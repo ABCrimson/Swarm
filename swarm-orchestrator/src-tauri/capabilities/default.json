@@ -1,0 +1,24 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for SWARM Orchestrator",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "fs:allow-read-text-file",
+    "fs:allow-write-text-file",
+    "fs:allow-read-dir",
+    "fs:allow-exists",
+    "fs:allow-mkdir",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$APPDATA/**" },
+        { "path": "$HOME/**" }
+      ]
+    },
+    "dialog:default",
+    "shell:allow-open",
+    "store:default",
+    "updater:default"
+  ]
+}

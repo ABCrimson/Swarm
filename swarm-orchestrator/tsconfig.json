@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "module": "esnext",
+    "target": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["esnext", "DOM", "DOM.Iterable"],
+    "noUncheckedSideEffectImports": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "noEmit": true,
+    "skipLibCheck": false,
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "#components/*": ["./src/components/*"],
+      "#store/*": ["./src/store/*"],
+      "#lib/*": ["./src/lib/*"],
+      "#workers/*": ["./src/workers/*"],
+      "#hooks/*": ["./src/hooks/*"],
+      "#pages/*": ["./src/pages/*"],
+      "#styles/*": ["./src/styles/*"]
+    }
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "src-tauri"]
+}

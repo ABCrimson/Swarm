@@ -1,0 +1,154 @@
+import { atom } from "jotai";
+import { atomWithStorage } from "jotai/utils";
+
+import { commandHistory } from "#lib/command-history";
+import { settingsStore } from "#lib/lazy-store";
+import { isTauri } from "#lib/tauri";
+
+// ── Tauri plugin-store persistence adapter ───────────
+
+const tauriStore = settingsStore;
+
+function createTauriStorage<T>(): {
+  getItem: (key: string, initialValue: T) => T;
+  setItem: (key: string, value: T) => void;
+  removeItem: (key: string) => void;
+  subscribe?: (key: string, callback: (value: T) => void, initialValue: T) => () => void;
+} {
+  return {
+    getItem(_key, initialValue) {
+      // Always return synchronously to prevent Jotai Suspense.
+      // Persisted values are hydrated via subscribe on mount.
+      return initialValue;
+    },
+    setItem(key, value) {
+      if (!isTauri()) return;
+      void tauriStore.set(key, value).then(() => tauriStore.save());
+    },
+    removeItem(key) {
+      if (!isTauri()) return;
+      void tauriStore.delete(key).then(() => tauriStore.save());
+    },
+    subscribe(key, callback, initialValue) {
+      if (!isTauri()) return () => {};
+      // Hydrate from store after mount
+      void tauriStore.get<T>(key)
+        .then((v) => { if (v != null) callback(v); })
+        .catch(() => {});
+      return () => {};
+    },
+  };
+}
+
+// ── Panel state (ephemeral) ─────────────────────────
+
+/** Whether the command palette modal is open. */
+export const commandPaletteOpenAtom = atom(false);
+
+/** Currently selected worker UUID, or `null` if none selected. */
+export const selectedWorkerIdAtom = atom<string | null>(null);
+
+/** Whether the sidebar is in its collapsed (icon-only) state. */
+export const sidebarCollapsedAtom = atom(false);
+
+/** Active page identifier for client-side routing. */
+export const currentPageAtom = atom<"dashboard" | "workers" | "sessions" | "metrics" | "settings" | "logs" | "tools" | "workspace">(
+  "dashboard",
+);
+
+/** Whether the user prefers reduced motion (mirrors OS setting). */
+export const reducedMotionAtom = atom(false);
+
+/** Whether the worker detail panel is expanded. */
+export const detailPanelOpenAtom = atom(false);
+
+/** Workers page view mode: dependency graph or flat list. */
+export const graphViewAtom = atom<"graph" | "list">("graph");
+
+// ── Persisted via plugin-store integration ───────────
+
+/** Persisted split-pane sizes for the main/detail layout. */
+export const paneSizesAtom = atomWithStorage<{ main: number; detail: number }>(
+  "swarm:ui:paneSizes",
+  { main: 60, detail: 40 },
+  createTauriStorage<{ main: number; detail: number }>(),
+);
+
+/** Persisted theme preferences (particle background toggle, GPU overlay). */
+export const themeAtom = atomWithStorage<{ particlesEnabled: boolean; gpuOverlay: boolean }>(
+  "swarm:ui:theme",
+  { particlesEnabled: true, gpuOverlay: false },
+  createTauriStorage<{ particlesEnabled: boolean; gpuOverlay: boolean }>(),
+);
+
+// ── AI model selection ──────────────────────────────
+
+/** Persisted Anthropic model selection for AI streaming. */
+export const selectedModelAtom = atomWithStorage<"opus" | "sonnet" | "haiku">(
+  "swarm:ai:model",
+  "sonnet",
+  createTauriStorage<"opus" | "sonnet" | "haiku">(),
+);
+
+// ── WebGPU performance atoms (Milestone 0.6.5) ──────
+
+/** Current GPU frame time in milliseconds for the particle system. */
+export const gpuFrameTimeAtom = atom(0);
+
+/** Target particle count for the WebGPU compute pipeline. */
+export const particleCountAtom = atom(10_000);
+
+// ── Performance overlay (Milestone 0.8.4) ───────────
+
+/** Whether the developer performance overlay is visible. */
+export const perfOverlayOpenAtom = atom(false);
+
+// ── Color scheme (dark-only mandate) ─────────────────
+
+/** Color scheme is locked to dark per spec. */
+export const colorSchemeAtom = atom<"dark">("dark");
+
+// ── Undo / Redo (Feature 14) ────────────────────────
+
+/** Trigger atom that increments whenever command history changes. */
+const undoRedoVersionAtom = atom(0);
+
+let _notifyHistoryChange: () => void = () => {};
+
+// Subscribe the version atom to CommandHistory changes at module load.
+commandHistory.subscribe(() => {
+  _notifyHistoryChange();
+});
+
+/**
+ * Mount atom that wires CommandHistory subscriber notifications
+ * into the Jotai dependency graph. Must be used in a component
+ * via `useAtom(undoRedoMountAtom)` to activate.
+ */
+export const undoRedoMountAtom = atom(null, (_get, set) => {
+  _notifyHistoryChange = () => {
+    set(undoRedoVersionAtom, (v) => v + 1);
+  };
+});
+undoRedoMountAtom.onMount = (setSelf) => {
+  setSelf();
+};
+
+/** Whether the command history has commands available to undo. */
+export const undoAvailableAtom = atom((get) => {
+  get(undoRedoVersionAtom);
+  return commandHistory.canUndo();
+});
+
+/** Whether the command history has commands available to redo. */
+export const redoAvailableAtom = atom((get) => {
+  get(undoRedoVersionAtom);
+  return commandHistory.canRedo();
+});
+
+// ── Derived atoms ────────────────────────────────────
+
+/** Derived atom resolving the currently selected worker ID. */
+export const selectedWorkerAtom = atom((get) => {
+  return get(selectedWorkerIdAtom);
+});

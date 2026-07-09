@@ -1,0 +1,288 @@
+import { useAtom, useAtomValue } from "jotai";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+
+import { WorkerDetail } from "#components/graph/WorkerDetail";
+import { WorkerGraph } from "#components/graph/WorkerGraph";
+import { Button } from "#components/ui/Button";
+import { spawnWorker } from "#lib/tauri";
+import { detailPanelOpenAtom, graphViewAtom, selectedWorkerIdAtom } from "#store/ui";
+import { useWorkerStore } from "#store/workers";
+
+function WorkerListView(): React.ReactElement {
+  const workers = useWorkerStore((s) => s.workers);
+  const [selectedId, setSelectedId] = useAtom(selectedWorkerIdAtom);
+  const [, setDetailOpen] = useAtom(detailPanelOpenAtom);
+
+  if (workers.size === 0) {
+    return (
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 12,
+        }}
+      >
+        <div
+          style={{
+            width: 48,
+            height: 48,
+            borderRadius: 12,
+            background: "oklch(0.12 0.03 220)",
+            border: "1px solid oklch(0.22 0.04 220)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 20,
+            color: "oklch(0.40 0.04 220)",
+          }}
+          aria-hidden="true"
+        >
+          +
+        </div>
+        <span
+          style={{
+            color: "oklch(0.50 0.04 220)",
+            fontFamily: "var(--font-body)",
+            fontSize: "0.8125rem",
+          }}
+        >
+          No workers running
+        </span>
+        <span
+          style={{
+            color: "oklch(0.38 0.03 220)",
+            fontFamily: "var(--font-mono)",
+            fontSize: "0.6875rem",
+          }}
+        >
+          Click "Spawn Worker" or press Ctrl+K
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: 16 }} className="scroll-area">
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {[...workers.entries()].map(([id, worker]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => {
+              setSelectedId(id);
+              setDetailOpen(true);
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "12px 16px",
+              background:
+                selectedId === id ? "oklch(0.78 0.18 205 / 0.08)" : "oklch(0.12 0.03 220 / 0.7)",
+              backdropFilter: "blur(12px) saturate(1.5)",
+              border: `1px solid ${selectedId === id ? "oklch(0.78 0.18 205 / 0.3)" : "oklch(0.28 0.05 220)"}`,
+              borderRadius: 8,
+              cursor: "pointer",
+              textAlign: "left",
+              width: "100%",
+              outline: "none",
+              transition: "background 0.12s cubic-bezier(0, 0, 0.2, 1), border-color 0.12s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0, 0, 0.2, 1)",
+            }}
+            onFocus={(e) => {
+              e.currentTarget.style.boxShadow = "0 0 0 2px oklch(0.78 0.18 205 / 0.4)";
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.boxShadow = "none";
+            }}
+          >
+            <span
+              style={{
+                fontFamily: "var(--font-display)",
+                fontSize: "0.8125rem",
+                fontWeight: 600,
+                color: "oklch(0.95 0.02 220)",
+              }}
+            >
+              {worker.name ?? id.slice(0, 8)}
+            </span>
+            <span className="swarm-badge" data-state={worker.state}>
+              {worker.state}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Workers page with graph/list view toggle, worker detail panel,
+ * and Ctrl+Shift+G keyboard shortcut for switching views.
+ */
+export function Workers(): React.ReactElement {
+  const [viewMode, setViewMode] = useAtom(graphViewAtom);
+  const detailOpen = useAtomValue(detailPanelOpenAtom);
+  const selectedId = useAtomValue(selectedWorkerIdAtom);
+  const workers = useWorkerStore((s) => s.workers);
+  const selectedWorker = selectedId ? workers.get(selectedId) : undefined;
+  const [isSpawning, setIsSpawning] = useState(false);
+
+  const handleSpawn = async () => {
+    setIsSpawning(true);
+    try {
+      const id = await spawnWorker();
+      if (id) {
+        toast.success(`Worker spawned: ${id.slice(0, 8)}`);
+      }
+    } catch (err) {
+      toast.error(`Spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsSpawning(false);
+    }
+  };
+
+  // Ctrl+Shift+G to toggle view mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "G" && e.ctrlKey && e.shiftKey) {
+        e.preventDefault();
+        setViewMode((prev) => (prev === "graph" ? "list" : "graph"));
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [setViewMode]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "16px 24px",
+          borderBottom: "1px solid oklch(0.22 0.04 220)",
+          flexShrink: 0,
+        }}
+      >
+        <div>
+          <h1
+            style={{
+              fontFamily: "var(--font-display)",
+              fontSize: "1.25rem",
+              fontWeight: 700,
+              color: "oklch(0.95 0.02 220)",
+              margin: 0,
+              letterSpacing: "-0.01em",
+            }}
+          >
+            Workers
+          </h1>
+          <p
+            style={{
+              fontFamily: "var(--font-body)",
+              fontSize: "0.75rem",
+              color: "oklch(0.55 0.04 220)",
+              margin: "4px 0 0",
+            }}
+          >
+            Manage and monitor worker processes.
+          </p>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        {/* Spawn button */}
+        <Button
+          variant="primary"
+          size="sm"
+          loading={isSpawning}
+          onClick={() => void handleSpawn()}
+        >
+          Spawn Worker
+        </Button>
+
+        {/* View toggle */}
+        <div
+          style={{
+            display: "flex",
+            background: "oklch(0.08 0.02 220)",
+            border: "1px solid oklch(0.22 0.04 220)",
+            borderRadius: 8,
+            padding: 2,
+          }}
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === "graph"}
+            onClick={() => setViewMode("graph")}
+            style={{
+              padding: "6px 12px",
+              background: viewMode === "graph" ? "oklch(0.78 0.18 205 / 0.15)" : "transparent",
+              border: "none",
+              borderRadius: 6,
+              color: viewMode === "graph" ? "oklch(0.78 0.18 205)" : "oklch(0.55 0.04 220)",
+              fontFamily: "var(--font-body)",
+              fontSize: "0.75rem",
+              fontWeight: 500,
+              cursor: "pointer",
+              outline: "none",
+              transition: "background 0.12s cubic-bezier(0, 0, 0.2, 1), color 0.12s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0, 0, 0.2, 1)",
+            }}
+            onFocus={(e) => {
+              e.currentTarget.style.boxShadow = "0 0 0 2px oklch(0.78 0.18 205 / 0.4)";
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.boxShadow = "none";
+            }}
+          >
+            Graph
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === "list"}
+            onClick={() => setViewMode("list")}
+            style={{
+              padding: "6px 12px",
+              background: viewMode === "list" ? "oklch(0.78 0.18 205 / 0.15)" : "transparent",
+              border: "none",
+              borderRadius: 6,
+              color: viewMode === "list" ? "oklch(0.78 0.18 205)" : "oklch(0.55 0.04 220)",
+              fontFamily: "var(--font-body)",
+              fontSize: "0.75rem",
+              fontWeight: 500,
+              cursor: "pointer",
+              outline: "none",
+              transition: "background 0.12s cubic-bezier(0, 0, 0.2, 1), color 0.12s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0, 0, 0.2, 1)",
+            }}
+            onFocus={(e) => {
+              e.currentTarget.style.boxShadow = "0 0 0 2px oklch(0.78 0.18 205 / 0.4)";
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.boxShadow = "none";
+            }}
+          >
+            List
+          </button>
+        </div>
+        </div>
+      </div>
+
+      {/* Main content area */}
+      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          {viewMode === "graph" ? <WorkerGraph /> : <WorkerListView />}
+        </div>
+
+        {/* Detail panel */}
+        {detailOpen && selectedWorker && <WorkerDetail worker={selectedWorker} />}
+      </div>
+    </div>
+  );
+}

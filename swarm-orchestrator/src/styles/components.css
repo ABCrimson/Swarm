@@ -1,0 +1,374 @@
+@layer components {
+  /* ── Screen reader only ─────────────────────────── */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+
+  .sr-only:focus,
+  .focus\:not-sr-only:focus {
+    position: fixed;
+    top: 4px;
+    left: 4px;
+    z-index: 9999;
+    width: auto;
+    height: auto;
+    padding: 8px 16px;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+    background: oklch(0.78 0.18 205);
+    color: oklch(0.06 0.02 220);
+    border-radius: 8px;
+    font-family: var(--font-body, "DM Sans Variable", system-ui, sans-serif);
+    font-weight: 600;
+    font-size: 0.875rem;
+    text-decoration: none;
+    outline: 2px solid oklch(0.78 0.18 205);
+    outline-offset: 2px;
+  }
+
+  /* ── JetBrains Mono Ligatures ───────────────────── */
+  [style*="font-mono"],
+  [style*="JetBrains Mono"],
+  code,
+  pre,
+  .swarm-badge,
+  [cmdk-badge] {
+    font-feature-settings: "liga" 1, "calt" 1;
+    font-variant-ligatures: common-ligatures contextual;
+  }
+
+  .scroll-area {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) oklch(0 0 0 / 0);
+  }
+
+  .scroll-area::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scroll-area::-webkit-scrollbar-track {
+    background: oklch(0 0 0 / 0);
+  }
+
+  .scroll-area::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 3px;
+  }
+
+  .scroll-area::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+  }
+
+  /* ── Button ────────────────────────────────────── */
+  .swarm-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border: 1px solid oklch(0 0 0 / 0);
+    border-radius: 8px;
+    font-family: var(--font-body, "DM Sans Variable", system-ui, sans-serif);
+    font-weight: 500;
+    cursor: pointer;
+    transition:
+      background 0.12s cubic-bezier(0.0, 0.0, 0.2, 1.0),
+      border-color 0.12s cubic-bezier(0.0, 0.0, 0.2, 1.0),
+      box-shadow 0.15s cubic-bezier(0.0, 0.0, 0.2, 1.0),
+      transform 0.1s cubic-bezier(0.0, 0.0, 0.2, 1.0);
+    outline: none;
+    white-space: nowrap;
+    user-select: none;
+  }
+
+  .swarm-btn:focus-visible {
+    box-shadow:
+      0 0 0 2px oklch(0.78 0.18 205 / 0.5),
+      0 0 12px oklch(0.78 0.18 205 / 0.2);
+  }
+
+  .swarm-btn[data-size="sm"] {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 0.75rem;
+  }
+
+  .swarm-btn[data-size="md"] {
+    height: 36px;
+    padding: 0 16px;
+    font-size: 0.8125rem;
+  }
+
+  .swarm-btn[data-size="lg"] {
+    height: 44px;
+    padding: 0 24px;
+    font-size: 0.9375rem;
+  }
+
+  .swarm-btn[data-variant="primary"] {
+    background: oklch(0.78 0.18 205);
+    color: oklch(0.06 0.02 220);
+  }
+
+  .swarm-btn[data-variant="primary"]:hover:not(:disabled) {
+    background: oklch(0.84 0.16 205);
+  }
+
+  .swarm-btn[data-variant="secondary"] {
+    background: var(--bg-surface-2);
+    border-color: var(--border-2);
+    color: var(--text-primary);
+  }
+
+  .swarm-btn[data-variant="secondary"]:hover:not(:disabled) {
+    background: var(--bg-surface-3);
+    border-color: var(--scrollbar-thumb-hover);
+  }
+
+  .swarm-btn[data-variant="ghost"] {
+    background: oklch(0 0 0 / 0);
+    color: var(--text-primary);
+  }
+
+  .swarm-btn[data-variant="ghost"]:hover:not(:disabled) {
+    background: var(--bg-surface-2);
+  }
+
+  .swarm-btn[data-variant="danger"] {
+    background: oklch(0.72 0.20 10);
+    color: oklch(0.06 0.02 220);
+  }
+
+  .swarm-btn[data-variant="danger"]:hover:not(:disabled) {
+    background: oklch(0.78 0.18 10);
+  }
+
+  .swarm-btn:active:not(:disabled) {
+    transform: scale(0.97);
+    transition-duration: 0.05s;
+  }
+
+  .swarm-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .swarm-btn[data-loading] {
+    cursor: wait;
+  }
+
+  /* ── Input ─────────────────────────────────────── */
+  .swarm-input {
+    display: block;
+    width: 100%;
+    height: 36px;
+    padding: 0 12px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-family: var(--font-body, "DM Sans Variable", system-ui, sans-serif);
+    font-size: 0.8125rem;
+    outline: none;
+    transition:
+      border-color 0.15s cubic-bezier(0.0, 0.0, 0.2, 1.0),
+      box-shadow 0.2s cubic-bezier(0.0, 0.0, 0.2, 1.0);
+  }
+
+  .swarm-input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .swarm-input:focus {
+    border-color: oklch(0.78 0.18 205);
+    box-shadow:
+      0 0 0 2px oklch(0.78 0.18 205 / 0.25),
+      0 0 16px oklch(0.78 0.18 205 / 0.1);
+  }
+
+  .swarm-input:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background: oklch(0.06 0.02 220);
+  }
+
+  /* ── Badge ─────────────────────────────────────── */
+  .swarm-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-family: var(--font-mono, "JetBrains Mono Variable", monospace);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    line-height: 1.4;
+    letter-spacing: 0.02em;
+    transition:
+      background 0.3s cubic-bezier(0.0, 0.0, 0.2, 1.0),
+      color 0.3s cubic-bezier(0.0, 0.0, 0.2, 1.0),
+      border-color 0.3s cubic-bezier(0.0, 0.0, 0.2, 1.0);
+  }
+
+  .swarm-badge[data-state="idle"] {
+    background: oklch(0.55 0.04 220 / 0.2);
+    color: oklch(0.55 0.04 220);
+    border: 1px solid oklch(0.55 0.04 220 / 0.3);
+  }
+
+  .swarm-badge[data-state="running"] {
+    background: oklch(0.78 0.18 205 / 0.15);
+    color: oklch(0.78 0.18 205);
+    border: 1px solid oklch(0.78 0.18 205 / 0.3);
+  }
+
+  .swarm-badge[data-state="paused"] {
+    background: oklch(0.82 0.19 70 / 0.15);
+    color: oklch(0.82 0.19 70);
+    border: 1px solid oklch(0.82 0.19 70 / 0.3);
+  }
+
+  .swarm-badge[data-state="error"] {
+    background: oklch(0.72 0.20 10 / 0.15);
+    color: oklch(0.72 0.20 10);
+    border: 1px solid oklch(0.72 0.20 10 / 0.3);
+  }
+
+  /* ── Command Palette (modern-cmdk) ─────────────── */
+  .swarm-cmdk-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--overlay-bg);
+    backdrop-filter: blur(4px);
+  }
+
+  .swarm-cmdk-content {
+    position: fixed;
+    top: 20%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(640px, calc(100vw - 32px));
+    background: var(--glass-bg);
+    backdrop-filter: blur(16px) saturate(1.5);
+    border: 1px solid var(--border-2);
+    border-radius: 12px;
+    box-shadow:
+      0 0 0 1px oklch(0.78 0.18 205 / 0.1),
+      0 24px 64px oklch(0.06 0.02 220 / 0.8);
+    overflow: hidden;
+    outline: none;
+  }
+
+  .swarm-cmdk [cmdk-input] {
+    width: 100%;
+    padding: 14px 16px;
+    background: oklch(0 0 0 / 0);
+    border: none;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-bright);
+    font-family: var(--font-body, "DM Sans Variable", system-ui, sans-serif);
+    font-size: 0.9375rem;
+    outline: none;
+  }
+
+  .swarm-cmdk [cmdk-input]::placeholder {
+    color: var(--text-muted);
+  }
+
+  .swarm-cmdk [cmdk-list] {
+    max-height: 320px;
+    overflow-y: auto;
+    padding: 8px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) oklch(0 0 0 / 0);
+  }
+
+  .swarm-cmdk [cmdk-group-heading] {
+    padding: 6px 8px 4px;
+    font-family: var(--font-mono, "JetBrains Mono Variable", monospace);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    user-select: none;
+  }
+
+  .swarm-cmdk [cmdk-item] {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-family: var(--font-body, "DM Sans Variable", system-ui, sans-serif);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.1s cubic-bezier(0.0, 0.0, 0.2, 1.0);
+  }
+
+  .swarm-cmdk [cmdk-item][data-selected="true"] {
+    background: oklch(0.78 0.18 205 / 0.12);
+    color: var(--text-bright);
+  }
+
+  .swarm-cmdk [cmdk-item]:active {
+    background: oklch(0.78 0.18 205 / 0.2);
+  }
+
+  .swarm-cmdk [cmdk-empty] {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 16px;
+    color: var(--text-muted);
+    font-family: var(--font-body, "DM Sans Variable", system-ui, sans-serif);
+    font-size: 0.8125rem;
+  }
+
+  .swarm-cmdk [cmdk-badge] {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: 9999px;
+    background: oklch(0.78 0.18 205 / 0.15);
+    color: oklch(0.78 0.18 205);
+    font-family: var(--font-mono, "JetBrains Mono Variable", monospace);
+    font-size: 0.625rem;
+    font-weight: 600;
+  }
+
+  .swarm-cmdk [cmdk-separator] {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--border);
+  }
+
+  /* ── Focus visible ring for keyboard navigation ── */
+  .swarm-cmdk [cmdk-item]:focus-visible,
+  .swarm-input:focus-visible {
+    outline: 2px solid oklch(0.78 0.18 205 / 0.6);
+    outline-offset: -1px;
+  }
+
+  /* ── Backdrop-filter fallback for inline-styled panels ── */
+  @supports not (backdrop-filter: blur(1px)) {
+    .swarm-cmdk-content {
+      background: var(--glass-fallback);
+    }
+    .swarm-cmdk-overlay {
+      background: var(--overlay-bg);
+    }
+  }
+}

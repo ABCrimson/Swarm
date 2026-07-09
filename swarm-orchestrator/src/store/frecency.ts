@@ -1,0 +1,68 @@
+import { atom } from "jotai";
+import { atomWithStorage } from "jotai/utils";
+
+import { settingsStore } from "#lib/lazy-store";
+import { isTauri } from "#lib/tauri";
+
+// Temporal is available as a global in the target runtime (Node 25.8.1 / Chromium 146+).
+declare const Temporal: {
+  Now: { instant(): { since(other: unknown): { total(unit: string): number }; toString(): string } };
+  Instant: { from(s: string): unknown };
+};
+
+/** A single frecency record tracking usage count and recency. */
+export interface FrecencyEntry {
+  readonly uses: number;
+  readonly lastUsed: string;
+}
+
+// ── Tauri plugin-store persistence adapter ───────────
+
+const tauriStore = settingsStore;
+
+/**
+ * Persisted atom storing frecency data for command palette ranking.
+ *
+ * Serialised to Tauri plugin-store as an array of `[commandId, FrecencyEntry]` tuples.
+ */
+export const frecencyAtom = atomWithStorage<Map<string, FrecencyEntry>>(
+  "swarm:frecency",
+  new Map(),
+  {
+    getItem(_key, initialValue) {
+      return initialValue;
+    },
+    setItem(key, value) {
+      if (!isTauri()) return;
+      void tauriStore.set(key, [...value.entries()]).then(() => tauriStore.save());
+    },
+    removeItem(key) {
+      if (!isTauri()) return;
+      void tauriStore.delete(key).then(() => tauriStore.save());
+    },
+    subscribe(key, callback, _initialValue) {
+      if (!isTauri()) return () => {};
+      void tauriStore.get<Array<[string, FrecencyEntry]>>(key)
+        .then((raw) => { if (raw) callback(new Map(raw)); })
+        .catch(() => {});
+      return () => {};
+    },
+  },
+);
+
+/** Derived atom that computes a frecency score for sorting commands. */
+export const frecencyScoreAtom = atom((get) => {
+  const entries = get(frecencyAtom);
+
+  return (commandId: string): number => {
+    const entry = entries.get(commandId);
+    if (!entry) return 0;
+
+    const elapsed = Temporal.Now.instant().since(Temporal.Instant.from(entry.lastUsed)).total("milliseconds");
+    const hoursAgo = elapsed / (1000 * 60 * 60);
+
+    // Decay factor: halve the score every 72 hours
+    const decay = 2 ** (-hoursAgo / 72);
+    return entry.uses * decay;
+  };
+});

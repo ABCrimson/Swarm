@@ -1,0 +1,79 @@
+/* ── Typed custom properties ─────────────────────── */
+@property --glow-intensity {
+  syntax: "<number>";
+  initial-value: 0;
+  inherits: false;
+}
+
+@property --pulse-scale {
+  syntax: "<number>";
+  initial-value: 1;
+  inherits: false;
+}
+
+@property --scan-alpha {
+  syntax: "<number>";
+  initial-value: 0;
+  inherits: false;
+}
+
+@property --worker-hue {
+  syntax: "<angle>";
+  initial-value: 205deg;
+  inherits: false;
+}
+
+/* ── @keyframes ──────────────────────────────────── */
+@keyframes pulse-ring {
+  0%   { transform: scale(1);   opacity: 0.8; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+
+@keyframes glow-breathe {
+  0%, 100% { --glow-intensity: 0.3; }
+  50%       { --glow-intensity: 0.8; }
+}
+
+@keyframes dash-flow {
+  0%   { stroke-dashoffset: 24; }
+  100% { stroke-dashoffset: 0; }
+}
+
+@keyframes scan-line {
+  0%   { --scan-alpha: 0; transform: translateY(-100%); }
+  10%  { --scan-alpha: 0.4; }
+  90%  { --scan-alpha: 0.4; }
+  100% { --scan-alpha: 0; transform: translateY(100vh); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+
+@keyframes spinner-rotate {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  40% { opacity: 1; }
+  50% { opacity: 0; }
+  90% { opacity: 0; }
+}
+
+@keyframes tool-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.98); }
+}
+
+/* ── Reduced motion ──────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration:       0.001ms !important;
+    animation-iteration-count: 1      !important;
+    transition-duration:      0.001ms !important;
+    scroll-behavior:          auto    !important;
+  }
+}

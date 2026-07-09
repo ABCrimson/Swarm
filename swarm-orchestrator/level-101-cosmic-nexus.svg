@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <radialGradient id="gal"><stop offset="0%" stop-color="oklch(0.80 0.28 264)" stop-opacity="0.7"/><stop offset="40%" stop-color="oklch(0.55 0.30 300)" stop-opacity="0.4"/><stop offset="100%" stop-color="oklch(0.30 0.15 264)" stop-opacity="0"/></radialGradient>
+    <linearGradient id="nf" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="oklch(0.72 0.28 264)"/><stop offset="100%" stop-color="oklch(0.50 0.26 300)"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="28.80" fill="url(#gal)"/>
+  <line x1="37.76" y1="32.00" x2="51.95" y2="43.52" stroke="oklch(0.75 0.22 264.0)" stroke-width="0.6" opacity="0.3"/>
+  <line x1="34.88" y1="36.99" x2="32.00" y2="55.04" stroke="oklch(0.75 0.22 294.0)" stroke-width="0.6" opacity="0.3"/>
+  <line x1="29.12" y1="36.99" x2="12.05" y2="43.52" stroke="oklch(0.75 0.22 324.0)" stroke-width="0.6" opacity="0.3"/>
+  <line x1="26.24" y1="32.00" x2="12.05" y2="20.48" stroke="oklch(0.75 0.22 354.0)" stroke-width="0.6" opacity="0.3"/>
+  <line x1="29.12" y1="27.01" x2="32.00" y2="8.96" stroke="oklch(0.75 0.22 24.0)" stroke-width="0.6" opacity="0.3"/>
+  <line x1="34.88" y1="27.01" x2="51.95" y2="20.48" stroke="oklch(0.75 0.22 54.0)" stroke-width="0.6" opacity="0.3"/>
+  <polygon points="32.00,12.80 45.58,18.42 51.20,32.00 45.58,45.58 32.00,51.20 18.42,45.58 12.80,32.00 18.42,18.42" fill="url(#nf)" stroke="oklch(0.75 0.25 264)" stroke-width="1.2"/>
+  <polygon points="32.00,25.28 33.10,29.34 36.75,27.25 34.66,30.90 38.72,32.00 34.66,33.10 36.75,36.75 33.10,34.66 32.00,38.72 30.90,34.66 27.25,36.75 29.34,33.10 25.28,32.00 29.34,30.90 27.25,27.25 30.90,29.34" fill="oklch(0.88 0.20 264 / 0.6)"/>
+  <circle cx="47.08" cy="34.93" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.40"/>
+  <circle cx="50.41" cy="44.19" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.55"/>
+  <circle cx="48.10" cy="55.88" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.70"/>
+  <circle cx="35.06" cy="47.05" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.85"/>
+  <circle cx="27.79" cy="53.67" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.40"/>
+  <circle cx="16.10" cy="56.02" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.55"/>
+  <circle cx="19.27" cy="40.59" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.70"/>
+  <circle cx="10.36" cy="36.40" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.85"/>
+  <circle cx="3.73" cy="26.50" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.40"/>
+  <circle cx="19.19" cy="23.52" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.55"/>
+  <circle cx="19.65" cy="13.69" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.70"/>
+  <circle cx="26.26" cy="3.78" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.85"/>
+  <circle cx="34.93" cy="16.92" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.40"/>
+  <circle cx="44.19" cy="13.59" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.55"/>
+  <circle cx="55.88" cy="15.90" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.70"/>
+  <circle cx="47.05" cy="28.94" r="0.5" fill="oklch(0.95 0.05 264)" opacity="0.85"/>
+</svg>

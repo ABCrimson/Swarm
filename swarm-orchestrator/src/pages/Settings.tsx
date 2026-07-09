@@ -1,0 +1,465 @@
+import { useAtom } from "jotai";
+import { useState } from "react";
+import { toast } from "sonner";
+import { alertThresholdsAtom } from "#lib/alerts";
+import { selectedModelAtom, themeAtom } from "#store/ui";
+
+const SECTION_STYLE: React.CSSProperties = {
+  background: "oklch(0.10 0.02 220)",
+  border: "1px solid oklch(0.20 0.03 220)",
+  borderRadius: 12,
+  padding: "24px 28px",
+};
+
+const LABEL_STYLE: React.CSSProperties = {
+  fontFamily: "var(--font-body)",
+  fontSize: "0.82rem",
+  fontWeight: 500,
+  color: "oklch(0.75 0.03 220)",
+  display: "block",
+  marginBottom: 6,
+};
+
+const DESCRIPTION_STYLE: React.CSSProperties = {
+  fontFamily: "var(--font-body)",
+  fontSize: "0.72rem",
+  color: "oklch(0.48 0.03 220)",
+  marginTop: 4,
+  lineHeight: 1.4,
+};
+
+function Toggle({
+  checked,
+  onChange,
+  label,
+  description,
+}: {
+  readonly checked: boolean;
+  readonly onChange: (v: boolean) => void;
+  readonly label: string;
+  readonly description?: string;
+}): React.ReactElement {
+  return (
+    <label
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "space-between",
+        gap: 16,
+        cursor: "pointer",
+        padding: "10px 0",
+      }}
+    >
+      <div>
+        <span style={LABEL_STYLE}>{label}</span>
+        {description && <span style={DESCRIPTION_STYLE}>{description}</span>}
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        style={{
+          position: "relative",
+          width: 44,
+          height: 24,
+          borderRadius: 12,
+          border: "none",
+          cursor: "pointer",
+          flexShrink: 0,
+          marginTop: 2,
+          background: checked
+            ? "oklch(0.78 0.18 205)"
+            : "oklch(0.22 0.03 220)",
+          transition: "background 0.2s ease",
+          outline: "none",
+        }}
+      >
+        <span
+          style={{
+            position: "absolute",
+            top: 3,
+            left: checked ? 23 : 3,
+            width: 18,
+            height: 18,
+            borderRadius: "50%",
+            background: checked
+              ? "oklch(0.98 0 0)"
+              : "oklch(0.50 0.03 220)",
+            transition: "left 0.2s cubic-bezier(0.4, 0, 0.2, 1), background 0.2s ease",
+            boxShadow: "0 1px 3px oklch(0 0 0 / 0.3)",
+          }}
+        />
+      </button>
+    </label>
+  );
+}
+
+function ModelCard({
+  id,
+  name,
+  description,
+  context,
+  selected,
+  onSelect,
+}: {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly context: string;
+  readonly selected: boolean;
+  readonly onSelect: () => void;
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        padding: "14px 18px",
+        borderRadius: 10,
+        border: selected
+          ? "1.5px solid oklch(0.78 0.18 205)"
+          : "1px solid oklch(0.20 0.03 220)",
+        background: selected
+          ? "oklch(0.12 0.03 210)"
+          : "oklch(0.08 0.015 220)",
+        cursor: "pointer",
+        textAlign: "left",
+        transition: "all 0.15s ease",
+        outline: "none",
+        boxShadow: selected
+          ? "0 0 12px oklch(0.78 0.18 205 / 0.15)"
+          : "none",
+        flex: 1,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: selected ? "oklch(0.78 0.18 205)" : "oklch(0.30 0.03 220)",
+            flexShrink: 0,
+            transition: "background 0.15s ease",
+          }}
+        />
+        <span
+          style={{
+            fontFamily: "var(--font-display)",
+            fontSize: "0.9rem",
+            fontWeight: 700,
+            color: selected ? "oklch(0.95 0.03 205)" : "oklch(0.70 0.03 220)",
+            letterSpacing: "-0.01em",
+          }}
+        >
+          {name}
+        </span>
+      </div>
+      <span style={{ ...DESCRIPTION_STYLE, marginTop: 0 }}>{description}</span>
+      <span
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: "0.65rem",
+          color: "oklch(0.45 0.04 205)",
+          background: "oklch(0.06 0.02 220)",
+          padding: "2px 8px",
+          borderRadius: 4,
+          alignSelf: "flex-start",
+        }}
+      >
+        {context}
+      </span>
+    </button>
+  );
+}
+
+const MODELS = [
+  {
+    id: "opus" as const,
+    name: "Claude Opus",
+    description: "Most capable. Complex reasoning, deep analysis, and nuanced tasks.",
+    context: "200K context",
+  },
+  {
+    id: "sonnet" as const,
+    name: "Claude Sonnet",
+    description: "Balanced speed and capability. Best for most orchestration tasks.",
+    context: "200K context",
+  },
+  {
+    id: "haiku" as const,
+    name: "Claude Haiku",
+    description: "Fastest responses. Lightweight tasks, quick queries, and monitoring.",
+    context: "200K context",
+  },
+];
+
+/** Settings page for application configuration and preferences. */
+export function Settings(): React.ReactElement {
+  const [theme, setTheme] = useAtom(themeAtom);
+  const [selectedModel, setSelectedModel] = useAtom(selectedModelAtom);
+  const [thresholds, setThresholds] = useAtom(alertThresholdsAtom);
+  const [editingThresholds, setEditingThresholds] = useState(false);
+  const [tempThresholds, setTempThresholds] = useState(thresholds);
+
+  return (
+    <div className="flex flex-col gap-6 p-6" style={{ maxWidth: 720 }}>
+      {/* Header */}
+      <div>
+        <h1
+          className="text-2xl font-bold tracking-tight"
+          style={{
+            fontFamily: "var(--font-display)",
+            color: "oklch(0.95 0.02 220)",
+            letterSpacing: "-0.02em",
+          }}
+        >
+          Settings
+        </h1>
+        <p style={DESCRIPTION_STYLE}>
+          Configure AI models, visual preferences, and alert thresholds.
+        </p>
+      </div>
+
+      {/* AI Model Selection */}
+      <section style={SECTION_STYLE}>
+        <h2
+          style={{
+            fontFamily: "var(--font-display)",
+            fontSize: "0.95rem",
+            fontWeight: 700,
+            color: "oklch(0.88 0.04 220)",
+            marginBottom: 16,
+            letterSpacing: "-0.01em",
+          }}
+        >
+          AI Model
+        </h2>
+        <div style={{ display: "flex", gap: 12 }}>
+          {MODELS.map((model) => (
+            <ModelCard
+              key={model.id}
+              {...model}
+              selected={selectedModel === model.id}
+              onSelect={() => {
+                setSelectedModel(model.id);
+                toast.success(`Switched to Claude ${model.name.split(" ")[1]}`);
+              }}
+            />
+          ))}
+        </div>
+      </section>
+
+      {/* Visual Preferences */}
+      <section style={SECTION_STYLE}>
+        <h2
+          style={{
+            fontFamily: "var(--font-display)",
+            fontSize: "0.95rem",
+            fontWeight: 700,
+            color: "oklch(0.88 0.04 220)",
+            marginBottom: 8,
+            letterSpacing: "-0.01em",
+          }}
+        >
+          Visual Preferences
+        </h2>
+        <div style={{ borderBottom: "1px solid oklch(0.16 0.02 220)", paddingBottom: 4 }}>
+          <Toggle
+            checked={theme.particlesEnabled}
+            onChange={(v) => setTheme({ ...theme, particlesEnabled: v })}
+            label="Particle Background"
+            description="GPU-accelerated WebGPU particle system behind the workspace. Disable to reduce GPU usage."
+          />
+        </div>
+        <div>
+          <Toggle
+            checked={theme.gpuOverlay}
+            onChange={(v) => setTheme({ ...theme, gpuOverlay: v })}
+            label="GPU Frame Time Overlay"
+            description="Display GPU frame timing in the status bar for performance monitoring."
+          />
+        </div>
+      </section>
+
+      {/* Alert Thresholds */}
+      <section style={SECTION_STYLE}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h2
+            style={{
+              fontFamily: "var(--font-display)",
+              fontSize: "0.95rem",
+              fontWeight: 700,
+              color: "oklch(0.88 0.04 220)",
+              letterSpacing: "-0.01em",
+            }}
+          >
+            Alert Thresholds
+          </h2>
+          {!editingThresholds ? (
+            <button
+              type="button"
+              onClick={() => {
+                setTempThresholds(thresholds);
+                setEditingThresholds(true);
+              }}
+              style={{
+                fontFamily: "var(--font-body)",
+                fontSize: "0.75rem",
+                fontWeight: 500,
+                color: "oklch(0.78 0.18 205)",
+                background: "oklch(0.12 0.04 210)",
+                border: "1px solid oklch(0.78 0.18 205 / 0.3)",
+                borderRadius: 6,
+                padding: "5px 14px",
+                cursor: "pointer",
+                transition: "all 0.12s ease",
+              }}
+            >
+              Edit
+            </button>
+          ) : (
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setEditingThresholds(false)}
+                style={{
+                  fontFamily: "var(--font-body)",
+                  fontSize: "0.75rem",
+                  color: "oklch(0.55 0.03 220)",
+                  background: "none",
+                  border: "1px solid oklch(0.25 0.03 220)",
+                  borderRadius: 6,
+                  padding: "5px 14px",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setThresholds(tempThresholds);
+                  setEditingThresholds(false);
+                  toast.success("Alert thresholds updated");
+                }}
+                style={{
+                  fontFamily: "var(--font-body)",
+                  fontSize: "0.75rem",
+                  fontWeight: 500,
+                  color: "oklch(0.95 0 0)",
+                  background: "oklch(0.78 0.18 205)",
+                  border: "none",
+                  borderRadius: 6,
+                  padding: "5px 14px",
+                  cursor: "pointer",
+                }}
+              >
+                Save
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: "12px 24px",
+          }}
+        >
+          {([
+            { key: "cpuWarning" as const, label: "CPU Warning", unit: "%", color: "oklch(0.82 0.16 85)" },
+            { key: "cpuCritical" as const, label: "CPU Critical", unit: "%", color: "oklch(0.72 0.20 25)" },
+            { key: "memoryWarning" as const, label: "Memory Warning", unit: "%", color: "oklch(0.82 0.16 85)" },
+            { key: "memoryCritical" as const, label: "Memory Critical", unit: "%", color: "oklch(0.72 0.20 25)" },
+            { key: "errorRateWarning" as const, label: "Error Rate Warning", unit: "%", color: "oklch(0.82 0.16 85)" },
+            { key: "errorRateCritical" as const, label: "Error Rate Critical", unit: "%", color: "oklch(0.72 0.20 25)" },
+          ]).map(({ key, label, unit, color }) => (
+            <div key={key}>
+              <label style={{ ...LABEL_STYLE, fontSize: "0.72rem" }}>{label}</label>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={editingThresholds ? tempThresholds[key] : thresholds[key]}
+                  disabled={!editingThresholds}
+                  onChange={(e) =>
+                    setTempThresholds({ ...tempThresholds, [key]: Number(e.target.value) })
+                  }
+                  style={{
+                    width: 72,
+                    padding: "6px 10px",
+                    borderRadius: 6,
+                    border: editingThresholds
+                      ? `1px solid oklch(0.35 0.04 220)`
+                      : "1px solid oklch(0.20 0.03 220)",
+                    background: editingThresholds
+                      ? "oklch(0.08 0.015 220)"
+                      : "oklch(0.06 0.01 220)",
+                    color: color,
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "0.82rem",
+                    fontWeight: 600,
+                    outline: "none",
+                    transition: "border-color 0.12s ease",
+                  }}
+                />
+                <span
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "0.72rem",
+                    color: "oklch(0.45 0.03 220)",
+                  }}
+                >
+                  {unit}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* About */}
+      <section style={SECTION_STYLE}>
+        <h2
+          style={{
+            fontFamily: "var(--font-display)",
+            fontSize: "0.95rem",
+            fontWeight: 700,
+            color: "oklch(0.88 0.04 220)",
+            marginBottom: 12,
+            letterSpacing: "-0.01em",
+          }}
+        >
+          About
+        </h2>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "auto 1fr",
+            gap: "6px 20px",
+            fontFamily: "var(--font-mono)",
+            fontSize: "0.72rem",
+          }}
+        >
+          <span style={{ color: "oklch(0.50 0.03 220)" }}>Version</span>
+          <span style={{ color: "oklch(0.78 0.18 205)" }}>0.9.9</span>
+          <span style={{ color: "oklch(0.50 0.03 220)" }}>Runtime</span>
+          <span style={{ color: "oklch(0.70 0.03 220)" }}>Tauri 2.10 + React 19</span>
+          <span style={{ color: "oklch(0.50 0.03 220)" }}>Backend</span>
+          <span style={{ color: "oklch(0.70 0.03 220)" }}>Rust 1.95 + Tokio 1.50</span>
+          <span style={{ color: "oklch(0.50 0.03 220)" }}>AI</span>
+          <span style={{ color: "oklch(0.70 0.03 220)" }}>Anthropic SDK 0.78.0</span>
+          <span style={{ color: "oklch(0.50 0.03 220)" }}>License</span>
+          <span style={{ color: "oklch(0.70 0.03 220)" }}>MIT</span>
+        </div>
+      </section>
+    </div>
+  );
+}

@@ -1,0 +1,183 @@
+import * as z from "zod/v4";
+
+// ── Worker schemas ──────────────────────────────────
+
+/** Zod schema for worker lifecycle states. */
+export const WorkerStateSchema = z.enum(["idle", "running", "paused", "error"]);
+
+/** Lifecycle state of a SWARM worker process. */
+export type WorkerState = z.infer<typeof WorkerStateSchema>;
+
+/** Zod schema for a SWARM worker entity. */
+export const WorkerSchema = z.object({
+  id: z.string().uuid(),
+  state: WorkerStateSchema,
+  name: z.string().optional(),
+  pid: z.number().int().optional(),
+  startedAt: z.string().datetime(),
+  output: z.string().optional(),
+});
+
+/** A SWARM worker process with its current state and metadata. */
+export type Worker = z.infer<typeof WorkerSchema>;
+
+// ── Session schemas ─────────────────────────────────
+
+/** Zod schema for session metadata (description, tags, template reference). */
+export const SessionMetadataSchema = z.object({
+  description: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  templateId: z.string().optional(),
+});
+
+/** Metadata attached to a session for categorisation and filtering. */
+export type SessionMetadata = z.infer<typeof SessionMetadataSchema>;
+
+/** Zod schema for a SWARM orchestration session. */
+export const SessionSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  workerIds: z.array(z.string().uuid()),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  config: z.record(z.string(), z.unknown()).optional(),
+  metadata: SessionMetadataSchema.optional(),
+  snapshotIds: z.array(z.string().uuid()).optional(),
+});
+
+/** A SWARM session grouping one or more workers with shared config. */
+export type Session = z.infer<typeof SessionSchema>;
+
+// ── Snapshot schemas ────────────────────────────────
+
+/** Zod schema for a point-in-time session snapshot. */
+export const SnapshotSchema = z.object({
+  id: z.string().uuid(),
+  sessionId: z.string().uuid(),
+  timestamp: z.string().datetime(),
+  data: z.record(z.string(), z.unknown()),
+});
+
+/** Point-in-time snapshot of a session's state for time-travel debugging. */
+export type Snapshot = z.infer<typeof SnapshotSchema>;
+
+// ── Template schemas ────────────────────────────────
+
+/** Zod schema for a worker configuration within a session template. */
+export const WorkerConfigSchema = z.object({
+  name: z.string(),
+  role: z.string().optional(),
+  model: z.enum(["opus", "sonnet", "haiku"]).optional(),
+  systemPrompt: z.string().optional(),
+});
+
+/** Configuration for a single worker in a session template. */
+export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;
+
+/** Zod schema for a reusable session template. */
+export const SessionTemplateSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  description: z.string(),
+  workerConfigs: z.array(WorkerConfigSchema),
+  builtIn: z.boolean().optional(),
+  createdAt: z.string().datetime().optional(),
+});
+
+/** Reusable session template defining a preset worker configuration. */
+export type SessionTemplate = z.infer<typeof SessionTemplateSchema>;
+
+// ── System metrics schemas ──────────────────────────
+
+/** Zod schema for a single system metric data point. */
+export const MetricPointSchema = z.object({
+  time: z.number(),
+  cpu: z.number(),
+  memory: z.number(),
+  workerCount: z.number().int(),
+});
+
+/** A single time-series data point for system metrics. */
+export type MetricPoint = z.infer<typeof MetricPointSchema>;
+
+/** Zod schema for aggregate system metrics with history. */
+export const SystemMetricsSchema = z.object({
+  cpuPercent: z.number(),
+  memoryMb: z.number(),
+  workerCount: z.number().int(),
+  aiReqPerSec: z.number(),
+  tokensPerSec: z.number(),
+  history: z.array(MetricPointSchema),
+});
+
+/** Aggregate system metrics including CPU, memory, and AI throughput. */
+export type SystemMetrics = z.infer<typeof SystemMetricsSchema>;
+
+// ── AI schemas ──────────────────────────────────────
+
+/** Zod schema for an AI conversation message with optional tool calls. */
+export const AiMessageSchema = z.object({
+  id: z.string().uuid(),
+  role: z.enum(["user", "assistant"]),
+  content: z.string(),
+  timestamp: z.string().datetime(),
+  toolCalls: z
+    .array(
+      z.object({
+        name: z.string(),
+        input: z.record(z.string(), z.unknown()),
+        result: z.string().optional(),
+      }),
+    )
+    .optional(),
+});
+
+/** A single AI conversation message (user or assistant) with optional tool calls. */
+export type AiMessage = z.infer<typeof AiMessageSchema>;
+
+/** Zod schema for a priority-queued AI request item. */
+export const AiQueueItemSchema = z.object({
+  id: z.string().uuid(),
+  priority: z.enum(["critical", "high", "normal", "low"]),
+  workerId: z.string().uuid(),
+  messages: z.array(AiMessageSchema),
+  status: z.enum(["pending", "streaming", "complete", "error"]),
+});
+
+/** A queued AI request with priority, status, and associated worker. */
+export type AiQueueItem = z.infer<typeof AiQueueItemSchema>;
+
+// ── Provider schemas ───────────────────────────────
+
+/** Zod schema for the selected AI provider configuration. */
+export const ProviderConfigSchema = z.object({
+  providerId: z.string(),
+  modelId: z.string(),
+});
+
+/** The currently selected AI provider and model. */
+export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
+
+/** Zod schema for a single token usage record. */
+export const TokenUsageRecordSchema = z.object({
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  model: z.string(),
+  provider: z.string(),
+  costUsd: z.number(),
+  timestamp: z.number(),
+});
+
+/** A single token usage record with cost tracking. */
+export type TokenUsageRecord = z.infer<typeof TokenUsageRecordSchema>;
+
+/** Zod schema for cumulative token usage statistics. */
+export const CumulativeUsageSchema = z.object({
+  totalInputTokens: z.number(),
+  totalOutputTokens: z.number(),
+  totalCostUsd: z.number(),
+  history: z.array(TokenUsageRecordSchema),
+});
+
+/** Cumulative token usage and cost tracking across sessions. */
+export type CumulativeUsage = z.infer<typeof CumulativeUsageSchema>;
