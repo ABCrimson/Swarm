@@ -4,6 +4,7 @@
 
 import { useAtomValue, useSetAtom } from "jotai";
 import { useEffect, useRef } from "react";
+import { toast } from "sonner";
 
 import { useParticleSync } from "#hooks/useParticleSync";
 import { useWebGPU } from "#hooks/useWebGPU";
@@ -22,8 +23,33 @@ import {
   destroyPostProcessPipeline,
   renderPostProcess,
 } from "#lib/postprocess";
-import { isWebGPUSupported } from "#lib/webgpu";
+import type { WebGPUUnavailableReason } from "#lib/webgpu";
+import { getWebGPUUnavailableReason, isWebGPUSupported } from "#lib/webgpu";
 import { gpuFrameTimeAtom, particleCountAtom, reducedMotionAtom, themeAtom } from "#store/ui";
+
+// ── One-time "pipeline can't start" diagnostics ──────
+//
+// Module-level (not component state) so the warning/toast fires at most
+// once per app session no matter how many times ParticleBackground or
+// ParticleCanvas re-render, remount (StrictMode), or retry after a
+// device-loss recovery.
+
+let hasWarnedParticlesUnavailable = false;
+
+/** Resets the one-time guard. Test-only — production code never calls this. */
+export function _resetParticlesUnavailableWarningForTests(): void {
+  hasWarnedParticlesUnavailable = false;
+}
+
+function warnParticlesUnavailable(reason: WebGPUUnavailableReason): void {
+  if (hasWarnedParticlesUnavailable) return;
+  hasWarnedParticlesUnavailable = true;
+
+  console.warn(`[particles] Particle Background Unavailable: ${reason}`);
+  toast.warning("Particle Background Unavailable", {
+    description: reason,
+  });
+}
 
 // ── Adaptive particle count constants ────────────────
 
@@ -39,10 +65,19 @@ const SAMPLE_WINDOW = 30;
 
 // ── Fallback background (OKLCH void) ─────────────────
 
+// zIndex: -1 (not 0) is load-bearing. AppShell's root grid wrapper
+// (AppShell.tsx) is a plain, non-positioned `<div>` — an in-flow,
+// non-positioned box paints *before* (below) any sibling with an
+// explicit `z-index: 0`, positioned or not, per CSS2.1 painting order
+// (Appendix E, categories 3 vs 6). A `zIndex: 0` here therefore stacks
+// this fixed, opaque, full-viewport layer *above* the entire app,
+// hiding it. `zIndex: -1` places it in the negative-stack-level
+// category, which paints *before* (below) the app's non-positioned
+// root, so it sits above the page background but below all content.
 const FALLBACK_STYLE: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  zIndex: 0,
+  zIndex: -1,
   pointerEvents: "none",
   background: "oklch(0.06 0.02 220)",
 };
@@ -52,7 +87,7 @@ const CANVAS_STYLE: React.CSSProperties = {
   inset: 0,
   width: "100vw",
   height: "100vh",
-  zIndex: 0,
+  zIndex: -1,
   pointerEvents: "none",
   background: "oklch(0.06 0.02 220)",
 };
@@ -60,7 +95,7 @@ const CANVAS_STYLE: React.CSSProperties = {
 /**
  * Full-viewport WebGPU particle background.
  *
- * Renders a fixed canvas behind all content (z-index: 0, pointer-events: none)
+ * Renders a fixed canvas behind all content (z-index: -1, pointer-events: none)
  * with compute-shader particles, bloom, chromatic aberration, and vignette.
  *
  * Graceful degradation:
@@ -78,7 +113,19 @@ export function ParticleBackground(): React.ReactElement {
   const theme = useAtomValue(themeAtom);
   const reducedMotion = useAtomValue(reducedMotionAtom);
 
-  const shouldRender = isWebGPUSupported() && theme.particlesEnabled && !reducedMotion;
+  const supported = isWebGPUSupported();
+  const shouldRender = supported && theme.particlesEnabled && !reducedMotion;
+
+  // Diagnose the "enabled in Settings but can't start" gap: only when the
+  // user actually wants particles (enabled, motion not reduced) but the
+  // very first gate — WebGPU exposure — already fails. Gates further down
+  // the pipeline (no adapter, no canvas context) are diagnosed inside
+  // ParticleCanvas, since they can only be detected once it mounts.
+  useEffect(() => {
+    if (supported || !theme.particlesEnabled || reducedMotion) return;
+    const reason = getWebGPUUnavailableReason();
+    if (reason) warnParticlesUnavailable(reason);
+  }, [supported, theme.particlesEnabled, reducedMotion]);
 
   if (!shouldRender) {
     return <div aria-hidden="true" style={FALLBACK_STYLE} />;
@@ -90,7 +137,15 @@ export function ParticleBackground(): React.ReactElement {
 // ── Internal canvas component (only mounted when WebGPU is active) ──
 
 function ParticleCanvas(): React.ReactElement {
-  const { canvasRef, device, context, format, isReady, canvasWidth, canvasHeight } = useWebGPU();
+  const { canvasRef, device, context, format, isReady, canvasWidth, canvasHeight, failureReason } =
+    useWebGPU();
+
+  // Diagnose init failures that only manifest once this component has
+  // mounted (WebGPU was exposed, so ParticleBackground's own gate passed,
+  // but requestAdapter/getContext/requestDevice failed inside useWebGPU).
+  useEffect(() => {
+    if (failureReason) warnParticlesUnavailable(failureReason);
+  }, [failureReason]);
 
   const systemRef = useRef<ParticleSystem | null>(null);
   const postProcessRef = useRef<PostProcessPipeline | null>(null);

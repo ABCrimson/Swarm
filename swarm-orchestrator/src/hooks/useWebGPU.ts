@@ -6,7 +6,7 @@ import { useResizeObserver } from "@crimson_dev/use-resize-observer";
 import { useAtomValue } from "jotai";
 import { useEffect, useRef, useState } from "react";
 
-import type { WebGPUContext } from "#lib/webgpu";
+import type { WebGPUContext, WebGPUUnavailableReason } from "#lib/webgpu";
 
 import { initWebGPU, isWebGPUSupported } from "#lib/webgpu";
 import { reducedMotionAtom, themeAtom } from "#store/ui";
@@ -20,6 +20,8 @@ interface UseWebGPUResult {
   isReady: boolean;
   canvasWidth: number;
   canvasHeight: number;
+  /** Specific reason `initWebGPU()` most recently failed, or `null` if it hasn't failed. */
+  failureReason: WebGPUUnavailableReason | null;
 }
 
 /**
@@ -37,6 +39,7 @@ export function useWebGPU(): UseWebGPUResult {
   const [isReady, setIsReady] = useState(false);
   const [canvasWidth, setCanvasWidth] = useState(0);
   const [canvasHeight, setCanvasHeight] = useState(0);
+  const [failureReason, setFailureReason] = useState<WebGPUUnavailableReason | null>(null);
   const canvasElRef = useRef<HTMLCanvasElement | null>(null);
   const isInitializingRef = useRef(false);
   const destroyedRef = useRef(false);
@@ -95,14 +98,17 @@ export function useWebGPU(): UseWebGPUResult {
     });
 
     if (destroyedRef.current) {
-      result?.device.destroy();
+      if (result.ok) result.value.device.destroy();
       isInitializingRef.current = false;
       return;
     }
 
-    if (result) {
-      setGpuCtx(result);
+    if (result.ok) {
+      setGpuCtx(result.value);
       setIsReady(true);
+      setFailureReason(null);
+    } else {
+      setFailureReason(result.reason);
     }
 
     isInitializingRef.current = false;
@@ -141,5 +147,6 @@ export function useWebGPU(): UseWebGPUResult {
     isReady,
     canvasWidth,
     canvasHeight,
+    failureReason,
   };
 }
