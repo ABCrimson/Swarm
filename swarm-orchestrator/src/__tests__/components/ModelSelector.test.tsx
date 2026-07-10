@@ -131,4 +131,49 @@ describe("ModelSelector portal", () => {
     const option = screen.getByRole("option", { name: /Claude Mythos 5/ });
     expect(option).toHaveTextContent("Requires Project Glasswing");
   });
+
+  it("closes the panel when keyboard focus moves outside it (tab-away), without stealing focus back to the trigger", async () => {
+    render(<ModelSelector />);
+    const outside = document.createElement("button");
+    outside.textContent = "outside";
+    document.body.appendChild(outside);
+
+    await openDropdown();
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+    // Simulate tab-away past the last option: focus lands on an element
+    // outside both the trigger's container and the portaled panel.
+    outside.focus();
+    fireEvent.focusIn(outside);
+
+    expect(screen.getByRole("button", { name: "Select AI Model" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    });
+    // Unlike Escape, tab-driven focus-out must not force focus back onto
+    // the trigger — that would fight native tab order.
+    expect(document.activeElement).toBe(outside);
+
+    document.body.removeChild(outside);
+  });
+
+  it("does not close the panel when focus moves within it (e.g. onto an option)", async () => {
+    render(<ModelSelector />);
+
+    await openDropdown();
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+    const option = screen.getByRole("option", { name: /Claude Opus 4\.8/ });
+    option.focus();
+    fireEvent.focusIn(option);
+
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select AI Model" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
 });

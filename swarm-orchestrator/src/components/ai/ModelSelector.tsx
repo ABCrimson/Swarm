@@ -256,6 +256,35 @@ export function ModelSelector(): React.ReactElement {
     };
   }, [open]);
 
+  // Tab-away-to-close. The old blur-based close relied on `relatedTarget`
+  // containment against the trigger's local fieldset — once the panel
+  // moved to a `document.body` portal, that check could never see the
+  // portaled option as "contained," so keyboard tab-away past the last
+  // option no longer closed anything (mousedown-outside only covers
+  // pointer interactions, not keyboard focus). A document-level `focusin`
+  // listener mirrors the outside-click effect above: if focus lands
+  // anywhere outside both the trigger's container and the portaled panel,
+  // close. Unlike the Escape handler, this does NOT call
+  // `triggerRef.current?.focus()` — forcing focus back onto the trigger
+  // here would fight native tab order and trap focus instead of letting
+  // it continue to wherever Tab was headed.
+  useEffect(() => {
+    if (!open) return;
+
+    function handleFocusIn(e: FocusEvent): void {
+      const target = e.target as Node;
+      if (containerRef.current?.contains(target)) return;
+      if (panelRef.current?.contains(target)) return;
+      setOpen(false);
+    }
+
+    document.addEventListener("focusin", handleFocusIn);
+
+    return () => {
+      document.removeEventListener("focusin", handleFocusIn);
+    };
+  }, [open]);
+
   return (
     <fieldset
       ref={containerRef}
