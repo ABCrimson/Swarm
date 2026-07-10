@@ -2,12 +2,15 @@ import { useAtom, useAtomValue } from "jotai";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { WorkerAIPanel } from "#components/ai/WorkerAIPanel";
 import { WorkerDetail } from "#components/graph/WorkerDetail";
 import { WorkerGraph } from "#components/graph/WorkerGraph";
 import { Button } from "#components/ui/Button";
 import { spawnWorker } from "#lib/tauri";
 import { detailPanelOpenAtom, graphViewAtom, selectedWorkerIdAtom } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
+
+type DetailTab = "detail" | "ai";
 
 function WorkerListView(): React.ReactElement {
   const workers = useWorkerStore((s) => s.workers);
@@ -90,7 +93,8 @@ function WorkerListView(): React.ReactElement {
               textAlign: "left",
               width: "100%",
               outline: "none",
-              transition: "background 0.12s cubic-bezier(0, 0, 0.2, 1), border-color 0.12s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0, 0, 0.2, 1)",
+              transition:
+                "background 0.12s cubic-bezier(0, 0, 0.2, 1), border-color 0.12s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0, 0, 0.2, 1)",
             }}
             onFocus={(e) => {
               e.currentTarget.style.boxShadow = "0 0 0 2px oklch(0.78 0.18 205 / 0.4)";
@@ -130,6 +134,7 @@ export function Workers(): React.ReactElement {
   const workers = useWorkerStore((s) => s.workers);
   const selectedWorker = selectedId ? workers.get(selectedId) : undefined;
   const [isSpawning, setIsSpawning] = useState(false);
+  const [detailTab, setDetailTab] = useState<DetailTab>("detail");
 
   const handleSpawn = async () => {
     setIsSpawning(true);
@@ -196,81 +201,83 @@ export function Workers(): React.ReactElement {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        {/* Spawn button */}
-        <Button
-          variant="primary"
-          size="sm"
-          loading={isSpawning}
-          onClick={() => void handleSpawn()}
-        >
-          Spawn Worker
-        </Button>
+          {/* Spawn button */}
+          <Button
+            variant="primary"
+            size="sm"
+            loading={isSpawning}
+            onClick={() => void handleSpawn()}
+          >
+            Spawn Worker
+          </Button>
 
-        {/* View toggle */}
-        <div
-          style={{
-            display: "flex",
-            background: "oklch(0.08 0.02 220)",
-            border: "1px solid oklch(0.22 0.04 220)",
-            borderRadius: 8,
-            padding: 2,
-          }}
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={viewMode === "graph"}
-            onClick={() => setViewMode("graph")}
+          {/* View toggle */}
+          <div
             style={{
-              padding: "6px 12px",
-              background: viewMode === "graph" ? "oklch(0.78 0.18 205 / 0.15)" : "transparent",
-              border: "none",
-              borderRadius: 6,
-              color: viewMode === "graph" ? "oklch(0.78 0.18 205)" : "oklch(0.55 0.04 220)",
-              fontFamily: "var(--font-body)",
-              fontSize: "0.75rem",
-              fontWeight: 500,
-              cursor: "pointer",
-              outline: "none",
-              transition: "background 0.12s cubic-bezier(0, 0, 0.2, 1), color 0.12s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0, 0, 0.2, 1)",
-            }}
-            onFocus={(e) => {
-              e.currentTarget.style.boxShadow = "0 0 0 2px oklch(0.78 0.18 205 / 0.4)";
-            }}
-            onBlur={(e) => {
-              e.currentTarget.style.boxShadow = "none";
+              display: "flex",
+              background: "oklch(0.08 0.02 220)",
+              border: "1px solid oklch(0.22 0.04 220)",
+              borderRadius: 8,
+              padding: 2,
             }}
           >
-            Graph
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={viewMode === "list"}
-            onClick={() => setViewMode("list")}
-            style={{
-              padding: "6px 12px",
-              background: viewMode === "list" ? "oklch(0.78 0.18 205 / 0.15)" : "transparent",
-              border: "none",
-              borderRadius: 6,
-              color: viewMode === "list" ? "oklch(0.78 0.18 205)" : "oklch(0.55 0.04 220)",
-              fontFamily: "var(--font-body)",
-              fontSize: "0.75rem",
-              fontWeight: 500,
-              cursor: "pointer",
-              outline: "none",
-              transition: "background 0.12s cubic-bezier(0, 0, 0.2, 1), color 0.12s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0, 0, 0.2, 1)",
-            }}
-            onFocus={(e) => {
-              e.currentTarget.style.boxShadow = "0 0 0 2px oklch(0.78 0.18 205 / 0.4)";
-            }}
-            onBlur={(e) => {
-              e.currentTarget.style.boxShadow = "none";
-            }}
-          >
-            List
-          </button>
-        </div>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === "graph"}
+              onClick={() => setViewMode("graph")}
+              style={{
+                padding: "6px 12px",
+                background: viewMode === "graph" ? "oklch(0.78 0.18 205 / 0.15)" : "transparent",
+                border: "none",
+                borderRadius: 6,
+                color: viewMode === "graph" ? "oklch(0.78 0.18 205)" : "oklch(0.55 0.04 220)",
+                fontFamily: "var(--font-body)",
+                fontSize: "0.75rem",
+                fontWeight: 500,
+                cursor: "pointer",
+                outline: "none",
+                transition:
+                  "background 0.12s cubic-bezier(0, 0, 0.2, 1), color 0.12s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0, 0, 0.2, 1)",
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.boxShadow = "0 0 0 2px oklch(0.78 0.18 205 / 0.4)";
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.boxShadow = "none";
+              }}
+            >
+              Graph
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === "list"}
+              onClick={() => setViewMode("list")}
+              style={{
+                padding: "6px 12px",
+                background: viewMode === "list" ? "oklch(0.78 0.18 205 / 0.15)" : "transparent",
+                border: "none",
+                borderRadius: 6,
+                color: viewMode === "list" ? "oklch(0.78 0.18 205)" : "oklch(0.55 0.04 220)",
+                fontFamily: "var(--font-body)",
+                fontSize: "0.75rem",
+                fontWeight: 500,
+                cursor: "pointer",
+                outline: "none",
+                transition:
+                  "background 0.12s cubic-bezier(0, 0, 0.2, 1), color 0.12s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0, 0, 0.2, 1)",
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.boxShadow = "0 0 0 2px oklch(0.78 0.18 205 / 0.4)";
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.boxShadow = "none";
+              }}
+            >
+              List
+            </button>
+          </div>
         </div>
       </div>
 
@@ -280,8 +287,76 @@ export function Workers(): React.ReactElement {
           {viewMode === "graph" ? <WorkerGraph /> : <WorkerListView />}
         </div>
 
-        {/* Detail panel */}
-        {detailOpen && selectedWorker && <WorkerDetail worker={selectedWorker} />}
+        {/* Detail / AI chat panel */}
+        {detailOpen && selectedWorker && (
+          <div
+            style={{
+              width: detailTab === "ai" ? 480 : 320,
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+              flexShrink: 0,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                borderBottom: "1px solid oklch(0.22 0.04 220)",
+                background: "oklch(0.10 0.03 220)",
+                flexShrink: 0,
+              }}
+              role="tablist"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={detailTab === "detail"}
+                onClick={() => setDetailTab("detail")}
+                style={{
+                  flex: 1,
+                  padding: "8px 12px",
+                  background:
+                    detailTab === "detail" ? "oklch(0.78 0.18 205 / 0.12)" : "transparent",
+                  border: "none",
+                  color: detailTab === "detail" ? "oklch(0.78 0.18 205)" : "oklch(0.55 0.04 220)",
+                  fontFamily: "var(--font-body)",
+                  fontSize: "0.75rem",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                }}
+              >
+                Detail
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={detailTab === "ai"}
+                onClick={() => setDetailTab("ai")}
+                style={{
+                  flex: 1,
+                  padding: "8px 12px",
+                  background: detailTab === "ai" ? "oklch(0.78 0.18 205 / 0.12)" : "transparent",
+                  border: "none",
+                  color: detailTab === "ai" ? "oklch(0.78 0.18 205)" : "oklch(0.55 0.04 220)",
+                  fontFamily: "var(--font-body)",
+                  fontSize: "0.75rem",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                }}
+              >
+                AI Chat
+              </button>
+            </div>
+            <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+              {detailTab === "detail" ? (
+                <WorkerDetail worker={selectedWorker} />
+              ) : (
+                <WorkerAIPanel workerId={selectedWorker.id} />
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

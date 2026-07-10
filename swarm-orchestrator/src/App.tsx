@@ -24,7 +24,15 @@ const Logs = lazy(() => import("#pages/Logs").then((m) => ({ default: m.Logs }))
 const Tools = lazy(() => import("#pages/Tools").then((m) => ({ default: m.Tools })));
 const Workspace = lazy(() => import("#pages/Workspace").then((m) => ({ default: m.Workspace })));
 
-type PageId = "dashboard" | "workers" | "sessions" | "metrics" | "settings" | "logs" | "tools" | "workspace";
+type PageId =
+  | "dashboard"
+  | "workers"
+  | "sessions"
+  | "metrics"
+  | "settings"
+  | "logs"
+  | "tools"
+  | "workspace";
 
 const PAGE_MAP: Record<PageId, React.LazyExoticComponent<() => React.ReactElement>> = {
   dashboard: Dashboard,

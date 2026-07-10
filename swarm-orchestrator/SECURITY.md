@@ -4,6 +4,7 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 0.10.x  | :white_check_mark: |
 | 0.9.x   | :white_check_mark: |
 | < 0.9   | :x:                |
 
@@ -24,9 +25,17 @@ We will acknowledge receipt within 48 hours and provide a detailed response with
 
 ## Security Measures
 
-- All IPC commands validate input at the boundary
-- API keys are never logged or serialized
-- Content Security Policy enforced via Tauri configuration
-- Update signatures verified via public key
-- File system access scoped to application data directory
+- All IPC commands validate input at the boundary (UUID parsing, required fields)
+- API keys are never logged or serialized (redacted from `Debug`/`Serialize` derives on the AI client config)
+- Content Security Policy enforced via Tauri configuration (`default-src 'self'`, no `unsafe-inline`, `connect-src` scoped to `ipc:`/`http://ipc.localhost` and `https://api.anthropic.com`)
+- **Update signatures are configured and enforced.** An Ed25519 keypair has been generated (`~/.tauri/swarm-orchestrator.key`, not committed); the public key is populated in `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`, and `tauri-plugin-updater` verifies every downloaded update against it before installation. See [`src-tauri/UPDATER_KEYS.md`](src-tauri/UPDATER_KEYS.md) for key management details.
+- CI signs release artifacts: `.github/workflows/release.yml` passes `TAURI_SIGNING_PRIVATE_KEY` (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, if set) as GitHub Actions secrets to `tauri-apps/tauri-action`, so every published release is signed automatically, not just local builds
+- File system access is scoped by Tauri capabilities (`src-tauri/capabilities/default.json`), narrower than a blanket app-data grant:
+  - Reads (`fs:allow-read-text-file`, `fs:allow-read-dir`, `fs:allow-exists`) are permitted under `$APPDATA/**` and `$HOME/**`, to support workspace/file-tree browsing
+  - Writes, removals, and renames (`fs:allow-write-text-file`, `fs:allow-mkdir`, `fs:allow-remove`, `fs:allow-rename`) are restricted to `$APPDATA/**` and `$HOME/.swarm/**` only -- the app cannot write, delete, or rename files anywhere else under the user's home directory
 - No `eval()` or `new Function()` usage
+
+## Known Gaps / In Progress
+
+- Update artifacts are signed and verified, but the release pipeline has not yet been exercised end-to-end against a production update server; treat the first few tagged releases as a soak test for the updater path.
+- The broad read scope (`$HOME/**`) is intentionally permissive to support arbitrary workspace directories; if this proves too broad in practice, a future release should move to a user-configured allowlist of workspace roots instead of blanket `$HOME` read access.

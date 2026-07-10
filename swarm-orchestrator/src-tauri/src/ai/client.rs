@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tokio_stream::StreamExt;
 
-use crate::events::{emit_event, AiStreamDeltaPayload, SwarmEvent};
+use crate::error::AppError;
+use crate::events::{AiStreamDeltaPayload, SwarmEvent, emit_event};
 
 use super::stream::{extract_delta_text, is_message_stop, parse_sse_line};
 
@@ -26,7 +27,7 @@ use super::stream::{extract_delta_text, is_message_stop, parse_sse_line};
 /// |-------------|----------------------------------------|
 /// | `api_key`   | `""` (must be configured at runtime)    |
 /// | `base_url`  | `https://api.anthropic.com/v1`          |
-/// | `model`     | `claude-sonnet-4-20250514`              |
+/// | `model`     | `claude-sonnet-5`                       |
 /// | `max_tokens`| `4096`                                  |
 ///
 /// # Examples
@@ -38,7 +39,7 @@ use super::stream::{extract_delta_text, is_message_stop, parse_sse_line};
 ///     api_key: "sk-ant-...".to_string(),
 ///     ..AiClientConfig::default()
 /// };
-/// assert_eq!(config.model, "claude-sonnet-4-20250514");
+/// assert_eq!(config.model, "claude-sonnet-5");
 /// ```
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,7 +49,7 @@ pub struct AiClientConfig {
     pub api_key: String,
     /// Base URL for the Anthropic API.
     pub base_url: String,
-    /// Model identifier (e.g., `"claude-sonnet-4-20250514"`).
+    /// Model identifier (e.g., `"claude-sonnet-5"`).
     pub model: String,
     /// Maximum number of tokens to generate per response.
     pub max_tokens: u32,
@@ -70,7 +71,7 @@ impl Default for AiClientConfig {
         Self {
             api_key: String::new(),
             base_url: "https://api.anthropic.com/v1".to_string(),
-            model: "claude-sonnet-4-20250514".to_string(),
+            model: "claude-sonnet-5".to_string(),
             max_tokens: 4096,
         }
     }
@@ -205,16 +206,49 @@ impl AiClient {
     ///
     /// # Errors
     ///
-    /// Returns `anyhow::Error` if:
+    /// Returns [`AppError::Ai`] if:
     /// - The HTTP request fails to send
     /// - The API returns a non-2xx status code
     /// - An SSE stream chunk cannot be read
+    ///
+    /// On every error path, a final `ai:stream_delta` event with
+    /// `done: true` is emitted before the error is returned, so
+    /// frontend listeners never hang waiting for a terminal event.
     #[tracing::instrument(skip(self, app, request), fields(request_id = %request.request_id))]
     pub async fn stream_message(
         &self,
         app: &AppHandle,
         request: &AiRequest,
-    ) -> anyhow::Result<String> {
+    ) -> Result<String, AppError> {
+        match self.stream_message_inner(app, request).await {
+            Ok(text) => Ok(text),
+            Err(e) => {
+                // Guarantee a terminal event reaches the frontend on any
+                // failure path (send failure, non-2xx status, stream
+                // read error) so listeners never hang indefinitely.
+                emit_event(
+                    app,
+                    SwarmEvent::AiStreamDelta(AiStreamDeltaPayload {
+                        request_id: request.request_id.clone(),
+                        delta: String::new(),
+                        done: true,
+                    }),
+                );
+                Err(e)
+            }
+        }
+    }
+
+    /// Inner implementation of [`Self::stream_message`].
+    ///
+    /// Separated so the outer method can guarantee a `done: true`
+    /// event is emitted on every exit path, including errors raised
+    /// by `?` from this function.
+    async fn stream_message_inner(
+        &self,
+        app: &AppHandle,
+        request: &AiRequest,
+    ) -> Result<String, AppError> {
         let url = format!("{}/messages", self.config.base_url);
 
         // Build the Anthropic API request body
@@ -244,7 +278,7 @@ impl AiClient {
             .json(&body)
             .send()
             .await
-            .context("failed to send AI API request")?;
+            .map_err(|e| AppError::Ai(format!("failed to send AI API request: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -252,7 +286,7 @@ impl AiClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "unknown error".to_string());
-            anyhow::bail!("AI API returned {}: {}", status, text);
+            return Err(AppError::Ai(format!("AI API returned {status}: {text}")));
         }
 
         let mut full_text = String::new();
@@ -262,7 +296,8 @@ impl AiClient {
         let mut done_sent = false;
 
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.context("error reading SSE stream chunk")?;
+            let chunk =
+                chunk.map_err(|e| AppError::Ai(format!("error reading SSE stream chunk: {e}")))?;
             let text = String::from_utf8_lossy(&chunk);
             buffer.push_str(&text);
 
@@ -306,11 +341,14 @@ impl AiClient {
 
         // Guarantee done signal even if stream ended without message_stop
         if !done_sent {
-            emit_event(app, SwarmEvent::AiStreamDelta(AiStreamDeltaPayload {
-                request_id: request.request_id.clone(),
-                delta: String::new(),
-                done: true,
-            }));
+            emit_event(
+                app,
+                SwarmEvent::AiStreamDelta(AiStreamDeltaPayload {
+                    request_id: request.request_id.clone(),
+                    delta: String::new(),
+                    done: true,
+                }),
+            );
         }
 
         tracing::debug!(

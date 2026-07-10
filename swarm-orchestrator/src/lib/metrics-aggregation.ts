@@ -23,12 +23,19 @@ export function createRingBuffer<T>(capacity: number): RingBuffer<T> {
   };
 }
 
-/** Push an item into the ring buffer, returning a new buffer. */
+/**
+ * Push an item into the ring buffer, returning an updated buffer descriptor.
+ *
+ * O(1) amortized: the backing `items` array is mutated in place (only the
+ * slot at `head` is written) rather than copied, so this stays cheap
+ * regardless of `capacity`. Callers relying on the previous descriptor's
+ * `items` array remaining unchanged after a push should not do so — the
+ * array is shared and mutated, only `head`/`size` are new.
+ */
 export function ringBufferPush<T>(buf: RingBuffer<T>, item: T): RingBuffer<T> {
-  const items = [...buf.items];
-  items[buf.head] = item;
+  buf.items[buf.head] = item;
   return {
-    items,
+    items: buf.items,
     capacity: buf.capacity,
     head: (buf.head + 1) % buf.capacity,
     size: Math.min(buf.size + 1, buf.capacity),

@@ -3,10 +3,11 @@
 // Per model: context window, cost estimate, capability badges.
 // Persisted via Jotai atomWithStorage.
 
-import { AnimatePresence, motion } from "framer-motion";
 import { useAtom } from "jotai";
+import { AnimatePresence, motion } from "motion/react";
 import type { CSSProperties } from "react";
 import { useRef, useState } from "react";
+import { CLAUDE_MODELS } from "#lib/models";
 import { selectedModelAtom } from "#store/ui";
 
 // ── Model Definitions ───────────────────────────────
@@ -24,12 +25,18 @@ interface ModelInfo {
   readonly borderColor: string;
 }
 
+/** Formats a token count as a compact "1M tokens" / "200K tokens" label. */
+function formatContextWindow(tokens: number): string {
+  if (tokens >= 1_000_000) return `${tokens / 1_000_000}M tokens`;
+  return `${Math.round(tokens / 1000)}K tokens`;
+}
+
 const MODELS: ModelInfo[] = [
   {
     key: "opus",
-    label: "Claude Opus",
-    id: "claude-opus-4-0-20250514",
-    contextWindow: "200K tokens",
+    label: CLAUDE_MODELS.opus.label,
+    id: CLAUDE_MODELS.opus.id,
+    contextWindow: formatContextWindow(CLAUDE_MODELS.opus.contextWindow),
     costIndicator: "$$$",
     capabilities: ["Extended thinking", "Complex reasoning", "Code generation", "Analysis"],
     color: "oklch(0.72 0.20 290)",
@@ -37,9 +44,9 @@ const MODELS: ModelInfo[] = [
   },
   {
     key: "sonnet",
-    label: "Claude Sonnet",
-    id: "claude-sonnet-4-20250514",
-    contextWindow: "200K tokens",
+    label: CLAUDE_MODELS.sonnet.label,
+    id: CLAUDE_MODELS.sonnet.id,
+    contextWindow: formatContextWindow(CLAUDE_MODELS.sonnet.contextWindow),
     costIndicator: "$$",
     capabilities: ["Balanced", "Fast reasoning", "Code generation", "Tool use"],
     color: "oklch(0.78 0.18 205)",
@@ -47,9 +54,9 @@ const MODELS: ModelInfo[] = [
   },
   {
     key: "haiku",
-    label: "Claude Haiku",
-    id: "claude-haiku-3-5-20241022",
-    contextWindow: "200K tokens",
+    label: CLAUDE_MODELS.haiku.label,
+    id: CLAUDE_MODELS.haiku.id,
+    contextWindow: formatContextWindow(CLAUDE_MODELS.haiku.contextWindow),
     costIndicator: "$",
     capabilities: ["Fast", "Low cost", "Simple tasks", "Lightweight"],
     color: "oklch(0.82 0.18 140)",

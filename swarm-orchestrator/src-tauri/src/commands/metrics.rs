@@ -6,10 +6,16 @@
 //! 1. **Push:** A background loop emits `system:metrics` events
 //!    every 500ms via [`start_metrics_loop`]
 //! 2. **Pull:** The [`get_metrics`] command returns an on-demand
-//!    metrics snapshot
+//!    metrics snapshot, including a `perWorker` breakdown
+//!
+//! Both mechanisms share the same [`SharedSystem`] managed state
+//! (a single `sysinfo::System` behind a mutex) so there is one
+//! CPU-usage-delta tracker for the whole app, rather than each
+//! mechanism refreshing its own independent `System`.
 //!
 //! Uses `sysinfo` for real CPU and memory data, and per-worker
-//! process-level metrics when worker PIDs are available.
+//! process-level metrics when worker PIDs are available (see
+//! [`collect_per_worker_metrics`], wired into [`get_metrics`]).
 
 use parking_lot::Mutex;
 use std::time::Duration;
@@ -18,7 +24,7 @@ use sysinfo::System;
 use tauri::AppHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::events::{emit_event, SwarmEvent, SystemMetricsPayload};
+use crate::events::{SwarmEvent, SystemMetricsPayload, emit_event};
 use crate::worker::registry::WorkerRegistry;
 
 /// Shared system metrics state persisted across Tauri command calls.
@@ -42,6 +48,11 @@ impl SharedSystem {
 /// `sysinfo` refresh is CPU-bound) and worker aggregate metrics,
 /// then emitting them as `system:metrics` Tauri events.
 ///
+/// Reuses the app-wide [`SharedSystem`] managed state (the same
+/// `sysinfo::System` instance used by [`get_metrics`]) so CPU usage
+/// deltas are computed from a single source of truth instead of a
+/// second, independent tracker.
+///
 /// The loop respects the provided `CancellationToken` for graceful
 /// shutdown via `tokio::select!`.
 ///
@@ -49,6 +60,7 @@ impl SharedSystem {
 ///
 /// * `app` - Tauri app handle for event emission
 /// * `registry` - The shared worker registry to collect metrics from
+/// * `shared_sys` - The app-wide shared `sysinfo::System` (managed state)
 /// * `cancel` - Cancellation token for graceful shutdown
 ///
 /// # Metrics Collected
@@ -60,65 +72,66 @@ impl SharedSystem {
 /// | `worker_count`       | `registry.aggregate_metrics()`      |
 /// | `ai_req_per_sec`| Placeholder (0.0)                   |
 /// | `timestamp`          | Current Unix time (ms)              |
-pub fn start_metrics_loop(app: AppHandle, registry: WorkerRegistry, cancel: CancellationToken) {
+pub fn start_metrics_loop(
+    app: AppHandle,
+    registry: WorkerRegistry,
+    shared_sys: SharedSystem,
+    cancel: CancellationToken,
+) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(500));
         tracing::info!("metrics collection loop started (500ms interval)");
 
-        // Keep sysinfo System alive across ticks for accurate CPU deltas
-        let mut sys = System::new_all();
-
         loop {
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled() => {
-                    tracing::info!("metrics loop shutting down");
-                    break;
+            // A single future (the interval tick) racing against
+            // cancellation — `run_until_cancelled` expresses this more
+            // directly than a two-armed `tokio::select!`.
+            let Some(_) = cancel.run_until_cancelled(interval.tick()).await else {
+                tracing::info!("metrics loop shutting down");
+                break;
+            };
+
+            // Offload sysinfo refresh to spawn_blocking (CPU-bound),
+            // reusing the shared System for accurate CPU deltas.
+            let sys_arc = shared_sys.0.clone();
+            let (cpu_percent, memory_mb) = tokio::task::spawn_blocking(move || {
+                let mut sys = sys_arc.lock();
+                sys.refresh_cpu_usage();
+                sys.refresh_memory();
+                (
+                    sys.global_cpu_usage() as f64,
+                    sys.used_memory() as f64 / (1024.0 * 1024.0),
+                )
+            })
+            .await
+            .unwrap_or((0.0, 0.0));
+
+            let registry_clone = registry.clone();
+            let metrics =
+                tokio::task::spawn_blocking(move || registry_clone.aggregate_metrics()).await;
+
+            let metrics = match metrics {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to collect aggregate metrics");
+                    continue;
                 }
-                _ = interval.tick() => {
-                    // Offload sysinfo refresh to spawn_blocking (CPU-bound)
-                    sys = tokio::task::spawn_blocking(move || {
-                        sys.refresh_cpu_usage();
-                        sys.refresh_memory();
-                        sys
-                    })
-                    .await
-                    .unwrap_or_else(|_| System::new_all());
+            };
 
-                    let cpu_percent = sys.global_cpu_usage() as f64;
-                    let used_memory_bytes = sys.used_memory();
-                    let memory_mb = used_memory_bytes as f64 / (1024.0 * 1024.0);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
 
-                    let registry_clone = registry.clone();
-                    let metrics = tokio::task::spawn_blocking(move || {
-                        registry_clone.aggregate_metrics()
-                    })
-                    .await;
+            let payload = SystemMetricsPayload {
+                cpu_percent,
+                memory_mb,
+                worker_count: metrics.total_workers,
+                ai_req_per_sec: 0.0, // placeholder — future AI queue integration
+                timestamp: now,
+            };
 
-                    let metrics = match metrics {
-                        Ok(m) => m,
-                        Err(e) => {
-                            tracing::error!(error = %e, "failed to collect aggregate metrics");
-                            continue;
-                        }
-                    };
-
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as i64)
-                        .unwrap_or(0);
-
-                    let payload = SystemMetricsPayload {
-                        cpu_percent,
-                        memory_mb,
-                        worker_count: metrics.total_workers,
-                        ai_req_per_sec: 0.0, // placeholder — future AI queue integration
-                        timestamp: now,
-                    };
-
-                    emit_event(&app, SwarmEvent::SystemMetrics(payload));
-                }
-            }
+            emit_event(&app, SwarmEvent::SystemMetrics(payload));
         }
     });
 }
@@ -140,6 +153,9 @@ pub fn start_metrics_loop(app: AppHandle, registry: WorkerRegistry, cancel: Canc
 /// - `cpuPercent` - Global CPU usage percentage
 /// - `memoryMb` - Used memory in megabytes
 /// - `totalWorkers`, `running`, `paused`, `idle`, `errored` - Worker counts
+/// - `perWorker` - Array of per-worker process metrics (see
+///   [`collect_per_worker_metrics`]), each with `workerId`, `pid`,
+///   `cpuPercent`, and `memoryBytes`
 ///
 /// # Errors
 ///
@@ -154,16 +170,21 @@ pub async fn get_metrics(
 ) -> Result<serde_json::Value, String> {
     tracing::debug!("get_metrics called");
 
-    // Collect system metrics using the shared System instance (offload to spawn_blocking)
+    // Collect system metrics and per-worker process metrics using the
+    // same shared System instance (offload to spawn_blocking).
     let sys_arc = shared_sys.0.clone();
-    let sys_metrics = tokio::task::spawn_blocking(move || {
+    let registry_for_sys = registry.inner().clone();
+    let (sys_metrics, per_worker) = tokio::task::spawn_blocking(move || {
         let mut sys = sys_arc.lock();
         sys.refresh_cpu_usage();
         sys.refresh_memory();
-        (
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        let sys_metrics = (
             sys.global_cpu_usage() as f64,
             sys.used_memory() as f64 / (1024.0 * 1024.0),
-        )
+        );
+        let per_worker = collect_per_worker_metrics(&registry_for_sys, &sys);
+        (sys_metrics, per_worker)
     })
     .await
     .map_err(|e| {
@@ -187,6 +208,7 @@ pub async fn get_metrics(
         "paused": worker_metrics.paused,
         "idle": worker_metrics.idle,
         "errored": worker_metrics.errored,
+        "perWorker": per_worker,
     });
 
     Ok(combined)
@@ -283,10 +305,7 @@ mod tests {
         sys.refresh_cpu_usage();
         let cpu = sys.global_cpu_usage();
         // CPU usage is a percentage [0.0, 100.0+] — just verify it's finite
-        assert!(
-            cpu.is_finite(),
-            "expected finite CPU usage, got: {cpu}"
-        );
+        assert!(cpu.is_finite(), "expected finite CPU usage, got: {cpu}");
     }
 
     #[test]
@@ -340,10 +359,7 @@ mod tests {
         for entry in &metrics {
             let cpu = entry["cpuPercent"].as_f64().unwrap();
             let mem = entry["memoryBytes"].as_u64().unwrap();
-            assert!(
-                cpu.is_finite(),
-                "expected finite cpuPercent"
-            );
+            assert!(cpu.is_finite(), "expected finite cpuPercent");
             // For a non-existent PID, memory should be 0
             assert_eq!(mem, 0, "expected 0 bytes for non-existent PID");
         }

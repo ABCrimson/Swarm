@@ -35,19 +35,35 @@ export function useAiStream(): UseAiStreamReturn {
   const activeStreams = useAiStore((s) => s.activeStreams);
   const concurrentLimit = useAiStore((s) => s.concurrentLimit);
   const updateItemStatus = useAiStore((s) => s.updateItemStatus);
-  const setActiveStreams = useAiStore((s) => s.setActiveStreams);
 
   const abortControllers = useRef(new Map<string, AbortController>());
+  // Tracks which itemIds have already had their activeStreams decrement +
+  // controller cleanup performed, so cancelStream() and startStream()'s
+  // finally block never both settle the same stream.
+  const settled = useRef(new Set<string>());
 
   const atLimit = activeStreams >= concurrentLimit;
 
-  const startStream = async (itemId: string, params: StreamParams, onDelta?: OnStreamDelta): Promise<string> => {
+  /** Performs the activeStreams decrement + bookkeeping exactly once per stream. */
+  const settle = (itemId: string) => {
+    if (settled.current.has(itemId)) return;
+    settled.current.add(itemId);
+    abortControllers.current.delete(itemId);
+    useAiStore.setState((state) => ({ activeStreams: Math.max(0, state.activeStreams - 1) }));
+  };
+
+  const startStream = async (
+    itemId: string,
+    params: StreamParams,
+    onDelta?: OnStreamDelta,
+  ): Promise<string> => {
     if (useAiStore.getState().activeStreams >= useAiStore.getState().concurrentLimit) {
       throw new Error("Concurrent stream limit reached");
     }
 
     const controller = new AbortController();
     abortControllers.current.set(itemId, controller);
+    settled.current.delete(itemId);
 
     // Increment active streams (functional updater via getState to avoid read-then-write race)
     useAiStore.setState((state) => ({ activeStreams: state.activeStreams + 1 }));
@@ -80,8 +96,10 @@ export function useAiStream(): UseAiStreamReturn {
       }
       throw error;
     } finally {
-      abortControllers.current.delete(itemId);
-      useAiStore.setState((state) => ({ activeStreams: Math.max(0, state.activeStreams - 1) }));
+      // Single settlement point: whether this stream finished, errored, or
+      // was aborted by cancelStream(), only the first caller to reach
+      // settle() actually decrements activeStreams / clears the controller.
+      settle(itemId);
     }
 
     return fullContent;
@@ -91,9 +109,10 @@ export function useAiStream(): UseAiStreamReturn {
     const controller = abortControllers.current.get(itemId);
     if (controller) {
       controller.abort();
-      abortControllers.current.delete(itemId);
       updateItemStatus(itemId, "error");
-      useAiStore.setState((state) => ({ activeStreams: Math.max(0, state.activeStreams - 1) }));
+      // Do NOT settle here: streamMessage's async generator does not throw
+      // on abort (the for-await loop just ends), so startStream's own
+      // finally block will run and call settle() exactly once.
     }
   };
 

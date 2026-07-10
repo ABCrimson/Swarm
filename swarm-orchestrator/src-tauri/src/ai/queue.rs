@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use tauri::AppHandle;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 
 use super::client::{AiClient, AiRequest};
@@ -160,9 +160,9 @@ impl AiQueue {
             mpsc::error::TrySendError::Full(_) => crate::error::AppError::QueueFull {
                 capacity: AI_QUEUE_CAPACITY,
             },
-            mpsc::error::TrySendError::Closed(_) => crate::error::AppError::ChannelClosed(
-                "AI queue channel closed".to_string(),
-            ),
+            mpsc::error::TrySendError::Closed(_) => {
+                crate::error::AppError::ChannelClosed("AI queue channel closed".to_string())
+            }
         })
     }
 
@@ -231,7 +231,9 @@ impl AiQueue {
 
             // Process from the priority heap — pop without holding guard across await
             loop {
-                let Some(prioritized) = heap.lock().pop() else { break };
+                let Some(prioritized) = heap.lock().pop() else {
+                    break;
+                };
 
                 let permit = match semaphore.clone().acquire_owned().await {
                     Ok(p) => p,
@@ -322,18 +324,20 @@ mod tests {
         let result = sender
             .try_send(make_request("r2", AiPriority::Normal))
             .map_err(|e| match e {
-                mpsc::error::TrySendError::Full(_) => crate::error::AppError::QueueFull {
-                    capacity: 1,
-                },
-                mpsc::error::TrySendError::Closed(_) => crate::error::AppError::ChannelClosed(
-                    "AI queue channel closed".to_string(),
-                ),
+                mpsc::error::TrySendError::Full(_) => {
+                    crate::error::AppError::QueueFull { capacity: 1 }
+                }
+                mpsc::error::TrySendError::Closed(_) => {
+                    crate::error::AppError::ChannelClosed("AI queue channel closed".to_string())
+                }
             });
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("queue full") || err_msg.contains("Queue full") || err_msg.contains("1"),
+            err_msg.contains("queue full")
+                || err_msg.contains("Queue full")
+                || err_msg.contains("1"),
             "expected queue full error with capacity, got: {err_msg}"
         );
     }
@@ -421,12 +425,12 @@ mod tests {
         let result = sender
             .try_send(make_request("orphan", AiPriority::Normal))
             .map_err(|e| match e {
-                mpsc::error::TrySendError::Full(_) => crate::error::AppError::QueueFull {
-                    capacity: 4,
-                },
-                mpsc::error::TrySendError::Closed(_) => crate::error::AppError::ChannelClosed(
-                    "AI queue channel closed".to_string(),
-                ),
+                mpsc::error::TrySendError::Full(_) => {
+                    crate::error::AppError::QueueFull { capacity: 4 }
+                }
+                mpsc::error::TrySendError::Closed(_) => {
+                    crate::error::AppError::ChannelClosed("AI queue channel closed".to_string())
+                }
             });
 
         assert!(result.is_err());

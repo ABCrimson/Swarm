@@ -1,9 +1,13 @@
+import { useSystemStore } from "#store/system";
+
 /**
  * Top bar for the SWARM Orchestrator.
  * Shows app title in Syne Variable and worker count.
  * Acts as the Tauri frameless window drag region.
  */
 export function Topbar(): React.ReactElement {
+  const workerCount = useSystemStore((s) => s.metrics.workerCount) ?? 0;
+
   return (
     <header
       data-tauri-drag-region
@@ -57,7 +61,9 @@ export function Topbar(): React.ReactElement {
             background: "oklch(0.82 0.18 140)",
           }}
         />
-        <span>0 workers</span>
+        <span>
+          {workerCount} worker{workerCount !== 1 ? "s" : ""}
+        </span>
       </div>
     </header>
   );

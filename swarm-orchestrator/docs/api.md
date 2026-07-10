@@ -32,10 +32,21 @@ const unlisten = await listen("event:channel", (event) => { /* ... */ });
   - [delete_session](#delete_session)
   - [list_sessions](#list_sessions)
   - [get_session](#get_session)
+  - [session_add_worker](#session_add_worker)
 - [AI Commands](#ai-commands)
   - [ai_request](#ai_request)
 - [Metrics Commands](#metrics-commands)
   - [get_metrics](#get_metrics)
+- [Bus Commands](#bus-commands)
+  - [bus_send](#bus_send)
+  - [bus_subscribe](#bus_subscribe)
+  - [bus_create_pipeline](#bus_create_pipeline)
+  - [bus_list_channels](#bus_list_channels)
+  - [bus_list_pipelines](#bus_list_pipelines)
+- [Updater Commands](#updater-commands)
+  - [check_for_updates](#check_for_updates)
+- [Notification Commands](#notification-commands)
+  - [send_notification](#send_notification)
 - [Events](#events)
 
 ---
@@ -357,6 +368,39 @@ const session = await invoke("get_session", { id: "550e8400-..." });
 
 ---
 
+### `session_add_worker`
+
+Registers a worker against a session's `workerIds` list.
+
+**Parameters:**
+
+| Name         | Type     | Required | Description                        |
+|--------------|----------|----------|-------------------------------------|
+| `sessionId`  | `string` | Yes      | UUID of the target session          |
+| `workerId`   | `string` | Yes      | UUID of the worker to add           |
+
+**Returns:** `void`
+
+**Errors:**
+
+| Error             | Condition                                |
+|-------------------|-------------------------------------------|
+| Invalid UUID      | `sessionId` or `workerId` is not a valid UUID |
+| Session not found | No session with the given ID exists       |
+
+**Example:**
+
+```typescript
+await invoke("session_add_worker", {
+  sessionId: session.id,
+  workerId,
+});
+```
+
+**Side effect:** Auto-saves the updated session list to `sessions.json`.
+
+---
+
 ## AI Commands
 
 ### `ai_request`
@@ -435,6 +479,8 @@ await invoke("ai_request", {
 | `delta`     | `string`  | Text chunk (empty string on final event) |
 | `done`      | `boolean` | `true` on the final event                |
 
+**Guaranteed termination:** A `done: true` event is always emitted for a given `requestId`, even when the stream fails (network error, malformed SSE, provider error) or ends without a `message_stop` event. Frontend consumers can rely on `done: true` as the definitive signal to stop listening -- there is no scenario where a request is enqueued and the frontend never receives a terminal event.
+
 ---
 
 ## Metrics Commands
@@ -445,44 +491,279 @@ Returns a snapshot of the current aggregate worker metrics.
 
 **Parameters:** None
 
-**Returns:** `AggregateMetrics` (JSON)
+**Returns:** JSON object combining system, aggregate worker, and per-worker metrics.
 
-| Field          | Type     | Description                    |
-|----------------|----------|--------------------------------|
-| `totalWorkers` | `number` | Total registered workers       |
-| `running`      | `number` | Workers in `running` state     |
-| `paused`       | `number` | Workers in `paused` state      |
-| `idle`         | `number` | Workers in `idle` state        |
-| `errored`      | `number` | Workers in `error` state       |
+| Field          | Type            | Description                              |
+|----------------|-----------------|-------------------------------------------|
+| `cpuPercent`   | `number`        | Global CPU usage percentage, via `sysinfo` |
+| `memoryMb`     | `number`        | Used system memory in megabytes, via `sysinfo` |
+| `totalWorkers` | `number`        | Total registered workers                 |
+| `running`      | `number`        | Workers in `running` state               |
+| `paused`       | `number`        | Workers in `paused` state                |
+| `idle`         | `number`        | Workers in `idle` state                  |
+| `errored`      | `number`        | Workers in `error` state                 |
+| `perWorker`    | `PerWorkerMetric[]` | Per-worker process metrics (see below) |
+
+**`PerWorkerMetric` object:**
+
+| Field         | Type             | Description                                         |
+|---------------|------------------|------------------------------------------------------|
+| `workerId`    | `string` (UUID)  | UUID of the worker                                  |
+| `pid`         | `number \| null` | OS process ID, if the worker has one                |
+| `cpuPercent`  | `number`         | Process-level CPU usage percentage (`0` if no PID or process not found) |
+| `memoryBytes` | `number`         | Process-level resident memory in bytes (`0` if no PID or process not found) |
 
 **Example:**
 
 ```typescript
 const metrics = await invoke("get_metrics");
 console.log(`${metrics.running}/${metrics.totalWorkers} workers running`);
+for (const w of metrics.perWorker) {
+  console.log(`${w.workerId}: ${w.cpuPercent.toFixed(1)}% CPU, ${w.memoryBytes} bytes`);
+}
 ```
 
-**Note:** This is the pull-based complement to the push-based `system:metrics` event (emitted every 500ms).
+**Note:** This is the pull-based complement to the push-based `system:metrics` event (emitted every 500ms). Both `get_metrics` and the background loop read from the same `SharedSystem` (managed state wrapping one `sysinfo::System` behind a `parking_lot::Mutex`), so CPU usage deltas are computed from a single source of truth instead of two independently-refreshing `System` instances.
+
+---
+
+## Bus Commands
+
+The message bus enables direct, broadcast, and pipeline-routed communication between workers. It is composed of a `MessageBus` (per-topic `tokio::sync::broadcast` channels) and a `Router` (direct/broadcast send + pipeline orchestration), both held as Tauri managed state.
+
+### `bus_send`
+
+Sends a message from one worker to another (or broadcasts it) on a topic.
+
+**Parameters:**
+
+| Name           | Type                | Required | Description                                          |
+|----------------|---------------------|----------|--------------------------------------------------------|
+| `fromWorkerId` | `string`            | Yes      | UUID of the sending worker                              |
+| `toWorkerId`   | `string \| null`    | No       | UUID of the target worker. Omit/`null` to broadcast     |
+| `topic`        | `string`            | Yes      | Topic channel to send on                                |
+| `payload`      | `unknown` (JSON)    | Yes      | Arbitrary JSON payload                                  |
+
+**Returns:** `number` -- the count of receivers that received the message. `0` means no [`bus_subscribe`](#bus_subscribe) caller is currently listening on this topic.
+
+**Errors:**
+
+| Error         | Condition                                    |
+|---------------|------------------------------------------------|
+| Invalid UUID  | `fromWorkerId` or `toWorkerId` is not a valid UUID |
+
+**Example:**
+
+```typescript
+const receiverCount = await invoke("bus_send", {
+  fromWorkerId: workerA,
+  toWorkerId: workerB, // omit for broadcast
+  topic: "task:result",
+  payload: { status: "done", output: "..." },
+});
+```
+
+**Important:** `bus_send` only publishes to the internal bus -- it does **not** emit a frontend event itself. Delivery to the frontend happens exclusively via [`bus_subscribe`](#bus_subscribe)'s forwarding task (see [Unified Bus Event Contract](#unified-bus-event-contract) below).
+
+---
+
+### `bus_subscribe`
+
+Subscribes to a topic and streams matching messages to the frontend as `swarm://bus-message` events.
+
+**Parameters:**
+
+| Name    | Type     | Required | Description         |
+|---------|----------|----------|----------------------|
+| `topic` | `string` | Yes      | Topic to subscribe to |
+
+**Returns:** `void` -- resolves once the background forwarding task is spawned; messages arrive later as events.
+
+**Errors:**
+
+| Error              | Condition                          |
+|--------------------|--------------------------------------|
+| Subscription failed | Failed to create/attach to the broadcast channel |
+
+**Example:**
+
+```typescript
+await invoke("bus_subscribe", { topic: "task:result" });
+
+const unlisten = await listen("swarm://bus-message", (event) => {
+  const { messageId, fromWorker, toWorker, topic, payload } = event.payload;
+  console.log(`[${topic}] ${fromWorker} -> ${toWorker ?? "*"}:`, payload);
+});
+```
+
+**Emits:** `swarm://bus-message` event with `{ messageId, fromWorker, toWorker, topic, payload }` for every message received on the subscribed topic, for the lifetime of the subscription task.
+
+---
+
+### `bus_create_pipeline`
+
+Creates a new multi-stage message processing pipeline. Each stage names a worker and an optional jq-like dot-notation transform (e.g., `".result"`, `".data.items"`) applied to the payload before it is forwarded to the next stage.
+
+**Parameters:**
+
+| Name     | Type              | Required | Description                              |
+|----------|-------------------|----------|--------------------------------------------|
+| `stages` | `PipelineStage[]` | Yes      | Ordered list of pipeline stages            |
+
+**`PipelineStage` object:**
+
+| Field       | Type              | Description                                            |
+|-------------|-------------------|-----------------------------------------------------------|
+| `workerId`  | `string` (UUID)   | Worker that processes this stage                          |
+| `transform` | `string \| null`  | Optional dot-notation field selector applied to the payload |
+
+**Returns:** `string` -- UUID of the newly created pipeline.
+
+**Example:**
+
+```typescript
+const pipelineId = await invoke("bus_create_pipeline", {
+  stages: [
+    { workerId: workerA, transform: null },
+    { workerId: workerB, transform: ".result" },
+  ],
+});
+```
+
+---
+
+### `bus_list_channels`
+
+Lists all active message bus topic channels.
+
+**Parameters:** None
+
+**Returns:** `string[]`
+
+**Example:**
+
+```typescript
+const topics = await invoke("bus_list_channels");
+```
+
+---
+
+### `bus_list_pipelines`
+
+Lists all registered pipelines.
+
+**Parameters:** None
+
+**Returns:** `PipelineInfo[]`
+
+**`PipelineInfo` object:**
+
+| Field        | Type             | Description                        |
+|--------------|------------------|--------------------------------------|
+| `id`         | `string` (UUID)  | Pipeline identifier                  |
+| `stageCount` | `number`         | Number of stages in the pipeline     |
+| `workerIds`  | `string[]`       | Worker IDs in pipeline order         |
+
+**Example:**
+
+```typescript
+const pipelines = await invoke("bus_list_pipelines");
+```
+
+---
+
+## Updater Commands
+
+### `check_for_updates`
+
+Checks the configured update endpoint (`tauri-plugin-updater`) for an available application update.
+
+**Parameters:** None (the `AppHandle` is injected automatically)
+
+**Returns:** JSON object:
+
+| Field       | Type                | Description                                  |
+|-------------|---------------------|------------------------------------------------|
+| `available` | `boolean`           | Whether an update is available                 |
+| `version`   | `string` (optional) | Version of the available update, if any        |
+| `body`      | `string` (optional) | Release notes, if any                          |
+| `date`      | `string` (optional) | Release date, if any                           |
+
+**Errors:**
+
+| Error              | Condition                                    |
+|--------------------|-------------------------------------------------|
+| Update check failed | The updater plugin could not reach the update endpoint (e.g., network error) |
+
+**Example:**
+
+```typescript
+const update = await invoke("check_for_updates");
+if (update.available) {
+  console.log(`Update ${update.version} available:`, update.body);
+}
+```
+
+Updates are signed with an Ed25519 keypair; see [`src-tauri/UPDATER_KEYS.md`](../src-tauri/UPDATER_KEYS.md) for key setup and the `plugins.updater.pubkey` value configured in `tauri.conf.json`.
+
+---
+
+## Notification Commands
+
+### `send_notification`
+
+Sends a native OS notification via `tauri-plugin-notification`.
+
+**Parameters:**
+
+| Name    | Type              | Required | Description                        |
+|---------|-------------------|----------|--------------------------------------|
+| `title` | `string`          | Yes      | Notification title                   |
+| `body`  | `string`          | Yes      | Notification body text               |
+| `icon`  | `string \| null`  | No       | Optional path to a notification icon |
+
+**Returns:** `void`
+
+**Errors:**
+
+| Error                | Condition                                  |
+|----------------------|-----------------------------------------------|
+| Notification failed  | The OS notification failed to display          |
+
+**Example:**
+
+```typescript
+await invoke("send_notification", {
+  title: "Worker finished",
+  body: "Research Agent completed its task.",
+  icon: null,
+});
+```
 
 ---
 
 ## Events
 
+### Unified Bus Event Contract
+
+`swarm://bus-message` is delivered through exactly one path: the background task spawned by [`bus_subscribe`](#bus_subscribe). `bus_send` never emits directly. This guarantees each message reaches the frontend **at most once**, in one consistent shape, regardless of how many (if any) `bus_subscribe` calls are active for a topic -- there is no double-delivery and no risk of the emit-on-send and emit-on-subscribe paths drifting out of sync.
+
 ### Event Channel Reference
 
-All events use colon-separated channel names. Payload fields are `camelCase`.
+All events use colon-separated channel names (`swarm://bus-message` uses the Tauri URL-style channel form). Payload fields are `camelCase`.
 
-| Channel           | Payload Type             | Frequency        |
-|-------------------|--------------------------|------------------|
-| `worker:spawned`  | `WorkerSpawnedPayload`   | On spawn         |
-| `worker:killed`   | `WorkerKilledPayload`    | On kill          |
-| `worker:output`   | `WorkerOutputPayload`    | Continuous       |
-| `worker:state`    | `WorkerStatePayload`     | On state change  |
-| `session:created` | `SessionCreatedPayload`  | On create        |
-| `session:deleted` | `SessionDeletedPayload`  | On delete        |
-| `system:metrics`  | `SystemMetricsPayload`   | Every 500ms      |
-| `ai:stream_delta` | `AiStreamDeltaPayload`   | Per AI chunk     |
-| `system:log`      | `SystemLogPayload`       | On log emit      |
+| Channel               | Payload Type             | Frequency        |
+|------------------------|--------------------------|------------------|
+| `worker:spawned`       | `WorkerSpawnedPayload`   | On spawn         |
+| `worker:killed`        | `WorkerKilledPayload`    | On kill          |
+| `worker:output`        | `WorkerOutputPayload`    | Continuous       |
+| `worker:state`         | `WorkerStatePayload`     | On state change  |
+| `session:created`      | `SessionCreatedPayload`  | On create        |
+| `session:deleted`      | `SessionDeletedPayload`  | On delete        |
+| `system:metrics`       | `SystemMetricsPayload`   | Every 500ms      |
+| `ai:stream_delta`      | `AiStreamDeltaPayload`   | Per AI chunk (always terminates with `done: true`) |
+| `system:log`           | `SystemLogPayload`       | On log emit      |
+| `swarm://bus-message`  | `BusMessagePayload`      | Per bus message, only while a matching `bus_subscribe` task is active |
 
 ### Listening to Events
 
@@ -501,6 +782,13 @@ const unlisten = await listen("worker:output", (event) => {
 await listen("system:metrics", (event) => {
   const { cpuPercent, memoryMb, workerCount, timestamp } = event.payload;
   updateMetricsChart({ cpuPercent, memoryMb, workerCount, timestamp });
+});
+
+// Bus messages (requires an active bus_subscribe call for the topic)
+await invoke("bus_subscribe", { topic: "task:result" });
+await listen("swarm://bus-message", (event) => {
+  const { messageId, fromWorker, toWorker, topic, payload } = event.payload;
+  console.log(`[${topic}]`, payload);
 });
 
 // Cleanup on unmount

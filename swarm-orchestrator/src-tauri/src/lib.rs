@@ -118,6 +118,10 @@ pub fn run() {
     let message_bus = MessageBus::new();
     let router = Router::new(message_bus.clone());
 
+    // Single shared sysinfo::System, reused by both the background metrics
+    // loop and the on-demand get_metrics command for one CPU-delta tracker.
+    let shared_system = SharedSystem::new();
+
     // AI client with default (empty) config — user configures API key at runtime
     let ai_config = AiClientConfig::default();
 
@@ -130,7 +134,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(registry.clone())
         .manage(session_manager.clone())
-        .manage(SharedSystem::new())
+        .manage(shared_system.clone())
         .manage(message_bus)
         .manage(router)
         .invoke_handler(tauri::generate_handler![
@@ -146,6 +150,7 @@ pub fn run() {
             commands::session::delete_session,
             commands::session::list_sessions,
             commands::session::get_session,
+            commands::session::session_add_worker,
             // AI commands
             commands::ai::ai_request,
             // Metrics commands
@@ -182,17 +187,14 @@ pub fn run() {
             commands::metrics::start_metrics_loop(
                 app_handle.clone(),
                 registry.clone(),
+                shared_system.clone(),
                 metrics_cancel,
             );
 
             // Initialize AI queue (requires app handle for event emission)
             let ai_client = AiClient::new(ai_config.clone())
                 .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
-            let ai_queue = AiQueue::new(
-                app_handle.clone(),
-                ai_client,
-                AiQueueConfig::default(),
-            );
+            let ai_queue = AiQueue::new(app_handle.clone(), ai_client, AiQueueConfig::default());
             app.manage(ai_queue);
 
             tracing::info!("SWARM Orchestrator setup complete");

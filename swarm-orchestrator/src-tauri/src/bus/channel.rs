@@ -92,28 +92,11 @@ impl MessageBus {
     ///
     /// * `topic` - The name of the topic channel to create
     pub fn create_channel(&self, topic: &str) {
-        self.channels
-            .entry(topic.to_string())
-            .or_insert_with(|| {
-                let (tx, _) = broadcast::channel(DEFAULT_CHANNEL_CAPACITY);
-                tracing::info!(topic = topic, "bus channel created");
-                tx
-            });
-    }
-
-    /// Removes a topic channel, dropping all associated senders and receivers.
-    ///
-    /// Returns `true` if the channel existed and was removed, `false` otherwise.
-    ///
-    /// # Arguments
-    ///
-    /// * `topic` - The name of the topic channel to remove
-    pub fn remove_channel(&self, topic: &str) -> bool {
-        let removed = self.channels.remove(topic).is_some();
-        if removed {
-            tracing::info!(topic = topic, "bus channel removed");
-        }
-        removed
+        self.channels.entry(topic.to_string()).or_insert_with(|| {
+            let (tx, _) = broadcast::channel(DEFAULT_CHANNEL_CAPACITY);
+            tracing::info!(topic = topic, "bus channel created");
+            tx
+        });
     }
 
     /// Sends a message to a specific topic channel.
@@ -240,15 +223,6 @@ mod tests {
         assert_eq!(channels.len(), 2);
         assert!(channels.contains(&"topic-a".to_string()));
         assert!(channels.contains(&"topic-b".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_remove_channel() {
-        let bus = MessageBus::new();
-        bus.create_channel("ephemeral");
-        assert!(bus.remove_channel("ephemeral"));
-        assert!(!bus.remove_channel("ephemeral"));
-        assert!(bus.list_channels().is_empty());
     }
 
     #[tokio::test]

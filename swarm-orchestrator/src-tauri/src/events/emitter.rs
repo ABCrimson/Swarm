@@ -153,9 +153,9 @@ pub struct SessionDeletedPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemMetricsPayload {
-    /// CPU utilization percentage (0.0 - 100.0). Currently a placeholder.
+    /// CPU utilization percentage (0.0 - 100.0), sourced from `sysinfo`.
     pub cpu_percent: f64,
-    /// Memory usage in megabytes. Currently a placeholder.
+    /// Memory usage in megabytes, sourced from `sysinfo`.
     pub memory_mb: f64,
     /// Total number of registered workers.
     pub worker_count: usize,
@@ -244,46 +244,16 @@ pub struct SystemLogPayload {
 #[tracing::instrument(skip(app, event), fields(event_type))]
 pub fn emit_event(app: &AppHandle, event: SwarmEvent) {
     let (channel, result) = match &event {
-        SwarmEvent::WorkerSpawned(p) => (
-            "worker:spawned",
-            app.emit("worker:spawned", p),
-        ),
-        SwarmEvent::WorkerKilled(p) => (
-            "worker:killed",
-            app.emit("worker:killed", p),
-        ),
-        SwarmEvent::WorkerOutput(p) => (
-            "worker:output",
-            app.emit("worker:output", p),
-        ),
-        SwarmEvent::WorkerState(p) => (
-            "worker:state",
-            app.emit("worker:state", p),
-        ),
-        SwarmEvent::SessionCreated(p) => (
-            "session:created",
-            app.emit("session:created", p),
-        ),
-        SwarmEvent::SessionDeleted(p) => (
-            "session:deleted",
-            app.emit("session:deleted", p),
-        ),
-        SwarmEvent::SystemMetrics(p) => (
-            "system:metrics",
-            app.emit("system:metrics", p),
-        ),
-        SwarmEvent::AiStreamDelta(p) => (
-            "ai:stream_delta",
-            app.emit("ai:stream_delta", p),
-        ),
-        SwarmEvent::SystemLog(p) => (
-            "system:log",
-            app.emit("system:log", p),
-        ),
-        SwarmEvent::BusMessage(p) => (
-            "swarm://bus-message",
-            app.emit("swarm://bus-message", p),
-        ),
+        SwarmEvent::WorkerSpawned(p) => ("worker:spawned", app.emit("worker:spawned", p)),
+        SwarmEvent::WorkerKilled(p) => ("worker:killed", app.emit("worker:killed", p)),
+        SwarmEvent::WorkerOutput(p) => ("worker:output", app.emit("worker:output", p)),
+        SwarmEvent::WorkerState(p) => ("worker:state", app.emit("worker:state", p)),
+        SwarmEvent::SessionCreated(p) => ("session:created", app.emit("session:created", p)),
+        SwarmEvent::SessionDeleted(p) => ("session:deleted", app.emit("session:deleted", p)),
+        SwarmEvent::SystemMetrics(p) => ("system:metrics", app.emit("system:metrics", p)),
+        SwarmEvent::AiStreamDelta(p) => ("ai:stream_delta", app.emit("ai:stream_delta", p)),
+        SwarmEvent::SystemLog(p) => ("system:log", app.emit("system:log", p)),
+        SwarmEvent::BusMessage(p) => ("swarm://bus-message", app.emit("swarm://bus-message", p)),
     };
 
     tracing::Span::current().record("event_type", tracing::field::display(&channel));

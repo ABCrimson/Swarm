@@ -1,0 +1,203 @@
+<meta name="color-scheme" content="dark" />
+<title>SWARM v2 — Reimagining Proposal</title>
+<style>
+  :root {
+    /* SWARM design tokens — OKLCH only, dark-only by spec decree */
+    --void: oklch(0.07 0.02 220);
+    --surface-1: oklch(0.11 0.03 220);
+    --surface-2: oklch(0.14 0.03 220);
+    --border: oklch(0.24 0.04 220);
+    --border-dim: oklch(0.18 0.03 220);
+    --text: oklch(0.84 0.03 220);
+    --text-dim: oklch(0.58 0.03 220);
+    --text-bright: oklch(0.96 0.01 220);
+    --plasma: oklch(0.78 0.18 205);
+    --plasma-dim: oklch(0.55 0.12 205);
+    --amber: oklch(0.82 0.17 75);
+    --rose: oklch(0.7 0.19 15);
+    --lime: oklch(0.8 0.17 140);
+    --violet: oklch(0.72 0.18 290);
+    --mono: "JetBrains Mono", ui-monospace, "Cascadia Code", monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(60rem 30rem at 85% -5%, oklch(from var(--plasma) l c h / 0.07), transparent 60%),
+      radial-gradient(50rem 26rem at -10% 40%, oklch(from var(--violet) l c h / 0.05), transparent 60%),
+      var(--void);
+    color: var(--text);
+    font: 400 15px/1.62 system-ui, sans-serif;
+    padding: 3.5rem 1.5rem 6rem;
+  }
+  main { max-width: 82ch; margin-inline: auto; }
+  h1, h2, h3 { color: var(--text-bright); letter-spacing: -0.02em; text-wrap: balance; }
+  h1 { font-size: 2rem; line-height: 1.15; margin: 0.4rem 0 0.3rem; }
+  h1 .accent { color: var(--plasma); }
+  h2 { font-size: 1.2rem; margin: 3rem 0 0.8rem; }
+  p { margin: 0.55rem 0; text-wrap: pretty; }
+  .eyebrow {
+    font: 600 0.68rem/1 var(--mono);
+    letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--plasma);
+  }
+  .intent { color: var(--text-dim); font-size: 1.02rem; max-width: 66ch; }
+  .meta { font: 500 0.72rem/1 var(--mono); color: var(--text-dim); margin-top: 1rem; display: flex; gap: 1.4rem; flex-wrap: wrap; }
+  .meta b { color: var(--text); font-weight: 600; }
+
+  .phase {
+    background: var(--surface-1);
+    border: 1px solid var(--border-dim);
+    border-radius: 12px;
+    padding: 1.15rem 1.35rem 1.05rem;
+    margin: 0.9rem 0;
+    position: relative;
+  }
+  .phase::before {
+    content: attr(data-n);
+    position: absolute; top: 1.1rem; right: 1.25rem;
+    font: 700 0.7rem/1 var(--mono); color: var(--plasma-dim);
+    letter-spacing: 0.12em;
+  }
+  .phase h3 { margin: 0 0 0.15rem; font-size: 1.02rem; }
+  .phase .outcome { color: var(--text-bright); font-weight: 600; }
+  .phase .when {
+    display: inline-block; margin-top: 0.55rem;
+    font: 600 0.68rem/1 var(--mono); letter-spacing: 0.08em;
+    color: var(--amber);
+  }
+  .phase ul { margin: 0.5rem 0 0; padding-left: 1.15rem; }
+  .phase li { margin: 0.28rem 0; }
+  .phase li::marker { color: var(--plasma-dim); }
+
+  table {
+    border-collapse: collapse; width: 100%;
+    font-size: 0.88rem;
+  }
+  .scroll { overflow-x: auto; border: 1px solid var(--border-dim); border-radius: 10px; }
+  th, td { text-align: left; padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--border-dim); vertical-align: top; }
+  th { font: 600 0.68rem/1.3 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); background: var(--surface-1); }
+  tr:last-child td { border-bottom: none; }
+  .scroll table td b { color: var(--text-bright); }
+  td .win { color: var(--lime); }
+  td .loss { color: var(--text-dim); }
+
+  .callout {
+    border: 1px solid oklch(from var(--rose) l c h / 0.35);
+    background: oklch(from var(--rose) 0.16 0.04 h);
+    border-radius: 10px; padding: 0.9rem 1.2rem; margin: 0.9rem 0;
+  }
+  .callout h3 { margin: 0 0 0.3rem; font-size: 0.95rem; color: oklch(from var(--rose) 0.85 0.12 h); }
+  .callout ul { margin: 0.3rem 0 0; padding-left: 1.15rem; }
+  code, .k {
+    font: 500 0.84em var(--mono);
+    background: var(--surface-2);
+    border: 1px solid var(--border-dim);
+    border-radius: 5px; padding: 0.08em 0.38em;
+    color: oklch(0.85 0.1 205);
+    white-space: nowrap;
+  }
+  .num { font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 0.85em; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.9rem; }
+  .quiet { color: var(--text-dim); font-size: 0.86rem; }
+  a { color: var(--plasma); text-decoration: none; border-bottom: 1px solid oklch(from var(--plasma) l c h / 0.35); }
+</style>
+
+<main>
+  <div class="eyebrow">Proposal · awaiting your approval — nothing below is implemented</div>
+  <h1>SWARM v2 — from spectacle to <span class="accent">the fastest agent harness on desktop</span></h1>
+  <p class="intent">Benchmarked against Theo's T3 Code and T3 Chat: keep SWARM's Rust core and WebGPU identity, adopt the four architectural ideas that made T3's products win, and stop rebuilding what the labs already tune better than we can.</p>
+  <div class="meta">
+    <span><b>Date</b> 2026-07-09</span>
+    <span><b>Baseline</b> v0.10.0 (today's modernization pass — all gates green)</span>
+    <span><b>Benchmark</b> T3 Code v0.0.28 · 13.5k★ · T3 Chat</span>
+  </div>
+
+  <h2>Context — why now</h2>
+  <p>Today's audit fixed the "release candidate" fiction: 85+ findings, five crash-level runtime bugs, three charts rendering <code>Math.random()</code> as telemetry. The codebase is now genuinely evergreen (TS 7, Vite 8.1, Vitest 4, Rust 1.98-beta, pnpm 11) — but the <em>architecture</em> still predates the 2026 agent landscape. Theo shipped our exact category in the open: <b>T3 Code</b> is an MIT-licensed GUI for parallel coding agents, and its two load-bearing theses — <em>wrap official harnesses, don't rebuild agent loops</em>, and <em>one ordered event stream, never polling</em> — are both things SWARM currently does the opposite of. SWARM's custom Anthropic loop, ad-hoc Tauri events, and decorative-only topology are v1 thinking. The good news: our Rust + PTY + WebGPU foundation is exactly the substrate T3 Code lacks (it ships Electron 41).</p>
+
+  <h2>The plan</h2>
+
+  <div class="phase" data-n="PHASE 1 · S">
+    <h3>Truthful, ordered core</h3>
+    <p class="outcome">Every pixel of UI state traces to one ordered, persisted event log — zero polling, zero fabricated data, replayable by construction.</p>
+    <ul>
+      <li>Introduce an <b>OrchestrationEngine</b> in Rust: domain events (worker, session, AI, PTY) persisted to SQLite, in-memory read models derived from them.</li>
+      <li>Collapse today's ad-hoc emitters into a <b>single ordered push bus</b> (T3 Code's ServerPushBus pattern) over one Tauri channel; the frontend consumes exactly one ordered stream.</li>
+      <li>Replace remaining poll loops with <b>typed receipts</b>: <code>worker-spawned</code>, <code>turn-quiescent</code>, <code>checkpoint-captured</code>, <code>stream-settled</code> — UI and tests await receipts, never timers.</li>
+      <li>This resurrects session replay honestly (we deleted the dead replay UI today) — replay becomes "re-run the log", free.</li>
+    </ul>
+    <span class="when">~2 weeks · unlocks everything below</span>
+  </div>
+
+  <div class="phase" data-n="PHASE 2 · L">
+    <h3>The harness pivot — SWARM's real product</h3>
+    <p class="outcome">Workers are no longer bare shells with a hand-rolled Claude loop — each worker <em>is</em> an official agent CLI (Claude Code, Codex, OpenCode) spawned in its PTY and driven over ACP/JSON-RPC.</p>
+    <ul>
+      <li>Adopt Theo's thesis: labs tune harnesses to their models; wrapping <code>claude-code</code>, <code>codex app-server</code>, and OpenCode gets frontier agent quality + multi-provider support for free. Our PTY infrastructure already exists — we add the <b>Agent Client Protocol</b> layer in Rust, not another API client.</li>
+      <li>Keep <code>lib/anthropic.ts</code> streaming only for the orchestrator's own supervisor chat; delete the per-worker custom loop.</li>
+      <li>The topology graph gains <b>real edges at last</b> (today it draws Map-iteration order — we documented that honestly this morning): supervisor→worker delegation, worker→worker handoffs, all sourced from the event log.</li>
+    </ul>
+    <span class="when">~4–6 weeks · the differentiator: T3 Code's architecture at Rust-native speed, with a live GPU topology it cannot match</span>
+  </div>
+
+  <div class="phase" data-n="PHASE 3 · M">
+    <h3>Safe parallelism + the ship chain</h3>
+    <p class="outcome">N agents never collide, every turn is reviewable, and finishing work is one click.</p>
+    <ul>
+      <li><b>Git worktree per worker</b> — T3 Code's proven isolation pattern, managed by the Rust core.</li>
+      <li><b>Turn-by-turn diff viewer</b> as a first-class surface: checkpoint per turn (a receipt), Pierre-style diff per checkpoint, inline in the worker panel.</li>
+      <li><b>Ship chain</b>: generate commit message → commit → push → open PR, one action per worktree.</li>
+      <li><b>Two-mode trust dial</b>: Supervised (approval-on-request, workspace-write) vs Full-access — mapped directly onto Tauri capabilities + process sandboxing. One comprehensible switch, not a permission matrix.</li>
+      <li><b>Cost usage bar</b> (T3 Chat's Feb 2026 pattern): one depleting/refilling meter per session fed by real token costs from <code>lib/models.ts</code> — multi-agent burn made legible.</li>
+    </ul>
+    <span class="when">~3 weeks · mostly UI over Phase-1 receipts</span>
+  </div>
+
+  <div class="phase" data-n="PHASE 4 · L">
+    <h3>Local-first, headless-capable</h3>
+    <p class="outcome">Sessions open in &lt;100ms from local SQLite; the swarm keeps working with the window closed.</p>
+    <ul>
+      <li>Read models hydrate the UI instantly on launch — no spinners, T3 Chat's core speed trick, easier on desktop than it ever was on web.</li>
+      <li>Extract <code>swarm-core</code> as a headless daemon; the Tauri window becomes its first client. Remote access (Tailscale/SSH, a web client) becomes possible later without a rewrite — T3 Code's server/npx/mobile split validates the shape.</li>
+      <li>WebGPU particles stay — but every burst is driven by a real event from the bus (spawn, error, quiescence). Spectacle becomes signal.</li>
+    </ul>
+    <span class="when">~4 weeks · can trail Phase 3; daemon split is the only risky cut</span>
+  </div>
+
+  <h2>Decisions &amp; trade-offs</h2>
+  <div class="scroll">
+  <table>
+    <tr><th>Decision</th><th>Chosen</th><th>Rejected</th><th>Why</th></tr>
+    <tr><td>Agent execution</td><td><b>Wrap official CLIs via ACP</b></td><td class="loss">Keep custom Anthropic loop</td><td>Labs tune harnesses to their models; we get Claude Code/Codex/OpenCode quality + updates for free. Our loop was already the buggiest subsystem in today's audit.</td></tr>
+    <tr><td>Shell</td><td><b>Tauri + Rust core</b></td><td class="loss">Electron (T3 Code's choice)</td><td><span class="win">Our edge</span> — native perf, small binaries, capability sandboxing; T3 Code fights Electron sluggishness by discipline alone.</td></tr>
+    <tr><td>State transport</td><td><b>One ordered push bus + typed receipts</b></td><td class="loss">Ad-hoc events + polling</td><td>Deterministic ordering makes multi-agent state debuggable, testable, replayable. T3 Code's most load-bearing pattern.</td></tr>
+    <tr><td>Persistence</td><td><b>SQLite event log + read models</b></td><td class="loss">tauri-plugin-store JSON blobs</td><td>Event sourcing gives replay, audit, and crash recovery by construction; JSON snapshots stay as export format only.</td></tr>
+    <tr><td>Cloud sync</td><td><b>None yet (local-first)</b></td><td class="loss">Convex-style sync engine</td><td>T3 Chat's outage postmortem shows subscription-sync operational risk; desktop needs it less. Revisit post-daemon.</td></tr>
+    <tr><td>Version channels</td><td><b>Keep canary/beta pins</b></td><td class="loss">Retreat to stable</td><td>The spec's evergreen doctrine held up today — every canary pin survived the July bump with zero rollbacks.</td></tr>
+  </table>
+  </div>
+
+  <h2>Risks &amp; kill-criteria</h2>
+  <div class="callout">
+    <h3>What would make us stop</h3>
+    <ul>
+      <li><b>Harness spike fails</b> — if a 1-week ACP spike (drive headless Claude Code from Rust, stream a full tool-use turn into the existing UI) can't match the current loop's streaming UX, we halt Phase 2 and keep the custom loop as fallback. This spike is the go/no-go gate for the whole pivot.</li>
+      <li><b>Protocol churn</b> — ACP/app-server interfaces are alpha-grade; we pin exact CLI versions (house rule) and wrap them behind one Rust trait so a breaking change costs one adapter, not the product.</li>
+      <li><b>Event-sourcing stall</b> — if Phase 1 exceeds 3 weeks, we ship the push bus without SQLite persistence first (ordering is the value; durability can follow).</li>
+      <li><b>Scope gravity</b> — the 97-milestone spec habit. Each phase ships independently; no phase starts until the previous one's verification passes.</li>
+    </ul>
+  </div>
+
+  <h2>Verification — how we'll know it worked</h2>
+  <ul>
+    <li><span class="num">0</span> polling loops in the frontend; every state change arrives as an ordered event (assert in e2e by replaying a recorded log).</li>
+    <li>Cold start to interactive session list <span class="num">&lt;1.5s</span>; <span class="num">60fps</span> sustained with 8 concurrent streaming workers (the spec's own budgets, now measurable against real streams).</li>
+    <li>An agent turn driven end-to-end through a real Claude Code CLI shows: live tokens, per-turn diff, checkpoint receipt, cost tick on the usage bar.</li>
+    <li>Kill the window mid-swarm → relaunch → session restores from the event log with zero lost turns (daemon phase: swarm never stopped).</li>
+    <li>Two workers editing the same repo never conflict (worktree isolation, verified in CI e2e).</li>
+  </ul>
+
+  <p class="quiet" style="margin-top:2.5rem">Sources: t3.gg · github.com/pingdotgg/t3code (architecture docs: ServerPushBus, OrchestrationEngine, typed receipts, runtime modes) · t3.chat · Convex outage postmortem (June 2025) · today's 20-agent audit of this repo. Baseline v0.10.0 modernization is complete and verified separately — this document only covers what comes next.</p>
+</main>

@@ -126,22 +126,10 @@ export function Dashboard(): React.ReactElement {
             severity={cpuSeverity(cpu)}
             trend={cpuTrend}
           />
-          <MetricCard
-            label="Memory"
-            value={`${mem.toFixed(0)} MB`}
-            severity={memSeverity(mem)}
-          />
+          <MetricCard label="Memory" value={`${mem.toFixed(0)} MB`} severity={memSeverity(mem)} />
           <MetricCard label="Workers" value={`${workers}`} severity="good" />
-          <MetricCard
-            label="AI Req/s"
-            value={`${aiReq.toFixed(1)}`}
-            severity="good"
-          />
-          <MetricCard
-            label="Tokens/s"
-            value={`${tokens.toFixed(0)}`}
-            severity="good"
-          />
+          <MetricCard label="AI Req/s" value={`${aiReq.toFixed(1)}`} severity="good" />
+          <MetricCard label="Tokens/s" value={`${tokens.toFixed(0)}`} severity="good" />
         </div>
       </section>
 

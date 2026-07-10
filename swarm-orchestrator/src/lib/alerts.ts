@@ -16,8 +16,6 @@ export interface AlertThresholds {
   readonly cpuCritical: number;
   readonly memoryWarning: number;
   readonly memoryCritical: number;
-  readonly errorRateWarning: number;
-  readonly errorRateCritical: number;
 }
 
 const DEFAULT_THRESHOLDS: AlertThresholds = {
@@ -25,11 +23,7 @@ const DEFAULT_THRESHOLDS: AlertThresholds = {
   cpuCritical: 80,
   memoryWarning: 80,
   memoryCritical: 90,
-  errorRateWarning: 5,
-  errorRateCritical: 10,
 };
-
-const tauriStore = settingsStore;
 
 /** Persisted thresholds via Jotai atomWithStorage backed by Tauri plugin-store. */
 export const alertThresholdsAtom = atomWithStorage<AlertThresholds>(
@@ -41,16 +35,19 @@ export const alertThresholdsAtom = atomWithStorage<AlertThresholds>(
     },
     setItem(key, value) {
       if (!isTauri()) return;
-      void tauriStore.set(key, value).then(() => tauriStore.save());
+      void settingsStore.set(key, value).then(() => settingsStore.save());
     },
     removeItem(key) {
       if (!isTauri()) return;
-      void tauriStore.delete(key).then(() => tauriStore.save());
+      void settingsStore.delete(key).then(() => settingsStore.save());
     },
     subscribe(key, callback, _initialValue) {
       if (!isTauri()) return () => {};
-      void tauriStore.get<AlertThresholds>(key)
-        .then((v) => { if (v != null) callback(v); })
+      void settingsStore
+        .get<AlertThresholds>(key)
+        .then((v) => {
+          if (v != null) callback(v);
+        })
         .catch(() => {});
       return () => {};
     },
@@ -84,7 +81,6 @@ export const ALERT_COOLDOWN_MS = 30_000;
 export interface MetricsSnapshot {
   readonly cpuPercent: number;
   readonly memoryPercent: number;
-  readonly errorRate: number;
 }
 
 /**
@@ -137,13 +133,6 @@ export function evaluateThresholds(
     thresholds.memoryWarning,
     thresholds.memoryCritical,
     "Memory usage",
-  );
-  check(
-    "errorRate",
-    snapshot.errorRate,
-    thresholds.errorRateWarning,
-    thresholds.errorRateCritical,
-    "Error rate",
   );
 
   return alerts;

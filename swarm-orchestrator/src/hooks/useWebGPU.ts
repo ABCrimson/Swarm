@@ -4,7 +4,7 @@
 
 import { useResizeObserver } from "@crimson_dev/use-resize-observer";
 import { useAtomValue } from "jotai";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { WebGPUContext } from "#lib/webgpu";
 
@@ -76,7 +76,7 @@ export function useWebGPU(): UseWebGPUResult {
     },
   });
 
-  const initialize = useCallback(async () => {
+  const initialize = async (): Promise<void> => {
     const canvas = canvasElRef.current;
     if (!canvas || isInitializingRef.current || destroyedRef.current) return;
     if (!enabled) return;
@@ -106,7 +106,7 @@ export function useWebGPU(): UseWebGPUResult {
     }
 
     isInitializingRef.current = false;
-  }, [enabled]);
+  };
 
   // Keep the ref in sync with the latest initialize function
   initializeRef.current = initialize;
@@ -114,9 +114,9 @@ export function useWebGPU(): UseWebGPUResult {
   // Initialize when canvas is available and enabled
   useEffect(() => {
     if (enabled && canvasElRef.current && !gpuCtx) {
-      initialize();
+      initializeRef.current();
     }
-  }, [enabled, gpuCtx, initialize]);
+  }, [enabled, gpuCtx]);
 
   // Cleanup on unmount
   useEffect(() => {

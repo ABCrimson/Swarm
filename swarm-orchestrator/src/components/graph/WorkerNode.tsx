@@ -1,6 +1,6 @@
 import type { Node, NodeProps } from "@xyflow/react";
 import { Handle, Position } from "@xyflow/react";
-import { motion } from "framer-motion";
+import { motion } from "motion/react";
 import { Badge } from "#components/ui/Badge";
 import { withAlpha, workerColor } from "#lib/theme";
 import type { WorkerState } from "#store/types";
@@ -34,16 +34,28 @@ export function WorkerNode({ data }: NodeProps<WorkerNodeType>): React.ReactElem
   const borderColor = withAlpha(color, 0.5);
   const isRunning = state === "running";
 
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      // Trigger the same activation path as a mouse click — XYFlow binds
+      // its onNodeClick handler to a click listener on the node wrapper,
+      // so a synthetic click bubbles up through it.
+      event.currentTarget.click();
+    }
+  };
+
   return (
     <motion.div
       data-state={state}
       tabIndex={0}
       role="button"
       aria-label={`Worker ${label}, status: ${stateLabels[state]}${pid != null ? `, PID ${pid}` : ""}`}
+      onKeyDown={handleKeyDown}
       whileHover={{ scale: 1.02 }}
       whileFocus={{ scale: 1.02 }}
       transition={{ type: "spring", stiffness: 400, damping: 25 }}
       style={{
+        position: "relative",
         width: 220,
         minHeight: 100,
         background: "oklch(0.12 0.03 220 / 0.7)",
@@ -58,7 +70,8 @@ export function WorkerNode({ data }: NodeProps<WorkerNodeType>): React.ReactElem
         boxShadow: isRunning
           ? `0 0 0 1px ${borderColor}, 0 0 20px ${glowColor}, 0 0 40px ${withAlpha(color, 0.15)}`
           : `0 0 0 1px ${borderColor}`,
-        transition: "box-shadow 0.3s cubic-bezier(0.0, 0.0, 0.2, 1.0), border-color 0.3s cubic-bezier(0.0, 0.0, 0.2, 1.0)",
+        transition:
+          "box-shadow 0.3s cubic-bezier(0.0, 0.0, 0.2, 1.0), border-color 0.3s cubic-bezier(0.0, 0.0, 0.2, 1.0)",
       }}
     >
       <Handle

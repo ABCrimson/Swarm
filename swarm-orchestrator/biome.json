@@ -1,7 +1,16 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.4.6/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.5.3/schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-  "files": { "ignore": ["src-tauri/target/**", "dist/**", "node_modules/**"] },
+  "files": {
+    "includes": [
+      "**",
+      "!**/src-tauri/target",
+      "!**/dist",
+      "!**/node_modules",
+      "!**/*.svg",
+      "!src/styles/tokens.css"
+    ]
+  },
   "formatter": {
     "enabled": true,
     "indentStyle": "space",
@@ -16,11 +25,10 @@
       "test": "recommended"
     },
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "correctness": {
         "noUnusedImports": "error",
-        "noUnusedVariables": "error",
-        "noFloatingPromises": "error"
+        "noUnusedVariables": "error"
       },
       "style": {
         "noNonNullAssertion": "warn",
@@ -28,11 +36,13 @@
       },
       "suspicious": {
         "noExplicitAny": "error"
+      },
+      "nursery": {
+        "noFloatingPromises": "error"
       }
     }
   },
-  "organizeImports": { "enabled": true },
-  "assist": { "enabled": true },
+  "assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } },
   "css": {
     "parser": {
       "cssModules": false,

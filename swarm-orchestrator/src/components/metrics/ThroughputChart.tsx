@@ -1,5 +1,6 @@
 // ── ThroughputChart ─────────────────────────────────
-// Tokens/sec per model line chart, 30s window.
+// Tokens/sec per model line chart, 30s window, sampled from real
+// token-usage records in useAiStore's cumulativeUsage.history.
 // OKLCH colors: opus=violet, sonnet=plasma, haiku=lime.
 // Recharts LineChart with ResponsiveContainer, isAnimationActive={false}.
 
@@ -24,6 +25,7 @@ import {
   legendStyle,
   tooltipProps,
 } from "#lib/chart-theme";
+import { useAiStore } from "#store/ai";
 
 // OKLCH model colors
 const COLOR_OPUS = "oklch(0.68 0.22 290)";
@@ -32,6 +34,8 @@ const COLOR_HAIKU = "oklch(0.78 0.18 130)";
 
 const WINDOW_MS = 30_000;
 const SAMPLE_MS = 1000;
+/** Trailing window used to compute a tokens/sec rate for each sample. */
+const RATE_WINDOW_MS = 10_000;
 
 interface ThroughputPoint {
   readonly time: number;
@@ -59,13 +63,22 @@ const headerStyle: CSSProperties = {
   alignItems: "center",
 };
 
-function jitter(base: number, range: number, min: number, max: number): number {
-  const delta = (Math.random() - 0.5) * range;
-  return Math.max(min, Math.min(max, base + delta));
+/** Sums input+output tokens for records matching `keyword` within the trailing rate window. */
+function tokensPerSecFor(
+  history: { model: string; inputTokens: number; outputTokens: number; timestamp: number }[],
+  keyword: string,
+  now: number,
+): number {
+  const cutoff = now - RATE_WINDOW_MS;
+  const tokens = history
+    .filter((r) => r.timestamp > cutoff && r.model.toLowerCase().includes(keyword))
+    .reduce((sum, r) => sum + r.inputTokens + r.outputTokens, 0);
+  return tokens / (RATE_WINDOW_MS / 1000);
 }
 
 /**
- * Line chart showing AI throughput (tokens/sec) per model over a 30-second window.
+ * Line chart showing real AI throughput (tokens/sec) per model over a 30-second window,
+ * derived from `useAiStore().cumulativeUsage.history` token-usage records.
  *
  * Colours: Opus (violet), Sonnet (plasma blue), Haiku (lime green).
  */
@@ -76,14 +89,15 @@ export function ThroughputChart(): React.ReactElement {
   useEffect(() => {
     intervalRef.current = setInterval(() => {
       setData((prev) => {
-        const cutoff = Date.now() - WINDOW_MS;
+        const now = Date.now();
+        const cutoff = now - WINDOW_MS;
         const filtered = prev.filter((p) => p.time > cutoff);
-        const last = filtered.at(-1);
+        const history = useAiStore.getState().cumulativeUsage.history;
         const point: ThroughputPoint = {
-          time: Date.now(),
-          opus: jitter(last?.opus ?? 35, 10, 0, 120),
-          sonnet: jitter(last?.sonnet ?? 85, 15, 0, 200),
-          haiku: jitter(last?.haiku ?? 150, 25, 0, 400),
+          time: now,
+          opus: tokensPerSecFor(history, "opus", now),
+          sonnet: tokensPerSecFor(history, "sonnet", now),
+          haiku: tokensPerSecFor(history, "haiku", now),
         };
         return [...filtered, point];
       });

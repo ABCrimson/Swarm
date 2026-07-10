@@ -100,7 +100,8 @@ export function StatusBar(): React.ReactElement {
             padding: "2px 6px",
             borderRadius: 4,
             outline: "none",
-            transition: "background 0.12s cubic-bezier(0, 0, 0.2, 1), color 0.12s cubic-bezier(0, 0, 0.2, 1)",
+            transition:
+              "background 0.12s cubic-bezier(0, 0, 0.2, 1), color 0.12s cubic-bezier(0, 0, 0.2, 1)",
           }}
           onFocus={(e) => {
             e.currentTarget.style.boxShadow = "0 0 0 1px oklch(0.78 0.18 205 / 0.5)";

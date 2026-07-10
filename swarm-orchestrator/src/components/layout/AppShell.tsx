@@ -1,7 +1,7 @@
 import { useResizeObserver } from "@crimson_dev/use-resize-observer";
-import { AnimatePresence, motion } from "framer-motion";
 import gsap from "gsap";
 import { useAtomValue } from "jotai";
+import { AnimatePresence, motion } from "motion/react";
 import type { ReactNode } from "react";
 import { useEffect, useRef } from "react";
 import { reducedMotionAtom, sidebarCollapsedAtom } from "#store/ui";

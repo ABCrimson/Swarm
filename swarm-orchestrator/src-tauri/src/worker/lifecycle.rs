@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::events::{
-    emit_event, SwarmEvent, WorkerKilledPayload, WorkerSpawnedPayload, WorkerStatePayload,
+    SwarmEvent, WorkerKilledPayload, WorkerSpawnedPayload, WorkerStatePayload, emit_event,
 };
 use crate::worker::handle::{WorkerConfig, WorkerHandle, WorkerState};
 use crate::worker::pty::spawn_pty;
@@ -98,9 +98,15 @@ pub fn do_spawn_worker(
 
 /// Pauses a running worker by updating its state to [`WorkerState::Paused`].
 ///
-/// On Windows, process suspension via signals is not directly supported,
-/// so this only updates the internal state. On Unix platforms, a
-/// `SIGSTOP` would be sent (not yet implemented).
+/// This is state-only on all platforms today (see
+/// [`WorkerState::Paused`]) — no signal is sent to the underlying
+/// process yet.
+///
+/// The precondition check (worker must currently be `Running`) and the
+/// state write happen atomically via [`WorkerRegistry::update_state_if`]
+/// (a single `DashMap` shard lock), preventing a TOCTOU race where a
+/// concurrent pause/resume call on the same worker could observe a
+/// stale state between a separate check and set.
 ///
 /// Emits a `worker:state` event with `state: "paused"`.
 ///
@@ -113,26 +119,14 @@ pub fn do_spawn_worker(
 /// # Errors
 ///
 /// * [`AppError::WorkerNotFound`] - No worker with the given ID exists
+/// * [`AppError::Ipc`] - The worker is not currently `Running`
 #[tracing::instrument(skip(app, registry))]
 pub fn do_pause_worker(
     app: &AppHandle,
     registry: &WorkerRegistry,
     id: Uuid,
 ) -> Result<(), AppError> {
-    // Verify worker exists and is running
-    {
-        let entry = registry
-            .workers
-            .get(&id)
-            .ok_or_else(|| AppError::WorkerNotFound {
-                id: id.to_string(),
-            })?;
-        if entry.state != WorkerState::Running {
-            return Err(AppError::Ipc(format!("cannot pause worker {} in state {}", id, entry.state)));
-        }
-    }
-
-    registry.update_state(&id, WorkerState::Paused)?;
+    registry.update_state_if(&id, WorkerState::Running, WorkerState::Paused)?;
 
     emit_event(
         app,
@@ -147,6 +141,11 @@ pub fn do_pause_worker(
 
 /// Resumes a paused worker by updating its state to [`WorkerState::Running`].
 ///
+/// The precondition check (worker must currently be `Paused`) and the
+/// state write happen atomically via [`WorkerRegistry::update_state_if`]
+/// (a single `DashMap` shard lock), preventing a TOCTOU race with a
+/// concurrent pause/resume call on the same worker.
+///
 /// Emits a `worker:state` event with `state: "running"`.
 ///
 /// # Arguments
@@ -158,25 +157,14 @@ pub fn do_pause_worker(
 /// # Errors
 ///
 /// * [`AppError::WorkerNotFound`] - No worker with the given ID exists
+/// * [`AppError::Ipc`] - The worker is not currently `Paused`
 #[tracing::instrument(skip(app, registry))]
 pub fn do_resume_worker(
     app: &AppHandle,
     registry: &WorkerRegistry,
     id: Uuid,
 ) -> Result<(), AppError> {
-    {
-        let entry = registry
-            .workers
-            .get(&id)
-            .ok_or_else(|| AppError::WorkerNotFound {
-                id: id.to_string(),
-            })?;
-        if entry.state != WorkerState::Paused {
-            return Err(AppError::Ipc(format!("cannot resume worker {} in state {}", id, entry.state)));
-        }
-    }
-
-    registry.update_state(&id, WorkerState::Running)?;
+    registry.update_state_if(&id, WorkerState::Paused, WorkerState::Running)?;
 
     emit_event(
         app,
@@ -260,27 +248,18 @@ pub fn do_kill_worker(
 /// * [`AppError::WorkerNotFound`] - No worker with the given ID exists
 /// * [`AppError::Ipc`] - The worker has no PTY writer, or the write failed
 #[tracing::instrument(skip(registry, data))]
-pub fn do_worker_input(
-    registry: &WorkerRegistry,
-    id: Uuid,
-    data: &[u8],
-) -> Result<(), AppError> {
+pub fn do_worker_input(registry: &WorkerRegistry, id: Uuid, data: &[u8]) -> Result<(), AppError> {
     let entry = registry
         .workers
         .get(&id)
-        .ok_or_else(|| AppError::WorkerNotFound {
-            id: id.to_string(),
-        })?;
+        .ok_or_else(|| AppError::WorkerNotFound { id: id.to_string() })?;
 
     if let Some(writer_mutex) = &entry.pty_writer {
         let mut writer = writer_mutex.lock();
         crate::worker::pty::write_to_pty(writer.as_mut(), data)
             .map_err(|e| AppError::Ipc(e.to_string()))?;
     } else {
-        return Err(AppError::Ipc(format!(
-            "worker {} has no PTY writer",
-            id
-        )));
+        return Err(AppError::Ipc(format!("worker {} has no PTY writer", id)));
     }
 
     Ok(())

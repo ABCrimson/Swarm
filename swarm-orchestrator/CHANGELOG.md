@@ -7,6 +7,59 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 
 ---
 
+## [0.10.0] - 2026-07-09
+
+### Evergreen Modernization Pass
+
+Full dependency refresh to July-2026 latest across the entire stack, plus a batch of critical runtime fixes and new features surfaced along the way. Headline dependency bumps:
+
+- TypeScript `6.0.0-dev` -> **7.0.2** (native compiler)
+- Vite `8.0.0` -> **8.1.4** (Rolldown; `minify: "oxc"`; `manualChunks` replaced by `rolldownOptions.output.advancedChunks`)
+- Vitest `3.x` -> **4.1.10**
+- `@vitejs/plugin-react` `4.x` -> **6.0.3**, with React Compiler now running via `@rolldown/plugin-babel` + `reactCompilerPreset()` instead of a Babel-in-plugin-react pipeline
+- `jsdom` `26.x` -> **29.1.1**
+- Biome `2.4.6` -> **2.5.3**
+- Tailwind CSS `4.2.1` -> **4.3.2**
+- `@anthropic-ai/sdk` `0.78.0` -> **0.110.0**
+- Tauri `2.10` -> **2.11.5** (CLI 2.11.4)
+- `tokio` `1.50.0` -> **1.52.3**
+- `sysinfo` `0.35.x` -> **0.39.6**
+- Rust toolchain `1.95.0-beta` -> **1.98.0-beta**
+- Node.js `25.8.1` -> **26.5.0**
+- Package manager: **npm -> pnpm 11.11.0** (pinned via `packageManager` in `package.json`; every script and CI workflow now runs through pnpm)
+- `framer-motion` -> **`motion` 12.42.2** (the package was renamed upstream; there is no `framer-motion` dependency anymore)
+
+### Fixed
+
+- **Immer MapSet in production:** `enableMapSet()` is now called unconditionally at module load (`main.tsx` and each store that models domain data as `Map`/`Set`), not only reachable in dev/test paths -- Map/Set-backed Zustand stores now work correctly in production builds
+- **Fonts actually load:** Migrated from a `public/fonts` static asset directory (which had gone stale) to the `@fontsource-variable/{jetbrains-mono,syne,dm-sans}` packages, so the three variable fonts are guaranteed to load and stay in sync with their declared versions
+- **Post-process pipeline await bug:** WebGPU post-processing pipeline creation now correctly awaits `createRenderPipelineAsync`/`createComputePipelineAsync` end-to-end instead of racing pipeline use against in-flight compilation
+- **Resize-observer virtualization:** Virtualized lists (`SessionList`, `FileTree`, `LogViewer`) now recompute visible ranges correctly on container resize via `@crimson_dev/use-resize-observer`
+- **AI stream error termination:** The AI client now always emits a terminal `ai:stream_delta` event with `done: true` for a given `requestId`, even on network failure, malformed SSE, or a stream that ends without `message_stop` -- the frontend can no longer be left waiting on a request that never resolves
+- **Bus contract unification:** `bus_send` no longer emits `swarm://bus-message` directly; delivery to the frontend happens exclusively through the background task spawned by `bus_subscribe`, guaranteeing each message reaches the frontend at most once in one consistent shape
+- **TOCTOU-safe pause/resume:** Worker state transitions now go through `WorkerRegistry::update_state_if`, an atomic compare-and-set, closing a race window where a separate read-then-write could clobber a concurrent state change
+- **Atomic session writes + fs permissions:** Session persistence writes are atomic, and `src-tauri/capabilities/default.json` now scopes write/remove/rename permissions to `$APPDATA/**` and `$HOME/.swarm/**` (reads remain broader, under `$APPDATA/**` and `$HOME/**`, to support workspace browsing)
+- **GPU buffer clamp + per-frame texture reuse:** Particle and post-processing GPU buffers/textures are allocated once at a fixed `maxParticles`/canvas size and reused every frame, instead of being reallocated per frame; the adaptive particle count is clamped to `[2,000, 50,000]`
+- **Honest charts:** Metrics charts render only real telemetry (`sysinfo` CPU/memory, worker counts) -- no synthetic/placeholder series remain in the shipped charts
+- **TopBar live count:** The TopBar worker/session count now reflects live store state instead of a stale snapshot
+
+### Added
+
+- `WorkerAIPanel` is now mounted on the Workers page -- a combined terminal + AI chat split view per worker, with tool execution routed through the worker's PTY
+- Tool-call display: AI tool calls and their results render inline in the chat stream
+- `session_add_worker` Tauri command -- registers a worker against a session's `workerIds` list, auto-saving to `sessions.json`
+- Per-worker metrics: `get_metrics` now returns a `perWorker` array (workerId, pid, cpuPercent, memoryBytes) sourced from a single shared `sysinfo::System` (`SharedSystem`), alongside the existing aggregate counts
+- Update signing is fully configured: Ed25519 keypair generated, public key set in `tauri.conf.json`, CI release workflow (`release.yml`) signs artifacts via the `TAURI_SIGNING_PRIVATE_KEY` secret
+
+### Removed
+
+- Dead code: `src/lib/{agent-loop,diff,replay,test-utils,token-costs}.ts` and the `src/lib/providers/` multi-provider registry (the app is Anthropic-native via `src/lib/anthropic.ts`)
+- Dead components: `DiffViewer`, `ReplayControls`, `ReplayTimeline`, `Drawer`, `ScrollArea`, `WorkerAnalytics`, `WorkerCard` -- the session replay feature they supported was removed as dead code
+- `rayon` removed from `Cargo.toml` (unused; sequential aggregation under `spawn_blocking` is cheaper than parallel dispatch overhead at the 64-worker cap)
+- `vaul` removed from `package.json` (no longer used now that `Drawer` is gone)
+
+---
+
 ## [0.9.9] - 2026-03-16
 
 ### Changed

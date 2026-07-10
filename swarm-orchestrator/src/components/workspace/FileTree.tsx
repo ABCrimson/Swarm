@@ -86,62 +86,60 @@ function TreeItem({
   const paddingLeft = 12 + depth * 16;
 
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => {
-          if (node.isDir) {
-            void onToggle(node.path);
-          } else {
-            onSelect(node.path);
-          }
-        }}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          width: "100%",
-          padding: `4px 8px 4px ${paddingLeft}px`,
-          background: isSelected ? "oklch(0.18 0.04 205 / 0.4)" : "oklch(0 0 0 / 0)",
-          border: "none",
-          borderRadius: 4,
-          color: isSelected ? "oklch(0.92 0.02 220)" : "oklch(0.72 0.04 220)",
-          fontFamily: "var(--font-body)",
-          fontSize: "0.8125rem",
-          textAlign: "left",
-          cursor: "pointer",
-          transition: "background 0.1s ease",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-        }}
-        onMouseEnter={(e) => {
-          if (!isSelected) e.currentTarget.style.background = "oklch(0.14 0.03 220 / 0.5)";
-        }}
-        onMouseLeave={(e) => {
-          if (!isSelected) e.currentTarget.style.background = "oklch(0 0 0 / 0)";
-        }}
-      >
-        {node.isDir && (
-          <span
-            aria-hidden="true"
-            style={{
-              display: "inline-block",
-              width: 12,
-              fontSize: "0.625rem",
-              color: "oklch(0.55 0.04 220)",
-              transform: node.expanded ? "rotate(90deg)" : "rotate(0deg)",
-              transition: "transform 0.15s ease",
-            }}
-          >
-            {"\u25B6"}
-          </span>
-        )}
-        {!node.isDir && <span style={{ width: 12 }} />}
-        <span style={{ fontSize: "0.75rem" }}>{fileIcon(node.name, node.isDir)}</span>
-        <span>{node.name}</span>
-      </button>
-    </>
+    <button
+      type="button"
+      onClick={() => {
+        if (node.isDir) {
+          void onToggle(node.path);
+        } else {
+          onSelect(node.path);
+        }
+      }}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        width: "100%",
+        padding: `4px 8px 4px ${paddingLeft}px`,
+        background: isSelected ? "oklch(0.18 0.04 205 / 0.4)" : "oklch(0 0 0 / 0)",
+        border: "none",
+        borderRadius: 4,
+        color: isSelected ? "oklch(0.92 0.02 220)" : "oklch(0.72 0.04 220)",
+        fontFamily: "var(--font-body)",
+        fontSize: "0.8125rem",
+        textAlign: "left",
+        cursor: "pointer",
+        transition: "background 0.1s ease",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      }}
+      onMouseEnter={(e) => {
+        if (!isSelected) e.currentTarget.style.background = "oklch(0.14 0.03 220 / 0.5)";
+      }}
+      onMouseLeave={(e) => {
+        if (!isSelected) e.currentTarget.style.background = "oklch(0 0 0 / 0)";
+      }}
+    >
+      {node.isDir && (
+        <span
+          aria-hidden="true"
+          style={{
+            display: "inline-block",
+            width: 12,
+            fontSize: "0.625rem",
+            color: "oklch(0.55 0.04 220)",
+            transform: node.expanded ? "rotate(90deg)" : "rotate(0deg)",
+            transition: "transform 0.15s ease",
+          }}
+        >
+          {"\u25B6"}
+        </span>
+      )}
+      {!node.isDir && <span style={{ width: 12 }} />}
+      <span style={{ fontSize: "0.75rem" }}>{fileIcon(node.name, node.isDir)}</span>
+      <span>{node.name}</span>
+    </button>
   );
 }
 
@@ -159,13 +157,8 @@ export function FileTree({
   const [nodes, setNodes] = useState<TreeNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [scrollTop, setScrollTop] = useState(0);
-  const [containerHeight, setContainerHeight] = useState(0);
 
-  const { ref: containerRef } = useResizeObserver<HTMLDivElement>({
-    onResize: ({ height }) => {
-      if (height !== undefined) setContainerHeight(height);
-    },
-  });
+  const { ref: containerRef, height: containerHeight = 0 } = useResizeObserver<HTMLDivElement>();
 
   // Load root directory entries
   useEffect(() => {

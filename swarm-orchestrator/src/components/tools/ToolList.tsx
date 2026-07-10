@@ -31,8 +31,8 @@ export function ToolList({
     name: tool.name,
     description: tool.description,
     paramCount: Object.keys(
-      (tool.anthropicTool.input_schema as { properties?: Record<string, unknown> })
-        .properties ?? {},
+      (tool.anthropicTool.input_schema as { properties?: Record<string, unknown> }).properties ??
+        {},
     ).length,
     isCustom: false as const,
   }));

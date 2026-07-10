@@ -1,13 +1,11 @@
-import { test, expect } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 test.describe("SWARM Orchestrator smoke tests", () => {
   test("app loads and displays the dashboard", async ({ page }) => {
     await page.goto("/");
 
     // Wait for the app to fully render — look for SWARM branding or main heading
-    await expect(
-      page.getByText(/swarm/i).first(),
-    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/swarm/i).first()).toBeVisible({ timeout: 10_000 });
   });
 
   test("sidebar navigation is present and clickable", async ({ page }) => {

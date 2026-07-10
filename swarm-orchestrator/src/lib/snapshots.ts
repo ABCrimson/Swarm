@@ -82,62 +82,6 @@ export async function getSnapshot(sessionId: string, snapshotId: string): Promis
 }
 
 /**
- * Deep-diff two snapshot data objects.
- * Returns an object describing additions, removals, and changes.
- */
-export function diffSnapshots(
-  a: Record<string, unknown>,
-  b: Record<string, unknown>,
-): SnapshotDiff {
-  const diff: SnapshotDiff = {
-    added: {},
-    removed: {},
-    changed: {},
-  };
-
-  const allKeys = new Set([...Object.keys(a), ...Object.keys(b)]);
-
-  for (const key of allKeys) {
-    const valA = a[key];
-    const valB = b[key];
-
-    if (!(key in a)) {
-      diff.added[key] = valB;
-    } else if (!(key in b)) {
-      diff.removed[key] = valA;
-    } else if (
-      typeof valA === "object" &&
-      typeof valB === "object" &&
-      valA !== null &&
-      valB !== null
-    ) {
-      const nested = diffSnapshots(
-        valA as Record<string, unknown>,
-        valB as Record<string, unknown>,
-      );
-      if (
-        Object.keys(nested.added).length > 0 ||
-        Object.keys(nested.removed).length > 0 ||
-        Object.keys(nested.changed).length > 0
-      ) {
-        diff.changed[key] = nested;
-      }
-    } else if (valA !== valB) {
-      diff.changed[key] = { from: valA, to: valB };
-    }
-  }
-
-  return diff;
-}
-
-/** Structural diff between two snapshot data objects describing mutations. */
-export interface SnapshotDiff {
-  added: Record<string, unknown>;
-  removed: Record<string, unknown>;
-  changed: Record<string, unknown>;
-}
-
-/**
  * Delete all snapshots for a session.
  */
 export async function clearSnapshots(sessionId: string): Promise<void> {

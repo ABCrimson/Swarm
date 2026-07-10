@@ -1,4 +1,4 @@
-import * as z from "zod/v4";
+import * as z from "zod";
 
 // ── Worker schemas ──────────────────────────────────
 
@@ -10,7 +10,7 @@ export type WorkerState = z.infer<typeof WorkerStateSchema>;
 
 /** Zod schema for a SWARM worker entity. */
 export const WorkerSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   state: WorkerStateSchema,
   name: z.string().optional(),
   pid: z.number().int().optional(),
@@ -35,14 +35,14 @@ export type SessionMetadata = z.infer<typeof SessionMetadataSchema>;
 
 /** Zod schema for a SWARM orchestration session. */
 export const SessionSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   name: z.string(),
-  workerIds: z.array(z.string().uuid()),
+  workerIds: z.array(z.uuid()),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   config: z.record(z.string(), z.unknown()).optional(),
   metadata: SessionMetadataSchema.optional(),
-  snapshotIds: z.array(z.string().uuid()).optional(),
+  snapshotIds: z.array(z.uuid()).optional(),
 });
 
 /** A SWARM session grouping one or more workers with shared config. */
@@ -52,8 +52,8 @@ export type Session = z.infer<typeof SessionSchema>;
 
 /** Zod schema for a point-in-time session snapshot. */
 export const SnapshotSchema = z.object({
-  id: z.string().uuid(),
-  sessionId: z.string().uuid(),
+  id: z.uuid(),
+  sessionId: z.uuid(),
   timestamp: z.string().datetime(),
   data: z.record(z.string(), z.unknown()),
 });
@@ -76,7 +76,7 @@ export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;
 
 /** Zod schema for a reusable session template. */
 export const SessionTemplateSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   name: z.string(),
   description: z.string(),
   workerConfigs: z.array(WorkerConfigSchema),
@@ -117,13 +117,14 @@ export type SystemMetrics = z.infer<typeof SystemMetricsSchema>;
 
 /** Zod schema for an AI conversation message with optional tool calls. */
 export const AiMessageSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   role: z.enum(["user", "assistant"]),
   content: z.string(),
   timestamp: z.string().datetime(),
   toolCalls: z
     .array(
       z.object({
+        id: z.string().optional(),
         name: z.string(),
         input: z.record(z.string(), z.unknown()),
         result: z.string().optional(),
@@ -137,9 +138,9 @@ export type AiMessage = z.infer<typeof AiMessageSchema>;
 
 /** Zod schema for a priority-queued AI request item. */
 export const AiQueueItemSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   priority: z.enum(["critical", "high", "normal", "low"]),
-  workerId: z.string().uuid(),
+  workerId: z.uuid(),
   messages: z.array(AiMessageSchema),
   status: z.enum(["pending", "streaming", "complete", "error"]),
 });

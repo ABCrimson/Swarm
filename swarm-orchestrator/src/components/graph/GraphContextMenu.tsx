@@ -73,6 +73,7 @@ function MenuItem({
 export function GraphContextMenu({
   x,
   y,
+  workerId,
   workerState,
   onPause,
   onResume,
@@ -128,6 +129,17 @@ export function GraphContextMenu({
         boxShadow: "0 0 0 1px oklch(0.78 0.18 205 / 0.1), 0 12px 32px oklch(0.06 0.02 220 / 0.6)",
       }}
     >
+      <div
+        style={{
+          padding: "4px 12px 6px",
+          fontFamily: "var(--font-mono)",
+          fontSize: "0.6875rem",
+          color: "oklch(0.55 0.04 220)",
+          userSelect: "text",
+        }}
+      >
+        {workerId.slice(0, 8)}
+      </div>
       <MenuItem label="Pause" onClick={onPause} disabled={!canPause} />
       <MenuItem label="Resume" onClick={onResume} disabled={!canResume} />
       <hr

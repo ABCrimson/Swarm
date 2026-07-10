@@ -8,23 +8,45 @@ import { useAtom } from "jotai";
 import type { CSSProperties, FormEvent } from "react";
 import { Suspense, startTransition, useEffect, useRef, useState } from "react";
 import { Spinner } from "#components/ui/Spinner";
-import { useStream } from "#hooks/useStream";
+import { useAiStream } from "#hooks/useAiStream";
+import { truncateMessages } from "#lib/ai-error";
+import { CLAUDE_MODELS, getContextWindow } from "#lib/models";
+import { useAiStore } from "#store/ai";
 import type { AiMessage } from "#store/types";
 import { selectedModelAtom } from "#store/ui";
 import { AIMessageStream } from "./AIMessageStream.tsx";
+import { ToolCallDisplay } from "./ToolCallDisplay.tsx";
 
 interface AIChatProps {
   /** Worker ID this chat is attached to. */
   readonly workerId: string;
+  /**
+   * An instruction to inject into the conversation, e.g. from
+   * WorkerAIPanel's "Inject Instruction" modal. Give each injection a
+   * fresh `id` (even for repeated identical text) so the effect below
+   * fires exactly once per injection.
+   */
+  readonly injectedInstruction?: { readonly id: string; readonly content: string } | null;
 }
 
 // ── Model mapping ───────────────────────────────────
+// Keyed by the persisted `selectedModelAtom` value; the catalog in
+// #lib/models is the single source of truth for the actual model IDs.
 
 const MODEL_IDS: Record<"opus" | "sonnet" | "haiku", string> = {
-  opus: "claude-opus-4-0-20250514",
-  sonnet: "claude-sonnet-4-20250514",
-  haiku: "claude-haiku-3-5-20241022",
+  opus: CLAUDE_MODELS.opus.id,
+  sonnet: CLAUDE_MODELS.sonnet.id,
+  haiku: CLAUDE_MODELS.haiku.id,
 };
+
+// ── Streaming tool-call tracking ─────────────────────
+
+interface LiveToolCall {
+  readonly id: string;
+  readonly name: string;
+  readonly input: Record<string, unknown>;
+  readonly status: "executing" | "complete";
+}
 
 // ── Styles (OKLCH) ──────────────────────────────────
 
@@ -103,6 +125,9 @@ const userBubbleStyle: CSSProperties = {
 const assistantBubbleStyle: CSSProperties = {
   alignSelf: "flex-start",
   maxWidth: "85%",
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
 };
 
 const timestampStyle: CSSProperties = {
@@ -149,7 +174,16 @@ function MessageBubble({ message }: { message: AiMessage }): React.ReactElement 
 
   return (
     <div style={assistantBubbleStyle}>
-      <AIMessageStream content={message.content} isStreaming={false} />
+      {message.content && <AIMessageStream content={message.content} isStreaming={false} />}
+      {message.toolCalls?.map((tc) => (
+        <ToolCallDisplay
+          key={tc.id ?? `${message.id}-tool-${tc.name}-${JSON.stringify(tc.input)}`}
+          name={tc.name}
+          input={tc.input}
+          result={tc.result}
+          status={tc.result !== undefined ? "complete" : "executing"}
+        />
+      ))}
       <div style={timestampStyle}>{time}</div>
     </div>
   );
@@ -157,22 +191,186 @@ function MessageBubble({ message }: { message: AiMessage }): React.ReactElement 
 
 // ── Chat Content ────────────────────────────────────
 
-function AIChatContent({ workerId }: AIChatProps): React.ReactElement {
+function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.ReactElement {
   const [selectedModel] = useAtom(selectedModelAtom);
   const modelId = MODEL_IDS[selectedModel];
-  const { messages, isStreaming, error, streamingContent, send, cancel } = useStream(
-    workerId,
-    modelId,
-  );
+  const { startStream, cancelStream, atLimit } = useAiStream();
+  const enqueue = useAiStore((s) => s.enqueue);
+  const dequeue = useAiStore((s) => s.dequeue);
+
+  const [messages, setMessages] = useState<AiMessage[]>([]);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [streamingContent, setStreamingContent] = useState("");
+  const [liveToolCalls, setLiveToolCalls] = useState<LiveToolCall[]>([]);
 
   const [inputValue, setInputValue] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const activeItemIdRef = useRef<string | null>(null);
+  const finishedToolCallsRef = useRef<AiMessage["toolCalls"]>([]);
+  const lastInjectionIdRef = useRef<string | undefined>(undefined);
 
-  // Auto-scroll to bottom on new messages or streaming content
+  // Latest-ref pattern: lets the injection effect below call the current
+  // `doSend` without listing it as a dependency (it is a plain function
+  // re-created every render, not memoized — house rules disallow useCallback).
+  const doSendRef = useRef<(content: string) => void>(() => {});
+
+  const doSend = (content: string) => {
+    const trimmed = content.trim();
+    if (!trimmed || isStreaming) return;
+
+    const userMessage: AiMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: trimmed,
+      timestamp: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
+    setError(null);
+    setIsStreaming(true);
+    setStreamingContent("");
+    setLiveToolCalls([]);
+    finishedToolCallsRef.current = [];
+
+    const itemId = crypto.randomUUID();
+    activeItemIdRef.current = itemId;
+    enqueue({
+      id: itemId,
+      priority: "normal",
+      workerId,
+      messages: [],
+      status: "pending",
+    });
+
+    const apiMessages = [...messagesRef.current, userMessage].map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+    const truncated = truncateMessages(apiMessages, getContextWindow(modelId));
+
+    let buffer = "";
+    let rafId = 0;
+    const flushBuffer = () => {
+      if (buffer) {
+        const chunk = buffer;
+        buffer = "";
+        setStreamingContent((prev) => prev + chunk);
+      }
+      rafId = 0;
+    };
+
+    void (async () => {
+      try {
+        const fullContent = await startStream(
+          itemId,
+          { model: modelId, maxTokens: 4096, messages: truncated },
+          (delta) => {
+            if (delta.toolUse) {
+              const toolUse = delta.toolUse;
+              if (!toolUse.complete) {
+                setLiveToolCalls((prev) => {
+                  const last = prev.at(-1);
+                  if (last && last.status === "executing" && last.name === toolUse.toolName) {
+                    return prev;
+                  }
+                  return [
+                    ...prev,
+                    {
+                      id: crypto.randomUUID(),
+                      name: toolUse.toolName,
+                      input: {},
+                      status: "executing",
+                    },
+                  ];
+                });
+                return;
+              }
+
+              let parsedInput: Record<string, unknown> = {};
+              try {
+                parsedInput = toolUse.partialInput
+                  ? (JSON.parse(toolUse.partialInput) as Record<string, unknown>)
+                  : {};
+              } catch {
+                // Malformed partial JSON — display an empty input rather than crash.
+              }
+
+              finishedToolCallsRef.current = [
+                ...(finishedToolCallsRef.current ?? []),
+                { id: crypto.randomUUID(), name: toolUse.toolName, input: parsedInput },
+              ];
+              setLiveToolCalls((prev) => {
+                const next = [...prev];
+                const last = next.at(-1);
+                next[next.length - 1] = {
+                  id: last?.id ?? crypto.randomUUID(),
+                  name: toolUse.toolName,
+                  input: parsedInput,
+                  status: "complete",
+                };
+                return next;
+              });
+              return;
+            }
+
+            if (delta.content) {
+              buffer += delta.content;
+              if (!rafId) {
+                rafId = requestAnimationFrame(flushBuffer);
+              }
+            }
+          },
+        );
+
+        if (rafId) cancelAnimationFrame(rafId);
+        flushBuffer();
+
+        startTransition(() => {
+          setStreamingContent((finalContent) => {
+            if (finalContent || finishedToolCallsRef.current?.length) {
+              const assistantMessage: AiMessage = {
+                id: crypto.randomUUID(),
+                role: "assistant",
+                content: finalContent || fullContent,
+                timestamp: new Date().toISOString(),
+                toolCalls: finishedToolCallsRef.current?.length
+                  ? finishedToolCallsRef.current
+                  : undefined,
+              };
+              setMessages((prev) => [...prev, assistantMessage]);
+            }
+            return "";
+          });
+          setLiveToolCalls([]);
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (rafId) cancelAnimationFrame(rafId);
+        setIsStreaming(false);
+        dequeue(itemId);
+        activeItemIdRef.current = null;
+      }
+    })();
+  };
+  doSendRef.current = doSend;
+
+  // Fire an injected instruction exactly once per unique injection id.
+  useEffect(() => {
+    if (!injectedInstruction || injectedInstruction.id === lastInjectionIdRef.current) return;
+    lastInjectionIdRef.current = injectedInstruction.id;
+    doSendRef.current(injectedInstruction.content);
+  }, [injectedInstruction]);
+
+  // Auto-scroll to bottom on new messages or streaming content growth.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deps are intentionally used only as scroll triggers, not read in the effect body
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, streamingContent.length > 0]);
+  }, [messages.length, streamingContent, liveToolCalls.length]);
 
   // Auto-resize textarea
   const handleTextareaInput = () => {
@@ -187,7 +385,7 @@ function AIChatContent({ workerId }: AIChatProps): React.ReactElement {
     if (!trimmed || isStreaming) return;
 
     startTransition(() => {
-      send(trimmed);
+      doSend(trimmed);
       setInputValue("");
       if (textareaRef.current) {
         textareaRef.current.style.height = "auto";
@@ -207,6 +405,32 @@ function AIChatContent({ workerId }: AIChatProps): React.ReactElement {
     }
   };
 
+  const handleCancel = () => {
+    if (activeItemIdRef.current) {
+      cancelStream(activeItemIdRef.current);
+    }
+    setIsStreaming(false);
+
+    setStreamingContent((partial) => {
+      if (partial) {
+        const partialMessage: AiMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: `${partial}\n\n[Cancelled]`,
+          timestamp: new Date().toISOString(),
+          toolCalls: finishedToolCallsRef.current?.length
+            ? finishedToolCallsRef.current
+            : undefined,
+        };
+        startTransition(() => {
+          setMessages((prev) => [...prev, partialMessage]);
+        });
+      }
+      return "";
+    });
+    setLiveToolCalls([]);
+  };
+
   return (
     <div style={chatContainerStyle}>
       <div style={messagesAreaStyle}>
@@ -221,9 +445,23 @@ function AIChatContent({ workerId }: AIChatProps): React.ReactElement {
           <MessageBubble key={msg.id} message={msg} />
         ))}
 
-        {isStreaming && streamingContent && (
+        {isStreaming && (streamingContent || liveToolCalls.length > 0) && (
           <div style={assistantBubbleStyle}>
-            <AIMessageStream content={streamingContent} isStreaming={true} onCancel={cancel} />
+            {streamingContent && (
+              <AIMessageStream
+                content={streamingContent}
+                isStreaming={true}
+                onCancel={handleCancel}
+              />
+            )}
+            {liveToolCalls.map((tc) => (
+              <ToolCallDisplay
+                key={tc.id}
+                name={tc.name}
+                input={tc.input}
+                status={tc.status === "complete" ? "complete" : "executing"}
+              />
+            ))}
           </div>
         )}
 
@@ -252,7 +490,11 @@ function AIChatContent({ workerId }: AIChatProps): React.ReactElement {
           onChange={(e) => setInputValue(e.target.value)}
           onInput={handleTextareaInput}
           onKeyDown={handleKeyDown}
-          placeholder="Type a message... (Shift+Enter for newline)"
+          placeholder={
+            atLimit && !isStreaming
+              ? "Concurrent stream limit reached…"
+              : "Type a message... (Shift+Enter for newline)"
+          }
           rows={1}
           style={textareaStyle}
           disabled={isStreaming}
@@ -281,10 +523,13 @@ function AIChatContent({ workerId }: AIChatProps): React.ReactElement {
  * - Messages scroll up, input at bottom
  * - User messages right-aligned, AI left-aligned
  * - Glass-panel OKLCH styling
- * - Auto-scroll on new messages
+ * - Auto-scroll on new messages and growing streamed content
  * - Suspense boundary for loading states
+ * - Streams through `useAiStream`, so queue item status and
+ *   `activeStreams` (shown by AIQueue) stay accurate
+ * - Renders `tool_use` content blocks via ToolCallDisplay
  */
-export function AIChat({ workerId }: AIChatProps): React.ReactElement {
+export function AIChat({ workerId, injectedInstruction }: AIChatProps): React.ReactElement {
   return (
     <Suspense
       fallback={
@@ -293,7 +538,7 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
         </div>
       }
     >
-      <AIChatContent workerId={workerId} />
+      <AIChatContent workerId={workerId} injectedInstruction={injectedInstruction} />
     </Suspense>
   );
 }

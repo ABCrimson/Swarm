@@ -43,6 +43,7 @@ export function ParticleCanvas(): React.ReactElement {
 
   const systemRef = useRef<ParticleSystem | null>(null);
   const postProcessRef = useRef<PostProcessPipeline | null>(null);
+  const intermediateTextureRef = useRef<GPUTexture | null>(null);
   const rafRef = useRef<number>(0);
   const particleCountRef = useRef(INITIAL_PARTICLE_COUNT);
   const lastTimeRef = useRef(0);
@@ -74,8 +75,26 @@ export function ParticleCanvas(): React.ReactElement {
         }
         systemRef.current = system;
 
-        const postProcess = createPostProcessPipeline(device, format, canvasWidth, canvasHeight);
+        const postProcess = await createPostProcessPipeline(
+          device,
+          format,
+          canvasWidth,
+          canvasHeight,
+        );
+        if (controller.signal.aborted) {
+          destroyPostProcessPipeline(postProcess);
+          return;
+        }
         postProcessRef.current = postProcess;
+
+        // Allocate the post-process intermediate texture once here — it is
+        // only recreated when this effect re-runs (device/format/canvas
+        // size change), never per-frame.
+        intermediateTextureRef.current = device.createTexture({
+          size: { width: canvasWidth, height: canvasHeight },
+          format,
+          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        });
 
         writeRenderParams(device, system, canvasWidth, canvasHeight);
       } catch (err) {
@@ -95,6 +114,10 @@ export function ParticleCanvas(): React.ReactElement {
         destroyPostProcessPipeline(postProcessRef.current);
         postProcessRef.current = null;
       }
+      if (intermediateTextureRef.current) {
+        intermediateTextureRef.current.destroy();
+        intermediateTextureRef.current = null;
+      }
     };
   }, [device, format, isReady, canvasWidth, canvasHeight]);
 
@@ -110,12 +133,18 @@ export function ParticleCanvas(): React.ReactElement {
       const avg = frameTimesRef.current.reduce((a, b) => a + b, 0) / frameTimesRef.current.length;
       frameTimesRef.current = [];
 
+      // Never exceed the buffer capacity allocated at pipeline creation
+      // (maxParticles), regardless of MAX_PARTICLE_COUNT's headroom.
+      const ceiling = Math.min(
+        MAX_PARTICLE_COUNT,
+        systemRef.current?.maxParticles ?? MAX_PARTICLE_COUNT,
+      );
       let count = particleCountRef.current;
 
       if (avg > TARGET_HIGH_MS) {
         count = Math.max(MIN_PARTICLE_COUNT, Math.floor(count * 0.8));
       } else if (avg < TARGET_LOW_MS) {
-        count = Math.min(MAX_PARTICLE_COUNT, Math.floor(count * 1.1));
+        count = Math.min(ceiling, Math.floor(count * 1.1));
       }
 
       if (count !== particleCountRef.current) {
@@ -155,32 +184,25 @@ export function ParticleCanvas(): React.ReactElement {
         // Compute pass: update particles
         dispatchCompute(encoder, system);
 
-        if (postProcess && canvasWidth > 0 && canvasHeight > 0) {
-          // Render particles to an intermediate texture
-          const intermediateTexture = device.createTexture({
-            size: { width: canvasWidth, height: canvasHeight },
-            format: context.getCurrentTexture().format,
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-          });
+        // Defense-in-depth: never instance-draw more particles than the
+        // GPU buffer allocated at createParticleSystem() time holds.
+        const drawCount = Math.min(particleCountRef.current, system.maxParticles);
 
-          renderParticles(
-            encoder,
-            system,
-            intermediateTexture.createView(),
-            particleCountRef.current,
-          );
+        const intermediateTexture = intermediateTextureRef.current;
+
+        if (postProcess && intermediateTexture && canvasWidth > 0 && canvasHeight > 0) {
+          // Render particles to the pre-allocated intermediate texture
+          renderParticles(encoder, system, intermediateTexture.createView(), drawCount);
 
           device.queue.submit([encoder.finish()]);
 
           // Post-process: bloom + chromatic aberration + vignette
           const outputView = context.getCurrentTexture().createView();
           renderPostProcess(device, postProcess, intermediateTexture, outputView);
-
-          intermediateTexture.destroy();
         } else {
           // No post-processing — render directly
           const textureView = context.getCurrentTexture().createView();
-          renderParticles(encoder, system, textureView, particleCountRef.current);
+          renderParticles(encoder, system, textureView, drawCount);
           device.queue.submit([encoder.finish()]);
         }
 
@@ -201,7 +223,7 @@ export function ParticleCanvas(): React.ReactElement {
         rafRef.current = 0;
       }
     };
-  }, [device, context, isReady, canvasWidth, canvasHeight]);
+  }, [device, context, isReady, canvasWidth, canvasHeight, setParticleCount, setGpuFrameTime]);
 
   return (
     <canvas

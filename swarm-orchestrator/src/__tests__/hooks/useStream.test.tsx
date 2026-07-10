@@ -10,25 +10,16 @@ vi.mock("#lib/anthropic", () => ({
 
 // Mock ai-error utilities (withRetry and truncateMessages)
 vi.mock("#lib/ai-error", () => ({
-  withRetry: vi.fn(
-    async (
-      fn: (signal: AbortSignal) => Promise<void>,
-      _options?: unknown,
-    ) => {
-      const controller = new AbortController();
-      try {
-        return await fn(controller.signal);
-      } catch (err) {
-        // Mirror real withRetry behavior: rethrow with a wrapped message
-        throw new Error(
-          err instanceof Error ? err.message : String(err),
-        );
-      }
-    },
-  ),
-  truncateMessages: vi.fn(
-    (messages: Array<{ role: string; content: string }>) => messages,
-  ),
+  withRetry: vi.fn(async (fn: (signal: AbortSignal) => Promise<void>, _options?: unknown) => {
+    const controller = new AbortController();
+    try {
+      return await fn(controller.signal);
+    } catch (err) {
+      // Mirror real withRetry behavior: rethrow with a wrapped message
+      throw new Error(err instanceof Error ? err.message : String(err));
+    }
+  }),
+  truncateMessages: vi.fn((messages: Array<{ role: string; content: string }>) => messages),
 }));
 
 // Mock the AI store
@@ -172,6 +163,10 @@ describe("useStream", () => {
 
   it("should handle stream errors", async () => {
     mockStreamMessage.mockImplementation(async function* () {
+      // Immediately-thrown async generator, matching the real streamMessage
+      // signature. The `for await` consumer never receives a yielded value
+      // since throwing happens on the first `.next()` call.
+      if (Date.now() < 0) yield undefined as never;
       throw new Error("API connection failed");
     });
 
@@ -213,9 +208,7 @@ describe("useStream", () => {
   it("should use the default model when no params override is given", async () => {
     mockStreamMessage.mockImplementation(() => fakeStream([]));
 
-    const { result } = renderHook(() =>
-      useStream("worker-1", "claude-opus-4-0-20250514"),
-    );
+    const { result } = renderHook(() => useStream("worker-1", "claude-opus-4-0-20250514"));
 
     await act(async () => {
       result.current.send("Model test");

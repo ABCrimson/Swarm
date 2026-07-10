@@ -6,6 +6,7 @@ import { startTransition, useEffect, useRef, useState } from "react";
 import { truncateMessages, withRetry } from "#lib/ai-error";
 import type { StreamParams } from "#lib/anthropic";
 import { streamMessage } from "#lib/anthropic";
+import { CLAUDE_MODELS, getContextWindow } from "#lib/models";
 import { useAiStore } from "#store/ai";
 import type { AiMessage } from "#store/types";
 
@@ -24,12 +25,6 @@ interface UseStreamReturn {
   readonly cancel: () => void;
 }
 
-const MODEL_CONTEXT_LIMITS: Record<string, number> = {
-  "claude-sonnet-4-20250514": 200_000,
-  "claude-opus-4-0-20250514": 200_000,
-  "claude-haiku-3-5-20241022": 200_000,
-};
-
 /**
  * Streaming hook for AI chat conversations.
  *
@@ -40,7 +35,7 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
  */
 export function useStream(
   workerId: string,
-  defaultModel = "claude-sonnet-4-20250514",
+  defaultModel: string = CLAUDE_MODELS.sonnet.id,
 ): UseStreamReturn {
   const [messages, setMessages] = useState<AiMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -56,7 +51,7 @@ export function useStream(
   const send = (content: string, params?: Partial<StreamParams>) => {
     const model = params?.model ?? defaultModel;
     const maxTokens = params?.maxTokens ?? 4096;
-    const contextLimit = MODEL_CONTEXT_LIMITS[model] ?? 200_000;
+    const contextLimit = getContextWindow(model);
 
     // Add user message
     const userMessage: AiMessage = {

@@ -68,7 +68,9 @@ export function PerformanceOverlay(): React.ReactElement | null {
   const [renderCount, setRenderCount] = useState(0);
 
   // Track renders
-  renderCountRef.current += 1;
+  useEffect(() => {
+    renderCountRef.current += 1;
+  });
   useEffect(() => {
     const id = setInterval(() => {
       setRenderCount(renderCountRef.current);
@@ -110,7 +112,7 @@ export function PerformanceOverlay(): React.ReactElement | null {
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [setIsOpen]);
 
   // Only render in dev mode
   if (!import.meta.env.DEV) return null;

@@ -11,7 +11,7 @@
 /// <reference lib="webworker" />
 
 import type { ElkExtendedEdge, ElkNode } from "elkjs";
-import ELK from "elkjs";
+import ELK from "elkjs/lib/elk.bundled.js";
 
 /** Node descriptor sent from the main thread. */
 interface IncomingNode {

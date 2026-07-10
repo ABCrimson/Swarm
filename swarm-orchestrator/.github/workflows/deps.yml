@@ -6,37 +6,43 @@ on:
   workflow_dispatch:
 
 env:
-  NODE_VERSION: "25.8.1"
+  NODE_VERSION: "26.5.0"
+  # Keep in sync with src-tauri/rust-toolchain.toml
+  RUST_TOOLCHAIN: "1.98.0-beta"
 
 jobs:
-  audit-npm:
-    name: npm Audit
+  audit-pnpm:
+    name: pnpm Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
-      - name: npm audit
-        run: npm audit --audit-level=high
+      - name: pnpm audit
+        run: pnpm audit --audit-level high
 
   audit-cargo:
     name: Cargo Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.95.0-beta"
+          # Keep in sync with src-tauri/rust-toolchain.toml
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Install cargo-audit
         uses: taiki-e/install-action@cargo-audit

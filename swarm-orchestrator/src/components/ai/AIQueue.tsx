@@ -2,7 +2,7 @@
 // Visual queue display with position indicators, priority badges,
 // estimated wait times, and cancel functionality.
 
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion } from "motion/react";
 import type { CSSProperties } from "react";
 import { Spinner } from "#components/ui/Spinner";
 import { useAiStore } from "#store/ai";
@@ -200,6 +200,12 @@ export function AIQueue(): React.ReactElement {
 
   const pendingCount = queue.filter((q) => q.status === "pending").length;
 
+  // Position of each pending item within the pending sub-queue (1-based),
+  // counting only preceding items that are themselves still pending —
+  // streaming/complete/error items ahead in the array don't add wait time.
+  let pendingSeen = 0;
+  const pendingPositions = queue.map((item) => (item.status === "pending" ? ++pendingSeen : 0));
+
   return (
     <div style={queueContainerStyle}>
       <div style={headerStyle}>
@@ -232,7 +238,9 @@ export function AIQueue(): React.ReactElement {
             <StatusLabel status={item.status} />
 
             {item.status === "pending" && (
-              <span style={waitEstimateStyle}>{formatWait(idx - activeStreams + 1)}</span>
+              <span style={waitEstimateStyle}>
+                {formatWait(Math.max(1, pendingPositions[idx]))}
+              </span>
             )}
 
             {(item.status === "pending" || item.status === "streaming") && (

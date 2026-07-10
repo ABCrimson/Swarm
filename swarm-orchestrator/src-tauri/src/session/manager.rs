@@ -35,7 +35,7 @@ use crate::error::AppError;
 ///     "name": "Research Session",
 ///     "workerIds": [],
 ///     "createdAt": 1700000000,
-///     "config": { "model": "claude-sonnet-4-20250514" }
+///     "config": { "model": "model-id" }
 /// });
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,7 +69,7 @@ pub struct Session {
 /// let manager = SessionManager::new();
 /// let session = manager.create_session(
 ///     "Research".to_string(),
-///     json!({ "model": "claude-sonnet-4-20250514" }),
+///     json!({ "model": "model-id" }),
 /// );
 /// assert_eq!(session.name, "Research");
 /// ```
@@ -104,11 +104,7 @@ impl SessionManager {
     /// # Returns
     ///
     /// The newly created [`Session`].
-    pub fn create_session(
-        &self,
-        name: String,
-        config: serde_json::Value,
-    ) -> Session {
+    pub fn create_session(&self, name: String, config: serde_json::Value) -> Session {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -144,9 +140,7 @@ impl SessionManager {
         self.sessions
             .get(id)
             .map(|entry| entry.clone())
-            .ok_or_else(|| AppError::SessionNotFound {
-                id: id.to_string(),
-            })
+            .ok_or_else(|| AppError::SessionNotFound { id: id.to_string() })
     }
 
     /// Deletes a session by ID and returns it.
@@ -166,9 +160,7 @@ impl SessionManager {
         self.sessions
             .remove(id)
             .map(|(_, session)| session)
-            .ok_or_else(|| AppError::SessionNotFound {
-                id: id.to_string(),
-            })
+            .ok_or_else(|| AppError::SessionNotFound { id: id.to_string() })
     }
 
     /// Lists all sessions as cloned snapshots.
@@ -177,10 +169,7 @@ impl SessionManager {
     ///
     /// A `Vec<Session>` containing all registered sessions.
     pub fn list_sessions(&self) -> Vec<Session> {
-        self.sessions
-            .iter()
-            .map(|entry| entry.clone())
-            .collect()
+        self.sessions.iter().map(|entry| entry.clone()).collect()
     }
 
     /// Adds a worker to a session's worker list.
@@ -198,12 +187,12 @@ impl SessionManager {
         session_id: &Uuid,
         worker_id: Uuid,
     ) -> Result<(), AppError> {
-        let mut entry = self
-            .sessions
-            .get_mut(session_id)
-            .ok_or_else(|| AppError::SessionNotFound {
-                id: session_id.to_string(),
-            })?;
+        let mut entry =
+            self.sessions
+                .get_mut(session_id)
+                .ok_or_else(|| AppError::SessionNotFound {
+                    id: session_id.to_string(),
+                })?;
         entry.worker_ids.push(worker_id);
         Ok(())
     }

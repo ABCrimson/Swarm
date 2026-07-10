@@ -29,4 +29,14 @@ env:
 
 ## Current Status
 
-The `pubkey` field in `tauri.conf.json` must be populated before production release.
+**Keys are generated and wired up.**
+
+- **Private key:** Generated at `~/.tauri/swarm-orchestrator.key` (no password set on the key). It is not committed to the repository and exists only on the machine(s) that generated it and in the `TAURI_SIGNING_PRIVATE_KEY` GitHub Actions secret.
+- **Public key:** Populated in `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`.
+- **Update endpoint:** `plugins.updater.endpoints` in `tauri.conf.json` points at the `crimson-dev/swarm-orchestrator` GitHub Releases `latest.json` asset:
+  ```
+  https://github.com/crimson-dev/swarm-orchestrator/releases/latest/download/latest.json
+  ```
+- **CI signing:** `.github/workflows/release.yml` runs on `v*` tag pushes, builds with `tauri-apps/tauri-action`, and passes `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (both GitHub Actions secrets) as env vars to the build step, so every tagged release is signed automatically across all three build matrix targets (`x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `x86_64-apple-darwin`).
+
+No password was set on the generated private key (`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` is present in the workflow for forward-compatibility but is currently unset/empty as a secret). If the key is ever rotated to a password-protected one, set that secret before the next tagged release.

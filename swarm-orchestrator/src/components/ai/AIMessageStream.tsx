@@ -215,6 +215,8 @@ interface ParsedSegment {
   readonly type: "text" | "code_block" | "inline_code";
   readonly content: string;
   readonly language?: string;
+  /** Offset of this segment's start within the raw source string — stable React key. */
+  readonly start: number;
 }
 
 function parseContent(raw: string): ParsedSegment[] {
@@ -227,13 +229,14 @@ function parseContent(raw: string): ParsedSegment[] {
     const matchIndex = blockMatch.index ?? 0;
     if (matchIndex > lastIndex) {
       const textBefore = raw.slice(lastIndex, matchIndex);
-      parseInlineCode(textBefore, segments);
+      parseInlineCode(textBefore, segments, lastIndex);
     }
 
     segments.push({
       type: "code_block",
       content: blockMatch[2],
       language: blockMatch[1] || undefined,
+      start: matchIndex,
     });
 
     lastIndex = matchIndex + blockMatch[0].length;
@@ -241,27 +244,35 @@ function parseContent(raw: string): ParsedSegment[] {
 
   // Remaining text after last code block
   if (lastIndex < raw.length) {
-    parseInlineCode(raw.slice(lastIndex), segments);
+    parseInlineCode(raw.slice(lastIndex), segments, lastIndex);
   }
 
   return segments;
 }
 
-function parseInlineCode(text: string, segments: ParsedSegment[]): void {
+function parseInlineCode(text: string, segments: ParsedSegment[], baseOffset: number): void {
   const inlineRegex = /`([^`]+)`/g;
   let lastIdx = 0;
 
   for (const inlineMatch of text.matchAll(inlineRegex)) {
     const matchIndex = inlineMatch.index ?? 0;
     if (matchIndex > lastIdx) {
-      segments.push({ type: "text", content: text.slice(lastIdx, matchIndex) });
+      segments.push({
+        type: "text",
+        content: text.slice(lastIdx, matchIndex),
+        start: baseOffset + lastIdx,
+      });
     }
-    segments.push({ type: "inline_code", content: inlineMatch[1] });
+    segments.push({
+      type: "inline_code",
+      content: inlineMatch[1],
+      start: baseOffset + matchIndex,
+    });
     lastIdx = matchIndex + inlineMatch[0].length;
   }
 
   if (lastIdx < text.length) {
-    segments.push({ type: "text", content: text.slice(lastIdx) });
+    segments.push({ type: "text", content: text.slice(lastIdx), start: baseOffset + lastIdx });
   }
 }
 
@@ -299,32 +310,38 @@ export function AIMessageStream({
         </button>
       )}
 
-      {segments.map((segment, segIdx) => {
+      {segments.map((segment) => {
         switch (segment.type) {
-          case "code_block":
+          case "code_block": {
+            let lineOffset = segment.start;
             return (
-              <pre key={`seg-${segIdx}`} style={codeBlockStyle}>
+              <pre key={`seg-${segment.start}`} style={codeBlockStyle}>
                 {segment.language && <span style={langLabelStyle}>{segment.language}</span>}
                 <code>
-                  {segment.content.split("\n").map((line, lineIdx) => (
-                    <span key={`line-${lineIdx}`}>
-                      {highlightCodeLine(line)}
-                      {"\n"}
-                    </span>
-                  ))}
+                  {segment.content.split("\n").map((line) => {
+                    const lineKey = lineOffset;
+                    lineOffset += line.length + 1;
+                    return (
+                      <span key={`line-${lineKey}`}>
+                        {highlightCodeLine(line)}
+                        {"\n"}
+                      </span>
+                    );
+                  })}
                 </code>
               </pre>
             );
+          }
 
           case "inline_code":
             return (
-              <code key={`seg-${segIdx}`} style={inlineCodeStyle}>
+              <code key={`seg-${segment.start}`} style={inlineCodeStyle}>
                 {segment.content}
               </code>
             );
 
           default:
-            return <span key={`seg-${segIdx}`}>{segment.content}</span>;
+            return <span key={`seg-${segment.start}`}>{segment.content}</span>;
         }
       })}
 

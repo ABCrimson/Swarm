@@ -228,11 +228,12 @@ function InjectModal({
 export function WorkerAIPanel({ workerId }: WorkerAIPanelProps): React.ReactElement {
   const [showInjectModal, setShowInjectModal] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
+  // Each injection gets a fresh id so AIChat's effect fires even when the
+  // same instruction text is injected twice in a row.
+  const [injection, setInjection] = useState<{ id: string; content: string } | null>(null);
 
-  const handleInject = (_instruction: string) => {
-    // The instruction would be injected into the AI conversation
-    // via the useStream hook's send method. This is a UI bridge —
-    // the actual injection happens through the chat's message flow.
+  const handleInject = (instruction: string) => {
+    setInjection({ id: crypto.randomUUID(), content: instruction });
   };
 
   return (
@@ -294,7 +295,7 @@ export function WorkerAIPanel({ workerId }: WorkerAIPanelProps): React.ReactElem
             <div style={paneWrapperStyle}>
               <div style={labelStyle}>AI Chat</div>
               <div style={{ flex: 1, minHeight: 0 }}>
-                <AIChat workerId={workerId} />
+                <AIChat workerId={workerId} injectedInstruction={injection} />
               </div>
             </div>
           }

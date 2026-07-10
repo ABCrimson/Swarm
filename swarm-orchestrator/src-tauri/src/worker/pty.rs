@@ -7,13 +7,13 @@
 //! backpressure when the consumer falls behind.
 
 use anyhow::Context;
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::io::{Read, Write};
 use tauri::AppHandle;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::events::{emit_event, SwarmEvent, WorkerOutputPayload};
+use crate::events::{SwarmEvent, WorkerOutputPayload, emit_event};
 
 /// Result of spawning a PTY process.
 ///
@@ -139,7 +139,10 @@ pub fn spawn_pty(
                         break;
                     }
                 }
-                Err(e) => { tracing::error!(error = %e, "PTY read error"); break; }
+                Err(e) => {
+                    tracing::error!(error = %e, "PTY read error");
+                    break;
+                }
             }
         }
     });
@@ -157,10 +160,7 @@ pub fn spawn_pty(
             let data = String::from_utf8_lossy(&bytes).into_owned();
             emit_event(
                 &app_handle,
-                SwarmEvent::WorkerOutput(WorkerOutputPayload {
-                    worker_id,
-                    data,
-                }),
+                SwarmEvent::WorkerOutput(WorkerOutputPayload { worker_id, data }),
             );
         }
         tracing::debug!(worker_id = %worker_id, "PTY output reader finished");
@@ -171,11 +171,7 @@ pub fn spawn_pty(
         }
     });
 
-    Ok(PtyHandle {
-        writer,
-        child,
-        pid,
-    })
+    Ok(PtyHandle { writer, child, pid })
 }
 
 /// Writes input bytes to a PTY master file descriptor.
@@ -192,9 +188,7 @@ pub fn spawn_pty(
 ///
 /// Returns `anyhow::Error` if the write or flush operation fails.
 pub fn write_to_pty(writer: &mut dyn Write, data: &[u8]) -> anyhow::Result<()> {
-    writer
-        .write_all(data)
-        .context("failed to write to PTY")?;
+    writer.write_all(data).context("failed to write to PTY")?;
     writer.flush().context("failed to flush PTY writer")?;
     Ok(())
 }

@@ -219,9 +219,7 @@ impl WorkerRegistry {
         self.workers
             .get(id)
             .map(|entry| entry.to_info())
-            .ok_or_else(|| AppError::WorkerNotFound {
-                id: id.to_string(),
-            })
+            .ok_or_else(|| AppError::WorkerNotFound { id: id.to_string() })
     }
 
     /// Removes a worker from the registry by ID.
@@ -244,9 +242,7 @@ impl WorkerRegistry {
         self.workers
             .remove(id)
             .map(|(_, handle)| handle)
-            .ok_or_else(|| AppError::WorkerNotFound {
-                id: id.to_string(),
-            })
+            .ok_or_else(|| AppError::WorkerNotFound { id: id.to_string() })
     }
 
     /// Updates the lifecycle state of a worker in the registry.
@@ -263,11 +259,83 @@ impl WorkerRegistry {
         let mut entry = self
             .workers
             .get_mut(id)
-            .ok_or_else(|| AppError::WorkerNotFound {
-                id: id.to_string(),
-            })?;
+            .ok_or_else(|| AppError::WorkerNotFound { id: id.to_string() })?;
         entry.state = state;
         tracing::debug!(worker_id = %id, new_state = %state, "worker state updated");
+        Ok(())
+    }
+
+    /// Atomically checks and updates a worker's lifecycle state.
+    ///
+    /// Performs the expected-state check and the write inside a single
+    /// `DashMap` shard lock (via one `get_mut` guard), eliminating the
+    /// check-then-set race that exists when a caller separately reads
+    /// the current state and then calls [`Self::update_state`] — two
+    /// concurrent callers (e.g. a pause and a resume racing on the same
+    /// worker) could otherwise both pass their precondition check before
+    /// either applies its update.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The UUID of the worker to update
+    /// * `expected` - The state the worker must currently be in
+    /// * `new_state` - The state to transition to if the check passes
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if the worker was in `expected` state and was updated.
+    ///
+    /// # Errors
+    ///
+    /// * [`AppError::WorkerNotFound`] - No worker with the given ID exists
+    /// * [`AppError::Ipc`] - The worker's current state does not match
+    ///   `expected` (includes the actual state in the error message)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swarm_core::worker::registry::WorkerRegistry;
+    /// use swarm_core::worker::handle::{WorkerHandle, WorkerState};
+    /// use uuid::Uuid;
+    ///
+    /// let registry = WorkerRegistry::new();
+    /// let handle = WorkerHandle {
+    ///     id: Uuid::new_v4(),
+    ///     state: WorkerState::Running,
+    ///     name: "test".to_string(),
+    ///     pid: None,
+    ///     started_at: 0,
+    ///     pty_writer: None,
+    ///     child: None,
+    /// };
+    /// let id = registry.spawn_worker(handle).unwrap();
+    ///
+    /// // Succeeds: worker is Running as expected.
+    /// registry.update_state_if(&id, WorkerState::Running, WorkerState::Paused).unwrap();
+    ///
+    /// // Fails: worker is now Paused, not Running.
+    /// assert!(registry.update_state_if(&id, WorkerState::Running, WorkerState::Paused).is_err());
+    /// ```
+    pub fn update_state_if(
+        &self,
+        id: &WorkerId,
+        expected: WorkerState,
+        new_state: WorkerState,
+    ) -> Result<(), AppError> {
+        let mut entry = self
+            .workers
+            .get_mut(id)
+            .ok_or_else(|| AppError::WorkerNotFound { id: id.to_string() })?;
+
+        if entry.state != expected {
+            return Err(AppError::Ipc(format!(
+                "cannot transition worker {} from {} to {} (expected {})",
+                id, entry.state, new_state, expected
+            )));
+        }
+
+        entry.state = new_state;
+        tracing::debug!(worker_id = %id, new_state = %new_state, "worker state updated (CAS)");
         Ok(())
     }
 
@@ -325,10 +393,7 @@ impl WorkerRegistry {
     ///
     /// A `Vec<WorkerInfo>` of all registered workers.
     pub fn list_workers(&self) -> Vec<WorkerInfo> {
-        self.workers
-            .iter()
-            .map(|entry| entry.to_info())
-            .collect()
+        self.workers.iter().map(|entry| entry.to_info()).collect()
     }
 }
 
@@ -396,6 +461,40 @@ mod tests {
         reg.update_state(&id, WorkerState::Paused).unwrap();
         let info = reg.get_worker(&id).unwrap();
         assert_eq!(info.state, WorkerState::Paused);
+    }
+
+    #[test]
+    fn test_update_state_if_succeeds_when_expected_matches() {
+        let reg = WorkerRegistry::new();
+        let handle = make_handle("cas-worker");
+        let id = handle.id;
+        reg.spawn_worker(handle).unwrap();
+
+        let result = reg.update_state_if(&id, WorkerState::Running, WorkerState::Paused);
+        assert!(result.is_ok());
+        assert_eq!(reg.get_worker(&id).unwrap().state, WorkerState::Paused);
+    }
+
+    #[test]
+    fn test_update_state_if_fails_when_expected_mismatches() {
+        let reg = WorkerRegistry::new();
+        let handle = make_handle("cas-worker-2");
+        let id = handle.id;
+        reg.spawn_worker(handle).unwrap();
+
+        // Worker is Running, but we expect Paused — should fail without mutating.
+        let result = reg.update_state_if(&id, WorkerState::Paused, WorkerState::Running);
+        assert!(result.is_err());
+        // State must remain unchanged (no partial/racy mutation).
+        assert_eq!(reg.get_worker(&id).unwrap().state, WorkerState::Running);
+    }
+
+    #[test]
+    fn test_update_state_if_worker_not_found() {
+        let reg = WorkerRegistry::new();
+        let fake_id = Uuid::new_v4();
+        let result = reg.update_state_if(&fake_id, WorkerState::Running, WorkerState::Paused);
+        assert!(result.is_err());
     }
 
     #[test]

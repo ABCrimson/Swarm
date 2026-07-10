@@ -33,13 +33,9 @@ export function SessionList({
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
-  const [containerHeight, setContainerHeight] = useState(0);
 
-  const { ref: virtualizationRef } = useResizeObserver<HTMLDivElement>({
-    onResize: ({ height }) => {
-      if (height !== undefined) setContainerHeight(height);
-    },
-  });
+  const { ref: virtualizationRef, height: containerHeight = 0 } =
+    useResizeObserver<HTMLDivElement>();
 
   const sortedSessions = [...sessions.values()].sort(
     (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),

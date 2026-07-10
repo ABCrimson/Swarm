@@ -33,6 +33,7 @@ const cardStyle: CSSProperties = {
   borderRadius: 8,
   backdropFilter: "blur(12px) saturate(1.5)",
   padding: "12px 16px",
+  margin: 0,
   display: "flex",
   flexDirection: "column",
   gap: 4,
@@ -53,7 +54,7 @@ export function MetricCard({
   const accentColor = SEVERITY_COLOR[severity];
 
   return (
-    <div role="group" style={cardStyle} aria-label={`${label}: ${value}`}>
+    <fieldset style={cardStyle} aria-label={`${label}: ${value}`}>
       <span
         style={{
           fontFamily: "var(--font-body)",
@@ -89,6 +90,6 @@ export function MetricCard({
           {TREND_SYMBOL[trend]}
         </span>
       </div>
-    </div>
+    </fieldset>
   );
 }

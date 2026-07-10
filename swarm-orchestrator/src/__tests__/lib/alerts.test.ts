@@ -7,8 +7,6 @@ const DEFAULT_THRESHOLDS: AlertThresholds = {
   cpuCritical: 80,
   memoryWarning: 80,
   memoryCritical: 90,
-  errorRateWarning: 5,
-  errorRateCritical: 10,
 };
 
 const BASE_NOW = 1_000_000;
@@ -16,7 +14,7 @@ const BASE_NOW = 1_000_000;
 describe("evaluateThresholds", () => {
   describe("warning triggers", () => {
     it("triggers a CPU warning at the warning threshold", () => {
-      const snapshot: MetricsSnapshot = { cpuPercent: 70, memoryPercent: 50, errorRate: 0 };
+      const snapshot: MetricsSnapshot = { cpuPercent: 70, memoryPercent: 50 };
       const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW);
 
       const cpuAlert = alerts.find((a) => a.metric === "cpu");
@@ -27,27 +25,18 @@ describe("evaluateThresholds", () => {
     });
 
     it("triggers a memory warning when memory exceeds warning threshold", () => {
-      const snapshot: MetricsSnapshot = { cpuPercent: 50, memoryPercent: 85, errorRate: 0 };
+      const snapshot: MetricsSnapshot = { cpuPercent: 50, memoryPercent: 85 };
       const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW);
 
       const memAlert = alerts.find((a) => a.metric === "memory");
       expect(memAlert).toBeDefined();
       expect(memAlert?.severity).toBe("warning");
     });
-
-    it("triggers an error rate warning", () => {
-      const snapshot: MetricsSnapshot = { cpuPercent: 50, memoryPercent: 50, errorRate: 7 };
-      const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW);
-
-      const errAlert = alerts.find((a) => a.metric === "errorRate");
-      expect(errAlert).toBeDefined();
-      expect(errAlert?.severity).toBe("warning");
-    });
   });
 
   describe("critical triggers", () => {
     it("triggers a CPU critical alert at the critical threshold", () => {
-      const snapshot: MetricsSnapshot = { cpuPercent: 80, memoryPercent: 50, errorRate: 0 };
+      const snapshot: MetricsSnapshot = { cpuPercent: 80, memoryPercent: 50 };
       const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW);
 
       const cpuAlert = alerts.find((a) => a.metric === "cpu");
@@ -57,7 +46,7 @@ describe("evaluateThresholds", () => {
     });
 
     it("triggers a memory critical alert", () => {
-      const snapshot: MetricsSnapshot = { cpuPercent: 50, memoryPercent: 95, errorRate: 0 };
+      const snapshot: MetricsSnapshot = { cpuPercent: 50, memoryPercent: 95 };
       const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW);
 
       const memAlert = alerts.find((a) => a.metric === "memory");
@@ -65,18 +54,9 @@ describe("evaluateThresholds", () => {
       expect(memAlert?.severity).toBe("critical");
     });
 
-    it("triggers an error rate critical alert", () => {
-      const snapshot: MetricsSnapshot = { cpuPercent: 50, memoryPercent: 50, errorRate: 15 };
-      const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW);
-
-      const errAlert = alerts.find((a) => a.metric === "errorRate");
-      expect(errAlert).toBeDefined();
-      expect(errAlert?.severity).toBe("critical");
-    });
-
     it("critical supersedes warning when both thresholds are exceeded", () => {
       // CPU at 90 exceeds both warning (70) and critical (80)
-      const snapshot: MetricsSnapshot = { cpuPercent: 90, memoryPercent: 50, errorRate: 0 };
+      const snapshot: MetricsSnapshot = { cpuPercent: 90, memoryPercent: 50 };
       const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW);
 
       const cpuAlerts = alerts.filter((a) => a.metric === "cpu");
@@ -87,7 +67,7 @@ describe("evaluateThresholds", () => {
 
   describe("no alerts", () => {
     it("returns empty array when all metrics are below thresholds", () => {
-      const snapshot: MetricsSnapshot = { cpuPercent: 30, memoryPercent: 40, errorRate: 1 };
+      const snapshot: MetricsSnapshot = { cpuPercent: 30, memoryPercent: 40 };
       const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW);
 
       expect(alerts).toHaveLength(0);
@@ -96,7 +76,7 @@ describe("evaluateThresholds", () => {
 
   describe("cooldown enforcement", () => {
     it("suppresses an alert when within the cooldown window", () => {
-      const snapshot: MetricsSnapshot = { cpuPercent: 85, memoryPercent: 50, errorRate: 0 };
+      const snapshot: MetricsSnapshot = { cpuPercent: 85, memoryPercent: 50 };
       // Last alert was 10 seconds ago (within 30s cooldown)
       const cooldowns = { cpu: BASE_NOW - 10_000 };
 
@@ -107,7 +87,7 @@ describe("evaluateThresholds", () => {
     });
 
     it("allows an alert after the cooldown has elapsed", () => {
-      const snapshot: MetricsSnapshot = { cpuPercent: 85, memoryPercent: 50, errorRate: 0 };
+      const snapshot: MetricsSnapshot = { cpuPercent: 85, memoryPercent: 50 };
       // Last alert was 31 seconds ago (past the 30s cooldown)
       const cooldowns = { cpu: BASE_NOW - ALERT_COOLDOWN_MS - 1_000 };
 
@@ -118,7 +98,7 @@ describe("evaluateThresholds", () => {
     });
 
     it("suppresses only the cooled-down metric, not others", () => {
-      const snapshot: MetricsSnapshot = { cpuPercent: 85, memoryPercent: 92, errorRate: 0 };
+      const snapshot: MetricsSnapshot = { cpuPercent: 85, memoryPercent: 92 };
       // CPU is in cooldown, memory is not
       const cooldowns = { cpu: BASE_NOW - 5_000 };
 
@@ -129,7 +109,7 @@ describe("evaluateThresholds", () => {
     });
 
     it("alerts include timestamp matching the current time", () => {
-      const snapshot: MetricsSnapshot = { cpuPercent: 75, memoryPercent: 50, errorRate: 0 };
+      const snapshot: MetricsSnapshot = { cpuPercent: 75, memoryPercent: 50 };
       const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW);
 
       expect(alerts[0].timestamp).toBe(BASE_NOW);
@@ -138,7 +118,7 @@ describe("evaluateThresholds", () => {
 
   describe("alert message format", () => {
     it("includes the metric label and value in warning messages", () => {
-      const snapshot: MetricsSnapshot = { cpuPercent: 72.5, memoryPercent: 50, errorRate: 0 };
+      const snapshot: MetricsSnapshot = { cpuPercent: 72.5, memoryPercent: 50 };
       const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW);
 
       expect(alerts[0].message).toContain("CPU usage");
@@ -147,7 +127,7 @@ describe("evaluateThresholds", () => {
     });
 
     it("includes 'critically high' in critical messages", () => {
-      const snapshot: MetricsSnapshot = { cpuPercent: 85, memoryPercent: 50, errorRate: 0 };
+      const snapshot: MetricsSnapshot = { cpuPercent: 85, memoryPercent: 50 };
       const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW);
 
       expect(alerts[0].message).toContain("critically high");

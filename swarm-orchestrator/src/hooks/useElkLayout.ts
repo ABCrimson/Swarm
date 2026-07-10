@@ -1,5 +1,5 @@
 import type { Edge, Node } from "@xyflow/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface LayoutedResult {
   readonly layoutedNodes: readonly { id: string; x: number; y: number }[];
@@ -97,7 +97,7 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
     };
   }, []);
 
-  const runLayout = useCallback(() => {
+  const runLayout = (): void => {
     const worker = workerRef.current;
     if (!worker) return;
 
@@ -118,9 +118,10 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
         target: e.target,
       })),
     });
-  }, []);
+  };
 
   // Auto-layout when topology changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runLayout is recreated every render but only reads refs; adding it would re-run this effect on every render (the fingerprint guard would still block extra layouts, but re-computing the fingerprint on every render is wasted work we intentionally avoid)
   useEffect(() => {
     const fingerprint = topologyFingerprint(nodes, edges);
 
@@ -128,7 +129,7 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
       prevFingerprintRef.current = fingerprint;
       runLayout();
     }
-  }, [nodes, edges, runLayout]);
+  }, [nodes, edges]);
 
   return { layoutedNodes, layoutedEdges, isLayouting, runLayout };
 }

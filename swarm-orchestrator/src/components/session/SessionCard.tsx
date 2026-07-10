@@ -1,5 +1,5 @@
 import { formatDistanceToNow } from "date-fns";
-import { motion } from "framer-motion";
+import { motion } from "motion/react";
 
 import type { Session } from "#store/types";
 

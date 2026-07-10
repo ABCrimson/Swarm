@@ -1,7 +1,7 @@
 import { load } from "@tauri-apps/plugin-store";
-import * as z from "zod/v4";
-import { isTauri } from "#lib/tauri";
 import { toast } from "sonner";
+import * as z from "zod";
+import { isTauri } from "#lib/tauri";
 import { SessionSchema, SessionTemplateSchema, SnapshotSchema } from "#store/types";
 
 /** Schema for the full sessions store. */

@@ -1,0 +1,5 @@
+minimumReleaseAgeExclude:
+  - react-dom@19.3.0-canary-5123b063-20260708
+  - react@19.3.0-canary-5123b063-20260708
+  - scheduler@0.28.0-canary-5123b063-20260708
+  - vite@8.1.4

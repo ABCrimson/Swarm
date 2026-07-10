@@ -67,7 +67,7 @@ export function ToolBuilder({
 }: ToolBuilderProps): React.ReactElement {
   const [name, setName] = useState(initialTool?.name ?? "");
   const [description, setDescription] = useState(initialTool?.description ?? "");
-  const [params, setParams] = useState<ToolParam[]>(initialTool?.params ?? []);
+  const [params, setParams] = useState<ToolParam[]>(() => [...(initialTool?.params ?? [])]);
   const [script, setScript] = useState(initialTool?.script ?? "// Tool execution script\n");
 
   // Add parameter

@@ -25,7 +25,11 @@
 fn main() {
     // Explicit Tokio multi-thread runtime with CPU-scaled worker threads
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1))
+        .worker_threads(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1),
+        )
         .enable_all()
         .build()
         .expect("failed to build Tokio runtime");

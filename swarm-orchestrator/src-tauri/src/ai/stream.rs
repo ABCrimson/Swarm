@@ -186,8 +186,7 @@ mod tests {
 
     #[test]
     fn test_parse_content_block_delta() {
-        let line =
-            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
+        let line = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
         let event = parse_sse_line(line).expect("should parse");
         let text = extract_delta_text(&event).expect("should have text");
         assert_eq!(text, "Hello");

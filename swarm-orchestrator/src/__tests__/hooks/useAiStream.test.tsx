@@ -56,11 +56,7 @@ describe("useAiStream", () => {
 
   it("should start streaming and return accumulated content", async () => {
     mockStreamMessage.mockImplementation(() =>
-      fakeStream([
-        { content: "Hello" },
-        { content: " from" },
-        { content: " Claude" },
-      ]),
+      fakeStream([{ content: "Hello" }, { content: " from" }, { content: " Claude" }]),
     );
 
     // Enqueue an item so updateItemStatus has something to operate on
@@ -89,9 +85,7 @@ describe("useAiStream", () => {
   });
 
   it("should increment and decrement active streams", async () => {
-    mockStreamMessage.mockImplementation(() =>
-      fakeStream([{ content: "data" }]),
-    );
+    mockStreamMessage.mockImplementation(() => fakeStream([{ content: "data" }]));
 
     act(() => {
       useAiStore.getState().enqueue({
@@ -169,6 +163,10 @@ describe("useAiStream", () => {
 
   it("should handle errors gracefully", async () => {
     mockStreamMessage.mockImplementation(async function* () {
+      // Immediately-thrown async generator, matching the real streamMessage
+      // signature. The `for await` consumer never receives a yielded value
+      // since throwing happens on the first `.next()` call.
+      if (Date.now() < 0) yield undefined as never;
       throw new Error("Network failure");
     });
 
@@ -268,10 +266,8 @@ describe("useAiStream", () => {
     const deltas: unknown[] = [];
     let content = "";
     await act(async () => {
-      content = await result.current.startStream(
-        "item-6",
-        STREAM_PARAMS,
-        (delta) => deltas.push(delta),
+      content = await result.current.startStream("item-6", STREAM_PARAMS, (delta) =>
+        deltas.push(delta),
       );
     });
 

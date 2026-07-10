@@ -1,10 +1,10 @@
-import { useCallback, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { HistorySearch } from "#components/session/HistorySearch";
 import { SessionActions, useSessionLifecycle } from "#components/session/SessionActions";
 import { SessionList } from "#components/session/SessionList";
 import { TemplateSelector } from "#components/session/TemplateSelector";
 import { Button } from "#components/ui/Button";
-import { toast } from "sonner";
 import { exportAsJSON, exportAsMarkdown, exportMetricsCSV, saveToFile } from "#lib/export";
 import { createSnapshot } from "#lib/snapshots";
 import { createTemplateFromSession, saveUserTemplate } from "#lib/templates";
@@ -31,7 +31,8 @@ interface TemplateFormState {
 export function Sessions(): React.ReactElement {
   const [view, setView] = useState<SessionView>("list");
   const [templateForm, setTemplateForm] = useState<TemplateFormState | null>(null);
-  const templateInputRef = useRef<HTMLInputElement>(null);
+  const templateFormInputRef = useRef<HTMLInputElement>(null);
+  const lastFocusedFormKeyRef = useRef<string | null>(null);
   const sessions = useSessionStore((s) => s.sessions);
   const setActiveSession = useSessionStore((s) => s.setActiveSession);
   const { deleteWithConfirm, exportSession } = useSessionLifecycle();
@@ -40,12 +41,24 @@ export function Sessions(): React.ReactElement {
   const activeSession = activeSessionId ? sessions.get(activeSessionId) : undefined;
   const metrics = useSystemStore((s) => s.metrics);
 
+  // Focus the inline template-form field whenever it opens or advances a step,
+  // replacing the removed `autoFocus` attribute. Keyed on sessionId+step (not
+  // name/description) so typing doesn't repeatedly steal focus.
+  useEffect(() => {
+    if (!templateForm) return;
+    const formKey = `${templateForm.sessionId}-${templateForm.step}`;
+    if (lastFocusedFormKeyRef.current !== formKey) {
+      lastFocusedFormKeyRef.current = formKey;
+      templateFormInputRef.current?.focus();
+    }
+  }, [templateForm]);
+
   const handleDelete = (id: string) => {
-    deleteWithConfirm(id);
+    void deleteWithConfirm(id);
   };
 
   const handleExport = (id: string) => {
-    exportSession(id);
+    void exportSession(id);
   };
 
   const handleCreateTemplate = (id: string) => {
@@ -61,7 +74,7 @@ export function Sessions(): React.ReactElement {
     });
   };
 
-  const handleTemplateFormSubmit = useCallback(async () => {
+  const handleTemplateFormSubmit = async () => {
     if (!templateForm) return;
 
     if (templateForm.step === "name") {
@@ -82,7 +95,7 @@ export function Sessions(): React.ReactElement {
       toast.error("Failed to save template");
     }
     setTemplateForm(null);
-  }, [templateForm]);
+  };
 
   const handleTemplateSelect = (_template: SessionTemplate) => {
     // Template selection creates a new session from the template
@@ -238,13 +251,15 @@ export function Sessions(): React.ReactElement {
           }}
         >
           <label
+            htmlFor="template-form-field"
             className="text-xs font-medium"
             style={{ color: "oklch(0.75 0.08 290)", fontFamily: "var(--font-body)" }}
           >
             {templateForm.step === "name" ? "Template name:" : "Description:"}
           </label>
           <input
-            ref={templateInputRef}
+            id="template-form-field"
+            ref={templateFormInputRef}
             type="text"
             className="flex-1 rounded-lg px-3 py-1.5 text-sm"
             style={{
@@ -265,8 +280,9 @@ export function Sessions(): React.ReactElement {
               if (e.key === "Enter") void handleTemplateFormSubmit();
               if (e.key === "Escape") setTemplateForm(null);
             }}
-            autoFocus
-            placeholder={templateForm.step === "name" ? "Enter template name" : "Enter description (optional)"}
+            placeholder={
+              templateForm.step === "name" ? "Enter template name" : "Enter description (optional)"
+            }
           />
           <Button variant="ghost" size="sm" onClick={() => void handleTemplateFormSubmit()}>
             {templateForm.step === "name" ? "Next" : "Save"}

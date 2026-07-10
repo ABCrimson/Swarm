@@ -62,30 +62,33 @@ Each component uses `@crimson_dev/use-resize-observer` to track container dimens
 
 ### Tokio Runtime
 
-The application creates an explicit Tokio multi-threaded runtime scaled to CPU count (`num_cpus::get()`):
+The application creates an explicit Tokio multi-threaded runtime scaled to available parallelism:
 
 ```rust
 let runtime = tokio::runtime::Builder::new_multi_thread()
-    .worker_threads(num_cpus::get())
+    .worker_threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1))
     .enable_all()
     .build()
     .expect("failed to build Tokio runtime");
 ```
 
 - `spawn_blocking` for all blocking I/O: PTY reads (`pty.rs`), sysinfo refresh (`metrics.rs`), worker metrics aggregation (`metrics.rs`), session persistence (`session.rs`)
-- `CancellationToken` + `tokio::select! { biased; }` for graceful metrics loop shutdown
+- `CancellationToken::run_until_cancelled` races the 500ms metrics interval tick against shutdown, replacing an earlier two-armed `tokio::select! { biased; }` with a more direct single-future expression
 - `JoinSet` for tracking spawned AI streaming tasks with clean drain on shutdown
+- A single `SharedSystem` (one `sysinfo::System` behind a `parking_lot::Mutex`, managed as Tauri state) is shared between the background metrics loop and the on-demand `get_metrics` command, so CPU-usage deltas come from one tracker instead of two independently-refreshing `System` instances
 
 ### Concurrency
 
 | Primitive | Version / Crate | Usage |
 |-----------|----------------|-------|
-| `DashMap` | 7.0.0-rc2 | Lock-free worker registry (`WorkerRegistry`) |
-| `parking_lot::Mutex` | 0.12.5 | PTY writer/child wrapping, shared sysinfo `System`, AI queue heap |
+| `DashMap` | 7.0.0-rc2 | Lock-free worker registry (`WorkerRegistry`), session manager, bus pipelines |
+| `parking_lot::Mutex` | 0.12.5 | PTY writer/child wrapping, shared sysinfo `System` (`SharedSystem`), AI queue heap |
 | `parking_lot::RwLock` | 0.12.5 | System configuration (max workers, default shell) |
-| `tokio::sync::Semaphore` | tokio 1.50.0 | AI concurrency limiting (default: 3 concurrent requests) |
-| `tokio::sync::mpsc` | tokio 1.50.0 | PTY output channel (4096 capacity), AI queue (256 capacity) |
-| `rayon` | 1.11.0 | Available for CPU-parallel aggregation (currently sequential -- 64 worker cap makes parallel dispatch overhead unnecessary) |
+| `tokio::sync::Semaphore` | tokio 1.52.3 | AI concurrency limiting (default: 3 concurrent requests) |
+| `tokio::sync::mpsc` | tokio 1.52.3 | PTY output channel (4096 capacity), AI queue (256 capacity) |
+| `tokio::sync::broadcast` | tokio 1.52.3 | Per-topic message bus channels (`bus::channel::MessageBus`) |
+
+`rayon` was removed from `Cargo.toml` -- it was an unused dependency. Worker metrics aggregation runs as sequential iteration inside `tokio::task::spawn_blocking`; the 64-worker registry cap makes `rayon`-style parallel dispatch overhead not worth paying for.
 
 `parking_lot::Mutex` is used instead of `std::sync::Mutex` throughout the codebase -- no poisoning overhead and better performance under contention.
 
@@ -139,32 +142,39 @@ When the `timestamp-query` device feature is available, the compute pass records
 
 ## Build Optimization
 
-### Vite 8.0 + Rolldown
+### Vite 8.1 + Rolldown
 
-The frontend builds with Vite 8.0.0 using the Rolldown bundler:
+The frontend builds with Vite 8.1.4 using the Rolldown bundler. React Compiler runs via `@rolldown/plugin-babel` (`reactCompilerPreset()` from `@vitejs/plugin-react` 6.0.3), since `@vitejs/plugin-react` itself is oxc-based and no longer runs Babel directly:
 
 ```ts
 build: {
-  minify: "rolldown",           // Native Rolldown minification
+  minify: "oxc",                        // Native oxc minification (Rolldown's minifier)
   sourcemap: true,
-  target: "es2026",             // No polyfills for modern APIs
-  modulePreload: { polyfill: false },  // Chromium 146+ native
+  target: "esnext",                     // Tauri renders in Chromium 146+ (WebView2/WKWebView) — no downleveling needed
+  modulePreload: { polyfill: false },
+  rolldownOptions: {
+    output: {
+      advancedChunks: { groups: [ /* ... */ ] },  // manualChunks is gone in Vite 8/Rolldown
+    },
+  },
 }
 ```
 
-### Manual Chunk Splitting
+### Chunk Splitting (`advancedChunks`)
 
-Vendor code is split into dedicated chunks to maximize caching:
+`manualChunks` was removed in Vite 8/Rolldown; vendor code is split into dedicated chunks via `rolldownOptions.output.advancedChunks.groups` to maximize caching:
 
 | Chunk | Contents |
 |-------|----------|
-| `react-vendor` | `react`, `react-dom` |
-| `motion` | `framer-motion`, `gsap` |
+| `react-vendor` | `react`, `react-dom`, `scheduler` |
+| `motion` | `motion`, `gsap` |
 | `graph` | `@xyflow/react`, `elkjs` |
 | `terminal` | `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-webgl` |
 | `state` | `zustand`, `immer`, `jotai` |
 | `ai` | `@anthropic-ai/sdk` |
 | `charts` | `recharts` |
+
+> `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 12.42.2, not `framer-motion`.
 
 ### Rust Release Profile
 

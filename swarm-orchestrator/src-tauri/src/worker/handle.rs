@@ -38,7 +38,9 @@ pub enum WorkerState {
     Idle,
     /// Worker process is actively running.
     Running,
-    /// Worker process is suspended (state-only on Windows).
+    /// Worker process is suspended. This is state-only on all
+    /// platforms today — no `SIGSTOP`/`SIGCONT` (or Windows
+    /// equivalent) is sent to the underlying process yet.
     Paused,
     /// Worker encountered a fatal error.
     Error,

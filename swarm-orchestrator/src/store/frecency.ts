@@ -4,9 +4,11 @@ import { atomWithStorage } from "jotai/utils";
 import { settingsStore } from "#lib/lazy-store";
 import { isTauri } from "#lib/tauri";
 
-// Temporal is available as a global in the target runtime (Node 25.8.1 / Chromium 146+).
+// Temporal is available as a global in the target runtime (Node 26.5.0 / Chromium 146+).
 declare const Temporal: {
-  Now: { instant(): { since(other: unknown): { total(unit: string): number }; toString(): string } };
+  Now: {
+    instant(): { since(other: unknown): { total(unit: string): number }; toString(): string };
+  };
   Instant: { from(s: string): unknown };
 };
 
@@ -17,8 +19,6 @@ export interface FrecencyEntry {
 }
 
 // ── Tauri plugin-store persistence adapter ───────────
-
-const tauriStore = settingsStore;
 
 /**
  * Persisted atom storing frecency data for command palette ranking.
@@ -34,16 +34,19 @@ export const frecencyAtom = atomWithStorage<Map<string, FrecencyEntry>>(
     },
     setItem(key, value) {
       if (!isTauri()) return;
-      void tauriStore.set(key, [...value.entries()]).then(() => tauriStore.save());
+      void settingsStore.set(key, [...value.entries()]).then(() => settingsStore.save());
     },
     removeItem(key) {
       if (!isTauri()) return;
-      void tauriStore.delete(key).then(() => tauriStore.save());
+      void settingsStore.delete(key).then(() => settingsStore.save());
     },
     subscribe(key, callback, _initialValue) {
       if (!isTauri()) return () => {};
-      void tauriStore.get<Array<[string, FrecencyEntry]>>(key)
-        .then((raw) => { if (raw) callback(new Map(raw)); })
+      void settingsStore
+        .get<Array<[string, FrecencyEntry]>>(key)
+        .then((raw) => {
+          if (raw) callback(new Map(raw));
+        })
         .catch(() => {});
       return () => {};
     },
@@ -58,7 +61,9 @@ export const frecencyScoreAtom = atom((get) => {
     const entry = entries.get(commandId);
     if (!entry) return 0;
 
-    const elapsed = Temporal.Now.instant().since(Temporal.Instant.from(entry.lastUsed)).total("milliseconds");
+    const elapsed = Temporal.Now.instant()
+      .since(Temporal.Instant.from(entry.lastUsed))
+      .total("milliseconds");
     const hoursAgo = elapsed / (1000 * 60 * 60);
 
     // Decay factor: halve the score every 72 hours

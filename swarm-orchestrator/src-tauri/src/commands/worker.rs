@@ -87,18 +87,16 @@ pub async fn pause_worker(
     })?;
     let registry = registry.inner().clone();
     let app_clone = app.clone();
-    tokio::task::spawn_blocking(move || {
-        lifecycle::do_pause_worker(&app_clone, &registry, uuid)
-    })
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "pause_worker task panicked");
-        e.to_string()
-    })?
-    .map_err(|e| {
-        tracing::error!(error = %e, "failed to pause worker");
-        e.to_string()
-    })
+    tokio::task::spawn_blocking(move || lifecycle::do_pause_worker(&app_clone, &registry, uuid))
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "pause_worker task panicked");
+            e.to_string()
+        })?
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to pause worker");
+            e.to_string()
+        })
 }
 
 /// Resumes a paused worker by transitioning it back to the `Running` state.
@@ -128,18 +126,16 @@ pub async fn resume_worker(
     })?;
     let registry = registry.inner().clone();
     let app_clone = app.clone();
-    tokio::task::spawn_blocking(move || {
-        lifecycle::do_resume_worker(&app_clone, &registry, uuid)
-    })
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "resume_worker task panicked");
-        e.to_string()
-    })?
-    .map_err(|e| {
-        tracing::error!(error = %e, "failed to resume worker");
-        e.to_string()
-    })
+    tokio::task::spawn_blocking(move || lifecycle::do_resume_worker(&app_clone, &registry, uuid))
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "resume_worker task panicked");
+            e.to_string()
+        })?
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to resume worker");
+            e.to_string()
+        })
 }
 
 /// Kills a worker and cleans up all associated resources.
@@ -172,18 +168,16 @@ pub async fn kill_worker(
     })?;
     let registry = registry.inner().clone();
     let app_clone = app.clone();
-    tokio::task::spawn_blocking(move || {
-        lifecycle::do_kill_worker(&app_clone, &registry, uuid)
-    })
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "kill_worker task panicked");
-        e.to_string()
-    })?
-    .map_err(|e| {
-        tracing::error!(error = %e, "failed to kill worker");
-        e.to_string()
-    })
+    tokio::task::spawn_blocking(move || lifecycle::do_kill_worker(&app_clone, &registry, uuid))
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "kill_worker task panicked");
+            e.to_string()
+        })?
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to kill worker");
+            e.to_string()
+        })
 }
 
 /// Lists all active workers as serializable info snapshots.
@@ -232,16 +226,14 @@ pub async fn worker_input(
         e.to_string()
     })?;
     let registry = registry.inner().clone();
-    tokio::task::spawn_blocking(move || {
-        lifecycle::do_worker_input(&registry, uuid, &data)
-    })
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "worker_input task panicked");
-        e.to_string()
-    })?
-    .map_err(|e| {
-        tracing::error!(error = %e, "failed to send input to worker");
-        e.to_string()
-    })
+    tokio::task::spawn_blocking(move || lifecycle::do_worker_input(&registry, uuid, &data))
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "worker_input task panicked");
+            e.to_string()
+        })?
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to send input to worker");
+            e.to_string()
+        })
 }

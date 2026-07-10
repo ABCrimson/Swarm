@@ -29,11 +29,14 @@ function createTauriStorage<T>(): {
       if (!isTauri()) return;
       void tauriStore.delete(key).then(() => tauriStore.save());
     },
-    subscribe(key, callback, initialValue) {
+    subscribe(key, callback, _initialValue) {
       if (!isTauri()) return () => {};
       // Hydrate from store after mount
-      void tauriStore.get<T>(key)
-        .then((v) => { if (v != null) callback(v); })
+      void tauriStore
+        .get<T>(key)
+        .then((v) => {
+          if (v != null) callback(v);
+        })
         .catch(() => {});
       return () => {};
     },
@@ -52,9 +55,9 @@ export const selectedWorkerIdAtom = atom<string | null>(null);
 export const sidebarCollapsedAtom = atom(false);
 
 /** Active page identifier for client-side routing. */
-export const currentPageAtom = atom<"dashboard" | "workers" | "sessions" | "metrics" | "settings" | "logs" | "tools" | "workspace">(
-  "dashboard",
-);
+export const currentPageAtom = atom<
+  "dashboard" | "workers" | "sessions" | "metrics" | "settings" | "logs" | "tools" | "workspace"
+>("dashboard");
 
 /** Whether the user prefers reduced motion (mirrors OS setting). */
 export const reducedMotionAtom = atom(false);

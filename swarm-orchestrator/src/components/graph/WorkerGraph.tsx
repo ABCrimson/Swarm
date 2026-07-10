@@ -18,8 +18,8 @@ import {
   ReactFlowProvider,
   useReactFlow,
 } from "@xyflow/react";
-import { AnimatePresence, motion } from "framer-motion";
 import { useAtom } from "jotai";
+import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "#components/ui/Spinner";
 import { useElkLayout } from "#hooks/useElkLayout";
@@ -66,7 +66,10 @@ function buildGraphData(workers: Map<string, Worker>): { nodes: Node[]; edges: E
     },
   }));
 
-  // Build dependency edges between sequential workers
+  // Build spawn-order chain edges. NOTE: these are NOT real dependency
+  // relationships — the Worker schema has no dependency/parent field, so
+  // this simply connects entries in Map iteration (insertion) order as a
+  // visual chain. Treat as illustrative topology only.
   const edges: Edge[] = [];
   for (let i = 1; i < entries.length; i++) {
     const [prevId] = entries[i - 1];
@@ -118,12 +121,16 @@ function WorkerGraphInner(): React.ReactElement {
   }, [layoutedEdges]);
 
   // Fit view on first layout completion
-  if (!isLayouting && nodes.length > 0 && !initialFitDone.current) {
-    initialFitDone.current = true;
-    requestAnimationFrame(() => {
-      fitView({ duration: 300, padding: 0.2 });
-    });
-  }
+  useEffect(() => {
+    if (!isLayouting && nodes.length > 0 && !initialFitDone.current) {
+      initialFitDone.current = true;
+      const raf = requestAnimationFrame(() => {
+        fitView({ duration: 300, padding: 0.2 });
+      });
+      return () => cancelAnimationFrame(raf);
+    }
+    return undefined;
+  }, [isLayouting, nodes.length, fitView]);
 
   // Controlled change handlers for drag, select, remove
   const onNodesChange: OnNodesChange = (changes) => {
@@ -419,8 +426,10 @@ function WorkerGraphInner(): React.ReactElement {
 }
 
 /**
- * Interactive worker dependency graph with ELK layout, context menus,
+ * Interactive worker topology graph with ELK layout, context menus,
  * zoom controls, edge drawing, node addition, and a mini-map.
+ * Edges are a spawn-order chain (Map insertion order), not real
+ * dependency relationships — the Worker schema has no dependency field.
  * Wraps React Flow with a provider.
  */
 export function WorkerGraph(): React.ReactElement {

@@ -21,9 +21,9 @@
 
 | Tool      | Version        | Purpose                              |
 |-----------|----------------|--------------------------------------|
-| Node.js   | 25.8.1         | Frontend build and dev server        |
-| Rust      | 1.95.0-beta    | Backend compilation                  |
-| npm       | latest         | Package management                   |
+| Node.js   | 26.5.0         | Frontend build and dev server        |
+| pnpm      | 11.11.0        | Package management (pinned via `packageManager` in `package.json`; npm is not used in this project) |
+| Rust      | 1.98.0-beta    | Backend compilation                  |
 
 ### Rust Toolchain
 
@@ -31,7 +31,7 @@ The Rust toolchain is automatically configured by `rust-toolchain.toml`:
 
 ```toml
 [toolchain]
-channel    = "1.95.0-beta"
+channel    = "1.98.0-beta"
 profile    = "minimal"
 components = ["rustfmt", "clippy", "rust-src", "rust-analyzer"]
 targets    = [
@@ -51,7 +51,7 @@ git clone https://github.com/crimson-dev/swarm-orchestrator.git
 cd swarm-orchestrator
 
 # Install frontend dependencies
-npm install
+pnpm install
 
 # Verify Rust toolchain
 cd src-tauri
@@ -59,7 +59,7 @@ cargo check
 cd ..
 
 # Start the dev server
-npm run tauri:dev
+pnpm tauri:dev
 ```
 
 ### Editor Setup
@@ -89,18 +89,20 @@ npm run tauri:dev
 
 ### TypeScript / React
 
-**Formatter/Linter:** Biome 2.4.6
+**Formatter/Linter:** Biome 2.5.3
 
 ```bash
 # Lint + format (auto-fix)
-npm run check
+pnpm check
 
 # Lint only
-npm run lint
+pnpm lint
 
 # Format only
-npm run format
+pnpm format
 ```
+
+**Exclusion note:** `src/styles/tokens.css` is excluded from Biome's `files.includes` (`biome.json`). Biome's CSS parser does not yet support the `@function` at-rule syntax used in that file for OKLCH token derivation, so it is formatted/linted by hand until upstream support lands. Do not remove the exclusion without first confirming Biome's CSS parser handles `@function`.
 
 **Import style:** Use hash imports exclusively.
 
@@ -175,8 +177,9 @@ cargo test
 
 - `DashMap` for concurrent collections
 - `parking_lot` for mutexes and rwlocks (faster than `std::sync`)
-- `tokio::task::spawn_blocking` for CPU-bound work (rayon)
-- Never call rayon on a Tokio async thread
+- `tokio::task::spawn_blocking` for CPU-bound and blocking work (sysinfo refresh, worker metrics aggregation, session persistence)
+- Never do blocking or CPU-bound work directly on a Tokio async task -- always `spawn_blocking`
+- `WorkerRegistry::update_state_if` for compare-and-set state transitions instead of a separate get-then-set (avoids TOCTOU races)
 
 ---
 
@@ -288,8 +291,8 @@ docs(api): document ai_request streaming protocol
 2. **Run all checks locally:**
    ```bash
    # Frontend
-   npm run check
-   npx tsc --noEmit
+   pnpm check
+   pnpm typecheck   # runs tsc --noEmit against both the app tsconfig.json and tsconfig.worker.json
 
    # Backend
    cd src-tauri
@@ -347,18 +350,30 @@ cargo test --doc
 
 **Current test coverage:**
 
-| Module          | Tests | Description                                    |
-|-----------------|-------|------------------------------------------------|
-| `error`         | 9     | Display formatting, serialization              |
-| `events`        | 8     | Roundtrip serialization, field casing           |
-| `worker::registry` | 5  | Insert, get, remove, state update, capacity    |
-| `ai::stream`    | 5     | SSE parsing, delta extraction, stop detection  |
-| **Total**       | **28**| + 12 doc-tests (7 ignored for private modules) |
+| Module                | Tests | Description                                              |
+|------------------------|-------|-------------------------------------------------------------|
+| `error`                | 11    | Display formatting, serialization                            |
+| `events::emitter`      | 8     | Roundtrip serialization, `snake_case` type tags, `camelCase` payload fields |
+| `worker::registry`     | 9     | Insert, get, remove, `update_state_if` compare-and-set, capacity, aggregate metrics |
+| `worker::lifecycle`    | 6     | Spawn/pause/resume/kill lifecycle transitions and error paths |
+| `ai::queue`            | 7     | Priority ordering, concurrency limiting, enqueue/dequeue      |
+| `ai::stream`           | 5     | SSE parsing, delta extraction, stop detection                 |
+| `bus::channel`         | 4     | Channel creation, send/receive, broadcast, message serialization |
+| `bus::router`          | 6     | Direct/broadcast send, pipeline creation, transform application |
+| `commands::metrics`    | 5     | `SharedSystem` construction, lock behavior, per-worker metric collection |
+| **Total**              | **61**| + 15 doc-tests passing (7 more `ignore`-annotated for private/network-dependent examples) |
+
+Run `cargo test` from `src-tauri/` to reproduce this locally; run `cargo test --doc` for just the doc-tests.
 
 ### Frontend Testing
 
-Frontend tests use the mock utilities in `src/lib/`:
+Frontend tests run via Vitest (`pnpm test`): **16 test files, 178 tests**, covering components, hooks, stores, and `lib/` utilities.
 
-- `mockInvoke` -- Mock Tauri `invoke()` calls
-- `mockListen` -- Mock Tauri `listen()` event subscriptions
-- `mockWorkerStore` -- Pre-populated worker store for component tests
+| Directory                        | Focus                                                          |
+|-----------------------------------|-----------------------------------------------------------------|
+| `src/__tests__/components/`       | `Badge`, `Button`, `ErrorBoundary`, `MetricCard`                 |
+| `src/__tests__/hooks/`            | `useAiStream`, `useSession`, `useStream`, `useWorker`            |
+| `src/__tests__/lib/`              | `alerts`, `export`, `metrics-aggregation`, `theme`               |
+| `src/__tests__/store/`            | `ai`, `sessions`, `system`, `workers` Zustand stores             |
+
+Tauri IPC is mocked globally in `src/__tests__/setup.ts` via `vi.mock("@tauri-apps/api/core")` (stubs `invoke`) and `vi.mock("@tauri-apps/api/event")` (stubs `listen`), plus mocks for the `dialog`, `fs`, `shell`, and `store` plugins. Individual tests override the default rejected/no-op behavior with `vi.mocked(invoke).mockResolvedValueOnce(...)` as needed. There is no standalone `src/lib/test-utils.ts` module -- the old `agent-loop`, `diff`, `replay`, `test-utils`, and `token-costs` modules under `src/lib/` were removed along with the (dead) session-replay feature.

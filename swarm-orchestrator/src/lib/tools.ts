@@ -3,7 +3,7 @@
 // Each tool has a name, description, input schema, and execute function.
 
 import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
-import * as z from "zod/v4";
+import * as z from "zod";
 import { zodToTool } from "#lib/anthropic";
 import { invoke } from "#lib/tauri";
 
@@ -32,11 +32,11 @@ const SpawnWorkerInput = z.object({
 });
 
 const KillWorkerInput = z.object({
-  workerId: z.string().uuid().describe("UUID of the worker to terminate"),
+  workerId: z.uuid().describe("UUID of the worker to terminate"),
 });
 
 const RunCommandInput = z.object({
-  workerId: z.string().uuid().describe("UUID of the worker to run the command in"),
+  workerId: z.uuid().describe("UUID of the worker to run the command in"),
   command: z.string().describe("Shell command to execute"),
 });
 
@@ -51,11 +51,7 @@ const WriteFileInput = z.object({
 });
 
 const GetMetricsInput = z.object({
-  workerId: z
-    .string()
-    .uuid()
-    .optional()
-    .describe("Optional worker UUID; omit for system-wide metrics"),
+  workerId: z.uuid().optional().describe("Optional worker UUID; omit for system-wide metrics"),
 });
 
 // ── Tool Definitions ────────────────────────────────

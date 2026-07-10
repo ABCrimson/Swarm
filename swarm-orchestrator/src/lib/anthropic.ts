@@ -4,7 +4,7 @@ import type {
   MessageStreamEvent,
   Tool,
 } from "@anthropic-ai/sdk/resources/messages/messages";
-import * as z from "zod/v4";
+import * as z from "zod";
 import { readConfig } from "#lib/tauri";
 
 // ── Types ────────────────────────────────────────────
@@ -112,7 +112,10 @@ function extractDelta(event: MessageStreamEvent): string {
  * }
  * ```
  */
-export async function* streamMessage(params: StreamParams, signal?: AbortSignal): AsyncGenerator<StreamDelta> {
+export async function* streamMessage(
+  params: StreamParams,
+  signal?: AbortSignal,
+): AsyncGenerator<StreamDelta> {
   let client: Anthropic;
   try {
     client = await getClient();

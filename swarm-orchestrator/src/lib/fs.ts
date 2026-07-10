@@ -54,8 +54,14 @@ export async function readScopedTextFile(
 /**
  * Write a text file using an atomic write pattern.
  *
- * Writes to a `.tmp` file first, then renames it to the target path.
- * This prevents data corruption if the process is interrupted during write.
+ * Writes to a `.tmp` file first, then renames it onto the target path. On
+ * POSIX, `rename()` is atomic and silently overwrites an existing target, so
+ * the temp file replaces the target in a single filesystem operation with no
+ * window where the target is missing. On Windows, `rename` fails if the
+ * target already exists; in that case we fall back to remove-then-rename,
+ * which reintroduces a brief window where the target doesn't exist (but only
+ * on Windows, and only after the new data is already safely on disk in the
+ * temp file).
  *
  * @param path - Relative path within the base directory
  * @param data - String content to write
@@ -75,14 +81,18 @@ export async function writeScopedTextFile(
     handleDiskError(err, `write file "${path}"`);
   }
 
-  // If the target already exists, remove it first
-  const targetExists = await exists(path, { baseDir });
-  if (targetExists) {
-    await remove(path, { baseDir });
+  try {
+    // Atomic rename: .tmp -> target (overwrites on POSIX)
+    await rename(tmpPath, path, { oldPathBaseDir: baseDir, newPathBaseDir: baseDir });
+  } catch {
+    // Windows: rename fails when the target exists. Fall back to
+    // remove-then-rename now that the new data is durably on disk.
+    const targetExists = await exists(path, { baseDir });
+    if (targetExists) {
+      await remove(path, { baseDir });
+    }
+    await rename(tmpPath, path, { oldPathBaseDir: baseDir, newPathBaseDir: baseDir });
   }
-
-  // Atomic rename: .tmp -> target
-  await rename(tmpPath, path, { oldPathBaseDir: baseDir, newPathBaseDir: baseDir });
 }
 
 /**

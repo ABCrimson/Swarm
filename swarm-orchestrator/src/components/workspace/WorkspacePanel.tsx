@@ -7,6 +7,8 @@ import { FileViewer } from "./FileViewer.tsx";
 const DEFAULT_SIDEBAR_WIDTH = 260;
 const MIN_SIDEBAR_WIDTH = 180;
 const MAX_SIDEBAR_WIDTH = 480;
+/** Pixels adjusted per arrow-key press on the resize separator. */
+const KEYBOARD_RESIZE_STEP = 16;
 
 /**
  * Workspace panel with a file tree sidebar and file viewer main area.
@@ -22,7 +24,9 @@ export function WorkspacePanel(): React.ReactElement {
   const cleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    return () => { cleanupRef.current?.(); };
+    return () => {
+      cleanupRef.current?.();
+    };
   }, []);
 
   // Open directory picker
@@ -49,10 +53,7 @@ export function WorkspacePanel(): React.ReactElement {
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
       const delta = moveEvent.clientX - startX;
-      const newWidth = Math.min(
-        MAX_SIDEBAR_WIDTH,
-        Math.max(MIN_SIDEBAR_WIDTH, startWidth + delta),
-      );
+      const newWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, startWidth + delta));
       setSidebarWidth(newWidth);
     };
 
@@ -69,6 +70,23 @@ export function WorkspacePanel(): React.ReactElement {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
+  };
+
+  // Keyboard resize handler (WAI-ARIA separator pattern: ArrowLeft/ArrowRight)
+  const handleSeparatorKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setSidebarWidth((w) => Math.max(MIN_SIDEBAR_WIDTH, w - KEYBOARD_RESIZE_STEP));
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setSidebarWidth((w) => Math.min(MAX_SIDEBAR_WIDTH, w + KEYBOARD_RESIZE_STEP));
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setSidebarWidth(MIN_SIDEBAR_WIDTH);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setSidebarWidth(MAX_SIDEBAR_WIDTH);
+    }
   };
 
   // No project open state
@@ -239,6 +257,7 @@ export function WorkspacePanel(): React.ReactElement {
         aria-valuemax={MAX_SIDEBAR_WIDTH}
         aria-label="Resize file tree"
         onMouseDown={handleMouseDown}
+        onKeyDown={handleSeparatorKeyDown}
         style={{
           width: 4,
           cursor: "col-resize",

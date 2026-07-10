@@ -8,10 +8,14 @@
  * @module message-history
  */
 
+import { enableMapSet } from "immer";
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
 import type { AiMessage } from "./types";
+
+// Required for immer producers that mutate native Map instances (below).
+enableMapSet();
 
 /** Maximum messages stored per worker. */
 const MAX_MESSAGES_PER_WORKER = 100;
@@ -70,8 +74,8 @@ function touchLru(lruOrder: string[], workerId: string, history: Map<string, AiM
  * Standalone selector for retrieving messages for a specific worker.
  * Prefer this over the store action `getMessages` for reactive usage in components.
  */
-export const selectMessages = (workerId: string) =>
-  (state: MessageHistoryState) => state.history.get(workerId) ?? [];
+export const selectMessages = (workerId: string) => (state: MessageHistoryState) =>
+  state.history.get(workerId) ?? [];
 
 export const useMessageHistoryStore = create<MessageHistoryState & MessageHistoryActions>()(
   subscribeWithSelector(

@@ -1,4 +1,4 @@
-import { motion } from "framer-motion";
+import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 import { BUILT_IN_TEMPLATES, loadUserTemplates } from "#lib/templates";
 import type { SessionTemplate } from "#store/types";
@@ -19,9 +19,13 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
   useEffect(() => {
     let cancelled = false;
     void loadUserTemplates()
-      .then((templates) => { if (!cancelled) setUserTemplates(templates); })
+      .then((templates) => {
+        if (!cancelled) setUserTemplates(templates);
+      })
       .catch(() => {});
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleSelect = (template: SessionTemplate) => {

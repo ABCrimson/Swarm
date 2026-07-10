@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
+import { CLAUDE_MODELS } from "#lib/models";
 import type { AiQueueItem, CumulativeUsage, ProviderConfig, TokenUsageRecord } from "./types";
 
 /** Reactive state slice for the AI request queue, provider selection, and cost tracking. */
@@ -24,10 +25,10 @@ interface AiStoreActions {
   readonly resetUsage: () => void;
 }
 
-/** Default provider configuration (Anthropic Claude Sonnet 4). */
+/** Default provider configuration (Anthropic Claude Sonnet 5). */
 const DEFAULT_PROVIDER: ProviderConfig = {
   providerId: "anthropic",
-  modelId: "claude-sonnet-4-20250514",
+  modelId: CLAUDE_MODELS.sonnet.id,
 };
 
 /** Empty cumulative usage state. */

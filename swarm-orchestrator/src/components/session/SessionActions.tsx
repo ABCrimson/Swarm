@@ -2,7 +2,7 @@ import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
-import { toast } from "sonner";
+import { toast } from "#components/ui/Toast";
 import { readScopedTextFile, writeScopedTextFile } from "#lib/fs";
 import { createSession as createSessionIpc, deleteSession as deleteSessionIpc } from "#lib/tauri";
 import { useSessionStore } from "#store/sessions";
@@ -167,9 +167,7 @@ export function useSessionLifecycle(): {
       removeSession(id);
       toast.success(`Session "${name}" deleted`);
     } catch (err) {
-      toast.error(
-        `Failed to delete session: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      toast.error(`Failed to delete session: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 

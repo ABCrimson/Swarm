@@ -2,6 +2,7 @@
 // Rate limiting, context overflow, network timeout, retries.
 
 import { toast } from "sonner";
+import { estimateTokens } from "#lib/context-manager";
 
 // ── Error Types ─────────────────────────────────────
 
@@ -178,14 +179,11 @@ export async function withRetry<T>(
 
 // ── Context Truncation ──────────────────────────────
 
-/** Rough token estimate: ~4 characters per token. */
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
-
 /**
  * Truncates the oldest messages to fit within a token budget.
- * Always preserves the system message and the most recent user message.
+ * Always preserves the first message and the most recent message
+ * (this array holds only user/assistant turns — the system prompt is
+ * passed separately to the API and is never part of it).
  */
 export function truncateMessages(
   messages: Array<{ role: "user" | "assistant"; content: string }>,

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
 import { useResizeObserver } from "@crimson_dev/use-resize-observer";
+import { useEffect, useRef, useState } from "react";
 import type { LogEntry, LogLevel } from "#lib/log-store";
 import { useLogStore } from "#lib/log-store";
 import { LogFilter } from "./LogFilter.tsx";
@@ -76,7 +76,10 @@ export function LogViewer(): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
 
-  const { height: containerHeight } = useResizeObserver({ ref: containerRef, box: "content-box" });
+  const { height: containerHeight = 0 } = useResizeObserver({
+    ref: containerRef,
+    box: "content-box",
+  });
 
   // Filter entries
   const filteredEntries = (() => {

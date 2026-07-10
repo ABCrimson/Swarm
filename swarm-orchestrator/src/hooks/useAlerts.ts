@@ -33,7 +33,6 @@ export function useAlerts(): void {
         const snapshot: MetricsSnapshot = {
           cpuPercent: metrics.cpuPercent,
           memoryPercent,
-          errorRate: 0, // Will be populated when error tracking is available
         };
 
         const alerts = evaluateThresholds(snapshot, thresholds, cooldownsRef.current, now);

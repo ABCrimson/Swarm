@@ -4,23 +4,27 @@
 //! Each command delegates to the [`MessageBus`](crate::bus::channel::MessageBus)
 //! and [`Router`](crate::bus::router::Router) instances managed as Tauri state.
 
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::bus::channel::MessageBus;
 use crate::bus::router::{PipelineInfo, PipelineStage, Router};
-use crate::events::{emit_event, BusMessagePayload, SwarmEvent};
+use crate::events::{BusMessagePayload, SwarmEvent, emit_event};
 
 /// Sends a message from one worker to another on a topic.
 ///
 /// If `to_worker_id` is provided, the message is sent as a direct
 /// message. Otherwise, it is broadcast to all subscribers of the topic.
 ///
-/// Emits a `swarm://bus-message` event to the frontend with the message details.
+/// This delivers the message on the internal message bus only; it does
+/// **not** emit a `swarm://bus-message` event itself. Frontend delivery
+/// happens exclusively through [`bus_subscribe`]'s forwarding task, which
+/// is the single source of truth for the `swarm://bus-message` contract.
+/// This keeps delivery to exactly one event per message, regardless of
+/// how many (if any) frontend listeners are subscribed.
 ///
 /// # Arguments
 ///
-/// * `app` - Tauri app handle for event emission
 /// * `router` - Shared router (managed state)
 /// * `from_worker_id` - UUID string of the sending worker
 /// * `to_worker_id` - Optional UUID string of the target worker
@@ -29,7 +33,8 @@ use crate::events::{emit_event, BusMessagePayload, SwarmEvent};
 ///
 /// # Returns
 ///
-/// The number of receivers that received the message.
+/// The number of receivers that received the message. `0` means no
+/// subscriber (via [`bus_subscribe`]) is currently listening on this topic.
 ///
 /// # Errors
 ///
@@ -37,9 +42,8 @@ use crate::events::{emit_event, BusMessagePayload, SwarmEvent};
 /// - The UUID strings are invalid
 /// - The message delivery fails
 #[tauri::command]
-#[tracing::instrument(skip(app, router, payload))]
+#[tracing::instrument(skip(router, payload))]
 pub async fn bus_send(
-    app: AppHandle,
     router: tauri::State<'_, Router>,
     from_worker_id: String,
     to_worker_id: Option<String>,
@@ -68,22 +72,10 @@ pub async fn bus_send(
     };
 
     let count = if let Some(to) = to_uuid {
-        router.send_direct(from, to, &topic, payload.clone())?
+        router.send_direct(from, to, &topic, payload)?
     } else {
-        router.send_broadcast(from, &topic, payload.clone())?
+        router.send_broadcast(from, &topic, payload)?
     };
-
-    // Emit bus event to frontend via typed event system
-    emit_event(
-        &app,
-        SwarmEvent::BusMessage(BusMessagePayload {
-            message_id: Uuid::new_v4(),
-            from_worker: from,
-            to_worker: to_uuid,
-            topic,
-            payload,
-        }),
-    );
 
     Ok(count)
 }
@@ -91,8 +83,14 @@ pub async fn bus_send(
 /// Subscribes to a message bus topic and streams messages as Tauri events.
 ///
 /// Creates a background task that listens for messages on the given topic
-/// and emits them as `swarm://bus-message` events to the frontend. The
-/// task runs until the channel is closed or the topic is removed.
+/// and emits them to the frontend via [`emit_event`] as typed
+/// `SwarmEvent::BusMessage` payloads on the `swarm://bus-message` channel.
+/// The task runs until the channel is closed or the topic is removed.
+///
+/// This is the **sole** path by which bus messages reach the frontend —
+/// [`bus_send`] only publishes to the internal bus and does not emit
+/// directly, so each message reaches the frontend at most once, in one
+/// consistent shape (`{ messageId, fromWorker, toWorker, topic, payload }`).
 ///
 /// # Arguments
 ///
@@ -118,7 +116,16 @@ pub async fn bus_subscribe(
         loop {
             match rx.recv().await {
                 Ok(msg) => {
-                    let _ = app.emit("swarm://bus-message", &msg);
+                    emit_event(
+                        &app,
+                        SwarmEvent::BusMessage(BusMessagePayload {
+                            message_id: msg.id,
+                            from_worker: msg.from_worker,
+                            to_worker: msg.to_worker,
+                            topic: msg.topic,
+                            payload: msg.payload,
+                        }),
+                    );
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(topic = %topic, skipped = n, "bus subscriber lagged");
@@ -168,9 +175,7 @@ pub async fn bus_create_pipeline(
 /// A `Vec<String>` of all active topic channel names.
 #[tauri::command]
 #[tracing::instrument(skip(bus))]
-pub async fn bus_list_channels(
-    bus: tauri::State<'_, MessageBus>,
-) -> Result<Vec<String>, String> {
+pub async fn bus_list_channels(bus: tauri::State<'_, MessageBus>) -> Result<Vec<String>, String> {
     tracing::debug!("bus_list_channels called");
     Ok(bus.list_channels())
 }

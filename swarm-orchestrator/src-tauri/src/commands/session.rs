@@ -10,9 +10,7 @@
 use tauri::AppHandle;
 use uuid::Uuid;
 
-use crate::events::{
-    emit_event, SessionCreatedPayload, SessionDeletedPayload, SwarmEvent,
-};
+use crate::events::{SessionCreatedPayload, SessionDeletedPayload, SwarmEvent, emit_event};
 use crate::session::manager::{Session, SessionManager};
 use crate::session::store;
 
@@ -59,10 +57,8 @@ pub async fn create_session(
     // Auto-save to persistent store via spawn_blocking (blocking disk I/O)
     let app_clone = app.clone();
     let manager_clone = manager.inner().clone();
-    match tokio::task::spawn_blocking(move || {
-        store::save_sessions(&app_clone, &manager_clone)
-    })
-    .await
+    match tokio::task::spawn_blocking(move || store::save_sessions(&app_clone, &manager_clone))
+        .await
     {
         Ok(Err(e)) => {
             tracing::error!(error = %e, "failed to auto-save sessions after create");
@@ -112,18 +108,14 @@ pub async fn delete_session(
 
     emit_event(
         &app,
-        SwarmEvent::SessionDeleted(SessionDeletedPayload {
-            session_id: uuid,
-        }),
+        SwarmEvent::SessionDeleted(SessionDeletedPayload { session_id: uuid }),
     );
 
     // Auto-save after deletion via spawn_blocking (blocking disk I/O)
     let app_clone = app.clone();
     let manager_clone = manager.inner().clone();
-    match tokio::task::spawn_blocking(move || {
-        store::save_sessions(&app_clone, &manager_clone)
-    })
-    .await
+    match tokio::task::spawn_blocking(move || store::save_sessions(&app_clone, &manager_clone))
+        .await
     {
         Ok(Err(e)) => {
             tracing::error!(error = %e, "failed to auto-save sessions after delete");
@@ -153,6 +145,67 @@ pub async fn list_sessions(
 ) -> Result<Vec<Session>, String> {
     tracing::debug!("list_sessions called");
     Ok(manager.list_sessions())
+}
+
+/// Adds a worker to a session's worker list.
+///
+/// Registers the worker ID against the session in the in-memory
+/// manager and auto-saves the updated session list to the
+/// persistent store.
+///
+/// # Arguments
+///
+/// * `app` - Tauri app handle (injected by Tauri)
+/// * `manager` - Shared session manager (managed state)
+/// * `session_id` - UUID string of the target session
+/// * `worker_id` - UUID string of the worker to add
+///
+/// # Errors
+///
+/// Returns a `String` error if:
+/// - Either UUID string is invalid
+/// - No session with the given ID exists
+#[tauri::command]
+#[tracing::instrument(skip(app, manager))]
+pub async fn session_add_worker(
+    app: AppHandle,
+    manager: tauri::State<'_, SessionManager>,
+    session_id: String,
+    worker_id: String,
+) -> Result<(), String> {
+    tracing::info!(session_id = %session_id, worker_id = %worker_id, "session_add_worker called");
+    let session_uuid = Uuid::parse_str(&session_id).map_err(|e| {
+        tracing::error!(error = %e, "invalid session ID");
+        e.to_string()
+    })?;
+    let worker_uuid = Uuid::parse_str(&worker_id).map_err(|e| {
+        tracing::error!(error = %e, "invalid worker ID");
+        e.to_string()
+    })?;
+
+    manager
+        .add_worker_to_session(&session_uuid, worker_uuid)
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to add worker to session");
+            e.to_string()
+        })?;
+
+    // Auto-save after mutation via spawn_blocking (blocking disk I/O)
+    let app_clone = app.clone();
+    let manager_clone = manager.inner().clone();
+    match tokio::task::spawn_blocking(move || store::save_sessions(&app_clone, &manager_clone))
+        .await
+    {
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "failed to auto-save sessions after add_worker");
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "save_sessions task panicked after add_worker");
+        }
+        Ok(Ok(())) => {}
+    }
+
+    Ok(())
 }
 
 /// Gets a single session by ID.

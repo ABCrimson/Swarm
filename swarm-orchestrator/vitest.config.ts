@@ -1,6 +1,8 @@
 import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
 
+const dirname = import.meta.dirname;
+
 export default defineConfig({
   test: {
     globals: true,
@@ -22,13 +24,13 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "#components": resolve(__dirname, "src/components"),
-      "#store": resolve(__dirname, "src/store"),
-      "#lib": resolve(__dirname, "src/lib"),
-      "#hooks": resolve(__dirname, "src/hooks"),
-      "#pages": resolve(__dirname, "src/pages"),
-      "#workers": resolve(__dirname, "src/workers"),
-      "#styles": resolve(__dirname, "src/styles"),
+      "#components": resolve(dirname, "src/components"),
+      "#store": resolve(dirname, "src/store"),
+      "#lib": resolve(dirname, "src/lib"),
+      "#hooks": resolve(dirname, "src/hooks"),
+      "#pages": resolve(dirname, "src/pages"),
+      "#workers": resolve(dirname, "src/workers"),
+      "#styles": resolve(dirname, "src/styles"),
     },
   },
 });

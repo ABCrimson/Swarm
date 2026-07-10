@@ -153,7 +153,7 @@ export function GraphControls({
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, []);
+  }, [zoomIn, zoomOut, fitView]);
 
   return (
     <div

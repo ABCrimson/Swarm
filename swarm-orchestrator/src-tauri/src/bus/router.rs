@@ -191,30 +191,10 @@ impl Router {
     /// The UUID of the newly created pipeline.
     pub fn create_pipeline(&self, stages: Vec<PipelineStage>) -> Uuid {
         let id = Uuid::new_v4();
-        let pipeline = Pipeline {
-            id,
-            stages,
-        };
+        let pipeline = Pipeline { id, stages };
         self.pipelines.insert(id, pipeline);
         tracing::info!(pipeline_id = %id, "pipeline created");
         id
-    }
-
-    /// Removes a pipeline by ID.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - UUID of the pipeline to remove
-    ///
-    /// # Returns
-    ///
-    /// `true` if the pipeline existed and was removed.
-    pub fn remove_pipeline(&self, id: &Uuid) -> bool {
-        let removed = self.pipelines.remove(id).is_some();
-        if removed {
-            tracing::info!(pipeline_id = %id, "pipeline removed");
-        }
-        removed
     }
 
     /// Executes a pipeline by sending the initial payload through each stage.
@@ -294,15 +274,6 @@ impl Router {
                 }
             })
             .collect()
-    }
-
-    /// Returns a reference to the underlying message bus.
-    ///
-    /// # Returns
-    ///
-    /// A reference to the shared [`MessageBus`].
-    pub fn bus(&self) -> &MessageBus {
-        &self.bus
     }
 }
 
@@ -388,15 +359,6 @@ mod tests {
         assert_eq!(pipelines.len(), 1);
         assert_eq!(pipelines[0].id, id);
         assert_eq!(pipelines[0].stage_count, 2);
-    }
-
-    #[test]
-    fn test_remove_pipeline() {
-        let bus = MessageBus::new();
-        let router = Router::new(bus);
-        let id = router.create_pipeline(vec![]);
-        assert!(router.remove_pipeline(&id));
-        assert!(!router.remove_pipeline(&id));
     }
 
     #[test]

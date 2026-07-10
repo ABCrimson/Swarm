@@ -12,7 +12,17 @@ interface NavItem {
 
 function IconDashboard(): React.ReactElement {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <rect x="3" y="3" width="7" height="9" rx="1.5" />
       <rect x="14" y="3" width="7" height="5" rx="1.5" />
       <rect x="14" y="12" width="7" height="9" rx="1.5" />
@@ -23,7 +33,17 @@ function IconDashboard(): React.ReactElement {
 
 function IconWorkers(): React.ReactElement {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <rect x="4" y="4" width="6" height="6" rx="1" />
       <rect x="14" y="4" width="6" height="6" rx="1" />
       <rect x="4" y="14" width="6" height="6" rx="1" />
@@ -36,7 +56,17 @@ function IconWorkers(): React.ReactElement {
 
 function IconSessions(): React.ReactElement {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
       <polyline points="14 2 14 8 20 8" />
       <line x1="8" y1="13" x2="16" y2="13" />
@@ -47,7 +77,17 @@ function IconSessions(): React.ReactElement {
 
 function IconMetrics(): React.ReactElement {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <line x1="18" y1="20" x2="18" y2="10" />
       <line x1="12" y1="20" x2="12" y2="4" />
       <line x1="6" y1="20" x2="6" y2="14" />
@@ -58,7 +98,17 @@ function IconMetrics(): React.ReactElement {
 
 function IconSettings(): React.ReactElement {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
@@ -147,19 +197,21 @@ export function Sidebar(): React.ReactElement {
       </div>
 
       {/* Navigation links */}
-      <nav ref={navRef} className="flex flex-col gap-0.5 px-2.5 py-3 flex-1" role="tablist" aria-label="Page navigation" aria-orientation="vertical">
+      <nav
+        ref={navRef}
+        className="flex flex-col gap-0.5 px-2.5 py-3 flex-1"
+        aria-label="Page navigation"
+      >
         {NAV_ITEMS.map((item, index) => {
           const isActive = currentPage === item.id;
           return (
             <button
               key={item.id}
               type="button"
-              role="tab"
               data-nav-item="true"
               data-active={isActive ? "true" : undefined}
               onClick={() => setCurrentPage(item.id)}
               onKeyDown={(e) => handleNavKeyDown(e, index)}
-              aria-selected={isActive}
               aria-current={isActive ? "page" : undefined}
               tabIndex={isActive ? 0 : -1}
               title={collapsed ? item.label : undefined}
@@ -185,7 +237,9 @@ export function Sidebar(): React.ReactElement {
                 whiteSpace: "nowrap",
                 transition: "all 0.15s cubic-bezier(0.4, 0, 0.2, 1)",
                 outline: "none",
-                boxShadow: isActive ? "0 1px 8px oklch(0.78 0.18 205 / 0.1), inset 0 1px 0 oklch(1 0 0 / 0.03)" : "none",
+                boxShadow: isActive
+                  ? "0 1px 8px oklch(0.78 0.18 205 / 0.1), inset 0 1px 0 oklch(1 0 0 / 0.03)"
+                  : "none",
               }}
               onFocus={(e) => {
                 e.currentTarget.style.boxShadow = "0 0 0 2px oklch(0.78 0.18 205 / 0.4) inset";
@@ -208,12 +262,14 @@ export function Sidebar(): React.ReactElement {
                 }
               }}
             >
-              <span style={{
-                opacity: isActive ? 1 : 0.6,
-                transition: "opacity 0.15s ease",
-                display: "flex",
-                alignItems: "center",
-              }}>
+              <span
+                style={{
+                  opacity: isActive ? 1 : 0.6,
+                  transition: "opacity 0.15s ease",
+                  display: "flex",
+                  alignItems: "center",
+                }}
+              >
                 {item.icon}
               </span>
               {!collapsed && item.label}
@@ -233,7 +289,7 @@ export function Sidebar(): React.ReactElement {
           color: "oklch(0.40 0.02 220)",
         }}
       >
-        {collapsed ? "v0" : "v0.0.1"}
+        {collapsed ? "v" : `v${__APP_VERSION__}`}
       </div>
     </aside>
   );

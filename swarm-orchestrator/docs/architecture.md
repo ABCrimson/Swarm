@@ -19,7 +19,7 @@
 
 ## System Overview
 
-SWARM Orchestrator is a Tauri 2.10 desktop application with a clear separation between a Rust backend and a React 19 frontend. Communication between the two layers happens exclusively through Tauri's IPC mechanism: **invoke** (request/response) and **listen** (event stream).
+SWARM Orchestrator is a Tauri 2.11 desktop application with a clear separation between a Rust backend and a React 19 frontend. Communication between the two layers happens exclusively through Tauri's IPC mechanism: **invoke** (request/response) and **listen** (event stream).
 
 ```text
  ┌──────────────────────────────────────────────────────┐
@@ -38,31 +38,38 @@ SWARM Orchestrator is a Tauri 2.10 desktop application with a clear separation b
 
 **Design principles:**
 
-1. The Rust backend owns all mutable state (workers, sessions, AI queue)
+1. The Rust backend owns all mutable state (workers, sessions, AI queue, message bus)
 2. The frontend receives state updates via Tauri events, not polling
-3. CPU-bound work (rayon metrics) runs on blocking threads, never on the async executor
+3. CPU-bound and blocking work (sysinfo refresh, worker metrics aggregation, session persistence) runs on `spawn_blocking` threads, never on the async executor
 4. All IPC payloads use `camelCase` fields; all event type tags use `snake_case`
+5. Worker state transitions are TOCTOU-safe: `WorkerRegistry::update_state_if` performs a compare-and-set under the registry's per-entry lock rather than a separate read-then-write
 
 ---
 
 ## Backend Architecture
 
-The backend is organized into four domain modules under `src-tauri/src/`:
+The backend is organized into five domain modules under `src-tauri/src/`:
 
 ### Module Map
 
 ```text
 src-tauri/src/
 ├── ai/              AI integration
-│   ├── client.rs    Anthropic API client (reqwest + SSE streaming)
+│   ├── client.rs    Anthropic API client (reqwest + SSE streaming; always emits a terminal `done: true`)
 │   ├── queue.rs     Priority queue with semaphore concurrency control
 │   └── stream.rs    SSE event parser (content_block_delta, message_stop)
+├── bus/             Inter-agent message bus
+│   ├── channel.rs   MessageBus -- per-topic tokio::sync::broadcast channels
+│   └── router.rs    Router -- direct/broadcast send + pipeline orchestration
 ├── commands/        Tauri IPC command handlers
-│   ├── worker.rs    spawn, pause, resume, kill, list, input
-│   ├── session.rs   create, delete, list, get
-│   ├── ai.rs        ai_request
-│   ├── metrics.rs   get_metrics + background collection loop
-│   └── fs.rs        Delegates to tauri-plugin-fs
+│   ├── worker.rs        spawn, pause, resume, kill, list, input
+│   ├── session.rs       create, delete, list, get, session_add_worker
+│   ├── ai.rs            ai_request
+│   ├── bus.rs           bus_send, bus_subscribe, bus_create_pipeline, bus_list_channels, bus_list_pipelines
+│   ├── metrics.rs       get_metrics (incl. perWorker) + background collection loop
+│   ├── updater.rs       check_for_updates
+│   ├── notification.rs  send_notification
+│   └── fs.rs            Delegates to tauri-plugin-fs
 ├── events/          Event emission system
 │   └── emitter.rs   SwarmEvent enum + emit_event() dispatcher
 ├── session/         Session management
@@ -72,7 +79,7 @@ src-tauri/src/
 │   ├── handle.rs    WorkerHandle, WorkerState, WorkerConfig, WorkerInfo
 │   ├── lifecycle.rs Spawn, pause, resume, kill, input operations
 │   ├── pty.rs       PTY spawning (portable-pty) + Tokio I/O bridge
-│   └── registry.rs  DashMap registry + rayon aggregate metrics
+│   └── registry.rs  DashMap registry, TOCTOU-safe update_state_if, aggregate metrics
 ├── error.rs         AppError enum (thiserror + Serialize for IPC)
 ├── lib.rs           Tauri app builder and setup
 └── main.rs          Binary entry point (Tokio runtime)
@@ -96,8 +103,9 @@ The `WorkerRegistry` is the central data structure for worker management:
 
 - **Storage:** `DashMap<Uuid, WorkerHandle>` -- lock-free concurrent reads, per-shard write locks
 - **Configuration:** `parking_lot::RwLock<SystemConfig>` -- max workers (64) and default shell
-- **Metrics:** `rayon::par_iter` over worker states for aggregate counts
+- **Metrics:** Sequential iteration over worker states for aggregate counts, run inside `tokio::task::spawn_blocking` so the async executor is never blocked. (The 64-worker cap makes sequential aggregation cheaper than `rayon`-style parallel dispatch overhead, so `rayon` was removed from the dependency tree.)
 - **Capacity:** Enforces `max_workers` limit, returns `AppError::RegistryFull` on overflow
+- **State transitions:** `update_state_if(id, expected, new)` performs an atomic compare-and-set against the current state under the entry's lock, eliminating the read-then-write TOCTOU window that a separate `get` + `insert` would have
 
 ### PTY Management
 
@@ -143,14 +151,30 @@ Frontend ──invoke──> ai_request command
 
 Priority levels: `Low (0) < Normal (1) < High (2) < Critical (3)`
 
+On stream failure (network error, malformed SSE, provider error) or a stream that ends without a `message_stop` event, the client still emits a final `ai:stream_delta` with `done: true` -- the frontend is guaranteed a terminal event for every enqueued `requestId`.
+
 ### Session Persistence
 
 Sessions are stored in `DashMap<Uuid, Session>` and persisted to disk:
 
 - **Storage file:** `sessions.json` in Tauri's app data directory
-- **Backend:** `tauri-plugin-store` 2.4.2
-- **Auto-save:** After every create/delete operation
+- **Backend:** `tauri-plugin-store` 2.4.3
+- **Auto-save:** After every create/delete/`session_add_worker` operation, offloaded to `spawn_blocking`
 - **Restore:** Loaded once during app setup, before any commands are processed
+
+### Message Bus
+
+The `bus` module provides inter-agent communication independent of the AI queue:
+
+- **`MessageBus`** (`bus/channel.rs`): creates and holds one `tokio::sync::broadcast` channel per topic string, in a `DashMap<String, Sender<BusMessage>>`
+- **`Router`** (`bus/router.rs`): sends direct messages (`send_direct`, tagged with a `to_worker`) and broadcasts (`send_broadcast`), and owns a `DashMap<Uuid, Pipeline>` of registered multi-stage pipelines
+- **Pipelines:** an ordered list of `PipelineStage { worker_id, transform }`; `execute_pipeline` forwards a payload from stage to stage, applying an optional dot-notation field-selector transform (e.g. `.result`, `.data.items`) between stages
+- **Frontend delivery contract:** `bus_send` only publishes to the internal bus and never emits an event itself. `bus_subscribe` spawns the sole background task that forwards messages on a topic to the frontend as `swarm://bus-message` events. This keeps delivery to exactly one event per message, in one payload shape (`BusMessagePayload`), regardless of how many (if any) subscribers are attached -- see [docs/api.md](api.md#unified-bus-event-contract)
+
+### Updates and Notifications
+
+- **`commands/updater.rs`**: `check_for_updates` wraps `tauri-plugin-updater`'s `UpdaterExt::check()`, returning an `available`/`version`/`body`/`date` JSON summary. Updates are signed with an Ed25519 keypair (see [`src-tauri/UPDATER_KEYS.md`](../src-tauri/UPDATER_KEYS.md)); the public key is embedded in `tauri.conf.json` under `plugins.updater.pubkey`
+- **`commands/notification.rs`**: `send_notification` wraps `tauri-plugin-notification`'s builder API for native OS notifications (title, body, optional icon)
 
 ---
 
@@ -312,7 +336,7 @@ Backend: emit(ai:stream_delta, { requestId, delta: "", done: true })
 Background task (500ms interval)
         │
         ▼
-spawn_blocking(registry.aggregate_metrics())    Rayon parallel
+spawn_blocking(registry.aggregate_metrics())    Sequential (spawn_blocking-offloaded)
         │
         ▼
 emit(system:metrics, { cpuPercent, memoryMb, workerCount, ... })
@@ -332,7 +356,7 @@ The application uses a three-tier state management strategy:
 
 ### Tier 1: Domain State (Zustand 5)
 
-Zustand stores manage domain entities with `subscribeWithSelector` for minimal re-renders and `immer` for immutable updates:
+Zustand stores manage domain entities with `subscribeWithSelector` for minimal re-renders and `immer` (11.1.11, with `enableMapSet()` enabled in production) for immutable updates:
 
 | Store            | Purpose                        | Persistence         |
 |------------------|--------------------------------|----------------------|
@@ -340,6 +364,8 @@ Zustand stores manage domain entities with `subscribeWithSelector` for minimal r
 | `sessionStore`   | Session list and active session| `tauri-plugin-store` |
 | `aiQueueStore`   | AI request queue and history   | In-memory            |
 | `metricsStore`   | System metrics time series     | In-memory            |
+
+`enableMapSet()` is called once at store-module load in production, not gated behind a dev-only path, so any store that models domain data as a `Map`/`Set` under Immer's `produce` works correctly in a production build, not just in dev/test where Immer's dev warnings previously masked the missing plugin registration.
 
 ### Tier 2: UI State (Jotai)
 
@@ -366,36 +392,45 @@ Long-lived state that must survive restarts:
 
 The backend emits typed events via `SwarmEvent` enum:
 
-| Channel            | Payload                  | Trigger                    |
-|--------------------|--------------------------|----------------------------|
-| `worker:spawned`   | `{ workerId, name, pid }`| Worker registered          |
-| `worker:killed`    | `{ workerId }`           | Worker terminated          |
-| `worker:output`    | `{ workerId, data }`     | PTY output available       |
-| `worker:state`     | `{ workerId, state }`    | State transition           |
-| `session:created`  | `{ sessionId, name }`    | Session created            |
-| `session:deleted`  | `{ sessionId }`          | Session removed            |
-| `system:metrics`   | `{ cpuPercent, ... }`    | 500ms metrics tick         |
-| `ai:stream_delta`  | `{ requestId, delta }`   | AI response chunk          |
-| `system:log`       | `{ level, message }`     | Backend log message        |
+| Channel                | Payload                                         | Trigger                    |
+|------------------------|--------------------------------------------------|----------------------------|
+| `worker:spawned`       | `{ workerId, name, pid }`                        | Worker registered          |
+| `worker:killed`        | `{ workerId }`                                   | Worker terminated          |
+| `worker:output`        | `{ workerId, data }`                             | PTY output available       |
+| `worker:state`         | `{ workerId, state }`                            | State transition           |
+| `session:created`      | `{ sessionId, name }`                            | Session created            |
+| `session:deleted`      | `{ sessionId }`                                  | Session removed            |
+| `system:metrics`       | `{ cpuPercent, ... }`                            | 500ms metrics tick         |
+| `ai:stream_delta`      | `{ requestId, delta, done }`                     | AI response chunk (always terminates with `done: true`) |
+| `system:log`           | `{ level, message }`                             | Backend log message        |
+| `swarm://bus-message`  | `{ messageId, fromWorker, toWorker, topic, payload }` | Bus message, forwarded by an active `bus_subscribe` task |
 
 ### Frontend to Backend (Pull)
 
 The frontend invokes Tauri commands via `invoke()`:
 
-| Command          | Response                   |
-|------------------|----------------------------|
-| `spawn_worker`   | Worker UUID string         |
-| `pause_worker`   | `()`                       |
-| `resume_worker`  | `()`                       |
-| `kill_worker`    | `()`                       |
-| `list_workers`   | `WorkerInfo[]`             |
-| `worker_input`   | `()`                       |
-| `create_session` | `Session`                  |
-| `delete_session` | `()`                       |
-| `list_sessions`  | `Session[]`                |
-| `get_session`    | `Session`                  |
-| `ai_request`     | Request ID string          |
-| `get_metrics`    | `AggregateMetrics` (JSON)  |
+| Command               | Response                          |
+|------------------------|-----------------------------------|
+| `spawn_worker`         | Worker UUID string                |
+| `pause_worker`         | `()`                               |
+| `resume_worker`        | `()`                               |
+| `kill_worker`          | `()`                               |
+| `list_workers`         | `WorkerInfo[]`                     |
+| `worker_input`         | `()`                               |
+| `create_session`       | `Session`                          |
+| `delete_session`       | `()`                               |
+| `list_sessions`        | `Session[]`                        |
+| `get_session`          | `Session`                          |
+| `session_add_worker`   | `()`                               |
+| `ai_request`           | Request ID string                  |
+| `get_metrics`          | Metrics JSON, incl. `perWorker`    |
+| `bus_send`             | Receiver count (`number`)          |
+| `bus_subscribe`        | `()`                               |
+| `bus_create_pipeline`  | Pipeline UUID string                |
+| `bus_list_channels`    | `string[]`                          |
+| `bus_list_pipelines`   | `PipelineInfo[]`                    |
+| `check_for_updates`    | Update-availability JSON            |
+| `send_notification`    | `()`                                |
 
 ---
 

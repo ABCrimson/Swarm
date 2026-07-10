@@ -4,7 +4,7 @@
 // Status indicators: pending (spinner), executing (pulse),
 // complete (checkmark), error (rose).
 
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion } from "motion/react";
 import type { CSSProperties } from "react";
 import { useState } from "react";
 import { Spinner } from "#components/ui/Spinner";
@@ -175,10 +175,19 @@ function HighlightedJson({ data }: { data: unknown }): React.ReactElement {
   const jsonStr = JSON.stringify(data, null, 2);
   const tokens = tokenizeJson(jsonStr);
 
+  // Keyed by cumulative character offset in the source string — a stable,
+  // data-derived position since tokens are never reordered or spliced.
+  let offset = 0;
+  const keyedTokens = tokens.map((token) => {
+    const key = offset;
+    offset += token.value.length;
+    return { ...token, key };
+  });
+
   return (
     <pre style={jsonContainerStyle}>
-      {tokens.map((token, i) => (
-        <span key={`tok-${i}`} style={{ color: token.color }}>
+      {keyedTokens.map((token) => (
+        <span key={token.key} style={{ color: token.color }}>
           {token.value}
         </span>
       ))}

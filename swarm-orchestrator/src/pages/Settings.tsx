@@ -68,9 +68,7 @@ function Toggle({
           cursor: "pointer",
           flexShrink: 0,
           marginTop: 2,
-          background: checked
-            ? "oklch(0.78 0.18 205)"
-            : "oklch(0.22 0.03 220)",
+          background: checked ? "oklch(0.78 0.18 205)" : "oklch(0.22 0.03 220)",
           transition: "background 0.2s ease",
           outline: "none",
         }}
@@ -83,9 +81,7 @@ function Toggle({
             width: 18,
             height: 18,
             borderRadius: "50%",
-            background: checked
-              ? "oklch(0.98 0 0)"
-              : "oklch(0.50 0.03 220)",
+            background: checked ? "oklch(0.98 0 0)" : "oklch(0.50 0.03 220)",
             transition: "left 0.2s cubic-bezier(0.4, 0, 0.2, 1), background 0.2s ease",
             boxShadow: "0 1px 3px oklch(0 0 0 / 0.3)",
           }}
@@ -113,6 +109,8 @@ function ModelCard({
   return (
     <button
       type="button"
+      data-model-id={id}
+      aria-pressed={selected}
       onClick={onSelect}
       style={{
         display: "flex",
@@ -120,19 +118,13 @@ function ModelCard({
         gap: 6,
         padding: "14px 18px",
         borderRadius: 10,
-        border: selected
-          ? "1.5px solid oklch(0.78 0.18 205)"
-          : "1px solid oklch(0.20 0.03 220)",
-        background: selected
-          ? "oklch(0.12 0.03 210)"
-          : "oklch(0.08 0.015 220)",
+        border: selected ? "1.5px solid oklch(0.78 0.18 205)" : "1px solid oklch(0.20 0.03 220)",
+        background: selected ? "oklch(0.12 0.03 210)" : "oklch(0.08 0.015 220)",
         cursor: "pointer",
         textAlign: "left",
         transition: "all 0.15s ease",
         outline: "none",
-        boxShadow: selected
-          ? "0 0 12px oklch(0.78 0.18 205 / 0.15)"
-          : "none",
+        boxShadow: selected ? "0 0 12px oklch(0.78 0.18 205 / 0.15)" : "none",
         flex: 1,
       }}
     >
@@ -288,7 +280,14 @@ export function Settings(): React.ReactElement {
 
       {/* Alert Thresholds */}
       <section style={SECTION_STYLE}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 16,
+          }}
+        >
           <h2
             style={{
               fontFamily: "var(--font-display)",
@@ -372,18 +371,39 @@ export function Settings(): React.ReactElement {
             gap: "12px 24px",
           }}
         >
-          {([
-            { key: "cpuWarning" as const, label: "CPU Warning", unit: "%", color: "oklch(0.82 0.16 85)" },
-            { key: "cpuCritical" as const, label: "CPU Critical", unit: "%", color: "oklch(0.72 0.20 25)" },
-            { key: "memoryWarning" as const, label: "Memory Warning", unit: "%", color: "oklch(0.82 0.16 85)" },
-            { key: "memoryCritical" as const, label: "Memory Critical", unit: "%", color: "oklch(0.72 0.20 25)" },
-            { key: "errorRateWarning" as const, label: "Error Rate Warning", unit: "%", color: "oklch(0.82 0.16 85)" },
-            { key: "errorRateCritical" as const, label: "Error Rate Critical", unit: "%", color: "oklch(0.72 0.20 25)" },
-          ]).map(({ key, label, unit, color }) => (
+          {[
+            {
+              key: "cpuWarning" as const,
+              label: "CPU Warning",
+              unit: "%",
+              color: "oklch(0.82 0.16 85)",
+            },
+            {
+              key: "cpuCritical" as const,
+              label: "CPU Critical",
+              unit: "%",
+              color: "oklch(0.72 0.20 25)",
+            },
+            {
+              key: "memoryWarning" as const,
+              label: "Memory Warning",
+              unit: "%",
+              color: "oklch(0.82 0.16 85)",
+            },
+            {
+              key: "memoryCritical" as const,
+              label: "Memory Critical",
+              unit: "%",
+              color: "oklch(0.72 0.20 25)",
+            },
+          ].map(({ key, label, unit, color }) => (
             <div key={key}>
-              <label style={{ ...LABEL_STYLE, fontSize: "0.72rem" }}>{label}</label>
+              <label htmlFor={`threshold-${key}`} style={{ ...LABEL_STYLE, fontSize: "0.72rem" }}>
+                {label}
+              </label>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <input
+                  id={`threshold-${key}`}
                   type="number"
                   min={0}
                   max={100}
@@ -449,13 +469,13 @@ export function Settings(): React.ReactElement {
           }}
         >
           <span style={{ color: "oklch(0.50 0.03 220)" }}>Version</span>
-          <span style={{ color: "oklch(0.78 0.18 205)" }}>0.9.9</span>
+          <span style={{ color: "oklch(0.78 0.18 205)" }}>{__APP_VERSION__}</span>
           <span style={{ color: "oklch(0.50 0.03 220)" }}>Runtime</span>
-          <span style={{ color: "oklch(0.70 0.03 220)" }}>Tauri 2.10 + React 19</span>
+          <span style={{ color: "oklch(0.70 0.03 220)" }}>Tauri + React</span>
           <span style={{ color: "oklch(0.50 0.03 220)" }}>Backend</span>
-          <span style={{ color: "oklch(0.70 0.03 220)" }}>Rust 1.95 + Tokio 1.50</span>
+          <span style={{ color: "oklch(0.70 0.03 220)" }}>Rust + Tokio</span>
           <span style={{ color: "oklch(0.50 0.03 220)" }}>AI</span>
-          <span style={{ color: "oklch(0.70 0.03 220)" }}>Anthropic SDK 0.78.0</span>
+          <span style={{ color: "oklch(0.70 0.03 220)" }}>Anthropic SDK</span>
           <span style={{ color: "oklch(0.50 0.03 220)" }}>License</span>
           <span style={{ color: "oklch(0.70 0.03 220)" }}>MIT</span>
         </div>

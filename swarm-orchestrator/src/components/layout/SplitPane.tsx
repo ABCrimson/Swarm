@@ -76,10 +76,7 @@ export function SplitPane({
     if ((isHorizontal && e.key === "ArrowRight") || (!isHorizontal && e.key === "ArrowDown")) {
       e.preventDefault();
       newPercent = Math.min(maxPercent, paneSizes.main + step);
-    } else if (
-      (isHorizontal && e.key === "ArrowLeft") ||
-      (!isHorizontal && e.key === "ArrowUp")
-    ) {
+    } else if ((isHorizontal && e.key === "ArrowLeft") || (!isHorizontal && e.key === "ArrowUp")) {
       e.preventDefault();
       newPercent = Math.max(minPercent, paneSizes.main - step);
     }
@@ -103,7 +100,9 @@ export function SplitPane({
     gridArea: "handle",
     background: isDragging ? "oklch(0.78 0.18 205 / 0.5)" : "oklch(0.78 0.18 205 / 0.15)",
     cursor: isHorizontal ? "col-resize" : "row-resize",
-    transition: isDragging ? "none" : "background 0.2s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0, 0, 0.2, 1)",
+    transition: isDragging
+      ? "none"
+      : "background 0.2s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0, 0, 0.2, 1)",
     touchAction: "none",
     userSelect: "none",
     position: "relative",
@@ -127,7 +126,6 @@ export function SplitPane({
       </div>
       <hr
         tabIndex={0}
-        role="separator"
         aria-orientation={isHorizontal ? "vertical" : "horizontal"}
         aria-valuenow={Math.round(paneSizes.main)}
         aria-valuemin={minPercent}
