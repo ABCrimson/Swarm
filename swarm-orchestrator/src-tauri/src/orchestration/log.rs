@@ -42,6 +42,11 @@ impl EventLog {
             .map_err(|e| AppError::EventLog(e.to_string()))?;
         conn.pragma_update(None, "synchronous", "NORMAL")
             .map_err(|e| AppError::EventLog(e.to_string()))?;
+        // A WAL checkpoint can briefly hold the writer lock; without a
+        // busy timeout a concurrent read (e.g. an events_since backfill)
+        // would fail instantly with SQLITE_BUSY instead of waiting it out.
+        conn.busy_timeout(std::time::Duration::from_secs(2))
+            .map_err(|e| AppError::EventLog(e.to_string()))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS events (
                 seq     INTEGER PRIMARY KEY,
@@ -83,12 +88,16 @@ impl EventLog {
 
     /// Returns up to `limit` persisted events with `seq > after_seq`, ascending.
     pub fn events_since(&self, after_seq: u64, limit: u32) -> Result<Vec<StoredEvent>, AppError> {
+        // Clamp rather than cast-wrap: after_seq as i64 would go negative
+        // for values > i64::MAX, which turns "give me everything past the
+        // end" into "give me everything" — silently replaying the log.
+        let after_seq_i64 = i64::try_from(after_seq).unwrap_or(i64::MAX);
         let mut stmt = self
             .conn
             .prepare("SELECT seq, ts, type, payload FROM events WHERE seq > ?1 ORDER BY seq ASC LIMIT ?2")
             .map_err(|e| AppError::EventLog(e.to_string()))?;
         let rows = stmt
-            .query_map((after_seq as i64, limit), |row| {
+            .query_map((after_seq_i64, limit), |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, i64>(1)?,

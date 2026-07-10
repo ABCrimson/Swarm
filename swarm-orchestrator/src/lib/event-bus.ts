@@ -40,8 +40,40 @@ export function onEvent(type: string, handler: Handler): () => void {
 function dispatch(e: DomainEvent): void {
   if (e.seq <= lastSeq) return; // already seen (live/backfill race)
   lastSeq = e.seq;
-  for (const h of handlers.get(e.type) ?? []) h(e);
-  for (const h of wildcard) h(e);
+  for (const h of handlers.get(e.type) ?? []) {
+    try {
+      h(e);
+    } catch (err) {
+      console.error("event-bus: handler threw", err);
+    }
+  }
+  for (const h of wildcard) {
+    try {
+      h(e);
+    } catch (err) {
+      console.error("event-bus: handler threw", err);
+    }
+  }
+}
+
+/**
+ * Gap check + dispatch/buffer — the single decision point for every
+ * incoming event, live or replayed from a backfill flush. Keeping both
+ * callers on this one path is what makes a gap discovered mid-flush (or
+ * a gap left behind by a failed backfill) self-heal the same way a live
+ * gap does.
+ */
+function handleIncoming(e: DomainEvent): void {
+  if (backfilling) {
+    pending.push(e);
+    return;
+  }
+  if (lastSeq > 0 && e.seq > lastSeq + 1) {
+    pending.push(e);
+    void backfill(lastSeq);
+    return;
+  }
+  dispatch(e);
 }
 
 async function backfill(afterSeq: number): Promise<void> {
@@ -62,8 +94,13 @@ async function backfill(afterSeq: number): Promise<void> {
     console.error("event-bus backfill failed:", err);
   } finally {
     backfilling = false;
+    // Route flushed events through the same gap-check path as live events:
+    // on success this catches a gap that opened during the backfill (and
+    // re-triggers a follow-up backfill); on failure lastSeq was never
+    // advanced past the gap, so the first pending event re-detects it and
+    // retries — the failed attempt is never silently swallowed.
     const toFlush = pending.splice(0).sort((a, b) => a.seq - b.seq);
-    for (const e of toFlush) dispatch(e);
+    for (const e of toFlush) handleIncoming(e);
   }
 }
 
@@ -80,17 +117,7 @@ export async function connectEventBus(): Promise<() => void> {
       console.error("event-bus: invalid envelope", parsed.error);
       return;
     }
-    const e = parsed.data as DomainEvent;
-    if (backfilling) {
-      pending.push(e);
-      return;
-    }
-    if (lastSeq > 0 && e.seq > lastSeq + 1) {
-      pending.push(e);
-      void backfill(lastSeq);
-      return;
-    }
-    dispatch(e);
+    handleIncoming(parsed.data as DomainEvent);
   });
 }
 

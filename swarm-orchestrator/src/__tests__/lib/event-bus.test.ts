@@ -88,4 +88,60 @@ describe("event-bus", () => {
     await expect(settled).rejects.toThrow(/timeout/i);
     vi.useRealTimers();
   });
+
+  it("backfill rejection does not lose the gap: pending events re-enter the gap-check path and retry with the original afterSeq; missed events are eventually delivered in order", async () => {
+    invokeMock.mockRejectedValueOnce(new Error("network down"));
+    invokeMock.mockResolvedValueOnce([ev(2), ev(3)]);
+    await connectEventBus();
+    const seen: number[] = [];
+    onEvent("worker_spawned", (e) => seen.push(e.seq));
+
+    push(ev(1));
+    push(ev(4)); // gap: triggers backfill(afterSeq: 1), which rejects
+
+    await vi.waitFor(() => expect(seen).toEqual([1, 2, 3, 4]));
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "events_since", { afterSeq: 1 });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "events_since", { afterSeq: 1 });
+
+    // the bus keeps working normally afterward — no extra backfill needed
+    push(ev(5));
+    expect(seen).toEqual([1, 2, 3, 4, 5]);
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a gap detected among flushed pending events triggers a second backfill", async () => {
+    invokeMock.mockResolvedValueOnce([ev(2), ev(3)]); // first backfill: afterSeq 1
+    invokeMock.mockResolvedValueOnce([ev(4), ev(5)]); // second backfill: afterSeq 3, from a gap within the flush
+    await connectEventBus();
+    const seen: number[] = [];
+    onEvent("worker_spawned", (e) => seen.push(e.seq));
+
+    push(ev(1));
+    push(ev(3)); // gap: triggers backfill(afterSeq: 1)
+    push(ev(6)); // arrives mid-backfill; buffered as pending without a gap check yet
+
+    await vi.waitFor(() => expect(seen).toEqual([1, 2, 3, 4, 5, 6]));
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "events_since", { afterSeq: 1 });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "events_since", { afterSeq: 3 });
+  });
+
+  it("a throwing handler does not break fan-out to other subscribers or waitFor", async () => {
+    await connectEventBus();
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const seen: number[] = [];
+    onEvent("worker_spawned", () => {
+      throw new Error("boom");
+    });
+    onEvent("worker_spawned", (e) => seen.push(e.seq));
+    const settled = waitFor((e) => e.type === "worker_spawned");
+
+    push(ev(1));
+
+    expect(seen).toEqual([1]);
+    await expect(settled).resolves.toMatchObject({ seq: 1 });
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
+  });
 });
