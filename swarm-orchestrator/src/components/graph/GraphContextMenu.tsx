@@ -114,7 +114,7 @@ export function GraphContextMenu({
     <div
       ref={menuRef}
       role="menu"
-      aria-label="Worker context menu"
+      aria-label="Worker Context Menu"
       style={{
         position: "fixed",
         top: y,

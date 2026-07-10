@@ -77,7 +77,7 @@ export function Tools(): React.ReactElement {
             color: "oklch(0.55 0.04 220)",
           }}
         >
-          Manage built-in and custom tool definitions
+          Manage Built-In And Custom Tool Definitions
         </p>
       </div>
 

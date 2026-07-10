@@ -103,9 +103,9 @@ export function GraphControls({
 
     try {
       await writeTextFile(filePath, json);
-      toast.success("Workflow exported", { description: filePath });
+      toast.success("Workflow Exported", { description: filePath });
     } catch (err) {
-      toast.error("Export failed", { description: String(err) });
+      toast.error("Export Failed", { description: String(err) });
     }
   };
 
@@ -125,9 +125,9 @@ export function GraphControls({
       const { nodes: importedNodes, edges: importedEdges } = importWorkflow(def);
       setNodes(importedNodes);
       setEdges(importedEdges);
-      toast.success("Workflow imported", { description: def.name });
+      toast.success("Workflow Imported", { description: def.name });
     } catch (err) {
-      toast.error("Import failed", { description: String(err) });
+      toast.error("Import Failed", { description: String(err) });
     }
   };
 
@@ -158,7 +158,7 @@ export function GraphControls({
   return (
     <div
       role="toolbar"
-      aria-label="Graph controls"
+      aria-label="Graph Controls"
       style={{
         position: "absolute",
         bottom: 16,
@@ -171,7 +171,7 @@ export function GraphControls({
     >
       {/* Add Worker */}
       {onAddNode && (
-        <ControlButton onClick={onAddNode} label="Add worker node">
+        <ControlButton onClick={onAddNode} label="Add Worker Node">
           <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <circle cx={8} cy={8} r={6} stroke="currentColor" strokeWidth={1.5} />
             <path d="M8 5v6M5 8h6" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" />
@@ -181,7 +181,7 @@ export function GraphControls({
 
       {/* Delete selected edge */}
       {onDeleteEdge && (
-        <ControlButton onClick={onDeleteEdge} label="Delete selected edge">
+        <ControlButton onClick={onDeleteEdge} label="Delete Selected Edge">
           <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path
               d="M4 4l8 8M12 4l-8 8"
@@ -193,19 +193,19 @@ export function GraphControls({
         </ControlButton>
       )}
 
-      <ControlButton onClick={handleZoomIn} label="Zoom in (+)">
+      <ControlButton onClick={handleZoomIn} label="Zoom In (+)">
         <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" />
         </svg>
       </ControlButton>
 
-      <ControlButton onClick={handleZoomOut} label="Zoom out (-)">
+      <ControlButton onClick={handleZoomOut} label="Zoom Out (-)">
         <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path d="M3 8h10" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" />
         </svg>
       </ControlButton>
 
-      <ControlButton onClick={handleFitView} label="Fit view (0)">
+      <ControlButton onClick={handleFitView} label="Fit View (0)">
         <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path
             d="M2 6V3a1 1 0 011-1h3M10 2h3a1 1 0 011 1v3M14 10v3a1 1 0 01-1 1h-3M6 14H3a1 1 0 01-1-1v-3"
@@ -217,7 +217,7 @@ export function GraphControls({
         </svg>
       </ControlButton>
 
-      <ControlButton onClick={onResetLayout} label="Reset layout">
+      <ControlButton onClick={onResetLayout} label="Reset Layout">
         <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path
             d="M2 8a6 6 0 0111.46-2.46M14 8a6 6 0 01-11.46 2.46"
@@ -237,7 +237,7 @@ export function GraphControls({
 
       {/* Export */}
       {nodes && edges && (
-        <ControlButton onClick={handleExport} label="Export workflow">
+        <ControlButton onClick={handleExport} label="Export Workflow">
           <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path
               d="M8 2v8M5 7l3 3 3-3M3 12v1a1 1 0 001 1h8a1 1 0 001-1v-1"
@@ -251,7 +251,7 @@ export function GraphControls({
       )}
 
       {/* Import */}
-      <ControlButton onClick={handleImport} label="Import workflow">
+      <ControlButton onClick={handleImport} label="Import Workflow">
         <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path
             d="M8 10V2M5 5l3-3 3 3M3 12v1a1 1 0 001 1h8a1 1 0 001-1v-1"

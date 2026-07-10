@@ -30,12 +30,12 @@ function isTauriError(error: unknown): error is TauriError {
 function toastError(error: unknown): void {
   if (isTauriError(error)) {
     toast.error(`IPC Error: ${error.message}`, {
-      description: error.kind ?? "An error occurred communicating with the backend.",
+      description: error.kind ?? "An Error Occurred Communicating With The Backend.",
     });
   } else if (error instanceof Error) {
     toast.error(error.message);
   } else {
-    toast.error("An unexpected error occurred.");
+    toast.error("An Unexpected Error Occurred.");
   }
 }
 
@@ -100,7 +100,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     const { retryCount } = this.state;
 
     if (retryCount >= MAX_RETRIES) {
-      toast.error("Maximum retries exceeded. Please reload the application.");
+      toast.error("Maximum Retries Exceeded. Please Reload The Application.");
       return;
     }
 
@@ -114,7 +114,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       this.retryTimeoutId = null;
     }, delay);
 
-    toast.info(`Retrying in ${delay / 1000}s...`);
+    toast.info(`Retrying In ${delay / 1000}s...`);
   };
 
   render(): ReactNode {
@@ -150,7 +150,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               color: "oklch(0.72 0.20 10)",
             }}
           >
-            Something went wrong
+            Something Went Wrong
           </div>
           <div
             style={{
@@ -185,7 +185,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 e.currentTarget.style.background = "oklch(0.78 0.18 205 / 0.15)";
               }}
             >
-              Retry ({MAX_RETRIES - retryCount} remaining)
+              Retry ({MAX_RETRIES - retryCount} Remaining)
             </button>
           )}
         </div>

@@ -169,17 +169,17 @@ export function AIQueue(): React.ReactElement {
       <div style={headerStyle}>
         <span style={headerTitleStyle}>AI Queue</span>
         <span style={streamCountStyle}>
-          {activeStreams}/{concurrentLimit} active
+          {activeStreams}/{concurrentLimit} Active
           {pendingCount > 0 && (
             <span style={{ color: "oklch(0.82 0.19 70)" }}>
               {" "}
-              {"\u2022"} {pendingCount} pending
+              {"\u2022"} {pendingCount} Pending
             </span>
           )}
         </span>
       </div>
 
-      {queue.length === 0 && <div style={emptyStyle}>No items in queue</div>}
+      {queue.length === 0 && <div style={emptyStyle}>No Items In Queue</div>}
 
       <AnimatePresence initial={false}>
         {queue.map((item, idx) => (
@@ -207,7 +207,7 @@ export function AIQueue(): React.ReactElement {
                 tone="danger"
                 size="sm"
                 onClick={() => handleCancel(item.id)}
-                aria-label={`Cancel queue item ${idx + 1}`}
+                aria-label={`Cancel Queue Item ${idx + 1}`}
                 style={{ marginLeft: "auto", flexShrink: 0 }}
               >
                 Cancel

@@ -1,3 +1,4 @@
+import { pluralizeWorkers } from "#lib/format";
 import { useSystemStore } from "#store/system";
 
 /**
@@ -61,9 +62,7 @@ export function Topbar(): React.ReactElement {
             background: "oklch(0.82 0.18 140)",
           }}
         />
-        <span>
-          {workerCount} worker{workerCount !== 1 ? "s" : ""}
-        </span>
+        <span>{pluralizeWorkers(workerCount)}</span>
       </div>
     </header>
   );

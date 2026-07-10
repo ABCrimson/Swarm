@@ -429,7 +429,7 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
         {messages.length === 0 && !isStreaming && (
           <div style={emptyStateStyle}>
             <span style={{ fontSize: 24, opacity: 0.5 }}>AI</span>
-            <span>Send a message to start chatting</span>
+            <span>Send A Message To Start Chatting</span>
           </div>
         )}
 
@@ -484,8 +484,8 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
           onKeyDown={handleKeyDown}
           placeholder={
             atLimit && !isStreaming
-              ? "Concurrent stream limit reached…"
-              : "Type a message... (Shift+Enter for newline)"
+              ? "Concurrent Stream Limit Reached…"
+              : "Type A Message... (Shift+Enter For Newline)"
           }
           rows={1}
           style={textareaStyle}

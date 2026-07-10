@@ -130,7 +130,7 @@ export function SplitPane({
         aria-valuenow={Math.round(paneSizes.main)}
         aria-valuemin={minPercent}
         aria-valuemax={maxPercent}
-        aria-label={`Resize ${isHorizontal ? "columns" : "rows"}`}
+        aria-label={`Resize ${isHorizontal ? "Columns" : "Rows"}`}
         onPointerDown={handlePointerDown}
         onKeyDown={handleKeyDown}
         onMouseEnter={(e) => {

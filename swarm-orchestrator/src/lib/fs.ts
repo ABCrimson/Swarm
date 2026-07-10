@@ -25,11 +25,11 @@ function handleDiskError(err: unknown, operation: string): never {
     lower.includes("not enough space") ||
     lower.includes("there is not enough space on the disk")
   ) {
-    toast.error("Disk full", {
-      description: `Cannot ${operation} \u2014 free up disk space and try again.`,
+    toast.error("Disk Full", {
+      description: `Cannot ${operation} \u2014 Free Up Disk Space And Try Again.`,
       duration: 10_000,
     });
-    throw new Error(`Disk full: cannot ${operation}. Free up disk space and try again.`);
+    throw new Error(`Disk Full: Cannot ${operation}. Free Up Disk Space And Try Again.`);
   }
 
   throw err;

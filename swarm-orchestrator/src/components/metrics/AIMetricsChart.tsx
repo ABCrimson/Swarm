@@ -120,7 +120,7 @@ export function AIMetricsChart(): React.ReactElement {
       <div style={headerStyle}>
         <span>AI Metrics</span>
         <span style={{ fontSize: 11, fontWeight: 400, color: "oklch(0.55 0.03 220)" }}>
-          30s window
+          30s Window
         </span>
       </div>
 
@@ -159,7 +159,7 @@ export function AIMetricsChart(): React.ReactElement {
             yAxisId="secondary"
             type="monotone"
             dataKey="queueDepth"
-            name="Queue depth"
+            name="Queue Depth"
             stroke={color0}
             fill="url(#grad-queue)"
             strokeWidth={1.5}
@@ -170,7 +170,7 @@ export function AIMetricsChart(): React.ReactElement {
             yAxisId="secondary"
             type="monotone"
             dataKey="activeStreams"
-            name="Active streams"
+            name="Active Streams"
             stroke={color1}
             fill="url(#grad-streams)"
             strokeWidth={1.5}

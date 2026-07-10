@@ -277,7 +277,7 @@ export function FileTree({
             color: "oklch(0.45 0.04 220)",
           }}
         >
-          Empty directory
+          Empty Directory
         </div>
       )}
     </div>

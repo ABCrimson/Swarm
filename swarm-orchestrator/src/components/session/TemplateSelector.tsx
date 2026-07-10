@@ -1,6 +1,7 @@
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 import { Pill } from "#components/ui/Pill";
+import { pluralizeWorkers } from "#lib/format";
 import { BUILT_IN_TEMPLATES, loadUserTemplates } from "#lib/templates";
 import type { SessionTemplate } from "#store/types";
 
@@ -50,12 +51,12 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
             color: "oklch(0.92 0.02 220)",
           }}
         >
-          Choose a Template
+          Choose A Template
         </h2>
         <button
           type="button"
           onClick={onClose}
-          aria-label="Close template selector"
+          aria-label="Close Template Selector"
           className="p-1 rounded-lg transition-colors cursor-pointer"
           style={{ color: "oklch(0.55 0.03 220)" }}
           onMouseEnter={(e) => {
@@ -86,7 +87,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
             color: "oklch(0.50 0.06 220)",
           }}
         >
-          Built-in
+          Built-In
         </h3>
         <div className="grid grid-cols-2 gap-3">
           {BUILT_IN_TEMPLATES.map((template, idx) => (
@@ -180,7 +181,7 @@ function TemplateCard({
         {template.description}
       </p>
       <Pill tone="info" size="sm">
-        {template.workerConfigs.length} {template.workerConfigs.length === 1 ? "Worker" : "Workers"}
+        {pluralizeWorkers(template.workerConfigs.length)}
       </Pill>
     </motion.button>
   );

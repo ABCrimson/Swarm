@@ -103,7 +103,7 @@ export function WorkspacePanel(): React.ReactElement {
         }}
       >
         <svg width={56} height={56} viewBox="0 0 56 56" fill="none">
-          <title>Open project</title>
+          <title>Open Project</title>
           <rect
             x={8}
             y={14}
@@ -128,7 +128,7 @@ export function WorkspacePanel(): React.ReactElement {
             color: "oklch(0.55 0.04 220)",
           }}
         >
-          No project directory open
+          No Project Directory Open
         </span>
         <button
           type="button"
@@ -204,7 +204,7 @@ export function WorkspacePanel(): React.ReactElement {
           <button
             type="button"
             onClick={() => void handleOpenProject()}
-            aria-label="Change project directory"
+            aria-label="Change Project Directory"
             style={{
               width: 24,
               height: 24,
@@ -255,7 +255,7 @@ export function WorkspacePanel(): React.ReactElement {
         aria-valuenow={sidebarWidth}
         aria-valuemin={MIN_SIDEBAR_WIDTH}
         aria-valuemax={MAX_SIDEBAR_WIDTH}
-        aria-label="Resize file tree"
+        aria-label="Resize File Tree"
         onMouseDown={handleMouseDown}
         onKeyDown={handleSeparatorKeyDown}
         style={{

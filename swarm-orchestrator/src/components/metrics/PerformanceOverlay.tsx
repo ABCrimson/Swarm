@@ -122,7 +122,7 @@ export function PerformanceOverlay(): React.ReactElement | null {
     fps >= 55 ? "oklch(0.78 0.18 140)" : fps >= 30 ? "oklch(0.78 0.18 70)" : "oklch(0.68 0.22 15)";
 
   return (
-    <output style={overlayStyle} aria-label="Performance overlay">
+    <output style={overlayStyle} aria-label="Performance Overlay">
       <div style={titleStyle}>Perf Overlay</div>
 
       <div style={rowStyle}>

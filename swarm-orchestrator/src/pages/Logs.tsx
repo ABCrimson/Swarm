@@ -35,7 +35,7 @@ export function Logs(): React.ReactElement {
             color: "oklch(0.55 0.04 220)",
           }}
         >
-          Centralised log aggregation from all sources
+          Centralised Log Aggregation From All Sources
         </p>
       </div>
 

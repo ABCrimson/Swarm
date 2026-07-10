@@ -82,7 +82,7 @@ function createTool(
 
 const spawnWorkerTool = createTool(
   "spawn_worker",
-  "Spawn a new worker process. Returns the worker ID.",
+  "Spawn A New Worker Process. Returns The Worker ID.",
   SpawnWorkerInput,
   async (input) => {
     try {
@@ -100,7 +100,7 @@ const spawnWorkerTool = createTool(
 
 const killWorkerTool = createTool(
   "kill_worker",
-  "Terminate a running worker process by its UUID.",
+  "Terminate A Running Worker Process By Its UUID.",
   KillWorkerInput,
   async (input) => {
     try {
@@ -114,7 +114,7 @@ const killWorkerTool = createTool(
 
 const runCommandTool = createTool(
   "run_command",
-  "Execute a shell command within a worker's PTY. Returns stdout/stderr output.",
+  "Execute A Shell Command Within A Worker's PTY. Returns Stdout/Stderr Output.",
   RunCommandInput,
   async (input) => {
     try {
@@ -131,7 +131,7 @@ const runCommandTool = createTool(
 
 const readFileTool = createTool(
   "read_file",
-  "Read the contents of a file at the given path.",
+  "Read The Contents Of A File At The Given Path.",
   ReadFileInput,
   async (input) => {
     try {
@@ -148,7 +148,7 @@ const readFileTool = createTool(
 
 const writeFileTool = createTool(
   "write_file",
-  "Write content to a file at the given path, creating or overwriting it.",
+  "Write Content To A File At The Given Path, Creating Or Overwriting It.",
   WriteFileInput,
   async (input) => {
     try {
@@ -165,7 +165,7 @@ const writeFileTool = createTool(
 
 const getMetricsTool = createTool(
   "get_metrics",
-  "Retrieve system or per-worker performance metrics (CPU, memory, uptime).",
+  "Retrieve System Or Per-Worker Performance Metrics (CPU, Memory, Uptime).",
   GetMetricsInput,
   async (input) => {
     try {
@@ -208,7 +208,7 @@ export async function executeTool(
 ): Promise<SwarmToolResult> {
   const tool = toolRegistry.get(name);
   if (!tool) {
-    return { success: false, error: `Unknown tool: ${name}` };
+    return { success: false, error: `Unknown Tool: ${name}` };
   }
   return tool.execute(input);
 }

@@ -122,7 +122,7 @@ export function LogFilter({
       <select
         value={selectedSource ?? ""}
         onChange={handleSourceChange}
-        aria-label="Filter by source"
+        aria-label="Filter By Source"
         style={{
           padding: "4px 8px",
           borderRadius: 6,
@@ -136,7 +136,7 @@ export function LogFilter({
           minWidth: 120,
         }}
       >
-        <option value="">All sources</option>
+        <option value="">All Sources</option>
         {sortedSources.map((source) => (
           <option key={source} value={source}>
             {source}
@@ -148,10 +148,10 @@ export function LogFilter({
       <div style={{ flex: 1, minWidth: 140 }}>
         <input
           type="text"
-          placeholder="Search logs..."
+          placeholder="Search Logs..."
           value={localSearch}
           onChange={(e) => handleSearchChange(e.target.value)}
-          aria-label="Search log messages"
+          aria-label="Search Log Messages"
           style={{
             width: "100%",
             padding: "5px 10px",
@@ -170,7 +170,7 @@ export function LogFilter({
       <button
         type="button"
         onClick={onClear}
-        aria-label="Clear all logs"
+        aria-label="Clear All Logs"
         style={{
           padding: "4px 10px",
           borderRadius: 6,

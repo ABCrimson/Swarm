@@ -40,7 +40,7 @@ describe("ErrorBoundary", () => {
       </ErrorBoundary>,
     );
 
-    expect(screen.getByText("Something went wrong")).toBeInTheDocument();
+    expect(screen.getByText("Something Went Wrong")).toBeInTheDocument();
     expect(screen.getByText("Test render error")).toBeInTheDocument();
   });
 
@@ -118,6 +118,6 @@ describe("ErrorBoundary", () => {
 
     // The button should still be in the document (the error persists
     // because the child will throw again on re-render)
-    expect(screen.getByText("Something went wrong")).toBeInTheDocument();
+    expect(screen.getByText("Something Went Wrong")).toBeInTheDocument();
   });
 });

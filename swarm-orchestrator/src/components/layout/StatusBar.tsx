@@ -6,6 +6,7 @@
 import { useAtomValue } from "jotai";
 import type { CSSProperties } from "react";
 import { useState } from "react";
+import { pluralizeWorkers } from "#lib/format";
 import { useSystemStore } from "#store/system";
 import { gpuFrameTimeAtom } from "#store/ui";
 
@@ -62,7 +63,7 @@ export function StatusBar(): React.ReactElement {
         : "oklch(0.78 0.18 140)";
 
   return (
-    <output style={barStyle} aria-live="polite" aria-label="System status bar">
+    <output style={barStyle} aria-live="polite" aria-label="System Status Bar">
       <div style={sectionStyle}>
         <span className="flex items-center">
           <span style={{ ...dotStyle, background: statusColor }} aria-hidden="true" />
@@ -71,13 +72,11 @@ export function StatusBar(): React.ReactElement {
         <span style={{ color: "oklch(0.5 0.04 220)" }} aria-hidden="true">
           |
         </span>
-        <span>
-          {workerCount} worker{workerCount !== 1 ? "s" : ""}
-        </span>
+        <span>{pluralizeWorkers(workerCount)}</span>
       </div>
 
       <div style={sectionStyle}>
-        <span style={{ color: "oklch(0.6 0.05 220)" }}>est. ~${dailyCost}/24h</span>
+        <span style={{ color: "oklch(0.6 0.05 220)" }}>Est. ~${dailyCost}/24h</span>
         {showGpu && (
           <>
             <span style={{ color: "oklch(0.5 0.04 220)" }} aria-hidden="true">
@@ -89,7 +88,7 @@ export function StatusBar(): React.ReactElement {
         <button
           type="button"
           onClick={() => setShowGpu((v) => !v)}
-          aria-label={showGpu ? "Hide GPU frame time" : "Show GPU frame time"}
+          aria-label={showGpu ? "Hide GPU Frame Time" : "Show GPU Frame Time"}
           style={{
             background: "none",
             border: "none",
@@ -116,7 +115,7 @@ export function StatusBar(): React.ReactElement {
             e.currentTarget.style.color = "oklch(0.55 0.04 220)";
           }}
         >
-          {showGpu ? "hide gpu" : "show gpu"}
+          {showGpu ? "Hide GPU" : "Show GPU"}
         </button>
       </div>
     </output>

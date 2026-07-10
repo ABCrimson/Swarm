@@ -44,7 +44,7 @@ export function classifyError(error: unknown): AiError {
     ) {
       return {
         kind: "auth_invalid",
-        message: "API key invalid or missing \u2014 update in Settings.",
+        message: "API Key Invalid Or Missing \u2014 Update In Settings.",
         retryable: false,
         statusCode: 401,
       };
@@ -54,7 +54,7 @@ export function classifyError(error: unknown): AiError {
     if (msg.includes("rate_limit") || msg.includes("429") || msg.includes("too many requests")) {
       return {
         kind: "rate_limit",
-        message: "Rate limit exceeded. Retrying with backoff...",
+        message: "Rate Limit Exceeded. Retrying With Backoff...",
         retryable: true,
         retryAfterMs: 1000,
         statusCode: 429,
@@ -70,7 +70,7 @@ export function classifyError(error: unknown): AiError {
     ) {
       return {
         kind: "context_overflow",
-        message: "Context window exceeded. Truncating oldest messages.",
+        message: "Context Window Exceeded. Truncating Oldest Messages.",
         retryable: true,
       };
     }
@@ -84,7 +84,7 @@ export function classifyError(error: unknown): AiError {
     ) {
       return {
         kind: "network_timeout",
-        message: "Network request timed out after 30s.",
+        message: "Network Request Timed Out After 30s.",
         retryable: true,
         retryAfterMs: 2000,
       };
@@ -172,9 +172,9 @@ export async function withRetry<T>(
   }
 
   // All retries exhausted — show final error toast
-  showErrorToast(lastError ?? { kind: "unknown", message: "Unknown error", retryable: false });
+  showErrorToast(lastError ?? { kind: "unknown", message: "Unknown Error", retryable: false });
 
-  throw new Error(lastError?.message ?? "AI request failed after retries");
+  throw new Error(lastError?.message ?? "AI Request Failed After Retries");
 }
 
 // ── Context Truncation ──────────────────────────────
@@ -204,8 +204,8 @@ export function truncateMessages(
   }
 
   if (result.length < messages.length) {
-    toast.info("Oldest messages truncated to fit context window", {
-      description: `Removed ${messages.length - result.length} message(s)`,
+    toast.info("Oldest Messages Truncated To Fit Context Window", {
+      description: `Removed ${messages.length - result.length} Message(s)`,
     });
   }
 
@@ -216,20 +216,20 @@ export function truncateMessages(
 
 function showRetryToast(attempt: number, waitMs: number): void {
   const seconds = Math.ceil(waitMs / 1000);
-  toast.warning(`Retrying in ${seconds}s...`, {
-    description: `Attempt ${attempt}/${MAX_RETRIES} — Rate limit backoff`,
+  toast.warning(`Retrying In ${seconds}s...`, {
+    description: `Attempt ${attempt}/${MAX_RETRIES} — Rate Limit Backoff`,
     duration: waitMs + 500,
   });
 }
 
 function showErrorToast(error: AiError): void {
   const actions: Record<AiErrorKind, string> = {
-    rate_limit: "Rate limit exhausted after 3 retries",
-    context_overflow: "Context window overflow",
-    network_timeout: "Network connection failed",
-    auth_invalid: "API key invalid \u2014 update in Settings",
-    api_error: "API error",
-    unknown: "Unexpected error",
+    rate_limit: "Rate Limit Exhausted After 3 Retries",
+    context_overflow: "Context Window Overflow",
+    network_timeout: "Network Connection Failed",
+    auth_invalid: "API Key Invalid \u2014 Update In Settings",
+    api_error: "API Error",
+    unknown: "Unexpected Error",
   };
 
   toast.error(actions[error.kind], {

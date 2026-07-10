@@ -2,6 +2,7 @@ import { formatDistanceToNow } from "date-fns";
 import { motion } from "motion/react";
 
 import { Pill } from "#components/ui/Pill";
+import { pluralizeWorkers } from "#lib/format";
 import type { Session } from "#store/types";
 
 interface SessionCardProps {
@@ -66,7 +67,7 @@ export function SessionCard({
         </h3>
 
         <Pill tone="info" size="sm" className="shrink-0">
-          {session.workerIds.length} {session.workerIds.length === 1 ? "Worker" : "Workers"}
+          {pluralizeWorkers(session.workerIds.length)}
         </Pill>
       </div>
 

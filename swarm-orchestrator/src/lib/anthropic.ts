@@ -63,7 +63,7 @@ async function getClient(): Promise<Anthropic> {
   clientInstance = new Anthropic({
     apiKey: async () => {
       const key = await readConfig<string>("anthropic_api_key");
-      if (!key) throw new Error("Anthropic API key not configured");
+      if (!key) throw new Error("Anthropic API Key Not Configured");
       return key;
     },
     dangerouslyAllowBrowser: true,
@@ -128,10 +128,11 @@ export async function* streamMessage(
   try {
     client = await getClient();
   } catch (err) {
-    // Surface auth errors clearly
-    const msg = err instanceof Error ? err.message : String(err);
+    // Surface auth errors clearly. Lowercased so this keeps matching
+    // regardless of how the underlying "not configured" message is cased.
+    const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
     if (msg.includes("not configured")) {
-      throw new Error("API key not configured \u2014 update in Settings.");
+      throw new Error("API Key Not Configured \u2014 Update In Settings.");
     }
     throw err;
   }
@@ -250,11 +251,11 @@ function handleStreamError(err: unknown): void {
   if (status === 401) {
     // Reset client so the user can reconfigure
     clientInstance = null;
-    throw new Error("401 Unauthorized \u2014 API key invalid. Update in Settings.");
+    throw new Error("401 Unauthorized \u2014 API Key Invalid. Update In Settings.");
   }
 
   if (status === 403) {
-    throw new Error("403 Forbidden \u2014 your API key lacks permission for this model.");
+    throw new Error("403 Forbidden \u2014 Your API Key Lacks Permission For This Model.");
   }
 
   // Network errors mid-stream
@@ -266,7 +267,7 @@ function handleStreamError(err: unknown): void {
     msg.includes("fetch failed") ||
     msg.includes("socket hang up")
   ) {
-    throw new Error("Network connection lost during streaming. Check your internet connection.");
+    throw new Error("Network Connection Lost During Streaming. Check Your Internet Connection.");
   }
 }
 

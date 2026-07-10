@@ -90,9 +90,9 @@ export function Sessions(): React.ReactElement {
     const template = createTemplateFromSession(templateForm.name, templateForm.description, []);
     try {
       await saveUserTemplate(template);
-      toast.success(`Template "${templateForm.name}" saved`);
+      toast.success(`Template "${templateForm.name}" Saved`);
     } catch {
-      toast.error("Failed to save template");
+      toast.error("Failed To Save Template");
     }
     setTemplateForm(null);
   };
@@ -100,7 +100,7 @@ export function Sessions(): React.ReactElement {
   const handleTemplateSelect = (_template: SessionTemplate) => {
     // Template selection creates a new session from the template
     setView("list");
-    toast.success(`Template "${_template.name}" selected — create a session to apply it`);
+    toast.success(`Template "${_template.name}" Selected — Create A Session To Apply It`);
   };
 
   const handleSearchResultSelect = (sessionId: string) => {
@@ -110,21 +110,21 @@ export function Sessions(): React.ReactElement {
 
   const handleSnapshot = async () => {
     if (!activeSession) {
-      toast.error("No active session to snapshot");
+      toast.error("No Active Session To Snapshot");
       return;
     }
 
     try {
       await createSnapshot(activeSession);
-      toast.success("Snapshot created");
+      toast.success("Snapshot Created");
     } catch {
-      toast.error("Failed to create snapshot");
+      toast.error("Failed To Create Snapshot");
     }
   };
 
   const handleExportMarkdown = async () => {
     if (!activeSession) {
-      toast.error("No active session to export");
+      toast.error("No Active Session To Export");
       return;
     }
 
@@ -136,15 +136,15 @@ export function Sessions(): React.ReactElement {
         "Markdown",
         "md",
       );
-      if (path) toast.success("Exported as Markdown");
+      if (path) toast.success("Exported As Markdown");
     } catch {
-      toast.error("Export failed");
+      toast.error("Export Failed");
     }
   };
 
   const handleExportJSON = async () => {
     if (!activeSession) {
-      toast.error("No active session to export");
+      toast.error("No Active Session To Export");
       return;
     }
 
@@ -156,9 +156,9 @@ export function Sessions(): React.ReactElement {
         "JSON",
         "json",
       );
-      if (path) toast.success("Exported as JSON");
+      if (path) toast.success("Exported As JSON");
     } catch {
-      toast.error("Export failed");
+      toast.error("Export Failed");
     }
   };
 
@@ -166,9 +166,9 @@ export function Sessions(): React.ReactElement {
     try {
       const csv = exportMetricsCSV(metrics.history);
       const path = await saveToFile(csv, "swarm-metrics.csv", "CSV", "csv");
-      if (path) toast.success("Metrics exported as CSV");
+      if (path) toast.success("Metrics Exported As CSV");
     } catch {
-      toast.error("Metrics export failed");
+      toast.error("Metrics Export Failed");
     }
   };
 
@@ -193,7 +193,7 @@ export function Sessions(): React.ReactElement {
               color: "oklch(0.55 0.04 220)",
             }}
           >
-            Active and historical worker sessions.
+            Active And Historical Worker Sessions.
           </p>
         </div>
       </div>
@@ -255,7 +255,7 @@ export function Sessions(): React.ReactElement {
             className="text-xs font-medium"
             style={{ color: "oklch(0.75 0.08 290)", fontFamily: "var(--font-body)" }}
           >
-            {templateForm.step === "name" ? "Template name:" : "Description:"}
+            {templateForm.step === "name" ? "Template Name:" : "Description:"}
           </label>
           <input
             id="template-form-field"
@@ -281,7 +281,7 @@ export function Sessions(): React.ReactElement {
               if (e.key === "Escape") setTemplateForm(null);
             }}
             placeholder={
-              templateForm.step === "name" ? "Enter template name" : "Enter description (optional)"
+              templateForm.step === "name" ? "Enter Template Name" : "Enter Description (Optional)"
             }
           />
           <Button variant="ghost" size="sm" onClick={() => void handleTemplateFormSubmit()}>

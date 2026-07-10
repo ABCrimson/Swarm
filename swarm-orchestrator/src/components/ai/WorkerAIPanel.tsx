@@ -159,14 +159,14 @@ function InjectModal({
           ...modalStyle,
           position: "relative",
         }}
-        aria-label="Inject instruction"
+        aria-label="Inject Instruction"
         onClose={onClose}
       >
         <div style={modalTitleStyle}>Inject Mid-Conversation Instruction</div>
         <textarea
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder="Enter instruction to inject into the AI conversation..."
+          placeholder="Enter Instruction To Inject Into The AI Conversation..."
           style={modalTextareaStyle}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -250,7 +250,7 @@ export function WorkerAIPanel({ workerId }: WorkerAIPanelProps): React.ReactElem
           type="button"
           onClick={() => setShowInjectModal(true)}
           style={injectButtonStyle}
-          aria-label="Inject instruction"
+          aria-label="Inject Instruction"
         >
           Inject Instruction
         </button>
@@ -265,7 +265,7 @@ export function WorkerAIPanel({ workerId }: WorkerAIPanelProps): React.ReactElem
             color: "oklch(0.78 0.18 205)",
             marginLeft: "auto",
           }}
-          aria-label="Toggle queue"
+          aria-label="Toggle Queue"
           aria-pressed={showQueue}
         >
           Queue

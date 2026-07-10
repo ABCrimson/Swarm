@@ -54,7 +54,7 @@ function WorkerListView(): React.ReactElement {
             fontSize: "0.8125rem",
           }}
         >
-          No workers running
+          No Workers Running
         </span>
         <span
           style={{
@@ -63,7 +63,7 @@ function WorkerListView(): React.ReactElement {
             fontSize: "0.6875rem",
           }}
         >
-          Click "Spawn Worker" or press Ctrl+K
+          Click "Spawn Worker" Or Press Ctrl+K
         </span>
       </div>
     );
@@ -140,10 +140,10 @@ export function Workers(): React.ReactElement {
     try {
       const id = await spawnWorker();
       if (id) {
-        toast.success(`Worker spawned: ${id.slice(0, 8)}`);
+        toast.success(`Worker Spawned: ${id.slice(0, 8)}`);
       }
     } catch (err) {
-      toast.error(`Spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Spawn Failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsSpawning(false);
     }
@@ -195,7 +195,7 @@ export function Workers(): React.ReactElement {
               margin: "4px 0 0",
             }}
           >
-            Manage and monitor worker processes.
+            Manage And Monitor Worker Processes.
           </p>
         </div>
 

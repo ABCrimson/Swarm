@@ -68,7 +68,7 @@ export async function validateStoreData(): Promise<ValidationResult[]> {
           valid: false,
           error: "Data did not match SessionSchema — reset to empty array",
         });
-        toast.warning("Session data was corrupted and has been reset.");
+        toast.warning("Session Data Was Corrupted And Has Been Reset.");
       } else {
         results.push({ key: "swarm:sessions", valid: true });
       }
@@ -99,7 +99,7 @@ export async function validateStoreData(): Promise<ValidationResult[]> {
           valid: false,
           error: "Data did not match ConfigSchema — reset to empty object",
         });
-        toast.warning("Configuration data was corrupted and has been reset.");
+        toast.warning("Configuration Data Was Corrupted And Has Been Reset.");
       } else {
         results.push({ key: "swarm:config", valid: true });
       }
@@ -130,7 +130,7 @@ export async function validateStoreData(): Promise<ValidationResult[]> {
           valid: false,
           error: "Data did not match UiSchema — reset to defaults",
         });
-        toast.warning("UI settings were corrupted and have been reset.");
+        toast.warning("UI Settings Were Corrupted And Have Been Reset.");
       } else {
         results.push({ key: "swarm:ui", valid: true });
       }
@@ -191,7 +191,7 @@ export async function validateStoreData(): Promise<ValidationResult[]> {
           valid: false,
           error: "Template data corrupted — reset to empty array",
         });
-        toast.warning("Template data was corrupted and has been reset.");
+        toast.warning("Template Data Was Corrupted And Has Been Reset.");
       } else {
         results.push({ key: "swarm:templates", valid: true });
       }

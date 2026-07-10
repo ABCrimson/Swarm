@@ -78,35 +78,35 @@ export function CommandPalette(): React.ReactElement {
   const staticCommands: readonly CommandDef[] = [
     {
       id: "nav:dashboard",
-      label: "Go to Dashboard",
+      label: "Go To Dashboard",
       group: "Navigation",
       keywords: ["navigate", "home"],
       action: () => setPage("dashboard"),
     },
     {
       id: "nav:workers",
-      label: "Go to Workers",
+      label: "Go To Workers",
       group: "Navigation",
       keywords: ["navigate", "agents"],
       action: () => setPage("workers"),
     },
     {
       id: "nav:sessions",
-      label: "Go to Sessions",
+      label: "Go To Sessions",
       group: "Navigation",
       keywords: ["navigate", "history"],
       action: () => setPage("sessions"),
     },
     {
       id: "nav:metrics",
-      label: "Go to Metrics",
+      label: "Go To Metrics",
       group: "Navigation",
       keywords: ["navigate", "performance", "stats"],
       action: () => setPage("metrics"),
     },
     {
       id: "nav:settings",
-      label: "Go to Settings",
+      label: "Go To Settings",
       group: "Navigation",
       keywords: ["navigate", "preferences", "config"],
       action: () => setPage("settings"),
@@ -134,7 +134,7 @@ export function CommandPalette(): React.ReactElement {
     },
     {
       id: "graph:zoom-fit",
-      label: "Zoom to Fit",
+      label: "Zoom To Fit",
       group: "Graph",
       keywords: ["fit", "view", "zoom", "graph"],
       action: () => {
@@ -154,7 +154,7 @@ export function CommandPalette(): React.ReactElement {
     },
     {
       id: "graph:toggle-view",
-      label: graphView === "graph" ? "Switch to List View" : "Switch to Graph View",
+      label: graphView === "graph" ? "Switch To List View" : "Switch To Graph View",
       group: "Graph",
       keywords: ["toggle", "view", "graph", "list", "switch"],
       action: () => setGraphView((prev) => (prev === "graph" ? "list" : "graph")),
@@ -166,14 +166,14 @@ export function CommandPalette(): React.ReactElement {
       keywords: ["snapshot", "save", "backup", "state"],
       action: () => {
         if (!activeSessionId) {
-          toast.error("No active session to snapshot");
+          toast.error("No Active Session To Snapshot");
           return;
         }
         const session = sessions.get(activeSessionId);
         if (!session) return;
         void createSnapshot(session)
-          .then(() => toast.success("Snapshot created"))
-          .catch(() => toast.error("Failed to create snapshot"));
+          .then(() => toast.success("Snapshot Created"))
+          .catch(() => toast.error("Failed To Create Snapshot"));
       },
     },
   ];
@@ -223,9 +223,9 @@ export function CommandPalette(): React.ReactElement {
       overlayClassName="swarm-cmdk-overlay"
       contentClassName="swarm-cmdk-content"
     >
-      <Command.Input placeholder="Type a command or search..." />
+      <Command.Input placeholder="Type A Command Or Search..." />
       <Command.List>
-        <Command.Empty>No commands found.</Command.Empty>
+        <Command.Empty>No Commands Found.</Command.Empty>
         {[...groups.entries()].map(([groupName, cmds]) => (
           <Command.Group key={groupName} heading={groupName}>
             {cmds.map((cmd) => (

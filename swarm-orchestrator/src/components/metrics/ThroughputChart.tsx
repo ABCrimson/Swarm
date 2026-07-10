@@ -120,7 +120,7 @@ export function ThroughputChart(): React.ReactElement {
             color: "oklch(0.55 0.03 220)",
           }}
         >
-          tokens/sec &middot; 30s
+          Tokens/Sec &middot; 30s
         </span>
       </div>
       <ResponsiveContainer width="100%" height="85%">

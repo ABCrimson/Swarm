@@ -295,6 +295,6 @@ describe("useAiStream", () => {
       act(async () => {
         await result.current.startStream("item-7", STREAM_PARAMS);
       }),
-    ).rejects.toThrow("Concurrent stream limit reached");
+    ).rejects.toThrow("Concurrent Stream Limit Reached");
   });
 });

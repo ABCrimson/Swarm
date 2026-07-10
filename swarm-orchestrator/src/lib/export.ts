@@ -141,7 +141,7 @@ export async function saveToFile(
   extension: string,
 ): Promise<string | null> {
   const filePath = await save({
-    title: `Export as ${filterName}`,
+    title: `Export As ${filterName}`,
     defaultPath: defaultName,
     filters: [{ name: filterName, extensions: [extension] }],
   });

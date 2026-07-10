@@ -79,7 +79,7 @@ export function Metrics(): React.ReactElement {
             color: "oklch(0.55 0.04 220)",
           }}
         >
-          Performance analytics and resource usage
+          Performance Analytics And Resource Usage
         </p>
       </div>
 

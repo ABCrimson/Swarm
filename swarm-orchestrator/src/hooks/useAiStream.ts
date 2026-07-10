@@ -58,7 +58,7 @@ export function useAiStream(): UseAiStreamReturn {
     onDelta?: OnStreamDelta,
   ): Promise<string> => {
     if (useAiStore.getState().activeStreams >= useAiStore.getState().concurrentLimit) {
-      throw new Error("Concurrent stream limit reached");
+      throw new Error("Concurrent Stream Limit Reached");
     }
 
     const controller = new AbortController();

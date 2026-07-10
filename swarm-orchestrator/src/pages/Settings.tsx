@@ -263,7 +263,7 @@ export function Settings(): React.ReactElement {
           Settings
         </h1>
         <p style={DESCRIPTION_STYLE}>
-          Configure AI models, visual preferences, and alert thresholds.
+          Configure AI Models, Visual Preferences, And Alert Thresholds.
         </p>
       </div>
 
@@ -368,7 +368,7 @@ export function Settings(): React.ReactElement {
             checked={theme.particlesEnabled}
             onChange={(v) => setTheme({ ...theme, particlesEnabled: v })}
             label="Particle Background"
-            description="GPU-accelerated WebGPU particle system behind the workspace. Disable to reduce GPU usage."
+            description="GPU-Accelerated WebGPU Particle System Behind The Workspace. Disable To Reduce GPU Usage."
           />
         </div>
         <div>
@@ -376,7 +376,7 @@ export function Settings(): React.ReactElement {
             checked={theme.gpuOverlay}
             onChange={(v) => setTheme({ ...theme, gpuOverlay: v })}
             label="GPU Frame Time Overlay"
-            description="Display GPU frame timing in the status bar for performance monitoring."
+            description="Display GPU Frame Timing In The Status Bar For Performance Monitoring."
           />
         </div>
       </section>
@@ -447,7 +447,7 @@ export function Settings(): React.ReactElement {
                 onClick={() => {
                   setThresholds(tempThresholds);
                   setEditingThresholds(false);
-                  toast.success("Alert thresholds updated");
+                  toast.success("Alert Thresholds Updated");
                 }}
                 style={{
                   fontFamily: "var(--font-body)",

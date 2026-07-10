@@ -106,7 +106,7 @@ export function Dashboard(): React.ReactElement {
             color: "oklch(0.55 0.04 220)",
           }}
         >
-          System overview and real-time metrics
+          System Overview And Real-Time Metrics
         </p>
       </div>
 

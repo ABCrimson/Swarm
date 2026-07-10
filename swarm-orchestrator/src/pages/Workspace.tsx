@@ -37,7 +37,7 @@ export function Workspace(): React.ReactElement {
             color: "oklch(0.55 0.04 220)",
           }}
         >
-          Browse and inspect project files
+          Browse And Inspect Project Files
         </p>
       </div>
 

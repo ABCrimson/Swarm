@@ -310,7 +310,7 @@ function WorkerGraphInner(): React.ReactElement {
         }}
       >
         <svg width={48} height={48} viewBox="0 0 48 48" fill="none">
-          <title>No workers</title>
+          <title>No Workers</title>
           <circle cx={24} cy={24} r={20} stroke="oklch(0.28 0.05 220)" strokeWidth={2} />
           <path
             d="M18 24h12M24 18v12"
@@ -326,7 +326,7 @@ function WorkerGraphInner(): React.ReactElement {
             color: "oklch(0.55 0.04 220)",
           }}
         >
-          No workers running. Spawn a worker to see the topology graph.
+          No Workers Running. Spawn A Worker To See The Topology Graph.
         </span>
       </div>
     );

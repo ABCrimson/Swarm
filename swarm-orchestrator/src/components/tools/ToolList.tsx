@@ -1,4 +1,5 @@
 import { Pill } from "#components/ui/Pill";
+import { pluralize } from "#lib/format";
 import { toolRegistry } from "#lib/tools";
 
 import type { CustomToolDef } from "./ToolBuilder.tsx";
@@ -109,7 +110,7 @@ export function ToolList({
               marginBottom: 8,
             }}
           >
-            Built-in
+            Built-In
           </div>
           <div
             style={{
@@ -158,7 +159,7 @@ export function ToolList({
               borderRadius: 12,
             }}
           >
-            No custom tools yet. Click &quot;New Tool&quot; to create one.
+            No Custom Tools Yet. Click &quot;New Tool&quot; To Create One.
           </div>
         ) : (
           <div
@@ -228,7 +229,7 @@ function ToolCard({
           {name}
         </span>
         <Pill tone="neutral" size="sm">
-          {paramCount} {paramCount === 1 ? "Param" : "Params"}
+          {pluralize("Param", paramCount)}
         </Pill>
       </div>
 

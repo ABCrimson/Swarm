@@ -77,7 +77,7 @@ export function FileViewer({ filePath }: FileViewerProps): React.ReactElement {
           color: "oklch(0.45 0.04 220)",
         }}
       >
-        Select a file to view
+        Select A File To View
       </div>
     );
   }

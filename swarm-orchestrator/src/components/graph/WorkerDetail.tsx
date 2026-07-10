@@ -92,7 +92,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
         <button
           type="button"
           onClick={() => setDetailOpen(false)}
-          aria-label="Close detail panel"
+          aria-label="Close Detail Panel"
           style={{
             width: 28,
             height: 28,

@@ -34,12 +34,12 @@ export function SessionActions({ onSessionCreated }: SessionActionsProps): React
     try {
       const session = await createSessionIpc(trimmed);
       addSession(session);
-      toast.success(`Session "${trimmed}" created`);
+      toast.success(`Session "${trimmed}" Created`);
       onSessionCreated?.(session);
       setNameValue("");
       setShowNameInput(false);
     } catch (err) {
-      toast.error(`Failed to create session: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Failed To Create Session: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsCreating(false);
     }
@@ -66,7 +66,7 @@ export function SessionActions({ onSessionCreated }: SessionActionsProps): React
 
       const content = await readScopedTextFile(filePath);
       if (!content) {
-        toast.error("Could not read file");
+        toast.error("Could Not Read File");
         return;
       }
 
@@ -74,7 +74,7 @@ export function SessionActions({ onSessionCreated }: SessionActionsProps): React
       const result = SessionSchema.safeParse(parsed);
 
       if (!result.success) {
-        toast.error("Invalid session file format");
+        toast.error("Invalid Session File Format");
         return;
       }
 
@@ -89,9 +89,9 @@ export function SessionActions({ onSessionCreated }: SessionActionsProps): React
       };
 
       addSession(imported);
-      toast.success(`Session "${imported.name}" imported`);
+      toast.success(`Session "${imported.name}" Imported`);
     } catch (err) {
-      toast.error(`Import failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Import Failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -100,7 +100,7 @@ export function SessionActions({ onSessionCreated }: SessionActionsProps): React
       {showNameInput ? (
         <div className="flex items-center gap-2">
           <Input
-            placeholder="Session name..."
+            placeholder="Session Name..."
             value={nameValue}
             onChange={(e) => setNameValue(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -157,7 +157,7 @@ export function useSessionLifecycle(): {
     const name = session?.name ?? id.slice(0, 8);
 
     const confirmed = await ask(
-      `Are you sure you want to delete session "${name}"? This action cannot be undone.`,
+      `Are You Sure You Want To Delete Session "${name}"? This Action Cannot Be Undone.`,
       { title: "Delete Session", kind: "warning" },
     );
     if (!confirmed) return;
@@ -165,16 +165,16 @@ export function useSessionLifecycle(): {
     try {
       await deleteSessionIpc(id);
       removeSession(id);
-      toast.success(`Session "${name}" deleted`);
+      toast.success(`Session "${name}" Deleted`);
     } catch (err) {
-      toast.error(`Failed to delete session: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Failed To Delete Session: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
   const exportSession = async (id: string) => {
     const session = sessions.get(id);
     if (!session) {
-      toast.error("Session not found");
+      toast.error("Session Not Found");
       return;
     }
 
@@ -189,9 +189,9 @@ export function useSessionLifecycle(): {
 
       const data = JSON.stringify(session, null, 2);
       await writeScopedTextFile(filePath, data);
-      toast.success(`Session exported to ${filePath}`);
+      toast.success(`Session Exported To ${filePath}`);
     } catch (err) {
-      toast.error(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Export Failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 

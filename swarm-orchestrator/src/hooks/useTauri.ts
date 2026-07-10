@@ -16,19 +16,19 @@ function friendlyIpcError(cmd: string, err: unknown): Error {
   const lower = raw.toLowerCase();
 
   if (lower.includes("not found")) {
-    return new Error(`Resource not found (${cmd}). It may have been removed.`);
+    return new Error(`Resource Not Found (${cmd}). It May Have Been Removed.`);
   }
   if (lower.includes("permission") || lower.includes("denied")) {
-    return new Error(`Permission denied for "${cmd}". Check application permissions.`);
+    return new Error(`Permission Denied For "${cmd}". Check Application Permissions.`);
   }
   if (lower.includes("capacity") || lower.includes("full")) {
-    return new Error(`System at capacity. Cannot complete "${cmd}" — try removing unused workers.`);
+    return new Error(`System At Capacity. Cannot Complete "${cmd}" — Try Removing Unused Workers.`);
   }
   if (lower.includes("channel closed") || lower.includes("ipc")) {
-    return new Error(`Backend communication failed for "${cmd}". The backend may be restarting.`);
+    return new Error(`Backend Communication Failed For "${cmd}". The Backend May Be Restarting.`);
   }
 
-  return new Error(`Command "${cmd}" failed: ${raw}`);
+  return new Error(`Command "${cmd}" Failed: ${raw}`);
 }
 
 function runInvoke<T>(

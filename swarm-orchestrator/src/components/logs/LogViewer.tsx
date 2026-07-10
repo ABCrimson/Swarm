@@ -187,7 +187,7 @@ export function LogViewer(): React.ReactElement {
             cursor: "pointer",
           }}
         >
-          Resume auto-scroll
+          Resume Auto-Scroll
         </button>
       )}
 
@@ -229,7 +229,7 @@ export function LogViewer(): React.ReactElement {
               color: "oklch(0.45 0.04 220)",
             }}
           >
-            {entries.length === 0 ? "No log entries yet" : "No entries match current filters"}
+            {entries.length === 0 ? "No Log Entries Yet" : "No Entries Match Current Filters"}
           </div>
         )}
       </div>

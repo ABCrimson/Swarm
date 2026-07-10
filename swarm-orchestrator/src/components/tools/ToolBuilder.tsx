@@ -167,7 +167,7 @@ export function ToolBuilder({
           <input
             id="tool-name"
             type="text"
-            placeholder="e.g. search_docs"
+            placeholder="E.g. search_docs"
             value={name}
             onChange={(e) => setName(e.target.value)}
             style={inputStyle}
@@ -181,7 +181,7 @@ export function ToolBuilder({
           </label>
           <textarea
             id="tool-desc"
-            placeholder="What does this tool do?"
+            placeholder="What Does This Tool Do?"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={3}
@@ -240,7 +240,7 @@ export function ToolBuilder({
               >
                 <input
                   type="text"
-                  placeholder="name"
+                  placeholder="Name"
                   value={param.name}
                   onChange={(e) => handleParamChange(param.id, "name", e.target.value)}
                   style={{
@@ -253,7 +253,7 @@ export function ToolBuilder({
                 <select
                   value={param.type}
                   onChange={(e) => handleParamChange(param.id, "type", e.target.value)}
-                  aria-label="Parameter type"
+                  aria-label="Parameter Type"
                   style={{
                     padding: "4px 6px",
                     borderRadius: 6,
@@ -275,7 +275,7 @@ export function ToolBuilder({
 
                 <input
                   type="text"
-                  placeholder="description"
+                  placeholder="Description"
                   value={param.description}
                   onChange={(e) => handleParamChange(param.id, "description", e.target.value)}
                   style={{
@@ -288,7 +288,7 @@ export function ToolBuilder({
                 <button
                   type="button"
                   onClick={() => handleRemoveParam(param.id)}
-                  aria-label="Remove parameter"
+                  aria-label="Remove Parameter"
                   style={{
                     width: 24,
                     height: 24,

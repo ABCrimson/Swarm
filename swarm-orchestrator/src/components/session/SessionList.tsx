@@ -86,10 +86,10 @@ export function SessionList({
         style={{ color: "oklch(0.55 0.03 220)" }}
       >
         <p className="text-lg font-medium" style={{ fontFamily: "var(--font-display)" }}>
-          No sessions yet
+          No Sessions Yet
         </p>
         <p className="mt-1 text-sm" style={{ fontFamily: "var(--font-body)" }}>
-          Create a new session to get started.
+          Create A New Session To Get Started.
         </p>
       </div>
     );
@@ -134,7 +134,7 @@ export function SessionList({
               if (e.key === "Escape") closeContextMenu();
             }}
             tabIndex={-1}
-            aria-label="Close context menu"
+            aria-label="Close Context Menu"
             style={{ background: "oklch(0 0 0 / 0)", border: "none" }}
           />
 
@@ -149,9 +149,9 @@ export function SessionList({
               border: "1px solid oklch(0.30 0.05 220)",
             }}
           >
-            <ContextMenuItem label="Export as JSON" onClick={() => handleContextAction("export")} />
+            <ContextMenuItem label="Export As JSON" onClick={() => handleContextAction("export")} />
             <ContextMenuItem
-              label="Save as Template"
+              label="Save As Template"
               onClick={() => handleContextAction("template")}
             />
             <div className="my-1 h-px" style={{ background: "oklch(0.28 0.04 220)" }} />

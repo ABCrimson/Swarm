@@ -63,7 +63,7 @@ export function AIQueueChart(): React.ReactElement {
 
   return (
     <div style={containerStyle}>
-      <div style={headerStyle}>AI Queue by Priority</div>
+      <div style={headerStyle}>AI Queue By Priority</div>
       <ResponsiveContainer width="100%" height="80%">
         <BarChart data={data} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
           <CartesianGrid {...gridProps} />

@@ -1,6 +1,7 @@
 import { isAfter, isBefore, parseISO, startOfDay } from "date-fns";
 import { useEffect, useRef, useState } from "react";
 import { Input } from "#components/ui/Input";
+import { pluralize } from "#lib/format";
 
 import { useSessionStore } from "#store/sessions";
 import type { Session } from "#store/types";
@@ -191,7 +192,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
               color: "oklch(0.50 0.04 220)",
             }}
           >
-            {results.length} {results.length === 1 ? "result" : "results"}
+            {pluralize("Result", results.length)}
           </p>
 
           {results.map((session) => (
@@ -211,7 +212,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
                 color: "oklch(0.55 0.03 220)",
               }}
             >
-              No matching sessions found.
+              No Matching Sessions Found.
             </p>
           )}
         </div>

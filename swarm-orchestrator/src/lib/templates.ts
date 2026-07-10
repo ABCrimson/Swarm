@@ -16,7 +16,7 @@ export const BUILT_IN_TEMPLATES: readonly SessionTemplate[] = [
     id: "00000000-0000-0000-0000-000000000001",
     name: "Single Agent",
     description:
-      "A single autonomous agent for focused tasks. Ideal for simple queries or standalone operations.",
+      "A Single Autonomous Agent For Focused Tasks. Ideal For Simple Queries Or Standalone Operations.",
     workerConfigs: [
       {
         name: "Agent",
@@ -31,7 +31,7 @@ export const BUILT_IN_TEMPLATES: readonly SessionTemplate[] = [
     id: "00000000-0000-0000-0000-000000000002",
     name: "Multi-Agent Parallel",
     description:
-      "Multiple agents working independently in parallel. Great for batch processing or diverse task sets.",
+      "Multiple Agents Working Independently In Parallel. Great For Batch Processing Or Diverse Task Sets.",
     workerConfigs: [
       {
         name: "Agent Alpha",
@@ -58,7 +58,7 @@ export const BUILT_IN_TEMPLATES: readonly SessionTemplate[] = [
     id: "00000000-0000-0000-0000-000000000003",
     name: "Supervisor + Workers",
     description:
-      "A supervisor agent coordinates task distribution across worker agents. Best for complex multi-step workflows.",
+      "A Supervisor Agent Coordinates Task Distribution Across Worker Agents. Best For Complex Multi-Step Workflows.",
     workerConfigs: [
       {
         name: "Supervisor",
@@ -88,7 +88,7 @@ export const BUILT_IN_TEMPLATES: readonly SessionTemplate[] = [
     id: "00000000-0000-0000-0000-000000000004",
     name: "Pipeline",
     description:
-      "Sequential processing pipeline where each agent's output feeds into the next. Ideal for staged transformations.",
+      "Sequential Processing Pipeline Where Each Agent's Output Feeds Into The Next. Ideal For Staged Transformations.",
     workerConfigs: [
       {
         name: "Stage 1: Input",

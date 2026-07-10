@@ -280,7 +280,7 @@ export function MessageHistory({
   if (allMessages.length === 0) {
     return (
       <div style={containerStyle}>
-        <div style={emptyStyle}>No conversation history</div>
+        <div style={emptyStyle}>No Conversation History</div>
       </div>
     );
   }
@@ -302,7 +302,7 @@ export function MessageHistory({
               cursor: "pointer",
             }}
           >
-            Load older messages ({allMessages.length - visibleCount} remaining)
+            Load Older Messages ({allMessages.length - visibleCount} Remaining)
           </button>
         )}
 
