@@ -101,7 +101,13 @@ function WorkerGraphInner(): React.ReactElement {
   const { nodes: rawNodes, edges: rawEdges } = buildGraphData(workers);
 
   // Run ELK layout
-  const { layoutedNodes, layoutedEdges, isLayouting, runLayout } = useElkLayout(rawNodes, rawEdges);
+  const {
+    layoutedNodes,
+    layoutedEdges,
+    isLayouting,
+    error: layoutError,
+    runLayout,
+  } = useElkLayout(rawNodes, rawEdges);
 
   // Controlled nodes/edges state for interactive editing
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -328,9 +334,9 @@ function WorkerGraphInner(): React.ReactElement {
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
-      {/* Loading overlay */}
+      {/* Loading / layout-error overlay */}
       <AnimatePresence>
-        {isLayouting && (
+        {(isLayouting || layoutError) && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -348,25 +354,67 @@ function WorkerGraphInner(): React.ReactElement {
               borderRadius: 12,
             }}
           >
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                gap: 8,
-              }}
-            >
-              <Spinner size="lg" />
-              <span
+            {layoutError ? (
+              <div
                 style={{
-                  fontFamily: "var(--font-body)",
-                  fontSize: "0.75rem",
-                  color: "oklch(0.55 0.04 220)",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: 24,
+                  maxWidth: 320,
+                  textAlign: "center",
                 }}
               >
-                Computing layout...
-              </span>
-            </div>
+                <span
+                  style={{
+                    fontFamily: "var(--font-body)",
+                    fontSize: "0.875rem",
+                    fontWeight: 600,
+                    color: "oklch(0.72 0.20 10)",
+                  }}
+                >
+                  {layoutError}
+                </span>
+                <button
+                  type="button"
+                  onClick={runLayout}
+                  style={{
+                    padding: "8px 20px",
+                    fontSize: "0.75rem",
+                    fontWeight: 500,
+                    fontFamily: "var(--font-body)",
+                    background: "oklch(0.78 0.18 205 / 0.15)",
+                    border: "1px solid oklch(0.78 0.18 205 / 0.3)",
+                    borderRadius: 8,
+                    color: "oklch(0.78 0.18 205)",
+                    cursor: "pointer",
+                  }}
+                >
+                  Retry Layout
+                </button>
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <Spinner size="lg" />
+                <span
+                  style={{
+                    fontFamily: "var(--font-body)",
+                    fontSize: "0.75rem",
+                    color: "oklch(0.55 0.04 220)",
+                  }}
+                >
+                  Computing Layout
+                </span>
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
