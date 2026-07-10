@@ -17,13 +17,14 @@
 //! | `session:deleted`  | [`SessionDeletedPayload`]| Session removed                |
 //! | `system:metrics`   | [`SystemMetricsPayload`] | Periodic metrics update        |
 //! | `ai:stream_delta`  | [`AiStreamDeltaPayload`] | AI response text chunk         |
+//! | `ai:stream_settled`| [`AiStreamSettledPayload`] | AI stream terminal receipt  |
 //! | `system:log`       | [`SystemLogPayload`]     | Backend log message            |
 //! | `swarm://bus-message` | [`BusMessagePayload`] | Inter-agent bus message        |
 
 pub mod emitter;
 
 pub use emitter::{
-    AiStreamDeltaPayload, BusMessagePayload, SessionCreatedPayload, SessionDeletedPayload,
-    SwarmEvent, SystemLogPayload, SystemMetricsPayload, WorkerKilledPayload, WorkerOutputPayload,
-    WorkerSpawnedPayload, WorkerStatePayload, emit_event,
+    AiStreamDeltaPayload, AiStreamSettledPayload, BusMessagePayload, SessionCreatedPayload,
+    SessionDeletedPayload, SwarmEvent, SystemLogPayload, SystemMetricsPayload, WorkerKilledPayload,
+    WorkerOutputPayload, WorkerSpawnedPayload, WorkerStatePayload, emit_event,
 };

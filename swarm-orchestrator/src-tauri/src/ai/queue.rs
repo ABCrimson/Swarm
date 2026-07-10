@@ -18,6 +18,7 @@ use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 
 use super::client::{AiClient, AiRequest};
+use crate::events::{AiStreamSettledPayload, SwarmEvent, emit_event};
 
 /// Bounded channel capacity for the AI request queue.
 const AI_QUEUE_CAPACITY: usize = 256;
@@ -248,12 +249,32 @@ impl AiQueue {
 
                 join_set.spawn(async move {
                     let request_id = prioritized.request.request_id.clone();
-                    if let Err(e) = client.stream_message(&app, &prioritized.request).await {
-                        tracing::error!(
-                            request_id = %request_id,
-                            error = %e,
-                            "AI request failed"
-                        );
+                    match client.stream_message(&app, &prioritized.request).await {
+                        Ok(_) => {
+                            emit_event(
+                                &app,
+                                SwarmEvent::AiStreamSettled(AiStreamSettledPayload {
+                                    request_id: request_id.clone(),
+                                    status: "ok".to_string(),
+                                    error: None,
+                                }),
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                request_id = %request_id,
+                                error = %e,
+                                "AI request failed"
+                            );
+                            emit_event(
+                                &app,
+                                SwarmEvent::AiStreamSettled(AiStreamSettledPayload {
+                                    request_id: request_id.clone(),
+                                    status: "error".to_string(),
+                                    error: Some(e.to_string()),
+                                }),
+                            );
+                        }
                     }
                     drop(permit);
                 });

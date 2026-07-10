@@ -65,6 +65,8 @@ pub enum SwarmEvent {
     SystemMetrics(SystemMetricsPayload),
     /// A delta chunk from an AI streaming response.
     AiStreamDelta(AiStreamDeltaPayload),
+    /// Terminal receipt for an AI stream: exactly one per request.
+    AiStreamSettled(AiStreamSettledPayload),
     /// A backend log message for the frontend console.
     SystemLog(SystemLogPayload),
     /// A message was sent through the inter-agent bus.
@@ -181,6 +183,22 @@ pub struct AiStreamDeltaPayload {
     pub done: bool,
 }
 
+/// Payload for the `ai_stream_settled` receipt.
+///
+/// Emitted exactly once per AI request, after the final delta, on both
+/// success and failure paths. Frontends and tests await this receipt
+/// instead of polling stream state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiStreamSettledPayload {
+    /// Correlation ID matching the original AI request.
+    pub request_id: String,
+    /// `"ok"` or `"error"`.
+    pub status: String,
+    /// Error description when `status == "error"`.
+    pub error: Option<String>,
+}
+
 /// Payload for the `swarm://bus-message` event.
 ///
 /// Emitted when a message is sent through the inter-agent bus.
@@ -230,17 +248,18 @@ pub struct SystemLogPayload {
 ///
 /// # Channel Mapping
 ///
-/// | Variant          | Channel           |
-/// |------------------|-------------------|
-/// | `WorkerSpawned`  | `worker:spawned`  |
-/// | `WorkerKilled`   | `worker:killed`   |
-/// | `WorkerOutput`   | `worker:output`   |
-/// | `WorkerState`    | `worker:state`    |
-/// | `SessionCreated` | `session:created` |
-/// | `SessionDeleted` | `session:deleted` |
-/// | `SystemMetrics`  | `system:metrics`  |
-/// | `AiStreamDelta`  | `ai:stream_delta` |
-/// | `SystemLog`      | `system:log`      |
+/// | Variant           | Channel             |
+/// |-------------------|----------------------|
+/// | `WorkerSpawned`   | `worker:spawned`    |
+/// | `WorkerKilled`    | `worker:killed`     |
+/// | `WorkerOutput`    | `worker:output`     |
+/// | `WorkerState`     | `worker:state`      |
+/// | `SessionCreated`  | `session:created`   |
+/// | `SessionDeleted`  | `session:deleted`   |
+/// | `SystemMetrics`   | `system:metrics`    |
+/// | `AiStreamDelta`   | `ai:stream_delta`   |
+/// | `AiStreamSettled` | `ai:stream_settled` |
+/// | `SystemLog`       | `system:log`        |
 ///
 /// In addition to the legacy per-channel emission above, every event is
 /// routed through the [`crate::orchestration::OrchestrationEngine`], which
@@ -264,6 +283,7 @@ pub fn emit_event(app: &AppHandle, event: SwarmEvent) {
         SwarmEvent::SessionDeleted(p) => ("session:deleted", app.emit("session:deleted", p)),
         SwarmEvent::SystemMetrics(p) => ("system:metrics", app.emit("system:metrics", p)),
         SwarmEvent::AiStreamDelta(p) => ("ai:stream_delta", app.emit("ai:stream_delta", p)),
+        SwarmEvent::AiStreamSettled(p) => ("ai:stream_settled", app.emit("ai:stream_settled", p)),
         SwarmEvent::SystemLog(p) => ("system:log", app.emit("system:log", p)),
         SwarmEvent::BusMessage(p) => ("swarm://bus-message", app.emit("swarm://bus-message", p)),
     };
@@ -378,6 +398,25 @@ mod tests {
             assert_eq!(p.message, "something happened");
         } else {
             panic!("expected SystemLog variant");
+        }
+    }
+
+    #[test]
+    fn test_ai_stream_settled_roundtrip() {
+        let event = SwarmEvent::AiStreamSettled(AiStreamSettledPayload {
+            request_id: "req-9".to_string(),
+            status: "error".to_string(),
+            error: Some("rate limited".to_string()),
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"ai_stream_settled\""));
+        assert!(json.contains("\"requestId\":\"req-9\""));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::AiStreamSettled(p) = deserialized {
+            assert_eq!(p.status, "error");
+            assert_eq!(p.error.as_deref(), Some("rate limited"));
+        } else {
+            panic!("expected AiStreamSettled variant");
         }
     }
 

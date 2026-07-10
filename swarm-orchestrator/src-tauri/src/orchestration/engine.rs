@@ -122,7 +122,8 @@ fn run_writer_loop(
 mod tests {
     use super::*;
     use crate::events::{
-        SwarmEvent, SystemMetricsPayload, WorkerOutputPayload, WorkerSpawnedPayload,
+        AiStreamSettledPayload, SwarmEvent, SystemMetricsPayload, WorkerOutputPayload,
+        WorkerSpawnedPayload,
     };
     use uuid::Uuid;
 
@@ -150,6 +151,13 @@ mod tests {
                 worker_count: 0,
                 ai_req_per_sec: 0.0,
                 timestamp: 0,
+            }
+        )));
+        assert!(is_persistent(&SwarmEvent::AiStreamSettled(
+            AiStreamSettledPayload {
+                request_id: "req-1".to_string(),
+                status: "ok".to_string(),
+                error: None,
             }
         )));
     }
