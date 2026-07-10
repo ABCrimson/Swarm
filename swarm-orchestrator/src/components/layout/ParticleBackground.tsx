@@ -27,23 +27,31 @@ import type { WebGPUUnavailableReason } from "#lib/webgpu";
 import { getWebGPUUnavailableReason, isWebGPUSupported } from "#lib/webgpu";
 import { gpuFrameTimeAtom, particleCountAtom, reducedMotionAtom, themeAtom } from "#store/ui";
 
-// ── One-time "pipeline can't start" diagnostics ──────
+// ── One-time-per-reason "pipeline can't start" diagnostics ──
 //
 // Module-level (not component state) so the warning/toast fires at most
-// once per app session no matter how many times ParticleBackground or
-// ParticleCanvas re-render, remount (StrictMode), or retry after a
-// device-loss recovery.
+// once per *distinct reason* per app session, no matter how many times
+// ParticleBackground or ParticleCanvas re-render, remount (StrictMode), or
+// retry after a device-loss recovery. Keyed on the reason value (not a
+// plain boolean) because retrying — e.g. toggling `particlesEnabled` in
+// Settings, which re-runs useWebGPU's init effect — can legitimately
+// surface a different `failureReason` than the first attempt (e.g. "No
+// Compatible GPU Adapter Found" first, then "GPU Device Request Failed" on
+// retry). A single session-wide boolean would silently drop that new,
+// more-current reason; tracking the last-warned reason lets a genuinely
+// different one still fire once, while repeats of the same reason stay
+// suppressed.
 
-let hasWarnedParticlesUnavailable = false;
+let lastWarnedParticlesUnavailableReason: WebGPUUnavailableReason | null = null;
 
-/** Resets the one-time guard. Test-only — production code never calls this. */
+/** Resets the one-time-per-reason guard. Test-only — production code never calls this. */
 export function _resetParticlesUnavailableWarningForTests(): void {
-  hasWarnedParticlesUnavailable = false;
+  lastWarnedParticlesUnavailableReason = null;
 }
 
 function warnParticlesUnavailable(reason: WebGPUUnavailableReason): void {
-  if (hasWarnedParticlesUnavailable) return;
-  hasWarnedParticlesUnavailable = true;
+  if (lastWarnedParticlesUnavailableReason === reason) return;
+  lastWarnedParticlesUnavailableReason = reason;
 
   console.warn(`[particles] Particle Background Unavailable: ${reason}`);
   toast.warning("Particle Background Unavailable", {

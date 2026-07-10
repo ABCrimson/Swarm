@@ -22,7 +22,27 @@ import {
   _resetParticlesUnavailableWarningForTests,
   ParticleBackground,
 } from "#components/layout/ParticleBackground";
+import { getWebGPUUnavailableReason } from "#lib/webgpu";
 import { reducedMotionAtom } from "#store/ui";
+
+// The latch under test is keyed on the *reason value*, not "has ever
+// warned" — so retrying (toggling particlesEnabled, which re-runs
+// useWebGPU's init effect) after a different failure can still surface a
+// genuinely different reason. ParticleBackground's own gate can only ever
+// produce "WebGPU Is Not Exposed By This WebView" (see
+// `getWebGPUUnavailableReason()` in `#lib/webgpu`), so a second, distinct
+// reason is modeled here by overriding that lookup for one render — this
+// stands in for the deeper useWebGPU()/initWebGPU() path (covered at the
+// unit level in `__tests__/lib/webgpu.test.ts`) producing e.g.
+// "No Compatible GPU Adapter Found" on a retry, without needing a full
+// WebGPU adapter/device/ResizeObserver mock (see file header).
+vi.mock("#lib/webgpu", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("#lib/webgpu")>();
+  return {
+    ...actual,
+    getWebGPUUnavailableReason: vi.fn(actual.getWebGPUUnavailableReason),
+  };
+});
 
 function setNavigatorGpu(value: unknown): void {
   Object.defineProperty(navigator, "gpu", {
@@ -123,5 +143,40 @@ describe("ParticleBackground diagnostics", () => {
     expect(container.querySelector("canvas")).toBeNull();
     expect(toast.warning).not.toHaveBeenCalled();
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("warns again exactly once when a genuinely different failure reason follows the first", async () => {
+    setNavigatorGpu(undefined);
+
+    const first = render(<ParticleBackground />);
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledTimes(1));
+    expect(toast.warning).toHaveBeenNthCalledWith(
+      1,
+      "Particle Background Unavailable",
+      expect.objectContaining({ description: "WebGPU Is Not Exposed By This WebView" }),
+    );
+
+    first.unmount();
+
+    // Model the retry path from the finding: toggling `particlesEnabled`
+    // re-runs useWebGPU's init effect, which can produce a different
+    // `failureReason` than the first attempt (e.g. "No Compatible GPU
+    // Adapter Found" instead of "not exposed"). A same-session latch keyed
+    // only on "have I ever warned" would wrongly swallow this new reason.
+    vi.mocked(getWebGPUUnavailableReason).mockReturnValueOnce("No Compatible GPU Adapter Found");
+
+    render(<ParticleBackground />);
+
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledTimes(2));
+    expect(toast.warning).toHaveBeenNthCalledWith(
+      2,
+      "Particle Background Unavailable",
+      expect.objectContaining({ description: "No Compatible GPU Adapter Found" }),
+    );
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("Particle Background Unavailable: No Compatible GPU Adapter Found"),
+    );
   });
 });
