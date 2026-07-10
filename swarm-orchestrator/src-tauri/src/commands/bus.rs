@@ -17,9 +17,9 @@ use crate::events::{BusMessagePayload, SwarmEvent, emit_event};
 /// message. Otherwise, it is broadcast to all subscribers of the topic.
 ///
 /// This delivers the message on the internal message bus only; it does
-/// **not** emit a `swarm://bus-message` event itself. Frontend delivery
-/// happens exclusively through [`bus_subscribe`]'s forwarding task, which
-/// is the single source of truth for the `swarm://bus-message` contract.
+/// **not** emit events itself. Frontend delivery happens exclusively through
+/// [`bus_subscribe`]'s forwarding task, which emits `SwarmEvent::BusMessage`
+/// as `bus_message`-tagged envelopes on the `swarm://events` channel.
 /// This keeps delivery to exactly one event per message, regardless of
 /// how many (if any) frontend listeners are subscribed.
 ///
@@ -83,8 +83,8 @@ pub async fn bus_send(
 /// Subscribes to a message bus topic and streams messages as Tauri events.
 ///
 /// Creates a background task that listens for messages on the given topic
-/// and emits them to the frontend via [`emit_event`] as typed
-/// `SwarmEvent::BusMessage` payloads on the `swarm://bus-message` channel.
+/// and emits them to the frontend via [`emit_event`] as `bus_message`-tagged
+/// `SwarmEvent::BusMessage` payloads on the `swarm://events` channel.
 /// The task runs until the channel is closed or the topic is removed.
 ///
 /// This is the **sole** path by which bus messages reach the frontend —
