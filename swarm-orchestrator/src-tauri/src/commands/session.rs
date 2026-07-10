@@ -17,8 +17,8 @@ use crate::session::store;
 /// Creates a new session with the given name and configuration.
 ///
 /// The session is added to the in-memory session manager,
-/// a `session:created` event is emitted, and the full session
-/// list is auto-saved to the persistent store.
+/// a `session_created` event is emitted on `swarm://events`, and the
+/// full session list is auto-saved to the persistent store.
 ///
 /// # Arguments
 ///
@@ -75,8 +75,8 @@ pub async fn create_session(
 /// Deletes a session by ID.
 ///
 /// Removes the session from the in-memory manager, emits a
-/// `session:deleted` event, and auto-saves the remaining
-/// sessions to the persistent store.
+/// `session_deleted` event on `swarm://events`, and auto-saves the
+/// remaining sessions to the persistent store.
 ///
 /// # Arguments
 ///

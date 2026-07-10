@@ -72,8 +72,9 @@ export function useWorker(id: string): UseWorkerReturn {
 /**
  * Hook to spawn a new worker. Returns the UUID of the spawned worker.
  *
- * The full Worker record is populated by the `worker:spawned` event listener;
- * this hook adds a minimal placeholder to the store immediately.
+ * The full Worker record is populated by the `worker_spawned` envelope on
+ * `swarm://events`; this hook adds a minimal placeholder to the store
+ * immediately.
  */
 export function useSpawnWorker(): (name?: string) => Promise<string> {
   const addWorker = useWorkerStore((s) => s.addWorker);

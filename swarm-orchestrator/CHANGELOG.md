@@ -19,7 +19,7 @@ Replaces the legacy per-channel event system with a single ordered channel. Ever
 - **`ai_stream_settled` receipt:** a new terminal event emitted exactly once per AI request, after the final `ai_stream_delta`, on both success (`status: "ok"`) and failure (`status: "error"`, with `error` set) -- the receipt pattern that replaces inferring completion from a stream event's `done` flag. (Frontend consumption is not yet wired to a UI -- this lands the contract.)
 - **`events_since(after_seq)`:** a new IPC command returning persisted envelopes ascending, capped at 5000 rows per call, for gap backfill and replay
 - **Frontend event bus:** `src/lib/event-bus.ts` replaces all `listen()`-per-channel call sites with `connectEventBus()` + `onEvent()`/`waitFor()`; envelopes are zod-validated, sequence gaps trigger an `events_since` backfill with a pending-buffer to preserve ordering against concurrently-arriving live events
-- **Legacy per-channel events removed:** `worker:spawned`, `worker:killed`, `worker:output`, `worker:state`, `session:created`, `session:deleted`, `system:metrics`, `ai:stream_delta`, `ai:stream_settled`, `system:log`, and `swarm://bus-message` are no longer emitted as distinct Tauri channels -- `emit_event()` now routes exclusively through the engine
+- **Legacy per-channel events removed:** `worker:spawned`, `worker:killed`, `worker:output`, `worker:state`, `session:created`, `session:deleted`, `system:metrics`, `ai:stream_delta`, `system:log`, and `swarm://bus-message` are no longer emitted as distinct Tauri channels -- `emit_event()` now routes exclusively through the engine
 
 ### BREAKING CHANGE
 

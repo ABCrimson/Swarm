@@ -28,6 +28,8 @@ use serde::Serialize;
 /// | `Serialization`    | JSON serialization/deserialization failure         |
 /// | `SessionNotFound`  | Session ID does not exist in the manager           |
 /// | `ChannelClosed`    | Tokio mpsc or broadcast channel was dropped        |
+/// | `EventLog`         | SQLite event-log operation failed                 |
+/// | `QueueFull`        | AI request queue is full (backpressure)           |
 ///
 /// # Examples
 ///

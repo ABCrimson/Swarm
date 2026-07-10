@@ -65,7 +65,7 @@ impl Default for SystemConfig {
 ///
 /// Computed via [`WorkerRegistry::aggregate_metrics`] using sequential
 /// iteration. Sent to the frontend as part of the
-/// `system:metrics` event payload.
+/// `system_metrics` event payload on `swarm://events`.
 ///
 /// # Fields
 ///

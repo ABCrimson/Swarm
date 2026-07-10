@@ -11,7 +11,8 @@ use crate::ai::{AiQueue, AiRequest};
 /// Accepts an [`AiRequest`] from the frontend and places it
 /// into the [`AiQueue`] priority queue. The queue processes
 /// requests in priority order with concurrency limiting,
-/// emitting `ai:stream_delta` events as response chunks arrive.
+/// emitting `ai_stream_delta` events on `swarm://events` as response
+/// chunks arrive.
 ///
 /// # Arguments
 ///
@@ -22,7 +23,8 @@ use crate::ai::{AiQueue, AiRequest};
 /// # Returns
 ///
 /// The `request_id` string from the request, which the frontend
-/// can use to correlate incoming `ai:stream_delta` events.
+/// can use to correlate incoming `ai_stream_delta` events on
+/// `swarm://events`.
 ///
 /// # Errors
 ///

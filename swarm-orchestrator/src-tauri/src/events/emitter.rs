@@ -248,9 +248,10 @@ pub struct SystemLogPayload {
 /// * `app` - The Tauri app handle used to look up the managed engine
 /// * `event` - The typed event to record
 ///
-/// `try_state` is used because unit tests construct `AppHandle`s without
-/// engine setup; in that case the event is dropped with a warning rather
-/// than panicking.
+/// `try_state` is used because the engine may not be managed yet when this
+/// is called (e.g. an event emitted during early app setup, before
+/// `OrchestrationEngine::start` registers it); in that case the event is
+/// dropped with a warning rather than panicking.
 #[tracing::instrument(skip(app, event))]
 pub fn emit_event(app: &AppHandle, event: SwarmEvent) {
     if let Some(engine) = app.try_state::<crate::orchestration::OrchestrationEngine>() {

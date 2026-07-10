@@ -191,8 +191,8 @@ impl AiClient {
     ///
     /// Constructs the API request body, sends it with SSE streaming
     /// enabled, and processes the response stream line by line.
-    /// Each text delta chunk is emitted as an `ai:stream_delta`
-    /// Tauri event. A final event with `done: true` is emitted
+    /// Each text delta chunk is emitted as an `ai_stream_delta` event
+    /// on `swarm://events`. A final event with `done: true` is emitted
     /// when the message is complete.
     ///
     /// # Arguments
@@ -211,9 +211,10 @@ impl AiClient {
     /// - The API returns a non-2xx status code
     /// - An SSE stream chunk cannot be read
     ///
-    /// On every error path, a final `ai:stream_delta` event with
-    /// `done: true` is emitted before the error is returned, so
-    /// frontend listeners never hang waiting for a terminal event.
+    /// On every error path, a final `ai_stream_delta` event with
+    /// `done: true` is emitted on `swarm://events` before the error is
+    /// returned, so frontend listeners never hang waiting for a terminal
+    /// event.
     #[tracing::instrument(skip(self, app, request), fields(request_id = %request.request_id))]
     pub async fn stream_message(
         &self,

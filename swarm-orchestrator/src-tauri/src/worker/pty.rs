@@ -39,7 +39,7 @@ pub struct PtyHandle {
 /// Creates a cross-platform pseudo-terminal pair, spawns the
 /// requested shell as a child process in the slave PTY, and
 /// starts a background reader task that emits PTY output as
-/// `worker:output` Tauri events.
+/// `worker_output` events on `swarm://events`.
 ///
 /// # Architecture
 ///

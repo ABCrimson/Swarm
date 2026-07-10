@@ -3,8 +3,8 @@
 //! Provides real-time system metrics to the frontend through
 //! two mechanisms:
 //!
-//! 1. **Push:** A background loop emits `system:metrics` events
-//!    every 500ms via [`start_metrics_loop`]
+//! 1. **Push:** A background loop emits `system_metrics` events on
+//!    `swarm://events` every 500ms via [`start_metrics_loop`]
 //! 2. **Pull:** The [`get_metrics`] command returns an on-demand
 //!    metrics snapshot, including a `perWorker` breakdown
 //!
@@ -46,7 +46,7 @@ impl SharedSystem {
 /// Spawns a Tokio task that runs every 500ms, collecting real system
 /// metrics via `sysinfo` (offloaded to `spawn_blocking` since
 /// `sysinfo` refresh is CPU-bound) and worker aggregate metrics,
-/// then emitting them as `system:metrics` Tauri events.
+/// then emitting them as `system_metrics` events on `swarm://events`.
 ///
 /// Reuses the app-wide [`SharedSystem`] managed state (the same
 /// `sysinfo::System` instance used by [`get_metrics`]) so CPU usage

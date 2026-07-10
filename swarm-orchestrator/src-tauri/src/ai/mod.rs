@@ -21,7 +21,7 @@
 //!                                         │
 //!                                    SSE parser (stream.rs)
 //!                                         │
-//!                                    emit ai:stream_delta
+//!                                    emit ai_stream_delta (swarm://events)
 //!                                         │
 //!                                    Frontend (accumulate)
 //! ```

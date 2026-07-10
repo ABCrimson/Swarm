@@ -18,7 +18,7 @@ use crate::worker::registry::WorkerRegistry;
 /// Spawns a new worker with the given configuration.
 ///
 /// Creates a PTY process, registers the worker in the registry,
-/// and emits a `worker:spawned` event.
+/// and emits a `worker_spawned` event on `swarm://events`.
 ///
 /// # Arguments
 ///
@@ -141,7 +141,7 @@ pub async fn resume_worker(
 /// Kills a worker and cleans up all associated resources.
 ///
 /// Removes the worker from the registry, terminates the PTY child
-/// process, and emits a `worker:killed` event.
+/// process, and emits a `worker_killed` event on `swarm://events`.
 ///
 /// # Arguments
 ///

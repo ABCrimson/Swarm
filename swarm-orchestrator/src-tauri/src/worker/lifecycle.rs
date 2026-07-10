@@ -21,7 +21,8 @@ use crate::worker::registry::WorkerRegistry;
 ///
 /// Creates a new PTY process using the shell specified in `config`
 /// (or the system default), wraps it in a [`WorkerHandle`], inserts
-/// it into the registry, and emits a `worker:spawned` event.
+/// it into the registry, and emits a `worker_spawned` event on
+/// `swarm://events`.
 ///
 /// # Arguments
 ///
@@ -108,7 +109,7 @@ pub fn do_spawn_worker(
 /// concurrent pause/resume call on the same worker could observe a
 /// stale state between a separate check and set.
 ///
-/// Emits a `worker:state` event with `state: "paused"`.
+/// Emits a `worker_state` event on `swarm://events` with `state: "paused"`.
 ///
 /// # Arguments
 ///
@@ -146,7 +147,7 @@ pub fn do_pause_worker(
 /// (a single `DashMap` shard lock), preventing a TOCTOU race with a
 /// concurrent pause/resume call on the same worker.
 ///
-/// Emits a `worker:state` event with `state: "running"`.
+/// Emits a `worker_state` event on `swarm://events` with `state: "running"`.
 ///
 /// # Arguments
 ///
@@ -182,7 +183,8 @@ pub fn do_resume_worker(
 /// Removes the worker from the registry, drops the PTY writer
 /// first to close the master fd (ensuring the child sees EOF),
 /// then kills the child process and waits for it to exit to
-/// prevent zombie processes. Emits a `worker:killed` event.
+/// prevent zombie processes. Emits a `worker_killed` event on
+/// `swarm://events`.
 ///
 /// # Arguments
 ///

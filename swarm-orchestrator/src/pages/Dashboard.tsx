@@ -1,6 +1,6 @@
 // ── Dashboard ───────────────────────────────────────
 // Full dashboard layout with grid of metric cards + charts.
-// Real-time data from system:metrics events at 500ms.
+// Real-time data from `system_metrics` envelopes on swarm://events at 500ms.
 // Section headers in Syne Variable, metrics in JetBrains Mono.
 
 import type { CSSProperties } from "react";
