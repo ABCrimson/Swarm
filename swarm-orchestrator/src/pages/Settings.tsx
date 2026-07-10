@@ -2,6 +2,12 @@ import { useAtom } from "jotai";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { alertThresholdsAtom } from "#lib/alerts";
+import {
+  CLAUDE_MODELS,
+  formatContextLabel,
+  formatMaxOutputLabel,
+  type ModelKey,
+} from "#lib/models";
 import { readConfig, writeConfig } from "#lib/tauri";
 import { selectedModelAtom, themeAtom } from "#store/ui";
 
@@ -125,6 +131,7 @@ function ModelCard({
   name,
   description,
   context,
+  gated,
   selected,
   onSelect,
 }: {
@@ -132,6 +139,7 @@ function ModelCard({
   readonly name: string;
   readonly description: string;
   readonly context: string;
+  readonly gated: boolean;
   readonly selected: boolean;
   readonly onSelect: () => void;
 }): React.ReactElement {
@@ -157,7 +165,7 @@ function ModelCard({
         flex: 1,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span
           style={{
             width: 8,
@@ -179,6 +187,23 @@ function ModelCard({
         >
           {name}
         </span>
+        {gated && (
+          <span
+            style={{
+              display: "inline-flex",
+              padding: "1px 6px",
+              borderRadius: 3,
+              fontSize: "0.6rem",
+              fontWeight: 600,
+              letterSpacing: "0.01em",
+              background: "oklch(0.30 0.13 55 / 0.35)",
+              color: "oklch(0.85 0.15 55)",
+              border: "1px solid oklch(0.48 0.16 55 / 0.6)",
+            }}
+          >
+            Requires Project Glasswing
+          </span>
+        )}
       </div>
       <span style={{ ...DESCRIPTION_STYLE, marginTop: 0 }}>{description}</span>
       <span
@@ -197,27 +222,6 @@ function ModelCard({
     </button>
   );
 }
-
-const MODELS = [
-  {
-    id: "opus" as const,
-    name: "Claude Opus",
-    description: "Most capable. Complex reasoning, deep analysis, and nuanced tasks.",
-    context: "200K context",
-  },
-  {
-    id: "sonnet" as const,
-    name: "Claude Sonnet",
-    description: "Balanced speed and capability. Best for most orchestration tasks.",
-    context: "200K context",
-  },
-  {
-    id: "haiku" as const,
-    name: "Claude Haiku",
-    description: "Fastest responses. Lightweight tasks, quick queries, and monitoring.",
-    context: "200K context",
-  },
-];
 
 /** Settings page for application configuration and preferences. */
 export function Settings(): React.ReactElement {
@@ -345,15 +349,21 @@ export function Settings(): React.ReactElement {
         >
           AI Model
         </h2>
-        <div style={{ display: "flex", gap: 12 }}>
-          {MODELS.map((model) => (
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {(
+            Object.entries(CLAUDE_MODELS) as Array<[ModelKey, (typeof CLAUDE_MODELS)[ModelKey]]>
+          ).map(([key, model]) => (
             <ModelCard
-              key={model.id}
-              {...model}
-              selected={selectedModel === model.id}
+              key={key}
+              id={model.id}
+              name={model.label}
+              description={model.description}
+              context={`${formatContextLabel(model.contextWindow)} · ${formatMaxOutputLabel(model.maxOutputTokens)}`}
+              gated={model.gated !== undefined}
+              selected={selectedModel === key}
               onSelect={() => {
-                setSelectedModel(model.id);
-                toast.success(`Switched to Claude ${model.name.split(" ")[1]}`);
+                setSelectedModel(key);
+                toast.success(`Switched To ${model.label}`);
               }}
             />
           ))}

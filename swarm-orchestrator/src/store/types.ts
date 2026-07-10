@@ -1,4 +1,5 @@
 import * as z from "zod";
+import { MODEL_KEYS } from "#lib/models";
 
 // ── Worker schemas ──────────────────────────────────
 
@@ -67,7 +68,7 @@ export type Snapshot = z.infer<typeof SnapshotSchema>;
 export const WorkerConfigSchema = z.object({
   name: z.string(),
   role: z.string().optional(),
-  model: z.enum(["opus", "sonnet", "haiku"]).optional(),
+  model: z.enum(MODEL_KEYS).optional(),
   systemPrompt: z.string().optional(),
 });
 

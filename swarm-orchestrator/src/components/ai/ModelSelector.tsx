@@ -1,68 +1,48 @@
 // ── ModelSelector ───────────────────────────────────
-// Claude opus/sonnet/haiku model selector.
+// Claude model selector — iterates the shared catalog in #lib/models
+// (single source of truth; no local model list here).
 // Per model: context window, cost estimate, capability badges.
+// Mythos carries a "Requires Project Glasswing" gating badge.
 // Persisted via Jotai atomWithStorage.
 
 import { useAtom } from "jotai";
 import { AnimatePresence, motion } from "motion/react";
 import type { CSSProperties } from "react";
 import { useRef, useState } from "react";
-import { CLAUDE_MODELS } from "#lib/models";
+import { CLAUDE_MODELS, formatContextLabel, type ModelInfo, type ModelKey } from "#lib/models";
 import { selectedModelAtom } from "#store/ui";
 
-// ── Model Definitions ───────────────────────────────
+// ── UI-only presentation for each catalog key ───────
+// Colors/capability badges are cosmetic and not part of the model
+// catalog itself — the catalog (#lib/models) remains the single source
+// of truth for ids/labels/pricing/context.
 
-type ModelKey = "opus" | "sonnet" | "haiku";
+const MODEL_STYLE: Record<ModelKey, { readonly color: string; readonly borderColor: string }> = {
+  fable: { color: "oklch(0.80 0.19 55)", borderColor: "oklch(0.42 0.14 55)" },
+  mythos: { color: "oklch(0.75 0.22 340)", borderColor: "oklch(0.42 0.16 340)" },
+  opus: { color: "oklch(0.72 0.20 290)", borderColor: "oklch(0.40 0.14 290)" },
+  sonnet: { color: "oklch(0.78 0.18 205)", borderColor: "oklch(0.40 0.10 205)" },
+  haiku: { color: "oklch(0.82 0.18 140)", borderColor: "oklch(0.40 0.10 140)" },
+};
 
-interface ModelInfo {
-  readonly key: ModelKey;
-  readonly label: string;
-  readonly id: string;
-  readonly contextWindow: string;
-  readonly costIndicator: "$$$" | "$$" | "$";
-  readonly capabilities: readonly string[];
-  readonly color: string;
-  readonly borderColor: string;
+const MODEL_CAPABILITIES: Record<ModelKey, readonly string[]> = {
+  fable: ["Long-Horizon Reasoning", "Agentic Work", "Adaptive Thinking"],
+  mythos: ["Long-Horizon Reasoning", "Agentic Work", "Adaptive Thinking"],
+  opus: ["Complex Reasoning", "Deep Analysis", "Code Generation"],
+  sonnet: ["Balanced", "Fast Reasoning", "Tool Use"],
+  haiku: ["Fast", "Low Cost", "Lightweight Tasks"],
+};
+
+/** Ordered `[key, model]` pairs from the shared catalog, for iteration. */
+const MODEL_ENTRIES = Object.entries(CLAUDE_MODELS) as ReadonlyArray<[ModelKey, ModelInfo]>;
+
+/** Derives a `$`…`$$$$` cost indicator from the catalog's output price — never hardcoded per model. */
+function costIndicator(model: ModelInfo): string {
+  if (model.outputPerMTok >= 50) return "$$$$";
+  if (model.outputPerMTok >= 20) return "$$$";
+  if (model.outputPerMTok >= 10) return "$$";
+  return "$";
 }
-
-/** Formats a token count as a compact "1M tokens" / "200K tokens" label. */
-function formatContextWindow(tokens: number): string {
-  if (tokens >= 1_000_000) return `${tokens / 1_000_000}M tokens`;
-  return `${Math.round(tokens / 1000)}K tokens`;
-}
-
-const MODELS: ModelInfo[] = [
-  {
-    key: "opus",
-    label: CLAUDE_MODELS.opus.label,
-    id: CLAUDE_MODELS.opus.id,
-    contextWindow: formatContextWindow(CLAUDE_MODELS.opus.contextWindow),
-    costIndicator: "$$$",
-    capabilities: ["Extended thinking", "Complex reasoning", "Code generation", "Analysis"],
-    color: "oklch(0.72 0.20 290)",
-    borderColor: "oklch(0.40 0.14 290)",
-  },
-  {
-    key: "sonnet",
-    label: CLAUDE_MODELS.sonnet.label,
-    id: CLAUDE_MODELS.sonnet.id,
-    contextWindow: formatContextWindow(CLAUDE_MODELS.sonnet.contextWindow),
-    costIndicator: "$$",
-    capabilities: ["Balanced", "Fast reasoning", "Code generation", "Tool use"],
-    color: "oklch(0.78 0.18 205)",
-    borderColor: "oklch(0.40 0.10 205)",
-  },
-  {
-    key: "haiku",
-    label: CLAUDE_MODELS.haiku.label,
-    id: CLAUDE_MODELS.haiku.id,
-    contextWindow: formatContextWindow(CLAUDE_MODELS.haiku.contextWindow),
-    costIndicator: "$",
-    capabilities: ["Fast", "Low cost", "Simple tasks", "Lightweight"],
-    color: "oklch(0.82 0.18 140)",
-    borderColor: "oklch(0.40 0.10 140)",
-  },
-];
 
 // ── Styles (OKLCH) ──────────────────────────────────
 
@@ -96,7 +76,7 @@ const dropdownPanelStyle: CSSProperties = {
   boxShadow: "0 8px 32px oklch(0 0 0 / 0.4)",
   overflow: "hidden",
   zIndex: 50,
-  minWidth: 260,
+  minWidth: 280,
 };
 
 const modelOptionStyle: CSSProperties = {
@@ -136,6 +116,19 @@ const capabilityBadgeStyle: CSSProperties = {
   border: "1px solid oklch(0.22 0.03 220)",
 };
 
+/** Distinct, minimal badge flagging a gated model (e.g. Mythos → Project Glasswing). */
+const gatedBadgeStyle: CSSProperties = {
+  display: "inline-flex",
+  padding: "1px 6px",
+  borderRadius: 3,
+  fontSize: 10,
+  fontWeight: 600,
+  letterSpacing: "0.01em",
+  background: "oklch(0.30 0.13 55 / 0.35)",
+  color: "oklch(0.85 0.15 55)",
+  border: "1px solid oklch(0.48 0.16 55 / 0.6)",
+};
+
 const costStyle: CSSProperties = {
   fontSize: 12,
   fontFamily: "var(--font-mono, 'JetBrains Mono Variable', 'Fira Code', monospace)",
@@ -153,8 +146,10 @@ const selectedDotStyle: CSSProperties = {
 /**
  * Claude model selector dropdown.
  *
- * - Opus / Sonnet / Haiku selection
+ * - Renders one option per entry in the shared catalog (`#lib/models`)
  * - Shows context window, cost indicator, capability badges per model
+ * - Mythos carries a "Requires Project Glasswing" badge; selecting it
+ *   is still allowed (the owner's decision — see batch-1 task brief)
  * - Persisted via Jotai `atomWithStorage`
  * - Glass-panel OKLCH styling
  */
@@ -163,7 +158,8 @@ export function ModelSelector(): React.ReactElement {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLFieldSetElement>(null);
 
-  const currentModel = MODELS.find((m) => m.key === selectedModel) ?? MODELS[1];
+  const currentModel = CLAUDE_MODELS[selectedModel];
+  const currentStyle = MODEL_STYLE[selectedModel];
 
   const handleSelect = (key: ModelKey) => {
     setSelectedModel(key);
@@ -194,21 +190,21 @@ export function ModelSelector(): React.ReactElement {
         onClick={() => setOpen(!open)}
         style={{
           ...dropdownTriggerStyle,
-          borderColor: open ? currentModel.color : "oklch(0.28 0.05 220)",
+          borderColor: open ? currentStyle.color : "oklch(0.28 0.05 220)",
         }}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label="Select AI model"
+        aria-label="Select AI Model"
       >
         <span
           style={{
             ...selectedDotStyle,
-            background: currentModel.color,
+            background: currentStyle.color,
           }}
         />
         <span>{currentModel.label}</span>
         <span style={{ marginLeft: "auto", color: "oklch(0.55 0.03 220)", fontSize: 12 }}>
-          {open ? "\u25B4" : "\u25BE"}
+          {open ? "▴" : "▾"}
         </span>
       </button>
 
@@ -221,43 +217,49 @@ export function ModelSelector(): React.ReactElement {
             transition={{ duration: 0.12 }}
             style={dropdownPanelStyle}
             role="listbox"
-            aria-label="AI Model options"
+            aria-label="AI Model Options"
           >
-            {MODELS.map((model) => {
-              const isSelected = model.key === selectedModel;
+            {MODEL_ENTRIES.map(([key, model]) => {
+              const isSelected = key === selectedModel;
+              const style = MODEL_STYLE[key];
               return (
                 <div
-                  key={model.key}
+                  key={key}
                   role="option"
                   aria-selected={isSelected}
                   tabIndex={0}
-                  onClick={() => handleSelect(model.key)}
+                  onClick={() => handleSelect(key)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      handleSelect(model.key);
+                      handleSelect(key);
                     }
                   }}
                   style={{
                     ...modelOptionStyle,
                     background: isSelected
-                      ? `oklch(0.16 0.04 ${model.key === "opus" ? 290 : model.key === "sonnet" ? 205 : 140} / 0.3)`
+                      ? `${style.color.slice(0, -1)} / 0.14)`
                       : "oklch(0 0 0 / 0)",
                   }}
                 >
                   <div style={modelNameStyle}>
-                    <span style={{ color: model.color }}>{model.label}</span>
-                    <span style={{ ...costStyle, color: model.color }}>{model.costIndicator}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ color: style.color }}>{model.label}</span>
+                      {model.gated === "glasswing" && (
+                        <span style={gatedBadgeStyle}>Requires Project Glasswing</span>
+                      )}
+                    </span>
+                    <span style={{ ...costStyle, color: style.color }}>{costIndicator(model)}</span>
                   </div>
 
                   <div style={modelMetaStyle}>
-                    <span>{model.contextWindow}</span>
-                    <span style={{ color: "oklch(0.35 0.02 220)" }}>{"\u2022"}</span>
+                    <span>{formatContextLabel(model.contextWindow)}</span>
+                    <span style={{ color: "oklch(0.35 0.02 220)" }}>{"•"}</span>
                     <span>{model.id}</span>
                   </div>
 
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 2 }}>
-                    {model.capabilities.map((cap) => (
+                    {MODEL_CAPABILITIES[key].map((cap) => (
                       <span key={cap} style={capabilityBadgeStyle}>
                         {cap}
                       </span>

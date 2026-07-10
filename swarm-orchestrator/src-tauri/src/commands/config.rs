@@ -294,6 +294,6 @@ mod tests {
         save_config_map(&path, &map).expect("save should succeed");
 
         let loaded = load_config_map(&path);
-        assert!(loaded.get("anthropic_api_key").is_none());
+        assert!(!loaded.contains_key("anthropic_api_key"));
     }
 }

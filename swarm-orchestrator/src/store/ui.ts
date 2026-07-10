@@ -3,6 +3,7 @@ import { atomWithStorage } from "jotai/utils";
 
 import { commandHistory } from "#lib/command-history";
 import { settingsStore } from "#lib/lazy-store";
+import type { ModelKey } from "#lib/models";
 import { isTauri } from "#lib/tauri";
 
 // ── Tauri plugin-store persistence adapter ───────────
@@ -86,11 +87,18 @@ export const themeAtom = atomWithStorage<{ particlesEnabled: boolean; gpuOverlay
 
 // ── AI model selection ──────────────────────────────
 
-/** Persisted Anthropic model selection for AI streaming. */
-export const selectedModelAtom = atomWithStorage<"opus" | "sonnet" | "haiku">(
+/**
+ * Persisted Anthropic model selection for AI streaming.
+ *
+ * Widened to the full `ModelKey` union from `#lib/models` (the shared
+ * catalog) so Fable/Mythos are selectable — old persisted "opus" /
+ * "sonnet" / "haiku" values remain valid members of the wider union,
+ * so no migration is needed for existing installs.
+ */
+export const selectedModelAtom = atomWithStorage<ModelKey>(
   "swarm:ai:model",
   "sonnet",
-  createTauriStorage<"opus" | "sonnet" | "haiku">(),
+  createTauriStorage<ModelKey>(),
 );
 
 // ── WebGPU performance atoms (Milestone 0.6.5) ──────

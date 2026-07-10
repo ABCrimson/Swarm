@@ -1,6 +1,7 @@
 import { load } from "@tauri-apps/plugin-store";
 import { toast } from "sonner";
 import * as z from "zod";
+import { MODEL_KEYS } from "#lib/models";
 import { isTauri } from "#lib/tauri";
 import { SessionSchema, SessionTemplateSchema, SnapshotSchema } from "#store/types";
 
@@ -24,7 +25,7 @@ const UiStoreSchema = z.object({
       gpuOverlay: z.boolean(),
     })
     .optional(),
-  model: z.enum(["opus", "sonnet", "haiku"]).optional(),
+  model: z.enum(MODEL_KEYS).optional(),
 });
 
 /** Schema for snapshots (per-session). */

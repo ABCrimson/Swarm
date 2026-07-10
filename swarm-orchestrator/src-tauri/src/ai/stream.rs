@@ -180,6 +180,44 @@ pub fn is_message_stop(event: &SseEvent) -> bool {
     matches!(event, SseEvent::MessageStop {})
 }
 
+/// Returns `true` if this event signals that Claude declined the request
+/// (`stop_reason: "refusal"`).
+///
+/// Fable-tier models (`claude-fable-5`, `claude-mythos-5`) run safety
+/// classifiers that can decline a request with a normal HTTP 200 and a
+/// `message_delta` event carrying `stop_reason: "refusal"` instead of
+/// `end_turn` — the response is not an HTTP/transport error, so callers
+/// must inspect `stop_reason` before treating the stream as a successful
+/// completion. Content accumulated before this event (if any, on a
+/// mid-stream decline) must not be read as the final reply.
+///
+/// # Arguments
+///
+/// * `event` - The SSE event to check
+///
+/// # Returns
+///
+/// `true` if the event is a [`SseEvent::MessageDelta`] whose `delta.stop_reason`
+/// is `"refusal"`, `false` otherwise.
+///
+/// # Examples
+///
+/// ```ignore
+/// use swarm_core::ai::stream::{parse_sse_line, is_refusal};
+///
+/// let line = r#"data: {"type":"message_delta","delta":{"stop_reason":"refusal"},"usage":null}"#;
+/// let event = parse_sse_line(line).unwrap();
+/// assert!(is_refusal(&event));
+/// ```
+pub fn is_refusal(event: &SseEvent) -> bool {
+    match event {
+        SseEvent::MessageDelta { delta, .. } => {
+            delta.get("stop_reason").and_then(|v| v.as_str()) == Some("refusal")
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,5 +253,43 @@ mod tests {
     fn test_non_data_line() {
         let line = "event: message_start";
         assert!(parse_sse_line(line).is_none());
+    }
+
+    #[test]
+    fn test_is_refusal_true_on_stop_reason_refusal() {
+        let line =
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"refusal"},"usage":null}"#;
+        let event = parse_sse_line(line).expect("should parse");
+        assert!(is_refusal(&event));
+    }
+
+    #[test]
+    fn test_is_refusal_false_on_end_turn() {
+        let line =
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":null}"#;
+        let event = parse_sse_line(line).expect("should parse");
+        assert!(!is_refusal(&event));
+    }
+
+    #[test]
+    fn test_is_refusal_false_on_max_tokens() {
+        let line =
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":null}"#;
+        let event = parse_sse_line(line).expect("should parse");
+        assert!(!is_refusal(&event));
+    }
+
+    #[test]
+    fn test_is_refusal_false_on_message_stop() {
+        let line = r#"data: {"type":"message_stop"}"#;
+        let event = parse_sse_line(line).expect("should parse");
+        assert!(!is_refusal(&event));
+    }
+
+    #[test]
+    fn test_is_refusal_false_on_content_block_delta() {
+        let line = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
+        let event = parse_sse_line(line).expect("should parse");
+        assert!(!is_refusal(&event));
     }
 }

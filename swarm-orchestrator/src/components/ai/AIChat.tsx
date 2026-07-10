@@ -29,16 +29,6 @@ interface AIChatProps {
   readonly injectedInstruction?: { readonly id: string; readonly content: string } | null;
 }
 
-// ── Model mapping ───────────────────────────────────
-// Keyed by the persisted `selectedModelAtom` value; the catalog in
-// #lib/models is the single source of truth for the actual model IDs.
-
-const MODEL_IDS: Record<"opus" | "sonnet" | "haiku", string> = {
-  opus: CLAUDE_MODELS.opus.id,
-  sonnet: CLAUDE_MODELS.sonnet.id,
-  haiku: CLAUDE_MODELS.haiku.id,
-};
-
 // ── Streaming tool-call tracking ─────────────────────
 
 interface LiveToolCall {
@@ -193,7 +183,9 @@ function MessageBubble({ message }: { message: AiMessage }): React.ReactElement 
 
 function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.ReactElement {
   const [selectedModel] = useAtom(selectedModelAtom);
-  const modelId = MODEL_IDS[selectedModel];
+  // The shared catalog (#lib/models) is the single source of truth for
+  // model IDs — `selectedModel` (a ModelKey) indexes it directly.
+  const modelId = CLAUDE_MODELS[selectedModel].id;
   const { startStream, cancelStream, atLimit } = useAiStream();
   const enqueue = useAiStore((s) => s.enqueue);
   const dequeue = useAiStore((s) => s.dequeue);

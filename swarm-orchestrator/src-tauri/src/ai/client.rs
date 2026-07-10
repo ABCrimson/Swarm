@@ -14,7 +14,7 @@ use tokio_stream::StreamExt;
 use crate::error::AppError;
 use crate::events::{AiStreamDeltaPayload, SwarmEvent, emit_event};
 
-use super::stream::{extract_delta_text, is_message_stop, parse_sse_line};
+use super::stream::{extract_delta_text, is_message_stop, is_refusal, parse_sse_line};
 
 /// Configuration for the AI client.
 ///
@@ -143,6 +143,44 @@ pub enum AiPriority {
     Critical = 3,
 }
 
+/// Builds the Anthropic Messages API request body.
+///
+/// Pulled out of [`AiClient::stream_message_inner`] as a pure function so
+/// request construction is unit-testable without a network stack.
+///
+/// # Fable-tier safety
+///
+/// Deliberately never sets `thinking`, `temperature`, `top_p`, or `top_k`,
+/// for any model. This matters most for Fable-tier models
+/// (`claude-fable-5`, `claude-mythos-5`), which run thinking always-on
+/// and reject an explicit `thinking` config or any sampling parameter
+/// with a 400 — and for `claude-opus-4-8`, which rejects `budget_tokens`
+/// and sampling parameters. Omitting these fields entirely is valid (and
+/// required) across the whole current model catalog (see
+/// `src/lib/models.ts` on the frontend), so no per-model branching is
+/// needed here. If a future field like `thinking` or `temperature` is
+/// added to [`AiClientConfig`], it must be gated off for `claude-fable-5`
+/// / `claude-mythos-5` before being included in the body.
+fn build_request_body(config: &AiClientConfig, request: &AiRequest) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "model": config.model,
+        "max_tokens": config.max_tokens,
+        "stream": true,
+        "messages": request.messages.iter().map(|m| {
+            serde_json::json!({
+                "role": m.role,
+                "content": m.content,
+            })
+        }).collect::<Vec<_>>(),
+    });
+
+    if let Some(ref system) = request.system {
+        body["system"] = serde_json::json!(system);
+    }
+
+    body
+}
+
 /// AI provider client wrapping `reqwest` for streaming SSE.
 ///
 /// Handles HTTP communication with the Anthropic Messages API,
@@ -251,23 +289,7 @@ impl AiClient {
         request: &AiRequest,
     ) -> Result<String, AppError> {
         let url = format!("{}/messages", self.config.base_url);
-
-        // Build the Anthropic API request body
-        let mut body = serde_json::json!({
-            "model": self.config.model,
-            "max_tokens": self.config.max_tokens,
-            "stream": true,
-            "messages": request.messages.iter().map(|m| {
-                serde_json::json!({
-                    "role": m.role,
-                    "content": m.content,
-                })
-            }).collect::<Vec<_>>(),
-        });
-
-        if let Some(ref system) = request.system {
-            body["system"] = serde_json::json!(system);
-        }
+        let body = build_request_body(&self.config, request);
 
         let response = self
             .http
@@ -312,6 +334,19 @@ impl AiClient {
                 }
 
                 if let Some(event) = parse_sse_line(&line) {
+                    // Safety-classifier decline (Fable-tier models in particular).
+                    // Bail out immediately — do not treat whatever text has
+                    // streamed so far as a normal, complete reply. The `?`
+                    // caller (`stream_message`) still guarantees a terminal
+                    // `done: true` `AiStreamDelta` event on this error path,
+                    // and the AI queue's error branch surfaces it via the
+                    // existing `ai_stream_settled` (status: "error") path.
+                    if is_refusal(&event) {
+                        return Err(AppError::Ai(
+                            "Request Declined By Safety Classifiers".to_string(),
+                        ));
+                    }
+
                     if let Some(delta) = extract_delta_text(&event) {
                         full_text.push_str(&delta);
                         emit_event(
@@ -359,5 +394,104 @@ impl AiClient {
         );
 
         Ok(full_text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_request() -> AiRequest {
+        AiRequest {
+            request_id: "req-1".to_string(),
+            messages: vec![AiMessage {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            }],
+            system: None,
+            priority: AiPriority::Normal,
+        }
+    }
+
+    /// Fable-tier models (`claude-fable-5`, `claude-mythos-5`) run thinking
+    /// always-on and reject an explicit `thinking` config or any sampling
+    /// parameter (`temperature`/`top_p`/`top_k`) with a 400. The request
+    /// builder must never emit these fields.
+    #[test]
+    fn test_build_request_body_fable_sends_no_thinking_or_sampling_params() {
+        let config = AiClientConfig {
+            model: "claude-fable-5".to_string(),
+            ..AiClientConfig::default()
+        };
+        let body = build_request_body(&config, &sample_request());
+
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("top_p").is_none());
+        assert!(body.get("top_k").is_none());
+        assert!(body.get("budget_tokens").is_none());
+        assert_eq!(body["model"], "claude-fable-5");
+    }
+
+    /// Same constraints apply to Project Glasswing's `claude-mythos-5`.
+    #[test]
+    fn test_build_request_body_mythos_sends_no_thinking_or_sampling_params() {
+        let config = AiClientConfig {
+            model: "claude-mythos-5".to_string(),
+            ..AiClientConfig::default()
+        };
+        let body = build_request_body(&config, &sample_request());
+
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("top_p").is_none());
+        assert!(body.get("top_k").is_none());
+    }
+
+    /// `claude-opus-4-8` also rejects `budget_tokens` and sampling params
+    /// (adaptive-thinking-only surface) — verify the builder never sends
+    /// them for Opus either.
+    #[test]
+    fn test_build_request_body_opus_sends_no_budget_tokens_or_sampling_params() {
+        let config = AiClientConfig {
+            model: "claude-opus-4-8".to_string(),
+            ..AiClientConfig::default()
+        };
+        let body = build_request_body(&config, &sample_request());
+
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("top_p").is_none());
+        assert!(body.get("top_k").is_none());
+        assert!(body.get("budget_tokens").is_none());
+    }
+
+    #[test]
+    fn test_build_request_body_includes_core_fields() {
+        let config = AiClientConfig::default();
+        let body = build_request_body(&config, &sample_request());
+
+        assert_eq!(body["model"], config.model);
+        assert_eq!(body["max_tokens"], config.max_tokens);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], "Hello");
+    }
+
+    #[test]
+    fn test_build_request_body_includes_system_prompt_when_present() {
+        let config = AiClientConfig::default();
+        let mut request = sample_request();
+        request.system = Some("You are helpful.".to_string());
+
+        let body = build_request_body(&config, &request);
+        assert_eq!(body["system"], "You are helpful.");
+    }
+
+    #[test]
+    fn test_build_request_body_omits_system_when_absent() {
+        let config = AiClientConfig::default();
+        let body = build_request_body(&config, &sample_request());
+        assert!(body.get("system").is_none());
     }
 }
