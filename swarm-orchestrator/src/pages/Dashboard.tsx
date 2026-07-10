@@ -10,6 +10,7 @@ import { MemoryChart } from "#components/metrics/MemoryChart";
 import { MetricCard } from "#components/metrics/MetricCard";
 import { MetricsChart } from "#components/metrics/MetricsChart";
 import { ThroughputChart } from "#components/metrics/ThroughputChart";
+import { memSeverity } from "#lib/memory";
 import { useSystemStore } from "#store/system";
 
 type Severity = "good" | "warning" | "critical";
@@ -52,14 +53,6 @@ function cpuSeverity(cpu: number): Severity {
   return "good";
 }
 
-function memSeverity(mb: number): Severity {
-  // Assume 16GB total
-  const pct = (mb / 16_384) * 100;
-  if (pct > 90) return "critical";
-  if (pct > 70) return "warning";
-  return "good";
-}
-
 function computeTrend(history: Array<{ cpu: number }>, field: "cpu"): Trend {
   if (history.length < 4) return "stable";
   const recent = history.slice(-4);
@@ -83,6 +76,7 @@ export function Dashboard(): React.ReactElement {
 
   const cpu = metrics.cpuPercent ?? 0;
   const mem = metrics.memoryMb ?? 0;
+  const memTotal = metrics.memoryTotalMb ?? 0;
   const aiReq = metrics.aiReqPerSec ?? 0;
   const tokens = metrics.tokensPerSec ?? 0;
   const workers = metrics.workerCount ?? 0;
@@ -126,7 +120,11 @@ export function Dashboard(): React.ReactElement {
             severity={cpuSeverity(cpu)}
             trend={cpuTrend}
           />
-          <MetricCard label="Memory" value={`${mem.toFixed(0)} MB`} severity={memSeverity(mem)} />
+          <MetricCard
+            label="Memory"
+            value={`${mem.toFixed(0)} MB`}
+            severity={memSeverity(mem, memTotal)}
+          />
           <MetricCard label="Workers" value={`${workers}`} severity="good" />
           <MetricCard label="AI Req/s" value={`${aiReq.toFixed(1)}`} severity="good" />
           <MetricCard label="Tokens/s" value={`${tokens.toFixed(0)}`} severity="good" />

@@ -6,6 +6,7 @@ import { MemoryChart } from "#components/metrics/MemoryChart";
 import { MetricCard } from "#components/metrics/MetricCard";
 import { MetricsChart } from "#components/metrics/MetricsChart";
 import { ThroughputChart } from "#components/metrics/ThroughputChart";
+import { memSeverity } from "#lib/memory";
 import { useSystemStore } from "#store/system";
 
 type Severity = "good" | "warning" | "critical";
@@ -44,13 +45,6 @@ const cardGridStyle: CSSProperties = {
 function cpuSeverity(v: number): Severity {
   if (v > 80) return "critical";
   if (v > 60) return "warning";
-  return "good";
-}
-
-function memSeverity(mb: number): Severity {
-  const pct = (mb / 16_384) * 100;
-  if (pct > 90) return "critical";
-  if (pct > 70) return "warning";
   return "good";
 }
 
@@ -101,7 +95,7 @@ export function Metrics(): React.ReactElement {
           <MetricCard
             label="Memory"
             value={`${(metrics.memoryMb ?? 0).toFixed(0)} MB`}
-            severity={memSeverity(metrics.memoryMb ?? 0)}
+            severity={memSeverity(metrics.memoryMb ?? 0, metrics.memoryTotalMb ?? 0)}
           />
           <MetricCard label="Workers" value={`${metrics.workerCount ?? 0}`} />
           <MetricCard label="AI Req/s" value={`${(metrics.aiReqPerSec ?? 0).toFixed(1)}`} />

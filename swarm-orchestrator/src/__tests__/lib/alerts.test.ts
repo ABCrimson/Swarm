@@ -121,16 +121,16 @@ describe("evaluateThresholds", () => {
       const snapshot: MetricsSnapshot = { cpuPercent: 72.5, memoryPercent: 50 };
       const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW);
 
-      expect(alerts[0].message).toContain("CPU usage");
+      expect(alerts[0].message).toContain("CPU Usage");
       expect(alerts[0].message).toContain("72.5%");
-      expect(alerts[0].message).toContain("elevated");
+      expect(alerts[0].message).toContain("Elevated");
     });
 
-    it("includes 'critically high' in critical messages", () => {
+    it("includes 'Critically High' in critical messages", () => {
       const snapshot: MetricsSnapshot = { cpuPercent: 85, memoryPercent: 50 };
       const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW);
 
-      expect(alerts[0].message).toContain("critically high");
+      expect(alerts[0].message).toContain("Critically High");
     });
   });
 });

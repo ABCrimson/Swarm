@@ -163,6 +163,11 @@ pub struct SystemMetricsPayload {
     pub cpu_percent: f64,
     /// Memory usage in megabytes, sourced from `sysinfo`.
     pub memory_mb: f64,
+    /// Total physical memory in megabytes, sourced from `sysinfo`'s
+    /// `System::total_memory()`. Real hardware capacity — the frontend
+    /// must derive memory percentages from this value rather than
+    /// assuming a fixed total.
+    pub memory_total_mb: f64,
     /// Total number of registered workers.
     pub worker_count: usize,
     /// AI API requests per second. Currently a placeholder.
@@ -300,6 +305,7 @@ mod tests {
         let event = SwarmEvent::SystemMetrics(SystemMetricsPayload {
             cpu_percent: 45.2,
             memory_mb: 1024.5,
+            memory_total_mb: 262_144.0,
             worker_count: 3,
             ai_req_per_sec: 1.5,
             timestamp: 1700000000,
@@ -309,6 +315,43 @@ mod tests {
         if let SwarmEvent::SystemMetrics(p) = deserialized {
             assert!((p.cpu_percent - 45.2).abs() < f64::EPSILON);
             assert_eq!(p.worker_count, 3);
+        } else {
+            panic!("expected SystemMetrics variant");
+        }
+    }
+
+    /// Regression test for the "Memory usage: critically high: 216%" bug:
+    /// the frontend never learned the machine's real RAM total and fell
+    /// back to a hardcoded 16GB assumption. `memory_total_mb` closes that
+    /// gap — this test locks in its wire name (`memoryTotalMb`) and that
+    /// it survives a serialize/deserialize roundtrip untouched.
+    #[test]
+    fn test_system_metrics_memory_total_mb_roundtrip() {
+        let event = SwarmEvent::SystemMetrics(SystemMetricsPayload {
+            cpu_percent: 12.0,
+            memory_mb: 35_389.0,
+            memory_total_mb: 262_144.0, // 256GB machine from the bug report
+            worker_count: 1,
+            ai_req_per_sec: 0.0,
+            timestamp: 1700000000,
+        });
+
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(
+            json.contains("\"memoryTotalMb\":262144"),
+            "expected camelCase memoryTotalMb field in JSON, got: {json}"
+        );
+
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::SystemMetrics(p) = deserialized {
+            assert!((p.memory_total_mb - 262_144.0).abs() < f64::EPSILON);
+            // 35,389 / 262,144 ≈ 13.5%, not the inflated 216% from dividing
+            // by a hardcoded 16,384 MB assumption.
+            let pct = (p.memory_mb / p.memory_total_mb) * 100.0;
+            assert!(
+                (pct - 13.5).abs() < 0.1,
+                "expected ~13.5% memory usage on real hardware total, got {pct}"
+            );
         } else {
             panic!("expected SystemMetrics variant");
         }

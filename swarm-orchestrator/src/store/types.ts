@@ -104,6 +104,7 @@ export type MetricPoint = z.infer<typeof MetricPointSchema>;
 export const SystemMetricsSchema = z.object({
   cpuPercent: z.number(),
   memoryMb: z.number(),
+  memoryTotalMb: z.number(),
   workerCount: z.number().int(),
   aiReqPerSec: z.number(),
   tokensPerSec: z.number(),

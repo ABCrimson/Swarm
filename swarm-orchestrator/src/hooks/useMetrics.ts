@@ -22,6 +22,7 @@ export function useMetrics(): void {
       const p = e.payload as {
         cpuPercent: number;
         memoryMb: number;
+        memoryTotalMb: number;
         workerCount: number;
         aiReqPerSec: number;
       };
@@ -29,6 +30,7 @@ export function useMetrics(): void {
       updateMetrics({
         cpuPercent: p.cpuPercent,
         memoryMb: p.memoryMb,
+        memoryTotalMb: p.memoryTotalMb,
         workerCount: p.workerCount,
         aiReqPerSec: p.aiReqPerSec,
       });

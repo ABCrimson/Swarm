@@ -111,7 +111,7 @@ export function evaluateThresholds(
         severity: "critical",
         value,
         threshold: criticalThreshold,
-        message: `${label} critically high: ${value.toFixed(1)}% (threshold: ${criticalThreshold}%)`,
+        message: `${label} Critically High: ${value.toFixed(1)}% (Threshold: ${criticalThreshold}%)`,
         timestamp: now,
       });
     } else if (value >= warningThreshold) {
@@ -120,19 +120,19 @@ export function evaluateThresholds(
         severity: "warning",
         value,
         threshold: warningThreshold,
-        message: `${label} elevated: ${value.toFixed(1)}% (threshold: ${warningThreshold}%)`,
+        message: `${label} Elevated: ${value.toFixed(1)}% (Threshold: ${warningThreshold}%)`,
         timestamp: now,
       });
     }
   };
 
-  check("cpu", snapshot.cpuPercent, thresholds.cpuWarning, thresholds.cpuCritical, "CPU usage");
+  check("cpu", snapshot.cpuPercent, thresholds.cpuWarning, thresholds.cpuCritical, "CPU Usage");
   check(
     "memory",
     snapshot.memoryPercent,
     thresholds.memoryWarning,
     thresholds.memoryCritical,
-    "Memory usage",
+    "Memory Usage",
   );
 
   return alerts;

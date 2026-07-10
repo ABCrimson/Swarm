@@ -69,6 +69,7 @@ impl SharedSystem {
 /// |----------------------|-------------------------------------|
 /// | `cpu_percent`        | `sysinfo::System::global_cpu_usage` |
 /// | `memory_mb`          | `sysinfo::System::used_memory`      |
+/// | `memory_total_mb`    | `sysinfo::System::total_memory`     |
 /// | `worker_count`       | `registry.aggregate_metrics()`      |
 /// | `ai_req_per_sec`| Placeholder (0.0)                   |
 /// | `timestamp`          | Current Unix time (ms)              |
@@ -94,17 +95,19 @@ pub fn start_metrics_loop(
             // Offload sysinfo refresh to spawn_blocking (CPU-bound),
             // reusing the shared System for accurate CPU deltas.
             let sys_arc = shared_sys.0.clone();
-            let (cpu_percent, memory_mb) = tokio::task::spawn_blocking(move || {
-                let mut sys = sys_arc.lock();
-                sys.refresh_cpu_usage();
-                sys.refresh_memory();
-                (
-                    sys.global_cpu_usage() as f64,
-                    sys.used_memory() as f64 / (1024.0 * 1024.0),
-                )
-            })
-            .await
-            .unwrap_or((0.0, 0.0));
+            let (cpu_percent, memory_mb, memory_total_mb) =
+                tokio::task::spawn_blocking(move || {
+                    let mut sys = sys_arc.lock();
+                    sys.refresh_cpu_usage();
+                    sys.refresh_memory();
+                    (
+                        sys.global_cpu_usage() as f64,
+                        sys.used_memory() as f64 / (1024.0 * 1024.0),
+                        sys.total_memory() as f64 / (1024.0 * 1024.0),
+                    )
+                })
+                .await
+                .unwrap_or((0.0, 0.0, 0.0));
 
             let registry_clone = registry.clone();
             let metrics =
@@ -126,6 +129,7 @@ pub fn start_metrics_loop(
             let payload = SystemMetricsPayload {
                 cpu_percent,
                 memory_mb,
+                memory_total_mb,
                 worker_count: metrics.total_workers,
                 ai_req_per_sec: 0.0, // placeholder — future AI queue integration
                 timestamp: now,
@@ -152,6 +156,8 @@ pub fn start_metrics_loop(
 /// A `serde_json::Value` containing system and worker metrics:
 /// - `cpuPercent` - Global CPU usage percentage
 /// - `memoryMb` - Used memory in megabytes
+/// - `memoryTotalMb` - Total physical memory in megabytes (real hardware
+///   capacity, from `sysinfo::System::total_memory`)
 /// - `totalWorkers`, `running`, `paused`, `idle`, `errored` - Worker counts
 /// - `perWorker` - Array of per-worker process metrics (see
 ///   [`collect_per_worker_metrics`]), each with `workerId`, `pid`,
@@ -182,6 +188,7 @@ pub async fn get_metrics(
         let sys_metrics = (
             sys.global_cpu_usage() as f64,
             sys.used_memory() as f64 / (1024.0 * 1024.0),
+            sys.total_memory() as f64 / (1024.0 * 1024.0),
         );
         let per_worker = collect_per_worker_metrics(&registry_for_sys, &sys);
         (sys_metrics, per_worker)
@@ -203,6 +210,7 @@ pub async fn get_metrics(
     let combined = serde_json::json!({
         "cpuPercent": sys_metrics.0,
         "memoryMb": sys_metrics.1,
+        "memoryTotalMb": sys_metrics.2,
         "totalWorkers": worker_metrics.total_workers,
         "running": worker_metrics.running,
         "paused": worker_metrics.paused,

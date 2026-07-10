@@ -23,6 +23,7 @@ import {
   legendStyle,
   tooltipProps,
 } from "#lib/chart-theme";
+import { memoryAvailableMb } from "#lib/memory";
 import { useSystemStore } from "#store/system";
 
 // OKLCH colors
@@ -52,6 +53,7 @@ const headerStyle: CSSProperties = {
  */
 export function MemoryChart(): React.ReactElement {
   const history = useSystemStore((s) => s.metrics.history);
+  const memoryTotalMb = useSystemStore((s) => s.metrics.memoryTotalMb);
 
   const data = (() => {
     const cutoff = Date.now() - 60_000;
@@ -61,7 +63,7 @@ export function MemoryChart(): React.ReactElement {
         time: p.time,
         used: p.memory,
         cached: Math.max(0, p.memory * 0.15),
-        available: Math.max(0, 16384 - p.memory - p.memory * 0.15),
+        available: memoryAvailableMb(p.memory, memoryTotalMb),
       }));
   })();
 

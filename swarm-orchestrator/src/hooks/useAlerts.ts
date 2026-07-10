@@ -7,10 +7,8 @@ import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import type { MetricsSnapshot } from "#lib/alerts";
 import { alertCooldownsAtom, alertThresholdsAtom, evaluateThresholds } from "#lib/alerts";
+import { memPercent } from "#lib/memory";
 import { useSystemStore } from "#store/system";
-
-/** @todo Detect actual system memory via Tauri system info command */
-const SYSTEM_MEMORY_MB = 16_384;
 
 /**
  * Evaluates system metrics against alert thresholds and fires Sonner toasts.
@@ -28,8 +26,11 @@ export function useAlerts(): void {
       (metrics) => {
         const now = Date.now();
 
-        // Build metrics snapshot
-        const memoryPercent = (metrics.memoryMb / SYSTEM_MEMORY_MB) * 100;
+        // Build metrics snapshot. `memPercent` derives the denominator from
+        // the real hardware total reported by the backend; it returns
+        // `undefined` until a nonzero total has been observed, which we
+        // treat as 0% so no alert fires on a not-yet-known total.
+        const memoryPercent = memPercent(metrics.memoryMb, metrics.memoryTotalMb) ?? 0;
         const snapshot: MetricsSnapshot = {
           cpuPercent: metrics.cpuPercent,
           memoryPercent,

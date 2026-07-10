@@ -39,6 +39,7 @@ export const useSystemStore = create<SystemStoreState & SystemStoreActions>()(
       metrics: {
         cpuPercent: 0,
         memoryMb: 0,
+        memoryTotalMb: 0,
         workerCount: 0,
         aiReqPerSec: 0,
         tokensPerSec: 0,

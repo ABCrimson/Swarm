@@ -148,6 +148,7 @@ mod tests {
             SystemMetricsPayload {
                 cpu_percent: 0.0,
                 memory_mb: 0.0,
+                memory_total_mb: 0.0,
                 worker_count: 0,
                 ai_req_per_sec: 0.0,
                 timestamp: 0,
