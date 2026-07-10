@@ -157,6 +157,8 @@ pub fn run() {
             commands::ai::ai_request,
             // Metrics commands
             commands::metrics::get_metrics,
+            // Orchestration commands
+            commands::orchestration::events_since,
             // Bus commands
             commands::bus::bus_send,
             commands::bus::bus_subscribe,
