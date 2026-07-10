@@ -38,6 +38,7 @@ use ai::{AiClient, AiClientConfig, AiQueue, AiQueueConfig};
 use bus::channel::MessageBus;
 use bus::router::Router;
 use commands::metrics::SharedSystem;
+use orchestration::{EventLog, OrchestrationEngine};
 use session::SessionManager;
 use worker::registry::WorkerRegistry;
 
@@ -175,6 +176,20 @@ pub fn run() {
             let icon_bytes = include_bytes!("../icons/icon.png");
             let icon = tauri::image::Image::from_bytes(icon_bytes)?;
             window.set_icon(icon)?;
+
+            // Ordered event core: SQLite log + single-writer engine.
+            let db_path = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?
+                .join("swarm-events.db");
+            if let Some(parent) = db_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let event_log = EventLog::open(&db_path)
+                .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+            let engine = OrchestrationEngine::start(app.handle().clone(), event_log, Some(db_path));
+            app.manage(engine);
 
             // Load persisted sessions
             let app_handle = app.handle().clone();

@@ -11,7 +11,7 @@
 //! - This matches the frontend's expected JSON format
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 use crate::worker::handle::WorkerState;
@@ -241,8 +241,20 @@ pub struct SystemLogPayload {
 /// | `SystemMetrics`  | `system:metrics`  |
 /// | `AiStreamDelta`  | `ai:stream_delta` |
 /// | `SystemLog`      | `system:log`      |
+///
+/// In addition to the legacy per-channel emission above, every event is
+/// routed through the [`crate::orchestration::OrchestrationEngine`], which
+/// assigns a monotonic sequence number and emits an ordered envelope on
+/// the single `swarm://events` channel.
 #[tracing::instrument(skip(app, event), fields(event_type))]
 pub fn emit_event(app: &AppHandle, event: SwarmEvent) {
+    // Ordered path: the engine assigns seq and emits on `swarm://events`.
+    // `try_state` because unit tests construct AppHandles without setup.
+    if let Some(engine) = app.try_state::<crate::orchestration::OrchestrationEngine>() {
+        engine.record(event.clone());
+    }
+
+    // Legacy per-channel path — removed in the frontend-cutover cleanup task.
     let (channel, result) = match &event {
         SwarmEvent::WorkerSpawned(p) => ("worker:spawned", app.emit("worker:spawned", p)),
         SwarmEvent::WorkerKilled(p) => ("worker:killed", app.emit("worker:killed", p)),
