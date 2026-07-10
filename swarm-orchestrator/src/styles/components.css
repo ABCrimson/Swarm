@@ -257,8 +257,18 @@
     cursor: default;
   }
 
+  /* Interactive pills render as real <button> elements (Kill/Pause/Resume,
+     tool-list edit/delete, etc.) — restores the pre-consolidation 28px
+     control height (old .swarm-btn[data-size="sm"]) regardless of
+     data-size, giving WCAG 2.5.8 (Target Size Minimum) headroom on
+     controls, including destructive ones like Kill. `min-height` clamps
+     the sm/md `height` values up without touching static label-only
+     pills, which keep their compact metrics. The extra vertical padding
+     keeps the label from looking pinned to a stretched box. */
   .swarm-pill[data-interactive] {
     cursor: pointer;
+    min-height: 28px;
+    padding-block: 2px;
   }
 
   /* Tone → OKLCH semantic color (same tokens as .swarm-btn's variants) */
