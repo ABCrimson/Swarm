@@ -2,7 +2,10 @@
 //!
 //! Provides a typed event system for broadcasting worker state
 //! changes, session events, AI stream deltas, and system metrics
-//! to the React frontend via Tauri's `AppHandle::emit` API.
+//! to the React frontend. Every event is routed through the
+//! [`crate::orchestration::OrchestrationEngine`], which assigns a
+//! monotonic sequence number and emits an ordered envelope on the
+//! single `swarm://events` channel.
 //!
 //! ## Serialization Convention
 //!
@@ -11,7 +14,7 @@
 //! - This matches the frontend's expected JSON format
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 use crate::worker::handle::WorkerState;
@@ -19,7 +22,8 @@ use crate::worker::handle::WorkerState;
 /// All typed events emitted by the SWARM backend.
 ///
 /// This enum is the single source of truth for the backend-to-frontend
-/// event contract. Each variant maps to a specific Tauri event channel.
+/// event contract. Each variant maps to a `snake_case` type tag inside
+/// the ordered envelope emitted on the single `swarm://events` channel.
 ///
 /// # Serialization
 ///
@@ -73,7 +77,7 @@ pub enum SwarmEvent {
     BusMessage(BusMessagePayload),
 }
 
-/// Payload for the `worker:spawned` event.
+/// Payload for the `worker_spawned` event.
 ///
 /// Emitted when a new worker PTY process is successfully created
 /// and registered in the worker registry.
@@ -88,7 +92,7 @@ pub struct WorkerSpawnedPayload {
     pub pid: Option<u32>,
 }
 
-/// Payload for the `worker:killed` event.
+/// Payload for the `worker_killed` event.
 ///
 /// Emitted when a worker process is terminated and removed
 /// from the registry.
@@ -99,7 +103,7 @@ pub struct WorkerKilledPayload {
     pub worker_id: Uuid,
 }
 
-/// Payload for the `worker:output` event.
+/// Payload for the `worker_output` event.
 ///
 /// Emitted when raw bytes are read from a worker's PTY master fd.
 /// The frontend (xterm.js) writes these bytes directly to the
@@ -113,7 +117,7 @@ pub struct WorkerOutputPayload {
     pub data: String,
 }
 
-/// Payload for the `worker:state` event.
+/// Payload for the `worker_state` event.
 ///
 /// Emitted when a worker transitions between lifecycle states
 /// (e.g., `"running"` to `"paused"`).
@@ -126,7 +130,7 @@ pub struct WorkerStatePayload {
     pub state: WorkerState,
 }
 
-/// Payload for the `session:created` event.
+/// Payload for the `session_created` event.
 ///
 /// Emitted when a new user session is created.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,7 +142,7 @@ pub struct SessionCreatedPayload {
     pub name: String,
 }
 
-/// Payload for the `session:deleted` event.
+/// Payload for the `session_deleted` event.
 ///
 /// Emitted when a session is removed from the manager.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,7 +152,7 @@ pub struct SessionDeletedPayload {
     pub session_id: Uuid,
 }
 
-/// Payload for the `system:metrics` event.
+/// Payload for the `system_metrics` event.
 ///
 /// Emitted every 500ms by the background metrics collection loop.
 /// Contains both system-level metrics and worker aggregate counts.
@@ -167,7 +171,7 @@ pub struct SystemMetricsPayload {
     pub timestamp: i64,
 }
 
-/// Payload for the `ai:stream_delta` event.
+/// Payload for the `ai_stream_delta` event.
 ///
 /// Emitted for each text delta chunk received from the AI
 /// streaming API. The frontend accumulates these deltas to
@@ -199,7 +203,7 @@ pub struct AiStreamSettledPayload {
     pub error: Option<String>,
 }
 
-/// Payload for the `swarm://bus-message` event.
+/// Payload for the `bus_message` event.
 ///
 /// Emitted when a message is sent through the inter-agent bus.
 /// Contains the full message details for frontend routing.
@@ -218,7 +222,7 @@ pub struct BusMessagePayload {
     pub payload: serde_json::Value,
 }
 
-/// Payload for the `system:log` event.
+/// Payload for the `system_log` event.
 ///
 /// Bridges backend log messages to the frontend console
 /// for debugging and monitoring.
@@ -235,63 +239,24 @@ pub struct SystemLogPayload {
     pub timestamp: i64,
 }
 
-/// Emits a typed [`SwarmEvent`] to the Tauri frontend.
-///
-/// Routes each enum variant to its corresponding channel name
-/// and serializes the payload. Channel names use colon-separated
-/// namespaces (e.g., `"worker:spawned"`, `"ai:stream_delta"`).
+/// Routes a typed [`SwarmEvent`] into the [`crate::orchestration::OrchestrationEngine`],
+/// which assigns a monotonic sequence number, persists it per policy, and
+/// emits the ordered envelope on the single `swarm://events` channel.
 ///
 /// # Arguments
 ///
-/// * `app` - The Tauri app handle to emit events through
-/// * `event` - The typed event to emit
+/// * `app` - The Tauri app handle used to look up the managed engine
+/// * `event` - The typed event to record
 ///
-/// # Channel Mapping
-///
-/// | Variant           | Channel             |
-/// |-------------------|----------------------|
-/// | `WorkerSpawned`   | `worker:spawned`    |
-/// | `WorkerKilled`    | `worker:killed`     |
-/// | `WorkerOutput`    | `worker:output`     |
-/// | `WorkerState`     | `worker:state`      |
-/// | `SessionCreated`  | `session:created`   |
-/// | `SessionDeleted`  | `session:deleted`   |
-/// | `SystemMetrics`   | `system:metrics`    |
-/// | `AiStreamDelta`   | `ai:stream_delta`   |
-/// | `AiStreamSettled` | `ai:stream_settled` |
-/// | `SystemLog`       | `system:log`        |
-///
-/// In addition to the legacy per-channel emission above, every event is
-/// routed through the [`crate::orchestration::OrchestrationEngine`], which
-/// assigns a monotonic sequence number and emits an ordered envelope on
-/// the single `swarm://events` channel.
-#[tracing::instrument(skip(app, event), fields(event_type))]
+/// `try_state` is used because unit tests construct `AppHandle`s without
+/// engine setup; in that case the event is dropped with a warning rather
+/// than panicking.
+#[tracing::instrument(skip(app, event))]
 pub fn emit_event(app: &AppHandle, event: SwarmEvent) {
-    // Ordered path: the engine assigns seq and emits on `swarm://events`.
-    // `try_state` because unit tests construct AppHandles without setup.
     if let Some(engine) = app.try_state::<crate::orchestration::OrchestrationEngine>() {
-        engine.record(event.clone());
-    }
-
-    // Legacy per-channel path — removed in the frontend-cutover cleanup task.
-    let (channel, result) = match &event {
-        SwarmEvent::WorkerSpawned(p) => ("worker:spawned", app.emit("worker:spawned", p)),
-        SwarmEvent::WorkerKilled(p) => ("worker:killed", app.emit("worker:killed", p)),
-        SwarmEvent::WorkerOutput(p) => ("worker:output", app.emit("worker:output", p)),
-        SwarmEvent::WorkerState(p) => ("worker:state", app.emit("worker:state", p)),
-        SwarmEvent::SessionCreated(p) => ("session:created", app.emit("session:created", p)),
-        SwarmEvent::SessionDeleted(p) => ("session:deleted", app.emit("session:deleted", p)),
-        SwarmEvent::SystemMetrics(p) => ("system:metrics", app.emit("system:metrics", p)),
-        SwarmEvent::AiStreamDelta(p) => ("ai:stream_delta", app.emit("ai:stream_delta", p)),
-        SwarmEvent::AiStreamSettled(p) => ("ai:stream_settled", app.emit("ai:stream_settled", p)),
-        SwarmEvent::SystemLog(p) => ("system:log", app.emit("system:log", p)),
-        SwarmEvent::BusMessage(p) => ("swarm://bus-message", app.emit("swarm://bus-message", p)),
-    };
-
-    tracing::Span::current().record("event_type", tracing::field::display(&channel));
-
-    if let Err(e) = result {
-        tracing::error!(channel = channel, error = %e, "failed to emit event");
+        engine.record(event);
+    } else {
+        tracing::warn!("emit_event before engine setup; event dropped");
     }
 }
 

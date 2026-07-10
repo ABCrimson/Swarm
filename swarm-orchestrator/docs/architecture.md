@@ -71,7 +71,10 @@ src-tauri/src/
 │   ├── notification.rs  send_notification
 │   └── fs.rs            Delegates to tauri-plugin-fs
 ├── events/          Event emission system
-│   └── emitter.rs   SwarmEvent enum + emit_event() dispatcher
+│   └── emitter.rs   SwarmEvent enum + emit_event() dispatcher (routes into OrchestrationEngine)
+├── orchestration/   Ordered event core -- see "Ordered Event Core" below
+│   ├── engine.rs    OrchestrationEngine (single writer thread) + DomainEvent envelope
+│   └── log.rs       EventLog -- SQLite (WAL) append-only event log
 ├── session/         Session management
 │   ├── manager.rs   DashMap-backed CRUD
 │   └── store.rs     Persistence via tauri-plugin-store
@@ -123,7 +126,7 @@ spawn_pty()
     │       │
     │       └── mpsc::channel(4096)        Bridge to async world (bounded)
     │               │
-    └── tokio::spawn(event emitter)       Forward as worker:output events
+    └── tokio::spawn(event emitter)       Forward as worker_output events (ephemeral)
 ```
 
 The PTY writer and child process are wrapped in `parking_lot::Mutex` to satisfy `Sync` requirements for `DashMap` storage.
@@ -146,12 +149,12 @@ Frontend ──invoke──> ai_request command
                          │
                     tokio::spawn(client.stream_message())
                          │
-                    SSE parser → emit ai:stream_delta events
+                    SSE parser → emit_event(AiStreamDelta) events, terminated by emit_event(AiStreamSettled)
 ```
 
 Priority levels: `Low (0) < Normal (1) < High (2) < Critical (3)`
 
-On stream failure (network error, malformed SSE, provider error) or a stream that ends without a `message_stop` event, the client still emits a final `ai:stream_delta` with `done: true` -- the frontend is guaranteed a terminal event for every enqueued `requestId`.
+On stream failure (network error, malformed SSE, provider error) or a stream that ends without a `message_stop` event, the client still emits a final `ai_stream_delta` with `done: true`, followed by `ai_stream_settled` -- the frontend is guaranteed a terminal receipt for every enqueued `requestId`.
 
 ### Session Persistence
 
@@ -169,7 +172,31 @@ The `bus` module provides inter-agent communication independent of the AI queue:
 - **`MessageBus`** (`bus/channel.rs`): creates and holds one `tokio::sync::broadcast` channel per topic string, in a `DashMap<String, Sender<BusMessage>>`
 - **`Router`** (`bus/router.rs`): sends direct messages (`send_direct`, tagged with a `to_worker`) and broadcasts (`send_broadcast`), and owns a `DashMap<Uuid, Pipeline>` of registered multi-stage pipelines
 - **Pipelines:** an ordered list of `PipelineStage { worker_id, transform }`; `execute_pipeline` forwards a payload from stage to stage, applying an optional dot-notation field-selector transform (e.g. `.result`, `.data.items`) between stages
-- **Frontend delivery contract:** `bus_send` only publishes to the internal bus and never emits an event itself. `bus_subscribe` spawns the sole background task that forwards messages on a topic to the frontend as `swarm://bus-message` events. This keeps delivery to exactly one event per message, in one payload shape (`BusMessagePayload`), regardless of how many (if any) subscribers are attached -- see [docs/api.md](api.md#unified-bus-event-contract)
+- **Frontend delivery contract:** `bus_send` only publishes to the internal bus and never emits an event itself. `bus_subscribe` spawns the sole background task that forwards messages on a topic to the frontend as `bus_message` envelopes on `swarm://events`. This keeps delivery to exactly one event per message, in one payload shape (`BusMessagePayload`), regardless of how many (if any) subscribers are attached -- see [docs/api.md](api.md#unified-bus-event-contract)
+
+### Ordered Event Core
+
+The `orchestration` module owns the single ordered event pipeline that every `emit_event` call (`src-tauri/src/events/emitter.rs`) is routed through:
+
+```text
+Any backend call ──emit_event()──> OrchestrationEngine::record()   (mpsc::Sender, any thread)
+                                              │
+                                    swarm-event-writer thread        (the only writer)
+                                              │
+                                    seq += 1; ts = now_millis()
+                                              │
+                                    is_persistent(event)? ──yes──> EventLog::append()   SQLite (WAL)
+                                              │                        <app-data>/swarm-events.db
+                                              ▼
+                                    AppHandle::emit("swarm://events", DomainEvent)
+```
+
+- **Single writer, one thread:** `OrchestrationEngine::start` spawns one dedicated `swarm-event-writer` OS thread owning an `mpsc::Receiver<SwarmEvent>` and the `EventLog` connection. `record()` is a non-blocking `Sender::send` callable from any thread/task; the writer loop is the *only* place that assigns `seq`, so wire order is totally ordered by construction -- there is no window where two threads could race to claim the same sequence number.
+- **SQLite WAL log:** `EventLog` (`orchestration/log.rs`) opens a SQLite database at `<app-data>/swarm-events.db` in WAL journal mode (`synchronous = NORMAL`), with a single `events(seq INTEGER PRIMARY KEY, ts, type, payload) STRICT` table. `seq` is the primary key, so a duplicate-seq append is a hard error -- an invariant the writer thread's exclusive ownership of `seq` assignment guarantees never fires in practice. On startup, the engine resumes numbering from `EventLog::max_seq()`, so sequence numbers stay monotonic across restarts, not just within one process lifetime.
+- **Persistence policy:** every event consumes a `seq`, but only some are written to the log. `is_persistent()` (`orchestration/engine.rs`) excludes `WorkerOutput`, `SystemMetrics`, and `SystemLog` -- high-frequency telemetry that flows live but is not history. Everything else (`worker_spawned`, `worker_killed`, `worker_state`, `session_created`, `session_deleted`, `ai_stream_delta`, `ai_stream_settled`, `bus_message`) persists before being emitted.
+- **Emission:** after the persistence step, the writer wraps the event in a `DomainEvent { seq, ts, ..flattened SwarmEvent }` and emits it on the single `swarm://events` Tauri channel. See [docs/api.md#events](api.md#events) for the wire shape and full type-tag list.
+- **The receipt pattern:** rather than overload a stream event's payload with a completion flag, terminal outcomes get their own event type -- e.g. `ai_stream_settled`, emitted exactly once per AI request after the final `ai_stream_delta`, on both success and failure. Frontend code awaits the receipt (`waitFor()` in `src/lib/event-bus.ts`) instead of inferring completion from stream contents.
+- **Replay foundation:** `commands/orchestration.rs::events_since(after_seq)` returns persisted rows with `seq > after_seq`, ascending, capped at 5000 per call (see [docs/api.md#events_since](api.md#events_since)). This is the data-layer foundation for gap backfill -- already wired into `src/lib/event-bus.ts`'s `connectEventBus` -- and for future replay; a replay *UI* is out of scope for this phase.
 
 ### Updates and Notifications
 
@@ -288,10 +315,13 @@ Backend: commands::worker::spawn_worker()
 Backend: lifecycle::do_spawn_worker()
         ├── pty::spawn_pty()          Spawn PTY process
         ├── WorkerRegistry.spawn()    Register in DashMap
-        └── emit(worker:spawned)      Notify frontend
+        └── emit_event(WorkerSpawned) Hand off to OrchestrationEngine
         │
         ▼
-Frontend: listen("worker:spawned")
+OrchestrationEngine writer thread: seq++, persist, emit
+        │  DomainEvent{ seq, ts, type: "worker_spawned", payload } on swarm://events
+        ▼
+Frontend: onEvent("worker_spawned", ...)   (src/lib/event-bus.ts)
         │
         ▼
 Zustand worker store updates → React re-renders
@@ -318,16 +348,22 @@ Backend: AiClient.stream_message()   POST to Anthropic API
 SSE Stream: data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}
         │
         ▼
-Backend: emit(ai:stream_delta, { requestId, delta: "Hi", done: false })
-        │
+Backend: emit_event(AiStreamDelta{ requestId, delta: "Hi", done: false })
+        │  OrchestrationEngine: seq++, persist, emit as swarm://events
         ▼
-Frontend: listen("ai:stream_delta")
+Frontend: onEvent("ai_stream_delta", ...)
         │
         ▼
 Zustand AI store accumulates deltas → React re-renders message
         │
         ▼
-Backend: emit(ai:stream_delta, { requestId, delta: "", done: true })
+Backend: emit_event(AiStreamDelta{ requestId, delta: "", done: true })
+        │
+        ▼
+Backend: emit_event(AiStreamSettled{ requestId, status: "ok", error: null })   Terminal receipt
+        │
+        ▼
+Frontend: waitFor(e => e.type === "ai_stream_settled" && ...)   (no shipped consumer yet -- contract only)
 ```
 
 ### Metrics Collection
@@ -339,10 +375,10 @@ Background task (500ms interval)
 spawn_blocking(registry.aggregate_metrics())    Sequential (spawn_blocking-offloaded)
         │
         ▼
-emit(system:metrics, { cpuPercent, memoryMb, workerCount, ... })
-        │
+emit_event(SystemMetrics{ cpuPercent, memoryMb, workerCount, ... })
+        │  OrchestrationEngine: seq++, NOT persisted (ephemeral), emit as swarm://events
         ▼
-Frontend: listen("system:metrics")
+Frontend: onEvent("system_metrics", ...)
         │
         ▼
 Zustand metrics store → Recharts re-renders
@@ -390,20 +426,23 @@ Long-lived state that must survive restarts:
 
 ### Backend to Frontend (Push)
 
-The backend emits typed events via `SwarmEvent` enum:
+The backend emits typed events via the `SwarmEvent` enum, but not directly: every emission is routed through `emit_event()` into the `OrchestrationEngine` (see [Ordered Event Core](#ordered-event-core) above), which is the sole source of the single `swarm://events` channel. There is one channel, not one channel per event type -- the type tag lives in the envelope's `type` field:
 
-| Channel                | Payload                                         | Trigger                    |
-|------------------------|--------------------------------------------------|----------------------------|
-| `worker:spawned`       | `{ workerId, name, pid }`                        | Worker registered          |
-| `worker:killed`        | `{ workerId }`                                   | Worker terminated          |
-| `worker:output`        | `{ workerId, data }`                             | PTY output available       |
-| `worker:state`         | `{ workerId, state }`                            | State transition           |
-| `session:created`      | `{ sessionId, name }`                            | Session created            |
-| `session:deleted`      | `{ sessionId }`                                  | Session removed            |
-| `system:metrics`       | `{ cpuPercent, ... }`                            | 500ms metrics tick         |
-| `ai:stream_delta`      | `{ requestId, delta, done }`                     | AI response chunk (always terminates with `done: true`) |
-| `system:log`           | `{ level, message }`                             | Backend log message        |
-| `swarm://bus-message`  | `{ messageId, fromWorker, toWorker, topic, payload }` | Bus message, forwarded by an active `bus_subscribe` task |
+| Type                 | Payload                                                        | Trigger                    | Persisted |
+|-----------------------|-----------------------------------------------------------------|-----------------------------|-----------|
+| `worker_spawned`     | `{ workerId, name, pid }`                                       | Worker registered           | Yes |
+| `worker_killed`      | `{ workerId }`                                                   | Worker terminated           | Yes |
+| `worker_output`      | `{ workerId, data }`                                             | PTY output available        | No |
+| `worker_state`       | `{ workerId, state }`                                            | State transition            | Yes |
+| `session_created`    | `{ sessionId, name }`                                            | Session created              | Yes |
+| `session_deleted`    | `{ sessionId }`                                                  | Session removed              | Yes |
+| `system_metrics`     | `{ cpuPercent, memoryMb, workerCount, aiReqPerSec, timestamp }`  | 500ms metrics tick           | No |
+| `ai_stream_delta`    | `{ requestId, delta, done }`                                     | AI response chunk            | Yes |
+| `ai_stream_settled`  | `{ requestId, status, error }`                                   | Terminal receipt, once per AI request | Yes |
+| `system_log`         | `{ level, message, target, timestamp }`                          | Backend log message          | No |
+| `bus_message`        | `{ messageId, fromWorker, toWorker, topic, payload }`            | Bus message, forwarded by an active `bus_subscribe` task | Yes |
+
+See [docs/api.md#events](api.md#events) for the full envelope contract (`{ seq, ts, type, payload }`), the persistence policy, the receipt pattern, and `events_since` paging.
 
 ### Frontend to Backend (Pull)
 
@@ -429,6 +468,7 @@ The frontend invokes Tauri commands via `invoke()`:
 | `bus_create_pipeline`  | Pipeline UUID string                |
 | `bus_list_channels`    | `string[]`                          |
 | `bus_list_pipelines`   | `PipelineInfo[]`                    |
+| `events_since`          | Persisted `DomainEvent[]`, `seq > afterSeq`, capped at 5000 |
 | `check_for_updates`    | Update-availability JSON            |
 | `send_notification`    | `()`                                |
 

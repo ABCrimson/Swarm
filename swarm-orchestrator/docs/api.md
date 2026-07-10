@@ -9,12 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 const result = await invoke("command_name", { arg1: value1 });
 ```
 
-Events are received via:
-
-```typescript
-import { listen } from "@tauri-apps/api/event";
-const unlisten = await listen("event:channel", (event) => { /* ... */ });
-```
+Events are received on a single ordered channel, `swarm://events` -- see [Events](#events) below for the envelope contract. The frontend does not call `listen()` directly outside of `src/lib/event-bus.ts`; application code subscribes via `onEvent()`/`waitFor()`.
 
 ---
 
@@ -99,7 +94,7 @@ const workerId = await invoke("spawn_worker", {
 console.log("Spawned worker:", workerId);
 ```
 
-**Emits:** `worker:spawned` event with `{ workerId, name, pid }`.
+**Emits:** `worker_spawned` envelope on `swarm://events` with payload `{ workerId, name, pid }`.
 
 ---
 
@@ -128,7 +123,7 @@ Pauses a running worker by transitioning its state to `paused`.
 await invoke("pause_worker", { id: "550e8400-e29b-41d4-a716-446655440000" });
 ```
 
-**Emits:** `worker:state` event with `{ workerId, state: "paused" }`.
+**Emits:** `worker_state` envelope on `swarm://events` with payload `{ workerId, state: "paused" }`.
 
 **Note:** On Windows, this only updates the internal state. Process-level suspension via `SIGSTOP` is not supported.
 
@@ -159,7 +154,7 @@ Resumes a paused worker by transitioning its state back to `running`.
 await invoke("resume_worker", { id: "550e8400-e29b-41d4-a716-446655440000" });
 ```
 
-**Emits:** `worker:state` event with `{ workerId, state: "running" }`.
+**Emits:** `worker_state` envelope on `swarm://events` with payload `{ workerId, state: "running" }`.
 
 ---
 
@@ -190,7 +185,7 @@ Drops the PTY writer (closes master fd), kills the child process, waits for exit
 await invoke("kill_worker", { id: "550e8400-e29b-41d4-a716-446655440000" });
 ```
 
-**Emits:** `worker:killed` event with `{ workerId }`.
+**Emits:** `worker_killed` envelope on `swarm://events` with payload `{ workerId }`.
 
 ---
 
@@ -288,7 +283,7 @@ const session = await invoke("create_session", {
 console.log("Created session:", session.id);
 ```
 
-**Emits:** `session:created` event with `{ sessionId, name }`.
+**Emits:** `session_created` envelope on `swarm://events` with payload `{ sessionId, name }`.
 
 **Side effect:** Auto-saves all sessions to `sessions.json`.
 
@@ -319,7 +314,7 @@ Deletes a session by ID.
 await invoke("delete_session", { id: session.id });
 ```
 
-**Emits:** `session:deleted` event with `{ sessionId }`.
+**Emits:** `session_deleted` envelope on `swarm://events` with payload `{ sessionId }`.
 
 **Side effect:** Auto-saves remaining sessions to `sessions.json`.
 
@@ -407,7 +402,7 @@ await invoke("session_add_worker", {
 
 Enqueues an AI request for streaming processing via the Anthropic Messages API.
 
-The request is placed into a priority queue and processed when a concurrency slot is available (default: 3 concurrent requests). Response chunks are delivered as `ai:stream_delta` events.
+The request is placed into a priority queue and processed when a concurrency slot is available (default: 3 concurrent requests). Response chunks are delivered as `ai_stream_delta` envelopes on `swarm://events`, followed by exactly one `ai_stream_settled` receipt.
 
 **Parameters:**
 
@@ -443,19 +438,18 @@ The request is placed into a priority queue and processed when a concurrency slo
 **Example:**
 
 ```typescript
+import { onEvent, waitFor } from "#lib/event-bus";
+
 const requestId = crypto.randomUUID();
 
-// Listen for stream deltas
-const unlisten = await listen("ai:stream_delta", (event) => {
-  const { requestId: id, delta, done } = event.payload;
-  if (id === requestId) {
-    if (done) {
-      console.log("Stream complete");
-      unlisten();
-    } else {
-      console.log(delta);
-    }
-  }
+// Accumulate deltas as they arrive
+const off = onEvent("ai_stream_delta", (e) => {
+  const { requestId: id, delta, done } = e.payload as {
+    requestId: string;
+    delta: string;
+    done: boolean;
+  };
+  if (id === requestId && !done) console.log(delta);
 });
 
 // Enqueue the request
@@ -469,17 +463,29 @@ await invoke("ai_request", {
     priority: "normal",
   },
 });
+
+// Await the terminal receipt instead of polling stream state
+const settled = await waitFor(
+  (e) => e.type === "ai_stream_settled" && (e.payload as { requestId: string }).requestId === requestId,
+);
+off();
+console.log("Stream settled:", settled.payload);
 ```
 
-**Emits:** Multiple `ai:stream_delta` events:
+**Emits:** Multiple `ai_stream_delta` envelopes, then exactly one `ai_stream_settled` receipt:
 
-| Field       | Type      | Description                              |
-|-------------|-----------|------------------------------------------|
-| `requestId` | `string`  | Correlation ID matching the request      |
-| `delta`     | `string`  | Text chunk (empty string on final event) |
-| `done`      | `boolean` | `true` on the final event                |
+| Type                | Field       | Type              | Description                                  |
+|---------------------|-------------|-------------------|-----------------------------------------------|
+| `ai_stream_delta`   | `requestId` | `string`          | Correlation ID matching the request          |
+| `ai_stream_delta`   | `delta`     | `string`          | Text chunk (empty string on the final delta) |
+| `ai_stream_delta`   | `done`      | `boolean`         | `true` on the final delta                    |
+| `ai_stream_settled` | `requestId` | `string`          | Correlation ID matching the request          |
+| `ai_stream_settled` | `status`    | `string`          | `"ok"` or `"error"`                          |
+| `ai_stream_settled` | `error`     | `string \| null`  | Error description when `status == "error"`   |
 
-**Guaranteed termination:** A `done: true` event is always emitted for a given `requestId`, even when the stream fails (network error, malformed SSE, provider error) or ends without a `message_stop` event. Frontend consumers can rely on `done: true` as the definitive signal to stop listening -- there is no scenario where a request is enqueued and the frontend never receives a terminal event.
+**Guaranteed termination:** `ai_stream_settled` is always emitted exactly once for a given `requestId`, after the final delta, even when the stream fails (network error, malformed SSE, provider error) or ends without a `message_stop` event. Frontend and test consumers should `waitFor` this receipt instead of polling stream state or relying on `delta.done` alone -- there is no scenario where a request is enqueued and the frontend never receives the terminal receipt.
+
+**Note:** As of this writing, no shipped UI consumes `ai_stream_delta`/`ai_stream_settled` -- this documents the receipt contract, not an active consumer.
 
 ---
 
@@ -523,7 +529,7 @@ for (const w of metrics.perWorker) {
 }
 ```
 
-**Note:** This is the pull-based complement to the push-based `system:metrics` event (emitted every 500ms). Both `get_metrics` and the background loop read from the same `SharedSystem` (managed state wrapping one `sysinfo::System` behind a `parking_lot::Mutex`), so CPU usage deltas are computed from a single source of truth instead of two independently-refreshing `System` instances.
+**Note:** This is the pull-based complement to the push-based `system_metrics` envelope (emitted every 500ms on `swarm://events`; ephemeral -- consumes a seq but is never persisted). Both `get_metrics` and the background loop read from the same `SharedSystem` (managed state wrapping one `sysinfo::System` behind a `parking_lot::Mutex`), so CPU usage deltas are computed from a single source of truth instead of two independently-refreshing `System` instances.
 
 ---
 
@@ -569,7 +575,7 @@ const receiverCount = await invoke("bus_send", {
 
 ### `bus_subscribe`
 
-Subscribes to a topic and streams matching messages to the frontend as `swarm://bus-message` events.
+Subscribes to a topic and streams matching messages to the frontend as `bus_message` envelopes on `swarm://events`.
 
 **Parameters:**
 
@@ -588,15 +594,23 @@ Subscribes to a topic and streams matching messages to the frontend as `swarm://
 **Example:**
 
 ```typescript
+import { onEvent } from "#lib/event-bus";
+
 await invoke("bus_subscribe", { topic: "task:result" });
 
-const unlisten = await listen("swarm://bus-message", (event) => {
-  const { messageId, fromWorker, toWorker, topic, payload } = event.payload;
+const off = onEvent("bus_message", (e) => {
+  const { messageId, fromWorker, toWorker, topic, payload } = e.payload as {
+    messageId: string;
+    fromWorker: string;
+    toWorker: string | null;
+    topic: string;
+    payload: unknown;
+  };
   console.log(`[${topic}] ${fromWorker} -> ${toWorker ?? "*"}:`, payload);
 });
 ```
 
-**Emits:** `swarm://bus-message` event with `{ messageId, fromWorker, toWorker, topic, payload }` for every message received on the subscribed topic, for the lifetime of the subscription task.
+**Emits:** `bus_message` envelope on `swarm://events` with payload `{ messageId, fromWorker, toWorker, topic, payload }` for every message received on the subscribed topic, for the lifetime of the subscription task.
 
 ---
 
@@ -744,53 +758,111 @@ await invoke("send_notification", {
 
 ## Events
 
+Every backend event -- worker lifecycle, session lifecycle, AI streaming, metrics, logs, bus messages -- travels on a **single** Tauri channel, `swarm://events`, as a seq-ordered envelope. There are no per-domain channels; `listen()` against anything else is not part of the contract.
+
+### The Envelope
+
+```json
+{ "seq": 42, "ts": 1752099600123, "type": "worker_spawned", "payload": { "workerId": "...", "name": "...", "pid": 1234 } }
+```
+
+| Field     | Type     | Description                                                          |
+|-----------|----------|------------------------------------------------------------------------|
+| `seq`     | `number` | Monotonic sequence number assigned by the single-writer engine. Wire order == seq order; never reused, never reordered. |
+| `ts`      | `number` | Unix timestamp in milliseconds, assigned by the writer thread.        |
+| `type`    | `string` | Event type tag, `snake_case` (e.g. `"worker_spawned"`).               |
+| `payload` | `object` | The event's data, `camelCase` fields -- shape depends on `type`.       |
+
+`seq` is assigned by one dedicated writer thread (the `OrchestrationEngine`) that every backend call routes through via `emit_event`, so there is a single, total order across every event type -- a `worker_spawned` and a `session_created` racing in the backend still land on the wire (and in the log) in a well-defined, non-interleaved order.
+
+### Type Tags
+
+| Type                 | Payload                                                        | Persisted |
+|----------------------|-----------------------------------------------------------------|-----------|
+| `worker_spawned`     | `{ workerId, name, pid }`                                       | Yes       |
+| `worker_killed`      | `{ workerId }`                                                   | Yes       |
+| `worker_output`      | `{ workerId, data }`                                             | No (ephemeral) |
+| `worker_state`       | `{ workerId, state }`                                            | Yes       |
+| `session_created`    | `{ sessionId, name }`                                            | Yes       |
+| `session_deleted`    | `{ sessionId }`                                                  | Yes       |
+| `system_metrics`     | `{ cpuPercent, memoryMb, workerCount, aiReqPerSec, timestamp }`  | No (ephemeral) |
+| `ai_stream_delta`    | `{ requestId, delta, done }`                                     | Yes       |
+| `ai_stream_settled`  | `{ requestId, status, error }` -- terminal receipt, exactly once per request | Yes |
+| `system_log`         | `{ level, message, target, timestamp }`                          | No (ephemeral) |
+| `bus_message`        | `{ messageId, fromWorker, toWorker, topic, payload }`            | Yes       |
+
 ### Unified Bus Event Contract
 
-`swarm://bus-message` is delivered through exactly one path: the background task spawned by [`bus_subscribe`](#bus_subscribe). `bus_send` never emits directly. This guarantees each message reaches the frontend **at most once**, in one consistent shape, regardless of how many (if any) `bus_subscribe` calls are active for a topic -- there is no double-delivery and no risk of the emit-on-send and emit-on-subscribe paths drifting out of sync.
+`bus_message` envelopes are delivered through exactly one path: the background task spawned by [`bus_subscribe`](#bus_subscribe). `bus_send` never emits directly. This guarantees each message reaches the frontend **at most once**, in one consistent shape, regardless of how many (if any) `bus_subscribe` calls are active for a topic -- there is no double-delivery and no risk of the emit-on-send and emit-on-subscribe paths drifting out of sync.
 
-### Event Channel Reference
+### Persistence Policy
 
-All events use colon-separated channel names (`swarm://bus-message` uses the Tauri URL-style channel form). Payload fields are `camelCase`.
+`worker_output`, `system_metrics`, and `system_log` are high-frequency telemetry: they still flow through the ordered stream and each consumes a `seq`, but they are **never written to the log**. They cannot be backfilled after a gap and will not appear in [`events_since`](#events_since) -- treat them as best-effort, live-only.
 
-| Channel               | Payload Type             | Frequency        |
-|------------------------|--------------------------|------------------|
-| `worker:spawned`       | `WorkerSpawnedPayload`   | On spawn         |
-| `worker:killed`        | `WorkerKilledPayload`    | On kill          |
-| `worker:output`        | `WorkerOutputPayload`    | Continuous       |
-| `worker:state`         | `WorkerStatePayload`     | On state change  |
-| `session:created`      | `SessionCreatedPayload`  | On create        |
-| `session:deleted`      | `SessionDeletedPayload`  | On delete        |
-| `system:metrics`       | `SystemMetricsPayload`   | Every 500ms      |
-| `ai:stream_delta`      | `AiStreamDeltaPayload`   | Per AI chunk (always terminates with `done: true`) |
-| `system:log`           | `SystemLogPayload`       | On log emit      |
-| `swarm://bus-message`  | `BusMessagePayload`      | Per bus message, only while a matching `bus_subscribe` task is active |
+Every other type persists to the SQLite event log (`<app-data>/swarm-events.db`, WAL mode) before being emitted, so it survives a gap or a restart and can be replayed via `events_since`.
 
-### Listening to Events
+### Receipts
+
+Some request/response flows use a dedicated terminal event (a "receipt") instead of a boolean flag buried in a stream event, so callers have one unambiguous signal to await:
+
+- **`ai_stream_settled`** -- emitted exactly once per AI request, after the final `ai_stream_delta`, on both the success (`status: "ok"`) and failure (`status: "error"`, `error` set) paths. See [`ai_request`](#ai_request) for the contract and an example using `waitFor`. No shipped UI currently consumes this receipt -- it documents the contract for the next consumer, not an existing one.
+
+The frontend's `waitFor(predicate, timeoutMs?)` (in `src/lib/event-bus.ts`) is the general consumption primitive for receipts: it resolves the first envelope matching `predicate`, or rejects on timeout (default 5000ms).
+
+### `events_since`
 
 ```typescript
-import { listen } from "@tauri-apps/api/event";
+const events = await invoke("events_since", { afterSeq: 100 });
+```
+
+Returns **persisted** envelopes with `seq > afterSeq`, ascending, capped at 5000 rows per call. Used by the frontend to backfill after a detected sequence gap (see `src/lib/event-bus.ts`'s gap-detection in `connectEventBus`) and as the foundation for replay. Ephemeral types (`worker_output`, `system_metrics`, `system_log`) never appear in the result, by construction.
+
+Callers page by re-invoking with the last-seen `seq` as the new `afterSeq` while a full (5000-row) page keeps coming back:
+
+```typescript
+let cursor = afterSeq;
+for (;;) {
+  const page = await invoke<DomainEvent[]>("events_since", { afterSeq: cursor });
+  for (const e of page) handle(e);
+  if (page.length < 5000) break;
+  cursor = page[page.length - 1].seq;
+}
+```
+
+### Subscribing
+
+Application code does not call `listen()` directly -- it goes through `src/lib/event-bus.ts`, which validates every envelope with zod, tracks `lastSeq`, triggers `events_since` backfill on a detected gap (buffering live events that arrive mid-backfill and flushing them seq-sorted afterward), and exposes:
+
+```typescript
+import { connectEventBus, onEvent, waitFor } from "#lib/event-bus";
+
+// Once, at app bootstrap:
+await connectEventBus();
 
 // Worker output (high frequency -- PTY data)
-const unlisten = await listen("worker:output", (event) => {
-  const { workerId, data } = event.payload;
-  // data is a number[] of raw bytes
-  const text = new TextDecoder().decode(new Uint8Array(data));
-  terminal.write(text);
+onEvent("worker_output", (e) => {
+  const { workerId, data } = e.payload as { workerId: string; data: string };
+  terminal.write(data);
 });
 
 // System metrics (every 500ms)
-await listen("system:metrics", (event) => {
-  const { cpuPercent, memoryMb, workerCount, timestamp } = event.payload;
+onEvent("system_metrics", (e) => {
+  const { cpuPercent, memoryMb, workerCount, timestamp } = e.payload as {
+    cpuPercent: number;
+    memoryMb: number;
+    workerCount: number;
+    timestamp: number;
+  };
   updateMetricsChart({ cpuPercent, memoryMb, workerCount, timestamp });
 });
 
 // Bus messages (requires an active bus_subscribe call for the topic)
 await invoke("bus_subscribe", { topic: "task:result" });
-await listen("swarm://bus-message", (event) => {
-  const { messageId, fromWorker, toWorker, topic, payload } = event.payload;
+onEvent("bus_message", (e) => {
+  const { topic, payload } = e.payload as { topic: string; payload: unknown };
   console.log(`[${topic}]`, payload);
 });
 
-// Cleanup on unmount
-unlisten();
+// A receipt: await a specific ai_stream_settled instead of polling
+const settled = await waitFor((e) => e.type === "ai_stream_settled");
 ```

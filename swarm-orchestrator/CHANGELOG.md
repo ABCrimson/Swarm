@@ -7,6 +7,26 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 
 ---
 
+## [0.11.0] - 2026-07-10
+
+### Phase 1: ordered event core
+
+Replaces the legacy per-channel event system with a single ordered channel. Every backend event -- worker, session, AI streaming, metrics, logs, bus messages -- now flows through one `swarm://events` Tauri channel as a `{ seq, ts, type, payload }` envelope, assigned by a single-writer `OrchestrationEngine` running on its own thread, so wire order is total across every event type.
+
+- **Single-writer engine:** `OrchestrationEngine` (`src-tauri/src/orchestration/engine.rs`) owns one dedicated writer thread that every `emit_event()` call is routed through; it assigns the monotonic `seq`, persists per policy, and emits -- eliminating the possibility of two threads racing to claim the same sequence number
+- **SQLite append-only log:** events are persisted to `<app-data>/swarm-events.db` (WAL mode, `events(seq PRIMARY KEY, ts, type, payload) STRICT`); sequence numbering resumes from the log's max `seq` across restarts
+- **Persistence policy:** `worker_output`, `system_metrics`, and `system_log` are high-frequency telemetry -- they consume a `seq` and flow live but are never written to the log. Every other type (`worker_spawned`, `worker_killed`, `worker_state`, `session_created`, `session_deleted`, `ai_stream_delta`, `ai_stream_settled`, `bus_message`) persists
+- **`ai_stream_settled` receipt:** a new terminal event emitted exactly once per AI request, after the final `ai_stream_delta`, on both success (`status: "ok"`) and failure (`status: "error"`, with `error` set) -- the receipt pattern that replaces inferring completion from a stream event's `done` flag. (Frontend consumption is not yet wired to a UI -- this lands the contract.)
+- **`events_since(after_seq)`:** a new IPC command returning persisted envelopes ascending, capped at 5000 rows per call, for gap backfill and replay
+- **Frontend event bus:** `src/lib/event-bus.ts` replaces all `listen()`-per-channel call sites with `connectEventBus()` + `onEvent()`/`waitFor()`; envelopes are zod-validated, sequence gaps trigger an `events_since` backfill with a pending-buffer to preserve ordering against concurrently-arriving live events
+- **Legacy per-channel events removed:** `worker:spawned`, `worker:killed`, `worker:output`, `worker:state`, `session:created`, `session:deleted`, `system:metrics`, `ai:stream_delta`, `ai:stream_settled`, `system:log`, and `swarm://bus-message` are no longer emitted as distinct Tauri channels -- `emit_event()` now routes exclusively through the engine
+
+### BREAKING CHANGE
+
+Any code still calling `listen("worker:spawned", ...)` (or any other legacy per-channel name) against the Tauri backend will no longer receive events. Subscribe via `swarm://events` and the `type` field, or use `src/lib/event-bus.ts`'s `onEvent()`.
+
+---
+
 ## [0.10.0] - 2026-07-09
 
 ### Evergreen Modernization Pass
