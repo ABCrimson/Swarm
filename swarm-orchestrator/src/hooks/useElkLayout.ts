@@ -27,6 +27,12 @@ const DEFAULT_LAYOUT_OPTIONS: Record<string, string> = {
 /** Shown when the ELK layout worker fails to start, crashes, or sends an unreadable message. */
 const LAYOUT_ENGINE_ERROR = "Layout Engine Failed To Start";
 
+/** Shown when `elk.layout()` neither resolves nor rejects within {@link LAYOUT_TIMEOUT_MS} — the worker is presumed hung. */
+const LAYOUT_TIMEOUT_ERROR = "Layout Engine Timed Out";
+
+/** How long to wait for `elk.layout()` to settle before treating it as a hung/failed layout. */
+const LAYOUT_TIMEOUT_MS = 10_000;
+
 /**
  * Generates a stable fingerprint of the topology for deep comparison.
  * Only re-layouts when the node set or edge connections actually change.
@@ -53,6 +59,11 @@ function topologyFingerprint(nodes: Node[], edges: Edge[]): string {
  * protocol over that single worker and resolves/rejects `.layout()`
  * accordingly; a `worker.onerror`/`onmessageerror` failure is surfaced
  * through the `error` return value instead of leaving `isLayouting` stuck.
+ * A {@link LAYOUT_TIMEOUT_MS} watchdog covers the remaining failure mode —
+ * a worker that neither errors nor ever responds — by racing `.layout()`
+ * against a timer and surfacing the same kind of `error` state if it wins;
+ * the watchdog timer is always cleared (success, any failure path, or
+ * unmount) so it never fires — and never leaks — after the fact.
  *
  * Automatically re-runs layout when the topology fingerprint changes.
  * Node positions are applied via `requestAnimationFrame` to avoid layout thrash.
@@ -72,14 +83,29 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
   const nodesRef = useRef<Node[]>(nodes);
   const edgesRef = useRef<Edge[]>(edges);
   const rafIdRef = useRef<number | null>(null);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   nodesRef.current = nodes;
   edgesRef.current = edges;
 
+  /** Clears the in-flight layout watchdog, if any. Idempotent. */
+  const clearWatchdog = (): void => {
+    if (watchdogRef.current !== null) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+  };
+
   // Construct the ELK driver (and its single, non-nested worker) once on
   // mount, terminate on unmount.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: clearWatchdog is a stable-shape helper closing only over the ref; including it would redefine the effect's identity every render for no behavioral change.
   useEffect(() => {
     const handleWorkerFailure = (): void => {
+      // A worker crash/unreadable-message failure makes the in-flight
+      // `.layout()` call moot — without this, the watchdog would still
+      // fire LAYOUT_TIMEOUT_MS later and stomp this (correct) error with
+      // a misleading timeout one.
+      clearWatchdog();
       setError(LAYOUT_ENGINE_ERROR);
       setIsLayouting(false);
     };
@@ -104,6 +130,7 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
         cancelAnimationFrame(rafIdRef.current);
         rafIdRef.current = null;
       }
+      clearWatchdog();
     };
   }, []);
 
@@ -134,9 +161,24 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
       ),
     };
 
-    elk
-      .layout(graph)
+    // Clear any watchdog left over from a prior in-flight call — a fresh
+    // runLayout() always supersedes it, and only one should ever be live.
+    clearWatchdog();
+
+    // Race `.layout()` against a watchdog timer: elkjs's worker protocol
+    // has no built-in timeout, so a worker that neither errors nor ever
+    // responds (as opposed to the onerror/onmessageerror cases handled
+    // above) would otherwise leave `isLayouting` stuck forever.
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      watchdogRef.current = setTimeout(() => {
+        watchdogRef.current = null;
+        reject(new Error("elk-layout-watchdog-timeout"));
+      }, LAYOUT_TIMEOUT_MS);
+    });
+
+    Promise.race([elk.layout(graph), timeoutPromise])
       .then((result) => {
+        clearWatchdog();
         rafIdRef.current = requestAnimationFrame(() => {
           rafIdRef.current = null;
 
@@ -160,8 +202,10 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
           setIsLayouting(false);
         });
       })
-      .catch(() => {
-        setError(LAYOUT_ENGINE_ERROR);
+      .catch((err: unknown) => {
+        clearWatchdog();
+        const timedOut = err instanceof Error && err.message === "elk-layout-watchdog-timeout";
+        setError(timedOut ? LAYOUT_TIMEOUT_ERROR : LAYOUT_ENGINE_ERROR);
         setIsLayouting(false);
       });
   };

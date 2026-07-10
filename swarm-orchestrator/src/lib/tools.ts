@@ -16,10 +16,25 @@ export interface SwarmToolResult {
   readonly error?: string;
 }
 
-/** A registered SWARM tool with its Zod schema and Anthropic-compatible definition. */
+/**
+ * A registered SWARM tool with its Zod schema and Anthropic-compatible
+ * definition.
+ *
+ * `description` and `uiDescription` are deliberately split (dual-use
+ * strings, one audience each):
+ *   - `description` is sent to the Anthropic API as the tool-schema
+ *     description (via `anthropicTool`/`zodToTool`) — natural sentence
+ *     case reads better as a model-facing instruction and yields better
+ *     prompt quality than a Title-Cased label.
+ *   - `uiDescription` is shown on the Tools page (`ToolCard`) — Title
+ *     Case, matching this app's UI copy convention.
+ */
 export interface SwarmTool {
   readonly name: string;
+  /** Sentence-case description sent to the Anthropic API as the tool's schema description. */
   readonly description: string;
+  /** Title Case description rendered in the Tools page UI (`ToolCard`). */
+  readonly uiDescription: string;
   readonly schema: z.ZodType;
   readonly anthropicTool: Tool;
   readonly execute: (input: Record<string, unknown>) => Promise<SwarmToolResult>;
@@ -60,7 +75,8 @@ const GetMetricsInput = z.object({
  * Factory for creating a SWARM tool with its Anthropic-compatible definition.
  *
  * @param name - Tool identifier used in Anthropic tool_use blocks.
- * @param description - Human-readable description for the model.
+ * @param description - Sentence-case description sent to the model as the tool-schema description (via `zodToTool`).
+ * @param uiDescription - Title Case description rendered in the Tools page UI (`ToolCard`); never sent to the API.
  * @param schema - Zod schema defining the tool's input parameters.
  * @param execute - Async function that runs the tool and returns a result.
  * @returns Fully constructed {@link SwarmTool} with API-compatible definition.
@@ -68,12 +84,14 @@ const GetMetricsInput = z.object({
 function createTool(
   name: string,
   description: string,
+  uiDescription: string,
   schema: z.ZodType,
   execute: (input: Record<string, unknown>) => Promise<SwarmToolResult>,
 ): SwarmTool {
   return {
     name,
     description,
+    uiDescription,
     schema,
     anthropicTool: zodToTool(name, description, schema),
     execute,
@@ -82,6 +100,7 @@ function createTool(
 
 const spawnWorkerTool = createTool(
   "spawn_worker",
+  "Spawn a new worker process. Returns the worker ID.",
   "Spawn A New Worker Process. Returns The Worker ID.",
   SpawnWorkerInput,
   async (input) => {
@@ -100,6 +119,7 @@ const spawnWorkerTool = createTool(
 
 const killWorkerTool = createTool(
   "kill_worker",
+  "Terminate a running worker process by its UUID.",
   "Terminate A Running Worker Process By Its UUID.",
   KillWorkerInput,
   async (input) => {
@@ -114,6 +134,7 @@ const killWorkerTool = createTool(
 
 const runCommandTool = createTool(
   "run_command",
+  "Execute a shell command within a worker's PTY. Returns stdout/stderr output.",
   "Execute A Shell Command Within A Worker's PTY. Returns Stdout/Stderr Output.",
   RunCommandInput,
   async (input) => {
@@ -131,6 +152,7 @@ const runCommandTool = createTool(
 
 const readFileTool = createTool(
   "read_file",
+  "Read the contents of a file at the given path.",
   "Read The Contents Of A File At The Given Path.",
   ReadFileInput,
   async (input) => {
@@ -148,6 +170,7 @@ const readFileTool = createTool(
 
 const writeFileTool = createTool(
   "write_file",
+  "Write content to a file at the given path, creating or overwriting it.",
   "Write Content To A File At The Given Path, Creating Or Overwriting It.",
   WriteFileInput,
   async (input) => {
@@ -165,6 +188,7 @@ const writeFileTool = createTool(
 
 const getMetricsTool = createTool(
   "get_metrics",
+  "Retrieve system or per-worker performance metrics (CPU, memory, uptime).",
   "Retrieve System Or Per-Worker Performance Metrics (CPU, Memory, Uptime).",
   GetMetricsInput,
   async (input) => {

@@ -28,10 +28,12 @@ export function ToolList({
   onDelete,
   onCreateNew,
 }: ToolListProps): React.ReactElement {
-  // Merge built-in and custom tools
+  // Merge built-in and custom tools. Built-in tools show `uiDescription`
+  // (Title Case, UI-only) here — `description` (sentence case) is reserved
+  // for the Anthropic API tool-schema path; see #lib/tools.
   const builtInTools = [...toolRegistry.values()].map((tool) => ({
     name: tool.name,
-    description: tool.description,
+    description: tool.uiDescription,
     paramCount: Object.keys(
       (tool.anthropicTool.input_schema as { properties?: Record<string, unknown> }).properties ??
         {},

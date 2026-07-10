@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Settings } from "#pages/Settings";
 
@@ -76,5 +77,36 @@ describe("Settings — API Key field", () => {
     await user.click(saveButton);
 
     await waitFor(() => expect(saveButton).toBeDisabled());
+  });
+});
+
+describe("Settings — AI Model selection (Task 8 item 2)", () => {
+  beforeEach(() => {
+    mockReadConfig.mockReset().mockResolvedValue(null);
+    mockWriteConfig.mockReset().mockResolvedValue(undefined);
+    vi.mocked(toast.warning).mockClear();
+    vi.mocked(toast.success).mockClear();
+  });
+
+  it("fires exactly one toast.warning, and no toast.success, when the gated Mythos card is selected", async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.click(screen.getByRole("button", { name: /Claude Mythos 5/ }));
+
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    expect(toast.warning).toHaveBeenCalledWith("Claude Mythos 5 Requires Project Glasswing Access");
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("keeps the plain success toast for a non-gated card (unchanged behavior)", async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await user.click(screen.getByRole("button", { name: /Claude Opus 4\.8/ }));
+
+    expect(toast.success).toHaveBeenCalledTimes(1);
+    expect(toast.success).toHaveBeenCalledWith("Switched To Claude Opus 4.8");
+    expect(toast.warning).not.toHaveBeenCalled();
   });
 });

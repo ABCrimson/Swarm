@@ -20,7 +20,8 @@
         "minWidth": 800,
         "minHeight": 500,
         "decorations": true,
-        "transparent": false
+        "transparent": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=WebGPU"
       }
     ],
     "security": {

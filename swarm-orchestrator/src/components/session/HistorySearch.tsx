@@ -118,7 +118,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
       {/* Search input */}
       <div className="flex flex-col gap-3">
         <Input
-          placeholder="Search sessions..."
+          placeholder="Search Sessions..."
           value={query}
           onChange={handleQueryChange}
           className="w-full"

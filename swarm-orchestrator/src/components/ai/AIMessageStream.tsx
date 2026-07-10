@@ -304,7 +304,7 @@ export function AIMessageStream({
           type="button"
           onClick={onCancel}
           style={cancelButtonStyle}
-          aria-label="Cancel streaming"
+          aria-label="Cancel Streaming"
         >
           Cancel
         </button>

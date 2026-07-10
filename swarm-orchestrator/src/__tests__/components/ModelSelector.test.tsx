@@ -17,6 +17,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { getDefaultStore } from "jotai";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ModelSelector } from "#components/ai/ModelSelector";
 import { selectedModelAtom } from "#store/ui";
@@ -188,5 +189,39 @@ describe("ModelSelector portal", () => {
       "aria-expanded",
       "true",
     );
+  });
+
+  describe("Mythos gating toast (Task 8 item 2)", () => {
+    beforeEach(() => {
+      vi.mocked(toast.warning).mockClear();
+      vi.mocked(toast.success).mockClear();
+    });
+
+    it("fires exactly one toast.warning, and no toast.success, when Mythos is selected", async () => {
+      render(<ModelSelector />);
+      const user = await openDropdown();
+
+      const option = screen.getByRole("option", { name: /Claude Mythos 5/ });
+      option.focus();
+      await user.keyboard("{Enter}");
+
+      expect(toast.warning).toHaveBeenCalledTimes(1);
+      expect(toast.warning).toHaveBeenCalledWith(
+        "Claude Mythos 5 Requires Project Glasswing Access",
+      );
+      expect(toast.success).not.toHaveBeenCalled();
+    });
+
+    it("fires no toast for a non-gated selection (unchanged behavior)", async () => {
+      render(<ModelSelector />);
+      const user = await openDropdown();
+
+      const option = screen.getByRole("option", { name: /Claude Opus 4\.8/ });
+      option.focus();
+      await user.keyboard("{Enter}");
+
+      expect(toast.warning).not.toHaveBeenCalled();
+      expect(toast.success).not.toHaveBeenCalled();
+    });
   });
 });

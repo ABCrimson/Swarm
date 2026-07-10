@@ -8,6 +8,8 @@
 // (fetched 2026-07-10). Standard (non-introductory) per-MTok pricing is used;
 // Claude Sonnet 5 has introductory pricing of $2/$10 per MTok through 2026-08-31.
 
+import { toast } from "sonner";
+
 /** Stable identifier for a catalog entry. */
 export type ModelKey = "fable" | "mythos" | "opus" | "sonnet" | "haiku";
 
@@ -119,4 +121,21 @@ export function formatContextLabel(contextWindow: number): string {
 /** Formats a model's max output as a compact, Title Case label, e.g. "128K Max Output". */
 export function formatMaxOutputLabel(maxOutputTokens: number): string {
   return `${formatTokenCount(maxOutputTokens)} Max Output`;
+}
+
+/**
+ * Fires the Project Glasswing warning toast for a gated model selection
+ * (currently just Mythos) — selection itself is still allowed, this is a
+ * notice, not a block. No-ops (and returns `false`) for non-gated models.
+ *
+ * Shared by both selection paths — the `ModelSelector` dropdown and the
+ * Settings model cards — so the gating check and copy live once. Callers
+ * with their own default "selected" toast (e.g. Settings' "Switched To
+ * X") should skip it when this returns `true`: one toast per selection,
+ * never two.
+ */
+export function warnIfModelGated(model: ModelInfo): boolean {
+  if (!model.gated) return false;
+  toast.warning(`${model.label} Requires Project Glasswing Access`);
+  return true;
 }

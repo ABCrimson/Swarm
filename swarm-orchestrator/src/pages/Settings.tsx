@@ -8,6 +8,7 @@ import {
   formatContextLabel,
   formatMaxOutputLabel,
   type ModelKey,
+  warnIfModelGated,
 } from "#lib/models";
 import { readConfig, writeConfig } from "#lib/tauri";
 import { selectedModelAtom, themeAtom } from "#store/ui";
@@ -342,7 +343,12 @@ export function Settings(): React.ReactElement {
               selected={selectedModel === key}
               onSelect={() => {
                 setSelectedModel(key);
-                toast.success(`Switched To ${model.label}`);
+                // Mythos (gated) selection gets a warning toast instead of
+                // the plain "switched" success toast — one toast per
+                // selection, never two (see #lib/models).
+                if (!warnIfModelGated(model)) {
+                  toast.success(`Switched To ${model.label}`);
+                }
               }}
             />
           ))}

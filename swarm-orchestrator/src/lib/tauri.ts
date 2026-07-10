@@ -114,12 +114,12 @@ export async function searchHistory(
 
 // ── FS utilities ─────────────────────────────────────
 
-/** Read a typed configuration value from plugin-store by key. */
+/** Read a typed configuration value by key from the flat `swarm-config.json` file (via the `read_config` custom command). */
 export async function readConfig<T>(key: string): Promise<T | null> {
   return invoke<T | null>("read_config", { key });
 }
 
-/** Write a typed configuration value to plugin-store. */
+/** Write a typed configuration value by key to the flat `swarm-config.json` file (via the `write_config` custom command). */
 export async function writeConfig<T>(key: string, value: T): Promise<void> {
   return invoke<void>("write_config", { key, value });
 }

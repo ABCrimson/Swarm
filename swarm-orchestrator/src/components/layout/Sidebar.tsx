@@ -161,7 +161,7 @@ export function Sidebar(): React.ReactElement {
   return (
     <aside
       className="glass-panel flex flex-col h-full select-none"
-      aria-label="Main navigation"
+      aria-label="Main Navigation"
       style={{
         borderRight: "1px solid oklch(0.20 0.03 220)",
         borderTop: "none",
@@ -200,7 +200,7 @@ export function Sidebar(): React.ReactElement {
       <nav
         ref={navRef}
         className="flex flex-col gap-0.5 px-2.5 py-3 flex-1"
-        aria-label="Page navigation"
+        aria-label="Page Navigation"
       >
         {NAV_ITEMS.map((item, index) => {
           const isActive = currentPage === item.id;

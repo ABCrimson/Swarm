@@ -100,4 +100,85 @@ describe("useElkLayout", () => {
 
     expect(worker?.terminate).toHaveBeenCalled();
   });
+
+  describe("layout watchdog (Task 8 item 5)", () => {
+    // MockWorker.postMessage is a no-op that never calls back into
+    // elkjs's own onmessage handler, so `elk.layout()` hangs forever here
+    // by construction — exactly the "worker neither errors nor ever
+    // responds" case the watchdog exists to cover.
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("surfaces a distinct, Title-Cased timeout error and clears isLayouting when elk.layout() never settles within 10s", async () => {
+      const { result } = renderHook(() => useElkLayout(nodes, edges));
+      expect(result.current.isLayouting).toBe(true);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      expect(result.current.error).toBe("Layout Engine Timed Out");
+      expect(result.current.isLayouting).toBe(false);
+    });
+
+    it("does not fire the watchdog before the 10s deadline", async () => {
+      const { result } = renderHook(() => useElkLayout(nodes, edges));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(9_999);
+      });
+
+      expect(result.current.error).toBeNull();
+      expect(result.current.isLayouting).toBe(true);
+    });
+
+    it("clears the watchdog timer on unmount, leaking no pending timers", () => {
+      const { unmount } = renderHook(() => useElkLayout(nodes, edges));
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+      unmount();
+
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("does not let a later-firing watchdog overwrite a worker-crash error that already resolved isLayouting", async () => {
+      const { result } = renderHook(() => useElkLayout(nodes, edges));
+      const worker = MockWorker.instances.at(-1);
+
+      act(() => {
+        worker?.onerror?.(new ErrorEvent("error", { message: "boom" }));
+      });
+      expect(result.current.error).toBe("Layout Engine Failed To Start");
+
+      // If the watchdog leaked (wasn't cleared by the onerror path), this
+      // advance would let it fire and stomp the error above.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      expect(result.current.error).toBe("Layout Engine Failed To Start");
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("clears the previous watchdog when runLayout is retried, without double-firing", async () => {
+      const { result } = renderHook(() => useElkLayout(nodes, edges));
+
+      act(() => {
+        result.current.runLayout();
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      expect(result.current.error).toBe("Layout Engine Timed Out");
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
 });

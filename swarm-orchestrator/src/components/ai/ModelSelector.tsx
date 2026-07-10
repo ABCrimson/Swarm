@@ -11,7 +11,13 @@ import type { CSSProperties } from "react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Pill } from "#components/ui/Pill";
-import { CLAUDE_MODELS, formatContextLabel, type ModelInfo, type ModelKey } from "#lib/models";
+import {
+  CLAUDE_MODELS,
+  formatContextLabel,
+  type ModelInfo,
+  type ModelKey,
+  warnIfModelGated,
+} from "#lib/models";
 import { selectedModelAtom } from "#store/ui";
 
 // ── UI-only presentation for each catalog key ───────
@@ -139,7 +145,9 @@ const selectedDotStyle: CSSProperties = {
  * - Renders one option per entry in the shared catalog (`#lib/models`)
  * - Shows context window, cost indicator, capability badges per model
  * - Mythos carries a "Requires Project Glasswing" badge; selecting it
- *   is still allowed (the owner's decision — see batch-1 task brief)
+ *   is still allowed (the owner's decision — see batch-1 task brief) but
+ *   fires a `toast.warning` (via the shared `#lib/models` helper) instead
+ *   of silently switching
  * - Persisted via Jotai `atomWithStorage`
  * - Glass-panel OKLCH styling
  * - The open panel is portaled to `document.body` (via `createPortal`)
@@ -168,6 +176,7 @@ export function ModelSelector(): React.ReactElement {
 
   const handleSelect = (key: ModelKey) => {
     setSelectedModel(key);
+    warnIfModelGated(CLAUDE_MODELS[key]);
     setOpen(false);
     // Return focus to the trigger — the portaled option the user just
     // interacted with is about to unmount.
