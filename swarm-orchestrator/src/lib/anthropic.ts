@@ -9,7 +9,16 @@ import { readConfig } from "#lib/tauri";
 
 // ── Types ────────────────────────────────────────────
 
-/** Parameters for initiating an Anthropic streaming message request. */
+/**
+ * Parameters for initiating an Anthropic streaming message request.
+ *
+ * Deliberately has no `temperature` (or `top_p`/`top_k`) field — mirrors
+ * the Rust side's `build_request_body` invariant (`src-tauri/src/ai/client.rs`):
+ * never send a sampling parameter, for any model. This matters most for
+ * Fable-tier models (`claude-fable-5`, `claude-mythos-5`), which reject any
+ * sampling parameter with a 400, and for `claude-opus-4-8`, which rejects
+ * `temperature`/`top_p`/`top_k` outright.
+ */
 export interface StreamParams {
   readonly model: string;
   readonly maxTokens: number;
@@ -19,7 +28,6 @@ export interface StreamParams {
   }>;
   readonly system?: string;
   readonly tools?: Tool[];
-  readonly temperature?: number;
 }
 
 /**
@@ -137,7 +145,6 @@ export async function* streamMessage(
     })),
     ...(params.system ? { system: params.system } : {}),
     ...(params.tools ? { tools: params.tools } : {}),
-    ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
   };
 
   let stream: ReturnType<typeof client.messages.stream>;
@@ -204,6 +211,19 @@ export async function* streamMessage(
         activeToolBlock = null;
         yield finalDelta;
         continue;
+      }
+
+      // Refusal: safety classifiers declined the request (stop_reason
+      // "refusal" on a message_delta event). Surface this as a thrown
+      // error instead of falling through to the generic yield below — a
+      // silent empty/truncated "complete" reply would otherwise render to
+      // the user as a normal response. Mirrors the Rust side's
+      // `is_refusal` check (src-tauri/src/ai/client.rs, src-tauri/src/ai/stream.rs).
+      // Partial text already yielded before this event is not treated as a
+      // valid final reply: the throw propagates out of this generator, so
+      // callers' `for await` loops never reach a normal completion.
+      if (event.type === "message_delta" && event.delta.stop_reason === "refusal") {
+        throw new Error("Request Declined By Safety Classifiers");
       }
 
       // Regular text deltas

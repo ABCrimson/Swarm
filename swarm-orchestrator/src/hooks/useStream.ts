@@ -94,7 +94,6 @@ export function useStream(
       messages: truncated,
       system: params?.system,
       tools: params?.tools,
-      temperature: params?.temperature,
     };
 
     // Use requestAnimationFrame-batched updates for streaming content
