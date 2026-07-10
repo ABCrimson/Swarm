@@ -92,6 +92,10 @@ pub enum AppError {
     #[error("Channel closed: {0}")]
     ChannelClosed(String),
 
+    /// SQLite event-log operation failed.
+    #[error("event log: {0}")]
+    EventLog(String),
+
     /// The AI request queue is full (backpressure).
     #[error("AI queue full ({capacity} capacity)")]
     QueueFull {

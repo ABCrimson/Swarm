@@ -30,6 +30,7 @@ pub mod bus;
 mod commands;
 pub mod error;
 pub mod events;
+pub mod orchestration;
 mod session;
 pub mod worker;
 
