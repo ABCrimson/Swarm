@@ -1,62 +1,52 @@
 import { useEffect } from "react";
-import { onWorkerOutput, onWorkerSpawned, onWorkerState } from "#lib/tauri";
+import { onEvent } from "#lib/event-bus";
+import type { WorkerState } from "#store/types";
 import { useWorkerStore } from "#store/workers";
 
 /**
  * Global worker event subscription hook.
  *
- * Must be called exactly once at the app root level. Connects Tauri
- * backend events to the Zustand worker store:
+ * Must be called exactly once at the app root level. Connects the
+ * single ordered event bus to the Zustand worker store:
  *
- * - `worker:spawned` -> store.addWorker()
- * - `worker:output`  -> store.appendOutput()
- * - `worker:state`   -> store.updateState()
+ * - `worker_spawned` -> store.addWorker()
+ * - `worker_output`  -> store.appendOutput()
+ * - `worker_state`   -> store.updateState()
+ * - `worker_killed`  -> store.removeWorker()
  *
  * All listeners are cleaned up on unmount — zero event listener leaks.
  */
 export function useWorkerEvents(): void {
   useEffect(() => {
-    let cancelled = false;
-    const cleanups: Array<() => void> = [];
+    const { addWorker, appendOutput, updateState, removeWorker } = useWorkerStore.getState();
 
-    const setupListeners = async (): Promise<void> => {
-      const { addWorker, appendOutput, updateState } = useWorkerStore.getState();
-
-      const unlistenSpawned = await onWorkerSpawned((worker) => {
-        addWorker(worker);
-      });
-      if (cancelled) {
-        unlistenSpawned();
-        return;
-      }
-      cleanups.push(unlistenSpawned);
-
-      const unlistenOutput = await onWorkerOutput(({ workerId, data }) => {
-        appendOutput(workerId, data);
-      });
-      if (cancelled) {
-        unlistenOutput();
-        return;
-      }
-      cleanups.push(unlistenOutput);
-
-      const unlistenState = await onWorkerState(({ workerId, state }) => {
-        updateState(workerId, state);
-      });
-      if (cancelled) {
-        unlistenState();
-        return;
-      }
-      cleanups.push(unlistenState);
-    };
-
-    void setupListeners();
+    const offs = [
+      onEvent("worker_spawned", (e) => {
+        const p = e.payload as { workerId: string; name: string; pid: number | null };
+        addWorker({
+          id: p.workerId,
+          name: p.name,
+          pid: p.pid ?? undefined,
+          state: "running",
+          startedAt: new Date().toISOString(),
+        });
+      }),
+      onEvent("worker_output", (e) => {
+        const p = e.payload as { workerId: string; data: string };
+        appendOutput(p.workerId, p.data);
+      }),
+      onEvent("worker_state", (e) => {
+        const p = e.payload as { workerId: string; state: WorkerState };
+        updateState(p.workerId, p.state);
+      }),
+      onEvent("worker_killed", (e) => {
+        const p = e.payload as { workerId: string };
+        removeWorker(p.workerId);
+      }),
+    ];
 
     return () => {
-      cancelled = true;
-      for (const cleanup of cleanups) {
-        cleanup();
-      }
+      for (const off of offs) off();
     };
   }, []);
 }

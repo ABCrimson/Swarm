@@ -1,7 +1,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { listen as tauriListen } from "@tauri-apps/api/event";
-import type { Session, SystemMetrics, Worker, WorkerState } from "#store/types";
+import type { Session, Worker } from "#store/types";
 
 /** Returns `true` when running inside a Tauri webview (IPC bridge is available). */
 export function isTauri(): boolean {
@@ -122,54 +122,4 @@ export async function readConfig<T>(key: string): Promise<T | null> {
 /** Write a typed configuration value to plugin-store. */
 export async function writeConfig<T>(key: string, value: T): Promise<void> {
   return invoke<void>("write_config", { key, value });
-}
-
-// ── Event listeners (typed) ──────────────────────────
-
-/** Fires when a new worker process is spawned by the backend. */
-export function onWorkerSpawned(handler: (worker: Worker) => void): Promise<UnlistenFn> {
-  return listen<Worker>("worker:spawned", handler);
-}
-
-/** Fires when a worker emits output (stdout/stderr). */
-export function onWorkerOutput(
-  handler: (payload: { workerId: string; data: string }) => void,
-): Promise<UnlistenFn> {
-  return listen<{ workerId: string; data: string }>("worker:output", handler);
-}
-
-/** Fires when a worker's state changes. */
-export function onWorkerState(
-  handler: (payload: { workerId: string; state: WorkerState }) => void,
-): Promise<UnlistenFn> {
-  return listen<{ workerId: string; state: WorkerState }>("worker:state", handler);
-}
-
-/** Fires when system metrics are updated (CPU, memory, etc.). */
-export function onSystemMetrics(handler: (metrics: SystemMetrics) => void): Promise<UnlistenFn> {
-  return listen<SystemMetrics>("system:metrics", handler);
-}
-
-/** Fires when a new session is created. */
-export function onSessionCreated(handler: (session: Session) => void): Promise<UnlistenFn> {
-  return listen<Session>("session:created", handler);
-}
-
-/** Fires when a session is deleted. */
-export function onSessionDeleted(handler: (payload: { id: string }) => void): Promise<UnlistenFn> {
-  return listen<{ id: string }>("session:deleted", handler);
-}
-
-/** Fires when the AI stream emits a delta. */
-export function onAiStreamDelta(
-  handler: (payload: { streamId: string; delta: string; done: boolean }) => void,
-): Promise<UnlistenFn> {
-  return listen<{ streamId: string; delta: string; done: boolean }>("ai:stream:delta", handler);
-}
-
-/** Fires when the system emits a log entry. */
-export function onSystemLog(
-  handler: (payload: { level: string; message: string; timestamp: string }) => void,
-): Promise<UnlistenFn> {
-  return listen<{ level: string; message: string; timestamp: string }>("system:log", handler);
 }

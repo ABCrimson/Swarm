@@ -11,6 +11,7 @@ import { useMetrics } from "#hooks/useMetrics";
 import { useSessionEvents } from "#hooks/useSessionEvents";
 import { useTheme } from "#hooks/useTheme";
 import { useWorkerEvents } from "#hooks/useWorkerEvents";
+import { connectEventBus } from "#lib/event-bus";
 import { validateStoreData } from "#lib/store-integrity";
 import { currentPageAtom } from "#store/ui";
 
@@ -83,6 +84,20 @@ function DeferredAutoSnapshot(): null {
  */
 export function App(): React.ReactElement {
   const currentPage = useAtomValue(currentPageAtom);
+
+  // Connect the single ordered event bus once at mount.
+  useEffect(() => {
+    let dispose: (() => void) | undefined;
+    let cancelled = false;
+    void connectEventBus().then((off) => {
+      if (cancelled) off();
+      else dispose = off;
+    });
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
+  }, []);
 
   // Initialize global subscriptions (theme, events, metrics, alerts)
   useTheme();

@@ -1,12 +1,13 @@
 import { useEffect } from "react";
-import { onSystemMetrics } from "#lib/tauri";
+import { onEvent } from "#lib/event-bus";
 import { useSystemStore } from "#store/system";
 
 /**
  * Global metrics event subscription hook.
  *
- * Must be called once at the app root level. Listens for `system:metrics`
- * events from the Tauri backend and updates the Zustand system store:
+ * Must be called once at the app root level. Listens for `system_metrics`
+ * events on the single ordered event bus and updates the Zustand system
+ * store:
  *
  * - Updates current metric values (CPU%, memory, etc.)
  * - Pushes a history point for charting
@@ -15,41 +16,33 @@ import { useSystemStore } from "#store/system";
  */
 export function useMetrics(): void {
   useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
+    const { updateMetrics, pushHistory } = useSystemStore.getState();
 
-    const setup = async (): Promise<void> => {
-      const { updateMetrics, pushHistory } = useSystemStore.getState();
+    const off = onEvent("system_metrics", (e) => {
+      const p = e.payload as {
+        cpuPercent: number;
+        memoryMb: number;
+        workerCount: number;
+        aiReqPerSec: number;
+      };
 
-      const fn = await onSystemMetrics((metrics) => {
-        updateMetrics({
-          cpuPercent: metrics.cpuPercent,
-          memoryMb: metrics.memoryMb,
-          workerCount: metrics.workerCount,
-          aiReqPerSec: metrics.aiReqPerSec,
-          tokensPerSec: metrics.tokensPerSec,
-        });
-
-        pushHistory({
-          time: Date.now(),
-          cpu: metrics.cpuPercent,
-          memory: metrics.memoryMb,
-          workerCount: metrics.workerCount,
-        });
+      updateMetrics({
+        cpuPercent: p.cpuPercent,
+        memoryMb: p.memoryMb,
+        workerCount: p.workerCount,
+        aiReqPerSec: p.aiReqPerSec,
       });
 
-      if (cancelled) {
-        fn();
-        return;
-      }
-      unlisten = fn;
-    };
-
-    void setup();
+      pushHistory({
+        time: Date.now(),
+        cpu: p.cpuPercent,
+        memory: p.memoryMb,
+        workerCount: p.workerCount,
+      });
+    });
 
     return () => {
-      cancelled = true;
-      unlisten?.();
+      off();
     };
   }, []);
 }
