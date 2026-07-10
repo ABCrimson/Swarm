@@ -8,7 +8,8 @@
 import { useAtom } from "jotai";
 import { AnimatePresence, motion } from "motion/react";
 import type { CSSProperties } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { CLAUDE_MODELS, formatContextLabel, type ModelInfo, type ModelKey } from "#lib/models";
 import { selectedModelAtom } from "#store/ui";
 
@@ -63,19 +64,31 @@ const dropdownTriggerStyle: CSSProperties = {
   position: "relative",
 };
 
+// The panel is portaled to document.body (see the Component doc comment
+// below) so it now competes in body's top-level stacking context instead
+// of being trapped inside WorkerAIPanel's `backdrop-filter` toolbar. The
+// highest non-toast z-index elsewhere in the app is 9999 (AppShell's
+// skip-link, PerformanceOverlay) — 10,000 sits just above that so the
+// open dropdown is never hidden behind other app chrome, while staying
+// far below Sonner's own toast-viewport z-index (999,999,999, sonner's
+// hardcoded default — see #components/ui/Toast), so an open dropdown
+// never covers a toast notification, and vice versa.
+const DROPDOWN_PANEL_Z_INDEX = 10_000;
+
+// `top`/`left`/`width` are supplied per-render from the trigger's
+// `getBoundingClientRect()` (position: "fixed" matches that viewport-
+// relative coordinate space directly) — computed in useLayoutEffect
+// below. `minWidth` is the same floor the panel used before portaling,
+// so narrow triggers still get a legible panel.
 const dropdownPanelStyle: CSSProperties = {
-  position: "absolute",
-  top: "100%",
-  left: 0,
-  right: 0,
-  marginTop: 4,
+  position: "fixed",
   borderRadius: 8,
   border: "1px solid oklch(0.28 0.05 220)",
   background: "oklch(0.10 0.03 220 / 0.95)",
   backdropFilter: "blur(16px) saturate(1.5)",
   boxShadow: "0 8px 32px oklch(0 0 0 / 0.4)",
   overflow: "hidden",
-  zIndex: 50,
+  zIndex: DROPDOWN_PANEL_Z_INDEX,
   minWidth: 280,
 };
 
@@ -152,11 +165,26 @@ const selectedDotStyle: CSSProperties = {
  *   is still allowed (the owner's decision — see batch-1 task brief)
  * - Persisted via Jotai `atomWithStorage`
  * - Glass-panel OKLCH styling
+ * - The open panel is portaled to `document.body` (via `createPortal`)
+ *   so it always renders above app content regardless of any ancestor
+ *   `backdrop-filter`/`filter`/`transform` stacking context (see
+ *   batch-1 task 6 — WorkerAIPanel's toolbar backdrop-filter used to
+ *   trap the dropdown behind the rest of the panel). Position is read
+ *   from the trigger's `getBoundingClientRect()` and kept in sync on
+ *   open/scroll/resize.
  */
 export function ModelSelector(): React.ReactElement {
   const [selectedModel, setSelectedModel] = useAtom(selectedModelAtom);
   const [open, setOpen] = useState(false);
+  const [panelPosition, setPanelPosition] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
   const containerRef = useRef<HTMLFieldSetElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const listboxId = useId();
 
   const currentModel = CLAUDE_MODELS[selectedModel];
   const currentStyle = MODEL_STYLE[selectedModel];
@@ -164,14 +192,69 @@ export function ModelSelector(): React.ReactElement {
   const handleSelect = (key: ModelKey) => {
     setSelectedModel(key);
     setOpen(false);
+    // Return focus to the trigger — the portaled option the user just
+    // interacted with is about to unmount.
+    triggerRef.current?.focus();
   };
 
-  // Close on click outside
-  const handleBlur = (e: React.FocusEvent) => {
-    if (!containerRef.current?.contains(e.relatedTarget as Node)) {
+  // Position the portaled panel from the trigger's rect. Re-runs on
+  // open, window resize, and any ancestor scroll — a capture-phase
+  // "scroll" listener catches scrolling of ancestor containers (e.g.
+  // AppShell's own overflow:auto wrapper), not just window-level
+  // scroll, which a bubble-phase listener would miss.
+  useLayoutEffect(() => {
+    if (!open) return;
+
+    function updatePosition(): void {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setPanelPosition({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+    }
+
+    updatePosition();
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [open]);
+
+  // Click-outside-to-close and Escape-to-close. The panel is portaled to
+  // document.body, so it is no longer a DOM descendant of the trigger's
+  // fieldset — the classic portal regression here is that a prior
+  // onBlur/relatedTarget-containment check would close the panel the
+  // instant a portaled option received focus (relatedTarget is never
+  // "contained" by the fieldset once the option lives under <body>),
+  // closing it before a click could ever register. A document-level
+  // mousedown listener that checks both the trigger's and the portaled
+  // panel's own refs handles this correctly instead.
+  useEffect(() => {
+    if (!open) return;
+
+    function handlePointerDown(e: MouseEvent): void {
+      const target = e.target as Node;
+      if (containerRef.current?.contains(target)) return;
+      if (panelRef.current?.contains(target)) return;
       setOpen(false);
     }
-  };
+
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
 
   return (
     <fieldset
@@ -183,9 +266,9 @@ export function ModelSelector(): React.ReactElement {
         padding: 0,
         margin: 0,
       }}
-      onBlur={handleBlur}
     >
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen(!open)}
         style={{
@@ -194,6 +277,7 @@ export function ModelSelector(): React.ReactElement {
         }}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={listboxId}
         aria-label="Select AI Model"
       >
         <span
@@ -208,69 +292,92 @@ export function ModelSelector(): React.ReactElement {
         </span>
       </button>
 
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.12 }}
-            style={dropdownPanelStyle}
-            role="listbox"
-            aria-label="AI Model Options"
-          >
-            {MODEL_ENTRIES.map(([key, model]) => {
-              const isSelected = key === selectedModel;
-              const style = MODEL_STYLE[key];
-              return (
-                <div
-                  key={key}
-                  role="option"
-                  aria-selected={isSelected}
-                  tabIndex={0}
-                  onClick={() => handleSelect(key)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      handleSelect(key);
-                    }
-                  }}
-                  style={{
-                    ...modelOptionStyle,
-                    background: isSelected
-                      ? `${style.color.slice(0, -1)} / 0.14)`
-                      : "oklch(0 0 0 / 0)",
-                  }}
-                >
-                  <div style={modelNameStyle}>
-                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <span style={{ color: style.color }}>{model.label}</span>
-                      {model.gated === "glasswing" && (
-                        <span style={gatedBadgeStyle}>Requires Project Glasswing</span>
-                      )}
-                    </span>
-                    <span style={{ ...costStyle, color: style.color }}>{costIndicator(model)}</span>
-                  </div>
-
-                  <div style={modelMetaStyle}>
-                    <span>{formatContextLabel(model.contextWindow)}</span>
-                    <span style={{ color: "oklch(0.35 0.02 220)" }}>{"•"}</span>
-                    <span>{model.id}</span>
-                  </div>
-
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 2 }}>
-                    {MODEL_CAPABILITIES[key].map((cap) => (
-                      <span key={cap} style={capabilityBadgeStyle}>
-                        {cap}
+      {/*
+       * `createPortal` must wrap `AnimatePresence`, not the other way
+       * around: AnimatePresence clones its children via
+       * `React.isValidElement`-gated logic to inject exit-tracking
+       * props, and a `ReactPortal` (the object `createPortal` returns)
+       * fails that check — nesting it *inside* AnimatePresence causes
+       * the portaled panel to silently never render. Portaling
+       * unconditionally here (with AnimatePresence's own child gated on
+       * `open`/`panelPosition`) keeps the panel's mount/exit-animation
+       * lifecycle working exactly as before, just relocated to body.
+       */}
+      {createPortal(
+        <AnimatePresence>
+          {open && panelPosition && (
+            <motion.div
+              ref={panelRef}
+              id={listboxId}
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.12 }}
+              style={{
+                ...dropdownPanelStyle,
+                top: panelPosition.top,
+                left: panelPosition.left,
+                width: panelPosition.width,
+              }}
+              role="listbox"
+              aria-label="AI Model Options"
+            >
+              {MODEL_ENTRIES.map(([key, model]) => {
+                const isSelected = key === selectedModel;
+                const style = MODEL_STYLE[key];
+                return (
+                  <div
+                    key={key}
+                    role="option"
+                    aria-selected={isSelected}
+                    tabIndex={0}
+                    onClick={() => handleSelect(key)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleSelect(key);
+                      }
+                    }}
+                    style={{
+                      ...modelOptionStyle,
+                      background: isSelected
+                        ? `${style.color.slice(0, -1)} / 0.14)`
+                        : "oklch(0 0 0 / 0)",
+                    }}
+                  >
+                    <div style={modelNameStyle}>
+                      <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ color: style.color }}>{model.label}</span>
+                        {model.gated === "glasswing" && (
+                          <span style={gatedBadgeStyle}>Requires Project Glasswing</span>
+                        )}
                       </span>
-                    ))}
+                      <span style={{ ...costStyle, color: style.color }}>
+                        {costIndicator(model)}
+                      </span>
+                    </div>
+
+                    <div style={modelMetaStyle}>
+                      <span>{formatContextLabel(model.contextWindow)}</span>
+                      <span style={{ color: "oklch(0.35 0.02 220)" }}>{"•"}</span>
+                      <span>{model.id}</span>
+                    </div>
+
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 2 }}>
+                      {MODEL_CAPABILITIES[key].map((cap) => (
+                        <span key={cap} style={capabilityBadgeStyle}>
+                          {cap}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </motion.div>
-        )}
-      </AnimatePresence>
+                );
+              })}
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body,
+      )}
     </fieldset>
   );
 }
