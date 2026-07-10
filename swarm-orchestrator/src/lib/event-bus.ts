@@ -108,7 +108,9 @@ async function backfill(afterSeq: number): Promise<void> {
  * Connects the single ordered event stream. Call exactly once at app
  * bootstrap. Gaps in seq trigger a persisted-event backfill; ephemeral
  * events (worker output, metrics, logs) are not persisted and are
- * accepted as lost across a gap.
+ * accepted as lost across a gap. A failed backfill is retried when the
+ * next event arrives (there is no independent retry timer), so a gap
+ * can stay open while the app is fully idle.
  */
 export async function connectEventBus(): Promise<() => void> {
   return listen<unknown>(EVENT_CHANNEL, (raw) => {
