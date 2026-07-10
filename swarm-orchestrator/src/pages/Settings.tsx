@@ -1,8 +1,12 @@
 import { useAtom } from "jotai";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { alertThresholdsAtom } from "#lib/alerts";
+import { readConfig, writeConfig } from "#lib/tauri";
 import { selectedModelAtom, themeAtom } from "#store/ui";
+
+/** Config key under which the Anthropic API key is persisted (see #lib/anthropic). */
+const ANTHROPIC_API_KEY_CONFIG_KEY = "anthropic_api_key";
 
 const SECTION_STYLE: React.CSSProperties = {
   background: "oklch(0.10 0.02 220)",
@@ -26,6 +30,31 @@ const DESCRIPTION_STYLE: React.CSSProperties = {
   color: "oklch(0.48 0.03 220)",
   marginTop: 4,
   lineHeight: 1.4,
+};
+
+const TEXT_INPUT_STYLE: React.CSSProperties = {
+  width: "100%",
+  padding: "8px 12px",
+  borderRadius: 6,
+  border: "1px solid oklch(0.35 0.04 220)",
+  background: "oklch(0.08 0.015 220)",
+  color: "oklch(0.85 0.03 220)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "0.82rem",
+  outline: "none",
+  transition: "border-color 0.12s ease",
+};
+
+const SAVE_BUTTON_STYLE: React.CSSProperties = {
+  fontFamily: "var(--font-body)",
+  fontSize: "0.75rem",
+  fontWeight: 500,
+  color: "oklch(0.95 0 0)",
+  background: "oklch(0.78 0.18 205)",
+  border: "none",
+  borderRadius: 6,
+  padding: "5px 14px",
+  cursor: "pointer",
 };
 
 function Toggle({
@@ -198,6 +227,44 @@ export function Settings(): React.ReactElement {
   const [editingThresholds, setEditingThresholds] = useState(false);
   const [tempThresholds, setTempThresholds] = useState(thresholds);
 
+  // ── API key (read on mount, written on Save via #lib/tauri) ──
+  // The key itself is never logged, traced, or included in a toast —
+  // only the static "saved"/"failed" messages below are shown.
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
+  const [apiKeySaved, setApiKeySaved] = useState<string | null>(null);
+  const [savingApiKey, setSavingApiKey] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    readConfig<string>(ANTHROPIC_API_KEY_CONFIG_KEY)
+      .then((key) => {
+        if (cancelled || typeof key !== "string" || key.length === 0) return;
+        setApiKeyDraft(key);
+        setApiKeySaved(key);
+      })
+      .catch(() => {
+        // No config file yet (fresh install) or IPC unavailable — leave the field empty.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const apiKeyDirty = apiKeyDraft !== (apiKeySaved ?? "");
+
+  const handleSaveApiKey = async (): Promise<void> => {
+    setSavingApiKey(true);
+    try {
+      await writeConfig(ANTHROPIC_API_KEY_CONFIG_KEY, apiKeyDraft);
+      setApiKeySaved(apiKeyDraft);
+      toast.success("API Key Saved");
+    } catch {
+      toast.error("Failed To Save API Key");
+    } finally {
+      setSavingApiKey(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-6 p-6" style={{ maxWidth: 720 }}>
       {/* Header */}
@@ -216,6 +283,53 @@ export function Settings(): React.ReactElement {
           Configure AI models, visual preferences, and alert thresholds.
         </p>
       </div>
+
+      {/* AI Connectivity */}
+      <section style={SECTION_STYLE}>
+        <h2
+          style={{
+            fontFamily: "var(--font-display)",
+            fontSize: "0.95rem",
+            fontWeight: 700,
+            color: "oklch(0.88 0.04 220)",
+            marginBottom: 16,
+            letterSpacing: "-0.01em",
+          }}
+        >
+          AI Connectivity
+        </h2>
+        <label htmlFor="anthropic-api-key" style={LABEL_STYLE}>
+          API Key
+        </label>
+        <input
+          id="anthropic-api-key"
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          value={apiKeyDraft}
+          onChange={(e) => setApiKeyDraft(e.target.value)}
+          placeholder="Enter Your Anthropic API Key"
+          style={TEXT_INPUT_STYLE}
+        />
+        <p style={DESCRIPTION_STYLE}>
+          Your Anthropic API Key. Required To Use AI Chat. Stored Locally In Plaintext At App Data —
+          Never Logged Or Displayed In Clear Text.
+        </p>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+          <button
+            type="button"
+            onClick={() => void handleSaveApiKey()}
+            disabled={!apiKeyDirty || savingApiKey}
+            style={{
+              ...SAVE_BUTTON_STYLE,
+              opacity: !apiKeyDirty || savingApiKey ? 0.5 : 1,
+              cursor: !apiKeyDirty || savingApiKey ? "default" : "pointer",
+            }}
+          >
+            {savingApiKey ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </section>
 
       {/* AI Model Selection */}
       <section style={SECTION_STYLE}>

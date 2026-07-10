@@ -1,9 +1,19 @@
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
 
 const dirname = import.meta.dirname;
 
+const pkg = JSON.parse(readFileSync(resolve(dirname, "package.json"), "utf8")) as {
+  version: string;
+};
+
 export default defineConfig({
+  // Mirrors vite.config.ts's `define` — components reading __APP_VERSION__
+  // (e.g. Settings, Sidebar) need it defined to render under vitest/jsdom.
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   test: {
     globals: true,
     environment: "jsdom",

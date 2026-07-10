@@ -30,6 +30,7 @@ use serde::Serialize;
 /// | `ChannelClosed`    | Tokio mpsc or broadcast channel was dropped        |
 /// | `EventLog`         | SQLite event-log operation failed                 |
 /// | `QueueFull`        | AI request queue is full (backpressure)           |
+/// | `Config`           | App config file read/write/resolve failed         |
 ///
 /// # Examples
 ///
@@ -104,6 +105,13 @@ pub enum AppError {
         /// The configured capacity of the bounded channel.
         capacity: usize,
     },
+
+    /// The app config file could not be resolved, read, or written.
+    ///
+    /// Never carries secret values (e.g. API keys) in its message —
+    /// only path/IO context, so it is safe to log and display.
+    #[error("Config error: {0}")]
+    Config(String),
 }
 
 /// Serializes [`AppError`] as a plain string for Tauri IPC transport.
@@ -192,6 +200,15 @@ mod tests {
         let err = AppError::QueueFull { capacity: 128 };
         let json = serde_json::to_string(&err).expect("serialize");
         assert_eq!(json, r#""AI queue full (128 capacity)""#);
+    }
+
+    #[test]
+    fn test_config_display() {
+        let err = AppError::Config("failed to resolve app data dir".to_string());
+        assert_eq!(
+            err.to_string(),
+            "Config error: failed to resolve app data dir"
+        );
     }
 
     #[test]

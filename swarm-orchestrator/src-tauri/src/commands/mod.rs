@@ -10,6 +10,7 @@
 //! - [`worker`] — Worker lifecycle commands (spawn, pause, resume, kill, list, input)
 //! - [`session`] — Session CRUD commands (create, delete, list, get)
 //! - [`ai`] — AI request enqueue command
+//! - [`config`] — App config file commands (read_config, write_config)
 //! - [`metrics`] — System metrics collection and retrieval
 //! - [`bus`] — Message bus commands (send, subscribe, pipeline, list channels)
 //! - [`fs`] — File system operations (delegates to `tauri-plugin-fs`)
@@ -19,6 +20,7 @@
 
 pub mod ai;
 pub mod bus;
+pub mod config;
 pub mod fs;
 pub mod metrics;
 pub mod notification;

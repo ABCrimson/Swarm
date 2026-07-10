@@ -155,6 +155,9 @@ pub fn run() {
             commands::session::session_add_worker,
             // AI commands
             commands::ai::ai_request,
+            // Config commands
+            commands::config::read_config,
+            commands::config::write_config,
             // Metrics commands
             commands::metrics::get_metrics,
             // Orchestration commands
