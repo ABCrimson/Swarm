@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { WorkerAIPanel } from "#components/ai/WorkerAIPanel";
 import { WorkerDetail } from "#components/graph/WorkerDetail";
 import { WorkerGraph } from "#components/graph/WorkerGraph";
+import { Badge, stateLabels } from "#components/ui/Badge";
 import { Button } from "#components/ui/Button";
 import { spawnWorker } from "#lib/tauri";
 import { detailPanelOpenAtom, graphViewAtom, selectedWorkerIdAtom } from "#store/ui";
@@ -113,9 +114,7 @@ function WorkerListView(): React.ReactElement {
             >
               {worker.name ?? id.slice(0, 8)}
             </span>
-            <span className="swarm-badge" data-state={worker.state}>
-              {worker.state}
-            </span>
+            <Badge state={worker.state}>{stateLabels[worker.state]}</Badge>
           </button>
         ))}
       </div>

@@ -1,14 +1,16 @@
 import { useResizeObserver } from "@crimson_dev/use-resize-observer";
 import { useEffect, useRef, useState } from "react";
+import type { PillTone } from "#components/ui/Pill";
+import { Pill } from "#components/ui/Pill";
 import type { LogEntry, LogLevel } from "#lib/log-store";
 import { useLogStore } from "#lib/log-store";
 import { LogFilter } from "./LogFilter.tsx";
 
-const LEVEL_BADGE_COLORS: Record<LogLevel, { bg: string; text: string }> = {
-  debug: { bg: "oklch(0.65 0.04 220 / 0.15)", text: "oklch(0.65 0.04 220)" },
-  info: { bg: "oklch(0.78 0.18 205 / 0.15)", text: "oklch(0.78 0.18 205)" },
-  warn: { bg: "oklch(0.82 0.19 70 / 0.15)", text: "oklch(0.82 0.19 70)" },
-  error: { bg: "oklch(0.72 0.20 10 / 0.15)", text: "oklch(0.72 0.20 10)" },
+const LEVEL_TONE: Record<LogLevel, PillTone> = {
+  debug: "neutral",
+  info: "info",
+  warn: "warning",
+  error: "danger",
 };
 
 /** Row height for virtualized list. */
@@ -242,8 +244,6 @@ function LogRow({
   readonly entry: LogEntry;
   readonly searchQuery: string;
 }): React.ReactElement {
-  const badge = LEVEL_BADGE_COLORS[entry.level];
-
   return (
     <div
       style={{
@@ -270,25 +270,13 @@ function LogRow({
       </span>
 
       {/* Level badge */}
-      <span
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "1px 6px",
-          borderRadius: 4,
-          background: badge.bg,
-          color: badge.text,
-          fontWeight: 600,
-          fontSize: "0.625rem",
-          textTransform: "uppercase",
-          letterSpacing: "0.04em",
-          width: 44,
-          flexShrink: 0,
-        }}
+      <Pill
+        tone={LEVEL_TONE[entry.level]}
+        size="sm"
+        style={{ textTransform: "uppercase", width: 44, flexShrink: 0 }}
       >
         {entry.level}
-      </span>
+      </Pill>
 
       {/* Source */}
       <span

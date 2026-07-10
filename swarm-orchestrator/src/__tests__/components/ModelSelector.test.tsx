@@ -14,7 +14,7 @@
 // the trigger's local container incorrectly closes a portaled panel —
 // and (d) keyboard selection still works end-to-end.
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { getDefaultStore } from "jotai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -130,6 +130,19 @@ describe("ModelSelector portal", () => {
 
     const option = screen.getByRole("option", { name: /Claude Mythos 5/ });
     expect(option).toHaveTextContent("Requires Project Glasswing");
+  });
+
+  it("renders the gated badge and capability chips via the shared Pill component (batch-1 task 7)", async () => {
+    render(<ModelSelector />);
+
+    await openDropdown();
+
+    const option = screen.getByRole("option", { name: /Claude Mythos 5/ });
+    const gatedBadge = within(option).getByText("Requires Project Glasswing");
+    expect(gatedBadge.closest(".swarm-pill")).toHaveAttribute("data-tone", "warning");
+
+    const capabilityChip = within(option).getByText("Agentic Work");
+    expect(capabilityChip.closest(".swarm-pill")).toHaveAttribute("data-tone", "neutral");
   });
 
   it("closes the panel when keyboard focus moves outside it (tab-away), without stealing focus back to the trigger", async () => {

@@ -1,7 +1,7 @@
 import { formatDistanceToNow } from "date-fns";
 import { useAtom } from "jotai";
-import { Badge } from "#components/ui/Badge";
-import { Button } from "#components/ui/Button";
+import { Badge, stateLabels } from "#components/ui/Badge";
+import { Pill } from "#components/ui/Pill";
 import { useWorker } from "#hooks/useWorker";
 import type { Worker } from "#store/types";
 import { detailPanelOpenAtom } from "#store/ui";
@@ -9,13 +9,6 @@ import { detailPanelOpenAtom } from "#store/ui";
 interface WorkerDetailProps {
   readonly worker: Worker;
 }
-
-const stateLabels: Record<string, string> = {
-  idle: "Idle",
-  running: "Running",
-  paused: "Paused",
-  error: "Error",
-};
 
 function DetailRow({
   label,
@@ -205,7 +198,10 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
         )}
       </div>
 
-      {/* Actions */}
+      {/* Actions — same-purpose action pills in a uniform-width group
+          (flex: 1 on each) rather than three independently-sized
+          buttons. Kill is a real button (interactive) with danger tone
+          for proper destructive-action affordance. */}
       <div
         style={{
           display: "flex",
@@ -214,15 +210,29 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
           borderTop: "1px solid oklch(0.22 0.04 220)",
         }}
       >
-        <Button variant="secondary" size="sm" onClick={pause} disabled={!canPause}>
+        <Pill
+          interactive
+          tone="neutral"
+          size="md"
+          onClick={pause}
+          disabled={!canPause}
+          style={{ flex: 1 }}
+        >
           Pause
-        </Button>
-        <Button variant="secondary" size="sm" onClick={resume} disabled={!canResume}>
+        </Pill>
+        <Pill
+          interactive
+          tone="neutral"
+          size="md"
+          onClick={resume}
+          disabled={!canResume}
+          style={{ flex: 1 }}
+        >
           Resume
-        </Button>
-        <Button variant="danger" size="sm" onClick={kill}>
+        </Pill>
+        <Pill interactive tone="danger" size="md" onClick={kill} style={{ flex: 1 }}>
           Kill
-        </Button>
+        </Pill>
       </div>
     </div>
   );

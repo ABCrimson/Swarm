@@ -237,7 +237,9 @@ export function CommandPalette(): React.ReactElement {
               >
                 {cmd.label}
                 {frecency.has(cmd.id) && (
-                  <Command.Badge>{frecency.get(cmd.id)?.uses}</Command.Badge>
+                  <Command.Badge className="swarm-pill" data-tone="info" data-size="sm">
+                    {frecency.get(cmd.id)?.uses}
+                  </Command.Badge>
                 )}
               </Command.Item>
             ))}

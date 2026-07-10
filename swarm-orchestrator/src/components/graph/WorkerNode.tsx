@@ -1,7 +1,7 @@
 import type { Node, NodeProps } from "@xyflow/react";
 import { Handle, Position } from "@xyflow/react";
 import { motion } from "motion/react";
-import { Badge } from "#components/ui/Badge";
+import { Badge, stateLabels } from "#components/ui/Badge";
 import { withAlpha, workerColor } from "#lib/theme";
 import type { WorkerState } from "#store/types";
 
@@ -13,13 +13,6 @@ export interface WorkerNodeData {
 }
 
 type WorkerNodeType = Node<WorkerNodeData & Record<string, unknown>, "worker">;
-
-const stateLabels: Record<WorkerState, string> = {
-  idle: "Idle",
-  running: "Running",
-  paused: "Paused",
-  error: "Error",
-};
 
 /**
  * Custom React Flow node representing a SWARM worker in the dependency graph.

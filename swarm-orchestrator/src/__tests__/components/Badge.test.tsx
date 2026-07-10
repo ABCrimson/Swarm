@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { Badge } from "#components/ui/Badge";
+import { Badge, stateLabels } from "#components/ui/Badge";
 
 describe("Badge", () => {
   it("renders children text", () => {
@@ -10,46 +10,58 @@ describe("Badge", () => {
   });
 
   it("sets data-state attribute to the worker state", () => {
-    render(<Badge state="running">Running</Badge>);
+    const { container } = render(<Badge state="running">Running</Badge>);
 
-    const badge = screen.getByText("Running");
-    expect(badge).toHaveAttribute("data-state", "running");
+    expect(container.firstElementChild).toHaveAttribute("data-state", "running");
   });
 
   it("sets data-state for idle state", () => {
-    render(<Badge state="idle">Waiting</Badge>);
+    const { container } = render(<Badge state="idle">Waiting</Badge>);
 
-    expect(screen.getByText("Waiting")).toHaveAttribute("data-state", "idle");
+    expect(container.firstElementChild).toHaveAttribute("data-state", "idle");
   });
 
   it("sets data-state for paused state", () => {
-    render(<Badge state="paused">Paused</Badge>);
+    const { container } = render(<Badge state="paused">Paused</Badge>);
 
-    expect(screen.getByText("Paused")).toHaveAttribute("data-state", "paused");
+    expect(container.firstElementChild).toHaveAttribute("data-state", "paused");
   });
 
   it("sets data-state for error state", () => {
-    render(<Badge state="error">Error</Badge>);
+    const { container } = render(<Badge state="error">Error</Badge>);
 
-    expect(screen.getByText("Error")).toHaveAttribute("data-state", "error");
+    expect(container.firstElementChild).toHaveAttribute("data-state", "error");
   });
 
-  it("applies the swarm-badge CSS class", () => {
-    render(<Badge state="idle">Test</Badge>);
+  it("maps each worker state to the correct semantic pill tone", () => {
+    const expected: Record<string, string> = {
+      idle: "neutral",
+      running: "info",
+      paused: "warning",
+      error: "danger",
+    };
+    for (const [state, tone] of Object.entries(expected)) {
+      const { container } = render(
+        <Badge state={state as "idle" | "running" | "paused" | "error"}>{state}</Badge>,
+      );
+      expect(container.firstElementChild).toHaveAttribute("data-tone", tone);
+    }
+  });
 
-    const badge = screen.getByText("Test");
-    expect(badge.className).toContain("swarm-badge");
+  it("applies the swarm-pill CSS class (Badge delegates to the shared Pill component)", () => {
+    const { container } = render(<Badge state="idle">Test</Badge>);
+
+    expect(container.firstElementChild?.className).toContain("swarm-pill");
   });
 
   it("applies additional className when provided", () => {
-    render(
+    const { container } = render(
       <Badge state="idle" className="extra-class">
         Test
       </Badge>,
     );
 
-    const badge = screen.getByText("Test");
-    expect(badge.className).toContain("extra-class");
+    expect(container.firstElementChild?.className).toContain("extra-class");
   });
 
   it("renders complex children nodes", () => {
@@ -61,5 +73,14 @@ describe("Badge", () => {
 
     expect(screen.getByTestId("inner")).toBeInTheDocument();
     expect(screen.getByTestId("inner")).toHaveTextContent("Status");
+  });
+
+  it("exports Title Case labels for every worker state", () => {
+    expect(stateLabels).toEqual({
+      idle: "Idle",
+      running: "Running",
+      paused: "Paused",
+      error: "Error",
+    });
   });
 });

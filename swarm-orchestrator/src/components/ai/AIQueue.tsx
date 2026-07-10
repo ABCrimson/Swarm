@@ -4,6 +4,8 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import type { CSSProperties } from "react";
+import type { PillTone } from "#components/ui/Pill";
+import { Pill } from "#components/ui/Pill";
 import { Spinner } from "#components/ui/Spinner";
 import { useAiStore } from "#store/ai";
 import type { AiQueueItem } from "#store/types";
@@ -70,19 +72,6 @@ const positionStyle: CSSProperties = {
   flexShrink: 0,
 };
 
-const cancelButtonStyle: CSSProperties = {
-  marginLeft: "auto",
-  padding: "2px 8px",
-  borderRadius: 4,
-  border: "1px solid oklch(0.30 0.08 10)",
-  background: "oklch(0.14 0.04 10 / 0.6)",
-  color: "oklch(0.72 0.15 10)",
-  fontSize: 11,
-  cursor: "pointer",
-  transition: "background 0.15s ease",
-  flexShrink: 0,
-};
-
 const waitEstimateStyle: CSSProperties = {
   fontSize: 11,
   color: "oklch(0.55 0.03 220)",
@@ -98,49 +87,18 @@ const emptyStyle: CSSProperties = {
 
 // ── Priority Badge ──────────────────────────────────
 
-const PRIORITY_COLORS: Record<string, { bg: string; text: string; border: string }> = {
-  critical: {
-    bg: "oklch(0.18 0.08 10 / 0.5)",
-    text: "oklch(0.72 0.20 10)",
-    border: "oklch(0.40 0.14 10)",
-  },
-  high: {
-    bg: "oklch(0.18 0.08 70 / 0.5)",
-    text: "oklch(0.82 0.19 70)",
-    border: "oklch(0.40 0.12 70)",
-  },
-  normal: {
-    bg: "oklch(0.18 0.08 205 / 0.5)",
-    text: "oklch(0.78 0.18 205)",
-    border: "oklch(0.40 0.10 205)",
-  },
-  low: {
-    bg: "oklch(0.14 0.02 220 / 0.5)",
-    text: "oklch(0.50 0.03 220)",
-    border: "oklch(0.25 0.03 220)",
-  },
+const PRIORITY_TONE: Record<string, PillTone> = {
+  critical: "danger",
+  high: "warning",
+  normal: "info",
+  low: "neutral",
 };
 
 function PriorityBadge({ priority }: { priority: string }): React.ReactElement {
-  const colors = PRIORITY_COLORS[priority] ?? PRIORITY_COLORS.normal;
   return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        padding: "1px 6px",
-        borderRadius: 3,
-        fontSize: 10,
-        fontWeight: 600,
-        textTransform: "uppercase",
-        letterSpacing: "0.04em",
-        background: colors.bg,
-        color: colors.text,
-        border: `1px solid ${colors.border}`,
-      }}
-    >
+    <Pill tone={PRIORITY_TONE[priority] ?? "info"} size="sm" style={{ textTransform: "uppercase" }}>
       {priority}
-    </span>
+    </Pill>
   );
 }
 
@@ -244,14 +202,16 @@ export function AIQueue(): React.ReactElement {
             )}
 
             {(item.status === "pending" || item.status === "streaming") && (
-              <button
-                type="button"
+              <Pill
+                interactive
+                tone="danger"
+                size="sm"
                 onClick={() => handleCancel(item.id)}
-                style={cancelButtonStyle}
                 aria-label={`Cancel queue item ${idx + 1}`}
+                style={{ marginLeft: "auto", flexShrink: 0 }}
               >
                 Cancel
-              </button>
+              </Pill>
             )}
           </motion.div>
         ))}

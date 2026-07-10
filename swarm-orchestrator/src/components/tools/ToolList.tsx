@@ -1,3 +1,4 @@
+import { Pill } from "#components/ui/Pill";
 import { toolRegistry } from "#lib/tools";
 
 import type { CustomToolDef } from "./ToolBuilder.tsx";
@@ -226,18 +227,9 @@ function ToolCard({
         >
           {name}
         </span>
-        <span
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.625rem",
-            color: "oklch(0.50 0.04 220)",
-            padding: "2px 6px",
-            borderRadius: 4,
-            background: "oklch(0.14 0.03 220)",
-          }}
-        >
-          {paramCount} param{paramCount !== 1 ? "s" : ""}
-        </span>
+        <Pill tone="neutral" size="sm">
+          {paramCount} {paramCount === 1 ? "Param" : "Params"}
+        </Pill>
       </div>
 
       {/* Description */}
@@ -261,38 +253,12 @@ function ToolCard({
       {/* Custom tool actions */}
       {isCustom && (
         <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-          <button
-            type="button"
-            onClick={onEdit}
-            style={{
-              padding: "3px 10px",
-              borderRadius: 4,
-              border: "1px solid oklch(0.22 0.04 220)",
-              background: "oklch(0 0 0 / 0)",
-              color: "oklch(0.65 0.04 220)",
-              fontFamily: "var(--font-body)",
-              fontSize: "0.6875rem",
-              cursor: "pointer",
-            }}
-          >
+          <Pill interactive tone="neutral" size="sm" onClick={onEdit}>
             Edit
-          </button>
-          <button
-            type="button"
-            onClick={onDelete}
-            style={{
-              padding: "3px 10px",
-              borderRadius: 4,
-              border: "1px solid oklch(0.72 0.20 10 / 0.3)",
-              background: "oklch(0 0 0 / 0)",
-              color: "oklch(0.72 0.20 10)",
-              fontFamily: "var(--font-body)",
-              fontSize: "0.6875rem",
-              cursor: "pointer",
-            }}
-          >
+          </Pill>
+          <Pill interactive tone="danger" size="sm" onClick={onDelete}>
             Delete
-          </button>
+          </Pill>
         </div>
       )}
     </div>

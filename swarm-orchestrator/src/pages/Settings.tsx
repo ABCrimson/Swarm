@@ -1,6 +1,7 @@
 import { useAtom } from "jotai";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { Pill } from "#components/ui/Pill";
 import { alertThresholdsAtom } from "#lib/alerts";
 import {
   CLAUDE_MODELS,
@@ -188,37 +189,15 @@ function ModelCard({
           {name}
         </span>
         {gated && (
-          <span
-            style={{
-              display: "inline-flex",
-              padding: "1px 6px",
-              borderRadius: 3,
-              fontSize: "0.6rem",
-              fontWeight: 600,
-              letterSpacing: "0.01em",
-              background: "oklch(0.30 0.13 55 / 0.35)",
-              color: "oklch(0.85 0.15 55)",
-              border: "1px solid oklch(0.48 0.16 55 / 0.6)",
-            }}
-          >
+          <Pill tone="warning" size="sm">
             Requires Project Glasswing
-          </span>
+          </Pill>
         )}
       </div>
       <span style={{ ...DESCRIPTION_STYLE, marginTop: 0 }}>{description}</span>
-      <span
-        style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: "0.65rem",
-          color: "oklch(0.45 0.04 205)",
-          background: "oklch(0.06 0.02 220)",
-          padding: "2px 8px",
-          borderRadius: 4,
-          alignSelf: "flex-start",
-        }}
-      >
+      <Pill tone="neutral" size="sm" style={{ alignSelf: "flex-start" }}>
         {context}
-      </span>
+      </Pill>
     </button>
   );
 }

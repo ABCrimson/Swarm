@@ -1,6 +1,7 @@
 import { formatDistanceToNow } from "date-fns";
 import { motion } from "motion/react";
 
+import { Pill } from "#components/ui/Pill";
 import type { Session } from "#store/types";
 
 interface SessionCardProps {
@@ -64,16 +65,9 @@ export function SessionCard({
           {session.name}
         </h3>
 
-        <span
-          className="shrink-0 inline-flex items-center justify-center rounded-full px-2 py-0.5 text-xs font-medium"
-          style={{
-            background: "oklch(0.25 0.06 205 / 0.5)",
-            color: "oklch(0.78 0.12 205)",
-            fontFamily: "var(--font-mono, 'JetBrains Mono Variable', monospace)",
-          }}
-        >
-          {session.workerIds.length} {session.workerIds.length === 1 ? "worker" : "workers"}
-        </span>
+        <Pill tone="info" size="sm" className="shrink-0">
+          {session.workerIds.length} {session.workerIds.length === 1 ? "Worker" : "Workers"}
+        </Pill>
       </div>
 
       <p
@@ -89,16 +83,9 @@ export function SessionCard({
       {session.metadata?.tags && session.metadata.tags.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
           {session.metadata.tags.map((tag) => (
-            <span
-              key={tag}
-              className="rounded-md px-1.5 py-0.5 text-xs"
-              style={{
-                background: "oklch(0.22 0.04 220 / 0.6)",
-                color: "oklch(0.65 0.06 220)",
-              }}
-            >
+            <Pill key={tag} tone="neutral" size="sm" maxWidth={120}>
               {tag}
-            </span>
+            </Pill>
           ))}
         </div>
       )}

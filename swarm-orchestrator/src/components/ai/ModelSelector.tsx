@@ -10,6 +10,7 @@ import { AnimatePresence, motion } from "motion/react";
 import type { CSSProperties } from "react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Pill } from "#components/ui/Pill";
 import { CLAUDE_MODELS, formatContextLabel, type ModelInfo, type ModelKey } from "#lib/models";
 import { selectedModelAtom } from "#store/ui";
 
@@ -116,30 +117,6 @@ const modelMetaStyle: CSSProperties = {
   gap: 8,
   fontSize: 11,
   color: "oklch(0.58 0.03 220)",
-};
-
-const capabilityBadgeStyle: CSSProperties = {
-  display: "inline-flex",
-  padding: "1px 5px",
-  borderRadius: 3,
-  fontSize: 10,
-  fontWeight: 500,
-  background: "oklch(0.16 0.03 220 / 0.6)",
-  color: "oklch(0.60 0.04 220)",
-  border: "1px solid oklch(0.22 0.03 220)",
-};
-
-/** Distinct, minimal badge flagging a gated model (e.g. Mythos → Project Glasswing). */
-const gatedBadgeStyle: CSSProperties = {
-  display: "inline-flex",
-  padding: "1px 6px",
-  borderRadius: 3,
-  fontSize: 10,
-  fontWeight: 600,
-  letterSpacing: "0.01em",
-  background: "oklch(0.30 0.13 55 / 0.35)",
-  color: "oklch(0.85 0.15 55)",
-  border: "1px solid oklch(0.48 0.16 55 / 0.6)",
 };
 
 const costStyle: CSSProperties = {
@@ -378,7 +355,9 @@ export function ModelSelector(): React.ReactElement {
                       <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <span style={{ color: style.color }}>{model.label}</span>
                         {model.gated === "glasswing" && (
-                          <span style={gatedBadgeStyle}>Requires Project Glasswing</span>
+                          <Pill tone="warning" size="sm">
+                            Requires Project Glasswing
+                          </Pill>
                         )}
                       </span>
                       <span style={{ ...costStyle, color: style.color }}>
@@ -394,9 +373,9 @@ export function ModelSelector(): React.ReactElement {
 
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 2 }}>
                       {MODEL_CAPABILITIES[key].map((cap) => (
-                        <span key={cap} style={capabilityBadgeStyle}>
+                        <Pill key={cap} tone="neutral" size="sm">
                           {cap}
-                        </span>
+                        </Pill>
                       ))}
                     </div>
                   </div>

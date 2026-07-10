@@ -1,5 +1,6 @@
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
+import { Pill } from "#components/ui/Pill";
 import { BUILT_IN_TEMPLATES, loadUserTemplates } from "#lib/templates";
 import type { SessionTemplate } from "#store/types";
 
@@ -178,16 +179,9 @@ function TemplateCard({
       >
         {template.description}
       </p>
-      <span
-        className="inline-flex items-center text-xs rounded-full px-2 py-0.5"
-        style={{
-          background: "oklch(0.22 0.06 205 / 0.4)",
-          color: "oklch(0.70 0.10 205)",
-          fontFamily: "var(--font-mono, 'JetBrains Mono Variable', monospace)",
-        }}
-      >
-        {template.workerConfigs.length} {template.workerConfigs.length === 1 ? "worker" : "workers"}
-      </span>
+      <Pill tone="info" size="sm">
+        {template.workerConfigs.length} {template.workerConfigs.length === 1 ? "Worker" : "Workers"}
+      </Pill>
     </motion.button>
   );
 }

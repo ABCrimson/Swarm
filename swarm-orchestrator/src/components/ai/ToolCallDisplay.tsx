@@ -7,6 +7,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import type { CSSProperties } from "react";
 import { useState } from "react";
+import { Pill } from "#components/ui/Pill";
 import { Spinner } from "#components/ui/Spinner";
 import { tokenizeJson } from "#lib/syntax-highlight";
 
@@ -43,17 +44,6 @@ const headerStyle: CSSProperties = {
   cursor: "pointer",
   userSelect: "none",
   transition: "background 0.15s ease",
-};
-
-const badgeBase: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 4,
-  padding: "2px 8px",
-  borderRadius: 4,
-  fontSize: 12,
-  fontWeight: 600,
-  fontFamily: "var(--font-mono, 'JetBrains Mono Variable', 'Fira Code', monospace)",
 };
 
 const TOOL_BADGE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
@@ -306,16 +296,17 @@ export function ToolCallDisplay({
       >
         <StatusIndicator status={status} />
 
-        <span
+        <Pill
+          tone="neutral"
+          size="sm"
           style={{
-            ...badgeBase,
             background: badgeColors.bg,
             color: badgeColors.text,
-            border: `1px solid ${badgeColors.border}`,
+            borderColor: badgeColors.border,
           }}
         >
           {name}
-        </span>
+        </Pill>
 
         <span style={chevronStyle}>{expanded ? "\u25B4" : "\u25BE"}</span>
       </button>
