@@ -72,7 +72,10 @@ describe("SystemStore", () => {
       expect(history[2].time).toBe(3);
     });
 
-    it("caps at MAX_HISTORY (3600) and wraps around", () => {
+    // 3610 pushes each rebuild + re-freeze the full history array under immer,
+    // so this test is CPU-bound (~6s) and load-sensitive; the default 5s
+    // timeout flakes. Production pushes once per metrics tick and is unaffected.
+    it("caps at MAX_HISTORY (3600) and wraps around", { timeout: 30_000 }, () => {
       const { pushHistory } = useSystemStore.getState();
 
       // Push 3610 points (10 over the limit)
