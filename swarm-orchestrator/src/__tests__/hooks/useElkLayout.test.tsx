@@ -1,5 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import type { Edge, Node } from "@xyflow/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useElkLayout } from "#hooks/useElkLayout";
 
@@ -179,6 +180,64 @@ describe("useElkLayout", () => {
 
       expect(result.current.error).toBe("Layout Engine Timed Out");
       expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
+  describe("StrictMode remount (fix/feedback-batch-1 item 1)", () => {
+    // StrictMode double-invokes effects on mount in dev (mount -> cleanup
+    // -> mount). When a worker topology already exists at mount time, the
+    // auto-layout effect fires runLayout() on the FIRST pass (fingerprint
+    // "" -> topology), arming the watchdog and starting a layout call on
+    // the first engine. The construction effect's cleanup then terminates
+    // that engine's worker and clears the watchdog mid-flight. On the
+    // replay mount a fresh engine is created — but `prevFingerprintRef` is
+    // a ref, so without resetting it in that cleanup, the replayed
+    // auto-layout effect sees no fingerprint change (the ref survived the
+    // replay) and skips runLayout() entirely, leaving the fresh engine
+    // idle, the watchdog dead, and isLayouting stuck true forever. This
+    // exercises that exact sequence via a real React.StrictMode wrapper.
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("re-triggers layout on the fresh engine after a StrictMode replay instead of leaving isLayouting stuck", async () => {
+      const { result } = renderHook(() => useElkLayout(nodes, edges), {
+        wrapper: StrictMode,
+      });
+
+      // The worker factory must have been invoked twice: once for the
+      // pre-replay engine, once for the surviving post-replay engine.
+      expect(MockWorker.instances.length).toBe(2);
+
+      const secondWorker = MockWorker.instances[1];
+      const layoutCallsOnSecondWorker = secondWorker.postMessage.mock.calls.filter(
+        ([msg]) => (msg as { cmd?: string } | undefined)?.cmd === "layout",
+      );
+
+      // The replayed auto-layout effect must have actually re-requested a
+      // layout on the second (surviving) engine — not just constructed it
+      // and left it idle.
+      expect(layoutCallsOnSecondWorker.length).toBe(1);
+
+      // A fresh watchdog must be armed for that second layout request. If
+      // the bug were present, runLayout() would never have been called on
+      // the second engine, so no watchdog would be running at all here.
+      expect(vi.getTimerCount()).toBe(1);
+      expect(result.current.isLayouting).toBe(true);
+
+      // Prove the second engine is genuinely alive (not orphaned): its
+      // watchdog fires on schedule instead of leaving isLayouting stuck
+      // `true` forever with no error, ever.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      expect(result.current.error).toBe("Layout Engine Timed Out");
+      expect(result.current.isLayouting).toBe(false);
     });
   });
 });

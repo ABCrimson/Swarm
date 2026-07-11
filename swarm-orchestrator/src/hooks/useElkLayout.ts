@@ -98,6 +98,31 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
 
   // Construct the ELK driver (and its single, non-nested worker) once on
   // mount, terminate on unmount.
+  //
+  // StrictMode replay hazard: in dev, StrictMode mounts this effect, runs
+  // its cleanup, then mounts it again (mount -> cleanup -> mount) to flush
+  // out effects that aren't cleanup-safe. If a worker topology already
+  // exists when the Graph view mounts, the auto-layout effect below fires
+  // `runLayout()` on that first mount (fingerprint "" -> topology),
+  // arming the watchdog and starting `elk1.layout()`. This cleanup then
+  // runs, terminating elk1's worker and clearing the watchdog while that
+  // layout is still in flight. On the replay mount a fresh elk2 is
+  // constructed — but `prevFingerprintRef` is a ref, so it SURVIVES the
+  // replay and still holds the topology fingerprint set on the first
+  // mount. The replayed auto-layout effect therefore sees no fingerprint
+  // change and skips `runLayout()` entirely, leaving elk2 idle, the
+  // watchdog dead, and `isLayouting` stuck `true` forever — the
+  // "Computing Layout" spinner never resolves. (A first-ever mount with no
+  // pre-existing topology doesn't hit this: the worker spawns after mount,
+  // so the topology fingerprint only appears/changes later, on the replay,
+  // which then runs `runLayout()` normally.)
+  //
+  // Resetting `prevFingerprintRef` and `isLayouting` here — on every
+  // cleanup, not just a genuine unmount — makes the replay mount behave
+  // like a first mount: the next auto-layout effect run re-triggers
+  // `runLayout()` on the fresh engine, and no stale spinner survives the
+  // replay. On a real unmount these are harmless no-ops (nothing reads the
+  // ref or renders this state again).
   // biome-ignore lint/correctness/useExhaustiveDependencies: clearWatchdog is a stable-shape helper closing only over the ref; including it would redefine the effect's identity every render for no behavioral change.
   useEffect(() => {
     const handleWorkerFailure = (): void => {
@@ -131,6 +156,11 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
         rafIdRef.current = null;
       }
       clearWatchdog();
+      // See the StrictMode replay hazard note above: reset so a replayed
+      // (or next real) mount's auto-layout effect re-triggers layout on
+      // the fresh engine, and no stale spinner carries over.
+      prevFingerprintRef.current = "";
+      setIsLayouting(false);
     };
   }, []);
 
