@@ -64,6 +64,9 @@ function topologyFingerprint(nodes: Node[], edges: Edge[]): string {
  * against a timer and surfacing the same kind of `error` state if it wins;
  * the watchdog timer is always cleared (success, any failure path, or
  * unmount) so it never fires — and never leaks — after the fact.
+ * Overlapping layouts are serialized by a run token: only the most recent
+ * `runLayout()` invocation may commit state, clear the watchdog, or stamp
+ * an error — a superseded run's late settlement is ignored outright.
  *
  * Automatically re-runs layout when the topology fingerprint changes.
  * Node positions are applied directly (synchronously) in the `.then()`
@@ -90,6 +93,14 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
   const nodesRef = useRef<Node[]>(nodes);
   const edgesRef = useRef<Edge[]>(edges);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Monotonic run token: each runLayout() claims a new id, and a settlement
+  // whose id is no longer current belongs to a superseded run — it must not
+  // clear the active run's watchdog, commit stale positions, or stamp an
+  // error the active run would never clear. Layouts genuinely overlap: the
+  // auto-layout effect re-fires on every topology change while a prior
+  // elk.layout() may still be in flight (elkjs settles each request
+  // independently by per-message id).
+  const runIdRef = useRef(0);
 
   nodesRef.current = nodes;
   edgesRef.current = edges;
@@ -158,6 +169,11 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
       elk.terminateWorker();
       elkRef.current = null;
       clearWatchdog();
+      // Invalidate any in-flight settlement from the terminated engine: a
+      // response already queued in PromisedWorker's setTimeout(0) deferral
+      // still settles after terminate(), and must not commit into the
+      // replayed mount's (or post-unmount) state.
+      runIdRef.current += 1;
       // See the StrictMode replay hazard note above: reset so a replayed
       // (or next real) mount's auto-layout effect re-triggers layout on
       // the fresh engine, and no stale spinner carries over.
@@ -196,6 +212,7 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
     // Clear any watchdog left over from a prior in-flight call — a fresh
     // runLayout() always supersedes it, and only one should ever be live.
     clearWatchdog();
+    const runId = ++runIdRef.current;
 
     // Race `.layout()` against a watchdog timer: elkjs's worker protocol
     // has no built-in timeout, so a worker that neither errors nor ever
@@ -210,6 +227,7 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
 
     Promise.race([elk.layout(graph), timeoutPromise])
       .then((result) => {
+        if (runId !== runIdRef.current) return;
         clearWatchdog();
 
         const positionMap = new Map(
@@ -229,6 +247,7 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
         setIsLayouting(false);
       })
       .catch((err: unknown) => {
+        if (runId !== runIdRef.current) return;
         clearWatchdog();
         const timedOut = err instanceof Error && err.message === "elk-layout-watchdog-timeout";
         setError(timedOut ? LAYOUT_TIMEOUT_ERROR : LAYOUT_ENGINE_ERROR);

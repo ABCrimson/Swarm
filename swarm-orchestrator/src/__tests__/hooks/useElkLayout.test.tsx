@@ -261,6 +261,121 @@ describe("useElkLayout", () => {
     });
   });
 
+  describe("superseded runs (stale-settlement guard)", () => {
+    // Two layouts can genuinely overlap: the auto-layout effect fires
+    // runLayout() on every topology fingerprint change, and elkjs's
+    // PromisedWorker resolves each in-flight `.layout()` independently by
+    // per-message id. A superseded run's late settlement must be ignored
+    // entirely — it must not disarm the active run's watchdog, commit stale
+    // positions, flip isLayouting, or stamp an error the active run would
+    // then never clear.
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const nodesWithC: Node[] = [...nodes, { id: "c", position: { x: 0, y: 0 }, data: {} }];
+
+    /** ids of `cmd: "layout"` requests posted to `worker`, in send order. */
+    function layoutRequestIds(worker: MockWorker): number[] {
+      return worker.postMessage.mock.calls
+        .map(([msg]) => msg as { id: number; cmd?: string })
+        .filter((msg) => msg.cmd === "layout")
+        .map((msg) => msg.id);
+    }
+
+    /** Delivers an elkjs-protocol response and flushes PromisedWorker's setTimeout(0) deferral. */
+    async function deliver(worker: MockWorker, data: Record<string, unknown>): Promise<void> {
+      await act(async () => {
+        worker.onmessage?.({ data } as MessageEvent);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    }
+
+    it("ignores a superseded run's late success: active watchdog stays armed and still fires", async () => {
+      const { result, rerender } = renderHook(
+        ({ n, e }: { n: Node[]; e: Edge[] }) => useElkLayout(n, e),
+        {
+          initialProps: { n: nodes, e: edges },
+        },
+      );
+      const worker = MockWorker.instances.at(-1);
+      expect(worker).toBeDefined();
+      if (!worker) return;
+
+      // Run A fired on mount; topology change starts run B while A is in flight.
+      expect(layoutRequestIds(worker).length).toBe(1);
+      const [idA] = layoutRequestIds(worker);
+      rerender({ n: nodesWithC, e: edges });
+      expect(layoutRequestIds(worker).length).toBe(2);
+      expect(vi.getTimerCount()).toBe(1);
+
+      // A's late success must not disarm B's watchdog or end B's loading state.
+      await deliver(worker, {
+        id: idA,
+        data: {
+          id: "root",
+          children: [
+            { id: "a", x: 1, y: 1 },
+            { id: "b", x: 2, y: 2 },
+          ],
+        },
+      });
+      expect(result.current.isLayouting).toBe(true);
+      expect(vi.getTimerCount()).toBe(1);
+
+      // B hangs — its watchdog must still be alive to catch that.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(result.current.error).toBe("Layout Engine Timed Out");
+      expect(result.current.isLayouting).toBe(false);
+    });
+
+    it("ignores a superseded run's late rejection: no sticky error over the active run's success", async () => {
+      const { result, rerender } = renderHook(
+        ({ n, e }: { n: Node[]; e: Edge[] }) => useElkLayout(n, e),
+        {
+          initialProps: { n: nodes, e: edges },
+        },
+      );
+      const worker = MockWorker.instances.at(-1);
+      expect(worker).toBeDefined();
+      if (!worker) return;
+
+      const [idA] = layoutRequestIds(worker);
+      rerender({ n: nodesWithC, e: edges });
+      const idB = layoutRequestIds(worker)[1];
+
+      // A rejects late (elkjs rejects a request whose response carries `error`).
+      await deliver(worker, { id: idA, error: { message: "boom" } });
+      expect(result.current.error).toBeNull();
+      expect(result.current.isLayouting).toBe(true);
+
+      // B then succeeds — the commit must land with no error stamped.
+      await deliver(worker, {
+        id: idB,
+        data: {
+          id: "root",
+          children: [
+            { id: "a", x: 100, y: 50 },
+            { id: "b", x: 200, y: 100 },
+            { id: "c", x: 300, y: 150 },
+          ],
+        },
+      });
+      expect(result.current.error).toBeNull();
+      expect(result.current.isLayouting).toBe(false);
+      expect(result.current.layoutedNodes.find((n) => n.id === "c")?.position).toEqual({
+        x: 300,
+        y: 150,
+      });
+    });
+  });
+
   describe("layout success commit (fix/feedback-batch-1: rAF deferral starves under occlusion/CDP)", () => {
     beforeEach(() => {
       vi.useFakeTimers();
