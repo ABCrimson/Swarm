@@ -3,6 +3,7 @@
 // Recharts 3.8.0 with isAnimationActive={false} for 60fps.
 // Uses shared chart theme for OKLCH styling.
 
+import type { CSSProperties } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -13,9 +14,32 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { axisProps, formatTime, gridProps, legendStyle, tooltipProps } from "#lib/chart-theme";
+import {
+  axisProps,
+  formatTime,
+  glassPanelStyle,
+  gridProps,
+  legendStyle,
+  tooltipProps,
+} from "#lib/chart-theme";
 import { workerColor } from "#lib/theme";
 import { useSystemStore } from "#store/system";
+
+const containerStyle: CSSProperties = {
+  ...glassPanelStyle,
+  padding: 12,
+  width: "100%",
+  height: "100%",
+  minHeight: 200,
+};
+
+const headerStyle: CSSProperties = {
+  fontFamily: "var(--font-display)",
+  fontSize: 14,
+  fontWeight: 600,
+  color: "oklch(0.85 0.04 220)",
+  marginBottom: 8,
+};
 
 /**
  * Real-time metrics chart displaying CPU%, memory usage, and worker count.
@@ -27,14 +51,9 @@ export function MetricsChart(): React.ReactElement {
   const history = useSystemStore((s) => s.metrics.history);
 
   return (
-    <div
-      style={{
-        width: "100%",
-        height: "100%",
-        minHeight: 200,
-      }}
-    >
-      <ResponsiveContainer width="100%" height="100%">
+    <div style={containerStyle}>
+      <div style={headerStyle}>System Metrics</div>
+      <ResponsiveContainer width="100%" height="85%">
         <LineChart data={history} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
           <CartesianGrid {...gridProps} />
           <XAxis dataKey="time" tickFormatter={formatTime} {...axisProps} />
