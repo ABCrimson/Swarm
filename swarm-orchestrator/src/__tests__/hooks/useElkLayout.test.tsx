@@ -7,18 +7,37 @@ import { useElkLayout } from "#hooks/useElkLayout";
 /**
  * Minimal mock of the DOM `Worker` API. A real end-to-end elkjs worker test
  * is impractical under jsdom (jsdom has no Worker implementation and can't
- * evaluate a module worker script), so this only exercises the hook's
+ * evaluate a module worker script), so this mostly exercises the hook's
  * failure-handling contract: when the worker the hook constructs fires
  * `onerror`/`onmessageerror`, the hook must surface an error and clear
  * `isLayouting` instead of hanging forever (the Task 4 regression).
+ *
+ * When `MockWorker.autoRespondLayout` is set, `postMessage` also speaks just
+ * enough of elkjs's own `{cmd, id}` request/response protocol (see
+ * elkjs's `PromisedWorker`) to resolve a real `elk.layout()` call — needed
+ * to exercise the success path (fix/feedback-batch-1 item: synchronous
+ * layout commit) without a real worker.
  */
 class MockWorker {
   static instances: MockWorker[] = [];
+  static autoRespondLayout = false;
 
   onmessage: ((ev: MessageEvent) => void) | null = null;
   onerror: ((ev: ErrorEvent) => void) | null = null;
   onmessageerror: ((ev: MessageEvent) => void) | null = null;
-  postMessage = vi.fn();
+  postMessage = vi.fn(
+    (msg: { id: number; cmd?: string; graph?: { children?: { id: string }[] } }) => {
+      if (!MockWorker.autoRespondLayout || msg.cmd !== "layout") return;
+      const children = (msg.graph?.children ?? []).map((child, i) => ({
+        id: child.id,
+        x: (i + 1) * 100,
+        y: (i + 1) * 50,
+      }));
+      this.onmessage?.({
+        data: { id: msg.id, data: { id: "root", children } },
+      } as MessageEvent);
+    },
+  );
   terminate = vi.fn();
 
   constructor() {
@@ -35,6 +54,7 @@ const edges: Edge[] = [{ id: "e-a-b", source: "a", target: "b" }];
 describe("useElkLayout", () => {
   beforeEach(() => {
     MockWorker.instances = [];
+    MockWorker.autoRespondLayout = false;
     vi.stubGlobal("Worker", MockWorker);
   });
 
@@ -238,6 +258,49 @@ describe("useElkLayout", () => {
 
       expect(result.current.error).toBe("Layout Engine Timed Out");
       expect(result.current.isLayouting).toBe(false);
+    });
+  });
+
+  describe("layout success commit (fix/feedback-batch-1: rAF deferral starves under occlusion/CDP)", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it("commits layout state even when requestAnimationFrame never fires", async () => {
+      // Chromium suppresses rAF callbacks for occluded/minimized windows (and
+      // under CDP evaluation pressure). Stub it to a no-op that never invokes
+      // its callback, simulating that starvation deterministically: if the
+      // hook's success handler still depends on rAF to commit state, this
+      // test must fail (isLayouting stuck true, layoutedNodes never update).
+      const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+      MockWorker.autoRespondLayout = true;
+
+      const { result } = renderHook(() => useElkLayout(nodes, edges));
+      expect(result.current.isLayouting).toBe(true);
+
+      // elkjs's own PromisedWorker defers delivery of the mocked response by
+      // one macrotask (`setTimeout(fn, 0)`); flush it deterministically
+      // instead of polling on real timers.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(result.current.isLayouting).toBe(false);
+      expect(result.current.layoutedNodes.find((n) => n.id === "a")?.position).toEqual({
+        x: 100,
+        y: 50,
+      });
+      expect(result.current.layoutedNodes.find((n) => n.id === "b")?.position).toEqual({
+        x: 200,
+        y: 100,
+      });
+      expect(result.current.layoutedEdges).toBe(edges);
+      expect(rafSpy).not.toHaveBeenCalled();
     });
   });
 });

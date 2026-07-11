@@ -66,7 +66,14 @@ function topologyFingerprint(nodes: Node[], edges: Edge[]): string {
  * unmount) so it never fires — and never leaks — after the fact.
  *
  * Automatically re-runs layout when the topology fingerprint changes.
- * Node positions are applied via `requestAnimationFrame` to avoid layout thrash.
+ * Node positions are applied directly (synchronously) in the `.then()`
+ * handler as a single batched React state commit. This used to be deferred
+ * via `requestAnimationFrame`, but rAF is not guaranteed to fire — Chromium
+ * suppresses it for occluded/minimized windows (and under CDP evaluation
+ * pressure) — and the layout watchdog is cleared before that deferred
+ * callback runs, so a suppressed frame left `isLayouting` stuck `true`
+ * forever with no recovery path. A single batched commit doesn't need frame
+ * alignment, so the commit must not depend on frame production at all.
  *
  * @param nodes - React Flow nodes to position.
  * @param edges - React Flow edges defining connections.
@@ -82,7 +89,6 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
   const prevFingerprintRef = useRef<string>("");
   const nodesRef = useRef<Node[]>(nodes);
   const edgesRef = useRef<Edge[]>(edges);
-  const rafIdRef = useRef<number | null>(null);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   nodesRef.current = nodes;
@@ -151,10 +157,6 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
     return () => {
       elk.terminateWorker();
       elkRef.current = null;
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
-      }
       clearWatchdog();
       // See the StrictMode replay hazard note above: reset so a replayed
       // (or next real) mount's auto-layout effect re-triggers layout on
@@ -209,28 +211,22 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
     Promise.race([elk.layout(graph), timeoutPromise])
       .then((result) => {
         clearWatchdog();
-        rafIdRef.current = requestAnimationFrame(() => {
-          rafIdRef.current = null;
 
-          const positionMap = new Map(
-            (result.children ?? []).map((child) => [
-              child.id,
-              { x: child.x ?? 0, y: child.y ?? 0 },
-            ]),
-          );
+        const positionMap = new Map(
+          (result.children ?? []).map((child) => [child.id, { x: child.x ?? 0, y: child.y ?? 0 }]),
+        );
 
-          const updated = nodesRef.current.map((node) => {
-            const pos = positionMap.get(node.id);
-            if (pos) {
-              return { ...node, position: { x: pos.x, y: pos.y } };
-            }
-            return node;
-          });
-
-          setLayoutedNodes(updated);
-          setLayoutedEdges(edgesRef.current);
-          setIsLayouting(false);
+        const updated = nodesRef.current.map((node) => {
+          const pos = positionMap.get(node.id);
+          if (pos) {
+            return { ...node, position: { x: pos.x, y: pos.y } };
+          }
+          return node;
         });
+
+        setLayoutedNodes(updated);
+        setLayoutedEdges(edgesRef.current);
+        setIsLayouting(false);
       })
       .catch((err: unknown) => {
         clearWatchdog();
