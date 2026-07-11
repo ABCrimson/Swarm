@@ -1,5 +1,6 @@
 // ── CPUChart ────────────────────────────────────────
-// 60s rolling window LineChart of real aggregate CPU usage.
+// LineChart of real aggregate CPU usage over the trailing
+// MAX_CHART_POINTS samples.
 // Recharts 3.8.0 with ResponsiveContainer, isAnimationActive={false}.
 
 import type { CSSProperties } from "react";
