@@ -21,9 +21,8 @@ import {
   legendStyle,
   tooltipProps,
 } from "#lib/chart-theme";
+import { lastN } from "#lib/chart-window";
 import { useSystemStore } from "#store/system";
-
-const WINDOW_MS = 60_000; // 60s rolling window
 
 const containerStyle: CSSProperties = {
   ...glassPanelStyle,
@@ -42,16 +41,14 @@ const headerStyle: CSSProperties = {
 };
 
 /**
- * Aggregate CPU usage line chart over a 60-second rolling window,
- * sourced from real system-store telemetry (`metrics.history`).
+ * Aggregate CPU usage line chart over the trailing sample window
+ * (see `MAX_CHART_POINTS`), sourced from real system-store telemetry
+ * (`metrics.history`).
  */
 export function CPUChart(): React.ReactElement {
   const history = useSystemStore((s) => s.metrics.history);
 
-  const data = (() => {
-    const cutoff = Date.now() - WINDOW_MS;
-    return history.filter((p) => p.time > cutoff).map((p) => ({ time: p.time, cpu: p.cpu }));
-  })();
+  const data = lastN(history).map((p) => ({ time: p.time, cpu: p.cpu }));
 
   return (
     <div style={containerStyle}>

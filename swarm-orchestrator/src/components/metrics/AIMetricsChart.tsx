@@ -1,8 +1,8 @@
 // ── AIMetricsChart ──────────────────────────────────
 // Recharts 3.8.0 AreaChart for AI performance metrics.
 // Metrics: queue depth, active streams, tokens/min, req/min — all sampled
-// from the real AI store (useAiStore) on a rolling 30s window.
-// Uses shared chart theme.
+// from the real AI store (useAiStore), keeping the trailing
+// MAX_CHART_POINTS samples. Uses shared chart theme.
 
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -17,6 +17,7 @@ import {
   YAxis,
 } from "recharts";
 import { axisProps, formatTime, gridProps, legendStyle, tooltipProps } from "#lib/chart-theme";
+import { lastN, MAX_CHART_POINTS } from "#lib/chart-window";
 import { workerColor } from "#lib/theme";
 import { useAiStore } from "#store/ai";
 
@@ -54,7 +55,6 @@ const headerStyle: CSSProperties = {
 
 // ── Rolling Window Sampling ──────────────────────────
 
-const WINDOW_MS = 30_000;
 const SAMPLE_INTERVAL_MS = 1000;
 const RATE_WINDOW_MS = 60_000;
 
@@ -82,8 +82,9 @@ function sampleAiStore(now: number): AiMetricPoint {
 // ── Component ───────────────────────────────────────
 
 /**
- * AI performance metrics chart with 30s rolling window, sourced from
- * `useAiStore` (queue depth, active streams, and real token-usage rates).
+ * AI performance metrics chart over the trailing `MAX_CHART_POINTS`
+ * samples, sourced from `useAiStore` (queue depth, active streams, and
+ * real token-usage rates).
  *
  * - Recharts 3.8.0 `<AreaChart>` with `<ResponsiveContainer>`
  * - OKLCH fills via `workerColor()`
@@ -98,9 +99,7 @@ export function AIMetricsChart(): React.ReactElement {
     intervalRef.current = setInterval(() => {
       setData((prev) => {
         const now = Date.now();
-        const cutoff = now - WINDOW_MS;
-        const filtered = prev.filter((p) => p.time > cutoff);
-        return [...filtered, sampleAiStore(now)];
+        return lastN([...prev, sampleAiStore(now)]);
       });
     }, SAMPLE_INTERVAL_MS);
 
@@ -120,7 +119,7 @@ export function AIMetricsChart(): React.ReactElement {
       <div style={headerStyle}>
         <span>AI Metrics</span>
         <span style={{ fontSize: 11, fontWeight: 400, color: "oklch(0.55 0.03 220)" }}>
-          30s Window
+          Last {MAX_CHART_POINTS} Samples
         </span>
       </div>
 

@@ -1,6 +1,7 @@
 // ── ThroughputChart ─────────────────────────────────
-// Tokens/sec per model line chart, 30s window, sampled from real
-// token-usage records in useAiStore's cumulativeUsage.history.
+// Tokens/sec per model line chart keeping the trailing MAX_CHART_POINTS
+// samples, computed from real token-usage records in useAiStore's
+// cumulativeUsage.history.
 // OKLCH colors: opus=violet, sonnet=plasma, haiku=lime.
 // Recharts LineChart with ResponsiveContainer, isAnimationActive={false}.
 
@@ -25,6 +26,7 @@ import {
   legendStyle,
   tooltipProps,
 } from "#lib/chart-theme";
+import { lastN, MAX_CHART_POINTS } from "#lib/chart-window";
 import { useAiStore } from "#store/ai";
 
 // OKLCH model colors
@@ -32,7 +34,6 @@ const COLOR_OPUS = "oklch(0.68 0.22 290)";
 const COLOR_SONNET = "oklch(0.72 0.18 205)";
 const COLOR_HAIKU = "oklch(0.78 0.18 130)";
 
-const WINDOW_MS = 30_000;
 const SAMPLE_MS = 1000;
 /** Trailing window used to compute a tokens/sec rate for each sample. */
 const RATE_WINDOW_MS = 10_000;
@@ -77,8 +78,9 @@ function tokensPerSecFor(
 }
 
 /**
- * Line chart showing real AI throughput (tokens/sec) per model over a 30-second window,
- * derived from `useAiStore().cumulativeUsage.history` token-usage records.
+ * Line chart showing real AI throughput (tokens/sec) per model over the
+ * trailing `MAX_CHART_POINTS` samples, derived from
+ * `useAiStore().cumulativeUsage.history` token-usage records.
  *
  * Colours: Opus (violet), Sonnet (plasma blue), Haiku (lime green).
  */
@@ -90,8 +92,6 @@ export function ThroughputChart(): React.ReactElement {
     intervalRef.current = setInterval(() => {
       setData((prev) => {
         const now = Date.now();
-        const cutoff = now - WINDOW_MS;
-        const filtered = prev.filter((p) => p.time > cutoff);
         const history = useAiStore.getState().cumulativeUsage.history;
         const point: ThroughputPoint = {
           time: now,
@@ -99,7 +99,7 @@ export function ThroughputChart(): React.ReactElement {
           sonnet: tokensPerSecFor(history, "sonnet", now),
           haiku: tokensPerSecFor(history, "haiku", now),
         };
-        return [...filtered, point];
+        return lastN([...prev, point]);
       });
     }, SAMPLE_MS);
 
@@ -120,7 +120,7 @@ export function ThroughputChart(): React.ReactElement {
             color: "oklch(0.55 0.03 220)",
           }}
         >
-          Tokens/Sec &middot; 30s
+          Tokens/Sec &middot; Last {MAX_CHART_POINTS}
         </span>
       </div>
       <ResponsiveContainer width="100%" height="85%">

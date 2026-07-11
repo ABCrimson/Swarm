@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAiStore } from "#store/ai";
-import type { AiQueueItem } from "#store/types";
+import type { AiQueueItem, TokenUsageRecord } from "#store/types";
 
 function createQueueItem(overrides?: Partial<AiQueueItem>): AiQueueItem {
   return {
@@ -186,6 +186,75 @@ describe("AiStore", () => {
     it("updates the active stream count", () => {
       useAiStore.getState().setActiveStreams(2);
       expect(useAiStore.getState().activeStreams).toBe(2);
+    });
+  });
+
+  describe("addTokenUsage", () => {
+    const T0 = 1_000_000;
+
+    function usageRecord(overrides?: Partial<TokenUsageRecord>): TokenUsageRecord {
+      return {
+        inputTokens: 100,
+        outputTokens: 50,
+        model: "claude-sonnet-5",
+        provider: "anthropic",
+        costUsd: 0.01,
+        timestamp: T0,
+        ...overrides,
+      };
+    }
+
+    beforeEach(() => {
+      useAiStore.getState().resetUsage();
+    });
+
+    it("accumulates totals across records", () => {
+      useAiStore.getState().addTokenUsage(usageRecord());
+      useAiStore.getState().addTokenUsage(usageRecord({ inputTokens: 10, outputTokens: 5 }));
+
+      const usage = useAiStore.getState().cumulativeUsage;
+      expect(usage.totalInputTokens).toBe(110);
+      expect(usage.totalOutputTokens).toBe(55);
+      expect(usage.totalCostUsd).toBeCloseTo(0.02);
+    });
+
+    it("retains history records within the trailing rate window", () => {
+      useAiStore.getState().addTokenUsage(usageRecord({ timestamp: T0 }));
+      useAiStore.getState().addTokenUsage(usageRecord({ timestamp: T0 + 30_000 }));
+
+      expect(useAiStore.getState().cumulativeUsage.history).toHaveLength(2);
+    });
+
+    it("prunes history records older than the rate window when a new record arrives", () => {
+      useAiStore.getState().addTokenUsage(usageRecord({ timestamp: T0 }));
+      // Exactly at the horizon (60s later) — the rate charts' strict `>`
+      // cutoff already excludes it, so the store drops it too.
+      useAiStore.getState().addTokenUsage(usageRecord({ timestamp: T0 + 60_000 }));
+
+      const history = useAiStore.getState().cumulativeUsage.history;
+      expect(history).toHaveLength(1);
+      expect(history[0].timestamp).toBe(T0 + 60_000);
+    });
+
+    it("pruning does not touch the cumulative totals", () => {
+      useAiStore.getState().addTokenUsage(usageRecord({ timestamp: T0 }));
+      useAiStore.getState().addTokenUsage(usageRecord({ timestamp: T0 + 120_000 }));
+
+      const usage = useAiStore.getState().cumulativeUsage;
+      expect(usage.history).toHaveLength(1);
+      expect(usage.totalInputTokens).toBe(200);
+      expect(usage.totalOutputTokens).toBe(100);
+    });
+
+    it("resetUsage clears totals and history", () => {
+      useAiStore.getState().addTokenUsage(usageRecord());
+      useAiStore.getState().resetUsage();
+
+      const usage = useAiStore.getState().cumulativeUsage;
+      expect(usage.totalInputTokens).toBe(0);
+      expect(usage.totalOutputTokens).toBe(0);
+      expect(usage.totalCostUsd).toBe(0);
+      expect(usage.history).toHaveLength(0);
     });
   });
 });

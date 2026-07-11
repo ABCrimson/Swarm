@@ -23,6 +23,7 @@ import {
   legendStyle,
   tooltipProps,
 } from "#lib/chart-theme";
+import { lastN } from "#lib/chart-window";
 import { memoryAvailableMb } from "#lib/memory";
 import { useSystemStore } from "#store/system";
 
@@ -49,23 +50,19 @@ const headerStyle: CSSProperties = {
 
 /**
  * Stacked area chart showing memory usage breakdown (used, cached, available)
- * over a 60-second rolling window with OKLCH gradient fills.
+ * over the trailing sample window (see `MAX_CHART_POINTS`) with OKLCH
+ * gradient fills.
  */
 export function MemoryChart(): React.ReactElement {
   const history = useSystemStore((s) => s.metrics.history);
   const memoryTotalMb = useSystemStore((s) => s.metrics.memoryTotalMb);
 
-  const data = (() => {
-    const cutoff = Date.now() - 60_000;
-    return history
-      .filter((p) => p.time > cutoff)
-      .map((p) => ({
-        time: p.time,
-        used: p.memory,
-        cached: Math.max(0, p.memory * 0.15),
-        available: memoryAvailableMb(p.memory, memoryTotalMb),
-      }));
-  })();
+  const data = lastN(history).map((p) => ({
+    time: p.time,
+    used: p.memory,
+    cached: Math.max(0, p.memory * 0.15),
+    available: memoryAvailableMb(p.memory, memoryTotalMb),
+  }));
 
   return (
     <div style={containerStyle}>

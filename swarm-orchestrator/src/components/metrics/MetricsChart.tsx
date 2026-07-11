@@ -22,6 +22,7 @@ import {
   legendStyle,
   tooltipProps,
 } from "#lib/chart-theme";
+import { lastN } from "#lib/chart-window";
 import { workerColor } from "#lib/theme";
 import { useSystemStore } from "#store/system";
 
@@ -49,12 +50,15 @@ const headerStyle: CSSProperties = {
  */
 export function MetricsChart(): React.ReactElement {
   const history = useSystemStore((s) => s.metrics.history);
+  // The store retains deep history (CSV export needs it); the chart renders
+  // only the trailing window so it never compresses into noise over time.
+  const data = lastN(history);
 
   return (
     <div style={containerStyle}>
       <div style={headerStyle}>System Metrics</div>
       <ResponsiveContainer width="100%" height="85%">
-        <LineChart data={history} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+        <LineChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
           <CartesianGrid {...gridProps} />
           <XAxis dataKey="time" tickFormatter={formatTime} {...axisProps} />
           <YAxis

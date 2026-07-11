@@ -40,6 +40,16 @@ const EMPTY_USAGE: CumulativeUsage = {
 };
 
 /**
+ * How long token-usage records are retained in `cumulativeUsage.history`.
+ * Records only feed trailing-rate computations (AIMetricsChart's 60s
+ * tokens/min window, ThroughputChart's 10s tokens/sec window), so anything
+ * older than the widest window is dead weight — without pruning, the pool
+ * grows unboundedly for the lifetime of the app. The cumulative totals are
+ * separate counters and keep accumulating regardless.
+ */
+const USAGE_HISTORY_RETENTION_MS = 60_000;
+
+/**
  * Zustand store for the priority-based AI request queue,
  * provider selection, and cumulative token cost tracking.
  *
@@ -106,6 +116,10 @@ export const useAiStore = create<AiStoreState & AiStoreActions>()(
           s.cumulativeUsage.totalInputTokens += record.inputTokens;
           s.cumulativeUsage.totalOutputTokens += record.outputTokens;
           s.cumulativeUsage.totalCostUsd += record.costUsd;
+          const horizon = record.timestamp - USAGE_HISTORY_RETENTION_MS;
+          s.cumulativeUsage.history = s.cumulativeUsage.history.filter(
+            (r) => r.timestamp > horizon,
+          );
           s.cumulativeUsage.history.push(record);
         });
       },
