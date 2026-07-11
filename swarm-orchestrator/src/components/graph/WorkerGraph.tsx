@@ -126,11 +126,14 @@ function WorkerGraphInner(): React.ReactElement {
     }
   }, [layoutedEdges]);
 
-  // Fit view on first layout completion
+  // Fit view on first layout completion. The guard is consumed inside the rAF
+  // callback: while occluded, Chromium suppresses rAF, and a topology change
+  // cancels the pending fit — leaving the guard unset lets the next layout
+  // completion reschedule it instead of losing the initial fit forever.
   useEffect(() => {
     if (!isLayouting && nodes.length > 0 && !initialFitDone.current) {
-      initialFitDone.current = true;
       const raf = requestAnimationFrame(() => {
+        initialFitDone.current = true;
         fitView({ duration: 300, padding: 0.2 });
       });
       return () => cancelAnimationFrame(raf);
