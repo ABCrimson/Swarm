@@ -1,12 +1,11 @@
 import { useAtom, useAtomValue } from "jotai";
 import { Command } from "modern-cmdk/react";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { toast } from "sonner";
 
 // Temporal is available as a global in the target runtime (Node 25.8.1 / Chromium 146+).
 declare const Temporal: { Now: { instant(): { toString(): string } } };
 
-import { rankCommands } from "#lib/command-ranking";
 import { matchesBinding } from "#lib/keybindings";
 import { createSnapshot } from "#lib/snapshots";
 import type { FrecencyEntry } from "#store/frecency";
@@ -33,9 +32,11 @@ interface CommandDef {
  * Global command palette (Ctrl+K) built on `modern-cmdk`.
  *
  * Provides navigation, worker management, graph controls, and session
- * operations. Typed queries filter and rank by match relevance (see
- * #lib/command-ranking); frecency (frequency + recency) breaks ties
- * and orders the list when the query is empty.
+ * operations. Typed queries are filtered and ranked by the machine's
+ * own multi-strategy scorer (exact → prefix → substring →
+ * word-boundary → fuzzy) against each item's label and keywords; the
+ * frecency (frequency + recency) presort below defines the display
+ * order when the query is empty.
  */
 export function CommandPalette(): React.ReactElement {
   const [open, setOpen] = useAtom(commandPaletteOpenAtom);
@@ -43,12 +44,6 @@ export function CommandPalette(): React.ReactElement {
   const [, setSidebarCollapsed] = useAtom(sidebarCollapsedAtom);
   const [frecency, setFrecency] = useAtom(frecencyAtom);
   const getScore = useAtomValue(frecencyScoreAtom);
-  const [query, setQuery] = useState("");
-
-  // A stale query must not leak into the next open.
-  useEffect(() => {
-    if (!open) setQuery("");
-  }, [open]);
 
   const [graphView, setGraphView] = useAtom(graphViewAtom);
   const workers = useWorkerStore((s) => s.workers);
@@ -222,7 +217,9 @@ export function CommandPalette(): React.ReactElement {
     action: () => removeWorker(id),
   }));
 
-  const allCommands = rankCommands([...staticCommands, ...killCommands], query, getScore);
+  const allCommands = [...staticCommands, ...killCommands].toSorted(
+    (a, b) => getScore(b.id) - getScore(a.id),
+  );
 
   const groups = (() => {
     const map = new Map<string, CommandDef[]>();
@@ -248,33 +245,33 @@ export function CommandPalette(): React.ReactElement {
 
   return (
     <Command.Dialog
+      // The machine's `search` state survives CLOSE while the input
+      // unmounts empty — on reopen the stale query silently filters
+      // group children out of registration and the list corrupts.
+      // Keying by `open` remounts the dialog (fresh machine, empty
+      // search) each cycle; frecency lives in our own atom, so nothing
+      // user-visible is lost.
+      key={String(open)}
       open={open}
       onOpenChange={setOpen}
-      filter={false}
       label="SWARM Command Palette"
       className="swarm-cmdk"
       overlayClassName="swarm-cmdk-overlay"
       contentClassName="swarm-cmdk-content"
     >
-      <Command.Input placeholder="Type A Command Or Search..." onValueChange={setQuery} />
+      <Command.Input placeholder="Type A Command Or Search..." />
       <Command.List>
-        {/* Command.Empty keys off the machine's registered-item count,
-            which tracks our tree-level filtering (items deregister on
-            unmount) — it renders exactly when ranking filters everything
-            out. */}
         <Command.Empty>No Commands Found.</Command.Empty>
         {[...groups.entries()].map(([groupName, cmds]) => (
           <Command.Group key={groupName} heading={groupName}>
             {cmds.map((cmd) => (
               <Command.Item
-                // The query in the key forces a remount (deregister +
-                // re-register) on every keystroke, so the machine's
-                // keyboard-navigation order tracks the RANKED order —
-                // items otherwise keep their original registration
-                // position and Enter could execute a command that is
-                // not the one rendered first.
-                key={`${query}::${cmd.id}`}
-                value={cmd.id}
+                key={cmd.id}
+                // The machine scores against `value` + `keywords` — the
+                // visible label is what users type, so it must be the
+                // value (ids like "nav:tools" would make matching
+                // depend on internal naming).
+                value={cmd.label}
                 keywords={[...cmd.keywords]}
                 onSelect={() => handleSelect(cmd.id)}
               >
