@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import type { MetricsSnapshot } from "#lib/alerts";
 import { alertCooldownsAtom, alertThresholdsAtom, evaluateThresholds } from "#lib/alerts";
 import { memPercent } from "#lib/memory";
+import { isTauri, sendNotification } from "#lib/tauri";
 import { useSystemStore } from "#store/system";
 import { appSettingsAtom } from "#store/ui";
 
@@ -17,7 +18,7 @@ import { appSettingsAtom } from "#store/ui";
  */
 export function useAlerts(): void {
   const thresholds = useAtomValue(alertThresholdsAtom);
-  const cooldownSec = useAtomValue(appSettingsAtom).alertCooldownSec;
+  const { alertCooldownSec: cooldownSec, nativeAlertNotifications } = useAtomValue(appSettingsAtom);
   const [cooldowns, setCooldowns] = useAtom(alertCooldownsAtom);
   const cooldownsRef = useRef(cooldowns);
   cooldownsRef.current = cooldowns;
@@ -53,6 +54,14 @@ export function useAlerts(): void {
         for (const alert of alerts) {
           newCooldowns[alert.metric] = now;
 
+          // Mirror the toast as a native OS notification when enabled —
+          // fire-and-forget; a notification failure must never break
+          // alert handling.
+          if (nativeAlertNotifications && isTauri()) {
+            const title = alert.severity === "critical" ? "SWARM Critical Alert" : "SWARM Warning";
+            sendNotification(title, alert.message).catch(() => {});
+          }
+
           // Fire Sonner toast
           if (alert.severity === "critical") {
             toast.error(alert.message, {
@@ -84,5 +93,5 @@ export function useAlerts(): void {
     );
 
     return unsub;
-  }, [thresholds, cooldownSec, setCooldowns]);
+  }, [thresholds, cooldownSec, nativeAlertNotifications, setCooldowns]);
 }

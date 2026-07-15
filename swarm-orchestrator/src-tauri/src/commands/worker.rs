@@ -237,3 +237,38 @@ pub async fn worker_input(
             e.to_string()
         })
 }
+
+/// Updates the worker registry's maximum concurrent worker cap.
+///
+/// Applies immediately to subsequent spawns and persists the value to
+/// `swarm-config.json` (key `max_workers`) so it survives restarts —
+/// the setup hook in `lib.rs` re-applies it on launch.
+///
+/// # Arguments
+///
+/// * `app` - Tauri app handle (injected by Tauri)
+/// * `registry` - Worker registry state (injected by Tauri)
+/// * `max` - New cap; must be within the registry's accepted range
+///
+/// # Errors
+///
+/// Returns a `String` error if `max` is out of range or persistence
+/// fails. The cap is only persisted after validation succeeds, so the
+/// stored value can never be out of range.
+#[tauri::command]
+#[tracing::instrument(skip(app, registry))]
+pub async fn set_max_workers(
+    app: AppHandle,
+    registry: tauri::State<'_, WorkerRegistry>,
+    max: usize,
+) -> Result<(), String> {
+    tracing::info!(max, "set_max_workers called");
+
+    registry.set_max_workers(max).map_err(|e| {
+        tracing::error!(error = %e, "rejected max_workers update");
+        e.to_string()
+    })?;
+
+    crate::commands::config::write_config(app, "max_workers".to_string(), serde_json::json!(max))
+        .await
+}

@@ -11,7 +11,7 @@ import {
   type ModelKey,
   warnIfModelGated,
 } from "#lib/models";
-import { checkForUpdates, readConfig, writeConfig } from "#lib/tauri";
+import { checkForUpdates, readConfig, setMaxWorkers, writeConfig } from "#lib/tauri";
 import {
   type AppSettings,
   appSettingsAtom,
@@ -474,6 +474,35 @@ export function Settings(): React.ReactElement {
 
   const apiKeyDirty = apiKeyDraft !== (apiKeySaved ?? "");
 
+  // ── Worker registry cap (backend-persisted via set_max_workers) ──
+  const [maxWorkers, setMaxWorkersState] = useState(64);
+
+  useEffect(() => {
+    let cancelled = false;
+    readConfig<number>("max_workers")
+      .then((v) => {
+        if (!cancelled && typeof v === "number" && v >= 1) setMaxWorkersState(v);
+      })
+      .catch(() => {
+        // No persisted value yet — keep the backend default.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSetMaxWorkers = async (v: number): Promise<void> => {
+    const previous = maxWorkers;
+    setMaxWorkersState(v);
+    try {
+      await setMaxWorkers(v);
+      toast.success(`Worker Registry Cap Set To ${v}`);
+    } catch {
+      setMaxWorkersState(previous);
+      toast.error("Failed To Update Worker Registry Cap");
+    }
+  };
+
   const handleSaveApiKey = async (): Promise<void> => {
     setSavingApiKey(true);
     try {
@@ -650,33 +679,15 @@ export function Settings(): React.ReactElement {
             onChange={(v) => patchSettings({ historyMaxWorkers: v })}
           />
         </div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            justifyContent: "space-between",
-            gap: 16,
-            padding: "10px 0",
-          }}
-        >
-          <div>
-            <span style={LABEL_STYLE}>Worker Registry Cap</span>
-            <span style={DESCRIPTION_STYLE}>
-              Fixed Backend Limit On Simultaneous Worker Processes.
-            </span>
-          </div>
-          <span
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: "0.82rem",
-              fontWeight: 600,
-              color: "oklch(0.55 0.03 220)",
-              marginTop: 2,
-            }}
-          >
-            64
-          </span>
-        </div>
+        <NumberField
+          label="Worker Registry Cap"
+          description="Backend Limit On Simultaneous Worker Processes — Applies Immediately To New Spawns And Persists Across Restarts."
+          unit="Workers"
+          min={1}
+          max={256}
+          value={maxWorkers}
+          onChange={(v) => void handleSetMaxWorkers(v)}
+        />
       </section>
 
       {/* Sessions & Logs */}
@@ -906,6 +917,14 @@ export function Settings(): React.ReactElement {
             max={600}
             value={appSettings.alertCooldownSec}
             onChange={(v) => patchSettings({ alertCooldownSec: v })}
+          />
+        </div>
+        <div style={{ borderTop: "1px solid oklch(0.16 0.02 220)" }}>
+          <Toggle
+            checked={appSettings.nativeAlertNotifications}
+            onChange={(v) => patchSettings({ nativeAlertNotifications: v })}
+            label="Native Alert Notifications"
+            description="Also Send An OS Notification When An Alert Fires — Visible Even When The App Is In The Background."
           />
         </div>
       </section>

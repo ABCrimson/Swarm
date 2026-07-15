@@ -1,11 +1,12 @@
 import { useAtom, useAtomValue } from "jotai";
 import { Command } from "modern-cmdk/react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 // Temporal is available as a global in the target runtime (Node 25.8.1 / Chromium 146+).
 declare const Temporal: { Now: { instant(): { toString(): string } } };
 
+import { rankCommands } from "#lib/command-ranking";
 import { matchesBinding } from "#lib/keybindings";
 import { createSnapshot } from "#lib/snapshots";
 import type { FrecencyEntry } from "#store/frecency";
@@ -32,7 +33,9 @@ interface CommandDef {
  * Global command palette (Ctrl+K) built on `modern-cmdk`.
  *
  * Provides navigation, worker management, graph controls, and session
- * operations. Commands are ranked by frecency (frequency + recency).
+ * operations. Typed queries filter and rank by match relevance (see
+ * #lib/command-ranking); frecency (frequency + recency) breaks ties
+ * and orders the list when the query is empty.
  */
 export function CommandPalette(): React.ReactElement {
   const [open, setOpen] = useAtom(commandPaletteOpenAtom);
@@ -40,6 +43,12 @@ export function CommandPalette(): React.ReactElement {
   const [, setSidebarCollapsed] = useAtom(sidebarCollapsedAtom);
   const [frecency, setFrecency] = useAtom(frecencyAtom);
   const getScore = useAtomValue(frecencyScoreAtom);
+  const [query, setQuery] = useState("");
+
+  // A stale query must not leak into the next open.
+  useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
 
   const [graphView, setGraphView] = useAtom(graphViewAtom);
   const workers = useWorkerStore((s) => s.workers);
@@ -213,10 +222,7 @@ export function CommandPalette(): React.ReactElement {
     action: () => removeWorker(id),
   }));
 
-  const allCommands = (() => {
-    const merged = [...staticCommands, ...killCommands];
-    return merged.toSorted((a, b) => getScore(b.id) - getScore(a.id));
-  })();
+  const allCommands = rankCommands([...staticCommands, ...killCommands], query, getScore);
 
   const groups = (() => {
     const map = new Map<string, CommandDef[]>();
@@ -250,9 +256,16 @@ export function CommandPalette(): React.ReactElement {
       overlayClassName="swarm-cmdk-overlay"
       contentClassName="swarm-cmdk-content"
     >
-      <Command.Input placeholder="Type A Command Or Search..." />
+      <Command.Input placeholder="Type A Command Or Search..." onValueChange={setQuery} />
       <Command.List>
-        <Command.Empty>No Commands Found.</Command.Empty>
+        {/* The library filter is disabled (`filter={false}`), so its own
+            Empty state never triggers — render ours when ranking filters
+            everything out. */}
+        {allCommands.length === 0 && (
+          <div data-command-empty="" role="status">
+            No Commands Found.
+          </div>
+        )}
         {[...groups.entries()].map(([groupName, cmds]) => (
           <Command.Group key={groupName} heading={groupName}>
             {cmds.map((cmd) => (

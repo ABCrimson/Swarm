@@ -147,6 +147,7 @@ pub fn run() {
             commands::worker::kill_worker,
             commands::worker::list_workers,
             commands::worker::worker_input,
+            commands::worker::set_max_workers,
             // Session commands
             commands::session::create_session,
             commands::session::delete_session,
@@ -200,6 +201,17 @@ pub fn run() {
             let app_handle = app.handle().clone();
             if let Err(e) = session::store::load_sessions(&app_handle, &session_manager) {
                 tracing::warn!(error = %e, "failed to load persisted sessions");
+            }
+
+            // Apply the persisted worker-registry cap (set via Settings →
+            // set_max_workers). An absent/invalid value keeps the default.
+            if let Some(max) = commands::config::read_config_value_sync(&app_handle, "max_workers")
+                .and_then(|v| v.as_u64())
+            {
+                let reg = app.state::<WorkerRegistry>();
+                if let Err(e) = reg.set_max_workers(max as usize) {
+                    tracing::warn!(error = %e, "ignoring persisted max_workers");
+                }
             }
 
             // Start metrics collection loop with cancellation token

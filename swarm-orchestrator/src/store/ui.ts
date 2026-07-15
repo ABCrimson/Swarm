@@ -152,6 +152,8 @@ export interface AppSettings {
   readonly historyMaxWorkers: number;
   /** Check for app updates once on launch. */
   readonly updateCheckOnLaunch: boolean;
+  /** Also send native OS notifications when an alert fires. */
+  readonly nativeAlertNotifications: boolean;
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -161,6 +163,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   aiConcurrentLimit: 3,
   historyMaxWorkers: 50,
   updateCheckOnLaunch: false,
+  nativeAlertNotifications: false,
 };
 
 export const appSettingsAtom = atomWithStorage<AppSettings>(

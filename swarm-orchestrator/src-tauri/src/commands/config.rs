@@ -76,6 +76,18 @@ fn save_config_map(path: &Path, map: &HashMap<String, Value>) -> Result<(), AppE
     Ok(())
 }
 
+/// Synchronously reads a single config value by key.
+///
+/// For startup paths (e.g. applying the persisted worker-registry cap
+/// in `lib.rs`'s setup hook) that run before the async runtime is the
+/// natural home for work. Missing file/key or malformed JSON all yield
+/// `None`, mirroring [`read_config`]'s tolerance.
+pub(crate) fn read_config_value_sync(app: &AppHandle, key: &str) -> Option<Value> {
+    let path = config_path(app).ok()?;
+    let _guard = CONFIG_LOCK.lock();
+    load_config_map(&path).remove(key)
+}
+
 /// Resolves the absolute path to `swarm-config.json`, creating the
 /// app data directory if it does not exist yet.
 fn config_path(app: &AppHandle) -> Result<PathBuf, AppError> {

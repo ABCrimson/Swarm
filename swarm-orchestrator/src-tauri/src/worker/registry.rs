@@ -20,6 +20,12 @@ use crate::error::AppError;
 /// Aliases `uuid::Uuid` (v4) for type clarity throughout the codebase.
 pub type WorkerId = Uuid;
 
+/// Lowest accepted `max_workers` value.
+pub const MIN_MAX_WORKERS: usize = 1;
+/// Highest accepted `max_workers` value — PTY processes are heavyweight;
+/// anything beyond this is almost certainly a misconfiguration.
+pub const MAX_MAX_WORKERS: usize = 256;
+
 /// System-wide configuration shared across all workers.
 ///
 /// Controls the maximum number of concurrent workers and the
@@ -154,6 +160,40 @@ impl WorkerRegistry {
     /// The count of active workers in the registry.
     pub fn count(&self) -> usize {
         self.workers.len()
+    }
+
+    /// Updates the maximum concurrent worker cap.
+    ///
+    /// Applies immediately to subsequent [`spawn_worker`](Self::spawn_worker)
+    /// calls (the cap is read per spawn). Shrinking below the current
+    /// worker count is allowed — running workers are never evicted, new
+    /// spawns are simply rejected until the count drops below the cap.
+    ///
+    /// # Errors
+    ///
+    /// * [`AppError::Config`] - `max` is outside
+    ///   [`MIN_MAX_WORKERS`]..=[`MAX_MAX_WORKERS`]
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swarm_core::worker::registry::WorkerRegistry;
+    ///
+    /// let registry = WorkerRegistry::new();
+    /// registry.set_max_workers(8).unwrap();
+    /// assert_eq!(registry.config.read().max_workers, 8);
+    /// assert!(registry.set_max_workers(0).is_err());
+    /// assert!(registry.set_max_workers(1000).is_err());
+    /// ```
+    pub fn set_max_workers(&self, max: usize) -> Result<(), AppError> {
+        if !(MIN_MAX_WORKERS..=MAX_MAX_WORKERS).contains(&max) {
+            return Err(AppError::Config(format!(
+                "max_workers must be between {MIN_MAX_WORKERS} and {MAX_MAX_WORKERS}, got {max}"
+            )));
+        }
+        self.config.write().max_workers = max;
+        tracing::info!(max_workers = max, "worker registry cap updated");
+        Ok(())
     }
 
     /// Inserts a worker handle into the registry.
@@ -419,6 +459,33 @@ mod tests {
             pty_writer: None,
             child: None,
         }
+    }
+
+    #[test]
+    fn test_set_max_workers_validates_and_applies_live() {
+        let reg = WorkerRegistry::new();
+
+        // Out-of-range values are rejected, leaving the default intact.
+        assert!(reg.set_max_workers(0).is_err());
+        assert!(reg.set_max_workers(MAX_MAX_WORKERS + 1).is_err());
+        assert_eq!(reg.config.read().max_workers, 64);
+
+        // A valid cap applies to subsequent spawns immediately.
+        reg.set_max_workers(2).unwrap();
+        reg.spawn_worker(make_handle("a")).unwrap();
+        reg.spawn_worker(make_handle("b")).unwrap();
+        let err = reg.spawn_worker(make_handle("c")).unwrap_err();
+        assert!(matches!(err, AppError::RegistryFull { max: 2 }));
+
+        // Shrinking below the live count never evicts running workers —
+        // it only blocks new spawns.
+        reg.set_max_workers(1).unwrap();
+        assert_eq!(reg.count(), 2);
+        assert!(reg.spawn_worker(make_handle("d")).is_err());
+
+        // Raising the cap unblocks spawning again.
+        reg.set_max_workers(3).unwrap();
+        assert!(reg.spawn_worker(make_handle("e")).is_ok());
     }
 
     #[test]

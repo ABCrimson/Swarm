@@ -64,6 +64,14 @@ export async function workerInput(id: string, data: string): Promise<void> {
   return invoke<void>("worker_input", { id, data });
 }
 
+/**
+ * Update the backend worker-registry cap. Applies immediately to new
+ * spawns and persists across restarts (see `set_max_workers` in src-tauri).
+ */
+export async function setMaxWorkers(max: number): Promise<void> {
+  return invoke<void>("set_max_workers", { max });
+}
+
 // ── Session commands ─────────────────────────────────
 
 /** Create a new orchestration session with the given name. */
@@ -84,6 +92,13 @@ export async function listSessions(): Promise<Session[]> {
 /** Retrieve a single session by UUID. */
 export async function getSession(id: string): Promise<Session> {
   return invoke<Session>("get_session", { id });
+}
+
+// ── Notifications ────────────────────────────────────
+
+/** Display a native OS notification (see `send_notification` in src-tauri). */
+export async function sendNotification(title: string, body: string): Promise<void> {
+  return invoke<void>("send_notification", { title, body });
 }
 
 // ── Updater ──────────────────────────────────────────
