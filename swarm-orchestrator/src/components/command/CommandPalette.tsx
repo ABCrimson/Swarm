@@ -6,6 +6,7 @@ import { toast } from "sonner";
 // Temporal is available as a global in the target runtime (Node 25.8.1 / Chromium 146+).
 declare const Temporal: { Now: { instant(): { toString(): string } } };
 
+import { matchesBinding } from "#lib/keybindings";
 import { createSnapshot } from "#lib/snapshots";
 import type { FrecencyEntry } from "#store/frecency";
 import { frecencyAtom, frecencyScoreAtom } from "#store/frecency";
@@ -14,6 +15,7 @@ import {
   commandPaletteOpenAtom,
   currentPageAtom,
   graphViewAtom,
+  keybindingsAtom,
   sidebarCollapsedAtom,
 } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
@@ -46,21 +48,23 @@ export function CommandPalette(): React.ReactElement {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
 
-  // Ctrl+K to open, Ctrl+Shift+G to toggle graph/list
+  // Palette open + graph/list toggle — bindings are remappable in
+  // Settings (see #lib/keybindings).
+  const keybindings = useAtomValue(keybindingsAtom);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+      if (matchesBinding(e, keybindings.commandPalette)) {
         e.preventDefault();
         setOpen((prev) => !prev);
       }
-      if (e.key === "G" && e.ctrlKey && e.shiftKey) {
+      if (matchesBinding(e, keybindings.graphToggle)) {
         e.preventDefault();
         setGraphView((prev) => (prev === "graph" ? "list" : "graph"));
       }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [setOpen, setGraphView]);
+  }, [setOpen, setGraphView, keybindings]);
 
   const recordUsage = (commandId: string) => {
     setFrecency((prev) => {

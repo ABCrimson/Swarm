@@ -19,7 +19,10 @@ enableMapSet();
 
 /** Maximum messages stored per worker. */
 const MAX_MESSAGES_PER_WORKER = 100;
-/** Maximum number of workers to keep history for. */
+/**
+ * Default maximum number of workers to keep history for. The live cap
+ * comes from the Chat History Worker Cap setting via useSettingsBridge.
+ */
 const MAX_WORKERS = 50;
 
 interface MessageHistoryState {
@@ -27,6 +30,8 @@ interface MessageHistoryState {
   readonly history: Map<string, AiMessage[]>;
   /** LRU order: most recently accessed worker IDs. */
   readonly lruOrder: string[];
+  /** Live LRU cap — driven by the Chat History Worker Cap setting. */
+  readonly maxWorkers: number;
 }
 
 interface MessageHistoryActions {
@@ -42,13 +47,20 @@ interface MessageHistoryActions {
   readonly clearAll: () => void;
   /** Touch a worker to move it to the front of the LRU. */
   readonly touch: (workerId: string) => void;
+  /** Update the LRU cap, evicting least-recently-used workers if it shrank. */
+  readonly setMaxWorkers: (max: number) => void;
 }
 
 /**
  * Moves a worker ID to the front of the LRU list.
  * Evicts the least recently used worker if we exceed MAX_WORKERS.
  */
-function touchLru(lruOrder: string[], workerId: string, history: Map<string, AiMessage[]>): void {
+function touchLru(
+  lruOrder: string[],
+  workerId: string,
+  history: Map<string, AiMessage[]>,
+  maxWorkers: number,
+): void {
   const idx = lruOrder.indexOf(workerId);
   if (idx !== -1) {
     lruOrder.splice(idx, 1);
@@ -56,7 +68,7 @@ function touchLru(lruOrder: string[], workerId: string, history: Map<string, AiM
   lruOrder.unshift(workerId);
 
   // Evict LRU workers beyond max
-  while (lruOrder.length > MAX_WORKERS) {
+  while (lruOrder.length > maxWorkers) {
     const evicted = lruOrder.pop();
     if (evicted) {
       history.delete(evicted);
@@ -82,6 +94,7 @@ export const useMessageHistoryStore = create<MessageHistoryState & MessageHistor
     immer((set, get) => ({
       history: new Map(),
       lruOrder: [],
+      maxWorkers: MAX_WORKERS,
 
       addMessage(workerId, message) {
         set((s) => {
@@ -98,7 +111,7 @@ export const useMessageHistoryStore = create<MessageHistoryState & MessageHistor
             workerMessages.splice(0, excess);
           }
 
-          touchLru(s.lruOrder, workerId, s.history);
+          touchLru(s.lruOrder, workerId, s.history, s.maxWorkers);
         });
       },
 
@@ -117,7 +130,7 @@ export const useMessageHistoryStore = create<MessageHistoryState & MessageHistor
             workerMessages.splice(0, excess);
           }
 
-          touchLru(s.lruOrder, workerId, s.history);
+          touchLru(s.lruOrder, workerId, s.history, s.maxWorkers);
         });
       },
 
@@ -142,7 +155,19 @@ export const useMessageHistoryStore = create<MessageHistoryState & MessageHistor
 
       touch(workerId) {
         set((s) => {
-          touchLru(s.lruOrder, workerId, s.history);
+          touchLru(s.lruOrder, workerId, s.history, s.maxWorkers);
+        });
+      },
+
+      setMaxWorkers(max) {
+        set((s) => {
+          s.maxWorkers = max;
+          while (s.lruOrder.length > max) {
+            const evicted = s.lruOrder.pop();
+            if (evicted) {
+              s.history.delete(evicted);
+            }
+          }
         });
       },
     })),

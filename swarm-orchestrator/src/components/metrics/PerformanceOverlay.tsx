@@ -7,7 +7,13 @@
 import { useAtom, useAtomValue } from "jotai";
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
-import { gpuFrameTimeAtom, particleCountAtom, perfOverlayOpenAtom } from "#store/ui";
+import { matchesBinding } from "#lib/keybindings";
+import {
+  gpuFrameTimeAtom,
+  keybindingsAtom,
+  particleCountAtom,
+  perfOverlayOpenAtom,
+} from "#store/ui";
 
 const overlayStyle: CSSProperties = {
   position: "fixed",
@@ -101,10 +107,11 @@ export function PerformanceOverlay(): React.ReactElement | null {
     return () => cancelAnimationFrame(rafId);
   }, [isOpen]);
 
-  // Keyboard shortcut: Ctrl+Shift+P
+  // Overlay toggle — binding is remappable in Settings.
+  const keybindings = useAtomValue(keybindingsAtom);
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && e.key === "P") {
+      if (matchesBinding(e, keybindings.perfOverlay)) {
         e.preventDefault();
         setIsOpen((v) => !v);
       }
@@ -112,7 +119,7 @@ export function PerformanceOverlay(): React.ReactElement | null {
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [setIsOpen]);
+  }, [setIsOpen, keybindings]);
 
   // Only render in dev mode
   if (!import.meta.env.DEV) return null;

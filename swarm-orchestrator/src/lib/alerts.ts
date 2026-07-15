@@ -72,7 +72,11 @@ export interface Alert {
 /** Tracks last alert time per metric key for cooldown enforcement. */
 export const alertCooldownsAtom = atom<Record<string, number>>({});
 
-/** Cooldown period in ms — don't re-alert same metric within 30s. */
+/**
+ * Default cooldown period in ms — don't re-alert same metric within 30s.
+ * The live value comes from the Alert Cooldown setting (appSettingsAtom);
+ * this constant remains as {@link evaluateThresholds}'s default.
+ */
 export const ALERT_COOLDOWN_MS = 30_000;
 
 // ── Evaluation ─────────────────────────────────────
@@ -92,6 +96,7 @@ export function evaluateThresholds(
   thresholds: AlertThresholds,
   cooldowns: Record<string, number>,
   now: number,
+  cooldownMs: number = ALERT_COOLDOWN_MS,
 ): Alert[] {
   const alerts: Alert[] = [];
 
@@ -103,7 +108,7 @@ export function evaluateThresholds(
     label: string,
   ): void => {
     const lastAlert = cooldowns[metric] ?? 0;
-    if (now - lastAlert < ALERT_COOLDOWN_MS) return;
+    if (now - lastAlert < cooldownMs) return;
 
     if (value >= criticalThreshold) {
       alerts.push({

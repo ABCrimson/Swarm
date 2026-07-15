@@ -9,6 +9,7 @@ import { useAlerts } from "#hooks/useAlerts";
 import { useAutoSnapshot } from "#hooks/useAutoSnapshot";
 import { useMetrics } from "#hooks/useMetrics";
 import { useSessionEvents } from "#hooks/useSessionEvents";
+import { useSettingsBridge } from "#hooks/useSettingsBridge";
 import { useTheme } from "#hooks/useTheme";
 import { useWorkerEvents } from "#hooks/useWorkerEvents";
 import { connectEventBus } from "#lib/event-bus";
@@ -105,6 +106,7 @@ export function App(): React.ReactElement {
   useSessionEvents();
   useMetrics();
   useAlerts();
+  useSettingsBridge();
 
   // Defer auto-snapshot until after initial render is complete
   const [snapshotReady, setSnapshotReady] = useState(false);

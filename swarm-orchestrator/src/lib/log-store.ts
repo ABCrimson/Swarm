@@ -18,13 +18,15 @@ export interface LogEntry {
   readonly metadata?: Record<string, unknown>;
 }
 
-/** Maximum entries retained in the ring buffer. */
+/** Default maximum entries retained in the ring buffer. */
 const MAX_ENTRIES = 10_000;
 
 /** State slice for the log store. */
 interface LogStoreState {
   readonly entries: LogEntry[];
   readonly sources: Set<string>;
+  /** Live retention cap — driven by the Log Retention setting via useSettingsBridge. */
+  readonly maxEntries: number;
 }
 
 /** Mutation actions for the log store. */
@@ -35,6 +37,8 @@ interface LogStoreActions {
   readonly addBatch: (entries: ReadonlyArray<Omit<LogEntry, "id">>) => void;
   /** Remove all log entries and reset sources. */
   readonly clear: () => void;
+  /** Update the retention cap, trimming existing entries if it shrank. */
+  readonly setMaxEntries: (max: number) => void;
 }
 
 /**
@@ -48,13 +52,14 @@ export const useLogStore = create<LogStoreState & LogStoreActions>()(
   subscribeWithSelector((set) => ({
     entries: [],
     sources: new Set<string>(),
+    maxEntries: MAX_ENTRIES,
 
     addEntry(entry) {
       set((state) => {
         const newEntry: LogEntry = { ...entry, id: crypto.randomUUID() };
         const nextEntries =
-          state.entries.length >= MAX_ENTRIES
-            ? [...state.entries.slice(-(MAX_ENTRIES - 1)), newEntry]
+          state.entries.length >= state.maxEntries
+            ? [...state.entries.slice(-(state.maxEntries - 1)), newEntry]
             : [...state.entries, newEntry];
         const nextSources = new Set(state.sources);
         nextSources.add(entry.source);
@@ -69,7 +74,8 @@ export const useLogStore = create<LogStoreState & LogStoreActions>()(
           id: crypto.randomUUID(),
         }));
         const combined = [...state.entries, ...newEntries];
-        const trimmed = combined.length > MAX_ENTRIES ? combined.slice(-MAX_ENTRIES) : combined;
+        const trimmed =
+          combined.length > state.maxEntries ? combined.slice(-state.maxEntries) : combined;
         const nextSources = new Set(state.sources);
         for (const e of entries) {
           nextSources.add(e.source);
@@ -80,6 +86,13 @@ export const useLogStore = create<LogStoreState & LogStoreActions>()(
 
     clear() {
       set({ entries: [], sources: new Set<string>() });
+    },
+
+    setMaxEntries(max) {
+      set((state) => ({
+        maxEntries: max,
+        entries: state.entries.length > max ? state.entries.slice(-max) : state.entries,
+      }));
     },
   })),
 );

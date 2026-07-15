@@ -2,6 +2,7 @@ import { atom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 
 import { commandHistory } from "#lib/command-history";
+import { DEFAULT_KEYBINDINGS, type Keybindings } from "#lib/keybindings";
 import { settingsStore } from "#lib/lazy-store";
 import type { ModelKey } from "#lib/models";
 import { isTauri } from "#lib/tauri";
@@ -90,6 +91,52 @@ export const themeAtom = atomWithStorage<{ particlesEnabled: boolean; gpuOverlay
   "swarm:ui:theme",
   { particlesEnabled: true, gpuOverlay: true },
   createTauriStorage<{ particlesEnabled: boolean; gpuOverlay: boolean }>(),
+);
+
+// ── App settings (persisted) ────────────────────────
+
+/**
+ * Tunable app behavior promoted from hardcoded constants (feedback
+ * follow-up). Every field is consumed live — see useAlerts (cooldown),
+ * useAutoSnapshot (interval), log-store (retention), ai store
+ * (concurrent limit), message-history (LRU cap), and the
+ * update-on-launch check in useSettingsBridge.
+ */
+export interface AppSettings {
+  /** Seconds between repeat alerts for the same metric. */
+  readonly alertCooldownSec: number;
+  /** Minutes between automatic session snapshots. */
+  readonly snapshotIntervalMin: number;
+  /** Maximum retained log entries before the oldest are evicted. */
+  readonly logMaxEntries: number;
+  /** Maximum simultaneous AI streams. */
+  readonly aiConcurrentLimit: number;
+  /** Maximum workers whose chat history is retained (LRU-evicted). */
+  readonly historyMaxWorkers: number;
+  /** Check for app updates once on launch. */
+  readonly updateCheckOnLaunch: boolean;
+}
+
+export const DEFAULT_APP_SETTINGS: AppSettings = {
+  alertCooldownSec: 30,
+  snapshotIntervalMin: 5,
+  logMaxEntries: 10_000,
+  aiConcurrentLimit: 3,
+  historyMaxWorkers: 50,
+  updateCheckOnLaunch: false,
+};
+
+export const appSettingsAtom = atomWithStorage<AppSettings>(
+  "swarm:settings:app",
+  DEFAULT_APP_SETTINGS,
+  createTauriStorage<AppSettings>(),
+);
+
+/** Persisted remappable keyboard shortcuts (see #lib/keybindings). */
+export const keybindingsAtom = atomWithStorage<Keybindings>(
+  "swarm:settings:keybindings",
+  DEFAULT_KEYBINDINGS,
+  createTauriStorage<Keybindings>(),
 );
 
 // ── AI model selection ──────────────────────────────

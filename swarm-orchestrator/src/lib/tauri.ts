@@ -86,6 +86,21 @@ export async function getSession(id: string): Promise<Session> {
   return invoke<Session>("get_session", { id });
 }
 
+// ── Updater ──────────────────────────────────────────
+
+/** Result of a manual or on-launch update check (see `check_for_updates` in src-tauri). */
+export interface UpdateCheckResult {
+  readonly available: boolean;
+  readonly version?: string;
+  readonly body?: string;
+  readonly date?: string;
+}
+
+/** Query the configured update endpoint for an available app update. */
+export async function checkForUpdates(): Promise<UpdateCheckResult> {
+  return invoke<UpdateCheckResult>("check_for_updates");
+}
+
 // ── FS utilities ─────────────────────────────────────
 
 /** Read a typed configuration value by key from the flat `swarm-config.json` file (via the `read_config` custom command). */

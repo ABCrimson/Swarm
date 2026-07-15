@@ -9,6 +9,7 @@ import type { MetricsSnapshot } from "#lib/alerts";
 import { alertCooldownsAtom, alertThresholdsAtom, evaluateThresholds } from "#lib/alerts";
 import { memPercent } from "#lib/memory";
 import { useSystemStore } from "#store/system";
+import { appSettingsAtom } from "#store/ui";
 
 /**
  * Evaluates system metrics against alert thresholds and fires Sonner toasts.
@@ -16,6 +17,7 @@ import { useSystemStore } from "#store/system";
  */
 export function useAlerts(): void {
   const thresholds = useAtomValue(alertThresholdsAtom);
+  const cooldownSec = useAtomValue(appSettingsAtom).alertCooldownSec;
   const [cooldowns, setCooldowns] = useAtom(alertCooldownsAtom);
   const cooldownsRef = useRef(cooldowns);
   cooldownsRef.current = cooldowns;
@@ -36,7 +38,13 @@ export function useAlerts(): void {
           memoryPercent,
         };
 
-        const alerts = evaluateThresholds(snapshot, thresholds, cooldownsRef.current, now);
+        const alerts = evaluateThresholds(
+          snapshot,
+          thresholds,
+          cooldownsRef.current,
+          now,
+          cooldownSec * 1000,
+        );
 
         if (alerts.length === 0) return;
 
@@ -76,5 +84,5 @@ export function useAlerts(): void {
     );
 
     return unsub;
-  }, [thresholds, setCooldowns]);
+  }, [thresholds, cooldownSec, setCooldowns]);
 }

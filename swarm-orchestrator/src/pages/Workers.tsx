@@ -7,8 +7,14 @@ import { WorkerDetail } from "#components/graph/WorkerDetail";
 import { WorkerGraph } from "#components/graph/WorkerGraph";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Button } from "#components/ui/Button";
+import { matchesBinding } from "#lib/keybindings";
 import { spawnWorker } from "#lib/tauri";
-import { detailPanelOpenAtom, graphViewAtom, selectedWorkerIdAtom } from "#store/ui";
+import {
+  detailPanelOpenAtom,
+  graphViewAtom,
+  keybindingsAtom,
+  selectedWorkerIdAtom,
+} from "#store/ui";
 import { useWorkerStore } from "#store/workers";
 
 type DetailTab = "detail" | "ai";
@@ -149,17 +155,18 @@ export function Workers(): React.ReactElement {
     }
   };
 
-  // Ctrl+Shift+G to toggle view mode
+  // Graph/list toggle — binding is remappable in Settings.
+  const keybindings = useAtomValue(keybindingsAtom);
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "G" && e.ctrlKey && e.shiftKey) {
+      if (matchesBinding(e, keybindings.graphToggle)) {
         e.preventDefault();
         setViewMode((prev) => (prev === "graph" ? "list" : "graph"));
       }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [setViewMode]);
+  }, [setViewMode, keybindings]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>

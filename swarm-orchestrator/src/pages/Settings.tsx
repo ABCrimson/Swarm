@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Pill } from "#components/ui/Pill";
 import { alertThresholdsAtom } from "#lib/alerts";
+import { bindingFromEvent, formatBinding, type Keybindings } from "#lib/keybindings";
 import {
   CLAUDE_MODELS,
   formatContextLabel,
@@ -10,8 +11,14 @@ import {
   type ModelKey,
   warnIfModelGated,
 } from "#lib/models";
-import { readConfig, writeConfig } from "#lib/tauri";
-import { selectedModelAtom, themeAtom } from "#store/ui";
+import { checkForUpdates, readConfig, writeConfig } from "#lib/tauri";
+import {
+  type AppSettings,
+  appSettingsAtom,
+  keybindingsAtom,
+  selectedModelAtom,
+  themeAtom,
+} from "#store/ui";
 
 /** Config key under which the Anthropic API key is persisted (see #lib/anthropic). */
 const ANTHROPIC_API_KEY_CONFIG_KEY = "anthropic_api_key";
@@ -128,6 +135,181 @@ function Toggle({
   );
 }
 
+const SECTION_TITLE_STYLE: React.CSSProperties = {
+  fontFamily: "var(--font-display)",
+  fontSize: "0.95rem",
+  fontWeight: 700,
+  color: "oklch(0.88 0.04 220)",
+  marginBottom: 16,
+  letterSpacing: "-0.01em",
+};
+
+/**
+ * Numeric setting row: label + description on the left, a clamped
+ * number input with unit on the right. Commits on change; clamps to
+ * [min, max] on blur so a half-typed value never persists out of range.
+ */
+function NumberField({
+  label,
+  description,
+  unit,
+  min,
+  max,
+  value,
+  onChange,
+}: {
+  readonly label: string;
+  readonly description: string;
+  readonly unit: string;
+  readonly min: number;
+  readonly max: number;
+  readonly value: number;
+  readonly onChange: (v: number) => void;
+}): React.ReactElement {
+  const inputId = `setting-${label.toLowerCase().replace(/\s+/g, "-")}`;
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "space-between",
+        gap: 16,
+        padding: "10px 0",
+      }}
+    >
+      <div>
+        <label htmlFor={inputId} style={LABEL_STYLE}>
+          {label}
+        </label>
+        <span style={DESCRIPTION_STYLE}>{description}</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginTop: 2 }}>
+        <input
+          id={inputId}
+          type="number"
+          min={min}
+          max={max}
+          value={value}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (Number.isFinite(n)) onChange(n);
+          }}
+          onBlur={(e) => {
+            const n = Number(e.target.value);
+            const clamped = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : min;
+            if (clamped !== value) onChange(clamped);
+          }}
+          style={{
+            width: 88,
+            padding: "6px 10px",
+            borderRadius: 6,
+            border: "1px solid oklch(0.35 0.04 220)",
+            background: "oklch(0.08 0.015 220)",
+            color: "oklch(0.85 0.03 220)",
+            fontFamily: "var(--font-mono)",
+            fontSize: "0.82rem",
+            outline: "none",
+          }}
+        />
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "0.72rem",
+            color: "oklch(0.45 0.03 220)",
+            minWidth: 52,
+          }}
+        >
+          {unit}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Keybinding capture row: click the chip, press the new combination
+ * (must include a modifier or be a function key), Escape cancels.
+ */
+function KeybindingField({
+  label,
+  description,
+  value,
+  onChange,
+}: {
+  readonly label: string;
+  readonly description: string;
+  readonly value: string;
+  readonly onChange: (binding: string) => void;
+}): React.ReactElement {
+  const [listening, setListening] = useState(false);
+
+  useEffect(() => {
+    if (!listening) return;
+
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setListening(false);
+        return;
+      }
+      const binding = bindingFromEvent(e);
+      if (binding) {
+        onChange(binding);
+        setListening(false);
+        toast.success(`${label} Bound To ${formatBinding(binding)}`);
+      }
+    };
+
+    // Capture phase so the app's own shortcut listeners never see the
+    // keystroke being assigned.
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
+  }, [listening, label, onChange]);
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "space-between",
+        gap: 16,
+        padding: "10px 0",
+      }}
+    >
+      <div>
+        <span style={LABEL_STYLE}>{label}</span>
+        <span style={DESCRIPTION_STYLE}>{description}</span>
+      </div>
+      <button
+        type="button"
+        onClick={() => setListening(true)}
+        onBlur={() => setListening(false)}
+        aria-label={`Change Shortcut For ${label}`}
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: "0.75rem",
+          fontWeight: 600,
+          color: listening ? "oklch(0.82 0.16 85)" : "oklch(0.78 0.18 205)",
+          background: listening ? "oklch(0.14 0.05 85 / 0.5)" : "oklch(0.12 0.04 210)",
+          border: listening
+            ? "1px solid oklch(0.55 0.12 85)"
+            : "1px solid oklch(0.78 0.18 205 / 0.3)",
+          borderRadius: 6,
+          padding: "5px 14px",
+          cursor: "pointer",
+          flexShrink: 0,
+          marginTop: 2,
+          minWidth: 130,
+          transition: "all 0.12s ease",
+        }}
+      >
+        {listening ? "Press Keys…" : formatBinding(value)}
+      </button>
+    </div>
+  );
+}
+
 function ModelCard({
   id,
   name,
@@ -210,6 +392,30 @@ export function Settings(): React.ReactElement {
   const [thresholds, setThresholds] = useAtom(alertThresholdsAtom);
   const [editingThresholds, setEditingThresholds] = useState(false);
   const [tempThresholds, setTempThresholds] = useState(thresholds);
+  const [appSettings, setAppSettings] = useAtom(appSettingsAtom);
+  const [keybindings, setKeybindings] = useAtom(keybindingsAtom);
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+
+  const patchSettings = (patch: Partial<AppSettings>): void =>
+    setAppSettings({ ...appSettings, ...patch });
+  const patchKeybinding = (key: keyof Keybindings, binding: string): void =>
+    setKeybindings({ ...keybindings, [key]: binding });
+
+  const handleCheckForUpdates = async (): Promise<void> => {
+    setCheckingUpdates(true);
+    try {
+      const result = await checkForUpdates();
+      if (result.available) {
+        toast.info(`Update Available: Version ${result.version ?? "Unknown"}`);
+      } else {
+        toast.success("You Are On The Latest Version");
+      }
+    } catch {
+      toast.error("Update Check Failed — No Update Endpoint Reachable");
+    } finally {
+      setCheckingUpdates(false);
+    }
+  };
 
   // ── API key (read on mount, written on Save via #lib/tauri) ──
   // The key itself is never logged, traced, or included in a toast —
@@ -387,6 +593,112 @@ export function Settings(): React.ReactElement {
         </div>
       </section>
 
+      {/* Workers & AI limits */}
+      <section style={SECTION_STYLE}>
+        <h2 style={SECTION_TITLE_STYLE}>Workers &amp; AI</h2>
+        <div style={{ borderBottom: "1px solid oklch(0.16 0.02 220)" }}>
+          <NumberField
+            label="AI Concurrent Stream Limit"
+            description="Maximum Simultaneous AI Streams Across All Workers."
+            unit="Streams"
+            min={1}
+            max={10}
+            value={appSettings.aiConcurrentLimit}
+            onChange={(v) => patchSettings({ aiConcurrentLimit: v })}
+          />
+        </div>
+        <div style={{ borderBottom: "1px solid oklch(0.16 0.02 220)" }}>
+          <NumberField
+            label="Chat History Worker Cap"
+            description="How Many Workers Keep Chat History In Memory — Least-Recently-Used Workers Are Evicted Past The Cap."
+            unit="Workers"
+            min={5}
+            max={200}
+            value={appSettings.historyMaxWorkers}
+            onChange={(v) => patchSettings({ historyMaxWorkers: v })}
+          />
+        </div>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            gap: 16,
+            padding: "10px 0",
+          }}
+        >
+          <div>
+            <span style={LABEL_STYLE}>Worker Registry Cap</span>
+            <span style={DESCRIPTION_STYLE}>
+              Fixed Backend Limit On Simultaneous Worker Processes.
+            </span>
+          </div>
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: "0.82rem",
+              fontWeight: 600,
+              color: "oklch(0.55 0.03 220)",
+              marginTop: 2,
+            }}
+          >
+            64
+          </span>
+        </div>
+      </section>
+
+      {/* Sessions & Logs */}
+      <section style={SECTION_STYLE}>
+        <h2 style={SECTION_TITLE_STYLE}>Sessions &amp; Logs</h2>
+        <div style={{ borderBottom: "1px solid oklch(0.16 0.02 220)" }}>
+          <NumberField
+            label="Auto-Snapshot Interval"
+            description="How Often The Active Session Is Snapshotted Automatically."
+            unit="Minutes"
+            min={1}
+            max={120}
+            value={appSettings.snapshotIntervalMin}
+            onChange={(v) => patchSettings({ snapshotIntervalMin: v })}
+          />
+        </div>
+        <NumberField
+          label="Log Retention"
+          description="Maximum Log Entries Kept In Memory — The Oldest Are Evicted Past The Cap."
+          unit="Entries"
+          min={100}
+          max={100_000}
+          value={appSettings.logMaxEntries}
+          onChange={(v) => patchSettings({ logMaxEntries: v })}
+        />
+      </section>
+
+      {/* Keybindings */}
+      <section style={SECTION_STYLE}>
+        <h2 style={SECTION_TITLE_STYLE}>Keybindings</h2>
+        <div style={{ borderBottom: "1px solid oklch(0.16 0.02 220)" }}>
+          <KeybindingField
+            label="Command Palette"
+            description="Open The Global Command Palette."
+            value={keybindings.commandPalette}
+            onChange={(b) => patchKeybinding("commandPalette", b)}
+          />
+        </div>
+        <div style={{ borderBottom: "1px solid oklch(0.16 0.02 220)" }}>
+          <KeybindingField
+            label="Graph / List Toggle"
+            description="Switch The Workers Page Between Graph And List View."
+            value={keybindings.graphToggle}
+            onChange={(b) => patchKeybinding("graphToggle", b)}
+          />
+        </div>
+        <KeybindingField
+          label="Performance Overlay"
+          description="Toggle The FPS / GPU Frame-Time Overlay (Dev Builds)."
+          value={keybindings.perfOverlay}
+          onChange={(b) => patchKeybinding("perfOverlay", b)}
+        />
+      </section>
+
       {/* Alert Thresholds */}
       <section style={SECTION_STYLE}>
         <div
@@ -552,6 +864,18 @@ export function Settings(): React.ReactElement {
             </div>
           ))}
         </div>
+
+        <div style={{ borderTop: "1px solid oklch(0.16 0.02 220)", marginTop: 16 }}>
+          <NumberField
+            label="Alert Cooldown"
+            description="Minimum Time Between Repeat Alerts For The Same Metric."
+            unit="Seconds"
+            min={5}
+            max={600}
+            value={appSettings.alertCooldownSec}
+            onChange={(v) => patchSettings({ alertCooldownSec: v })}
+          />
+        </div>
       </section>
 
       {/* About */}
@@ -587,6 +911,29 @@ export function Settings(): React.ReactElement {
           <span style={{ color: "oklch(0.70 0.03 220)" }}>Anthropic SDK</span>
           <span style={{ color: "oklch(0.50 0.03 220)" }}>License</span>
           <span style={{ color: "oklch(0.70 0.03 220)" }}>MIT</span>
+        </div>
+
+        <div style={{ borderTop: "1px solid oklch(0.16 0.02 220)", marginTop: 16 }}>
+          <Toggle
+            checked={appSettings.updateCheckOnLaunch}
+            onChange={(v) => patchSettings({ updateCheckOnLaunch: v })}
+            label="Check For Updates On Launch"
+            description="Query The Update Endpoint Once Each Time The App Starts."
+          />
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={() => void handleCheckForUpdates()}
+            disabled={checkingUpdates}
+            style={{
+              ...SAVE_BUTTON_STYLE,
+              opacity: checkingUpdates ? 0.5 : 1,
+              cursor: checkingUpdates ? "default" : "pointer",
+            }}
+          >
+            {checkingUpdates ? "Checking…" : "Check For Updates"}
+          </button>
         </div>
       </section>
     </div>
