@@ -244,6 +244,11 @@ pub async fn worker_input(
 /// `swarm-config.json` (key `max_workers`) so it survives restarts —
 /// the setup hook in `lib.rs` re-applies it on launch.
 ///
+/// Ordering: validate → persist → apply. Applying cannot fail after
+/// validation, so an `Err` from this command always means the live cap
+/// is unchanged — persistence failure must not leave the backend
+/// enforcing a cap that neither the UI nor disk agrees with.
+///
 /// # Arguments
 ///
 /// * `app` - Tauri app handle (injected by Tauri)
@@ -253,8 +258,7 @@ pub async fn worker_input(
 /// # Errors
 ///
 /// Returns a `String` error if `max` is out of range or persistence
-/// fails. The cap is only persisted after validation succeeds, so the
-/// stored value can never be out of range.
+/// fails; in both cases the live cap keeps its previous value.
 #[tauri::command]
 #[tracing::instrument(skip(app, registry))]
 pub async fn set_max_workers(
@@ -262,13 +266,22 @@ pub async fn set_max_workers(
     registry: tauri::State<'_, WorkerRegistry>,
     max: usize,
 ) -> Result<(), String> {
+    use crate::worker::registry::{MAX_MAX_WORKERS, MIN_MAX_WORKERS};
+
     tracing::info!(max, "set_max_workers called");
 
-    registry.set_max_workers(max).map_err(|e| {
-        tracing::error!(error = %e, "rejected max_workers update");
-        e.to_string()
-    })?;
+    if !(MIN_MAX_WORKERS..=MAX_MAX_WORKERS).contains(&max) {
+        tracing::error!(max, "rejected out-of-range max_workers update");
+        return Err(format!(
+            "max_workers must be between {MIN_MAX_WORKERS} and {MAX_MAX_WORKERS}, got {max}"
+        ));
+    }
 
     crate::commands::config::write_config(app, "max_workers".to_string(), serde_json::json!(max))
-        .await
+        .await?;
+
+    registry.set_max_workers(max).map_err(|e| {
+        tracing::error!(error = %e, "failed to apply validated max_workers");
+        e.to_string()
+    })
 }

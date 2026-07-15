@@ -258,19 +258,22 @@ export function CommandPalette(): React.ReactElement {
     >
       <Command.Input placeholder="Type A Command Or Search..." onValueChange={setQuery} />
       <Command.List>
-        {/* The library filter is disabled (`filter={false}`), so its own
-            Empty state never triggers — render ours when ranking filters
-            everything out. */}
-        {allCommands.length === 0 && (
-          <div data-command-empty="" role="status">
-            No Commands Found.
-          </div>
-        )}
+        {/* Command.Empty keys off the machine's registered-item count,
+            which tracks our tree-level filtering (items deregister on
+            unmount) — it renders exactly when ranking filters everything
+            out. */}
+        <Command.Empty>No Commands Found.</Command.Empty>
         {[...groups.entries()].map(([groupName, cmds]) => (
           <Command.Group key={groupName} heading={groupName}>
             {cmds.map((cmd) => (
               <Command.Item
-                key={cmd.id}
+                // The query in the key forces a remount (deregister +
+                // re-register) on every keystroke, so the machine's
+                // keyboard-navigation order tracks the RANKED order —
+                // items otherwise keep their original registration
+                // position and Enter could execute a command that is
+                // not the one rendered first.
+                key={`${query}::${cmd.id}`}
                 value={cmd.id}
                 keywords={[...cmd.keywords]}
                 onSelect={() => handleSelect(cmd.id)}

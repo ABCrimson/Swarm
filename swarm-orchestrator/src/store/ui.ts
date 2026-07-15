@@ -166,10 +166,34 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   nativeAlertNotifications: false,
 };
 
+/**
+ * Storage for {@link appSettingsAtom} that spreads hydrated values over
+ * the defaults: a settings object persisted by an older version simply
+ * lacks newer keys, and replacing the whole object would hydrate those
+ * as `undefined` (breaking number fields and making booleans read as
+ * off regardless of default).
+ */
+function createAppSettingsStorage(): ReturnType<typeof createTauriStorage<AppSettings>> {
+  const base = createTauriStorage<AppSettings>();
+  return {
+    ...base,
+    subscribe(key, callback, initialValue) {
+      if (!isTauri()) return () => {};
+      void tauriStore
+        .get<Partial<AppSettings>>(key)
+        .then((v) => {
+          if (v != null) callback({ ...initialValue, ...v });
+        })
+        .catch(() => {});
+      return () => {};
+    },
+  };
+}
+
 export const appSettingsAtom = atomWithStorage<AppSettings>(
   "swarm:settings:app",
   DEFAULT_APP_SETTINGS,
-  createTauriStorage<AppSettings>(),
+  createAppSettingsStorage(),
 );
 
 /** Persisted remappable keyboard shortcuts (see #lib/keybindings). */
