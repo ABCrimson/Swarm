@@ -10,7 +10,9 @@ import { Suspense, startTransition, useEffect, useRef, useState } from "react";
 import { Spinner } from "#components/ui/Spinner";
 import { useAiStream } from "#hooks/useAiStream";
 import { truncateMessages } from "#lib/ai-error";
+import type { StreamParams } from "#lib/anthropic";
 import { CLAUDE_MODELS, getContextWindow } from "#lib/models";
+import { executeTool, getAllAnthropicTools } from "#lib/tools";
 import { useAiStore } from "#store/ai";
 import type { AiMessage } from "#store/types";
 import { selectedModelAtom } from "#store/ui";
@@ -35,7 +37,8 @@ interface LiveToolCall {
   readonly id: string;
   readonly name: string;
   readonly input: Record<string, unknown>;
-  readonly status: "executing" | "complete";
+  readonly status: "executing" | "complete" | "error";
+  readonly result?: string;
 }
 
 // ── Styles (OKLCH) ──────────────────────────────────
@@ -256,67 +259,133 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
     };
 
     void (async () => {
+      // Agentic tool loop: stream → execute any tool calls (built-ins via
+      // the registry, custom tools in their sandbox) → report tool_result
+      // blocks back to the model → stream again, until the model answers
+      // without tools or the round cap is hit. The cap bounds runaway
+      // tool chains; the final round's calls still execute and display,
+      // the model just doesn't get to react to them.
+      const MAX_TOOL_ROUNDS = 4;
+
       try {
-        const fullContent = await startStream(
-          itemId,
-          { model: modelId, maxTokens: 4096, messages: truncated },
-          (delta) => {
-            if (delta.toolUse) {
-              const toolUse = delta.toolUse;
-              if (!toolUse.complete) {
-                setLiveToolCalls((prev) => {
-                  const last = prev.at(-1);
-                  if (last && last.status === "executing" && last.name === toolUse.toolName) {
-                    return prev;
-                  }
-                  return [
-                    ...prev,
-                    {
-                      id: crypto.randomUUID(),
-                      name: toolUse.toolName,
-                      input: {},
-                      status: "executing",
-                    },
-                  ];
-                });
+        const tools = getAllAnthropicTools();
+        let convo: StreamParams["messages"] = truncated;
+        let allText = "";
+
+        for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+          const roundCalls: { id: string; name: string; input: Record<string, unknown> }[] = [];
+
+          const roundText = await startStream(
+            itemId,
+            { model: modelId, maxTokens: 4096, messages: convo, tools },
+            (delta) => {
+              if (delta.toolUse) {
+                const toolUse = delta.toolUse;
+                if (!toolUse.complete) {
+                  setLiveToolCalls((prev) =>
+                    prev.some((tc) => tc.id === toolUse.id)
+                      ? prev
+                      : [
+                          ...prev,
+                          {
+                            id: toolUse.id,
+                            name: toolUse.toolName,
+                            input: {},
+                            status: "executing",
+                          },
+                        ],
+                  );
+                  return;
+                }
+
+                let parsedInput: Record<string, unknown> = {};
+                try {
+                  parsedInput = toolUse.partialInput
+                    ? (JSON.parse(toolUse.partialInput) as Record<string, unknown>)
+                    : {};
+                } catch {
+                  // Malformed partial JSON — display an empty input rather than crash.
+                }
+
+                roundCalls.push({ id: toolUse.id, name: toolUse.toolName, input: parsedInput });
+                finishedToolCallsRef.current = [
+                  ...(finishedToolCallsRef.current ?? []),
+                  { id: toolUse.id, name: toolUse.toolName, input: parsedInput },
+                ];
+                setLiveToolCalls((prev) =>
+                  prev.map((tc) => (tc.id === toolUse.id ? { ...tc, input: parsedInput } : tc)),
+                );
                 return;
               }
 
-              let parsedInput: Record<string, unknown> = {};
-              try {
-                parsedInput = toolUse.partialInput
-                  ? (JSON.parse(toolUse.partialInput) as Record<string, unknown>)
-                  : {};
-              } catch {
-                // Malformed partial JSON — display an empty input rather than crash.
+              if (delta.content) {
+                buffer += delta.content;
+                if (!rafId) {
+                  rafId = requestAnimationFrame(flushBuffer);
+                }
               }
+            },
+          );
+          allText += allText && roundText ? `\n\n${roundText}` : roundText;
 
-              finishedToolCallsRef.current = [
-                ...(finishedToolCallsRef.current ?? []),
-                { id: crypto.randomUUID(), name: toolUse.toolName, input: parsedInput },
-              ];
-              setLiveToolCalls((prev) => {
-                const next = [...prev];
-                const last = next.at(-1);
-                next[next.length - 1] = {
-                  id: last?.id ?? crypto.randomUUID(),
-                  name: toolUse.toolName,
-                  input: parsedInput,
-                  status: "complete",
-                };
-                return next;
-              });
-              return;
-            }
+          if (roundCalls.length === 0) break;
 
-            if (delta.content) {
-              buffer += delta.content;
-              if (!rafId) {
-                rafId = requestAnimationFrame(flushBuffer);
-              }
-            }
-          },
-        );
+          // Cancelled mid-round (cancelStream marks the queue item as
+          // error immediately): don't execute the calls or keep looping.
+          if (useAiStore.getState().queue.find((q) => q.id === itemId)?.status === "error") {
+            break;
+          }
+
+          const results: { call: (typeof roundCalls)[number]; ok: boolean; text: string }[] = [];
+          for (const call of roundCalls) {
+            const result = await executeTool(call.name, call.input);
+            const text = result.success
+              ? JSON.stringify(result.data ?? null)
+              : (result.error ?? "Unknown Error");
+            results.push({ call, ok: result.success, text });
+
+            finishedToolCallsRef.current = (finishedToolCallsRef.current ?? []).map((tc) =>
+              tc.id === call.id ? { ...tc, result: text } : tc,
+            );
+            setLiveToolCalls((prev) =>
+              prev.map((tc) =>
+                tc.id === call.id
+                  ? { ...tc, status: result.success ? "complete" : "error", result: text }
+                  : tc,
+              ),
+            );
+          }
+
+          if (round === MAX_TOOL_ROUNDS) break;
+
+          convo = [
+            ...convo,
+            {
+              role: "assistant",
+              content: [
+                ...(roundText ? [{ type: "text" as const, text: roundText }] : []),
+                ...roundCalls.map((c) => ({
+                  type: "tool_use" as const,
+                  id: c.id,
+                  name: c.name,
+                  input: c.input,
+                })),
+              ],
+            },
+            {
+              role: "user",
+              content: results.map((r) => ({
+                type: "tool_result" as const,
+                tool_use_id: r.call.id,
+                content: r.text,
+                is_error: !r.ok,
+              })),
+            },
+          ];
+
+          // Visual separation before the next round's streamed text.
+          if (roundText) buffer += "\n\n";
+        }
 
         if (rafId) cancelAnimationFrame(rafId);
         flushBuffer();
@@ -327,7 +396,7 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
               const assistantMessage: AiMessage = {
                 id: crypto.randomUUID(),
                 role: "assistant",
-                content: finalContent || fullContent,
+                content: finalContent || allText,
                 timestamp: new Date().toISOString(),
                 toolCalls: finishedToolCallsRef.current?.length
                   ? finishedToolCallsRef.current
@@ -451,7 +520,8 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
                 key={tc.id}
                 name={tc.name}
                 input={tc.input}
-                status={tc.status === "complete" ? "complete" : "executing"}
+                result={tc.result}
+                status={tc.status}
               />
             ))}
           </div>

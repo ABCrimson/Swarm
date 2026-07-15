@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type {
   MessageCreateParamsBase,
+  MessageParam,
   MessageStreamEvent,
   Tool,
 } from "@anthropic-ai/sdk/resources/messages/messages";
@@ -22,9 +23,13 @@ import { readConfig } from "#lib/tauri";
 export interface StreamParams {
   readonly model: string;
   readonly maxTokens: number;
+  /**
+   * Plain text turns use string content; tool-loop follow-ups pass full
+   * SDK content blocks (assistant `tool_use` + user `tool_result`).
+   */
   readonly messages: ReadonlyArray<{
     readonly role: "user" | "assistant";
-    readonly content: string;
+    readonly content: MessageParam["content"];
   }>;
   readonly system?: string;
   readonly tools?: Tool[];
@@ -40,6 +45,8 @@ export interface StreamDelta {
   readonly type: string;
   readonly content: string;
   readonly toolUse?: {
+    /** The API's tool_use block id — echoed back as `tool_use_id` in the tool_result. */
+    readonly id: string;
     readonly toolName: string;
     readonly partialInput: string;
     readonly complete: boolean;
@@ -76,6 +83,7 @@ async function getClient(): Promise<Anthropic> {
 
 /** State for accumulating tool_use content blocks during streaming. */
 interface ToolUseBlockState {
+  id: string;
   toolName: string;
   partialInput: string;
 }
@@ -166,11 +174,12 @@ export async function* streamMessage(
       if (event.type === "content_block_start") {
         const block = event.content_block;
         if (block.type === "tool_use") {
-          activeToolBlock = { toolName: block.name, partialInput: "" };
+          activeToolBlock = { id: block.id, toolName: block.name, partialInput: "" };
           yield {
             type: "tool_use",
             content: "",
             toolUse: {
+              id: block.id,
               toolName: block.name,
               partialInput: "",
               complete: false,
@@ -189,6 +198,7 @@ export async function* streamMessage(
             type: "tool_use",
             content: delta.partial_json,
             toolUse: {
+              id: activeToolBlock.id,
               toolName: activeToolBlock.toolName,
               partialInput: activeToolBlock.partialInput,
               complete: false,
@@ -204,6 +214,7 @@ export async function* streamMessage(
           type: "tool_use",
           content: "",
           toolUse: {
+            id: activeToolBlock.id,
             toolName: activeToolBlock.toolName,
             partialInput: activeToolBlock.partialInput,
             complete: true,

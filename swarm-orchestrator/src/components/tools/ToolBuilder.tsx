@@ -1,23 +1,11 @@
 import { useState } from "react";
+import type { CustomToolDef, ToolParam } from "#lib/custom-tools";
 import type { HighlightToken } from "#lib/syntax-highlight";
 import { tokenizeJson } from "#lib/syntax-highlight";
 
-/** A single parameter definition for a custom tool. */
-export interface ToolParam {
-  readonly id: string;
-  readonly name: string;
-  readonly type: "string" | "number" | "boolean" | "object" | "array";
-  readonly description: string;
-}
-
-/** Full definition of a custom tool. */
-export interface CustomToolDef {
-  readonly id: string;
-  readonly name: string;
-  readonly description: string;
-  readonly params: readonly ToolParam[];
-  readonly script: string;
-}
+// Canonical shapes live in #lib/custom-tools (shared with the store and
+// the AI request path); re-exported here for existing consumers.
+export type { CustomToolDef, ToolParam } from "#lib/custom-tools";
 
 /** Props for the tool builder form. */
 interface ToolBuilderProps {

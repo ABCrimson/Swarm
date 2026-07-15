@@ -7,7 +7,7 @@ import type { CustomToolDef } from "./ToolBuilder.tsx";
 /** Props for the tool list component. */
 interface ToolListProps {
   /** Custom tools created by the user. */
-  readonly customTools: CustomToolDef[];
+  readonly customTools: readonly CustomToolDef[];
   /** Callback to edit a custom tool. */
   readonly onEdit: (tool: CustomToolDef) => void;
   /** Callback to delete a custom tool. */

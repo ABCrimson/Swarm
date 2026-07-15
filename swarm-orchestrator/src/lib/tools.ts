@@ -5,7 +5,9 @@
 import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
 import * as z from "zod";
 import { zodToTool } from "#lib/anthropic";
+import { customToolToAnthropic, runCustomTool } from "#lib/custom-tools";
 import { invoke } from "#lib/tauri";
+import { useCustomToolsStore } from "#store/custom-tools";
 
 // ── Tool Types ──────────────────────────────────────
 
@@ -223,16 +225,37 @@ export function getAnthropicTools(): Tool[] {
 }
 
 /**
+ * Returns Anthropic Tool definitions for built-ins plus every persisted
+ * custom tool from the Tools page builder. A custom tool whose name
+ * collides with a built-in is dropped — built-ins win, and sending two
+ * schemas with one name would be an API error.
+ */
+export function getAllAnthropicTools(): Tool[] {
+  const customs = useCustomToolsStore
+    .getState()
+    .customTools.filter((t) => !toolRegistry.has(t.name))
+    .map(customToolToAnthropic);
+  return [...getAnthropicTools(), ...customs];
+}
+
+/**
  * Execute a tool by name with the given input.
- * Looks up the tool in the registry and runs its execute function.
+ *
+ * Built-ins run their registry execute function; names not in the
+ * registry fall back to the persisted custom tools, whose scripts run
+ * in a sandboxed Blob Worker (see #lib/custom-tools).
  */
 export async function executeTool(
   name: string,
   input: Record<string, unknown>,
 ): Promise<SwarmToolResult> {
   const tool = toolRegistry.get(name);
-  if (!tool) {
-    return { success: false, error: `Unknown Tool: ${name}` };
+  if (tool) {
+    return tool.execute(input);
   }
-  return tool.execute(input);
+  const custom = useCustomToolsStore.getState().customTools.find((t) => t.name === name);
+  if (custom) {
+    return runCustomTool(custom, input);
+  }
+  return { success: false, error: `Unknown Tool: ${name}` };
 }

@@ -2,15 +2,20 @@ import { useState } from "react";
 import type { CustomToolDef } from "#components/tools/ToolBuilder";
 import { ToolBuilder } from "#components/tools/ToolBuilder";
 import { ToolList } from "#components/tools/ToolList";
+import { useCustomToolsStore } from "#store/custom-tools";
 
 /**
  * Tools page for managing built-in and custom tool definitions.
  *
  * Provides a list view of all tools and a builder form for creating
- * or editing custom tools with live Anthropic JSON preview.
+ * or editing custom tools with live Anthropic JSON preview. Custom
+ * tools persist via the settings store and are sent to Claude with
+ * every AI chat request (see #store/custom-tools, #lib/tools).
  */
 export function Tools(): React.ReactElement {
-  const [customTools, setCustomTools] = useState<CustomToolDef[]>([]);
+  const customTools = useCustomToolsStore((s) => s.customTools);
+  const saveTool = useCustomToolsStore((s) => s.saveTool);
+  const deleteTool = useCustomToolsStore((s) => s.deleteTool);
   const [editingTool, setEditingTool] = useState<CustomToolDef | undefined>(undefined);
   const [isBuilding, setIsBuilding] = useState(false);
 
@@ -24,20 +29,8 @@ export function Tools(): React.ReactElement {
     setIsBuilding(true);
   };
 
-  const handleDelete = (id: string) => {
-    setCustomTools((prev) => prev.filter((t) => t.id !== id));
-  };
-
   const handleSave = (tool: CustomToolDef) => {
-    setCustomTools((prev) => {
-      const existing = prev.findIndex((t) => t.id === tool.id);
-      if (existing >= 0) {
-        const next = [...prev];
-        next[existing] = tool;
-        return next;
-      }
-      return [...prev, tool];
-    });
+    saveTool(tool);
     setIsBuilding(false);
     setEditingTool(undefined);
   };
@@ -95,7 +88,7 @@ export function Tools(): React.ReactElement {
           <ToolList
             customTools={customTools}
             onEdit={handleEdit}
-            onDelete={handleDelete}
+            onDelete={deleteTool}
             onCreateNew={handleCreateNew}
           />
         )}
