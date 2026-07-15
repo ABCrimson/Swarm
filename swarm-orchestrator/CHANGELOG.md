@@ -7,7 +7,19 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 
 ---
 
-## [0.11.1] - 2026-07-14
+## [0.11.2] - 2026-07-15
+
+### Post-release polish
+
+### Added
+
+- **Native alert notifications:** an Alerts toggle (off by default) mirrors every alert toast as a native OS notification via the previously-uncalled `send_notification` command — visible even when the app is in the background
+- **Configurable worker registry cap:** the backend's 64-worker limit is now a real setting — `set_max_workers` validates (1–256), persists to `swarm-config.json`, applies immediately to new spawns (running workers are never evicted), and is re-applied on launch; the command validates → persists → applies, so a failure always leaves the live cap unchanged
+
+### Fixed
+
+- **Command palette search works:** `filter={false}` had switched off the machine's multi-strategy scorer entirely, so typing never filtered anything and the most-used command stayed first regardless of the query; items now pass their visible label as the scored value, frecency presorts the empty-query order, and the dialog remounts per open cycle (the machine's search state survives close while the input resets — a stale query silently corrupted the next open)
+- **App settings hydrate by merging over defaults**, so settings persisted by older versions don't surface newer keys as `undefined`
 
 ### Feedback Batch 1 + follow-up cleanups
 
