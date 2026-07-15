@@ -7,11 +7,19 @@ import { useAiStore } from "#store/ai";
 export type OnStreamDelta = (delta: StreamDelta) => void;
 
 interface UseAiStreamReturn {
-  /** Start streaming for a given queue item, with optional per-delta callback. */
+  /**
+   * Start streaming for a given queue item, with optional per-delta
+   * callback. `opts.holdCompletion` keeps the queue item in "streaming"
+   * when the stream ends — used by AIChat's agentic tool loop, which
+   * runs several streams under one item and marks completion itself
+   * (otherwise the item flickers Streaming → Complete → Streaming and
+   * AIQueue hides its Cancel control mid-turn).
+   */
   readonly startStream: (
     itemId: string,
     params: StreamParams,
     onDelta?: OnStreamDelta,
+    opts?: { readonly holdCompletion?: boolean },
   ) => Promise<string>;
   /** Cancel an active stream. */
   readonly cancelStream: (itemId: string) => void;
@@ -56,6 +64,7 @@ export function useAiStream(): UseAiStreamReturn {
     itemId: string,
     params: StreamParams,
     onDelta?: OnStreamDelta,
+    opts?: { readonly holdCompletion?: boolean },
   ): Promise<string> => {
     if (useAiStore.getState().activeStreams >= useAiStore.getState().concurrentLimit) {
       throw new Error("Concurrent Stream Limit Reached");
@@ -87,7 +96,7 @@ export function useAiStream(): UseAiStreamReturn {
         }
       }
 
-      if (!controller.signal.aborted) {
+      if (!controller.signal.aborted && !opts?.holdCompletion) {
         updateItemStatus(itemId, "complete");
       }
     } catch (error) {

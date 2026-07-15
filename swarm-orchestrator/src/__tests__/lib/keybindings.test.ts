@@ -60,6 +60,15 @@ describe("bindingFromEvent", () => {
     expect(bindingFromEvent(keyEvent({ key: "F5" }))).toBe("f5");
   });
 
+  it("rejects '+' and space terminal keys (can't round-trip the '+'-joined format)", () => {
+    expect(bindingFromEvent(keyEvent({ key: "+", ctrlKey: true }))).toBeNull();
+    expect(bindingFromEvent(keyEvent({ key: " ", ctrlKey: true }))).toBeNull();
+  });
+
+  it("treats AltGraph as a modifier, not a terminal key", () => {
+    expect(bindingFromEvent(keyEvent({ key: "AltGraph" }))).toBeNull();
+  });
+
   it("includes alt in the normalized order", () => {
     expect(bindingFromEvent(keyEvent({ key: "p", ctrlKey: true, altKey: true }))).toBe(
       "ctrl+alt+p",
@@ -71,6 +80,16 @@ describe("formatBinding", () => {
   it("Title-Cases each part for display", () => {
     expect(formatBinding("ctrl+shift+g")).toBe("Ctrl+Shift+G");
     expect(formatBinding("ctrl+k")).toBe("Ctrl+K");
+  });
+
+  it("renders multi-word named keys properly", () => {
+    expect(formatBinding("ctrl+arrowup")).toBe("Ctrl+ArrowUp");
+    expect(formatBinding("ctrl+pagedown")).toBe("Ctrl+PageDown");
+  });
+
+  it("never crashes on malformed bindings with empty parts", () => {
+    expect(formatBinding("ctrl++")).toBe("Ctrl");
+    expect(formatBinding("")).toBe("");
   });
 
   it("round-trips every default binding", () => {

@@ -5,7 +5,7 @@
 // request path (schemas sent to Claude + execution on tool_use).
 
 import { create } from "zustand";
-import { type CustomToolDef, CustomToolListSchema } from "#lib/custom-tools";
+import { type CustomToolDef, parsePersistedCustomTools } from "#lib/custom-tools";
 import { settingsStore } from "#lib/lazy-store";
 import { isTauri } from "#lib/tauri";
 
@@ -52,15 +52,15 @@ export const useCustomToolsStore = create<CustomToolsState & CustomToolsActions>
   },
 }));
 
-// Hydrate once at module init. A corrupted/legacy value degrades to no
-// custom tools rather than crashing consumers (schema-validated).
+// Hydrate once at module init. Entries are validated individually — a
+// corrupted or invalid-named entry drops only itself, not the whole
+// collection (see parsePersistedCustomTools).
 if (isTauri()) {
   void settingsStore
     .get<unknown>(STORE_KEY)
     .then((raw) => {
-      const parsed = CustomToolListSchema.safeParse(raw ?? []);
       useCustomToolsStore.setState({
-        customTools: parsed.success ? parsed.data : [],
+        customTools: parsePersistedCustomTools(raw),
         hydrated: true,
       });
     })

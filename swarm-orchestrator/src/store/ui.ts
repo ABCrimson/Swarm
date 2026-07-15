@@ -79,6 +79,43 @@ export const paneSizesAtom = atomWithStorage<{ main: number; detail: number }>(
   createTauriStorage<{ main: number; detail: number }>(),
 );
 
+interface ThemePrefs {
+  readonly particlesEnabled: boolean;
+  readonly gpuOverlay: boolean;
+}
+
+/**
+ * Storage for {@link themeAtom} under a v2 key, with one-time migration:
+ * before this key existed, `gpuOverlay` was a dead setting (nothing
+ * consumed it) persisting `false` for every install — so hydrating a
+ * legacy value must carry over only `particlesEnabled` and take the new
+ * `gpuOverlay: true` default, or the status bar's long-standing GPU
+ * readout would silently vanish on upgrade.
+ */
+function createThemeStorage(): ReturnType<typeof createTauriStorage<ThemePrefs>> {
+  const base = createTauriStorage<ThemePrefs>();
+  return {
+    ...base,
+    subscribe(key, callback, initialValue) {
+      if (!isTauri()) return () => {};
+      void tauriStore
+        .get<ThemePrefs>(key)
+        .then(async (v) => {
+          if (v != null) {
+            callback(v);
+            return;
+          }
+          const legacy = await tauriStore.get<Partial<ThemePrefs>>("swarm:ui:theme");
+          if (legacy != null) {
+            callback({ ...initialValue, particlesEnabled: legacy.particlesEnabled ?? true });
+          }
+        })
+        .catch(() => {});
+      return () => {};
+    },
+  };
+}
+
 /**
  * Persisted theme preferences (particle background toggle, GPU overlay).
  *
@@ -87,10 +124,10 @@ export const paneSizesAtom = atomWithStorage<{ main: number; detail: number }>(
  * bar's Hide/Show GPU button both read/write this same field (the
  * toggle used to be dead: nothing consumed it).
  */
-export const themeAtom = atomWithStorage<{ particlesEnabled: boolean; gpuOverlay: boolean }>(
-  "swarm:ui:theme",
+export const themeAtom = atomWithStorage<ThemePrefs>(
+  "swarm:ui:theme2",
   { particlesEnabled: true, gpuOverlay: true },
-  createTauriStorage<{ particlesEnabled: boolean; gpuOverlay: boolean }>(),
+  createThemeStorage(),
 );
 
 // ── App settings (persisted) ────────────────────────

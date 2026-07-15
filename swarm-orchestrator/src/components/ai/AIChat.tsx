@@ -41,6 +41,27 @@ interface LiveToolCall {
   readonly result?: string;
 }
 
+/**
+ * Cancellation token for one agentic turn. The stream's AbortController
+ * only exists while a round is streaming — between rounds (during tool
+ * execution) cancelStream is a silent no-op, so cancel/unmount flip this
+ * flag instead and the loop checks it at every await boundary. A new
+ * turn gets a fresh token; a superseded turn keeps its own, so a ghost
+ * loop can never outlive its cancellation or stomp the next turn's state.
+ */
+interface TurnToken {
+  cancelled: boolean;
+}
+
+/** JSON.stringify that never throws (BigInt, circular refs) — a tool result must not abort the turn. */
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? "null";
+  } catch {
+    return String(value);
+  }
+}
+
 // ── Styles (OKLCH) ──────────────────────────────────
 
 const chatContainerStyle: CSSProperties = {
@@ -205,8 +226,19 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
   const activeItemIdRef = useRef<string | null>(null);
+  const activeTurnRef = useRef<TurnToken | null>(null);
   const finishedToolCallsRef = useRef<AiMessage["toolCalls"]>([]);
   const lastInjectionIdRef = useRef<string | undefined>(undefined);
+
+  // Unmount must stop the agentic loop outright: useAiStream's own
+  // cleanup only aborts a currently-streaming round — without this, a
+  // turn unmounted during tool execution would keep executing tools and
+  // streaming further rounds headless.
+  useEffect(() => {
+    return () => {
+      if (activeTurnRef.current) activeTurnRef.current.cancelled = true;
+    };
+  }, []);
 
   // Latest-ref pattern: lets the injection effect below call the current
   // `doSend` without listing it as a dependency (it is a plain function
@@ -233,6 +265,8 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
 
     const itemId = crypto.randomUUID();
     activeItemIdRef.current = itemId;
+    const turn: TurnToken = { cancelled: false };
+    activeTurnRef.current = turn;
     enqueue({
       id: itemId,
       priority: "normal",
@@ -279,6 +313,7 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
             itemId,
             { model: modelId, maxTokens: 4096, messages: convo, tools },
             (delta) => {
+              if (turn.cancelled) return;
               if (delta.toolUse) {
                 const toolUse = delta.toolUse;
                 if (!toolUse.complete) {
@@ -325,22 +360,27 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
                 }
               }
             },
+            { holdCompletion: true },
           );
           allText += allText && roundText ? `\n\n${roundText}` : roundText;
 
           if (roundCalls.length === 0) break;
 
-          // Cancelled mid-round (cancelStream marks the queue item as
-          // error immediately): don't execute the calls or keep looping.
-          if (useAiStore.getState().queue.find((q) => q.id === itemId)?.status === "error") {
+          // Stop before executing tools when the turn was cancelled
+          // (Cancel button/unmount flip the token; AIQueue's Cancel
+          // dequeues the item, cancelStream marks it error) — executing
+          // side-effectful tools after a cancel is never acceptable.
+          const queueItem = useAiStore.getState().queue.find((q) => q.id === itemId);
+          if (turn.cancelled || !queueItem || queueItem.status === "error") {
             break;
           }
 
           const results: { call: (typeof roundCalls)[number]; ok: boolean; text: string }[] = [];
           for (const call of roundCalls) {
+            if (turn.cancelled) break;
             const result = await executeTool(call.name, call.input);
             const text = result.success
-              ? JSON.stringify(result.data ?? null)
+              ? safeJson(result.data ?? null)
               : (result.error ?? "Unknown Error");
             results.push({ call, ok: result.success, text });
 
@@ -356,7 +396,7 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
             );
           }
 
-          if (round === MAX_TOOL_ROUNDS) break;
+          if (turn.cancelled || round === MAX_TOOL_ROUNDS) break;
 
           convo = [
             ...convo,
@@ -390,31 +430,67 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
         if (rafId) cancelAnimationFrame(rafId);
         flushBuffer();
 
-        startTransition(() => {
-          setStreamingContent((finalContent) => {
-            if (finalContent || finishedToolCallsRef.current?.length) {
-              const assistantMessage: AiMessage = {
-                id: crypto.randomUUID(),
-                role: "assistant",
-                content: finalContent || allText,
-                timestamp: new Date().toISOString(),
-                toolCalls: finishedToolCallsRef.current?.length
-                  ? finishedToolCallsRef.current
-                  : undefined,
-              };
-              setMessages((prev) => [...prev, assistantMessage]);
-            }
-            return "";
+        // A cancelled turn already committed its partial in handleCancel
+        // (or unmounted) — committing again would duplicate the bubble.
+        if (!turn.cancelled) {
+          useAiStore.getState().updateItemStatus(itemId, "complete");
+          startTransition(() => {
+            setStreamingContent((finalContent) => {
+              if (finalContent || finishedToolCallsRef.current?.length) {
+                const assistantMessage: AiMessage = {
+                  id: crypto.randomUUID(),
+                  role: "assistant",
+                  content: finalContent || allText,
+                  timestamp: new Date().toISOString(),
+                  toolCalls: finishedToolCallsRef.current?.length
+                    ? finishedToolCallsRef.current
+                    : undefined,
+                };
+                setMessages((prev) => [...prev, assistantMessage]);
+              }
+              return "";
+            });
+            setLiveToolCalls([]);
           });
-          setLiveToolCalls([]);
-        });
+        }
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        if (rafId) cancelAnimationFrame(rafId);
+        flushBuffer();
+
+        // Commit whatever already streamed in — a failure on round 3
+        // must not discard the rounds the user already watched — then
+        // surface the error under it.
+        if (!turn.cancelled) {
+          startTransition(() => {
+            setStreamingContent((partial) => {
+              if (partial || finishedToolCallsRef.current?.length) {
+                const partialMessage: AiMessage = {
+                  id: crypto.randomUUID(),
+                  role: "assistant",
+                  content: partial,
+                  timestamp: new Date().toISOString(),
+                  toolCalls: finishedToolCallsRef.current?.length
+                    ? finishedToolCallsRef.current
+                    : undefined,
+                };
+                setMessages((prev) => [...prev, partialMessage]);
+              }
+              return "";
+            });
+            setLiveToolCalls([]);
+          });
+          setError(err instanceof Error ? err.message : String(err));
+        }
       } finally {
         if (rafId) cancelAnimationFrame(rafId);
-        setIsStreaming(false);
         dequeue(itemId);
-        activeItemIdRef.current = null;
+        // A new turn may have started after this one was cancelled —
+        // never stomp its live state.
+        if (activeTurnRef.current === turn) {
+          setIsStreaming(false);
+          activeItemIdRef.current = null;
+          activeTurnRef.current = null;
+        }
       }
     })();
   };
@@ -467,6 +543,12 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
   };
 
   const handleCancel = () => {
+    // Flag first: between rounds there is no live AbortController for
+    // cancelStream to abort, so the token is what actually stops the
+    // loop (tool execution and further rounds).
+    if (activeTurnRef.current) {
+      activeTurnRef.current.cancelled = true;
+    }
     if (activeItemIdRef.current) {
       cancelStream(activeItemIdRef.current);
     }

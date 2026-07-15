@@ -146,8 +146,13 @@ const SECTION_TITLE_STYLE: React.CSSProperties = {
 
 /**
  * Numeric setting row: label + description on the left, a clamped
- * number input with unit on the right. Commits on change; clamps to
- * [min, max] on blur so a half-typed value never persists out of range.
+ * number input with unit on the right.
+ *
+ * Edits are staged in a local draft and committed only on blur or
+ * Enter, clamped to [min, max]. Never commits per keystroke: several
+ * consumers apply values destructively the moment they change (log
+ * retention trims entries, the history cap evicts workers), so a
+ * half-typed "1" on the way to "1000" must never reach them.
  */
 function NumberField({
   label,
@@ -167,6 +172,18 @@ function NumberField({
   readonly onChange: (v: number) => void;
 }): React.ReactElement {
   const inputId = `setting-${label.toLowerCase().replace(/\s+/g, "-")}`;
+  const [draft, setDraft] = useState(String(value));
+  const [editing, setEditing] = useState(false);
+
+  const commit = (raw: string): void => {
+    setEditing(false);
+    const n = Number(raw);
+    const clamped =
+      Number.isFinite(n) && raw.trim() !== "" ? Math.min(max, Math.max(min, n)) : value;
+    setDraft(String(clamped));
+    if (clamped !== value) onChange(clamped);
+  };
+
   return (
     <div
       style={{
@@ -189,15 +206,18 @@ function NumberField({
           type="number"
           min={min}
           max={max}
-          value={value}
-          onChange={(e) => {
-            const n = Number(e.target.value);
-            if (Number.isFinite(n)) onChange(n);
+          value={editing ? draft : String(value)}
+          onFocus={() => {
+            setDraft(String(value));
+            setEditing(true);
           }}
-          onBlur={(e) => {
-            const n = Number(e.target.value);
-            const clamped = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : min;
-            if (clamped !== value) onChange(clamped);
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={(e) => commit(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commit(e.currentTarget.value);
+            }
           }}
           style={{
             width: 88,
@@ -229,6 +249,8 @@ function NumberField({
 /**
  * Keybinding capture row: click the chip, press the new combination
  * (must include a modifier or be a function key), Escape cancels.
+ * `onChange` returns whether the binding was accepted (the parent
+ * rejects duplicates with its own toast).
  */
 function KeybindingField({
   label,
@@ -239,7 +261,7 @@ function KeybindingField({
   readonly label: string;
   readonly description: string;
   readonly value: string;
-  readonly onChange: (binding: string) => void;
+  readonly onChange: (binding: string) => boolean;
 }): React.ReactElement {
   const [listening, setListening] = useState(false);
 
@@ -255,9 +277,10 @@ function KeybindingField({
       }
       const binding = bindingFromEvent(e);
       if (binding) {
-        onChange(binding);
         setListening(false);
-        toast.success(`${label} Bound To ${formatBinding(binding)}`);
+        if (onChange(binding)) {
+          toast.success(`${label} Bound To ${formatBinding(binding)}`);
+        }
       }
     };
 
@@ -398,8 +421,17 @@ export function Settings(): React.ReactElement {
 
   const patchSettings = (patch: Partial<AppSettings>): void =>
     setAppSettings({ ...appSettings, ...patch });
-  const patchKeybinding = (key: keyof Keybindings, binding: string): void =>
+  const patchKeybinding = (key: keyof Keybindings, binding: string): boolean => {
+    const taken = (Object.entries(keybindings) as [keyof Keybindings, string][]).find(
+      ([other, b]) => other !== key && b === binding,
+    );
+    if (taken) {
+      toast.error(`${formatBinding(binding)} Is Already Assigned To Another Shortcut`);
+      return false;
+    }
     setKeybindings({ ...keybindings, [key]: binding });
+    return true;
+  };
 
   const handleCheckForUpdates = async (): Promise<void> => {
     setCheckingUpdates(true);

@@ -3,6 +3,8 @@ import {
   buildWorkerSource,
   type CustomToolDef,
   customToolToAnthropic,
+  isValidToolName,
+  parsePersistedCustomTools,
   runCustomTool,
 } from "#lib/custom-tools";
 import { executeTool, getAllAnthropicTools, toolRegistry } from "#lib/tools";
@@ -63,6 +65,30 @@ describe("customToolToAnthropic", () => {
   it("handles a tool with no params", () => {
     const tool = customToolToAnthropic(makeTool({ params: [] }));
     expect(tool.input_schema).toEqual({ type: "object", properties: {}, required: [] });
+  });
+});
+
+describe("tool name validation (API contract ^[a-zA-Z0-9_-]{1,64}$)", () => {
+  it("accepts conforming names and rejects spaces/empty/overlong", () => {
+    expect(isValidToolName("lookup_docs")).toBe(true);
+    expect(isValidToolName("Tool-2")).toBe(true);
+    expect(isValidToolName("Search Docs")).toBe(false);
+    expect(isValidToolName("")).toBe(false);
+    expect(isValidToolName("a".repeat(65))).toBe(false);
+  });
+
+  it("parsePersistedCustomTools drops only the invalid entries", () => {
+    const good = makeTool();
+    const badName = makeTool({ name: "Search Docs" });
+    const corrupt = { id: "x", name: "ok_tool" }; // missing fields
+    const tools = parsePersistedCustomTools([good, badName, corrupt, "junk"]);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].id).toBe(good.id);
+  });
+
+  it("parsePersistedCustomTools returns [] for non-array input", () => {
+    expect(parsePersistedCustomTools(undefined)).toEqual([]);
+    expect(parsePersistedCustomTools({ not: "an array" })).toEqual([]);
   });
 });
 
@@ -144,6 +170,22 @@ describe("custom tools in the shared registry pipeline", () => {
     const tools = getAllAnthropicTools();
     expect(tools.length).toBe(toolRegistry.size);
     expect(tools.filter((t) => t.name === "spawn_worker").length).toBe(1);
+  });
+
+  it("drops custom tools with API-invalid names and dedupes duplicate custom names", () => {
+    useCustomToolsStore.setState({
+      customTools: [
+        makeTool({ name: "Search Docs" }),
+        makeTool({ name: "dup_tool", description: "First." }),
+        makeTool({ name: "dup_tool", description: "Second." }),
+      ],
+    });
+    const tools = getAllAnthropicTools();
+    expect(tools.length).toBe(toolRegistry.size + 1);
+    const dups = tools.filter((t) => t.name === "dup_tool");
+    expect(dups).toHaveLength(1);
+    expect(dups[0].description).toBe("First.");
+    expect(tools.some((t) => t.name === "Search Docs")).toBe(false);
   });
 
   it("executeTool falls back to custom tools for unknown registry names", async () => {

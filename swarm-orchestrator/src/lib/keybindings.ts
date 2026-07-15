@@ -22,16 +22,19 @@ export const DEFAULT_KEYBINDINGS: Keybindings = {
 };
 
 /** Keys that are pure modifiers — never a binding's terminal key. */
-const MODIFIER_KEYS = new Set(["control", "shift", "alt", "meta"]);
+const MODIFIER_KEYS = new Set(["control", "shift", "alt", "meta", "altgraph"]);
 
 /**
  * Builds a normalized binding string from a keydown event, or `null`
- * when the event can't form a complete binding (a bare modifier press,
- * or a bare letter/digit with no modifier — those would hijack typing).
+ * when the event can't form a complete binding: a bare modifier press,
+ * a bare letter/digit with no modifier (would hijack typing), or a
+ * terminal key that can't round-trip through the "+"-joined format
+ * ("+" itself and space).
  */
 export function bindingFromEvent(e: KeyboardEvent): string | null {
   const key = e.key.toLowerCase();
   if (MODIFIER_KEYS.has(key)) return null;
+  if (key === "+" || key === " ") return null;
 
   const hasModifier = e.ctrlKey || e.metaKey || e.altKey;
   const isFunctionKey = /^f\d{1,2}$/.test(key);
@@ -61,10 +64,30 @@ export function matchesBinding(e: KeyboardEvent, binding: string): boolean {
   );
 }
 
+/** Display names for multi-word named keys that plain capitalization would mangle. */
+const KEY_DISPLAY_NAMES: Record<string, string> = {
+  arrowup: "ArrowUp",
+  arrowdown: "ArrowDown",
+  arrowleft: "ArrowLeft",
+  arrowright: "ArrowRight",
+  pageup: "PageUp",
+  pagedown: "PageDown",
+  capslock: "CapsLock",
+  numlock: "NumLock",
+  scrolllock: "ScrollLock",
+  contextmenu: "ContextMenu",
+  printscreen: "PrintScreen",
+};
+
 /** Formats a normalized binding for display: "ctrl+shift+g" → "Ctrl+Shift+G". */
 export function formatBinding(binding: string): string {
   return binding
     .split("+")
-    .map((part) => (part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1)))
+    .filter((part) => part.length > 0)
+    .map(
+      (part) =>
+        KEY_DISPLAY_NAMES[part] ??
+        (part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1)),
+    )
     .join("+");
 }

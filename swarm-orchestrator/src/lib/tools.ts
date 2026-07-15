@@ -5,7 +5,7 @@
 import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
 import * as z from "zod";
 import { zodToTool } from "#lib/anthropic";
-import { customToolToAnthropic, runCustomTool } from "#lib/custom-tools";
+import { customToolToAnthropic, isValidToolName, runCustomTool } from "#lib/custom-tools";
 import { invoke } from "#lib/tauri";
 import { useCustomToolsStore } from "#store/custom-tools";
 
@@ -226,15 +226,22 @@ export function getAnthropicTools(): Tool[] {
 
 /**
  * Returns Anthropic Tool definitions for built-ins plus every persisted
- * custom tool from the Tools page builder. A custom tool whose name
- * collides with a built-in is dropped — built-ins win, and sending two
- * schemas with one name would be an API error.
+ * custom tool from the Tools page builder.
+ *
+ * Defensive filtering at request-assembly time (one bad definition
+ * would 400 every chat request app-wide): custom tools with names
+ * violating the API's `^[a-zA-Z0-9_-]{1,64}$` contract are dropped, a
+ * name colliding with a built-in loses to the built-in, and duplicate
+ * custom names keep only the first.
  */
 export function getAllAnthropicTools(): Tool[] {
-  const customs = useCustomToolsStore
-    .getState()
-    .customTools.filter((t) => !toolRegistry.has(t.name))
-    .map(customToolToAnthropic);
+  const seen = new Set<string>(toolRegistry.keys());
+  const customs: Tool[] = [];
+  for (const t of useCustomToolsStore.getState().customTools) {
+    if (!isValidToolName(t.name) || seen.has(t.name)) continue;
+    seen.add(t.name);
+    customs.push(customToolToAnthropic(t));
+  }
   return [...getAnthropicTools(), ...customs];
 }
 

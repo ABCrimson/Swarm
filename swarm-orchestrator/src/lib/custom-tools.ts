@@ -31,6 +31,19 @@ export interface CustomToolDef {
   readonly script: string;
 }
 
+/**
+ * The Anthropic API's tool-name contract: `^[a-zA-Z0-9_-]{1,64}$`. A
+ * name outside this pattern 400s the entire request, so it is enforced
+ * at save time (ToolBuilder), at hydrate time (schema below), and at
+ * request-assembly time (getAllAnthropicTools).
+ */
+export const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+
+/** Whether a custom tool name is safe to send to the Anthropic API. */
+export function isValidToolName(name: string): boolean {
+  return TOOL_NAME_PATTERN.test(name);
+}
+
 const ToolParamSchema: z.ZodType<ToolParam> = z.object({
   id: z.string(),
   name: z.string(),
@@ -40,7 +53,7 @@ const ToolParamSchema: z.ZodType<ToolParam> = z.object({
 
 const CustomToolDefSchema: z.ZodType<CustomToolDef> = z.object({
   id: z.string(),
-  name: z.string(),
+  name: z.string().regex(TOOL_NAME_PATTERN),
   description: z.string(),
   params: z.array(ToolParamSchema),
   script: z.string(),
@@ -48,6 +61,19 @@ const CustomToolDefSchema: z.ZodType<CustomToolDef> = z.object({
 
 export const CustomToolListSchema: z.ZodType<readonly CustomToolDef[]> =
   z.array(CustomToolDefSchema);
+
+/**
+ * Validates a persisted value entry-by-entry, keeping the valid tools —
+ * one corrupted or invalid-named entry drops only itself, not the
+ * user's whole collection.
+ */
+export function parsePersistedCustomTools(raw: unknown): CustomToolDef[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry) => {
+    const parsed = CustomToolDefSchema.safeParse(entry);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
 
 /** How long a custom tool script may run before its worker is terminated. */
 const SCRIPT_TIMEOUT_MS = 10_000;

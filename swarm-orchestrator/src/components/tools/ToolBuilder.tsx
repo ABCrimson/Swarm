@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { CustomToolDef, ToolParam } from "#lib/custom-tools";
+import { isValidToolName } from "#lib/custom-tools";
 import type { HighlightToken } from "#lib/syntax-highlight";
 import { tokenizeJson } from "#lib/syntax-highlight";
 
@@ -158,8 +159,25 @@ export function ToolBuilder({
             placeholder="E.g. search_docs"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            style={inputStyle}
+            style={{
+              ...inputStyle,
+              ...(name && !isValidToolName(name) ? { borderColor: "oklch(0.55 0.14 10)" } : {}),
+            }}
           />
+          {name && !isValidToolName(name) && (
+            <span
+              style={{
+                display: "block",
+                marginTop: 4,
+                fontFamily: "var(--font-body)",
+                fontSize: "0.6875rem",
+                color: "oklch(0.72 0.20 10)",
+              }}
+            >
+              Names May Only Use Letters, Digits, Underscores, And Hyphens (Max 64) — The API
+              Rejects Anything Else.
+            </span>
+          )}
         </div>
 
         {/* Description */}
@@ -347,7 +365,7 @@ export function ToolBuilder({
           <button
             type="button"
             onClick={handleSave}
-            disabled={!name.trim()}
+            disabled={!isValidToolName(name)}
             style={{
               padding: "8px 20px",
               borderRadius: 8,
@@ -357,8 +375,8 @@ export function ToolBuilder({
               fontFamily: "var(--font-body)",
               fontSize: "0.8125rem",
               fontWeight: 600,
-              cursor: name.trim() ? "pointer" : "not-allowed",
-              opacity: name.trim() ? 1 : 0.5,
+              cursor: isValidToolName(name) ? "pointer" : "not-allowed",
+              opacity: isValidToolName(name) ? 1 : 0.5,
             }}
           >
             Save Tool
