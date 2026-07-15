@@ -115,6 +115,29 @@ export function CommandPalette(): React.ReactElement {
       keywords: ["navigate", "preferences", "config"],
       action: () => setPage("settings"),
     },
+    // Tools/Logs/Workspace have no sidebar entry — the palette is their
+    // only navigation path (they were unreachable before these commands).
+    {
+      id: "nav:tools",
+      label: "Go To Tools",
+      group: "Navigation",
+      keywords: ["navigate", "custom", "builder"],
+      action: () => setPage("tools"),
+    },
+    {
+      id: "nav:logs",
+      label: "Go To Logs",
+      group: "Navigation",
+      keywords: ["navigate", "output", "console"],
+      action: () => setPage("logs"),
+    },
+    {
+      id: "nav:workspace",
+      label: "Go To Workspace",
+      group: "Navigation",
+      keywords: ["navigate", "files", "project"],
+      action: () => setPage("workspace"),
+    },
     {
       id: "ui:toggle-sidebar",
       label: "Toggle Sidebar",
