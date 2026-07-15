@@ -78,10 +78,17 @@ export const paneSizesAtom = atomWithStorage<{ main: number; detail: number }>(
   createTauriStorage<{ main: number; detail: number }>(),
 );
 
-/** Persisted theme preferences (particle background toggle, GPU overlay). */
+/**
+ * Persisted theme preferences (particle background toggle, GPU overlay).
+ *
+ * `gpuOverlay` defaults `true` to match the status bar's long-standing
+ * visible-by-default GPU readout — the Settings toggle and the status
+ * bar's Hide/Show GPU button both read/write this same field (the
+ * toggle used to be dead: nothing consumed it).
+ */
 export const themeAtom = atomWithStorage<{ particlesEnabled: boolean; gpuOverlay: boolean }>(
   "swarm:ui:theme",
-  { particlesEnabled: true, gpuOverlay: false },
+  { particlesEnabled: true, gpuOverlay: true },
   createTauriStorage<{ particlesEnabled: boolean; gpuOverlay: boolean }>(),
 );
 

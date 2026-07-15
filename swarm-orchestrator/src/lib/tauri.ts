@@ -86,32 +86,6 @@ export async function getSession(id: string): Promise<Session> {
   return invoke<Session>("get_session", { id });
 }
 
-// ── AI commands ──────────────────────────────────────
-
-/** Start an AI streaming session for a worker, returning the stream ID. */
-export async function startAiStream(params: {
-  workerId: string;
-  messages: Array<{ role: string; content: string }>;
-  model?: string;
-}): Promise<string> {
-  return invoke<string>("start_ai_stream", params);
-}
-
-/** Cancel an active AI stream by its stream ID. */
-export async function cancelAiStream(streamId: string): Promise<void> {
-  return invoke<void>("cancel_ai_stream", { streamId });
-}
-
-// ── Session search ──────────────────────────────────
-
-/** Full-text search across session history with optional date range filter. */
-export async function searchHistory(
-  query: string,
-  dateRange?: { from?: string; to?: string },
-): Promise<Session[]> {
-  return invoke<Session[]>("search_history", { query, dateRange });
-}
-
 // ── FS utilities ─────────────────────────────────────
 
 /** Read a typed configuration value by key from the flat `swarm-config.json` file (via the `read_config` custom command). */

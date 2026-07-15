@@ -3,12 +3,11 @@
 // 28px height, OKLCH text, glass-panel background.
 // GPU frame time from gpuFrameTimeAtom — toggleable.
 
-import { useAtomValue } from "jotai";
+import { useAtom, useAtomValue } from "jotai";
 import type { CSSProperties } from "react";
-import { useState } from "react";
 import { pluralizeWorkers } from "#lib/format";
 import { useSystemStore } from "#store/system";
-import { gpuFrameTimeAtom } from "#store/ui";
+import { gpuFrameTimeAtom, themeAtom } from "#store/ui";
 
 const barStyle: CSSProperties = {
   height: 28,
@@ -50,7 +49,10 @@ export function StatusBar(): React.ReactElement {
   const tokensPerSec = useSystemStore((s) => s.metrics.tokensPerSec) ?? 0;
   const cpuPercent = useSystemStore((s) => s.metrics.cpuPercent) ?? 0;
   const gpuFrameTime = useAtomValue(gpuFrameTimeAtom) ?? 0;
-  const [showGpu, setShowGpu] = useState(true);
+  // Shared with Settings' "GPU Frame Time Overlay" toggle — one persisted
+  // source of truth instead of the local state this used to be.
+  const [theme, setTheme] = useAtom(themeAtom);
+  const showGpu = theme.gpuOverlay;
 
   // Rough 24h cost estimate: tokens/sec * 86400 * $0.000015 (sonnet pricing avg)
   const dailyCost = (tokensPerSec * 86_400 * 0.000015).toFixed(2);
@@ -87,7 +89,7 @@ export function StatusBar(): React.ReactElement {
         )}
         <button
           type="button"
-          onClick={() => setShowGpu((v) => !v)}
+          onClick={() => setTheme({ ...theme, gpuOverlay: !theme.gpuOverlay })}
           aria-label={showGpu ? "Hide GPU Frame Time" : "Show GPU Frame Time"}
           style={{
             background: "none",
