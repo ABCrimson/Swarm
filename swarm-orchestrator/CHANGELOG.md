@@ -7,7 +7,31 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 
 ---
 
-## [0.11.0] - 2026-07-10
+## [0.11.1] - 2026-07-14
+
+### Feedback Batch 1 + follow-up cleanups
+
+Fixes every defect from the 2026-07-10 owner feedback session, wires two previously-inert feature surfaces end-to-end, and promotes the most-wanted hardcoded constants into real settings.
+
+### Fixed
+
+- **Memory metrics use real hardware totals:** the backend now transmits `memory_total_mb` (from `sysinfo`), replacing four independent hardcoded 16 GB denominators — no more "Memory usage critically high: 216%" on large machines; one shared `memSeverity`/`memoryAvailableMb` helper (`src/lib/memory.ts`) guards divide-by-zero until the first real total arrives
+- **AI configuration works in packaged builds:** new `read_config`/`write_config` Tauri commands persist to `swarm-config.json`, and Settings gains a masked API Key field — the AI chat key path previously invoked commands that did not exist
+- **Workers Graph no longer hangs on "Computing layout...":** the ELK layout engine runs inside its own worker without the nested-worker spawn that crashed on module evaluation; worker failures surface as an error state with a 10s watchdog, StrictMode replay and rAF starvation (occluded/minimized windows) are handled, and superseded layout runs are ignored via a run token
+- **Model picker renders from the shared catalog:** Fable 5 and Mythos 5 (with a "Requires Project Glasswing" badge on its own row) are selectable everywhere; context/output labels derive from catalog data; the Rust client never sends sampling parameters and surfaces `stop_reason: "refusal"` instead of rendering a blank reply
+- **Particle background diagnostics:** each silent WebGPU failure gate (missing `navigator.gpu`, null adapter, null context) warns once with the specific reason; canvas stacking fixed so a successful init renders behind content
+- **AI chat model dropdown escapes the toolbar:** portaled to `document.body` with position tracking, keyboard focus handling preserved
+- **Charts cap at the trailing 20 samples** (`MAX_CHART_POINTS`/`lastN`): long-lived sessions no longer compress every chart into noise; AI token-usage records prune to the trailing 60s rate window
+- **GPU Frame Time Overlay setting actually works:** the Settings toggle and the status bar's Hide/Show GPU button now share one persisted atom (the toggle was dead); theme storage migrated to a v2 key so existing installs keep their particles preference and regain the readout
+- **Title Case everywhere:** all user-facing strings — labels, toasts, errors, full sentences — follow the owner's Title Case convention, with worker-count pluralization centralized
+- **Pill component consolidation:** one `Pill` with size/tone variants replaces every ad-hoc chip; interactive controls (e.g. Kill) are real buttons
+- **Tools, Logs, and Workspace pages are reachable again** via new command-palette navigation entries (no code path set the page atom to them)
+- **Dead IPC wrappers removed:** `startAiStream`/`cancelAiStream`/`searchHistory` pointed at backend commands that were never registered
+
+### Added
+
+- **Tools run end-to-end:** AI chat sends built-in + custom tool schemas with every request and executes tool calls in a capped agentic loop (execute → `tool_result` → continue); custom tools persist via the settings store, run their scripts in a sandboxed Blob Worker (off-thread, no Tauri IPC, hard 10s termination), and enforce the API's `^[a-zA-Z0-9_-]{1,64}$` name contract at save, hydrate, and request assembly; turns are cancellable at every await boundary (Cancel/unmount/queue-dequeue)
+- **Settings catalog:** alert cooldown, auto-snapshot interval, log retention cap, AI concurrent stream limit, chat history worker cap (all live-wired, committed on blur/Enter with clamping), remappable keybindings for the command palette / graph toggle / performance overlay (with duplicate-assignment guard), a Check For Updates button, and an update-check-on-launch toggle
 
 ### Phase 1: ordered event core
 
