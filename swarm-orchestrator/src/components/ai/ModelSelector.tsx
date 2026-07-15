@@ -361,18 +361,24 @@ export function ModelSelector(): React.ReactElement {
                     }}
                   >
                     <div style={modelNameStyle}>
-                      <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ color: style.color }}>{model.label}</span>
-                        {model.gated === "glasswing" && (
-                          <Pill tone="warning" size="sm">
-                            Requires Project Glasswing
-                          </Pill>
-                        )}
+                      <span style={{ color: style.color, whiteSpace: "nowrap" }}>
+                        {model.label}
                       </span>
                       <span style={{ ...costStyle, color: style.color }}>
                         {costIndicator(model)}
                       </span>
                     </div>
+
+                    {/* The gating badge gets its own row — inline with the
+                        name it forces "Claude Mythos 5" to wrap across
+                        three lines at the panel's width. */}
+                    {model.gated === "glasswing" && (
+                      <div>
+                        <Pill tone="warning" size="sm">
+                          Requires Project Glasswing
+                        </Pill>
+                      </div>
+                    )}
 
                     <div style={modelMetaStyle}>
                       <span>{formatContextLabel(model.contextWindow)}</span>
