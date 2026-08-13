@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -21,10 +22,19 @@ jobs:
         include:
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            args: ""
           - platform: macos-latest
             target: aarch64-apple-darwin
+            args: ""
           - platform: macos-13
             target: x86_64-apple-darwin
+            args: ""
+          # ubuntu-22.04 (NOT ubuntu-latest/24.04): 24.04 ships glibc 2.39, which
+          # raises the floor above Debian 12 / Ubuntu 22.04 users. 22.04's glibc
+          # 2.35 floor keeps them buildable and still has libwebkit2gtk-4.1-dev.
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: "--bundles deb,appimage"
 
     runs-on: ${{ matrix.platform }}
     # The app lives one level below the repo root.
@@ -33,6 +43,12 @@ jobs:
         working-directory: swarm-orchestrator
     steps:
       - uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -74,3 +90,29 @@ jobs:
           releaseBody: "See CHANGELOG.md for details."
           releaseDraft: true
           prerelease: ${{ startsWith(github.ref_name, 'v0.') }}
+          args: ${{ matrix.args }}
+
+  verify-updater-manifest:
+    name: Verify Updater Manifest
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download latest.json from draft release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download ${{ github.ref_name }} --repo ${{ github.repository }} --pattern latest.json --output latest.json --clobber
+
+      - name: Assert all four platform keys are present
+        run: |
+          missing=()
+          for key in windows-x86_64 darwin-aarch64 darwin-x86_64 linux-x86_64; do
+            if ! jq -e --arg k "$key" '.platforms[$k]' latest.json > /dev/null; then
+              missing+=("$key")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::latest.json is missing platform key(s): ${missing[*]}"
+            exit 1
+          fi
+          echo "latest.json carries all four platform keys."

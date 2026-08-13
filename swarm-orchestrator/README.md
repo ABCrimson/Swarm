@@ -153,6 +153,8 @@ pnpm tauri:build
 
 The compiled binary will be in `src-tauri/target/release/`.
 
+Tagged releases (`v*`) build signed installers for Windows, macOS (Intel + Apple Silicon), and Linux (`.deb` + `.AppImage`) via `.github/workflows/release.yml`. **Linux updater caveat:** `tauri-plugin-updater` only supports self-applying updates through the `.AppImage` bundle — a `.deb` install will report an available update via `check_for_updates` but cannot apply it in-place; see `src-tauri/UPDATER_KEYS.md` for details.
+
 ---
 
 ## Project Structure
