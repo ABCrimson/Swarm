@@ -104,9 +104,20 @@ export function Sessions(): React.ReactElement {
       try {
         const { session, workerIds } = await applyTemplate(template);
         setActiveSession(session.id);
-        toast.success(
-          `Template "${template.name}" Applied — ${pluralizeWorkers(workerIds.length)} Spawned`,
-        );
+
+        const total = template.workerConfigs.length;
+        const spawned = workerIds.length;
+        if (spawned === 0) {
+          toast.error(`Template "${template.name}" Failed — 0 Of ${total} Workers Spawned`);
+        } else if (spawned < total) {
+          toast.warning(
+            `Template "${template.name}" Partially Applied — ${spawned} Of ${total} Workers Spawned`,
+          );
+        } else {
+          toast.success(
+            `Template "${template.name}" Applied — ${pluralizeWorkers(spawned)} Spawned`,
+          );
+        }
       } catch (err) {
         toast.error(
           `Failed To Apply Template "${template.name}": ${err instanceof Error ? err.message : String(err)}`,

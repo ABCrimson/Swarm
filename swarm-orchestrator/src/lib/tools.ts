@@ -8,6 +8,7 @@ import { zodToTool } from "#lib/anthropic";
 import { customToolToAnthropic, isValidToolName, runCustomTool } from "#lib/custom-tools";
 import { readAbsoluteFile, writeAbsoluteFile } from "#lib/fs";
 import { invoke } from "#lib/tauri";
+import { spawnWorkerFromSpec } from "#lib/worker-spawn";
 import { useCustomToolsStore } from "#store/custom-tools";
 
 // ── Tool Types ──────────────────────────────────────
@@ -60,7 +61,7 @@ const RunCommandInput = z.object({
 
 const ReadFileInput = z.object({
   path: z.string().describe("Absolute path to the file to read"),
-  maxLines: z.number().int().optional().describe("Maximum number of lines to read"),
+  maxLines: z.number().int().min(1).optional().describe("Maximum number of lines to read"),
 });
 
 const WriteFileInput = z.object({
@@ -108,11 +109,15 @@ const spawnWorkerTool = createTool(
   SpawnWorkerInput,
   async (input) => {
     try {
-      const workerId = await invoke<string>("spawn_worker", {
-        config: {
-          name: input.name ?? "Worker",
-        },
-      });
+      const { name } = SpawnWorkerInput.parse(input);
+      // Routed through spawnWorkerFromSpec (not a hand-rolled invoke())
+      // so an AI-spawned worker gets the same Zod-validated response and
+      // store bookkeeping (useWorkerStore placeholder) as every other
+      // spawn path — see #lib/worker-spawn.
+      const workerId = await spawnWorkerFromSpec({ name: name ?? "Worker" });
+      if (workerId === null) {
+        return { success: false, error: "Spawn Worker Unavailable Outside The Desktop App." };
+      }
       return { success: true, data: { id: workerId } };
     } catch (error) {
       return { success: false, error: String(error) };
@@ -161,9 +166,16 @@ const readFileTool = createTool(
   async (input) => {
     try {
       const { path, maxLines } = ReadFileInput.parse(input);
+      // The file is always read in full, then sliced in memory — there
+      // is no streaming/early-exit read path yet. Acceptable for now
+      // given these are AI-tool reads of small config/text files, not a
+      // general-purpose log tailer; revisit if maxLines is ever used
+      // against multi-gigabyte files.
       const fullContent = await readAbsoluteFile(path);
       const content =
-        typeof maxLines === "number" ? fullContent.split("\n").slice(0, maxLines).join("\n") : fullContent;
+        typeof maxLines === "number"
+          ? fullContent.split("\n").slice(0, maxLines).join("\n")
+          : fullContent;
       return { success: true, data: { path, content } };
     } catch (error) {
       return { success: false, error: String(error) };

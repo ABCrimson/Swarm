@@ -11,6 +11,7 @@ import { Spinner } from "#components/ui/Spinner";
 import { useAiStream } from "#hooks/useAiStream";
 import { truncateMessages } from "#lib/ai-error";
 import type { StreamParams } from "#lib/anthropic";
+import { estimateTokens } from "#lib/context-manager";
 import { CLAUDE_MODELS, getContextWindow } from "#lib/models";
 import { executeTool, getAllAnthropicTools } from "#lib/tools";
 import { useAiStore } from "#store/ai";
@@ -207,10 +208,7 @@ function MessageBubble({ message }: { message: AiMessage }): React.ReactElement 
 // ── Chat Content ────────────────────────────────────
 
 function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.ReactElement {
-  const [selectedModel, setSelectedModel] = useAtom(selectedModelAtom);
-  // The shared catalog (#lib/models) is the single source of truth for
-  // model IDs — `selectedModel` (a ModelKey) indexes it directly.
-  const modelId = CLAUDE_MODELS[selectedModel].id;
+  const [selectedModel] = useAtom(selectedModelAtom);
   const { startStream, cancelStream, atLimit } = useAiStream();
   const enqueue = useAiStore((s) => s.enqueue);
   const dequeue = useAiStore((s) => s.dequeue);
@@ -218,22 +216,22 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
   // Agent metadata (role/model/systemPrompt) set at spawn time for a
   // worker created from a session template (see #lib/worker-spawn) —
   // never sent to Rust, read here to make the template's config real:
-  // preselect its model below and inject its system prompt into every
-  // stream request for this worker's chat.
+  // resolved into this worker's effective model below and injected as
+  // the system prompt on every stream request for this worker's chat.
   const agentMetadata = useWorkerAgentStore((s) => s.metadata.get(workerId));
 
-  // Preselect this worker's template-derived model once per worker (the
-  // model dropdown is a single global selection shared by every chat —
-  // switching into a templated worker's chat should default to its
-  // template's model without fighting a later manual re-selection).
-  const preselectedForWorkerRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (preselectedForWorkerRef.current === workerId) return;
-    preselectedForWorkerRef.current = workerId;
-    if (agentMetadata?.model) {
-      setSelectedModel(agentMetadata.model);
-    }
-  }, [workerId, agentMetadata, setSelectedModel]);
+  // The effective model for this worker's requests: the template's
+  // pinned model if this worker has one, else the user's global
+  // selection. Resolved fresh at request time rather than written back
+  // into `selectedModelAtom` — that atom is `atomWithStorage`, shared
+  // (and persisted to disk) across every worker's chat and Settings, so
+  // writing it here would revert the user's manual choice — and
+  // silently persist a worker-specific value — every time this
+  // component remounts (e.g. switching Workers.tsx's Detail/AI tab).
+  // #lib/models remains the single source of truth for IDs/context
+  // windows either way.
+  const effectiveModelKey = agentMetadata?.model ?? selectedModel;
+  const modelId = CLAUDE_MODELS[effectiveModelKey].id;
 
   const [messages, setMessages] = useState<AiMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -300,7 +298,15 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
       role: m.role,
       content: m.content,
     }));
-    const truncated = truncateMessages(apiMessages, getContextWindow(modelId));
+    // The system prompt (when this worker has one) occupies part of the
+    // context window too, even though it's passed to the API separately
+    // from `messages` — shrink the truncation budget by its estimated
+    // size so a large template systemPrompt can't push the real request
+    // over the model's context window after truncateMessages "fits" it.
+    const systemPromptTokens = agentMetadata?.systemPrompt
+      ? estimateTokens(agentMetadata.systemPrompt)
+      : 0;
+    const truncated = truncateMessages(apiMessages, getContextWindow(modelId) - systemPromptTokens);
 
     let buffer = "";
     let rafId = 0;

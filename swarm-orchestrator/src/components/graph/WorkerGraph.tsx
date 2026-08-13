@@ -446,37 +446,42 @@ function WorkerGraphInner(): React.ReactElement {
         {/* Legend: the animated dashed edges are a spawn-order chain
             (Map insertion order), never a real dependency graph — see
             buildGraphData above. Labeling this "Spawn Order" instead of
-            "Dependency" keeps the UI honest about what it renders. */}
-        <Panel
-          position="top-left"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "6px 10px",
-            borderRadius: 8,
-            background: "oklch(0.12 0.03 220 / 0.85)",
-            backdropFilter: "blur(8px)",
-            border: "1px solid oklch(0.28 0.05 220)",
-            fontFamily: "var(--font-body)",
-            fontSize: "0.6875rem",
-            fontWeight: 500,
-            color: "oklch(0.65 0.04 220)",
-          }}
-        >
-          <svg width={20} height={8} viewBox="0 0 20 8" aria-hidden="true">
-            <line
-              x1={1}
-              y1={4}
-              x2={19}
-              y2={4}
-              stroke="oklch(0.78 0.18 205 / 0.8)"
-              strokeWidth={2}
-              strokeDasharray="4 2.5"
-            />
-          </svg>
-          <span>Spawn Order</span>
-        </Panel>
+            "Dependency" keeps the UI honest about what it renders. Only
+            shown when there is at least one edge to label — a
+            single-worker graph has none, and the legend would otherwise
+            describe a line style nothing on screen uses. */}
+        {edges.length > 0 && (
+          <Panel
+            position="top-left"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "6px 10px",
+              borderRadius: 8,
+              background: "oklch(0.12 0.03 220 / 0.85)",
+              backdropFilter: "blur(8px)",
+              border: "1px solid oklch(0.28 0.05 220)",
+              fontFamily: "var(--font-body)",
+              fontSize: "0.6875rem",
+              fontWeight: 500,
+              color: "oklch(0.65 0.04 220)",
+            }}
+          >
+            <svg width={20} height={8} viewBox="0 0 20 8" aria-hidden="true">
+              <line
+                x1={1}
+                y1={4}
+                x2={19}
+                y2={4}
+                stroke="oklch(0.78 0.18 205 / 0.8)"
+                strokeWidth={2}
+                strokeDasharray="4 2.5"
+              />
+            </svg>
+            <span>Spawn Order</span>
+          </Panel>
+        )}
         <MiniMap
           nodeColor={miniMapNodeColor}
           maskColor="oklch(0.06 0.02 220 / 0.8)"

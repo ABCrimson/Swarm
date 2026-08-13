@@ -35,7 +35,8 @@ function createSession(overrides?: Partial<Session>): Session {
 
 function resetStores(): void {
   for (const [id] of useWorkerStore.getState().workers) useWorkerStore.getState().removeWorker(id);
-  for (const [id] of useSessionStore.getState().sessions) useSessionStore.getState().removeSession(id);
+  for (const [id] of useSessionStore.getState().sessions)
+    useSessionStore.getState().removeSession(id);
   for (const [id] of useWorkerAgentStore.getState().metadata) {
     useWorkerAgentStore.getState().removeAgentMetadata(id);
   }
@@ -128,5 +129,19 @@ describe("spawnWorkerFromSpec", () => {
 
     expect(workerId).toBe("worker-5");
     consoleError.mockRestore();
+  });
+
+  it("returns null and skips all store writes when spawnWorker degrades to null (no Tauri IPC bridge)", async () => {
+    spawnWorkerMock.mockResolvedValueOnce(null);
+
+    const workerId = await spawnWorkerFromSpec(
+      { name: "Agent", role: "coder", model: "opus", systemPrompt: "You write code." },
+      "some-session",
+    );
+
+    expect(workerId).toBeNull();
+    expect(useWorkerStore.getState().workers.size).toBe(0);
+    expect(useWorkerAgentStore.getState().metadata.size).toBe(0);
+    expect(sessionAddWorkerMock).not.toHaveBeenCalled();
   });
 });

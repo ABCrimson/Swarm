@@ -50,7 +50,10 @@ describe("read_file tool", () => {
   });
 
   it("surfaces a truthful, actionable error when the fs capability scope denies the read", async () => {
-    vi.mocked(readTextFile).mockRejectedValueOnce(new Error("forbidden path: outside of configured scope"));
+    // The real shape tauri-plugin-fs's Error::PathForbidden serializes as
+    // (verified against the plugin's error.rs: #[error("forbidden path: {0}")]),
+    // not a generic "permission"/"denied" placeholder string.
+    vi.mocked(readTextFile).mockRejectedValueOnce(new Error("forbidden path: /etc/passwd"));
 
     const result = await readFileTool?.execute({ path: "/etc/passwd" });
 
@@ -59,7 +62,9 @@ describe("read_file tool", () => {
   });
 
   it("surfaces a not-found error distinctly from a scope rejection", async () => {
-    vi.mocked(readTextFile).mockRejectedValueOnce(new Error("No such file or directory (os error 2)"));
+    vi.mocked(readTextFile).mockRejectedValueOnce(
+      new Error("No such file or directory (os error 2)"),
+    );
 
     const result = await readFileTool?.execute({ path: "/home/user/missing.txt" });
 
@@ -68,11 +73,32 @@ describe("read_file tool", () => {
     expect(result?.error).not.toContain("Access Is Limited");
   });
 
+  it("surfaces an OS-level permission error distinctly from a capability-scope rejection", async () => {
+    // A real Windows OS error for a path that IS inside the capability
+    // scope (e.g. a locked/ACL-protected file under $APPDATA) — must not
+    // be misreported as "Access Is Limited To..." (that claim would be
+    // false; the sandbox never rejected this path).
+    vi.mocked(readTextFile).mockRejectedValueOnce(new Error("Access is denied (os error 5)"));
+
+    const result = await readFileTool?.execute({ path: "/home/user/locked.txt" });
+
+    expect(result?.success).toBe(false);
+    expect(result?.error).toContain("The Operating System Denied Access To");
+    expect(result?.error).not.toContain("Access Is Limited To");
+  });
+
   it("rejects malformed input truthfully instead of silently failing", async () => {
     const result = await readFileTool?.execute({});
 
     expect(result?.success).toBe(false);
     expect(result?.error).toBeDefined();
+    expect(readTextFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-positive maxLines instead of silently reading zero lines", async () => {
+    const result = await readFileTool?.execute({ path: "/home/user/notes.txt", maxLines: 0 });
+
+    expect(result?.success).toBe(false);
     expect(readTextFile).not.toHaveBeenCalled();
   });
 });
@@ -96,12 +122,14 @@ describe("write_file tool", () => {
   });
 
   it("surfaces a truthful, actionable error when the fs capability scope denies the write", async () => {
-    vi.mocked(writeTextFile).mockRejectedValueOnce(new Error("forbidden path: outside of configured scope"));
+    vi.mocked(writeTextFile).mockRejectedValueOnce(new Error("forbidden path: /etc/passwd"));
 
     const result = await writeFileTool?.execute({ path: "/etc/passwd", content: "x" });
 
     expect(result?.success).toBe(false);
-    expect(result?.error).toContain("Write Access Is Limited To The App Data And .swarm Directories");
+    expect(result?.error).toContain(
+      "Write Access Is Limited To The App Data And .swarm Directories",
+    );
   });
 
   it("rejects malformed input truthfully instead of silently failing", async () => {

@@ -2,7 +2,6 @@ import { load } from "@tauri-apps/plugin-store";
 
 import { createSession as createSessionIpc } from "#lib/tauri";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
-import { useSessionStore } from "#store/sessions";
 import type { Session, SessionTemplate, WorkerSpawnSpec } from "#store/types";
 
 /** plugin-store key for user templates. */
@@ -192,8 +191,20 @@ export async function getAllTemplates(): Promise<SessionTemplate[]> {
  * session via `session_add_worker`. This is what makes a template's
  * agent configuration real instead of decorative.
  *
- * A worker whose spawn fails is skipped (logged, not thrown) so the
- * rest of the template still applies.
+ * Deliberately does not add the created session to `useSessionStore`
+ * itself — Rust emits `session_created` as part of `create_session`,
+ * and `useSessionEvents` (mounted at the app root) already writes the
+ * authoritative record from that event. A second, redundant write here
+ * would race the event-driven one instead of adding anything. This
+ * function still needs `session.id` from the IPC response, though, to
+ * wire each spawned worker to the right session below.
+ *
+ * A worker whose spawn fails (thrown error) or degrades to `null` (no
+ * Tauri IPC bridge — see `spawnWorkerFromSpec`) is skipped, logged, and
+ * does not stop the rest of the template from applying. Callers should
+ * compare the returned `workerIds.length` against
+ * `template.workerConfigs.length` to detect a partial or total failure
+ * and report it honestly instead of always toasting success.
  *
  * @returns The created session and the worker IDs that spawned
  * successfully, in template order.
@@ -202,12 +213,18 @@ export async function applyTemplate(
   template: SessionTemplate,
 ): Promise<{ readonly session: Session; readonly workerIds: string[] }> {
   const session = await createSessionIpc(template.name);
-  useSessionStore.getState().addSession(session);
 
   const workerIds: string[] = [];
   for (const spec of template.workerConfigs) {
     try {
-      workerIds.push(await spawnWorkerFromSpec(spec, session.id));
+      const workerId = await spawnWorkerFromSpec(spec, session.id);
+      if (workerId === null) {
+        console.error(
+          `applyTemplate: spawnWorkerFromSpec returned null for worker "${spec.name}" from template "${template.name}" (no Tauri IPC bridge)`,
+        );
+        continue;
+      }
+      workerIds.push(workerId);
     } catch (err) {
       console.error(
         `applyTemplate: failed to spawn worker "${spec.name}" from template "${template.name}"`,

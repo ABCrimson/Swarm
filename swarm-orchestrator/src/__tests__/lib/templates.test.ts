@@ -34,7 +34,8 @@ function mockSession(id: string, name: string) {
 
 function resetStores(): void {
   for (const [id] of useWorkerStore.getState().workers) useWorkerStore.getState().removeWorker(id);
-  for (const [id] of useSessionStore.getState().sessions) useSessionStore.getState().removeSession(id);
+  for (const [id] of useSessionStore.getState().sessions)
+    useSessionStore.getState().removeSession(id);
   for (const [id] of useWorkerAgentStore.getState().metadata) {
     useWorkerAgentStore.getState().removeAgentMetadata(id);
   }
@@ -53,7 +54,10 @@ describe("applyTemplate", () => {
   it("creates a session and spawns one worker per workerConfigs entry", async () => {
     const template = BUILT_IN_TEMPLATES[1]; // Multi-Agent Parallel: 3 workers
     createSessionMock.mockResolvedValueOnce(mockSession("session-x", template.name));
-    spawnWorkerMock.mockResolvedValueOnce("w1").mockResolvedValueOnce("w2").mockResolvedValueOnce("w3");
+    spawnWorkerMock
+      .mockResolvedValueOnce("w1")
+      .mockResolvedValueOnce("w2")
+      .mockResolvedValueOnce("w3");
 
     const { session, workerIds } = await applyTemplate(template);
 
@@ -62,14 +66,18 @@ describe("applyTemplate", () => {
     expect(spawnWorkerMock).toHaveBeenCalledTimes(3);
   });
 
-  it("adds the created session to the session store", async () => {
+  it("does not add the session to the store itself — useSessionEvents' session_created handler owns that", async () => {
     const template = BUILT_IN_TEMPLATES[0];
     createSessionMock.mockResolvedValueOnce(mockSession("session-store", template.name));
     spawnWorkerMock.mockResolvedValueOnce("w-single");
 
     await applyTemplate(template);
 
-    expect(useSessionStore.getState().sessions.has("session-store")).toBe(true);
+    // A second, redundant addSession() here would race the event-driven
+    // one instead of adding anything new — see #lib/worker-spawn's
+    // session-wiring test below for the case where the event *has*
+    // already populated the store by the time a worker spawns into it.
+    expect(useSessionStore.getState().sessions.has("session-store")).toBe(false);
   });
 
   it("stores each spawned worker's role/model/systemPrompt in the agent metadata store", async () => {
@@ -88,7 +96,14 @@ describe("applyTemplate", () => {
 
   it("registers each spawned worker against the new session, growing workerIds", async () => {
     const template = BUILT_IN_TEMPLATES[0];
-    createSessionMock.mockResolvedValueOnce(mockSession("session-z", template.name));
+    const session = mockSession("session-z", template.name);
+    createSessionMock.mockResolvedValueOnce(session);
+    // Simulate useSessionEvents having already added the session from
+    // its session_created event — applyTemplate itself no longer does
+    // this (see the test above), but spawnWorkerFromSpec's own
+    // session-workerIds update still needs the session to exist in the
+    // store to have anything to grow.
+    useSessionStore.getState().addSession(session);
     spawnWorkerMock.mockResolvedValueOnce("w-solo");
 
     await applyTemplate(template);
@@ -103,6 +118,21 @@ describe("applyTemplate", () => {
     spawnWorkerMock
       .mockResolvedValueOnce("w1")
       .mockRejectedValueOnce(new Error("spawn failed"))
+      .mockResolvedValueOnce("w3");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { workerIds } = await applyTemplate(template);
+
+    expect(workerIds).toEqual(["w1", "w3"]);
+    consoleError.mockRestore();
+  });
+
+  it("counts a null spawn result (no Tauri bridge) as a failure without stopping the rest of the template", async () => {
+    const template = BUILT_IN_TEMPLATES[1]; // 3 workers
+    createSessionMock.mockResolvedValueOnce(mockSession("session-null", template.name));
+    spawnWorkerMock
+      .mockResolvedValueOnce("w1")
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce("w3");
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 

@@ -1,7 +1,6 @@
 import { useOptimistic } from "react";
 import { killWorker, pauseWorker, resumeWorker } from "#lib/tauri";
-import { spawnWorkerFromSpec } from "#lib/worker-spawn";
-import type { Worker, WorkerSpawnSpec, WorkerState } from "#store/types";
+import type { Worker, WorkerState } from "#store/types";
 import { useWorkerAgentStore } from "#store/worker-agents";
 import { useWorkerStore } from "#store/workers";
 
@@ -70,20 +69,4 @@ export function useWorker(id: string): UseWorkerReturn {
     : undefined;
 
   return { worker: optimisticWorker, optimisticState, pause, resume, kill };
-}
-
-/**
- * Hook to spawn a new worker from a `WorkerSpawnSpec`. Returns the UUID
- * of the spawned worker.
- *
- * Thin wrapper around `spawnWorkerFromSpec` (`#lib/worker-spawn`),
- * which does the actual work: splitting process options (sent to Rust)
- * from agent metadata (stored client-side), adding an optimistic
- * placeholder to `useWorkerStore` (the full record is populated by the
- * `worker_spawned` envelope on `swarm://events`), and — when
- * `sessionId` is given — registering the worker against that session
- * via `session_add_worker`.
- */
-export function useSpawnWorker(): (spec: WorkerSpawnSpec, sessionId?: string) => Promise<string> {
-  return spawnWorkerFromSpec;
 }
