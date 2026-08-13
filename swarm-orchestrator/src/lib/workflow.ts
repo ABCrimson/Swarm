@@ -71,7 +71,7 @@ export function importWorkflow(def: WorkflowDefinition): { nodes: Node[]; edges:
     id: e.id,
     source: e.source,
     target: e.target,
-    type: "dependency",
+    type: "spawnOrder",
     label: e.label,
   }));
 

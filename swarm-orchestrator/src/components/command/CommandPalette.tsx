@@ -3,9 +3,6 @@ import { Command } from "modern-cmdk/react";
 import { useEffect } from "react";
 import { toast } from "sonner";
 
-// Temporal is available as a global in the target runtime (Node 25.8.1 / Chromium 146+).
-declare const Temporal: { Now: { instant(): { toString(): string } } };
-
 import { matchesBinding } from "#lib/keybindings";
 import { createSnapshot } from "#lib/snapshots";
 import type { FrecencyEntry } from "#store/frecency";

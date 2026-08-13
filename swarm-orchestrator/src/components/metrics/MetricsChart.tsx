@@ -1,6 +1,6 @@
 // ── MetricsChart ────────────────────────────────────
 // Real-time metrics chart: CPU%, memory usage, worker count.
-// Recharts 3.8.0 with isAnimationActive={false} for 60fps.
+// Recharts 3.x with isAnimationActive={false} for 60fps.
 // Uses shared chart theme for OKLCH styling.
 
 import type { CSSProperties } from "react";

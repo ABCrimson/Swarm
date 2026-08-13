@@ -4,14 +4,6 @@ import { atomWithStorage } from "jotai/utils";
 import { settingsStore } from "#lib/lazy-store";
 import { isTauri } from "#lib/tauri";
 
-// Temporal is available as a global in the target runtime (Node 26.5.0 / Chromium 146+).
-declare const Temporal: {
-  Now: {
-    instant(): { since(other: unknown): { total(unit: string): number }; toString(): string };
-  };
-  Instant: { from(s: string): unknown };
-};
-
 /** A single frecency record tracking usage count and recency. */
 export interface FrecencyEntry {
   readonly uses: number;

@@ -1,5 +1,5 @@
 // ── AIMetricsChart ──────────────────────────────────
-// Recharts 3.8.0 AreaChart for AI performance metrics.
+// Recharts 3.x AreaChart for AI performance metrics.
 // Metrics: queue depth, active streams, tokens/min, req/min — all sampled
 // from the real AI store (useAiStore), keeping the trailing
 // MAX_CHART_POINTS samples. Uses shared chart theme.
@@ -86,7 +86,7 @@ function sampleAiStore(now: number): AiMetricPoint {
  * samples, sourced from `useAiStore` (queue depth, active streams, and
  * real token-usage rates).
  *
- * - Recharts 3.8.0 `<AreaChart>` with `<ResponsiveContainer>`
+ * - Recharts 3.x `<AreaChart>` with `<ResponsiveContainer>`
  * - OKLCH fills via `workerColor()`
  * - `isAnimationActive={false}` for 60fps performance
  */

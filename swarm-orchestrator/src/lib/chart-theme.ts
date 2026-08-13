@@ -1,5 +1,5 @@
 /**
- * Shared Recharts 3.8.0 theme using OKLCH colours.
+ * Shared Recharts 3.x theme using OKLCH colours.
  *
  * All chart components import these prop objects for consistent styling
  * across grid, tooltip, axis, and legend elements.

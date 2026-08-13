@@ -2,11 +2,15 @@ import type { EdgeProps } from "@xyflow/react";
 import { BaseEdge, getBezierPath } from "@xyflow/react";
 
 /**
- * Animated bezier edge for the worker dependency graph.
+ * Animated bezier edge for the Workers topology graph.
  *
+ * Labeled "Spawn Order" in the graph's legend — these edges connect
+ * workers in the order they were added to the store (see
+ * `buildGraphData` in `WorkerGraph.tsx`), not a real dependency
+ * relationship (the `Worker` schema has no dependency/parent field).
  * Renders a dashed stroke with animated flow and OKLCH glow drop-shadow.
  */
-export function DependencyEdge({
+export function SpawnOrderEdge({
   id,
   sourceX,
   sourceY,
