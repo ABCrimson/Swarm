@@ -126,3 +126,72 @@ export async function writeJsonFile<T>(
   const content = JSON.stringify(data, null, 2);
   await writeScopedTextFile(path, content, baseDir);
 }
+
+/**
+ * Normalizes a raw fs-plugin error into a truthful, model-actionable
+ * message — distinguishing a capability-scope rejection (the path fell
+ * outside `$APPDATA`/`$HOME`, see `src-tauri/capabilities/default.json`)
+ * from other failures (missing file, disk error, etc) so the caller
+ * never has to guess why the operation failed.
+ */
+function toAbsolutePathError(err: unknown, operation: "read" | "write", path: string): Error {
+  const raw = err instanceof Error ? err.message : String(err);
+  const lower = raw.toLowerCase();
+
+  if (
+    lower.includes("forbidden") ||
+    lower.includes("not allowed") ||
+    lower.includes("scope") ||
+    lower.includes("permission") ||
+    lower.includes("denied")
+  ) {
+    return operation === "write"
+      ? new Error("Write Access Is Limited To The App Data And .swarm Directories.")
+      : new Error("Read Access Is Limited To The App Data And Home Directories.");
+  }
+
+  if (lower.includes("no such file") || lower.includes("not found") || lower.includes("cannot find")) {
+    return new Error(`File Not Found: "${path}".`);
+  }
+
+  return err instanceof Error ? err : new Error(raw);
+}
+
+/**
+ * Reads a file at an absolute path through the capability-scoped fs
+ * plugin (reads permitted under `$APPDATA/**` and `$HOME/**`). Used by
+ * the `read_file` AI tool (see `#lib/tools`) to read files the model
+ * names directly, as opposed to the app's own scoped/relative config
+ * and store files above.
+ *
+ * @param path - Absolute filesystem path to read
+ * @returns The file's full text content
+ * @throws {Error} A truthful, model-actionable message — a capability
+ * rejection reads distinctly from a missing file or other I/O failure.
+ */
+export async function readAbsoluteFile(path: string): Promise<string> {
+  try {
+    return await readTextFile(path);
+  } catch (err) {
+    throw toAbsolutePathError(err, "read", path);
+  }
+}
+
+/**
+ * Writes a file at an absolute path through the capability-scoped fs
+ * plugin (writes permitted under `$APPDATA/**` and `$HOME/.swarm/**`).
+ * Used by the `write_file` AI tool (see `#lib/tools`) to write files the
+ * model names directly, creating or overwriting the target.
+ *
+ * @param path - Absolute filesystem path to write
+ * @param content - Text content to write
+ * @throws {Error} A truthful, model-actionable message — a capability
+ * rejection reads distinctly from other I/O failures.
+ */
+export async function writeAbsoluteFile(path: string, content: string): Promise<void> {
+  try {
+    await writeTextFile(path, content);
+  } catch (err) {
+    throw toAbsolutePathError(err, "write", path);
+  }
+}

@@ -6,6 +6,7 @@ import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
 import * as z from "zod";
 import { zodToTool } from "#lib/anthropic";
 import { customToolToAnthropic, isValidToolName, runCustomTool } from "#lib/custom-tools";
+import { readAbsoluteFile, writeAbsoluteFile } from "#lib/fs";
 import { invoke } from "#lib/tauri";
 import { useCustomToolsStore } from "#store/custom-tools";
 
@@ -159,11 +160,11 @@ const readFileTool = createTool(
   ReadFileInput,
   async (input) => {
     try {
-      const content = await invoke<string>("read_file", {
-        path: input.path,
-        maxLines: input.maxLines,
-      });
-      return { success: true, data: { path: input.path, content } };
+      const { path, maxLines } = ReadFileInput.parse(input);
+      const fullContent = await readAbsoluteFile(path);
+      const content =
+        typeof maxLines === "number" ? fullContent.split("\n").slice(0, maxLines).join("\n") : fullContent;
+      return { success: true, data: { path, content } };
     } catch (error) {
       return { success: false, error: String(error) };
     }
@@ -177,11 +178,9 @@ const writeFileTool = createTool(
   WriteFileInput,
   async (input) => {
     try {
-      await invoke<void>("write_file", {
-        path: input.path,
-        content: input.content,
-      });
-      return { success: true, data: { path: input.path, written: true } };
+      const { path, content } = WriteFileInput.parse(input);
+      await writeAbsoluteFile(path, content);
+      return { success: true, data: { path, written: true } };
     } catch (error) {
       return { success: false, error: String(error) };
     }
