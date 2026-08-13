@@ -239,7 +239,7 @@ export function WorkerAIPanel({ workerId }: WorkerAIPanelProps): React.ReactElem
   return (
     <div style={panelContainerStyle}>
       <div style={toolbarStyle}>
-        <ModelSelector />
+        <ModelSelector workerId={workerId} />
 
         <div style={flowIndicatorStyle}>
           <span style={flowDotStyle} />

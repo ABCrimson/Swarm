@@ -19,6 +19,7 @@ import {
   warnIfModelGated,
 } from "#lib/models";
 import { selectedModelAtom } from "#store/ui";
+import { useWorkerAgentStore } from "#store/worker-agents";
 
 // ── UI-only presentation for each catalog key ───────
 // Colors/capability badges are cosmetic and not part of the model
@@ -139,6 +140,22 @@ const selectedDotStyle: CSSProperties = {
 
 // ── Component ───────────────────────────────────────
 
+interface ModelSelectorProps {
+  /**
+   * Ties this selector to a specific worker's chat instead of the
+   * global model. When that worker has a template-pinned model
+   * (`agentMetadata.model` set in `useWorkerAgentStore`), it becomes
+   * this selector's single source of truth for BOTH display and
+   * selection — the dropdown shows the model requests actually use, and
+   * a manual pick overwrites that worker's own `useWorkerAgentStore`
+   * entry instead of the shared, persisted `selectedModelAtom`. Without
+   * this (or for a worker with no agent metadata — not spawned from a
+   * template), behavior is unchanged: reads/writes the global atom,
+   * shared across every chat and Settings.
+   */
+  readonly workerId?: string;
+}
+
 /**
  * Claude model selector dropdown.
  *
@@ -148,7 +165,8 @@ const selectedDotStyle: CSSProperties = {
  *   is still allowed (the owner's decision — see batch-1 task brief) but
  *   fires a `toast.warning` (via the shared `#lib/models` helper) instead
  *   of silently switching
- * - Persisted via Jotai `atomWithStorage`
+ * - Persisted via Jotai `atomWithStorage`, UNLESS `workerId` names a
+ *   worker with a template-pinned model — see {@link ModelSelectorProps}
  * - Glass-panel OKLCH styling
  * - The open panel is portaled to `document.body` (via `createPortal`)
  *   so it always renders above app content regardless of any ancestor
@@ -158,8 +176,12 @@ const selectedDotStyle: CSSProperties = {
  *   from the trigger's `getBoundingClientRect()` and kept in sync on
  *   open/scroll/resize.
  */
-export function ModelSelector(): React.ReactElement {
+export function ModelSelector({ workerId }: ModelSelectorProps): React.ReactElement {
   const [selectedModel, setSelectedModel] = useAtom(selectedModelAtom);
+  const agentMetadata = useWorkerAgentStore((s) =>
+    workerId ? s.metadata.get(workerId) : undefined,
+  );
+  const setAgentMetadata = useWorkerAgentStore((s) => s.setAgentMetadata);
   const [open, setOpen] = useState(false);
   const [panelPosition, setPanelPosition] = useState<{
     top: number;
@@ -171,11 +193,20 @@ export function ModelSelector(): React.ReactElement {
   const panelRef = useRef<HTMLDivElement>(null);
   const listboxId = useId();
 
-  const currentModel = CLAUDE_MODELS[selectedModel];
-  const currentStyle = MODEL_STYLE[selectedModel];
+  // This worker's pinned model (if any) overrides the global selection
+  // for both display and future picks — see ModelSelectorProps.
+  const hasWorkerOverride = agentMetadata?.model !== undefined;
+  const displayedModel = agentMetadata?.model ?? selectedModel;
+
+  const currentModel = CLAUDE_MODELS[displayedModel];
+  const currentStyle = MODEL_STYLE[displayedModel];
 
   const handleSelect = (key: ModelKey) => {
-    setSelectedModel(key);
+    if (hasWorkerOverride && workerId) {
+      setAgentMetadata(workerId, { ...agentMetadata, model: key });
+    } else {
+      setSelectedModel(key);
+    }
     warnIfModelGated(CLAUDE_MODELS[key]);
     setOpen(false);
     // Return focus to the trigger — the portaled option the user just
@@ -338,7 +369,7 @@ export function ModelSelector(): React.ReactElement {
               aria-label="AI Model Options"
             >
               {MODEL_ENTRIES.map(([key, model]) => {
-                const isSelected = key === selectedModel;
+                const isSelected = key === displayedModel;
                 const style = MODEL_STYLE[key];
                 return (
                   <div

@@ -8,7 +8,7 @@ import { useSessionStore } from "#store/sessions";
  * Must be called once at the app root level. Connects the single
  * ordered event bus to the Zustand session store:
  *
- * - `session_created` -> store.addSession()
+ * - `session_created` -> store.addSession() (merged, see below)
  * - `session_deleted` -> store.removeSession()
  *
  * All listeners are cleaned up on unmount — zero event listener leaks.
@@ -21,12 +21,30 @@ export function useSessionEvents(): void {
       onEvent("session_created", (e) => {
         const p = e.payload as { sessionId: string; name: string };
         const now = new Date().toISOString();
+        // Merge into any record already in the store instead of a blind
+        // replace. Rust emits this event as part of `create_session`,
+        // so a client-driven creator (applyTemplate, useSessionActions)
+        // racing its own IPC response's addSession() against this event
+        // is expected, in either order:
+        //   - event first: this creates a { workerIds: [] } stub, then
+        //     the IPC-response addSession() overwrites it with the
+        //     normalized Session — fine, neither has spawned workers yet.
+        //   - IPC response first: the store already holds the real
+        //     Session (and may already have grown workerIds from
+        //     spawns that ran after it) by the time this event lands —
+        //     a naive replace here would reset workerIds back to `[]`
+        //     and silently drop every worker registered so far.
+        // The event payload itself only ever carries { sessionId, name }
+        // — anything richer (workerIds, config, real timestamps) comes
+        // from whatever's already in the store, if anything is.
+        const existing = useSessionStore.getState().sessions.get(p.sessionId);
         addSession({
+          ...existing,
           id: p.sessionId,
           name: p.name,
-          workerIds: [],
-          createdAt: now,
-          updatedAt: now,
+          workerIds: existing?.workerIds ?? [],
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: existing?.updatedAt ?? now,
         });
       }),
       onEvent("session_deleted", (e) => {

@@ -107,7 +107,9 @@ export async function setMaxWorkers(max: number): Promise<void> {
 // ── Session commands ─────────────────────────────────
 
 /**
- * Raw shape of the `create_session` IPC response, before normalization.
+ * Raw shape of a Session exactly as Rust returns it — shared by every
+ * command that hands back a `Session` (`create_session`,
+ * `list_sessions`, `get_session` all serialize the same struct).
  * Mirrors Rust's `Session` struct (`src-tauri/src/session/manager.rs`)
  * exactly: `createdAt` is Unix seconds, and there is no `updatedAt`
  * field at all — Rust never tracks one.
@@ -121,29 +123,22 @@ const RawSessionResponseSchema = z.object({
 });
 
 /**
- * Create a new orchestration session with the given name.
- *
- * Sends `config: {}` — Rust's `create_session` command requires this
- * argument (`config: serde_json::Value`, no `#[serde(default)]`); a
- * call that omits it fails IPC deserialization outright ("missing
- * required key config") before any handler code runs.
- *
- * Normalizes the response at this seam: Rust's `Session` has no
- * `updatedAt` field and represents `createdAt` as Unix seconds, while
- * the frontend's `SessionSchema` requires ISO-8601 strings for both.
- * `updatedAt` is seeded with the same ISO timestamp as `createdAt` (a
- * session is "updated" the instant it's created). The normalized
- * result is then validated against `SessionSchema` before returning —
- * an unexpected shape throws here instead of poisoning the session
- * store with a value whose `updatedAt` is `undefined`, which throws a
- * `RangeError` inside `date-fns`' `formatDistanceToNow` in `SessionCard`
- * and sorts as `NaN` in `SessionList`.
+ * Normalizes one raw Session IPC response into a validated frontend
+ * `Session`: converts `createdAt` from Unix seconds to an ISO-8601
+ * string and seeds `updatedAt` with that same value (Rust has no
+ * `updatedAt` field at all — a session is "updated" the instant it's
+ * created), then validates the result against `SessionSchema`. Shared
+ * by `createSession`/`listSessions`/`getSession` so none of them can
+ * hand a caller a value that fails `SessionSchema` downstream — an
+ * unexpected shape throws here instead of poisoning the session store
+ * with a value whose `updatedAt` is `undefined`, which throws a
+ * `RangeError` inside `date-fns`' `formatDistanceToNow` in
+ * `SessionCard` and sorts as `NaN` in `SessionList`.
  */
-export async function createSession(name: string): Promise<Session> {
-  const raw = await invoke<unknown>("create_session", { name, config: {} });
+function normalizeSession(raw: unknown): Session {
   const parsedRaw = RawSessionResponseSchema.safeParse(raw);
   if (!parsedRaw.success) {
-    throw new Error("Create Session Returned An Unexpected Shape.");
+    throw new Error("The Session Backend Returned An Unexpected Shape.");
   }
 
   const createdAtIso = new Date(parsedRaw.data.createdAt * 1000).toISOString();
@@ -153,10 +148,23 @@ export async function createSession(name: string): Promise<Session> {
     updatedAt: createdAtIso,
   });
   if (!parsed.success) {
-    throw new Error("Create Session Returned An Unexpected Shape.");
+    throw new Error("The Session Backend Returned An Unexpected Shape.");
   }
 
   return parsed.data;
+}
+
+/**
+ * Create a new orchestration session with the given name.
+ *
+ * Sends `config: {}` — Rust's `create_session` command requires this
+ * argument (`config: serde_json::Value`, no `#[serde(default)]`); a
+ * call that omits it fails IPC deserialization outright ("missing
+ * required key config") before any handler code runs.
+ */
+export async function createSession(name: string): Promise<Session> {
+  const raw = await invoke<unknown>("create_session", { name, config: {} });
+  return normalizeSession(raw);
 }
 
 /** Delete a session by UUID and remove its associated data. */
@@ -164,14 +172,26 @@ export async function deleteSession(id: string): Promise<void> {
   return invoke<void>("delete_session", { id });
 }
 
-/** Retrieve all sessions from the backend store. */
+/**
+ * Retrieve all sessions from the backend store, each normalized the
+ * same way as `createSession` (see `normalizeSession`). Currently
+ * unreachable in the shipped app (`useSessionActions`, its only
+ * caller, has no consumers) — but wired now rather than left to
+ * detonate the instant session restore is.
+ */
 export async function listSessions(): Promise<Session[]> {
-  return invoke<Session[]>("list_sessions");
+  if (!isTauri()) return [];
+  const raw = await invoke<unknown[]>("list_sessions");
+  return raw.map(normalizeSession);
 }
 
-/** Retrieve a single session by UUID. */
+/**
+ * Retrieve a single session by UUID, normalized the same way as
+ * `createSession` (see `normalizeSession`).
+ */
 export async function getSession(id: string): Promise<Session> {
-  return invoke<Session>("get_session", { id });
+  const raw = await invoke<unknown>("get_session", { id });
+  return normalizeSession(raw);
 }
 
 /**
