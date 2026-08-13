@@ -41,8 +41,17 @@ export function SessionCard({
   // with the live worker store gives an honest count of workers that
   // still actually exist, instead of a number that climbs forever. The
   // persisted `workerIds` list itself is left untouched.
-  const workers = useWorkerStore((s) => s.workers);
-  const liveWorkerCount = session.workerIds.filter((id) => workers.has(id)).length;
+  //
+  // Selects the derived count itself, not the whole `workers` Map:
+  // `appendOutput` (PTY output, arriving at high frequency) produces a
+  // new Map reference on every call via immer, which would re-render
+  // every session card on every output chunk if the selector returned
+  // the Map. Returning a primitive number lets Zustand's default
+  // `Object.is` equality bail out whenever this session's live count
+  // hasn't actually changed.
+  const liveWorkerCount = useWorkerStore((s) =>
+    session.workerIds.reduce((count, id) => (s.workers.has(id) ? count + 1 : count), 0),
+  );
 
   return (
     <motion.button

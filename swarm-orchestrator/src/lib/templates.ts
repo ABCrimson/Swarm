@@ -2,6 +2,7 @@ import { load } from "@tauri-apps/plugin-store";
 
 import { createSession as createSessionIpc } from "#lib/tauri";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
+import { useSessionStore } from "#store/sessions";
 import type { Session, SessionTemplate, WorkerSpawnSpec } from "#store/types";
 
 /** plugin-store key for user templates. */
@@ -191,13 +192,15 @@ export async function getAllTemplates(): Promise<SessionTemplate[]> {
  * session via `session_add_worker`. This is what makes a template's
  * agent configuration real instead of decorative.
  *
- * Deliberately does not add the created session to `useSessionStore`
- * itself — Rust emits `session_created` as part of `create_session`,
- * and `useSessionEvents` (mounted at the app root) already writes the
- * authoritative record from that event. A second, redundant write here
- * would race the event-driven one instead of adding anything. This
- * function still needs `session.id` from the IPC response, though, to
- * wire each spawned worker to the right session below.
+ * Adds the created session to `useSessionStore` itself (safe now that
+ * `createSession`, `#lib/tauri`, returns a validated, normalized
+ * `Session`) — Rust also emits `session_created` as part of
+ * `create_session`, which `useSessionEvents` (mounted at the app root)
+ * writes independently from this same call. Those two writes race in
+ * either order; `useSessionEvents`' handler merges into whatever's
+ * already in the store instead of replacing it, so neither write can
+ * clobber `workerIds` the other has already grown — see the comment
+ * there for the full ordering analysis.
  *
  * A worker whose spawn fails (thrown error) or degrades to `null` (no
  * Tauri IPC bridge — see `spawnWorkerFromSpec`) is skipped, logged, and
@@ -213,6 +216,7 @@ export async function applyTemplate(
   template: SessionTemplate,
 ): Promise<{ readonly session: Session; readonly workerIds: string[] }> {
   const session = await createSessionIpc(template.name);
+  useSessionStore.getState().addSession(session);
 
   const workerIds: string[] = [];
   for (const spec of template.workerConfigs) {

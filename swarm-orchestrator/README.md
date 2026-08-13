@@ -264,7 +264,7 @@ cargo fmt
 - **TypeScript:** `pnpm typecheck` (strict mode, no emit, two tsconfig projects)
 - **Biome:** Enforces formatting and linting rules (`src/styles/tokens.css` is excluded -- see [docs/contributing.md](docs/contributing.md))
 - **Clippy:** `-D warnings` (zero tolerance for warnings)
-- **Tests:** 61 Rust unit tests + 15 doc-tests, and 369 frontend tests across 36 test files
+- **Tests:** 61 Rust unit tests + 15 doc-tests, and 400 frontend tests across 40 test files
 
 ---
 

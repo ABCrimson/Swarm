@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ModelSelector } from "#components/ai/ModelSelector";
 import { selectedModelAtom } from "#store/ui";
+import { useWorkerAgentStore } from "#store/worker-agents";
 
 const TRIGGER_RECT = DOMRect.fromRect({ x: 50, y: 200, width: 100, height: 30 });
 
@@ -222,6 +223,91 @@ describe("ModelSelector portal", () => {
 
       expect(toast.warning).not.toHaveBeenCalled();
       expect(toast.success).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("per-worker model override (fix wave, item NEW-2)", () => {
+    const WORKER_ID = "11111111-2222-3333-8444-555555555555";
+
+    afterEach(() => {
+      useWorkerAgentStore.getState().removeAgentMetadata(WORKER_ID);
+    });
+
+    it("displays the worker's pinned model instead of the global selection", async () => {
+      // Global selection is sonnet (see outer beforeEach), but this
+      // worker was spawned from a template pinning opus — the trigger
+      // must show what requests actually use, not the global atom.
+      useWorkerAgentStore.getState().setAgentMetadata(WORKER_ID, {
+        role: "supervisor",
+        model: "opus",
+        systemPrompt: "You coordinate.",
+      });
+
+      render(<ModelSelector workerId={WORKER_ID} />);
+
+      expect(screen.getByRole("button", { name: "Select AI Model" })).toHaveTextContent(
+        "Claude Opus 4.8",
+      );
+      expect(store.get(selectedModelAtom)).toBe("sonnet");
+    });
+
+    it("writes a manual pick into the worker's own metadata entry, not the global atom", async () => {
+      useWorkerAgentStore.getState().setAgentMetadata(WORKER_ID, {
+        role: "supervisor",
+        model: "opus",
+        systemPrompt: "You coordinate.",
+      });
+
+      render(<ModelSelector workerId={WORKER_ID} />);
+      const user = await openDropdown();
+
+      const option = screen.getByRole("option", { name: /Claude Haiku 4\.5/ });
+      option.focus();
+      await user.keyboard("{Enter}");
+
+      // The exact entry AIChat reads (agentMetadata.model) to resolve
+      // this worker's effective model for its next request.
+      expect(useWorkerAgentStore.getState().metadata.get(WORKER_ID)?.model).toBe("haiku");
+      // Every other worker's chat and Settings share this atom — a pick
+      // for one worker must never leak into it.
+      expect(store.get(selectedModelAtom)).toBe("sonnet");
+      expect(screen.getByRole("button", { name: "Select AI Model" })).toHaveTextContent(
+        "Claude Haiku 4.5",
+      );
+    });
+
+    it("keeps the systemPrompt/role untouched when only the model is picked", async () => {
+      useWorkerAgentStore.getState().setAgentMetadata(WORKER_ID, {
+        role: "supervisor",
+        model: "opus",
+        systemPrompt: "You coordinate.",
+      });
+
+      render(<ModelSelector workerId={WORKER_ID} />);
+      const user = await openDropdown();
+      const option = screen.getByRole("option", { name: /Claude Haiku 4\.5/ });
+      option.focus();
+      await user.keyboard("{Enter}");
+
+      const metadata = useWorkerAgentStore.getState().metadata.get(WORKER_ID);
+      expect(metadata?.role).toBe("supervisor");
+      expect(metadata?.systemPrompt).toBe("You coordinate.");
+    });
+
+    it("falls back to the global atom for a worker with no agent metadata (non-templated worker)", async () => {
+      render(<ModelSelector workerId={WORKER_ID} />);
+      const user = await openDropdown();
+
+      expect(screen.getByRole("button", { name: "Select AI Model" })).toHaveTextContent(
+        "Claude Sonnet 5",
+      );
+
+      const option = screen.getByRole("option", { name: /Claude Opus 4\.8/ });
+      option.focus();
+      await user.keyboard("{Enter}");
+
+      expect(store.get(selectedModelAtom)).toBe("opus");
+      expect(useWorkerAgentStore.getState().metadata.has(WORKER_ID)).toBe(false);
     });
   });
 });

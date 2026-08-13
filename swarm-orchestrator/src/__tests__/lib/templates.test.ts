@@ -66,18 +66,18 @@ describe("applyTemplate", () => {
     expect(spawnWorkerMock).toHaveBeenCalledTimes(3);
   });
 
-  it("does not add the session to the store itself — useSessionEvents' session_created handler owns that", async () => {
+  it("adds the created session to the store itself — createSession's response is validated/normalized, safe to trust directly", async () => {
     const template = BUILT_IN_TEMPLATES[0];
     createSessionMock.mockResolvedValueOnce(mockSession("session-store", template.name));
     spawnWorkerMock.mockResolvedValueOnce("w-single");
 
     await applyTemplate(template);
 
-    // A second, redundant addSession() here would race the event-driven
-    // one instead of adding anything new — see #lib/worker-spawn's
-    // session-wiring test below for the case where the event *has*
-    // already populated the store by the time a worker spawns into it.
-    expect(useSessionStore.getState().sessions.has("session-store")).toBe(false);
+    // Rust also emits session_created independently of this call — that
+    // write and this one race in either order. useSessionEvents' handler
+    // merges instead of replacing (see its own tests), so this add is
+    // safe even if the event arrives first or second.
+    expect(useSessionStore.getState().sessions.has("session-store")).toBe(true);
   });
 
   it("stores each spawned worker's role/model/systemPrompt in the agent metadata store", async () => {
@@ -98,12 +98,6 @@ describe("applyTemplate", () => {
     const template = BUILT_IN_TEMPLATES[0];
     const session = mockSession("session-z", template.name);
     createSessionMock.mockResolvedValueOnce(session);
-    // Simulate useSessionEvents having already added the session from
-    // its session_created event — applyTemplate itself no longer does
-    // this (see the test above), but spawnWorkerFromSpec's own
-    // session-workerIds update still needs the session to exist in the
-    // store to have anything to grow.
-    useSessionStore.getState().addSession(session);
     spawnWorkerMock.mockResolvedValueOnce("w-solo");
 
     await applyTemplate(template);
