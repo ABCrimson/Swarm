@@ -1,7 +1,8 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { listen as tauriListen } from "@tauri-apps/api/event";
-import type { Session, Worker } from "#store/types";
+import * as z from "zod";
+import type { Session, Worker, WorkerProcessOptions } from "#store/types";
 
 /** Returns `true` when running inside a Tauri webview (IPC bridge is available). */
 export function isTauri(): boolean {
@@ -30,13 +31,35 @@ export async function listen<T>(event: string, handler: (payload: T) => void): P
 
 // ── Worker commands ──────────────────────────────────
 
-/** Spawn a new worker process, optionally assigning a human-readable name. */
-export async function spawnWorker(name?: string): Promise<string> {
-  return invoke<string>("spawn_worker", {
-    config: {
-      name: name ?? "Worker",
-    },
-  });
+/** Validates the raw `spawn_worker` IPC response is a worker UUID before trusting it. */
+const SpawnWorkerResponseSchema = z.uuid();
+
+/**
+ * Spawn a new worker process from process options only — `name`,
+ * optionally `shell`/`cwd`/`env` — which map 1:1 onto Rust's
+ * `WorkerConfig` (`src-tauri/src/worker/handle.rs`) and are the only
+ * fields sent over IPC. Agent metadata (role/model/systemPrompt) never
+ * belongs here — see `WorkerSpawnSpec` (`#store/types`) and
+ * `spawnWorkerFromSpec` (`#lib/worker-spawn`), which splits the two and
+ * stores agent metadata client-side instead.
+ *
+ * The response is Zod-validated (a bare worker UUID) rather than cast,
+ * matching the event-bus's `safeParse`-at-the-seam discipline
+ * (`#lib/event-bus`) — an unexpected shape throws instead of handing
+ * callers an untrusted value typed as `string`.
+ */
+export async function spawnWorker(options: WorkerProcessOptions): Promise<string> {
+  const config: Record<string, unknown> = { name: options.name };
+  if (options.shell !== undefined) config.shell = options.shell;
+  if (options.cwd !== undefined) config.cwd = options.cwd;
+  if (options.env !== undefined) config.env = options.env;
+
+  const raw = await invoke<unknown>("spawn_worker", { config });
+  const parsed = SpawnWorkerResponseSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error("Spawn Worker Returned An Invalid Worker ID.");
+  }
+  return parsed.data;
 }
 
 /** Pause a running worker, suspending its PTY process. */
@@ -92,6 +115,18 @@ export async function listSessions(): Promise<Session[]> {
 /** Retrieve a single session by UUID. */
 export async function getSession(id: string): Promise<Session> {
   return invoke<Session>("get_session", { id });
+}
+
+/**
+ * Register a worker against a session's `workerIds` list (backend
+ * command `session_add_worker`, registered in `generate_handler!` but
+ * previously called from nowhere in the frontend). Does not emit a
+ * `swarm://events` envelope on success — callers must mirror the
+ * result into `useSessionStore` themselves (see `spawnWorkerFromSpec`
+ * in `#lib/worker-spawn`).
+ */
+export async function sessionAddWorker(sessionId: string, workerId: string): Promise<void> {
+  return invoke<void>("session_add_worker", { sessionId, workerId });
 }
 
 // ── Notifications ────────────────────────────────────

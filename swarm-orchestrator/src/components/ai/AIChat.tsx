@@ -16,6 +16,7 @@ import { executeTool, getAllAnthropicTools } from "#lib/tools";
 import { useAiStore } from "#store/ai";
 import type { AiMessage } from "#store/types";
 import { selectedModelAtom } from "#store/ui";
+import { useWorkerAgentStore } from "#store/worker-agents";
 import { AIMessageStream } from "./AIMessageStream.tsx";
 import { ToolCallDisplay } from "./ToolCallDisplay.tsx";
 
@@ -206,13 +207,33 @@ function MessageBubble({ message }: { message: AiMessage }): React.ReactElement 
 // ── Chat Content ────────────────────────────────────
 
 function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.ReactElement {
-  const [selectedModel] = useAtom(selectedModelAtom);
+  const [selectedModel, setSelectedModel] = useAtom(selectedModelAtom);
   // The shared catalog (#lib/models) is the single source of truth for
   // model IDs — `selectedModel` (a ModelKey) indexes it directly.
   const modelId = CLAUDE_MODELS[selectedModel].id;
   const { startStream, cancelStream, atLimit } = useAiStream();
   const enqueue = useAiStore((s) => s.enqueue);
   const dequeue = useAiStore((s) => s.dequeue);
+
+  // Agent metadata (role/model/systemPrompt) set at spawn time for a
+  // worker created from a session template (see #lib/worker-spawn) —
+  // never sent to Rust, read here to make the template's config real:
+  // preselect its model below and inject its system prompt into every
+  // stream request for this worker's chat.
+  const agentMetadata = useWorkerAgentStore((s) => s.metadata.get(workerId));
+
+  // Preselect this worker's template-derived model once per worker (the
+  // model dropdown is a single global selection shared by every chat —
+  // switching into a templated worker's chat should default to its
+  // template's model without fighting a later manual re-selection).
+  const preselectedForWorkerRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (preselectedForWorkerRef.current === workerId) return;
+    preselectedForWorkerRef.current = workerId;
+    if (agentMetadata?.model) {
+      setSelectedModel(agentMetadata.model);
+    }
+  }, [workerId, agentMetadata, setSelectedModel]);
 
   const [messages, setMessages] = useState<AiMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -311,7 +332,13 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
 
           const roundText = await startStream(
             itemId,
-            { model: modelId, maxTokens: 4096, messages: convo, tools },
+            {
+              model: modelId,
+              maxTokens: 4096,
+              messages: convo,
+              tools,
+              system: agentMetadata?.systemPrompt,
+            },
             (delta) => {
               if (turn.cancelled) return;
               if (delta.toolUse) {

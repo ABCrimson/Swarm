@@ -6,8 +6,9 @@ import { SessionList } from "#components/session/SessionList";
 import { TemplateSelector } from "#components/session/TemplateSelector";
 import { Button } from "#components/ui/Button";
 import { exportAsJSON, exportAsMarkdown, exportMetricsCSV, saveToFile } from "#lib/export";
+import { pluralizeWorkers } from "#lib/format";
 import { createSnapshot } from "#lib/snapshots";
-import { createTemplateFromSession, saveUserTemplate } from "#lib/templates";
+import { applyTemplate, createTemplateFromSession, saveUserTemplate } from "#lib/templates";
 import { useSessionStore } from "#store/sessions";
 import { useSystemStore } from "#store/system";
 import type { SessionTemplate } from "#store/types";
@@ -97,10 +98,21 @@ export function Sessions(): React.ReactElement {
     setTemplateForm(null);
   };
 
-  const handleTemplateSelect = (_template: SessionTemplate) => {
-    // Template selection creates a new session from the template
+  const handleTemplateSelect = (template: SessionTemplate) => {
     setView("list");
-    toast.success(`Template "${_template.name}" Selected — Create A Session To Apply It`);
+    void (async () => {
+      try {
+        const { session, workerIds } = await applyTemplate(template);
+        setActiveSession(session.id);
+        toast.success(
+          `Template "${template.name}" Applied — ${pluralizeWorkers(workerIds.length)} Spawned`,
+        );
+      } catch (err) {
+        toast.error(
+          `Failed To Apply Template "${template.name}": ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    })();
   };
 
   const handleSearchResultSelect = (sessionId: string) => {
