@@ -85,8 +85,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: swarm-orchestrator
-          tagName: ${{ github.ref_name }}
-          releaseName: "SWARM Orchestrator ${{ github.ref_name }}"
+          # On workflow_dispatch (tag-free bundler dry runs) tagName is empty, so
+          # tauri-action builds the bundles without creating any release.
+          tagName: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          releaseName: ${{ github.event_name == 'push' && format('SWARM Orchestrator {0}', github.ref_name) || '' }}
           releaseBody: "See CHANGELOG.md for details."
           releaseDraft: true
           prerelease: ${{ startsWith(github.ref_name, 'v0.') }}
@@ -95,7 +97,8 @@ jobs:
   verify-updater-manifest:
     name: Verify Updater Manifest
     needs: build
-    if: always()
+    # Tag pushes only — dispatch dry runs create no release to verify.
+    if: always() && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Download latest.json from draft release
