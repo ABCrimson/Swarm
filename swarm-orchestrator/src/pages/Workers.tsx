@@ -144,7 +144,7 @@ export function Workers(): React.ReactElement {
   const handleSpawn = async () => {
     setIsSpawning(true);
     try {
-      const id = await spawnWorker();
+      const id = await spawnWorker({ name: "Worker" });
       if (id) {
         toast.success(`Worker Spawned: ${id.slice(0, 8)}`);
       }

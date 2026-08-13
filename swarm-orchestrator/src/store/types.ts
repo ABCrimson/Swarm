@@ -64,23 +64,59 @@ export type Snapshot = z.infer<typeof SnapshotSchema>;
 
 // ── Template schemas ────────────────────────────────
 
-/** Zod schema for a worker configuration within a session template. */
-export const WorkerConfigSchema = z.object({
+/**
+ * Zod schema for the process options half of a worker spawn spec —
+ * fields that map 1:1 onto Rust's `WorkerConfig`
+ * (`src-tauri/src/worker/handle.rs`) and are sent over IPC to
+ * `spawn_worker`. Deliberately excludes `rows`/`cols` (PTY dimensions,
+ * Rust-defaulted and not template-configurable today).
+ */
+export const WorkerProcessOptionsSchema = z.object({
   name: z.string(),
+  shell: z.string().optional(),
+  cwd: z.string().optional(),
+  env: z.record(z.string(), z.string()).optional(),
+});
+
+/** Process-level spawn options sent to the Rust `spawn_worker` command. */
+export type WorkerProcessOptions = z.infer<typeof WorkerProcessOptionsSchema>;
+
+/**
+ * Zod schema for the agent-metadata half of a worker spawn spec —
+ * client-side only, never sent to Rust. Stored per worker id in
+ * `useWorkerAgentStore` (`#store/worker-agents`) at spawn time so
+ * WorkerAIPanel/AIChat can preselect the model and inject the system
+ * prompt for a worker spawned from a template.
+ */
+export const WorkerAgentMetadataSchema = z.object({
   role: z.string().optional(),
   model: z.enum(MODEL_KEYS).optional(),
   systemPrompt: z.string().optional(),
 });
 
-/** Configuration for a single worker in a session template. */
-export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;
+/** Client-side-only agent metadata for a worker (role/model/system prompt). */
+export type WorkerAgentMetadata = z.infer<typeof WorkerAgentMetadataSchema>;
+
+/**
+ * Zod schema for a full worker spawn spec within a session template:
+ * process options (sent to Rust) plus agent metadata (kept client-side).
+ * Replaces the old, single `WorkerConfig` type that conflated both with
+ * Rust's unrelated `WorkerConfig` struct of the same name.
+ */
+export const WorkerSpawnSpecSchema = z.object({
+  ...WorkerProcessOptionsSchema.shape,
+  ...WorkerAgentMetadataSchema.shape,
+});
+
+/** Full spawn spec for a single worker in a session template. */
+export type WorkerSpawnSpec = z.infer<typeof WorkerSpawnSpecSchema>;
 
 /** Zod schema for a reusable session template. */
 export const SessionTemplateSchema = z.object({
   id: z.uuid(),
   name: z.string(),
   description: z.string(),
-  workerConfigs: z.array(WorkerConfigSchema),
+  workerConfigs: z.array(WorkerSpawnSpecSchema),
   builtIn: z.boolean().optional(),
   createdAt: z.string().datetime().optional(),
 });

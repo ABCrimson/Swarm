@@ -1,6 +1,9 @@
 import { load } from "@tauri-apps/plugin-store";
 
-import type { SessionTemplate, WorkerConfig } from "#store/types";
+import { createSession as createSessionIpc } from "#lib/tauri";
+import { spawnWorkerFromSpec } from "#lib/worker-spawn";
+import { useSessionStore } from "#store/sessions";
+import type { Session, SessionTemplate, WorkerSpawnSpec } from "#store/types";
 
 /** plugin-store key for user templates. */
 const USER_TEMPLATES_KEY = "swarm:templates";
@@ -160,7 +163,7 @@ export async function deleteUserTemplate(templateId: string): Promise<void> {
 export function createTemplateFromSession(
   name: string,
   description: string,
-  workerConfigs: WorkerConfig[],
+  workerConfigs: WorkerSpawnSpec[],
 ): SessionTemplate {
   return {
     id: crypto.randomUUID(),
@@ -178,4 +181,40 @@ export function createTemplateFromSession(
 export async function getAllTemplates(): Promise<SessionTemplate[]> {
   const userTemplates = await loadUserTemplates();
   return [...BUILT_IN_TEMPLATES, ...userTemplates];
+}
+
+/**
+ * Applies a session template: creates a new session named after the
+ * template, then spawns one worker per `workerConfigs` entry into that
+ * session (see `spawnWorkerFromSpec`, `#lib/worker-spawn`) — process
+ * options go to Rust, agent metadata (role/model/systemPrompt) is
+ * stored client-side and each worker is registered against the new
+ * session via `session_add_worker`. This is what makes a template's
+ * agent configuration real instead of decorative.
+ *
+ * A worker whose spawn fails is skipped (logged, not thrown) so the
+ * rest of the template still applies.
+ *
+ * @returns The created session and the worker IDs that spawned
+ * successfully, in template order.
+ */
+export async function applyTemplate(
+  template: SessionTemplate,
+): Promise<{ readonly session: Session; readonly workerIds: string[] }> {
+  const session = await createSessionIpc(template.name);
+  useSessionStore.getState().addSession(session);
+
+  const workerIds: string[] = [];
+  for (const spec of template.workerConfigs) {
+    try {
+      workerIds.push(await spawnWorkerFromSpec(spec, session.id));
+    } catch (err) {
+      console.error(
+        `applyTemplate: failed to spawn worker "${spec.name}" from template "${template.name}"`,
+        err,
+      );
+    }
+  }
+
+  return { session, workerIds };
 }
