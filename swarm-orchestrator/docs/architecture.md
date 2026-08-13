@@ -13,6 +13,7 @@
 - [Data Flow](#data-flow)
 - [State Management](#state-management)
 - [Event System](#event-system)
+- [Built, Not Wired](#built-not-wired)
 - [Error Handling](#error-handling)
 
 ---
@@ -131,12 +132,12 @@ spawn_pty()
 
 The PTY writer and child process are wrapped in `parking_lot::Mutex` to satisfy `Sync` requirements for `DashMap` storage.
 
-### AI Queue
+### AI Queue (Built, Not Wired)
 
-AI requests flow through a priority queue with concurrency control:
+**Nothing in `src/` calls `ai_request` today** -- see [Built, Not Wired](#built-not-wired) for the full picture. The diagram below documents what this Rust-side apparatus does when invoked (it is fully implemented and unit-tested, not a stub); it is not what happens when a user sends a chat message in the shipped app today -- for that, see [AI Streaming](#ai-streaming) under Data Flow.
 
 ```text
-Frontend ──invoke──> ai_request command
+ai_request command   (no shipped caller -- documented for the next consumer)
                          │
                     mpsc::channel(256)          Bounded queue
                          │
@@ -154,7 +155,7 @@ Frontend ──invoke──> ai_request command
 
 Priority levels: `Low (0) < Normal (1) < High (2) < Critical (3)`
 
-On stream failure (network error, malformed SSE, provider error) or a stream that ends without a `message_stop` event, the client still emits a final `ai_stream_delta` with `done: true`, followed by `ai_stream_settled` -- the frontend is guaranteed a terminal receipt for every enqueued `requestId`.
+On stream failure (network error, malformed SSE, provider error) or a stream that ends without a `message_stop` event, the client still emits a final `ai_stream_delta` with `done: true`, followed by `ai_stream_settled` -- were this path in use, the frontend would be guaranteed a terminal receipt for every enqueued `requestId`.
 
 ### Session Persistence
 
@@ -238,7 +239,7 @@ AppShell (CSS Grid + GSAP startup animation)
 │   ├── Workers Page
 │   │   ├── TopologyGraph (XYFlow + ELK)
 │   │   │   ├── WorkerNode (custom node)
-│   │   │   └── DependencyEdge (custom edge)
+│   │   │   └── SpawnOrderEdge (custom edge, labeled "Spawn Order" in the graph's legend -- not a real dependency graph)
 │   │   ├── WorkerTerminal (xterm.js + WebGL2)
 │   │   └── WorkerAIPanel (terminal + AI chat split)
 │   ├── Sessions Page
@@ -329,42 +330,34 @@ Zustand worker store updates → React re-renders
 
 ### AI Streaming
 
+This is the flow that actually runs when a user sends a chat message today. It never leaves the webview except for one config read -- no Rust IPC carries the request or the response, no `swarm://events` envelope is involved, and nothing is persisted. Contrast with [AI Queue](#ai-queue-built-not-wired) above, which documents Rust machinery this flow does not use; see [Built, Not Wired](#built-not-wired) for why both exist.
+
 ```text
 User sends message
         │
         ▼
-Frontend: invoke("ai_request", { requestId, messages, priority })
+Frontend: src/lib/anthropic.ts getClient()
+        ├── invoke("read_config", { key: "anthropic_api_key" })   The one Rust round-trip in this flow
+        ▼
+new Anthropic({ apiKey, dangerouslyAllowBrowser: true })   @anthropic-ai/sdk client, held in the webview
         │
         ▼
-Backend: AiQueue.enqueue()           Add to priority queue
+client.messages.stream(requestParams, { signal })   Direct HTTPS request, webview → api.anthropic.com
         │
         ▼
-Backend: AiQueue.process_loop()      Pop from BinaryHeap
+SSE Stream, parsed by the Anthropic SDK itself (not src-tauri's ai/stream.rs)
         │
         ▼
-Backend: AiClient.stream_message()   POST to Anthropic API
+Frontend: streamMessage() (src/lib/anthropic.ts) yields StreamDelta objects
         │
         ▼
-SSE Stream: data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}
+Frontend: useAiStream (src/hooks/useAiStream.ts) -- Zustand AI store accumulates deltas → React re-renders message
         │
         ▼
-Backend: emit_event(AiStreamDelta{ requestId, delta: "Hi", done: false })
-        │  OrchestrationEngine: seq++, persist, emit as swarm://events
-        ▼
-Frontend: onEvent("ai_stream_delta", ...)
-        │
-        ▼
-Zustand AI store accumulates deltas → React re-renders message
-        │
-        ▼
-Backend: emit_event(AiStreamDelta{ requestId, delta: "", done: true })
-        │
-        ▼
-Backend: emit_event(AiStreamSettled{ requestId, status: "ok", error: null })   Terminal receipt
-        │
-        ▼
-Frontend: waitFor(e => e.type === "ai_stream_settled" && ...)   (no shipped consumer yet -- contract only)
+Stream ends (or is aborted) -- useAiStream resolves/rejects its promise directly; no separate terminal event exists for this path
 ```
+
+Tool calls the model requests (`spawn_worker`, `read_file`, etc.) still run as ordinary `invoke()` IPC through the ordered event core, exactly like any other command -- only the AI request/response leg itself bypasses Rust.
 
 ### Metrics Collection
 
@@ -461,16 +454,30 @@ The frontend invokes Tauri commands via `invoke()`:
 | `list_sessions`        | `Session[]`                        |
 | `get_session`          | `Session`                          |
 | `session_add_worker`   | `()`                               |
-| `ai_request`           | Request ID string                  |
+| `ai_request`           | Request ID string (no shipped caller -- see [Built, Not Wired](#built-not-wired)) |
 | `get_metrics`          | Metrics JSON, incl. `perWorker`    |
-| `bus_send`             | Receiver count (`number`)          |
-| `bus_subscribe`        | `()`                               |
-| `bus_create_pipeline`  | Pipeline UUID string                |
-| `bus_list_channels`    | `string[]`                          |
-| `bus_list_pipelines`   | `PipelineInfo[]`                    |
+| `bus_send`             | Receiver count (`number`) (no shipped caller -- see [Built, Not Wired](#built-not-wired)) |
+| `bus_subscribe`        | `()` (no shipped caller -- see [Built, Not Wired](#built-not-wired)) |
+| `bus_create_pipeline`  | Pipeline UUID string (no shipped caller -- see [Built, Not Wired](#built-not-wired)) |
+| `bus_list_channels`    | `string[]` (no shipped caller -- see [Built, Not Wired](#built-not-wired)) |
+| `bus_list_pipelines`   | `PipelineInfo[]` (no shipped caller -- see [Built, Not Wired](#built-not-wired)) |
 | `events_since`          | Persisted `DomainEvent[]`, `seq > afterSeq`, capped at 5000 |
 | `check_for_updates`    | Update-availability JSON            |
 | `send_notification`    | `()`                                |
+
+---
+
+## Built, Not Wired
+
+Three pieces of the shipped Rust backend are fully implemented and tested but have zero frontend callers today. They are not stubs or dead code -- they are the backend half of features that have not been wired up yet, built ahead of the multi-provider (ACP) rework that is expected to route AI traffic (and possibly agent-to-agent bus traffic) through Rust instead of the webview.
+
+| Piece | Where | Why it isn't live today |
+|-------|-------|---------------------------|
+| The AI request path: [`ai_request`](api.md#ai_request), `AiQueue`, the SSE parser (`ai/stream.rs`) | `src-tauri/src/ai/`, `src-tauri/src/commands/ai.rs` | The shipped AI flow runs `@anthropic-ai/sdk` directly in the webview (`src/lib/anthropic.ts`, `dangerouslyAllowBrowser: true`) and streams straight to `api.anthropic.com` -- see [AI Streaming](#ai-streaming). Scheduled to become the real transport once the multi-provider (ACP) rework lands. |
+| The five `bus_*` commands: [`bus_send`](api.md#bus_send), [`bus_subscribe`](api.md#bus_subscribe), [`bus_create_pipeline`](api.md#bus_create_pipeline), [`bus_list_channels`](api.md#bus_list_channels), [`bus_list_pipelines`](api.md#bus_list_pipelines) | `src-tauri/src/bus/`, `src-tauri/src/commands/bus.rs` | No UI surface invokes any of them -- inter-agent messaging is implemented but not exposed to a user today. Scheduled alongside the ACP rework, which introduces the agent-to-agent flows that would need it. |
+| The `ai_stream_settled` receipt | `src-tauri/src/events/emitter.rs`, emitted from `AiQueue`'s process loop | Downstream of `ai_request` above -- since nothing calls `ai_request`, nothing ever triggers this event. Documents the intended terminal-receipt contract for whichever consumer eventually calls `ai_request`. |
+
+Read the [AI Queue](#ai-queue-built-not-wired) diagram and the `ai_request`/`bus_*` entries in [docs/api.md](api.md) as a description of what the Rust side does *if* called -- not as a description of what happens when a user sends a chat message or a worker talks to another worker in the app today.
 
 ---
 

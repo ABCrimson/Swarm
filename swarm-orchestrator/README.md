@@ -28,9 +28,9 @@ SWARM Orchestrator is a high-performance desktop application for managing and or
 **Key capabilities:**
 
 - **Multi-agent orchestration** -- Spawn, pause, resume, and kill worker agents with real-time state tracking across a concurrent registry supporting up to 64 simultaneous workers
-- **Interactive topology graph** -- Visualize worker relationships as a directed acyclic graph (DAG) using XYFlow + ELK layout with animated edges, sparkline badges, and context menus
+- **Interactive topology graph** -- Visualize workers using XYFlow + ELK layout, connected by animated "Spawn Order" edges (the order workers were added, not a dependency graph -- see the graph's own legend), with sparkline badges and context menus
 - **Integrated terminal per worker** -- Each worker runs in its own PTY with @xterm/xterm (WebGL2 renderer), bridged to Tokio via non-blocking mpsc channels
-- **Streaming AI responses** -- Anthropic Claude API integration with SSE streaming, priority queue with semaphore-based concurrency limiting, and tool-use capabilities
+- **Streaming AI responses** -- `@anthropic-ai/sdk` streams directly from the webview to the Anthropic Messages API (SSE), gated by a frontend priority queue and concurrency limit (`useAiStore`), with an agentic tool-use loop. (Rust also ships an `ai_request`/`AiQueue`/SSE-parser path with the same shape -- it has no frontend caller yet; see [Built, Not Wired](docs/architecture.md#built-not-wired).)
 - **Per-worker AI chat** -- `WorkerAIPanel` mounts a combined terminal + AI chat split view on the Workers page, with tool execution routed through the worker's PTY
 - **Inter-agent message bus** -- Direct, broadcast, and pipeline routing between workers with a unified single-delivery event contract
 - **Real-time metrics dashboard** -- CPU, memory, throughput, and AI queue metrics displayed via Recharts with 500ms refresh, a `perWorker` process breakdown, and a performance overlay
@@ -78,6 +78,8 @@ SWARM Orchestrator is a high-performance desktop application for managing and or
  │              (CPU-scaled worker threads)                     │
  └─────────────────────────────────────────────────────────────┘
 ```
+
+> The Rust Backend's "AI Client (reqwest) + Queue + Stream" is real, tested code -- but it is **built, not wired**: no frontend caller invokes it today. The live "AI Message Stream" shown above actually runs `@anthropic-ai/sdk` directly in the webview and streams straight to `api.anthropic.com`, bypassing Rust entirely except for one `read_config` call for the API key. See [docs/architecture.md#ai-streaming](docs/architecture.md#ai-streaming) for the real flow and [docs/architecture.md#built-not-wired](docs/architecture.md#built-not-wired) for what else is in this position.
 
 For detailed architecture documentation, see [docs/architecture.md](docs/architecture.md).
 
@@ -262,7 +264,7 @@ cargo fmt
 - **TypeScript:** `pnpm typecheck` (strict mode, no emit, two tsconfig projects)
 - **Biome 2.5.3:** Enforces formatting and linting rules (`src/styles/tokens.css` is excluded -- see [docs/contributing.md](docs/contributing.md))
 - **Clippy:** `-D warnings` (zero tolerance for warnings)
-- **Tests:** 61 Rust unit tests + 15 doc-tests, and 178 frontend tests across 16 test files
+- **Tests:** 61 Rust unit tests + 15 doc-tests, and 369 frontend tests across 36 test files
 
 ---
 
@@ -292,6 +294,8 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed release notes per milestone.
 ## API Reference
 
 Full IPC command documentation is available at [docs/api.md](docs/api.md).
+
+> `ai_request` and the five `bus_*` commands below are implemented and tested but have no frontend caller in the shipped app -- see [Built, Not Wired](docs/architecture.md#built-not-wired).
 
 **Commands at a glance:**
 

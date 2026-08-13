@@ -43,6 +43,7 @@ Events are received on a single ordered channel, `swarm://events` -- see [Events
 - [Notification Commands](#notification-commands)
   - [send_notification](#send_notification)
 - [Events](#events)
+- [Built, Not Wired](#built-not-wired)
 
 ---
 
@@ -400,6 +401,8 @@ await invoke("session_add_worker", {
 
 ### `ai_request`
 
+> **Built, not wired.** No shipped frontend code calls this command -- see [Built, Not Wired](#built-not-wired). The chat flow you get by running the app streams `@anthropic-ai/sdk` directly from the webview to `api.anthropic.com` (`src/lib/anthropic.ts`); it never reaches this command. This section documents the contract the multi-provider (ACP) rework is expected to route through instead.
+
 Enqueues an AI request for streaming processing via the Anthropic Messages API.
 
 The request is placed into a priority queue and processed when a concurrency slot is available (default: 3 concurrent requests). Response chunks are delivered as `ai_stream_delta` envelopes on `swarm://events`, followed by exactly one `ai_stream_settled` receipt.
@@ -483,9 +486,9 @@ console.log("Stream settled:", settled.payload);
 | `ai_stream_settled` | `status`    | `string`          | `"ok"` or `"error"`                          |
 | `ai_stream_settled` | `error`     | `string \| null`  | Error description when `status == "error"`   |
 
-**Guaranteed termination:** `ai_stream_settled` is always emitted exactly once for a given `requestId`, after the final delta, even when the stream fails (network error, malformed SSE, provider error) or ends without a `message_stop` event. Frontend and test consumers should `waitFor` this receipt instead of polling stream state or relying on `delta.done` alone -- there is no scenario where a request is enqueued and the frontend never receives the terminal receipt.
+**Guaranteed termination (contract, not observed behavior today):** were this path in use, `ai_stream_settled` would be emitted exactly once for a given `requestId`, after the final delta, even when the stream fails (network error, malformed SSE, provider error) or ends without a `message_stop` event. A future frontend or test consumer should `waitFor` this receipt instead of polling stream state or relying on `delta.done` alone.
 
-**Note:** As of this writing, no shipped UI consumes `ai_stream_delta`/`ai_stream_settled` -- this documents the receipt contract, not an active consumer.
+**Note:** No shipped UI consumes `ai_request`, `ai_stream_delta`, or `ai_stream_settled` -- see [Built, Not Wired](#built-not-wired). This section documents the receipt contract for the next consumer, not an active one; `ai_stream_settled` is never emitted in the app as shipped because nothing calls `ai_request` to begin with.
 
 ---
 
@@ -534,6 +537,8 @@ for (const w of metrics.perWorker) {
 ---
 
 ## Bus Commands
+
+> **Built, not wired.** No shipped UI surface calls any of the five commands below -- see [Built, Not Wired](#built-not-wired). They are fully implemented and tested; inter-agent messaging just is not exposed to a user in the app today.
 
 The message bus enables direct, broadcast, and pipeline-routed communication between workers. It is composed of a `MessageBus` (per-topic `tokio::sync::broadcast` channels) and a `Router` (direct/broadcast send + pipeline orchestration), both held as Tauri managed state.
 
@@ -805,7 +810,7 @@ Every other type persists to the SQLite event log (`<app-data>/swarm-events.db`,
 
 Some request/response flows use a dedicated terminal event (a "receipt") instead of a boolean flag buried in a stream event, so callers have one unambiguous signal to await:
 
-- **`ai_stream_settled`** -- emitted exactly once per AI request, after the final `ai_stream_delta`, on both the success (`status: "ok"`) and failure (`status: "error"`, `error` set) paths. See [`ai_request`](#ai_request) for the contract and an example using `waitFor`. No shipped UI currently consumes this receipt -- it documents the contract for the next consumer, not an existing one.
+- **`ai_stream_settled`** -- would be emitted exactly once per AI request, after the final `ai_stream_delta`, on both the success (`status: "ok"`) and failure (`status: "error"`, `error` set) paths, were this path in use. See [`ai_request`](#ai_request) for the contract and an example using `waitFor`. See [Built, Not Wired](#built-not-wired) -- no shipped UI consumes this receipt, because nothing calls `ai_request` to trigger it.
 
 The frontend's `waitFor(predicate, timeoutMs?)` (in `src/lib/event-bus.ts`) is the general consumption primitive for receipts: it resolves the first envelope matching `predicate`, or rejects on timeout (default 5000ms).
 
@@ -866,3 +871,17 @@ onEvent("bus_message", (e) => {
 // A receipt: await a specific ai_stream_settled instead of polling
 const settled = await waitFor((e) => e.type === "ai_stream_settled");
 ```
+
+---
+
+## Built, Not Wired
+
+Three pieces of this reference document commands and an event that are fully implemented and tested in Rust, but have no frontend caller in the shipped app today. They are not stubs -- they are the backend half of a feature that has not been connected to the frontend yet, built ahead of the multi-provider (ACP) rework that is expected to route AI traffic (and possibly agent-to-agent bus traffic) through Rust instead of the webview.
+
+| Piece | No caller because... |
+|-------|------------------------|
+| [`ai_request`](#ai_request) | The shipped AI flow runs `@anthropic-ai/sdk` directly in the webview (`src/lib/anthropic.ts`, `dangerouslyAllowBrowser: true`) and streams straight to `api.anthropic.com` -- it never invokes this command. See [docs/architecture.md#ai-streaming](architecture.md#ai-streaming) for the real flow and [docs/architecture.md#built-not-wired](architecture.md#built-not-wired) for the fuller picture. |
+| [`bus_send`](#bus_send), [`bus_subscribe`](#bus_subscribe), [`bus_create_pipeline`](#bus_create_pipeline), [`bus_list_channels`](#bus_list_channels), [`bus_list_pipelines`](#bus_list_pipelines) | No UI surface invokes any of them -- inter-agent messaging is implemented but not exposed to a user today. |
+| The `ai_stream_settled` receipt | Downstream of `ai_request` -- since nothing calls `ai_request`, this event is never emitted in the app as shipped. |
+
+Read every code example and contract above involving these six commands and one event as documentation of what the Rust side does *if* called -- not as a description of what the shipped app does when a user sends a chat message or a worker messages another worker.

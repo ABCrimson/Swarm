@@ -367,7 +367,7 @@ Run `cargo test` from `src-tauri/` to reproduce this locally; run `cargo test --
 
 ### Frontend Testing
 
-Frontend tests run via Vitest (`pnpm test`): **16 test files, 178 tests**, covering components, hooks, stores, and `lib/` utilities.
+Frontend tests run via Vitest (`pnpm test`): **36 test files, 369 tests**, covering components, hooks, stores, and `lib/` utilities.
 
 | Directory                        | Focus                                                          |
 |-----------------------------------|-----------------------------------------------------------------|

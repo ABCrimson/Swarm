@@ -14,6 +14,7 @@ import {
   applyNodeChanges,
   Background,
   MiniMap,
+  Panel,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
@@ -29,9 +30,9 @@ import type { Worker, WorkerState } from "#store/types";
 
 import { detailPanelOpenAtom, selectedWorkerIdAtom } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
-import { DependencyEdge } from "./DependencyEdge.tsx";
 import { GraphContextMenu } from "./GraphContextMenu.tsx";
 import { GraphControls } from "./GraphControls.tsx";
+import { SpawnOrderEdge } from "./SpawnOrderEdge.tsx";
 import { WorkerNode } from "./WorkerNode.tsx";
 
 import "@xyflow/react/dist/style.css";
@@ -41,7 +42,7 @@ const nodeTypes: NodeTypes = {
 };
 
 const edgeTypes: EdgeTypes = {
-  dependency: DependencyEdge,
+  spawnOrder: SpawnOrderEdge,
 };
 
 interface ContextMenuState {
@@ -69,7 +70,9 @@ function buildGraphData(workers: Map<string, Worker>): { nodes: Node[]; edges: E
   // Build spawn-order chain edges. NOTE: these are NOT real dependency
   // relationships — the Worker schema has no dependency/parent field, so
   // this simply connects entries in Map iteration (insertion) order as a
-  // visual chain. Treat as illustrative topology only.
+  // visual chain. Treat as illustrative topology only. Labeled "Spawn
+  // Order" in the graph's legend (below) — never "dependency" — to keep
+  // the UI honest about what these edges represent.
   const edges: Edge[] = [];
   for (let i = 1; i < entries.length; i++) {
     const [prevId] = entries[i - 1];
@@ -78,7 +81,7 @@ function buildGraphData(workers: Map<string, Worker>): { nodes: Node[]; edges: E
       id: `edge-${prevId}-${currId}`,
       source: prevId,
       target: currId,
-      type: "dependency",
+      type: "spawnOrder",
     });
   }
 
@@ -157,7 +160,7 @@ function WorkerGraphInner(): React.ReactElement {
       id: `edge-${connection.source}-${connection.target}-${Date.now()}`,
       source: connection.source,
       target: connection.target,
-      type: "dependency",
+      type: "spawnOrder",
     };
     setEdges((eds) => [...eds, newEdge]);
   };
@@ -440,6 +443,40 @@ function WorkerGraphInner(): React.ReactElement {
         style={{ background: "oklch(0.08 0.02 220)" }}
       >
         <Background color="oklch(0.14 0.03 220)" gap={20} size={1} />
+        {/* Legend: the animated dashed edges are a spawn-order chain
+            (Map insertion order), never a real dependency graph — see
+            buildGraphData above. Labeling this "Spawn Order" instead of
+            "Dependency" keeps the UI honest about what it renders. */}
+        <Panel
+          position="top-left"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "6px 10px",
+            borderRadius: 8,
+            background: "oklch(0.12 0.03 220 / 0.85)",
+            backdropFilter: "blur(8px)",
+            border: "1px solid oklch(0.28 0.05 220)",
+            fontFamily: "var(--font-body)",
+            fontSize: "0.6875rem",
+            fontWeight: 500,
+            color: "oklch(0.65 0.04 220)",
+          }}
+        >
+          <svg width={20} height={8} viewBox="0 0 20 8" aria-hidden="true">
+            <line
+              x1={1}
+              y1={4}
+              x2={19}
+              y2={4}
+              stroke="oklch(0.78 0.18 205 / 0.8)"
+              strokeWidth={2}
+              strokeDasharray="4 2.5"
+            />
+          </svg>
+          <span>Spawn Order</span>
+        </Panel>
         <MiniMap
           nodeColor={miniMapNodeColor}
           maskColor="oklch(0.06 0.02 220 / 0.8)"
