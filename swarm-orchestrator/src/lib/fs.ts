@@ -129,29 +129,49 @@ export async function writeJsonFile<T>(
 
 /**
  * Normalizes a raw fs-plugin error into a truthful, model-actionable
- * message — distinguishing a capability-scope rejection (the path fell
- * outside `$APPDATA`/`$HOME`, see `src-tauri/capabilities/default.json`)
- * from other failures (missing file, disk error, etc) so the caller
- * never has to guess why the operation failed.
+ * message — distinguishing three failure classes so the caller never
+ * has to guess why the operation failed:
+ *
+ * 1. A capability-scope rejection (the path fell outside
+ *    `$APPDATA`/`$HOME`, see `src-tauri/capabilities/default.json`).
+ *    Matched on the plugin's exact, stable error text —
+ *    `tauri-plugin-fs`'s `Error::PathForbidden` variant serializes as
+ *    `"forbidden path: {path}"` (verified against the plugin's
+ *    `error.rs`) — not a generic "permission"/"denied" substring. Those
+ *    generic substrings also appear in OS-level errors for paths that
+ *    ARE inside the capability scope (e.g. Windows' "Access is denied
+ *    (os error 5)" for a locked or ACL-protected file under
+ *    `$APPDATA`), which would otherwise be misreported as a sandbox
+ *    rejection they are not.
+ * 2. A missing file.
+ * 3. An OS-level permission error (in-scope path, but the OS itself
+ *    refused), which gets its own truthful message distinct from the
+ *    scope message above.
  */
 function toAbsolutePathError(err: unknown, operation: "read" | "write", path: string): Error {
   const raw = err instanceof Error ? err.message : String(err);
   const lower = raw.toLowerCase();
 
-  if (
-    lower.includes("forbidden") ||
-    lower.includes("not allowed") ||
-    lower.includes("scope") ||
-    lower.includes("permission") ||
-    lower.includes("denied")
-  ) {
+  if (lower.includes("forbidden path:")) {
     return operation === "write"
       ? new Error("Write Access Is Limited To The App Data And .swarm Directories.")
       : new Error("Read Access Is Limited To The App Data And Home Directories.");
   }
 
-  if (lower.includes("no such file") || lower.includes("not found") || lower.includes("cannot find")) {
+  if (
+    lower.includes("no such file") ||
+    lower.includes("not found") ||
+    lower.includes("cannot find")
+  ) {
     return new Error(`File Not Found: "${path}".`);
+  }
+
+  if (
+    lower.includes("permission") ||
+    lower.includes("denied") ||
+    lower.includes("access is denied")
+  ) {
+    return new Error(`The Operating System Denied Access To "${path}".`);
   }
 
   return err instanceof Error ? err : new Error(raw);

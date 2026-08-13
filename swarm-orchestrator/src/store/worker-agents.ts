@@ -12,10 +12,12 @@ enableMapSet();
  * prompt) — the half of a `WorkerSpawnSpec` (`#store/types`) that never
  * travels over IPC to Rust's `WorkerConfig`. Populated at spawn time
  * (see `#lib/worker-spawn`'s `spawnWorkerFromSpec`) for workers spawned
- * from a session template, keyed by worker id. `WorkerAIPanel`/`AIChat`
- * read it to preselect that worker's model and inject its system
- * prompt — this is what makes a template's role/model/systemPrompt
- * real instead of decorative.
+ * from a session template, keyed by worker id. `AIChat` (not
+ * `WorkerAIPanel`, which only renders `AIChat`) reads it to resolve
+ * that worker's effective model at request time and inject its system
+ * prompt — this is what makes a template's model/systemPrompt real
+ * instead of decorative. `role` is not consumed by `AIChat` yet — it is
+ * kept for the upcoming multi-provider (ACP) work.
  */
 interface WorkerAgentStoreState {
   readonly metadata: Map<string, WorkerAgentMetadata>;

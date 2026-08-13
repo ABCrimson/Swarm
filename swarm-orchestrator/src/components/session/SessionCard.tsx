@@ -4,6 +4,7 @@ import { motion } from "motion/react";
 import { Pill } from "#components/ui/Pill";
 import { pluralizeWorkers } from "#lib/format";
 import type { Session } from "#store/types";
+import { useWorkerStore } from "#store/workers";
 
 interface SessionCardProps {
   readonly session: Session;
@@ -34,6 +35,14 @@ export function SessionCard({
   const relativeTime = formatDistanceToNow(new Date(session.updatedAt), {
     addSuffix: true,
   });
+
+  // `session.workerIds` only ever grows (there is no `session_remove_worker`
+  // command in Rust to prune it when a worker is killed) — intersecting
+  // with the live worker store gives an honest count of workers that
+  // still actually exist, instead of a number that climbs forever. The
+  // persisted `workerIds` list itself is left untouched.
+  const workers = useWorkerStore((s) => s.workers);
+  const liveWorkerCount = session.workerIds.filter((id) => workers.has(id)).length;
 
   return (
     <motion.button
@@ -67,7 +76,7 @@ export function SessionCard({
         </h3>
 
         <Pill tone="info" size="sm" className="shrink-0">
-          {pluralizeWorkers(session.workerIds.length)}
+          {pluralizeWorkers(liveWorkerCount)}
         </Pill>
       </div>
 

@@ -357,7 +357,7 @@ Frontend: useAiStream (src/hooks/useAiStream.ts) -- Zustand AI store accumulates
 Stream ends (or is aborted) -- useAiStream resolves/rejects its promise directly; no separate terminal event exists for this path
 ```
 
-Tool calls the model requests (`spawn_worker`, `read_file`, etc.) still run as ordinary `invoke()` IPC through the ordered event core, exactly like any other command -- only the AI request/response leg itself bypasses Rust.
+Most tool calls the model requests (e.g. `spawn_worker`) still run as ordinary `invoke()` IPC through the ordered event core, exactly like any other command -- only the AI request/response leg itself bypasses Rust. `read_file`/`write_file` are the exception: they run over `tauri-plugin-fs` directly (see `#lib/fs`), not through the ordered event core (no `seq`, no `swarm://events` envelope).
 
 ### Metrics Collection
 
