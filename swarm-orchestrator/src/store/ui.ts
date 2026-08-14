@@ -70,6 +70,18 @@ export const detailPanelOpenAtom = atom(false);
 /** Workers page view mode: dependency graph or flat list. */
 export const graphViewAtom = atom<"graph" | "list">("graph");
 
+/**
+ * Target seq for the causality inspector overlay (`CausalityPanel`),
+ * or `null` when closed. Opened from a measured edge click
+ * (`WorkerGraph.tsx`'s `handleEdgeClick`) or from `WorkerDetail`'s
+ * "View Causality" action — both just set this to the seq of the
+ * measured event whose causal chain to walk backward from. A shared
+ * atom (rather than component-local state) is what lets both entry
+ * points drive one overlay instance rendered once, at the `Workers`
+ * page level.
+ */
+export const causalityInspectorAtom = atom<{ readonly startSeq: number } | null>(null);
+
 // ── Persisted via plugin-store integration ───────────
 
 /** Persisted split-pane sizes for the main/detail layout. */
