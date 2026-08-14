@@ -6,13 +6,30 @@
 //! - Spawns `git` with an argument **vector** (never a shell string —
 //!   arg-vector invocation is injection-proof by construction; see
 //!   `worktree.rs`'s argv builders, which are unit-tested directly).
-//! - Sets `GIT_TERMINAL_PROMPT=0` so a missing credential can never
-//!   block on an interactive prompt.
+//! - Sets an environment-hygiene block so a git child can never block
+//!   on an interactive prompt or race the user's own git activity:
+//!   `GIT_TERMINAL_PROMPT=0` (no credential prompt), `GCM_INTERACTIVE=never`
+//!   (Git Credential Manager's own GUI/terminal prompt, a second,
+//!   independent prompt path on Windows that `GIT_TERMINAL_PROMPT`
+//!   alone does not cover), `GIT_OPTIONAL_LOCKS=0` (skips the optional
+//!   background `.lock` files git otherwise takes for read-side
+//!   operations like status refresh, which can contend with a
+//!   concurrent SWARM-issued mutation against the same repo), and
+//!   `LC_ALL=C` (stable, unlocalized stderr — the ship module's error
+//!   classification pattern-matches specific English substrings like
+//!   `"rejected"`/`"non-fast-forward"`, which a localized git could
+//!   translate out from under it). Stdin is `/dev/null`-equivalent
+//!   ([`Stdio::null`]) for the same never-block-on-a-prompt reason.
 //! - On Windows, sets `CREATE_NO_WINDOW` so a GUI app never flashes a
 //!   console window for a background git call.
 //! - Enforces a wall-clock timeout, killing the child if it is
 //!   exceeded, so a hung `git` process (e.g. waiting on a stale lock)
 //!   can never hang the caller forever.
+//! - Redacts secrets and caps captured stdout/stderr at 8KB (see
+//!   [`super::redact`]) **before** returning [`GitOutput`] — this is
+//!   the single choke point every caller's error message, log line,
+//!   and persisted event payload is built from, so no call site can
+//!   forget to sanitize a git-produced string.
 //!
 //! Callers run inside `tokio::task::spawn_blocking` (the existing
 //! convention for `swarm-core`'s other blocking work, e.g. PTY spawn)
@@ -23,6 +40,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use super::redact;
 use crate::error::AppError;
 
 /// Minimum supported `git` version — `git worktree remove` (used by
@@ -91,7 +109,15 @@ pub fn run(args: &[String], timeout: Duration) -> Result<GitOutput, AppError> {
     let mut command = Command::new(git_binary());
     command
         .args(args)
+        // Env hygiene: never let a child git process block on any
+        // interactive prompt, race the user's own git activity via
+        // optional locks, or emit stderr in a locale the ship
+        // module's string-pattern error classification can't read.
+        // See the module doc for why each variable is here.
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("LC_ALL", "C")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -134,10 +160,14 @@ pub fn run(args: &[String], timeout: Duration) -> Result<GitOutput, AppError> {
     let stdout = stdout_rx.recv().unwrap_or_default();
     let stderr = stderr_rx.recv().unwrap_or_default();
 
+    // Redact-then-truncate (see `redact::sanitize`'s doc for why that
+    // order, not the reverse) — this is the single choke point, so
+    // every caller's error message, log line, and persisted event
+    // payload downstream is already sanitized by construction.
     Ok(GitOutput {
         status,
-        stdout: String::from_utf8_lossy(&stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        stdout: redact::sanitize(&String::from_utf8_lossy(&stdout)),
+        stderr: redact::sanitize(&String::from_utf8_lossy(&stderr)),
     })
 }
 
@@ -291,6 +321,41 @@ mod tests {
         )
         .expect("git should run (and fail) without spawning a shell");
         assert!(!out.success());
+    }
+
+    /// End-to-end proof of the redaction choke point (DIRECTIVE:
+    /// redaction coverage — a token-shaped string never reaches an
+    /// event payload). A clone against a closed local port fails fast
+    /// (connection refused, no DNS lookup, no network required) while
+    /// exercising the real wiring: git's own stderr echoes back the
+    /// URL it tried to reach, credentials and all, and `run` must
+    /// strip them before this test — or any caller building an
+    /// error/log/event from `GitOutput` — ever sees them.
+    #[test]
+    fn test_run_redacts_url_credentials_from_real_git_stderr() {
+        let tmp =
+            std::env::temp_dir().join(format!("swarm-redact-clone-test-{}", uuid::Uuid::new_v4()));
+        let out = run(
+            &[
+                "clone".to_string(),
+                "https://alice:hunter2@127.0.0.1:1/repo.git".to_string(),
+                tmp.display().to_string(),
+            ],
+            Duration::from_secs(10),
+        )
+        .expect("git should run (and fail to connect) without spawning a shell");
+        assert!(!out.success());
+        assert!(
+            !out.stderr.contains("hunter2"),
+            "credentials must be redacted from stderr: {}",
+            out.stderr
+        );
+        assert!(
+            !out.stdout.contains("hunter2"),
+            "credentials must be redacted from stdout: {}",
+            out.stdout
+        );
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]

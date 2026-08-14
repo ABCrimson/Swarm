@@ -28,6 +28,7 @@ uuid                        = { version = "=1.24.0", features = ["v4", "serde"] 
 dashmap                     = "=6.2.1"
 parking_lot                 = "=0.12.5"
 rusqlite                    = { version = "=0.40.2", features = ["bundled"] }
+regex                       = "=1.13.1"
 tauri-plugin-fs             = "=2.5.1"
 tauri-plugin-dialog         = "=2.7.2"
 tauri-plugin-shell          = "=2.3.5"

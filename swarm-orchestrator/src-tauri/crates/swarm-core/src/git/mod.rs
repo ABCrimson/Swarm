@@ -1,7 +1,12 @@
-//! Git facade: binary discovery + arg-vector runner ([`cli`]), repo
-//! discovery ([`repo`]), and worktree lifecycle ([`worktree`]) — the
-//! whole surface `swarm-core` needs to give each worker its own git
-//! worktree.
+//! Git facade: binary discovery + arg-vector runner ([`cli`]), secret
+//! redaction/output truncation ([`redact`]), repo discovery ([`repo`]),
+//! worktree lifecycle ([`worktree`]), remote URL parsing + compare-URL
+//! construction ([`remote`]), and the ship chain — preflight, staged
+//! commit, push ([`ship`]). See [`ship`]'s module doc for the
+//! worktree/ship ownership split: this module owns worktree
+//! creation/removal, [`ship`] owns commit/push, and they meet at
+//! [`ship::worktree_info_for_worker`], the one frozen accessor between
+//! them.
 //!
 //! `swarm-core` stays tauri-free here too: everything shells out to
 //! the system `git` binary via `std::process::Command` (arg vectors
@@ -19,10 +24,17 @@
 //! `git` reuses exactly the checkout behavior they already trust.
 
 pub mod cli;
+pub mod redact;
+pub mod remote;
 pub mod repo;
+pub mod ship;
 pub mod worktree;
 
 pub use cli::{GitCapability, MIN_GIT_VERSION, probe_capability};
+pub use ship::{
+    CommitOutcome, PushOutcome, ShipError, ShipErrorKind, ShipPreflight, ShipRemedy,
+    ShipWorktreeInfo, StagingMode,
+};
 pub use worktree::{RemoveOutcome, WorktreeEntry};
 
 use std::path::{Path, PathBuf};

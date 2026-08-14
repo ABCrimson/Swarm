@@ -203,6 +203,15 @@ pub struct WorkerInfo {
     /// unisolated worker.
     #[serde(default)]
     pub branch: Option<String>,
+    /// Log `seq` the most recent successful ship pushed through, if
+    /// any. `None` until the first successful `git_push` for this
+    /// worker.
+    #[serde(default)]
+    pub last_shipped_seq: Option<u64>,
+    /// Commit sha of the most recent successful ship, mirroring
+    /// `last_shipped_seq`.
+    #[serde(default)]
+    pub last_shipped_commit: Option<String>,
 }
 
 /// Runtime handle to a running worker instance.
@@ -256,6 +265,16 @@ pub struct WorkerHandle {
     /// commits) — never exposed to the frontend, purely an internal
     /// bookkeeping field for that one decision.
     pub base_commit: Option<String>,
+    /// Log `seq` the most recent successful ship pushed through, if
+    /// any. Written **only** by the ship chain
+    /// (`swarm_core::git::ship`) via
+    /// [`super::registry::WorkerRegistry::set_last_shipped`] — every
+    /// other field on this struct is owned by the worktree feature.
+    /// `None` until the first successful `git_push` for this worker.
+    pub last_shipped_seq: Option<u64>,
+    /// Commit sha of the most recent successful ship, mirroring
+    /// `last_shipped_seq`.
+    pub last_shipped_commit: Option<String>,
 }
 
 // SAFETY: All non-Sync fields are wrapped in parking_lot::Mutex,
@@ -275,6 +294,7 @@ impl std::fmt::Debug for WorkerHandle {
             .field("worktree_path", &self.worktree_path)
             .field("branch", &self.branch)
             .field("base_commit", &self.base_commit)
+            .field("last_shipped_seq", &self.last_shipped_seq)
             .finish()
     }
 }
@@ -308,6 +328,8 @@ impl WorkerHandle {
     ///     repo_root: None,
     ///     branch: None,
     ///     base_commit: None,
+    ///     last_shipped_seq: None,
+    ///     last_shipped_commit: None,
     /// };
     /// let info = handle.to_info();
     /// assert_eq!(info.name, "agent-1");
@@ -321,6 +343,8 @@ impl WorkerHandle {
             started_at: self.started_at,
             worktree_path: self.worktree_path.clone(),
             branch: self.branch.clone(),
+            last_shipped_seq: self.last_shipped_seq,
+            last_shipped_commit: self.last_shipped_commit.clone(),
         }
     }
 }

@@ -271,6 +271,8 @@ pub fn do_spawn_worker(
         repo_root: isolation.as_ref().map(|w| w.repo_root.clone()),
         branch: isolation.as_ref().map(|w| w.branch.clone()),
         base_commit: isolation.as_ref().map(|w| w.base_commit.clone()),
+        last_shipped_seq: None,
+        last_shipped_commit: None,
     };
 
     registry.spawn_worker(handle)?;
@@ -654,6 +656,8 @@ mod tests {
             repo_root: None,
             branch: None,
             base_commit: None,
+            last_shipped_seq: None,
+            last_shipped_commit: None,
         }
     }
 
