@@ -127,6 +127,45 @@ describe("event-bus", () => {
     expect(invokeMock).toHaveBeenNthCalledWith(2, "events_since", { afterSeq: 3 });
   });
 
+  it("an entirely-ephemeral gap converges instead of wedging backfill forever", async () => {
+    // Every events_since call comes back empty — the gap (seqs 2-4) is
+    // e.g. an all-terminal-source worker_input stretch: consumed a seq,
+    // never persisted.
+    invokeMock.mockResolvedValue([]);
+    await connectEventBus();
+    const seen: number[] = [];
+    onEvent("worker_spawned", (e) => seen.push(e.seq));
+
+    push(ev(1));
+    push(ev(5)); // gap: triggers backfill(afterSeq: 1)
+
+    await vi.waitFor(() => expect(seen).toEqual([1, 5]));
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+
+    // The wedge this test guards against: without the fix, lastSeq never
+    // advances on an empty page, so every subsequent live event would
+    // re-detect "the same" gap and re-trigger backfill forever.
+    push(ev(6));
+    expect(seen).toEqual([1, 5, 6]);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a gap with a persisted head and an ephemeral tail still backfills the persisted part, then converges", async () => {
+    invokeMock.mockResolvedValueOnce([ev(2), ev(3)]); // first backfill(afterSeq: 1): real rows, but doesn't reach seq 10
+    invokeMock.mockResolvedValueOnce([]); // second backfill(afterSeq: 3): seqs 4-9 are entirely ephemeral
+    await connectEventBus();
+    const seen: number[] = [];
+    onEvent("worker_spawned", (e) => seen.push(e.seq));
+
+    push(ev(1));
+    push(ev(10)); // gap: triggers backfill(afterSeq: 1)
+
+    await vi.waitFor(() => expect(seen).toEqual([1, 2, 3, 10]));
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "events_since", { afterSeq: 1 });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "events_since", { afterSeq: 3 });
+  });
+
   it("delivers a stamped envelope's originWorker/causeSeq to handlers unstripped", async () => {
     await connectEventBus();
     let received: DomainEvent | undefined;

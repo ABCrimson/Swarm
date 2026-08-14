@@ -122,8 +122,9 @@ function handleFileChange(changedPaths: string[], autoInject: boolean): void {
   // Inject instruction to each active worker in the session. source:
   // "automation" — machine-issued, gets a control-stripped preview and
   // persists normally, but no provenance: there is no workspace_changed
-  // event yet for this to cite as a cause (v2, per the honest v1
-  // attribution table).
+  // event yet for this to cite as a cause (v2). See "The honest v1
+  // attribution table" under docs/architecture.md's "Ordered Event
+  // Core" section for the full per-path breakdown.
   for (const workerId of session.workerIds) {
     invoke("worker_input", { id: workerId, data: instruction, source: "automation" }).catch(() => {
       // Silently fail — worker may not be running
