@@ -1,3 +1,4 @@
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useAtom, useAtomValue } from "jotai";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -7,8 +8,9 @@ import { WorkerDetail } from "#components/graph/WorkerDetail";
 import { WorkerGraph } from "#components/graph/WorkerGraph";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Button } from "#components/ui/Button";
+import { Pill } from "#components/ui/Pill";
 import { matchesBinding } from "#lib/keybindings";
-import { spawnWorker } from "#lib/tauri";
+import { readConfig, spawnWorker, writeConfig } from "#lib/tauri";
 import {
   detailPanelOpenAtom,
   graphViewAtom,
@@ -16,6 +18,9 @@ import {
   selectedWorkerIdAtom,
 } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
+
+/** Config key persisting the last-picked project root (`write_config`/`read_config`). */
+const DEFAULT_REPO_ROOT_KEY = "default_repo_root";
 
 type DetailTab = "detail" | "ai";
 
@@ -112,13 +117,36 @@ function WorkerListView(): React.ReactElement {
           >
             <span
               style={{
-                fontFamily: "var(--font-display)",
-                fontSize: "0.8125rem",
-                fontWeight: 600,
-                color: "oklch(0.95 0.02 220)",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                minWidth: 0,
               }}
             >
-              {worker.name ?? id.slice(0, 8)}
+              <span
+                style={{
+                  fontFamily: "var(--font-display)",
+                  fontSize: "0.8125rem",
+                  fontWeight: 600,
+                  color: "oklch(0.95 0.02 220)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {worker.name ?? id.slice(0, 8)}
+              </span>
+              {worker.branch != null && (
+                <Pill
+                  tone="info"
+                  size="sm"
+                  maxWidth={160}
+                  title={worker.branch}
+                  style={{ fontFamily: "var(--font-mono)" }}
+                >
+                  {worker.branch}
+                </Pill>
+              )}
             </span>
             <Badge state={worker.state}>{stateLabels[worker.state]}</Badge>
           </button>
@@ -140,11 +168,50 @@ export function Workers(): React.ReactElement {
   const selectedWorker = selectedId ? workers.get(selectedId) : undefined;
   const [isSpawning, setIsSpawning] = useState(false);
   const [detailTab, setDetailTab] = useState<DetailTab>("detail");
+  // Project root for worktree isolation on the next spawn — undefined =
+  // "unset" (still loading or never picked), null = "explicitly none",
+  // string = a picked directory. Pre-filled from the persisted
+  // "default_repo_root" config key so the choice survives a restart.
+  const [projectRoot, setProjectRoot] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    readConfig<string>(DEFAULT_REPO_ROOT_KEY)
+      .then((value) => {
+        if (!cancelled) setProjectRoot(value);
+      })
+      .catch(() => {
+        if (!cancelled) setProjectRoot(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handlePickProjectRoot = async () => {
+    const selected = await openDialog({
+      title: "Choose Project Root For Worktree Isolation",
+      directory: true,
+      multiple: false,
+    });
+    if (!selected) return;
+    setProjectRoot(selected);
+    try {
+      await writeConfig(DEFAULT_REPO_ROOT_KEY, selected);
+    } catch (err) {
+      toast.error(
+        `Could Not Save Project Root: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
 
   const handleSpawn = async () => {
     setIsSpawning(true);
     try {
-      const id = await spawnWorker({ name: "Worker" });
+      const id = await spawnWorker({
+        name: "Worker",
+        ...(projectRoot ? { repoRoot: projectRoot } : {}),
+      });
       if (id) {
         toast.success(`Worker Spawned: ${id.slice(0, 8)}`);
       }
@@ -207,6 +274,42 @@ export function Workers(): React.ReactElement {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {/* Project root — worktree isolation source for the next spawn.
+              Absent selection = today's behavior (no isolation). */}
+          <button
+            type="button"
+            onClick={() => void handlePickProjectRoot()}
+            title={
+              projectRoot
+                ? `Project Root: ${projectRoot} — New Workers Isolate Into A Worktree Here`
+                : "Choose A Project Root To Isolate New Workers Into Their Own Git Worktree"
+            }
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "6px 12px",
+              background: "oklch(0.12 0.03 220 / 0.7)",
+              border: "1px solid oklch(0.28 0.05 220)",
+              borderRadius: 8,
+              color: projectRoot ? "oklch(0.82 0.04 220)" : "oklch(0.55 0.04 220)",
+              fontFamily: "var(--font-mono)",
+              fontSize: "0.6875rem",
+              cursor: "pointer",
+              maxWidth: 220,
+            }}
+          >
+            <span
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {projectRoot ? projectRoot : "No Project Root"}
+            </span>
+          </button>
+
           {/* Spawn button */}
           <Button
             variant="primary"

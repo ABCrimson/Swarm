@@ -22,6 +22,7 @@ Events are received on a single ordered channel, `swarm://events` -- see [Events
   - [kill_worker](#kill_worker)
   - [list_workers](#list_workers)
   - [worker_input](#worker_input)
+  - [Worktree Isolation Lifecycle](#worktree-isolation-lifecycle)
 - [Session Commands](#session-commands)
   - [create_session](#create_session)
   - [delete_session](#delete_session)
@@ -61,21 +62,26 @@ Creates a new worker process with a PTY and registers it in the worker registry.
 
 **`WorkerConfig` object:**
 
-| Field   | Type                  | Default            | Description                          |
-|---------|-----------------------|--------------------|--------------------------------------|
-| `name`  | `string`              | `"Worker"`         | Human-readable display name          |
-| `shell` | `string`              | System default     | Shell executable path                |
-| `cwd`   | `string`              | `""`               | Initial working directory            |
-| `env`   | `Record<string, string>` | `{}`            | Additional environment variables     |
-| `rows`  | `number`              | `24`               | PTY terminal rows                    |
-| `cols`  | `number`              | `80`               | PTY terminal columns                 |
+| Field      | Type                     | Default            | Description                          |
+|------------|--------------------------|---------------------|--------------------------------------|
+| `name`     | `string`                 | `"Worker"`         | Human-readable display name          |
+| `shell`    | `string`                 | System default     | Shell executable path                |
+| `cwd`      | `string`                 | `""`                | Initial working directory. Ignored when a worktree is actually created (see `isolation` below) -- the PTY's cwd becomes the new worktree path instead |
+| `env`      | `Record<string, string>` | `{}`                | Additional environment variables     |
+| `rows`     | `number`                 | `24`                | PTY terminal rows                    |
+| `cols`     | `number`                 | `80`                | PTY terminal columns                 |
+| `repoRoot` | `string \| null`         | `null`              | Root of the git repository to isolate this worker into. `null` (default) reproduces exactly the pre-worktree-isolation spawn -- no git anywhere |
+| `isolation`| `"worktree" \| "none"`   | `"worktree"`        | Isolation mode, effective only when `repoRoot` is present |
 
 **Returns:** `string` -- UUID of the newly spawned worker.
+
+**Worktree isolation (when `repoRoot` is given and `isolation` resolves to `"worktree"`):** resolves `repoRoot`'s git toplevel and `HEAD` sha, creates `~/.swarm/worktrees/<repo>-<hash8>/w-<id8>` on a fresh branch `swarm/<slug>-<id8>` starting at that sha, locks it (`git worktree lock --reason "swarm worker <uuid>"`), and spawns the PTY there instead of at `cwd`. Any failure in that pipeline (repo discovery, `HEAD` resolution, `git worktree add`/`lock`, or the PTY spawn itself) hard-fails the whole command -- **no worker is created and no PTY is started**; there is no silent fallback to spawning unisolated at a shared `cwd`. Omitting `repoRoot` skips this entirely and reproduces exactly the pre-worktree-isolation spawn.
 
 **Errors:**
 
 | Error               | Condition                                |
 |---------------------|------------------------------------------|
+| Git error           | `repoRoot` given and repo discovery, `HEAD` resolution, or `git worktree add`/`lock` failed |
 | PTY spawn failed    | Shell executable not found or PTY error  |
 | Registry at capacity| Worker count exceeds max_workers (64)    |
 
@@ -95,7 +101,22 @@ const workerId = await invoke("spawn_worker", {
 console.log("Spawned worker:", workerId);
 ```
 
-**Emits:** `worker_spawned` envelope on `swarm://events` with payload `{ workerId, name, pid }`.
+**Example (worktree isolation):**
+
+```typescript
+const workerId = await invoke("spawn_worker", {
+  config: {
+    name: "Research Agent",
+    repoRoot: "C:/Projects/swarm-orchestrator",
+    // isolation: "worktree" is the default when repoRoot is present
+  },
+});
+// Spawns the PTY in a fresh worktree, e.g.
+// C:/Users/you/.swarm/worktrees/swarm-orchestrator-a1b2c3d4/w-e5f6a7b8
+// on branch swarm/research-agent-e5f6a7b8.
+```
+
+**Emits:** `worker_spawned` envelope on `swarm://events` with payload `{ workerId, name, pid, isolation }`. When isolated, also emits `worktree_created` -- see [Events](#events) below.
 
 ---
 
@@ -163,7 +184,9 @@ await invoke("resume_worker", { id: "550e8400-e29b-41d4-a716-446655440000" });
 
 Terminates a worker process and removes it from the registry.
 
-Drops the PTY writer (closes master fd), kills the child process, waits for exit to prevent zombie processes, and emits a killed event.
+Drops the PTY writer (closes master fd), kills the child process, waits for exit to prevent zombie processes (and, on Windows, to release any OS handle the child held on the worktree directory as its cwd), and emits a killed event.
+
+If the worker was isolated into a git worktree, also unlocks and `git worktree remove`s it -- **never** with `--force`. git's own refusal on a dirty/untracked worktree is treated as a successful preserve, not an error: SWARM never deletes uncommitted work.
 
 **Parameters:**
 
@@ -186,7 +209,7 @@ Drops the PTY writer (closes master fd), kills the child process, waits for exit
 await invoke("kill_worker", { id: "550e8400-e29b-41d4-a716-446655440000" });
 ```
 
-**Emits:** `worker_killed` envelope on `swarm://events` with payload `{ workerId }`.
+**Emits:** `worker_killed` envelope on `swarm://events` with payload `{ workerId }`. When the worker was isolated, also emits `worktree_removed` first -- see [Events](#events) below.
 
 ---
 
@@ -200,13 +223,15 @@ Returns a list of all active workers as serializable info snapshots.
 
 **`WorkerInfo` object:**
 
-| Field       | Type             | Description                        |
-|-------------|------------------|------------------------------------|
-| `id`        | `string` (UUID)  | Unique worker identifier           |
-| `state`     | `string`         | `"idle"`, `"running"`, `"paused"`, or `"error"` |
-| `name`      | `string`         | Human-readable display name        |
-| `pid`       | `number \| null` | OS process ID, if available        |
-| `startedAt` | `number`         | Unix timestamp (seconds)           |
+| Field          | Type             | Description                        |
+|----------------|------------------|------------------------------------|
+| `id`           | `string` (UUID)  | Unique worker identifier           |
+| `state`        | `string`         | `"idle"`, `"running"`, `"paused"`, or `"error"` |
+| `name`         | `string`         | Human-readable display name        |
+| `pid`          | `number \| null` | OS process ID, if available        |
+| `startedAt`    | `number`         | Unix timestamp (seconds)           |
+| `worktreePath` | `string \| null` | Absolute path of this worker's git worktree, if it was spawned with isolation |
+| `branch`       | `string \| null` | Branch checked out in `worktreePath` (`swarm/<slug>-<id8>`), if isolated |
 
 **Example:**
 
@@ -246,6 +271,27 @@ const encoder = new TextEncoder();
 const data = Array.from(encoder.encode("ls\n"));
 await invoke("worker_input", { id: workerId, data });
 ```
+
+---
+
+### Worktree Isolation Lifecycle
+
+Giving a worker its own `git worktree` is opt-in per spawn, via [`spawn_worker`](#spawn_worker)'s `repoRoot`/`isolation` fields -- no `repoRoot` reproduces exactly the pre-worktree-isolation behavior.
+
+**Lifecycle:**
+
+1. **Spawn** (`repoRoot` present, `isolation` resolves to `"worktree"`): resolve `repoRoot`'s git toplevel and `HEAD` sha -> `git worktree add -b swarm/<slug>-<id8> <path> <sha>` -> `git worktree lock --reason "swarm worker <uuid>"` -> spawn the PTY with `cwd = <path>`. Emits `worktree_created`.
+2. **Kill**: wait for the PTY child to fully exit -> `git worktree unlock` -> `git worktree remove` (**never** `--force`). Emits `worktree_removed` with the resulting `disposition`.
+
+**The Preserve-On-Dirty Guarantee:** `git worktree remove` is invoked without `--force`, which is the entire mechanism -- git itself refuses to remove a worktree that has uncommitted changes or untracked files. That refusal is not treated as an error; it becomes `disposition: "preserved_dirty"` in the `worktree_removed` event. SWARM never deletes a worktree's contents itself, and no code path anywhere in the git module can construct a `--force`/`-f` argument for `worktree remove` (enforced by a unit test on the argv builder, `git::worktree::tests::test_remove_args_never_contains_force`).
+
+**Failure policy:** no `repoRoot` -> today's unisolated spawn, unconditionally. `repoRoot` present and the worktree-creation pipeline fails at any step -> the whole [`spawn_worker`](#spawn_worker) call fails -- no worker is registered and no PTY is started. There is no silent fallback to sharing a cwd across workers.
+
+**Location:** worktrees live under `~/.swarm/worktrees/<repo>-<hash8>/w-<id8>` (`<repo>` a sanitized repo directory name, `<hash8>` an 8-hex-character tag derived from the repo's absolute path, `<id8>` the worker UUID's first 8 hex characters) -- already inside SWARM's reserved writable scope (`$HOME/.swarm/**` in `src-tauri/capabilities/default.json`).
+
+**Startup probe:** on launch, the shell runs `git --version` and requires >= 2.17 (the version `git worktree remove` was added in). A missing or too-old git is never silently degraded -- it logs a warning and emits a `system_log` envelope (`level: "warn"`) explaining that worktree isolation is unavailable and workers will spawn without isolation.
+
+**Startup prune:** the shell also runs `git worktree prune` against the persisted `default_repo_root` config key (see the Project Root picker on the Workers page), logging the pruned count.
 
 ---
 
@@ -784,7 +830,7 @@ Every backend event -- worker lifecycle, session lifecycle, AI streaming, metric
 
 | Type                 | Payload                                                        | Persisted |
 |----------------------|-----------------------------------------------------------------|-----------|
-| `worker_spawned`     | `{ workerId, name, pid }`                                       | Yes       |
+| `worker_spawned`     | `{ workerId, name, pid, isolation }`                             | Yes       |
 | `worker_killed`      | `{ workerId }`                                                   | Yes       |
 | `worker_output`      | `{ workerId, data }`                                             | No (ephemeral) |
 | `worker_state`       | `{ workerId, state }`                                            | Yes       |
@@ -795,6 +841,8 @@ Every backend event -- worker lifecycle, session lifecycle, AI streaming, metric
 | `ai_stream_settled`  | `{ requestId, status, error }` -- terminal receipt, exactly once per request | Yes |
 | `system_log`         | `{ level, message, target, timestamp }`                          | No (ephemeral) |
 | `bus_message`        | `{ messageId, fromWorker, toWorker, topic, payload }`            | Yes       |
+| `worktree_created`   | `{ workerId, sessionId, repoRoot, worktreePath, branch, baseCommit }` -- its own `seq` is the range start for "what changed" queries | Yes |
+| `worktree_removed`   | `{ workerId, worktreePath, branch, disposition, headCommit, reason }` -- `disposition` is `"removed"`, `"preserved_dirty"`, or `"failed"` | Yes |
 
 ### Unified Bus Event Contract
 

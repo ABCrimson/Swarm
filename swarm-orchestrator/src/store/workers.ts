@@ -20,6 +20,14 @@ interface WorkerStoreActions {
   readonly removeWorker: (id: string) => void;
   readonly selectWorker: (id: string | null) => void;
   readonly appendOutput: (id: string, data: string) => void;
+  /**
+   * Mirrors a worker's `worktreePath`/`branch` from the backend
+   * `worktree_created` event (see `#hooks/useWorkerEvents`). A no-op
+   * if the worker isn't (yet) in the store — the optimistic
+   * `addWorker` placeholder from `spawnWorkerFromSpec` normally lands
+   * first, but this guards the ordering either way.
+   */
+  readonly setWorktreeInfo: (id: string, worktreePath: string, branch: string) => void;
 }
 
 /**
@@ -69,6 +77,16 @@ export const useWorkerStore = create<WorkerStoreState & WorkerStoreActions>()(
             if (w.output.length > 10_000) {
               w.output = w.output.slice(-10_000);
             }
+          }
+        });
+      },
+
+      setWorktreeInfo(id, worktreePath, branch) {
+        set((s) => {
+          const w = s.workers.get(id);
+          if (w) {
+            w.worktreePath = worktreePath;
+            w.branch = branch;
           }
         });
       },

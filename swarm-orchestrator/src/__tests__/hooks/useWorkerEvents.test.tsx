@@ -72,4 +72,29 @@ describe("useWorkerEvents", () => {
 
     expect(useWorkerStore.getState().workers.has(workerId)).toBe(false);
   });
+
+  it("mirrors worktreePath/branch onto the worker store on worktree_created", () => {
+    const workerId = "33333333-4444-5555-8666-777777777777";
+    useWorkerStore.getState().addWorker({
+      id: workerId,
+      state: "running",
+      name: "Isolated Worker",
+      startedAt: new Date().toISOString(),
+    });
+
+    renderHook(() => useWorkerEvents());
+    registered.get("worktree_created")?.({
+      payload: {
+        workerId,
+        repoRoot: "/repo",
+        worktreePath: "/home/user/.swarm/worktrees/repo-abcd1234/w-11112222",
+        branch: "swarm/isolated-worker-11112222",
+        baseCommit: "deadbeef",
+      },
+    });
+
+    const worker = useWorkerStore.getState().workers.get(workerId);
+    expect(worker?.worktreePath).toBe("/home/user/.swarm/worktrees/repo-abcd1234/w-11112222");
+    expect(worker?.branch).toBe("swarm/isolated-worker-11112222");
+  });
 });

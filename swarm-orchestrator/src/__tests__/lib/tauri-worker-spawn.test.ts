@@ -57,6 +57,34 @@ describe("spawnWorker", () => {
     });
   });
 
+  it("includes repoRoot/isolation in the IPC payload when specified", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce(WORKER_UUID);
+
+    await spawnWorker({
+      name: "Agent",
+      repoRoot: "C:/Projects/swarm",
+      isolation: "worktree",
+    });
+
+    expect(tauriInvoke).toHaveBeenCalledWith("spawn_worker", {
+      config: {
+        name: "Agent",
+        repoRoot: "C:/Projects/swarm",
+        isolation: "worktree",
+      },
+    });
+  });
+
+  it("omits repoRoot/isolation entirely when not specified — zero regression for existing callers", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce(WORKER_UUID);
+
+    await spawnWorker({ name: "Agent" });
+
+    const [, payload] = vi.mocked(tauriInvoke).mock.calls[0] as [string, { config: object }];
+    expect(payload.config).not.toHaveProperty("repoRoot");
+    expect(payload.config).not.toHaveProperty("isolation");
+  });
+
   it("returns the worker id from a valid UUID response", async () => {
     vi.mocked(tauriInvoke).mockResolvedValueOnce(WORKER_UUID);
 

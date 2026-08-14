@@ -1,5 +1,7 @@
+import { open } from "@tauri-apps/plugin-shell";
 import { formatDistanceToNow } from "date-fns";
 import { useAtom } from "jotai";
+import { toast } from "sonner";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Pill } from "#components/ui/Pill";
 import { useWorker } from "#hooks/useWorker";
@@ -55,6 +57,15 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
   const canPause = currentState === "running";
   const canResume = currentState === "paused";
   const uptime = formatDistanceToNow(new Date(worker.startedAt), { addSuffix: false });
+
+  const handleOpenWorktree = async () => {
+    if (!worker.worktreePath) return;
+    try {
+      await open(worker.worktreePath);
+    } catch (err) {
+      toast.error(`Could Not Open Worktree: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
 
   return (
     <div
@@ -157,6 +168,34 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
           </DetailRow>
           {worker.pid != null && <DetailRow label="PID">{worker.pid}</DetailRow>}
           <DetailRow label="Uptime">{uptime}</DetailRow>
+          {worker.branch != null && <DetailRow label="Branch">{worker.branch}</DetailRow>}
+          {worker.worktreePath != null && (
+            <DetailRow label="Worktree">
+              <button
+                type="button"
+                onClick={() => void handleOpenWorktree()}
+                title={worker.worktreePath}
+                style={{
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  margin: 0,
+                  cursor: "pointer",
+                  color: "oklch(0.78 0.18 205)",
+                  fontFamily: "var(--font-body)",
+                  fontSize: "0.8125rem",
+                  textDecoration: "underline",
+                  textUnderlineOffset: 2,
+                  maxWidth: 180,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {worker.worktreePath}
+              </button>
+            </DetailRow>
+          )}
         </div>
 
         {/* Output preview */}
