@@ -97,9 +97,9 @@ pub(crate) fn resolve_paths(app: &tauri::AppHandle) -> Result<Paths, AppError> {
 /// 4. Registers all IPC command handlers
 /// 5. In the `setup` closure:
 ///    - Sets the window icon programmatically for crisp taskbar rendering
-///    - Starts the ordered event core (SQLite log + single-writer engine)
-///      and spawns a forwarder task that emits its broadcast stream on
-///      `swarm://events`
+///    - Starts the ordered event core (SQLite log + single-writer engine),
+///      passing it a closure that synchronously emits each event on
+///      `swarm://events` — the primary, lossless delivery path
 ///    - Loads persisted sessions from disk
 ///    - Starts the background metrics collection loop (500ms interval)
 ///    - Initializes the AI client and priority queue
@@ -190,44 +190,31 @@ pub fn run() {
             let icon = tauri::image::Image::from_bytes(icon_bytes)?;
             window.set_icon(icon)?;
 
-            // Ordered event core: SQLite log + single-writer engine.
-            let paths = resolve_paths(&app.handle().clone())?;
+            // Ordered event core: SQLite log + single-writer engine. The
+            // `emit` closure below is the PRIMARY delivery path — called
+            // synchronously, in order, for every event, exactly mirroring
+            // the pre-split direct `app.emit` call (lossless; a slow
+            // webview backs up the writer channel rather than dropping
+            // events). No forwarder task is spawned: the engine's
+            // broadcast fanout (OrchestrationEngine::subscribe) is a
+            // secondary, intentionally-lossy path reserved for future
+            // remote (Phase 2 swarmd) subscribers, which this shell does
+            // not use.
+            let paths = resolve_paths(app.handle())?;
             let db_path = paths.data_dir.join("swarm-events.db");
             let event_log = EventLog::open(&db_path)
                 .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
-            let engine = OrchestrationEngine::start(event_log, Some(db_path));
 
-            // The emit seam: forward the engine's ordered broadcast stream
-            // onto the single `swarm://events` webview channel. Subscribe
-            // before managing state so no event recorded from this point
-            // forward can be missed.
-            let mut event_rx = engine.subscribe();
+            let emit_app = app.handle().clone();
+            let engine = OrchestrationEngine::start(event_log, Some(db_path), move |envelope| {
+                if let Err(e) = emit_app.emit(EVENT_CHANNEL, envelope) {
+                    tracing::error!(error = %e, "failed to emit domain event");
+                }
+            });
+
             let sink = engine.sink();
             app.manage(sink.clone());
             app.manage(engine);
-
-            let forwarder_app = app.handle().clone();
-            tokio::spawn(async move {
-                loop {
-                    match event_rx.recv().await {
-                        Ok(envelope) => {
-                            if let Err(e) = forwarder_app.emit(EVENT_CHANNEL, &*envelope) {
-                                tracing::error!(error = %e, "failed to emit domain event");
-                            }
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!(
-                                skipped = n,
-                                "event forwarder lagged; frontend gap-detection will backfill via events_since"
-                            );
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            tracing::debug!("event broadcast channel closed; forwarder stopping");
-                            break;
-                        }
-                    }
-                }
-            });
 
             // Load persisted sessions
             let app_handle = app.handle().clone();

@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tokio::sync::broadcast;
@@ -11,17 +12,23 @@ use super::log::EventLog;
 use crate::events::{EventSink, SwarmEvent};
 
 /// The single ordered channel name every backend event is logically
-/// pushed on. Not a Tauri-specific mechanism — shells forward the
-/// broadcast stream (see [`OrchestrationEngine::subscribe`]) onto
-/// whatever wire channel they use under this name (the Tauri desktop
-/// shell emits it on the webview event channel of the same name).
+/// pushed on. Not a Tauri-specific mechanism — the primary delivery
+/// path is the `emit` closure passed to [`OrchestrationEngine::start`]
+/// (the Tauri shell's closure emits under this name on the webview
+/// event channel).
 pub const EVENT_CHANNEL: &str = "swarm://events";
 
-/// Buffer capacity for the live broadcast fanout. Sized generously
-/// above any expected burst so a slow subscriber only needs to fall
-/// back to `events_since` backfill in a pathological case, not under
-/// ordinary load.
+/// Buffer capacity for the SECONDARY broadcast fanout (see the
+/// `broadcast_tx` field doc) — future multi-client use, not exercised
+/// by the desktop shell today.
 const BROADCAST_CAPACITY: usize = 4096;
+
+/// Minimum interval between "broadcast send failed" log lines. A send
+/// only fails when every receiver disconnected between the
+/// `receiver_count() > 0` check and the send itself — rare, racy, and
+/// diagnostic rather than routine, so it's rate-limited instead of
+/// logged on every occurrence.
+const BROADCAST_WARN_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Ordered envelope wrapping every [`SwarmEvent`] on the wire.
 ///
@@ -54,41 +61,77 @@ pub fn is_persistent(event: &SwarmEvent) -> bool {
 ///
 /// [`Self::record`] (via [`EventSink`]) is fire-and-forget from any
 /// thread; the dedicated writer thread assigns seq, persists (per
-/// policy), and broadcasts — guaranteeing total order on the wire.
+/// policy), and emits — guaranteeing total order on the wire.
 #[derive(Clone)]
 pub struct OrchestrationEngine {
     sink: EventSink,
     db_path: Option<PathBuf>,
+    /// Secondary fanout; lossy under lag by design. The primary shell
+    /// path is the synchronous `emit` closure passed to [`Self::start`],
+    /// which never drops an event — this broadcast channel exists only
+    /// for future multi-client use (Phase 2's `swarmd`, per the
+    /// headless-daemon plan), where a per-connection two-lane
+    /// backpressure scheme handles lag by design. Remote subscribers
+    /// must heal lag via `events_since` replay; the desktop shell does
+    /// not subscribe to this at all today.
     broadcast_tx: broadcast::Sender<Arc<DomainEvent>>,
 }
 
 impl OrchestrationEngine {
     /// Spawns the writer thread and returns the engine handle.
     ///
-    /// Every recorded event is assigned a sequence number, persisted
-    /// per [`is_persistent`], and broadcast as an `Arc<DomainEvent>` on
-    /// an internal `tokio::sync::broadcast` channel — [`Self::subscribe`]
-    /// hands out receivers for any number of shells/clients to forward
-    /// onward (e.g. the Tauri shell's `app.emit`), independent of how
-    /// many are currently listening. This is N-client fanout for free.
+    /// `emit` is the PRIMARY delivery path: called synchronously, in
+    /// sequence-number order, for every event (persisted or not) —
+    /// exactly mirroring the pre-split direct `app.emit` call. It must
+    /// not be lossy; a slow consumer should back up the (unbounded)
+    /// writer channel rather than have events silently vanish, since
+    /// ephemeral event types (`worker_output`, `system_metrics`,
+    /// `system_log`) are never persisted and can never be backfilled
+    /// once dropped.
+    ///
+    /// Every event is additionally offered to a SECONDARY broadcast
+    /// fanout (see the `broadcast_tx` field and [`Self::subscribe`])
+    /// for future multi-client use — that path is intentionally lossy
+    /// under lag and is skipped entirely (no clone, no send) when
+    /// nothing is subscribed, which is the common case for a
+    /// desktop-only shell.
     ///
     /// `db_path` is retained so read-only connections (e.g. the
     /// `events_since` command) can be opened against the same file;
     /// pass `None` for in-memory logs.
-    pub fn start(log: EventLog, db_path: Option<PathBuf>) -> Self {
+    pub fn start(
+        log: EventLog,
+        db_path: Option<PathBuf>,
+        mut emit: impl FnMut(&DomainEvent) + Send + 'static,
+    ) -> Self {
         let (tx, rx) = std::sync::mpsc::channel::<SwarmEvent>();
         let (broadcast_tx, _) = broadcast::channel::<Arc<DomainEvent>>(BROADCAST_CAPACITY);
         let writer_broadcast_tx = broadcast_tx.clone();
         std::thread::Builder::new()
             .name("swarm-event-writer".to_string())
             .spawn(move || {
+                let mut last_broadcast_warn: Option<Instant> = None;
                 run_writer_loop(rx, log, move |envelope| {
-                    // Zero receivers (nothing subscribed yet, or the
-                    // shell hasn't started forwarding) is an expected
-                    // steady state, not an error — unlike a direct
-                    // Tauri `app.emit` failure, it carries no context
-                    // worth logging.
-                    let _ = writer_broadcast_tx.send(Arc::new(envelope.clone()));
+                    // Primary path first, synchronous and lossless.
+                    emit(envelope);
+
+                    // Secondary path: only pay for the Arc + clone when
+                    // someone is actually subscribed.
+                    if writer_broadcast_tx.receiver_count() > 0 {
+                        let arc = Arc::new(envelope.clone());
+                        if writer_broadcast_tx.send(arc).is_err() {
+                            let now = Instant::now();
+                            let should_warn = last_broadcast_warn
+                                .is_none_or(|t| now.duration_since(t) >= BROADCAST_WARN_INTERVAL);
+                            if should_warn {
+                                tracing::warn!(
+                                    "broadcast fanout send failed (all receivers disconnected \
+                                     between the receiver_count check and send)"
+                                );
+                                last_broadcast_warn = Some(now);
+                            }
+                        }
+                    }
                 });
             })
             .expect("failed to spawn event writer thread");
@@ -111,12 +154,9 @@ impl OrchestrationEngine {
         self.sink.clone()
     }
 
-    /// Subscribes to the live ordered event stream.
-    ///
-    /// Each call yields an independent receiver seeing every event
-    /// recorded from this point forward. A shell should call this
-    /// once at startup and forward the stream onward (e.g. onto a
-    /// Tauri webview event channel or a WebSocket).
+    /// Subscribes to the SECONDARY broadcast fanout — see the doc on
+    /// the `broadcast_tx` field. Not used by the desktop shell; exists
+    /// for future multi-client (Phase 2 `swarmd`) use.
     pub fn subscribe(&self) -> broadcast::Receiver<Arc<DomainEvent>> {
         self.broadcast_tx.subscribe()
     }
