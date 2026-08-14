@@ -7,7 +7,7 @@ on:
 
 env:
   NODE_VERSION: "26.7.0"
-  # Keep in sync with src-tauri/rust-toolchain.toml
+  # Keep in sync with rust-toolchain.toml
   RUST_TOOLCHAIN: "nightly-2026-08-13"
 
 jobs:
@@ -41,7 +41,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          # Keep in sync with src-tauri/rust-toolchain.toml
+          # Keep in sync with rust-toolchain.toml
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Install cargo-audit
