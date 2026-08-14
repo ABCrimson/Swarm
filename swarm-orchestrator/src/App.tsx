@@ -5,6 +5,7 @@ import { AppShell } from "#components/layout/AppShell";
 import { PerformanceOverlay } from "#components/metrics/PerformanceOverlay";
 import { ErrorBoundary } from "#components/ui/ErrorBoundary";
 import { SwarmToaster } from "#components/ui/Toast";
+import { useAgentSessionEvents } from "#hooks/useAgentSessionEvents";
 import { useAlerts } from "#hooks/useAlerts";
 import { useAutoSnapshot } from "#hooks/useAutoSnapshot";
 import { useMetrics } from "#hooks/useMetrics";
@@ -105,6 +106,7 @@ export function App(): React.ReactElement {
   // Initialize global subscriptions (theme, events, metrics, alerts)
   useTheme();
   useWorkerEvents();
+  useAgentSessionEvents();
   useProvenanceEvents();
   useSystemLogEvents();
   useSessionEvents();

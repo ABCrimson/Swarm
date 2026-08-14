@@ -37,6 +37,11 @@ Events are received on a single ordered channel, `swarm://events` -- see [Events
   - [session_add_worker](#session_add_worker)
 - [Agent Commands](#agent-commands)
   - [agent_turn_started](#agent_turn_started)
+  - [agent_spawn](#agent_spawn)
+  - [agent_send_turn](#agent_send_turn)
+  - [agent_cancel](#agent_cancel)
+  - [agent_shutdown](#agent_shutdown)
+  - [agent_probe](#agent_probe)
 - [File System Commands](#file-system-commands)
   - [read_file](#read_file)
   - [write_file](#write_file)
@@ -202,6 +207,8 @@ Terminates a worker process and removes it from the registry.
 Drops the PTY writer (closes master fd), kills the child process, waits for exit to prevent zombie processes (and, on Windows, to release any OS handle the child held on the worktree directory as its cwd), and emits a killed event.
 
 If the worker was isolated into a git worktree, also unlocks and `git worktree remove`s it -- **never** with `--force`. git's own refusal on a dirty/untracked worktree is treated as a successful preserve, not an error: SWARM never deletes uncommitted work.
+
+**Phase 3:** if this worker also has a live agent session attached ([`agent_spawn`](#agent_spawn)), it is removed from the `AgentSessionRegistry` and shut down too -- best-effort: a failure here is logged, not propagated, so an agent-session teardown hiccup never blocks the PTY worker's own kill.
 
 **Parameters:**
 
@@ -796,6 +803,114 @@ await invoke("worker_input", {
 
 ---
 
+### `agent_spawn`
+
+Phase 3. Spawns a new worker via the existing worktree-isolation path (`do_spawn_worker` -- the same machinery [`spawn_worker`](#spawn_worker) uses) and attaches a Claude Code provider-adapter session to it in one call. The PTY worker and the attached agent session are independent resources sharing only the worker id and cwd (see `docs/architecture.md`'s "Session state -- three owners, no mirroring" table): the PTY continues to back the plain terminal view, while the agent session drives the AI conversation via [`agent_send_turn`](#agent_send_turn) et al.
+
+**Parameters:**
+
+| Name        | Type                                    | Required | Description |
+|-------------|------------------------------------------|----------|--------------|
+| `config`    | `WorkerConfig`                           | Yes      | Same shape [`spawn_worker`](#spawn_worker) takes (`name`/`shell`/`cwd`/`env`/`repoRoot`/`isolation`) |
+| `provider`  | `string`                                 | Yes      | Wire provider id -- only `"claude_code"` is supported today |
+| `model`     | `string`                                 | No       | Model alias (e.g. `"sonnet"`); omitted defers to the adapter's default |
+| `trustTier` | `"restricted" \| "standard" \| "write_enabled"` | No | Spawn-time trust dial (see `docs/architecture.md`'s adapter-layer section); omitted defers to `"standard"` |
+| `originWorker` | `string` | No | Causal attribution, same convention as `spawn_worker` |
+| `causeSeq`     | `number` | No | Causal attribution, same convention as `spawn_worker` |
+
+**Returns:** `string` -- the UUID of the newly spawned worker (same contract as `spawn_worker`). The attached session's `sessionKey`/`capabilities`/model arrive via the `agent_session_started` event, not this return value.
+
+**Errors:**
+
+| Error | Condition |
+|-------|-----------|
+| Same as `spawn_worker` | The PTY worker spawn itself fails (registry full, worktree creation failed, etc.) |
+| `Unknown Provider: ...` / `Provider Not Yet Supported: ...` | `provider` is not `"claude_code"` |
+| The agent adapter's own error, verbatim | The Claude Code session failed to attach (binary missing, `system/init` timeout, ...) -- **the PTY worker still exists and is usable as a plain terminal** in this case; this is not rolled back |
+
+**Emits:** `worker_spawned` (+ `worktree_created` if isolated) from the underlying `do_spawn_worker` call, then `agent_session_started` once the adapter's `spawn()` resolves.
+
+---
+
+### `agent_send_turn`
+
+Phase 3. Enqueues one turn for `workerId`'s attached agent session through the `AgentScheduler` (concurrency-gated across every session's turns -- see `docs/architecture.md`'s adapter-layer section). **Fire-and-forget by design:** resolves once the turn is admitted to the scheduler, not once it completes or even starts. The frontend transcript (`AgentChat.tsx`) renders from the live `agent_*` event stream (`agent_block`/`agent_tool_call`/`agent_tool_result`/`agent_turn_settled`, all carrying `workerId`), not from this call's return value -- there is no synchronous `turnId` handed back the way `spawn_worker` hands back a worker id.
+
+**Parameters:**
+
+| Name       | Type     | Required | Description |
+|------------|----------|----------|--------------|
+| `workerId` | `string` | Yes      | UUID of the worker whose attached session should receive this turn |
+| `prompt`   | `string` | Yes      | The turn's prompt text |
+
+**Returns:** `void`.
+
+**Errors:**
+
+| Error | Condition |
+|-------|-----------|
+| Invalid UUID | `workerId` is not a valid UUID string |
+| `AppError::QueueFull` | The scheduler's bounded admission queue (256) is full |
+
+A session already mid-turn does **not** surface as an error here -- the underlying `send_turn` rejects with `AgentSessionBusy` inside the scheduler's executor, logged server-side, not propagated to this IPC call (a session never queues internally; see the `AgentSession` concurrency contract in `docs/architecture.md`).
+
+---
+
+### `agent_cancel`
+
+Phase 3. Cancels `workerId`'s in-flight turn. `turnId` comes from that turn's own `agent_block`/`agent_tool_call` events' `turnId` field. `ClaudeCodeAdapter`'s `cancel_granularity` is `KillOnly` -- this kills the whole child process (43ms measured in the Phase 1 spike), then synthesizes the terminal receipt (Condition B). A stale or already-settled `turnId` is a benign no-op.
+
+**Parameters:**
+
+| Name       | Type     | Required | Description |
+|------------|----------|----------|--------------|
+| `workerId` | `string` | Yes      | UUID of the worker whose session should cancel |
+| `turnId`   | `string` | Yes      | The turn to cancel |
+
+**Returns:** `void`.
+
+**Errors:** Invalid UUID, or no attached agent session for `workerId`.
+
+**Emits:** `agent_turn_settled` (`status: "error"`, `error: "Process Exited Without A Receipt"`) + `agent_session_exited`, if `turnId` was genuinely in flight.
+
+---
+
+### `agent_shutdown`
+
+Phase 3. Shuts down `workerId`'s attached agent session (idempotent) and removes it from the registry. Does **not** kill the underlying PTY worker -- see [`kill_worker`](#kill_worker), which also tears down any attached agent session as part of its own cleanup. A worker with no attached session is a benign no-op, not an error.
+
+**Parameters:**
+
+| Name       | Type     | Required | Description |
+|------------|----------|----------|--------------|
+| `workerId` | `string` | Yes      | UUID of the worker whose session should shut down |
+
+**Returns:** `void`.
+
+**Errors:** Invalid UUID only.
+
+**Emits:** `agent_session_exited` (and a synthesized `agent_turn_settled` if a turn was in flight).
+
+---
+
+### `agent_probe`
+
+Phase 3. Checks whether the Claude Code CLI is installed and responds to `--version`, bounded by a 5-second timeout -- never a hang. Never touches or reports a credential.
+
+**Parameters:** none.
+
+**Returns:** `ProbeReport`:
+
+```typescript
+{ available: boolean; version?: string | null; detail?: string | null }
+```
+
+An unusable provider is reported as `{ available: false, detail: "..." }`, never an `Err` -- `detail` is always human-readable (e.g. `"Claude Code CLI Not Found On PATH: ..."`), never a credential or raw auth error. `detail` is also `Some("Signed-In State Unknown Until First Spawn")` on a successful probe -- this command never makes a network call, so "authenticated or not" is only actually observable at the first real spawn.
+
+**Errors:** This command itself never fails (see above) -- the `Result` wrapper exists only for Tauri's IPC error-transport convention.
+
+---
+
 ## File System Commands
 
 Real Rust commands for the `read_file`/`write_file` AI tools (`src/lib/tools.ts`) -- previously (Phase 0) both tools ran over `tauri-plugin-fs`'s capability-scoped helpers (`src/lib/fs.ts`) because these commands didn't exist yet. Path validation mirrors the same scopes the plugin-fs capability config (`src-tauri/capabilities/default.json`) declares -- reads permitted under `$APPDATA/**` and `$HOME/**`, writes permitted under `$APPDATA/**` and `$HOME/.swarm/**` -- enforced by hand in `commands/fs.rs::FsScopes` (that capability scope doesn't apply here; these are plain custom commands, not plugin-fs calls), with the identical truthful, Title Case error wording as the plugin-fs path. `src/lib/fs.ts` and its other (non-tool) UI consumers are unaffected by this migration.
@@ -1189,7 +1304,7 @@ A stamped envelope additionally carries `originWorker`/`causeSeq`:
 | `agent_block`         | `{ workerId, turnId, blockIndex, kind, content }` -- durable counterpart to `agent_turn_delta`; replay reconstructs full turns from these rows, only the typing animation is lost | Yes |
 | `agent_tool_call`     | `{ workerId, turnId, toolUseId, name, input }`                   | Yes |
 | `agent_tool_result`   | `{ workerId, turnId, toolUseId, isError, content }` -- `toolUseId` correlates with the originating `agent_tool_call` | Yes |
-| `agent_permission_request` | `{ workerId, turnId, requestId, tool, input, suggestedDecision? }` -- the ONLY legitimate permission-gating surface; never `allowedTools` (Condition C, see `docs/architecture.md`) | Yes |
+| `agent_permission_request` | `{ workerId, turnId, requestId, tool, input, suggestedDecision?, denialSubclass?, message? }` -- the ONLY legitimate permission-gating surface; never `allowedTools` (Condition C). **For `ClaudeCodeAdapter` (Phase 3), this is a REPORT of an already-decided denial, not a pending request** -- `suggestedDecision` is always `"deny"`, `denialSubclass` is one of `"mode"` / `"ungranted_write"` / `"redirection_guard"`, and `message` is the provider's raw denial text. See `docs/architecture.md`'s adapter-layer section for the semantics shift. | Yes |
 | `agent_turn_settled`  | `{ workerId, turnId, status, error, costUsd, usage, durationMs, numTurns }` -- terminal receipt, exactly once per turn, synthesized on ungraceful child exit too (Condition B) | Yes |
 | `agent_session_exited` | `{ workerId, exitCode, signal }`                                | Yes |
 | `system_log`          | `{ level, message, target, timestamp }`                          | No (ephemeral) |
@@ -1297,8 +1412,10 @@ This reference document also covers commands and events that are fully implement
 | Piece | No caller because... |
 |-------|------------------------|
 | `ai_request` | **Removed** (Phase 2 of the multi-provider plan) -- absorbed into the agent scheduler. The shipped AI flow runs `@anthropic-ai/sdk` directly in the webview (`src/lib/anthropic.ts`, `dangerouslyAllowBrowser: true`) and streams straight to `api.anthropic.com`; it never invoked this command, and its tested queueing machinery now lives as `swarm_core::agent::scheduler::AgentScheduler`. See [Agent Commands](#agent-commands) and `docs/architecture.md`'s adapter-layer section. |
-| `agent_*` (Phase 3+ family: `agent_session_started`, `agent_turn_delta`, `agent_block`, `agent_tool_call`, `agent_tool_result`, `agent_permission_request`, `agent_turn_settled`, `agent_session_exited`) | Typed, tested, and persistence-classified in Rust as of Phase 2, but no concrete `AgentAdapter` implementation exists yet to emit them (Phase 3's `ClaudeCodeAdapter`) -- see `docs/architecture.md`'s adapter-layer section. |
+| `agent_*` (Phase 3+ family) | **No longer built-not-wired for Claude Code** -- [`agent_spawn`](#agent_spawn)/[`agent_send_turn`](#agent_send_turn)/etc. emit the full family, consumed by `useAgentSessionEvents` + `AgentChat.tsx` as of Phase 3. Still true for Codex/OpenCode/Gemini -- the `AgentAdapter`/`AgentSession` traits are provider-agnostic and tested via `MockAdapter`, but only `ClaudeCodeAdapter` exists. See `docs/architecture.md`'s adapter-layer section. |
 | [`bus_send`](#bus_send), [`bus_subscribe`](#bus_subscribe), [`bus_create_pipeline`](#bus_create_pipeline), [`bus_list_channels`](#bus_list_channels), [`bus_list_pipelines`](#bus_list_pipelines) | No UI surface invokes any of them -- inter-agent messaging is implemented but not exposed to a user today. |
 | The `ai_stream_settled` receipt | Downstream of the removed `ai_request` -- kept as a `SwarmEvent` variant (unused) until the webview path is retired in Phase 5; never emitted in the app as shipped. |
+| The interactive `agent_permission_request` -> `respond_permission` round-trip | `ClaudeCodeSession::respond_permission` is a documented no-op (`Ok(())` always) -- `--permission-mode manual` is a silent no-op on the real CLI (verified empirically), so there is nothing on the provider side to answer. The event fires only as a post-hoc REPORT of an already-decided denial. See `docs/architecture.md`'s adapter-layer section. |
+| The full spawn-dialog / polished `WorkerAIPanel` redesign | Phase 3 ships the minimal command surface + a basic provider picker only (see [`agent_spawn`](#agent_spawn) and `docs/architecture.md`'s adapter-layer section) -- the richer UI (auth-health dot, tool-call cards, permission timeline, capability-driven "Queue Next Turn" labeling) is an explicitly deferred follow-up branch. |
 
-Read every code example and contract above involving these six commands and one event as documentation of what the Rust side does *if* called -- not as a description of what the shipped app does when a user sends a chat message or a worker messages another worker.
+Read every code example and contract above involving these commands and events as documentation of what the Rust side does *if* called -- not necessarily as a description of what the shipped app's default (webview Anthropic) path does when a user sends a chat message; Claude Code workers ARE live via `agent_spawn` as of Phase 3.

@@ -11,9 +11,11 @@ import { ShipPanel } from "#components/ship/ShipPanel";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Button } from "#components/ui/Button";
 import { Pill } from "#components/ui/Pill";
+import type { ClaudeCodeTrustTier } from "#lib/agent-events";
 import { matchesBinding } from "#lib/keybindings";
 import { DEFAULT_REPO_ROOT_KEY, getPersistedRepoRoot } from "#lib/project-root";
-import { spawnWorker, validateRepoRoot, writeConfig } from "#lib/tauri";
+import { agentSpawn, spawnWorker, validateRepoRoot, writeConfig } from "#lib/tauri";
+import { useAgentSessionStore } from "#store/agent-sessions";
 import {
   causalityInspectorAtom,
   detailPanelOpenAtom,
@@ -25,8 +27,12 @@ import { useWorkerStore } from "#store/workers";
 
 type DetailTab = "detail" | "ai" | "ship";
 
+/** Worker spawn provider — "Webview Anthropic" is the existing, default behavior. */
+type SpawnProvider = "webview_anthropic" | "claude_code";
+
 function WorkerListView(): React.ReactElement {
   const workers = useWorkerStore((s) => s.workers);
+  const agentSessions = useAgentSessionStore((s) => s.sessions);
   const [selectedId, setSelectedId] = useAtom(selectedWorkerIdAtom);
   const [, setDetailOpen] = useAtom(detailPanelOpenAtom);
 
@@ -148,6 +154,22 @@ function WorkerListView(): React.ReactElement {
                   {worker.branch}
                 </Pill>
               )}
+              {agentSessions.has(id) && (
+                <span
+                  style={{
+                    padding: "2px 7px",
+                    borderRadius: 5,
+                    border: "1px solid oklch(0.45 0.14 290)",
+                    background: "oklch(0.16 0.06 290 / 0.5)",
+                    color: "oklch(0.80 0.14 290)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "0.625rem",
+                    fontWeight: 600,
+                  }}
+                >
+                  Claude Code
+                </span>
+              )}
             </span>
             <Badge state={worker.state}>{stateLabels[worker.state]}</Badge>
           </button>
@@ -175,6 +197,13 @@ export function Workers(): React.ReactElement {
   // string = a picked directory. Pre-filled from the persisted
   // "default_repo_root" config key so the choice survives a restart.
   const [projectRoot, setProjectRoot] = useState<string | null | undefined>(undefined);
+  // Provider picker for the NEXT spawn — "Webview Anthropic" reproduces
+  // today's spawnWorker behavior exactly; "Claude Code" routes through
+  // agent_spawn instead (Phase 3's minimal command surface — the full
+  // spawn-dialog UI overhaul is a follow-up branch).
+  const [spawnProvider, setSpawnProvider] = useState<SpawnProvider>("webview_anthropic");
+  const [claudeModel, setClaudeModel] = useState("sonnet");
+  const [claudeTrustTier, setClaudeTrustTier] = useState<ClaudeCodeTrustTier>("standard");
 
   // Load path: the persisted root is Zod-validated at the seam by
   // getPersistedRepoRoot, then revalidated as a REAL git repo — a repo
@@ -234,10 +263,14 @@ export function Workers(): React.ReactElement {
   const handleSpawn = async () => {
     setIsSpawning(true);
     try {
-      const id = await spawnWorker({
+      const options = {
         name: "Worker",
         ...(projectRoot ? { repoRoot: projectRoot } : {}),
-      });
+      };
+      const id =
+        spawnProvider === "claude_code"
+          ? await agentSpawn(options, claudeModel, claudeTrustTier)
+          : await spawnWorker(options);
       if (id) {
         toast.success(`Worker Spawned: ${id.slice(0, 8)}`);
       }
@@ -300,6 +333,67 @@ export function Workers(): React.ReactElement {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {/* Provider picker for the next spawn — "Webview Anthropic" is
+              the existing, default behavior; "Claude Code" routes through
+              agent_spawn (Phase 3's minimal command surface). */}
+          <select
+            aria-label="Provider For Next Spawn"
+            value={spawnProvider}
+            onChange={(e) => setSpawnProvider(e.target.value as SpawnProvider)}
+            style={{
+              padding: "6px 10px",
+              background: "oklch(0.12 0.03 220 / 0.7)",
+              border: "1px solid oklch(0.28 0.05 220)",
+              borderRadius: 8,
+              color: "oklch(0.82 0.04 220)",
+              fontFamily: "var(--font-body)",
+              fontSize: "0.75rem",
+            }}
+          >
+            <option value="webview_anthropic">Webview Anthropic</option>
+            <option value="claude_code">Claude Code</option>
+          </select>
+
+          {spawnProvider === "claude_code" && (
+            <>
+              <input
+                aria-label="Claude Code Model Alias"
+                value={claudeModel}
+                onChange={(e) => setClaudeModel(e.target.value)}
+                placeholder="Model (e.g. sonnet)"
+                style={{
+                  width: 120,
+                  padding: "6px 10px",
+                  background: "oklch(0.12 0.03 220 / 0.7)",
+                  border: "1px solid oklch(0.28 0.05 220)",
+                  borderRadius: 8,
+                  color: "oklch(0.82 0.04 220)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "0.6875rem",
+                }}
+              />
+              <select
+                aria-label="Trust Tier For Next Spawn"
+                value={claudeTrustTier}
+                onChange={(e) => setClaudeTrustTier(e.target.value as ClaudeCodeTrustTier)}
+                title="Restricted: Read-Only. Standard: Can Run Commands, Cannot Edit Files. Write Enabled: Can Run Commands And Edit Files."
+                style={{
+                  padding: "6px 10px",
+                  background: "oklch(0.12 0.03 220 / 0.7)",
+                  border: "1px solid oklch(0.28 0.05 220)",
+                  borderRadius: 8,
+                  color: "oklch(0.82 0.04 220)",
+                  fontFamily: "var(--font-body)",
+                  fontSize: "0.75rem",
+                }}
+              >
+                <option value="restricted">Restricted</option>
+                <option value="standard">Standard</option>
+                <option value="write_enabled">Write Enabled</option>
+              </select>
+            </>
+          )}
+
           {/* Project root — worktree isolation source for the next spawn.
               Absent selection = today's behavior (no isolation). */}
           <button
