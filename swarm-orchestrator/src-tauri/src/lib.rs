@@ -339,35 +339,66 @@ pub fn run() {
             // default is the honest approximation; wiring a
             // `set_agent_concurrency` command to keep the two in sync
             // live is a follow-up, not part of this minimal surface.
+            // Review B2 (binding): the OLD executor dropped a turn
+            // silently on `AgentSessionBusy` and released the
+            // semaphore permit the instant `send_turn` returned (a
+            // stdin write — the REAL work happens afterward,
+            // asynchronously) — meaning the concurrency limit bounded
+            // nothing, and two turns queued back-to-back for one
+            // worker deterministically lost the second. Fixed:
+            // (1) `send_turn` -> `await_turn_completion` -> THEN the
+            //     closure (and therefore the permit) resolves, so the
+            //     semaphore bounds actual EXECUTING turns.
+            // (2) A per-session lock (`AgentSessionRegistry::turn_lock`)
+            //     held across both calls serializes two turns queued
+            //     for the SAME worker instead of racing them into a
+            //     `Busy` rejection.
+            // (3) If a turn is STILL rejected through any path (no
+            //     live session, or a direct caller outside this lock
+            //     raced a `Busy`), a synthesized `agent_turn_settled`
+            //     is emitted so the frontend never has an admitted
+            //     turn that silently never terminates (the wedged-chat
+            //     failure mode, review B3).
             let scheduler_registry = agent_session_registry.clone();
+            let scheduler_sink = sink.clone();
             let scheduler = AgentScheduler::new(AgentSchedulerConfig::default(), move |request: AgentTurnRequest| {
                 let registry = scheduler_registry.clone();
+                let sink = scheduler_sink.clone();
                 async move {
-                    match registry.get(&request.worker_id) {
-                        Ok(session) => {
-                            // `AgentSessionBusy` is an ordinary, expected
-                            // outcome here (the session already rejects an
-                            // overlapping turn on its own — see
-                            // `AgentSession`'s concurrency contract) —
-                            // logged, not escalated; the session's own
-                            // `agent_*` event stream is the source of
-                            // truth the frontend renders from, not this
-                            // executor's return value.
-                            if let Err(e) = session.send_turn(request.turn).await {
-                                tracing::warn!(
-                                    worker_id = %request.worker_id,
-                                    error = %e,
-                                    "agent turn dispatch: send_turn did not accept the turn"
-                                );
+                    let turn_lock = registry.turn_lock(&request.worker_id);
+                    let _guard = turn_lock.lock().await;
+
+                    let dispatch_error = match registry.get(&request.worker_id) {
+                        Ok(session) => match session.send_turn(request.turn).await {
+                            Ok(turn_id) => {
+                                if let Err(e) = session.await_turn_completion(turn_id).await {
+                                    tracing::warn!(
+                                        worker_id = %request.worker_id,
+                                        error = %e,
+                                        "agent turn dispatch: await_turn_completion failed"
+                                    );
+                                }
+                                None
                             }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                worker_id = %request.worker_id,
-                                error = %e,
-                                "agent turn dispatch: no live session for worker"
-                            );
-                        }
+                            Err(e) => Some(format!("Turn Rejected: {e}")),
+                        },
+                        Err(e) => Some(format!("No Live Session For This Worker: {e}")),
+                    };
+
+                    if let Some(error) = dispatch_error {
+                        tracing::warn!(worker_id = %request.worker_id, %error, "agent turn dispatch failed — synthesizing a terminal receipt");
+                        sink.emit(SwarmEvent::AgentTurnSettled(
+                            swarm_core::events::AgentTurnSettledPayload {
+                                worker_id: request.worker_id,
+                                turn_id: uuid::Uuid::new_v4().to_string(),
+                                status: swarm_core::agent::AgentTurnStatus::Error,
+                                error: Some(error),
+                                cost_usd: None,
+                                usage: None,
+                                duration_ms: 0,
+                                num_turns: None,
+                            },
+                        ));
                     }
                 }
             });

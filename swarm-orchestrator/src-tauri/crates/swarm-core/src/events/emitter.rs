@@ -682,8 +682,11 @@ pub struct AgentPermissionRequestPayload {
     /// auto-applied by SWARM. Always `Some(Deny)` for a
     /// `ClaudeCodeAdapter` report (see the struct doc's semantics
     /// shift) — the fine-grained reason lives in
-    /// [`Self::denial_subclass`].
-    #[serde(default)]
+    /// [`Self::denial_subclass`]. Omitted from the wire entirely
+    /// (review F1 — belt #2 alongside the TS schema's
+    /// `.nullable().optional()`) when absent, rather than serialized as
+    /// `null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggested_decision: Option<PermissionDecision>,
     /// Best-effort classification of WHY the provider denied this
     /// call. For `ClaudeCodeAdapter`, one of three values (the §0b
@@ -698,13 +701,15 @@ pub struct AgentPermissionRequestPayload {
     /// any known subclass. Free-form (not a closed enum) because this
     /// is provider-CLI-observed text classification, not a SWARM-owned
     /// vocabulary — see `crate::agent::claude_code`'s classifier doc.
-    #[serde(default)]
+    /// Omitted from the wire when absent (review F1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub denial_subclass: Option<String>,
     /// Raw, human-readable denial message from the provider, verbatim,
     /// when available. `None` for a genuine pending-request event (the
     /// pre-Phase-3 meaning this struct was designed for); `Some` for a
-    /// `ClaudeCodeAdapter` report.
-    #[serde(default)]
+    /// `ClaudeCodeAdapter` report. Omitted from the wire when absent
+    /// (review F1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
 

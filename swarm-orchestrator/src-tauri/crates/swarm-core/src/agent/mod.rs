@@ -32,9 +32,9 @@ pub mod registry;
 pub mod scheduler;
 
 pub use adapter::{
-    AgentAdapter, AgentSession, AgentSpawnSpec, BoxFuture, CancelGranularity, Capabilities,
-    ExitSummary, PermissionDecision, PermissionId, ProbeReport, ProviderId, SessionKey, TurnId,
-    TurnInput,
+    AgentAdapter, AgentSession, AgentSpawnSpec, AgentTurnStatus, BoxFuture, CancelGranularity,
+    Capabilities, ExitSummary, PermissionDecision, PermissionId, ProbeReport, ProviderId,
+    SessionKey, TurnId, TurnInput,
 };
 pub use claude_code::{ClaudeCodeAdapter, ClaudeCodeSession, ClaudeCodeTrustTier};
 pub use registry::AgentSessionRegistry;

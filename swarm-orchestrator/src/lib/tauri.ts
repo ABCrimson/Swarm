@@ -125,6 +125,38 @@ export async function spawnWorker(
 /** Validates the raw `agent_spawn` IPC response is a worker UUID before trusting it. */
 const AgentSpawnResponseSchema = z.uuid();
 
+/** Mirrors Rust's `AgentSpawnError` (`src-tauri/src/commands/agent.rs`). */
+const AgentSpawnErrorSchema = z.object({
+  workerId: z.uuid().nullable().optional(),
+  message: z.string(),
+});
+
+/**
+ * An `agent_spawn` failure, carrying the worker id when the PTY worker
+ * was already created before the agent-session attach step failed
+ * (review F9) — a caller can still find/show that worker instead of
+ * being left with a bare, unattributable error message. Thrown by
+ * {@link agentSpawn} in place of the raw IPC rejection value, mirroring
+ * {@link ShipCommandError}'s pattern.
+ */
+export class AgentSpawnCommandError extends Error {
+  readonly workerId: string | null;
+
+  constructor(workerId: string | null, message: string) {
+    super(message);
+    this.name = "AgentSpawnCommandError";
+    this.workerId = workerId;
+  }
+}
+
+function toAgentSpawnCommandError(err: unknown): Error {
+  const parsed = AgentSpawnErrorSchema.safeParse(err);
+  if (parsed.success) {
+    return new AgentSpawnCommandError(parsed.data.workerId ?? null, parsed.data.message);
+  }
+  return err instanceof Error ? err : new Error(String(err));
+}
+
 /**
  * Spawns a new worker (via the same worktree-isolation path as
  * {@link spawnWorker}) AND attaches a Claude Code provider-adapter
@@ -160,19 +192,23 @@ export async function agentSpawn(
   if (options.repoRoot !== undefined) config.repoRoot = options.repoRoot;
   if (options.isolation !== undefined) config.isolation = options.isolation;
 
-  const raw = await invoke<unknown>("agent_spawn", {
-    config,
-    provider: "claude_code",
-    model,
-    trustTier,
-    originWorker: prov?.originWorker,
-    causeSeq: prov?.causeSeq,
-  });
-  const parsed = AgentSpawnResponseSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new Error("Agent Spawn Returned An Invalid Worker ID.");
+  try {
+    const raw = await invoke<unknown>("agent_spawn", {
+      config,
+      provider: "claude_code",
+      model,
+      trustTier,
+      originWorker: prov?.originWorker,
+      causeSeq: prov?.causeSeq,
+    });
+    const parsed = AgentSpawnResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("Agent Spawn Returned An Invalid Worker ID.");
+    }
+    return parsed.data;
+  } catch (err) {
+    throw toAgentSpawnCommandError(err);
   }
-  return parsed.data;
 }
 
 /**

@@ -14,7 +14,7 @@ import { Pill } from "#components/ui/Pill";
 import type { ClaudeCodeTrustTier } from "#lib/agent-events";
 import { matchesBinding } from "#lib/keybindings";
 import { DEFAULT_REPO_ROOT_KEY, getPersistedRepoRoot } from "#lib/project-root";
-import { agentSpawn, spawnWorker, validateRepoRoot, writeConfig } from "#lib/tauri";
+import { agentProbe, agentSpawn, spawnWorker, validateRepoRoot, writeConfig } from "#lib/tauri";
 import { useAgentSessionStore } from "#store/agent-sessions";
 import {
   causalityInspectorAtom,
@@ -204,6 +204,27 @@ export function Workers(): React.ReactElement {
   const [spawnProvider, setSpawnProvider] = useState<SpawnProvider>("webview_anthropic");
   const [claudeModel, setClaudeModel] = useState("sonnet");
   const [claudeTrustTier, setClaudeTrustTier] = useState<ClaudeCodeTrustTier>("standard");
+  // Claude Code availability (review F7) — undefined = "still probing"
+  // (the option stays enabled meanwhile — an early click can't be
+  // blocked by a probe that hasn't resolved yet), null = "available",
+  // string = "unavailable," holding the Title Case reason the option's
+  // title/disabled state surfaces.
+  const [claudeUnavailableReason, setClaudeUnavailableReason] = useState<string | null | undefined>(
+    undefined,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void agentProbe().then((report) => {
+      if (cancelled) return;
+      setClaudeUnavailableReason(
+        report.available ? null : (report.detail ?? "Claude Code CLI Not Available"),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Load path: the persisted root is Zod-validated at the seam by
   // getPersistedRepoRoot, then revalidated as a REAL git repo — a repo
@@ -261,6 +282,10 @@ export function Workers(): React.ReactElement {
   };
 
   const handleSpawn = async () => {
+    if (spawnProvider === "claude_code" && claudeUnavailableReason != null) {
+      toast.error(`Claude Code Unavailable: ${claudeUnavailableReason}`);
+      return;
+    }
     setIsSpawning(true);
     try {
       const options = {
@@ -340,6 +365,7 @@ export function Workers(): React.ReactElement {
             aria-label="Provider For Next Spawn"
             value={spawnProvider}
             onChange={(e) => setSpawnProvider(e.target.value as SpawnProvider)}
+            title={claudeUnavailableReason ? `Claude Code: ${claudeUnavailableReason}` : undefined}
             style={{
               padding: "6px 10px",
               background: "oklch(0.12 0.03 220 / 0.7)",
@@ -351,7 +377,9 @@ export function Workers(): React.ReactElement {
             }}
           >
             <option value="webview_anthropic">Webview Anthropic</option>
-            <option value="claude_code">Claude Code</option>
+            <option value="claude_code" disabled={claudeUnavailableReason != null}>
+              Claude Code{claudeUnavailableReason ? ` (${claudeUnavailableReason})` : ""}
+            </option>
           </select>
 
           {spawnProvider === "claude_code" && (
@@ -360,7 +388,7 @@ export function Workers(): React.ReactElement {
                 aria-label="Claude Code Model Alias"
                 value={claudeModel}
                 onChange={(e) => setClaudeModel(e.target.value)}
-                placeholder="Model (e.g. sonnet)"
+                placeholder="Model Alias (E.g. Sonnet)"
                 style={{
                   width: 120,
                   padding: "6px 10px",

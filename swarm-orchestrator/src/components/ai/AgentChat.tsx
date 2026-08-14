@@ -3,9 +3,10 @@
 // session (Phase 3's command surface — see docs/architecture.md's
 // adapter-layer section). Renders directly from the agent_* event
 // stream; sends turns via agentSendTurn. The polished, richly
-// interactive version (tool-call cards, permission timeline, streaming
-// deltas rendered live) is the follow-up UI-overhaul branch — this is
-// deliberately the minimal surface: one append-only list, one input.
+// interactive version (tool-call cards, permission timeline) is the
+// follow-up UI-overhaul branch — this is deliberately the minimal
+// surface: one append-only list, one input, live streaming text, and a
+// Cancel affordance.
 
 import type { CSSProperties, FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -22,17 +23,18 @@ import {
   AgentPermissionRequestPayloadSchema,
   AgentToolCallPayloadSchema,
   AgentToolResultPayloadSchema,
+  AgentTurnDeltaPayloadSchema,
   AgentTurnSettledPayloadSchema,
 } from "#lib/agent-events";
 import { onEvent } from "#lib/event-bus";
-import { agentSendTurn } from "#lib/tauri";
+import { agentCancel, agentSendTurn } from "#lib/tauri";
 
 interface AgentChatProps {
   readonly workerId: string;
 }
 
 type TranscriptItem =
-  | { readonly id: string; readonly kind: "user"; readonly text: string }
+  | { readonly id: string; readonly kind: "user"; readonly text: string; readonly failed: boolean }
   | { readonly id: string; readonly kind: "block"; readonly payload: AgentBlockPayload }
   | { readonly id: string; readonly kind: "tool_call"; readonly payload: AgentToolCallPayload }
   | { readonly id: string; readonly kind: "tool_result"; readonly payload: AgentToolResultPayload }
@@ -42,6 +44,25 @@ type TranscriptItem =
       readonly payload: AgentPermissionRequestPayload;
     }
   | { readonly id: string; readonly kind: "settled"; readonly payload: AgentTurnSettledPayload };
+
+/** Live, not-yet-finalized text for one (turnId, blockIndex) pair, accumulated from agent_turn_delta. */
+interface StreamingBlock {
+  readonly kind: string;
+  readonly text: string;
+}
+
+// ── Denial subclass -> Title Case label (review F10) ─
+
+const DENIAL_SUBCLASS_LABELS: Record<string, string> = {
+  mode: "Mode Denied",
+  ungranted_write: "Write Not Granted",
+  redirection_guard: "Redirection Blocked",
+};
+
+function denialSubclassLabel(subclass: string | null | undefined): string {
+  if (subclass && subclass in DENIAL_SUBCLASS_LABELS) return DENIAL_SUBCLASS_LABELS[subclass];
+  return "Permission Denied";
+}
 
 // ── Styles (OKLCH) ───────────────────────────────────
 
@@ -78,12 +99,23 @@ const userBubbleStyle: CSSProperties = {
   maxWidth: "85%",
 };
 
+const userBubbleFailedStyle: CSSProperties = {
+  ...userBubbleStyle,
+  background: "oklch(0.16 0.08 25 / 0.35)",
+  border: "1px solid oklch(0.45 0.18 25)",
+};
+
 const textBlockStyle: CSSProperties = {
   ...bubbleBaseStyle,
   alignSelf: "flex-start",
   background: "oklch(0.12 0.03 220 / 0.7)",
   color: "oklch(0.90 0.02 220)",
   maxWidth: "90%",
+};
+
+const streamingBlockStyle: CSSProperties = {
+  ...textBlockStyle,
+  border: "1px dashed oklch(0.45 0.10 205 / 0.6)",
 };
 
 const thinkingBlockStyle: CSSProperties = {
@@ -169,6 +201,17 @@ const sendButtonStyle: CSSProperties = {
   cursor: "pointer",
 };
 
+const cancelButtonStyle: CSSProperties = {
+  padding: "8px 14px",
+  borderRadius: 8,
+  border: "1px solid oklch(0.45 0.18 25)",
+  background: "oklch(0.16 0.08 25 / 0.5)",
+  color: "oklch(0.82 0.19 25)",
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
 // ── Block rendering ───────────────────────────────────
 
 function renderBlockContent(kind: string, content: unknown): string {
@@ -191,7 +234,7 @@ function renderBlockContent(kind: string, content: unknown): string {
 function TranscriptRow({ item }: { readonly item: TranscriptItem }): React.ReactElement | null {
   switch (item.kind) {
     case "user":
-      return <div style={userBubbleStyle}>{item.text}</div>;
+      return <div style={item.failed ? userBubbleFailedStyle : userBubbleStyle}>{item.text}</div>;
     case "block": {
       const text = renderBlockContent(item.payload.kind, item.payload.content);
       if (!text.trim()) return null;
@@ -219,8 +262,8 @@ function TranscriptRow({ item }: { readonly item: TranscriptItem }): React.React
     case "permission_denied":
       return (
         <div style={permissionDeniedStyle}>
-          Denied — {item.payload.tool} ({item.payload.denialSubclass ?? "unknown"}):{" "}
-          {item.payload.message}
+          {denialSubclassLabel(item.payload.denialSubclass)} — {item.payload.tool}
+          {item.payload.message ? `: ${item.payload.message}` : ""}
         </div>
       );
     case "settled":
@@ -228,7 +271,7 @@ function TranscriptRow({ item }: { readonly item: TranscriptItem }): React.React
         <div style={settledStyle}>
           {item.payload.status === "ok"
             ? "Turn Complete"
-            : `Turn Failed: ${item.payload.error ?? ""}`}
+            : `Turn Failed${item.payload.error ? `: ${item.payload.error}` : ""}`}
           {item.payload.costUsd != null ? ` · $${item.payload.costUsd.toFixed(4)}` : ""}
         </div>
       );
@@ -241,33 +284,71 @@ function TranscriptRow({ item }: { readonly item: TranscriptItem }): React.React
 
 /**
  * Minimal event-driven transcript + input for a worker's attached
- * Claude Code session. Every `TranscriptItem` traces to a real
- * `agent_*` event (or the caller's own optimistic outgoing message) —
- * nothing here fabricates content client-side, matching AIChat's own
- * discipline for the webview path.
+ * Claude Code session. Every persisted `TranscriptItem` traces to a
+ * real `agent_*` event (or the caller's own optimistic outgoing
+ * message) — nothing here fabricates content client-side, matching
+ * AIChat's own discipline for the webview path. `agent_turn_delta`
+ * (ephemeral, review F6) additionally renders as a live, in-progress
+ * bubble per (turnId, blockIndex) that gets replaced by the real
+ * `agent_block` once the provider finalizes it.
  */
 export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
   const [items, setItems] = useState<TranscriptItem[]>([]);
+  const [streaming, setStreaming] = useState<Map<string, StreamingBlock>>(new Map());
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  // The most recently observed turnId for THIS worker's in-flight turn
+  // (review F7) — agent_send_turn is fire-and-forget and never hands
+  // back a turnId directly, so Cancel correlates via whatever the
+  // event stream has told us about the turn actually running.
+  const [currentTurnId, setCurrentTurnId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setItems([]);
+    setStreaming(new Map());
     setBusy(false);
+    setCurrentTurnId(null);
 
     const push = (item: TranscriptItem) => setItems((prev) => [...prev, item]);
+    const streamKey = (turnId: string, blockIndex: number) => `${turnId}:${blockIndex}`;
 
     const offs = [
+      onEvent("agent_turn_delta", (e) => {
+        const parsed = AgentTurnDeltaPayloadSchema.safeParse(e.payload);
+        if (!parsed.success || parsed.data.workerId !== workerId) return;
+        setCurrentTurnId(parsed.data.turnId);
+        const key = streamKey(parsed.data.turnId, parsed.data.blockIndex);
+        setStreaming((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(key);
+          next.set(key, {
+            kind: parsed.data.kind,
+            text: (existing?.text ?? "") + parsed.data.text,
+          });
+          return next;
+        });
+      }),
       onEvent("agent_block", (e) => {
         const parsed = AgentBlockPayloadSchema.safeParse(e.payload);
-        if (parsed.success && parsed.data.workerId === workerId) {
-          push({ id: `${e.seq}`, kind: "block", payload: parsed.data });
-        }
+        if (!parsed.success || parsed.data.workerId !== workerId) return;
+        setCurrentTurnId(parsed.data.turnId);
+        // The finalized block supersedes any in-progress streaming
+        // bubble for the same (turnId, blockIndex) — drop it so the
+        // content isn't shown twice.
+        const key = streamKey(parsed.data.turnId, parsed.data.blockIndex);
+        setStreaming((prev) => {
+          if (!prev.has(key)) return prev;
+          const next = new Map(prev);
+          next.delete(key);
+          return next;
+        });
+        push({ id: `${e.seq}`, kind: "block", payload: parsed.data });
       }),
       onEvent("agent_tool_call", (e) => {
         const parsed = AgentToolCallPayloadSchema.safeParse(e.payload);
         if (parsed.success && parsed.data.workerId === workerId) {
+          setCurrentTurnId(parsed.data.turnId);
           push({ id: `${e.seq}`, kind: "tool_call", payload: parsed.data });
         }
       }),
@@ -285,9 +366,29 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
       }),
       onEvent("agent_turn_settled", (e) => {
         const parsed = AgentTurnSettledPayloadSchema.safeParse(e.payload);
-        if (parsed.success && parsed.data.workerId === workerId) {
-          push({ id: `${e.seq}`, kind: "settled", payload: parsed.data });
-          setBusy(false);
+        if (!parsed.success || parsed.data.workerId !== workerId) return;
+        push({ id: `${e.seq}`, kind: "settled", payload: parsed.data });
+        setBusy(false);
+        setCurrentTurnId(null);
+        // Reconcile the optimistic bubble (review B3): every admitted
+        // turn now reaches exactly one terminal agent_turn_settled
+        // (guaranteed by the B2 scheduler fix, including the
+        // synthesized-on-rejection case) — mark the most recent
+        // pending user bubble as failed on an error settlement so the
+        // failure is visually attached to the message that caused it,
+        // not just a floating status line at the bottom.
+        if (parsed.data.status === "error") {
+          setItems((prev) => {
+            const idx = [...prev].reverse().findIndex((it) => it.kind === "user" && !it.failed);
+            if (idx === -1) return prev;
+            const realIdx = prev.length - 1 - idx;
+            const next = [...prev];
+            const target = next[realIdx];
+            if (target.kind === "user") {
+              next[realIdx] = { ...target, failed: true };
+            }
+            return next;
+          });
         }
       }),
     ];
@@ -306,20 +407,47 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
     const trimmed = draft.trim();
     if (!trimmed || busy) return;
 
-    setItems((prev) => [...prev, { id: crypto.randomUUID(), kind: "user", text: trimmed }]);
+    setItems((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), kind: "user", text: trimmed, failed: false },
+    ]);
     setDraft("");
     setBusy(true);
 
     void agentSendTurn(workerId, trimmed).catch((err) => {
       setBusy(false);
+      setCurrentTurnId(null);
       toast.error(`Send Turn Failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Admission itself failed (e.g. the scheduler's queue is full) —
+      // no agent_turn_settled will ever arrive for this message, so
+      // reconcile the optimistic bubble here directly (review B3).
+      setItems((prev) => {
+        const idx = [...prev].reverse().findIndex((it) => it.kind === "user" && !it.failed);
+        if (idx === -1) return prev;
+        const realIdx = prev.length - 1 - idx;
+        const next = [...prev];
+        const target = next[realIdx];
+        if (target.kind === "user") {
+          next[realIdx] = { ...target, failed: true };
+        }
+        return next;
+      });
     });
   };
+
+  const handleCancel = () => {
+    if (!currentTurnId) return;
+    void agentCancel(workerId, currentTurnId).catch((err) => {
+      toast.error(`Cancel Failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  };
+
+  const streamingEntries = [...streaming.entries()];
 
   return (
     <div style={containerStyle}>
       <div style={transcriptStyle} ref={scrollRef}>
-        {items.length === 0 && (
+        {items.length === 0 && streamingEntries.length === 0 && (
           <div style={{ ...settledStyle, alignSelf: "center", marginTop: 24 }}>
             No Messages Yet — Say Something Below
           </div>
@@ -327,6 +455,16 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
         {items.map((item) => (
           <TranscriptRow key={item.id} item={item} />
         ))}
+        {streamingEntries.map(([key, block]) =>
+          block.text.trim() ? (
+            <div
+              key={key}
+              style={block.kind === "thinking" ? thinkingBlockStyle : streamingBlockStyle}
+            >
+              {block.text}
+            </div>
+          ) : null,
+        )}
         {busy && <div style={settledStyle}>Working…</div>}
       </div>
       <form style={formStyle} onSubmit={handleSubmit}>
@@ -338,9 +476,20 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
           disabled={busy}
           aria-label="Message Claude Code"
         />
-        <button type="submit" style={sendButtonStyle} disabled={busy || !draft.trim()}>
-          Send
-        </button>
+        {busy && currentTurnId ? (
+          <button
+            type="button"
+            style={cancelButtonStyle}
+            onClick={handleCancel}
+            aria-label="Cancel"
+          >
+            Cancel
+          </button>
+        ) : (
+          <button type="submit" style={sendButtonStyle} disabled={busy || !draft.trim()}>
+            Send
+          </button>
+        )}
       </form>
     </div>
   );

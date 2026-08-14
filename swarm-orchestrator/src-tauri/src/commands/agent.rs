@@ -137,6 +137,45 @@ fn parse_provider(raw: &str) -> Result<ProviderId, String> {
         .map_err(|_| format!("Unknown Provider: {raw}"))
 }
 
+/// Typed error for [`agent_spawn`] (review F9).
+///
+/// A generic `String` error loses the worker id the instant the PTY
+/// worker spawn itself succeeds but the SUBSEQUENT agent-session attach
+/// fails — the caller is left with an error message and no way to
+/// find/show the worker that nonetheless exists and is usable as a
+/// plain terminal (see [`agent_spawn`]'s doc). `workerId` is `Some` from
+/// the moment the PTY worker has been created, `None` only for errors
+/// that happen before that (bad provider string, bad provenance args,
+/// or the PTY spawn itself failing).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSpawnError {
+    /// UUID of the worker that was created, if the failure happened
+    /// AFTER worker creation (the agent-session attach step).
+    pub worker_id: Option<String>,
+    /// Human-readable failure detail.
+    pub message: String,
+}
+
+impl std::fmt::Display for AgentSpawnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl From<String> for AgentSpawnError {
+    /// Every error site BEFORE the worker exists (`parse_provider`,
+    /// `parse_provenance`, and `?` from those) converts through here —
+    /// `workerId: None` is correct at that point, there is no worker
+    /// yet.
+    fn from(message: String) -> Self {
+        Self {
+            worker_id: None,
+            message,
+        }
+    }
+}
+
 /// Spawns a new worker (via the existing worktree-isolation path — see
 /// [`crate::commands::worker::spawn_worker`]) and attaches a Claude
 /// Code provider-adapter session to it in the same call.
@@ -153,7 +192,9 @@ fn parse_provider(raw: &str) -> Result<ProviderId, String> {
 /// agent-attach failure without rolling back the worker spawn, matching
 /// the plan's "Not Signed In is a state, never a hang" rule (a
 /// half-attached worker is a legitimate, visible degraded state, not a
-/// silent failure).
+/// silent failure). [`AgentSpawnError::worker_id`] carries that
+/// worker's id in this case (review F9) so the frontend is never left
+/// with an error message it can't attribute to anything.
 ///
 /// # Arguments
 ///
@@ -173,10 +214,11 @@ fn parse_provider(raw: &str) -> Result<ProviderId, String> {
 ///
 /// # Errors
 ///
-/// Returns a `String` error if the PTY worker spawn itself fails (same
-/// failure modes as `spawn_worker`), if `provider` is unrecognized or
-/// not yet supported, or if the agent session fails to attach (in which
-/// case the worker still exists — see above).
+/// Returns an [`AgentSpawnError`] if the PTY worker spawn itself fails
+/// (same failure modes as `spawn_worker`; `workerId: None`), if
+/// `provider` is unrecognized or not yet supported (`workerId: None`),
+/// or if the agent session fails to attach (`workerId: Some` — the
+/// worker still exists, see above).
 #[tauri::command]
 #[tracing::instrument(skip(sink, registry, repo_locks, session_registry, claude_adapter, config))]
 #[allow(clippy::too_many_arguments)]
@@ -192,13 +234,14 @@ pub async fn agent_spawn(
     trust_tier: Option<String>,
     origin_worker: Option<String>,
     cause_seq: Option<u64>,
-) -> Result<String, String> {
+) -> Result<String, AgentSpawnError> {
     tracing::info!(name = %config.name, %provider, "agent_spawn called");
     let provider_id = parse_provider(&provider)?;
     if provider_id != ProviderId::ClaudeCode {
-        return Err(format!(
-            "Provider Not Yet Supported: {provider} (only claude_code today)"
-        ));
+        return Err(AgentSpawnError {
+            worker_id: None,
+            message: format!("Provider Not Yet Supported: {provider} (only claude_code today)"),
+        });
     }
 
     let provenance = parse_provenance(origin_worker, cause_seq)?;
@@ -208,16 +251,28 @@ pub async fn agent_spawn(
     let sink_inner = sink.inner().clone();
     let repo_locks_inner = repo_locks.inner().clone();
     let worker_id = tokio::task::spawn_blocking(move || {
-        lifecycle::do_spawn_worker(&sink_inner, &registry_inner, &repo_locks_inner, config, provenance)
+        lifecycle::do_spawn_worker(
+            &sink_inner,
+            &registry_inner,
+            &repo_locks_inner,
+            config,
+            provenance,
+        )
     })
     .await
     .map_err(|e| {
         tracing::error!(error = %e, "agent_spawn: worker spawn task panicked");
-        e.to_string()
+        AgentSpawnError {
+            worker_id: None,
+            message: e.to_string(),
+        }
     })?
     .map_err(|e| {
         tracing::error!(error = %e, "agent_spawn: worker spawn failed");
-        e.to_string()
+        AgentSpawnError {
+            worker_id: None,
+            message: e.to_string(),
+        }
     })?;
 
     // Worktree cwd (when isolated) takes priority over the config's raw
@@ -243,7 +298,13 @@ pub async fn agent_spawn(
         }
         Err(e) => {
             tracing::error!(worker_id = %worker_id, error = %e, "agent_spawn: session attach failed — worker remains usable as a plain terminal");
-            return Err(e.to_string());
+            // The PTY worker already exists at this point (review F9)
+            // — carry its id so the caller isn't left with a bare error
+            // message it can't attribute to anything.
+            return Err(AgentSpawnError {
+                worker_id: Some(worker_id.to_string()),
+                message: e.to_string(),
+            });
         }
     }
 
@@ -359,5 +420,8 @@ pub async fn agent_shutdown(
 pub async fn agent_probe(
     claude_adapter: tauri::State<'_, ClaudeCodeAdapter>,
 ) -> Result<ProbeReport, String> {
-    claude_adapter.probe().await.map_err(|e: AppError| e.to_string())
+    claude_adapter
+        .probe()
+        .await
+        .map_err(|e: AppError| e.to_string())
 }

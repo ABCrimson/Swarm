@@ -413,6 +413,29 @@ pub trait AgentSession: Send + Sync {
     /// above. Never queues internally.
     fn send_turn(&self, turn: TurnInput) -> BoxFuture<'_, Result<TurnId, AppError>>;
 
+    /// Resolves once `turn` reaches a terminal settlement — the SAME
+    /// settlement `agent_turn_settled` reports, whether the provider
+    /// produced it naturally or it was synthesized on ungraceful exit
+    /// (Condition B, [`Self::shutdown`]'s doc). Added by review (B2):
+    /// the scheduler that gates concurrent agent turns needs a real
+    /// "this turn's process is done executing" signal to hold its
+    /// concurrency permit against — `send_turn` resolving only proves
+    /// the provider ACCEPTED the turn (see its own doc), not that
+    /// executing it is finished, so a scheduler that released its
+    /// permit at `send_turn`'s return would bound nothing.
+    ///
+    /// **MUST NOT hang past this session's own death.** If the session
+    /// is torn down (via [`Self::shutdown`]) before `turn` ever
+    /// settles — including a `turn` id that never existed, e.g. a
+    /// caller racing a rejected [`Self::send_turn`] — this resolves
+    /// `Ok(())` anyway rather than waiting for an event that can no
+    /// longer arrive. A caller that wants to distinguish "settled
+    /// successfully" from "session died before this turn settled"
+    /// reads the persisted `agent_turn_settled`/`agent_session_exited`
+    /// rows for the real answer; this method's contract is purely
+    /// "stop blocking," not "tell you how it went."
+    fn await_turn_completion(&self, turn: TurnId) -> BoxFuture<'_, Result<(), AppError>>;
+
     /// Cancels an in-flight turn, honoring
     /// [`Capabilities::cancel_granularity`] — `KillOnly` adapters tear
     /// down the whole process (see [`Self::shutdown`]'s Condition B
@@ -667,6 +690,14 @@ mod tests {
 
                 Ok(turn_id)
             })
+        }
+
+        fn await_turn_completion(&self, _turn: TurnId) -> BoxFuture<'_, Result<(), AppError>> {
+            // `send_turn` above already runs the turn to full settlement
+            // (including the ownership handshake) before ever returning
+            // `Ok(turn_id)` — by construction, any turn id a caller could
+            // hold has already completed. Nothing to wait for.
+            Box::pin(async { Ok(()) })
         }
 
         fn cancel(&self, _turn: TurnId) -> BoxFuture<'_, Result<(), AppError>> {
