@@ -71,7 +71,12 @@ export function importWorkflow(def: WorkflowDefinition): { nodes: Node[]; edges:
     id: e.id,
     source: e.source,
     target: e.target,
-    type: "spawnOrder",
+    // Imported edges are inherently user-authored, not measured facts
+    // derived from a stamped envelope — the "manual" kind keeps them
+    // visually and structurally distinct from provenance edges (see
+    // `ProvenanceEdge.tsx`), same as one hand-drawn via `onConnect`.
+    type: "provenance",
+    data: { kind: "manual" },
     label: e.label,
   }));
 

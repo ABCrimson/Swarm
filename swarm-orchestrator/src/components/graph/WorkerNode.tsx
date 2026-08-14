@@ -2,6 +2,7 @@ import type { Node, NodeProps } from "@xyflow/react";
 import { Handle, Position } from "@xyflow/react";
 import { motion } from "motion/react";
 import { Badge, stateLabels } from "#components/ui/Badge";
+import { Pill } from "#components/ui/Pill";
 import { withAlpha, workerColor } from "#lib/theme";
 import type { WorkerState } from "#store/types";
 
@@ -10,6 +11,13 @@ export interface WorkerNodeData {
   readonly state: WorkerState;
   readonly index: number;
   readonly pid?: number;
+  /**
+   * Count of `file_written` events this worker originated — rendered as
+   * a node badge, never an edge (files aren't workers, and a
+   * node-per-file would explode the layout). Zero/absent renders no
+   * badge at all.
+   */
+  readonly fileWriteCount?: number;
 }
 
 type WorkerNodeType = Node<WorkerNodeData & Record<string, unknown>, "worker">;
@@ -21,7 +29,7 @@ type WorkerNodeType = Node<WorkerNodeData & Record<string, unknown>, "worker">;
  * state badge, PID, and connection handles.
  */
 export function WorkerNode({ data }: NodeProps<WorkerNodeType>): React.ReactElement {
-  const { label, state, index, pid } = data;
+  const { label, state, index, pid, fileWriteCount } = data;
   const color = workerColor(index);
   const glowColor = withAlpha(color, 0.3);
   const borderColor = withAlpha(color, 0.5);
@@ -106,6 +114,12 @@ export function WorkerNode({ data }: NodeProps<WorkerNodeType>): React.ReactElem
         >
           PID {pid}
         </span>
+      )}
+
+      {fileWriteCount != null && fileWriteCount > 0 && (
+        <Pill tone="info" size="sm" style={{ alignSelf: "flex-start" }}>
+          Wrote {fileWriteCount} {fileWriteCount === 1 ? "File" : "Files"}
+        </Pill>
       )}
 
       {isRunning && (

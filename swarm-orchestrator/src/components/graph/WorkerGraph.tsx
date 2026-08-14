@@ -19,20 +19,22 @@ import {
   ReactFlowProvider,
   useReactFlow,
 } from "@xyflow/react";
-import { useAtom } from "jotai";
+import { useAtom, useSetAtom } from "jotai";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "#components/ui/Spinner";
 import { useElkLayout } from "#hooks/useElkLayout";
 import { workerColor } from "#lib/theme";
-
+import type { ProvenanceEdgeRecord } from "#store/provenance";
+import { selectVisibleEdges, useProvenanceStore } from "#store/provenance";
 import type { Worker, WorkerState } from "#store/types";
-
-import { detailPanelOpenAtom, selectedWorkerIdAtom } from "#store/ui";
+import { causalityInspectorAtom, detailPanelOpenAtom, selectedWorkerIdAtom } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
 import { GraphContextMenu } from "./GraphContextMenu.tsx";
 import { GraphControls } from "./GraphControls.tsx";
-import { SpawnOrderEdge } from "./SpawnOrderEdge.tsx";
+import { GraphLegend } from "./GraphLegend.tsx";
+import type { GraphEdgeKind, ProvenanceEdgeData } from "./ProvenanceEdge.tsx";
+import { ProvenanceEdge } from "./ProvenanceEdge.tsx";
 import { WorkerNode } from "./WorkerNode.tsx";
 
 import "@xyflow/react/dist/style.css";
@@ -42,7 +44,7 @@ const nodeTypes: NodeTypes = {
 };
 
 const edgeTypes: EdgeTypes = {
-  spawnOrder: SpawnOrderEdge,
+  provenance: ProvenanceEdge,
 };
 
 interface ContextMenuState {
@@ -52,10 +54,12 @@ interface ContextMenuState {
   readonly workerState: WorkerState;
 }
 
-function buildGraphData(workers: Map<string, Worker>): { nodes: Node[]; edges: Edge[] } {
-  const entries = [...workers.entries()];
-
-  const nodes: Node[] = entries.map(([id, worker], index) => ({
+/** Builds nodes from the live worker registry — one per worker, no fabricated edges. `fileWriteCounts` feeds each node's "Wrote N Files" badge. */
+function buildNodes(
+  workers: ReadonlyMap<string, Worker>,
+  fileWriteCounts: ReadonlyMap<string, number>,
+): Node[] {
+  return [...workers.entries()].map(([id, worker], index) => ({
     id,
     type: "worker",
     position: { x: 0, y: 0 },
@@ -64,70 +68,86 @@ function buildGraphData(workers: Map<string, Worker>): { nodes: Node[]; edges: E
       state: worker.state,
       index,
       pid: worker.pid,
+      fileWriteCount: fileWriteCounts.get(id) ?? 0,
     },
   }));
+}
 
-  // Build spawn-order chain edges. NOTE: these are NOT real dependency
-  // relationships — the Worker schema has no dependency/parent field, so
-  // this simply connects entries in Map iteration (insertion) order as a
-  // visual chain. Treat as illustrative topology only. Labeled "Spawn
-  // Order" in the graph's legend (below) — never "dependency" — to keep
-  // the UI honest about what these edges represent.
-  const edges: Edge[] = [];
-  for (let i = 1; i < entries.length; i++) {
-    const [prevId] = entries[i - 1];
-    const [currId] = entries[i];
-    edges.push({
-      id: `edge-${prevId}-${currId}`,
-      source: prevId,
-      target: currId,
-      type: "spawnOrder",
-    });
-  }
-
-  return { nodes, edges };
+/**
+ * Converts visible provenance-store edge records into React Flow edges.
+ * Each record already collapsed repeated same-kind occurrences (see
+ * `#store/provenance`'s `ingestEvent`) — `count`/`lastSeq` ride along in
+ * `data` for `ProvenanceEdge`'s ×N label and `CausalityPanel`'s walk
+ * starting point, respectively.
+ */
+function toFlowEdges(records: readonly ProvenanceEdgeRecord[]): Edge[] {
+  return records.map((r) => ({
+    id: `prov-${r.from}-${r.to}-${r.kind}`,
+    source: r.from,
+    target: r.to,
+    type: "provenance",
+    data: { kind: r.kind, count: r.count, lastSeq: r.lastSeq } satisfies ProvenanceEdgeData,
+  }));
 }
 
 function WorkerGraphInner(): React.ReactElement {
   const workers = useWorkerStore((s) => s.workers);
   const updateState = useWorkerStore((s) => s.updateState);
   const removeWorker = useWorkerStore((s) => s.removeWorker);
+  const provenanceEdges = useProvenanceStore((s) => s.edges);
+  const fileWriteCounts = useProvenanceStore((s) => s.fileWriteCounts);
   const [, setSelectedId] = useAtom(selectedWorkerIdAtom);
   const [, setDetailOpen] = useAtom(detailPanelOpenAtom);
+  const setCausalityTarget = useSetAtom(causalityInspectorAtom);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const initialFitDone = useRef(false);
 
   const { fitView, getViewport } = useReactFlow();
 
-  // Build raw graph data from worker store
-  const { nodes: rawNodes, edges: rawEdges } = buildGraphData(workers);
+  // Nodes come from the live worker registry; measured edges come from
+  // the provenance store, filtered to workers still on the canvas (an
+  // edge whose endpoint departed drops from the graph but stays in the
+  // store — see `selectVisibleEdges`'s doc, still findable via
+  // CausalityPanel by seq).
+  const rawNodes = buildNodes(workers, fileWriteCounts);
+  const visibleRecords = selectVisibleEdges(provenanceEdges, new Set(workers.keys()));
+  const measuredEdges = toFlowEdges(visibleRecords);
 
-  // Run ELK layout
+  // Run ELK layout. Only measured edges feed the topology (crossing
+  // minimization) — user-drawn manual edges never did (onConnect always
+  // appended straight into rendered state, bypassing layout) and still
+  // don't here.
   const {
     layoutedNodes,
-    layoutedEdges,
     isLayouting,
     error: layoutError,
     runLayout,
-  } = useElkLayout(rawNodes, rawEdges);
+  } = useElkLayout(rawNodes, measuredEdges);
 
-  // Controlled nodes/edges state for interactive editing
+  // Controlled nodes state for interactive editing (drag, add, kill).
   const [nodes, setNodes] = useState<Node[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
+  // User-drawn annotation edges only (kind: "manual") — kept as real
+  // React state since nothing else derives them. Measured edges are
+  // NOT stored as state: they're recomputed fresh every render from the
+  // provenance store above, so a repeat occurrence's count/×N label
+  // never goes stale waiting on the next ELK relayout (ELK only
+  // repositions NODES; it passes edges through unchanged, so routing
+  // edge content through it would leave collapsed-edge counts stuck at
+  // whatever was true the last time the node topology itself changed).
+  const [manualEdges, setManualEdges] = useState<Edge[]>([]);
 
-  // Sync layout results into controlled state
+  const edges = [...measuredEdges, ...manualEdges];
+  const presentKinds = new Set<GraphEdgeKind>(
+    edges.map((e) => (e.data as ProvenanceEdgeData).kind),
+  );
+
+  // Sync layout results into controlled node state.
   useEffect(() => {
     if (layoutedNodes.length > 0) {
       setNodes(layoutedNodes);
     }
   }, [layoutedNodes]);
-
-  useEffect(() => {
-    if (layoutedEdges.length > 0) {
-      setEdges(layoutedEdges);
-    }
-  }, [layoutedEdges]);
 
   // Fit view on first layout completion. The guard is consumed inside the rAF
   // callback: while occluded, Chromium suppresses rAF, and a topology change
@@ -144,28 +164,36 @@ function WorkerGraphInner(): React.ReactElement {
     return undefined;
   }, [isLayouting, nodes.length, fitView]);
 
-  // Controlled change handlers for drag, select, remove
+  // Controlled change handlers for drag, select, remove.
   const onNodesChange: OnNodesChange = (changes) => {
     setNodes((nds) => applyNodeChanges(changes, nds));
   };
 
+  // Only manual edges are ever structurally mutable — measured edges are
+  // read-only facts recomputed from the store, so changes targeting
+  // their ids are inert here (there's nothing in `manualEdges` for them
+  // to match).
   const onEdgesChange: OnEdgesChange = (changes) => {
-    setEdges((eds) => applyEdgeChanges(changes, eds));
+    setManualEdges((eds) => applyEdgeChanges(changes, eds));
   };
 
-  // Connect handler — draw new edges by dragging between handles
+  // Connect handler — draw a new MANUAL annotation edge by dragging
+  // between handles. Kept visually and structurally distinct from
+  // measured edges (own `kind: "manual"`, own legend row) — annotations
+  // must never be mistaken for measured facts.
   const onConnect = (connection: Connection) => {
     if (!connection.source || !connection.target) return;
     const newEdge: Edge = {
-      id: `edge-${connection.source}-${connection.target}-${Date.now()}`,
+      id: `manual-${connection.source}-${connection.target}-${Date.now()}`,
       source: connection.source,
       target: connection.target,
-      type: "spawnOrder",
+      type: "provenance",
+      data: { kind: "manual" } satisfies ProvenanceEdgeData,
     };
-    setEdges((eds) => [...eds, newEdge]);
+    setManualEdges((eds) => [...eds, newEdge]);
   };
 
-  // Add a new worker node at viewport center
+  // Add a new worker node at viewport center.
   const handleAddNode = () => {
     const viewport = getViewport();
     const centerX = (-viewport.x + 400) / viewport.zoom;
@@ -185,7 +213,7 @@ function WorkerGraphInner(): React.ReactElement {
     setNodes((nds) => [...nds, newNode]);
   };
 
-  // Delete selected nodes via Delete/Backspace key
+  // Delete selected (manual) edge via Delete/Backspace key.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -193,34 +221,40 @@ function WorkerGraphInner(): React.ReactElement {
         return;
       }
 
-      if (e.key === "Delete" || e.key === "Backspace") {
-        // Delete selected edge
-        if (selectedEdgeId) {
-          e.preventDefault();
-          setEdges((eds) => eds.filter((edge) => edge.id !== selectedEdgeId));
-          setSelectedEdgeId(null);
-          return;
-        }
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedEdgeId) {
+        e.preventDefault();
+        setManualEdges((eds) => eds.filter((edge) => edge.id !== selectedEdgeId));
+        setSelectedEdgeId(null);
       }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [selectedEdgeId]);
 
-  // Edge click — select for deletion
+  // Edge click: a MEASURED edge opens the causality inspector at its
+  // most recent occurrence; a MANUAL edge selects for deletion (the
+  // pre-existing annotation-editing UX) — never both, so a click can
+  // never be ambiguous about which kind of edge it landed on.
   const handleEdgeClick: EdgeMouseHandler = (_event, edge) => {
-    setSelectedEdgeId((prev) => (prev === edge.id ? null : edge.id));
+    const data = edge.data as ProvenanceEdgeData | undefined;
+    if (data?.kind === "manual") {
+      setSelectedEdgeId((prev) => (prev === edge.id ? null : edge.id));
+      return;
+    }
+    if (typeof data?.lastSeq === "number") {
+      setCausalityTarget({ startSeq: data.lastSeq });
+    }
   };
 
-  // Delete selected edge
+  // Delete selected edge (toolbar button).
   const handleDeleteEdge = () => {
     if (selectedEdgeId) {
-      setEdges((eds) => eds.filter((e) => e.id !== selectedEdgeId));
+      setManualEdges((eds) => eds.filter((e) => e.id !== selectedEdgeId));
       setSelectedEdgeId(null);
     }
   };
 
-  // Node click → select worker + open detail
+  // Node click → select worker + open detail.
   const handleNodeClick: NodeMouseHandler = (_event, node) => {
     setSelectedId(node.id);
     setDetailOpen(true);
@@ -228,7 +262,7 @@ function WorkerGraphInner(): React.ReactElement {
     setSelectedEdgeId(null);
   };
 
-  // Right-click → context menu with delete option
+  // Right-click → context menu with delete option.
   const handleNodeContextMenu: NodeMouseHandler = (event, node) => {
     event.preventDefault();
     const worker = workers.get(node.id);
@@ -247,7 +281,7 @@ function WorkerGraphInner(): React.ReactElement {
     setSelectedEdgeId(null);
   };
 
-  // Context menu actions
+  // Context menu actions.
   const handlePause = () => {
     if (contextMenu) {
       updateState(contextMenu.workerId, "paused");
@@ -264,13 +298,15 @@ function WorkerGraphInner(): React.ReactElement {
 
   const handleKill = () => {
     if (contextMenu) {
-      // Remove from store if it exists there
+      // Remove from store if it exists there.
       if (workers.has(contextMenu.workerId)) {
         removeWorker(contextMenu.workerId);
       }
-      // Always remove from graph
+      // Always remove from graph. Measured edges auto-drop next render
+      // via selectVisibleEdges once the worker leaves the store; only
+      // manual edges (real state) need an explicit filter here.
       setNodes((nds) => nds.filter((n) => n.id !== contextMenu.workerId));
-      setEdges((eds) =>
+      setManualEdges((eds) =>
         eds.filter((e) => e.source !== contextMenu.workerId && e.target !== contextMenu.workerId),
       );
       setContextMenu(null);
@@ -289,19 +325,19 @@ function WorkerGraphInner(): React.ReactElement {
     setContextMenu(null);
   };
 
-  // MiniMap node color
+  // MiniMap node color.
   const miniMapNodeColor = (node: Node): string => {
     const data = node.data as { index?: number } | undefined;
     return workerColor(data?.index ?? 0);
   };
 
-  // Edge styles — highlight selected edge
+  // Edge styles — highlight selected (manual) edge.
   const styledEdges = edges.map((edge) => ({
     ...edge,
     selected: edge.id === selectedEdgeId,
   }));
 
-  // Empty state
+  // Empty state — zero workers.
   if (workers.size === 0 && nodes.length === 0) {
     return (
       <div
@@ -443,45 +479,33 @@ function WorkerGraphInner(): React.ReactElement {
         style={{ background: "oklch(0.08 0.02 220)" }}
       >
         <Background color="oklch(0.14 0.03 220)" gap={20} size={1} />
-        {/* Legend: the animated dashed edges are a spawn-order chain
-            (Map insertion order), never a real dependency graph — see
-            buildGraphData above. Labeling this "Spawn Order" instead of
-            "Dependency" keeps the UI honest about what it renders. Only
-            shown when there is at least one edge to label — a
-            single-worker graph has none, and the legend would otherwise
-            describe a line style nothing on screen uses. */}
-        {edges.length > 0 && (
+
+        <GraphLegend presentKinds={presentKinds} />
+
+        {/* Empty-causality hint: workers exist but nothing measured has
+            happened between them yet (e.g. three hand-spawned workers).
+            This is the acceptance criterion for measured provenance —
+            an honest, quiet canvas rather than a fabricated chain. Only
+            shown once layout has actually settled, so it doesn't flash
+            during the initial computing-layout overlay. */}
+        {!isLayouting && !layoutError && nodes.length > 0 && edges.length === 0 && (
           <Panel
-            position="top-left"
+            position="bottom-center"
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "6px 10px",
-              borderRadius: 8,
-              background: "oklch(0.12 0.03 220 / 0.85)",
+              padding: "6px 14px",
+              borderRadius: 999,
+              background: "oklch(0.12 0.03 220 / 0.75)",
               backdropFilter: "blur(8px)",
-              border: "1px solid oklch(0.28 0.05 220)",
+              border: "1px solid oklch(0.22 0.04 220)",
               fontFamily: "var(--font-body)",
               fontSize: "0.6875rem",
-              fontWeight: 500,
-              color: "oklch(0.65 0.04 220)",
+              color: "oklch(0.50 0.04 220)",
             }}
           >
-            <svg width={20} height={8} viewBox="0 0 20 8" aria-hidden="true">
-              <line
-                x1={1}
-                y1={4}
-                x2={19}
-                y2={4}
-                stroke="oklch(0.78 0.18 205 / 0.8)"
-                strokeWidth={2}
-                strokeDasharray="4 2.5"
-              />
-            </svg>
-            <span>Spawn Order</span>
+            No Measured Causality Yet
           </Panel>
         )}
+
         <MiniMap
           nodeColor={miniMapNodeColor}
           maskColor="oklch(0.06 0.02 220 / 0.8)"
@@ -521,9 +545,13 @@ function WorkerGraphInner(): React.ReactElement {
 /**
  * Interactive worker topology graph with ELK layout, context menus,
  * zoom controls, edge drawing, node addition, and a mini-map.
- * Edges are a spawn-order chain (Map insertion order), not real
- * dependency relationships — the Worker schema has no dependency field.
- * Wraps React Flow with a provider.
+ *
+ * Edges are MEASURED causal facts derived from stamped `swarm://events`
+ * envelopes (see `#store/provenance`) — spawn/kill/command/message —
+ * plus user-drawn `manual` annotations, kept visually and structurally
+ * distinct. Workers with no measured causality render with zero edges
+ * and a quiet "No Measured Causality Yet" hint; nothing is ever
+ * fabricated. Wraps React Flow with a provider.
  */
 export function WorkerGraph(): React.ReactElement {
   return (
