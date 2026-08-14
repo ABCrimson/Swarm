@@ -11,15 +11,24 @@
 //!
 //! - [`adapter`] — The trait pair, [`adapter::Capabilities`], and every
 //!   supporting type (`ProviderId`, `AgentSpawnSpec`, `TurnInput`, ...)
+//! - [`claude_code`] — `ClaudeCodeAdapter`/`ClaudeCodeSession` (Phase 3):
+//!   the first concrete provider, driving `claude -p --output-format
+//!   stream-json` over [`crate::worker::proc::spawn_piped`]
 //! - [`scheduler`] — Priority + concurrency gating for agent turns
 //!   (absorbed from the deleted `ai/queue.rs`)
+//! - [`registry`] — Live `Arc<dyn AgentSession>` handles keyed by
+//!   worker id, the Tauri-free counterpart to
+//!   [`crate::worker::registry::WorkerRegistry`] for provider sessions
 //!
-//! Phase 2 ships this module fully typed and tested but unwired — no
-//! concrete [`adapter::AgentAdapter`] implementation exists yet (that's
-//! Phase 3's `ClaudeCodeAdapter`), and `swarm-desktop` does not
-//! `app.manage()` an [`scheduler::AgentScheduler`] until one does.
+//! Phase 2 shipped this module fully typed and tested but unwired — no
+//! concrete [`adapter::AgentAdapter`] implementation existed yet. Phase
+//! 3 lands the first one ([`claude_code::ClaudeCodeAdapter`]) and wires
+//! it: `swarm-desktop` now `app.manage()`s an
+//! [`scheduler::AgentScheduler`] and an [`registry::AgentSessionRegistry`].
 
 pub mod adapter;
+pub mod claude_code;
+pub mod registry;
 pub mod scheduler;
 
 pub use adapter::{
@@ -27,4 +36,6 @@ pub use adapter::{
     ExitSummary, PermissionDecision, PermissionId, ProbeReport, ProviderId, SessionKey, TurnId,
     TurnInput,
 };
+pub use claude_code::{ClaudeCodeAdapter, ClaudeCodeSession, ClaudeCodeTrustTier};
+pub use registry::AgentSessionRegistry;
 pub use scheduler::{AgentScheduler, AgentSchedulerConfig, AgentTurnRequest, TurnPriority};

@@ -1,0 +1,9 @@
+# Fixture for crates/swarm-core/src/agent/claude_code.rs unit tests.
+# Real `system/init` line (verbatim), then a directive that makes the
+# fake child emit an unterminated line past NdjsonFramer::MAX_LINE_BYTES
+# (10MB) with no trailing "\n" — exercises framer_errors surfacing as a
+# session-level failure (AppError::LineTooLong).
+
+{"type":"system","subtype":"init","cwd":"C:\\Users\\alber\\AppData\\Local\\Temp\\claude\\C--Users-alber-Desktop-Projects-Swarm\\cde6ade8-9131-46a8-8339-33d9ba107cc6\\scratchpad\\spike\\repo","session_id":"22222222-2222-4222-8222-222222222222","tools":["Read"],"mcp_servers":[],"model":"claude-sonnet-5","permissionMode":"default","apiKeySource":"none","claude_code_version":"2.1.232"}
+#DIRECTIVE AWAIT_STDIN_LINE
+#DIRECTIVE EMIT_OVERSIZED_LINE

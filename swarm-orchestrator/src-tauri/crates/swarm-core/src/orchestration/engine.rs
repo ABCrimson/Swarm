@@ -504,6 +504,8 @@ mod tests {
                 tool: "Bash".to_string(),
                 input: serde_json::json!({}),
                 suggested_decision: Some(PermissionDecision::Deny),
+                denial_subclass: None,
+                message: None,
             }
         )));
         assert!(is_persistent(&SwarmEvent::AgentTurnSettled(
