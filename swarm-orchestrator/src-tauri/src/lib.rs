@@ -162,6 +162,8 @@ pub fn run() {
             commands::worker::list_workers,
             commands::worker::worker_input,
             commands::worker::set_max_workers,
+            // Git commands
+            commands::git::validate_repo_root,
             // Session commands
             commands::session::create_session,
             commands::session::delete_session,
@@ -255,10 +257,15 @@ pub fn run() {
                 }
                 GitCapability::Unavailable { reason } => {
                     tracing::warn!(reason = %reason, "git worktree isolation unavailable");
+                    // DIRECTIVE F4: the old copy ("Workers Will Spawn
+                    // Without Isolation") was a lie — do_spawn_worker
+                    // hard-fails a repoRoot-bearing spawn when git is
+                    // unavailable (see worker::lifecycle's failure
+                    // policy), it never silently drops isolation.
                     sink.emit(SwarmEvent::SystemLog(SystemLogPayload {
                         level: "warn".to_string(),
                         message: format!(
-                            "Worktree Isolation Unavailable: {reason}. Workers Will Spawn Without Isolation."
+                            "Git Unavailable — Isolated Spawns Will Fail Until Git Is Installed Or Upgraded: {reason}"
                         ),
                         target: "swarm_core::git".to_string(),
                         timestamp: std::time::SystemTime::now()

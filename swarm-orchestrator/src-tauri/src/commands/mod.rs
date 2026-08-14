@@ -14,6 +14,7 @@
 //! - [`metrics`] — System metrics collection and retrieval
 //! - [`bus`] — Message bus commands (send, subscribe, pipeline, list channels)
 //! - [`fs`] — File system operations (delegates to `tauri-plugin-fs`)
+//! - [`git`] — Git repo-root validation command (validate_repo_root)
 //! - [`notification`] — OS notification command
 //! - [`orchestration`] — Ordered event core commands (events_since)
 //! - [`updater`] — Auto-updater check command
@@ -22,6 +23,7 @@ pub mod ai;
 pub mod bus;
 pub mod config;
 pub mod fs;
+pub mod git;
 pub mod metrics;
 pub mod notification;
 pub mod orchestration;
