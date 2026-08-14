@@ -16,10 +16,12 @@ import { useWorkerStore } from "#store/workers";
 
 const spawnWorkerMock = vi.fn();
 const sessionAddWorkerMock = vi.fn();
+const readConfigMock = vi.fn();
 
 vi.mock("#lib/tauri", () => ({
   spawnWorker: (...args: unknown[]) => spawnWorkerMock(...args),
   sessionAddWorker: (...args: unknown[]) => sessionAddWorkerMock(...args),
+  readConfig: (...args: unknown[]) => readConfigMock(...args),
 }));
 
 function createSession(overrides?: Partial<Session>): Session {
@@ -47,6 +49,10 @@ describe("spawnWorkerFromSpec", () => {
     resetStores();
     spawnWorkerMock.mockReset();
     sessionAddWorkerMock.mockReset();
+    readConfigMock.mockReset();
+    // Default: no persisted project root — matches pre-F6 behavior for
+    // every test below that doesn't explicitly set one.
+    readConfigMock.mockResolvedValue(null);
   });
   afterEach(resetStores);
 
@@ -143,5 +149,42 @@ describe("spawnWorkerFromSpec", () => {
     expect(useWorkerStore.getState().workers.size).toBe(0);
     expect(useWorkerAgentStore.getState().metadata.size).toBe(0);
     expect(sessionAddWorkerMock).not.toHaveBeenCalled();
+  });
+
+  // ── DIRECTIVE F6: template/session spawns must not silently skip
+  // isolation — repoRoot falls back to the persisted default_repo_root
+  // when the spec doesn't specify its own.
+
+  it("falls back to the persisted default_repo_root when the spec has no repoRoot of its own", async () => {
+    readConfigMock.mockResolvedValueOnce("C:/Projects/swarm-orchestrator");
+    spawnWorkerMock.mockResolvedValueOnce("worker-6");
+
+    await spawnWorkerFromSpec({ name: "Templated Agent" });
+
+    expect(spawnWorkerMock).toHaveBeenCalledWith({
+      name: "Templated Agent",
+      repoRoot: "C:/Projects/swarm-orchestrator",
+    });
+  });
+
+  it("prefers the spec's own repoRoot over the persisted default", async () => {
+    readConfigMock.mockResolvedValueOnce("C:/Projects/persisted-default");
+    spawnWorkerMock.mockResolvedValueOnce("worker-7");
+
+    await spawnWorkerFromSpec({ name: "Explicit Agent", repoRoot: "C:/Projects/explicit" });
+
+    expect(spawnWorkerMock).toHaveBeenCalledWith({
+      name: "Explicit Agent",
+      repoRoot: "C:/Projects/explicit",
+    });
+  });
+
+  it("spawns unisolated (no repoRoot key) when there is no persisted default either", async () => {
+    spawnWorkerMock.mockResolvedValueOnce("worker-8");
+
+    await spawnWorkerFromSpec({ name: "Unisolated Agent" });
+
+    const [payload] = spawnWorkerMock.mock.calls[0] as [Record<string, unknown>];
+    expect(payload).not.toHaveProperty("repoRoot");
   });
 });

@@ -23,6 +23,7 @@ Events are received on a single ordered channel, `swarm://events` -- see [Events
   - [list_workers](#list_workers)
   - [worker_input](#worker_input)
   - [Worktree Isolation Lifecycle](#worktree-isolation-lifecycle)
+  - [validate_repo_root](#validate_repo_root)
 - [Session Commands](#session-commands)
   - [create_session](#create_session)
   - [delete_session](#delete_session)
@@ -281,17 +282,62 @@ Giving a worker its own `git worktree` is opt-in per spawn, via [`spawn_worker`]
 **Lifecycle:**
 
 1. **Spawn** (`repoRoot` present, `isolation` resolves to `"worktree"`): resolve `repoRoot`'s git toplevel and `HEAD` sha -> `git worktree add -b swarm/<slug>-<id8> <path> <sha>` -> `git worktree lock --reason "swarm worker <uuid>"` -> spawn the PTY with `cwd = <path>`. Emits `worktree_created`.
-2. **Kill**: wait for the PTY child to fully exit -> `git worktree unlock` -> `git worktree remove` (**never** `--force`). Emits `worktree_removed` with the resulting `disposition`.
+2. **Kill**: wait for the PTY child to fully exit -> `git worktree unlock` -> `git worktree remove` (**never** `--force`). Emits `worktree_removed` with the resulting `disposition`. On a `"removed"` disposition only, also attempts to delete the isolation branch -- see **Branch Cleanup** below.
 
-**The Preserve-On-Dirty Guarantee:** `git worktree remove` is invoked without `--force`, which is the entire mechanism -- git itself refuses to remove a worktree that has uncommitted changes or untracked files. That refusal is not treated as an error; it becomes `disposition: "preserved_dirty"` in the `worktree_removed` event. SWARM never deletes a worktree's contents itself, and no code path anywhere in the git module can construct a `--force`/`-f` argument for `worktree remove` (enforced by a unit test on the argv builder, `git::worktree::tests::test_remove_args_never_contains_force`).
+**Disposition is classified honestly, not optimistically.** `worktree_removed.disposition` is one of:
+
+| Disposition | Meaning |
+|---|---|
+| `"removed"` | `git worktree remove` succeeded -- the directory is gone. |
+| `"preserved_dirty"` | git refused *specifically* because the worktree has uncommitted changes or untracked files (`"contains modified or untracked files"`). This is the **only** refusal classified as preserved -- see the guarantee below. |
+| `"failed"` | Anything else went wrong: the worktree was still locked (an unlock failure is treated as a failure in its own right and `remove` is never even attempted), a permission error killed the delete partway through, the path was already gone, or an unrecognized git error. `reason` carries the stderr excerpt. |
+
+Earlier drafts of this classification lumped every non-dirty refusal into `"preserved_dirty"`, which is a lie in at least two real scenarios: a still-locked worktree isn't dirty at all, and a permission error can strike *after* git has already started deleting tracked files -- reporting "preserved" there claims safety that doesn't exist. `"failed"` is the honest signal that something needs a human to look at it; `"preserved_dirty"` is reserved strictly for the one refusal that means "your uncommitted work is intact, untouched, right where it was."
+
+**The Preserve-On-Dirty Guarantee:** `git worktree remove` is invoked without `--force`, which is the entire mechanism -- git itself refuses to remove a worktree that has uncommitted changes or untracked files. SWARM never deletes a worktree's contents itself, and no code path anywhere in the git module can construct a `--force`/`-f` argument for `worktree remove` (enforced by a unit test on the argv builder, `git::worktree::tests::test_remove_args_never_contains_force`).
+
+**A surviving child process can produce `"failed"`.** The PTY layer (`portable-pty` 0.9) does not use a Windows job object or a Unix process group -- killing a worker's shell does not kill any grandchild it spawned (e.g. a long-running build). A grandchild that outlives the kill can hold the worktree directory open as its own cwd, which makes `git worktree remove` fail with a permission error. That is correctly reported as `disposition: "failed"` (never laundered into "preserved"), but the worktree is then stuck on disk until the surviving process exits, at which point a retry or manual cleanup is needed. Fixing this at the source (a job object / process-group kill) is out of Phase 1's scope; if it surfaces, the Title Case-appropriate framing is "Worktree Removal Failed -- A Process May Still Be Using It."
+
+**Branch Cleanup:** after a `"removed"` disposition (never any other), the isolation branch's tip is compared against the commit it was created from. If unchanged (the agent made no commits), the branch is deleted with `git branch -d` -- **never** `-D` (enforced the same way as the no-`--force` guarantee: `git::worktree::tests::test_branch_delete_args_never_contains_capital_d`). If the tip diverged (the agent committed real work), the branch is left in place -- deleting it would be data loss with extra steps. Either outcome is logged (`tracing`, not a `SwarmEvent` -- this is bookkeeping, not history) and never fails the kill itself.
 
 **Failure policy:** no `repoRoot` -> today's unisolated spawn, unconditionally. `repoRoot` present and the worktree-creation pipeline fails at any step -> the whole [`spawn_worker`](#spawn_worker) call fails -- no worker is registered and no PTY is started. There is no silent fallback to sharing a cwd across workers.
 
 **Location:** worktrees live under `~/.swarm/worktrees/<repo>-<hash8>/w-<id8>` (`<repo>` a sanitized repo directory name, `<hash8>` an 8-hex-character tag derived from the repo's absolute path, `<id8>` the worker UUID's first 8 hex characters) -- already inside SWARM's reserved writable scope (`$HOME/.swarm/**` in `src-tauri/capabilities/default.json`).
 
-**Startup probe:** on launch, the shell runs `git --version` and requires >= 2.17 (the version `git worktree remove` was added in). A missing or too-old git is never silently degraded -- it logs a warning and emits a `system_log` envelope (`level: "warn"`) explaining that worktree isolation is unavailable and workers will spawn without isolation.
+**Startup probe:** on launch, the shell runs `git --version` and requires >= 2.17 (the version `git worktree remove` was added in). A missing or too-old git is never silently degraded -- it logs a warning and emits a `system_log` envelope (`level: "warn"`, message "Git Unavailable -- Isolated Spawns Will Fail Until Git Is Installed Or Upgraded") consumed by `useSystemLogEvents` into the existing Logs page. It does not mean workers spawn unisolated -- a `repoRoot`-bearing spawn still hard-fails per the failure policy above; this only makes that fact visible before the user hits it as a spawn error.
 
 **Startup prune:** the shell also runs `git worktree prune` against the persisted `default_repo_root` config key (see the Project Root picker on the Workers page), logging the pruned count.
+
+---
+
+### `validate_repo_root`
+
+Validates that a directory is inside a git repository -- used by the Workers page's Project Root picker to confirm a chosen directory *before* persisting it as `default_repo_root` config, instead of letting every subsequent isolated spawn hard-fail with a raw git error. Also used to revalidate the persisted value on load (a repo can be deleted or moved between sessions).
+
+**Parameters:**
+
+| Name   | Type     | Required | Description                          |
+|--------|----------|----------|---------------------------------------|
+| `path` | `string` | Yes      | Candidate directory (e.g. from a directory picker) |
+
+**Returns:** `string` -- the repo's canonical toplevel absolute path (may differ from `path` if it was a subdirectory of the repo).
+
+**Errors:**
+
+| Error     | Condition                                    |
+|-----------|-----------------------------------------------|
+| Git error | `path` is not inside a git repository, `git` could not be spawned, or the operation timed out |
+
+**Example:**
+
+```typescript
+try {
+  const toplevel = await invoke("validate_repo_root", { path: "C:/Projects/swarm-orchestrator/src" });
+  // toplevel === "C:/Projects/swarm-orchestrator"
+} catch {
+  // not a git repository -- show a Title Case toast, don't persist it
+}
+```
 
 ---
 

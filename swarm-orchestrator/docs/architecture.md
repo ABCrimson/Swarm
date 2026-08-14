@@ -96,6 +96,7 @@ src-tauri/src/   (swarm-desktop -- Tauri shell)
 │   ├── metrics.rs       get_metrics (incl. perWorker) + background collection loop
 │   ├── orchestration.rs events_since
 │   ├── config.rs        read_config, write_config
+│   ├── git.rs           validate_repo_root
 │   ├── updater.rs       check_for_updates
 │   ├── notification.rs  send_notification
 │   └── fs.rs            Delegates to tauri-plugin-fs
@@ -161,37 +162,45 @@ do_spawn_worker(config)
     │       ├── path = ~/.swarm/worktrees/<repo>-<hash8>/w-<id8>
     │       ├── branch = swarm/<slug(name)>-<id8>
     │       ├── RepoLocks::run_serialized(root, || git::worktree::add(root, path, branch, sha))
-    │       └── git::worktree::lock(root, path, "swarm worker <uuid>")
+    │       └── RepoLocks::run_serialized(root, || git::worktree::lock(root, path, "swarm worker <uuid>"))
     │               any step fails ──> hard-fail the whole spawn (no worker, no PTY, no fallback cwd)
     │
     ├── spawn_pty(cwd = path, or config.cwd if unisolated)
-    ├── WorkerHandle { worktree_path, repo_root, branch, .. } inserted into registry
+    ├── WorkerHandle { worktree_path, repo_root, branch, base_commit, .. } inserted into registry
     └── emit worker_spawned { isolation: "worktree" | "none" }, then (if isolated) worktree_created
 
 do_kill_worker(id)
     │
     ├── remove from registry, drop PTY writer, kill + wait the child
     │       (waiting for exit matters on Windows: a live child holding the
-    │        worktree dir as its cwd would block removal)
+    │        worktree dir as its cwd would block removal — see the
+    │        surviving-grandchild caveat below)
     │
     ├── handle.worktree_path present?
     │       │
-    │       ├── git::worktree::unlock(root, path)
+    │       ├── RepoLocks::run_serialized(root, || git::worktree::unlock(root, path))
+    │       │       unlock fails ──> disposition "failed" directly; remove is never attempted
     │       ├── RepoLocks::run_serialized(root, || git::worktree::remove(root, path))  -- NEVER --force
+    │       ├── disposition == "removed"? ──> compare branch tip to base_commit;
+    │       │       tip == base_commit ──> RepoLocks::run_serialized(root, || git::worktree::delete_branch(root, branch))  -- NEVER -D
+    │       │       tip != base_commit ──> branch retained (logged, not an event)
     │       └── emit worktree_removed { disposition: "removed" | "preserved_dirty" | "failed" }
     │
     └── emit worker_killed
 ```
 
 - **Arg-vector only, never a shell string.** Every `git` invocation (`git/cli.rs::run`) is a `std::process::Command` with an explicit argument vector -- injection-proof by construction, unlike a shell command line. `GIT_TERMINAL_PROMPT=0` is set on every call (a missing credential can never block on an interactive prompt); on Windows, `CREATE_NO_WINDOW` (`0x0800_0000`) suppresses the console-window flash a GUI app would otherwise get from spawning a console subprocess. Every invocation carries `-C <dir> -c core.longpaths=true` (per-invocation, never written to the user's own git config) so long checkout paths under `~/.swarm/worktrees/**` survive Windows' legacy `MAX_PATH` limit.
-- **Timeouts.** 20s for `worktree add` (a full checkout, can legitimately take longer on a large repo), 5s for everything else (`rev-parse`, `worktree list`/`lock`/`unlock`/`remove`, `--version`). A timed-out child is killed.
-- **The preserve-on-dirty guarantee.** `git::worktree::remove` never constructs a `--force`/`-f` argument -- the argv builder is structurally incapable of it (`git::worktree::tests::test_remove_args_never_contains_force`). Without `--force`, git itself refuses to remove a worktree with uncommitted changes or untracked files; that refusal becomes `RemoveOutcome::Preserved` (and `disposition: "preserved_dirty"` on the wire), not an error. SWARM never deletes a worktree's contents itself -- it only ever asks git, and git says no when it would lose something.
-- **Per-repo serialization.** `RepoLocks` (`git/mod.rs`) holds a `DashMap<PathBuf, Mutex<()>>` keyed by repo root. Each mutating call (`worktree add`, `worktree remove`) runs under its repo's lock with one retry (200ms backoff) if the failure looks like transient index/ref-lock contention (`index.lock`, "cannot lock ref", "another git process..."). Two different repos' operations run fully in parallel; only operations against the *same* repo queue behind each other.
-- **Startup capability probe.** `git::probe_capability()` runs `git --version` and requires >= 2.17 (when `worktree remove` was added). Missing or too-old git is never silently degraded: `swarm-desktop`'s `setup()` logs a warning and emits a `system_log` envelope explaining that isolation is unavailable and workers will spawn without it -- a `repoRoot`-bearing spawn will then hard-fail naturally at the `discover_toplevel`/`head_sha` step, since there is no working `git` to run.
-- **Startup prune.** `setup()` also runs `git worktree prune` against the persisted `default_repo_root` config key (set via the Workers page's Project Root picker), logging the pruned count. This is intentionally the Phase 1 scope -- a full multi-repo orphan reconciliation (rebuilding the expected worktree set from the event log and diffing against `git worktree list --porcelain`) is a later phase.
+- **Timeouts.** 20s for `worktree add` (a full checkout, can legitimately take longer on a large repo), 5s for everything else (`rev-parse`, `worktree list`/`lock`/`unlock`/`remove`/`branch -d`, `--version`). A timed-out child is killed.
+- **Disposition is classified honestly, not optimistically.** `git::worktree::remove` reserves `RemoveOutcome::Preserved` (`disposition: "preserved_dirty"` on the wire) **strictly** for git's specific refusal (`"contains modified or untracked files"`) -- every other non-zero exit (a still-locked worktree, a permission error partway through delete, a missing path, an unrecognized message) is an `Err` that the caller reports as `disposition: "failed"`. An earlier version of this classification treated any non-zero exit other than two hardcoded strings as "preserved", which is a lie for a locked-but-clean worktree and dangerous for a permission error that struck mid-delete (git may have already removed tracked files by then). The narrow classification is pinned down by `git::worktree::tests::test_is_dirty_tree_refusal_*` and an end-to-end `test_remove_returns_err_not_preserved_for_still_locked_worktree`.
+- **The preserve-on-dirty guarantee.** `git::worktree::remove` never constructs a `--force`/`-f` argument -- the argv builder is structurally incapable of it (`git::worktree::tests::test_remove_args_never_contains_force`). Without `--force`, git itself refuses to remove a worktree with uncommitted changes or untracked files; that refusal, and *only* that refusal, becomes `disposition: "preserved_dirty"`. SWARM never deletes a worktree's contents itself -- it only ever asks git, and git says no when it would lose something.
+- **A surviving grandchild process can produce `disposition: "failed"`.** `portable-pty` 0.9 has no Windows job object and no Unix process-group kill -- `do_kill_worker`'s `child.kill()` only terminates the direct shell, not anything it spawned (e.g. a long build). A surviving grandchild can hold the worktree directory open as its own cwd, which makes `git worktree remove` fail with a permission error -- correctly `"failed"` (never laundered into "preserved"), but the worktree then sits on disk until the process exits and the operation is retried or cleaned up manually. TODO in `worker::lifecycle::do_kill_worker`: the real fix is a job object (Windows) / process-group kill (Unix) at spawn time; out of Phase 1 scope.
+- **Branch cleanup.** After a `"removed"` disposition (never any other), `do_kill_worker` resolves the isolation branch's tip (`git::repo::rev_parse`, which works even though the worktree directory is already gone -- branches live in the shared `.git` ref database) and compares it to the `base_commit` recorded at spawn time. Unchanged -> `git branch -d` (never `-D`; `git::worktree::tests::test_branch_delete_args_never_contains_capital_d` proves `-D` isn't constructible, same pattern as the no-`--force` guarantee) deletes it, so `swarm/*` branches don't accumulate forever in the user's real repo. Diverged (the agent committed) -> left in place; a `tracing` log records which happened (not a `SwarmEvent` -- this is bookkeeping, not history), and a failure at either step never fails `do_kill_worker` itself.
+- **Per-repo serialization, everywhere.** `RepoLocks` (`git/mod.rs`) holds a `DashMap<PathBuf, Mutex<()>>` keyed by the *canonical* repo toplevel (every call site resolves through `discover_toplevel` first). Every mutating call in the isolation lifecycle -- `worktree add`, `worktree lock`, `worktree unlock`, `worktree remove`, `branch -d`, including the best-effort cleanup path when spawn fails partway through -- runs under its repo's lock, with one retry (200ms backoff) if the failure looks like transient index/ref-lock contention (`index.lock`, "cannot lock ref", "another git process..."). Two different repos' operations run fully in parallel; only operations against the *same* repo queue behind each other.
+- **Startup capability probe.** `git::probe_capability()` runs `git --version` and requires >= 2.17 (when `worktree remove` was added). Missing or too-old git is never silently degraded: `swarm-desktop`'s `setup()` logs a warning and emits a `system_log` envelope (consumed by `useSystemLogEvents` into the existing Logs page -- the first live consumer of what was previously a documented-but-unwired event type) reading "Git Unavailable -- Isolated Spawns Will Fail Until Git Is Installed Or Upgraded". It does not claim workers spawn unisolated -- a `repoRoot`-bearing spawn still hard-fails naturally at the `discover_toplevel`/`head_sha` step, since there is no working `git` to run.
+- **Startup prune.** `setup()` also runs `git worktree prune` against the persisted `default_repo_root` config key (set via the Workers page's Project Root picker, which validates it as a real repo via `validate_repo_root` before persisting -- see [docs/api.md#validate_repo_root](api.md#validate_repo_root)), logging the pruned count. This is intentionally the Phase 1 scope -- a full multi-repo orphan reconciliation (rebuilding the expected worktree set from the event log and diffing against `git worktree list --porcelain`) is a later phase.
 - **Failure policy.** No `repoRoot` -> unconditionally today's unisolated spawn (zero regression, `worker::lifecycle::tests::test_spawn_without_repo_root_is_unisolated_zero_regression`). `repoRoot` present and the pipeline fails at any step -> the whole spawn fails; no silent fallback to a shared cwd (`worker::lifecycle::tests::test_spawn_hard_fails_when_repo_root_is_not_a_git_repo`).
 
-See [docs/api.md#worktree-isolation-lifecycle](api.md#worktree-isolation-lifecycle) for the IPC-level contract (`WorkerConfig` fields, `worktree_created`/`worktree_removed` payload shapes) and [Events](#event-system) below for where these events sit in the persistence policy.
+See [docs/api.md#worktree-isolation-lifecycle](api.md#worktree-isolation-lifecycle) for the IPC-level contract (`WorkerConfig` fields, `worktree_created`/`worktree_removed` payload shapes, `validate_repo_root`) and [Events](#event-system) below for where these events sit in the persistence policy.
 
 ### AI Queue (Built, Not Wired)
 

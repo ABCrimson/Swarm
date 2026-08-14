@@ -10,6 +10,7 @@ import { useAutoSnapshot } from "#hooks/useAutoSnapshot";
 import { useMetrics } from "#hooks/useMetrics";
 import { useSessionEvents } from "#hooks/useSessionEvents";
 import { useSettingsBridge } from "#hooks/useSettingsBridge";
+import { useSystemLogEvents } from "#hooks/useSystemLogEvents";
 import { useTheme } from "#hooks/useTheme";
 import { useWorkerEvents } from "#hooks/useWorkerEvents";
 import { connectEventBus } from "#lib/event-bus";
@@ -103,6 +104,7 @@ export function App(): React.ReactElement {
   // Initialize global subscriptions (theme, events, metrics, alerts)
   useTheme();
   useWorkerEvents();
+  useSystemLogEvents();
   useSessionEvents();
   useMetrics();
   useAlerts();

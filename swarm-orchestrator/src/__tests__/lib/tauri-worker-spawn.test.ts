@@ -9,7 +9,14 @@
 
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSession, getSession, listSessions, sessionAddWorker, spawnWorker } from "#lib/tauri";
+import {
+  createSession,
+  getSession,
+  listSessions,
+  sessionAddWorker,
+  spawnWorker,
+  validateRepoRoot,
+} from "#lib/tauri";
 
 const WORKER_UUID = "550e8400-e29b-41d4-a716-446655440000";
 
@@ -272,5 +279,51 @@ describe("getSession", () => {
     vi.mocked(tauriInvoke).mockResolvedValueOnce({ id: "not-a-uuid" });
 
     await expect(getSession("some-id")).rejects.toThrow(/Unexpected Shape/);
+  });
+});
+
+// ── validateRepoRoot (adversarial review F5) ─────────
+//
+// The Project Root picker must confirm a directory is a real git repo
+// via a live Rust round-trip before persisting it — otherwise a typo
+// or a moved/deleted repo silently poisons default_repo_root and every
+// subsequent isolated spawn hard-fails with a raw git error.
+
+describe("validateRepoRoot", () => {
+  beforeEach(() => {
+    vi.mocked(tauriInvoke).mockReset();
+    enableTauri();
+  });
+  afterEach(disableTauri);
+
+  it("returns the toplevel path on success", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce("C:/Projects/swarm-orchestrator");
+
+    const toplevel = await validateRepoRoot("C:/Projects/swarm-orchestrator/src-tauri");
+
+    expect(tauriInvoke).toHaveBeenCalledWith("validate_repo_root", {
+      path: "C:/Projects/swarm-orchestrator/src-tauri",
+    });
+    expect(toplevel).toBe("C:/Projects/swarm-orchestrator");
+  });
+
+  it("rejects when the backend reports the path is not a git repository", async () => {
+    vi.mocked(tauriInvoke).mockRejectedValueOnce(
+      new Error("C:/tmp is not inside a git repository"),
+    );
+
+    await expect(validateRepoRoot("C:/tmp")).rejects.toThrow(/not inside a git repository/);
+  });
+
+  it("Zod-validates the response and throws instead of trusting a malformed reply", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce({ not: "a path" });
+
+    await expect(validateRepoRoot("C:/Projects/x")).rejects.toThrow(/Invalid Response/);
+  });
+
+  it("throws (never silently returns null) when there is no Tauri IPC bridge", async () => {
+    disableTauri();
+
+    await expect(validateRepoRoot("C:/Projects/x")).rejects.toThrow();
   });
 });

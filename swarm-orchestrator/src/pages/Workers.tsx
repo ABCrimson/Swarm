@@ -10,7 +10,8 @@ import { Badge, stateLabels } from "#components/ui/Badge";
 import { Button } from "#components/ui/Button";
 import { Pill } from "#components/ui/Pill";
 import { matchesBinding } from "#lib/keybindings";
-import { readConfig, spawnWorker, writeConfig } from "#lib/tauri";
+import { DEFAULT_REPO_ROOT_KEY, getPersistedRepoRoot } from "#lib/project-root";
+import { spawnWorker, validateRepoRoot, writeConfig } from "#lib/tauri";
 import {
   detailPanelOpenAtom,
   graphViewAtom,
@@ -18,9 +19,6 @@ import {
   selectedWorkerIdAtom,
 } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
-
-/** Config key persisting the last-picked project root (`write_config`/`read_config`). */
-const DEFAULT_REPO_ROOT_KEY = "default_repo_root";
 
 type DetailTab = "detail" | "ai";
 
@@ -174,15 +172,30 @@ export function Workers(): React.ReactElement {
   // "default_repo_root" config key so the choice survives a restart.
   const [projectRoot, setProjectRoot] = useState<string | null | undefined>(undefined);
 
+  // Load path: the persisted root is Zod-validated at the seam by
+  // getPersistedRepoRoot, then revalidated as a REAL git repo — a repo
+  // that was deleted/moved since it was picked must not silently keep
+  // failing every spawn with a raw git toast. A stale root surfaces a
+  // warning and falls back to "no project root" (today's behavior)
+  // rather than being used anyway.
   useEffect(() => {
     let cancelled = false;
-    readConfig<string>(DEFAULT_REPO_ROOT_KEY)
-      .then((value) => {
-        if (!cancelled) setProjectRoot(value);
-      })
-      .catch(() => {
+    void (async () => {
+      const persisted = await getPersistedRepoRoot();
+      if (!persisted) {
         if (!cancelled) setProjectRoot(null);
-      });
+        return;
+      }
+      try {
+        const toplevel = await validateRepoRoot(persisted);
+        if (!cancelled) setProjectRoot(toplevel);
+      } catch {
+        if (!cancelled) {
+          setProjectRoot(null);
+          toast.warning(`Saved Project Root Is No Longer A Git Repository: ${persisted}`);
+        }
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -195,9 +208,18 @@ export function Workers(): React.ReactElement {
       multiple: false,
     });
     if (!selected) return;
-    setProjectRoot(selected);
+
+    let toplevel: string;
     try {
-      await writeConfig(DEFAULT_REPO_ROOT_KEY, selected);
+      toplevel = await validateRepoRoot(selected);
+    } catch {
+      toast.error(`Not A Git Repository: ${selected}`);
+      return;
+    }
+
+    setProjectRoot(toplevel);
+    try {
+      await writeConfig(DEFAULT_REPO_ROOT_KEY, toplevel);
     } catch (err) {
       toast.error(
         `Could Not Save Project Root: ${err instanceof Error ? err.message : String(err)}`,
@@ -310,11 +332,15 @@ export function Workers(): React.ReactElement {
             </span>
           </button>
 
-          {/* Spawn button */}
+          {/* Spawn button — disabled while the persisted project root is
+              still loading (`undefined`), so an early click can't
+              silently spawn unisolated before we know whether one is
+              configured. */}
           <Button
             variant="primary"
             size="sm"
             loading={isSpawning}
+            disabled={projectRoot === undefined}
             onClick={() => void handleSpawn()}
           >
             Spawn Worker
