@@ -6,12 +6,11 @@
 //! command handlers in [`crate::commands::worker`].
 
 use parking_lot::Mutex;
-use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::events::{
-    SwarmEvent, WorkerKilledPayload, WorkerSpawnedPayload, WorkerStatePayload, emit_event,
+    EventSink, SwarmEvent, WorkerKilledPayload, WorkerSpawnedPayload, WorkerStatePayload,
 };
 use crate::worker::handle::{WorkerConfig, WorkerHandle, WorkerState};
 use crate::worker::pty::spawn_pty;
@@ -26,7 +25,7 @@ use crate::worker::registry::WorkerRegistry;
 ///
 /// # Arguments
 ///
-/// * `app` - Tauri app handle for event emission
+/// * `sink` - Event sink for recording the `worker_spawned` event
 /// * `registry` - The shared worker registry
 /// * `config` - Worker spawn configuration (name, shell, cwd, env, PTY size)
 ///
@@ -38,9 +37,9 @@ use crate::worker::registry::WorkerRegistry;
 ///
 /// * [`AppError::PtySpawn`] - The PTY process failed to spawn
 /// * [`AppError::RegistryFull`] - The registry has reached capacity
-#[tracing::instrument(skip(app, registry))]
+#[tracing::instrument(skip(sink, registry))]
 pub fn do_spawn_worker(
-    app: &AppHandle,
+    sink: &EventSink,
     registry: &WorkerRegistry,
     config: WorkerConfig,
 ) -> Result<Uuid, AppError> {
@@ -54,7 +53,7 @@ pub fn do_spawn_worker(
     let worker_id = Uuid::new_v4();
 
     let pty_handle = spawn_pty(
-        app,
+        sink,
         worker_id,
         shell,
         &config.cwd,
@@ -85,14 +84,11 @@ pub fn do_spawn_worker(
 
     registry.spawn_worker(handle)?;
 
-    emit_event(
-        app,
-        SwarmEvent::WorkerSpawned(WorkerSpawnedPayload {
-            worker_id,
-            name: config.name,
-            pid,
-        }),
-    );
+    sink.emit(SwarmEvent::WorkerSpawned(WorkerSpawnedPayload {
+        worker_id,
+        name: config.name,
+        pid,
+    }));
 
     Ok(worker_id)
 }
@@ -113,7 +109,7 @@ pub fn do_spawn_worker(
 ///
 /// # Arguments
 ///
-/// * `app` - Tauri app handle for event emission
+/// * `sink` - Event sink for recording the `worker_state` event
 /// * `registry` - The shared worker registry
 /// * `id` - UUID of the worker to pause
 ///
@@ -121,21 +117,18 @@ pub fn do_spawn_worker(
 ///
 /// * [`AppError::WorkerNotFound`] - No worker with the given ID exists
 /// * [`AppError::Ipc`] - The worker is not currently `Running`
-#[tracing::instrument(skip(app, registry))]
+#[tracing::instrument(skip(sink, registry))]
 pub fn do_pause_worker(
-    app: &AppHandle,
+    sink: &EventSink,
     registry: &WorkerRegistry,
     id: Uuid,
 ) -> Result<(), AppError> {
     registry.update_state_if(&id, WorkerState::Running, WorkerState::Paused)?;
 
-    emit_event(
-        app,
-        SwarmEvent::WorkerState(WorkerStatePayload {
-            worker_id: id,
-            state: WorkerState::Paused,
-        }),
-    );
+    sink.emit(SwarmEvent::WorkerState(WorkerStatePayload {
+        worker_id: id,
+        state: WorkerState::Paused,
+    }));
 
     Ok(())
 }
@@ -151,7 +144,7 @@ pub fn do_pause_worker(
 ///
 /// # Arguments
 ///
-/// * `app` - Tauri app handle for event emission
+/// * `sink` - Event sink for recording the `worker_state` event
 /// * `registry` - The shared worker registry
 /// * `id` - UUID of the worker to resume
 ///
@@ -159,21 +152,18 @@ pub fn do_pause_worker(
 ///
 /// * [`AppError::WorkerNotFound`] - No worker with the given ID exists
 /// * [`AppError::Ipc`] - The worker is not currently `Paused`
-#[tracing::instrument(skip(app, registry))]
+#[tracing::instrument(skip(sink, registry))]
 pub fn do_resume_worker(
-    app: &AppHandle,
+    sink: &EventSink,
     registry: &WorkerRegistry,
     id: Uuid,
 ) -> Result<(), AppError> {
     registry.update_state_if(&id, WorkerState::Paused, WorkerState::Running)?;
 
-    emit_event(
-        app,
-        SwarmEvent::WorkerState(WorkerStatePayload {
-            worker_id: id,
-            state: WorkerState::Running,
-        }),
-    );
+    sink.emit(SwarmEvent::WorkerState(WorkerStatePayload {
+        worker_id: id,
+        state: WorkerState::Running,
+    }));
 
     Ok(())
 }
@@ -188,16 +178,16 @@ pub fn do_resume_worker(
 ///
 /// # Arguments
 ///
-/// * `app` - Tauri app handle for event emission
+/// * `sink` - Event sink for recording the `worker_killed` event
 /// * `registry` - The shared worker registry
 /// * `id` - UUID of the worker to kill
 ///
 /// # Errors
 ///
 /// * [`AppError::WorkerNotFound`] - No worker with the given ID exists
-#[tracing::instrument(skip(app, registry))]
+#[tracing::instrument(skip(sink, registry))]
 pub fn do_kill_worker(
-    app: &AppHandle,
+    sink: &EventSink,
     registry: &WorkerRegistry,
     id: Uuid,
 ) -> Result<(), AppError> {
@@ -225,10 +215,9 @@ pub fn do_kill_worker(
         }
     }
 
-    emit_event(
-        app,
-        SwarmEvent::WorkerKilled(WorkerKilledPayload { worker_id: id }),
-    );
+    sink.emit(SwarmEvent::WorkerKilled(WorkerKilledPayload {
+        worker_id: id,
+    }));
 
     tracing::info!(worker_id = %id, "worker killed and removed");
     Ok(())
@@ -293,7 +282,7 @@ mod tests {
         let id = handle.id;
         registry.spawn_worker(handle).unwrap();
 
-        // do_pause_worker requires an AppHandle, but the state check
+        // do_pause_worker requires an EventSink, but the state check
         // happens before event emission. We test the registry-level
         // precondition directly: worker must be Running to pause.
         let entry = registry.workers.get(&id).unwrap();

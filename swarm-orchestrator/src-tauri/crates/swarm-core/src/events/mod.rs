@@ -1,11 +1,11 @@
 //! Event system module.
 //!
-//! Re-exports all event types and the [`emit_event`] dispatcher
-//! from the [`emitter`] submodule. The event system bridges
-//! Rust backend state changes to the React frontend: every event
-//! flows through the [`crate::orchestration::OrchestrationEngine`]
-//! onto the single ordered `swarm://events` channel as a
-//! `{seq, ts, type, payload}` envelope.
+//! Re-exports all event types and the [`EventSink`] emission seam
+//! from the [`emitter`] submodule. The event system bridges backend
+//! state changes to any embedding shell: every event flows through
+//! the [`crate::orchestration::OrchestrationEngine`] onto the ordered
+//! stream as a `{seq, ts, type, payload}` envelope (the Tauri shell
+//! forwards it onto the single `swarm://events` channel).
 //!
 //! ## Event Types
 //!
@@ -26,7 +26,8 @@
 pub mod emitter;
 
 pub use emitter::{
-    AiStreamDeltaPayload, AiStreamSettledPayload, BusMessagePayload, SessionCreatedPayload,
-    SessionDeletedPayload, SwarmEvent, SystemLogPayload, SystemMetricsPayload, WorkerKilledPayload,
-    WorkerOutputPayload, WorkerSpawnedPayload, WorkerStatePayload, emit_event,
+    AiStreamDeltaPayload, AiStreamSettledPayload, BusMessagePayload, EventSink,
+    SessionCreatedPayload, SessionDeletedPayload, SwarmEvent, SystemLogPayload,
+    SystemMetricsPayload, WorkerKilledPayload, WorkerOutputPayload, WorkerSpawnedPayload,
+    WorkerStatePayload,
 };
