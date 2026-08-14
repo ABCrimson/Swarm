@@ -175,6 +175,38 @@ describe("WorkerStore", () => {
     });
   });
 
+  describe("setWorktreeInfo", () => {
+    it("sets worktreePath and branch on an existing worker", () => {
+      const worker = createWorker();
+      const { addWorker, setWorktreeInfo } = useWorkerStore.getState();
+      addWorker(worker);
+
+      setWorktreeInfo(
+        worker.id,
+        "/home/user/.swarm/worktrees/repo-abcd1234/w-11112222",
+        "swarm/agent-11112222",
+      );
+
+      const stored = useWorkerStore.getState().workers.get(worker.id);
+      expect(stored?.worktreePath).toBe("/home/user/.swarm/worktrees/repo-abcd1234/w-11112222");
+      expect(stored?.branch).toBe("swarm/agent-11112222");
+    });
+
+    it("does nothing for a non-existent worker id", () => {
+      const { setWorktreeInfo } = useWorkerStore.getState();
+      expect(() => setWorktreeInfo("non-existent", "/wt", "swarm/x-1")).not.toThrow();
+    });
+
+    it("leaves worktreePath/branch undefined for a worker spawned without isolation", () => {
+      const worker = createWorker();
+      useWorkerStore.getState().addWorker(worker);
+
+      const stored = useWorkerStore.getState().workers.get(worker.id);
+      expect(stored?.worktreePath).toBeUndefined();
+      expect(stored?.branch).toBeUndefined();
+    });
+  });
+
   describe("selectWorker", () => {
     it("selects a worker by id", () => {
       const worker = createWorker();

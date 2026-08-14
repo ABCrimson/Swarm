@@ -10,16 +10,18 @@ import { useWorkerStore } from "#store/workers";
  * Must be called exactly once at the app root level. Connects the
  * single ordered event bus to the Zustand worker store:
  *
- * - `worker_spawned` -> store.addWorker()
- * - `worker_output`  -> store.appendOutput()
- * - `worker_state`   -> store.updateState()
- * - `worker_killed`  -> store.removeWorker() + agent-store cleanup
+ * - `worker_spawned`    -> store.addWorker()
+ * - `worker_output`     -> store.appendOutput()
+ * - `worker_state`      -> store.updateState()
+ * - `worker_killed`     -> store.removeWorker() + agent-store cleanup
+ * - `worktree_created`  -> store.setWorktreeInfo() (branch/worktreePath)
  *
  * All listeners are cleaned up on unmount — zero event listener leaks.
  */
 export function useWorkerEvents(): void {
   useEffect(() => {
-    const { addWorker, appendOutput, updateState, removeWorker } = useWorkerStore.getState();
+    const { addWorker, appendOutput, updateState, removeWorker, setWorktreeInfo } =
+      useWorkerStore.getState();
 
     const offs = [
       onEvent("worker_spawned", (e) => {
@@ -50,6 +52,10 @@ export function useWorkerEvents(): void {
         // entry would leak in useWorkerAgentStore for the app's
         // lifetime.
         useWorkerAgentStore.getState().removeAgentMetadata(p.workerId);
+      }),
+      onEvent("worktree_created", (e) => {
+        const p = e.payload as { workerId: string; worktreePath: string; branch: string };
+        setWorktreeInfo(p.workerId, p.worktreePath, p.branch);
       }),
     ];
 

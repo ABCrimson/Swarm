@@ -17,6 +17,14 @@ export const WorkerSchema = z.object({
   pid: z.number().int().optional(),
   startedAt: z.string().datetime(),
   output: z.string().optional(),
+  /**
+   * Absolute path of this worker's git worktree, mirrored from the
+   * `worktree_created` event (`#hooks/useWorkerEvents`). Absent for a
+   * worker spawned without isolation.
+   */
+  worktreePath: z.string().optional(),
+  /** Branch checked out in `worktreePath` (`swarm/<slug>-<id8>`). */
+  branch: z.string().optional(),
 });
 
 /** A SWARM worker process with its current state and metadata. */
@@ -64,18 +72,31 @@ export type Snapshot = z.infer<typeof SnapshotSchema>;
 
 // ── Template schemas ────────────────────────────────
 
+/** Zod schema for worktree isolation mode — mirrors Rust's `WorkerIsolation`. */
+export const WorkerIsolationSchema = z.enum(["worktree", "none"]);
+
+/** Worktree isolation mode for a spawned worker. */
+export type WorkerIsolation = z.infer<typeof WorkerIsolationSchema>;
+
 /**
  * Zod schema for the process options half of a worker spawn spec —
  * fields that map 1:1 onto Rust's `WorkerConfig`
- * (`src-tauri/src/worker/handle.rs`) and are sent over IPC to
- * `spawn_worker`. Deliberately excludes `rows`/`cols` (PTY dimensions,
- * Rust-defaulted and not template-configurable today).
+ * (`src-tauri/crates/swarm-core/src/worker/handle.rs`) and are sent
+ * over IPC to `spawn_worker`. Deliberately excludes `rows`/`cols` (PTY
+ * dimensions, Rust-defaulted and not template-configurable today).
+ *
+ * `repoRoot`/`isolation` are additive and optional — omitting both
+ * reproduces exactly the pre-worktree-isolation spawn (no git
+ * anywhere). When `repoRoot` is given, `isolation` defaults
+ * server-side to `"worktree"`.
  */
 export const WorkerProcessOptionsSchema = z.object({
   name: z.string(),
   shell: z.string().optional(),
   cwd: z.string().optional(),
   env: z.record(z.string(), z.string()).optional(),
+  repoRoot: z.string().optional(),
+  isolation: WorkerIsolationSchema.optional(),
 });
 
 /** Process-level spawn options sent to the Rust `spawn_worker` command. */

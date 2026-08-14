@@ -8,6 +8,7 @@
 
 - [System Overview](#system-overview)
 - [Backend Architecture](#backend-architecture)
+  - [Worktree Isolation](#worktree-isolation)
 - [Frontend Architecture](#frontend-architecture)
 - [WebGPU Pipeline](#webgpu-pipeline)
 - [Data Flow](#data-flow)
@@ -53,8 +54,10 @@ The backend is organized into five domain modules under `src-tauri/src/`:
 
 ### Module Map
 
+The Rust side is a two-crate workspace: domain logic lives in the tauri-free `swarm-core` library crate, the Tauri shell (`swarm-desktop`) wires it to IPC commands and platform paths. CI enforces that `swarm-core` never depends on `tauri`/`tauri-plugin-*` (`cargo tree -p swarm-core -e normal`).
+
 ```text
-src-tauri/src/
+src-tauri/crates/swarm-core/src/   (swarm-core -- tauri-free domain crate)
 ├── ai/              AI integration
 │   ├── client.rs    Anthropic API client (reqwest + SSE streaming; always emits a terminal `done: true`)
 │   ├── queue.rs     Priority queue with semaphore concurrency control
@@ -62,30 +65,42 @@ src-tauri/src/
 ├── bus/             Inter-agent message bus
 │   ├── channel.rs   MessageBus -- per-topic tokio::sync::broadcast channels
 │   └── router.rs    Router -- direct/broadcast send + pipeline orchestration
-├── commands/        Tauri IPC command handlers
+├── events/          Event emission system
+│   └── emitter.rs   SwarmEvent enum + EventSink (routes into OrchestrationEngine)
+├── git/             Worktree-per-worker isolation -- see "Worktree Isolation" below
+│   ├── cli.rs       git binary discovery + arg-vector Command runner, capability probe
+│   ├── repo.rs      Repo toplevel discovery, HEAD sha resolution
+│   ├── worktree.rs  add/lock/unlock/remove/list/prune + porcelain parsing
+│   └── mod.rs       RepoLocks (per-repo serialization + lock-contention retry), home_dir/slugify/short_hash8
+├── orchestration/   Ordered event core -- see "Ordered Event Core" below
+│   ├── engine.rs    OrchestrationEngine (single writer thread) + DomainEvent envelope
+│   └── log.rs       EventLog -- SQLite (WAL) append-only event log
+├── session/         Session management
+│   └── manager.rs   DashMap-backed CRUD + SessionStore port
+├── worker/          Worker management
+│   ├── handle.rs    WorkerHandle, WorkerState, WorkerConfig, WorkerIsolation, WorkerInfo
+│   ├── lifecycle.rs Spawn, pause, resume, kill, input operations (worktree create/remove on spawn/kill)
+│   ├── pty.rs       PTY spawning (portable-pty) + Tokio I/O bridge
+│   └── registry.rs  DashMap registry, TOCTOU-safe update_state_if, aggregate metrics
+├── config.rs        Atomic key-value JSON config persistence
+├── paths.rs         Paths (data dir), constructed by the shell and passed in
+├── error.rs         AppError enum (thiserror + Serialize for IPC)
+└── lib.rs           Crate root, module re-exports
+
+src-tauri/src/   (swarm-desktop -- Tauri shell)
+├── commands/        Tauri IPC command handlers, thin wrappers over swarm-core
 │   ├── worker.rs        spawn, pause, resume, kill, list, input
 │   ├── session.rs       create, delete, list, get, session_add_worker
 │   ├── ai.rs            ai_request
 │   ├── bus.rs           bus_send, bus_subscribe, bus_create_pipeline, bus_list_channels, bus_list_pipelines
 │   ├── metrics.rs       get_metrics (incl. perWorker) + background collection loop
+│   ├── orchestration.rs events_since
+│   ├── config.rs        read_config, write_config
 │   ├── updater.rs       check_for_updates
 │   ├── notification.rs  send_notification
 │   └── fs.rs            Delegates to tauri-plugin-fs
-├── events/          Event emission system
-│   └── emitter.rs   SwarmEvent enum + emit_event() dispatcher (routes into OrchestrationEngine)
-├── orchestration/   Ordered event core -- see "Ordered Event Core" below
-│   ├── engine.rs    OrchestrationEngine (single writer thread) + DomainEvent envelope
-│   └── log.rs       EventLog -- SQLite (WAL) append-only event log
-├── session/         Session management
-│   ├── manager.rs   DashMap-backed CRUD
-│   └── store.rs     Persistence via tauri-plugin-store
-├── worker/          Worker management
-│   ├── handle.rs    WorkerHandle, WorkerState, WorkerConfig, WorkerInfo
-│   ├── lifecycle.rs Spawn, pause, resume, kill, input operations
-│   ├── pty.rs       PTY spawning (portable-pty) + Tokio I/O bridge
-│   └── registry.rs  DashMap registry, TOCTOU-safe update_state_if, aggregate metrics
-├── error.rs         AppError enum (thiserror + Serialize for IPC)
-├── lib.rs           Tauri app builder and setup
+├── session/         Session persistence via tauri-plugin-store
+├── lib.rs           Tauri app builder and setup (git capability probe + startup prune live here)
 └── main.rs          Binary entry point (Tokio runtime)
 ```
 
@@ -131,6 +146,52 @@ spawn_pty()
 ```
 
 The PTY writer and child process are wrapped in `parking_lot::Mutex` to satisfy `Sync` requirements for `DashMap` storage.
+
+### Worktree Isolation
+
+A worker spawned with `WorkerConfig.repoRoot` set (and `isolation` resolving to `"worktree"`, the default) gets its own `git worktree` instead of sharing a cwd with every other worker on the same repo -- the collision unit is the process writing files, and N PTYs in one working tree is exactly the failure this protects against. Everything lives in the tauri-free `git` module (`crates/swarm-core/src/git/`), which shells out to the system `git` binary rather than a Rust git library -- `gix` doesn't yet implement creating/removing worktrees, and `git2`/libgit2 checks out through a different code path than the user's own hooks/LFS/attributes.
+
+```text
+do_spawn_worker(config)
+    │
+    ├── config.repoRoot present, isolation == "worktree"?
+    │       │
+    │       ├── git::repo::discover_toplevel(repoRoot)   -C <dir> rev-parse --show-toplevel
+    │       ├── git::repo::head_sha(toplevel)             -C <root> rev-parse HEAD
+    │       ├── path = ~/.swarm/worktrees/<repo>-<hash8>/w-<id8>
+    │       ├── branch = swarm/<slug(name)>-<id8>
+    │       ├── RepoLocks::run_serialized(root, || git::worktree::add(root, path, branch, sha))
+    │       └── git::worktree::lock(root, path, "swarm worker <uuid>")
+    │               any step fails ──> hard-fail the whole spawn (no worker, no PTY, no fallback cwd)
+    │
+    ├── spawn_pty(cwd = path, or config.cwd if unisolated)
+    ├── WorkerHandle { worktree_path, repo_root, branch, .. } inserted into registry
+    └── emit worker_spawned { isolation: "worktree" | "none" }, then (if isolated) worktree_created
+
+do_kill_worker(id)
+    │
+    ├── remove from registry, drop PTY writer, kill + wait the child
+    │       (waiting for exit matters on Windows: a live child holding the
+    │        worktree dir as its cwd would block removal)
+    │
+    ├── handle.worktree_path present?
+    │       │
+    │       ├── git::worktree::unlock(root, path)
+    │       ├── RepoLocks::run_serialized(root, || git::worktree::remove(root, path))  -- NEVER --force
+    │       └── emit worktree_removed { disposition: "removed" | "preserved_dirty" | "failed" }
+    │
+    └── emit worker_killed
+```
+
+- **Arg-vector only, never a shell string.** Every `git` invocation (`git/cli.rs::run`) is a `std::process::Command` with an explicit argument vector -- injection-proof by construction, unlike a shell command line. `GIT_TERMINAL_PROMPT=0` is set on every call (a missing credential can never block on an interactive prompt); on Windows, `CREATE_NO_WINDOW` (`0x0800_0000`) suppresses the console-window flash a GUI app would otherwise get from spawning a console subprocess. Every invocation carries `-C <dir> -c core.longpaths=true` (per-invocation, never written to the user's own git config) so long checkout paths under `~/.swarm/worktrees/**` survive Windows' legacy `MAX_PATH` limit.
+- **Timeouts.** 20s for `worktree add` (a full checkout, can legitimately take longer on a large repo), 5s for everything else (`rev-parse`, `worktree list`/`lock`/`unlock`/`remove`, `--version`). A timed-out child is killed.
+- **The preserve-on-dirty guarantee.** `git::worktree::remove` never constructs a `--force`/`-f` argument -- the argv builder is structurally incapable of it (`git::worktree::tests::test_remove_args_never_contains_force`). Without `--force`, git itself refuses to remove a worktree with uncommitted changes or untracked files; that refusal becomes `RemoveOutcome::Preserved` (and `disposition: "preserved_dirty"` on the wire), not an error. SWARM never deletes a worktree's contents itself -- it only ever asks git, and git says no when it would lose something.
+- **Per-repo serialization.** `RepoLocks` (`git/mod.rs`) holds a `DashMap<PathBuf, Mutex<()>>` keyed by repo root. Each mutating call (`worktree add`, `worktree remove`) runs under its repo's lock with one retry (200ms backoff) if the failure looks like transient index/ref-lock contention (`index.lock`, "cannot lock ref", "another git process..."). Two different repos' operations run fully in parallel; only operations against the *same* repo queue behind each other.
+- **Startup capability probe.** `git::probe_capability()` runs `git --version` and requires >= 2.17 (when `worktree remove` was added). Missing or too-old git is never silently degraded: `swarm-desktop`'s `setup()` logs a warning and emits a `system_log` envelope explaining that isolation is unavailable and workers will spawn without it -- a `repoRoot`-bearing spawn will then hard-fail naturally at the `discover_toplevel`/`head_sha` step, since there is no working `git` to run.
+- **Startup prune.** `setup()` also runs `git worktree prune` against the persisted `default_repo_root` config key (set via the Workers page's Project Root picker), logging the pruned count. This is intentionally the Phase 1 scope -- a full multi-repo orphan reconciliation (rebuilding the expected worktree set from the event log and diffing against `git worktree list --porcelain`) is a later phase.
+- **Failure policy.** No `repoRoot` -> unconditionally today's unisolated spawn (zero regression, `worker::lifecycle::tests::test_spawn_without_repo_root_is_unisolated_zero_regression`). `repoRoot` present and the pipeline fails at any step -> the whole spawn fails; no silent fallback to a shared cwd (`worker::lifecycle::tests::test_spawn_hard_fails_when_repo_root_is_not_a_git_repo`).
+
+See [docs/api.md#worktree-isolation-lifecycle](api.md#worktree-isolation-lifecycle) for the IPC-level contract (`WorkerConfig` fields, `worktree_created`/`worktree_removed` payload shapes) and [Events](#event-system) below for where these events sit in the persistence policy.
 
 ### AI Queue (Built, Not Wired)
 
@@ -194,7 +255,7 @@ Any backend call ──emit_event()──> OrchestrationEngine::record()   (mpsc
 
 - **Single writer, one thread:** `OrchestrationEngine::start` spawns one dedicated `swarm-event-writer` OS thread owning an `mpsc::Receiver<SwarmEvent>` and the `EventLog` connection. `record()` is a non-blocking `Sender::send` callable from any thread/task; the writer loop is the *only* place that assigns `seq`, so wire order is totally ordered by construction -- there is no window where two threads could race to claim the same sequence number.
 - **SQLite WAL log:** `EventLog` (`orchestration/log.rs`) opens a SQLite database at `<app-data>/swarm-events.db` in WAL journal mode (`synchronous = NORMAL`), with a single `events(seq INTEGER PRIMARY KEY, ts, type, payload) STRICT` table. `seq` is the primary key, so a duplicate-seq append is a hard error -- an invariant the writer thread's exclusive ownership of `seq` assignment guarantees never fires in practice. On startup, the engine resumes numbering from `EventLog::max_seq()`, so sequence numbers stay monotonic across restarts, not just within one process lifetime.
-- **Persistence policy:** every event consumes a `seq`, but only some are written to the log. `is_persistent()` (`orchestration/engine.rs`) excludes `WorkerOutput`, `SystemMetrics`, and `SystemLog` -- high-frequency telemetry that flows live but is not history. Everything else (`worker_spawned`, `worker_killed`, `worker_state`, `session_created`, `session_deleted`, `ai_stream_delta`, `ai_stream_settled`, `bus_message`) persists before being emitted.
+- **Persistence policy:** every event consumes a `seq`, but only some are written to the log. `is_persistent()` (`orchestration/engine.rs`) excludes `WorkerOutput`, `SystemMetrics`, and `SystemLog` -- high-frequency telemetry that flows live but is not history. Everything else (`worker_spawned`, `worker_killed`, `worker_state`, `session_created`, `session_deleted`, `ai_stream_delta`, `ai_stream_settled`, `bus_message`, `worktree_created`, `worktree_removed`) persists before being emitted. `is_persistent()` excludes by name rather than allowlisting, so a new variant is persistent by construction unless explicitly added to the exclusion list -- pinned down for the two worktree events by `orchestration::engine::tests::test_worktree_events_are_persistent`.
 - **Emission:** after the persistence step, the writer wraps the event in a `DomainEvent { seq, ts, ..flattened SwarmEvent }` and emits it on the single `swarm://events` Tauri channel. See [docs/api.md#events](api.md#events) for the wire shape and full type-tag list.
 - **The receipt pattern:** rather than overload a stream event's payload with a completion flag, terminal outcomes get their own event type -- e.g. `ai_stream_settled`, emitted exactly once per AI request after the final `ai_stream_delta`, on both success and failure. Frontend code awaits the receipt (`waitFor()` in `src/lib/event-bus.ts`) instead of inferring completion from stream contents.
 - **Replay foundation:** `commands/orchestration.rs::events_since(after_seq)` returns persisted rows with `seq > after_seq`, ascending, capped at 5000 per call (see [docs/api.md#events_since](api.md#events_since)). This is the data-layer foundation for gap backfill -- already wired into `src/lib/event-bus.ts`'s `connectEventBus` -- and for future replay; a replay *UI* is out of scope for this phase.
@@ -423,7 +484,7 @@ The backend emits typed events via the `SwarmEvent` enum, but not directly: ever
 
 | Type                 | Payload                                                        | Trigger                    | Persisted |
 |-----------------------|-----------------------------------------------------------------|-----------------------------|-----------|
-| `worker_spawned`     | `{ workerId, name, pid }`                                       | Worker registered           | Yes |
+| `worker_spawned`     | `{ workerId, name, pid, isolation }`                             | Worker registered           | Yes |
 | `worker_killed`      | `{ workerId }`                                                   | Worker terminated           | Yes |
 | `worker_output`      | `{ workerId, data }`                                             | PTY output available        | No |
 | `worker_state`       | `{ workerId, state }`                                            | State transition            | Yes |
@@ -434,6 +495,8 @@ The backend emits typed events via the `SwarmEvent` enum, but not directly: ever
 | `ai_stream_settled`  | `{ requestId, status, error }`                                   | Terminal receipt, once per AI request | Yes |
 | `system_log`         | `{ level, message, target, timestamp }`                          | Backend log message          | No |
 | `bus_message`        | `{ messageId, fromWorker, toWorker, topic, payload }`            | Bus message, forwarded by an active `bus_subscribe` task | Yes |
+| `worktree_created`   | `{ workerId, sessionId, repoRoot, worktreePath, branch, baseCommit }` | Worker's git worktree created | Yes |
+| `worktree_removed`   | `{ workerId, worktreePath, branch, disposition, headCommit, reason }` | Worker killed; worktree removed/preserved | Yes |
 
 See [docs/api.md#events](api.md#events) for the full envelope contract (`{ seq, ts, type, payload }`), the persistence policy, the receipt pattern, and `events_since` paging.
 

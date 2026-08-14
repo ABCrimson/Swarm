@@ -11,6 +11,7 @@
 // is correct; (d) accessible names stay Title Case ("Kill", "Pause",
 // "Resume").
 
+import { open as openWorktree } from "@tauri-apps/plugin-shell";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -172,5 +173,48 @@ describe("WorkerDetail", () => {
     expect(screen.getByRole("button", { name: "Kill" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
+  });
+
+  // ── Worktree isolation rows ──────────────────────────────────────
+
+  it("shows no Branch or Worktree row for a worker spawned without isolation", () => {
+    const worker = createWorker();
+    seedWorker(worker);
+    render(<WorkerDetail worker={worker} />);
+
+    expect(screen.queryByText("Branch")).not.toBeInTheDocument();
+    expect(screen.queryByText("Worktree")).not.toBeInTheDocument();
+  });
+
+  it("shows Branch and Worktree rows for an isolated worker", () => {
+    const worker = createWorker({
+      branch: "swarm/research-agent-11112222",
+      worktreePath: "/home/user/.swarm/worktrees/repo-abcd1234/w-11112222",
+    });
+    seedWorker(worker);
+    render(<WorkerDetail worker={worker} />);
+
+    expect(screen.getByText("Branch")).toBeInTheDocument();
+    expect(screen.getByText("swarm/research-agent-11112222")).toBeInTheDocument();
+    expect(screen.getByText("Worktree")).toBeInTheDocument();
+    expect(
+      screen.getByText("/home/user/.swarm/worktrees/repo-abcd1234/w-11112222"),
+    ).toBeInTheDocument();
+  });
+
+  it("opens the worktree path via the shell plugin when clicked", async () => {
+    const user = userEvent.setup();
+    const worker = createWorker({
+      branch: "swarm/agent-11112222",
+      worktreePath: "/home/user/.swarm/worktrees/repo-abcd1234/w-11112222",
+    });
+    seedWorker(worker);
+    render(<WorkerDetail worker={worker} />);
+
+    await user.click(screen.getByText("/home/user/.swarm/worktrees/repo-abcd1234/w-11112222"));
+
+    expect(openWorktree).toHaveBeenCalledWith(
+      "/home/user/.swarm/worktrees/repo-abcd1234/w-11112222",
+    );
   });
 });

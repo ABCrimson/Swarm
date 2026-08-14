@@ -37,12 +37,21 @@ const SpawnWorkerResponseSchema = z.uuid();
 
 /**
  * Spawn a new worker process from process options only — `name`,
- * optionally `shell`/`cwd`/`env` — which map 1:1 onto Rust's
- * `WorkerConfig` (`src-tauri/src/worker/handle.rs`) and are the only
- * fields sent over IPC. Agent metadata (role/model/systemPrompt) never
- * belongs here — see `WorkerSpawnSpec` (`#store/types`) and
+ * optionally `shell`/`cwd`/`env`/`repoRoot`/`isolation` — which map
+ * 1:1 onto Rust's `WorkerConfig`
+ * (`src-tauri/crates/swarm-core/src/worker/handle.rs`) and are the
+ * only fields sent over IPC. Agent metadata (role/model/systemPrompt)
+ * never belongs here — see `WorkerSpawnSpec` (`#store/types`) and
  * `spawnWorkerFromSpec` (`#lib/worker-spawn`), which splits the two and
  * stores agent metadata client-side instead.
+ *
+ * `repoRoot`/`isolation` are additive and optional. Omitting `repoRoot`
+ * reproduces exactly the pre-worktree-isolation spawn — no git touched
+ * server-side. When `repoRoot` is given and worktree creation fails,
+ * Rust hard-fails the whole spawn (see `spawn_worker`'s `Errors`
+ * section in `docs/api.md`) rather than silently falling back to a
+ * shared cwd, so this function's promise rejects in that case exactly
+ * like any other spawn failure.
  *
  * The response is Zod-validated (a bare worker UUID) rather than cast,
  * matching the event-bus's `safeParse`-at-the-seam discipline
@@ -62,6 +71,8 @@ export async function spawnWorker(options: WorkerProcessOptions): Promise<string
   if (options.shell !== undefined) config.shell = options.shell;
   if (options.cwd !== undefined) config.cwd = options.cwd;
   if (options.env !== undefined) config.env = options.env;
+  if (options.repoRoot !== undefined) config.repoRoot = options.repoRoot;
+  if (options.isolation !== undefined) config.isolation = options.isolation;
 
   const raw = await invoke<unknown>("spawn_worker", { config });
   const parsed = SpawnWorkerResponseSchema.safeParse(raw);
