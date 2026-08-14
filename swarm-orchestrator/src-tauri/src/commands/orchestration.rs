@@ -1,6 +1,6 @@
 //! IPC commands for the ordered event core.
 
-use crate::orchestration::{EventLog, OrchestrationEngine};
+use swarm_core::orchestration::{EventLog, OrchestrationEngine};
 
 /// Maximum events returned per call; callers page by repeating the
 /// call with the last received seq until fewer than the cap arrive.
@@ -46,8 +46,8 @@ pub async fn events_since(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{SwarmEvent, WorkerSpawnedPayload};
-    use crate::orchestration::DomainEvent;
+    use swarm_core::events::{SwarmEvent, WorkerSpawnedPayload};
+    use swarm_core::orchestration::DomainEvent;
     use uuid::Uuid;
 
     /// Pins the two independently-defined wire envelopes together: the

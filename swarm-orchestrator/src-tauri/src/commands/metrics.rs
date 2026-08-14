@@ -21,11 +21,10 @@ use parking_lot::Mutex;
 use std::time::Duration;
 
 use sysinfo::System;
-use tauri::AppHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::events::{SwarmEvent, SystemMetricsPayload, emit_event};
-use crate::worker::registry::WorkerRegistry;
+use swarm_core::events::{EventSink, SwarmEvent, SystemMetricsPayload};
+use swarm_core::worker::registry::WorkerRegistry;
 
 /// Shared system metrics state persisted across Tauri command calls.
 ///
@@ -58,7 +57,7 @@ impl SharedSystem {
 ///
 /// # Arguments
 ///
-/// * `app` - Tauri app handle for event emission
+/// * `sink` - Event sink for recording `system_metrics` events
 /// * `registry` - The shared worker registry to collect metrics from
 /// * `shared_sys` - The app-wide shared `sysinfo::System` (managed state)
 /// * `cancel` - Cancellation token for graceful shutdown
@@ -74,7 +73,7 @@ impl SharedSystem {
 /// | `ai_req_per_sec`| Placeholder (0.0)                   |
 /// | `timestamp`          | Current Unix time (ms)              |
 pub fn start_metrics_loop(
-    app: AppHandle,
+    sink: EventSink,
     registry: WorkerRegistry,
     shared_sys: SharedSystem,
     cancel: CancellationToken,
@@ -135,7 +134,7 @@ pub fn start_metrics_loop(
                 timestamp: now,
             };
 
-            emit_event(&app, SwarmEvent::SystemMetrics(payload));
+            sink.emit(SwarmEvent::SystemMetrics(payload));
         }
     });
 }
@@ -329,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_collect_per_worker_metrics_with_workers() {
-        use crate::worker::handle::{WorkerHandle, WorkerState};
+        use swarm_core::worker::handle::{WorkerHandle, WorkerState};
         use uuid::Uuid;
 
         let registry = WorkerRegistry::new();

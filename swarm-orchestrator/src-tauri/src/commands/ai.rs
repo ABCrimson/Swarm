@@ -4,7 +4,7 @@
 //! into the priority queue for streaming processing via the
 //! Anthropic Messages API.
 
-use crate::ai::{AiQueue, AiRequest};
+use swarm_core::ai::{AiQueue, AiRequest};
 
 /// Enqueues an AI request for streaming processing.
 ///

@@ -1,19 +1,12 @@
-//! # SWARM Orchestrator Core Library
+//! # SWARM Orchestrator Desktop Shell
 //!
-//! The Rust backend for the SWARM Orchestrator desktop application,
-//! providing multi-agent worker management, AI streaming integration,
-//! session persistence, real-time metrics collection, inter-agent
-//! message bus, auto-updates, and OS notifications.
-//!
-//! ## Architecture
-//!
-//! The backend is organized into five domain modules:
-//!
-//! - [`worker`] — PTY-backed worker process registry and lifecycle management
-//! - [`ai`] — Anthropic API client with SSE streaming and priority queue
-//! - [`session`] — Session CRUD with crash-recovery persistence via `tauri-plugin-store`
-//! - [`events`] — Typed event emission system bridging Rust state to the React frontend
-//! - [`bus`] — Inter-agent message bus with broadcast channels and pipelines
+//! The Tauri desktop shell for the SWARM Orchestrator application. All
+//! domain logic (worker management, AI streaming, session CRUD, the
+//! ordered event log, the inter-agent message bus) lives in the
+//! Tauri-free `swarm-core` crate; this crate wires that domain layer to
+//! Tauri: it registers plugins and IPC command handlers, resolves
+//! filesystem paths from `app.path()`, and forwards the ordered event
+//! stream onto the `swarm://events` webview channel.
 //!
 //! ## Runtime
 //!
@@ -22,25 +15,21 @@
 //! through `tokio::task::spawn_blocking` to avoid starving the async
 //! executor.
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 
-mod ai;
-pub mod bus;
 mod commands;
-pub mod error;
-pub mod events;
-pub mod orchestration;
 mod session;
-pub mod worker;
 
-use ai::{AiClient, AiClientConfig, AiQueue, AiQueueConfig};
-use bus::channel::MessageBus;
-use bus::router::Router;
 use commands::metrics::SharedSystem;
-use orchestration::{EventLog, OrchestrationEngine};
-use session::SessionManager;
-use worker::registry::WorkerRegistry;
+use swarm_core::Paths;
+use swarm_core::ai::{AiClient, AiClientConfig, AiQueue, AiQueueConfig};
+use swarm_core::bus::channel::MessageBus;
+use swarm_core::bus::router::Router;
+use swarm_core::error::AppError;
+use swarm_core::orchestration::{EVENT_CHANNEL, EventLog, OrchestrationEngine};
+use swarm_core::session::SessionManager;
+use swarm_core::worker::registry::WorkerRegistry;
 
 /// Initializes the tracing subscriber for structured logging.
 ///
@@ -48,20 +37,20 @@ use worker::registry::WorkerRegistry;
 /// - **Debug mode:** Pretty-printed, human-readable output with thread names
 /// - **Release mode:** JSON-formatted output for structured log aggregation
 ///
-/// The default log filter is `swarm_core=debug,warn` unless overridden
-/// by the `RUST_LOG` environment variable.
+/// The default log filter is `swarm_core=debug,swarm_desktop=debug,warn`
+/// unless overridden by the `RUST_LOG` environment variable.
 ///
 /// # Examples
 ///
 /// ```bash
 /// # Override log level at runtime
-/// RUST_LOG=swarm_core=trace cargo run
+/// RUST_LOG=swarm_core=trace,swarm_desktop=trace cargo run
 /// ```
 fn init_tracing() {
     use tracing_subscriber::EnvFilter;
 
     let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("swarm_core=debug,warn"));
+        .unwrap_or_else(|_| EnvFilter::new("swarm_core=debug,swarm_desktop=debug,warn"));
 
     if cfg!(debug_assertions) {
         tracing_subscriber::fmt()
@@ -81,6 +70,21 @@ fn init_tracing() {
     tracing::info!("tracing initialized");
 }
 
+/// Resolves the shared [`swarm_core::Paths`] from the Tauri app handle,
+/// creating the app data directory if it does not exist yet.
+///
+/// Used both by `setup()` (to locate the event log) and by the config
+/// commands (to locate `swarm-config.json`) — one resolution site keeps
+/// the two from ever disagreeing on where app data lives.
+pub(crate) fn resolve_paths(app: &tauri::AppHandle) -> Result<Paths, AppError> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::Config(format!("failed to resolve app data dir: {e}")))?;
+    std::fs::create_dir_all(&data_dir)?;
+    Ok(Paths { data_dir })
+}
+
 /// Builds and runs the SWARM Orchestrator Tauri application.
 ///
 /// This is the main application entry point called from `main.rs`.
@@ -93,6 +97,9 @@ fn init_tracing() {
 /// 4. Registers all IPC command handlers
 /// 5. In the `setup` closure:
 ///    - Sets the window icon programmatically for crisp taskbar rendering
+///    - Starts the ordered event core (SQLite log + single-writer engine)
+///      and spawns a forwarder task that emits its broadcast stream on
+///      `swarm://events`
 ///    - Loads persisted sessions from disk
 ///    - Starts the background metrics collection loop (500ms interval)
 ///    - Initializes the AI client and priority queue
@@ -108,7 +115,7 @@ fn init_tracing() {
 ///
 /// ```no_run
 /// // Called from the binary entry point:
-/// swarm_core::run();
+/// swarm_desktop::run();
 /// ```
 pub fn run() {
     init_tracing();
@@ -184,18 +191,43 @@ pub fn run() {
             window.set_icon(icon)?;
 
             // Ordered event core: SQLite log + single-writer engine.
-            let db_path = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?
-                .join("swarm-events.db");
-            if let Some(parent) = db_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
+            let paths = resolve_paths(&app.handle().clone())?;
+            let db_path = paths.data_dir.join("swarm-events.db");
             let event_log = EventLog::open(&db_path)
                 .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
-            let engine = OrchestrationEngine::start(app.handle().clone(), event_log, Some(db_path));
+            let engine = OrchestrationEngine::start(event_log, Some(db_path));
+
+            // The emit seam: forward the engine's ordered broadcast stream
+            // onto the single `swarm://events` webview channel. Subscribe
+            // before managing state so no event recorded from this point
+            // forward can be missed.
+            let mut event_rx = engine.subscribe();
+            let sink = engine.sink();
+            app.manage(sink.clone());
             app.manage(engine);
+
+            let forwarder_app = app.handle().clone();
+            tokio::spawn(async move {
+                loop {
+                    match event_rx.recv().await {
+                        Ok(envelope) => {
+                            if let Err(e) = forwarder_app.emit(EVENT_CHANNEL, &*envelope) {
+                                tracing::error!(error = %e, "failed to emit domain event");
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(
+                                skipped = n,
+                                "event forwarder lagged; frontend gap-detection will backfill via events_since"
+                            );
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            tracing::debug!("event broadcast channel closed; forwarder stopping");
+                            break;
+                        }
+                    }
+                }
+            });
 
             // Load persisted sessions
             let app_handle = app.handle().clone();
@@ -218,16 +250,16 @@ pub fn run() {
             let metrics_cancel = CancellationToken::new();
             app.manage(metrics_cancel.clone());
             commands::metrics::start_metrics_loop(
-                app_handle.clone(),
+                sink.clone(),
                 registry.clone(),
                 shared_system.clone(),
                 metrics_cancel,
             );
 
-            // Initialize AI queue (requires app handle for event emission)
+            // Initialize AI queue (requires an EventSink for event emission)
             let ai_client = AiClient::new(ai_config.clone())
                 .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
-            let ai_queue = AiQueue::new(app_handle.clone(), ai_client, AiQueueConfig::default());
+            let ai_queue = AiQueue::new(sink, ai_client, AiQueueConfig::default());
             app.manage(ai_queue);
 
             tracing::info!("SWARM Orchestrator setup complete");

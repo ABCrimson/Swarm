@@ -1,15 +1,14 @@
 //! Message bus Tauri IPC command handlers.
 //!
 //! Exposes inter-agent message bus operations to the React frontend.
-//! Each command delegates to the [`MessageBus`](crate::bus::channel::MessageBus)
-//! and [`Router`](crate::bus::router::Router) instances managed as Tauri state.
+//! Each command delegates to the [`MessageBus`](swarm_core::bus::channel::MessageBus)
+//! and [`Router`](swarm_core::bus::router::Router) instances managed as Tauri state.
 
-use tauri::AppHandle;
 use uuid::Uuid;
 
-use crate::bus::channel::MessageBus;
-use crate::bus::router::{PipelineInfo, PipelineStage, Router};
-use crate::events::{BusMessagePayload, SwarmEvent, emit_event};
+use swarm_core::bus::channel::MessageBus;
+use swarm_core::bus::router::{PipelineInfo, PipelineStage, Router};
+use swarm_core::events::{BusMessagePayload, EventSink, SwarmEvent};
 
 /// Sends a message from one worker to another on a topic.
 ///
@@ -83,7 +82,7 @@ pub async fn bus_send(
 /// Subscribes to a message bus topic and streams messages as Tauri events.
 ///
 /// Creates a background task that listens for messages on the given topic
-/// and emits them to the frontend via [`emit_event`] as `bus_message`-tagged
+/// and emits them to the frontend via the [`EventSink`] as `bus_message`-tagged
 /// `SwarmEvent::BusMessage` payloads on the `swarm://events` channel.
 /// The task runs until the channel is closed or the topic is removed.
 ///
@@ -94,7 +93,7 @@ pub async fn bus_send(
 ///
 /// # Arguments
 ///
-/// * `app` - Tauri app handle for event emission
+/// * `sink` - Event sink for recording `bus_message` events (managed state)
 /// * `bus` - Shared message bus (managed state)
 /// * `topic` - Topic to subscribe to
 ///
@@ -102,30 +101,28 @@ pub async fn bus_send(
 ///
 /// Returns a `String` error if subscription fails.
 #[tauri::command]
-#[tracing::instrument(skip(app, bus))]
+#[tracing::instrument(skip(sink, bus))]
 pub async fn bus_subscribe(
-    app: AppHandle,
+    sink: tauri::State<'_, EventSink>,
     bus: tauri::State<'_, MessageBus>,
     topic: String,
 ) -> Result<(), String> {
     tracing::info!(topic = %topic, "bus_subscribe called");
 
     let mut rx = bus.subscribe(&topic)?;
+    let sink = sink.inner().clone();
 
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(msg) => {
-                    emit_event(
-                        &app,
-                        SwarmEvent::BusMessage(BusMessagePayload {
-                            message_id: msg.id,
-                            from_worker: msg.from_worker,
-                            to_worker: msg.to_worker,
-                            topic: msg.topic,
-                            payload: msg.payload,
-                        }),
-                    );
+                    sink.emit(SwarmEvent::BusMessage(BusMessagePayload {
+                        message_id: msg.id,
+                        from_worker: msg.from_worker,
+                        to_worker: msg.to_worker,
+                        topic: msg.topic,
+                        payload: msg.payload,
+                    }));
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(topic = %topic, skipped = n, "bus subscriber lagged");

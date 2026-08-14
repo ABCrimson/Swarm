@@ -1,8 +1,8 @@
 //! Worker lifecycle Tauri IPC command handlers.
 //!
 //! Exposes worker management operations to the React frontend.
-//! Each command delegates to [`crate::worker::lifecycle`] functions,
-//! converting [`AppError`](crate::error::AppError) to `String`
+//! Each command delegates to [`swarm_core::worker::lifecycle`] functions,
+//! converting [`AppError`](swarm_core::error::AppError) to `String`
 //! for Tauri IPC error transport.
 //!
 //! Blocking lifecycle calls are wrapped in `tokio::task::spawn_blocking`
@@ -11,9 +11,10 @@
 use tauri::AppHandle;
 use uuid::Uuid;
 
-use crate::worker::handle::{WorkerConfig, WorkerInfo};
-use crate::worker::lifecycle;
-use crate::worker::registry::WorkerRegistry;
+use swarm_core::events::EventSink;
+use swarm_core::worker::handle::{WorkerConfig, WorkerInfo};
+use swarm_core::worker::lifecycle;
+use swarm_core::worker::registry::WorkerRegistry;
 
 /// Spawns a new worker with the given configuration.
 ///
@@ -22,7 +23,7 @@ use crate::worker::registry::WorkerRegistry;
 ///
 /// # Arguments
 ///
-/// * `app` - Tauri app handle (injected by Tauri)
+/// * `sink` - Event sink for recording the `worker_spawned` event (managed state)
 /// * `registry` - Shared worker registry (managed state)
 /// * `config` - Worker spawn configuration from the frontend
 ///
@@ -36,27 +37,26 @@ use crate::worker::registry::WorkerRegistry;
 /// - The PTY process fails to spawn
 /// - The registry is at capacity
 #[tauri::command]
-#[tracing::instrument(skip(app, registry))]
+#[tracing::instrument(skip(sink, registry))]
 pub async fn spawn_worker(
-    app: AppHandle,
+    sink: tauri::State<'_, EventSink>,
     registry: tauri::State<'_, WorkerRegistry>,
     config: WorkerConfig,
 ) -> Result<String, String> {
     tracing::info!(name = %config.name, "spawn_worker called");
     let registry = registry.inner().clone();
-    let app_clone = app.clone();
-    let id = tokio::task::spawn_blocking(move || {
-        lifecycle::do_spawn_worker(&app_clone, &registry, config)
-    })
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "spawn_worker task panicked");
-        e.to_string()
-    })?
-    .map_err(|e| {
-        tracing::error!(error = %e, "failed to spawn worker");
-        e.to_string()
-    })?;
+    let sink = sink.inner().clone();
+    let id =
+        tokio::task::spawn_blocking(move || lifecycle::do_spawn_worker(&sink, &registry, config))
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "spawn_worker task panicked");
+                e.to_string()
+            })?
+            .map_err(|e| {
+                tracing::error!(error = %e, "failed to spawn worker");
+                e.to_string()
+            })?;
     Ok(id.to_string())
 }
 
@@ -64,7 +64,7 @@ pub async fn spawn_worker(
 ///
 /// # Arguments
 ///
-/// * `app` - Tauri app handle (injected by Tauri)
+/// * `sink` - Event sink for recording the `worker_state` event (managed state)
 /// * `registry` - Shared worker registry (managed state)
 /// * `id` - UUID string of the worker to pause
 ///
@@ -74,9 +74,9 @@ pub async fn spawn_worker(
 /// - The `id` is not a valid UUID
 /// - No worker with the given ID exists
 #[tauri::command]
-#[tracing::instrument(skip(app, registry))]
+#[tracing::instrument(skip(sink, registry))]
 pub async fn pause_worker(
-    app: AppHandle,
+    sink: tauri::State<'_, EventSink>,
     registry: tauri::State<'_, WorkerRegistry>,
     id: String,
 ) -> Result<(), String> {
@@ -86,8 +86,8 @@ pub async fn pause_worker(
         e.to_string()
     })?;
     let registry = registry.inner().clone();
-    let app_clone = app.clone();
-    tokio::task::spawn_blocking(move || lifecycle::do_pause_worker(&app_clone, &registry, uuid))
+    let sink = sink.inner().clone();
+    tokio::task::spawn_blocking(move || lifecycle::do_pause_worker(&sink, &registry, uuid))
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "pause_worker task panicked");
@@ -103,7 +103,7 @@ pub async fn pause_worker(
 ///
 /// # Arguments
 ///
-/// * `app` - Tauri app handle (injected by Tauri)
+/// * `sink` - Event sink for recording the `worker_state` event (managed state)
 /// * `registry` - Shared worker registry (managed state)
 /// * `id` - UUID string of the worker to resume
 ///
@@ -113,9 +113,9 @@ pub async fn pause_worker(
 /// - The `id` is not a valid UUID
 /// - No worker with the given ID exists
 #[tauri::command]
-#[tracing::instrument(skip(app, registry))]
+#[tracing::instrument(skip(sink, registry))]
 pub async fn resume_worker(
-    app: AppHandle,
+    sink: tauri::State<'_, EventSink>,
     registry: tauri::State<'_, WorkerRegistry>,
     id: String,
 ) -> Result<(), String> {
@@ -125,8 +125,8 @@ pub async fn resume_worker(
         e.to_string()
     })?;
     let registry = registry.inner().clone();
-    let app_clone = app.clone();
-    tokio::task::spawn_blocking(move || lifecycle::do_resume_worker(&app_clone, &registry, uuid))
+    let sink = sink.inner().clone();
+    tokio::task::spawn_blocking(move || lifecycle::do_resume_worker(&sink, &registry, uuid))
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "resume_worker task panicked");
@@ -145,7 +145,7 @@ pub async fn resume_worker(
 ///
 /// # Arguments
 ///
-/// * `app` - Tauri app handle (injected by Tauri)
+/// * `sink` - Event sink for recording the `worker_killed` event (managed state)
 /// * `registry` - Shared worker registry (managed state)
 /// * `id` - UUID string of the worker to kill
 ///
@@ -155,9 +155,9 @@ pub async fn resume_worker(
 /// - The `id` is not a valid UUID
 /// - No worker with the given ID exists
 #[tauri::command]
-#[tracing::instrument(skip(app, registry))]
+#[tracing::instrument(skip(sink, registry))]
 pub async fn kill_worker(
-    app: AppHandle,
+    sink: tauri::State<'_, EventSink>,
     registry: tauri::State<'_, WorkerRegistry>,
     id: String,
 ) -> Result<(), String> {
@@ -167,8 +167,8 @@ pub async fn kill_worker(
         e.to_string()
     })?;
     let registry = registry.inner().clone();
-    let app_clone = app.clone();
-    tokio::task::spawn_blocking(move || lifecycle::do_kill_worker(&app_clone, &registry, uuid))
+    let sink = sink.inner().clone();
+    tokio::task::spawn_blocking(move || lifecycle::do_kill_worker(&sink, &registry, uuid))
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "kill_worker task panicked");
@@ -266,7 +266,7 @@ pub async fn set_max_workers(
     registry: tauri::State<'_, WorkerRegistry>,
     max: usize,
 ) -> Result<(), String> {
-    use crate::worker::registry::{MAX_MAX_WORKERS, MIN_MAX_WORKERS};
+    use swarm_core::worker::registry::{MAX_MAX_WORKERS, MIN_MAX_WORKERS};
 
     tracing::info!(max, "set_max_workers called");
 
