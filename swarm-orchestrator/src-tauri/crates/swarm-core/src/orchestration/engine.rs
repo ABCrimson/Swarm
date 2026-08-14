@@ -319,6 +319,29 @@ mod tests {
         assert!(is_persistent(&input("automation")));
     }
 
+    /// DIRECTIVE: `file_written` and `agent_turn_started` both persist —
+    /// same "excluded by name, persistent by construction" guarantee as
+    /// the worktree/ship events below. `file_written` in particular is
+    /// the whole point of Phase 5d (a worker's file write joining the
+    /// causality graph) — it would be silently useless as history if a
+    /// future refactor of the exclusion list dropped it.
+    #[test]
+    fn test_file_written_and_agent_turn_started_are_persistent() {
+        assert!(is_persistent(&SwarmEvent::FileWritten(
+            crate::events::FileWrittenPayload {
+                path: "/home/user/.swarm/out.txt".to_string(),
+                bytes: 7,
+            }
+        )));
+        assert!(is_persistent(&SwarmEvent::AgentTurnStarted(
+            crate::events::AgentTurnStartedPayload {
+                worker_id: Uuid::nil(),
+                model: "claude-sonnet-4-5".to_string(),
+                request_id: "turn-1".to_string(),
+            }
+        )));
+    }
+
     /// DIRECTIVE: worktree_created and worktree_removed both persist —
     /// `is_persistent` excludes by name (`WorkerOutput`, `SystemMetrics`,
     /// `SystemLog`), so any new variant is persistent by construction
@@ -519,5 +542,46 @@ mod tests {
         // Both messages processed, in order — the dropped ack neither
         // stalled nor skipped anything.
         assert_eq!(seen, vec![1, 2]);
+    }
+
+    /// DIRECTIVE: `agent_turn_started` returns a real seq — integration
+    /// through the ACTUAL engine (a live `OrchestrationEngine::start`,
+    /// spawning the real `swarm-event-writer` OS thread), not just the
+    /// raw-channel unit tests above. This is the exact mechanism
+    /// `commands::ai::agent_turn_started` uses: `EventSink::emit_awaiting_seq`
+    /// resolved by a running writer thread, end-to-end, proving the
+    /// returned seq is both the one the ack resolves to AND the one
+    /// actually persisted for that event.
+    #[tokio::test]
+    async fn test_agent_turn_started_mechanism_returns_a_real_seq_through_a_live_engine() {
+        let log = EventLog::open_in_memory().unwrap();
+        let engine = OrchestrationEngine::start(log, None, |_envelope| {});
+        let sink = engine.sink();
+        let worker_id = Uuid::new_v4();
+
+        let ack = sink.emit_awaiting_seq(
+            SwarmEvent::AgentTurnStarted(crate::events::AgentTurnStartedPayload {
+                worker_id,
+                model: "claude-sonnet-4-5".to_string(),
+                request_id: "turn-1".to_string(),
+            }),
+            Provenance::default(),
+        );
+        let turn_seq = ack.await.expect("live engine must resolve the ack");
+        assert_eq!(turn_seq, 1, "first event through a fresh engine gets seq 1");
+
+        // A second turn on the same live engine gets a distinct,
+        // monotonically-increasing seq — proving this isn't a
+        // coincidental always-1 stub.
+        let ack2 = sink.emit_awaiting_seq(
+            SwarmEvent::AgentTurnStarted(crate::events::AgentTurnStartedPayload {
+                worker_id,
+                model: "claude-sonnet-4-5".to_string(),
+                request_id: "turn-2".to_string(),
+            }),
+            Provenance::default(),
+        );
+        let turn_seq_2 = ack2.await.expect("live engine must resolve the second ack");
+        assert_eq!(turn_seq_2, 2);
     }
 }
