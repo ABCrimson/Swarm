@@ -9,7 +9,10 @@
 //!
 //! - [`worker`] — Worker lifecycle commands (spawn, pause, resume, kill, list, input)
 //! - [`session`] — Session CRUD commands (create, delete, list, get)
-//! - [`ai`] — AI request enqueue command
+//! - [`agent`] — `agent_turn_started`, the webview chat intake onto the
+//!   ordered spine (the Rust `ai_request`/`AiQueue` path it used to sit
+//!   beside was deleted in Phase 2 of the multi-provider plan — see
+//!   `docs/api.md`'s "Built, Not Wired" section)
 //! - [`config`] — App config file commands (read_config, write_config)
 //! - [`metrics`] — System metrics collection and retrieval
 //! - [`bus`] — Message bus commands (send, subscribe, pipeline, list channels)
@@ -21,7 +24,7 @@
 //! - [`orchestration`] — Ordered event core commands (events_since)
 //! - [`updater`] — Auto-updater check command
 
-pub mod ai;
+pub mod agent;
 pub mod bus;
 pub mod config;
 pub mod fs;

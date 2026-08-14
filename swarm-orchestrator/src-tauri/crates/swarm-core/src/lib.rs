@@ -42,7 +42,6 @@
 //! - [`error`] — Shared application error type
 
 pub mod agent;
-pub mod ai;
 pub mod bus;
 pub mod config;
 pub mod error;
