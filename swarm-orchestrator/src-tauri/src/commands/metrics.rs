@@ -342,6 +342,9 @@ mod tests {
             started_at: 0,
             pty_writer: None,
             child: None,
+            worktree_path: None,
+            repo_root: None,
+            branch: None,
         };
         registry.spawn_worker(h1).unwrap();
 
@@ -354,6 +357,9 @@ mod tests {
             started_at: 0,
             pty_writer: None,
             child: None,
+            worktree_path: None,
+            repo_root: None,
+            branch: None,
         };
         registry.spawn_worker(h2).unwrap();
 

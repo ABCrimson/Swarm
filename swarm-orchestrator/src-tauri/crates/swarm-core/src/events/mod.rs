@@ -22,6 +22,8 @@
 //! | `ai_stream_settled` | [`AiStreamSettledPayload`] | AI stream terminal receipt     |
 //! | `system_log`        | [`SystemLogPayload`]       | Backend log message            |
 //! | `bus_message`       | [`BusMessagePayload`]      | Inter-agent bus message        |
+//! | `worktree_created`  | [`WorktreeCreatedPayload`] | Worker's git worktree created  |
+//! | `worktree_removed`  | [`WorktreeRemovedPayload`] | Worker's git worktree removed/preserved |
 
 pub mod emitter;
 
@@ -29,5 +31,5 @@ pub use emitter::{
     AiStreamDeltaPayload, AiStreamSettledPayload, BusMessagePayload, EventSink,
     SessionCreatedPayload, SessionDeletedPayload, SwarmEvent, SystemLogPayload,
     SystemMetricsPayload, WorkerKilledPayload, WorkerOutputPayload, WorkerSpawnedPayload,
-    WorkerStatePayload,
+    WorkerStatePayload, WorktreeCreatedPayload, WorktreeRemovedPayload,
 };

@@ -12,6 +12,7 @@ use tauri::AppHandle;
 use uuid::Uuid;
 
 use swarm_core::events::EventSink;
+use swarm_core::git::RepoLocks;
 use swarm_core::worker::handle::{WorkerConfig, WorkerInfo};
 use swarm_core::worker::lifecycle;
 use swarm_core::worker::registry::WorkerRegistry;
@@ -23,8 +24,9 @@ use swarm_core::worker::registry::WorkerRegistry;
 ///
 /// # Arguments
 ///
-/// * `sink` - Event sink for recording the `worker_spawned` event (managed state)
+/// * `sink` - Event sink for recording emitted events (managed state)
 /// * `registry` - Shared worker registry (managed state)
+/// * `repo_locks` - Per-repo git-operation serialization (managed state)
 /// * `config` - Worker spawn configuration from the frontend
 ///
 /// # Returns
@@ -36,27 +38,34 @@ use swarm_core::worker::registry::WorkerRegistry;
 /// Returns a `String` error if:
 /// - The PTY process fails to spawn
 /// - The registry is at capacity
+/// - `config.repoRoot` is present and worktree creation fails (repo
+///   discovery, `HEAD` resolution, `git worktree add`/`lock`) — this
+///   hard-fails the whole spawn, never falling back to an unisolated
+///   shared cwd
 #[tauri::command]
-#[tracing::instrument(skip(sink, registry))]
+#[tracing::instrument(skip(sink, registry, repo_locks))]
 pub async fn spawn_worker(
     sink: tauri::State<'_, EventSink>,
     registry: tauri::State<'_, WorkerRegistry>,
+    repo_locks: tauri::State<'_, RepoLocks>,
     config: WorkerConfig,
 ) -> Result<String, String> {
     tracing::info!(name = %config.name, "spawn_worker called");
     let registry = registry.inner().clone();
     let sink = sink.inner().clone();
-    let id =
-        tokio::task::spawn_blocking(move || lifecycle::do_spawn_worker(&sink, &registry, config))
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "spawn_worker task panicked");
-                e.to_string()
-            })?
-            .map_err(|e| {
-                tracing::error!(error = %e, "failed to spawn worker");
-                e.to_string()
-            })?;
+    let repo_locks = repo_locks.inner().clone();
+    let id = tokio::task::spawn_blocking(move || {
+        lifecycle::do_spawn_worker(&sink, &registry, &repo_locks, config)
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "spawn_worker task panicked");
+        e.to_string()
+    })?
+    .map_err(|e| {
+        tracing::error!(error = %e, "failed to spawn worker");
+        e.to_string()
+    })?;
     Ok(id.to_string())
 }
 
@@ -141,12 +150,16 @@ pub async fn resume_worker(
 /// Kills a worker and cleans up all associated resources.
 ///
 /// Removes the worker from the registry, terminates the PTY child
-/// process, and emits a `worker_killed` event on `swarm://events`.
+/// process, and emits a `worker_killed` event on `swarm://events`. If
+/// the worker was isolated into a git worktree, also unlocks and
+/// removes it (never with `--force` — a dirty worktree is preserved,
+/// never deleted) and emits `worktree_removed` with the disposition.
 ///
 /// # Arguments
 ///
-/// * `sink` - Event sink for recording the `worker_killed` event (managed state)
+/// * `sink` - Event sink for recording emitted events (managed state)
 /// * `registry` - Shared worker registry (managed state)
+/// * `repo_locks` - Per-repo git-operation serialization (managed state)
 /// * `id` - UUID string of the worker to kill
 ///
 /// # Errors
@@ -155,10 +168,11 @@ pub async fn resume_worker(
 /// - The `id` is not a valid UUID
 /// - No worker with the given ID exists
 #[tauri::command]
-#[tracing::instrument(skip(sink, registry))]
+#[tracing::instrument(skip(sink, registry, repo_locks))]
 pub async fn kill_worker(
     sink: tauri::State<'_, EventSink>,
     registry: tauri::State<'_, WorkerRegistry>,
+    repo_locks: tauri::State<'_, RepoLocks>,
     id: String,
 ) -> Result<(), String> {
     tracing::info!(worker_id = %id, "kill_worker called");
@@ -168,16 +182,19 @@ pub async fn kill_worker(
     })?;
     let registry = registry.inner().clone();
     let sink = sink.inner().clone();
-    tokio::task::spawn_blocking(move || lifecycle::do_kill_worker(&sink, &registry, uuid))
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "kill_worker task panicked");
-            e.to_string()
-        })?
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to kill worker");
-            e.to_string()
-        })
+    let repo_locks = repo_locks.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        lifecycle::do_kill_worker(&sink, &registry, &repo_locks, uuid)
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "kill_worker task panicked");
+        e.to_string()
+    })?
+    .map_err(|e| {
+        tracing::error!(error = %e, "failed to kill worker");
+        e.to_string()
+    })
 }
 
 /// Lists all active workers as serializable info snapshots.

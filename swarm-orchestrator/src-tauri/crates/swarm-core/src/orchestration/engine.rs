@@ -207,7 +207,7 @@ mod tests {
     use super::*;
     use crate::events::{
         AiStreamSettledPayload, SwarmEvent, SystemMetricsPayload, WorkerOutputPayload,
-        WorkerSpawnedPayload,
+        WorkerSpawnedPayload, WorktreeCreatedPayload, WorktreeRemovedPayload,
     };
     use uuid::Uuid;
 
@@ -216,6 +216,7 @@ mod tests {
             worker_id: Uuid::nil(),
             name: "w".to_string(),
             pid: None,
+            isolation: None,
         })
     }
 
@@ -243,6 +244,36 @@ mod tests {
                 request_id: "req-1".to_string(),
                 status: "ok".to_string(),
                 error: None,
+            }
+        )));
+    }
+
+    /// DIRECTIVE: worktree_created and worktree_removed both persist —
+    /// `is_persistent` excludes by name (`WorkerOutput`, `SystemMetrics`,
+    /// `SystemLog`), so any new variant is persistent by construction
+    /// unless explicitly added to that list. These pin the outcome down
+    /// so a future refactor of the exclusion list can't silently drop
+    /// worktree lifecycle events out of the durable log.
+    #[test]
+    fn test_worktree_events_are_persistent() {
+        assert!(is_persistent(&SwarmEvent::WorktreeCreated(
+            WorktreeCreatedPayload {
+                worker_id: Uuid::nil(),
+                session_id: None,
+                repo_root: "/repo".to_string(),
+                worktree_path: "/repo-wt".to_string(),
+                branch: "swarm/x-abcd1234".to_string(),
+                base_commit: "sha".to_string(),
+            }
+        )));
+        assert!(is_persistent(&SwarmEvent::WorktreeRemoved(
+            WorktreeRemovedPayload {
+                worker_id: Uuid::nil(),
+                worktree_path: "/repo-wt".to_string(),
+                branch: "swarm/x-abcd1234".to_string(),
+                disposition: "removed".to_string(),
+                head_commit: None,
+                reason: None,
             }
         )));
     }
