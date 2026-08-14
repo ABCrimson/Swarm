@@ -640,6 +640,24 @@ pub struct AgentToolResultPayload {
 /// [`crate::agent::adapter::PermissionDecision`]'s Condition C doc:
 /// this event, answered via `respond_permission`, is the only
 /// legitimate gating surface — never `allowedTools`.
+///
+/// ## Semantics shift for `ClaudeCodeAdapter` (Phase 3, §0b of
+/// `RECONCILIATION.md`, BINDING)
+///
+/// The mid-turn `agent_permission_request` → `respond_permission`
+/// round-trip this doc describes above is **not buildable** on `claude
+/// -p` (`--permission-mode manual` is a silent no-op — verified via the
+/// permission-gating mini-spike). `ClaudeCodeAdapter` repurposes this
+/// SAME event as a **REPORT**: it is emitted only after the provider's
+/// own `system/permission_denied` line proves a tool call was ALREADY
+/// denied, never while one is pending. Concretely, for this adapter:
+/// `suggested_decision` is always `Some(`[`PermissionDecision::Deny`]`)`
+/// (there is nothing left to decide — the denial already happened) and
+/// [`Self::denial_subclass`]/[`Self::message`] carry the actual
+/// provider-observed detail. Calling `respond_permission` against a
+/// `ClaudeCodeAdapter` session is a documented no-op (see
+/// `crate::agent::claude_code::ClaudeCodeSession::respond_permission`)
+/// — there is no pending decision on the other end to answer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPermissionRequestPayload {
@@ -652,13 +670,42 @@ pub struct AgentPermissionRequestPayload {
     pub request_id: PermissionId,
     /// Name of the tool awaiting approval.
     pub tool: String,
-    /// The tool's proposed input, for display before approval.
+    /// The tool's proposed input, for display before approval. Best
+    /// effort for a report-only denial (see the struct doc's semantics
+    /// shift) — `claude -p`'s `system/permission_denied` line does not
+    /// carry the tool's input, only its name; `Value::Null` when no
+    /// earlier `agent_tool_call` for the same `tool_use_id` was
+    /// observed to correlate against.
     pub input: serde_json::Value,
     /// The provider's own suggested decision, when it has one (e.g. a
     /// hook-computed recommendation) — advisory only, never
-    /// auto-applied by SWARM.
+    /// auto-applied by SWARM. Always `Some(Deny)` for a
+    /// `ClaudeCodeAdapter` report (see the struct doc's semantics
+    /// shift) — the fine-grained reason lives in
+    /// [`Self::denial_subclass`].
     #[serde(default)]
     pub suggested_decision: Option<PermissionDecision>,
+    /// Best-effort classification of WHY the provider denied this
+    /// call. For `ClaudeCodeAdapter`, one of three values (the §0b
+    /// mini-spike's three empirically observed subclasses),
+    /// classified from the provider's raw `decision_reason_type`/
+    /// `message` fields: `"mode"` (denied because the active
+    /// `--permission-mode` disallows it, e.g. `plan`/`dontAsk`),
+    /// `"ungranted_write"` (default -p mode auto-denies Write/Edit —
+    /// "you haven't granted it yet"), or `"redirection_guard"` (the
+    /// static Bash output-redirection guard). `None` for providers/
+    /// events with no such concept, or when the raw shape doesn't match
+    /// any known subclass. Free-form (not a closed enum) because this
+    /// is provider-CLI-observed text classification, not a SWARM-owned
+    /// vocabulary — see `crate::agent::claude_code`'s classifier doc.
+    #[serde(default)]
+    pub denial_subclass: Option<String>,
+    /// Raw, human-readable denial message from the provider, verbatim,
+    /// when available. `None` for a genuine pending-request event (the
+    /// pre-Phase-3 meaning this struct was designed for); `Some` for a
+    /// `ClaudeCodeAdapter` report.
+    #[serde(default)]
+    pub message: Option<String>,
 }
 
 /// Payload for the `agent_turn_settled` receipt.
@@ -1476,6 +1523,8 @@ mod tests {
             tool: "Bash".to_string(),
             input: serde_json::json!({"command": "rm -rf /"}),
             suggested_decision: Some(PermissionDecision::Deny),
+            denial_subclass: None,
+            message: None,
         });
         let json = serde_json::to_string(&event).expect("serialize");
         assert!(json.contains("\"type\":\"agent_permission_request\""));
