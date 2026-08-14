@@ -80,6 +80,21 @@ fn prune_args(repo_root: &Path) -> Vec<String> {
     args
 }
 
+/// Argv for `git branch -d <branch>` — deliberately incapable of ever
+/// carrying `-D`/`--delete --force`. `-d` (lowercase) is git's own
+/// safe delete: it refuses if `branch` isn't fully merged. SWARM's own
+/// caller (`worker::lifecycle::do_kill_worker`) additionally checks
+/// the branch tip against the worktree's recorded base commit before
+/// even attempting this, so the two checks are redundant defense in
+/// depth, not a substitute for one another.
+fn branch_delete_args(repo_root: &Path, branch: &str) -> Vec<String> {
+    let mut args = base_args(repo_root);
+    args.push("branch".to_string());
+    args.push("-d".to_string());
+    args.push(branch.to_string());
+    args
+}
+
 // ── Porcelain parsing ───────────────────────────────────────────────
 
 /// One record from `git worktree list --porcelain`.
@@ -242,40 +257,64 @@ pub fn unlock(repo_root: &Path, worktree_path: &Path) -> Result<(), AppError> {
 pub enum RemoveOutcome {
     /// `git worktree remove` succeeded — the directory is gone.
     Removed,
-    /// git refused to remove the worktree (dirty/untracked files,
-    /// still locked, etc). `reason` is git's own stderr, trimmed. This
-    /// IS the preserve-on-dirty guarantee: SWARM never overrides this
-    /// refusal with `--force` (see the module doc).
+    /// git refused specifically because the worktree has uncommitted
+    /// changes or untracked files. `reason` is git's own stderr,
+    /// trimmed. This IS the preserve-on-dirty guarantee: SWARM never
+    /// overrides this refusal with `--force` (see the module doc). Any
+    /// *other* refusal (still locked, permission error, missing path)
+    /// is an [`AppError::Git`] from [`remove`], not this variant.
     Preserved { reason: String },
 }
 
 /// Removes `worktree_path` from the repo rooted at `repo_root` —
-/// **never** with `--force` (see the module doc). git's own refusal
-/// on a dirty/untracked/still-locked worktree becomes
-/// [`RemoveOutcome::Preserved`] rather than an error, since it is the
-/// expected, safe outcome of the guarantee, not a failure of the
-/// operation.
+/// **never** with `--force` (see the module doc).
+///
+/// Classification is deliberately narrow: only git's specific refusal
+/// for a dirty/untracked working tree (`"contains modified or
+/// untracked files"`) becomes [`RemoveOutcome::Preserved`] — the one
+/// case that is a *safe, expected* outcome of the no-`--force`
+/// guarantee, not a failure. Every other non-zero exit (a still-locked
+/// worktree, a permission error killed mid-delete, an already-missing
+/// path, or any unrecognized stderr) is an [`AppError::Git`] — it must
+/// never be laundered into "preserved", which would tell a caller
+/// "your work is safe on disk" when the truth might be "half-deleted"
+/// or "still locked and untouched". Callers map this `Err` to
+/// `disposition: "failed"` and surface the stderr excerpt as `reason`.
 ///
 /// # Errors
 ///
-/// * [`AppError::Git`] — the worktree path doesn't correspond to a
-///   real worktree at all (a genuine failure, distinct from a
-///   dirty-tree refusal), `git` could not be spawned, or the
-///   operation timed out.
+/// * [`AppError::Git`] — anything other than success or the dirty-tree
+///   refusal: `"cannot remove a locked working tree"` (unlock did not
+///   actually take), a permission error (see the module doc's note on
+///   surviving grandchild processes), a path that isn't a valid
+///   worktree, `git` could not be spawned, or the operation timed out.
 pub fn remove(repo_root: &Path, worktree_path: &Path) -> Result<RemoveOutcome, AppError> {
     let output = cli::run(&remove_args(repo_root, worktree_path), READ_TIMEOUT)?;
     if output.success() {
         return Ok(RemoveOutcome::Removed);
     }
     let stderr = output.stderr.trim().to_string();
-    let lower = stderr.to_lowercase();
-    if lower.contains("is not a working tree") || lower.contains("no such file or directory") {
-        return Err(AppError::Git(format!(
-            "git worktree remove failed for {} (not a valid worktree): {stderr}",
-            worktree_path.display()
-        )));
+    if is_dirty_tree_refusal(&stderr) {
+        return Ok(RemoveOutcome::Preserved { reason: stderr });
     }
-    Ok(RemoveOutcome::Preserved { reason: stderr })
+    Err(AppError::Git(format!(
+        "git worktree remove refused for {}: {stderr}",
+        worktree_path.display()
+    )))
+}
+
+/// Whether `stderr` from a failed `git worktree remove` is git's
+/// specific refusal for a dirty/untracked working tree — the *only*
+/// refusal [`remove`] classifies as [`RemoveOutcome::Preserved`].
+/// Extracted as its own pure predicate so the classification boundary
+/// is unit-testable against realistic git stderr strings without
+/// needing to reproduce every failure mode (a locked working tree, a
+/// permission error, a half-deleted admin entry) against a live
+/// process.
+fn is_dirty_tree_refusal(stderr: &str) -> bool {
+    stderr
+        .to_lowercase()
+        .contains("contains modified or untracked files")
 }
 
 /// Lists all worktrees registered against the repo rooted at
@@ -318,6 +357,29 @@ pub fn prune(repo_root: &Path) -> Result<usize, AppError> {
         .lines()
         .filter(|l| !l.trim().is_empty())
         .count())
+}
+
+/// Deletes `branch` from the repo rooted at `repo_root` with `git
+/// branch -d` (**never** `-D`) — see [`branch_delete_args`]. Intended
+/// for the one narrow case where it's safe: a `swarm/*` isolation
+/// branch whose tip the caller has already confirmed equals the
+/// commit the worktree was created from (i.e. the agent made no
+/// commits). git's own `-d` safety check (refuses an unmerged branch)
+/// is a second, independent guard on top of that caller-side check.
+///
+/// # Errors
+///
+/// * [`AppError::Git`] — `git branch -d` refused (e.g. not fully
+///   merged, already deleted, checked out elsewhere) or timed out.
+pub fn delete_branch(repo_root: &Path, branch: &str) -> Result<(), AppError> {
+    let output = cli::run(&branch_delete_args(repo_root, branch), READ_TIMEOUT)?;
+    if !output.success() {
+        return Err(AppError::Git(format!(
+            "git branch -d failed for {branch}: {}",
+            output.stderr.trim()
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -379,6 +441,30 @@ mod tests {
         assert!(args.contains(&"-b".to_string()));
     }
 
+    /// DIRECTIVE (B3): -D is not constructible for branch deletion —
+    /// same style as `test_remove_args_never_contains_force`.
+    #[test]
+    fn test_branch_delete_args_never_contains_capital_d() {
+        let repo = PathBuf::from("/tmp/repo");
+        let args = branch_delete_args(&repo, "swarm/x-abcd1234");
+        assert!(
+            !args.iter().any(|a| a == "-D" || a == "--delete"),
+            "branch_delete_args must never construct -D/--delete: {args:?}"
+        );
+        assert_eq!(
+            args,
+            vec![
+                "-C".to_string(),
+                repo.display().to_string(),
+                "-c".to_string(),
+                "core.longpaths=true".to_string(),
+                "branch".to_string(),
+                "-d".to_string(),
+                "swarm/x-abcd1234".to_string(),
+            ]
+        );
+    }
+
     // ── Porcelain parser unit tests ──────────────────────────────────
 
     #[test]
@@ -420,7 +506,7 @@ mod tests {
         assert!(parse_porcelain("").is_empty());
     }
 
-    // ── remove() classification unit test (no real git needed) ──────
+    // ── remove() classification unit tests (no real git needed) ──────
 
     #[test]
     fn test_remove_outcome_variants_are_distinguishable() {
@@ -430,6 +516,48 @@ mod tests {
         };
         assert_ne!(removed, preserved);
         assert!(matches!(preserved, RemoveOutcome::Preserved { .. }));
+    }
+
+    /// DIRECTIVE (B2): "preserved_dirty" is reserved strictly for
+    /// git's dirty/untracked-files refusal — this asserts the actual
+    /// git message classifies as a dirty-tree refusal.
+    #[test]
+    fn test_is_dirty_tree_refusal_matches_real_git_message() {
+        assert!(is_dirty_tree_refusal(
+            "fatal: 'C:\\wt' contains modified or untracked files, use --force to delete it"
+        ));
+    }
+
+    /// DIRECTIVE (B2): a still-locked worktree must NOT be classified
+    /// as "preserved_dirty" — it is a genuine failure (`remove()`
+    /// returns `Err`, caller reports `disposition: "failed"`).
+    #[test]
+    fn test_is_dirty_tree_refusal_false_for_locked_working_tree() {
+        assert!(!is_dirty_tree_refusal(
+            "fatal: 'C:\\wt' is a locked working tree\nuse 'remove -f -f' to override or unlock first"
+        ));
+    }
+
+    /// DIRECTIVE (B2): a permission error mid-delete (the
+    /// surviving-grandchild-process scenario — see the kill-site TODO
+    /// in `worker::lifecycle::do_kill_worker`) must NOT be classified
+    /// as "preserved_dirty" — git may have already half-deleted
+    /// tracked files and the admin entry by this point, so reporting
+    /// "preserved" would be a lie. It must be "failed".
+    #[test]
+    fn test_is_dirty_tree_refusal_false_for_permission_denied() {
+        assert!(!is_dirty_tree_refusal(
+            "error: failed to delete 'C:\\wt\\some\\file': Permission denied"
+        ));
+    }
+
+    /// DIRECTIVE (B2): any unrecognized stderr defaults to a genuine
+    /// failure, never a silent "preserved" laundering.
+    #[test]
+    fn test_is_dirty_tree_refusal_false_for_unrecognized_message() {
+        assert!(!is_dirty_tree_refusal(
+            "fatal: some entirely unrecognized git error"
+        ));
     }
 
     // ── Temp-repo integration test ───────────────────────────────────
@@ -516,6 +644,47 @@ mod tests {
             "removed worktree must be gone from disk"
         );
 
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// DIRECTIVE (B2), end-to-end against real git (not the fabricated
+    /// stderr in `test_is_dirty_tree_refusal_false_for_locked_working_tree`):
+    /// a still-locked worktree must make `remove()` return `Err`, never
+    /// `Ok(Preserved)`.
+    #[test]
+    fn test_remove_returns_err_not_preserved_for_still_locked_worktree() {
+        let base = std::env::temp_dir().join(format!("swarm-wt-locked-{}", Uuid::new_v4()));
+        let repo_root = base.join("repo");
+        std::fs::create_dir_all(&repo_root).unwrap();
+        run_setup(&["init".to_string(), repo_root.display().to_string()]);
+        run_setup_in(
+            &repo_root,
+            &["config", "user.email", "swarm-test@example.com"],
+        );
+        run_setup_in(&repo_root, &["config", "user.name", "Swarm Test"]);
+        std::fs::write(repo_root.join("README.md"), "hello").unwrap();
+        run_setup_in(&repo_root, &["add", "-A"]);
+        run_setup_in(&repo_root, &["commit", "-m", "initial"]);
+        let head = super::super::repo::head_sha(&repo_root).unwrap();
+
+        let worktree_path = base.join("wt");
+        add(&repo_root, &worktree_path, "swarm/locked-test", &head).unwrap();
+        lock(&repo_root, &worktree_path, "swarm worker locked-test").unwrap();
+
+        // Deliberately do NOT unlock — remove() while still locked must
+        // be a genuine failure, not a laundered "preserved".
+        let result = remove(&repo_root, &worktree_path);
+        assert!(
+            result.is_err(),
+            "expected Err for a still-locked worktree, got {result:?}"
+        );
+        assert!(
+            worktree_path.exists(),
+            "locked worktree must remain untouched"
+        );
+
+        unlock(&repo_root, &worktree_path).ok();
+        remove(&repo_root, &worktree_path).ok();
         std::fs::remove_dir_all(&base).ok();
     }
 

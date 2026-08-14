@@ -54,6 +54,18 @@ const CONTENTION_RETRY_BACKOFF: Duration = Duration::from_millis(200);
 /// the *same* repo queue behind each other, matching git's own
 /// per-repository locking granularity (the index and ref locks this
 /// guards against are per-`.git` directory).
+///
+/// Keying is by `repo_root: &Path` exactly as given — callers are
+/// expected to already hold the *canonical* toplevel path (i.e. the
+/// output of [`repo::discover_toplevel`], which shells out to `git
+/// rev-parse --show-toplevel`), not an arbitrary caller-supplied
+/// spelling of the same directory. `RepoLocks` does no normalization
+/// of its own; two different spellings of the same repo (a trailing
+/// slash, a symlink, mixed path separators) would silently defeat
+/// serialization by hashing to different map keys. Every call site in
+/// this codebase (`worker::lifecycle`) already routes through
+/// `discover_toplevel` before ever touching a `RepoLocks`, so this is
+/// documentation of an invariant that already holds, not a TODO.
 #[derive(Clone, Default)]
 pub struct RepoLocks {
     locks: Arc<DashMap<PathBuf, Arc<Mutex<()>>>>,

@@ -102,8 +102,16 @@ fn create_worktree_for_worker(
     }
 
     let lock_reason = format!("swarm worker {worker_id}");
-    if let Err(e) = git::worktree::lock(&repo_root_path, &worktree_path, &lock_reason) {
-        cleanup_orphaned_worktree(&repo_root_path, &worktree_path);
+    let lock_result = {
+        let repo_root_path = repo_root_path.clone();
+        let worktree_path = worktree_path.clone();
+        let lock_reason = lock_reason.clone();
+        repo_locks.run_serialized(&repo_root_path, || {
+            git::worktree::lock(&repo_root_path, &worktree_path, &lock_reason)
+        })
+    };
+    if let Err(e) = lock_result {
+        cleanup_orphaned_worktree(repo_locks, &repo_root_path, &worktree_path);
         return Err(e);
     }
 
@@ -118,20 +126,29 @@ fn create_worktree_for_worker(
 /// Best-effort cleanup for a worktree that was created but whose
 /// owning spawn subsequently failed (lock step, or the PTY itself
 /// failed to start) — never `--force`, exactly like the normal kill
-/// path. Failures here are logged, not propagated: the caller is
-/// already unwinding a harder error, and a worktree left behind in
-/// this rare case is a manual-cleanup inconvenience, not data loss (it
-/// is still locked/attributable, or git's own dirty-refusal preserves
-/// it).
-fn cleanup_orphaned_worktree(repo_root: &Path, worktree_path: &Path) {
-    if let Err(e) = git::worktree::unlock(repo_root, worktree_path) {
+/// path. Every mutating call is serialized through `repo_locks`, same
+/// as the normal spawn/kill paths, so `RepoLocks`' "every mutating git
+/// op for a repo is serialized" guarantee actually holds everywhere,
+/// not just on the happy path. Failures here are logged, not
+/// propagated: the caller is already unwinding a harder error, and a
+/// worktree left behind in this rare case is a manual-cleanup
+/// inconvenience, not data loss (it is still locked/attributable, or
+/// git's own dirty-refusal preserves it).
+fn cleanup_orphaned_worktree(repo_locks: &RepoLocks, repo_root: &Path, worktree_path: &Path) {
+    let unlock_result = repo_locks.run_serialized(repo_root, || {
+        git::worktree::unlock(repo_root, worktree_path)
+    });
+    if let Err(e) = unlock_result {
         tracing::warn!(
             error = %e,
             path = %worktree_path.display(),
             "cleanup: unlock failed for orphaned worktree after a failed spawn"
         );
     }
-    match git::worktree::remove(repo_root, worktree_path) {
+    let remove_result = repo_locks.run_serialized(repo_root, || {
+        git::worktree::remove(repo_root, worktree_path)
+    });
+    match remove_result {
         Ok(RemoveOutcome::Removed) => {
             tracing::info!(
                 path = %worktree_path.display(),
@@ -149,7 +166,7 @@ fn cleanup_orphaned_worktree(repo_root: &Path, worktree_path: &Path) {
             tracing::warn!(
                 error = %e,
                 path = %worktree_path.display(),
-                "cleanup: failed to remove orphaned worktree after a failed spawn"
+                "cleanup: failed to remove orphaned worktree after a failed spawn — manual cleanup needed"
             );
         }
     }
@@ -227,7 +244,11 @@ pub fn do_spawn_worker(
     .map_err(|e| {
         tracing::error!(error = %e, "PTY spawn failed");
         if let Some(w) = &isolation {
-            cleanup_orphaned_worktree(Path::new(&w.repo_root), Path::new(&w.worktree_path));
+            cleanup_orphaned_worktree(
+                repo_locks,
+                Path::new(&w.repo_root),
+                Path::new(&w.worktree_path),
+            );
         }
         AppError::PtySpawn(e.to_string())
     })?;
@@ -249,6 +270,7 @@ pub fn do_spawn_worker(
         worktree_path: isolation.as_ref().map(|w| w.worktree_path.clone()),
         repo_root: isolation.as_ref().map(|w| w.repo_root.clone()),
         branch: isolation.as_ref().map(|w| w.branch.clone()),
+        base_commit: isolation.as_ref().map(|w| w.base_commit.clone()),
     };
 
     registry.spawn_worker(handle)?;
@@ -365,7 +387,11 @@ pub fn do_resume_worker(
 /// (`worktree_path` present), unlocks and then `git worktree remove`s
 /// it — **never** with `--force` — and emits `worktree_removed` with
 /// the resulting disposition (`removed`/`preserved_dirty`/`failed`).
-/// Finally emits `worker_killed`.
+/// On a successful removal (only), also best-effort deletes the
+/// isolation branch with `git branch -d` (never `-D`) if its tip is
+/// still the worker's recorded `base_commit` — see
+/// [`delete_isolation_branch_if_unchanged`]. Finally emits
+/// `worker_killed`.
 ///
 /// # Arguments
 ///
@@ -386,10 +412,18 @@ pub fn do_kill_worker(
 ) -> Result<(), AppError> {
     let handle = registry.remove_worker(&id)?;
 
-    let worktree_info = match (&handle.worktree_path, &handle.repo_root, &handle.branch) {
-        (Some(worktree_path), Some(repo_root), Some(branch)) => {
-            Some((worktree_path.clone(), repo_root.clone(), branch.clone()))
-        }
+    let worktree_info = match (
+        &handle.worktree_path,
+        &handle.repo_root,
+        &handle.branch,
+        &handle.base_commit,
+    ) {
+        (Some(worktree_path), Some(repo_root), Some(branch), base_commit) => Some((
+            worktree_path.clone(),
+            repo_root.clone(),
+            branch.clone(),
+            base_commit.clone(),
+        )),
         _ => None,
     };
 
@@ -398,6 +432,18 @@ pub fn do_kill_worker(
     // preventing it from blocking on read after we kill it.
     drop(handle.pty_writer);
 
+    // TODO(worktree-isolation Phase 2+): portable-pty 0.9 has no
+    // Windows job object (and no process-group kill on Unix) — `kill()`
+    // below only terminates the direct child, not any grandchildren it
+    // spawned (e.g. a shell running a long build). A surviving
+    // grandchild can hold the worktree directory as its own cwd, which
+    // makes the `git worktree remove` below fail with a permission
+    // error — correctly classified as `disposition: "failed"` (see
+    // `git::worktree::remove`'s doc, DIRECTIVE B2), not silently
+    // laundered into "preserved", but the worktree is then stuck on
+    // disk until the surviving process exits and the user retries or
+    // cleans up manually. The real fix is a Windows job object /
+    // Unix process-group kill at spawn time; out of Phase 1 scope.
     // Kill the child process and wait for it to exit
     if let Some(child_mutex) = &handle.child {
         let mut child = child_mutex.lock();
@@ -417,8 +463,9 @@ pub fn do_kill_worker(
 
     // Only now — after the child has fully exited — attempt worktree
     // cleanup. The child is confirmed gone above, so its OS handle on
-    // the worktree directory (as its cwd) is released.
-    if let Some((worktree_path, repo_root, branch)) = worktree_info {
+    // the worktree directory (as its cwd) is released (modulo the
+    // surviving-grandchild caveat in the TODO above).
+    if let Some((worktree_path, repo_root, branch, base_commit)) = worktree_info {
         let repo_root_path = Path::new(&repo_root);
         let worktree_path_ref = Path::new(&worktree_path);
 
@@ -426,13 +473,25 @@ pub fn do_kill_worker(
         // gone and this would no longer resolve.
         let head_commit = git::repo::head_sha(worktree_path_ref).ok();
 
-        if let Err(e) = git::worktree::unlock(repo_root_path, worktree_path_ref) {
-            tracing::warn!(worker_id = %id, error = %e, "worktree unlock failed before remove");
-        }
-
-        let remove_result = repo_locks.run_serialized(repo_root_path, || {
-            git::worktree::remove(repo_root_path, worktree_path_ref)
+        let unlock_result = repo_locks.run_serialized(repo_root_path, || {
+            git::worktree::unlock(repo_root_path, worktree_path_ref)
         });
+
+        // A failed unlock means `remove` would misreport (it would
+        // either fail with "still locked" — correctly "failed" under
+        // B2's classification, but for the wrong stated reason — or,
+        // worse, silently no-op on a lock git already dropped for some
+        // other reason). Treat it as the failure it honestly is and
+        // skip the remove attempt entirely, rather than warn-and-continue.
+        let remove_result = match unlock_result {
+            Ok(()) => repo_locks.run_serialized(repo_root_path, || {
+                git::worktree::remove(repo_root_path, worktree_path_ref)
+            }),
+            Err(e) => {
+                tracing::error!(worker_id = %id, error = %e, "worktree unlock failed; skipping remove");
+                Err(e)
+            }
+        };
 
         let (disposition, reason) = match remove_result {
             Ok(RemoveOutcome::Removed) => {
@@ -454,6 +513,22 @@ pub fn do_kill_worker(
             }
         };
 
+        // Branch cleanup — strictly gated on a successful removal:
+        // never on "preserved_dirty" (the worktree still needs the
+        // branch checked out) or "failed" (the state is uncertain).
+        // `-d` (never `-D`) additionally refuses an unmerged branch on
+        // git's own side — this is redundant defense in depth on top
+        // of the tip-vs-base-commit check below, not a substitute.
+        if disposition == "removed" {
+            delete_isolation_branch_if_unchanged(
+                repo_locks,
+                repo_root_path,
+                &branch,
+                base_commit.as_deref(),
+                id,
+            );
+        }
+
         sink.emit(SwarmEvent::WorktreeRemoved(WorktreeRemovedPayload {
             worker_id: id,
             worktree_path,
@@ -470,6 +545,60 @@ pub fn do_kill_worker(
 
     tracing::info!(worker_id = %id, "worker killed and removed");
     Ok(())
+}
+
+/// After a successful worktree removal, deletes the isolation branch
+/// **only** if its tip is still exactly `base_commit` (the sha the
+/// worktree was created from) — i.e. the agent made no commits.
+/// Never `-D`, never called for any disposition other than "removed"
+/// (see the call site). Purely best-effort bookkeeping to stop
+/// `swarm/*` branches from accumulating forever in the user's real
+/// repo: failures and a diverged tip are logged (`tracing`, not a
+/// `SwarmEvent` — this is not part of the persisted history) and never
+/// propagated, since losing the ability to delete a branch is not a
+/// reason to fail `do_kill_worker`.
+fn delete_isolation_branch_if_unchanged(
+    repo_locks: &RepoLocks,
+    repo_root: &Path,
+    branch: &str,
+    base_commit: Option<&str>,
+    worker_id: Uuid,
+) {
+    let Some(base_commit) = base_commit else {
+        tracing::debug!(worker_id = %worker_id, branch, "no recorded base_commit; skipping branch cleanup");
+        return;
+    };
+
+    let tip = repo_locks.run_serialized(repo_root, || git::repo::rev_parse(repo_root, branch));
+    let tip = match tip {
+        Ok(tip) => tip,
+        Err(e) => {
+            tracing::warn!(worker_id = %worker_id, branch, error = %e, "could not resolve branch tip; leaving branch in place");
+            return;
+        }
+    };
+
+    if tip != base_commit {
+        tracing::info!(
+            worker_id = %worker_id,
+            branch,
+            base_commit,
+            tip,
+            "isolation branch retained — diverged from base_commit (worker committed)"
+        );
+        return;
+    }
+
+    match repo_locks.run_serialized(repo_root, || {
+        git::worktree::delete_branch(repo_root, branch)
+    }) {
+        Ok(()) => {
+            tracing::info!(worker_id = %worker_id, branch, "isolation branch deleted (unchanged from base_commit)");
+        }
+        Err(e) => {
+            tracing::warn!(worker_id = %worker_id, branch, error = %e, "isolation branch delete failed; leaving it in place");
+        }
+    }
 }
 
 /// Writes input data to a worker's PTY.
@@ -524,6 +653,7 @@ mod tests {
             worktree_path: None,
             repo_root: None,
             branch: None,
+            base_commit: None,
         }
     }
 
@@ -722,6 +852,14 @@ mod tests {
     // runtime *context* even though do_spawn_worker/do_kill_worker
     // themselves are synchronous — hence #[tokio::test] rather than
     // #[test] for every test that actually spawns a PTY.
+    //
+    // DIRECTIVE (B1): `shell` is deliberately left unset (empty
+    // string) rather than hardcoded to a platform-specific binary —
+    // `do_spawn_worker` then resolves it via
+    // `WorkerRegistry`'s `SystemConfig::default()`, exactly the
+    // production default-shell path (`powershell.exe` on Windows,
+    // `/bin/bash` on Unix/CI). A hardcoded `"cmd.exe"` would make this
+    // test (and the two below) unrunnable on CI's ubuntu runner.
     #[tokio::test]
     async fn test_spawn_without_repo_root_is_unisolated_zero_regression() {
         let registry = WorkerRegistry::new();
@@ -731,7 +869,6 @@ mod tests {
 
         let config = WorkerConfig {
             name: "Plain Worker".to_string(),
-            shell: "cmd.exe".to_string(),
             ..WorkerConfig::default()
         };
         assert!(config.repo_root.is_none());
@@ -800,7 +937,6 @@ mod tests {
 
         let config = WorkerConfig {
             name: "Research Agent".to_string(),
-            shell: "cmd.exe".to_string(),
             repo_root: Some(repo_root.display().to_string()),
             ..WorkerConfig::default()
         };
@@ -861,6 +997,160 @@ mod tests {
         std::fs::remove_dir_all(repo_root.parent().unwrap()).ok();
     }
 
+    /// DIRECTIVE (B3): after a clean kill (disposition "removed") with
+    /// the branch tip unchanged from `base_commit` (no commits made in
+    /// the worktree), the isolation branch itself is deleted —
+    /// otherwise one `swarm/*` branch would accumulate per worker
+    /// forever in the user's real repo.
+    #[tokio::test]
+    async fn test_kill_deletes_unchanged_isolation_branch() {
+        let repo_root = setup_temp_git_repo();
+        let registry = WorkerRegistry::new();
+        let repo_locks = RepoLocks::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let sink = EventSink::new(tx);
+
+        let config = WorkerConfig {
+            name: "Clean Agent".to_string(),
+            repo_root: Some(repo_root.display().to_string()),
+            ..WorkerConfig::default()
+        };
+        let worker_id = do_spawn_worker(&sink, &registry, &repo_locks, config).unwrap();
+        let branch = registry.get_worker(&worker_id).unwrap().branch.unwrap();
+
+        // Sanity: branch exists right after spawn.
+        assert!(git::repo::rev_parse(&repo_root, &branch).is_ok());
+
+        do_kill_worker(&sink, &registry, &repo_locks, worker_id).unwrap();
+
+        // worktree_removed must report "removed" (nothing changed).
+        match rx.recv().unwrap() {
+            SwarmEvent::WorkerSpawned(_) => {}
+            other => panic!("expected WorkerSpawned first, got {other:?}"),
+        }
+        match rx.recv().unwrap() {
+            SwarmEvent::WorktreeCreated(_) => {}
+            other => panic!("expected WorktreeCreated, got {other:?}"),
+        }
+        match rx.recv().unwrap() {
+            SwarmEvent::WorktreeRemoved(p) => assert_eq!(p.disposition, "removed"),
+            other => panic!("expected WorktreeRemoved, got {other:?}"),
+        }
+
+        // The branch itself must now be gone.
+        assert!(
+            git::repo::rev_parse(&repo_root, &branch).is_err(),
+            "unchanged isolation branch must be deleted after a clean kill"
+        );
+
+        std::fs::remove_dir_all(repo_root.parent().unwrap()).ok();
+    }
+
+    /// DIRECTIVE (B3): if the agent committed inside the worktree
+    /// before it was killed, the branch tip diverges from
+    /// `base_commit` — the branch must survive (never `-D`'d away)
+    /// even though the worktree itself was cleanly removed (a
+    /// commit leaves the working tree clean, so disposition is still
+    /// "removed" — divergence is judged against `base_commit`, not
+    /// dirtiness).
+    #[tokio::test]
+    async fn test_kill_retains_diverged_isolation_branch() {
+        let repo_root = setup_temp_git_repo();
+        let registry = WorkerRegistry::new();
+        let repo_locks = RepoLocks::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let sink = EventSink::new(tx);
+
+        let config = WorkerConfig {
+            name: "Committing Agent".to_string(),
+            repo_root: Some(repo_root.display().to_string()),
+            ..WorkerConfig::default()
+        };
+        let worker_id = do_spawn_worker(&sink, &registry, &repo_locks, config).unwrap();
+        let info = registry.get_worker(&worker_id).unwrap();
+        let branch = info.branch.unwrap();
+        let worktree_path = info.worktree_path.unwrap();
+
+        // The agent commits real work inside its worktree.
+        let wt_path = std::path::Path::new(&worktree_path);
+        std::fs::write(wt_path.join("agent-output.txt"), "real work").unwrap();
+        let commit = |args: &[&str]| {
+            let mut full = git::repo::base_args(wt_path);
+            full.extend(args.iter().map(|s| s.to_string()));
+            let out = git::cli::run(&full, git::cli::CREATE_TIMEOUT).unwrap();
+            assert!(out.success(), "git commit setup failed: {}", out.stderr);
+        };
+        commit(&["add", "-A"]);
+        commit(&["commit", "-m", "agent work"]);
+
+        // Drain spawn-time events.
+        rx.recv().unwrap();
+        rx.recv().unwrap();
+
+        do_kill_worker(&sink, &registry, &repo_locks, worker_id).unwrap();
+
+        // Worktree is clean (the commit cleaned it) so removal still succeeds.
+        match rx.recv().unwrap() {
+            SwarmEvent::WorktreeRemoved(p) => assert_eq!(p.disposition, "removed"),
+            other => panic!("expected WorktreeRemoved, got {other:?}"),
+        }
+
+        // The branch must survive — it carries the agent's commit.
+        assert!(
+            git::repo::rev_parse(&repo_root, &branch).is_ok(),
+            "diverged isolation branch must NOT be deleted"
+        );
+
+        std::fs::remove_dir_all(repo_root.parent().unwrap()).ok();
+    }
+
+    /// DIRECTIVE (B2): a failed unlock must propagate as the failure it
+    /// is (`disposition: "failed"`), not a warn-and-continue that then
+    /// attempts (and likely mis-reports) `remove` anyway.
+    #[tokio::test]
+    async fn test_kill_reports_failed_when_unlock_fails() {
+        let repo_root = setup_temp_git_repo();
+        let registry = WorkerRegistry::new();
+        let repo_locks = RepoLocks::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let sink = EventSink::new(tx);
+
+        let config = WorkerConfig {
+            name: "Unlock Fail Agent".to_string(),
+            repo_root: Some(repo_root.display().to_string()),
+            ..WorkerConfig::default()
+        };
+        let worker_id = do_spawn_worker(&sink, &registry, &repo_locks, config).unwrap();
+        let worktree_path = registry
+            .get_worker(&worker_id)
+            .unwrap()
+            .worktree_path
+            .unwrap();
+
+        // Force the unlock do_kill_worker is about to attempt to fail:
+        // unlock it out-of-band first, so git reports "not locked".
+        git::worktree::unlock(&repo_root, std::path::Path::new(&worktree_path)).unwrap();
+
+        // Drain spawn-time events.
+        rx.recv().unwrap();
+        rx.recv().unwrap();
+
+        do_kill_worker(&sink, &registry, &repo_locks, worker_id).unwrap();
+
+        match rx.recv().unwrap() {
+            SwarmEvent::WorktreeRemoved(p) => {
+                assert_eq!(p.disposition, "failed");
+                assert!(p.reason.is_some());
+            }
+            other => panic!("expected WorktreeRemoved, got {other:?}"),
+        }
+        // The worktree is untouched — remove() was never even attempted.
+        assert!(std::path::Path::new(&worktree_path).exists());
+
+        std::fs::remove_dir_all(&worktree_path).ok();
+        std::fs::remove_dir_all(repo_root.parent().unwrap()).ok();
+    }
+
     /// DIRECTIVE: preserve-on-dirty integration test outcome, exercised
     /// through the real `do_kill_worker` path (not just `git::worktree`
     /// directly). Dirties the isolated worker's worktree with an
@@ -877,7 +1167,6 @@ mod tests {
 
         let config = WorkerConfig {
             name: "Dirty Agent".to_string(),
-            shell: "cmd.exe".to_string(),
             repo_root: Some(repo_root.display().to_string()),
             ..WorkerConfig::default()
         };

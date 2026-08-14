@@ -345,6 +345,7 @@ mod tests {
             worktree_path: None,
             repo_root: None,
             branch: None,
+            base_commit: None,
         };
         registry.spawn_worker(h1).unwrap();
 
@@ -360,6 +361,7 @@ mod tests {
             worktree_path: None,
             repo_root: None,
             branch: None,
+            base_commit: None,
         };
         registry.spawn_worker(h2).unwrap();
 

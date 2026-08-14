@@ -230,6 +230,7 @@ impl WorkerRegistry {
     ///     worktree_path: None,
     ///     repo_root: None,
     ///     branch: None,
+    ///     base_commit: None,
     /// };
     /// let id = registry.spawn_worker(handle).unwrap();
     /// assert_eq!(registry.count(), 1);
@@ -353,6 +354,7 @@ impl WorkerRegistry {
     ///     worktree_path: None,
     ///     repo_root: None,
     ///     branch: None,
+    ///     base_commit: None,
     /// };
     /// let id = registry.spawn_worker(handle).unwrap();
     ///
@@ -467,6 +469,7 @@ mod tests {
             worktree_path: None,
             repo_root: None,
             branch: None,
+            base_commit: None,
         }
     }
 
