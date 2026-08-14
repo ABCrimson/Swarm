@@ -27,6 +27,8 @@ use swarm_core::ai::{AiClient, AiClientConfig, AiQueue, AiQueueConfig};
 use swarm_core::bus::channel::MessageBus;
 use swarm_core::bus::router::Router;
 use swarm_core::error::AppError;
+use swarm_core::events::{SwarmEvent, SystemLogPayload};
+use swarm_core::git::{self, GitCapability, RepoLocks};
 use swarm_core::orchestration::{EVENT_CHANNEL, EventLog, OrchestrationEngine};
 use swarm_core::session::SessionManager;
 use swarm_core::worker::registry::WorkerRegistry;
@@ -123,6 +125,10 @@ pub fn run() {
     let registry = WorkerRegistry::new();
     let session_manager = SessionManager::new();
 
+    // Per-repo git-operation serialization for worktree-per-worker
+    // isolation (spawn/kill). See swarm_core::git::RepoLocks.
+    let repo_locks = RepoLocks::new();
+
     // Inter-agent message bus and router
     let message_bus = MessageBus::new();
     let router = Router::new(message_bus.clone());
@@ -146,6 +152,7 @@ pub fn run() {
         .manage(shared_system.clone())
         .manage(message_bus)
         .manage(router)
+        .manage(repo_locks.clone())
         .invoke_handler(tauri::generate_handler![
             // Worker commands
             commands::worker::spawn_worker,
@@ -230,6 +237,61 @@ pub fn run() {
                 let reg = app.state::<WorkerRegistry>();
                 if let Err(e) = reg.set_max_workers(max as usize) {
                     tracing::warn!(error = %e, "ignoring persisted max_workers");
+                }
+            }
+
+            // Worktree isolation startup probe (item 1 of Phase 1): never
+            // silently degrade. A missing/too-old git only actually blocks
+            // a spawn that supplies `repoRoot` (see
+            // `worker::lifecycle::do_spawn_worker`'s hard-fail path) — this
+            // just makes that fact visible up front, in the console, before
+            // the user hits it as a spawn error.
+            match git::probe_capability() {
+                GitCapability::Available { version } => {
+                    tracing::info!(
+                        version = format!("{}.{}.{}", version.0, version.1, version.2),
+                        "git worktree isolation available"
+                    );
+                }
+                GitCapability::Unavailable { reason } => {
+                    tracing::warn!(reason = %reason, "git worktree isolation unavailable");
+                    sink.emit(SwarmEvent::SystemLog(SystemLogPayload {
+                        level: "warn".to_string(),
+                        message: format!(
+                            "Worktree Isolation Unavailable: {reason}. Workers Will Spawn Without Isolation."
+                        ),
+                        target: "swarm_core::git".to_string(),
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0),
+                    }));
+                }
+            }
+
+            // `git worktree prune` for the one repo Phase 1 tracks by
+            // default (the persisted "default_repo_root" — see
+            // commands::config), logging the count. A fuller multi-repo
+            // orphan reconciliation is out of scope for Phase 1.
+            if let Some(default_repo_root) =
+                commands::config::read_config_value_sync(&app_handle, "default_repo_root")
+                    .and_then(|v| v.as_str().map(str::to_string))
+            {
+                match git::worktree::prune(std::path::Path::new(&default_repo_root)) {
+                    Ok(count) => {
+                        tracing::info!(
+                            repo_root = %default_repo_root,
+                            pruned = count,
+                            "startup worktree prune complete"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            repo_root = %default_repo_root,
+                            error = %e,
+                            "startup worktree prune failed"
+                        );
+                    }
                 }
             }
 

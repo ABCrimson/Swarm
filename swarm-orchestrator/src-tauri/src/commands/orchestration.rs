@@ -62,6 +62,7 @@ mod tests {
             worker_id: Uuid::nil(),
             name: "w".to_string(),
             pid: Some(42),
+            isolation: None,
         });
 
         // Live shape: exactly what the writer thread emits on swarm://events.

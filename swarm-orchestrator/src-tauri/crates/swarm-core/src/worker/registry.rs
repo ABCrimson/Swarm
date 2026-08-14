@@ -227,6 +227,9 @@ impl WorkerRegistry {
     ///     started_at: 0,
     ///     pty_writer: None,
     ///     child: None,
+    ///     worktree_path: None,
+    ///     repo_root: None,
+    ///     branch: None,
     /// };
     /// let id = registry.spawn_worker(handle).unwrap();
     /// assert_eq!(registry.count(), 1);
@@ -347,6 +350,9 @@ impl WorkerRegistry {
     ///     started_at: 0,
     ///     pty_writer: None,
     ///     child: None,
+    ///     worktree_path: None,
+    ///     repo_root: None,
+    ///     branch: None,
     /// };
     /// let id = registry.spawn_worker(handle).unwrap();
     ///
@@ -458,6 +464,9 @@ mod tests {
             // No PTY resources in tests
             pty_writer: None,
             child: None,
+            worktree_path: None,
+            repo_root: None,
+            branch: None,
         }
     }
 

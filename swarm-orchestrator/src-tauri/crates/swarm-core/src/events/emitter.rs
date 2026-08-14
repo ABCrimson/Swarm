@@ -47,6 +47,7 @@ use crate::worker::handle::WorkerState;
 ///     worker_id: Uuid::nil(),
 ///     name: "agent-1".to_string(),
 ///     pid: Some(42),
+///     isolation: None,
 /// });
 /// let json = serde_json::to_string(&event).unwrap();
 /// assert!(json.contains("\"type\":\"worker_spawned\""));
@@ -76,6 +77,10 @@ pub enum SwarmEvent {
     SystemLog(SystemLogPayload),
     /// A message was sent through the inter-agent bus.
     BusMessage(BusMessagePayload),
+    /// A git worktree was created for a worker's isolation.
+    WorktreeCreated(WorktreeCreatedPayload),
+    /// A git worktree was removed (or preserved, if dirty) at kill time.
+    WorktreeRemoved(WorktreeRemovedPayload),
 }
 
 /// Payload for the `worker_spawned` event.
@@ -91,6 +96,14 @@ pub struct WorkerSpawnedPayload {
     pub name: String,
     /// OS process ID of the PTY child, if available.
     pub pid: Option<u32>,
+    /// Isolation outcome for this worker: `"worktree"` when a git
+    /// worktree was created, `"none"` when it was not (no `repoRoot`
+    /// given, or `isolation: "none"` was explicitly requested). The
+    /// log tells you a worker ran unisolated without needing a
+    /// separate event type. Additive field — `#[serde(default)]` so
+    /// older persisted rows without it still deserialize.
+    #[serde(default)]
+    pub isolation: Option<String>,
 }
 
 /// Payload for the `worker_killed` event.
@@ -228,6 +241,59 @@ pub struct BusMessagePayload {
     pub payload: serde_json::Value,
 }
 
+/// Payload for the `worktree_created` event.
+///
+/// Emitted once, immediately after `git worktree add` + `git worktree
+/// lock` succeed for a worker's isolation. Its own `seq` (assigned by
+/// the [`crate::orchestration::OrchestrationEngine`] writer thread) is
+/// the range start for "what did this worker change" queries — no
+/// separate `baseSeq` field is needed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeCreatedPayload {
+    /// UUID of the worker this worktree isolates.
+    pub worker_id: Uuid,
+    /// UUID of the session this worker belongs to, if any.
+    pub session_id: Option<Uuid>,
+    /// Absolute path to the repository root the worktree was created from.
+    pub repo_root: String,
+    /// Absolute path to the new worktree directory
+    /// (`~/.swarm/worktrees/<repo>-<hash8>/w-<id8>`).
+    pub worktree_path: String,
+    /// Branch checked out in the worktree (`swarm/<slug>-<id8>`).
+    pub branch: String,
+    /// Commit sha the worktree was created from (`HEAD` of `repo_root`
+    /// at spawn time).
+    pub base_commit: String,
+}
+
+/// Payload for the `worktree_removed` event.
+///
+/// Emitted at kill time after `git worktree unlock` + `git worktree
+/// remove` (never `--force`) run against an isolated worker's
+/// worktree. `disposition` records the outcome — `"removed"` on
+/// success, `"preserved_dirty"` when git refused because the worktree
+/// had uncommitted/untracked changes (the safety guarantee: SWARM
+/// never deletes work), or `"failed"` for a genuine error (e.g. the
+/// worktree path was already gone out-of-band).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeRemovedPayload {
+    /// UUID of the worker whose worktree this was.
+    pub worker_id: Uuid,
+    /// Absolute path to the worktree directory.
+    pub worktree_path: String,
+    /// Branch that was checked out in the worktree.
+    pub branch: String,
+    /// `"removed"`, `"preserved_dirty"`, or `"failed"`.
+    pub disposition: String,
+    /// `HEAD` commit sha of the worktree at removal time, when known.
+    pub head_commit: Option<String>,
+    /// Human-readable reason, populated for `"preserved_dirty"` (git's
+    /// own refusal message) and `"failed"` (the error).
+    pub reason: Option<String>,
+}
+
 /// Payload for the `system_log` event.
 ///
 /// Bridges backend log messages to the frontend console
@@ -287,12 +353,14 @@ mod tests {
             worker_id: Uuid::new_v4(),
             name: "test-worker".to_string(),
             pid: Some(42),
+            isolation: Some("worktree".to_string()),
         });
         let json = serde_json::to_string(&event).expect("serialize");
         let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
         if let SwarmEvent::WorkerSpawned(p) = deserialized {
             assert_eq!(p.name, "test-worker");
             assert_eq!(p.pid, Some(42));
+            assert_eq!(p.isolation.as_deref(), Some("worktree"));
         } else {
             panic!("expected WorkerSpawned variant");
         }
@@ -446,10 +514,117 @@ mod tests {
             worker_id: Uuid::nil(),
             name: "test".to_string(),
             pid: None,
+            isolation: Some("none".to_string()),
         });
         let json = serde_json::to_string(&event).expect("serialize");
         assert!(json.contains("\"type\":\"worker_spawned\""));
         assert!(json.contains("\"payload\""));
+    }
+
+    #[test]
+    fn test_worker_spawned_isolation_field_absent_deserializes_as_none() {
+        // Backward compatibility: a persisted row from before this
+        // field existed has no `isolation` key at all — it must still
+        // deserialize rather than fail replay.
+        let json =
+            r#"{"workerId":"00000000-0000-0000-0000-000000000000","name":"legacy","pid":null}"#;
+        let payload: WorkerSpawnedPayload = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(payload.isolation, None);
+    }
+
+    #[test]
+    fn test_worktree_created_roundtrip() {
+        let worker_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let event = SwarmEvent::WorktreeCreated(WorktreeCreatedPayload {
+            worker_id,
+            session_id: Some(session_id),
+            repo_root: "C:/Projects/swarm".to_string(),
+            worktree_path: "C:/Users/x/.swarm/worktrees/swarm-abcd1234/w-11112222".to_string(),
+            branch: "swarm/research-agent-11112222".to_string(),
+            base_commit: "deadbeefcafef00d".to_string(),
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"worktree_created\""));
+        assert!(json.contains("\"workerId\""));
+        assert!(json.contains("\"repoRoot\""));
+        assert!(json.contains("\"worktreePath\""));
+        assert!(json.contains("\"baseCommit\""));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::WorktreeCreated(p) = deserialized {
+            assert_eq!(p.worker_id, worker_id);
+            assert_eq!(p.session_id, Some(session_id));
+            assert_eq!(p.branch, "swarm/research-agent-11112222");
+            assert_eq!(p.base_commit, "deadbeefcafef00d");
+        } else {
+            panic!("expected WorktreeCreated variant");
+        }
+    }
+
+    #[test]
+    fn test_worktree_created_session_id_optional() {
+        let event = SwarmEvent::WorktreeCreated(WorktreeCreatedPayload {
+            worker_id: Uuid::nil(),
+            session_id: None,
+            repo_root: "/repo".to_string(),
+            worktree_path: "/repo-wt".to_string(),
+            branch: "swarm/x-abcd1234".to_string(),
+            base_commit: "sha".to_string(),
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::WorktreeCreated(p) = deserialized {
+            assert_eq!(p.session_id, None);
+        } else {
+            panic!("expected WorktreeCreated variant");
+        }
+    }
+
+    #[test]
+    fn test_worktree_removed_roundtrip_removed_disposition() {
+        let worker_id = Uuid::new_v4();
+        let event = SwarmEvent::WorktreeRemoved(WorktreeRemovedPayload {
+            worker_id,
+            worktree_path: "/repo-wt".to_string(),
+            branch: "swarm/x-abcd1234".to_string(),
+            disposition: "removed".to_string(),
+            head_commit: Some("sha123".to_string()),
+            reason: None,
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"worktree_removed\""));
+        assert!(json.contains("\"disposition\":\"removed\""));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::WorktreeRemoved(p) = deserialized {
+            assert_eq!(p.worker_id, worker_id);
+            assert_eq!(p.disposition, "removed");
+            assert_eq!(p.reason, None);
+        } else {
+            panic!("expected WorktreeRemoved variant");
+        }
+    }
+
+    #[test]
+    fn test_worktree_removed_roundtrip_preserved_dirty_disposition() {
+        let event = SwarmEvent::WorktreeRemoved(WorktreeRemovedPayload {
+            worker_id: Uuid::nil(),
+            worktree_path: "/repo-wt".to_string(),
+            branch: "swarm/x-abcd1234".to_string(),
+            disposition: "preserved_dirty".to_string(),
+            head_commit: Some("sha456".to_string()),
+            reason: Some("contains modified or untracked files".to_string()),
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::WorktreeRemoved(p) = deserialized {
+            assert_eq!(p.disposition, "preserved_dirty");
+            assert_eq!(
+                p.reason.as_deref(),
+                Some("contains modified or untracked files")
+            );
+        } else {
+            panic!("expected WorktreeRemoved variant");
+        }
     }
 
     #[test]
@@ -458,6 +633,7 @@ mod tests {
             worker_id: Uuid::nil(),
             name: "test".to_string(),
             pid: Some(100),
+            isolation: None,
         });
         let json = serde_json::to_string(&event).expect("serialize");
         assert!(json.contains("\"workerId\""));

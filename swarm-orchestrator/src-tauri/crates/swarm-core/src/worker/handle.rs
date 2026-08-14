@@ -57,6 +57,40 @@ impl std::fmt::Display for WorkerState {
     }
 }
 
+/// Worktree isolation mode for a spawned worker.
+///
+/// # Serialization
+///
+/// Serialized as lowercase `snake_case` strings for Tauri IPC
+/// transport (`"worktree"`, `"none"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerIsolation {
+    /// Spawn inside a fresh `git worktree` rooted at `WorkerConfig::repo_root`.
+    /// The default when `repo_root` is present.
+    Worktree,
+    /// No isolation — spawn directly at `WorkerConfig::cwd`, exactly
+    /// today's (pre-worktree-isolation) behavior.
+    None,
+}
+
+impl std::fmt::Display for WorkerIsolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerIsolation::Worktree => write!(f, "worktree"),
+            WorkerIsolation::None => write!(f, "none"),
+        }
+    }
+}
+
+/// Default isolation mode: `worktree`. Only takes effect when
+/// [`WorkerConfig::repo_root`] is also present — a worker with no
+/// `repo_root` spawns exactly as it did before worktree isolation
+/// existed, regardless of this field.
+fn default_isolation() -> WorkerIsolation {
+    WorkerIsolation::Worktree
+}
+
 /// Configuration for spawning a new worker process.
 ///
 /// Passed from the frontend via Tauri IPC when the user
@@ -74,6 +108,7 @@ impl std::fmt::Display for WorkerState {
 /// let config = WorkerConfig::default();
 /// assert_eq!(config.rows, 24);
 /// assert_eq!(config.cols, 80);
+/// assert!(config.repo_root.is_none());
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,7 +118,10 @@ pub struct WorkerConfig {
     /// Shell command to execute (defaults to system shell if empty).
     #[serde(default)]
     pub shell: String,
-    /// Initial working directory.
+    /// Initial working directory. Ignored when a worktree is actually
+    /// created (`repo_root` present and `isolation` resolves to
+    /// `worktree`) — the PTY's cwd becomes the new worktree path
+    /// instead.
     #[serde(default)]
     pub cwd: String,
     /// Environment variables to set.
@@ -95,6 +133,14 @@ pub struct WorkerConfig {
     /// Number of columns for PTY.
     #[serde(default = "default_cols")]
     pub cols: u16,
+    /// Root of the git repository to isolate this worker into. `None`
+    /// (the default) reproduces exactly today's (pre-worktree-isolation)
+    /// spawn behavior — no git anywhere, PTY cwd is `cwd` as given.
+    #[serde(default)]
+    pub repo_root: Option<String>,
+    /// Isolation mode, effective only when `repo_root` is present.
+    #[serde(default = "default_isolation")]
+    pub isolation: WorkerIsolation,
 }
 
 /// Default PTY row count (24 rows, standard terminal height).
@@ -116,6 +162,8 @@ impl Default for WorkerConfig {
             env: std::collections::HashMap::new(),
             rows: default_rows(),
             cols: default_cols(),
+            repo_root: None,
+            isolation: default_isolation(),
         }
     }
 }
@@ -146,6 +194,15 @@ pub struct WorkerInfo {
     pub pid: Option<u32>,
     /// Unix timestamp (seconds) when the worker was spawned.
     pub started_at: i64,
+    /// Absolute path of this worker's git worktree, if it was spawned
+    /// with isolation. `None` for an unisolated worker.
+    #[serde(default)]
+    pub worktree_path: Option<String>,
+    /// Branch name checked out in `worktree_path` (`swarm/<slug>-<id8>`),
+    /// if this worker was spawned with isolation. `None` for an
+    /// unisolated worker.
+    #[serde(default)]
+    pub branch: Option<String>,
 }
 
 /// Runtime handle to a running worker instance.
@@ -181,6 +238,17 @@ pub struct WorkerHandle {
     /// Handle to the child process (for kill/signal).
     /// Wrapped in Mutex because `dyn Child + Send` is not Sync.
     pub child: Option<Mutex<Box<dyn portable_pty::Child + Send>>>,
+    /// Absolute path of this worker's git worktree, if it was spawned
+    /// with isolation (`repo_root` present, resolved `isolation ==
+    /// worktree`, and worktree creation succeeded).
+    pub worktree_path: Option<String>,
+    /// Root of the git repository this worker's worktree was created
+    /// from, if isolated. Needed at kill time to run `git -C
+    /// <repo_root> worktree remove` — the worktree's own directory is
+    /// not itself a valid `-C` target once removed.
+    pub repo_root: Option<String>,
+    /// Branch checked out in `worktree_path`, if isolated.
+    pub branch: Option<String>,
 }
 
 // SAFETY: All non-Sync fields are wrapped in parking_lot::Mutex,
@@ -197,6 +265,8 @@ impl std::fmt::Debug for WorkerHandle {
             .field("started_at", &self.started_at)
             .field("has_pty_writer", &self.pty_writer.is_some())
             .field("has_child", &self.child.is_some())
+            .field("worktree_path", &self.worktree_path)
+            .field("branch", &self.branch)
             .finish()
     }
 }
@@ -226,6 +296,9 @@ impl WorkerHandle {
     ///     started_at: 1700000000,
     ///     pty_writer: None,
     ///     child: None,
+    ///     worktree_path: None,
+    ///     repo_root: None,
+    ///     branch: None,
     /// };
     /// let info = handle.to_info();
     /// assert_eq!(info.name, "agent-1");
@@ -237,6 +310,8 @@ impl WorkerHandle {
             name: self.name.clone(),
             pid: self.pid,
             started_at: self.started_at,
+            worktree_path: self.worktree_path.clone(),
+            branch: self.branch.clone(),
         }
     }
 }
