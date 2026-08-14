@@ -7,6 +7,8 @@ import type { CSSProperties } from "react";
 import { useState } from "react";
 import { SplitPane } from "#components/layout/SplitPane";
 import { WorkerTerminal } from "#components/worker/WorkerTerminal";
+import { useAgentSessionStore } from "#store/agent-sessions";
+import { AgentChat } from "./AgentChat.tsx";
 import { AIChat } from "./AIChat.tsx";
 import { AIQueue } from "./AIQueue.tsx";
 import { ModelSelector } from "./ModelSelector.tsx";
@@ -233,6 +235,20 @@ function InjectModal({
  * - Inject instruction button for mid-conversation commands
  * - Bidirectional flow: AI sends commands to PTY, results flow back
  */
+const providerBadgeStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  padding: "3px 8px",
+  borderRadius: 6,
+  border: "1px solid oklch(0.45 0.14 290)",
+  background: "oklch(0.16 0.06 290 / 0.5)",
+  color: "oklch(0.80 0.14 290)",
+  fontFamily: "var(--font-mono, monospace)",
+  fontSize: 10.5,
+  fontWeight: 600,
+  letterSpacing: "0.03em",
+};
+
 export function WorkerAIPanel({
   workerId,
   canShip = true,
@@ -243,6 +259,11 @@ export function WorkerAIPanel({
   // Each injection gets a fresh id so AIChat's effect fires even when the
   // same instruction text is injected twice in a row.
   const [injection, setInjection] = useState<{ id: string; content: string } | null>(null);
+  // Presence, not just truthiness \u2014 an entry means this worker has a
+  // LIVE provider-adapter session attached (Phase 3's agent_spawn),
+  // which routes the chat input through agentSendTurn/AgentChat instead
+  // of the webview-direct AIChat path (see #store/agent-sessions' doc).
+  const agentSession = useAgentSessionStore((s) => s.sessions.get(workerId));
 
   const handleInject = (instruction: string) => {
     setInjection({ id: crypto.randomUUID(), content: instruction });
@@ -251,21 +272,29 @@ export function WorkerAIPanel({
   return (
     <div style={panelContainerStyle}>
       <div style={toolbarStyle}>
-        <ModelSelector workerId={workerId} />
+        {agentSession ? (
+          <span style={providerBadgeStyle} title={`Model: ${agentSession.model}`}>
+            Claude Code
+          </span>
+        ) : (
+          <ModelSelector workerId={workerId} />
+        )}
 
         <div style={flowIndicatorStyle}>
           <span style={flowDotStyle} />
           <span>AI {"\u2194"} PTY</span>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setShowInjectModal(true)}
-          style={injectButtonStyle}
-          aria-label="Inject Instruction"
-        >
-          Inject Instruction
-        </button>
+        {!agentSession && (
+          <button
+            type="button"
+            onClick={() => setShowInjectModal(true)}
+            style={injectButtonStyle}
+            aria-label="Inject Instruction"
+          >
+            Inject Instruction
+          </button>
+        )}
 
         {onRequestShipTab != null && (
           <button
@@ -286,24 +315,26 @@ export function WorkerAIPanel({
           </button>
         )}
 
-        <button
-          type="button"
-          onClick={() => setShowQueue(!showQueue)}
-          style={{
-            ...injectButtonStyle,
-            borderColor: "oklch(0.35 0.10 205)",
-            background: showQueue ? "oklch(0.20 0.08 205 / 0.6)" : "oklch(0.14 0.06 205 / 0.6)",
-            color: "oklch(0.78 0.18 205)",
-            marginLeft: "auto",
-          }}
-          aria-label="Toggle Queue"
-          aria-pressed={showQueue}
-        >
-          Queue
-        </button>
+        {!agentSession && (
+          <button
+            type="button"
+            onClick={() => setShowQueue(!showQueue)}
+            style={{
+              ...injectButtonStyle,
+              borderColor: "oklch(0.35 0.10 205)",
+              background: showQueue ? "oklch(0.20 0.08 205 / 0.6)" : "oklch(0.14 0.06 205 / 0.6)",
+              color: "oklch(0.78 0.18 205)",
+              marginLeft: "auto",
+            }}
+            aria-label="Toggle Queue"
+            aria-pressed={showQueue}
+          >
+            Queue
+          </button>
+        )}
       </div>
 
-      {showQueue && (
+      {showQueue && !agentSession && (
         <div style={{ padding: "8px 12px", borderBottom: "1px solid oklch(0.18 0.03 220)" }}>
           <AIQueue />
         </div>
@@ -324,9 +355,13 @@ export function WorkerAIPanel({
           }
           secondary={
             <div style={paneWrapperStyle}>
-              <div style={labelStyle}>AI Chat</div>
+              <div style={labelStyle}>{agentSession ? "Claude Code" : "AI Chat"}</div>
               <div style={{ flex: 1, minHeight: 0 }}>
-                <AIChat workerId={workerId} injectedInstruction={injection} />
+                {agentSession ? (
+                  <AgentChat workerId={workerId} />
+                ) : (
+                  <AIChat workerId={workerId} injectedInstruction={injection} />
+                )}
               </div>
             </div>
           }
