@@ -221,7 +221,7 @@ describe("useAiStream", () => {
 
     // Start a stream without awaiting
     act(() => {
-      result.current.startStream("item-5", STREAM_PARAMS);
+      void result.current.startStream("item-5", STREAM_PARAMS);
     });
 
     await act(async () => {

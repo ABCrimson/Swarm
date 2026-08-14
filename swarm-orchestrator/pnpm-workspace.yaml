@@ -3,12 +3,12 @@ minimumReleaseAgeExclude:
   - react@19.3.0-canary-22e4f993-20260811
   - scheduler@0.28.0-canary-22e4f993-20260811
   - vite@8.1.4
-  - '@biomejs/biome@2.5.4'
-  - '@biomejs/cli-darwin-arm64@2.5.4'
-  - '@biomejs/cli-darwin-x64@2.5.4'
-  - '@biomejs/cli-linux-arm64-musl@2.5.4'
-  - '@biomejs/cli-linux-arm64@2.5.4'
-  - '@biomejs/cli-linux-x64-musl@2.5.4'
-  - '@biomejs/cli-linux-x64@2.5.4'
-  - '@biomejs/cli-win32-arm64@2.5.4'
-  - '@biomejs/cli-win32-x64@2.5.4'
+  - '@biomejs/biome@2.5.8'
+  - '@biomejs/cli-darwin-arm64@2.5.8'
+  - '@biomejs/cli-darwin-x64@2.5.8'
+  - '@biomejs/cli-linux-arm64-musl@2.5.8'
+  - '@biomejs/cli-linux-arm64@2.5.8'
+  - '@biomejs/cli-linux-x64-musl@2.5.8'
+  - '@biomejs/cli-linux-x64@2.5.8'
+  - '@biomejs/cli-win32-arm64@2.5.8'
+  - '@biomejs/cli-win32-x64@2.5.8'
