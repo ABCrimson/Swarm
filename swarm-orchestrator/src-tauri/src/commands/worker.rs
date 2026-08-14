@@ -180,11 +180,19 @@ pub async fn resume_worker(
 /// removes it (never with `--force` — a dirty worktree is preserved,
 /// never deleted) and emits `worktree_removed` with the disposition.
 ///
+/// If this worker also has a live provider-adapter session attached
+/// (Phase 3, `agent_spawn`), that session is removed from the
+/// [`AgentSessionRegistry`] and shut down too — best-effort: a failure
+/// here is logged, not propagated, so an agent-session teardown hiccup
+/// never blocks the PTY worker's own kill from completing (the primary
+/// resource this command exists to clean up).
+///
 /// # Arguments
 ///
 /// * `sink` - Event sink for recording emitted events (managed state)
 /// * `registry` - Shared worker registry (managed state)
 /// * `repo_locks` - Per-repo git-operation serialization (managed state)
+/// * `session_registry` - Live agent-session handles (managed state)
 /// * `id` - UUID string of the worker to kill
 ///
 /// # Errors
@@ -193,11 +201,12 @@ pub async fn resume_worker(
 /// - The `id` is not a valid UUID
 /// - No worker with the given ID exists
 #[tauri::command]
-#[tracing::instrument(skip(sink, registry, repo_locks))]
+#[tracing::instrument(skip(sink, registry, repo_locks, session_registry))]
 pub async fn kill_worker(
     sink: tauri::State<'_, EventSink>,
     registry: tauri::State<'_, WorkerRegistry>,
     repo_locks: tauri::State<'_, RepoLocks>,
+    session_registry: tauri::State<'_, swarm_core::agent::AgentSessionRegistry>,
     id: String,
     origin_worker: Option<String>,
     cause_seq: Option<u64>,
@@ -211,7 +220,7 @@ pub async fn kill_worker(
     let registry = registry.inner().clone();
     let sink = sink.inner().clone();
     let repo_locks = repo_locks.inner().clone();
-    tokio::task::spawn_blocking(move || {
+    let kill_result = tokio::task::spawn_blocking(move || {
         lifecycle::do_kill_worker(&sink, &registry, &repo_locks, uuid, provenance)
     })
     .await
@@ -222,7 +231,15 @@ pub async fn kill_worker(
     .map_err(|e| {
         tracing::error!(error = %e, "failed to kill worker");
         e.to_string()
-    })
+    });
+
+    if let Some(session) = session_registry.remove(&uuid)
+        && let Err(e) = session.shutdown().await
+    {
+        tracing::warn!(worker_id = %uuid, error = %e, "agent session shutdown failed during kill_worker (best-effort)");
+    }
+
+    kill_result
 }
 
 /// Lists all active workers as serializable info snapshots.

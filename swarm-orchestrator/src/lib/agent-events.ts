@@ -6,15 +6,13 @@ import * as z from "zod";
  * `docs/architecture.md`'s "Adapter Layer" section and
  * `crates/swarm-core/src/events/emitter.rs`).
  *
- * **Additive, event-bus-consumption-only — no UI wired to these yet.**
- * No concrete `AgentAdapter` implementation exists (that's Phase 3's
- * `ClaudeCodeAdapter`), so nothing in the shipped app ever emits these
- * payloads today. **This module is consumed starting Phase 3** — the
- * next consumer is a `useAgentEvents` hook, mirroring
- * `#hooks/useWorkerEvents`'s `onEvent(type, handler)` pattern, which
- * will `safeParse` a payload instead of trusting an `as` cast, the same
- * discipline `#lib/event-bus`'s `DomainEventSchema` already applies at
- * the envelope level.
+ * As of Phase 3, `ClaudeCodeAdapter` (`crates/swarm-core/src/agent/claude_code.rs`)
+ * is a real, wired provider — `useAgentSessionEvents`
+ * (`#hooks/useAgentSessionEvents`) and `AgentChat`
+ * (`#components/ai/AgentChat`) consume this module's schemas via
+ * `safeParse` at the event-bus seam, the same discipline
+ * `#lib/event-bus`'s `DomainEventSchema` already applies at the
+ * envelope level.
  *
  * Field names are camelCase, mirroring the Rust payload structs'
  * `#[serde(rename_all = "camelCase")]` convention exactly.
@@ -137,6 +135,18 @@ export const AgentPermissionRequestPayloadSchema = z.object({
   tool: z.string(),
   input: z.unknown(),
   suggestedDecision: PermissionDecisionSchema.optional(),
+  /**
+   * Phase 3 semantics shift for `ClaudeCodeAdapter`: this event is a
+   * REPORT of an already-decided denial, not a pending request — see
+   * Rust's `AgentPermissionRequestPayload` doc. `denialSubclass` is one
+   * of `"mode"` | `"ungranted_write"` | `"redirection_guard"` (the §0b
+   * mini-spike's three observed subclasses) when classifiable, `null`
+   * otherwise. Free-form (not a closed enum) — provider-observed text
+   * classification, not a SWARM-owned vocabulary.
+   */
+  denialSubclass: z.string().nullable().optional(),
+  /** Raw, human-readable denial message from the provider, verbatim. */
+  message: z.string().nullable().optional(),
 });
 export type AgentPermissionRequestPayload = z.infer<typeof AgentPermissionRequestPayloadSchema>;
 
@@ -167,3 +177,26 @@ export const AgentSessionExitedPayloadSchema = z.object({
   signal: z.string().nullable().optional(),
 });
 export type AgentSessionExitedPayload = z.infer<typeof AgentSessionExitedPayloadSchema>;
+
+/**
+ * Phase 3: `ClaudeCodeAdapter`'s spawn-time trust dial
+ * (`crates/swarm-core/src/agent/claude_code.rs`'s `ClaudeCodeTrustTier`).
+ * Spawn-time only — permission modes are never a mid-turn prompt for
+ * this provider (the interactive round-trip is a documented no-op, see
+ * `AgentPermissionRequestPayloadSchema`'s semantics-shift doc below).
+ */
+export const ClaudeCodeTrustTierSchema = z.enum(["restricted", "standard", "write_enabled"]);
+export type ClaudeCodeTrustTier = z.infer<typeof ClaudeCodeTrustTierSchema>;
+
+/**
+ * Payload schema for the `agent_probe` command's response
+ * (mirrors Rust's `ProbeReport`, `crates/swarm-core/src/agent/adapter.rs`).
+ * `detail` is always human-readable, never a credential — see
+ * `ProbeReport`'s doc ("Detect and report, never store").
+ */
+export const ProbeReportSchema = z.object({
+  available: z.boolean(),
+  version: z.string().nullable().optional(),
+  detail: z.string().nullable().optional(),
+});
+export type ProbeReport = z.infer<typeof ProbeReportSchema>;
