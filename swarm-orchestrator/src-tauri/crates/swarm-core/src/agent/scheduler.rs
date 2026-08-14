@@ -25,6 +25,31 @@
 //! the shell (`swarm-desktop`) does not `app.manage()` an
 //! [`AgentScheduler`] until Phase 3's adapters exist to give the
 //! `executor` closure something real to call.
+//!
+//! ## Known limitation: priority inversion (inherited from `ai/queue.rs`, unchanged)
+//!
+//! This scheduler's priority ordering governs only WHICH pending
+//! request is picked next when a concurrency permit frees up — it does
+//! not preempt work already running:
+//!
+//! - **A `Critical` request cannot jump a permit already held by a
+//!   `Low`-priority task.** If `concurrent_limit` permits are all
+//!   currently out to lower-priority turns, a newly-arrived `Critical`
+//!   request waits for one to free naturally, same as anyone else. True
+//!   preemption would mean cancelling in-flight work to make room,
+//!   which this scheduler (like the `ai/queue.rs` it absorbed) does
+//!   not do.
+//! - **`QueueFull` can trigger with an "idle" heap.** Backpressure
+//!   ([`AgentScheduler::enqueue`]'s `AppError::QueueFull`) is on the
+//!   bounded mpsc channel feeding the heap, not on the heap's own
+//!   depth — a burst that saturates the channel returns `QueueFull`
+//!   even at a moment when every already-admitted request has already
+//!   moved into the heap (which has no capacity limit of its own).
+//!
+//! Both behaviors transferred verbatim from `ai/queue.rs` — pre-existing
+//! semantics, not something this module changed. Documented here rather
+//! than redesigned; a real preemption/priority-jump scheme is future
+//! work if a provider workload ever needs it.
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -587,9 +612,16 @@ mod tests {
         }
 
         assert_eq!(completed.load(AtomicOrdering::SeqCst), total_requests);
-        assert!(
-            max_observed.load(AtomicOrdering::SeqCst) <= concurrent_limit,
-            "never more than concurrent_limit executors in flight"
+        // DIRECTIVE (review nit D): strictly stronger than `<=` —
+        // proves the scheduler actually ACHIEVES full concurrency up to
+        // the limit (5 requests queued against a limit of 2, with the
+        // barrier forcing genuine overlap), not merely that it never
+        // exceeds it. A scheduler that accidentally serialized
+        // everything would satisfy `<=` but fail this.
+        assert_eq!(
+            max_observed.load(AtomicOrdering::SeqCst),
+            concurrent_limit,
+            "expected exactly concurrent_limit executors in flight at peak"
         );
     }
 }
