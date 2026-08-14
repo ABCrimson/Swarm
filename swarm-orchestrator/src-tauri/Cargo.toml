@@ -1,35 +1,58 @@
 [package]
-name    = "swarm-core"
+name    = "swarm-desktop"
 version = "0.11.2"
 edition = "2024"
 
+[workspace]
+members = ["crates/swarm-core"]
+
+[workspace.dependencies]
+tauri                      = { version = "=2.11.5",  features = ["devtools", "image-png"] }
+tokio                      = { version = "=1.53.1",  features = ["full"] }
+tokio-stream               = { version = "=0.1.19",  features = ["net"] }
+portable-pty                = "=0.9.0"
+reqwest                     = { version = "=0.13.4",  features = ["json", "stream", "rustls"], default-features = false }
+serde                       = { version = "=1.0.229", features = ["derive"] }
+serde_json                  = "=1.0.151"
+anyhow                      = "=1.0.104"
+thiserror                   = "=2.0.20"
+tracing                     = "=0.1.44"
+tracing-subscriber          = { version = "=0.3.23", features = ["json", "env-filter"] }
+uuid                        = { version = "=1.24.0", features = ["v4", "serde"] }
+dashmap                     = "=6.2.1"
+parking_lot                 = "=0.12.5"
+rusqlite                    = { version = "=0.40.2", features = ["bundled"] }
+tauri-plugin-fs             = "=2.5.1"
+tauri-plugin-dialog         = "=2.7.2"
+tauri-plugin-shell          = "=2.3.5"
+tauri-plugin-store          = "=2.4.4"
+sysinfo                     = "=0.39.6"
+tauri-plugin-updater        = "=2.10.1"
+tauri-plugin-notification   = "=2.3.3"
+tokio-util                  = { version = "=0.7.19", features = ["rt"] }
+tauri-build                 = { version = "=2.6.3", features = [] }
+
 [dependencies]
-tauri               = { version = "=2.11.5",  features = ["devtools", "image-png"] }
-tokio               = { version = "=1.53.1",  features = ["full"] }
-tokio-stream        = { version = "=0.1.19",  features = ["net"] }
-portable-pty        = "=0.9.0"
-reqwest             = { version = "=0.13.4",  features = ["json", "stream", "rustls"], default-features = false }
-serde               = { version = "=1.0.229", features = ["derive"] }
-serde_json          = "=1.0.151"
-anyhow              = "=1.0.104"
-thiserror           = "=2.0.20"
-tracing             = "=0.1.44"
-tracing-subscriber  = { version = "=0.3.23", features = ["json", "env-filter"] }
-uuid                = { version = "=1.24.0", features = ["v4", "serde"] }
-dashmap             = "=6.2.1"
-parking_lot         = "=0.12.5"
-rusqlite            = { version = "=0.40.2", features = ["bundled"] }
-tauri-plugin-fs     = "=2.5.1"
-tauri-plugin-dialog = "=2.7.2"
-tauri-plugin-shell  = "=2.3.5"
-tauri-plugin-store        = "=2.4.4"
-sysinfo                   = "=0.39.6"
-tauri-plugin-updater      = "=2.10.1"
-tauri-plugin-notification  = "=2.3.3"
-tokio-util                = { version = "=0.7.19", features = ["rt"] }
+tauri                      = { workspace = true }
+tauri-plugin-fs            = { workspace = true }
+tauri-plugin-dialog        = { workspace = true }
+tauri-plugin-shell         = { workspace = true }
+tauri-plugin-store         = { workspace = true }
+tauri-plugin-updater       = { workspace = true }
+tauri-plugin-notification  = { workspace = true }
+tokio                      = { workspace = true }
+tokio-util                 = { workspace = true }
+serde_json                 = { workspace = true }
+uuid                       = { workspace = true }
+tracing                    = { workspace = true }
+tracing-subscriber         = { workspace = true }
+anyhow                     = { workspace = true }
+sysinfo                    = { workspace = true }
+parking_lot                = { workspace = true }
+swarm-core                 = { path = "crates/swarm-core" }
 
 [build-dependencies]
-tauri-build = { version = "=2.6.3", features = [] }
+tauri-build = { workspace = true }
 
 [profile.release]
 opt-level     = 3
