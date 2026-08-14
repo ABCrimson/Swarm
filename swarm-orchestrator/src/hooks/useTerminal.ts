@@ -109,9 +109,13 @@ export function useTerminal({ workerId, containerRef }: UseTerminalOptions): Use
     // Initial fit
     fitAddon.fit();
 
-    // Input: send keystrokes to the backend
+    // Input: send keystrokes to the backend. source: "terminal" — no
+    // provenance (the causer is a human, not a worker's turn) and no
+    // preview ever generated server-side (see WorkerInputPayload's
+    // "never carries raw keystrokes" note); also excluded from
+    // persistence entirely, so typed secrets are never archived.
     const inputDisposable = term.onData((data) => {
-      void workerInput(workerId, data);
+      void workerInput(workerId, data, "terminal");
     });
 
     // Subscribe to worker output from the store

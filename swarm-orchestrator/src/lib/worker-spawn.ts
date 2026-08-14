@@ -9,6 +9,7 @@
 // the new worker into that session via `session_add_worker`.
 
 import { getPersistedRepoRoot } from "#lib/project-root";
+import type { ProvenanceArgs } from "#lib/tauri";
 import { sessionAddWorker, spawnWorker } from "#lib/tauri";
 import { useSessionStore } from "#store/sessions";
 import type { WorkerSpawnSpec } from "#store/types";
@@ -43,17 +44,25 @@ import { useWorkerStore } from "#store/workers";
  * gracefully because there is no Tauri IPC bridge (e.g. `pnpm dev` in a
  * plain browser) — no store writes happen in that case, since there is
  * no worker id to key them on.
+ *
+ * `prov` is optional causal attribution (e.g. an AI turn's `spawn_worker`
+ * tool call) — forwarded to `spawnWorker` only when given, so a
+ * human-initiated spawn from the Workers page keeps calling `spawnWorker`
+ * with exactly the same single-argument shape as before this parameter existed.
  */
 export async function spawnWorkerFromSpec(
   spec: WorkerSpawnSpec,
   sessionId?: string,
+  prov?: ProvenanceArgs,
 ): Promise<string | null> {
   const { role, model, systemPrompt, ...processOptions } = spec;
   if (processOptions.repoRoot === undefined) {
     const persistedRoot = await getPersistedRepoRoot();
     if (persistedRoot) processOptions.repoRoot = persistedRoot;
   }
-  const workerId = await spawnWorker(processOptions);
+  const workerId = prov
+    ? await spawnWorker(processOptions, prov)
+    : await spawnWorker(processOptions);
   if (workerId === null) return null;
 
   useWorkerStore.getState().addWorker({

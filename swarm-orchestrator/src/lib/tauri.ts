@@ -47,6 +47,18 @@ export async function listen<T>(event: string, handler: (payload: T) => void): P
 
 // ── Worker commands ──────────────────────────────────
 
+/**
+ * Causal attribution for an IPC call: the causer (`originWorker`,
+ * distinct from a payload's own subject `workerId`) and the seq of the
+ * event it's reacting to (`causeSeq`, typically an `agent_turn_started`
+ * seq). Both optional and independently omittable — absent on the wire
+ * (not `null`), matching Rust's `Provenance` fields exactly.
+ */
+export interface ProvenanceArgs {
+  readonly originWorker?: string;
+  readonly causeSeq?: number;
+}
+
 /** Validates the raw `spawn_worker` IPC response is a worker UUID before trusting it. */
 const SpawnWorkerResponseSchema = z.uuid();
 
@@ -78,8 +90,15 @@ const SpawnWorkerResponseSchema = z.uuid();
  * degrades to a no-op there, and a `null` return lets callers (see
  * `spawnWorkerFromSpec`) skip their store writes gracefully instead of
  * this function synthesizing a fake failure from an absent response.
+ *
+ * `prov` is optional causal attribution (e.g. the AI turn whose
+ * `spawn_worker` tool call triggered this spawn) — omitted for a
+ * human-initiated spawn from the Workers page.
  */
-export async function spawnWorker(options: WorkerProcessOptions): Promise<string | null> {
+export async function spawnWorker(
+  options: WorkerProcessOptions,
+  prov?: ProvenanceArgs,
+): Promise<string | null> {
   if (!isTauri()) return null;
 
   const config: Record<string, unknown> = { name: options.name };
@@ -89,7 +108,11 @@ export async function spawnWorker(options: WorkerProcessOptions): Promise<string
   if (options.repoRoot !== undefined) config.repoRoot = options.repoRoot;
   if (options.isolation !== undefined) config.isolation = options.isolation;
 
-  const raw = await invoke<unknown>("spawn_worker", { config });
+  const raw = await invoke<unknown>("spawn_worker", {
+    config,
+    originWorker: prov?.originWorker,
+    causeSeq: prov?.causeSeq,
+  });
   const parsed = SpawnWorkerResponseSchema.safeParse(raw);
   if (!parsed.success) {
     throw new Error("Spawn Worker Returned An Invalid Worker ID.");
@@ -117,9 +140,57 @@ export async function listWorkers(): Promise<Worker[]> {
   return invoke<Worker[]>("list_workers");
 }
 
-/** Send raw input data to a worker's PTY stdin. */
-export async function workerInput(id: string, data: string): Promise<void> {
-  return invoke<void>("worker_input", { id, data });
+/**
+ * `worker_input`'s `source` tag — required (not defaulted) so every
+ * call site states deliberately where the bytes came from. Drives both
+ * the backend's persistence carve-out (`terminal` input is ephemeral —
+ * never archived, see `is_persistent`) and its preview policy (`tool`/
+ * `automation` get a control-stripped preview; `terminal` never does).
+ */
+export type WorkerInputSource = "terminal" | "tool" | "automation";
+
+/**
+ * Send raw input data to a worker's PTY stdin.
+ *
+ * `data` is a plain string (not bytes) — matches every caller and what
+ * the Rust `worker_input` command's `data: String` parameter expects
+ * (see its doc for the `Vec<u8>` contract bug this replaced).
+ */
+export async function workerInput(
+  id: string,
+  data: string,
+  source: WorkerInputSource,
+  prov?: ProvenanceArgs,
+): Promise<void> {
+  return invoke<void>("worker_input", {
+    id,
+    data,
+    source,
+    originWorker: prov?.originWorker,
+    causeSeq: prov?.causeSeq,
+  });
+}
+
+/** Validates the raw `agent_turn_started` IPC response is a non-negative integer seq. */
+const AgentTurnStartedResponseSchema = z.number().int().nonnegative();
+
+/**
+ * Records the start of one AI/agent turn and returns the real,
+ * persisted seq the engine assigned it — the `causeSeq` every
+ * tool-driven side effect in that turn then cites (see
+ * `AIChat.tsx`'s `doSend`).
+ */
+export async function agentTurnStarted(
+  workerId: string,
+  model: string,
+  requestId: string,
+): Promise<number> {
+  const raw = await invoke<unknown>("agent_turn_started", { workerId, model, requestId });
+  const parsed = AgentTurnStartedResponseSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error("Agent Turn Started Returned An Invalid Seq.");
+  }
+  return parsed.data;
 }
 
 /**

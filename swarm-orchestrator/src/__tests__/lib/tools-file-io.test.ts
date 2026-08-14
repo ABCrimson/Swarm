@@ -1,24 +1,34 @@
-// ── read_file / write_file boundary fix (Phase 0) ───
+// ── read_file / write_file boundary fix (Phase 0 → provenance Phase 5) ──
 //
-// Prior to this fix, both tools invoked Tauri commands ("read_file",
-// "write_file") that were never registered on the Rust side — every
-// call failed and the try/catch silently reported {success:false} to
-// the model. Both tools now execute over #lib/fs's capability-scoped
-// absolute-path helpers instead. These tests prove: real content comes
-// back for a readable path, write_file round-trips, and a capability
-// rejection surfaces as a truthful, actionable error rather than a
-// generic failure.
+// Phase 0 fixed both tools to route through #lib/fs's capability-scoped
+// absolute-path helpers (tauri-plugin-fs), since the Rust commands they
+// originally named didn't exist. Provenance Phase 5 implements the real
+// read_file/write_file Rust commands (commands/fs.rs) and migrates both
+// tools onto them — write_file's side effect (a stamped, persisted
+// file_written event) is what lets file writes join the causality
+// graph, which plugin-fs alone could never do. These tests now mock
+// #lib/tauri's invoke() instead of the plugin-fs functions, but keep
+// asserting the same envelope shape, maxLines behavior, and truthful
+// deny-semantics wording the Rust commands were written to preserve.
 
-import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toolRegistry } from "#lib/tools";
+
+const invokeMock = vi.fn();
+
+vi.mock("#lib/tauri", () => ({
+  invoke: (...args: unknown[]) => invokeMock(...args),
+  // #lib/tools transitively imports the custom-tools store, which calls
+  // isTauri() at module load time — must be present on this mock even
+  // though these tests never exercise the custom-tool path.
+  isTauri: () => false,
+}));
 
 const readFileTool = toolRegistry.get("read_file");
 const writeFileTool = toolRegistry.get("write_file");
 
 beforeEach(() => {
-  vi.mocked(readTextFile).mockReset();
-  vi.mocked(writeTextFile).mockReset();
+  invokeMock.mockReset();
 });
 
 describe("read_file tool", () => {
@@ -27,11 +37,11 @@ describe("read_file tool", () => {
   });
 
   it("returns real file content for a readable path", async () => {
-    vi.mocked(readTextFile).mockResolvedValueOnce("hello world\nsecond line");
+    invokeMock.mockResolvedValueOnce("hello world\nsecond line");
 
     const result = await readFileTool?.execute({ path: "/home/user/notes.txt" });
 
-    expect(readTextFile).toHaveBeenCalledWith("/home/user/notes.txt");
+    expect(invokeMock).toHaveBeenCalledWith("read_file", { path: "/home/user/notes.txt" });
     expect(result?.success).toBe(true);
     expect(result?.data).toEqual({
       path: "/home/user/notes.txt",
@@ -40,7 +50,7 @@ describe("read_file tool", () => {
   });
 
   it("truncates to maxLines when provided", async () => {
-    vi.mocked(readTextFile).mockResolvedValueOnce("a\nb\nc\nd\ne");
+    invokeMock.mockResolvedValueOnce("a\nb\nc\nd\ne");
 
     const result = await readFileTool?.execute({ path: "/home/user/notes.txt", maxLines: 2 });
 
@@ -49,11 +59,14 @@ describe("read_file tool", () => {
     expect(data?.content).toBe("a\nb");
   });
 
-  it("surfaces a truthful, actionable error when the fs capability scope denies the read", async () => {
-    // The real shape tauri-plugin-fs's Error::PathForbidden serializes as
-    // (verified against the plugin's error.rs: #[error("forbidden path: {0}")]),
-    // not a generic "permission"/"denied" placeholder string.
-    vi.mocked(readTextFile).mockRejectedValueOnce(new Error("forbidden path: /etc/passwd"));
+  it("surfaces a truthful, actionable error when the fs scope denies the read", async () => {
+    // Exactly the wording commands/fs.rs's FsScopes::check_read returns
+    // for a path outside $APPDATA/**, $HOME/** — matching the wording
+    // the plugin-fs path already used, so the user-facing message is
+    // stable across the migration.
+    invokeMock.mockRejectedValueOnce(
+      "Read Access Is Limited To The App Data And Home Directories.",
+    );
 
     const result = await readFileTool?.execute({ path: "/etc/passwd" });
 
@@ -62,9 +75,7 @@ describe("read_file tool", () => {
   });
 
   it("surfaces a not-found error distinctly from a scope rejection", async () => {
-    vi.mocked(readTextFile).mockRejectedValueOnce(
-      new Error("No such file or directory (os error 2)"),
-    );
+    invokeMock.mockRejectedValueOnce('File Not Found: "/home/user/missing.txt".');
 
     const result = await readFileTool?.execute({ path: "/home/user/missing.txt" });
 
@@ -73,12 +84,10 @@ describe("read_file tool", () => {
     expect(result?.error).not.toContain("Access Is Limited");
   });
 
-  it("surfaces an OS-level permission error distinctly from a capability-scope rejection", async () => {
-    // A real Windows OS error for a path that IS inside the capability
-    // scope (e.g. a locked/ACL-protected file under $APPDATA) — must not
-    // be misreported as "Access Is Limited To..." (that claim would be
-    // false; the sandbox never rejected this path).
-    vi.mocked(readTextFile).mockRejectedValueOnce(new Error("Access is denied (os error 5)"));
+  it("surfaces an OS-level permission error distinctly from a scope rejection", async () => {
+    invokeMock.mockRejectedValueOnce(
+      'The Operating System Denied Access To "/home/user/locked.txt".',
+    );
 
     const result = await readFileTool?.execute({ path: "/home/user/locked.txt" });
 
@@ -92,14 +101,25 @@ describe("read_file tool", () => {
 
     expect(result?.success).toBe(false);
     expect(result?.error).toBeDefined();
-    expect(readTextFile).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 
   it("rejects a non-positive maxLines instead of silently reading zero lines", async () => {
     const result = await readFileTool?.execute({ path: "/home/user/notes.txt", maxLines: 0 });
 
     expect(result?.success).toBe(false);
-    expect(readTextFile).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("never forwards originWorker/causeSeq — reads are not a stamped side effect", async () => {
+    invokeMock.mockResolvedValueOnce("content");
+
+    await readFileTool?.execute(
+      { path: "/home/user/notes.txt" },
+      { originWorker: "w-1", causeSeq: 5 },
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith("read_file", { path: "/home/user/notes.txt" });
   });
 });
 
@@ -108,21 +128,44 @@ describe("write_file tool", () => {
     expect(writeFileTool).toBeDefined();
   });
 
-  it("round-trips content through the fs plugin", async () => {
-    vi.mocked(writeTextFile).mockResolvedValueOnce(undefined);
+  it("round-trips content through the real write_file command", async () => {
+    invokeMock.mockResolvedValueOnce(undefined);
 
     const result = await writeFileTool?.execute({
       path: "/home/user/.swarm/out.txt",
       content: "payload",
     });
 
-    expect(writeTextFile).toHaveBeenCalledWith("/home/user/.swarm/out.txt", "payload");
+    expect(invokeMock).toHaveBeenCalledWith("write_file", {
+      path: "/home/user/.swarm/out.txt",
+      content: "payload",
+      originWorker: undefined,
+      causeSeq: undefined,
+    });
     expect(result?.success).toBe(true);
     expect(result?.data).toEqual({ path: "/home/user/.swarm/out.txt", written: true });
   });
 
-  it("surfaces a truthful, actionable error when the fs capability scope denies the write", async () => {
-    vi.mocked(writeTextFile).mockRejectedValueOnce(new Error("forbidden path: /etc/passwd"));
+  it("forwards originWorker/causeSeq when the call happens inside an AI turn", async () => {
+    invokeMock.mockResolvedValueOnce(undefined);
+
+    await writeFileTool?.execute(
+      { path: "/home/user/.swarm/out.txt", content: "payload" },
+      { originWorker: "w-caller", causeSeq: 41 },
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith("write_file", {
+      path: "/home/user/.swarm/out.txt",
+      content: "payload",
+      originWorker: "w-caller",
+      causeSeq: 41,
+    });
+  });
+
+  it("surfaces a truthful, actionable error when the fs scope denies the write", async () => {
+    invokeMock.mockRejectedValueOnce(
+      "Write Access Is Limited To The App Data And .swarm Directories.",
+    );
 
     const result = await writeFileTool?.execute({ path: "/etc/passwd", content: "x" });
 
@@ -137,6 +180,6 @@ describe("write_file tool", () => {
 
     expect(result?.success).toBe(false);
     expect(result?.error).toBeDefined();
-    expect(writeTextFile).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 });

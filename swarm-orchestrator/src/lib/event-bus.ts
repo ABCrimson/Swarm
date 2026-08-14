@@ -1,10 +1,21 @@
 import * as z from "zod";
 import { invoke, listen } from "#lib/tauri";
 
-/** Ordered envelope for every backend event (mirrors Rust `DomainEvent`). */
+/**
+ * Ordered envelope for every backend event (mirrors Rust `DomainEvent`).
+ *
+ * `originWorker`/`causeSeq` are the causal-attribution fields Phase 2
+ * added on the Rust side (`Provenance`, `skip_serializing_if`): absent
+ * (not `null`) on the wire when unattributed, present when the engine
+ * recorded a real cause. `originWorker` is the CAUSER; a payload's own
+ * `workerId` is the SUBJECT — for a tool-driven spawn the two differ,
+ * and that difference is the causal edge (see `docs/architecture.md`).
+ */
 export interface DomainEvent {
   readonly seq: number;
   readonly ts: number;
+  readonly originWorker?: string;
+  readonly causeSeq?: number;
   readonly type: string;
   readonly payload: unknown;
 }
@@ -12,6 +23,12 @@ export interface DomainEvent {
 const DomainEventSchema = z.object({
   seq: z.number(),
   ts: z.number(),
+  // MANDATORY, not cosmetic: this schema is non-strict (extra keys are
+  // stripped by default), so a stamped envelope's originWorker/causeSeq
+  // would be silently dropped before dispatch() ever saw them without
+  // these two fields declared explicitly.
+  originWorker: z.string().optional(),
+  causeSeq: z.number().optional(),
   type: z.string(),
   payload: z.unknown(),
 });

@@ -37,6 +37,10 @@ Events are received on a single ordered channel, `swarm://events` -- see [Events
   - [session_add_worker](#session_add_worker)
 - [AI Commands](#ai-commands)
   - [ai_request](#ai_request)
+  - [agent_turn_started](#agent_turn_started)
+- [File System Commands](#file-system-commands)
+  - [read_file](#read_file)
+  - [write_file](#write_file)
 - [Metrics Commands](#metrics-commands)
   - [get_metrics](#get_metrics)
 - [Bus Commands](#bus-commands)
@@ -62,9 +66,11 @@ Creates a new worker process with a PTY and registers it in the worker registry.
 
 **Parameters:**
 
-| Name     | Type           | Required | Description                                    |
-|----------|----------------|----------|------------------------------------------------|
-| `config` | `WorkerConfig` | Yes      | Worker spawn configuration                     |
+| Name           | Type           | Required | Description                                    |
+|----------------|----------------|----------|------------------------------------------------|
+| `config`       | `WorkerConfig` | Yes      | Worker spawn configuration                     |
+| `originWorker` | `string`       | No       | UUID of the causer (e.g. the AI turn whose `spawn_worker` tool call triggered this spawn). Omitted (not `null`) for a human-initiated spawn -- absent deserializes as unattributed, matching every pre-provenance caller. |
+| `causeSeq`     | `number`       | No       | `seq` of the event this spawn is reacting to (typically an `agent_turn_started` seq). |
 
 **`WorkerConfig` object:**
 
@@ -122,7 +128,7 @@ const workerId = await invoke("spawn_worker", {
 // on branch swarm/research-agent-e5f6a7b8.
 ```
 
-**Emits:** `worker_spawned` envelope on `swarm://events` with payload `{ workerId, name, pid, isolation }`. When isolated, also emits `worktree_created` -- see [Events](#events) below.
+**Emits:** `worker_spawned` envelope on `swarm://events` with payload `{ workerId, name, pid, isolation }`. When isolated, also emits `worktree_created` -- see [Events](#events) below. Both envelopes carry `originWorker`/`causeSeq` when given -- the new worker's own id is the payload's `workerId` (the SUBJECT); `originWorker` is the CAUSER, and for a tool-driven spawn the two differ.
 
 ---
 
@@ -132,9 +138,11 @@ Pauses a running worker by transitioning its state to `paused`.
 
 **Parameters:**
 
-| Name | Type     | Required | Description              |
-|------|----------|----------|--------------------------|
-| `id` | `string` | Yes      | UUID of the worker       |
+| Name           | Type     | Required | Description              |
+|----------------|----------|----------|--------------------------|
+| `id`           | `string` | Yes      | UUID of the worker       |
+| `originWorker` | `string` | No       | UUID of the causer. Omitted for a human-initiated pause. |
+| `causeSeq`     | `number` | No       | `seq` this action is reacting to. |
 
 **Returns:** `void`
 
@@ -163,9 +171,11 @@ Resumes a paused worker by transitioning its state back to `running`.
 
 **Parameters:**
 
-| Name | Type     | Required | Description              |
-|------|----------|----------|--------------------------|
-| `id` | `string` | Yes      | UUID of the worker       |
+| Name           | Type     | Required | Description              |
+|----------------|----------|----------|--------------------------|
+| `id`           | `string` | Yes      | UUID of the worker       |
+| `originWorker` | `string` | No       | UUID of the causer. Omitted for a human-initiated resume. |
+| `causeSeq`     | `number` | No       | `seq` this action is reacting to. |
 
 **Returns:** `void`
 
@@ -196,9 +206,11 @@ If the worker was isolated into a git worktree, also unlocks and `git worktree r
 
 **Parameters:**
 
-| Name | Type     | Required | Description              |
-|------|----------|----------|--------------------------|
-| `id` | `string` | Yes      | UUID of the worker       |
+| Name           | Type     | Required | Description              |
+|----------------|----------|----------|--------------------------|
+| `id`           | `string` | Yes      | UUID of the worker       |
+| `originWorker` | `string` | No       | UUID of the causer (e.g. the AI turn whose `kill_worker` tool call triggered this). Omitted for a human-initiated kill. |
+| `causeSeq`     | `number` | No       | `seq` this action is reacting to. |
 
 **Returns:** `void`
 
@@ -215,7 +227,7 @@ If the worker was isolated into a git worktree, also unlocks and `git worktree r
 await invoke("kill_worker", { id: "550e8400-e29b-41d4-a716-446655440000" });
 ```
 
-**Emits:** `worker_killed` envelope on `swarm://events` with payload `{ workerId }`. When the worker was isolated, also emits `worktree_removed` first -- see [Events](#events) below.
+**Emits:** `worker_killed` envelope on `swarm://events` with payload `{ workerId }`. When the worker was isolated, also emits `worktree_removed` first -- see [Events](#events) below. Both carry `originWorker`/`causeSeq` when given.
 
 ---
 
@@ -250,14 +262,19 @@ const workers = await invoke("list_workers");
 
 ### `worker_input`
 
-Sends raw input bytes to a worker's PTY stdin.
+Sends input text to a worker's PTY stdin, then emits a stamped `worker_input` event recording that it happened.
+
+**Contract fix (provenance Phase 5c):** `data` is a `string`, not `number[]`/bytes. Every real caller (the terminal, the `run_command` AI tool, the workspace watcher's auto-injection) sends a JS string; a prior `Vec<u8>` Rust-side signature could not deserialize that (`serde_json` expects a JSON array of byte numbers for `Vec<u8>`, not a string) and failed IPC deserialization for every caller before this was fixed. The example below is what every real caller has always actually sent.
 
 **Parameters:**
 
-| Name   | Type       | Required | Description                     |
-|--------|------------|----------|---------------------------------|
-| `id`   | `string`   | Yes      | UUID of the target worker       |
-| `data` | `number[]` | Yes      | Raw bytes to write to the PTY   |
+| Name           | Type     | Required | Description                     |
+|----------------|----------|----------|----------------------------------|
+| `id`           | `string` | Yes      | UUID of the target worker       |
+| `data`         | `string` | Yes      | Text to write to the PTY (UTF-8 encoded before the write) |
+| `source`       | `string` | Yes      | `"terminal"` (human keystrokes), `"tool"` (an AI tool call), or `"automation"` (e.g. workspace-watcher auto-injection) |
+| `originWorker` | `string` | No       | UUID of the causer. Omitted for `source: "terminal"` (the causer is a human, not a worker's turn). |
+| `causeSeq`     | `number` | No       | `seq` this input is reacting to (typically an `agent_turn_started` seq). |
 
 **Returns:** `void`
 
@@ -265,18 +282,27 @@ Sends raw input bytes to a worker's PTY stdin.
 
 | Error            | Condition                          |
 |------------------|------------------------------------|
-| Invalid UUID     | `id` is not a valid UUID string    |
+| Invalid UUID     | `id` or `originWorker` is not a valid UUID string |
 | Worker not found | No worker with the given ID        |
 | IPC error        | Worker has no PTY writer or write failed |
 
 **Example:**
 
 ```typescript
-// Send "ls\n" to the worker's terminal
-const encoder = new TextEncoder();
-const data = Array.from(encoder.encode("ls\n"));
-await invoke("worker_input", { id: workerId, data });
+// Terminal keystrokes (see src/hooks/useTerminal.ts)
+await invoke("worker_input", { id: workerId, data: "ls\n", source: "terminal" });
+
+// An AI tool call (see src/lib/tools.ts's run_command)
+await invoke("worker_input", {
+  id: workerId,
+  data: "pnpm build\n",
+  source: "tool",
+  originWorker: callingWorkerId,
+  causeSeq: turnSeq,
+});
 ```
+
+**Emits:** `worker_input` envelope on `swarm://events` with payload `{ workerId, bytes, source, preview? }` -- emitted only AFTER a successful PTY write. `preview` (first ~120 characters, control characters stripped) is present only for `source ∈ {tool, automation}`; `source == "terminal"` never carries a preview and the row is excluded from persistence entirely (see [Persistence Policy](#persistence-policy)) -- raw human keystrokes, and any secrets typed into a shell, are never archived.
 
 ---
 
@@ -577,10 +603,12 @@ Creates a new session with the given name and configuration.
 
 **Parameters:**
 
-| Name     | Type   | Required | Description                        |
-|----------|--------|----------|------------------------------------|
-| `name`   | `string` | Yes    | Human-readable session name        |
-| `config` | `object` | Yes    | Arbitrary JSON configuration       |
+| Name           | Type     | Required | Description                        |
+|----------------|----------|----------|-------------------------------------|
+| `name`         | `string` | Yes      | Human-readable session name        |
+| `config`       | `object` | Yes      | Arbitrary JSON configuration       |
+| `originWorker` | `string` | No       | UUID of the causer. `None` in practice today -- no caller passes it yet (session CRUD is exclusively user-initiated in the shipped app). |
+| `causeSeq`     | `number` | No       | `seq` this action is reacting to.  |
 
 **Returns:** `Session`
 
@@ -616,9 +644,11 @@ Deletes a session by ID.
 
 **Parameters:**
 
-| Name | Type     | Required | Description              |
-|------|----------|----------|--------------------------|
-| `id` | `string` | Yes      | UUID of the session      |
+| Name           | Type     | Required | Description              |
+|----------------|----------|----------|--------------------------|
+| `id`           | `string` | Yes      | UUID of the session      |
+| `originWorker` | `string` | No       | UUID of the causer. `None` in practice today, same as `create_session`. |
+| `causeSeq`     | `number` | No       | `seq` this action is reacting to. |
 
 **Returns:** `void`
 
@@ -812,6 +842,127 @@ console.log("Stream settled:", settled.payload);
 
 ---
 
+### `agent_turn_started`
+
+A narrow webview intake, **actively used** by the shipped chat flow -- unlike `ai_request` above, this is not a Built-Not-Wired path. `AIChat.tsx`'s `doSend` calls this once per turn, before the first streaming round, and stores the returned seq (`turnSeq`) in that turn's closure. Every tool-driven side effect the turn executes afterward (`spawn_worker`, `kill_worker`, `worker_input`, `write_file`) cites `turnSeq` as its `causeSeq`.
+
+This is the mechanism behind the "the engine records provenance, it never infers it" invariant for AI turns specifically: the frontend cannot cite a cause that does not exist in the log, so this command's job is to make one exist deterministically -- no polling, no timeout-bound `waitFor` correlation. It uses the same ack-oneshot the writer thread resolves to the real assigned seq (`EventSink::emit_awaiting_seq`).
+
+**Parameters:**
+
+| Name        | Type     | Required | Description                                     |
+|-------------|----------|----------|--------------------------------------------------|
+| `workerId`  | `string` | Yes      | UUID of the worker whose chat panel started this turn |
+| `model`     | `string` | Yes      | Model identifier for this turn                  |
+| `requestId` | `string` | Yes      | Client-generated correlation ID (the chat item id) |
+
+**Returns:** `number` -- the `seq` the writer thread assigned the `agent_turn_started` event.
+
+**Errors:**
+
+| Error                  | Condition                                  |
+|------------------------|---------------------------------------------|
+| Invalid UUID           | `workerId` is not a valid UUID string      |
+| Event Writer Unavailable | The writer thread is gone (ack channel closed without a value) -- effectively unreachable in practice |
+
+**Example:**
+
+```typescript
+// AIChat.tsx's doSend, before round 0:
+const turnSeq = await invoke<number>("agent_turn_started", {
+  workerId,
+  model: modelId,
+  requestId: itemId,
+});
+// turnSeq now lives in this turn's closure, cited as causeSeq below:
+await invoke("worker_input", {
+  id: workerId,
+  data: "pnpm build\n",
+  source: "tool",
+  originWorker: workerId,
+  causeSeq: turnSeq,
+});
+```
+
+**Emits:** `agent_turn_started` envelope on `swarm://events` with payload `{ workerId, model, requestId }`. Unattributed (`originWorker`/`causeSeq` both absent) -- the turn's own start is caused by a human (or an injected instruction acting on the user's behalf), same as every other user-initiated action.
+
+---
+
+## File System Commands
+
+Real Rust commands for the `read_file`/`write_file` AI tools (`src/lib/tools.ts`) -- previously (Phase 0) both tools ran over `tauri-plugin-fs`'s capability-scoped helpers (`src/lib/fs.ts`) because these commands didn't exist yet. Path validation mirrors the same scopes the plugin-fs capability config (`src-tauri/capabilities/default.json`) declares -- reads permitted under `$APPDATA/**` and `$HOME/**`, writes permitted under `$APPDATA/**` and `$HOME/.swarm/**` -- enforced by hand in `commands/fs.rs::FsScopes` (that capability scope doesn't apply here; these are plain custom commands, not plugin-fs calls), with the identical truthful, Title Case error wording as the plugin-fs path. `src/lib/fs.ts` and its other (non-tool) UI consumers are unaffected by this migration.
+
+### `read_file`
+
+Reads a file at an absolute path.
+
+**Parameters:**
+
+| Name   | Type     | Required | Description             |
+|--------|----------|----------|---------------------------|
+| `path` | `string` | Yes      | Absolute path to read   |
+
+**Returns:** `string` -- the file's full text content.
+
+**Errors:**
+
+| Error                        | Condition                                    |
+|-------------------------------|-----------------------------------------------|
+| Read Requires An Absolute Path | `path` is not absolute                       |
+| Read Access Is Limited To The App Data And Home Directories | `path` falls outside `$APPDATA/**`/`$HOME/**` |
+| File Not Found                | The file does not exist                      |
+| The Operating System Denied Access | The OS itself refused (in-scope path, OS-level permission error) |
+
+**Example:**
+
+```typescript
+const content = await invoke<string>("read_file", { path: "/home/user/notes.txt" });
+```
+
+**Emits:** Nothing -- a read is not a causally interesting side effect.
+
+---
+
+### `write_file`
+
+Writes a file at an absolute path, creating or overwriting it. Emits a stamped, persisted `file_written` event on success.
+
+**Parameters:**
+
+| Name           | Type     | Required | Description                        |
+|----------------|----------|----------|-------------------------------------|
+| `path`         | `string` | Yes      | Absolute path to write             |
+| `content`      | `string` | Yes      | Text content to write              |
+| `originWorker` | `string` | No       | UUID of the causer (e.g. the AI turn whose `write_file` tool call triggered this write). |
+| `causeSeq`     | `number` | No       | `seq` this write is reacting to.   |
+
+**Returns:** `void`
+
+**Errors:**
+
+| Error                         | Condition                                    |
+|--------------------------------|-----------------------------------------------|
+| Write Requires An Absolute Path | `path` is not absolute                       |
+| Write Access Is Limited To The App Data And .swarm Directories | `path` falls outside `$APPDATA/**`/`$HOME/.swarm/**` |
+| Invalid UUID                   | `originWorker` is present but not a valid UUID |
+| Cannot Write ... Parent Directory Does Not Exist | The parent directory doesn't exist |
+| The Operating System Denied Access | The OS itself refused the write             |
+
+**Example:**
+
+```typescript
+await invoke("write_file", {
+  path: "/home/user/.swarm/notes.txt",
+  content: "Hello, SWARM.",
+  originWorker: callingWorkerId,
+  causeSeq: turnSeq,
+});
+```
+
+**Emits:** `file_written` envelope on `swarm://events` with payload `{ path, bytes }`, carrying `originWorker`/`causeSeq` when given.
+
+---
+
 ## Metrics Commands
 
 ### `get_metrics`
@@ -935,7 +1086,7 @@ const off = onEvent("bus_message", (e) => {
 });
 ```
 
-**Emits:** `bus_message` envelope on `swarm://events` with payload `{ messageId, fromWorker, toWorker, topic, payload }` for every message received on the subscribed topic, for the lifetime of the subscription task.
+**Emits:** `bus_message` envelope on `swarm://events` with payload `{ messageId, fromWorker, toWorker, topic, payload }` for every message received on the subscribed topic, for the lifetime of the subscription task. The envelope's `originWorker` is stamped from `fromWorker` -- real attribution for every bus message with no extra plumbing on the sending side (`causeSeq` stays absent; the sender would need to thread its own turn's seq through `bus_send` to populate that, deferred to v2).
 
 ---
 
@@ -1091,35 +1242,48 @@ Every backend event -- worker lifecycle, session lifecycle, AI streaming, metric
 { "seq": 42, "ts": 1752099600123, "type": "worker_spawned", "payload": { "workerId": "...", "name": "...", "pid": 1234 } }
 ```
 
-| Field     | Type     | Description                                                          |
-|-----------|----------|------------------------------------------------------------------------|
-| `seq`     | `number` | Monotonic sequence number assigned by the single-writer engine. Wire order == seq order; never reused, never reordered. |
-| `ts`      | `number` | Unix timestamp in milliseconds, assigned by the writer thread.        |
-| `type`    | `string` | Event type tag, `snake_case` (e.g. `"worker_spawned"`).               |
-| `payload` | `object` | The event's data, `camelCase` fields -- shape depends on `type`.       |
+A stamped envelope additionally carries `originWorker`/`causeSeq`:
 
-`seq` is assigned by one dedicated writer thread (the `OrchestrationEngine`) that every backend call routes through via `emit_event`, so there is a single, total order across every event type -- a `worker_spawned` and a `session_created` racing in the backend still land on the wire (and in the log) in a well-defined, non-interleaved order.
+```json
+{ "seq": 57, "ts": 1752099601000, "originWorker": "b2c3...", "causeSeq": 55, "type": "worker_spawned", "payload": { "workerId": "a1b2...", "name": "Sub-Agent", "pid": 5678 } }
+```
+
+| Field          | Type                | Description                                                          |
+|----------------|---------------------|------------------------------------------------------------------------|
+| `seq`          | `number`            | Monotonic sequence number assigned by the single-writer engine. Wire order == seq order; never reused, never reordered. |
+| `ts`           | `number`            | Unix timestamp in milliseconds, assigned by the writer thread.        |
+| `originWorker` | `string` (optional) | UUID of the worker whose action **caused** this event, when known. Absent (not `null`) when unattributed -- present only when the engine was given an explicit causer to record. |
+| `causeSeq`     | `number` (optional) | `seq` of the event this one is causally reacting to, when known. Typically an `agent_turn_started` seq. |
+| `type`         | `string`            | Event type tag, `snake_case` (e.g. `"worker_spawned"`).               |
+| `payload`      | `object`            | The event's data, `camelCase` fields -- shape depends on `type`.       |
+
+`seq` is assigned by one dedicated writer thread (the `OrchestrationEngine`) that every backend call routes through via `EventSink`, so there is a single, total order across every event type -- a `worker_spawned` and a `session_created` racing in the backend still land on the wire (and in the log) in a well-defined, non-interleaved order.
+
+**The subject-vs-causer rule:** a payload's own `workerId` field is the **SUBJECT** of the event -- whose worker spawned, whose PTY got input, whose file was written. `originWorker` on the envelope is the **CAUSER** -- who made it happen. For a human-driven action (clicking Spawn on the Workers page, typing into a terminal) the two are typically unrelated or `originWorker` is simply absent; for a tool-driven action (an AI turn's `spawn_worker`/`kill_worker`/`worker_input`/`write_file` tool call) `originWorker` is the panel worker whose turn issued the call, while the payload's `workerId` is the worker that got spawned/killed/written-to -- **and that difference is the causal edge** the provenance graph is built from. The engine records this attribution; it never infers it (see `EventSink::emit_with`'s invariant doc in `src-tauri/crates/swarm-core/src/events/emitter.rs`) -- there is no "the last AI turn probably caused this" heuristic anywhere in this codebase.
 
 ### Type Tags
 
-| Type                 | Payload                                                        | Persisted |
-|----------------------|-----------------------------------------------------------------|-----------|
-| `worker_spawned`     | `{ workerId, name, pid, isolation }`                             | Yes       |
-| `worker_killed`      | `{ workerId }`                                                   | Yes       |
-| `worker_output`      | `{ workerId, data }`                                             | No (ephemeral) |
-| `worker_state`       | `{ workerId, state }`                                            | Yes       |
-| `session_created`    | `{ sessionId, name }`                                            | Yes       |
-| `session_deleted`    | `{ sessionId }`                                                  | Yes       |
-| `system_metrics`     | `{ cpuPercent, memoryMb, workerCount, aiReqPerSec, timestamp }`  | No (ephemeral) |
-| `ai_stream_delta`    | `{ requestId, delta, done }`                                     | Yes       |
-| `ai_stream_settled`  | `{ requestId, status, error }` -- terminal receipt, exactly once per request | Yes |
-| `system_log`         | `{ level, message, target, timestamp }`                          | No (ephemeral) |
-| `bus_message`        | `{ messageId, fromWorker, toWorker, topic, payload }`            | Yes       |
-| `worktree_created`   | `{ workerId, sessionId, repoRoot, worktreePath, branch, baseCommit }` -- its own `seq` is the range start for "what changed" queries | Yes |
-| `worktree_removed`   | `{ workerId, worktreePath, branch, disposition, headCommit, reason }` -- `disposition` is `"removed"`, `"preserved_dirty"`, or `"failed"` | Yes |
-| `ship_progress`      | `{ shipId, workerId, step, status, detail }` -- `step` is free-form (`"staging"`, `"commit"`, `"push"`, `"compare"`); `status` is `"running"`, `"ok"`, or `"error"` | Yes |
-| `ship_settled`       | `{ shipId, workerId, commitSha, pushedRef, prUrl, status, error }` -- terminal receipt, exactly once per `shipId`; `error` is a `ShipError` object when `status == "error"` | Yes |
-| `commit_created`     | `{ workerId, sha, branch, seqFrom, seqTo }` -- mirrors the commit's own `Swarm-Seq-Range` trailer | Yes |
+| Type                  | Payload                                                        | Persisted |
+|-----------------------|-----------------------------------------------------------------|-----------|
+| `worker_spawned`      | `{ workerId, name, pid, isolation }`                             | Yes       |
+| `worker_killed`       | `{ workerId }`                                                   | Yes       |
+| `worker_output`       | `{ workerId, data }`                                             | No (ephemeral) |
+| `worker_state`        | `{ workerId, state }`                                            | Yes       |
+| `worker_input`        | `{ workerId, bytes, source, preview? }` -- `source` is `"terminal"`, `"tool"`, or `"automation"`; `preview` (first ~120 chars, control-stripped) is present only for `source ∈ {tool, automation}` -- see [Persistence Policy](#persistence-policy) | Only when `source != "terminal"` |
+| `session_created`     | `{ sessionId, name }`                                            | Yes       |
+| `session_deleted`     | `{ sessionId }`                                                  | Yes       |
+| `system_metrics`      | `{ cpuPercent, memoryMb, workerCount, aiReqPerSec, timestamp }`  | No (ephemeral) |
+| `ai_stream_delta`     | `{ requestId, delta, done }`                                     | Yes       |
+| `ai_stream_settled`   | `{ requestId, status, error }` -- terminal receipt, exactly once per request | Yes |
+| `agent_turn_started`  | `{ workerId, model, requestId }` -- the causal root a turn's tool-driven side effects cite as `causeSeq` (see [`agent_turn_started`](#agent_turn_started)) | Yes |
+| `system_log`          | `{ level, message, target, timestamp }`                          | No (ephemeral) |
+| `bus_message`         | `{ messageId, fromWorker, toWorker, topic, payload }` -- `originWorker` on the envelope is stamped from `fromWorker` for every message, free (no extra caller plumbing) | Yes |
+| `worktree_created`    | `{ workerId, sessionId, repoRoot, worktreePath, branch, baseCommit }` -- its own `seq` is the range start for "what changed" queries | Yes |
+| `worktree_removed`    | `{ workerId, worktreePath, branch, disposition, headCommit, reason }` -- `disposition` is `"removed"`, `"preserved_dirty"`, or `"failed"` | Yes |
+| `ship_progress`       | `{ shipId, workerId, step, status, detail }` -- `step` is free-form (`"staging"`, `"commit"`, `"push"`, `"compare"`); `status` is `"running"`, `"ok"`, or `"error"` | Yes |
+| `ship_settled`        | `{ shipId, workerId, commitSha, pushedRef, prUrl, status, error }` -- terminal receipt, exactly once per `shipId`; `error` is a `ShipError` object when `status == "error"` | Yes |
+| `commit_created`      | `{ workerId, sha, branch, seqFrom, seqTo }` -- mirrors the commit's own `Swarm-Seq-Range` trailer | Yes |
+| `file_written`        | `{ path, bytes }` -- emitted by [`write_file`](#write_file) only; a read is not a causally interesting side effect and emits nothing | Yes |
 
 ### Unified Bus Event Contract
 
@@ -1129,7 +1293,9 @@ Every backend event -- worker lifecycle, session lifecycle, AI streaming, metric
 
 `worker_output`, `system_metrics`, and `system_log` are high-frequency telemetry: they still flow through the ordered stream and each consumes a `seq`, but they are **never written to the log**. They cannot be backfilled after a gap and will not appear in [`events_since`](#events_since) -- treat them as best-effort, live-only.
 
-Every other type persists to the SQLite event log (`<app-data>/swarm-events.db`, WAL mode) before being emitted, so it survives a gap or a restart and can be replayed via `events_since`.
+**`worker_input` has a field-level carve-out on top of the variant-level rule above:** `source == "terminal"` rows (raw human keystrokes) are also excluded from persistence, even though the `worker_input` type itself persists for `source ∈ {tool, automation}`. A per-keystroke durable row would both flood the log and archive whatever the user typed into a shell -- including secrets -- so terminal input is deliberately ephemeral: it reaches the wire (and consumes a `seq`) but is never written to `swarm-events.db`.
+
+Every other type persists to the SQLite event log (`<app-data>/swarm-events.db`, WAL mode) before being emitted, so it survives a gap or a restart and can be replayed via `events_since`. Persisted rows carry `originWorker`/`causeSeq` columns (`origin_worker TEXT`, `cause_seq INTEGER`, both nullable) added via a `PRAGMA user_version` migration ladder -- rows written before this migration have both columns `NULL`, the truthful historical value, not a fabricated `None`.
 
 ### Receipts
 
@@ -1146,7 +1312,14 @@ The frontend's `waitFor(predicate, timeoutMs?)` (in `src/lib/event-bus.ts`) is t
 const events = await invoke("events_since", { afterSeq: 100 });
 ```
 
-Returns **persisted** envelopes with `seq > afterSeq`, ascending, capped at 5000 rows per call. Used by the frontend to backfill after a detected sequence gap (see `src/lib/event-bus.ts`'s gap-detection in `connectEventBus`) and as the foundation for replay. Ephemeral types (`worker_output`, `system_metrics`, `system_log`) never appear in the result, by construction.
+Returns **persisted** envelopes with `seq > afterSeq`, ascending, capped at 5000 rows per call by default. Used by the frontend to backfill after a detected sequence gap (see `src/lib/event-bus.ts`'s gap-detection in `connectEventBus`) and as the foundation for replay. Ephemeral types (`worker_output`, `system_metrics`, `system_log`, and `worker_input` rows with `source == "terminal"`) never appear in the result, by construction.
+
+**`limit`** (optional `number`, default and max 5000): caps the page size. A caller-supplied value above 5000 is silently clamped, not rejected. Exists primarily for a future causality inspector's single-row backward hops (`events_since({ afterSeq: causeSeq - 1, limit: 1 })`) rather than the bulk backfill path above, which always wants the largest page it can get.
+
+```typescript
+// A single-row backward hop
+const [priorEvent] = await invoke("events_since", { afterSeq: causeSeq - 1, limit: 1 });
+```
 
 Callers page by re-invoking with the last-seen `seq` as the new `afterSeq` while a full (5000-row) page keeps coming back:
 

@@ -119,9 +119,13 @@ function handleFileChange(changedPaths: string[], autoInject: boolean): void {
 
   const instruction = `[Workspace Update] The following files were modified: ${fileList}`;
 
-  // Inject instruction to each active worker in the session
+  // Inject instruction to each active worker in the session. source:
+  // "automation" — machine-issued, gets a control-stripped preview and
+  // persists normally, but no provenance: there is no workspace_changed
+  // event yet for this to cite as a cause (v2, per the honest v1
+  // attribution table).
   for (const workerId of session.workerIds) {
-    invoke("worker_input", { id: workerId, data: instruction }).catch(() => {
+    invoke("worker_input", { id: workerId, data: instruction, source: "automation" }).catch(() => {
       // Silently fail — worker may not be running
     });
   }

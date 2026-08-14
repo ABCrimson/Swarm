@@ -7,6 +7,24 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 
 ---
 
+## [Unreleased]
+
+### Added — Provenance stamping (ordered log → causality graph, Phases 2–5)
+
+- **Envelope-level causal attribution:** every `swarm://events` envelope and persisted row can now carry `originWorker`/`causeSeq` — who caused an event and what it was reacting to, distinct from a payload's own subject `workerId` (see the subject-vs-causer rule in `docs/architecture.md`). Absent (not `null`) when unattributed, so the common case (e.g. `worker_output`) pays no wire tax. The engine records provenance; it never infers it.
+- **`agent_turn_started` command:** a narrow webview intake `AIChat.tsx` calls once per AI/agent turn, before the first streaming round, returning the real seq the engine assigned via a non-blocking ack-oneshot (`EventSink::emit_awaiting_seq`). That seq becomes `causeSeq` on every tool-driven side effect the turn executes (`spawn_worker`, `kill_worker`, `worker_input`, `write_file`).
+- **`worker_input` event:** emitted after a successful PTY write, with `{ workerId, bytes, source, preview? }`. `source` is `"terminal"`, `"tool"`, or `"automation"`; a control-stripped preview (first ~120 chars) is generated only for `tool`/`automation` — raw human keystrokes get a byte count only and are excluded from persistence entirely, so typed secrets are never archived.
+- **Real `read_file`/`write_file` Rust commands** (`commands/fs.rs`, previously an empty stub) with path scoping matching `tauri-plugin-fs`'s capability config (reads under `$APPDATA`/`$HOME`, writes under `$APPDATA`/`$HOME/.swarm`). `write_file` emits a stamped, persisted `file_written { path, bytes }` event; `src/lib/tools.ts`'s `read_file`/`write_file` AI tools now invoke these commands instead of the plugin-fs path.
+- **`bus_message` free attribution:** `bus_subscribe`'s forwarder now stamps `originWorker` from the message's own `fromWorker` — real attribution for every inter-agent bus message with no additional caller plumbing.
+- **Optional `originWorker`/`causeSeq` IPC args** on `spawn_worker`, `kill_worker`, `pause_worker`, `resume_worker`, `worker_input`, `create_session`, `delete_session` — absent by default, every pre-existing caller is unaffected.
+- **SQLite migration ladder:** a `PRAGMA user_version` ladder adds `origin_worker`/`cause_seq` columns to the events table (existing rows come back `NULL` — the truthful historical value) plus a partial index on `(origin_worker, seq)` for worker-scoped queries. `events_since` gains an optional `limit` (clamped to the existing 5000-row cap) for future single-row lookups.
+
+### Fixed
+
+- **`worker_input` was broken for every caller:** the Rust command's `data: Vec<u8>` parameter could not deserialize the plain JS string every frontend call site (`useTerminal.ts`, the `run_command` AI tool, the workspace watcher's auto-injection) actually sends — `serde_json` expects a JSON array of byte numbers for `Vec<u8>`, not a string. Changed to `data: String`, writing its UTF-8 bytes to the PTY; a regression test pins the old signature's failure mode down permanently.
+
+---
+
 ## [0.11.2] - 2026-07-15
 
 ### Post-release polish
