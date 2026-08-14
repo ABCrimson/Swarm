@@ -1,11 +1,12 @@
-//! Tauri event emitter utilities.
+//! Domain event types and the [`EventSink`] emission seam.
 //!
 //! Provides a typed event system for broadcasting worker state
 //! changes, session events, AI stream deltas, and system metrics
-//! to the React frontend. Every event is routed through the
-//! [`crate::orchestration::OrchestrationEngine`], which assigns a
-//! monotonic sequence number and emits an ordered envelope on the
-//! single `swarm://events` channel.
+//! to any shell embedding `swarm-core`. Every event is routed through
+//! an [`EventSink`] into the [`crate::orchestration::OrchestrationEngine`],
+//! which assigns a monotonic sequence number and broadcasts an ordered
+//! envelope for shells to forward onward (e.g. the Tauri desktop shell
+//! emits it on the `swarm://events` webview channel).
 //!
 //! ## Serialization Convention
 //!
@@ -14,7 +15,7 @@
 //! - This matches the frontend's expected JSON format
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use std::sync::mpsc::Sender;
 use uuid::Uuid;
 
 use crate::worker::handle::WorkerState;
@@ -244,25 +245,35 @@ pub struct SystemLogPayload {
     pub timestamp: i64,
 }
 
-/// Routes a typed [`SwarmEvent`] into the [`crate::orchestration::OrchestrationEngine`],
-/// which assigns a monotonic sequence number, persists it per policy, and
-/// emits the ordered envelope on the single `swarm://events` channel.
+/// A cloneable handle for recording [`SwarmEvent`]s into the
+/// [`crate::orchestration::OrchestrationEngine`]'s ordered pipeline.
 ///
-/// # Arguments
-///
-/// * `app` - The Tauri app handle used to look up the managed engine
-/// * `event` - The typed event to record
-///
-/// `try_state` is used because the engine may not be managed yet when this
-/// is called (e.g. an event emitted during early app setup, before
-/// `OrchestrationEngine::start` registers it); in that case the event is
-/// dropped with a warning rather than panicking.
-#[tracing::instrument(skip(app, event))]
-pub fn emit_event(app: &AppHandle, event: SwarmEvent) {
-    if let Some(engine) = app.try_state::<crate::orchestration::OrchestrationEngine>() {
-        engine.record(event);
-    } else {
-        tracing::warn!("emit_event before engine setup; event dropped");
+/// Obtained via [`crate::orchestration::OrchestrationEngine::sink`] —
+/// there is no way to construct an `EventSink` before the engine exists,
+/// which structurally removes the "engine not managed yet, event
+/// dropped" hazard that a lookup-based dispatcher (e.g. one keyed off
+/// Tauri's `try_state`) would otherwise need to guard against at every
+/// call site.
+#[derive(Clone)]
+pub struct EventSink(Sender<SwarmEvent>);
+
+impl EventSink {
+    /// Wraps a raw channel sender. Called only by
+    /// [`crate::orchestration::OrchestrationEngine::start`].
+    pub(crate) fn new(tx: Sender<SwarmEvent>) -> Self {
+        Self(tx)
+    }
+
+    /// Records an event for ordering, persistence, and emission.
+    ///
+    /// Fire-and-forget: the dedicated writer thread assigns a sequence
+    /// number, persists (per policy), and broadcasts the ordered
+    /// envelope. If the writer thread is gone, the event is dropped
+    /// with an error log rather than panicking.
+    pub fn emit(&self, event: SwarmEvent) {
+        if self.0.send(event).is_err() {
+            tracing::error!("event writer thread is gone; event dropped");
+        }
     }
 }
 

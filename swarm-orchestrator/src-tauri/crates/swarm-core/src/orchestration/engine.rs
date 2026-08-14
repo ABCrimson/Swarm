@@ -1,16 +1,27 @@
 //! Single-writer orchestration engine: seq assignment, persistence, emission.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 use serde::Serialize;
-use tauri::Emitter;
+use tokio::sync::broadcast;
 
 use super::log::EventLog;
-use crate::events::SwarmEvent;
+use crate::events::{EventSink, SwarmEvent};
 
-/// The single Tauri channel every backend event is pushed on.
+/// The single ordered channel name every backend event is logically
+/// pushed on. Not a Tauri-specific mechanism — shells forward the
+/// broadcast stream (see [`OrchestrationEngine::subscribe`]) onto
+/// whatever wire channel they use under this name (the Tauri desktop
+/// shell emits it on the webview event channel of the same name).
 pub const EVENT_CHANNEL: &str = "swarm://events";
+
+/// Buffer capacity for the live broadcast fanout. Sized generously
+/// above any expected burst so a slow subscriber only needs to fall
+/// back to `events_since` backfill in a pathological case, not under
+/// ordinary load.
+const BROADCAST_CAPACITY: usize = 4096;
 
 /// Ordered envelope wrapping every [`SwarmEvent`] on the wire.
 ///
@@ -41,41 +52,73 @@ pub fn is_persistent(event: &SwarmEvent) -> bool {
 
 /// Handle to the single-writer orchestration engine.
 ///
-/// `record` is fire-and-forget from any thread; the dedicated writer
-/// thread assigns seq, persists (per policy), and emits — guaranteeing
-/// total order on the wire.
+/// [`Self::record`] (via [`EventSink`]) is fire-and-forget from any
+/// thread; the dedicated writer thread assigns seq, persists (per
+/// policy), and broadcasts — guaranteeing total order on the wire.
 #[derive(Clone)]
 pub struct OrchestrationEngine {
-    tx: Sender<SwarmEvent>,
+    sink: EventSink,
     db_path: Option<PathBuf>,
+    broadcast_tx: broadcast::Sender<Arc<DomainEvent>>,
 }
 
 impl OrchestrationEngine {
     /// Spawns the writer thread and returns the engine handle.
     ///
+    /// Every recorded event is assigned a sequence number, persisted
+    /// per [`is_persistent`], and broadcast as an `Arc<DomainEvent>` on
+    /// an internal `tokio::sync::broadcast` channel — [`Self::subscribe`]
+    /// hands out receivers for any number of shells/clients to forward
+    /// onward (e.g. the Tauri shell's `app.emit`), independent of how
+    /// many are currently listening. This is N-client fanout for free.
+    ///
     /// `db_path` is retained so read-only connections (e.g. the
     /// `events_since` command) can be opened against the same file;
     /// pass `None` for in-memory logs.
-    pub fn start(app: tauri::AppHandle, log: EventLog, db_path: Option<PathBuf>) -> Self {
+    pub fn start(log: EventLog, db_path: Option<PathBuf>) -> Self {
         let (tx, rx) = std::sync::mpsc::channel::<SwarmEvent>();
+        let (broadcast_tx, _) = broadcast::channel::<Arc<DomainEvent>>(BROADCAST_CAPACITY);
+        let writer_broadcast_tx = broadcast_tx.clone();
         std::thread::Builder::new()
             .name("swarm-event-writer".to_string())
             .spawn(move || {
                 run_writer_loop(rx, log, move |envelope| {
-                    if let Err(e) = app.emit(EVENT_CHANNEL, envelope) {
-                        tracing::error!(error = %e, "failed to emit domain event");
-                    }
+                    // Zero receivers (nothing subscribed yet, or the
+                    // shell hasn't started forwarding) is an expected
+                    // steady state, not an error — unlike a direct
+                    // Tauri `app.emit` failure, it carries no context
+                    // worth logging.
+                    let _ = writer_broadcast_tx.send(Arc::new(envelope.clone()));
                 });
             })
             .expect("failed to spawn event writer thread");
-        Self { tx, db_path }
+        Self {
+            sink: EventSink::new(tx),
+            db_path,
+            broadcast_tx,
+        }
     }
 
     /// Enqueues an event for ordering, persistence, and emission.
     pub fn record(&self, event: SwarmEvent) {
-        if self.tx.send(event).is_err() {
-            tracing::error!("event writer thread is gone; event dropped");
-        }
+        self.sink.emit(event);
+    }
+
+    /// Returns a cloneable [`EventSink`] for callers that only need to
+    /// record events (workers, the AI client/queue, metrics loop, bus
+    /// forwarding) without the rest of the engine's surface.
+    pub fn sink(&self) -> EventSink {
+        self.sink.clone()
+    }
+
+    /// Subscribes to the live ordered event stream.
+    ///
+    /// Each call yields an independent receiver seeing every event
+    /// recorded from this point forward. A shell should call this
+    /// once at startup and forward the stream onward (e.g. onto a
+    /// Tauri webview event channel or a WebSocket).
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<DomainEvent>> {
+        self.broadcast_tx.subscribe()
     }
 
     /// Path of the SQLite log, when file-backed.
@@ -85,7 +128,8 @@ impl OrchestrationEngine {
 }
 
 /// The writer loop. Extracted from the thread body so unit tests can
-/// drive it synchronously without a Tauri `AppHandle`.
+/// drive it synchronously with a plain closure instead of a live
+/// broadcast channel.
 fn run_writer_loop(
     rx: Receiver<SwarmEvent>,
     mut log: EventLog,

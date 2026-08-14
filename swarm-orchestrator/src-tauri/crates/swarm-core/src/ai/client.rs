@@ -3,16 +3,15 @@
 //! Manages HTTP connections to AI APIs (Anthropic Claude)
 //! with streaming SSE response support via `reqwest`. The client
 //! handles request construction, authentication, and response
-//! parsing, emitting incremental text deltas as Tauri events.
+//! parsing, emitting incremental text deltas as ordered events.
 
 use anyhow::Context;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
 use tokio_stream::StreamExt;
 
 use crate::error::AppError;
-use crate::events::{AiStreamDeltaPayload, SwarmEvent, emit_event};
+use crate::events::{AiStreamDeltaPayload, EventSink, SwarmEvent};
 
 use super::stream::{extract_delta_text, is_message_stop, is_refusal, parse_sse_line};
 
@@ -235,7 +234,7 @@ impl AiClient {
     ///
     /// # Arguments
     ///
-    /// * `app` - Tauri app handle for emitting stream delta events
+    /// * `sink` - Event sink for emitting stream delta events
     /// * `request` - The AI request containing messages and configuration
     ///
     /// # Returns
@@ -250,29 +249,25 @@ impl AiClient {
     /// - An SSE stream chunk cannot be read
     ///
     /// On every error path, a final `ai_stream_delta` event with
-    /// `done: true` is emitted on `swarm://events` before the error is
-    /// returned, so frontend listeners never hang waiting for a terminal
-    /// event.
-    #[tracing::instrument(skip(self, app, request), fields(request_id = %request.request_id))]
+    /// `done: true` is emitted before the error is returned, so
+    /// listeners never hang waiting for a terminal event.
+    #[tracing::instrument(skip(self, sink, request), fields(request_id = %request.request_id))]
     pub async fn stream_message(
         &self,
-        app: &AppHandle,
+        sink: &EventSink,
         request: &AiRequest,
     ) -> Result<String, AppError> {
-        match self.stream_message_inner(app, request).await {
+        match self.stream_message_inner(sink, request).await {
             Ok(text) => Ok(text),
             Err(e) => {
-                // Guarantee a terminal event reaches the frontend on any
+                // Guarantee a terminal event reaches listeners on any
                 // failure path (send failure, non-2xx status, stream
-                // read error) so listeners never hang indefinitely.
-                emit_event(
-                    app,
-                    SwarmEvent::AiStreamDelta(AiStreamDeltaPayload {
-                        request_id: request.request_id.clone(),
-                        delta: String::new(),
-                        done: true,
-                    }),
-                );
+                // read error) so they never hang indefinitely.
+                sink.emit(SwarmEvent::AiStreamDelta(AiStreamDeltaPayload {
+                    request_id: request.request_id.clone(),
+                    delta: String::new(),
+                    done: true,
+                }));
                 Err(e)
             }
         }
@@ -285,7 +280,7 @@ impl AiClient {
     /// by `?` from this function.
     async fn stream_message_inner(
         &self,
-        app: &AppHandle,
+        sink: &EventSink,
         request: &AiRequest,
     ) -> Result<String, AppError> {
         let url = format!("{}/messages", self.config.base_url);
@@ -349,25 +344,19 @@ impl AiClient {
 
                     if let Some(delta) = extract_delta_text(&event) {
                         full_text.push_str(&delta);
-                        emit_event(
-                            app,
-                            SwarmEvent::AiStreamDelta(AiStreamDeltaPayload {
-                                request_id: request.request_id.clone(),
-                                delta,
-                                done: false,
-                            }),
-                        );
+                        sink.emit(SwarmEvent::AiStreamDelta(AiStreamDeltaPayload {
+                            request_id: request.request_id.clone(),
+                            delta,
+                            done: false,
+                        }));
                     }
 
                     if is_message_stop(&event) {
-                        emit_event(
-                            app,
-                            SwarmEvent::AiStreamDelta(AiStreamDeltaPayload {
-                                request_id: request.request_id.clone(),
-                                delta: String::new(),
-                                done: true,
-                            }),
-                        );
+                        sink.emit(SwarmEvent::AiStreamDelta(AiStreamDeltaPayload {
+                            request_id: request.request_id.clone(),
+                            delta: String::new(),
+                            done: true,
+                        }));
                         done_sent = true;
                         break;
                     }
@@ -377,14 +366,11 @@ impl AiClient {
 
         // Guarantee done signal even if stream ended without message_stop
         if !done_sent {
-            emit_event(
-                app,
-                SwarmEvent::AiStreamDelta(AiStreamDeltaPayload {
-                    request_id: request.request_id.clone(),
-                    delta: String::new(),
-                    done: true,
-                }),
-            );
+            sink.emit(SwarmEvent::AiStreamDelta(AiStreamDeltaPayload {
+                request_id: request.request_id.clone(),
+                delta: String::new(),
+                done: true,
+            }));
         }
 
         tracing::debug!(

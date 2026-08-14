@@ -13,12 +13,11 @@ use std::collections::BinaryHeap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use tauri::AppHandle;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 
 use super::client::{AiClient, AiRequest};
-use crate::events::{AiStreamSettledPayload, SwarmEvent, emit_event};
+use crate::events::{AiStreamSettledPayload, EventSink, SwarmEvent};
 
 /// Bounded channel capacity for the AI request queue.
 const AI_QUEUE_CAPACITY: usize = 256;
@@ -106,8 +105,8 @@ impl Default for AiQueueConfig {
 /// ```ignore
 /// use swarm_core::ai::{AiQueue, AiQueueConfig, AiClient, AiClientConfig, AiRequest};
 ///
-/// // Created during app setup:
-/// // let queue = AiQueue::new(app_handle, ai_client, AiQueueConfig::default());
+/// // Created during shell setup:
+/// // let queue = AiQueue::new(engine.sink(), ai_client, AiQueueConfig::default());
 /// // app.manage(queue);
 /// ```
 pub struct AiQueue {
@@ -124,17 +123,17 @@ impl AiQueue {
     ///
     /// # Arguments
     ///
-    /// * `app` - Tauri app handle for event emission during streaming
+    /// * `sink` - Event sink for emitting events during streaming
     /// * `client` - The AI client for making API requests
     /// * `config` - Queue configuration (concurrency limit)
     ///
     /// # Returns
     ///
     /// A new `AiQueue` instance ready to accept requests via [`enqueue`](Self::enqueue).
-    pub fn new(app: AppHandle, client: AiClient, config: AiQueueConfig) -> Self {
+    pub fn new(sink: EventSink, client: AiClient, config: AiQueueConfig) -> Self {
         let (sender, receiver) = mpsc::channel::<AiRequest>(AI_QUEUE_CAPACITY);
 
-        tokio::spawn(Self::process_loop(app, client, receiver, config));
+        tokio::spawn(Self::process_loop(sink, client, receiver, config));
 
         Self { sender }
     }
@@ -181,13 +180,13 @@ impl AiQueue {
     ///
     /// # Arguments
     ///
-    /// * `app` - Tauri app handle for event emission
+    /// * `sink` - Event sink for event emission
     /// * `client` - The AI client for making API requests
     /// * `receiver` - The mpsc channel receiver for incoming requests
     /// * `config` - Queue configuration (concurrency limit)
-    #[tracing::instrument(skip(app, client, receiver), fields(concurrent_limit = config.concurrent_limit))]
+    #[tracing::instrument(skip(sink, client, receiver), fields(concurrent_limit = config.concurrent_limit))]
     async fn process_loop(
-        app: AppHandle,
+        sink: EventSink,
         client: AiClient,
         mut receiver: mpsc::Receiver<AiRequest>,
         config: AiQueueConfig,
@@ -245,20 +244,17 @@ impl AiQueue {
                 };
 
                 let client = client.clone();
-                let app = app.clone();
+                let sink = sink.clone();
 
                 join_set.spawn(async move {
                     let request_id = prioritized.request.request_id.clone();
-                    match client.stream_message(&app, &prioritized.request).await {
+                    match client.stream_message(&sink, &prioritized.request).await {
                         Ok(_) => {
-                            emit_event(
-                                &app,
-                                SwarmEvent::AiStreamSettled(AiStreamSettledPayload {
-                                    request_id: request_id.clone(),
-                                    status: "ok".to_string(),
-                                    error: None,
-                                }),
-                            );
+                            sink.emit(SwarmEvent::AiStreamSettled(AiStreamSettledPayload {
+                                request_id: request_id.clone(),
+                                status: "ok".to_string(),
+                                error: None,
+                            }));
                         }
                         Err(e) => {
                             tracing::error!(
@@ -266,14 +262,11 @@ impl AiQueue {
                                 error = %e,
                                 "AI request failed"
                             );
-                            emit_event(
-                                &app,
-                                SwarmEvent::AiStreamSettled(AiStreamSettledPayload {
-                                    request_id: request_id.clone(),
-                                    status: "error".to_string(),
-                                    error: Some(e.to_string()),
-                                }),
-                            );
+                            sink.emit(SwarmEvent::AiStreamSettled(AiStreamSettledPayload {
+                                request_id: request_id.clone(),
+                                status: "error".to_string(),
+                                error: Some(e.to_string()),
+                            }));
                         }
                     }
                     drop(permit);

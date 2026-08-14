@@ -3,17 +3,16 @@
 //! Uses `portable-pty` 0.9.0 for cross-platform pseudo-terminal
 //! spawning. PTY reads are bridged to Tokio via `spawn_blocking`
 //! and a bounded mpsc channel (capacity 4096), enabling non-blocking
-//! output streaming to the React frontend as Tauri events with
-//! backpressure when the consumer falls behind.
+//! output streaming to the shell as ordered `worker_output` events
+//! with backpressure when the consumer falls behind.
 
 use anyhow::Context;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::io::{Read, Write};
-use tauri::AppHandle;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::events::{SwarmEvent, WorkerOutputPayload, emit_event};
+use crate::events::{EventSink, SwarmEvent, WorkerOutputPayload};
 
 /// Result of spawning a PTY process.
 ///
@@ -46,13 +45,13 @@ pub struct PtyHandle {
 /// ```text
 /// ┌──────────┐  spawn_blocking  ┌─────────────┐  mpsc  ┌───────────┐
 /// │ PTY Slave│──────────────────>│ Reader Task │───────>│ Async Task│
-/// │ (shell)  │  blocking read   │ (4KB buffer) │        │ emit_event│
+/// │ (shell)  │  blocking read   │ (4KB buffer) │        │ sink.emit │
 /// └──────────┘                  └─────────────┘        └───────────┘
 /// ```
 ///
 /// # Arguments
 ///
-/// * `app` - Tauri app handle for event emission
+/// * `sink` - Event sink for recording `worker_output` events
 /// * `worker_id` - UUID of the worker this PTY belongs to
 /// * `shell` - Shell executable path (e.g., `powershell.exe`, `/bin/bash`)
 /// * `cwd` - Initial working directory for the shell process
@@ -70,9 +69,9 @@ pub struct PtyHandle {
 /// - The PTY pair cannot be opened
 /// - The shell command fails to spawn
 /// - The PTY master writer or reader cannot be obtained
-#[tracing::instrument(skip(app), fields(worker_id = %worker_id))]
+#[tracing::instrument(skip(sink), fields(worker_id = %worker_id))]
 pub fn spawn_pty(
-    app: &AppHandle,
+    sink: &EventSink,
     worker_id: Uuid,
     shell: &str,
     cwd: &str,
@@ -152,16 +151,16 @@ pub fn spawn_pty(
         }
     });
 
-    // Async task to forward chunks as Tauri events — track the JoinHandle
-    let app_handle = app.clone();
+    // Async task to forward chunks as ordered events — track the JoinHandle
+    let sink = sink.clone();
     let wid_forwarder = worker_id;
     let forwarder_handle = tokio::spawn(async move {
         while let Some(bytes) = rx.recv().await {
             let data = String::from_utf8_lossy(&bytes).into_owned();
-            emit_event(
-                &app_handle,
-                SwarmEvent::WorkerOutput(WorkerOutputPayload { worker_id, data }),
-            );
+            sink.emit(SwarmEvent::WorkerOutput(WorkerOutputPayload {
+                worker_id,
+                data,
+            }));
         }
         tracing::debug!(worker_id = %worker_id, "PTY output reader finished");
     });
