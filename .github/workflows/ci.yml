@@ -72,12 +72,24 @@ jobs:
 
       - name: Clippy
         working-directory: swarm-orchestrator/src-tauri
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --workspace -- -D warnings
 
       - name: Rust tests
         working-directory: swarm-orchestrator/src-tauri
-        run: cargo test
+        run: cargo test --workspace
 
       - name: Rust format check
         working-directory: swarm-orchestrator/src-tauri
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check
+
+      - name: Verify swarm-core has no Tauri dependency
+        working-directory: swarm-orchestrator/src-tauri
+        run: |
+          # Skip the root package line (tail -n +2) — the checkout path
+          # itself contains "src-tauri", which would otherwise false-
+          # positive a plain grep across the whole tree output.
+          if cargo tree -p swarm-core -e normal | tail -n +2 | grep -qi tauri; then
+            echo "::error::swarm-core must not depend on tauri (directly or transitively)"
+            cargo tree -p swarm-core -e normal | tail -n +2 | grep -i tauri
+            exit 1
+          fi
