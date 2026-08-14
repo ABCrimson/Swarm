@@ -243,16 +243,70 @@ pub fn worktree_info_for_worker(
 }
 
 /// Best-effort resolution of the "base branch" a worktree's isolation
-/// branch forked from: the branch currently checked out in the
-/// primary checkout (`repo_root`), which is where `HEAD` was read from
-/// at worktree-creation time. `worker::lifecycle` records only the
-/// base *commit* sha (not a branch name), so this is a live lookup,
-/// not a stored field — falls back to `"main"` if `repo_root` is
-/// itself detached or unreadable.
+/// branch forked from. `worker::lifecycle` records only the base
+/// *commit* sha (not a branch name), so this is always a live lookup,
+/// not a stored field. **Deliberately never** the primary checkout's
+/// current `HEAD` — a human can check out any branch in the primary
+/// checkout at any time, which has nothing to do with what the
+/// worktree's isolation branch actually forked from. Resolution order:
+///
+/// 1. `git symbolic-ref --short refs/remotes/origin/HEAD`, stripped of
+///    its `origin/` prefix — what the remote itself considers its
+///    default branch (set by `git remote set-head origin -a`, or
+///    automatically on a normal `git clone`).
+/// 2. The repo's local `init.defaultBranch` config value.
+/// 3. The literal fallback `"main"`.
 fn resolve_base_branch(repo_root: &Path) -> String {
-    match current_branch(repo_root) {
-        Ok(Some(branch)) => branch,
-        _ => "main".to_string(),
+    choose_base_branch(
+        origin_head_branch(repo_root),
+        configured_default_branch(repo_root),
+    )
+}
+
+/// The pure resolution-order decision, extracted from the git-plumbing
+/// calls so it's unit-testable independent of the host machine's own
+/// global git config (which may or may not have `init.defaultBranch`
+/// set — a fully-git-plumbing round trip for the "neither is set, fall
+/// back to the main literal" case would be flaky on a machine that
+/// *does* have a global default configured).
+fn choose_base_branch(origin_head: Option<String>, configured_default: Option<String>) -> String {
+    origin_head
+        .or(configured_default)
+        .unwrap_or_else(|| "main".to_string())
+}
+
+fn origin_head_branch(repo_root: &Path) -> Option<String> {
+    let out = run(
+        repo_root,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+        READ_TIMEOUT,
+    )
+    .ok()?;
+    if !out.success() {
+        return None;
+    }
+    let raw = out.stdout.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Some(raw.strip_prefix("origin/").unwrap_or(raw).to_string())
+}
+
+fn configured_default_branch(repo_root: &Path) -> Option<String> {
+    let out = run(
+        repo_root,
+        &["config", "--get", "init.defaultBranch"],
+        READ_TIMEOUT,
+    )
+    .ok()?;
+    if !out.success() {
+        return None;
+    }
+    let raw = out.stdout.trim();
+    if raw.is_empty() {
+        None
+    } else {
+        Some(raw.to_string())
     }
 }
 
@@ -377,6 +431,28 @@ fn current_branch(worktree_path: &Path) -> Result<Option<String>, AppError> {
     }
 }
 
+/// Resolves the branch **currently** checked out in `worktree_path`,
+/// hard-failing (never silently falling back to a possibly-stale
+/// stored `WorkerHandle.branch`) on a detached `HEAD` or an unreadable
+/// ref. Used by every action that actually *acts* on the branch
+/// (`push`, `compare_url`) so there is exactly one live resolution per
+/// action — never a stored-vs-live skew between what preflight showed
+/// and what push/compare actually operate on. `preflight` calls the
+/// same underlying [`current_branch`] but degrades to a `blockers`
+/// entry instead of a hard error, since preflight must never fail
+/// merely because the tree is momentarily detached.
+fn resolve_live_branch(worktree_path: &Path) -> Result<String, ShipError> {
+    match current_branch(worktree_path) {
+        Ok(Some(branch)) => Ok(branch),
+        Ok(None) => Err(ShipError {
+            kind: ShipErrorKind::InvalidBranch,
+            message: "Worktree Is In A Detached HEAD State — Nothing To Ship From.".to_string(),
+            remedy: None,
+        }),
+        Err(e) => Err(ShipError::from(e)),
+    }
+}
+
 /// Protected branch names ship refuses to commit/push directly onto —
 /// exact match for `main`/`master`/`develop`, glob for `release/*`.
 fn is_protected_branch(branch: &str) -> bool {
@@ -434,6 +510,19 @@ fn ahead_behind(worktree_path: &Path, upstream: &str) -> (u32, u32) {
             (ahead, behind)
         }
         _ => (0, 0),
+    }
+}
+
+/// Fallback `ahead` count for a branch with no upstream yet (a
+/// never-pushed isolation branch — the overwhelmingly common case the
+/// very first time a worker ships): commits reachable from `HEAD` but
+/// not from `base_commit`. `behind` has no meaningful value here
+/// (there is no upstream to be behind), so callers pair this with `0`.
+fn ahead_since_base(worktree_path: &Path, base_commit: &str) -> u32 {
+    let spec = format!("{base_commit}..HEAD");
+    match run(worktree_path, &["rev-list", "--count", &spec], READ_TIMEOUT) {
+        Ok(out) if out.success() => out.stdout.trim().parse().unwrap_or(0),
+        _ => 0,
     }
 }
 
@@ -526,12 +615,16 @@ pub struct SkippedFile {
 }
 
 /// Whether `rel_path` should be skipped from staging — secret-shaped
-/// filenames (`.env*`, `*.pem`, `*.key`, `id_rsa*`, `*secret*`,
-/// case-insensitive) or larger than 5MB. Size is checked against the
-/// file as it exists in `worktree_path` right now; a path with no
-/// existing file (already deleted) can't be size-skipped, only
-/// name-skipped.
+/// filenames (`.env*`, `*.pem`, `*.key`, `id_rsa*`, case-insensitive,
+/// matched against the basename) or a `secret` substring anywhere in
+/// the full relative path (case-insensitive — deliberately **not**
+/// basename-only, so a nested `config/secrets/api.yaml` is caught even
+/// though its own filename looks innocuous), or larger than 5MB. Size
+/// is checked against the file as it exists in `worktree_path` right
+/// now; a path with no existing file (already deleted) can't be
+/// size-skipped, only name-skipped.
 fn deny_reason(worktree_path: &Path, rel_path: &str) -> Option<String> {
+    let full_path_lower = rel_path.to_ascii_lowercase();
     let basename = Path::new(rel_path)
         .file_name()
         .and_then(|n| n.to_str())
@@ -542,7 +635,7 @@ fn deny_reason(worktree_path: &Path, rel_path: &str) -> Option<String> {
         || basename.ends_with(".pem")
         || basename.ends_with(".key")
         || basename.starts_with("id_rsa")
-        || basename.contains("secret");
+        || full_path_lower.contains("secret");
     if looks_like_credential {
         return Some("Skipped — Looks Like A Credential".to_string());
     }
@@ -645,12 +738,19 @@ fn commit_diff_stat(worktree_path: &Path, sha: &str) -> Result<DiffStat, AppErro
     Ok(stat)
 }
 
-// ── gh capability probe (informational only in Phase 1) ─────────────
+// ── gh capability probe (reserved for Phase 3 — NOT called from Phase 1) ──
+//
+// Phase 1 never acts on `gh` availability (PR creation is Phase 3), so
+// none of the three items below are wired into `preflight` — they are
+// kept, `#[allow(dead_code)]`, as the ready-made probe the Phase 3
+// `create_pr` command will call. Wiring an unused-in-Phase-1
+// capability field into `ShipPreflight` was reviewed and rejected: a
+// preflight field nothing reads is exactly the kind of "looks acted
+// upon but isn't" surface this codebase avoids.
 
 /// Runs `bin args...` with stdio suppressed and a short kill-on-timeout
-/// budget, returning whether it exited successfully. Used only for the
-/// `ghAvailable`/`ghAuthed` preflight fields — Phase 1 does not call
-/// `gh` for anything else (PR creation is Phase 3).
+/// budget, returning whether it exited successfully.
+#[allow(dead_code)]
 fn command_succeeds_quickly(bin: &str, args: &[&str], timeout: Duration) -> bool {
     let mut command = Command::new(bin);
     command
@@ -687,10 +787,12 @@ fn command_succeeds_quickly(bin: &str, args: &[&str], timeout: Duration) -> bool
     }
 }
 
+#[allow(dead_code)]
 fn probe_gh_available() -> bool {
     command_succeeds_quickly("gh", &["--version"], Duration::from_secs(3))
 }
 
+#[allow(dead_code)]
 fn probe_gh_authed() -> bool {
     command_succeeds_quickly("gh", &["auth", "status"], Duration::from_secs(3))
 }
@@ -705,6 +807,11 @@ pub struct ShipPreflight {
     pub base_branch: String,
     pub remote: Option<String>,
     pub host: Option<String>,
+    /// `true` when `host` looks like GitHub/GHES and `ship_compare_url`
+    /// would therefore succeed — the frontend uses this to disable
+    /// *only* the "Open Compare Page" action while leaving Commit Only
+    /// / Commit + Push available (see [`remote::looks_like_github_host`]).
+    pub host_supports_compare: bool,
     pub upstream: Option<String>,
     pub ahead: u32,
     pub behind: u32,
@@ -713,26 +820,30 @@ pub struct ShipPreflight {
     pub untracked: Vec<String>,
     pub skipped: Vec<SkippedFile>,
     pub diff_stat: DiffStat,
-    pub gh_available: bool,
-    pub gh_authed: bool,
     pub can_ship: bool,
     pub blockers: Vec<String>,
 }
 
-/// Computes the full ship preflight for `id`: branch/remote/tracking
-/// state, working-tree status, the deny-list preview, and the six
-/// refusal conditions (toplevel mismatch, primary checkout, detached
-/// `HEAD`, `branch == baseBranch`, protected branch, missing remote)
-/// as Title Case `blockers` — `canShip` is `true` only when `blockers`
-/// is empty. None of the six conditions make this function itself
-/// fail; it always returns `Ok` once the worker/worktree resolve at
-/// all (see the `Errors` section).
+/// Computes the full ship preflight for `id`, evaluated for the given
+/// staging `mode` (the deny-list preview and diff stat are mode-aware
+/// — see [`stage_and_commit`]'s own per-mode enforcement, which this
+/// mirrors): branch/remote/tracking state, working-tree status, and
+/// the seven refusal conditions (toplevel mismatch, primary checkout,
+/// detached `HEAD`, `branch == baseBranch`, protected branch, missing
+/// remote, nothing to ship at all) as Title Case `blockers` — `canShip`
+/// is `true` only when `blockers` is empty. None of the seven
+/// conditions make this function itself fail; it always returns `Ok`
+/// once the worker/worktree resolve at all (see the `Errors` section).
 ///
 /// # Errors
 ///
 /// * [`ShipErrorKind::WorkerNotFound`] / [`ShipErrorKind::NoWorktree`]
 ///   — same as [`worktree_info_for_worker`].
-pub fn preflight(registry: &WorkerRegistry, id: WorkerId) -> Result<ShipPreflight, ShipError> {
+pub fn preflight(
+    registry: &WorkerRegistry,
+    id: WorkerId,
+    mode: StagingMode,
+) -> Result<ShipPreflight, ShipError> {
     let info = worktree_info_for_worker(registry, id)?;
     let wt = info.worktree_path.as_path();
 
@@ -775,16 +886,34 @@ pub fn preflight(registry: &WorkerRegistry, id: WorkerId) -> Result<ShipPrefligh
     let remote = remote_raw.as_deref().map(redact::redact);
     let parsed_remote = remote_raw.as_deref().and_then(remote::parse);
     let host = parsed_remote.as_ref().map(|r| r.host.clone());
+    let host_supports_compare = host.as_deref().is_some_and(remote::looks_like_github_host);
 
     let upstream = upstream_ref(wt);
     let (ahead, behind) = match &upstream {
         Some(u) => ahead_behind(wt, u),
-        None => (0, 0),
+        None => (ahead_since_base(wt, &info.base_commit), 0),
     };
 
     let entries = status_porcelain(wt).map_err(ShipError::from)?;
     let (staged, unstaged, untracked) = classify_status(&entries);
-    let candidates = union_paths(&staged, &unstaged, &untracked);
+
+    if staged.is_empty() && unstaged.is_empty() && untracked.is_empty() && ahead == 0 {
+        blockers.push(
+            "Nothing To Ship — The Working Tree Is Clean And There's Nothing To Push.".to_string(),
+        );
+    }
+
+    // Mode-aware candidate set: "all" previews what `git add -- <survivors>`
+    // would touch (the full union); "staged" previews only the index,
+    // since that's the only thing `stage_and_commit`'s "staged" branch
+    // actually commits (and, after the B3 fix, actively unstages any
+    // denied path from) — showing the full union's skip list while in
+    // "staged" mode would be an inaccurate preview of what's about to
+    // happen.
+    let candidates = match mode {
+        StagingMode::All => union_paths(&staged, &unstaged, &untracked),
+        StagingMode::Staged => staged.clone(),
+    };
 
     let mut skipped = Vec::new();
     for path in &candidates {
@@ -797,19 +926,28 @@ pub fn preflight(registry: &WorkerRegistry, id: WorkerId) -> Result<ShipPrefligh
     }
     let skipped_set: HashSet<&str> = skipped.iter().map(|s| s.path.as_str()).collect();
 
-    let tracked_survivors: Vec<String> = union_paths(&staged, &unstaged, &[])
-        .into_iter()
-        .filter(|p| !skipped_set.contains(p.as_str()))
-        .collect();
-    let untracked_survivors: Vec<String> = untracked
-        .iter()
-        .filter(|p| !skipped_set.contains(p.as_str()))
-        .cloned()
-        .collect();
+    let (tracked_survivors, untracked_survivors): (Vec<String>, Vec<String>) = match mode {
+        StagingMode::All => (
+            union_paths(&staged, &unstaged, &[])
+                .into_iter()
+                .filter(|p| !skipped_set.contains(p.as_str()))
+                .collect(),
+            untracked
+                .iter()
+                .filter(|p| !skipped_set.contains(p.as_str()))
+                .cloned()
+                .collect(),
+        ),
+        StagingMode::Staged => (
+            staged
+                .iter()
+                .filter(|p| !skipped_set.contains(p.as_str()))
+                .cloned()
+                .collect(),
+            Vec::new(),
+        ),
+    };
     let diff_stat = preview_diff_stat(wt, &tracked_survivors, &untracked_survivors);
-
-    let gh_available = probe_gh_available();
-    let gh_authed = gh_available && probe_gh_authed();
 
     let can_ship = blockers.is_empty();
 
@@ -819,6 +957,7 @@ pub fn preflight(registry: &WorkerRegistry, id: WorkerId) -> Result<ShipPrefligh
         base_branch: info.base_branch,
         remote,
         host,
+        host_supports_compare,
         upstream,
         ahead,
         behind,
@@ -827,8 +966,6 @@ pub fn preflight(registry: &WorkerRegistry, id: WorkerId) -> Result<ShipPrefligh
         untracked,
         skipped,
         diff_stat,
-        gh_available,
-        gh_authed,
         can_ship,
         blockers,
     })
@@ -867,6 +1004,19 @@ pub struct CommitOutcome {
 fn add_args_explicit(worktree_path: &Path, paths: &[String]) -> Vec<String> {
     let mut args = base_args(worktree_path);
     args.push("add".to_string());
+    args.push("--".to_string());
+    args.extend(paths.iter().cloned());
+    args
+}
+
+/// Argv for `git restore --staged -- <paths>` — unstages `paths`
+/// without touching the working-tree copy. Used only by
+/// [`stage_and_commit`]'s `"staged"` mode to actually enforce the deny
+/// list (rather than merely reporting it) before committing.
+fn restore_staged_args(worktree_path: &Path, paths: &[String]) -> Vec<String> {
+    let mut args = base_args(worktree_path);
+    args.push("restore".to_string());
+    args.push("--staged".to_string());
     args.push("--".to_string());
     args.extend(paths.iter().cloned());
     args
@@ -992,20 +1142,45 @@ pub fn stage_and_commit(
             skipped
         }
         StagingMode::Staged => {
-            // Trusts the caller's own `git add` for *what* gets
-            // committed (un-staging something a human explicitly
-            // staged would be surprising) — but still scans it, so a
-            // secret staged by something other than SWARM is at least
-            // reported, not silently committed unremarked.
-            staged
-                .iter()
-                .filter_map(|path| {
-                    deny_reason(wt, path).map(|reason| SkippedFile {
+            // DIRECTIVE (B3): the deny list is *enforced* here, not
+            // merely reported — a denied path in the pre-staged index
+            // (staged by something other than SWARM, e.g. a human's
+            // own `git add .`) is actively unstaged via `git restore
+            // --staged` before the commit runs, under the same
+            // RepoLocks serialization as every other mutation. Earlier
+            // behaviour only *displayed* `skipped` while still
+            // committing the secret — the Title Case "Skipped" label
+            // was a lie the UI told the user. If the unstage itself
+            // fails, the commit is hard-aborted rather than risk
+            // committing the secret anyway.
+            let mut skipped = Vec::new();
+            let mut denied_paths = Vec::new();
+            for path in &staged {
+                if let Some(reason) = deny_reason(wt, path) {
+                    denied_paths.push(path.clone());
+                    skipped.push(SkippedFile {
                         path: path.clone(),
                         reason,
-                    })
-                })
-                .collect()
+                    });
+                }
+            }
+            if !denied_paths.is_empty() {
+                let args = restore_staged_args(wt, &denied_paths);
+                let out = repo_locks
+                    .run_serialized(repo_root, || cli::run(&args, CREATE_TIMEOUT))
+                    .map_err(ShipError::from)?;
+                if !out.success() {
+                    return Err(ShipError {
+                        kind: ShipErrorKind::Unknown,
+                        message: format!(
+                            "Failed To Unstage Denied Files Before Commit — Refusing To Ship: {}",
+                            out.stderr
+                        ),
+                        remedy: None,
+                    });
+                }
+            }
+            skipped
         }
     };
 
@@ -1020,13 +1195,30 @@ pub fn stage_and_commit(
         });
     }
 
-    let mut trailers = vec![format!("Swarm-Seq-Range: {seq_from}..{seq_to}")];
-    if let Some(co_author) = co_authored_by
-        && !co_author.trim().is_empty()
-    {
-        trailers.push(format!("Co-Authored-By: {}", co_author.trim()));
+    let mut trailers = Vec::new();
+    // DIRECTIVE (F10): never emit a degenerate range — `0..0` means
+    // "we truly have no seq data" (not "the range starts and ends at
+    // the beginning of the log"), and `seq_to < seq_from` can only mean
+    // a caller-side resolution bug. Either way, a trailer that lies
+    // about the range is worse than no trailer.
+    if !(seq_from == 0 && seq_to == 0) && seq_to >= seq_from {
+        trailers.push(format!("Swarm-Seq-Range: {seq_from}..{seq_to}"));
     }
-    let full_message = format!("{}\n\n{}", message.trim_end(), trailers.join("\n"));
+    if let Some(co_author) = co_authored_by {
+        let trimmed = co_author.trim();
+        // Single-line only: a config value with an embedded newline/CR
+        // could inject extra trailer-shaped lines (or corrupt the
+        // message) — drop the trailer entirely rather than sanitize it
+        // into something the user never actually configured.
+        if !trimmed.is_empty() && !trimmed.contains(['\n', '\r']) {
+            trailers.push(format!("Co-Authored-By: {trimmed}"));
+        }
+    }
+    let full_message = if trailers.is_empty() {
+        message.trim_end().to_string()
+    } else {
+        format!("{}\n\n{}", message.trim_end(), trailers.join("\n"))
+    };
 
     let args = commit_args(wt, &full_message);
     let out = repo_locks
@@ -1056,6 +1248,10 @@ pub fn stage_and_commit(
 #[serde(rename_all = "camelCase")]
 pub struct PushOutcome {
     pub pushed_ref: String,
+    /// `HEAD` sha at push time, resolved server-side (never trusted
+    /// from a caller-supplied value — see [`push`]'s doc on why this
+    /// enables pushing a commit `stage_and_commit` didn't just make).
+    pub sha: String,
 }
 
 fn classify_push_error(stderr: &str) -> ShipError {
@@ -1098,13 +1294,24 @@ fn classify_push_error(stderr: &str) -> ShipError {
 
 /// Pushes `origin <branch>` with `--set-upstream` — fixed argv, never
 /// force. Guarded by [`guard_not_primary_checkout`] as the literal
-/// first statement. The push itself runs under
+/// first statement. `branch` is resolved **live** via
+/// [`resolve_live_branch`], never the stored `WorkerHandle.branch` —
+/// see that function's doc for why. The push itself runs under
 /// `repo_locks.run_serialized`, same as [`stage_and_commit`]'s
 /// mutating calls.
+///
+/// Resolves `HEAD`'s sha itself (never a caller-supplied value) and
+/// returns it as `PushOutcome.sha` — this is what makes it safe to
+/// call `push` with **no** fresh commit from `stage_and_commit` in the
+/// same ship attempt: a worker that already has unpushed commits
+/// (`ShipPreflight.ahead > 0`, e.g. from an earlier "Commit Only") can
+/// go straight to `push`, and `push` will push and correctly report
+/// whatever `HEAD` actually is at that moment, not a stale value.
 ///
 /// # Errors
 ///
 /// * [`ShipErrorKind::PrimaryCheckout`] — the pre-mutation guard fired.
+/// * [`ShipErrorKind::InvalidBranch`] — detached `HEAD`.
 /// * [`ShipErrorKind::NoRemote`] — no `origin` remote configured.
 /// * [`ShipErrorKind::PushRejected`] / [`ShipErrorKind::AuthExpired`] /
 ///   [`ShipErrorKind::Timeout`] / [`ShipErrorKind::Unknown`] — the push
@@ -1119,6 +1326,7 @@ pub fn push(
     let repo_root = info.repo_root.as_path();
 
     guard_not_primary_checkout(wt)?;
+    let branch = resolve_live_branch(wt)?;
 
     if remote_url(wt, "origin").is_none() {
         return Err(ShipError {
@@ -1128,7 +1336,9 @@ pub fn push(
         });
     }
 
-    let args = push_args(wt, &info.branch);
+    let sha = super::repo::head_sha(wt).map_err(ShipError::from)?;
+
+    let args = push_args(wt, &branch);
     let out = repo_locks
         .run_serialized(repo_root, || cli::run(&args, CREATE_TIMEOUT))
         .map_err(ShipError::from)?;
@@ -1137,7 +1347,8 @@ pub fn push(
     }
 
     Ok(PushOutcome {
-        pushed_ref: format!("origin/{}", info.branch),
+        pushed_ref: format!("origin/{branch}"),
+        sha,
     })
 }
 
@@ -1145,9 +1356,18 @@ pub fn push(
 
 /// Builds the GitHub-style compare URL for `id`'s worktree, prefilled
 /// with `title`/`body` (capped per [`remote::MAX_COMPARE_URL_LEN`]).
+/// `branch` is resolved **live** via [`resolve_live_branch`], never
+/// the stored `WorkerHandle.branch` — same reasoning as [`push`].
+///
+/// The frontend is expected to pre-check `ShipPreflight.hostSupportsCompare`
+/// and disable the "Open Compare Page" action before ever calling this
+/// (leaving Commit Only / Commit + Push available) — this function's
+/// own [`ShipErrorKind::NonGitHubHost`] is the defensive fallback for
+/// a stale preflight, not the primary UX.
 ///
 /// # Errors
 ///
+/// * [`ShipErrorKind::InvalidBranch`] — detached `HEAD`.
 /// * [`ShipErrorKind::NoRemote`] — no `origin` remote configured.
 /// * [`ShipErrorKind::NonGitHubHost`] — the remote's host isn't one a
 ///   GitHub-style compare URL applies to.
@@ -1159,6 +1379,7 @@ pub fn compare_url(
 ) -> Result<String, ShipError> {
     let info = worktree_info_for_worker(registry, id)?;
     let wt = info.worktree_path.as_path();
+    let branch = resolve_live_branch(wt)?;
 
     let raw_remote = remote_url(wt, "origin").ok_or_else(|| ShipError {
         kind: ShipErrorKind::NoRemote,
@@ -1167,21 +1388,20 @@ pub fn compare_url(
     })?;
     let parsed = remote::parse(&raw_remote).ok_or_else(|| ShipError {
         kind: ShipErrorKind::NonGitHubHost,
-        message: "Could Not Parse The `origin` Remote URL.".to_string(),
+        message: "Could Not Parse The `origin` Remote URL Into A Compare Link.".to_string(),
         remedy: None,
     })?;
     if !remote::looks_like_github_host(&parsed.host) {
         return Err(ShipError {
             kind: ShipErrorKind::NonGitHubHost,
             message: format!(
-                "`{}` Doesn't Look Like A GitHub Host — Use Copy Push Command Instead.",
+                "`{}` Doesn't Look Like A GitHub Host — A Compare Link Can't Be Built For It.",
                 parsed.host
             ),
             remedy: None,
         });
     }
 
-    let branch = current_branch(wt).ok().flatten().unwrap_or(info.branch);
     Ok(remote::compare_url(
         &parsed,
         &info.base_branch,
@@ -1504,6 +1724,11 @@ mod tests {
         run_setup(&repo, &["init", "-b", "main"]);
         run_setup(&repo, &["config", "user.email", "swarm-test@example.com"]);
         run_setup(&repo, &["config", "user.name", "Swarm Test"]);
+        // Deterministic base_branch resolution regardless of the host
+        // machine's own global git config (see resolve_base_branch's
+        // fallback chain) — every test built on this fixture expects
+        // "main".
+        run_setup(&repo, &["config", "init.defaultBranch", "main"]);
         std::fs::write(repo.join("README.md"), "hello").unwrap();
         run_setup(&repo, &["add", "-A"]);
         run_setup(&repo, &["commit", "-m", "initial"]);
@@ -1758,7 +1983,8 @@ mod tests {
         let id = handle.id;
         registry.spawn_worker(handle).unwrap();
 
-        let result = preflight(&registry, id).expect("preflight itself must not error");
+        let result =
+            preflight(&registry, id, StagingMode::All).expect("preflight itself must not error");
         assert!(!result.can_ship);
         assert!(
             result
@@ -1787,6 +2013,10 @@ mod tests {
                 "https://github.com/example/repo.git",
             ],
         );
+        // A real, unshipped change — otherwise the F6 "Nothing To Ship"
+        // blocker correctly fires and this fixture would no longer be
+        // "healthy".
+        std::fs::write(worktree.join("new.txt"), "content").unwrap();
 
         let registry = WorkerRegistry::new();
         let handle = make_isolated_handle(
@@ -1797,10 +2027,552 @@ mod tests {
         let id = handle.id;
         registry.spawn_worker(handle).unwrap();
 
-        let result = preflight(&registry, id).unwrap();
+        let result = preflight(&registry, id, StagingMode::All).unwrap();
         assert!(result.can_ship, "blockers: {:?}", result.blockers);
         assert_eq!(result.base_branch, "main");
         assert_eq!(result.host.as_deref(), Some("github.com"));
+        assert!(result.host_supports_compare);
+
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn test_preflight_nothing_to_ship_blocker_when_clean_and_ahead_zero() {
+        let repo = setup_repo("preflight-nothing-to-ship");
+        let worktree = repo.parent().unwrap().join("wt");
+        let head = super::super::repo::head_sha(&repo).unwrap();
+        super::super::worktree::add(&repo, &worktree, "swarm/clean-abcd1234", &head).unwrap();
+        run_setup(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/example/repo.git",
+            ],
+        );
+        // No changes at all: clean tree, never diverged from base_commit.
+
+        let registry = WorkerRegistry::new();
+        let handle = make_isolated_handle(
+            &worktree.display().to_string(),
+            &repo.display().to_string(),
+            "swarm/clean-abcd1234",
+        );
+        let id = handle.id;
+        registry.spawn_worker(handle).unwrap();
+
+        let result = preflight(&registry, id, StagingMode::All).unwrap();
+        assert!(!result.can_ship);
+        assert!(
+            result
+                .blockers
+                .iter()
+                .any(|b| b.contains("Nothing To Ship"))
+        );
+
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    // ── B2: ahead-without-upstream fallback ──────────────────────────
+
+    #[test]
+    fn test_preflight_computes_ahead_from_base_commit_when_no_upstream() {
+        let repo = setup_repo("ahead-no-upstream");
+        let worktree = repo.parent().unwrap().join("wt");
+        let head = super::super::repo::head_sha(&repo).unwrap();
+        super::super::worktree::add(&repo, &worktree, "swarm/ahead-abcd1234", &head).unwrap();
+        run_setup(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/example/repo.git",
+            ],
+        );
+
+        // Two real commits in the worktree, never pushed — no upstream
+        // exists at all.
+        std::fs::write(worktree.join("a.txt"), "a").unwrap();
+        run_setup(&worktree, &["add", "-A"]);
+        run_setup(&worktree, &["commit", "-m", "first"]);
+        std::fs::write(worktree.join("b.txt"), "b").unwrap();
+        run_setup(&worktree, &["add", "-A"]);
+        run_setup(&worktree, &["commit", "-m", "second"]);
+
+        let registry = WorkerRegistry::new();
+        let mut handle = make_isolated_handle(
+            &worktree.display().to_string(),
+            &repo.display().to_string(),
+            "swarm/ahead-abcd1234",
+        );
+        // The real base sha — `make_isolated_handle`'s hardcoded
+        // "deadbeef" placeholder doesn't resolve in this repo, and
+        // `ahead_since_base` needs a real revision to diff against.
+        handle.base_commit = Some(head.clone());
+        let id = handle.id;
+        registry.spawn_worker(handle).unwrap();
+
+        let result = preflight(&registry, id, StagingMode::All).unwrap();
+        assert_eq!(result.upstream, None);
+        assert_eq!(result.ahead, 2);
+        assert_eq!(result.behind, 0);
+        // A clean tree with ahead > 0 must NOT trip the Nothing-To-Ship
+        // blocker.
+        assert!(
+            !result
+                .blockers
+                .iter()
+                .any(|b| b.contains("Nothing To Ship"))
+        );
+
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    // ── B2: stranded-commit recovery (push with no fresh commit) ─────
+
+    #[test]
+    fn test_push_resolves_and_pushes_existing_head_with_no_prior_stage_and_commit_call() {
+        let base = std::env::temp_dir().join(format!("swarm-ship-stranded-{}", Uuid::new_v4()));
+        let bare = base.join("origin.git");
+        let repo = base.join("repo");
+        let worktree = base.join("wt");
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+
+        run_setup(&bare, &["init", "--bare", "-b", "main"]);
+        run_setup(&repo, &["init", "-b", "main"]);
+        run_setup(&repo, &["config", "user.email", "swarm-test@example.com"]);
+        run_setup(&repo, &["config", "user.name", "Swarm Test"]);
+        std::fs::write(repo.join("README.md"), "hello").unwrap();
+        run_setup(&repo, &["add", "-A"]);
+        run_setup(&repo, &["commit", "-m", "initial"]);
+        run_setup(
+            &repo,
+            &["remote", "add", "origin", &bare.display().to_string()],
+        );
+        run_setup(&repo, &["push", "origin", "main"]);
+
+        let head = super::super::repo::head_sha(&repo).unwrap();
+        super::super::worktree::add(&repo, &worktree, "swarm/stranded-abcd1234", &head).unwrap();
+
+        // Simulates "Commit Only" having already happened in a prior
+        // ship attempt: a real commit exists in the worktree, but
+        // stage_and_commit is never called again — push() alone must
+        // still be able to push it.
+        std::fs::write(worktree.join("feature.txt"), "already committed").unwrap();
+        run_setup(&worktree, &["add", "-A"]);
+        run_setup(&worktree, &["commit", "-m", "feat: prior commit-only"]);
+        let expected_sha = super::super::repo::head_sha(&worktree).unwrap();
+
+        let registry = WorkerRegistry::new();
+        let repo_locks = RepoLocks::new();
+        let handle = make_isolated_handle(
+            &worktree.display().to_string(),
+            &repo.display().to_string(),
+            "swarm/stranded-abcd1234",
+        );
+        let id = handle.id;
+        registry.spawn_worker(handle).unwrap();
+
+        let outcome = push(&registry, &repo_locks, id).expect("push should succeed");
+        assert_eq!(outcome.sha, expected_sha);
+        assert_eq!(outcome.pushed_ref, "origin/swarm/stranded-abcd1234");
+
+        let bare_tip = super::super::repo::rev_parse(&bare, "swarm/stranded-abcd1234").unwrap();
+        assert_eq!(bare_tip, expected_sha);
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    // ── F8: push/compare resolve the LIVE branch, never a stale stored one ──
+
+    #[test]
+    fn test_push_uses_live_branch_not_stale_stored_handle_branch() {
+        let base = std::env::temp_dir().join(format!("swarm-ship-live-branch-{}", Uuid::new_v4()));
+        let bare = base.join("origin.git");
+        let repo = base.join("repo");
+        let worktree = base.join("wt");
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+
+        run_setup(&bare, &["init", "--bare", "-b", "main"]);
+        run_setup(&repo, &["init", "-b", "main"]);
+        run_setup(&repo, &["config", "user.email", "swarm-test@example.com"]);
+        run_setup(&repo, &["config", "user.name", "Swarm Test"]);
+        std::fs::write(repo.join("README.md"), "hello").unwrap();
+        run_setup(&repo, &["add", "-A"]);
+        run_setup(&repo, &["commit", "-m", "initial"]);
+        run_setup(
+            &repo,
+            &["remote", "add", "origin", &bare.display().to_string()],
+        );
+        run_setup(&repo, &["push", "origin", "main"]);
+
+        let head = super::super::repo::head_sha(&repo).unwrap();
+        super::super::worktree::add(&repo, &worktree, "swarm/original-abcd1234", &head).unwrap();
+        // The worktree's actual checked-out branch is renamed after
+        // creation — the stored WorkerHandle.branch ("swarm/original-abcd1234")
+        // is now stale.
+        run_setup(&worktree, &["branch", "-m", "swarm/renamed-abcd1234"]);
+        std::fs::write(worktree.join("feature.txt"), "work").unwrap();
+        run_setup(&worktree, &["add", "-A"]);
+        run_setup(&worktree, &["commit", "-m", "feat: work"]);
+
+        let registry = WorkerRegistry::new();
+        let repo_locks = RepoLocks::new();
+        let handle = make_isolated_handle(
+            &worktree.display().to_string(),
+            &repo.display().to_string(),
+            "swarm/original-abcd1234", // stale
+        );
+        let id = handle.id;
+        registry.spawn_worker(handle).unwrap();
+
+        let outcome = push(&registry, &repo_locks, id).expect("push should succeed");
+        assert_eq!(outcome.pushed_ref, "origin/swarm/renamed-abcd1234");
+
+        // The bare repo must have the RENAMED branch, not the stale one.
+        assert!(
+            super::super::repo::rev_parse(&bare, "swarm/renamed-abcd1234").is_ok(),
+            "expected the live (renamed) branch to have been pushed"
+        );
+        assert!(
+            super::super::repo::rev_parse(&bare, "swarm/original-abcd1234").is_err(),
+            "the stale stored branch name must never have been pushed"
+        );
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn test_push_hard_fails_on_detached_head() {
+        let repo = setup_repo("push-detached");
+        let worktree = repo.parent().unwrap().join("wt");
+        let head = super::super::repo::head_sha(&repo).unwrap();
+        super::super::worktree::add(&repo, &worktree, "swarm/detached-abcd1234", &head).unwrap();
+        let wt_head = super::super::repo::head_sha(&worktree).unwrap();
+        run_setup(&worktree, &["checkout", "--detach", &wt_head]);
+
+        let registry = WorkerRegistry::new();
+        let repo_locks = RepoLocks::new();
+        let handle = make_isolated_handle(
+            &worktree.display().to_string(),
+            &repo.display().to_string(),
+            "swarm/detached-abcd1234",
+        );
+        let id = handle.id;
+        registry.spawn_worker(handle).unwrap();
+
+        let err = push(&registry, &repo_locks, id).unwrap_err();
+        assert_eq!(err.kind, ShipErrorKind::InvalidBranch);
+
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    // ── F9: base_branch resolution order ─────────────────────────────
+
+    #[test]
+    fn test_resolve_base_branch_uses_origin_head_over_local_checkout() {
+        let base =
+            std::env::temp_dir().join(format!("swarm-base-branch-origin-{}", Uuid::new_v4()));
+        let bare = base.join("origin.git");
+        let local = base.join("local");
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::create_dir_all(&local).unwrap();
+
+        run_setup(&bare, &["init", "--bare", "-b", "master"]);
+
+        run_setup(&local, &["init", "-b", "master"]);
+        run_setup(&local, &["config", "user.email", "swarm-test@example.com"]);
+        run_setup(&local, &["config", "user.name", "Swarm Test"]);
+        std::fs::write(local.join("README.md"), "hello").unwrap();
+        run_setup(&local, &["add", "-A"]);
+        run_setup(&local, &["commit", "-m", "initial"]);
+        run_setup(
+            &local,
+            &["remote", "add", "origin", &bare.display().to_string()],
+        );
+        run_setup(&local, &["push", "origin", "master"]);
+        run_setup(&local, &["fetch", "origin"]);
+        run_setup(&local, &["remote", "set-head", "origin", "-a"]);
+
+        // The LOCAL checkout is on a different branch than origin's
+        // default — resolve_base_branch must report origin's ("master"),
+        // never the local checkout's current branch.
+        run_setup(&local, &["checkout", "-b", "some-feature-branch"]);
+
+        assert_eq!(resolve_base_branch(&local), "master");
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn test_resolve_base_branch_falls_back_to_configured_default_branch() {
+        let repo = setup_repo("base-branch-config-fallback");
+        // No origin/HEAD exists at all (no remote). Overwrite the
+        // deterministic "main" setup_repo already applied, to a
+        // distinct value neither matching the repo's real current
+        // branch nor the literal "main" fallback, to prove this really
+        // is the config value being read.
+        run_setup(&repo, &["config", "init.defaultBranch", "trunk"]);
+        assert_eq!(resolve_base_branch(&repo), "trunk");
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    /// Pure decision-logic test (see `choose_base_branch`'s doc for why
+    /// this isn't a real-git round trip): with neither `origin/HEAD`
+    /// nor a configured default present, the literal `"main"` fallback
+    /// applies — independent of whatever the *host machine's own*
+    /// global git config happens to have set.
+    #[test]
+    fn test_choose_base_branch_falls_back_to_main_literal_when_neither_source_is_set() {
+        assert_eq!(choose_base_branch(None, None), "main");
+    }
+
+    #[test]
+    fn test_choose_base_branch_prefers_origin_head_over_configured_default() {
+        assert_eq!(
+            choose_base_branch(Some("master".to_string()), Some("trunk".to_string())),
+            "master"
+        );
+    }
+
+    #[test]
+    fn test_choose_base_branch_uses_configured_default_when_origin_head_absent() {
+        assert_eq!(choose_base_branch(None, Some("trunk".to_string())), "trunk");
+    }
+
+    // ── F14: deny-list "secret" matches the full path, not just basename ──
+
+    #[test]
+    fn test_deny_reason_secret_matches_nested_directory_not_just_basename() {
+        let tmp = std::env::temp_dir().join(format!("swarm-deny-nested-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(tmp.join("config/secrets")).unwrap();
+        std::fs::write(tmp.join("config/secrets/api.yaml"), "key: x").unwrap();
+        assert!(
+            deny_reason(&tmp, "config/secrets/api.yaml").is_some(),
+            "a path with 'secret' in a directory segment must be denied even though the basename doesn't mention it"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── B3: staged mode actually enforces the deny list (unstages, not just reports) ──
+
+    #[tokio::test]
+    async fn test_staged_mode_unstages_and_omits_denied_secret_from_the_commit() {
+        let repo = setup_repo("staged-mode-secret");
+        let worktree = repo.parent().unwrap().join("wt");
+        let head = super::super::repo::head_sha(&repo).unwrap();
+        super::super::worktree::add(&repo, &worktree, "swarm/staged-secret-abcd1234", &head)
+            .unwrap();
+
+        std::fs::write(worktree.join(".env"), "API_KEY=leak").unwrap();
+        std::fs::write(worktree.join("safe.txt"), "fine").unwrap();
+        run_setup(&worktree, &["add", "-A"]); // pre-stages BOTH files, like a human's own `git add .`
+
+        let registry = WorkerRegistry::new();
+        let repo_locks = RepoLocks::new();
+        let handle = make_isolated_handle(
+            &worktree.display().to_string(),
+            &repo.display().to_string(),
+            "swarm/staged-secret-abcd1234",
+        );
+        let id = handle.id;
+        registry.spawn_worker(handle).unwrap();
+
+        let outcome = stage_and_commit(
+            &registry,
+            &repo_locks,
+            id,
+            "chore: staged mode commit",
+            StagingMode::Staged,
+            0,
+            1,
+            None,
+        )
+        .expect("commit of the surviving staged file should succeed");
+
+        assert_eq!(outcome.skipped.len(), 1);
+        assert_eq!(outcome.skipped[0].path, ".env");
+
+        // The secret must be unstaged (not merely reported) ...
+        let status = status_porcelain(&worktree).unwrap();
+        let (staged_after, _, untracked_after) = classify_status(&status);
+        assert!(
+            !staged_after.contains(&".env".to_string()),
+            "the denied file must have been unstaged before commit, not left staged"
+        );
+        // ... and physically absent from the commit itself.
+        let show = cli::run(
+            &{
+                let mut a = base_args(&repo);
+                a.extend(
+                    ["show", "--name-only", "--format=", &outcome.sha]
+                        .iter()
+                        .map(|s| s.to_string()),
+                );
+                a
+            },
+            READ_TIMEOUT,
+        )
+        .unwrap();
+        assert!(!show.stdout.contains(".env"));
+        assert!(show.stdout.contains("safe.txt"));
+
+        // The file itself still exists on disk, just untracked again —
+        // "restore --staged" never touches the working-tree copy.
+        assert!(worktree.join(".env").exists());
+        assert!(untracked_after.contains(&".env".to_string()));
+
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    // ── F10: degenerate Swarm-Seq-Range trailer is omitted ────────────
+
+    #[tokio::test]
+    async fn test_degenerate_seq_range_omits_the_trailer_entirely() {
+        let repo = setup_repo("degenerate-seq-range");
+        let worktree = repo.parent().unwrap().join("wt");
+        let head = super::super::repo::head_sha(&repo).unwrap();
+        super::super::worktree::add(&repo, &worktree, "swarm/degenerate-abcd1234", &head).unwrap();
+        std::fs::write(worktree.join("a.txt"), "a").unwrap();
+
+        let registry = WorkerRegistry::new();
+        let repo_locks = RepoLocks::new();
+        let handle = make_isolated_handle(
+            &worktree.display().to_string(),
+            &repo.display().to_string(),
+            "swarm/degenerate-abcd1234",
+        );
+        let id = handle.id;
+        registry.spawn_worker(handle).unwrap();
+
+        // seq_from == seq_to == 0: "unknown" range, must be omitted.
+        let outcome = stage_and_commit(
+            &registry,
+            &repo_locks,
+            id,
+            "feat: unknown range",
+            StagingMode::All,
+            0,
+            0,
+            None,
+        )
+        .unwrap();
+        let show = cli::run(
+            &{
+                let mut a = base_args(&worktree);
+                a.extend(
+                    ["show", "-s", "--format=%B", &outcome.sha]
+                        .iter()
+                        .map(|s| s.to_string()),
+                );
+                a
+            },
+            READ_TIMEOUT,
+        )
+        .unwrap();
+        assert!(!show.stdout.contains("Swarm-Seq-Range"));
+
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    #[tokio::test]
+    async fn test_valid_seq_range_is_included_in_the_trailer() {
+        let repo = setup_repo("valid-seq-range");
+        let worktree = repo.parent().unwrap().join("wt");
+        let head = super::super::repo::head_sha(&repo).unwrap();
+        super::super::worktree::add(&repo, &worktree, "swarm/valid-range-abcd1234", &head).unwrap();
+        std::fs::write(worktree.join("a.txt"), "a").unwrap();
+
+        let registry = WorkerRegistry::new();
+        let repo_locks = RepoLocks::new();
+        let handle = make_isolated_handle(
+            &worktree.display().to_string(),
+            &repo.display().to_string(),
+            "swarm/valid-range-abcd1234",
+        );
+        let id = handle.id;
+        registry.spawn_worker(handle).unwrap();
+
+        let outcome = stage_and_commit(
+            &registry,
+            &repo_locks,
+            id,
+            "feat: valid range",
+            StagingMode::All,
+            5,
+            12,
+            None,
+        )
+        .unwrap();
+        let show = cli::run(
+            &{
+                let mut a = base_args(&worktree);
+                a.extend(
+                    ["show", "-s", "--format=%B", &outcome.sha]
+                        .iter()
+                        .map(|s| s.to_string()),
+                );
+                a
+            },
+            READ_TIMEOUT,
+        )
+        .unwrap();
+        assert!(show.stdout.contains("Swarm-Seq-Range: 5..12"));
+
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    // ── nit: Co-Authored-By trim + reject embedded newlines ───────────
+
+    #[tokio::test]
+    async fn test_co_authored_by_with_embedded_newline_is_dropped_not_injected() {
+        let repo = setup_repo("co-author-newline");
+        let worktree = repo.parent().unwrap().join("wt");
+        let head = super::super::repo::head_sha(&repo).unwrap();
+        super::super::worktree::add(&repo, &worktree, "swarm/co-author-abcd1234", &head).unwrap();
+        std::fs::write(worktree.join("a.txt"), "a").unwrap();
+
+        let registry = WorkerRegistry::new();
+        let repo_locks = RepoLocks::new();
+        let handle = make_isolated_handle(
+            &worktree.display().to_string(),
+            &repo.display().to_string(),
+            "swarm/co-author-abcd1234",
+        );
+        let id = handle.id;
+        registry.spawn_worker(handle).unwrap();
+
+        let outcome = stage_and_commit(
+            &registry,
+            &repo_locks,
+            id,
+            "feat: co-author injection attempt",
+            StagingMode::All,
+            1,
+            2,
+            Some("Evil <evil@example.com>\nSwarm-Seq-Range: 999..999"),
+        )
+        .unwrap();
+        let show = cli::run(
+            &{
+                let mut a = base_args(&worktree);
+                a.extend(
+                    ["show", "-s", "--format=%B", &outcome.sha]
+                        .iter()
+                        .map(|s| s.to_string()),
+                );
+                a
+            },
+            READ_TIMEOUT,
+        )
+        .unwrap();
+        assert!(!show.stdout.contains("Evil"));
+        assert!(!show.stdout.contains("999..999"));
+        // The real, legitimate trailer must still be present.
+        assert!(show.stdout.contains("Swarm-Seq-Range: 1..2"));
 
         std::fs::remove_dir_all(repo.parent().unwrap()).ok();
     }

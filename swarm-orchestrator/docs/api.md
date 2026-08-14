@@ -362,48 +362,48 @@ The ship chain turns a worker's finished work into a real commit, a real upstrea
 
 ### `git_ship_preflight`
 
-Computes the full ship preflight for a worker's worktree: branch/remote/tracking state, working-tree status, the secret/size deny-list preview, and the `canShip`/`blockers` verdict. Read-only -- never mutates the working tree, emits no events.
+Computes the full ship preflight for a worker's worktree, evaluated for `mode` (defaults to `"all"` when omitted): branch/remote/tracking state, working-tree status, the deny-list preview (mode-aware -- a `"staged"` preview reflects only the index, matching what `git_stage_commit` would actually commit for that mode), and the `canShip`/`blockers` verdict. Read-only -- never mutates the working tree, emits no events.
 
-**Refuses (via non-fatal `blockers`, `canShip: false` when any is present) rather than erroring:** toplevel mismatch (the worktree path no longer resolves to itself), primary checkout (`--git-common-dir == --git-dir`), detached `HEAD`, `branch == baseBranch`, a protected branch (`main`/`master`/`develop`/`release/*`), missing `origin` remote.
+**Refuses (via non-fatal `blockers`, `canShip: false` when any is present) rather than erroring:** toplevel mismatch (the worktree path no longer resolves to itself), primary checkout (`--git-common-dir == --git-dir`), detached `HEAD`, `branch == baseBranch`, a protected branch (`main`/`master`/`develop`/`release/*`), missing `origin` remote, or nothing to ship at all (clean working tree **and** `ahead == 0`).
 
 **Parameters:**
 
 | Name       | Type     | Required | Description         |
 |------------|----------|----------|----------------------|
 | `workerId` | `string` | Yes      | UUID of the worker    |
+| `mode`     | `"all" \| "staged"` | No | Staging mode to evaluate the preview for. Defaults to `"all"` |
 
 **Returns:** `ShipPreflight`
 
 **`ShipPreflight` object:**
 
-| Field        | Type               | Description                                                          |
-|--------------|--------------------|--------------------------------------------------------------------------|
-| `workerId`   | `string` (UUID)    | The worker this preflight was computed for                                |
-| `branch`     | `string`           | Current branch checked out in the worktree                                |
-| `baseBranch` | `string`           | Branch the worktree's isolation branch forked from (best-effort: the primary checkout's current branch) |
-| `remote`     | `string \| null`   | `origin`'s URL, redacted (see `swarm_core::git::redact`)                   |
-| `host`       | `string \| null`   | Host parsed from `remote` (e.g. `"github.com"`)                           |
-| `upstream`   | `string \| null`   | Tracking ref (e.g. `"origin/swarm/x"`) -- `null` means no upstream yet, not an error |
-| `ahead`      | `number`           | Commits ahead of `upstream`                                               |
-| `behind`     | `number`           | Commits behind `upstream`                                                 |
-| `staged`     | `string[]`         | Paths with staged changes                                                 |
-| `unstaged`   | `string[]`         | Paths with unstaged changes                                               |
-| `untracked`  | `string[]`         | Untracked paths                                                           |
-| `skipped`    | `SkippedFile[]`    | Deny-list preview -- see below                                            |
-| `diffStat`   | `DiffStat`         | `{ filesChanged, insertions, deletions }` estimate over the deny-filtered survivor set |
-| `ghAvailable`| `boolean`          | Whether a `gh` binary was found (informational in Phase 1 -- PR creation is Phase 3) |
-| `ghAuthed`   | `boolean`          | Whether `gh auth status` succeeded                                        |
-| `canShip`    | `boolean`          | `true` only when `blockers` is empty                                      |
-| `blockers`   | `string[]`         | Title Case reasons `canShip` is `false`                                   |
+| Field                 | Type               | Description                                                          |
+|-----------------------|--------------------|--------------------------------------------------------------------------|
+| `workerId`            | `string` (UUID)    | The worker this preflight was computed for                                |
+| `branch`              | `string`           | Current branch checked out in the worktree                                |
+| `baseBranch`          | `string`           | The remote's default branch (`origin/HEAD`, stripped of the `origin/` prefix) -> falls back to the repo's `init.defaultBranch` config -> falls back to `"main"`. **Never** the primary checkout's current `HEAD` -- a human can have any branch checked out there at any time |
+| `remote`              | `string \| null`   | `origin`'s URL, redacted (see `swarm_core::git::redact`)                   |
+| `host`                | `string \| null`   | Host parsed from `remote` (e.g. `"github.com"`)                           |
+| `hostSupportsCompare` | `boolean`          | Whether `host` looks like GitHub/GHES -- the frontend disables *only* the "Open Compare Page" action when `false`, Commit Only / Commit + Push stay available |
+| `upstream`            | `string \| null`   | Tracking ref (e.g. `"origin/swarm/x"`) -- `null` means no upstream yet, not an error |
+| `ahead`               | `number`           | Commits ahead of `upstream`; when there's no upstream yet, a fallback count of commits reachable from `HEAD` but not from the worktree's recorded base commit |
+| `behind`              | `number`           | Commits behind `upstream` (`0` when there's no upstream -- there's nothing to be behind) |
+| `staged`              | `string[]`         | Paths with staged changes                                                 |
+| `unstaged`            | `string[]`         | Paths with unstaged changes                                               |
+| `untracked`           | `string[]`         | Untracked paths                                                           |
+| `skipped`             | `SkippedFile[]`    | Deny-list preview for `mode` -- see below                                 |
+| `diffStat`            | `DiffStat`         | `{ filesChanged, insertions, deletions }` estimate over the deny-filtered survivor set for `mode` |
+| `canShip`             | `boolean`          | `true` only when `blockers` is empty                                      |
+| `blockers`            | `string[]`         | Title Case reasons `canShip` is `false`                                   |
 
-**`SkippedFile` object:** `{ path: string, reason: string }` -- `reason` is one of `"Skipped — Looks Like A Credential"` or `"Skipped — Larger Than 5 MB"`, from the secret/size deny list: `.env*`, `*.pem`, `*.key`, `id_rsa*`, `*secret*` (case-insensitive), or any file larger than 5MB.
+**`SkippedFile` object:** `{ path: string, reason: string }` -- `reason` is one of `"Skipped — Looks Like A Credential"` or `"Skipped — Larger Than 5 MB"`, from the secret/size deny list: `.env*`, `*.pem`, `*.key`, `id_rsa*` (matched against the filename), or a `secret` substring anywhere in the full relative path (case-insensitive -- catches a nested `config/secrets/api.yaml` even though its own filename doesn't mention "secret"), or any file larger than 5MB.
 
 **Errors:** `ShipError` with kind `workerNotFound` (no worker with `workerId`) or `noWorktree` (the worker exists but was spawned without worktree isolation).
 
 **Example:**
 
 ```typescript
-const preflight = await invoke("git_ship_preflight", { workerId });
+const preflight = await invoke("git_ship_preflight", { workerId, mode: "all" });
 if (!preflight.canShip) {
   console.warn("Ship blocked:", preflight.blockers);
 }
@@ -413,9 +413,11 @@ if (!preflight.canShip) {
 
 ### `git_stage_commit`
 
-Stages changed files (per `mode`) and commits, appending a `Swarm-Seq-Range: <seqFrom>..<seqTo>` trailer (and, when the `shipCoAuthoredBy` config key is set, a `Co-Authored-By:` trailer) to the message. `--no-verify` is not constructible anywhere in the argv builder -- hooks always run.
+Stages changed files (per `mode`) and commits, appending a `Swarm-Seq-Range: <seqFrom>..<seqTo>` trailer -- **omitted entirely** when the range is unknown (`seqFrom == 0 && seqTo == 0`) or degenerate (`seqTo < seqFrom`), never emitted as a lying `0..0` -- and, when the `shipCoAuthoredBy` config key is set to a trimmed, single-line (no embedded `\n`/`\r`) value, a `Co-Authored-By:` trailer. `--no-verify` is not constructible anywhere in the argv builder -- hooks always run.
 
-Emits `ship_progress` for the `"staging"` then `"commit"` step, `commit_created` on success, and -- only when `finalStep` is `true` (the "Commit Only" action) or the commit failed -- the terminal `ship_settled` receipt.
+In `mode: "staged"`, the deny list is **enforced**, not just previewed: any denied path already in the index is unstaged via `git restore --staged` (under the same per-repo serialization as every other mutation) before the commit runs; if the unstage itself fails, the commit is hard-aborted with a truthful error rather than risk committing the secret anyway.
+
+Emits `ship_progress` for the `"staging"` then `"commit"` step, `commit_created` on success, and the terminal `ship_settled` receipt -- **except** when the failure is `nothingToCommit`, which is not automatically terminal (see [`git_push`](#git_push) below): the frontend may recover by pushing an already-committed, unpushed change instead of treating this as the end of the ship attempt.
 
 **Parameters:**
 
@@ -424,7 +426,7 @@ Emits `ship_progress` for the `"staging"` then `"commit"` step, `commit_created`
 | `workerId`  | `string`        | Yes      | UUID of the worker                                        |
 | `shipId`    | `string`        | Yes      | Correlation ID for this ship attempt (client-generated, e.g. `crypto.randomUUID()`) |
 | `message`   | `string`        | Yes      | Commit message (before trailers are appended)              |
-| `mode`      | `"all" \| "staged"` | Yes | `"all"`: stage every changed file minus the deny list (`git add -- <survivors>`, never `-A`). `"staged"`: commit exactly what's already in the index (offered when preflight shows a pre-staged index) |
+| `mode`      | `"all" \| "staged"` | Yes | `"all"`: stage every changed file minus the deny list (`git add -- <survivors>`, never `-A`). `"staged"`: commit the index, with denied paths actively unstaged first (see above) |
 | `finalStep` | `boolean`       | Yes      | `true` for "Commit Only" (no push/compare follows)          |
 
 **Returns:** `CommitOutcome`
@@ -437,18 +439,20 @@ Emits `ship_progress` for the `"staging"` then `"commit"` step, `commit_created`
 | `filesChanged`| `number`        | From `git show --numstat` on the actual commit    |
 | `insertions`  | `number`        |                                                    |
 | `deletions`   | `number`        |                                                    |
-| `seqFrom`     | `number`        | Start of the `Swarm-Seq-Range` trailer             |
+| `seqFrom`     | `number`        | Start of the `Swarm-Seq-Range` trailer (the values used even when the trailer itself was omitted) |
 | `seqTo`       | `number`        | End of the `Swarm-Seq-Range` trailer               |
-| `skipped`     | `SkippedFile[]` | Files the deny list caught                         |
+| `skipped`     | `SkippedFile[]` | Files the deny list caught (and, in `"staged"` mode, actively unstaged)  |
 
-**`seqFrom`/`seqTo` resolution:** `seqFrom` is the worker's `lastShippedSeq` if it has shipped before, else its `worktree_created` event's own `seq` (recovered by a full log scan, since the single-writer engine assigns that `seq` asynchronously after `worktree_created` is emitted -- it can't be a synchronous field on `WorkerHandle`), else `0`. `seqTo` is the log's current max `seq`, snapshotted *before* the commit -- the `commit_created` event's own `seq` is always `> seqTo`, correctly excluding "the record of shipping" from the range it describes.
+**`seqFrom`/`seqTo` resolution:** `seqFrom` is the worker's `lastShippedSeq` if it has shipped before (session-scoped -- see the note below), else its `worktree_created` event's own `seq` (an indexed lookup against the event log), else `0`. `seqTo` is the log's current max `seq`, snapshotted *before* the commit -- the `commit_created` event's own `seq` is always `> seqTo`, correctly excluding "the record of shipping" from the range it describes.
+
+**`lastShippedSeq` is session-scoped in Phase 1.** It lives only on the in-memory `WorkerHandle`, never persisted to disk -- an app restart loses it. The next ship after a restart falls back to the (indexed, cheap) `worktree_created` lookup instead, which re-covers the worktree's *entire* lifetime in the new commit's `Swarm-Seq-Range` trailer rather than just the range since the last real ship. This is harmless: the trailer is provenance metadata for a future causal query, not something Phase 1 itself reads back. Durable `lastShippedSeq` persistence is deferred to the provenance phase.
 
 **Errors:**
 
 | Error kind          | Condition                                                                   |
 |----------------------|------------------------------------------------------------------------------|
 | `primaryCheckout`    | The pre-mutation guard fired -- see [Ship Commands](#ship-commands)'s ownership-split note |
-| `nothingToCommit`    | Every candidate file was skipped by the deny list, or (mode `"staged"`) the index is empty |
+| `nothingToCommit`    | Every candidate file was skipped by the deny list, or (mode `"staged"`) the index is empty after unstaging denied paths -- **not automatically terminal**, see above |
 | `identityMissing`    | `git commit` failed because `user.name`/`user.email` aren't set (remedy `configureIdentity`) |
 | `hookFailed`         | `git commit` was rejected -- most plausibly a pre-commit/commit-msg hook, since `--no-verify` is never constructible |
 
@@ -471,7 +475,9 @@ console.log("Committed:", outcome.sha, "skipped:", outcome.skipped);
 
 ### `git_push`
 
-Pushes the worker's branch: `git push --set-upstream origin <branch>` -- **fixed argv**, no force token constructible anywhere in the argv builder (`--force`/`-f`/`--force-with-lease` cannot be reached). On success, records `lastShippedSeq`/`lastShippedCommit` for the worker via `WorkerRegistry::set_last_shipped` -- the ship chain is the only writer of those two fields.
+Pushes the worker's branch: `git push --set-upstream origin <branch>` -- **fixed argv**, no force token constructible anywhere in the argv builder (`--force`/`-f`/`--force-with-lease` cannot be reached). Both the branch and the sha pushed are resolved **live**, server-side, at push time -- this command takes **no** commit sha from the caller at all. On success, records `lastShippedSeq`/`lastShippedCommit` for the worker via `WorkerRegistry::set_last_shipped` -- the ship chain is the only writer of those two fields.
+
+**This is what lets a worker with already-committed, unpushed work go straight to `git_push`.** If `git_stage_commit` fails with `nothingToCommit` but `ShipPreflight.ahead > 0` (e.g. an earlier "Commit Only" already committed real work that was never pushed), the frontend calls `git_push` directly -- no fresh commit is required, because this command resolves whatever `HEAD` already is, live, rather than trusting a value from a preceding `git_stage_commit` call.
 
 Emits `ship_progress` for the `"push"` step, and -- when `finalStep` is `true` (the "Commit + Push" action) or the push failed -- the terminal `ship_settled` receipt.
 
@@ -480,18 +486,17 @@ Emits `ship_progress` for the `"push"` step, and -- when `finalStep` is `true` (
 | Name        | Type      | Required | Description                                                      |
 |-------------|-----------|----------|--------------------------------------------------------------------|
 | `workerId`  | `string`  | Yes      | UUID of the worker                                                   |
-| `shipId`    | `string`  | Yes      | Correlation ID matching the preceding `git_stage_commit` call         |
-| `commitSha` | `string`  | Yes      | The sha from `git_stage_commit`'s `CommitOutcome` -- recorded as `lastShippedCommit` on success |
-| `seqTo`     | `number`  | Yes      | The `seqTo` from `git_stage_commit`'s `CommitOutcome` -- recorded as `lastShippedSeq` on success |
+| `shipId`    | `string`  | Yes      | Correlation ID matching the preceding `git_stage_commit` call (if any) |
 | `finalStep` | `boolean` | Yes      | `true` for "Commit + Push" (no compare-page step follows)             |
 
-**Returns:** `PushOutcome` -- `{ pushedRef: string }` (e.g. `"origin/swarm/agent-abcd1234"`).
+**Returns:** `PushOutcome` -- `{ pushedRef: string, sha: string }` (e.g. `{ pushedRef: "origin/swarm/agent-abcd1234", sha: "..." }`). `sha` is `HEAD` at push time, resolved server-side.
 
 **Errors:**
 
 | Error kind       | Condition                                                              | Remedy            |
 |-------------------|--------------------------------------------------------------------------|--------------------|
 | `primaryCheckout` | The pre-mutation guard fired                                              | --                 |
+| `invalidBranch`   | Detached `HEAD` -- resolved live, the same check `git_ship_preflight` uses | --                 |
 | `noRemote`        | No `origin` remote configured                                             | --                 |
 | `pushRejected`    | Non-fast-forward rejection -- `origin` has commits the local branch doesn't | `fetchAndRebase` (`git pull --rebase`, re-preview, ship again -- **never** an automatic force-push) |
 | `authExpired`     | Authentication failed (expired/missing credentials, `GIT_TERMINAL_PROMPT=0` surfacing what would have been an interactive prompt) | `reAuthenticate`  |
@@ -501,14 +506,8 @@ Emits `ship_progress` for the `"push"` step, and -- when `finalStep` is `true` (
 
 ```typescript
 try {
-  const push = await invoke("git_push", {
-    workerId,
-    shipId,
-    commitSha: outcome.sha,
-    seqTo: outcome.seqTo,
-    finalStep: true,
-  });
-  console.log("Pushed:", push.pushedRef);
+  const push = await invoke("git_push", { workerId, shipId, finalStep: true });
+  console.log("Pushed:", push.pushedRef, push.sha);
 } catch (err) {
   // err is a ShipError object: { kind, message, remedy }
   if (err.kind === "pushRejected") {
@@ -517,13 +516,17 @@ try {
 }
 ```
 
-**Emits:** `ship_progress` (`step: "push"`), and (conditionally) `ship_settled` with `pushedRef` set.
+**Emits:** `ship_progress` (`step: "push"`), and (conditionally) `ship_settled` with `commitSha`/`pushedRef` set.
+
+**Client-side timeout discipline:** the frontend's own receipt wait (`waitFor("ship_settled", ...)` in `useShip.ts`) must use an explicit budget of at least 30 seconds -- the backend's own git timeout for a mutating call (`CREATE_TIMEOUT` in `git/cli.rs`) is 20 seconds, and `waitFor`'s library default (5 seconds) is well short of that. A push that legitimately takes 5-20s (a slow remote, a large object) must never be reported as "failed" by a frontend timeout that fires before the backend's own.
 
 ---
 
 ### `ship_compare_url`
 
-Builds the GitHub-style compare URL for a worker's worktree, prefilled with a PR title/body via `quick_pull=1` query parameters, capped at 6000 total characters (the body is truncated with a visible marker first if needed -- the title and the compare path itself are never truncated). Supports `https`/`ssh`/GHES remote URL shapes; a non-GitHub-shaped host (`gitlab.com`, `bitbucket.org`, etc.) is rejected rather than producing a broken URL.
+Builds the GitHub-style compare URL for a worker's worktree, prefilled with a PR title/body via `quick_pull=1` query parameters, capped at 6000 total characters. If the untruncated URL would exceed the cap, `body` is shortened first (with a visible truncation marker); if even an *empty* body still doesn't fit, `title` is clamped too as a last resort -- only the compare path itself (host/owner/repo/base/branch) is never truncated. The branch is resolved **live** (same as [`git_push`](#git_push), never a stale stored value). Supports `https`/`ssh`/GHES remote URL shapes; a non-GitHub-shaped host (`gitlab.com`, `bitbucket.org`, etc.) is rejected rather than producing a broken URL.
+
+The frontend is expected to pre-check `ShipPreflight.hostSupportsCompare` and disable the "Open Compare Page" action entirely for a non-GitHub remote -- this command's own `nonGitHubHost` error is the defensive fallback for a stale preflight, not the primary UX. Its message never references a "Copy Push Command" control, since no such control exists in Phase 1.
 
 Always the true final step of the "Commit + Push + Open Compare Page" action -- emits the terminal `ship_settled` receipt on both success and failure.
 
@@ -535,7 +538,7 @@ Always the true final step of the "Commit + Push + Open Compare Page" action -- 
 | `shipId`    | `string`  | Yes      | Correlation ID matching the preceding `git_stage_commit`/`git_push` calls |
 | `commitSha` | `string`  | Yes      | Carried through into the `ship_settled` receipt only          |
 | `pushedRef` | `string`  | Yes      | Carried through into the `ship_settled` receipt only          |
-| `title`     | `string`  | Yes      | PR title (URL query value, not truncated)                     |
+| `title`     | `string`  | Yes      | PR title (URL query value; only clamped if even an empty body doesn't fit the cap) |
 | `body`      | `string`  | Yes      | PR body (URL query value, truncated first if the URL would exceed the cap) |
 
 **Returns:** `string` -- the compare URL.
@@ -544,6 +547,7 @@ Always the true final step of the "Commit + Push + Open Compare Page" action -- 
 
 | Error kind      | Condition                                                       |
 |------------------|--------------------------------------------------------------------|
+| `invalidBranch`  | Detached `HEAD`                                                     |
 | `noRemote`       | No `origin` remote configured                                       |
 | `nonGitHubHost`  | The remote's host isn't one a GitHub-style compare URL applies to (e.g. GitLab, Bitbucket) |
 

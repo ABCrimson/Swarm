@@ -319,6 +319,8 @@ export const ShipPreflightSchema = z.object({
   baseBranch: z.string(),
   remote: z.string().nullable(),
   host: z.string().nullable(),
+  /** Whether `host` looks like GitHub/GHES — the "Open Compare Page" action is the only one gated on this. */
+  hostSupportsCompare: z.boolean(),
   upstream: z.string().nullable(),
   ahead: z.number().int(),
   behind: z.number().int(),
@@ -327,8 +329,6 @@ export const ShipPreflightSchema = z.object({
   untracked: z.array(z.string()),
   skipped: z.array(SkippedFileSchema),
   diffStat: DiffStatSchema,
-  ghAvailable: z.boolean(),
-  ghAuthed: z.boolean(),
   canShip: z.boolean(),
   blockers: z.array(z.string()),
 });
@@ -359,6 +359,8 @@ export type CommitOutcome = z.infer<typeof CommitOutcomeSchema>;
 /** Zod schema for the `git_push` response. */
 export const PushOutcomeSchema = z.object({
   pushedRef: z.string(),
+  /** `HEAD` sha at push time, resolved server-side — never a caller-supplied value. */
+  sha: z.string(),
 });
 
 /** Result of a successful push. */
