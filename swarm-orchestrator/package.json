@@ -43,7 +43,7 @@
     "immer": "11.1.16",
     "jotai": "2.20.2",
     "modern-cmdk": "1.2.1",
-    "motion": "12.42.2",
+    "motion": "13.1.0",
     "radix-ui": "1.6.7",
     "react": "19.3.0-canary-22e4f993-20260811",
     "react-dom": "19.3.0-canary-22e4f993-20260811",

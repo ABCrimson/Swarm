@@ -69,8 +69,8 @@ importers:
         specifier: 1.2.1
         version: 1.2.1(radix-ui@1.6.7(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.3.0-canary-22e4f993-20260811(react@19.3.0-canary-22e4f993-20260811))(react@19.3.0-canary-22e4f993-20260811))(react-dom@19.3.0-canary-22e4f993-20260811(react@19.3.0-canary-22e4f993-20260811))(react@19.3.0-canary-22e4f993-20260811)
       motion:
-        specifier: 12.42.2
-        version: 12.42.2(react-dom@19.3.0-canary-22e4f993-20260811(react@19.3.0-canary-22e4f993-20260811))(react@19.3.0-canary-22e4f993-20260811)
+        specifier: 13.1.0
+        version: 13.1.0(react-dom@19.3.0-canary-22e4f993-20260811(react@19.3.0-canary-22e4f993-20260811))(react@19.3.0-canary-22e4f993-20260811)
       radix-ui:
         specifier: 1.6.7
         version: 1.6.7(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.3.0-canary-22e4f993-20260811(react@19.3.0-canary-22e4f993-20260811))(react@19.3.0-canary-22e4f993-20260811)
@@ -2007,15 +2007,12 @@ packages:
       picomatch:
         optional: true
 
-  framer-motion@12.42.2:
-    resolution: {integrity: sha512-5XY9luDiu0oHfHBjpDthFMh0ES+122w6p/papSJBweMkO8Sn+PW2QaEgRblQBpWFnuvZS5qvarpt/hO2pjGmnw==}
+  framer-motion@13.1.0:
+    resolution: {integrity: sha512-QSZrF0Id3QGuHJ+OL+9PSY9pk86C8ERFalwAGSchzTm65+ZoGH/RM26lmEARLljcHj2lqhv0jZOOks+EI3COOw==}
     peerDependencies:
-      '@emotion/is-prop-valid': '*'
       react: ^18.0.0 || ^19.0.0
       react-dom: ^18.0.0 || ^19.0.0
     peerDependenciesMeta:
-      '@emotion/is-prop-valid':
-        optional: true
       react:
         optional: true
       react-dom:
@@ -2357,21 +2354,18 @@ packages:
       react-dom:
         optional: true
 
-  motion-dom@12.42.2:
-    resolution: {integrity: sha512-5gIMWLp/PycBtJRJWRgjxke5n8dlvkSn2DrYW+tr3XcqAZY1xZh6BJyooJXCM8wdfM7wfMjkBJNLge1CKPUIRA==}
+  motion-dom@13.0.0:
+    resolution: {integrity: sha512-Xk+SJas70uMAUIApg+m3lZDShxI3LBFHq7mFGbBKoRXc2PVPDyAKmzN64Bbzt4CZdP/CItTiJxWtn4TA0v53Ng==}
 
-  motion-utils@12.39.0:
-    resolution: {integrity: sha512-8nadJAJjTtqRkmRF36FoJTrywK9nnFmnPwnSMyxaOCU7GDjN9RTMJIxx9De8ErM+vpPhMccr/6fo5WciyQLnMQ==}
+  motion-utils@13.0.0:
+    resolution: {integrity: sha512-7DnN7TmbLcYXcG4RVadXIihWlyuM9afoUww8Y5Agg431kGKiuL2/OMyP4mJ5wLz+pvN3t5ySClLOaVXJ+wekRQ==}
 
-  motion@12.42.2:
-    resolution: {integrity: sha512-Atvv11yUKIid41cVrRBDVX5m8tF8kNpExRSlbpt6APClhDjtwQssgFHhQzejxw7/7YYbjHSPKBVbHo05BuJT5Q==}
+  motion@13.1.0:
+    resolution: {integrity: sha512-qtvscq59uCPdWnNW4SdSkrxR+BS/QYsa923bx7ocA+4p+ZGNbbVQwkSnG4aukB81QWjtl3AxX36plxNyZLmHCA==}
     peerDependencies:
-      '@emotion/is-prop-valid': '*'
       react: ^18.0.0 || ^19.0.0
       react-dom: ^18.0.0 || ^19.0.0
     peerDependenciesMeta:
-      '@emotion/is-prop-valid':
-        optional: true
       react:
         optional: true
       react-dom:
@@ -4560,10 +4554,10 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.5
 
-  framer-motion@12.42.2(react-dom@19.3.0-canary-22e4f993-20260811(react@19.3.0-canary-22e4f993-20260811))(react@19.3.0-canary-22e4f993-20260811):
+  framer-motion@13.1.0(react-dom@19.3.0-canary-22e4f993-20260811(react@19.3.0-canary-22e4f993-20260811))(react@19.3.0-canary-22e4f993-20260811):
     dependencies:
-      motion-dom: 12.42.2
-      motion-utils: 12.39.0
+      motion-dom: 13.0.0
+      motion-utils: 13.0.0
       tslib: 2.8.1
     optionalDependencies:
       react: 19.3.0-canary-22e4f993-20260811
@@ -4812,15 +4806,15 @@ snapshots:
       react: 19.3.0-canary-22e4f993-20260811
       react-dom: 19.3.0-canary-22e4f993-20260811(react@19.3.0-canary-22e4f993-20260811)
 
-  motion-dom@12.42.2:
+  motion-dom@13.0.0:
     dependencies:
-      motion-utils: 12.39.0
+      motion-utils: 13.0.0
 
-  motion-utils@12.39.0: {}
+  motion-utils@13.0.0: {}
 
-  motion@12.42.2(react-dom@19.3.0-canary-22e4f993-20260811(react@19.3.0-canary-22e4f993-20260811))(react@19.3.0-canary-22e4f993-20260811):
+  motion@13.1.0(react-dom@19.3.0-canary-22e4f993-20260811(react@19.3.0-canary-22e4f993-20260811))(react@19.3.0-canary-22e4f993-20260811):
     dependencies:
-      framer-motion: 12.42.2(react-dom@19.3.0-canary-22e4f993-20260811(react@19.3.0-canary-22e4f993-20260811))(react@19.3.0-canary-22e4f993-20260811)
+      framer-motion: 13.1.0(react-dom@19.3.0-canary-22e4f993-20260811(react@19.3.0-canary-22e4f993-20260811))(react@19.3.0-canary-22e4f993-20260811)
       tslib: 2.8.1
     optionalDependencies:
       react: 19.3.0-canary-22e4f993-20260811
