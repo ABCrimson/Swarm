@@ -35,11 +35,11 @@ fn rev_parse_toplevel_args(dir: &Path) -> Vec<String> {
     args
 }
 
-/// Argv for `git -C <repo_root> -c core.longpaths=true rev-parse HEAD`.
-fn rev_parse_head_args(repo_root: &Path) -> Vec<String> {
+/// Argv for `git -C <repo_root> -c core.longpaths=true rev-parse <rev>`.
+fn rev_parse_args(repo_root: &Path, rev: &str) -> Vec<String> {
     let mut args = base_args(repo_root);
     args.push("rev-parse".to_string());
-    args.push("HEAD".to_string());
+    args.push(rev.to_string());
     args
 }
 
@@ -70,18 +70,22 @@ pub fn discover_toplevel(dir: &Path) -> Result<PathBuf, AppError> {
     Ok(PathBuf::from(toplevel))
 }
 
-/// Resolves `HEAD`'s commit sha in the repo rooted at `repo_root`.
+/// Resolves an arbitrary revision (a branch name, `HEAD`, a sha, etc)
+/// to its commit sha in the repo rooted at `repo_root`. Works for a
+/// branch ref even after the worktree that checked it out has been
+/// removed — branches live in the shared `.git` object/ref database,
+/// not in the (possibly-gone) worktree directory.
 ///
 /// # Errors
 ///
-/// * [`AppError::Git`] — `HEAD` could not be resolved (e.g. an
+/// * [`AppError::Git`] — `rev` could not be resolved (unknown ref, an
 ///   unborn/empty repository with no commits yet), `git` could not be
 ///   spawned, or the operation timed out.
-pub fn head_sha(repo_root: &Path) -> Result<String, AppError> {
-    let output = cli::run(&rev_parse_head_args(repo_root), READ_TIMEOUT)?;
+pub fn rev_parse(repo_root: &Path, rev: &str) -> Result<String, AppError> {
+    let output = cli::run(&rev_parse_args(repo_root, rev), READ_TIMEOUT)?;
     if !output.success() {
         return Err(AppError::Git(format!(
-            "failed to resolve HEAD in {}: {}",
+            "failed to resolve {rev} in {}: {}",
             repo_root.display(),
             output.stderr.trim()
         )));
@@ -89,11 +93,17 @@ pub fn head_sha(repo_root: &Path) -> Result<String, AppError> {
     let sha = output.stdout.trim();
     if sha.is_empty() {
         return Err(AppError::Git(format!(
-            "git rev-parse HEAD returned empty output for {}",
+            "git rev-parse {rev} returned empty output for {}",
             repo_root.display()
         )));
     }
     Ok(sha.to_string())
+}
+
+/// Resolves `HEAD`'s commit sha in the repo rooted at `repo_root`.
+/// Thin wrapper over [`rev_parse`] — see its docs for error conditions.
+pub fn head_sha(repo_root: &Path) -> Result<String, AppError> {
+    rev_parse(repo_root, "HEAD")
 }
 
 #[cfg(test)]
@@ -120,12 +130,19 @@ mod tests {
     }
 
     #[test]
-    fn test_rev_parse_head_args_carries_shared_prefix() {
+    fn test_rev_parse_args_carries_shared_prefix() {
         let dir = PathBuf::from("/tmp/repo");
-        let args = rev_parse_head_args(&dir);
+        let args = rev_parse_args(&dir, "HEAD");
         assert_eq!(&args[..4], &base_args(&dir)[..]);
         assert_eq!(args[4], "rev-parse");
         assert_eq!(args[5], "HEAD");
+    }
+
+    #[test]
+    fn test_rev_parse_args_accepts_arbitrary_rev() {
+        let dir = PathBuf::from("/tmp/repo");
+        let args = rev_parse_args(&dir, "swarm/agent-abcd1234");
+        assert_eq!(args[5], "swarm/agent-abcd1234");
     }
 
     #[test]
@@ -133,6 +150,22 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("swarm-not-a-repo-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
         let result = discover_toplevel(&tmp);
+        assert!(result.is_err());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn test_rev_parse_rejects_unknown_rev() {
+        let tmp =
+            std::env::temp_dir().join(format!("swarm-rev-parse-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let init = cli::run(
+            &["init".to_string(), tmp.display().to_string()],
+            READ_TIMEOUT,
+        )
+        .unwrap();
+        assert!(init.success());
+        let result = rev_parse(&tmp, "definitely-not-a-real-branch");
         assert!(result.is_err());
         std::fs::remove_dir_all(&tmp).ok();
     }

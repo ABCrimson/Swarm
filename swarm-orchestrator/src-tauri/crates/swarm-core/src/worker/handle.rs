@@ -249,6 +249,13 @@ pub struct WorkerHandle {
     pub repo_root: Option<String>,
     /// Branch checked out in `worktree_path`, if isolated.
     pub branch: Option<String>,
+    /// Commit sha `branch` was created from (`HEAD` of `repo_root` at
+    /// spawn time), if isolated. Compared against the branch's tip at
+    /// kill time to decide whether the isolation branch can be safely
+    /// `git branch -d`'d (tip == base_commit means the agent made no
+    /// commits) — never exposed to the frontend, purely an internal
+    /// bookkeeping field for that one decision.
+    pub base_commit: Option<String>,
 }
 
 // SAFETY: All non-Sync fields are wrapped in parking_lot::Mutex,
@@ -267,6 +274,7 @@ impl std::fmt::Debug for WorkerHandle {
             .field("has_child", &self.child.is_some())
             .field("worktree_path", &self.worktree_path)
             .field("branch", &self.branch)
+            .field("base_commit", &self.base_commit)
             .finish()
     }
 }
@@ -299,6 +307,7 @@ impl WorkerHandle {
     ///     worktree_path: None,
     ///     repo_root: None,
     ///     branch: None,
+    ///     base_commit: None,
     /// };
     /// let info = handle.to_info();
     /// assert_eq!(info.name, "agent-1");
