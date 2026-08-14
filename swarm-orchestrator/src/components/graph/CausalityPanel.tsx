@@ -63,6 +63,18 @@ export interface CausalityWalkResult {
   readonly rows: DomainEvent[];
   /** `true` when the walk stopped at {@link MAX_CAUSALITY_HOPS} rather than reaching a real root. */
   readonly truncated: boolean;
+  /**
+   * `true` when the walk stopped early because a lookup genuinely
+   * missed (neither the ring nor a live `events_since` backfill found
+   * the cited seq) — distinct from {@link truncated} (hit the hop cap)
+   * and distinct from a real root (an event whose own `causeSeq` is
+   * absent). Without this flag the topmost RENDERED row is
+   * indistinguishable from an actual root — causality-by-omission: the
+   * trace looks complete when it isn't. Mutually exclusive with
+   * `truncated` by construction (a miss can only occur before the hop
+   * cap is reached).
+   */
+  readonly incomplete: boolean;
 }
 
 /**
@@ -70,9 +82,9 @@ export interface CausalityWalkResult {
  * terminating on an absent `causeSeq` (a real root — typically
  * `agent_turn_started`, which never carries one) or
  * {@link MAX_CAUSALITY_HOPS} hops, whichever comes first. A lookup miss
- * ends the walk early with whatever was found so far, rather than
- * throwing — the rows already collected are still true, just possibly
- * short of the root.
+ * ends the walk early and sets {@link CausalityWalkResult.incomplete} —
+ * the rows already collected are still true, just explicitly marked as
+ * possibly short of the root rather than silently passed off as complete.
  */
 export async function walkCausalityChain(
   startSeq: number,
@@ -80,16 +92,20 @@ export async function walkCausalityChain(
 ): Promise<CausalityWalkResult> {
   const chain: DomainEvent[] = []; // collected most-recent-first
   let currentSeq: number | undefined = startSeq;
+  let incomplete = false;
 
   while (currentSeq !== undefined && chain.length < MAX_CAUSALITY_HOPS) {
     const event = await resolveEvent(currentSeq, ring);
-    if (!event) break; // lookup miss -- stop with whatever's already collected
+    if (!event) {
+      incomplete = true; // genuine lookup miss -- stop with whatever's already collected
+      break;
+    }
     chain.push(event);
     currentSeq = event.causeSeq;
   }
 
-  const truncated = currentSeq !== undefined && chain.length >= MAX_CAUSALITY_HOPS;
-  return { rows: chain.toReversed(), truncated };
+  const truncated = !incomplete && currentSeq !== undefined && chain.length >= MAX_CAUSALITY_HOPS;
+  return { rows: chain.toReversed(), truncated, incomplete };
 }
 
 function workerLabel(id: string | undefined, workers: ReadonlyMap<string, Worker>): string {
@@ -177,6 +193,8 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
   const [result, setResult] = useState<CausalityWalkResult | null>(null);
   const [loading, setLoading] = useState(true);
   const panelRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -200,6 +218,49 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
       cancelled = true;
     };
   }, [startSeq]);
+
+  // Focus management: a modal dialog must move focus INTO itself on
+  // open (nothing did by default -- role="dialog" alone doesn't), and
+  // restore it to whatever had focus before on close, so a keyboard/
+  // screen-reader user isn't left on (or dropped back onto) an element
+  // behind an overlay they can no longer reach. Runs once per mount,
+  // not per `startSeq` change -- WorkerGraph/WorkerDetail always mount
+  // a fresh CausalityPanel per open cycle (the atom holds `{startSeq}`
+  // or `null`, never rewritten to a new seq while already open), so
+  // "on open"/"on close" and "on mount"/"on unmount" coincide here.
+  useEffect(() => {
+    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
+    closeButtonRef.current?.focus();
+    return () => {
+      previouslyFocusedRef.current?.focus?.();
+    };
+  }, []);
+
+  // Focus trap: Tab/Shift+Tab cycle among the dialog's own focusable
+  // elements only, never escaping to the graph/page behind it. Recomputes
+  // the focusable set on every Tab press (not once at mount) since rows
+  // appear asynchronously once the walk resolves.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Tab" || !panelRef.current) return;
+      const focusable = panelRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, []);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -279,6 +340,7 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
             Causality Trace
           </h2>
           <button
+            ref={closeButtonRef}
             type="button"
             onClick={onClose}
             aria-label="Close Causality Trace"
@@ -324,18 +386,31 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
             </div>
           )}
 
-          {!loading && result && result.rows.length === 0 && (
-            <span
+          {/* Terminal placeholder for a genuine lookup miss (`incomplete`)
+              — rendered FIRST (it's the earliest point in the chain the
+              walk couldn't resolve), distinct in both wording and style
+              from a real root so the topmost thing on screen never reads
+              as "this is where causality began" when it's actually "the
+              trail went cold here". Covers both "nothing at all" (zero
+              rows) and "some rows, then a miss" uniformly — the old
+              generic "Causality Trace Unavailable" message is exactly
+              the zero-rows case of this, so it's subsumed rather than
+              duplicated. */}
+          {!loading && result?.incomplete && (
+            <div
               style={{
                 fontFamily: "var(--font-body)",
-                fontSize: "0.8125rem",
+                fontSize: "0.75rem",
+                fontStyle: "italic",
                 color: "oklch(0.55 0.04 220)",
                 textAlign: "center",
-                padding: "24px 0",
+                padding: "10px 12px",
+                border: "1px dashed oklch(0.30 0.05 220)",
+                borderRadius: 8,
               }}
             >
-              Causality Trace Unavailable.
-            </span>
+              Cause Event Not Available (Ephemeral Or Pruned)
+            </div>
           )}
 
           {!loading &&
@@ -343,9 +418,10 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
             result.rows.map((row, index) => {
               const { text, workerId } = describeRow(row, workers);
               const clickable = workerId != null && workers.has(workerId);
+              const showArrowAbove = index > 0 || result.incomplete;
               return (
                 <div key={row.seq} style={{ display: "flex", flexDirection: "column" }}>
-                  {index > 0 && (
+                  {showArrowAbove && (
                     <div
                       aria-hidden="true"
                       style={{

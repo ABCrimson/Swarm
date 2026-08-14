@@ -27,6 +27,9 @@ interface GraphLegendProps {
   readonly presentKinds: ReadonlySet<GraphEdgeKind>;
 }
 
+/** Title Case group header separating measured facts from the user-drawn annotation kind — see the component doc for why this can't just be "one more row" visually. */
+const ANNOTATION_GROUP_LABEL = "Annotation";
+
 /**
  * Legend for the Workers topology graph — one row per edge kind
  * ACTUALLY rendered, gated on presence (a row for a kind with zero
@@ -36,11 +39,36 @@ interface GraphLegendProps {
  *
  * Measured kinds (spawn/kill/command/message) and the manual annotation
  * kind always render in this fixed order so the legend never implies
- * measured facts and user annotations are the same category of thing.
+ * measured facts and user annotations are the same category of thing —
+ * a same-list, same-style row for "Manual" right after "Message" would
+ * only ASSERT that distinction in prose (the component doc above) while
+ * looking, on screen, exactly like one more measured kind. A separator
+ * plus an "Annotation" group header makes the never-merge claim visibly
+ * true, not just documented.
  */
 export function GraphLegend({ presentKinds }: GraphLegendProps): React.ReactElement | null {
-  const rows = LEGEND_ROWS.filter((row) => presentKinds.has(row.kind));
-  if (rows.length === 0) return null;
+  const measuredRows = LEGEND_ROWS.filter(
+    (row) => row.kind !== "manual" && presentKinds.has(row.kind),
+  );
+  const manualRow = LEGEND_ROWS.find((row) => row.kind === "manual" && presentKinds.has(row.kind));
+  if (measuredRows.length === 0 && !manualRow) return null;
+
+  const renderRow = (row: LegendRow): React.ReactElement => (
+    <div key={row.kind} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <svg width={20} height={8} viewBox="0 0 20 8" aria-hidden="true">
+        <line
+          x1={1}
+          y1={4}
+          x2={19}
+          y2={4}
+          stroke={row.stroke}
+          strokeWidth={2}
+          strokeDasharray={row.dash}
+        />
+      </svg>
+      <span>{row.label}</span>
+    </div>
+  );
 
   return (
     <Panel
@@ -60,22 +88,35 @@ export function GraphLegend({ presentKinds }: GraphLegendProps): React.ReactElem
         color: "oklch(0.65 0.04 220)",
       }}
     >
-      {rows.map((row) => (
-        <div key={row.kind} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <svg width={20} height={8} viewBox="0 0 20 8" aria-hidden="true">
-            <line
-              x1={1}
-              y1={4}
-              x2={19}
-              y2={4}
-              stroke={row.stroke}
-              strokeWidth={2}
-              strokeDasharray={row.dash}
+      {measuredRows.map(renderRow)}
+
+      {manualRow && (
+        <>
+          {measuredRows.length > 0 && (
+            <hr
+              style={{
+                width: "100%",
+                height: 1,
+                margin: "2px 0",
+                border: "none",
+                background: "oklch(0.28 0.05 220)",
+              }}
             />
-          </svg>
-          <span>{row.label}</span>
-        </div>
-      ))}
+          )}
+          <span
+            style={{
+              fontSize: "0.5625rem",
+              fontWeight: 600,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              color: "oklch(0.45 0.04 220)",
+            }}
+          >
+            {ANNOTATION_GROUP_LABEL}
+          </span>
+          {renderRow(manualRow)}
+        </>
+      )}
     </Panel>
   );
 }

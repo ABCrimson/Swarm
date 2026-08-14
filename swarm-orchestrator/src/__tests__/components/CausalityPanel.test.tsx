@@ -74,6 +74,7 @@ describe("walkCausalityChain", () => {
 
     expect(invokeMock).not.toHaveBeenCalled();
     expect(result.truncated).toBe(false);
+    expect(result.incomplete).toBe(false);
     expect(result.rows.map((r) => r.seq)).toEqual([412, 418]); // root-first order
   });
 
@@ -94,10 +95,37 @@ describe("walkCausalityChain", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("events_since", { afterSeq: 99, limit: 1 });
     expect(result.truncated).toBe(false);
+    expect(result.incomplete).toBe(false);
     expect(result.rows.map((r) => r.seq)).toEqual([100, 105]);
   });
 
-  it("ends the walk early (not marked truncated) when a lookup genuinely misses", async () => {
+  it("treats a backfill row whose seq doesn't match the requested seq as a miss (the row.seq !== seq guard)", async () => {
+    // events_since is asked for seq 100 (afterSeq: 99) but the mocked
+    // response comes back with a DIFFERENT seq -- a gap/skip in what's
+    // persisted, or a malformed response. The guard must null this out
+    // rather than trust the wrong row.
+    const wrongSeqRow = ev({ seq: 101, type: "agent_turn_started", payload: { workerId: "w-a" } });
+    invokeMock.mockResolvedValueOnce([wrongSeqRow]);
+
+    const startEvent = ev({
+      seq: 105,
+      type: "worker_input",
+      originWorker: "w-a",
+      causeSeq: 100,
+      payload: { workerId: "w-b", bytes: 4, source: "tool", preview: "ls\n" },
+    });
+    const ring = new Map([[startEvent.seq, startEvent]]);
+
+    const result = await walkCausalityChain(105, ring);
+
+    expect(invokeMock).toHaveBeenCalledWith("events_since", { afterSeq: 99, limit: 1 });
+    expect(result.incomplete).toBe(true);
+    expect(result.truncated).toBe(false);
+    // Only the starting event resolved -- the mismatched row was rejected.
+    expect(result.rows.map((r) => r.seq)).toEqual([105]);
+  });
+
+  it("ends the walk early and marks the result incomplete (not truncated) when a lookup genuinely misses", async () => {
     const startEvent = ev({
       seq: 50,
       type: "worker_killed",
@@ -112,9 +140,10 @@ describe("walkCausalityChain", () => {
 
     expect(result.rows.map((r) => r.seq)).toEqual([50]);
     expect(result.truncated).toBe(false);
+    expect(result.incomplete).toBe(true);
   });
 
-  it("terminates immediately for a root event with no causeSeq at all", async () => {
+  it("terminates immediately for a root event with no causeSeq at all, marked neither truncated nor incomplete", async () => {
     const root = ev({ seq: 1, type: "agent_turn_started", payload: { workerId: "w-a" } });
     const ring = new Map([[root.seq, root]]);
 
@@ -123,9 +152,10 @@ describe("walkCausalityChain", () => {
     expect(invokeMock).not.toHaveBeenCalled();
     expect(result.rows.map((r) => r.seq)).toEqual([1]);
     expect(result.truncated).toBe(false);
+    expect(result.incomplete).toBe(false);
   });
 
-  it(`stops at ${MAX_CAUSALITY_HOPS} rows and reports truncated when the chain is deeper than the cap`, async () => {
+  it(`stops at ${MAX_CAUSALITY_HOPS} rows and reports truncated (not incomplete) when the chain is deeper than the cap`, async () => {
     // A synthetic chain of 51 events (seq 1..51), each citing seq-1 as its
     // cause, with seq 1 the true (never-reached) root.
     const ring = new Map<number, DomainEvent>();
@@ -145,6 +175,7 @@ describe("walkCausalityChain", () => {
 
     expect(invokeMock).not.toHaveBeenCalled();
     expect(result.truncated).toBe(true);
+    expect(result.incomplete).toBe(false);
     expect(result.rows).toHaveLength(MAX_CAUSALITY_HOPS);
     // The true root (seq 1) is excluded -- the cap bit before reaching it.
     expect(result.rows.map((r) => r.seq)).not.toContain(1);
@@ -228,11 +259,113 @@ describe("CausalityPanel (component)", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('shows "Causality Trace Unavailable" when the walk finds nothing at all', async () => {
+  it('renders the "Cause Event Not Available" terminal row when the walk finds nothing at all (incomplete, zero rows)', async () => {
     invokeMock.mockResolvedValueOnce([]); // seq 999 is neither cached nor persisted
 
     render(<CausalityPanel startSeq={999} onClose={vi.fn()} />);
 
-    expect(await screen.findByText("Causality Trace Unavailable.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Cause Event Not Available (Ephemeral Or Pruned)"),
+    ).toBeInTheDocument();
+  });
+
+  it('renders the "Cause Event Not Available" row above a partial trace when a mid-walk lookup misses', async () => {
+    const workerB = createWorker({ id: "w-b", name: "Worker Beta" });
+    act(() => {
+      useWorkerStore.getState().addWorker(workerB);
+    });
+    seedRing(
+      ev({
+        seq: 50,
+        type: "worker_killed",
+        originWorker: "w-a",
+        causeSeq: 10, // never resolves
+        payload: { workerId: "w-b" },
+      }),
+    );
+    invokeMock.mockResolvedValueOnce([]); // confirms seq 10 isn't persisted
+
+    render(<CausalityPanel startSeq={50} onClose={vi.fn()} />);
+
+    expect(
+      await screen.findByText("Cause Event Not Available (Ephemeral Or Pruned)"),
+    ).toBeInTheDocument();
+    // The one row that DID resolve still renders -- an incomplete trace
+    // isn't the same as an empty one.
+    expect(screen.getByText(/Killed Worker Beta/)).toBeInTheDocument();
+  });
+
+  // ── Focus management ────────────────────────────────────────────────
+
+  it("focuses the close button on open", async () => {
+    render(<CausalityPanel startSeq={1} onClose={vi.fn()} />);
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole("button", { name: "Close Causality Trace" })).toHaveFocus();
+    });
+  });
+
+  it("restores focus to the previously focused element on close/unmount", async () => {
+    const trigger = document.createElement("button");
+    trigger.textContent = "Open Trace";
+    document.body.appendChild(trigger);
+    trigger.focus();
+    expect(trigger).toHaveFocus();
+
+    const { unmount } = render(<CausalityPanel startSeq={1} onClose={vi.fn()} />);
+    await vi.waitFor(() => {
+      expect(screen.getByRole("button", { name: "Close Causality Trace" })).toHaveFocus();
+    });
+
+    unmount();
+
+    expect(trigger).toHaveFocus();
+    trigger.remove();
+  });
+
+  it("traps Tab within the dialog, wrapping from the last focusable element back to the first", async () => {
+    const user = userEvent.setup();
+    const workerB = createWorker({ id: "w-b", name: "Worker Beta" });
+    act(() => {
+      useWorkerStore.getState().addWorker(workerB);
+    });
+    seedRing(
+      ev({
+        seq: 1,
+        type: "worker_spawned",
+        payload: { workerId: "w-b", name: "Worker Beta", pid: 1 },
+      }),
+    );
+
+    render(<CausalityPanel startSeq={1} onClose={vi.fn()} />);
+    const closeButton = await screen.findByRole("button", { name: "Close Causality Trace" });
+    const row = screen.getByRole("button", { name: /Spawned Worker Beta/ });
+
+    // Close button is the first focusable (and already focused on open);
+    // the row is the last. Shift+Tab from the first wraps to the last.
+    expect(closeButton).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(row).toHaveFocus();
+
+    // Tab from the last wraps back to the first.
+    await user.tab();
+    expect(closeButton).toHaveFocus();
+  });
+
+  it("does not tab focus out to a trigger element behind the modal", async () => {
+    const user = userEvent.setup();
+    const trigger = document.createElement("button");
+    trigger.textContent = "Behind The Modal";
+    document.body.appendChild(trigger);
+
+    render(<CausalityPanel startSeq={1} onClose={vi.fn()} />);
+    await screen.findByRole("button", { name: "Close Causality Trace" });
+
+    await user.tab();
+    await user.tab();
+    await user.tab();
+
+    expect(trigger).not.toHaveFocus();
+    trigger.remove();
   });
 });

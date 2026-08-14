@@ -209,4 +209,39 @@ describe("WorkerGraph — measured edges", () => {
     // filtered out of what's shown -- still findable via the inspector.
     expect(useProvenanceStore.getState().edges.size).toBe(1);
   });
+
+  it("DIRECTIVE-IMPLEMENTED: a file_written ingest with NO topology change updates the rendered 'Wrote N Files' badge live, without waiting on a relayout", async () => {
+    const workerA = createWorker({ id: "w-a", name: "Worker A" });
+    act(() => {
+      useWorkerStore.getState().addWorker(workerA);
+    });
+
+    render(<WorkerGraph />);
+    await waitForLayoutSettled();
+
+    // No file has been written yet -- no badge.
+    expect(screen.queryByText(/Wrote \d+ Files?/)).not.toBeInTheDocument();
+
+    // Ingest a file_written event for the SAME worker set (no worker
+    // added/removed, no edge added/removed) -- the topology fingerprint
+    // useElkLayout keys off (node ids + edge source->target pairs) is
+    // unchanged, so this must never trigger a relayout, yet the badge
+    // must still update: it's read fresh from the provenance store every
+    // render via withLiveNodeData, not baked into the ELK-round-tripped
+    // node data.
+    act(() => {
+      useProvenanceStore.getState().ingestEvent(
+        ev({
+          seq: 20,
+          type: "file_written",
+          originWorker: "w-a",
+          payload: { path: "/repo/out.txt", bytes: 7 },
+        }),
+      );
+    });
+
+    expect(await screen.findByText("Wrote 1 File")).toBeInTheDocument();
+    // The layout overlay never reappeared -- proves no relayout fired.
+    expect(screen.queryByText("Computing Layout")).not.toBeInTheDocument();
+  });
 });
