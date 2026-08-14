@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::mpsc::Sender;
 use uuid::Uuid;
 
+use crate::git::ShipError;
 use crate::worker::handle::WorkerState;
 
 /// All typed events emitted by the SWARM backend.
@@ -81,6 +82,12 @@ pub enum SwarmEvent {
     WorktreeCreated(WorktreeCreatedPayload),
     /// A git worktree was removed (or preserved, if dirty) at kill time.
     WorktreeRemoved(WorktreeRemovedPayload),
+    /// One step of an in-flight ship operation (preflight/staging/commit/push).
+    ShipProgress(ShipProgressPayload),
+    /// Terminal receipt for a ship operation: exactly one per `shipId`.
+    ShipSettled(ShipSettledPayload),
+    /// A commit was created by the ship chain.
+    CommitCreated(CommitCreatedPayload),
 }
 
 /// Payload for the `worker_spawned` event.
@@ -292,6 +299,77 @@ pub struct WorktreeRemovedPayload {
     /// Human-readable reason, populated for `"preserved_dirty"` (git's
     /// own refusal message) and `"failed"` (the error).
     pub reason: Option<String>,
+}
+
+/// Payload for the `ship_progress` event.
+///
+/// Emitted for each step of a ship operation (`preflight`, `staging`,
+/// `commit`, `push` — `step` is a free-form string, not a closed enum,
+/// so a future step can be added without a wire-format change).
+/// `shipId` correlates every progress row and the terminal
+/// [`ShipSettledPayload`] for one ship attempt; `waitFor` on the
+/// frontend keys off it rather than a timer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShipProgressPayload {
+    /// Correlation ID for one ship attempt (client-generated).
+    pub ship_id: Uuid,
+    /// UUID of the worker being shipped.
+    pub worker_id: Uuid,
+    /// Free-form step name: `"preflight"`, `"staging"`, `"commit"`, `"push"`.
+    pub step: String,
+    /// `"running"`, `"ok"`, or `"error"`.
+    pub status: String,
+    /// Human-readable detail (e.g. a file count, a Title Case message).
+    pub detail: Option<String>,
+}
+
+/// Payload for the `ship_settled` receipt.
+///
+/// Emitted exactly once per `shipId`, after the last [`ShipProgressPayload`],
+/// on both success and failure. Frontends `waitFor` this receipt
+/// instead of polling progress state — the same pattern as
+/// `ai_stream_settled`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShipSettledPayload {
+    /// Correlation ID matching the triggering [`ShipProgressPayload`]s.
+    pub ship_id: Uuid,
+    /// UUID of the worker that was shipped.
+    pub worker_id: Uuid,
+    /// Sha of the commit created, if the commit step completed.
+    pub commit_sha: Option<String>,
+    /// `"origin/<branch>"`, if the push step completed.
+    pub pushed_ref: Option<String>,
+    /// PR/compare-page URL, if one was opened (Phase 1: only ever the
+    /// compare-URL fallback — real `gh pr create` is Phase 3).
+    pub pr_url: Option<String>,
+    /// `"ok"` or `"error"`.
+    pub status: String,
+    /// The typed failure, when `status == "error"`.
+    pub error: Option<ShipError>,
+}
+
+/// Payload for the `commit_created` event.
+///
+/// Emitted immediately after a successful ship-chain commit (before
+/// any push attempt) — `seqFrom`/`seqTo` mirror the
+/// `Swarm-Seq-Range:` trailer written into the commit message itself,
+/// so the binding between "this commit" and "this seq range" survives
+/// outside the app (e.g. in `git log`) even if the event log is lost.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitCreatedPayload {
+    /// UUID of the worker this commit was made in.
+    pub worker_id: Uuid,
+    /// Sha of the new commit.
+    pub sha: String,
+    /// Branch the commit was made on.
+    pub branch: String,
+    /// Start of the seq range cited in the commit's `Swarm-Seq-Range` trailer.
+    pub seq_from: u64,
+    /// End of the seq range cited in the commit's `Swarm-Seq-Range` trailer.
+    pub seq_to: u64,
 }
 
 /// Payload for the `system_log` event.
@@ -624,6 +702,83 @@ mod tests {
             );
         } else {
             panic!("expected WorktreeRemoved variant");
+        }
+    }
+
+    #[test]
+    fn test_ship_progress_roundtrip() {
+        let ship_id = Uuid::new_v4();
+        let worker_id = Uuid::new_v4();
+        let event = SwarmEvent::ShipProgress(ShipProgressPayload {
+            ship_id,
+            worker_id,
+            step: "push".to_string(),
+            status: "running".to_string(),
+            detail: None,
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"ship_progress\""));
+        assert!(json.contains("\"shipId\""));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::ShipProgress(p) = deserialized {
+            assert_eq!(p.ship_id, ship_id);
+            assert_eq!(p.worker_id, worker_id);
+            assert_eq!(p.step, "push");
+        } else {
+            panic!("expected ShipProgress variant");
+        }
+    }
+
+    #[test]
+    fn test_ship_settled_roundtrip_with_error() {
+        use crate::git::{ShipErrorKind, ShipRemedy};
+
+        let ship_id = Uuid::new_v4();
+        let event = SwarmEvent::ShipSettled(ShipSettledPayload {
+            ship_id,
+            worker_id: Uuid::new_v4(),
+            commit_sha: None,
+            pushed_ref: None,
+            pr_url: None,
+            status: "error".to_string(),
+            error: Some(ShipError {
+                kind: ShipErrorKind::PushRejected,
+                message: "Push Rejected".to_string(),
+                remedy: Some(ShipRemedy::FetchAndRebase),
+            }),
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"ship_settled\""));
+        assert!(json.contains("\"pushRejected\""));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::ShipSettled(p) = deserialized {
+            assert_eq!(p.status, "error");
+            assert_eq!(p.error.unwrap().kind, ShipErrorKind::PushRejected);
+        } else {
+            panic!("expected ShipSettled variant");
+        }
+    }
+
+    #[test]
+    fn test_commit_created_roundtrip() {
+        let worker_id = Uuid::new_v4();
+        let event = SwarmEvent::CommitCreated(CommitCreatedPayload {
+            worker_id,
+            sha: "deadbeef".to_string(),
+            branch: "swarm/agent-abcd1234".to_string(),
+            seq_from: 10,
+            seq_to: 42,
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"commit_created\""));
+        assert!(json.contains("\"seqFrom\":10"));
+        assert!(json.contains("\"seqTo\":42"));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::CommitCreated(p) = deserialized {
+            assert_eq!(p.worker_id, worker_id);
+            assert_eq!(p.sha, "deadbeef");
+        } else {
+            panic!("expected CommitCreated variant");
         }
     }
 
