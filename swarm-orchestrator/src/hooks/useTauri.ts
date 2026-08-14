@@ -104,15 +104,17 @@ export function useListen<T>(event: string, handler: (payload: T) => void): void
       handlerRef.current(payload);
     });
 
-    void setup.then((fn) => {
-      if (cancelled) {
-        fn();
-      } else {
-        unlisten = fn;
-      }
-    }).catch((err: unknown) => {
-      console.error(`[useListen] Failed to setup listener for "${event}":`, err);
-    });
+    void setup
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err: unknown) => {
+        console.error(`[useListen] Failed to setup listener for "${event}":`, err);
+      });
 
     return () => {
       cancelled = true;
