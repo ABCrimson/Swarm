@@ -164,6 +164,10 @@ pub fn run() {
             commands::worker::set_max_workers,
             // Git commands
             commands::git::validate_repo_root,
+            commands::git::git_ship_preflight,
+            commands::git::git_stage_commit,
+            commands::git::git_push,
+            commands::git::ship_compare_url,
             // Session commands
             commands::session::create_session,
             commands::session::delete_session,

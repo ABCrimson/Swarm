@@ -206,8 +206,9 @@ fn run_writer_loop(
 mod tests {
     use super::*;
     use crate::events::{
-        AiStreamSettledPayload, SwarmEvent, SystemMetricsPayload, WorkerOutputPayload,
-        WorkerSpawnedPayload, WorktreeCreatedPayload, WorktreeRemovedPayload,
+        AiStreamSettledPayload, CommitCreatedPayload, ShipProgressPayload, ShipSettledPayload,
+        SwarmEvent, SystemMetricsPayload, WorkerOutputPayload, WorkerSpawnedPayload,
+        WorktreeCreatedPayload, WorktreeRemovedPayload,
     };
     use uuid::Uuid;
 
@@ -274,6 +275,42 @@ mod tests {
                 disposition: "removed".to_string(),
                 head_commit: None,
                 reason: None,
+            }
+        )));
+    }
+
+    /// DIRECTIVE: `ship_progress`/`ship_settled`/`commit_created` all
+    /// persist — same "excluded by name, persistent by construction"
+    /// guarantee as the worktree events (see the test above).
+    #[test]
+    fn test_ship_events_are_persistent() {
+        assert!(is_persistent(&SwarmEvent::ShipProgress(
+            ShipProgressPayload {
+                ship_id: Uuid::nil(),
+                worker_id: Uuid::nil(),
+                step: "commit".to_string(),
+                status: "running".to_string(),
+                detail: None,
+            }
+        )));
+        assert!(is_persistent(&SwarmEvent::ShipSettled(
+            ShipSettledPayload {
+                ship_id: Uuid::nil(),
+                worker_id: Uuid::nil(),
+                commit_sha: None,
+                pushed_ref: None,
+                pr_url: None,
+                status: "ok".to_string(),
+                error: None,
+            }
+        )));
+        assert!(is_persistent(&SwarmEvent::CommitCreated(
+            CommitCreatedPayload {
+                worker_id: Uuid::nil(),
+                sha: "sha".to_string(),
+                branch: "swarm/x-abcd1234".to_string(),
+                seq_from: 0,
+                seq_to: 1,
             }
         )));
     }

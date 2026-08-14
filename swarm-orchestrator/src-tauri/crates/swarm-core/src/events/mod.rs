@@ -24,12 +24,16 @@
 //! | `bus_message`       | [`BusMessagePayload`]      | Inter-agent bus message        |
 //! | `worktree_created`  | [`WorktreeCreatedPayload`] | Worker's git worktree created  |
 //! | `worktree_removed`  | [`WorktreeRemovedPayload`] | Worker's git worktree removed/preserved |
+//! | `ship_progress`     | [`ShipProgressPayload`]    | One step of an in-flight ship operation |
+//! | `ship_settled`      | [`ShipSettledPayload`]     | Terminal receipt for a ship operation |
+//! | `commit_created`    | [`CommitCreatedPayload`]   | Ship chain created a commit    |
 
 pub mod emitter;
 
 pub use emitter::{
-    AiStreamDeltaPayload, AiStreamSettledPayload, BusMessagePayload, EventSink,
-    SessionCreatedPayload, SessionDeletedPayload, SwarmEvent, SystemLogPayload,
-    SystemMetricsPayload, WorkerKilledPayload, WorkerOutputPayload, WorkerSpawnedPayload,
-    WorkerStatePayload, WorktreeCreatedPayload, WorktreeRemovedPayload,
+    AiStreamDeltaPayload, AiStreamSettledPayload, BusMessagePayload, CommitCreatedPayload,
+    EventSink, SessionCreatedPayload, SessionDeletedPayload, ShipProgressPayload,
+    ShipSettledPayload, SwarmEvent, SystemLogPayload, SystemMetricsPayload, WorkerKilledPayload,
+    WorkerOutputPayload, WorkerSpawnedPayload, WorkerStatePayload, WorktreeCreatedPayload,
+    WorktreeRemovedPayload,
 };
