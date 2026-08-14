@@ -88,6 +88,13 @@ pub enum SwarmEvent {
     ShipSettled(ShipSettledPayload),
     /// A commit was created by the ship chain.
     CommitCreated(CommitCreatedPayload),
+    /// Bytes were written to a worker's PTY stdin.
+    WorkerInput(WorkerInputPayload),
+    /// An AI/agent turn started — the causal root a turn's tool-driven
+    /// side effects cite as `causeSeq`.
+    AgentTurnStarted(AgentTurnStartedPayload),
+    /// A file was written via the `write_file` command.
+    FileWritten(FileWrittenPayload),
 }
 
 /// Payload for the `worker_spawned` event.
@@ -389,6 +396,107 @@ pub struct SystemLogPayload {
     pub timestamp: i64,
 }
 
+/// Payload for the `worker_input` event.
+///
+/// Emitted from [`crate::worker::lifecycle::do_worker_input`] AFTER a
+/// successful `write_to_pty`. Never carries raw keystrokes: `preview`
+/// is populated only for `source ∈ {tool, automation}` — human
+/// terminal keystrokes get a byte count only (see the module-level
+/// persistence carve-out on [`crate::orchestration::is_persistent`],
+/// which additionally keeps `source: "terminal"` rows out of the
+/// durable log entirely, so a typed secret is never archived).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerInputPayload {
+    /// UUID of the worker whose PTY received input.
+    pub worker_id: Uuid,
+    /// Number of bytes written.
+    pub bytes: usize,
+    /// `"terminal"` (human keystrokes), `"tool"` (an AI tool call), or
+    /// `"automation"` (e.g. workspace-watcher auto-injection).
+    pub source: String,
+    /// First ~120 characters of the input, control characters
+    /// stripped. `None` for `source == "terminal"` — see the struct
+    /// doc's "never carries raw keystrokes" note.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+}
+
+/// Payload for the `agent_turn_started` event.
+///
+/// A narrow webview intake: the frontend calls the
+/// `agent_turn_started` command once per AI/agent turn, before the
+/// first streaming round, to obtain a real persisted `seq` for that
+/// turn (via [`EventSink::emit_awaiting_seq`]) — every tool-driven side
+/// effect that turn then cites this event's `seq` as its own
+/// `causeSeq`. The engine records provenance; it never infers it — see
+/// [`EventSink::emit_with`]'s invariant doc. This is the mechanism that
+/// makes that invariant possible for AI turns: the frontend cannot cite
+/// a cause that does not exist in the log, so this command's job is to
+/// make one exist.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTurnStartedPayload {
+    /// UUID of the worker whose chat panel started this turn.
+    pub worker_id: Uuid,
+    /// Model identifier used for this turn (e.g. `"claude-sonnet-4-5"`).
+    pub model: String,
+    /// Client-generated correlation ID for this turn (the chat item id).
+    pub request_id: String,
+}
+
+/// Payload for the `file_written` event.
+///
+/// Emitted once, after a successful `write_file` command — write only;
+/// reads are not a causally interesting side effect and emit nothing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileWrittenPayload {
+    /// Absolute path written.
+    pub path: String,
+    /// Number of bytes written.
+    pub bytes: usize,
+}
+
+/// Causal attribution for one event: who caused it (`origin_worker`,
+/// the CAUSER) and what it was reacting to (`cause_seq`, the seq of the
+/// event that triggered it). Distinct from a payload's own
+/// `worker_id`/`workerId` (the SUBJECT) — for a tool-driven spawn the
+/// two differ, and that difference IS the causal edge (see
+/// `docs/architecture.md`'s subject-vs-causer rule).
+///
+/// `Default` is the honest "unattributed" value (`None`/`None`) — every
+/// existing call site that only ever called [`EventSink::emit`] keeps
+/// recording exactly that, truthfully, rather than a manufactured
+/// guess.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Provenance {
+    /// UUID of the worker whose action caused this event, if known.
+    pub origin_worker: Option<Uuid>,
+    /// Seq of the event this one is causally reacting to, if known.
+    pub cause_seq: Option<u64>,
+}
+
+/// One item on the writer channel: the event to order/persist/emit,
+/// its causal attribution, and an optional one-shot ack the caller can
+/// use to learn the seq the writer thread assigns it.
+///
+/// Internal to `swarm-core` — callers only ever see [`EventSink`]'s
+/// `emit`/`emit_with`/`emit_awaiting_seq` methods, never construct this
+/// directly.
+pub(crate) struct WriterMsg {
+    pub(crate) event: SwarmEvent,
+    pub(crate) provenance: Provenance,
+    /// `Some` only for [`EventSink::emit_awaiting_seq`] callers. Sending
+    /// on a oneshot is inherently non-blocking and silently discards
+    /// the value when the receiver was dropped (`Sender::send` returns
+    /// `Err` in that case, which the writer loop ignores) — a caller
+    /// that drops its receiver (e.g. a cancelled IPC call) can never
+    /// stall the single writer thread.
+    pub(crate) ack: Option<tokio::sync::oneshot::Sender<u64>>,
+}
+
 /// A cloneable handle for recording [`SwarmEvent`]s into the
 /// [`crate::orchestration::OrchestrationEngine`]'s ordered pipeline.
 ///
@@ -399,25 +507,84 @@ pub struct SystemLogPayload {
 /// Tauri's `try_state`) would otherwise need to guard against at every
 /// call site.
 #[derive(Clone)]
-pub struct EventSink(Sender<SwarmEvent>);
+pub struct EventSink(Sender<WriterMsg>);
 
 impl EventSink {
     /// Wraps a raw channel sender. Called only by
     /// [`crate::orchestration::OrchestrationEngine::start`].
-    pub(crate) fn new(tx: Sender<SwarmEvent>) -> Self {
+    pub(crate) fn new(tx: Sender<WriterMsg>) -> Self {
         Self(tx)
     }
 
-    /// Records an event for ordering, persistence, and emission.
+    /// Records an event for ordering, persistence, and emission, with
+    /// no causal attribution (`Provenance::default()` — unattributed,
+    /// not a guess).
     ///
     /// Fire-and-forget: the dedicated writer thread assigns a sequence
     /// number, persists (per policy), and broadcasts the ordered
     /// envelope. If the writer thread is gone, the event is dropped
     /// with an error log rather than panicking.
     pub fn emit(&self, event: SwarmEvent) {
-        if self.0.send(event).is_err() {
+        self.emit_with(event, Provenance::default());
+    }
+
+    /// Records an event exactly like [`Self::emit`], additionally
+    /// stamping `provenance` on the envelope.
+    ///
+    /// # Invariant
+    ///
+    /// The engine (and every caller of this method) **records**
+    /// provenance — it never **infers** it. A "the last AI turn
+    /// probably caused this" heuristic would manufacture exactly the
+    /// class of fabricated edge this whole feature exists to replace
+    /// (see `docs/architecture.md`'s ordered-event-core section). Every
+    /// `Provenance` passed here must trace back to an explicit,
+    /// caller-supplied value — an IPC argument, a message's own
+    /// `from_worker`, a turn's own recorded seq — never a inferred
+    /// "current cause" guess.
+    pub fn emit_with(&self, event: SwarmEvent, provenance: Provenance) {
+        let msg = WriterMsg {
+            event,
+            provenance,
+            ack: None,
+        };
+        if self.0.send(msg).is_err() {
             tracing::error!("event writer thread is gone; event dropped");
         }
+    }
+
+    /// Records an event like [`Self::emit_with`], returning a receiver
+    /// that resolves to the seq the writer thread assigns it.
+    ///
+    /// The primary use is `agent_turn_started`: the frontend needs a
+    /// real, persisted seq to cite as `causeSeq` on every tool-driven
+    /// side effect in that turn, and this is how it learns that number
+    /// deterministically (no polling, no timeout-bound
+    /// correlation-by-waitFor).
+    ///
+    /// Non-blocking and stall-proof: if the caller drops the returned
+    /// receiver (e.g. a cancelled IPC call) before the writer thread
+    /// gets to it, the subsequent `ack.send(seq)` inside the writer
+    /// loop simply returns `Err` and is ignored — the writer thread
+    /// never blocks on, or even notices, a disinterested receiver.
+    pub fn emit_awaiting_seq(
+        &self,
+        event: SwarmEvent,
+        provenance: Provenance,
+    ) -> tokio::sync::oneshot::Receiver<u64> {
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let msg = WriterMsg {
+            event,
+            provenance,
+            ack: Some(ack_tx),
+        };
+        if self.0.send(msg).is_err() {
+            tracing::error!("event writer thread is gone; event dropped");
+            // `ack_tx` is dropped here (it was moved into `msg`, which
+            // is now dropped) — the awaiting receiver resolves to a
+            // `RecvError` rather than hanging forever.
+        }
+        ack_rx
     }
 }
 
@@ -792,5 +959,180 @@ mod tests {
         });
         let json = serde_json::to_string(&event).expect("serialize");
         assert!(json.contains("\"workerId\""));
+    }
+
+    // ── Provenance ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_provenance_default_is_fully_unattributed() {
+        let prov = Provenance::default();
+        assert_eq!(prov.origin_worker, None);
+        assert_eq!(prov.cause_seq, None);
+    }
+
+    #[test]
+    fn test_provenance_roundtrip_with_values() {
+        let worker_id = Uuid::new_v4();
+        let prov = Provenance {
+            origin_worker: Some(worker_id),
+            cause_seq: Some(42),
+        };
+        let json = serde_json::to_string(&prov).expect("serialize");
+        assert!(json.contains("\"originWorker\""));
+        assert!(json.contains("\"causeSeq\":42"));
+        let deserialized: Provenance = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(deserialized, prov);
+    }
+
+    // ── worker_input ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_worker_input_roundtrip_terminal_source_no_preview() {
+        let worker_id = Uuid::new_v4();
+        let event = SwarmEvent::WorkerInput(WorkerInputPayload {
+            worker_id,
+            bytes: 5,
+            source: "terminal".to_string(),
+            preview: None,
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"worker_input\""));
+        assert!(json.contains("\"source\":\"terminal\""));
+        // preview must be entirely absent from the wire, not `null` —
+        // omission (not nullability) is the contract for "no preview".
+        assert!(!json.contains("preview"));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::WorkerInput(p) = deserialized {
+            assert_eq!(p.worker_id, worker_id);
+            assert_eq!(p.bytes, 5);
+            assert_eq!(p.preview, None);
+        } else {
+            panic!("expected WorkerInput variant");
+        }
+    }
+
+    #[test]
+    fn test_worker_input_roundtrip_tool_source_with_preview() {
+        let event = SwarmEvent::WorkerInput(WorkerInputPayload {
+            worker_id: Uuid::nil(),
+            bytes: 12,
+            source: "tool".to_string(),
+            preview: Some("pnpm build\n".to_string()),
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"preview\":\"pnpm build\\n\""));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::WorkerInput(p) = deserialized {
+            assert_eq!(p.source, "tool");
+            assert_eq!(p.preview.as_deref(), Some("pnpm build\n"));
+        } else {
+            panic!("expected WorkerInput variant");
+        }
+    }
+
+    // ── agent_turn_started ───────────────────────────────────────────
+
+    #[test]
+    fn test_agent_turn_started_roundtrip() {
+        let worker_id = Uuid::new_v4();
+        let event = SwarmEvent::AgentTurnStarted(AgentTurnStartedPayload {
+            worker_id,
+            model: "claude-sonnet-4-5".to_string(),
+            request_id: "turn-1".to_string(),
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"agent_turn_started\""));
+        assert!(json.contains("\"requestId\":\"turn-1\""));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::AgentTurnStarted(p) = deserialized {
+            assert_eq!(p.worker_id, worker_id);
+            assert_eq!(p.model, "claude-sonnet-4-5");
+        } else {
+            panic!("expected AgentTurnStarted variant");
+        }
+    }
+
+    // ── file_written ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_file_written_roundtrip() {
+        let event = SwarmEvent::FileWritten(FileWrittenPayload {
+            path: "/home/user/.swarm/out.txt".to_string(),
+            bytes: 7,
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"file_written\""));
+        assert!(json.contains("\"bytes\":7"));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::FileWritten(p) = deserialized {
+            assert_eq!(p.path, "/home/user/.swarm/out.txt");
+            assert_eq!(p.bytes, 7);
+        } else {
+            panic!("expected FileWritten variant");
+        }
+    }
+
+    // ── EventSink emit_with / emit_awaiting_seq ─────────────────────
+
+    #[test]
+    fn test_emit_with_carries_provenance_onto_the_writer_channel() {
+        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
+        let sink = EventSink::new(tx);
+        let worker_id = Uuid::new_v4();
+
+        sink.emit_with(
+            SwarmEvent::WorkerKilled(WorkerKilledPayload { worker_id }),
+            Provenance {
+                origin_worker: Some(worker_id),
+                cause_seq: Some(9),
+            },
+        );
+
+        let msg = rx.recv().expect("message on writer channel");
+        assert_eq!(msg.provenance.origin_worker, Some(worker_id));
+        assert_eq!(msg.provenance.cause_seq, Some(9));
+        assert!(msg.ack.is_none());
+    }
+
+    #[test]
+    fn test_emit_defaults_to_unattributed_provenance() {
+        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
+        let sink = EventSink::new(tx);
+        sink.emit(SwarmEvent::WorkerKilled(WorkerKilledPayload {
+            worker_id: Uuid::nil(),
+        }));
+        let msg = rx.recv().expect("message on writer channel");
+        assert_eq!(msg.provenance, Provenance::default());
+    }
+
+    /// DIRECTIVE: dropping the `emit_awaiting_seq` receiver must never
+    /// stall the writer — the writer-side `ack.send(seq)` is
+    /// non-blocking by construction (oneshot semantics), and this pins
+    /// that down at the `EventSink` boundary rather than only trusting
+    /// the type. See the kill-criterion in the provenance plan.
+    #[test]
+    fn test_ack_send_after_receiver_dropped_does_not_panic_or_block() {
+        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
+        let sink = EventSink::new(tx);
+
+        let ack_rx = sink.emit_awaiting_seq(
+            SwarmEvent::WorkerKilled(WorkerKilledPayload {
+                worker_id: Uuid::nil(),
+            }),
+            Provenance::default(),
+        );
+        drop(ack_rx); // caller lost interest before the writer got to it
+
+        let msg = rx.recv().expect("message on writer channel");
+        let ack = msg
+            .ack
+            .expect("emit_awaiting_seq must attach an ack sender");
+        // This is the exact call the writer loop makes. It must return
+        // without panicking regardless of the (already-dropped) receiver.
+        let send_result = ack.send(7);
+        assert!(
+            send_result.is_err(),
+            "send must report the dropped receiver, not hang"
+        );
     }
 }

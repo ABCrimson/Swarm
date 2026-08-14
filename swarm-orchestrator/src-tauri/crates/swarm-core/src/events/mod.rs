@@ -27,13 +27,27 @@
 //! | `ship_progress`     | [`ShipProgressPayload`]    | One step of an in-flight ship operation |
 //! | `ship_settled`      | [`ShipSettledPayload`]     | Terminal receipt for a ship operation |
 //! | `commit_created`    | [`CommitCreatedPayload`]   | Ship chain created a commit    |
+//! | `worker_input`      | [`WorkerInputPayload`]     | Bytes written to a worker's PTY stdin |
+//! | `agent_turn_started`| [`AgentTurnStartedPayload`]| An AI/agent turn started (causal root) |
+//! | `file_written`      | [`FileWrittenPayload`]     | A file was written via `write_file` |
+//!
+//! ## Provenance
+//!
+//! Every event's envelope (the [`crate::orchestration::DomainEvent`]
+//! wrapping a `SwarmEvent`) can additionally carry a [`Provenance`]:
+//! `{originWorker, causeSeq}`. `originWorker` is the CAUSER; a
+//! payload's own `workerId` is the SUBJECT — for a tool-driven spawn
+//! the two differ, and that difference is the causal edge. The engine
+//! records provenance, it never infers it — see
+//! [`EventSink::emit_with`]'s invariant doc.
 
 pub mod emitter;
 
+pub(crate) use emitter::WriterMsg;
 pub use emitter::{
-    AiStreamDeltaPayload, AiStreamSettledPayload, BusMessagePayload, CommitCreatedPayload,
-    EventSink, SessionCreatedPayload, SessionDeletedPayload, ShipProgressPayload,
-    ShipSettledPayload, SwarmEvent, SystemLogPayload, SystemMetricsPayload, WorkerKilledPayload,
-    WorkerOutputPayload, WorkerSpawnedPayload, WorkerStatePayload, WorktreeCreatedPayload,
-    WorktreeRemovedPayload,
+    AgentTurnStartedPayload, AiStreamDeltaPayload, AiStreamSettledPayload, BusMessagePayload,
+    CommitCreatedPayload, EventSink, FileWrittenPayload, Provenance, SessionCreatedPayload,
+    SessionDeletedPayload, ShipProgressPayload, ShipSettledPayload, SwarmEvent, SystemLogPayload,
+    SystemMetricsPayload, WorkerInputPayload, WorkerKilledPayload, WorkerOutputPayload,
+    WorkerSpawnedPayload, WorkerStatePayload, WorktreeCreatedPayload, WorktreeRemovedPayload,
 };
