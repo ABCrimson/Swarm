@@ -119,6 +119,29 @@ pub enum AppError {
     /// is safe to log.
     #[error("Git error: {0}")]
     Git(String),
+
+    /// A [`crate::agent::adapter::AgentSession::send_turn`] call arrived
+    /// while a turn was already in flight on that session. A typed
+    /// variant (not a generic `Ipc` string) because callers are
+    /// expected to match on it: per the trait's concurrency contract, a
+    /// session never queues a second turn internally — turn-level
+    /// queueing across multiple turns is
+    /// [`crate::agent::scheduler::AgentScheduler`]'s job.
+    #[error("agent session busy: a turn is already in flight")]
+    AgentSessionBusy,
+
+    /// A piped provider process's NDJSON framer buffered a single line
+    /// past [`crate::worker::proc::MAX_LINE_BYTES`] without a
+    /// terminating `\n` — a provider bug (or a non-NDJSON stream) that
+    /// must fail loudly rather than grow the buffer unboundedly or
+    /// silently truncate the line.
+    #[error("NDJSON line exceeded {max} bytes without a terminator (buffered {bytes})")]
+    LineTooLong {
+        /// Bytes buffered when the cap was hit.
+        bytes: usize,
+        /// The configured cap.
+        max: usize,
+    },
 }
 
 /// Serializes [`AppError`] as a plain string for Tauri IPC transport.

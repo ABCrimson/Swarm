@@ -445,7 +445,7 @@ mod tests {
     #[test]
     fn test_every_other_new_agent_variant_is_persistent() {
         use crate::agent::adapter::{
-            CancelGranularity, Capabilities, PermissionDecision, ProviderId,
+            AgentTurnStatus, CancelGranularity, Capabilities, PermissionDecision, ProviderId,
         };
         use crate::events::{
             AgentBlockPayload, AgentPermissionRequestPayload, AgentSessionExitedPayload,
@@ -510,7 +510,7 @@ mod tests {
             AgentTurnSettledPayload {
                 worker_id: Uuid::nil(),
                 turn_id: "t1".to_string(),
-                status: "ok".to_string(),
+                status: AgentTurnStatus::Ok,
                 error: None,
                 cost_usd: Some(0.01),
                 usage: None,

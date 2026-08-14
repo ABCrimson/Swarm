@@ -322,6 +322,7 @@ pub async fn worker_input(
 #[cfg(test)]
 mod tests {
     use swarm_core::events::InputSource;
+    use swarm_core::worker::handle::WorkerConfig;
 
     /// Mirrors `worker_input`'s real, non-injected argument list
     /// (`id`, `data`, `source`, `origin_worker`, `cause_seq` — the
@@ -409,6 +410,106 @@ mod tests {
 
         let parsed: Result<WorkerInputArgs, _> = serde_json::from_value(frontend_payload);
         assert!(parsed.is_err());
+    }
+
+    // ── Credential-leak fix, command layer (review nit I) ────────────
+
+    /// `Write` + `tracing_subscriber::fmt::MakeWriter` impl over a
+    /// shared buffer, so a captured subscriber can be pointed at
+    /// in-process memory instead of stdout — mirrors
+    /// `swarm_core::worker::lifecycle::tests::TracingCaptureBuf`
+    /// exactly (duplicated rather than shared: it is a few lines, and
+    /// this crate has no existing shared test-support module to put it
+    /// in).
+    #[derive(Clone, Default)]
+    struct TracingCaptureBuf(std::sync::Arc<parking_lot::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for TracingCaptureBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TracingCaptureBuf {
+        type Writer = TracingCaptureBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// DIRECTIVE (review nit I): span-capture regression test for THIS
+    /// layer's credential-leak fix (`spawn_worker`'s own
+    /// `#[tracing::instrument(skip(sink, registry, repo_locks,
+    /// config))]`), mirroring
+    /// `swarm_core::worker::lifecycle::tests::test_do_spawn_worker_never_leaks_env_secret_into_tracing_output`
+    /// at the Tauri-command boundary — the first layer's test alone
+    /// left this second, earlier-in-the-call-chain boundary unverified.
+    ///
+    /// `spawn_worker` takes `tauri::State<'_, T>` parameters that
+    /// cannot be constructed outside a live `tauri::App` — no such test
+    /// harness exists in this codebase (see the `WorkerInputArgs`
+    /// shadow-struct note above for the same constraint applied to
+    /// argument-shape testing). This test instead reproduces the EXACT
+    /// span `#[tracing::instrument(skip(sink, registry, repo_locks,
+    /// config))]` generates for `spawn_worker`'s real, unmodified
+    /// parameter list (a `tracing::info_span!` naming the same fields
+    /// the macro would capture — `origin_worker`/`cause_seq` included,
+    /// `config` excluded) around the identical `tracing::info!` call
+    /// `spawn_worker`'s body makes, so a regression in either this
+    /// file's skip list or its logged summary is caught here without
+    /// needing a full Tauri harness.
+    ///
+    /// KEEP THIS IN SYNC with `spawn_worker`'s `#[tracing::instrument]`
+    /// attribute and its first `tracing::info!` call — same discipline
+    /// as the `WorkerInputArgs` shadow struct.
+    #[test]
+    fn test_spawn_worker_command_layer_never_leaks_env_secret_into_tracing_output() {
+        let capture = TracingCaptureBuf::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .finish();
+
+        const SECRET: &str = "sk-ant-command-layer-secret-should-never-be-logged";
+        let mut env = std::collections::HashMap::new();
+        env.insert("ANTHROPIC_API_KEY".to_string(), SECRET.to_string());
+        let config = WorkerConfig {
+            name: "Command Layer Secret Bearer".to_string(),
+            env,
+            ..WorkerConfig::default()
+        };
+        let origin_worker: Option<String> = None;
+        let cause_seq: Option<u64> = None;
+
+        tracing::subscriber::with_default(subscriber, || {
+            // Mirrors #[tracing::instrument(skip(sink, registry,
+            // repo_locks, config))] on spawn_worker(sink, registry,
+            // repo_locks, config, origin_worker, cause_seq) — same
+            // fields captured, `config` excluded.
+            let span = tracing::info_span!("spawn_worker", ?origin_worker, cause_seq);
+            let _enter = span.enter();
+            tracing::info!(
+                name = %config.name,
+                env_key_count = config.env.len(),
+                "spawn_worker called"
+            );
+        });
+
+        let captured = String::from_utf8_lossy(&capture.0.lock()).into_owned();
+        assert!(
+            !captured.contains(SECRET),
+            "captured tracing output leaked an env secret value at the command layer: {captured}"
+        );
+        assert!(
+            captured.contains("Command Layer Secret Bearer"),
+            "expected the redacted summary's name field to appear (proves the \
+             subscriber actually captured this call, not a vacuous pass), got: {captured}"
+        );
     }
 }
 

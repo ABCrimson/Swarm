@@ -19,7 +19,7 @@ use std::sync::mpsc::Sender;
 use uuid::Uuid;
 
 use crate::agent::adapter::{
-    Capabilities, PermissionDecision, PermissionId, ProviderId, SessionKey, TurnId,
+    AgentTurnStatus, Capabilities, PermissionDecision, PermissionId, ProviderId, SessionKey, TurnId,
 };
 use crate::git::ShipError;
 use crate::worker::handle::WorkerState;
@@ -676,9 +676,12 @@ pub struct AgentTurnSettledPayload {
     pub worker_id: Uuid,
     /// Correlation id for the settled turn.
     pub turn_id: TurnId,
-    /// `"ok"` or `"error"`.
-    pub status: String,
-    /// Error description when `status == "error"`.
+    /// `"ok"` or `"error"` — a closed enum (see
+    /// [`AgentTurnStatus`]'s doc for why this one is typed where the
+    /// older `ai_stream_settled`/`ship_settled` receipts stayed plain
+    /// strings).
+    pub status: AgentTurnStatus,
+    /// Error description when `status == `[`AgentTurnStatus::Error`].
     pub error: Option<String>,
     /// Real, provider-reported cost in USD, when available (see
     /// [`Capabilities::native_cost`]).
@@ -1497,10 +1500,12 @@ mod tests {
 
     #[test]
     fn test_agent_turn_settled_roundtrip_ok_and_synthesized_error() {
+        use crate::agent::adapter::AgentTurnStatus;
+
         let ok = SwarmEvent::AgentTurnSettled(AgentTurnSettledPayload {
             worker_id: Uuid::nil(),
             turn_id: "turn-1".to_string(),
-            status: "ok".to_string(),
+            status: AgentTurnStatus::Ok,
             error: None,
             cost_usd: Some(0.0123),
             usage: Some(serde_json::json!({"inputTokens": 100})),
@@ -1509,6 +1514,7 @@ mod tests {
         });
         let json = serde_json::to_string(&ok).expect("serialize");
         assert!(json.contains("\"type\":\"agent_turn_settled\""));
+        assert!(json.contains("\"status\":\"ok\""));
         assert!(json.contains("\"costUsd\":0.0123"));
 
         // Condition B: a synthesized settlement on ungraceful exit
@@ -1516,7 +1522,7 @@ mod tests {
         let synthesized = SwarmEvent::AgentTurnSettled(AgentTurnSettledPayload {
             worker_id: Uuid::nil(),
             turn_id: "turn-2".to_string(),
-            status: "error".to_string(),
+            status: AgentTurnStatus::Error,
             error: Some("process killed".to_string()),
             cost_usd: None,
             usage: None,
@@ -1524,14 +1530,26 @@ mod tests {
             num_turns: None,
         });
         let json2 = serde_json::to_string(&synthesized).expect("serialize");
+        assert!(json2.contains("\"status\":\"error\""));
         let deserialized: SwarmEvent = serde_json::from_str(&json2).expect("deserialize");
         if let SwarmEvent::AgentTurnSettled(p) = deserialized {
-            assert_eq!(p.status, "error");
+            assert_eq!(p.status, AgentTurnStatus::Error);
             assert_eq!(p.cost_usd, None);
             assert_eq!(p.usage, None);
         } else {
             panic!("expected AgentTurnSettled variant");
         }
+    }
+
+    /// DIRECTIVE (review nit F): `status` is a closed enum, not a bare
+    /// string — an unrecognized value must fail deserialization
+    /// outright, matching the [`crate::events::InputSource`]/
+    /// `ProviderId` precedent.
+    #[test]
+    fn test_agent_turn_status_rejects_unknown_string() {
+        use crate::agent::adapter::AgentTurnStatus;
+        let result: Result<AgentTurnStatus, _> = serde_json::from_str("\"pending\"");
+        assert!(result.is_err());
     }
 
     #[test]
