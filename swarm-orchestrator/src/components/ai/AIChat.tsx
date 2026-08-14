@@ -13,6 +13,8 @@ import { truncateMessages } from "#lib/ai-error";
 import type { StreamParams } from "#lib/anthropic";
 import { estimateTokens } from "#lib/context-manager";
 import { CLAUDE_MODELS, getContextWindow } from "#lib/models";
+import { agentTurnStarted } from "#lib/tauri";
+import type { ToolProvenance } from "#lib/tools";
 import { executeTool, getAllAnthropicTools } from "#lib/tools";
 import { useAiStore } from "#store/ai";
 import type { AiMessage } from "#store/types";
@@ -333,6 +335,24 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
         let convo: StreamParams["messages"] = truncated;
         let allText = "";
 
+        // One agent_turn_started per turn, before round 0 — the
+        // resulting seq (turnSeq) lives in this closure alongside the
+        // TurnToken and is cited as causeSeq on every tool execution
+        // below. A failure here (e.g. no Tauri IPC bridge) degrades to
+        // an unattributed-by-seq turn rather than aborting the turn —
+        // originWorker (this worker's own id) is still real and useful
+        // on its own.
+        let turnSeq: number | undefined;
+        try {
+          turnSeq = await agentTurnStarted(workerId, modelId, itemId);
+        } catch (err) {
+          console.error(
+            "AIChat: agentTurnStarted failed — this turn's tool calls will carry no causeSeq",
+            err,
+          );
+        }
+        const turnProvenance: ToolProvenance = { originWorker: workerId, causeSeq: turnSeq };
+
         for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
           const roundCalls: { id: string; name: string; input: Record<string, unknown> }[] = [];
 
@@ -411,7 +431,7 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
           const results: { call: (typeof roundCalls)[number]; ok: boolean; text: string }[] = [];
           for (const call of roundCalls) {
             if (turn.cancelled) break;
-            const result = await executeTool(call.name, call.input);
+            const result = await executeTool(call.name, call.input, turnProvenance);
             const text = result.success
               ? safeJson(result.data ?? null)
               : (result.error ?? "Unknown Error");

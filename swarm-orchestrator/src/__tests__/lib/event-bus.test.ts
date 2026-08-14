@@ -127,6 +127,39 @@ describe("event-bus", () => {
     expect(invokeMock).toHaveBeenNthCalledWith(2, "events_since", { afterSeq: 3 });
   });
 
+  it("delivers a stamped envelope's originWorker/causeSeq to handlers unstripped", async () => {
+    await connectEventBus();
+    let received: DomainEvent | undefined;
+    onEvent("worker_input", (e) => {
+      received = e;
+    });
+
+    push({
+      seq: 1,
+      ts: 1000,
+      type: "worker_input",
+      payload: { workerId: "w-1", bytes: 3, source: "tool" },
+      originWorker: "w-origin",
+      causeSeq: 41,
+    });
+
+    expect(received?.originWorker).toBe("w-origin");
+    expect(received?.causeSeq).toBe(41);
+  });
+
+  it("an unstamped envelope's originWorker/causeSeq are undefined, not stripped-to-null", async () => {
+    await connectEventBus();
+    let received: DomainEvent | undefined;
+    onEvent("worker_spawned", (e) => {
+      received = e;
+    });
+
+    push(ev(1));
+
+    expect(received?.originWorker).toBeUndefined();
+    expect(received?.causeSeq).toBeUndefined();
+  });
+
   it("a throwing handler does not break fan-out to other subscribers or waitFor", async () => {
     await connectEventBus();
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

@@ -6,7 +6,7 @@ import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
 import * as z from "zod";
 import { zodToTool } from "#lib/anthropic";
 import { customToolToAnthropic, isValidToolName, runCustomTool } from "#lib/custom-tools";
-import { readAbsoluteFile, writeAbsoluteFile } from "#lib/fs";
+import type { ProvenanceArgs } from "#lib/tauri";
 import { invoke } from "#lib/tauri";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
 import { useCustomToolsStore } from "#store/custom-tools";
@@ -19,6 +19,17 @@ export interface SwarmToolResult {
   readonly data?: unknown;
   readonly error?: string;
 }
+
+/**
+ * Causal attribution passed from an AI turn's tool loop
+ * (`AIChat.tsx`'s `doSend`) into a built-in tool's `execute`. `undefined`
+ * when a tool runs outside a turn context (there is none today, but the
+ * signature stays honest either way) — every `execute` treats it as
+ * optional and forwards `originWorker`/`causeSeq` as-is to whichever IPC
+ * command it calls. Re-exported from `#lib/tauri`'s `ProvenanceArgs` —
+ * one shape, one name, used at both seams.
+ */
+export type ToolProvenance = ProvenanceArgs;
 
 /**
  * A registered SWARM tool with its Zod schema and Anthropic-compatible
@@ -41,7 +52,10 @@ export interface SwarmTool {
   readonly uiDescription: string;
   readonly schema: z.ZodType;
   readonly anthropicTool: Tool;
-  readonly execute: (input: Record<string, unknown>) => Promise<SwarmToolResult>;
+  readonly execute: (
+    input: Record<string, unknown>,
+    prov?: ToolProvenance,
+  ) => Promise<SwarmToolResult>;
 }
 
 // ── Tool Input Schemas ──────────────────────────────
@@ -90,7 +104,7 @@ function createTool(
   description: string,
   uiDescription: string,
   schema: z.ZodType,
-  execute: (input: Record<string, unknown>) => Promise<SwarmToolResult>,
+  execute: (input: Record<string, unknown>, prov?: ToolProvenance) => Promise<SwarmToolResult>,
 ): SwarmTool {
   return {
     name,
@@ -107,14 +121,23 @@ const spawnWorkerTool = createTool(
   "Spawn a new worker process. Returns the worker ID.",
   "Spawn A New Worker Process. Returns The Worker ID.",
   SpawnWorkerInput,
-  async (input) => {
+  async (input, prov) => {
     try {
       const { name } = SpawnWorkerInput.parse(input);
       // Routed through spawnWorkerFromSpec (not a hand-rolled invoke())
       // so an AI-spawned worker gets the same Zod-validated response and
       // store bookkeeping (useWorkerStore placeholder) as every other
-      // spawn path — see #lib/worker-spawn.
-      const workerId = await spawnWorkerFromSpec({ name: name ?? "Worker" });
+      // spawn path — see #lib/worker-spawn. `prov` (the turn's
+      // workerId/turnSeq) is threaded through, when present, so the new
+      // worker's worker_spawned/worktree_created events carry a real
+      // causer, distinct from the subject (the new worker's own id) —
+      // that difference is the causal edge. Called with exactly two
+      // args when `prov` is absent, matching every pre-provenance
+      // caller's call shape.
+      const spec = { name: name ?? "Worker" };
+      const workerId = prov
+        ? await spawnWorkerFromSpec(spec, undefined, prov)
+        : await spawnWorkerFromSpec(spec);
       if (workerId === null) {
         return { success: false, error: "Spawn Worker Unavailable Outside The Desktop App." };
       }
@@ -130,9 +153,13 @@ const killWorkerTool = createTool(
   "Terminate a running worker process by its UUID.",
   "Terminate A Running Worker Process By Its UUID.",
   KillWorkerInput,
-  async (input) => {
+  async (input, prov) => {
     try {
-      await invoke<void>("kill_worker", { id: input.workerId });
+      await invoke<void>("kill_worker", {
+        id: input.workerId,
+        originWorker: prov?.originWorker,
+        causeSeq: prov?.causeSeq,
+      });
       return { success: true, data: { killed: input.workerId } };
     } catch (error) {
       return { success: false, error: String(error) };
@@ -145,11 +172,14 @@ const runCommandTool = createTool(
   "Execute a shell command within a worker's PTY. Returns stdout/stderr output.",
   "Execute A Shell Command Within A Worker's PTY. Returns Stdout/Stderr Output.",
   RunCommandInput,
-  async (input) => {
+  async (input, prov) => {
     try {
       await invoke<void>("worker_input", {
         id: input.workerId,
         data: `${input.command}\n`,
+        source: "tool",
+        originWorker: prov?.originWorker,
+        causeSeq: prov?.causeSeq,
       });
       return { success: true, data: { sent: input.command } };
     } catch (error) {
@@ -166,12 +196,14 @@ const readFileTool = createTool(
   async (input) => {
     try {
       const { path, maxLines } = ReadFileInput.parse(input);
-      // The file is always read in full, then sliced in memory — there
-      // is no streaming/early-exit read path yet. Acceptable for now
-      // given these are AI-tool reads of small config/text files, not a
+      // Routed through the real read_file Rust command (not
+      // tauri-plugin-fs) — see commands/fs.rs. The file is always read
+      // in full, then sliced in memory — there is no streaming/
+      // early-exit read path yet. Acceptable for now given these are
+      // AI-tool reads of small config/text files, not a
       // general-purpose log tailer; revisit if maxLines is ever used
       // against multi-gigabyte files.
-      const fullContent = await readAbsoluteFile(path);
+      const fullContent = await invoke<string>("read_file", { path });
       const content =
         typeof maxLines === "number"
           ? fullContent.split("\n").slice(0, maxLines).join("\n")
@@ -188,10 +220,19 @@ const writeFileTool = createTool(
   "Write content to a file at the given path, creating or overwriting it.",
   "Write Content To A File At The Given Path, Creating Or Overwriting It.",
   WriteFileInput,
-  async (input) => {
+  async (input, prov) => {
     try {
       const { path, content } = WriteFileInput.parse(input);
-      await writeAbsoluteFile(path, content);
+      // Routed through the real write_file Rust command (not
+      // tauri-plugin-fs) — see commands/fs.rs. Stamped: the resulting
+      // file_written event carries this turn's originWorker/causeSeq,
+      // joining the causality graph.
+      await invoke<void>("write_file", {
+        path,
+        content,
+        originWorker: prov?.originWorker,
+        causeSeq: prov?.causeSeq,
+      });
       return { success: true, data: { path, written: true } };
     } catch (error) {
       return { success: false, error: String(error) };
@@ -259,17 +300,22 @@ export function getAllAnthropicTools(): Tool[] {
 /**
  * Execute a tool by name with the given input.
  *
- * Built-ins run their registry execute function; names not in the
- * registry fall back to the persisted custom tools, whose scripts run
- * in a sandboxed Blob Worker (see #lib/custom-tools).
+ * Built-ins run their registry execute function, forwarding `prov`
+ * (causal attribution — the calling AI turn's workerId/turnSeq, when
+ * this call happens inside one) to whichever IPC command the tool
+ * calls. Names not in the registry fall back to the persisted custom
+ * tools, whose scripts run in a sandboxed Blob Worker (see
+ * #lib/custom-tools) — those have no side effects of their own to
+ * stamp, so `prov` is not forwarded there.
  */
 export async function executeTool(
   name: string,
   input: Record<string, unknown>,
+  prov?: ToolProvenance,
 ): Promise<SwarmToolResult> {
   const tool = toolRegistry.get(name);
   if (tool) {
-    return tool.execute(input);
+    return tool.execute(input, prov);
   }
   const custom = useCustomToolsStore.getState().customTools.find((t) => t.name === name);
   if (custom) {
