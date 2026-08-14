@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use swarm_core::bus::channel::MessageBus;
 use swarm_core::bus::router::{PipelineInfo, PipelineStage, Router};
-use swarm_core::events::{BusMessagePayload, EventSink, SwarmEvent};
+use swarm_core::events::{BusMessagePayload, EventSink, Provenance, SwarmEvent};
 
 /// Sends a message from one worker to another on a topic.
 ///
@@ -97,6 +97,16 @@ pub async fn bus_send(
 /// * `bus` - Shared message bus (managed state)
 /// * `topic` - Topic to subscribe to
 ///
+/// # Provenance
+///
+/// The forwarder already holds `msg.from_worker` — the free win from
+/// Phase 4: every `bus_message` envelope is stamped with
+/// `originWorker: msg.from_worker`, giving real attribution for every
+/// bus message with no new plumbing. `causeSeq` is left `None` — the
+/// sending side would need to thread its own turn's seq through
+/// `bus_send` to populate that, deferred to v2 per the honest v1
+/// attribution table.
+///
 /// # Errors
 ///
 /// Returns a `String` error if subscription fails.
@@ -116,13 +126,20 @@ pub async fn bus_subscribe(
         loop {
             match rx.recv().await {
                 Ok(msg) => {
-                    sink.emit(SwarmEvent::BusMessage(BusMessagePayload {
-                        message_id: msg.id,
-                        from_worker: msg.from_worker,
-                        to_worker: msg.to_worker,
-                        topic: msg.topic,
-                        payload: msg.payload,
-                    }));
+                    let from_worker = msg.from_worker;
+                    sink.emit_with(
+                        SwarmEvent::BusMessage(BusMessagePayload {
+                            message_id: msg.id,
+                            from_worker: msg.from_worker,
+                            to_worker: msg.to_worker,
+                            topic: msg.topic,
+                            payload: msg.payload,
+                        }),
+                        Provenance {
+                            origin_worker: Some(from_worker),
+                            cause_seq: None,
+                        },
+                    );
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(topic = %topic, skipped = n, "bus subscriber lagged");
