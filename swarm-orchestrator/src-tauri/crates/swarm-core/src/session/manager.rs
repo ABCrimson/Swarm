@@ -14,8 +14,9 @@ use crate::error::AppError;
 /// Represents a user session containing a set of workers and configuration.
 ///
 /// Sessions group related workers together and store arbitrary
-/// JSON configuration. They are persisted to disk via
-/// [`super::store`] for crash recovery.
+/// JSON configuration. They are persisted to disk via a shell-provided
+/// `SessionStore` implementation (see [`super::SessionStore`]) for
+/// crash recovery.
 ///
 /// # Fields
 ///

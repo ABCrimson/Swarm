@@ -119,7 +119,7 @@ impl AiQueue {
     ///
     /// The queue processes requests in priority order with a
     /// configurable concurrency limit. Uses a bounded channel
-    /// with capacity [`AI_QUEUE_CAPACITY`] for backpressure.
+    /// with capacity `AI_QUEUE_CAPACITY` for backpressure.
     ///
     /// # Arguments
     ///

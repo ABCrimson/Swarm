@@ -21,17 +21,17 @@ const STORE_KEY: &str = "sessions";
 pub struct PluginSessionStore<'a>(pub &'a AppHandle);
 
 impl SessionStore for PluginSessionStore<'_> {
-    fn load(&self) -> anyhow::Result<Vec<Session>> {
+    fn load(&self) -> anyhow::Result<Option<Vec<Session>>> {
         let store = self
             .0
             .store(STORE_FILE)
             .context("failed to open session store")?;
 
         match store.get(STORE_KEY) {
-            Some(value) => {
-                serde_json::from_value(value.clone()).context("failed to deserialize sessions")
-            }
-            None => Ok(Vec::new()),
+            Some(value) => Ok(Some(
+                serde_json::from_value(value.clone()).context("failed to deserialize sessions")?,
+            )),
+            None => Ok(None),
         }
     }
 
@@ -94,13 +94,9 @@ pub fn save_sessions(app: &AppHandle, manager: &SessionManager) -> anyhow::Resul
 /// - Session deserialization fails (corrupted data)
 #[tracing::instrument(skip(app, manager))]
 pub fn load_sessions(app: &AppHandle, manager: &SessionManager) -> anyhow::Result<()> {
-    let sessions = PluginSessionStore(app).load()?;
-
-    if sessions.is_empty() {
-        tracing::debug!("no sessions found in store, starting fresh");
-    } else {
-        tracing::info!(count = sessions.len(), "loaded sessions from store");
-        manager.restore_sessions(sessions);
+    match PluginSessionStore(app).load()? {
+        Some(sessions) => manager.restore_sessions(sessions), // logs count, including 0
+        None => tracing::debug!("no sessions found in store, starting fresh"),
     }
 
     Ok(())

@@ -85,11 +85,13 @@ jobs:
       - name: Verify swarm-core has no Tauri dependency
         working-directory: swarm-orchestrator/src-tauri
         run: |
-          # Skip the root package line (tail -n +2) — the checkout path
-          # itself contains "src-tauri", which would otherwise false-
-          # positive a plain grep across the whole tree output.
-          if cargo tree -p swarm-core -e normal | tail -n +2 | grep -qi tauri; then
+          # --prefix none --format "{p}" prints one bare "name version"
+          # per line (no tree-drawing indentation, no path). Anchored
+          # ^tauri match is immune to the checkout path containing
+          # "src-tauri" and to any future workspace path-dependency
+          # whose path happens to contain "tauri".
+          if cargo tree -p swarm-core -e normal --prefix none --format "{p}" | grep -qE "^tauri"; then
             echo "::error::swarm-core must not depend on tauri (directly or transitively)"
-            cargo tree -p swarm-core -e normal | tail -n +2 | grep -i tauri
+            cargo tree -p swarm-core -e normal --prefix none --format "{p}" | grep -E "^tauri"
             exit 1
           fi
