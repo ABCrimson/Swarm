@@ -1,18 +1,23 @@
-//! AI integration Tauri IPC command handlers.
+//! Agent turn Tauri IPC command handlers.
 //!
-//! Provides the `ai_request` command that enqueues AI requests
-//! into the priority queue for streaming processing via the
-//! Anthropic Messages API, and `agent_turn_started` — a narrow
-//! webview intake used by the client-side chat streaming path
-//! (`AIChat.tsx`, which streams `@anthropic-ai/sdk` directly from the
-//! webview and never calls `ai_request`) to record a real, persisted
-//! seq for each AI/agent turn.
+//! Provides `agent_turn_started` — a narrow webview intake used by the
+//! client-side chat streaming path (`AIChat.tsx`, which streams
+//! `@anthropic-ai/sdk` directly from the webview) to record a real,
+//! persisted seq for each AI/agent turn.
+//!
+//! Moved here from the deleted `commands/ai.rs` (Phase 2 of the
+//! multi-provider plan: `ai_request` and its queue wiring were deleted
+//! wholesale — see `crate::commands::ai`'s removal in the changelog —
+//! but this command is unrelated to that dead path and is actively
+//! used, so it survives, unrenamed, in a home that matches its new
+//! neighbors: the `agent_*` event family Phase 3's provider adapters
+//! will extend it alongside (`agent_turn`, `agent_cancel`,
+//! `agent_permission_respond`, `agent_probe_providers`).
 
 use std::time::Duration;
 
 use uuid::Uuid;
 
-use swarm_core::ai::{AiQueue, AiRequest};
 use swarm_core::events::{AgentTurnStartedPayload, EventSink, Provenance, SwarmEvent};
 
 /// Ceiling on how long `agent_turn_started` waits for the writer thread
@@ -22,45 +27,6 @@ use swarm_core::events::{AgentTurnStartedPayload, EventSink, Provenance, SwarmEv
 /// thread is gone/wedged" from an indefinite hang into a bounded,
 /// reported failure `AIChat.tsx` already treats as "proceed unstamped."
 const AGENT_TURN_STARTED_ACK_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Enqueues an AI request for streaming processing.
-///
-/// Accepts an [`AiRequest`] from the frontend and places it
-/// into the [`AiQueue`] priority queue. The queue processes
-/// requests in priority order with concurrency limiting,
-/// emitting `ai_stream_delta` events on `swarm://events` as response
-/// chunks arrive.
-///
-/// # Arguments
-///
-/// * `queue` - Shared AI request queue (managed state)
-/// * `request` - The AI request containing messages, system prompt,
-///   and priority level
-///
-/// # Returns
-///
-/// The `request_id` string from the request, which the frontend
-/// can use to correlate incoming `ai_stream_delta` events on
-/// `swarm://events`.
-///
-/// # Errors
-///
-/// Returns a `String` error if the queue channel is closed
-/// (i.e., the processing loop has shut down).
-#[tauri::command]
-#[tracing::instrument(skip(queue, request), fields(request_id = %request.request_id))]
-pub async fn ai_request(
-    queue: tauri::State<'_, AiQueue>,
-    request: AiRequest,
-) -> Result<String, String> {
-    tracing::info!(request_id = %request.request_id, "ai_request called");
-    let request_id = request.request_id.clone();
-    queue.enqueue(request).map_err(|e| {
-        tracing::error!(error = %e, "failed to enqueue AI request");
-        e.to_string()
-    })?;
-    Ok(request_id)
-}
 
 /// Records the start of one AI/agent turn and returns the real,
 /// persisted seq the engine assigned it.

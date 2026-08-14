@@ -23,7 +23,6 @@ mod session;
 
 use commands::metrics::SharedSystem;
 use swarm_core::Paths;
-use swarm_core::ai::{AiClient, AiClientConfig, AiQueue, AiQueueConfig};
 use swarm_core::bus::channel::MessageBus;
 use swarm_core::bus::router::Router;
 use swarm_core::error::AppError;
@@ -104,13 +103,11 @@ pub(crate) fn resolve_paths(app: &tauri::AppHandle) -> Result<Paths, AppError> {
 ///      `swarm://events` — the primary, lossless delivery path
 ///    - Loads persisted sessions from disk
 ///    - Starts the background metrics collection loop (500ms interval)
-///    - Initializes the AI client and priority queue
 ///
 /// # Panics
 ///
 /// Panics if:
 /// - The main webview window cannot be found
-/// - The AI client fails to initialize
 /// - The Tauri application fails to start
 ///
 /// # Examples
@@ -136,9 +133,6 @@ pub fn run() {
     // Single shared sysinfo::System, reused by both the background metrics
     // loop and the on-demand get_metrics command for one CPU-delta tracker.
     let shared_system = SharedSystem::new();
-
-    // AI client with default (empty) config — user configures API key at runtime
-    let ai_config = AiClientConfig::default();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -174,9 +168,8 @@ pub fn run() {
             commands::session::list_sessions,
             commands::session::get_session,
             commands::session::session_add_worker,
-            // AI commands
-            commands::ai::ai_request,
-            commands::ai::agent_turn_started,
+            // Agent commands
+            commands::agent::agent_turn_started,
             // Config commands
             commands::config::read_config,
             commands::config::write_config,
@@ -320,11 +313,10 @@ pub fn run() {
                 metrics_cancel,
             );
 
-            // Initialize AI queue (requires an EventSink for event emission)
-            let ai_client = AiClient::new(ai_config.clone())
-                .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
-            let ai_queue = AiQueue::new(sink, ai_client, AiQueueConfig::default());
-            app.manage(ai_queue);
+            // The agent-turn scheduler (`swarm_core::agent::AgentScheduler`)
+            // is constructed lazily — Phase 3's provider adapters give it
+            // something real to dispatch to. Nothing to `app.manage()`
+            // here yet (see `swarm_core::agent`'s module doc).
 
             tracing::info!("SWARM Orchestrator setup complete");
             Ok(())

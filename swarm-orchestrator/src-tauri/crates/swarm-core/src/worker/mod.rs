@@ -10,9 +10,13 @@
 //! - [`handle`] — Worker state, configuration, and handle types
 //! - [`registry`] — Thread-safe concurrent worker store with aggregate metrics
 //! - [`pty`] — Cross-platform PTY spawning and I/O bridging to Tokio
+//! - [`proc`] — Piped-stdio process spawning + NDJSON framing for
+//!   JSON-protocol provider CLIs (a PTY corrupts NDJSON framing — see
+//!   the module doc)
 //! - [`lifecycle`] — High-level spawn, pause, resume, kill operations
 
 pub mod handle;
 pub mod lifecycle;
+pub mod proc;
 pub mod pty;
 pub mod registry;
