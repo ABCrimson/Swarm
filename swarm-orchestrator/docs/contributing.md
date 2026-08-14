@@ -348,26 +348,34 @@ cargo test -- --nocapture
 cargo test --doc
 ```
 
-**Current test coverage:**
+**Current test coverage** (the `ai::queue`/`ai::stream` modules below were deleted in Phase 2 of the multi-provider agent-execution plan — absorbed into `agent::scheduler`/transplanted into `worker::proc` respectively; this table now reflects the replacement modules, not the deleted ones):
 
-| Module                | Tests | Description                                              |
-|------------------------|-------|-------------------------------------------------------------|
-| `error`                | 11    | Display formatting, serialization                            |
-| `events::emitter`      | 8     | Roundtrip serialization, `snake_case` type tags, `camelCase` payload fields |
-| `worker::registry`     | 9     | Insert, get, remove, `update_state_if` compare-and-set, capacity, aggregate metrics |
-| `worker::lifecycle`    | 6     | Spawn/pause/resume/kill lifecycle transitions and error paths |
-| `ai::queue`            | 7     | Priority ordering, concurrency limiting, enqueue/dequeue      |
-| `ai::stream`           | 5     | SSE parsing, delta extraction, stop detection                 |
-| `bus::channel`         | 4     | Channel creation, send/receive, broadcast, message serialization |
-| `bus::router`          | 6     | Direct/broadcast send, pipeline creation, transform application |
-| `commands::metrics`    | 5     | `SharedSystem` construction, lock behavior, per-worker metric collection |
-| **Total**              | **61**| + 15 doc-tests passing (7 more `ignore`-annotated for private/network-dependent examples) |
+| Module                    | Tests | Description                                              |
+|----------------------------|-------|-------------------------------------------------------------|
+| `error`                    | 13    | Display formatting, serialization                            |
+| `events::emitter`          | 39    | Roundtrip serialization, `snake_case` type tags, `camelCase` payload fields, provenance, the `agent_*` family |
+| `worker::registry`         | 12    | Insert, get, remove, `update_state_if` compare-and-set, capacity, aggregate metrics |
+| `worker::lifecycle`        | 17    | Spawn/pause/resume/kill lifecycle transitions, worktree isolation, credential-leak span-capture regression |
+| `worker::proc`             | 12    | NDJSON framer (linear-scan + line-cap regressions), `spawn_piped` round-trip, `kill_and_wait`, stderr tail |
+| `agent::adapter`           | 5     | `AgentAdapter`/`AgentSession` trait contract + object safety, session lifecycle through a live engine, concurrency contract (busy/idempotent shutdown/exactly-once settlement), `ProviderId` wire-value pin |
+| `agent::scheduler`         | 9     | Priority ordering, concurrency limiting, enqueue/dequeue |
+| `orchestration::engine`    | 14    | Persistence policy, envelope shape, provenance stamping, `agent_*` persistence pinning |
+| `orchestration::log`       | 12    | SQLite append/read, migration ladder, partial index |
+| `git::*` (7 files)         | 101   | Binary discovery, worktree add/lock/unlock/remove, ship preflight/commit/push, secret redaction |
+| `bus::channel`             | 4     | Channel creation, send/receive, broadcast, message serialization |
+| `bus::router`              | 6     | Direct/broadcast send, pipeline creation, transform application |
+| `config`                   | 7     | Atomic key-value JSON config persistence |
+| `commands::metrics`        | 5     | `SharedSystem` construction, lock behavior, per-worker metric collection |
+| `commands::orchestration`  | 6     | `events_since` paging, live/backfilled envelope shape parity |
+| `commands::fs`             | 6     | Path scoping, truthful error classification |
+| `commands::worker`         | 3     | Argument-shape regression, credential-leak span-capture (command layer) |
+| **Total**                  | **251 (swarm-core) + 20 (swarm-desktop) = 271** | + 15 doc-tests passing (1 more `ignore`-annotated) |
 
 Run `cargo test` from `src-tauri/` to reproduce this locally; run `cargo test --doc` for just the doc-tests.
 
 ### Frontend Testing
 
-Frontend tests run via Vitest (`pnpm test`): **40 test files, 400 tests**, covering components, hooks, stores, and `lib/` utilities.
+Frontend tests run via Vitest (`pnpm test`): **52 test files, 515 tests**, covering components, hooks, stores, and `lib/` utilities.
 
 | Directory                        | Focus                                                          |
 |-----------------------------------|-----------------------------------------------------------------|

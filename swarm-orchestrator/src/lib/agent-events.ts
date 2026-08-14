@@ -9,15 +9,24 @@ import * as z from "zod";
  * **Additive, event-bus-consumption-only — no UI wired to these yet.**
  * No concrete `AgentAdapter` implementation exists (that's Phase 3's
  * `ClaudeCodeAdapter`), so nothing in the shipped app ever emits these
- * payloads today. These schemas exist so the next consumer (a Phase 3
- * `useAgentEvents` hook, mirroring `#hooks/useWorkerEvents`'s
- * `onEvent(type, handler)` pattern) can `safeParse` a payload instead
- * of trusting an `as` cast, the same discipline
- * `#lib/event-bus`'s `DomainEventSchema` already applies at the
- * envelope level.
+ * payloads today. **This module is consumed starting Phase 3** — the
+ * next consumer is a `useAgentEvents` hook, mirroring
+ * `#hooks/useWorkerEvents`'s `onEvent(type, handler)` pattern, which
+ * will `safeParse` a payload instead of trusting an `as` cast, the same
+ * discipline `#lib/event-bus`'s `DomainEventSchema` already applies at
+ * the envelope level.
  *
  * Field names are camelCase, mirroring the Rust payload structs'
  * `#[serde(rename_all = "camelCase")]` convention exactly.
+ *
+ * **Manual cross-language contract, no automated diff:** every closed
+ * enum below (`ProviderIdSchema`, `CancelGranularitySchema`,
+ * `PermissionDecisionSchema`) is hand-kept in sync with its Rust
+ * counterpart in `crates/swarm-core/src/agent/adapter.rs`. The Rust
+ * side pins its wire values in a dedicated test
+ * (`agent::adapter::tests::test_provider_id_wire_values_pinned_for_the_typescript_schema`)
+ * — if that test ever needs to change, this file needs the identical
+ * edit, and vice versa.
  */
 
 /** Mirrors Rust's `ProviderId` (`crates/swarm-core/src/agent/adapter.rs`) — closed, snake_case wire values. */
@@ -135,7 +144,9 @@ export type AgentPermissionRequestPayload = z.infer<typeof AgentPermissionReques
  * Payload schema for the `agent_turn_settled` receipt — exactly once
  * per turn, on success AND on ungraceful child exit (Condition B).
  * `costUsd`/`usage` are `null` on a synthesized (kill-path) settlement
- * — honestly absent, never a fabricated estimate.
+ * — honestly absent, never a fabricated estimate. `status` mirrors
+ * Rust's closed `AgentTurnStatus` enum (not a bare string) — see this
+ * file's header doc on the manual cross-language contract.
  */
 export const AgentTurnSettledPayloadSchema = z.object({
   workerId: z.uuid(),
