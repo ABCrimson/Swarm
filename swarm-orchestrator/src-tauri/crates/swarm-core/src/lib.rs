@@ -27,7 +27,9 @@
 //! ## Module Layout
 //!
 //! - [`worker`] — PTY-backed worker process registry and lifecycle management
-//! - [`ai`] — Anthropic API client with SSE streaming and priority queue
+//! - [`agent`] — Multi-provider agent execution: the `AgentAdapter`/
+//!   `AgentSession` trait pair, capabilities, and the turn scheduler
+//!   (absorbed the former `ai` module's queue; see `agent`'s module doc)
 //! - [`session`] — Session domain types, CRUD, and the `SessionStore` port
 //! - [`events`] — Typed domain events and the `EventSink` emission seam
 //! - [`orchestration`] — Ordered event log + single-writer engine
@@ -39,6 +41,7 @@
 //!   invocations (never a shell string)
 //! - [`error`] — Shared application error type
 
+pub mod agent;
 pub mod ai;
 pub mod bus;
 pub mod config;
