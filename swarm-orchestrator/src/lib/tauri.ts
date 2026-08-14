@@ -334,13 +334,21 @@ function toShipCommandError(err: unknown): Error {
 }
 
 /**
- * Computes the ship preflight for `workerId`: branch/remote/tracking
- * state, working-tree status, the secret/size deny-list preview, and
- * the `canShip`/`blockers` verdict — read-only, no mutation.
+ * Computes the ship preflight for `workerId`, evaluated for `mode`
+ * (defaults to `"all"` — the app default, and what the first preflight
+ * of a session is computed for before the user has picked anything):
+ * branch/remote/tracking state, working-tree status, the secret/size
+ * deny-list preview (accurate for the given `mode` — a `"staged"`
+ * preview reflects only what's already indexed, matching what
+ * `gitStageCommit` would actually commit), and the `canShip`/
+ * `blockers` verdict — read-only, no mutation.
  */
-export async function gitShipPreflight(workerId: string): Promise<ShipPreflight> {
+export async function gitShipPreflight(
+  workerId: string,
+  mode?: StagingMode,
+): Promise<ShipPreflight> {
   try {
-    const raw = await invoke<unknown>("git_ship_preflight", { workerId });
+    const raw = await invoke<unknown>("git_ship_preflight", { workerId, mode });
     const parsed = ShipPreflightSchema.safeParse(raw);
     if (!parsed.success) {
       throw new Error("Ship Preflight Returned An Unexpected Shape.");
@@ -388,26 +396,26 @@ export async function gitStageCommit(
 
 /**
  * Pushes `workerId`'s branch (`origin <branch> --set-upstream`, fixed
- * argv, never force). On success, the backend records
- * `lastShippedSeq`/`lastShippedCommit` for this worker. `commitSha`/
- * `seqTo` should be the values from the preceding `gitStageCommit`
- * call. `finalStep` should be `true` for the "Commit + Push" action
- * (no compare-page step follows); `false` when a `shipCompareUrl` call
- * is coming next.
+ * argv, never force). Takes no commit sha from the caller — the
+ * backend resolves `HEAD` itself, live, at push time (see
+ * `swarm_core::git::ship::push`'s doc). This is what lets a worker
+ * with already-committed, unpushed work (`ShipPreflight.ahead > 0`,
+ * e.g. from an earlier "Commit Only") go straight to `gitPush` without
+ * a preceding `gitStageCommit` call in the same ship attempt. On
+ * success, the backend records `lastShippedSeq`/`lastShippedCommit`
+ * for this worker. `finalStep` should be `true` for the "Commit +
+ * Push" action (no compare-page step follows); `false` when a
+ * `shipCompareUrl` call is coming next.
  */
 export async function gitPush(
   workerId: string,
   shipId: string,
-  commitSha: string,
-  seqTo: number,
   finalStep: boolean,
 ): Promise<PushOutcome> {
   try {
     const raw = await invoke<unknown>("git_push", {
       workerId,
       shipId,
-      commitSha,
-      seqTo,
       finalStep,
     });
     const parsed = PushOutcomeSchema.safeParse(raw);

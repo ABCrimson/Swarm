@@ -14,6 +14,8 @@ import { ModelSelector } from "./ModelSelector.tsx";
 interface WorkerAIPanelProps {
   /** Worker ID for this combined view. */
   readonly workerId: string;
+  /** Whether this worker has an isolated worktree — shipping (and therefore the toolbar Ship button) requires one (DIRECTIVE F13). Defaults to `true` for callers that don't yet track this. */
+  readonly canShip?: boolean;
   /**
    * Invoked when the toolbar's Ship button is clicked — the detail
    * panel's tab strip (`#pages/Workers`) owns the Ship tab, so this
@@ -233,6 +235,7 @@ function InjectModal({
  */
 export function WorkerAIPanel({
   workerId,
+  canShip = true,
   onRequestShipTab,
 }: WorkerAIPanelProps): React.ReactElement {
   const [showInjectModal, setShowInjectModal] = useState(false);
@@ -268,11 +271,14 @@ export function WorkerAIPanel({
           <button
             type="button"
             onClick={onRequestShipTab}
+            disabled={!canShip}
+            title={canShip ? undefined : "Shipping Requires An Isolated Worktree"}
             style={{
               ...injectButtonStyle,
-              borderColor: "oklch(0.35 0.10 150)",
-              background: "oklch(0.14 0.06 150 / 0.6)",
-              color: "oklch(0.75 0.16 150)",
+              borderColor: canShip ? "oklch(0.35 0.10 150)" : "oklch(0.28 0.05 220)",
+              background: canShip ? "oklch(0.14 0.06 150 / 0.6)" : "oklch(0.12 0.03 220 / 0.6)",
+              color: canShip ? "oklch(0.75 0.16 150)" : "oklch(0.40 0.03 220)",
+              cursor: canShip ? "pointer" : "not-allowed",
             }}
             aria-label="Ship"
           >

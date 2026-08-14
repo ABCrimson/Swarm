@@ -487,17 +487,28 @@ export function Workers(): React.ReactElement {
                 type="button"
                 role="tab"
                 aria-selected={detailTab === "ship"}
+                disabled={selectedWorker.worktreePath == null}
                 onClick={() => setDetailTab("ship")}
+                title={
+                  selectedWorker.worktreePath == null
+                    ? "Shipping Requires An Isolated Worktree"
+                    : undefined
+                }
                 style={{
                   flex: 1,
                   padding: "8px 12px",
                   background: detailTab === "ship" ? "oklch(0.78 0.18 205 / 0.12)" : "transparent",
                   border: "none",
-                  color: detailTab === "ship" ? "oklch(0.78 0.18 205)" : "oklch(0.55 0.04 220)",
+                  color:
+                    selectedWorker.worktreePath == null
+                      ? "oklch(0.38 0.03 220)"
+                      : detailTab === "ship"
+                        ? "oklch(0.78 0.18 205)"
+                        : "oklch(0.55 0.04 220)",
                   fontFamily: "var(--font-body)",
                   fontSize: "0.75rem",
                   fontWeight: 500,
-                  cursor: "pointer",
+                  cursor: selectedWorker.worktreePath == null ? "not-allowed" : "pointer",
                 }}
               >
                 Ship
@@ -508,10 +519,26 @@ export function Workers(): React.ReactElement {
               {detailTab === "ai" && (
                 <WorkerAIPanel
                   workerId={selectedWorker.id}
+                  canShip={selectedWorker.worktreePath != null}
                   onRequestShipTab={() => setDetailTab("ship")}
                 />
               )}
-              {detailTab === "ship" && <ShipPanel workerId={selectedWorker.id} />}
+              {detailTab === "ship" &&
+                (selectedWorker.worktreePath != null ? (
+                  <ShipPanel workerId={selectedWorker.id} />
+                ) : (
+                  <div
+                    style={{
+                      padding: 24,
+                      fontFamily: "var(--font-body)",
+                      fontSize: "0.8125rem",
+                      color: "oklch(0.55 0.04 220)",
+                      textAlign: "center",
+                    }}
+                  >
+                    Shipping Requires An Isolated Worktree
+                  </div>
+                ))}
             </div>
           </div>
         )}

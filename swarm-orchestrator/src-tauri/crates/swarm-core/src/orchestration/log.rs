@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::AppError;
 
@@ -53,7 +53,8 @@ impl EventLog {
                 ts      INTEGER NOT NULL,
                 type    TEXT NOT NULL,
                 payload TEXT NOT NULL
-            ) STRICT;",
+            ) STRICT;
+            CREATE INDEX IF NOT EXISTS idx_events_type_seq ON events(type, seq);",
         )
         .map_err(|e| AppError::EventLog(e.to_string()))?;
         Ok(Self { conn })
@@ -121,6 +122,32 @@ impl EventLog {
         }
         Ok(out)
     }
+
+    /// Returns the `seq` of the first persisted event of `event_type`
+    /// whose JSON payload's `workerId` field equals `worker_id`, or
+    /// `None` if no such event exists.
+    ///
+    /// Used by the ship chain (`commands/git.rs::resolve_seq_range`) to
+    /// recover a never-shipped worker's `worktree_created` seq — the
+    /// `idx_events_type_seq` index (on `(type, seq)`) lets this narrow
+    /// to `event_type`'s rows via an index range scan in ascending
+    /// `seq` order before filtering by `workerId`, rather than paging
+    /// through the entire log.
+    pub fn find_first_for_worker(
+        &self,
+        event_type: &str,
+        worker_id: &str,
+    ) -> Result<Option<u64>, AppError> {
+        self.conn
+            .query_row(
+                "SELECT seq FROM events WHERE type = ?1 AND json_extract(payload, '$.workerId') = ?2 ORDER BY seq ASC LIMIT 1",
+                (event_type, worker_id),
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map(|opt| opt.map(|v| v as u64))
+            .map_err(|e| AppError::EventLog(e.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -175,5 +202,40 @@ mod tests {
         let mut log = EventLog::open_in_memory().unwrap();
         log.append(1, 1, "session_created", "{}").unwrap();
         assert!(log.append(1, 2, "session_deleted", "{}").is_err());
+    }
+
+    #[test]
+    fn test_find_first_for_worker_returns_earliest_matching_seq() {
+        let mut log = EventLog::open_in_memory().unwrap();
+        log.append(1, 1, "worktree_created", r#"{"workerId":"other"}"#)
+            .unwrap();
+        log.append(2, 2, "worker_state", r#"{"workerId":"a"}"#)
+            .unwrap();
+        log.append(3, 3, "worktree_created", r#"{"workerId":"a"}"#)
+            .unwrap();
+        log.append(4, 4, "worktree_created", r#"{"workerId":"a"}"#)
+            .unwrap();
+
+        assert_eq!(
+            log.find_first_for_worker("worktree_created", "a").unwrap(),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn test_find_first_for_worker_none_when_absent() {
+        let mut log = EventLog::open_in_memory().unwrap();
+        log.append(1, 1, "worktree_created", r#"{"workerId":"other"}"#)
+            .unwrap();
+        assert_eq!(
+            log.find_first_for_worker("worktree_created", "missing")
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            log.find_first_for_worker("nonexistent_type", "other")
+                .unwrap(),
+            None
+        );
     }
 }

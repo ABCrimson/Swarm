@@ -153,14 +153,40 @@ fn percent_encode_query_value(s: &str) -> String {
 /// — see [`compare_url`].
 pub const MAX_COMPARE_URL_LEN: usize = 6000;
 
+/// Binary-searches the largest char-prefix of `text` for which
+/// `fits(prefix)` holds (`fits` must be monotonic: a shorter prefix
+/// never makes the built URL longer), returning that prefix. Operates
+/// on `char`s, never bytes, so a multi-byte UTF-8 sequence is never
+/// split. Returns `""` if even an empty prefix doesn't satisfy `fits`.
+fn largest_fitting_prefix(text: &str, fits: impl Fn(&str) -> bool) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut lo = 0usize;
+    let mut hi = chars.len();
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        let candidate: String = chars[..mid].iter().collect();
+        if fits(&candidate) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    chars[..lo].iter().collect()
+}
+
 /// Builds a GitHub-style compare URL prefilled with a PR title/body
 /// via the `quick_pull=1` query parameters, capped at
-/// [`MAX_COMPARE_URL_LEN`] total characters. If the untruncated URL
-/// would exceed the cap, `body` is shortened (with a truncation
-/// marker appended) until the encoded result fits — `title` and the
-/// compare path itself are never truncated, since a truncated title or
-/// a mangled branch name is a worse failure mode than a shortened
-/// body.
+/// [`MAX_COMPARE_URL_LEN`] total characters.
+///
+/// If the untruncated URL would exceed the cap, `body` is shortened
+/// first (with a visible truncation marker appended) until the
+/// encoded result fits. If even an *empty* body (just the marker)
+/// still doesn't fit — the base URL + title alone already exceed the
+/// cap — `title` is clamped too, as the last resort: **only** the
+/// compare path itself (host/owner/repo/base/branch) is never
+/// truncated, since a corrupted ref there would silently build a URL
+/// pointing at the wrong compare, a worse failure than a clipped
+/// title.
 pub fn compare_url(
     remote: &ParsedRemote,
     base_branch: &str,
@@ -176,38 +202,39 @@ pub fn compare_url(
         percent_encode_path_segment(base_branch),
         percent_encode_path_segment(branch),
     );
-    let title_enc = percent_encode_query_value(title);
 
-    let build = |body_text: &str| -> String {
+    let build = |title_text: &str, body_text: &str| -> String {
         format!(
-            "{base}?quick_pull=1&title={title_enc}&body={}",
+            "{base}?quick_pull=1&title={}&body={}",
+            percent_encode_query_value(title_text),
             percent_encode_query_value(body_text)
         )
     };
 
-    let full = build(body);
+    let full = build(title, body);
     if full.len() <= MAX_COMPARE_URL_LEN {
         return full;
     }
 
-    // Binary-search the largest prefix of `body` (in chars, so we
-    // never split a multi-byte UTF-8 sequence) whose encoded URL fits.
     let marker = "\n\n[Truncated — Full Body Not Shown]";
-    let chars: Vec<char> = body.chars().collect();
-    let mut lo = 0usize;
-    let mut hi = chars.len();
-    while lo < hi {
-        let mid = lo + (hi - lo).div_ceil(2);
-        let candidate: String = chars[..mid].iter().collect();
-        let candidate_with_marker = format!("{candidate}{marker}");
-        if build(&candidate_with_marker).len() <= MAX_COMPARE_URL_LEN {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
+    let body_with_marker_fits =
+        |b: &str| build(title, &format!("{b}{marker}")).len() <= MAX_COMPARE_URL_LEN;
+    if body_with_marker_fits("") {
+        let shrunk_body = largest_fitting_prefix(body, body_with_marker_fits);
+        return build(title, &format!("{shrunk_body}{marker}"));
     }
-    let truncated: String = chars[..lo].iter().collect();
-    build(&format!("{truncated}{marker}"))
+
+    // Even an empty body (just the marker) doesn't fit — clamp the
+    // title too. Re-check with a genuinely empty body first: if that
+    // alone still doesn't fit, the base URL/title are what's too long,
+    // not the marker.
+    let empty_body = build(title, "");
+    if empty_body.len() <= MAX_COMPARE_URL_LEN {
+        return empty_body;
+    }
+    let title_fits = |t: &str| build(t, "").len() <= MAX_COMPARE_URL_LEN;
+    let shrunk_title = largest_fitting_prefix(title, title_fits);
+    build(&shrunk_title, "")
 }
 
 #[cfg(test)]
@@ -347,5 +374,37 @@ mod tests {
         };
         let url = compare_url(&remote, "main", "b", "t", "short body");
         assert!(!url.contains("Truncated"));
+    }
+
+    /// DIRECTIVE (nit): re-check the cap when the body-shrink binary
+    /// search bottoms out at `lo == 0` (even an empty body + marker
+    /// doesn't fit) — the title itself must then be clamped too, and
+    /// the *result* must actually respect the cap, not just "the
+    /// empty-body attempt was the best we found".
+    #[test]
+    fn test_compare_url_clamps_title_when_even_an_empty_body_does_not_fit() {
+        let remote = ParsedRemote {
+            host: "github.com".to_string(),
+            owner: "o".to_string(),
+            repo: "r".to_string(),
+        };
+        let huge_title = "T".repeat(7000);
+        let url = compare_url(
+            &remote,
+            "main",
+            "swarm/agent-abcd1234",
+            &huge_title,
+            "any body",
+        );
+        assert!(
+            url.len() <= MAX_COMPARE_URL_LEN,
+            "expected url.len() <= {MAX_COMPARE_URL_LEN}, got {}",
+            url.len()
+        );
+        // The compare path itself must survive untouched even though
+        // the title was clamped.
+        assert!(url.starts_with(
+            "https://github.com/o/r/compare/main...swarm/agent-abcd1234?quick_pull=1"
+        ));
     }
 }

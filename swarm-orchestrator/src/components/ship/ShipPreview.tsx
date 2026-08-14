@@ -70,14 +70,10 @@ const textareaStyle: CSSProperties = {
   boxSizing: "border-box",
 };
 
-const commandPlanStyle: CSSProperties = {
+const trailerNoteStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
-  fontSize: "0.6875rem",
-  color: "oklch(0.60 0.05 205)",
-  background: "oklch(0.78 0.18 205 / 0.08)",
-  border: "1px solid oklch(0.78 0.18 205 / 0.2)",
-  borderRadius: 8,
-  padding: "8px 10px",
+  fontSize: "0.625rem",
+  color: "oklch(0.50 0.04 220)",
 };
 
 const blockerListStyle: CSSProperties = {
@@ -99,7 +95,27 @@ const blockerItemStyle: CSSProperties = {
 const actionsStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 8,
+  gap: 4,
+};
+
+const actionGroupStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+};
+
+const actionPlanStyle: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: "0.625rem",
+  color: "oklch(0.50 0.04 220)",
+  padding: "0 2px",
+};
+
+const actionReasonStyle: CSSProperties = {
+  fontFamily: "var(--font-body)",
+  fontSize: "0.625rem",
+  color: "oklch(0.60 0.10 70)",
+  padding: "0 2px",
 };
 
 /** Deduplicated union of `staged`/`unstaged`/`untracked` paths, annotated with each file's skip reason (if any). */
@@ -115,18 +131,29 @@ function buildFileRows(preflight: ShipPreflight): Array<{ path: string; reason: 
   return rows;
 }
 
-/** The literal, non-abbreviated argv sequence a ship action will run — shown so the user knows exactly what's about to execute. */
-function commandPlan(mode: StagingMode): string {
-  return mode === "all"
-    ? "Will Run: git add -- <files> · git commit · git push -u origin <branch>"
-    : "Will Run: git commit (already-staged index) · git push -u origin <branch>";
+/**
+ * The literal, non-abbreviated argv sequence a *specific* action will
+ * run — never a blanket plan shared across all three buttons, so
+ * "Commit Only" never shows a `git push` line it isn't about to
+ * execute (DIRECTIVE F4).
+ */
+function commandPlanFor(mode: StagingMode, includePush: boolean, includeCompare: boolean): string {
+  const steps =
+    mode === "all" ? ["git add -- <files>", "git commit"] : ["git commit (already-staged index)"];
+  if (includePush) steps.push("git push -u origin <branch>");
+  if (includeCompare) steps.push("open compare page");
+  return `Will Run: ${steps.join(" · ")}`;
 }
 
 /**
- * The confirm step of the ship flow: branch/base/remote summary, diff
- * stat + per-file rows (including Skipped), the editable commit
- * message, the literal command plan, and the three ship actions.
- * Actions are disabled until `preflight.canShip` and while `busy`.
+ * The confirm step of the ship flow: branch/base/remote summary,
+ * ahead/behind, diff stat + per-file rows (including Skipped), the
+ * editable commit message, and the three ship actions — each labeled
+ * with its own literal command plan. Commit Only / Commit + Push are
+ * disabled until `preflight.canShip`, the message is non-empty, and
+ * not `busy`; the compare action additionally requires
+ * `preflight.hostSupportsCompare` (DIRECTIVE F7 — a non-GitHub remote
+ * disables *only* that one action, never the other two).
  */
 export function ShipPreview({
   preflight,
@@ -140,7 +167,9 @@ export function ShipPreview({
   onCommitPushAndOpenCompare,
 }: ShipPreviewProps): React.ReactElement {
   const fileRows = buildFileRows(preflight);
-  const disabled = !preflight.canShip || busy;
+  const messageEmpty = message.trim().length === 0;
+  const disabled = !preflight.canShip || busy || messageEmpty;
+  const compareDisabled = disabled || !preflight.hostSupportsCompare;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: 16 }}>
@@ -167,6 +196,16 @@ export function ShipPreview({
               <span style={{ color: "oklch(0.45 0.03 220)" }}>{"·"}</span>
               <span title={preflight.remote}>{preflight.host ?? preflight.remote}</span>
             </>
+          )}
+          {preflight.ahead > 0 && (
+            <Pill tone="warning" size="sm">
+              {preflight.ahead === 1 ? "1 Unpushed Commit" : `${preflight.ahead} Unpushed Commits`}
+            </Pill>
+          )}
+          {preflight.behind > 0 && (
+            <Pill tone="danger" size="sm">
+              {preflight.behind === 1 ? "1 Commit Behind" : `${preflight.behind} Commits Behind`}
+            </Pill>
           )}
         </div>
       </div>
@@ -240,26 +279,41 @@ export function ShipPreview({
           aria-label="Commit Message"
           spellCheck={false}
         />
+        <span style={trailerNoteStyle}>
+          Trailers Added Automatically: Swarm-Seq-Range (When Determinable), Co-Authored-By (When
+          Configured)
+        </span>
       </div>
 
-      <div style={commandPlanStyle}>{commandPlan(mode)}</div>
-
       <div style={actionsStyle}>
-        <Pill interactive tone="neutral" size="md" disabled={disabled} onClick={onCommitOnly}>
-          Commit Only
-        </Pill>
-        <Pill interactive tone="info" size="md" disabled={disabled} onClick={onCommitAndPush}>
-          Commit + Push
-        </Pill>
-        <Pill
-          interactive
-          tone="success"
-          size="md"
-          disabled={disabled}
-          onClick={onCommitPushAndOpenCompare}
-        >
-          Commit + Push + Open Compare Page
-        </Pill>
+        <div style={actionGroupStyle}>
+          <Pill interactive tone="neutral" size="md" disabled={disabled} onClick={onCommitOnly}>
+            Commit Only
+          </Pill>
+          <span style={actionPlanStyle}>{commandPlanFor(mode, false, false)}</span>
+        </div>
+        <div style={actionGroupStyle}>
+          <Pill interactive tone="info" size="md" disabled={disabled} onClick={onCommitAndPush}>
+            Commit + Push
+          </Pill>
+          <span style={actionPlanStyle}>{commandPlanFor(mode, true, false)}</span>
+        </div>
+        <div style={actionGroupStyle}>
+          <Pill
+            interactive
+            tone="success"
+            size="md"
+            disabled={compareDisabled}
+            onClick={onCommitPushAndOpenCompare}
+          >
+            Commit + Push + Open Compare Page
+          </Pill>
+          {preflight.hostSupportsCompare ? (
+            <span style={actionPlanStyle}>{commandPlanFor(mode, true, true)}</span>
+          ) : (
+            <span style={actionReasonStyle}>Compare Links Require A GitHub Remote</span>
+          )}
+        </div>
       </div>
     </div>
   );
