@@ -241,3 +241,125 @@ export const CumulativeUsageSchema = z.object({
 
 /** Cumulative token usage and cost tracking across sessions. */
 export type CumulativeUsage = z.infer<typeof CumulativeUsageSchema>;
+
+// ── Ship schemas ─────────────────────────────────────
+//
+// Mirror Rust's `swarm_core::git::ship` types
+// (`src-tauri/crates/swarm-core/src/git/ship.rs`) exactly: `ShipError`
+// is a documented divergence from the rest of the IPC surface's
+// `Result<T, String>` convention — it serializes as a structured
+// `{ kind, message, remedy }` object so the UI can branch on `kind`.
+
+/** Zod schema mirroring Rust's `ShipErrorKind` (camelCased variant names). */
+export const ShipErrorKindSchema = z.enum([
+  "workerNotFound",
+  "noWorktree",
+  "primaryCheckout",
+  "invalidBranch",
+  "noRemote",
+  "nonGitHubHost",
+  "nothingToCommit",
+  "identityMissing",
+  "hookFailed",
+  "pushRejected",
+  "authExpired",
+  "timeout",
+  "unknown",
+]);
+
+/** The full enumeration of ways a ship operation can fail. */
+export type ShipErrorKind = z.infer<typeof ShipErrorKindSchema>;
+
+/** Zod schema mirroring Rust's `ShipRemedy`. */
+export const ShipRemedySchema = z.enum(["fetchAndRebase", "reAuthenticate", "configureIdentity"]);
+
+/** A suggested next action for a `ShipError`. */
+export type ShipRemedy = z.infer<typeof ShipRemedySchema>;
+
+/**
+ * Zod schema for a typed ship failure. Every ship command
+ * (`git_stage_commit`, `git_push`, `ship_compare_url`) rejects with
+ * this shape rather than a bare string on error — see
+ * `#lib/tauri`'s `ShipCommandError`, which wraps a parsed instance of
+ * this in a real `Error` subclass so callers can `catch` normally
+ * while still reading `.shipError.kind`.
+ */
+export const ShipErrorSchema = z.object({
+  kind: ShipErrorKindSchema,
+  message: z.string(),
+  remedy: ShipRemedySchema.nullable(),
+});
+
+/** A typed ship failure — `{ kind, message, remedy }`. */
+export type ShipError = z.infer<typeof ShipErrorSchema>;
+
+/** Zod schema for one file the secret/size deny list caught. */
+export const SkippedFileSchema = z.object({
+  path: z.string(),
+  reason: z.string(),
+});
+
+/** A file skipped from staging, with its Title Case skip reason. */
+export type SkippedFile = z.infer<typeof SkippedFileSchema>;
+
+/** Zod schema for a diff stat summary. */
+export const DiffStatSchema = z.object({
+  filesChanged: z.number().int(),
+  insertions: z.number().int(),
+  deletions: z.number().int(),
+});
+
+/** File/insertion/deletion counts for a diff or commit. */
+export type DiffStat = z.infer<typeof DiffStatSchema>;
+
+/** Zod schema for the full `git_ship_preflight` response. */
+export const ShipPreflightSchema = z.object({
+  workerId: z.uuid(),
+  branch: z.string(),
+  baseBranch: z.string(),
+  remote: z.string().nullable(),
+  host: z.string().nullable(),
+  upstream: z.string().nullable(),
+  ahead: z.number().int(),
+  behind: z.number().int(),
+  staged: z.array(z.string()),
+  unstaged: z.array(z.string()),
+  untracked: z.array(z.string()),
+  skipped: z.array(SkippedFileSchema),
+  diffStat: DiffStatSchema,
+  ghAvailable: z.boolean(),
+  ghAuthed: z.boolean(),
+  canShip: z.boolean(),
+  blockers: z.array(z.string()),
+});
+
+/** Ship preflight state for a worker's worktree. */
+export type ShipPreflight = z.infer<typeof ShipPreflightSchema>;
+
+/** Zod schema for the staging strategy sent to `git_stage_commit`. */
+export const StagingModeSchema = z.enum(["all", "staged"]);
+
+/** Staging strategy: stage every changed file, or commit exactly what's already staged. */
+export type StagingMode = z.infer<typeof StagingModeSchema>;
+
+/** Zod schema for the `git_stage_commit` response. */
+export const CommitOutcomeSchema = z.object({
+  sha: z.string(),
+  filesChanged: z.number().int(),
+  insertions: z.number().int(),
+  deletions: z.number().int(),
+  seqFrom: z.number().int(),
+  seqTo: z.number().int(),
+  skipped: z.array(SkippedFileSchema),
+});
+
+/** Result of a successful staged commit. */
+export type CommitOutcome = z.infer<typeof CommitOutcomeSchema>;
+
+/** Zod schema for the `git_push` response. */
+export const PushOutcomeSchema = z.object({
+  pushedRef: z.string(),
+});
+
+/** Result of a successful push. */
+export type PushOutcome = z.infer<typeof PushOutcomeSchema>;

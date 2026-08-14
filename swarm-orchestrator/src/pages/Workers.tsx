@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { WorkerAIPanel } from "#components/ai/WorkerAIPanel";
 import { WorkerDetail } from "#components/graph/WorkerDetail";
 import { WorkerGraph } from "#components/graph/WorkerGraph";
+import { ShipPanel } from "#components/ship/ShipPanel";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Button } from "#components/ui/Button";
 import { Pill } from "#components/ui/Pill";
@@ -20,7 +21,7 @@ import {
 } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
 
-type DetailTab = "detail" | "ai";
+type DetailTab = "detail" | "ai" | "ship";
 
 function WorkerListView(): React.ReactElement {
   const workers = useWorkerStore((s) => s.workers);
@@ -426,7 +427,7 @@ export function Workers(): React.ReactElement {
         {detailOpen && selectedWorker && (
           <div
             style={{
-              width: detailTab === "ai" ? 480 : 320,
+              width: detailTab === "ai" ? 480 : detailTab === "ship" ? 420 : 320,
               height: "100%",
               display: "flex",
               flexDirection: "column",
@@ -482,13 +483,35 @@ export function Workers(): React.ReactElement {
               >
                 AI Chat
               </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={detailTab === "ship"}
+                onClick={() => setDetailTab("ship")}
+                style={{
+                  flex: 1,
+                  padding: "8px 12px",
+                  background: detailTab === "ship" ? "oklch(0.78 0.18 205 / 0.12)" : "transparent",
+                  border: "none",
+                  color: detailTab === "ship" ? "oklch(0.78 0.18 205)" : "oklch(0.55 0.04 220)",
+                  fontFamily: "var(--font-body)",
+                  fontSize: "0.75rem",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                }}
+              >
+                Ship
+              </button>
             </div>
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-              {detailTab === "detail" ? (
-                <WorkerDetail worker={selectedWorker} />
-              ) : (
-                <WorkerAIPanel workerId={selectedWorker.id} />
+              {detailTab === "detail" && <WorkerDetail worker={selectedWorker} />}
+              {detailTab === "ai" && (
+                <WorkerAIPanel
+                  workerId={selectedWorker.id}
+                  onRequestShipTab={() => setDetailTab("ship")}
+                />
               )}
+              {detailTab === "ship" && <ShipPanel workerId={selectedWorker.id} />}
             </div>
           </div>
         )}

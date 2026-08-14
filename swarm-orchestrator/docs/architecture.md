@@ -9,6 +9,7 @@
 - [System Overview](#system-overview)
 - [Backend Architecture](#backend-architecture)
   - [Worktree Isolation](#worktree-isolation)
+  - [Ship Chain](#ship-chain)
 - [Frontend Architecture](#frontend-architecture)
 - [WebGPU Pipeline](#webgpu-pipeline)
 - [Data Flow](#data-flow)
@@ -67,9 +68,12 @@ src-tauri/crates/swarm-core/src/   (swarm-core -- tauri-free domain crate)
 │   └── router.rs    Router -- direct/broadcast send + pipeline orchestration
 ├── events/          Event emission system
 │   └── emitter.rs   SwarmEvent enum + EventSink (routes into OrchestrationEngine)
-├── git/             Worktree-per-worker isolation -- see "Worktree Isolation" below
-│   ├── cli.rs       git binary discovery + arg-vector Command runner, capability probe
+├── git/             Worktree-per-worker isolation + ship chain -- see "Worktree Isolation"/"Ship Chain" below
+│   ├── cli.rs       git binary discovery + arg-vector Command runner, capability probe, env hygiene, redact-then-truncate choke point
+│   ├── redact.rs    Secret redaction (URL creds, GitHub/Anthropic tokens) + 8KB output truncation
+│   ├── remote.rs    Remote URL parsing (https/ssh/GHES) + GitHub-style compare-URL construction
 │   ├── repo.rs      Repo toplevel discovery, HEAD sha resolution
+│   ├── ship.rs      Preflight, staged commit, push -- see "Ship Chain" below
 │   ├── worktree.rs  add/lock/unlock/remove/list/prune + porcelain parsing
 │   └── mod.rs       RepoLocks (per-repo serialization + lock-contention retry), home_dir/slugify/short_hash8
 ├── orchestration/   Ordered event core -- see "Ordered Event Core" below
@@ -78,7 +82,7 @@ src-tauri/crates/swarm-core/src/   (swarm-core -- tauri-free domain crate)
 ├── session/         Session management
 │   └── manager.rs   DashMap-backed CRUD + SessionStore port
 ├── worker/          Worker management
-│   ├── handle.rs    WorkerHandle, WorkerState, WorkerConfig, WorkerIsolation, WorkerInfo
+│   ├── handle.rs    WorkerHandle, WorkerState, WorkerConfig, WorkerIsolation, WorkerInfo (incl. lastShippedSeq/lastShippedCommit, written only by the ship chain)
 │   ├── lifecycle.rs Spawn, pause, resume, kill, input operations (worktree create/remove on spawn/kill)
 │   ├── pty.rs       PTY spawning (portable-pty) + Tokio I/O bridge
 │   └── registry.rs  DashMap registry, TOCTOU-safe update_state_if, aggregate metrics
@@ -96,7 +100,7 @@ src-tauri/src/   (swarm-desktop -- Tauri shell)
 │   ├── metrics.rs       get_metrics (incl. perWorker) + background collection loop
 │   ├── orchestration.rs events_since
 │   ├── config.rs        read_config, write_config
-│   ├── git.rs           validate_repo_root
+│   ├── git.rs           validate_repo_root, git_ship_preflight, git_stage_commit, git_push, ship_compare_url
 │   ├── updater.rs       check_for_updates
 │   ├── notification.rs  send_notification
 │   └── fs.rs            Delegates to tauri-plugin-fs
@@ -202,6 +206,82 @@ do_kill_worker(id)
 
 See [docs/api.md#worktree-isolation-lifecycle](api.md#worktree-isolation-lifecycle) for the IPC-level contract (`WorkerConfig` fields, `worktree_created`/`worktree_removed` payload shapes, `validate_repo_root`) and [Events](#event-system) below for where these events sit in the persistence policy.
 
+### Ship Chain
+
+**Outcome (Phase 1 MVP): a worker's finished work becomes a real commit, a real upstream push, and a browser open on a prefilled GitHub compare page — zero AI dependency.** Everything git-mutating lives in `swarm_core::git::ship` (tauri-free, same reasoning as Worktree Isolation above); `commands/git.rs` is IPC plumbing only.
+
+**Ownership split (the Phase 0 contract).** There is no separate `WorktreeRegistry` type — the registry *is* `WorkerRegistry` + `WorkerHandle`. The worktree feature (above) owns creation/branch-naming/removal; ship owns commit/push and is the **only** writer of `WorkerHandle.last_shipped_seq`/`last_shipped_commit` (via `WorkerRegistry::set_last_shipped`, called only after a successful `git_push`). The two features meet at exactly one frozen accessor:
+
+```rust
+pub struct ShipWorktreeInfo {
+    pub worker_id: Uuid,
+    pub repo_root: PathBuf,
+    pub worktree_path: PathBuf,
+    pub branch: String,
+    pub base_branch: String,       // live lookup: repo_root's current branch, "main" fallback
+    pub base_commit: String,
+    pub last_shipped_seq: Option<u64>,
+    pub last_shipped_commit: Option<String>,
+}
+// swarm_core::git::ship::worktree_info_for_worker(registry, id) -> Result<ShipWorktreeInfo, ShipError>
+```
+
+`created_seq` is deliberately **not** on this struct: the single-writer `OrchestrationEngine` assigns `worktree_created`'s `seq` asynchronously, after `do_spawn_worker`'s `emit()` call already returned, so it cannot be captured synchronously at spawn time. When a never-shipped worker needs a starting seq for its `Swarm-Seq-Range` trailer, `commands/git.rs::resolve_seq_range` recovers it with a full paging scan of the event log for that worker's `worktree_created` row instead — the one place ship needs event-log access, which is why that logic lives in the command layer, not in the tauri-free `ship` module.
+
+```text
+git_ship_preflight(workerId)                                    read-only, no events
+    │
+    ├── ship::worktree_info_for_worker(registry, id)             the frozen accessor
+    ├── toplevel_matches?  is_primary_checkout?  detached HEAD?  branch == baseBranch?
+    │   protected branch?  origin remote present?                six refusal conditions
+    │       any true ──> pushed onto `blockers` (Title Case), canShip = false
+    │       (informational only here -- NOT the mutation guard, see below)
+    ├── git status --porcelain=v1 --untracked-files=all           staged/unstaged/untracked
+    ├── deny-list scan over the union (.env*, *.pem, *.key, id_rsa*, *secret*, >5MB)
+    │       skipped[] = { path, reason: "Skipped — Looks Like A Credential" | "Skipped — Larger Than 5 MB" }
+    ├── git diff --numstat HEAD (tracked survivors) + line-count (untracked survivors)   diffStat estimate
+    └── probe `gh --version` / `gh auth status`, 3s kill-on-timeout   ghAvailable/ghAuthed (informational, Phase 3 uses them)
+
+git_stage_commit(workerId, shipId, message, mode, finalStep)     mutates
+    │
+    ├── ship::guard_not_primary_checkout(worktreePath)            HARD guard, literal first statement --
+    │       fires before touching the working tree at all, even if preflight was stale or skipped
+    ├── mode "all": deny-list filter again ──> git add -- <survivors>   (never -A; explicit path list only)
+    │   mode "staged": commit the index as-is, deny-list scan is advisory only
+    │       each git call: RepoLocks::run_serialized(repoRoot, || cli::run(args))
+    ├── git commit -m "<message>\n\nSwarm-Seq-Range: <seqFrom>..<seqTo>[\nCo-Authored-By: <configured>]"
+    │       -n/--no-verify not constructible anywhere in commit_args -- hooks always run
+    └── emit ship_progress×2 (staging, commit), commit_created; ship_settled iff finalStep or failure
+
+git_push(workerId, shipId, commitSha, seqTo, finalStep)          mutates
+    │
+    ├── ship::guard_not_primary_checkout(worktreePath)            same hard guard, independently re-checked
+    ├── git push --set-upstream origin <branch>                   fixed argv -- --force/-f not constructible
+    │       RepoLocks::run_serialized(repoRoot, || cli::run(args))
+    ├── success ──> WorkerRegistry::set_last_shipped(id, seqTo, commitSha)   the ONLY writer of these fields
+    └── emit ship_progress (push); ship_settled iff finalStep or failure
+
+ship_compare_url(workerId, shipId, commitSha, pushedRef, title, body)
+    │
+    ├── remote::parse(origin url) -> {host, owner, repo}; reject known-non-GitHub hosts
+    ├── remote::compare_url(...)  https://<host>/<owner>/<repo>/compare/<base>...<branch>?quick_pull=1&title=&body=
+    │       body truncated (binary search on char count) if the encoded URL would exceed 6000 chars;
+    │       title and the compare path itself are never truncated
+    └── emit ship_progress (compare); ship_settled (always -- the true final step of "Commit+Push+Compare")
+```
+
+- **Defense in depth: the primary-checkout guard fires twice, independently.** `preflight` reports "primary checkout" as one of six non-fatal `blockers` (informational, `canShip: false`). `stage_and_commit`/`push` do **not** trust that a caller checked `canShip` first — each calls `guard_not_primary_checkout` as its own literal first statement, before `git status`, before anything. A stale preflight (working tree changed between preview and click) or a future caller that skips preflight entirely can never turn into a commit or push against the repo's primary checkout. Pinned down by `git::ship::tests::test_primary_checkout_guard_fires_before_any_mutation`, which points a fake `ShipWorktreeInfo` at a repo's own primary checkout and asserts zero mutation (nothing staged, `HEAD` unmoved) alongside the `PrimaryCheckout` error.
+- **Never `--force`, never `--no-verify` — structurally, not by convention.** `add_args_explicit` never constructs `-A`/`--all` (deny-listed paths are simply never in the explicit path list passed to `git add --`). `commit_args` has no code path that can append `-n`/`--no-verify`. `push_args` is a fixed five-token argv (`-C <dir> -c core.longpaths=true push --set-upstream origin <branch>`) with no branch for a force flag to attach to. All three are pinned by argv-shape unit tests, the same pattern `git::worktree`'s no-`--force` guarantee uses.
+- **Redaction is a choke point, not a per-call-site discipline.** `git::cli::run` — already the sole place a child git process is spawned — redacts (`redact::redact`: URL `user:pass@` credentials, `gh[pousr]_...` tokens, `sk-ant-...` keys) and then truncates to 8KB (`redact::truncate`) every captured stdout/stderr **before** returning `GitOutput`. Redact-before-truncate is the only ordering that can't leak half a token by slicing it at the 8KB boundary. Every error message, log line, and event payload built from a `GitOutput` downstream is sanitized by construction — proven end-to-end (not just against synthetic strings) by `git::cli::tests::test_run_redacts_url_credentials_from_real_git_stderr`, which points a real `git clone` at a closed local port with embedded credentials and asserts they never reach the returned `GitOutput`.
+- **Env hygiene, alongside `GIT_TERMINAL_PROMPT=0`.** `GCM_INTERACTIVE=never` (Git Credential Manager's own GUI/terminal prompt path on Windows, independent of `GIT_TERMINAL_PROMPT`), `GIT_OPTIONAL_LOCKS=0` (skips background lock-taking reads that could contend with a concurrent SWARM-issued mutation), `LC_ALL=C` (stable, unlocalized stderr — the push-error classifier pattern-matches English substrings like `"rejected"`/`"non-fast-forward"`, which a localized git could translate out from under it).
+- **Typed `ShipError`, a documented divergence.** Every ship command rejects with `{ kind, message, remedy }` instead of the plain-string convention the rest of the IPC surface uses — the UI needs to branch on `kind` for the right second-click remedy. See [docs/api.md#ship-commands](api.md#ship-commands) for the full `ShipErrorKind`/`ShipRemedy` enumerations and per-command error tables.
+- **Push rejection never triggers an automatic force-push.** `pushRejected`'s remedy is `fetchAndRebase` (`git pull --rebase`, re-preview, ship again) — a worker's branch can be a human's branch, so history-rewrite is always an explicit second click, never automatic.
+- **The bare-repo integration test.** `git::ship::tests::test_full_ship_cycle_advances_a_real_bare_remote` builds a disposable `git init --bare` `file://` origin, a real linked worktree, runs the actual `stage_and_commit` → `push` path (including a `.env` file that must survive as `skipped`, never committed), and asserts the *bare* repo's branch tip equals the pushed sha — the true, no-mock proof that push actually happened, on whichever platform CI runs on (no hardcoded shell/platform assumptions, matching the worktree tests' own convention).
+- **Deterministic commit message, zero AI dependency in Phase 1.** `src/lib/ship-message.ts`'s `generateCommitMessage` infers a Conventional Commit type from the changed paths (`docs/`/`*.md` → `docs`; known lockfile/config shapes → `chore`; otherwise → `feat`) and builds a summary from the file list + diff stat — pure, client-side, no Rust round-trip. Unlike the rest of this app's UI copy, the generated message body follows Conventional Commits' own lowercase-type convention, not Title Case (Title Case is a house rule for UI labels, not git commit content). The AI-assisted generator (`ship-copy.ts`) is Phase 2+ scope.
+- **`useShip` (`src/hooks/useShip.ts`): idle → preflighting → previewing → running → settled | failed.** A module-level `Set<workerId>` in-flight guard is checked synchronously (no `await` between check and add) at the top of every mutating action, so a double-click on the Ship button can never start two overlapping commits regardless of React re-render timing. The `waitFor("ship_settled", ...)` listener for `commitAndPush`/`commitPushAndOpenCompare` is armed **before** calling `gitPush`/`shipCompareUrl`, not after — event delivery (the webview event channel) and the IPC response (the `invoke()` promise) are two independent transport paths with no ordering guarantee between them, so registering the listener only after the triggering call resolves risks missing an event that already fired (this raced and timed out in the hook's own test suite before the fix, which is exactly the failure mode the fix closes).
+
+See [docs/api.md#ship-commands](api.md#ship-commands) for the full IPC contract and [Events](#event-system) below for `ship_progress`/`ship_settled`/`commit_created`'s place in the persistence policy.
+
 ### AI Queue (Built, Not Wired)
 
 **Nothing in `src/` calls `ai_request` today** -- see [Built, Not Wired](#built-not-wired) for the full picture. The diagram below documents what this Rust-side apparatus does when invoked (it is fully implemented and unit-tested, not a stub); it is not what happens when a user sends a chat message in the shipped app today -- for that, see [AI Streaming](#ai-streaming) under Data Flow.
@@ -264,7 +344,7 @@ Any backend call ──emit_event()──> OrchestrationEngine::record()   (mpsc
 
 - **Single writer, one thread:** `OrchestrationEngine::start` spawns one dedicated `swarm-event-writer` OS thread owning an `mpsc::Receiver<SwarmEvent>` and the `EventLog` connection. `record()` is a non-blocking `Sender::send` callable from any thread/task; the writer loop is the *only* place that assigns `seq`, so wire order is totally ordered by construction -- there is no window where two threads could race to claim the same sequence number.
 - **SQLite WAL log:** `EventLog` (`orchestration/log.rs`) opens a SQLite database at `<app-data>/swarm-events.db` in WAL journal mode (`synchronous = NORMAL`), with a single `events(seq INTEGER PRIMARY KEY, ts, type, payload) STRICT` table. `seq` is the primary key, so a duplicate-seq append is a hard error -- an invariant the writer thread's exclusive ownership of `seq` assignment guarantees never fires in practice. On startup, the engine resumes numbering from `EventLog::max_seq()`, so sequence numbers stay monotonic across restarts, not just within one process lifetime.
-- **Persistence policy:** every event consumes a `seq`, but only some are written to the log. `is_persistent()` (`orchestration/engine.rs`) excludes `WorkerOutput`, `SystemMetrics`, and `SystemLog` -- high-frequency telemetry that flows live but is not history. Everything else (`worker_spawned`, `worker_killed`, `worker_state`, `session_created`, `session_deleted`, `ai_stream_delta`, `ai_stream_settled`, `bus_message`, `worktree_created`, `worktree_removed`) persists before being emitted. `is_persistent()` excludes by name rather than allowlisting, so a new variant is persistent by construction unless explicitly added to the exclusion list -- pinned down for the two worktree events by `orchestration::engine::tests::test_worktree_events_are_persistent`.
+- **Persistence policy:** every event consumes a `seq`, but only some are written to the log. `is_persistent()` (`orchestration/engine.rs`) excludes `WorkerOutput`, `SystemMetrics`, and `SystemLog` -- high-frequency telemetry that flows live but is not history. Everything else (`worker_spawned`, `worker_killed`, `worker_state`, `session_created`, `session_deleted`, `ai_stream_delta`, `ai_stream_settled`, `bus_message`, `worktree_created`, `worktree_removed`, `ship_progress`, `ship_settled`, `commit_created`) persists before being emitted. `is_persistent()` excludes by name rather than allowlisting, so a new variant is persistent by construction unless explicitly added to the exclusion list -- pinned down for the two worktree events by `orchestration::engine::tests::test_worktree_events_are_persistent` and for the three ship events by `orchestration::engine::tests::test_ship_events_are_persistent`.
 - **Emission:** after the persistence step, the writer wraps the event in a `DomainEvent { seq, ts, ..flattened SwarmEvent }` and emits it on the single `swarm://events` Tauri channel. See [docs/api.md#events](api.md#events) for the wire shape and full type-tag list.
 - **The receipt pattern:** rather than overload a stream event's payload with a completion flag, terminal outcomes get their own event type -- e.g. `ai_stream_settled`, emitted exactly once per AI request after the final `ai_stream_delta`, on both success and failure. Frontend code awaits the receipt (`waitFor()` in `src/lib/event-bus.ts`) instead of inferring completion from stream contents.
 - **Replay foundation:** `commands/orchestration.rs::events_since(after_seq)` returns persisted rows with `seq > after_seq`, ascending, capped at 5000 per call (see [docs/api.md#events_since](api.md#events_since)). This is the data-layer foundation for gap backfill -- already wired into `src/lib/event-bus.ts`'s `connectEventBus` -- and for future replay; a replay *UI* is out of scope for this phase.
@@ -311,7 +391,10 @@ AppShell (CSS Grid + GSAP startup animation)
 │   │   │   ├── WorkerNode (custom node)
 │   │   │   └── SpawnOrderEdge (custom edge, labeled "Spawn Order" in the graph's legend -- not a real dependency graph)
 │   │   ├── WorkerTerminal (xterm.js + WebGL2)
-│   │   └── WorkerAIPanel (terminal + AI chat split)
+│   │   ├── WorkerAIPanel (terminal + AI chat split, toolbar Ship button)
+│   │   └── ShipPanel (Ship tab: preflight → preview → progress → receipt, backed by useShip)
+│   │       ├── ShipPreview (branch/base/remote, diff stat, editable message, actions)
+│   │       └── ShipProgress (live checklist, fed by ship_progress events)
 │   ├── Sessions Page
 │   │   ├── SessionList
 │   │   └── SessionCard
@@ -506,6 +589,9 @@ The backend emits typed events via the `SwarmEvent` enum, but not directly: ever
 | `bus_message`        | `{ messageId, fromWorker, toWorker, topic, payload }`            | Bus message, forwarded by an active `bus_subscribe` task | Yes |
 | `worktree_created`   | `{ workerId, sessionId, repoRoot, worktreePath, branch, baseCommit }` | Worker's git worktree created | Yes |
 | `worktree_removed`   | `{ workerId, worktreePath, branch, disposition, headCommit, reason }` | Worker killed; worktree removed/preserved | Yes |
+| `ship_progress`      | `{ shipId, workerId, step, status, detail }`                     | One step of an in-flight ship operation | Yes |
+| `ship_settled`       | `{ shipId, workerId, commitSha, pushedRef, prUrl, status, error }` | Terminal receipt, once per `shipId` | Yes |
+| `commit_created`     | `{ workerId, sha, branch, seqFrom, seqTo }`                      | Ship chain created a commit  | Yes |
 
 See [docs/api.md#events](api.md#events) for the full envelope contract (`{ seq, ts, type, payload }`), the persistence policy, the receipt pattern, and `events_since` paging.
 
@@ -526,6 +612,11 @@ The frontend invokes Tauri commands via `invoke()`:
 | `list_sessions`        | `Session[]`                        |
 | `get_session`          | `Session`                          |
 | `session_add_worker`   | `()`                               |
+| `validate_repo_root`   | Canonical toplevel path string     |
+| `git_ship_preflight`   | `ShipPreflight`                    |
+| `git_stage_commit`     | `CommitOutcome`                    |
+| `git_push`             | `PushOutcome`                      |
+| `ship_compare_url`     | Compare URL string                 |
 | `ai_request`           | Request ID string (no shipped caller -- see [Built, Not Wired](#built-not-wired)) |
 | `get_metrics`          | Metrics JSON, incl. `perWorker`    |
 | `bus_send`             | Receiver count (`number`) (no shipped caller -- see [Built, Not Wired](#built-not-wired)) |
@@ -593,3 +684,23 @@ Frontend (displays in Toast via Sonner)
 ```
 
 The `AppError -> String` mapping at the command boundary is intentional: Tauri commands return `Result<T, String>`, so we serialize errors as human-readable messages.
+
+### Ship Errors (a Documented Divergence)
+
+The four ship commands (`git_ship_preflight`, `git_stage_commit`, `git_push`, `ship_compare_url`) do **not** follow the `AppError -> String` convention above. They reject with `swarm_core::git::ShipError`, a struct (`{ kind, message, remedy }`) with its own `Serialize` impl that preserves its shape as a JSON object rather than flattening to a display string:
+
+```text
+Domain function (returns ShipError directly -- not AppError)
+        │
+        ▼
+Command handler (passes ShipError through unchanged; #[tauri::command] fn ... -> Result<T, ShipError>)
+        │
+        ▼
+Tauri IPC (sends { kind, message, remedy } object to frontend)
+        │
+        ▼
+Frontend (#lib/tauri wraps it in ShipCommandError, a real Error subclass carrying .shipError;
+          the Ship tab UI branches on .shipError.kind for the right second-click remedy)
+```
+
+This exists because the UI needs to distinguish `pushRejected` (remedy: fetch-and-rebase, re-preview, ship again) from `authExpired` (remedy: re-authenticate) from `nothingToCommit` (no remedy, just report it) — a bare string can carry the message but not a machine-checkable `kind` to switch on. `AppError::Git` errors from lower-level git plumbing (e.g. a `rev-parse` failure) are bridged into `ShipError` via a `From<AppError> for ShipError` impl that classifies a timeout message into `kind: "timeout"` and everything else into `kind: "unknown"`, so the divergence is contained to the ship module's own boundary rather than requiring `AppError` itself to change shape. See [docs/api.md#ship-commands](api.md#ship-commands) for the full `ShipErrorKind`/`ShipRemedy` enumerations.
