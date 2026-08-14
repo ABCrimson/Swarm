@@ -42,4 +42,36 @@ describe("GraphLegend — gating", () => {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });
+
+  // ── Visual separation of measured facts from user annotations ──────
+  // Same row/style for "Manual" next to "Spawn" would only ASSERT the
+  // never-merge claim in prose while looking, on screen, like one more
+  // measured kind — these pin down that the separation is visible, not
+  // just documented.
+
+  it('shows an "Annotation" group header above the Manual row when manual edges are present', () => {
+    renderLegend(new Set(["manual"]));
+
+    expect(screen.getByText("Annotation")).toBeInTheDocument();
+  });
+
+  it("draws a separator between measured rows and the Manual row when both are present", () => {
+    const { container } = renderLegend(new Set(["spawn", "manual"]));
+
+    expect(container.querySelector("hr")).not.toBeNull();
+    expect(screen.getByText("Annotation")).toBeInTheDocument();
+  });
+
+  it("omits the separator when only measured kinds are present (no Manual row to separate from)", () => {
+    const { container } = renderLegend(new Set(["spawn", "command"]));
+
+    expect(container.querySelector("hr")).toBeNull();
+    expect(screen.queryByText("Annotation")).not.toBeInTheDocument();
+  });
+
+  it("omits the separator when only the Manual row is present (nothing above it to separate from)", () => {
+    const { container } = renderLegend(new Set(["manual"]));
+
+    expect(container.querySelector("hr")).toBeNull();
+  });
 });

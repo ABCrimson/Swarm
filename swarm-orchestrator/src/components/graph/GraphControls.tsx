@@ -2,10 +2,12 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import type { Edge, Node } from "@xyflow/react";
 import { useReactFlow } from "@xyflow/react";
+import { useAtomValue } from "jotai";
 import { useEffect } from "react";
 import { toast } from "#components/ui/Toast";
 import type { WorkflowDefinition } from "#lib/workflow";
 import { exportWorkflow, importWorkflow } from "#lib/workflow";
+import { causalityInspectorAtom } from "#store/ui";
 
 interface GraphControlsProps {
   readonly onResetLayout: () => void;
@@ -73,6 +75,9 @@ export function GraphControls({
   edges,
 }: GraphControlsProps): React.ReactElement {
   const { zoomIn, zoomOut, fitView, setNodes, setEdges } = useReactFlow();
+  // Read-only: the zoom-key shortcuts below must not fire while the
+  // causality inspector is open — see the effect's own comment.
+  const causalityTarget = useAtomValue(causalityInspectorAtom);
 
   const handleZoomIn = () => {
     zoomIn({ duration: 200 });
@@ -123,6 +128,10 @@ export function GraphControls({
       const content = await readTextFile(filePath);
       const def = JSON.parse(content) as WorkflowDefinition;
       const { nodes: importedNodes, edges: importedEdges } = importWorkflow(def);
+      // Pre-existing, out of scope here: WorkerGraph.tsx passes `nodes`/
+      // `edges` to `<ReactFlow>` as controlled props, so these instance
+      // calls get stomped by the next render's parent-supplied values —
+      // an import doesn't actually stick today.
       setNodes(importedNodes);
       setEdges(importedEdges);
       toast.success("Workflow Imported", { description: def.name });
@@ -139,6 +148,11 @@ export function GraphControls({
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
         return;
       }
+      // The causality inspector owns the keyboard while open — this
+      // listener is document-level and stays live underneath its
+      // overlay, so without this gate typing "0" to do nothing in
+      // particular there would also fit-view the canvas behind it.
+      if (causalityTarget) return;
 
       if (e.key === "+" || e.key === "=") {
         e.preventDefault();
@@ -153,7 +167,7 @@ export function GraphControls({
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [zoomIn, zoomOut, fitView]);
+  }, [zoomIn, zoomOut, fitView, causalityTarget]);
 
   return (
     <div

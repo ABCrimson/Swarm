@@ -19,7 +19,7 @@ import {
   ReactFlowProvider,
   useReactFlow,
 } from "@xyflow/react";
-import { useAtom, useSetAtom } from "jotai";
+import { useAtom } from "jotai";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "#components/ui/Spinner";
@@ -74,6 +74,39 @@ function buildNodes(
 }
 
 /**
+ * Overlays LIVE per-worker data onto already-positioned nodes, every
+ * render — without this, `state`/`pid`/`fileWriteCount` would only ever
+ * refresh on the next ELK relayout, and none of the three ever change
+ * the topology fingerprint (same node ids, same edges), so in practice
+ * they'd refresh close to never (a file_written badge would render
+ * whatever the count was — usually zero — at the last time a worker was
+ * added or removed). Same principle as measured edges: positions come
+ * from `layoutedNodes`/the `nodes` state, but data that can change
+ * without a topology change is recomputed fresh every render, never
+ * round-tripped through ELK. A node with no backing worker (a scratch
+ * node from `handleAddNode`) passes through unchanged.
+ */
+function withLiveNodeData(
+  positioned: readonly Node[],
+  workers: ReadonlyMap<string, Worker>,
+  fileWriteCounts: ReadonlyMap<string, number>,
+): Node[] {
+  return positioned.map((node) => {
+    const worker = workers.get(node.id);
+    if (!worker) return node;
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        state: worker.state,
+        pid: worker.pid,
+        fileWriteCount: fileWriteCounts.get(node.id) ?? 0,
+      },
+    };
+  });
+}
+
+/**
  * Converts visible provenance-store edge records into React Flow edges.
  * Each record already collapsed repeated same-kind occurrences (see
  * `#store/provenance`'s `ingestEvent`) — `count`/`lastSeq` ride along in
@@ -98,7 +131,12 @@ function WorkerGraphInner(): React.ReactElement {
   const fileWriteCounts = useProvenanceStore((s) => s.fileWriteCounts);
   const [, setSelectedId] = useAtom(selectedWorkerIdAtom);
   const [, setDetailOpen] = useAtom(detailPanelOpenAtom);
-  const setCausalityTarget = useSetAtom(causalityInspectorAtom);
+  // Read (not just set): the delete-key handler below must gate itself
+  // on whether the causality inspector is open — a document-level
+  // listener stays live underneath any overlay, so without this a
+  // Backspace meant for the modal would delete a manual graph edge
+  // behind it.
+  const [causalityTarget, setCausalityTarget] = useAtom(causalityInspectorAtom);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const initialFitDone = useRef(false);
@@ -138,8 +176,15 @@ function WorkerGraphInner(): React.ReactElement {
   const [manualEdges, setManualEdges] = useState<Edge[]>([]);
 
   const edges = [...measuredEdges, ...manualEdges];
+  // Optional-chained: an edge with no `data` (never happens for one this
+  // component constructs itself, but defends against a future caller —
+  // e.g. a raw onConnect payload before onConnect below normalizes it)
+  // would otherwise white-screen the whole graph on a bare `.kind` read.
+  // ProvenanceEdge already defends the same way for its own render.
   const presentKinds = new Set<GraphEdgeKind>(
-    edges.map((e) => (e.data as ProvenanceEdgeData).kind),
+    edges
+      .map((e) => (e.data as ProvenanceEdgeData | undefined)?.kind)
+      .filter((k): k is GraphEdgeKind => k != null),
   );
 
   // Sync layout results into controlled node state.
@@ -148,6 +193,12 @@ function WorkerGraphInner(): React.ReactElement {
       setNodes(layoutedNodes);
     }
   }, [layoutedNodes]);
+
+  // Positions come from `nodes` (ELK, above); live per-worker data
+  // (state/pid/fileWriteCount) is overlaid fresh every render — see
+  // `withLiveNodeData`'s doc for why this can't wait on the next
+  // relayout.
+  const renderedNodes = withLiveNodeData(nodes, workers, fileWriteCounts);
 
   // Fit view on first layout completion. The guard is consumed inside the rAF
   // callback: while occluded, Chromium suppresses rAF, and a topology change
@@ -220,6 +271,13 @@ function WorkerGraphInner(): React.ReactElement {
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
         return;
       }
+      // The causality inspector owns Delete/Backspace while open (see
+      // the `causalityTarget` read above) — this listener is
+      // document-level and stays live underneath the modal's own
+      // overlay, so without this gate a Backspace meant to do nothing
+      // in particular there would delete a manual edge on the canvas
+      // behind it.
+      if (causalityTarget) return;
 
       if ((e.key === "Delete" || e.key === "Backspace") && selectedEdgeId) {
         e.preventDefault();
@@ -229,7 +287,7 @@ function WorkerGraphInner(): React.ReactElement {
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [selectedEdgeId]);
+  }, [selectedEdgeId, causalityTarget]);
 
   // Edge click: a MEASURED edge opens the causality inspector at its
   // most recent occurrence; a MANUAL edge selects for deletion (the
@@ -462,7 +520,7 @@ function WorkerGraphInner(): React.ReactElement {
       </AnimatePresence>
 
       <ReactFlow
-        nodes={nodes}
+        nodes={renderedNodes}
         edges={styledEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
@@ -491,6 +549,7 @@ function WorkerGraphInner(): React.ReactElement {
         {!isLayouting && !layoutError && nodes.length > 0 && edges.length === 0 && (
           <Panel
             position="bottom-center"
+            title="Provenance Edges Are Session-Scoped In v1 — A Reload Shows Nodes Without Historical Edges By Design."
             style={{
               padding: "6px 14px",
               borderRadius: 999,
@@ -519,8 +578,15 @@ function WorkerGraphInner(): React.ReactElement {
           onResetLayout={runLayout}
           onAddNode={handleAddNode}
           onDeleteEdge={selectedEdgeId ? handleDeleteEdge : undefined}
-          nodes={nodes}
-          edges={edges}
+          nodes={renderedNodes}
+          // `manualEdges` ONLY, never the full `edges` (measured +
+          // manual): GraphControls' Export Workflow feeds this straight
+          // into `exportWorkflow`, and a measured edge exported then
+          // re-imported would come back tagged `kind: "manual"` — the
+          // exact "measured fact laundered into a user annotation" merge
+          // `#store/provenance`'s own doc forbids. Measured facts aren't
+          // a portable workflow; only what the user hand-drew is.
+          edges={manualEdges}
         />
       </ReactFlow>
 

@@ -30,8 +30,20 @@ export interface WorkflowDefinition {
 /**
  * Exports the current React Flow graph state to a portable JSON definition.
  *
+ * `edges` MUST already be filtered to portable/user-authored ("manual")
+ * edges only — this function serializes whatever it's given verbatim,
+ * dropping each edge's `data.kind` entirely, and `importWorkflow` below
+ * always re-tags every imported edge `kind: "manual"`. Passing a
+ * MEASURED causal edge (spawn/kill/command/message, derived from a
+ * stamped `swarm://events` envelope — see `#store/provenance`) through
+ * this round-trip would silently launder it into a user annotation on
+ * re-import, exactly the "measured fact merged with annotation" outcome
+ * the provenance store's own doc forbids. `WorkerGraph.tsx` enforces
+ * this by only ever passing its `manualEdges` state here, never the
+ * combined measured+manual `edges` array.
+ *
  * @param nodes - Current React Flow nodes with positions and data.
- * @param edges - Current React Flow edges with source/target connections.
+ * @param edges - Current React Flow edges with source/target connections — manual/portable only, see above.
  * @returns A serialisable {@link WorkflowDefinition} with a generated UUID.
  */
 export function exportWorkflow(nodes: Node[], edges: Edge[]): WorkflowDefinition {
