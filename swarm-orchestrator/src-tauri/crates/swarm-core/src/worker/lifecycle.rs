@@ -2,8 +2,9 @@
 //!
 //! Handles the complete worker lifecycle — spawn, pause, resume,
 //! kill, and input — with proper cleanup and event emission at
-//! each transition. These functions are called by the Tauri
-//! command handlers in [`crate::commands::worker`].
+//! each transition. These functions are called by the embedding
+//! shell's `#[tauri::command]` handlers (`commands::worker` in the
+//! swarm-desktop crate).
 
 use parking_lot::Mutex;
 use uuid::Uuid;

@@ -14,7 +14,7 @@
 //! # Format compatibility
 //!
 //! An earlier era of the app already created an empty `{}`
-//! `swarm-config.json` in some installs. [`load_config_map`] treats
+//! `swarm-config.json` in some installs. `load_config_map` treats
 //! a missing file, an empty object, and malformed JSON identically —
 //! all fall back to an empty map — so those pre-existing files are
 //! transparently reused rather than rejected.
@@ -79,7 +79,7 @@ fn save_config_map(path: &Path, map: &HashMap<String, Value>) -> Result<(), AppE
 /// Reads a single config value by key.
 ///
 /// Returns `None` if the key is absent, the config file doesn't exist
-/// yet, or the file is malformed (see [`load_config_map`]).
+/// yet, or the file is malformed (see `load_config_map`).
 pub fn read_value(paths: &Paths, key: &str) -> Option<Value> {
     let _guard = CONFIG_LOCK.lock();
     load_config_map(&config_path(paths)).remove(key)
