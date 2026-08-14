@@ -2,8 +2,23 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import * as z from "zod";
-import type { Session, Worker, WorkerProcessOptions } from "#store/types";
-import { SessionSchema } from "#store/types";
+import type {
+  CommitOutcome,
+  PushOutcome,
+  Session,
+  ShipError,
+  ShipPreflight,
+  StagingMode,
+  Worker,
+  WorkerProcessOptions,
+} from "#store/types";
+import {
+  CommitOutcomeSchema,
+  PushOutcomeSchema,
+  SessionSchema,
+  ShipErrorSchema,
+  ShipPreflightSchema,
+} from "#store/types";
 
 /** Returns `true` when running inside a Tauri webview (IPC bridge is available). */
 export function isTauri(): boolean {
@@ -275,4 +290,170 @@ export async function readConfig<T>(key: string): Promise<T | null> {
 /** Write a typed configuration value by key to the flat `swarm-config.json` file (via the `write_config` custom command). */
 export async function writeConfig<T>(key: string, value: T): Promise<void> {
   return invoke<void>("write_config", { key, value });
+}
+
+// ── Ship chain ────────────────────────────────────────
+//
+// Every command here can reject with a typed `ShipError` object
+// (`{ kind, message, remedy }`), not a bare string — a documented
+// divergence from the rest of this file's `Result<T, String>`
+// convention (see `swarm_core::git::ship::ShipError`'s doc). Rather
+// than make every call site `safeParse` the rejection value itself,
+// each wrapper below funnels it through `toShipCommandError`, which
+// re-throws it as a real `Error` subclass carrying the parsed
+// `ShipError` at `.shipError` — callers can `catch` normally and, when
+// they need to branch on `kind`, narrow with `instanceof ShipCommandError`.
+
+/**
+ * A ship command failure, carrying the typed `ShipError` the backend
+ * returned. Thrown by every `git*`/`ship*` function below in place of
+ * the raw IPC rejection value (which Tauri delivers as the plain
+ * `{ kind, message, remedy }` object, not an `Error` instance).
+ */
+export class ShipCommandError extends Error {
+  readonly shipError: ShipError;
+
+  constructor(shipError: ShipError) {
+    super(shipError.message);
+    this.name = "ShipCommandError";
+    this.shipError = shipError;
+  }
+}
+
+/**
+ * Normalizes any thrown value from a ship command call into an
+ * `Error`: a rejection matching `ShipErrorSchema` becomes a
+ * `ShipCommandError`; anything else (a task panic, a missing Tauri
+ * bridge) is coerced into a plain `Error` rather than re-thrown as an
+ * unknown value.
+ */
+function toShipCommandError(err: unknown): Error {
+  const parsed = ShipErrorSchema.safeParse(err);
+  if (parsed.success) return new ShipCommandError(parsed.data);
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+/**
+ * Computes the ship preflight for `workerId`: branch/remote/tracking
+ * state, working-tree status, the secret/size deny-list preview, and
+ * the `canShip`/`blockers` verdict — read-only, no mutation.
+ */
+export async function gitShipPreflight(workerId: string): Promise<ShipPreflight> {
+  try {
+    const raw = await invoke<unknown>("git_ship_preflight", { workerId });
+    const parsed = ShipPreflightSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("Ship Preflight Returned An Unexpected Shape.");
+    }
+    return parsed.data;
+  } catch (err) {
+    throw toShipCommandError(err);
+  }
+}
+
+/**
+ * Stages (per `mode`) and commits `workerId`'s worktree, appending the
+ * `Swarm-Seq-Range` trailer server-side. `shipId` correlates the
+ * `ship_progress`/`ship_settled` events this call emits with the
+ * caller's own progress UI — generate a fresh one (`crypto.randomUUID()`)
+ * per ship attempt. `finalStep` should be `true` only for the "Commit
+ * Only" action (no push/compare follows) — it controls whether this
+ * call also emits the terminal `ship_settled` receipt on success (a
+ * failure always emits it regardless).
+ */
+export async function gitStageCommit(
+  workerId: string,
+  shipId: string,
+  message: string,
+  mode: StagingMode,
+  finalStep: boolean,
+): Promise<CommitOutcome> {
+  try {
+    const raw = await invoke<unknown>("git_stage_commit", {
+      workerId,
+      shipId,
+      message,
+      mode,
+      finalStep,
+    });
+    const parsed = CommitOutcomeSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("Git Stage Commit Returned An Unexpected Shape.");
+    }
+    return parsed.data;
+  } catch (err) {
+    throw toShipCommandError(err);
+  }
+}
+
+/**
+ * Pushes `workerId`'s branch (`origin <branch> --set-upstream`, fixed
+ * argv, never force). On success, the backend records
+ * `lastShippedSeq`/`lastShippedCommit` for this worker. `commitSha`/
+ * `seqTo` should be the values from the preceding `gitStageCommit`
+ * call. `finalStep` should be `true` for the "Commit + Push" action
+ * (no compare-page step follows); `false` when a `shipCompareUrl` call
+ * is coming next.
+ */
+export async function gitPush(
+  workerId: string,
+  shipId: string,
+  commitSha: string,
+  seqTo: number,
+  finalStep: boolean,
+): Promise<PushOutcome> {
+  try {
+    const raw = await invoke<unknown>("git_push", {
+      workerId,
+      shipId,
+      commitSha,
+      seqTo,
+      finalStep,
+    });
+    const parsed = PushOutcomeSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("Git Push Returned An Unexpected Shape.");
+    }
+    return parsed.data;
+  } catch (err) {
+    throw toShipCommandError(err);
+  }
+}
+
+/** Validates the raw `ship_compare_url` IPC response is a non-empty URL string. */
+const ShipCompareUrlResponseSchema = z.string().min(1);
+
+/**
+ * Builds the GitHub-style compare URL for `workerId`'s worktree,
+ * prefilled with `title`/`body` via `quick_pull=1` query params
+ * (server-side capped at 6000 characters total, truncating `body`
+ * first). Always the true final step of the "Commit + Push + Open
+ * Compare Page" action — emits the terminal `ship_settled` receipt on
+ * both success and failure.
+ */
+export async function shipCompareUrl(
+  workerId: string,
+  shipId: string,
+  commitSha: string,
+  pushedRef: string,
+  title: string,
+  body: string,
+): Promise<string> {
+  try {
+    const raw = await invoke<unknown>("ship_compare_url", {
+      workerId,
+      shipId,
+      commitSha,
+      pushedRef,
+      title,
+      body,
+    });
+    const parsed = ShipCompareUrlResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("Ship Compare URL Returned An Unexpected Shape.");
+    }
+    return parsed.data;
+  } catch (err) {
+    throw toShipCommandError(err);
+  }
 }

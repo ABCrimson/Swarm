@@ -14,6 +14,12 @@ import { ModelSelector } from "./ModelSelector.tsx";
 interface WorkerAIPanelProps {
   /** Worker ID for this combined view. */
   readonly workerId: string;
+  /**
+   * Invoked when the toolbar's Ship button is clicked — the detail
+   * panel's tab strip (`#pages/Workers`) owns the Ship tab, so this
+   * panel can only request the switch, not perform it itself.
+   */
+  readonly onRequestShipTab?: () => void;
 }
 
 // ── Styles (OKLCH) ──────────────────────────────────
@@ -225,7 +231,10 @@ function InjectModal({
  * - Inject instruction button for mid-conversation commands
  * - Bidirectional flow: AI sends commands to PTY, results flow back
  */
-export function WorkerAIPanel({ workerId }: WorkerAIPanelProps): React.ReactElement {
+export function WorkerAIPanel({
+  workerId,
+  onRequestShipTab,
+}: WorkerAIPanelProps): React.ReactElement {
   const [showInjectModal, setShowInjectModal] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
   // Each injection gets a fresh id so AIChat's effect fires even when the
@@ -254,6 +263,22 @@ export function WorkerAIPanel({ workerId }: WorkerAIPanelProps): React.ReactElem
         >
           Inject Instruction
         </button>
+
+        {onRequestShipTab != null && (
+          <button
+            type="button"
+            onClick={onRequestShipTab}
+            style={{
+              ...injectButtonStyle,
+              borderColor: "oklch(0.35 0.10 150)",
+              background: "oklch(0.14 0.06 150 / 0.6)",
+              color: "oklch(0.75 0.16 150)",
+            }}
+            aria-label="Ship"
+          >
+            Ship
+          </button>
+        )}
 
         <button
           type="button"
