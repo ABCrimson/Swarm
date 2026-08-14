@@ -8,6 +8,7 @@ import { SwarmToaster } from "#components/ui/Toast";
 import { useAlerts } from "#hooks/useAlerts";
 import { useAutoSnapshot } from "#hooks/useAutoSnapshot";
 import { useMetrics } from "#hooks/useMetrics";
+import { useProvenanceEvents } from "#hooks/useProvenanceEvents";
 import { useSessionEvents } from "#hooks/useSessionEvents";
 import { useSettingsBridge } from "#hooks/useSettingsBridge";
 import { useSystemLogEvents } from "#hooks/useSystemLogEvents";
@@ -104,6 +105,7 @@ export function App(): React.ReactElement {
   // Initialize global subscriptions (theme, events, metrics, alerts)
   useTheme();
   useWorkerEvents();
+  useProvenanceEvents();
   useSystemLogEvents();
   useSessionEvents();
   useMetrics();
