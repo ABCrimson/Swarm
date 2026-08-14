@@ -112,6 +112,13 @@ pub enum AppError {
     /// only path/IO context, so it is safe to log and display.
     #[error("Config error: {0}")]
     Config(String),
+
+    /// A `git` CLI invocation (worktree/repo discovery) failed, timed
+    /// out, or the installed `git` binary is missing/too old. Carries
+    /// only command/stderr context — never repo file contents — so it
+    /// is safe to log.
+    #[error("Git error: {0}")]
+    Git(String),
 }
 
 /// Serializes [`AppError`] as a plain string for Tauri IPC transport.
@@ -200,6 +207,15 @@ mod tests {
         let err = AppError::QueueFull { capacity: 128 };
         let json = serde_json::to_string(&err).expect("serialize");
         assert_eq!(json, r#""AI queue full (128 capacity)""#);
+    }
+
+    #[test]
+    fn test_git_display() {
+        let err = AppError::Git("worktree add refused: index.lock exists".to_string());
+        assert_eq!(
+            err.to_string(),
+            "Git error: worktree add refused: index.lock exists"
+        );
     }
 
     #[test]

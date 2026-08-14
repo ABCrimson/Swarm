@@ -33,6 +33,10 @@
 //! - [`orchestration`] — Ordered event log + single-writer engine
 //! - [`bus`] — Inter-agent message bus with broadcast channels and pipelines
 //! - [`config`] — Atomic key-value JSON config persistence
+//! - [`git`] — Worktree-per-worker isolation: binary discovery, repo
+//!   discovery, and worktree add/lock/unlock/remove/list/prune, all
+//!   shelling out to the system `git` binary via arg-vector `Command`
+//!   invocations (never a shell string)
 //! - [`error`] — Shared application error type
 
 pub mod ai;
@@ -40,6 +44,7 @@ pub mod bus;
 pub mod config;
 pub mod error;
 pub mod events;
+pub mod git;
 pub mod orchestration;
 mod paths;
 pub mod session;
