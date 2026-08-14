@@ -23,6 +23,9 @@ mod session;
 
 use commands::metrics::SharedSystem;
 use swarm_core::Paths;
+use swarm_core::agent::{
+    AgentScheduler, AgentSchedulerConfig, AgentSessionRegistry, AgentTurnRequest, ClaudeCodeAdapter,
+};
 use swarm_core::bus::channel::MessageBus;
 use swarm_core::bus::router::Router;
 use swarm_core::error::AppError;
@@ -170,6 +173,11 @@ pub fn run() {
             commands::session::session_add_worker,
             // Agent commands
             commands::agent::agent_turn_started,
+            commands::agent::agent_spawn,
+            commands::agent::agent_send_turn,
+            commands::agent::agent_cancel,
+            commands::agent::agent_shutdown,
+            commands::agent::agent_probe,
             // Config commands
             commands::config::read_config,
             commands::config::write_config,
@@ -313,10 +321,57 @@ pub fn run() {
                 metrics_cancel,
             );
 
-            // The agent-turn scheduler (`swarm_core::agent::AgentScheduler`)
-            // is constructed lazily — Phase 3's provider adapters give it
-            // something real to dispatch to. Nothing to `app.manage()`
-            // here yet (see `swarm_core::agent`'s module doc).
+            // Phase 3: the Claude Code provider adapter, its live-session
+            // registry, and the agent-turn scheduler that gates
+            // concurrency across every session's turns.
+            let claude_adapter = ClaudeCodeAdapter::new(sink.clone());
+            app.manage(claude_adapter);
+
+            let agent_session_registry = AgentSessionRegistry::new();
+            app.manage(agent_session_registry.clone());
+
+            // `AgentSchedulerConfig::default().concurrent_limit == 3`
+            // mirrors the existing AI concurrency setting's own default
+            // (`useAiStore`'s `concurrentLimit: 3`, `src/store/ai.ts`).
+            // That TS store is client-side-only (never persisted to
+            // `swarm-config.json`), so this Rust-side scheduler cannot
+            // read its live value at startup — seeding from the same
+            // default is the honest approximation; wiring a
+            // `set_agent_concurrency` command to keep the two in sync
+            // live is a follow-up, not part of this minimal surface.
+            let scheduler_registry = agent_session_registry.clone();
+            let scheduler = AgentScheduler::new(AgentSchedulerConfig::default(), move |request: AgentTurnRequest| {
+                let registry = scheduler_registry.clone();
+                async move {
+                    match registry.get(&request.worker_id) {
+                        Ok(session) => {
+                            // `AgentSessionBusy` is an ordinary, expected
+                            // outcome here (the session already rejects an
+                            // overlapping turn on its own — see
+                            // `AgentSession`'s concurrency contract) —
+                            // logged, not escalated; the session's own
+                            // `agent_*` event stream is the source of
+                            // truth the frontend renders from, not this
+                            // executor's return value.
+                            if let Err(e) = session.send_turn(request.turn).await {
+                                tracing::warn!(
+                                    worker_id = %request.worker_id,
+                                    error = %e,
+                                    "agent turn dispatch: send_turn did not accept the turn"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                worker_id = %request.worker_id,
+                                error = %e,
+                                "agent turn dispatch: no live session for worker"
+                            );
+                        }
+                    }
+                }
+            });
+            app.manage(scheduler);
 
             tracing::info!("SWARM Orchestrator setup complete");
             Ok(())

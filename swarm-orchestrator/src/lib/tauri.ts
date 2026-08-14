@@ -2,6 +2,8 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import * as z from "zod";
+import type { ClaudeCodeTrustTier, ProbeReport } from "#lib/agent-events";
+import { ProbeReportSchema } from "#lib/agent-events";
 import type {
   CommitOutcome,
   PushOutcome,
@@ -116,6 +118,112 @@ export async function spawnWorker(
   const parsed = SpawnWorkerResponseSchema.safeParse(raw);
   if (!parsed.success) {
     throw new Error("Spawn Worker Returned An Invalid Worker ID.");
+  }
+  return parsed.data;
+}
+
+/** Validates the raw `agent_spawn` IPC response is a worker UUID before trusting it. */
+const AgentSpawnResponseSchema = z.uuid();
+
+/**
+ * Spawns a new worker (via the same worktree-isolation path as
+ * {@link spawnWorker}) AND attaches a Claude Code provider-adapter
+ * session to it in one call (Rust's `agent_spawn` command,
+ * `src-tauri/src/commands/agent.rs`).
+ *
+ * `options` maps to `WorkerConfig` exactly like {@link spawnWorker}.
+ * `model`/`trustTier` are Claude-Code-specific: `trustTier` defaults to
+ * `"standard"` server-side when omitted. The attached session's
+ * `sessionKey`/`capabilities`/provider badge arrive via the
+ * `agent_session_started` event (`#hooks/useAgentSessionEvents`), not
+ * this call's return value — mirroring how `worker_spawned` (not
+ * `spawnWorker`'s return) is `useWorkerStore`'s source of truth.
+ *
+ * If the PTY worker spawns but the agent session fails to attach (e.g.
+ * `claude` is not installed or not authenticated), the worker still
+ * exists — usable as a plain terminal — and this call rejects with the
+ * attach failure. Callers should treat that as "spawned, but Not
+ * Signed In," not "nothing happened."
+ */
+export async function agentSpawn(
+  options: WorkerProcessOptions,
+  model: string | undefined,
+  trustTier: ClaudeCodeTrustTier | undefined,
+  prov?: ProvenanceArgs,
+): Promise<string | null> {
+  if (!isTauri()) return null;
+
+  const config: Record<string, unknown> = { name: options.name };
+  if (options.shell !== undefined) config.shell = options.shell;
+  if (options.cwd !== undefined) config.cwd = options.cwd;
+  if (options.env !== undefined) config.env = options.env;
+  if (options.repoRoot !== undefined) config.repoRoot = options.repoRoot;
+  if (options.isolation !== undefined) config.isolation = options.isolation;
+
+  const raw = await invoke<unknown>("agent_spawn", {
+    config,
+    provider: "claude_code",
+    model,
+    trustTier,
+    originWorker: prov?.originWorker,
+    causeSeq: prov?.causeSeq,
+  });
+  const parsed = AgentSpawnResponseSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error("Agent Spawn Returned An Invalid Worker ID.");
+  }
+  return parsed.data;
+}
+
+/**
+ * Sends one turn to `workerId`'s attached Claude Code session (Rust's
+ * `agent_send_turn` command). Fire-and-forget by design — resolves once
+ * the turn is ADMITTED to the backend scheduler, not once it completes;
+ * the transcript renders from the live `agent_*` event stream, not this
+ * call's return value (there is none). Rejects if `workerId` has no
+ * attached session, or if the backend's admission queue is full.
+ */
+export async function agentSendTurn(workerId: string, prompt: string): Promise<void> {
+  return invoke<void>("agent_send_turn", { workerId, prompt });
+}
+
+/**
+ * Cancels `workerId`'s in-flight turn (Rust's `agent_cancel` command).
+ * `turnId` comes from that turn's own `agent_block`/`agent_tool_call`
+ * events. A stale or already-settled `turnId` is a benign no-op.
+ */
+export async function agentCancel(workerId: string, turnId: string): Promise<void> {
+  return invoke<void>("agent_cancel", { workerId, turnId });
+}
+
+/**
+ * Shuts down `workerId`'s attached Claude Code session (Rust's
+ * `agent_shutdown` command) without killing the underlying PTY worker —
+ * see {@link killWorker} for that. Idempotent; a worker with no
+ * attached session is a benign no-op.
+ */
+export async function agentShutdown(workerId: string): Promise<void> {
+  return invoke<void>("agent_shutdown", { workerId });
+}
+
+/**
+ * Checks whether the Claude Code CLI is installed and responds to
+ * `--version` (Rust's `agent_probe` command). Bounded — never hangs.
+ * Returns `{ available: false }` (never throws) when the provider is
+ * unusable; `detail` carries a human-readable reason, never a
+ * credential. When Tauri is unavailable (e.g. `pnpm dev` in a plain
+ * browser), resolves to `{ available: false, detail: "..." }` rather
+ * than throwing, matching every other graceful-degradation command
+ * here.
+ */
+export async function agentProbe(): Promise<ProbeReport> {
+  if (!isTauri()) {
+    return { available: false, detail: "No Tauri IPC Bridge Available." };
+  }
+  const raw = await invoke<unknown>("agent_probe");
+  const parsed = ProbeReportSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error("Agent Probe Returned An Unexpected Shape.");
   }
   return parsed.data;
 }

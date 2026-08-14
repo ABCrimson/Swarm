@@ -3,22 +3,36 @@
 //! Provides `agent_turn_started` — a narrow webview intake used by the
 //! client-side chat streaming path (`AIChat.tsx`, which streams
 //! `@anthropic-ai/sdk` directly from the webview) to record a real,
-//! persisted seq for each AI/agent turn.
+//! persisted seq for each AI/agent turn — plus, as of Phase 3, the
+//! provider-adapter command surface: `agent_spawn`, `agent_send_turn`,
+//! `agent_cancel`, `agent_shutdown`, `agent_probe`. These attach and
+//! drive a [`swarm_core::agent::ClaudeCodeAdapter`] session for a
+//! worker; the webview-direct `AIChat.tsx` path and this one are
+//! independent providers that happen to share the `agent_*` event
+//! family (see `docs/architecture.md`'s adapter-layer section).
 //!
 //! Moved here from the deleted `commands/ai.rs` (Phase 2 of the
 //! multi-provider plan: `ai_request` and its queue wiring were deleted
 //! wholesale — see `crate::commands::ai`'s removal in the changelog —
-//! but this command is unrelated to that dead path and is actively
-//! used, so it survives, unrenamed, in a home that matches its new
-//! neighbors: the `agent_*` event family Phase 3's provider adapters
-//! will extend it alongside (`agent_turn`, `agent_cancel`,
-//! `agent_permission_respond`, `agent_probe_providers`).
+//! but `agent_turn_started` is unrelated to that dead path and is
+//! actively used, so it survived, unrenamed, in a home that now matches
+//! its Phase 3 neighbors.
 
 use std::time::Duration;
 
 use uuid::Uuid;
 
+use swarm_core::agent::{
+    AgentAdapter, AgentScheduler, AgentSessionRegistry, AgentSpawnSpec, AgentTurnRequest,
+    ClaudeCodeAdapter, ProbeReport, ProviderId, TurnInput, TurnPriority,
+};
+use swarm_core::error::AppError;
 use swarm_core::events::{AgentTurnStartedPayload, EventSink, Provenance, SwarmEvent};
+use swarm_core::git::RepoLocks;
+use swarm_core::worker::lifecycle;
+use swarm_core::worker::registry::WorkerRegistry;
+
+use crate::commands::parse_provenance;
 
 /// Ceiling on how long `agent_turn_started` waits for the writer thread
 /// to ack the assigned seq. The writer thread is a single dedicated OS
@@ -110,4 +124,240 @@ pub async fn agent_turn_started(
             Err("Agent Turn Started Timed Out.".to_string())
         }
     }
+}
+
+// ── Phase 3: provider-adapter command surface ───────────────────────
+
+/// Parses a wire provider string (e.g. `"claude_code"`) into a
+/// [`ProviderId`], failing closed on anything unrecognized — same
+/// discipline as every other closed-enum wire value in this codebase
+/// (see `ProviderId`'s own doc).
+fn parse_provider(raw: &str) -> Result<ProviderId, String> {
+    serde_json::from_value(serde_json::Value::String(raw.to_string()))
+        .map_err(|_| format!("Unknown Provider: {raw}"))
+}
+
+/// Spawns a new worker (via the existing worktree-isolation path — see
+/// [`crate::commands::worker::spawn_worker`]) and attaches a Claude
+/// Code provider-adapter session to it in the same call.
+///
+/// The underlying PTY worker and the attached agent session are
+/// deliberately independent resources sharing only the worker id and
+/// cwd (see the multi-provider plan's "Session state — three owners,
+/// no mirroring" table): the PTY continues to back the plain terminal
+/// view (`WorkerTerminal`), while the agent session drives the AI
+/// conversation (`agent_send_turn` et al.). If the PTY worker spawns
+/// successfully but the agent session fails to attach (e.g. the
+/// `claude` binary is missing or not authenticated), the worker is left
+/// running and usable as a plain terminal — this command reports the
+/// agent-attach failure without rolling back the worker spawn, matching
+/// the plan's "Not Signed In is a state, never a hang" rule (a
+/// half-attached worker is a legitimate, visible degraded state, not a
+/// silent failure).
+///
+/// # Arguments
+///
+/// * `sink`/`registry`/`repo_locks` - Worker spawn plumbing (managed state)
+/// * `session_registry` - Where the new live session is registered (managed state)
+/// * `claude_adapter` - The Claude Code provider adapter (managed state)
+/// * `config` - Worker spawn configuration (name/cwd/repoRoot/isolation — same shape `spawn_worker` takes)
+/// * `provider` - Wire provider id; only `"claude_code"` is supported today
+/// * `model` - Model alias (e.g. `"sonnet"`); `None` defers to the adapter's default
+/// * `trust_tier` - `"restricted"` | `"standard"` | `"write_enabled"`; `None` defers to `"standard"`
+///
+/// # Returns
+///
+/// The UUID string of the newly spawned worker (same contract as
+/// `spawn_worker`) — the attached session's `sessionKey`/`capabilities`
+/// arrive via the `agent_session_started` event, not this return value.
+///
+/// # Errors
+///
+/// Returns a `String` error if the PTY worker spawn itself fails (same
+/// failure modes as `spawn_worker`), if `provider` is unrecognized or
+/// not yet supported, or if the agent session fails to attach (in which
+/// case the worker still exists — see above).
+#[tauri::command]
+#[tracing::instrument(skip(sink, registry, repo_locks, session_registry, claude_adapter, config))]
+#[allow(clippy::too_many_arguments)]
+pub async fn agent_spawn(
+    sink: tauri::State<'_, EventSink>,
+    registry: tauri::State<'_, WorkerRegistry>,
+    repo_locks: tauri::State<'_, RepoLocks>,
+    session_registry: tauri::State<'_, AgentSessionRegistry>,
+    claude_adapter: tauri::State<'_, ClaudeCodeAdapter>,
+    config: swarm_core::worker::handle::WorkerConfig,
+    provider: String,
+    model: Option<String>,
+    trust_tier: Option<String>,
+    origin_worker: Option<String>,
+    cause_seq: Option<u64>,
+) -> Result<String, String> {
+    tracing::info!(name = %config.name, %provider, "agent_spawn called");
+    let provider_id = parse_provider(&provider)?;
+    if provider_id != ProviderId::ClaudeCode {
+        return Err(format!(
+            "Provider Not Yet Supported: {provider} (only claude_code today)"
+        ));
+    }
+
+    let provenance = parse_provenance(origin_worker, cause_seq)?;
+    let fallback_cwd = config.cwd.clone();
+
+    let registry_inner = registry.inner().clone();
+    let sink_inner = sink.inner().clone();
+    let repo_locks_inner = repo_locks.inner().clone();
+    let worker_id = tokio::task::spawn_blocking(move || {
+        lifecycle::do_spawn_worker(&sink_inner, &registry_inner, &repo_locks_inner, config, provenance)
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "agent_spawn: worker spawn task panicked");
+        e.to_string()
+    })?
+    .map_err(|e| {
+        tracing::error!(error = %e, "agent_spawn: worker spawn failed");
+        e.to_string()
+    })?;
+
+    // Worktree cwd (when isolated) takes priority over the config's raw
+    // cwd — same resolution `do_spawn_worker` itself applies internally
+    // for the PTY.
+    let cwd = registry
+        .get_worker(&worker_id)
+        .ok()
+        .and_then(|info| info.worktree_path)
+        .unwrap_or(fallback_cwd);
+
+    let spec = AgentSpawnSpec {
+        worker_id,
+        cwd,
+        model,
+        resume: None,
+        permission_mode: trust_tier,
+    };
+
+    match claude_adapter.spawn(spec).await {
+        Ok(session) => {
+            session_registry.insert(worker_id, std::sync::Arc::from(session));
+        }
+        Err(e) => {
+            tracing::error!(worker_id = %worker_id, error = %e, "agent_spawn: session attach failed — worker remains usable as a plain terminal");
+            return Err(e.to_string());
+        }
+    }
+
+    Ok(worker_id.to_string())
+}
+
+/// Enqueues one turn for `worker_id`'s attached agent session through
+/// the [`AgentScheduler`] (concurrency-gated across every session, per
+/// `docs/architecture.md`'s adapter section — "you do not want 20
+/// Claude Code processes running tools against one repo at once").
+///
+/// This command is fire-and-forget by design: it confirms the turn was
+/// ADMITTED to the scheduler, not that it completed (or even started)
+/// — the frontend's transcript renders from the live `agent_*` event
+/// stream (`agent_block`/`agent_tool_call`/`agent_tool_result`/
+/// `agent_turn_settled`, all carrying `workerId`), not from this call's
+/// return value. A session already mid-turn rejects the underlying
+/// `send_turn` with `AgentSessionBusy` inside the scheduler's executor
+/// (logged, not surfaced here) — see
+/// `crate::agent::adapter::AgentSession`'s concurrency contract for why
+/// that is the session's job, not this command's.
+///
+/// # Errors
+///
+/// Returns a `String` error if `worker_id` is not a valid UUID or the
+/// scheduler's bounded admission queue is full
+/// ([`swarm_core::error::AppError::QueueFull`]).
+#[tauri::command]
+#[tracing::instrument(skip(scheduler))]
+pub async fn agent_send_turn(
+    scheduler: tauri::State<'_, AgentScheduler>,
+    worker_id: String,
+    prompt: String,
+) -> Result<(), String> {
+    let uuid = Uuid::parse_str(&worker_id).map_err(|e| {
+        tracing::error!(error = %e, "agent_send_turn: invalid worker ID");
+        e.to_string()
+    })?;
+    scheduler
+        .enqueue(AgentTurnRequest {
+            worker_id: uuid,
+            turn: TurnInput { prompt },
+            priority: TurnPriority::Normal,
+        })
+        .map_err(|e| {
+            tracing::error!(worker_id = %uuid, error = %e, "agent_send_turn: enqueue failed");
+            e.to_string()
+        })
+}
+
+/// Cancels `worker_id`'s in-flight turn (identified by `turn_id`, from
+/// that turn's own `agent_block`/`agent_tool_call` events' `turnId`).
+/// A stale or already-settled `turn_id` is a benign no-op — see
+/// [`crate::agent::adapter::AgentSession::cancel`]'s doc.
+///
+/// # Errors
+///
+/// Returns a `String` error if `worker_id` is not a valid UUID or has
+/// no attached agent session.
+#[tauri::command]
+#[tracing::instrument(skip(session_registry))]
+pub async fn agent_cancel(
+    session_registry: tauri::State<'_, AgentSessionRegistry>,
+    worker_id: String,
+    turn_id: String,
+) -> Result<(), String> {
+    let uuid = Uuid::parse_str(&worker_id).map_err(|e| e.to_string())?;
+    let session = session_registry.get(&uuid).map_err(|e| e.to_string())?;
+    session.cancel(turn_id).await.map_err(|e| e.to_string())
+}
+
+/// Shuts down `worker_id`'s attached agent session (idempotent — see
+/// [`crate::agent::adapter::AgentSession::shutdown`]'s doc) and removes
+/// it from the registry. A worker with no attached session is a benign
+/// no-op, not an error — shutting down twice (or shutting down a
+/// worker that was never a Claude Code worker) is exactly the
+/// idempotent case this command is safe to call for.
+///
+/// Does NOT kill the underlying PTY worker — see `kill_worker` for
+/// that (which also tears down any attached agent session as part of
+/// its own cleanup).
+///
+/// # Errors
+///
+/// Returns a `String` error if `worker_id` is not a valid UUID.
+#[tauri::command]
+#[tracing::instrument(skip(session_registry))]
+pub async fn agent_shutdown(
+    session_registry: tauri::State<'_, AgentSessionRegistry>,
+    worker_id: String,
+) -> Result<(), String> {
+    let uuid = Uuid::parse_str(&worker_id).map_err(|e| e.to_string())?;
+    if let Some(session) = session_registry.remove(&uuid) {
+        session.shutdown().await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Checks whether the Claude Code CLI is installed and responds to
+/// `--version`, bounded by [`ClaudeCodeAdapter::probe`]'s own timeout —
+/// never a hang, per the plan's "Not Signed In is a state, never a
+/// hang" rule. Never touches or reports a credential; see
+/// [`ProbeReport`]'s doc.
+///
+/// # Errors
+///
+/// This command itself never fails — an unusable provider is reported
+/// as `ProbeReport { available: false, .. }` with a human-readable
+/// `detail`, not an `Err`. The `Result` wrapper exists only for Tauri's
+/// IPC error-transport convention, matching every other command here.
+#[tauri::command]
+#[tracing::instrument(skip(claude_adapter))]
+pub async fn agent_probe(
+    claude_adapter: tauri::State<'_, ClaudeCodeAdapter>,
+) -> Result<ProbeReport, String> {
+    claude_adapter.probe().await.map_err(|e: AppError| e.to_string())
 }

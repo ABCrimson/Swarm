@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-'use strict';
+"use strict";
 /*
  * Fake `claude -p --output-format stream-json ...` child process for
  * ClaudeCodeAdapter's Rust unit tests (crates/swarm-core/src/agent/claude_code.rs).
@@ -38,8 +38,8 @@
  *                                      (default: 0)
  */
 
-const fs = require('fs');
-const readline = require('readline');
+const fs = require("fs");
+const readline = require("readline");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -49,7 +49,7 @@ function makeStdinLineWaiter() {
   const rl = readline.createInterface({ input: process.stdin, terminal: false });
   const pending = [];
   const waiters = [];
-  rl.on('line', (line) => {
+  rl.on("line", (line) => {
     if (waiters.length > 0) {
       waiters.shift()(line);
     } else {
@@ -65,36 +65,36 @@ function makeStdinLineWaiter() {
 async function main() {
   const scriptPath = process.argv[2];
   if (!scriptPath) {
-    console.error('Usage: node fake_claude_cli.cjs <script-file>');
+    console.error("Usage: node fake_claude_cli.cjs <script-file>");
     process.exit(2);
   }
 
   const waitForStdinLine = makeStdinLineWaiter();
 
-  const lines = fs.readFileSync(scriptPath, 'utf8').split('\n');
+  const lines = fs.readFileSync(scriptPath, "utf8").split("\n");
   let exitCode = 0;
 
   for (const raw of lines) {
-    const line = raw.replace(/\r$/, '');
-    if (line.trim() === '') continue;
-    if (line.startsWith('#DIRECTIVE ')) {
+    const line = raw.replace(/\r$/, "");
+    if (line.trim() === "") continue;
+    if (line.startsWith("#DIRECTIVE ")) {
       const [, name, arg] = line.match(/^#DIRECTIVE\s+(\S+)(?:\s+(.*))?$/) || [];
-      if (name === 'SLEEP_MS') {
+      if (name === "SLEEP_MS") {
         await sleep(Number(arg) || 0);
-      } else if (name === 'HANG') {
+      } else if (name === "HANG") {
         await new Promise(() => {}); // never resolves; process stays alive until killed
-      } else if (name === 'EMIT_OVERSIZED_LINE') {
-        const blob = 'x'.repeat(11 * 1024 * 1024);
+      } else if (name === "EMIT_OVERSIZED_LINE") {
+        const blob = "x".repeat(11 * 1024 * 1024);
         fs.writeSync(1, blob); // deliberately NO trailing "\n"
         await new Promise(() => {});
-      } else if (name === 'AWAIT_STDIN_LINE') {
+      } else if (name === "AWAIT_STDIN_LINE") {
         await waitForStdinLine();
-      } else if (name === 'EXIT_CODE') {
+      } else if (name === "EXIT_CODE") {
         exitCode = Number(arg) || 0;
       }
       continue;
     }
-    if (line.startsWith('#')) continue; // plain comment
+    if (line.startsWith("#")) continue; // plain comment
     // fs.writeSync(1, ...) rather than process.stdout.write(...): stdout
     // is a piped, non-TTY stream here, and Node's async stream write
     // followed immediately by process.exit() can truncate whatever
@@ -103,13 +103,13 @@ async function main() {
     // every line actually reaches the pipe before this loop (and the
     // process) moves on, which matters here because this script emits
     // many lines back-to-back with no natural backpressure pause.
-    fs.writeSync(1, line + '\n');
+    fs.writeSync(1, line + "\n");
   }
 
   process.exit(exitCode);
 }
 
 main().catch((e) => {
-  console.error('FAKE_CLAUDE_CLI FATAL', e);
+  console.error("FAKE_CLAUDE_CLI FATAL", e);
   process.exit(1);
 });
