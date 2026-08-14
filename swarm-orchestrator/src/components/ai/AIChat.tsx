@@ -353,6 +353,18 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
         }
         const turnProvenance: ToolProvenance = { originWorker: workerId, causeSeq: turnSeq };
 
+        // Re-check immediately after the agentTurnStarted round-trip: a
+        // Cancel click during that await flips turn.cancelled but has no
+        // live stream to abort yet (cancelStream is a no-op between
+        // rounds — see TurnToken's doc), so without this check a cancel
+        // here would fall straight through into startStream and burn a
+        // full round of tokens on a turn the user already cancelled.
+        // Nothing has streamed yet, so there's no partial content to
+        // commit — the finally block below still runs its normal cleanup.
+        if (turn.cancelled) {
+          return;
+        }
+
         for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
           const roundCalls: { id: string; name: string; input: Record<string, unknown> }[] = [];
 

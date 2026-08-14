@@ -96,10 +96,24 @@ function handleIncoming(e: DomainEvent): void {
 async function backfill(afterSeq: number): Promise<void> {
   if (backfilling) return;
   backfilling = true;
+  // `true` only when a real (non-error) `events_since` call comes back
+  // empty — i.e. persistence itself confirms nothing exists past
+  // `cursor` right now. `events_since` is authoritative: it either
+  // throws (handled below, and must NOT trigger the skip-ahead logic —
+  // a failed call proves nothing) or returns the complete truth for
+  // that range. An empty non-error result means the remaining gap is
+  // ephemeral by design (e.g. an all-terminal-source `worker_input`
+  // stretch, or metrics/log-only traffic) — nothing is being withheld,
+  // there is simply nothing persisted to backfill.
+  let confirmedNothingPersisted = false;
   try {
     let cursor = afterSeq;
     for (;;) {
       const page = await invoke<DomainEvent[]>("events_since", { afterSeq: cursor });
+      if (page.length === 0) {
+        confirmedNothingPersisted = true;
+        break;
+      }
       for (const raw of page) {
         const parsed = DomainEventSchema.safeParse(raw);
         if (parsed.success) dispatch(parsed.data as DomainEvent);
@@ -111,12 +125,28 @@ async function backfill(afterSeq: number): Promise<void> {
     console.error("event-bus backfill failed:", err);
   } finally {
     backfilling = false;
+    const toFlush = pending.splice(0).sort((a, b) => a.seq - b.seq);
+    // Ephemeral-gap wedge fix: an empty page proved nothing is
+    // persisted past `lastSeq`, but `lastSeq` itself never advances on
+    // its own — without this, every subsequent live/flushed event would
+    // re-detect "the same" already-confirmed-empty gap and re-trigger
+    // backfill forever (a real, silent wedge — no crash, no error, just
+    // an unbounded stream of futile events_since round-trips for the
+    // life of the app). Jump lastSeq to just before the earliest event
+    // we're about to flush — anchoring to a concrete, already-in-hand
+    // seq (never a guess) so dispatch()'s own `e.seq <= lastSeq` dedup
+    // check can't accidentally swallow it.
+    if (confirmedNothingPersisted && toFlush.length > 0 && toFlush[0].seq > lastSeq + 1) {
+      console.debug(
+        `event-bus: gap after seq ${lastSeq} is entirely ephemeral — skipping ahead to seq ${toFlush[0].seq}`,
+      );
+      lastSeq = toFlush[0].seq - 1;
+    }
     // Route flushed events through the same gap-check path as live events:
     // on success this catches a gap that opened during the backfill (and
     // re-triggers a follow-up backfill); on failure lastSeq was never
     // advanced past the gap, so the first pending event re-detects it and
     // retries — the failed attempt is never silently swallowed.
-    const toFlush = pending.splice(0).sort((a, b) => a.seq - b.seq);
     for (const e of toFlush) handleIncoming(e);
   }
 }
