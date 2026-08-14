@@ -39,7 +39,8 @@ use swarm_core::events::Provenance;
 /// [`Provenance`]. Shared by every command that accepts explicit
 /// causal-attribution args (see Phase 4's "explicit IPC args, not
 /// ambient cause state" decision) — `spawn_worker`, `kill_worker`,
-/// `pause_worker`, `resume_worker`, `worker_input`, `write_file`.
+/// `pause_worker`, `resume_worker`, `worker_input`, `write_file`,
+/// `create_session`, `delete_session`.
 ///
 /// Absent `originWorker` yields `Provenance::default()` — the honest
 /// "unattributed" value every existing caller keeps producing. A

@@ -396,6 +396,37 @@ pub struct SystemLogPayload {
     pub timestamp: i64,
 }
 
+/// Where a `worker_input` event's bytes came from.
+///
+/// A closed, typed enum — not a bare string — so that the
+/// typed-secrets-never-archived guarantee (see [`WorkerInputPayload`]'s
+/// doc and [`crate::orchestration::is_persistent`]'s carve-out) does
+/// not rest on the webview spelling `"terminal"` correctly. An unknown
+/// or misspelled source value now fails IPC *deserialization* outright
+/// — the command errors before any PTY write or event emission happens
+/// — rather than silently falling through a string-equality check as
+/// "not terminal" and persisting/previewing something that should have
+/// been treated as raw human keystrokes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputSource {
+    /// Human keystrokes typed into a worker's terminal.
+    Terminal,
+    /// An AI tool call (e.g. the `run_command` tool).
+    Tool,
+    /// Machine-issued input outside a tool call (e.g. workspace-watcher
+    /// auto-injection).
+    Automation,
+}
+
+impl InputSource {
+    /// `true` for every source except [`Self::Terminal`] — the source
+    /// classes that get a control-stripped preview and persist normally.
+    pub fn is_machine_issued(self) -> bool {
+        !matches!(self, InputSource::Terminal)
+    }
+}
+
 /// Payload for the `worker_input` event.
 ///
 /// Emitted from [`crate::worker::lifecycle::do_worker_input`] AFTER a
@@ -412,9 +443,8 @@ pub struct WorkerInputPayload {
     pub worker_id: Uuid,
     /// Number of bytes written.
     pub bytes: usize,
-    /// `"terminal"` (human keystrokes), `"tool"` (an AI tool call), or
-    /// `"automation"` (e.g. workspace-watcher auto-injection).
-    pub source: String,
+    /// Where the input came from.
+    pub source: InputSource,
     /// First ~120 characters of the input, control characters
     /// stripped. `None` for `source == "terminal"` — see the struct
     /// doc's "never carries raw keystrokes" note.
@@ -992,7 +1022,7 @@ mod tests {
         let event = SwarmEvent::WorkerInput(WorkerInputPayload {
             worker_id,
             bytes: 5,
-            source: "terminal".to_string(),
+            source: InputSource::Terminal,
             preview: None,
         });
         let json = serde_json::to_string(&event).expect("serialize");
@@ -1016,18 +1046,36 @@ mod tests {
         let event = SwarmEvent::WorkerInput(WorkerInputPayload {
             worker_id: Uuid::nil(),
             bytes: 12,
-            source: "tool".to_string(),
+            source: InputSource::Tool,
             preview: Some("pnpm build\n".to_string()),
         });
         let json = serde_json::to_string(&event).expect("serialize");
         assert!(json.contains("\"preview\":\"pnpm build\\n\""));
         let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
         if let SwarmEvent::WorkerInput(p) = deserialized {
-            assert_eq!(p.source, "tool");
+            assert_eq!(p.source, InputSource::Tool);
             assert_eq!(p.preview.as_deref(), Some("pnpm build\n"));
         } else {
             panic!("expected WorkerInput variant");
         }
+    }
+
+    /// DIRECTIVE (BLOCKING fix): `source` is a closed, typed enum — an
+    /// unrecognized string must fail deserialization outright, not
+    /// silently coerce into some default. This is what makes the
+    /// "typed secrets never archived" guarantee independent of the
+    /// webview spelling `"terminal"` correctly.
+    #[test]
+    fn test_input_source_rejects_unknown_string() {
+        let result: Result<InputSource, _> = serde_json::from_str("\"carrier_pigeon\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_input_source_is_machine_issued() {
+        assert!(!InputSource::Terminal.is_machine_issued());
+        assert!(InputSource::Tool.is_machine_issued());
+        assert!(InputSource::Automation.is_machine_issued());
     }
 
     // ── agent_turn_started ───────────────────────────────────────────
@@ -1133,6 +1181,39 @@ mod tests {
         assert!(
             send_result.is_err(),
             "send must report the dropped receiver, not hang"
+        );
+    }
+
+    /// DIRECTIVE (BLOCKING fix, `agent_turn_started` hardening): a
+    /// caller awaiting `emit_awaiting_seq`'s receiver through
+    /// `tokio::time::timeout` must observe a bounded timeout, not an
+    /// indefinite hang, when nothing ever resolves the ack (e.g. a
+    /// wedged writer thread that received the message but never reaches
+    /// `ack.send(seq)`). This is the exact mechanism
+    /// `commands::ai::agent_turn_started` wraps in a 5s timeout; proven
+    /// here at the `EventSink` boundary (accessible from swarm-core's
+    /// own tests, unlike the desktop-crate command) with a short
+    /// duration so the test itself stays fast.
+    #[tokio::test]
+    async fn test_emit_awaiting_seq_ack_can_be_bounded_with_a_timeout() {
+        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
+        let sink = EventSink::new(tx);
+        // Kept alive (not dropped) — a dropped receiver resolves the ack
+        // immediately with a RecvError (see the test above), which is a
+        // different code path than a genuine timeout.
+        let _rx = rx;
+
+        let ack = sink.emit_awaiting_seq(
+            SwarmEvent::WorkerKilled(WorkerKilledPayload {
+                worker_id: Uuid::nil(),
+            }),
+            Provenance::default(),
+        );
+
+        let result = tokio::time::timeout(std::time::Duration::from_millis(30), ack).await;
+        assert!(
+            result.is_err(),
+            "an ack nothing ever resolves must time out, not hang forever"
         );
     }
 }

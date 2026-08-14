@@ -4380,6 +4380,7 @@ version = "0.11.2"
 dependencies = [
  "anyhow",
  "parking_lot",
+ "serde",
  "serde_json",
  "swarm-core",
  "sysinfo",

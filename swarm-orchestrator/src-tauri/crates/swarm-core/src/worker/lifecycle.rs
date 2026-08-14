@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::events::{
-    EventSink, Provenance, SwarmEvent, WorkerInputPayload, WorkerKilledPayload,
+    EventSink, InputSource, Provenance, SwarmEvent, WorkerInputPayload, WorkerKilledPayload,
     WorkerSpawnedPayload, WorkerStatePayload, WorktreeCreatedPayload, WorktreeRemovedPayload,
 };
 use crate::git::{self, RemoveOutcome, RepoLocks};
@@ -657,14 +657,14 @@ fn stamped_preview(data: &[u8]) -> String {
 /// * `registry` - The shared worker registry
 /// * `id` - UUID of the worker to send input to
 /// * `data` - Raw bytes to write to the PTY
-/// * `source` - `"terminal"` (human keystrokes — no `preview`, and
-///   excluded from persistence, see
-///   [`crate::orchestration::is_persistent`]), `"tool"`, or
-///   `"automation"` (machine-issued — both get a control-stripped
-///   `preview`)
+/// * `source` - [`InputSource::Terminal`] (human keystrokes — no
+///   `preview`, and excluded from persistence, see
+///   [`crate::orchestration::is_persistent`]), [`InputSource::Tool`],
+///   or [`InputSource::Automation`] (machine-issued — both get a
+///   control-stripped `preview`)
 /// * `provenance` - Causal attribution; `Provenance::default()` for
-///   `source == "terminal"` (the causer is a human, not another
-///   worker's turn)
+///   `source == InputSource::Terminal` (the causer is a human, not
+///   another worker's turn)
 ///
 /// # Errors
 ///
@@ -676,7 +676,7 @@ pub fn do_worker_input(
     registry: &WorkerRegistry,
     id: Uuid,
     data: &[u8],
-    source: &str,
+    source: InputSource,
     provenance: Provenance,
 ) -> Result<(), AppError> {
     {
@@ -694,12 +694,12 @@ pub fn do_worker_input(
         }
     } // drop the registry entry guard before emitting
 
-    let preview = (source != "terminal").then(|| stamped_preview(data));
+    let preview = source.is_machine_issued().then(|| stamped_preview(data));
     sink.emit_with(
         SwarmEvent::WorkerInput(WorkerInputPayload {
             worker_id: id,
             bytes: data.len(),
-            source: source.to_string(),
+            source,
             preview,
         }),
         provenance,
@@ -881,7 +881,7 @@ mod tests {
             &registry,
             id,
             b"hello",
-            "terminal",
+            InputSource::Terminal,
             Provenance::default(),
         );
         assert!(result.is_err());
@@ -946,7 +946,7 @@ mod tests {
             &registry,
             id,
             b"pnpm build\n",
-            "tool",
+            InputSource::Tool,
             Provenance {
                 origin_worker: Some(origin),
                 cause_seq: Some(41),
@@ -963,7 +963,7 @@ mod tests {
             SwarmEvent::WorkerInput(p) => {
                 assert_eq!(p.worker_id, id);
                 assert_eq!(p.bytes, 11);
-                assert_eq!(p.source, "tool");
+                assert_eq!(p.source, InputSource::Tool);
                 // Trailing `\n` is a control character — stripped, per
                 // `stamped_preview`'s "control-stripped" contract.
                 assert_eq!(p.preview.as_deref(), Some("pnpm build"));
@@ -989,7 +989,7 @@ mod tests {
             &registry,
             id,
             b"super-secret-password\n",
-            "terminal",
+            InputSource::Terminal,
             Provenance::default(),
         )
         .unwrap();
@@ -1023,7 +1023,7 @@ mod tests {
             &registry,
             id,
             &data,
-            "automation",
+            InputSource::Automation,
             Provenance::default(),
         )
         .unwrap();

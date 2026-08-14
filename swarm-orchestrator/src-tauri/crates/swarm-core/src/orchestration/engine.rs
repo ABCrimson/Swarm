@@ -63,17 +63,20 @@ pub struct DomainEvent {
 /// after a gap and is not replayed.
 ///
 /// `WorkerInput` gets a field-level carve-out on top of the
-/// variant-level exclusions below: `source == "terminal"` (raw human
-/// keystrokes) is excluded too — a persisted row per keystroke would
-/// both flood the log and archive whatever the user typed, secrets
-/// included. `source ∈ {tool, automation}` — deliberate, machine-issued
-/// input — persists normally.
+/// variant-level exclusions below: `source == InputSource::Terminal`
+/// (raw human keystrokes) is excluded too — a persisted row per
+/// keystroke would both flood the log and archive whatever the user
+/// typed, secrets included. `source.is_machine_issued()` (`Tool`/
+/// `Automation`) persists normally. Matched on the typed
+/// [`crate::events::InputSource`] enum, not a string — an unrecognized
+/// source value fails IPC deserialization long before it could reach
+/// this function, so the guarantee never depends on string spelling.
 pub fn is_persistent(event: &SwarmEvent) -> bool {
     match event {
         SwarmEvent::WorkerOutput(_) | SwarmEvent::SystemMetrics(_) | SwarmEvent::SystemLog(_) => {
             false
         }
-        SwarmEvent::WorkerInput(p) => p.source != "terminal",
+        SwarmEvent::WorkerInput(p) => p.source.is_machine_issued(),
         _ => true,
     }
 }
@@ -306,17 +309,19 @@ mod tests {
     /// other event.
     #[test]
     fn test_worker_input_persistence_depends_on_source() {
-        let input = |source: &str| {
+        let input = |source: crate::events::InputSource| {
             SwarmEvent::WorkerInput(WorkerInputPayload {
                 worker_id: Uuid::nil(),
                 bytes: 3,
-                source: source.to_string(),
+                source,
                 preview: None,
             })
         };
-        assert!(!is_persistent(&input("terminal")));
-        assert!(is_persistent(&input("tool")));
-        assert!(is_persistent(&input("automation")));
+        assert!(!is_persistent(&input(crate::events::InputSource::Terminal)));
+        assert!(is_persistent(&input(crate::events::InputSource::Tool)));
+        assert!(is_persistent(&input(
+            crate::events::InputSource::Automation
+        )));
     }
 
     /// DIRECTIVE: `file_written` and `agent_turn_started` both persist —
@@ -492,9 +497,13 @@ mod tests {
     }
 
     /// DIRECTIVE: the writer loop stamps `provenance` from the
-    /// `WriterMsg` onto the emitted `DomainEvent` and persists it —
-    /// end-to-end proof that a stamped message survives the writer
-    /// (not just `EventSink`, see emitter.rs's unit tests).
+    /// `WriterMsg` onto the emitted `DomainEvent` AND persists it — both
+    /// halves asserted here, not just the emitted envelope (see
+    /// emitter.rs's unit tests for the `EventSink` half in isolation).
+    /// This is the one seam — `run_writer_loop` → `log.append(..,
+    /// provenance)` — that a change to either side (e.g. forgetting to
+    /// pass `provenance` through to `append`) could silently break
+    /// without a test reading the persisted row back out.
     #[test]
     fn test_writer_stamps_provenance_onto_emitted_envelope() {
         let log = EventLog::open_in_memory().unwrap();
@@ -512,10 +521,17 @@ mod tests {
         drop(tx);
 
         let mut seen = Vec::new();
-        let _log = run_writer_loop(rx, log, |envelope| seen.push(envelope.clone()));
+        let log = run_writer_loop(rx, log, |envelope| seen.push(envelope.clone()));
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].origin_worker, Some(origin));
         assert_eq!(seen[0].cause_seq, Some(5));
+
+        // The persisted-row half: read straight back out of SQLite,
+        // independent of the emitted envelope above.
+        let stored = log.events_since(0, 10).unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].origin_worker, Some(origin));
+        assert_eq!(stored[0].cause_seq, Some(5));
     }
 
     /// DIRECTIVE (ack-oneshot no-stall): a dropped `emit_awaiting_seq`

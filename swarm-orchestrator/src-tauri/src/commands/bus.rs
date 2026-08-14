@@ -104,8 +104,9 @@ pub async fn bus_send(
 /// `originWorker: msg.from_worker`, giving real attribution for every
 /// bus message with no new plumbing. `causeSeq` is left `None` — the
 /// sending side would need to thread its own turn's seq through
-/// `bus_send` to populate that, deferred to v2 per the honest v1
-/// attribution table.
+/// `bus_send` to populate that, deferred to v2. See "The honest v1
+/// attribution table" under docs/architecture.md's "Ordered Event
+/// Core" section for the full per-path breakdown.
 ///
 /// # Errors
 ///

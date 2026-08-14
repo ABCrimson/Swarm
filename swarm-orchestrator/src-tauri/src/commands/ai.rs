@@ -8,10 +8,20 @@
 //! webview and never calls `ai_request`) to record a real, persisted
 //! seq for each AI/agent turn.
 
+use std::time::Duration;
+
 use uuid::Uuid;
 
 use swarm_core::ai::{AiQueue, AiRequest};
 use swarm_core::events::{AgentTurnStartedPayload, EventSink, Provenance, SwarmEvent};
+
+/// Ceiling on how long `agent_turn_started` waits for the writer thread
+/// to ack the assigned seq. The writer thread is a single dedicated OS
+/// thread doing in-memory work plus one SQLite insert — 5s is generous
+/// headroom, not a tuned budget; its only job is turning "the writer
+/// thread is gone/wedged" from an indefinite hang into a bounded,
+/// reported failure `AIChat.tsx` already treats as "proceed unstamped."
+const AGENT_TURN_STARTED_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Enqueues an AI request for streaming processing.
 ///
@@ -66,7 +76,12 @@ pub async fn ai_request(
 ///
 /// Uses [`EventSink::emit_awaiting_seq`] — deterministic (no polling,
 /// no timeout-bound `waitFor` correlation): the writer thread hands
-/// back the exact seq it assigned this event.
+/// back the exact seq it assigned this event. The `await` on that ack
+/// is itself bounded by [`AGENT_TURN_STARTED_ACK_TIMEOUT`] — a wedged or
+/// gone writer thread must surface as a bounded, reported failure, not
+/// an indefinite hang; `AIChat.tsx` already treats any failure here
+/// (timeout included) as "proceed unstamped for this turn," never as a
+/// reason to abort the turn outright.
 ///
 /// # Arguments
 ///
@@ -81,8 +96,12 @@ pub async fn ai_request(
 ///
 /// # Errors
 ///
-/// Returns a `String` error if `worker_id` is not a valid UUID, or if
-/// the event writer thread is gone (the ack channel closed without a value).
+/// Returns a `String` error if `worker_id` is not a valid UUID, if the
+/// event writer thread is gone (the ack channel closed without a
+/// value), or if the ack does not arrive within
+/// [`AGENT_TURN_STARTED_ACK_TIMEOUT`] — each case surfaces a distinct,
+/// truthful message so a caller inspecting the error (or a human
+/// reading logs) is not left guessing which one happened.
 #[tauri::command]
 #[tracing::instrument(skip(sink))]
 pub async fn agent_turn_started(
@@ -105,12 +124,24 @@ pub async fn agent_turn_started(
         }),
         // The turn's own start is caused by a human (or an injected
         // instruction acting on the user's behalf) — unattributed in
-        // v1, same as every other user-initiated action (see the
-        // honest v1 attribution table).
+        // v1, same as every other user-initiated action. See "The
+        // honest v1 attribution table" under docs/architecture.md's
+        // "Ordered Event Core" section for the full per-path breakdown.
         Provenance::default(),
     );
-    ack.await.map_err(|e| {
-        tracing::error!(error = %e, "event writer thread gone before ack");
-        "Event Writer Unavailable.".to_string()
-    })
+
+    match tokio::time::timeout(AGENT_TURN_STARTED_ACK_TIMEOUT, ack).await {
+        Ok(Ok(seq)) => Ok(seq),
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "event writer thread gone before ack");
+            Err("Event Writer Unavailable.".to_string())
+        }
+        Err(_elapsed) => {
+            tracing::error!(
+                timeout = ?AGENT_TURN_STARTED_ACK_TIMEOUT,
+                "agent_turn_started ack timed out"
+            );
+            Err("Agent Turn Started Timed Out.".to_string())
+        }
+    }
 }
