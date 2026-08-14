@@ -46,8 +46,9 @@ pub mod emitter;
 pub(crate) use emitter::WriterMsg;
 pub use emitter::{
     AgentTurnStartedPayload, AiStreamDeltaPayload, AiStreamSettledPayload, BusMessagePayload,
-    CommitCreatedPayload, EventSink, FileWrittenPayload, Provenance, SessionCreatedPayload,
-    SessionDeletedPayload, ShipProgressPayload, ShipSettledPayload, SwarmEvent, SystemLogPayload,
-    SystemMetricsPayload, WorkerInputPayload, WorkerKilledPayload, WorkerOutputPayload,
-    WorkerSpawnedPayload, WorkerStatePayload, WorktreeCreatedPayload, WorktreeRemovedPayload,
+    CommitCreatedPayload, EventSink, FileWrittenPayload, InputSource, Provenance,
+    SessionCreatedPayload, SessionDeletedPayload, ShipProgressPayload, ShipSettledPayload,
+    SwarmEvent, SystemLogPayload, SystemMetricsPayload, WorkerInputPayload, WorkerKilledPayload,
+    WorkerOutputPayload, WorkerSpawnedPayload, WorkerStatePayload, WorktreeCreatedPayload,
+    WorktreeRemovedPayload,
 };

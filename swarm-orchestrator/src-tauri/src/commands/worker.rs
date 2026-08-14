@@ -11,7 +11,7 @@
 use tauri::AppHandle;
 use uuid::Uuid;
 
-use swarm_core::events::EventSink;
+use swarm_core::events::{EventSink, InputSource};
 use swarm_core::git::RepoLocks;
 use swarm_core::worker::handle::{WorkerConfig, WorkerInfo};
 use swarm_core::worker::lifecycle;
@@ -245,10 +245,15 @@ pub async fn list_workers(
 /// `Vec<u8>` (it expects a JSON array of byte numbers), so with the
 /// prior signature this command failed IPC deserialization for every
 /// caller before the handler body ever ran. Confirmed via
-/// `test_worker_input_string_arg_reproduces_the_original_vec_u8_contract_bug`
+/// `test_worker_input_frontend_payload_matches_the_real_command_signature`
 /// in this module's test block. Fixed by taking the string directly and
 /// writing its UTF-8 bytes to the PTY (`data.as_bytes()`) — exactly
 /// what every caller already sends.
+///
+/// `source` is a closed, typed enum ([`InputSource`]), not a bare
+/// string — an unrecognized value fails IPC deserialization before the
+/// handler body runs, so the "raw keystrokes never persisted/previewed"
+/// guarantee never depends on the webview spelling `"terminal"` correctly.
 ///
 /// # Arguments
 ///
@@ -256,8 +261,9 @@ pub async fn list_workers(
 /// * `registry` - Shared worker registry (managed state)
 /// * `id` - UUID string of the target worker
 /// * `data` - Text to write to the worker's PTY
-/// * `source` - `"terminal"`, `"tool"`, or `"automation"` — see
-///   `WorkerInputPayload`'s doc for the persistence/preview implications
+/// * `source` - `"terminal"`, `"tool"`, or `"automation"` on the wire,
+///   deserialized into `InputSource` — see `WorkerInputPayload`'s doc
+///   for the persistence/preview implications
 /// * `originWorker`/`causeSeq` - Optional causal attribution (absent for
 ///   `source == "terminal"`, since the causer there is a human, not a
 ///   worker's turn)
@@ -266,6 +272,7 @@ pub async fn list_workers(
 ///
 /// Returns a `String` error if:
 /// - The `id` is not a valid UUID
+/// - `source` is present but not one of `"terminal"`/`"tool"`/`"automation"`
 /// - `originWorker` is present but not a valid UUID
 /// - No worker with the given ID exists
 /// - The worker has no PTY writer
@@ -277,11 +284,11 @@ pub async fn worker_input(
     registry: tauri::State<'_, WorkerRegistry>,
     id: String,
     data: String,
-    source: String,
+    source: InputSource,
     origin_worker: Option<String>,
     cause_seq: Option<u64>,
 ) -> Result<(), String> {
-    tracing::debug!(worker_id = %id, bytes = data.len(), source = %source, "worker_input called");
+    tracing::debug!(worker_id = %id, bytes = data.len(), ?source, "worker_input called");
     let uuid = Uuid::parse_str(&id).map_err(|e| {
         tracing::error!(error = %e, "invalid worker ID");
         e.to_string()
@@ -290,7 +297,7 @@ pub async fn worker_input(
     let sink = sink.inner().clone();
     let registry = registry.inner().clone();
     tokio::task::spawn_blocking(move || {
-        lifecycle::do_worker_input(&sink, &registry, uuid, data.as_bytes(), &source, provenance)
+        lifecycle::do_worker_input(&sink, &registry, uuid, data.as_bytes(), source, provenance)
     })
     .await
     .map_err(|e| {
@@ -305,27 +312,94 @@ pub async fn worker_input(
 
 #[cfg(test)]
 mod tests {
-    /// DIRECTIVE (Phase 5c, VERIFY-FIRST): reproduces the exact
-    /// deserialization failure the plan flagged — `Vec<u8>` cannot be
-    /// deserialized from a JSON string, which is what every frontend
-    /// caller sends (`invoke("worker_input", { id, data: "some text" })`).
-    /// This is a permanent regression guard: if this signature is ever
-    /// reintroduced, this test fails loudly instead of every real
-    /// terminal keystroke silently erroring in production.
+    use swarm_core::events::InputSource;
+
+    /// Mirrors `worker_input`'s real, non-injected argument list
+    /// (`id`, `data`, `source`, `origin_worker`, `cause_seq` — the
+    /// `sink`/`registry` params are Tauri-injected managed state, never
+    /// part of the IPC payload). Tauri's `#[tauri::command]` macro
+    /// builds its own args-extraction struct internally and doesn't
+    /// expose it for external testing, so this shadow struct is the
+    /// closest a unit test (no live `tauri::App` harness exists in this
+    /// codebase) can get to exercising the actual signature rather than
+    /// a single field type in isolation.
+    ///
+    /// KEEP THIS IN SYNC with `worker_input`'s parameter list above —
+    /// that coupling is exactly the point: if `data`'s type reverts to
+    /// `Vec<u8>` (or any other field's type changes) without updating
+    /// this struct to match, the test below stops proving anything
+    /// meaningful about the real command. The reverse also holds: if you
+    /// change `worker_input`'s signature, update this struct too.
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct WorkerInputArgs {
+        #[allow(dead_code)]
+        id: String,
+        data: String,
+        source: InputSource,
+        origin_worker: Option<String>,
+        cause_seq: Option<u64>,
+    }
+
+    /// The historical (pre-fix) `data: Vec<u8>` shape, for the negative
+    /// assertion below.
+    #[derive(serde::Deserialize)]
+    struct WorkerInputArgsVecU8Era {
+        #[allow(dead_code)]
+        id: String,
+        #[allow(dead_code)]
+        data: Vec<u8>,
+    }
+
+    /// DIRECTIVE (Phase 5c, VERIFY-FIRST, hardened per review): exercises
+    /// the REAL command argument shape — not just `data` in isolation.
+    /// The exact payload every frontend caller sends
+    /// (`invoke("worker_input", { id, data: "some text\n", source: "terminal" })`)
+    /// must deserialize successfully into `worker_input`'s actual
+    /// argument types, `originWorker`/`causeSeq` included (both absent
+    /// here, both must default to `None`). The historical `Vec<u8>`-era
+    /// shape must reject that same string payload — this is the bug the
+    /// plan flagged: `serde_json` cannot deserialize a JSON string into
+    /// `Vec<u8>` (it expects an array of byte numbers), so with the old
+    /// signature this command failed IPC deserialization for every real
+    /// caller before the fix.
     #[test]
-    fn test_worker_input_string_arg_reproduces_the_original_vec_u8_contract_bug() {
-        let frontend_arg = serde_json::json!("some text\n");
+    fn test_worker_input_frontend_payload_matches_the_real_command_signature() {
+        let frontend_payload = serde_json::json!({
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "data": "some text\n",
+            "source": "terminal",
+        });
 
-        let as_vec_u8 = serde_json::from_value::<Vec<u8>>(frontend_arg.clone());
+        let parsed: WorkerInputArgs = serde_json::from_value(frontend_payload.clone())
+            .expect("the real frontend payload must deserialize into worker_input's arg shape");
+        assert_eq!(parsed.data, "some text\n");
+        assert_eq!(parsed.source, InputSource::Terminal);
+        assert_eq!(parsed.origin_worker, None);
+        assert_eq!(parsed.cause_seq, None);
+
+        let as_vec_u8_era: Result<WorkerInputArgsVecU8Era, _> =
+            serde_json::from_value(frontend_payload);
         assert!(
-            as_vec_u8.is_err(),
-            "a JSON string must NOT deserialize into Vec<u8> — this is the bug the plan flagged"
+            as_vec_u8_era.is_err(),
+            "a JSON string must NOT deserialize into the old Vec<u8>-era `data` field — \
+             this is the bug the plan flagged"
         );
+    }
 
-        // The fix: the command's `data` parameter is `String`, which
-        // deserializes from exactly what every caller sends.
-        let as_string = serde_json::from_value::<String>(frontend_arg);
-        assert_eq!(as_string.unwrap(), "some text\n");
+    /// `source` is a closed, typed enum — an unrecognized value must
+    /// fail deserialization outright rather than silently defaulting to
+    /// something, so the same real-payload shape rejects a typo.
+    #[test]
+    fn test_worker_input_frontend_payload_rejects_an_unknown_source() {
+        let frontend_payload = serde_json::json!({
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "data": "ls\n",
+            "source": "carrier_pigeon",
+        });
+
+        let parsed: Result<WorkerInputArgs, _> = serde_json::from_value(frontend_payload);
+        assert!(parsed.is_err());
     }
 }
 

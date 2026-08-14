@@ -17,8 +17,10 @@
 //! success — write only; a read is not a causally interesting side
 //! effect and emits nothing. `tools.ts`'s `read_file`/`write_file` AI
 //! tools invoke these commands (migrated off the plugin-fs path so file
-//! writes join the causality graph — see RECONCILIATION.md §3); `#lib/fs.ts`
-//! and its UI consumers are unrelated and unchanged.
+//! writes join the causality graph — see docs/architecture.md's
+//! "Ordered Event Core" section, and its "The honest v1 attribution
+//! table" in particular); `#lib/fs.ts` backs unrelated, non-tool UI
+//! file access and is unaffected by this migration.
 
 use std::path::{Path, PathBuf};
 

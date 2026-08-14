@@ -51,7 +51,7 @@ impl EventLog {
         Self::init(conn)
     }
 
-    fn init(conn: Connection) -> Result<Self, AppError> {
+    fn init(mut conn: Connection) -> Result<Self, AppError> {
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| AppError::EventLog(e.to_string()))?;
         conn.pragma_update(None, "synchronous", "NORMAL")
@@ -61,7 +61,14 @@ impl EventLog {
         // would fail instantly with SQLITE_BUSY instead of waiting it out.
         conn.busy_timeout(std::time::Duration::from_secs(2))
             .map_err(|e| AppError::EventLog(e.to_string()))?;
-        conn.execute_batch(
+
+        // Base schema, transactional — see `migrate`'s doc for why every
+        // rung (this one included, even though CREATE TABLE/INDEX IF NOT
+        // EXISTS are each individually idempotent) commits atomically:
+        // consistency across every rung beats trusting each statement's
+        // own idempotency to save a crash window.
+        Self::run_rung(
+            &mut conn,
             "CREATE TABLE IF NOT EXISTS events (
                 seq     INTEGER PRIMARY KEY,
                 ts      INTEGER NOT NULL,
@@ -69,21 +76,53 @@ impl EventLog {
                 payload TEXT NOT NULL
             ) STRICT;
             CREATE INDEX IF NOT EXISTS idx_events_type_seq ON events(type, seq);",
-        )
-        .map_err(|e| AppError::EventLog(e.to_string()))?;
+        )?;
 
-        Self::migrate(&conn)?;
+        Self::migrate(&mut conn)?;
 
         Ok(Self { conn })
     }
 
+    /// Runs `sql` (one or more statements) inside an explicit
+    /// transaction via `rusqlite::Transaction` — never a bare
+    /// `execute_batch` call, which auto-commits each statement
+    /// individually in SQLite's default autocommit mode. That gap is
+    /// exactly what let a crash between two `ALTER TABLE` statements (or
+    /// between the ALTERs and the `PRAGMA user_version` bump) leave the
+    /// database in an inconsistent state a future launch could not
+    /// recover from on its own: `origin_worker` present but
+    /// `user_version` still 0 means every later launch replays the same
+    /// batch and dies on "duplicate column name" — `EventLog::init`
+    /// returns `Err` forever, and the only recovery is deleting
+    /// `swarm-events.db`. `rusqlite::Transaction` also rolls back on
+    /// `Drop` if `.commit()` is never reached (an error partway through
+    /// `sql`, or a panic), so a failed rung can never leave the
+    /// connection holding an open transaction either.
+    ///
+    /// SQLite's `PRAGMA user_version` write is itself transactional
+    /// (unlike e.g. `journal_mode`), so wrapping it in the same
+    /// transaction as the schema change it's marking makes "the schema
+    /// changed" and "the version says so" atomic — one crash-safe unit,
+    /// not two separately-committed writes with a window between them.
+    fn run_rung(conn: &mut Connection, sql: &str) -> Result<(), AppError> {
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::EventLog(e.to_string()))?;
+        tx.execute_batch(sql)
+            .map_err(|e| AppError::EventLog(e.to_string()))?;
+        tx.commit().map_err(|e| AppError::EventLog(e.to_string()))
+    }
+
     /// Applies the `PRAGMA user_version` migration ladder, starting
-    /// from whatever `CREATE TABLE IF NOT EXISTS` above already
-    /// produced (legacy-shape-first — a brand-new database and an
-    /// existing pre-provenance one both land here with the identical
-    /// 4-column table, then walk the same ladder rungs). Each rung is
-    /// idempotent and runs only when `user_version` is below it, so a
-    /// second `init()` against an already-migrated database is a no-op.
+    /// from whatever the base schema rung above already produced
+    /// (legacy-shape-first — a brand-new database and an existing
+    /// pre-provenance one both land here with the identical 4-column
+    /// table, then walk the same ladder rungs). Each rung runs
+    /// atomically (see [`Self::run_rung`]) and only when `user_version`
+    /// is below it, so a second `init()` against an already-migrated
+    /// database is a no-op, and a crash mid-rung always leaves the
+    /// database at a well-defined prior version to safely retry from —
+    /// never a half-applied one.
     ///
     /// v0 → v1: adds `origin_worker TEXT` / `cause_seq INTEGER` (STRICT
     /// permits nullable typed columns; every existing row's new columns
@@ -91,20 +130,20 @@ impl EventLog {
     /// and the partial composite index
     /// `idx_events_origin_seq(origin_worker, seq) WHERE origin_worker
     /// IS NOT NULL` for worker-scoped seq-range queries.
-    fn migrate(conn: &Connection) -> Result<(), AppError> {
+    fn migrate(conn: &mut Connection) -> Result<(), AppError> {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|e| AppError::EventLog(e.to_string()))?;
 
         if version < 1 {
-            conn.execute_batch(
+            Self::run_rung(
+                conn,
                 "ALTER TABLE events ADD COLUMN origin_worker TEXT;
                  ALTER TABLE events ADD COLUMN cause_seq INTEGER;
                  CREATE INDEX IF NOT EXISTS idx_events_origin_seq
                      ON events(origin_worker, seq) WHERE origin_worker IS NOT NULL;
                  PRAGMA user_version = 1;",
-            )
-            .map_err(|e| AppError::EventLog(e.to_string()))?;
+            )?;
         }
 
         debug_assert_eq!(
@@ -463,7 +502,7 @@ mod tests {
 
         // Re-running migrate() against the now-current-version database
         // must be a no-op — no error, no duplicate ALTER TABLE.
-        EventLog::migrate(&log.conn).expect("second migrate() must no-op cleanly");
+        EventLog::migrate(&mut log.conn).expect("second migrate() must no-op cleanly");
         let version_still: i64 = log
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -479,6 +518,119 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    /// `PRAGMA table_info(events)`, as `(name, type, notnull)` tuples in
+    /// column order — enough to detect a schema divergence between two
+    /// databases without caring about SQLite's internal rowid bookkeeping.
+    fn table_info(conn: &Connection) -> Vec<(String, String, i64)> {
+        let mut stmt = conn.prepare("PRAGMA table_info(events)").unwrap();
+        stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect()
+    }
+
+    /// Sorted index names on `events` — order-independent so this
+    /// doesn't spuriously fail if SQLite ever lists indexes differently
+    /// between a fresh CREATE and a migrated ALTER-then-CREATE-INDEX path.
+    fn index_list(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn.prepare("PRAGMA index_list(events)").unwrap();
+        let mut names: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// DIRECTIVE: fresh-vs-upgraded convergence. A database created from
+    /// scratch (`EventLog::open_in_memory`, walking straight to
+    /// `user_version = 1`) and a database migrated from the legacy
+    /// 4-column shape (the exact path a real pre-provenance
+    /// `swarm-events.db` takes) must land on an IDENTICAL schema — same
+    /// columns (name/type/notnull), same indexes. If they diverged, a
+    /// fresh install and an upgraded install would silently run
+    /// different code paths against different table shapes.
+    #[test]
+    fn test_fresh_and_migrated_schemas_converge() {
+        let fresh = EventLog::open_in_memory().unwrap();
+
+        let legacy_conn = Connection::open_in_memory().unwrap();
+        legacy_conn
+            .execute_batch(
+                "CREATE TABLE events (
+                    seq     INTEGER PRIMARY KEY,
+                    ts      INTEGER NOT NULL,
+                    type    TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                ) STRICT;
+                CREATE INDEX idx_events_type_seq ON events(type, seq);",
+            )
+            .unwrap();
+        let migrated = EventLog::init(legacy_conn).unwrap();
+
+        assert_eq!(
+            table_info(&fresh.conn),
+            table_info(&migrated.conn),
+            "fresh vs. migrated column shape diverged"
+        );
+        assert_eq!(
+            index_list(&fresh.conn),
+            index_list(&migrated.conn),
+            "fresh vs. migrated index list diverged"
+        );
+    }
+
+    /// DIRECTIVE (BLOCKING fix): the migration ladder must be crash-safe
+    /// — a rung that fails partway through must leave the database
+    /// exactly as it was before the rung started (rolled back), not with
+    /// e.g. `origin_worker` added but `user_version` still 0 (which
+    /// would permanently brick every future launch: replaying the same
+    /// `ALTER TABLE` batch against a column that already exists fails
+    /// with "duplicate column name", and `EventLog::open` would return
+    /// `Err` forever). Simulated by injecting a rung whose SQL fails
+    /// partway through (a bogus second statement) and asserting the
+    /// first statement's effect (a probe column) was rolled back, not
+    /// left dangling.
+    #[test]
+    fn test_run_rung_rolls_back_atomically_on_partial_failure() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (
+                seq     INTEGER PRIMARY KEY,
+                ts      INTEGER NOT NULL,
+                type    TEXT NOT NULL,
+                payload TEXT NOT NULL
+            ) STRICT;",
+        )
+        .unwrap();
+
+        // A rung whose first statement would succeed in isolation, but
+        // whose second statement is bogus — simulates a crash/error
+        // partway through a multi-statement rung.
+        let result = EventLog::run_rung(
+            &mut conn,
+            "ALTER TABLE events ADD COLUMN probe_column TEXT;
+             THIS IS NOT VALID SQL;",
+        );
+        assert!(result.is_err(), "a partially-invalid rung must fail");
+
+        // The first statement's effect must NOT be visible — proof the
+        // whole rung rolled back atomically rather than leaving
+        // `probe_column` added with no record of it having happened.
+        let columns = table_info(&conn);
+        assert!(
+            !columns.iter().any(|(name, ..)| name == "probe_column"),
+            "a failed rung must roll back its earlier statements too, got columns: {columns:?}"
+        );
     }
 
     // ── Partial index ────────────────────────────────────────────────
