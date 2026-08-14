@@ -15,11 +15,17 @@ import { useWorkerStore } from "#store/workers";
 const createSessionMock = vi.fn();
 const spawnWorkerMock = vi.fn();
 const sessionAddWorkerMock = vi.fn();
+const readConfigMock = vi.fn();
 
 vi.mock("#lib/tauri", () => ({
   createSession: (...args: unknown[]) => createSessionMock(...args),
   spawnWorker: (...args: unknown[]) => spawnWorkerMock(...args),
   sessionAddWorker: (...args: unknown[]) => sessionAddWorkerMock(...args),
+  // spawnWorkerFromSpec (via #lib/project-root's getPersistedRepoRoot)
+  // reads the persisted default project root on every spawn — default
+  // to "none configured" so these tests exercise their pre-existing
+  // (unisolated) expectations unchanged.
+  readConfig: (...args: unknown[]) => readConfigMock(...args),
 }));
 
 function mockSession(id: string, name: string) {
@@ -48,6 +54,8 @@ describe("applyTemplate", () => {
     spawnWorkerMock.mockReset();
     sessionAddWorkerMock.mockReset();
     sessionAddWorkerMock.mockResolvedValue(undefined);
+    readConfigMock.mockReset();
+    readConfigMock.mockResolvedValue(null);
   });
   afterEach(resetStores);
 

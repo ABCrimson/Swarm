@@ -115,6 +115,32 @@ export async function setMaxWorkers(max: number): Promise<void> {
   return invoke<void>("set_max_workers", { max });
 }
 
+/** Validates the raw `validate_repo_root` IPC response is a non-empty path string. */
+const ValidateRepoRootResponseSchema = z.string().min(1);
+
+/**
+ * Validates that `path` is inside a git repository (via
+ * `swarm_core::git::repo::discover_toplevel` on the Rust side),
+ * returning the repo's canonical toplevel path on success. Used by
+ * the Workers page's Project Root picker to confirm a chosen directory
+ * *before* persisting it as `default_repo_root` config, instead of
+ * letting every subsequent isolated spawn hard-fail with a raw git
+ * error the user never asked to see.
+ *
+ * Throws (does not return `null`) on an invalid path or a missing
+ * Tauri bridge — callers are expected to catch and show a truthful
+ * Title Case toast, not treat this like the graceful-degradation
+ * commands above.
+ */
+export async function validateRepoRoot(path: string): Promise<string> {
+  const raw = await invoke<unknown>("validate_repo_root", { path });
+  const parsed = ValidateRepoRootResponseSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error("Validate Repo Root Returned An Invalid Response.");
+  }
+  return parsed.data;
+}
+
 // ── Session commands ─────────────────────────────────
 
 /**
