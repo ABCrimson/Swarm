@@ -4366,6 +4366,21 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "swarm-desktop"
+version = "0.11.2"
+dependencies = [
+ "anyhow",
+ "parking_lot",
+ "serde_json",
+ "swarm-core",
  "sysinfo",
  "tauri",
  "tauri-build",
@@ -4375,9 +4390,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-store",
  "tauri-plugin-updater",
- "thiserror 2.0.20",
  "tokio",
- "tokio-stream",
  "tokio-util",
  "tracing",
  "tracing-subscriber",

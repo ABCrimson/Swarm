@@ -10,8 +10,9 @@
 use tauri::AppHandle;
 use uuid::Uuid;
 
-use crate::events::{SessionCreatedPayload, SessionDeletedPayload, SwarmEvent, emit_event};
-use crate::session::manager::{Session, SessionManager};
+use swarm_core::events::{EventSink, SessionCreatedPayload, SessionDeletedPayload, SwarmEvent};
+use swarm_core::session::manager::{Session, SessionManager};
+
 use crate::session::store;
 
 /// Creates a new session with the given name and configuration.
@@ -23,6 +24,7 @@ use crate::session::store;
 /// # Arguments
 ///
 /// * `app` - Tauri app handle (injected by Tauri)
+/// * `sink` - Event sink for recording the `session_created` event (managed state)
 /// * `manager` - Shared session manager (managed state)
 /// * `name` - Human-readable session name
 /// * `config` - Arbitrary JSON configuration for the session
@@ -36,9 +38,10 @@ use crate::session::store;
 /// Returns a `String` error if auto-save to the persistent store fails.
 /// The session is still created in memory even if persistence fails.
 #[tauri::command]
-#[tracing::instrument(skip(app, manager))]
+#[tracing::instrument(skip(app, sink, manager))]
 pub async fn create_session(
     app: AppHandle,
+    sink: tauri::State<'_, EventSink>,
     manager: tauri::State<'_, SessionManager>,
     name: String,
     config: serde_json::Value,
@@ -46,13 +49,10 @@ pub async fn create_session(
     tracing::info!(name = %name, "create_session called");
     let session = manager.create_session(name.clone(), config);
 
-    emit_event(
-        &app,
-        SwarmEvent::SessionCreated(SessionCreatedPayload {
-            session_id: session.id,
-            name,
-        }),
-    );
+    sink.emit(SwarmEvent::SessionCreated(SessionCreatedPayload {
+        session_id: session.id,
+        name,
+    }));
 
     // Auto-save to persistent store via spawn_blocking (blocking disk I/O)
     let app_clone = app.clone();
@@ -81,6 +81,7 @@ pub async fn create_session(
 /// # Arguments
 ///
 /// * `app` - Tauri app handle (injected by Tauri)
+/// * `sink` - Event sink for recording the `session_deleted` event (managed state)
 /// * `manager` - Shared session manager (managed state)
 /// * `id` - UUID string of the session to delete
 ///
@@ -90,9 +91,10 @@ pub async fn create_session(
 /// - The `id` is not a valid UUID
 /// - No session with the given ID exists
 #[tauri::command]
-#[tracing::instrument(skip(app, manager))]
+#[tracing::instrument(skip(app, sink, manager))]
 pub async fn delete_session(
     app: AppHandle,
+    sink: tauri::State<'_, EventSink>,
     manager: tauri::State<'_, SessionManager>,
     id: String,
 ) -> Result<(), String> {
@@ -106,10 +108,9 @@ pub async fn delete_session(
         e.to_string()
     })?;
 
-    emit_event(
-        &app,
-        SwarmEvent::SessionDeleted(SessionDeletedPayload { session_id: uuid }),
-    );
+    sink.emit(SwarmEvent::SessionDeleted(SessionDeletedPayload {
+        session_id: uuid,
+    }));
 
     // Auto-save after deletion via spawn_blocking (blocking disk I/O)
     let app_clone = app.clone();

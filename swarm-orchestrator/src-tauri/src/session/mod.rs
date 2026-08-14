@@ -1,15 +1,11 @@
-//! Session management subsystem.
+//! Session persistence shell.
 //!
-//! Provides persistent user sessions that group workers and
-//! configuration together. Sessions survive application restarts
-//! via `tauri-plugin-store` serialization to disk.
+//! Session domain types and CRUD live in `swarm_core::session`; this
+//! module provides the concrete `tauri-plugin-store`-backed
+//! implementation of `swarm_core::session::SessionStore`.
 //!
 //! ## Module Layout
 //!
-//! - [`manager`] — Thread-safe session CRUD with `DashMap` storage
 //! - [`store`] — Persistent serialization/deserialization via `tauri-plugin-store`
 
-pub mod manager;
 pub mod store;
-
-pub use manager::SessionManager;

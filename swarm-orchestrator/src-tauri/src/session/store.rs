@@ -1,20 +1,53 @@
 //! Session persistent storage.
 //!
-//! Serializes session state to disk via `tauri-plugin-store`
-//! for crash recovery and workspace restoration. Sessions are
-//! stored as a JSON array in a `sessions.json` store file
+//! Implements `swarm_core::session::SessionStore` on top of
+//! `tauri-plugin-store` for crash recovery and workspace restoration.
+//! Sessions are stored as a JSON array in a `sessions.json` store file
 //! managed by Tauri's app data directory.
 
 use anyhow::Context;
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
-use super::manager::{Session, SessionManager};
+use swarm_core::session::SessionStore;
+use swarm_core::session::manager::{Session, SessionManager};
 
 /// Store file name for session persistence.
 const STORE_FILE: &str = "sessions.json";
 /// Key within the store file where the session array is stored.
 const STORE_KEY: &str = "sessions";
+
+/// `tauri-plugin-store`-backed [`SessionStore`] implementation.
+pub struct PluginSessionStore<'a>(pub &'a AppHandle);
+
+impl SessionStore for PluginSessionStore<'_> {
+    fn load(&self) -> anyhow::Result<Vec<Session>> {
+        let store = self
+            .0
+            .store(STORE_FILE)
+            .context("failed to open session store")?;
+
+        match store.get(STORE_KEY) {
+            Some(value) => {
+                serde_json::from_value(value.clone()).context("failed to deserialize sessions")
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn save(&self, sessions: &[Session]) -> anyhow::Result<()> {
+        let store = self
+            .0
+            .store(STORE_FILE)
+            .context("failed to open session store")?;
+        store.set(
+            STORE_KEY,
+            serde_json::to_value(sessions).context("failed to serialize sessions")?,
+        );
+        store.save().context("failed to save session store")?;
+        Ok(())
+    }
+}
 
 /// Saves all sessions to the persistent store.
 ///
@@ -36,14 +69,7 @@ const STORE_KEY: &str = "sessions";
 #[tracing::instrument(skip(app, manager))]
 pub fn save_sessions(app: &AppHandle, manager: &SessionManager) -> anyhow::Result<()> {
     let sessions = manager.list_sessions();
-    let store = app
-        .store(STORE_FILE)
-        .context("failed to open session store")?;
-    store.set(
-        STORE_KEY,
-        serde_json::to_value(&sessions).context("failed to serialize sessions")?,
-    );
-    store.save().context("failed to save session store")?;
+    PluginSessionStore(app).save(&sessions)?;
     tracing::debug!(count = sessions.len(), "sessions saved to store");
     Ok(())
 }
@@ -68,17 +94,13 @@ pub fn save_sessions(app: &AppHandle, manager: &SessionManager) -> anyhow::Resul
 /// - Session deserialization fails (corrupted data)
 #[tracing::instrument(skip(app, manager))]
 pub fn load_sessions(app: &AppHandle, manager: &SessionManager) -> anyhow::Result<()> {
-    let store = app
-        .store(STORE_FILE)
-        .context("failed to open session store")?;
+    let sessions = PluginSessionStore(app).load()?;
 
-    if let Some(value) = store.get(STORE_KEY) {
-        let sessions: Vec<Session> =
-            serde_json::from_value(value.clone()).context("failed to deserialize sessions")?;
+    if sessions.is_empty() {
+        tracing::debug!("no sessions found in store, starting fresh");
+    } else {
         tracing::info!(count = sessions.len(), "loaded sessions from store");
         manager.restore_sessions(sessions);
-    } else {
-        tracing::debug!("no sessions found in store, starting fresh");
     }
 
     Ok(())

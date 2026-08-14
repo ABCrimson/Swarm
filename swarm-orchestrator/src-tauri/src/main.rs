@@ -5,7 +5,7 @@
 ///
 /// Configures and starts the Tokio multi-threaded async runtime
 /// with one worker thread per logical CPU core, then delegates
-/// to [`swarm_core::run`] for Tauri application setup.
+/// to [`swarm_desktop::run`] for Tauri application setup.
 ///
 /// # Panics
 ///
@@ -35,6 +35,6 @@ fn main() {
         .expect("failed to build Tokio runtime");
 
     runtime.block_on(async {
-        swarm_core::run();
+        swarm_desktop::run();
     });
 }
