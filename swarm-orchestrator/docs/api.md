@@ -35,8 +35,7 @@ Events are received on a single ordered channel, `swarm://events` -- see [Events
   - [list_sessions](#list_sessions)
   - [get_session](#get_session)
   - [session_add_worker](#session_add_worker)
-- [AI Commands](#ai-commands)
-  - [ai_request](#ai_request)
+- [Agent Commands](#agent-commands)
   - [agent_turn_started](#agent_turn_started)
 - [File System Commands](#file-system-commands)
   - [read_file](#read_file)
@@ -747,104 +746,13 @@ await invoke("session_add_worker", {
 
 ---
 
-## AI Commands
+## Agent Commands
 
-### `ai_request`
-
-> **Built, not wired.** No shipped frontend code calls this command -- see [Built, Not Wired](#built-not-wired). The chat flow you get by running the app streams `@anthropic-ai/sdk` directly from the webview to `api.anthropic.com` (`src/lib/anthropic.ts`); it never reaches this command. This section documents the contract the multi-provider (ACP) rework is expected to route through instead.
-
-Enqueues an AI request for streaming processing via the Anthropic Messages API.
-
-The request is placed into a priority queue and processed when a concurrency slot is available (default: 3 concurrent requests). Response chunks are delivered as `ai_stream_delta` envelopes on `swarm://events`, followed by exactly one `ai_stream_settled` receipt.
-
-**Parameters:**
-
-| Name      | Type        | Required | Description                          |
-|-----------|-------------|----------|--------------------------------------|
-| `request` | `AiRequest` | Yes      | The AI request to enqueue            |
-
-**`AiRequest` object:**
-
-| Field       | Type          | Required | Default    | Description                         |
-|-------------|---------------|----------|------------|-------------------------------------|
-| `requestId` | `string`      | Yes      | --         | Unique ID for correlating stream events |
-| `messages`  | `AiMessage[]` | Yes      | --         | Conversation history                |
-| `system`    | `string`      | No       | `null`     | Optional system prompt              |
-| `priority`  | `string`      | No       | `"normal"` | `"low"`, `"normal"`, `"high"`, `"critical"` |
-
-**`AiMessage` object:**
-
-| Field     | Type     | Description                            |
-|-----------|----------|----------------------------------------|
-| `role`    | `string` | `"user"` or `"assistant"`              |
-| `content` | `string` | Message text content                   |
-
-**Returns:** `string` -- The `requestId` from the request.
-
-**Errors:**
-
-| Error          | Condition                              |
-|----------------|----------------------------------------|
-| Queue full     | AI request queue at capacity (backpressure) |
-| Channel closed | AI queue processing loop has shut down |
-
-**Example:**
-
-```typescript
-import { onEvent, waitFor } from "#lib/event-bus";
-
-const requestId = crypto.randomUUID();
-
-// Accumulate deltas as they arrive
-const off = onEvent("ai_stream_delta", (e) => {
-  const { requestId: id, delta, done } = e.payload as {
-    requestId: string;
-    delta: string;
-    done: boolean;
-  };
-  if (id === requestId && !done) console.log(delta);
-});
-
-// Enqueue the request
-await invoke("ai_request", {
-  request: {
-    requestId,
-    messages: [
-      { role: "user", content: "Explain quantum computing in one paragraph." },
-    ],
-    system: "You are a helpful science tutor.",
-    priority: "normal",
-  },
-});
-
-// Await the terminal receipt instead of polling stream state
-const settled = await waitFor(
-  (e) => e.type === "ai_stream_settled" && (e.payload as { requestId: string }).requestId === requestId,
-);
-off();
-console.log("Stream settled:", settled.payload);
-```
-
-**Emits:** Multiple `ai_stream_delta` envelopes, then exactly one `ai_stream_settled` receipt:
-
-| Type                | Field       | Type              | Description                                  |
-|---------------------|-------------|-------------------|-----------------------------------------------|
-| `ai_stream_delta`   | `requestId` | `string`          | Correlation ID matching the request          |
-| `ai_stream_delta`   | `delta`     | `string`          | Text chunk (empty string on the final delta) |
-| `ai_stream_delta`   | `done`      | `boolean`         | `true` on the final delta                    |
-| `ai_stream_settled` | `requestId` | `string`          | Correlation ID matching the request          |
-| `ai_stream_settled` | `status`    | `string`          | `"ok"` or `"error"`                          |
-| `ai_stream_settled` | `error`     | `string \| null`  | Error description when `status == "error"`   |
-
-**Guaranteed termination (contract, not observed behavior today):** were this path in use, `ai_stream_settled` would be emitted exactly once for a given `requestId`, after the final delta, even when the stream fails (network error, malformed SSE, provider error) or ends without a `message_stop` event. A future frontend or test consumer should `waitFor` this receipt instead of polling stream state or relying on `delta.done` alone.
-
-**Note:** No shipped UI consumes `ai_request`, `ai_stream_delta`, or `ai_stream_settled` -- see [Built, Not Wired](#built-not-wired). This section documents the receipt contract for the next consumer, not an active one; `ai_stream_settled` is never emitted in the app as shipped because nothing calls `ai_request` to begin with.
-
----
+> **`ai_request` was removed in Phase 2 of the multi-provider agent-execution rework.** It enqueued raw Anthropic Messages API requests through a Rust-side priority queue (`AiQueue`) that no shipped frontend code ever called -- the chat flow you get by running the app streams `@anthropic-ai/sdk` directly from the webview to `api.anthropic.com` (`src/lib/anthropic.ts`) and never reached this command. Its tested queueing machinery (BinaryHeap priority + Semaphore concurrency gate + bounded mpsc backpressure) was **absorbed, not deleted** -- it now lives as `swarm_core::agent::scheduler::AgentScheduler`, retyped to schedule provider-adapter turns instead of raw API requests. See `docs/architecture.md`'s adapter-layer section for the trait pair (`AgentAdapter`/`AgentSession`) Phase 3's concrete adapters will implement, and the [`agent_*` event family](#type-tags) below for the normalized events those adapters will emit in place of `ai_stream_delta`/`ai_stream_settled`.
 
 ### `agent_turn_started`
 
-A narrow webview intake, **actively used** by the shipped chat flow -- unlike `ai_request` above, this is not a Built-Not-Wired path. `AIChat.tsx`'s `doSend` calls this once per turn, before the first streaming round, and stores the returned seq (`turnSeq`) in that turn's closure. Every tool-driven side effect the turn executes afterward (`spawn_worker`, `kill_worker`, `worker_input`, `write_file`) cites `turnSeq` as its `causeSeq`.
+A narrow webview intake, **actively used** by the shipped chat flow. `AIChat.tsx`'s `doSend` calls this once per turn, before the first streaming round, and stores the returned seq (`turnSeq`) in that turn's closure. Every tool-driven side effect the turn executes afterward (`spawn_worker`, `kill_worker`, `worker_input`, `write_file`) cites `turnSeq` as its `causeSeq`.
 
 This is the mechanism behind the "the engine records provenance, it never infers it" invariant for AI turns specifically: the frontend cannot cite a cause that does not exist in the log, so this command's job is to make one exist deterministically -- no polling, no timeout-bound `waitFor` correlation. It uses the same ack-oneshot the writer thread resolves to the real assigned seq (`EventSink::emit_awaiting_seq`).
 
@@ -1273,9 +1181,17 @@ A stamped envelope additionally carries `originWorker`/`causeSeq`:
 | `session_created`     | `{ sessionId, name }`                                            | Yes       |
 | `session_deleted`     | `{ sessionId }`                                                  | Yes       |
 | `system_metrics`      | `{ cpuPercent, memoryMb, workerCount, aiReqPerSec, timestamp }`  | No (ephemeral) |
-| `ai_stream_delta`     | `{ requestId, delta, done }`                                     | Yes       |
-| `ai_stream_settled`   | `{ requestId, status, error }` -- terminal receipt, exactly once per request | Yes |
+| `ai_stream_delta`     | `{ requestId, delta, done }` -- webview-path SwarmEvent variant, kept (unused) after `ai_request`'s Phase 2 removal; retired alongside the webview path itself in Phase 5 | Yes |
+| `ai_stream_settled`   | `{ requestId, status, error }` -- terminal receipt, exactly once per request; same kept-but-unused status as above | Yes |
 | `agent_turn_started`  | `{ workerId, model, requestId }` -- the causal root a turn's tool-driven side effects cite as `causeSeq` (see [`agent_turn_started`](#agent_turn_started)) | Yes |
+| `agent_session_started` | `{ workerId, provider, sessionKey, model, cwd, capabilities }` -- emitted once a Phase 3+ provider adapter's session starts; `capabilities` mirrors `Capabilities` (see `docs/architecture.md`'s adapter-layer section) | Yes |
+| `agent_turn_delta`    | `{ workerId, turnId, blockIndex, kind, text }` -- one streamed sub-message chunk within a turn | **No (ephemeral)** |
+| `agent_block`         | `{ workerId, turnId, blockIndex, kind, content }` -- durable counterpart to `agent_turn_delta`; replay reconstructs full turns from these rows, only the typing animation is lost | Yes |
+| `agent_tool_call`     | `{ workerId, turnId, toolUseId, name, input }`                   | Yes |
+| `agent_tool_result`   | `{ workerId, turnId, toolUseId, isError, content }` -- `toolUseId` correlates with the originating `agent_tool_call` | Yes |
+| `agent_permission_request` | `{ workerId, turnId, requestId, tool, input, suggestedDecision? }` -- the ONLY legitimate permission-gating surface; never `allowedTools` (Condition C, see `docs/architecture.md`) | Yes |
+| `agent_turn_settled`  | `{ workerId, turnId, status, error, costUsd, usage, durationMs, numTurns }` -- terminal receipt, exactly once per turn, synthesized on ungraceful child exit too (Condition B) | Yes |
+| `agent_session_exited` | `{ workerId, exitCode, signal }`                                | Yes |
 | `system_log`          | `{ level, message, target, timestamp }`                          | No (ephemeral) |
 | `bus_message`         | `{ messageId, fromWorker, toWorker, topic, payload }` -- `originWorker` on the envelope is stamped from `fromWorker` for every message, free (no extra caller plumbing) | Yes |
 | `worktree_created`    | `{ workerId, sessionId, repoRoot, worktreePath, branch, baseCommit }` -- its own `seq` is the range start for "what changed" queries | Yes |
@@ -1301,7 +1217,8 @@ Every other type persists to the SQLite event log (`<app-data>/swarm-events.db`,
 
 Some request/response flows use a dedicated terminal event (a "receipt") instead of a boolean flag buried in a stream event, so callers have one unambiguous signal to await:
 
-- **`ai_stream_settled`** -- would be emitted exactly once per AI request, after the final `ai_stream_delta`, on both the success (`status: "ok"`) and failure (`status: "error"`, `error` set) paths, were this path in use. See [`ai_request`](#ai_request) for the contract and an example using `waitFor`. See [Built, Not Wired](#built-not-wired) -- no shipped UI consumes this receipt, because nothing calls `ai_request` to trigger it.
+- **`ai_stream_settled`** -- the webview-path receipt; `ai_request` (the only command that ever emitted it) was removed in Phase 2 -- see [Agent Commands](#agent-commands). Kept as a `SwarmEvent` variant (unused) until the webview path itself is retired in Phase 5; see [Built, Not Wired](#built-not-wired).
+- **`agent_turn_settled`** -- the provider-adapter receipt Phase 3's adapters emit in its place: exactly once per turn, on success AND on ungraceful child exit (Condition B, `docs/architecture.md`'s adapter-layer section) -- a caller mid-turn when the provider process is killed still gets a terminal event, with `costUsd`/`usage` honestly `None` rather than fabricated.
 - **`ship_settled`** -- emitted exactly once per `shipId`, after the last `ship_progress` row, on both success and failure. `src/hooks/useShip.ts`'s state machine awaits this from `git_push`/`ship_compare_url` (the two commands that can be a chosen action's true final step), registering its `waitFor` listener *before* triggering the call that might emit it -- event delivery and the IPC response are two independent transport paths with no ordering guarantee between them, so the listener must already be armed when the event fires.
 
 The frontend's `waitFor(predicate, timeoutMs?)` (in `src/lib/event-bus.ts`) is the general consumption primitive for receipts: it resolves the first envelope matching `predicate`, or rejects on timeout (default 5000ms).
@@ -1375,12 +1292,13 @@ const settled = await waitFor((e) => e.type === "ai_stream_settled");
 
 ## Built, Not Wired
 
-Three pieces of this reference document commands and an event that are fully implemented and tested in Rust, but have no frontend caller in the shipped app today. They are not stubs -- they are the backend half of a feature that has not been connected to the frontend yet, built ahead of the multi-provider (ACP) rework that is expected to route AI traffic (and possibly agent-to-agent bus traffic) through Rust instead of the webview.
+This reference document also covers commands and events that are fully implemented and tested in Rust, but have no frontend caller in the shipped app today. They are not stubs -- they are the backend half of a feature that has not been connected to the frontend yet, built ahead of the multi-provider agent-execution rework that is expected to route AI traffic (and possibly agent-to-agent bus traffic) through Rust instead of the webview.
 
 | Piece | No caller because... |
 |-------|------------------------|
-| [`ai_request`](#ai_request) | The shipped AI flow runs `@anthropic-ai/sdk` directly in the webview (`src/lib/anthropic.ts`, `dangerouslyAllowBrowser: true`) and streams straight to `api.anthropic.com` -- it never invokes this command. See [docs/architecture.md#ai-streaming](architecture.md#ai-streaming) for the real flow and [docs/architecture.md#built-not-wired](architecture.md#built-not-wired) for the fuller picture. |
+| `ai_request` | **Removed** (Phase 2 of the multi-provider plan) -- absorbed into the agent scheduler. The shipped AI flow runs `@anthropic-ai/sdk` directly in the webview (`src/lib/anthropic.ts`, `dangerouslyAllowBrowser: true`) and streams straight to `api.anthropic.com`; it never invoked this command, and its tested queueing machinery now lives as `swarm_core::agent::scheduler::AgentScheduler`. See [Agent Commands](#agent-commands) and `docs/architecture.md`'s adapter-layer section. |
+| `agent_*` (Phase 3+ family: `agent_session_started`, `agent_turn_delta`, `agent_block`, `agent_tool_call`, `agent_tool_result`, `agent_permission_request`, `agent_turn_settled`, `agent_session_exited`) | Typed, tested, and persistence-classified in Rust as of Phase 2, but no concrete `AgentAdapter` implementation exists yet to emit them (Phase 3's `ClaudeCodeAdapter`) -- see `docs/architecture.md`'s adapter-layer section. |
 | [`bus_send`](#bus_send), [`bus_subscribe`](#bus_subscribe), [`bus_create_pipeline`](#bus_create_pipeline), [`bus_list_channels`](#bus_list_channels), [`bus_list_pipelines`](#bus_list_pipelines) | No UI surface invokes any of them -- inter-agent messaging is implemented but not exposed to a user today. |
-| The `ai_stream_settled` receipt | Downstream of `ai_request` -- since nothing calls `ai_request`, this event is never emitted in the app as shipped. |
+| The `ai_stream_settled` receipt | Downstream of the removed `ai_request` -- kept as a `SwarmEvent` variant (unused) until the webview path is retired in Phase 5; never emitted in the app as shipped. |
 
 Read every code example and contract above involving these six commands and one event as documentation of what the Rust side does *if* called -- not as a description of what the shipped app does when a user sends a chat message or a worker messages another worker.

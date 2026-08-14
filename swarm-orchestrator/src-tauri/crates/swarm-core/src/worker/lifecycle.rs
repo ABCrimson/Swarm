@@ -211,7 +211,22 @@ fn cleanup_orphaned_worktree(repo_locks: &RepoLocks, repo_root: &Path, worktree_
 ///   `worktree add`/`lock` failed (only when `repo_root` is present)
 /// * [`AppError::PtySpawn`] - The PTY process failed to spawn
 /// * [`AppError::RegistryFull`] - The registry has reached capacity
-#[tracing::instrument(skip(sink, registry, repo_locks))]
+///
+/// # Credential-leak fix (Phase 2, multi-provider plan step 4)
+///
+/// `config` is deliberately `skip`ped from this span's captured
+/// fields. `WorkerConfig` derives `Debug`, and `Debug` includes
+/// `env: HashMap<String, String>` verbatim — with the prior
+/// `#[tracing::instrument(skip(sink, registry, repo_locks))]` (`config`
+/// NOT skipped), every `WorkerConfig` passed through this function was
+/// captured into the span at creation time, which the `swarm_core=debug`
+/// default log filter (see `swarm_desktop::init_tracing`) actively
+/// records. Harmless only as long as nothing puts a secret in
+/// `config.env` — this fix lands *before* the multi-provider adapters
+/// arrive in Phase 3 and start doing exactly that (per-profile API keys
+/// riding the spawn env overlay). A redacted summary
+/// (`env_key_count` only, never a value) is logged explicitly instead.
+#[tracing::instrument(skip(sink, registry, repo_locks, config))]
 pub fn do_spawn_worker(
     sink: &EventSink,
     registry: &WorkerRegistry,
@@ -219,6 +234,12 @@ pub fn do_spawn_worker(
     config: WorkerConfig,
     provenance: Provenance,
 ) -> Result<Uuid, AppError> {
+    tracing::info!(
+        name = %config.name,
+        env_key_count = config.env.len(),
+        has_repo_root = config.repo_root.is_some(),
+        "do_spawn_worker: redacted config summary (env values never logged)"
+    );
     let default_shell = registry.config.read().default_shell.clone();
     let shell = if config.shell.is_empty() {
         &default_shell
@@ -1040,6 +1061,100 @@ mod tests {
             }
             other => panic!("expected WorkerInput event, got {other:?}"),
         }
+    }
+
+    // ── Credential-leak-in-waiting tracing fix ───────────────────────
+
+    /// `Write` + `MakeWriter` impl over a shared buffer, so a
+    /// `tracing_subscriber::fmt` subscriber can be pointed at
+    /// in-process memory instead of stdout — lets the test below
+    /// inspect exactly what the subscriber captured. Named distinctly
+    /// from the `SharedBuf` `Write`-only stand-in above (that one is a
+    /// fake PTY writer; this one is a fake log sink).
+    #[derive(Clone, Default)]
+    struct TracingCaptureBuf(std::sync::Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for TracingCaptureBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TracingCaptureBuf {
+        type Writer = TracingCaptureBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// DIRECTIVE (credential-leak fix, multi-provider plan Phase 2 step
+    /// 4): `do_spawn_worker`'s `#[tracing::instrument]` used to skip
+    /// only `sink`/`registry`/`repo_locks` — `config: WorkerConfig` was
+    /// NOT skipped, and `WorkerConfig` derives `Debug` including
+    /// `env: HashMap<String, String>` verbatim. At `swarm_core=debug`
+    /// (the app's default log filter), every call captured the whole
+    /// config — env values included — into the span. This test proves
+    /// the fix at the actual boundary where env values live: drives a
+    /// real `do_spawn_worker` call with a secret-shaped env value
+    /// through a captured `tracing_subscriber::fmt` subscriber and
+    /// asserts the secret string appears NOWHERE in the captured
+    /// output, while also proving the subscriber genuinely captured
+    /// *something* from this call (the redacted summary's `name`
+    /// field) — ruling out a vacuous pass from a subscriber that
+    /// captured nothing at all.
+    #[tokio::test]
+    async fn test_do_spawn_worker_never_leaks_env_secret_into_tracing_output() {
+        let capture = TracingCaptureBuf::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .finish();
+
+        let registry = WorkerRegistry::new();
+        let repo_locks = RepoLocks::new();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sink = EventSink::new(tx);
+
+        const SECRET: &str = "sk-ant-super-secret-value-should-never-be-logged";
+        let mut env = std::collections::HashMap::new();
+        env.insert("ANTHROPIC_API_KEY".to_string(), SECRET.to_string());
+
+        let config = WorkerConfig {
+            name: "Secret Bearer".to_string(),
+            env,
+            ..WorkerConfig::default()
+        };
+
+        let worker_id = tracing::subscriber::with_default(subscriber, || {
+            do_spawn_worker(&sink, &registry, &repo_locks, config, Provenance::default())
+        })
+        .expect("spawn should succeed");
+
+        let captured = String::from_utf8_lossy(&capture.0.lock()).into_owned();
+        assert!(
+            !captured.contains(SECRET),
+            "captured tracing output leaked an env secret value: {captured}"
+        );
+        assert!(
+            captured.contains("Secret Bearer"),
+            "expected the redacted summary's name field to appear in captured \
+             output (proves the subscriber actually captured this call, not a \
+             vacuous pass), got: {captured}"
+        );
+
+        do_kill_worker(
+            &sink,
+            &registry,
+            &repo_locks,
+            worker_id,
+            Provenance::default(),
+        )
+        .expect("cleanup kill should succeed");
     }
 
     // ── Worktree isolation tests ─────────────────────────────────────

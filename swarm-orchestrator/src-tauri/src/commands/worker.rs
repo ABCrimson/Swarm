@@ -45,8 +45,17 @@ use crate::commands::parse_provenance;
 ///   hard-fails the whole spawn, never falling back to an unisolated
 ///   shared cwd
 /// - `originWorker` is present but not a valid UUID
+///
+/// # Credential-leak fix (Phase 2, multi-provider plan step 4)
+///
+/// `config` is `skip`ped here too, for the same reason as
+/// `swarm_core::worker::lifecycle::do_spawn_worker`'s matching fix:
+/// this Tauri command is the FIRST boundary `config` (including its
+/// `env: HashMap<String, String>`) crosses, so leaving it captured here
+/// would have reintroduced the same leak one layer up even after the
+/// `swarm-core` fix landed.
 #[tauri::command]
-#[tracing::instrument(skip(sink, registry, repo_locks))]
+#[tracing::instrument(skip(sink, registry, repo_locks, config))]
 pub async fn spawn_worker(
     sink: tauri::State<'_, EventSink>,
     registry: tauri::State<'_, WorkerRegistry>,
@@ -55,7 +64,7 @@ pub async fn spawn_worker(
     origin_worker: Option<String>,
     cause_seq: Option<u64>,
 ) -> Result<String, String> {
-    tracing::info!(name = %config.name, "spawn_worker called");
+    tracing::info!(name = %config.name, env_key_count = config.env.len(), "spawn_worker called");
     let provenance = parse_provenance(origin_worker, cause_seq)?;
     let registry = registry.inner().clone();
     let sink = sink.inner().clone();

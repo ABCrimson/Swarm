@@ -10,6 +10,7 @@
 - [Backend Architecture](#backend-architecture)
   - [Worktree Isolation](#worktree-isolation)
   - [Ship Chain](#ship-chain)
+  - [Adapter Layer](#adapter-layer)
 - [Frontend Architecture](#frontend-architecture)
 - [WebGPU Pipeline](#webgpu-pipeline)
 - [Data Flow](#data-flow)
@@ -33,7 +34,7 @@ SWARM Orchestrator is a Tauri 2.11 desktop application with a clear separation b
  │         invoke() ↕ listen() / emit()                │
  ├──────────────────────────────────────────────────────┤
  │                   Rust Backend                       │
- │  Commands  │  Worker Registry  │  AI Queue  │  Store│
+ │  Commands  │  Worker Registry  │  Agent Scheduler  │  Store│
  │                                                      │
  │            Tokio Multi-Thread Runtime                │
  └──────────────────────────────────────────────────────┘
@@ -41,7 +42,7 @@ SWARM Orchestrator is a Tauri 2.11 desktop application with a clear separation b
 
 **Design principles:**
 
-1. The Rust backend owns all mutable state (workers, sessions, AI queue, message bus)
+1. The Rust backend owns all mutable state (workers, sessions, agent scheduler, message bus)
 2. The frontend receives state updates via Tauri events, not polling
 3. CPU-bound and blocking work (sysinfo refresh, worker metrics aggregation, session persistence) runs on `spawn_blocking` threads, never on the async executor
 4. All IPC payloads use `camelCase` fields; all event type tags use `snake_case`
@@ -59,10 +60,9 @@ The Rust side is a two-crate workspace: domain logic lives in the tauri-free `sw
 
 ```text
 src-tauri/crates/swarm-core/src/   (swarm-core -- tauri-free domain crate)
-├── ai/              AI integration
-│   ├── client.rs    Anthropic API client (reqwest + SSE streaming; always emits a terminal `done: true`)
-│   ├── queue.rs     Priority queue with semaphore concurrency control
-│   └── stream.rs    SSE event parser (content_block_delta, message_stop)
+├── agent/           Multi-provider agent execution -- see "Adapter Layer" below
+│   ├── adapter.rs   AgentAdapter/AgentSession trait pair, Capabilities, ProviderId
+│   └── scheduler.rs AgentScheduler -- priority queue + semaphore concurrency control (absorbed the deleted ai/queue.rs)
 ├── bus/             Inter-agent message bus
 │   ├── channel.rs   MessageBus -- per-topic tokio::sync::broadcast channels
 │   └── router.rs    Router -- direct/broadcast send + pipeline orchestration
@@ -84,7 +84,8 @@ src-tauri/crates/swarm-core/src/   (swarm-core -- tauri-free domain crate)
 ├── worker/          Worker management
 │   ├── handle.rs    WorkerHandle, WorkerState, WorkerConfig, WorkerIsolation, WorkerInfo (incl. lastShippedSeq/lastShippedCommit, written only by the ship chain)
 │   ├── lifecycle.rs Spawn, pause, resume, kill, input operations (worktree create/remove on spawn/kill)
-│   ├── pty.rs       PTY spawning (portable-pty) + Tokio I/O bridge
+│   ├── pty.rs       PTY spawning (portable-pty) + Tokio I/O bridge -- interactive shells only
+│   ├── proc.rs      Piped-stdio process spawning + NDJSON framer -- JSON-protocol provider CLIs only (a PTY corrupts NDJSON; see "Adapter Layer" below)
 │   └── registry.rs  DashMap registry, TOCTOU-safe update_state_if, aggregate metrics
 ├── config.rs        Atomic key-value JSON config persistence
 ├── paths.rs         Paths (data dir), constructed by the shell and passed in
@@ -95,7 +96,7 @@ src-tauri/src/   (swarm-desktop -- Tauri shell)
 ├── commands/        Tauri IPC command handlers, thin wrappers over swarm-core
 │   ├── worker.rs        spawn, pause, resume, kill, list, input
 │   ├── session.rs       create, delete, list, get, session_add_worker
-│   ├── ai.rs            ai_request, agent_turn_started (the latter actively used -- see "Ordered Event Core")
+│   ├── agent.rs         agent_turn_started (actively used -- see "Ordered Event Core"; ai_request/ai.rs removed in Phase 2, see "Adapter Layer")
 │   ├── bus.rs           bus_send, bus_subscribe, bus_create_pipeline, bus_list_channels, bus_list_pipelines
 │   ├── metrics.rs       get_metrics (incl. perWorker) + background collection loop
 │   ├── orchestration.rs events_since
@@ -301,30 +302,57 @@ ship_compare_url(workerId, shipId, commitSha, pushedRef, title, body)
 
 See [docs/api.md#ship-commands](api.md#ship-commands) for the full IPC contract and [Events](#event-system) below for `ship_progress`/`ship_settled`/`commit_created`'s place in the persistence policy.
 
-### AI Queue (Built, Not Wired)
+### Adapter Layer
 
-**Nothing in `src/` calls `ai_request` today** -- see [Built, Not Wired](#built-not-wired) for the full picture. The diagram below documents what this Rust-side apparatus does when invoked (it is fully implemented and unit-tested, not a stub); it is not what happens when a user sends a chat message in the shipped app today -- for that, see [AI Streaming](#ai-streaming) under Data Flow.
+**Outcome:** one Rust trait pair every provider CLI (Claude Code, Codex, OpenCode, Gemini) implements, so every provider's turns land as normalized `agent_*` events on the same ordered spine every other backend event already flows through (see [Ordered Event Core](#ordered-event-core)). Phase 2 of the multi-provider agent-execution plan ships this typed and tested; no concrete adapter exists yet (that's Phase 3's `ClaudeCodeAdapter`) and nothing in `swarm-desktop`'s `lib.rs` constructs an `AgentScheduler` yet either -- see [Built, Not Wired](#built-not-wired).
 
-```text
-ai_request command   (no shipped caller -- documented for the next consumer)
-                         │
-                    mpsc::channel(256)          Bounded queue
-                         │
-                    process_loop (long-lived task)
-                         │
-                    BinaryHeap<PrioritizedRequest>
-                    (Higher priority first, FIFO within same level)
-                         │
-                    Semaphore::acquire_owned() [concurrent_limit = 3]
-                         │
-                    tokio::spawn(client.stream_message())
-                         │
-                    SSE parser → emit_event(AiStreamDelta) events, terminated by emit_event(AiStreamSettled)
+**The trait pair** (`crates/swarm-core/src/agent/adapter.rs`):
+
+```rust
+pub trait AgentAdapter: Send + Sync {
+    fn provider(&self) -> ProviderId;
+    fn capabilities(&self) -> Capabilities;
+    fn probe(&self) -> BoxFuture<'_, Result<ProbeReport, AppError>>;
+    fn spawn(&self, spec: AgentSpawnSpec) -> BoxFuture<'_, Result<Box<dyn AgentSession>, AppError>>;
+}
+
+pub trait AgentSession: Send + Sync {
+    fn session_key(&self) -> &SessionKey;
+    fn send_turn(&self, turn: TurnInput) -> BoxFuture<'_, Result<TurnId, AppError>>;
+    fn cancel(&self, turn: TurnId) -> BoxFuture<'_, Result<(), AppError>>;
+    fn respond_permission(&self, req: PermissionId, d: PermissionDecision) -> BoxFuture<'_, Result<(), AppError>>;
+    fn shutdown(self: Box<Self>) -> BoxFuture<'static, Result<ExitSummary, AppError>>;
+}
 ```
 
-Priority levels: `Low (0) < Normal (1) < High (2) < Critical (3)`
+`AgentAdapter` is the provider-level, stateless launcher (one instance per provider); `AgentSession` is the per-worker, stateful handle to one live conversation. `BoxFuture<'a, T>` is `Pin<Box<dyn Future<Output = T> + Send + 'a>>` -- the multi-provider plan's pseudocode wrote these methods as `-> impl Future<Output = ...>` (RPITIT), which reads cleanly but is **not dyn-compatible**: `AgentAdapter::spawn` must return `Box<dyn AgentSession>`, a trait object, and a trait with RPITIT methods cannot be turned into one on stable Rust. `BoxFuture` is the hand-written equivalent of what the `async-trait` crate generates, chosen so this trait pair is object-safe without taking on a new dependency.
 
-On stream failure (network error, malformed SSE, provider error) or a stream that ends without a `message_stop` event, the client still emits a final `ai_stream_delta` with `done: true`, followed by `ai_stream_settled` -- were this path in use, the frontend would be guaranteed a terminal receipt for every enqueued `requestId`.
+**Capabilities honesty doctrine:** `Capabilities` (`partial_deltas`, `resume`, `native_cost`, `permission_modes`, `cancel_granularity`, `interrupt_midturn`, `worktree_aware`) exists so the UI disables an affordance instead of silently no-op'ing it when a provider structurally cannot do something (OpenCode's HTTP/SSE has no stdin to interrupt; `codex exec --json` has no mid-turn steering). Every field is backed by an empirical finding from the Phase 1 spike (claude CLI 2.1.232, `stream-json` over piped stdio, six-gate measurement, `scratchpad/spike/`) -- not an aspiration:
+
+| Capability field | Spike finding |
+|---|---|
+| `partial_deltas` | PASS, but **sentence-clause granularity** -- 4-6 deltas per response, ~100-230 chars each. Chunkier than the webview SDK's token-level streaming. |
+| `resume` | PASS -- context, including tool results from an error-terminated turn, carried across invocations by session id. |
+| `native_cost` | PASS on every clean exit (`total_cost_usd` always present, `modelUsage` breakdown included). **Killed turns lose cost data** -- see Condition B below. |
+| `cancel_granularity` | `KillOnly` is the honest default: 43ms cancel latency via `kill()` (well inside the ≤500ms gate), but stdin-close is NOT a cancel (the child runs to completion), and Windows `kill()` is `TerminateProcess` with no graceful signal path at all. |
+
+**The three binding spike conditions:**
+
+- **Condition A** (controlled config environment): SWARM workers MUST run provider CLIs with a controlled config environment (per-profile config home / `--setting-sources`) -- the operator's personal plugin/hook loadout added ~5s to first-token latency in the spike (6.6s p50 → 1.73s p50 with `--setting-sources ""`). Binding on `AgentSpawnSpec`'s Phase 3 extension, not yet enforced by the trait shape itself.
+- **Condition B** (synthesize the terminal receipt on ungraceful exit): every clean exit gets exactly one terminal event, including `max-turns` errors -- but **zero** terminal events on process kill. Every `AgentSession::shutdown` implementation MUST itself emit a synthesized `agent_turn_settled` (`status: "error"`, `costUsd`/`usage: None` -- honestly, not fabricated) for any turn still in flight when the process exits ungracefully, mirroring the pattern the deleted `AiClient::stream_message`'s error branch already established for `ai_stream_delta`'s `done: true` guarantee.
+- **Condition C** (never gate on `allowedTools`): `--allowedTools Read` did **not** prevent a `Bash` tool from executing in `-p` mode -- `allowedTools` is an auto-approve list, not a restriction. Permission gating MUST rest on `--permission-mode`/`disallowedTools`/hooks, never on reading an "allowed" list as if it were a denylist's complement. Phase 3's `ClaudeCodeAdapter` entry criterion is an empirical test proving its chosen gate actually blocks a denied tool.
+
+**Session state -- three owners, no mirroring:**
+
+| Layer | Owner | Rule |
+|---|---|---|
+| Conversation | The provider CLI | SWARM stores only an opaque `SessionKey` + `cwd`. Never mirror the transcript -- that was the dead Rust AI stack's mistake. |
+| History | SWARM's ordered event log | Every normalized `agent_*` event, seq-ordered -- see [docs/api.md](api.md#type-tags) for the full family and its persistence table. |
+| Process | Worker registry (ephemeral, Phase 3) | Child handle, stdin writer, current turn, pending permissions. Reconstructible from the log + `--resume`. |
+
+**Piped-process substrate** (`worker/proc.rs`, `spawn_piped`): a sibling to `spawn_pty` reusing the identical backpressure shape (`spawn_blocking` reader → bounded `mpsc(4096)` → forwarder task) but over `Stdio::piped()` instead of a pseudo-terminal, plus an `NdjsonFramer` that compacts its buffer once per `push()` call rather than once per line (see the module doc for the `ai/client.rs` line-framing loop this transplants and improves on). **A PTY is wrong for JSON**: line discipline echoes input, injects `\r`, and can inject ANSI escapes -- all of which corrupt NDJSON framing. `spawn_pty` stays correct for interactive shells; `spawn_piped` is the only substrate a JSON-protocol provider CLI may use.
+
+**The agent-turn scheduler** (`agent/scheduler.rs`, `AgentScheduler`) absorbed the deleted `ai/queue.rs` wholesale: the same `BinaryHeap<PrioritizedRequest>` + `Semaphore::acquire_owned()` + `JoinSet` + bounded `mpsc(256)` machinery, retyped from `AiRequest`/`AiPriority` to `AgentTurnRequest`/`TurnPriority`. The one structural change: the old queue owned a concrete `AiClient` and called `client.stream_message()` directly; `AgentScheduler` is generic over an injected `executor` closure instead, since Phase 2 has no concrete provider to call. Concurrent agent turns are the new scarce resource for the reason the plan gives: you do not want 20 Claude Code processes running tools against one repo at once.
 
 ### Session Persistence
 
@@ -365,7 +393,7 @@ Any backend call ──EventSink::emit[_with|_awaiting_seq]()──> WriterMsg {
 
 - **Single writer, one thread:** `OrchestrationEngine::start` spawns one dedicated `swarm-event-writer` OS thread owning an `mpsc::Receiver<WriterMsg>` and the `EventLog` connection. `EventSink::emit`/`emit_with` are a non-blocking `Sender::send` callable from any thread/task; the writer loop is the *only* place that assigns `seq`, so wire order is totally ordered by construction -- there is no window where two threads could race to claim the same sequence number.
 - **SQLite WAL log, migrated:** `EventLog` (`orchestration/log.rs`) opens a SQLite database at `<app-data>/swarm-events.db` in WAL journal mode (`synchronous = NORMAL`). The base `events(seq INTEGER PRIMARY KEY, ts, type, payload) STRICT` table is created legacy-shape-first, then a `PRAGMA user_version` migration ladder adds `origin_worker TEXT`/`cause_seq INTEGER` (both nullable -- existing rows come back `NULL`, the truthful historical value) plus a partial index `idx_events_origin_seq(origin_worker, seq) WHERE origin_worker IS NOT NULL` for worker-scoped seq-range queries. `seq` is the primary key, so a duplicate-seq append is a hard error -- an invariant the writer thread's exclusive ownership of `seq` assignment guarantees never fires in practice. On startup, the engine resumes numbering from `EventLog::max_seq()`, so sequence numbers stay monotonic across restarts, not just within one process lifetime.
-- **Persistence policy:** every event consumes a `seq`, but only some are written to the log. `is_persistent()` (`orchestration/engine.rs`) excludes `WorkerOutput`, `SystemMetrics`, and `SystemLog` by variant -- high-frequency telemetry that flows live but is not history -- plus `WorkerInput` by a **field-level** carve-out: `source == InputSource::Terminal` (raw human keystrokes) is excluded even though the `WorkerInput` variant itself persists for `source.is_machine_issued()` (`Tool`/`Automation`). `source` is a closed, typed enum (`crate::events::InputSource`, `#[serde(rename_all = "snake_case")]`), not a bare string -- an unrecognized wire value fails IPC deserialization before this function ever runs, so the "raw keystrokes/secrets never archived" guarantee doesn't depend on the webview spelling `"terminal"` correctly. A per-keystroke durable row would both flood the log and archive whatever a human typed into a shell, secrets included. Everything else (`worker_spawned`, `worker_killed`, `worker_state`, `worker_input` [non-terminal], `session_created`, `session_deleted`, `ai_stream_delta`, `ai_stream_settled`, `agent_turn_started`, `bus_message`, `worktree_created`, `worktree_removed`, `ship_progress`, `ship_settled`, `commit_created`, `file_written`) persists before being emitted. `is_persistent()` excludes by name (or, for `WorkerInput`, by field) rather than allowlisting, so a new variant is persistent by construction unless explicitly added to the exclusion list -- pinned down for the two worktree events by `orchestration::engine::tests::test_worktree_events_are_persistent`, the three ship events by `orchestration::engine::tests::test_ship_events_are_persistent`, and the `worker_input` source carve-out by `test_worker_input_persistence_depends_on_source`.
+- **Persistence policy:** every event consumes a `seq`, but only some are written to the log. `is_persistent()` (`orchestration/engine.rs`) excludes `WorkerOutput`, `SystemMetrics`, and `SystemLog` by variant -- high-frequency telemetry that flows live but is not history -- plus `WorkerInput` by a **field-level** carve-out: `source == InputSource::Terminal` (raw human keystrokes) is excluded even though the `WorkerInput` variant itself persists for `source.is_machine_issued()` (`Tool`/`Automation`). `source` is a closed, typed enum (`crate::events::InputSource`, `#[serde(rename_all = "snake_case")]`), not a bare string -- an unrecognized wire value fails IPC deserialization before this function ever runs, so the "raw keystrokes/secrets never archived" guarantee doesn't depend on the webview spelling `"terminal"` correctly. A per-keystroke durable row would both flood the log and archive whatever a human typed into a shell, secrets included. Everything else (`worker_spawned`, `worker_killed`, `worker_state`, `worker_input` [non-terminal], `session_created`, `session_deleted`, `ai_stream_delta`, `ai_stream_settled`, `agent_turn_started`, `agent_session_started`, `agent_block`, `agent_tool_call`, `agent_tool_result`, `agent_permission_request`, `agent_turn_settled`, `agent_session_exited`, `bus_message`, `worktree_created`, `worktree_removed`, `ship_progress`, `ship_settled`, `commit_created`, `file_written`) persists before being emitted -- **except `agent_turn_delta`**, excluded by variant alongside `WorkerOutput`/`SystemMetrics`/`SystemLog` above (per-clause streaming rows would be ~800 SQLite rows/s at 8 workers; its durable counterpart is `agent_block`). `is_persistent()` excludes by name (or, for `WorkerInput`, by field) rather than allowlisting, so a new variant is persistent by construction unless explicitly added to the exclusion list -- pinned down for the two worktree events by `orchestration::engine::tests::test_worktree_events_are_persistent`, the three ship events by `orchestration::engine::tests::test_ship_events_are_persistent`, every new `agent_*` variant by `test_agent_turn_delta_is_ephemeral`/`test_every_other_new_agent_variant_is_persistent`, and the `worker_input` source carve-out by `test_worker_input_persistence_depends_on_source`.
 - **Causal attribution (`Provenance`):** every `WriterMsg` carries a `Provenance { origin_worker: Option<Uuid>, cause_seq: Option<u64> }` alongside its event -- `Provenance::default()` (both `None`) for `EventSink::emit`, an explicit value for `emit_with`/`emit_awaiting_seq`. The writer stamps it straight onto the `DomainEvent` envelope as `originWorker`/`causeSeq` (`skip_serializing_if` keeps the common unattributed case wire-lean -- absent, not `null`) and into the persisted row's `origin_worker`/`cause_seq` columns. **The subject-vs-causer rule:** a payload's own `workerId` field is the SUBJECT of the event (whose worker spawned, whose PTY got input); `originWorker` on the envelope is the CAUSER (who made it happen). For a human-driven action the two are typically unrelated or `originWorker` is simply absent; for a tool-driven action (an AI turn's `spawn_worker`/`kill_worker`/`worker_input`/`write_file` tool call) `originWorker` is the panel worker whose turn issued the call, distinct from the payload's own `workerId` -- and that difference IS the causal edge the provenance graph is built from (see [Causality Graph](#causality-graph) below). **The invariant, enforced by doc-comment and review, not by the type system:** the engine *records* provenance, it never *infers* it -- there is no "the last AI turn probably caused this" heuristic anywhere in this codebase; every `Provenance` passed to `emit_with`/`emit_awaiting_seq` traces back to an explicit, caller-supplied value (an IPC argument, a bus message's own `from_worker`, a turn's own recorded seq).
 - **The ack-oneshot (`emit_awaiting_seq`):** returns a `tokio::sync::oneshot::Receiver<u64>` that resolves to the seq the writer thread assigns the event -- deterministic, no polling, no timeout-bound `waitFor` correlation. Used by the `agent_turn_started` command (see [docs/api.md#agent_turn_started](api.md#agent_turn_started)) so a chat turn can learn its own seq before any tool call needs to cite it as `causeSeq`. Non-blocking and stall-proof by oneshot construction: if the caller drops the receiver (e.g. a cancelled IPC call) before the writer gets to it, `ack.send(seq)` simply returns `Err` and is ignored -- the writer thread never waits on, or even notices, a disinterested receiver.
 - **Emission:** after the persistence step, the writer wraps the event in a `DomainEvent { seq, ts, originWorker?, causeSeq?, ..flattened SwarmEvent }` and hands it to the primary `emit` closure passed to `OrchestrationEngine::start` (the Tauri shell's closure forwards it onto the single `swarm://events` channel). See [docs/api.md#events](api.md#events) for the wire shape and full type-tag list.
@@ -541,7 +569,7 @@ Zustand worker store updates → React re-renders
 
 ### AI Streaming
 
-This is the flow that actually runs when a user sends a chat message today. The message content itself never leaves the webview except for one config read -- no Rust IPC carries the request or the response, no `swarm://events` envelope is involved for the stream itself, and no message text is persisted. Contrast with [AI Queue](#ai-queue-built-not-wired) above, which documents Rust machinery this flow does not use; see [Built, Not Wired](#built-not-wired) for why both exist.
+This is the flow that actually runs when a user sends a chat message today. The message content itself never leaves the webview except for one config read -- no Rust IPC carries the request or the response, no `swarm://events` envelope is involved for the stream itself, and no message text is persisted. Contrast with [Adapter Layer](#adapter-layer) above, which documents the Rust-side machinery this flow does not use (and, for the now-removed `ai_request` path this flow never used either, never did); see [Built, Not Wired](#built-not-wired) for why both exist.
 
 ```text
 User sends message
@@ -645,9 +673,17 @@ The backend emits typed events via the `SwarmEvent` enum, but not directly: ever
 | `session_created`    | `{ sessionId, name }`                                            | Session created              | Yes |
 | `session_deleted`    | `{ sessionId }`                                                  | Session removed              | Yes |
 | `system_metrics`     | `{ cpuPercent, memoryMb, workerCount, aiReqPerSec, timestamp }`  | 500ms metrics tick           | No |
-| `ai_stream_delta`    | `{ requestId, delta, done }`                                     | AI response chunk            | Yes |
-| `ai_stream_settled`  | `{ requestId, status, error }`                                   | Terminal receipt, once per AI request | Yes |
+| `ai_stream_delta`    | `{ requestId, delta, done }`                                     | Webview-path variant, kept but unemitted since `ai_request`'s Phase 2 removal | Yes |
+| `ai_stream_settled`  | `{ requestId, status, error }`                                   | Same kept-but-unemitted status | Yes |
 | `agent_turn_started` | `{ workerId, model, requestId }`                                 | AI/agent turn started (causal root) | Yes |
+| `agent_session_started` | `{ workerId, provider, sessionKey, model, cwd, capabilities }` | Phase 3+ provider-adapter session started | Yes |
+| `agent_turn_delta`   | `{ workerId, turnId, blockIndex, kind, text }`                   | Streamed sub-message chunk within a turn | **No** |
+| `agent_block`        | `{ workerId, turnId, blockIndex, kind, content }`                | Complete content block within a turn | Yes |
+| `agent_tool_call`    | `{ workerId, turnId, toolUseId, name, input }`                   | Provider-agent tool call     | Yes |
+| `agent_tool_result`  | `{ workerId, turnId, toolUseId, isError, content }`              | Result of a provider-agent tool call | Yes |
+| `agent_permission_request` | `{ workerId, turnId, requestId, tool, input, suggestedDecision? }` | Provider is asking for tool approval | Yes |
+| `agent_turn_settled` | `{ workerId, turnId, status, error, costUsd, usage, durationMs, numTurns }` | Terminal receipt for one provider-adapter turn | Yes |
+| `agent_session_exited` | `{ workerId, exitCode, signal }`                               | Provider-adapter session's process exited | Yes |
 | `system_log`         | `{ level, message, target, timestamp }`                          | Backend log message          | No |
 | `bus_message`        | `{ messageId, fromWorker, toWorker, topic, payload }`            | Bus message, forwarded by an active `bus_subscribe` task | Yes |
 | `worktree_created`   | `{ workerId, sessionId, repoRoot, worktreePath, branch, baseCommit }` | Worker's git worktree created | Yes |
@@ -681,7 +717,7 @@ The frontend invokes Tauri commands via `invoke()`:
 | `git_stage_commit`     | `CommitOutcome`                    |
 | `git_push`             | `PushOutcome`                      |
 | `ship_compare_url`     | Compare URL string                 |
-| `ai_request`           | Request ID string (no shipped caller -- see [Built, Not Wired](#built-not-wired)) |
+| `agent_turn_started`   | `number` (the assigned seq)        |
 | `get_metrics`          | Metrics JSON, incl. `perWorker`    |
 | `bus_send`             | Receiver count (`number`) (no shipped caller -- see [Built, Not Wired](#built-not-wired)) |
 | `bus_subscribe`        | `()` (no shipped caller -- see [Built, Not Wired](#built-not-wired)) |
@@ -696,15 +732,15 @@ The frontend invokes Tauri commands via `invoke()`:
 
 ## Built, Not Wired
 
-Three pieces of the shipped Rust backend are fully implemented and tested but have zero frontend callers today. They are not stubs or dead code -- they are the backend half of features that have not been wired up yet, built ahead of the multi-provider (ACP) rework that is expected to route AI traffic (and possibly agent-to-agent bus traffic) through Rust instead of the webview.
+Several pieces of the shipped Rust backend are fully implemented and tested but have zero frontend callers today. They are not stubs or dead code -- they are the backend half of features that have not been wired up yet, built ahead of the multi-provider agent-execution rework that is expected to route AI traffic (and possibly agent-to-agent bus traffic) through Rust instead of the webview.
 
 | Piece | Where | Why it isn't live today |
 |-------|-------|---------------------------|
-| The AI request path: [`ai_request`](api.md#ai_request), `AiQueue`, the SSE parser (`ai/stream.rs`) | `src-tauri/src/ai/`, `src-tauri/src/commands/ai.rs` | The shipped AI flow runs `@anthropic-ai/sdk` directly in the webview (`src/lib/anthropic.ts`, `dangerouslyAllowBrowser: true`) and streams straight to `api.anthropic.com` -- see [AI Streaming](#ai-streaming). Scheduled to become the real transport once the multi-provider (ACP) rework lands. |
-| The five `bus_*` commands: [`bus_send`](api.md#bus_send), [`bus_subscribe`](api.md#bus_subscribe), [`bus_create_pipeline`](api.md#bus_create_pipeline), [`bus_list_channels`](api.md#bus_list_channels), [`bus_list_pipelines`](api.md#bus_list_pipelines) | `src-tauri/src/bus/`, `src-tauri/src/commands/bus.rs` | No UI surface invokes any of them -- inter-agent messaging is implemented but not exposed to a user today. Scheduled alongside the ACP rework, which introduces the agent-to-agent flows that would need it. |
-| The `ai_stream_settled` receipt | `crates/swarm-core/src/events/emitter.rs`, emitted from `AiQueue`'s process loop | Downstream of `ai_request` above -- since nothing calls `ai_request`, nothing ever triggers this event. Documents the intended terminal-receipt contract for whichever consumer eventually calls `ai_request`. |
+| The `agent_*` event family (`AgentSessionStarted`, `AgentTurnDelta`, `AgentBlock`, `AgentToolCall`, `AgentToolResult`, `AgentPermissionRequest`, `AgentTurnSettled`, `AgentSessionExited`) + the `AgentAdapter`/`AgentSession` traits + `AgentScheduler` | `crates/swarm-core/src/agent/`, `crates/swarm-core/src/events/emitter.rs` | Typed, tested (including a `MockAdapter` proving a full session lifecycle through a live engine), and persistence-classified as of Phase 2 -- but no concrete `AgentAdapter` implementation exists yet to actually emit them. See [Adapter Layer](#adapter-layer). Scheduled for Phase 3's `ClaudeCodeAdapter`. |
+| The five `bus_*` commands: [`bus_send`](api.md#bus_send), [`bus_subscribe`](api.md#bus_subscribe), [`bus_create_pipeline`](api.md#bus_create_pipeline), [`bus_list_channels`](api.md#bus_list_channels), [`bus_list_pipelines`](api.md#bus_list_pipelines) | `src-tauri/src/bus/`, `src-tauri/src/commands/bus.rs` | No UI surface invokes any of them -- inter-agent messaging is implemented but not exposed to a user today. Scheduled alongside the multi-provider rework, which introduces the agent-to-agent flows that would need it. |
+| The `ai_stream_settled`/`ai_stream_delta` `SwarmEvent` variants | `crates/swarm-core/src/events/emitter.rs` | Downstream of `ai_request`, which was **removed** in Phase 2 (absorbed into `AgentScheduler`) -- nothing emits these variants in the app as shipped. Kept only because the webview chat path may still bridge onto them during the Phase 5 migration; retired alongside that path. |
 
-Read the [AI Queue](#ai-queue-built-not-wired) diagram and the `ai_request`/`bus_*` entries in [docs/api.md](api.md) as a description of what the Rust side does *if* called -- not as a description of what happens when a user sends a chat message or a worker talks to another worker in the app today.
+Read the [Adapter Layer](#adapter-layer) section and the `agent/`/`bus_*` entries in [docs/api.md](api.md) as a description of what the Rust side does *if* called -- not as a description of what happens when a user sends a chat message or a worker talks to another worker in the app today.
 
 ---
 

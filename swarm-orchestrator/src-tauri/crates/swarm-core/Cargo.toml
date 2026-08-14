@@ -18,3 +18,11 @@ dashmap       = { workspace = true }
 parking_lot   = { workspace = true }
 rusqlite      = { workspace = true }
 regex         = { workspace = true }
+
+[dev-dependencies]
+# Test-only, for the credential-leak-in-waiting span-capture test
+# (worker::lifecycle::tests) — captures formatted tracing output into
+# an in-memory buffer via a custom MakeWriter so the test can assert no
+# env value ever appears in it. Exact-pinned via the workspace, same
+# version swarm-desktop already depends on at runtime.
+tracing-subscriber = { workspace = true }
