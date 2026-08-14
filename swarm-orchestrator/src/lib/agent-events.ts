@@ -134,7 +134,12 @@ export const AgentPermissionRequestPayloadSchema = z.object({
   requestId: z.string(),
   tool: z.string(),
   input: z.unknown(),
-  suggestedDecision: PermissionDecisionSchema.optional(),
+  // .nullable().optional() (review F1, belt #2 alongside Rust's
+  // skip_serializing_if): Tauri's JSON bridge can hand back an
+  // explicit `null` for an absent Option<T> in some serialization
+  // paths even though the emitter now omits the key entirely on the
+  // wire — accept both rather than trusting the omission alone.
+  suggestedDecision: PermissionDecisionSchema.nullable().optional(),
   /**
    * Phase 3 semantics shift for `ClaudeCodeAdapter`: this event is a
    * REPORT of an already-decided denial, not a pending request — see
