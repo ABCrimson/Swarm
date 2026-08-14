@@ -231,6 +231,8 @@ impl WorkerRegistry {
     ///     repo_root: None,
     ///     branch: None,
     ///     base_commit: None,
+    ///     last_shipped_seq: None,
+    ///     last_shipped_commit: None,
     /// };
     /// let id = registry.spawn_worker(handle).unwrap();
     /// assert_eq!(registry.count(), 1);
@@ -355,6 +357,8 @@ impl WorkerRegistry {
     ///     repo_root: None,
     ///     branch: None,
     ///     base_commit: None,
+    ///     last_shipped_seq: None,
+    ///     last_shipped_commit: None,
     /// };
     /// let id = registry.spawn_worker(handle).unwrap();
     ///
@@ -443,6 +447,27 @@ impl WorkerRegistry {
     pub fn list_workers(&self) -> Vec<WorkerInfo> {
         self.workers.iter().map(|entry| entry.to_info()).collect()
     }
+
+    /// Records a successful ship for `id` — the **only** writer of
+    /// `WorkerHandle::last_shipped_seq`/`last_shipped_commit` (see the
+    /// ownership-split note in `swarm_core::git::ship`'s module doc;
+    /// every other `WorkerHandle` field is owned by the worktree
+    /// feature). Called by the ship command layer after a successful
+    /// `git_push`, never by preflight or a failed push.
+    ///
+    /// # Errors
+    ///
+    /// * [`AppError::WorkerNotFound`] - No worker with the given ID exists
+    pub fn set_last_shipped(&self, id: &WorkerId, seq: u64, commit: &str) -> Result<(), AppError> {
+        let mut entry = self
+            .workers
+            .get_mut(id)
+            .ok_or_else(|| AppError::WorkerNotFound { id: id.to_string() })?;
+        entry.last_shipped_seq = Some(seq);
+        entry.last_shipped_commit = Some(commit.to_string());
+        tracing::info!(worker_id = %id, seq, commit, "ship: last_shipped recorded");
+        Ok(())
+    }
 }
 
 impl Default for WorkerRegistry {
@@ -470,6 +495,8 @@ mod tests {
             repo_root: None,
             branch: None,
             base_commit: None,
+            last_shipped_seq: None,
+            last_shipped_commit: None,
         }
     }
 
@@ -607,6 +634,33 @@ mod tests {
         assert_eq!(metrics.total_workers, 2);
         assert_eq!(metrics.running, 1);
         assert_eq!(metrics.paused, 1);
+    }
+
+    #[test]
+    fn test_set_last_shipped_updates_only_the_target_worker() {
+        let reg = WorkerRegistry::new();
+        let a = make_handle("a");
+        let a_id = a.id;
+        let b = make_handle("b");
+        let b_id = b.id;
+        reg.spawn_worker(a).unwrap();
+        reg.spawn_worker(b).unwrap();
+
+        reg.set_last_shipped(&a_id, 42, "cafef00d").unwrap();
+
+        let a_info = reg.get_worker(&a_id).unwrap();
+        assert_eq!(a_info.last_shipped_seq, Some(42));
+        assert_eq!(a_info.last_shipped_commit.as_deref(), Some("cafef00d"));
+
+        let b_info = reg.get_worker(&b_id).unwrap();
+        assert_eq!(b_info.last_shipped_seq, None);
+    }
+
+    #[test]
+    fn test_set_last_shipped_worker_not_found() {
+        let reg = WorkerRegistry::new();
+        let result = reg.set_last_shipped(&Uuid::new_v4(), 1, "sha");
+        assert!(result.is_err());
     }
 
     #[test]
