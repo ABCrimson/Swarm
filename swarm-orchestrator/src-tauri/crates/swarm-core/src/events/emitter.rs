@@ -18,6 +18,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::mpsc::Sender;
 use uuid::Uuid;
 
+use crate::agent::adapter::{
+    Capabilities, PermissionDecision, PermissionId, ProviderId, SessionKey, TurnId,
+};
 use crate::git::ShipError;
 use crate::worker::handle::WorkerState;
 
@@ -95,6 +98,34 @@ pub enum SwarmEvent {
     AgentTurnStarted(AgentTurnStartedPayload),
     /// A file was written via the `write_file` command.
     FileWritten(FileWrittenPayload),
+    /// A provider-adapter session started for a worker (Phase 3+
+    /// adapters; see `crate::agent::adapter::AgentAdapter::spawn`).
+    AgentSessionStarted(AgentSessionStartedPayload),
+    /// One sub-message delta within a turn. EPHEMERAL — see
+    /// [`crate::orchestration::is_persistent`]'s `AgentTurnDelta`
+    /// exclusion; persisting per-token/per-clause rows would be
+    /// ~800 SQLite rows/s at 8 workers.
+    AgentTurnDelta(AgentTurnDeltaPayload),
+    /// One complete content block within a turn (the persisted
+    /// counterpart to [`Self::AgentTurnDelta`] — replay reconstructs
+    /// full turns from these rows; only the typing animation is lost).
+    AgentBlock(AgentBlockPayload),
+    /// A tool call the provider's agent issued mid-turn.
+    AgentToolCall(AgentToolCallPayload),
+    /// The result of a previously-issued [`Self::AgentToolCall`].
+    AgentToolResult(AgentToolResultPayload),
+    /// The provider is asking a human to approve or deny a tool call.
+    /// See [`crate::agent::adapter::PermissionDecision`]'s Condition C
+    /// doc — this is the ONLY legitimate gating surface, never
+    /// `allowedTools`.
+    AgentPermissionRequest(AgentPermissionRequestPayload),
+    /// Terminal receipt for one turn: exactly one per turn, on success
+    /// AND on ungraceful child exit — see
+    /// `crate::agent::adapter::AgentSession::shutdown`'s Condition B
+    /// doc for the synthesized-on-kill guarantee.
+    AgentTurnSettled(AgentTurnSettledPayload),
+    /// A provider-adapter session's underlying process exited.
+    AgentSessionExited(AgentSessionExitedPayload),
 }
 
 /// Payload for the `worker_spawned` event.
@@ -486,6 +517,198 @@ pub struct FileWrittenPayload {
     pub path: String,
     /// Number of bytes written.
     pub bytes: usize,
+}
+
+/// Payload for the `agent_session_started` event.
+///
+/// Emitted once, immediately after [`crate::agent::adapter::AgentAdapter::spawn`]
+/// resolves successfully — the provider-adapter counterpart to
+/// `worker_spawned`/`worktree_created` (which record the SWARM-side
+/// process/isolation facts). `capabilities` is stamped verbatim from
+/// the adapter (see [`Capabilities`]'s honesty doctrine) so a replay or
+/// a UI restored after a restart can render the right affordances
+/// without re-probing the provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionStartedPayload {
+    /// UUID of the worker this session belongs to.
+    pub worker_id: Uuid,
+    /// Which provider CLI is driving this session.
+    pub provider: ProviderId,
+    /// Provider-native session identifier (see [`SessionKey`]'s doc).
+    pub session_key: SessionKey,
+    /// Model alias/id this session was started with.
+    pub model: String,
+    /// Working directory the provider process is running in.
+    pub cwd: String,
+    /// What this adapter can honestly promise for this session.
+    pub capabilities: Capabilities,
+}
+
+/// Payload for the `agent_turn_delta` event.
+///
+/// EPHEMERAL — never persisted (see
+/// [`crate::orchestration::is_persistent`]). One row per streamed
+/// sub-message chunk within a turn; the persisted counterpart once the
+/// block completes is [`AgentBlockPayload`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTurnDeltaPayload {
+    /// UUID of the worker whose turn this delta belongs to.
+    pub worker_id: Uuid,
+    /// Correlation id for the turn this delta belongs to.
+    pub turn_id: TurnId,
+    /// Zero-based index of the content block this delta extends.
+    pub block_index: u32,
+    /// Block kind (e.g. `"text"`, `"thinking"`) — free-form, mirrors
+    /// whatever the provider's own protocol calls it, not a closed
+    /// enum, since providers do not agree on block taxonomies.
+    pub kind: String,
+    /// The delta text chunk itself.
+    pub text: String,
+}
+
+/// Payload for the `agent_block` event.
+///
+/// Persisted. Emitted once a content block within a turn is complete —
+/// the durable counterpart to the (ephemeral)
+/// [`AgentTurnDeltaPayload`] stream that preceded it. `content` is
+/// arbitrary structured JSON because block shapes vary by `kind` and by
+/// provider (a `"text"` block is just a string; a `"thinking"` block
+/// may carry a signature; a future block kind may carry anything else
+/// the provider's protocol defines).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentBlockPayload {
+    /// UUID of the worker whose turn this block belongs to.
+    pub worker_id: Uuid,
+    /// Correlation id for the turn this block belongs to.
+    pub turn_id: TurnId,
+    /// Zero-based index of this content block within the turn.
+    pub block_index: u32,
+    /// Block kind — see [`AgentTurnDeltaPayload::kind`]'s doc.
+    pub kind: String,
+    /// The complete block content.
+    pub content: serde_json::Value,
+}
+
+/// Payload for the `agent_tool_call` event.
+///
+/// Persisted. `tool_use_id` is the provider's own correlation id for
+/// this call — the same id [`AgentToolResultPayload::tool_use_id`]
+/// echoes back, letting a replay reconstruct call/result pairs
+/// unambiguously even when several tool calls are in flight within one
+/// turn (confirmed reconstructable in the Phase 1 spike's Gate 5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentToolCallPayload {
+    /// UUID of the worker whose turn issued this tool call.
+    pub worker_id: Uuid,
+    /// Correlation id for the turn this tool call belongs to.
+    pub turn_id: TurnId,
+    /// Provider-native tool-use correlation id.
+    pub tool_use_id: String,
+    /// Name of the tool invoked.
+    pub name: String,
+    /// The tool's input arguments, verbatim from the provider.
+    pub input: serde_json::Value,
+}
+
+/// Payload for the `agent_tool_result` event.
+///
+/// Persisted. See [`AgentToolCallPayload`]'s doc for the
+/// `tool_use_id` correlation contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentToolResultPayload {
+    /// UUID of the worker whose turn this result belongs to.
+    pub worker_id: Uuid,
+    /// Correlation id for the turn this result belongs to.
+    pub turn_id: TurnId,
+    /// Provider-native tool-use correlation id, echoing the
+    /// originating [`AgentToolCallPayload::tool_use_id`].
+    pub tool_use_id: String,
+    /// `true` when the tool call itself failed/errored.
+    pub is_error: bool,
+    /// The tool's result content, verbatim from the provider.
+    pub content: serde_json::Value,
+}
+
+/// Payload for the `agent_permission_request` event.
+///
+/// Persisted. See
+/// [`crate::agent::adapter::PermissionDecision`]'s Condition C doc:
+/// this event, answered via `respond_permission`, is the only
+/// legitimate gating surface — never `allowedTools`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPermissionRequestPayload {
+    /// UUID of the worker whose turn is asking for permission.
+    pub worker_id: Uuid,
+    /// Correlation id for the turn this request belongs to.
+    pub turn_id: TurnId,
+    /// Correlation id for this specific permission request, echoed
+    /// back on `respond_permission`.
+    pub request_id: PermissionId,
+    /// Name of the tool awaiting approval.
+    pub tool: String,
+    /// The tool's proposed input, for display before approval.
+    pub input: serde_json::Value,
+    /// The provider's own suggested decision, when it has one (e.g. a
+    /// hook-computed recommendation) — advisory only, never
+    /// auto-applied by SWARM.
+    #[serde(default)]
+    pub suggested_decision: Option<PermissionDecision>,
+}
+
+/// Payload for the `agent_turn_settled` receipt.
+///
+/// Persisted. Emitted exactly once per turn, on success AND on
+/// ungraceful child exit — see
+/// `crate::agent::adapter::AgentSession::shutdown`'s Condition B doc.
+/// `cost_usd`/`usage` are `None` on a synthesized (kill-path)
+/// settlement — the provider's terminal `result` line, which is the
+/// only source of truth for cost, is never observed on a kill.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTurnSettledPayload {
+    /// UUID of the worker this turn belongs to.
+    pub worker_id: Uuid,
+    /// Correlation id for the settled turn.
+    pub turn_id: TurnId,
+    /// `"ok"` or `"error"`.
+    pub status: String,
+    /// Error description when `status == "error"`.
+    pub error: Option<String>,
+    /// Real, provider-reported cost in USD, when available (see
+    /// [`Capabilities::native_cost`]).
+    pub cost_usd: Option<f64>,
+    /// Provider-reported token usage breakdown, verbatim, when
+    /// available.
+    pub usage: Option<serde_json::Value>,
+    /// Wall-clock duration of the turn in milliseconds.
+    pub duration_ms: u64,
+    /// Number of provider-internal turns this call represents, when
+    /// the provider reports one (some providers can take several
+    /// internal steps per SWARM-visible turn).
+    pub num_turns: Option<u32>,
+}
+
+/// Payload for the `agent_session_exited` event.
+///
+/// Persisted. Emitted once a session's underlying provider process has
+/// fully exited (clean or killed) — the provider-adapter counterpart to
+/// `worker_killed`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionExitedPayload {
+    /// UUID of the worker this session belonged to.
+    pub worker_id: Uuid,
+    /// Process exit code, when the OS reports one.
+    pub exit_code: Option<i32>,
+    /// Signal name that terminated the process, when applicable.
+    #[serde(default)]
+    pub signal: Option<String>,
 }
 
 /// Causal attribution for one event: who caused it (`origin_worker`,
@@ -1117,6 +1340,222 @@ mod tests {
             assert_eq!(p.bytes, 7);
         } else {
             panic!("expected FileWritten variant");
+        }
+    }
+
+    // ── agent_* family ───────────────────────────────────────────────
+
+    #[test]
+    fn test_agent_session_started_roundtrip() {
+        use crate::agent::adapter::{CancelGranularity, Capabilities, ProviderId};
+
+        let worker_id = Uuid::new_v4();
+        let event = SwarmEvent::AgentSessionStarted(AgentSessionStartedPayload {
+            worker_id,
+            provider: ProviderId::ClaudeCode,
+            session_key: "sess-abc".to_string(),
+            model: "claude-sonnet-5".to_string(),
+            cwd: "/repo/worktree".to_string(),
+            capabilities: Capabilities {
+                partial_deltas: true,
+                resume: true,
+                native_cost: true,
+                permission_modes: vec!["default".to_string(), "plan".to_string()],
+                cancel_granularity: CancelGranularity::KillOnly,
+                interrupt_midturn: false,
+                worktree_aware: true,
+            },
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"agent_session_started\""));
+        assert!(json.contains("\"sessionKey\":\"sess-abc\""));
+        assert!(json.contains("\"provider\":\"claude_code\""));
+        assert!(json.contains("\"cancelGranularity\":\"kill_only\""));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::AgentSessionStarted(p) = deserialized {
+            assert_eq!(p.worker_id, worker_id);
+            assert_eq!(p.provider, ProviderId::ClaudeCode);
+            assert!(p.capabilities.resume);
+        } else {
+            panic!("expected AgentSessionStarted variant");
+        }
+    }
+
+    #[test]
+    fn test_agent_turn_delta_roundtrip() {
+        let worker_id = Uuid::new_v4();
+        let event = SwarmEvent::AgentTurnDelta(AgentTurnDeltaPayload {
+            worker_id,
+            turn_id: "turn-1".to_string(),
+            block_index: 0,
+            kind: "text".to_string(),
+            text: "Hello".to_string(),
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"agent_turn_delta\""));
+        assert!(json.contains("\"turnId\":\"turn-1\""));
+        assert!(json.contains("\"blockIndex\":0"));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::AgentTurnDelta(p) = deserialized {
+            assert_eq!(p.worker_id, worker_id);
+            assert_eq!(p.text, "Hello");
+        } else {
+            panic!("expected AgentTurnDelta variant");
+        }
+    }
+
+    #[test]
+    fn test_agent_block_roundtrip() {
+        let event = SwarmEvent::AgentBlock(AgentBlockPayload {
+            worker_id: Uuid::nil(),
+            turn_id: "turn-1".to_string(),
+            block_index: 0,
+            kind: "text".to_string(),
+            content: serde_json::json!({"text": "Hello"}),
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"agent_block\""));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::AgentBlock(p) = deserialized {
+            assert_eq!(p.content, serde_json::json!({"text": "Hello"}));
+        } else {
+            panic!("expected AgentBlock variant");
+        }
+    }
+
+    #[test]
+    fn test_agent_tool_call_and_result_roundtrip_share_tool_use_id() {
+        let tool_use_id = "toolu_01ABC".to_string();
+        let call = SwarmEvent::AgentToolCall(AgentToolCallPayload {
+            worker_id: Uuid::nil(),
+            turn_id: "turn-1".to_string(),
+            tool_use_id: tool_use_id.clone(),
+            name: "run_command".to_string(),
+            input: serde_json::json!({"command": "pnpm build"}),
+        });
+        let result = SwarmEvent::AgentToolResult(AgentToolResultPayload {
+            worker_id: Uuid::nil(),
+            turn_id: "turn-1".to_string(),
+            tool_use_id: tool_use_id.clone(),
+            is_error: false,
+            content: serde_json::json!("ok"),
+        });
+
+        let call_json = serde_json::to_string(&call).expect("serialize");
+        assert!(call_json.contains("\"type\":\"agent_tool_call\""));
+        assert!(call_json.contains("\"toolUseId\":\"toolu_01ABC\""));
+
+        let result_json = serde_json::to_string(&result).expect("serialize");
+        assert!(result_json.contains("\"type\":\"agent_tool_result\""));
+        assert!(result_json.contains("\"isError\":false"));
+
+        if let (SwarmEvent::AgentToolCall(c), SwarmEvent::AgentToolResult(r)) = (
+            serde_json::from_str::<SwarmEvent>(&call_json).unwrap(),
+            serde_json::from_str::<SwarmEvent>(&result_json).unwrap(),
+        ) {
+            assert_eq!(
+                c.tool_use_id, r.tool_use_id,
+                "call and result must correlate"
+            );
+        } else {
+            panic!("expected AgentToolCall/AgentToolResult variants");
+        }
+    }
+
+    #[test]
+    fn test_agent_permission_request_roundtrip_with_suggested_decision() {
+        use crate::agent::adapter::PermissionDecision;
+
+        let event = SwarmEvent::AgentPermissionRequest(AgentPermissionRequestPayload {
+            worker_id: Uuid::nil(),
+            turn_id: "turn-1".to_string(),
+            request_id: "perm-1".to_string(),
+            tool: "Bash".to_string(),
+            input: serde_json::json!({"command": "rm -rf /"}),
+            suggested_decision: Some(PermissionDecision::Deny),
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"agent_permission_request\""));
+        assert!(json.contains("\"suggestedDecision\":\"deny\""));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::AgentPermissionRequest(p) = deserialized {
+            assert_eq!(p.suggested_decision, Some(PermissionDecision::Deny));
+        } else {
+            panic!("expected AgentPermissionRequest variant");
+        }
+    }
+
+    #[test]
+    fn test_agent_permission_request_suggested_decision_absent_deserializes_as_none() {
+        // Backward/forward compatibility: a provider that never offers
+        // a suggestion omits the field entirely.
+        let json = r#"{"workerId":"00000000-0000-0000-0000-000000000000","turnId":"t","requestId":"p","tool":"Bash","input":{}}"#;
+        let payload: AgentPermissionRequestPayload =
+            serde_json::from_str(json).expect("deserialize");
+        assert_eq!(payload.suggested_decision, None);
+    }
+
+    #[test]
+    fn test_agent_turn_settled_roundtrip_ok_and_synthesized_error() {
+        let ok = SwarmEvent::AgentTurnSettled(AgentTurnSettledPayload {
+            worker_id: Uuid::nil(),
+            turn_id: "turn-1".to_string(),
+            status: "ok".to_string(),
+            error: None,
+            cost_usd: Some(0.0123),
+            usage: Some(serde_json::json!({"inputTokens": 100})),
+            duration_ms: 4200,
+            num_turns: Some(1),
+        });
+        let json = serde_json::to_string(&ok).expect("serialize");
+        assert!(json.contains("\"type\":\"agent_turn_settled\""));
+        assert!(json.contains("\"costUsd\":0.0123"));
+
+        // Condition B: a synthesized settlement on ungraceful exit
+        // carries no cost data — honestly None, not a fabricated 0.
+        let synthesized = SwarmEvent::AgentTurnSettled(AgentTurnSettledPayload {
+            worker_id: Uuid::nil(),
+            turn_id: "turn-2".to_string(),
+            status: "error".to_string(),
+            error: Some("process killed".to_string()),
+            cost_usd: None,
+            usage: None,
+            duration_ms: 900,
+            num_turns: None,
+        });
+        let json2 = serde_json::to_string(&synthesized).expect("serialize");
+        let deserialized: SwarmEvent = serde_json::from_str(&json2).expect("deserialize");
+        if let SwarmEvent::AgentTurnSettled(p) = deserialized {
+            assert_eq!(p.status, "error");
+            assert_eq!(p.cost_usd, None);
+            assert_eq!(p.usage, None);
+        } else {
+            panic!("expected AgentTurnSettled variant");
+        }
+    }
+
+    #[test]
+    fn test_agent_session_exited_roundtrip() {
+        let worker_id = Uuid::new_v4();
+        let event = SwarmEvent::AgentSessionExited(AgentSessionExitedPayload {
+            worker_id,
+            exit_code: Some(1),
+            signal: None,
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"agent_session_exited\""));
+        assert!(json.contains("\"exitCode\":1"));
+        // Unlike `WorkerInputPayload::preview`, `signal` has no
+        // `skip_serializing_if` — it serializes as `null`, matching
+        // every other plain `Option` payload field in this codebase
+        // (e.g. `WorktreeRemovedPayload::reason`).
+        assert!(json.contains("\"signal\":null"));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::AgentSessionExited(p) = deserialized {
+            assert_eq!(p.worker_id, worker_id);
+            assert_eq!(p.exit_code, Some(1));
+        } else {
+            panic!("expected AgentSessionExited variant");
         }
     }
 
