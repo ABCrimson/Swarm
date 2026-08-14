@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tokio::sync::broadcast;
+use uuid::Uuid;
 
 use super::log::EventLog;
-use crate::events::{EventSink, SwarmEvent};
+use crate::events::{EventSink, SwarmEvent, WriterMsg};
 
 /// The single ordered channel name every backend event is logically
 /// pushed on. Not a Tauri-specific mechanism — the primary delivery
@@ -41,6 +42,16 @@ pub struct DomainEvent {
     pub seq: u64,
     /// Unix timestamp in milliseconds, assigned by the writer thread.
     pub ts: i64,
+    /// UUID of the worker whose action caused this event (the CAUSER),
+    /// when known. Absent (not `null`) when unattributed — see
+    /// [`Provenance`]'s doc; `skip_serializing_if` keeps the common
+    /// unattributed case (e.g. every `worker_output` chunk) from paying
+    /// a wire tax for a field that's almost always absent.
+    #[serde(rename = "originWorker", skip_serializing_if = "Option::is_none")]
+    pub origin_worker: Option<Uuid>,
+    /// Seq of the event this one is causally reacting to, when known.
+    #[serde(rename = "causeSeq", skip_serializing_if = "Option::is_none")]
+    pub cause_seq: Option<u64>,
     #[serde(flatten)]
     pub event: SwarmEvent,
 }
@@ -50,11 +61,21 @@ pub struct DomainEvent {
 /// High-frequency telemetry flows through the ordered stream (it still
 /// consumes sequence numbers) but is not history: it cannot be backfilled
 /// after a gap and is not replayed.
+///
+/// `WorkerInput` gets a field-level carve-out on top of the
+/// variant-level exclusions below: `source == "terminal"` (raw human
+/// keystrokes) is excluded too — a persisted row per keystroke would
+/// both flood the log and archive whatever the user typed, secrets
+/// included. `source ∈ {tool, automation}` — deliberate, machine-issued
+/// input — persists normally.
 pub fn is_persistent(event: &SwarmEvent) -> bool {
-    !matches!(
-        event,
-        SwarmEvent::WorkerOutput(_) | SwarmEvent::SystemMetrics(_) | SwarmEvent::SystemLog(_)
-    )
+    match event {
+        SwarmEvent::WorkerOutput(_) | SwarmEvent::SystemMetrics(_) | SwarmEvent::SystemLog(_) => {
+            false
+        }
+        SwarmEvent::WorkerInput(p) => p.source != "terminal",
+        _ => true,
+    }
 }
 
 /// Handle to the single-writer orchestration engine.
@@ -104,7 +125,7 @@ impl OrchestrationEngine {
         db_path: Option<PathBuf>,
         mut emit: impl FnMut(&DomainEvent) + Send + 'static,
     ) -> Self {
-        let (tx, rx) = std::sync::mpsc::channel::<SwarmEvent>();
+        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
         let (broadcast_tx, _) = broadcast::channel::<Arc<DomainEvent>>(BROADCAST_CAPACITY);
         let writer_broadcast_tx = broadcast_tx.clone();
         std::thread::Builder::new()
@@ -171,25 +192,36 @@ impl OrchestrationEngine {
 /// drive it synchronously with a plain closure instead of a live
 /// broadcast channel.
 fn run_writer_loop(
-    rx: Receiver<SwarmEvent>,
+    rx: Receiver<WriterMsg>,
     mut log: EventLog,
     mut emit: impl FnMut(&DomainEvent),
 ) -> EventLog {
     let mut seq = log.max_seq().unwrap_or(0);
-    while let Ok(event) = rx.recv() {
+    while let Ok(WriterMsg {
+        event,
+        provenance,
+        ack,
+    }) = rx.recv()
+    {
         seq += 1;
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-        let envelope = DomainEvent { seq, ts, event };
+        let envelope = DomainEvent {
+            seq,
+            ts,
+            origin_worker: provenance.origin_worker,
+            cause_seq: provenance.cause_seq,
+            event,
+        };
 
         if is_persistent(&envelope.event) {
             match serde_json::to_value(&envelope.event) {
                 Ok(tagged) => {
                     let event_type = tagged["type"].as_str().unwrap_or("unknown").to_string();
                     let payload = tagged["payload"].to_string();
-                    if let Err(e) = log.append(seq, ts, &event_type, &payload) {
+                    if let Err(e) = log.append(seq, ts, &event_type, &payload, &provenance) {
                         tracing::error!(seq, error = %e, "failed to persist event");
                     }
                 }
@@ -198,6 +230,14 @@ fn run_writer_loop(
         }
 
         emit(&envelope);
+
+        // Non-blocking by oneshot construction — a dropped receiver
+        // (e.g. a cancelled IPC call) makes `send` return `Err`, which
+        // is intentionally ignored: this thread never waits on, or even
+        // notices, a disinterested receiver (see `EventSink::emit_awaiting_seq`'s doc).
+        if let Some(ack) = ack {
+            let _ = ack.send(seq);
+        }
     }
     log
 }
@@ -206,9 +246,9 @@ fn run_writer_loop(
 mod tests {
     use super::*;
     use crate::events::{
-        AiStreamSettledPayload, CommitCreatedPayload, ShipProgressPayload, ShipSettledPayload,
-        SwarmEvent, SystemMetricsPayload, WorkerOutputPayload, WorkerSpawnedPayload,
-        WorktreeCreatedPayload, WorktreeRemovedPayload,
+        AiStreamSettledPayload, CommitCreatedPayload, Provenance, ShipProgressPayload,
+        ShipSettledPayload, SwarmEvent, SystemMetricsPayload, WorkerInputPayload,
+        WorkerOutputPayload, WorkerSpawnedPayload, WorktreeCreatedPayload, WorktreeRemovedPayload,
     };
     use uuid::Uuid;
 
@@ -219,6 +259,16 @@ mod tests {
             pid: None,
             isolation: None,
         })
+    }
+
+    /// Wraps a bare event with default (unattributed) provenance and no
+    /// ack — the shape every pre-provenance test used to send directly.
+    fn msg(event: SwarmEvent) -> WriterMsg {
+        WriterMsg {
+            event,
+            provenance: Provenance::default(),
+            ack: None,
+        }
     }
 
     #[test]
@@ -247,6 +297,26 @@ mod tests {
                 error: None,
             }
         )));
+    }
+
+    /// DIRECTIVE: `worker_input` persistence depends on `source`, not
+    /// just the variant — `terminal` (raw human keystrokes) is excluded
+    /// (would flood the log AND archive typed secrets); `tool` and
+    /// `automation` (machine-issued input) persist normally like any
+    /// other event.
+    #[test]
+    fn test_worker_input_persistence_depends_on_source() {
+        let input = |source: &str| {
+            SwarmEvent::WorkerInput(WorkerInputPayload {
+                worker_id: Uuid::nil(),
+                bytes: 3,
+                source: source.to_string(),
+                preview: None,
+            })
+        };
+        assert!(!is_persistent(&input("terminal")));
+        assert!(is_persistent(&input("tool")));
+        assert!(is_persistent(&input("automation")));
     }
 
     /// DIRECTIVE: worktree_created and worktree_removed both persist —
@@ -320,6 +390,8 @@ mod tests {
         let envelope = DomainEvent {
             seq: 7,
             ts: 123,
+            origin_worker: None,
+            cause_seq: None,
             event: spawned(),
         };
         let json = serde_json::to_value(&envelope).unwrap();
@@ -330,20 +402,43 @@ mod tests {
             json["payload"]["workerId"],
             "00000000-0000-0000-0000-000000000000"
         );
+        // Unattributed provenance must be absent from the wire, not `null`.
+        assert!(json.get("originWorker").is_none());
+        assert!(json.get("causeSeq").is_none());
+    }
+
+    /// DIRECTIVE: a stamped envelope serializes `originWorker`/`causeSeq`
+    /// as camelCase, present (not null) — the tripwire for the whole
+    /// point of Phase 2: an unattributed event's envelope must stay
+    /// lean (see the test above) while a stamped one actually carries
+    /// the causal attribution over the wire.
+    #[test]
+    fn test_domain_event_envelope_shape_stamped() {
+        let origin = Uuid::new_v4();
+        let envelope = DomainEvent {
+            seq: 9,
+            ts: 456,
+            origin_worker: Some(origin),
+            cause_seq: Some(3),
+            event: spawned(),
+        };
+        let json = serde_json::to_value(&envelope).unwrap();
+        assert_eq!(json["originWorker"], origin.to_string());
+        assert_eq!(json["causeSeq"], 3);
     }
 
     #[test]
     fn test_writer_persists_with_monotonic_seq() {
         // Drive the writer loop directly (no Tauri AppHandle in unit tests).
         let log = EventLog::open_in_memory().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel::<SwarmEvent>();
-        tx.send(spawned()).unwrap();
-        tx.send(SwarmEvent::WorkerOutput(WorkerOutputPayload {
+        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
+        tx.send(msg(spawned())).unwrap();
+        tx.send(msg(SwarmEvent::WorkerOutput(WorkerOutputPayload {
             worker_id: Uuid::nil(),
             data: "ephemeral".to_string(),
-        }))
+        })))
         .unwrap();
-        tx.send(spawned()).unwrap();
+        tx.send(msg(spawned())).unwrap();
         drop(tx);
 
         let log = run_writer_loop(rx, log, |_envelope| {});
@@ -356,19 +451,73 @@ mod tests {
     #[test]
     fn test_writer_resumes_seq_after_restart() {
         let log = EventLog::open_in_memory().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel::<SwarmEvent>();
-        tx.send(spawned()).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
+        tx.send(msg(spawned())).unwrap();
         drop(tx);
         let mut log = run_writer_loop(rx, log, |_| {});
         // Simulate a prior run reaching seq 41.
-        log.append(41, 1, "session_created", "{}").unwrap();
+        log.append(41, 1, "session_created", "{}", &Provenance::default())
+            .unwrap();
 
-        let (tx2, rx2) = std::sync::mpsc::channel::<SwarmEvent>();
+        let (tx2, rx2) = std::sync::mpsc::channel::<WriterMsg>();
         let mut seen = Vec::new();
-        tx2.send(spawned()).unwrap();
+        tx2.send(msg(spawned())).unwrap();
         drop(tx2);
         let log = run_writer_loop(rx2, log, |envelope| seen.push(envelope.seq));
         assert_eq!(seen, vec![42]);
         assert_eq!(log.max_seq().unwrap(), 42);
+    }
+
+    /// DIRECTIVE: the writer loop stamps `provenance` from the
+    /// `WriterMsg` onto the emitted `DomainEvent` and persists it —
+    /// end-to-end proof that a stamped message survives the writer
+    /// (not just `EventSink`, see emitter.rs's unit tests).
+    #[test]
+    fn test_writer_stamps_provenance_onto_emitted_envelope() {
+        let log = EventLog::open_in_memory().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
+        let origin = Uuid::new_v4();
+        tx.send(WriterMsg {
+            event: spawned(),
+            provenance: Provenance {
+                origin_worker: Some(origin),
+                cause_seq: Some(5),
+            },
+            ack: None,
+        })
+        .unwrap();
+        drop(tx);
+
+        let mut seen = Vec::new();
+        let _log = run_writer_loop(rx, log, |envelope| seen.push(envelope.clone()));
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].origin_worker, Some(origin));
+        assert_eq!(seen[0].cause_seq, Some(5));
+    }
+
+    /// DIRECTIVE (ack-oneshot no-stall): a dropped `emit_awaiting_seq`
+    /// receiver must not stall or panic the writer loop — it must
+    /// finish processing every message on the channel exactly as if no
+    /// ack had been requested at all.
+    #[test]
+    fn test_writer_loop_survives_dropped_ack_receiver() {
+        let log = EventLog::open_in_memory().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<u64>();
+        drop(ack_rx); // caller lost interest before the writer runs
+        tx.send(WriterMsg {
+            event: spawned(),
+            provenance: Provenance::default(),
+            ack: Some(ack_tx),
+        })
+        .unwrap();
+        tx.send(msg(spawned())).unwrap();
+        drop(tx);
+
+        let mut seen = Vec::new();
+        let _log = run_writer_loop(rx, log, |envelope| seen.push(envelope.seq));
+        // Both messages processed, in order — the dropped ack neither
+        // stalled nor skipped anything.
+        assert_eq!(seen, vec![1, 2]);
     }
 }
