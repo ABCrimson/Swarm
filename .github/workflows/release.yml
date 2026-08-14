@@ -25,10 +25,13 @@ jobs:
             args: ""
           - platform: macos-latest
             target: aarch64-apple-darwin
-            args: ""
-          - platform: macos-13
+            args: "--target aarch64-apple-darwin"
+          # macos-13 was the last free x86_64 image and its runner pool no
+          # longer schedules (observed: 2h+ queued while every other leg ran).
+          # Intel builds now cross-compile from the arm64 runner instead.
+          - platform: macos-latest
             target: x86_64-apple-darwin
-            args: ""
+            args: "--target x86_64-apple-darwin"
           # ubuntu-22.04 (NOT ubuntu-latest/24.04): 24.04 ships glibc 2.39, which
           # raises the floor above Debian 12 / Ubuntu 22.04 users. 22.04's glibc
           # 2.35 floor keeps them buildable and still has libwebkit2gtk-4.1-dev.
