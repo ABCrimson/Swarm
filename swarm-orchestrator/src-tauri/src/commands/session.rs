@@ -13,6 +13,7 @@ use uuid::Uuid;
 use swarm_core::events::{EventSink, SessionCreatedPayload, SessionDeletedPayload, SwarmEvent};
 use swarm_core::session::manager::{Session, SessionManager};
 
+use crate::commands::parse_provenance;
 use crate::session::store;
 
 /// Creates a new session with the given name and configuration.
@@ -45,14 +46,20 @@ pub async fn create_session(
     manager: tauri::State<'_, SessionManager>,
     name: String,
     config: serde_json::Value,
+    origin_worker: Option<String>,
+    cause_seq: Option<u64>,
 ) -> Result<Session, String> {
     tracing::info!(name = %name, "create_session called");
+    let provenance = parse_provenance(origin_worker, cause_seq)?;
     let session = manager.create_session(name.clone(), config);
 
-    sink.emit(SwarmEvent::SessionCreated(SessionCreatedPayload {
-        session_id: session.id,
-        name,
-    }));
+    sink.emit_with(
+        SwarmEvent::SessionCreated(SessionCreatedPayload {
+            session_id: session.id,
+            name,
+        }),
+        provenance,
+    );
 
     // Auto-save to persistent store via spawn_blocking (blocking disk I/O)
     let app_clone = app.clone();
@@ -97,20 +104,24 @@ pub async fn delete_session(
     sink: tauri::State<'_, EventSink>,
     manager: tauri::State<'_, SessionManager>,
     id: String,
+    origin_worker: Option<String>,
+    cause_seq: Option<u64>,
 ) -> Result<(), String> {
     tracing::info!(session_id = %id, "delete_session called");
     let uuid = Uuid::parse_str(&id).map_err(|e| {
         tracing::error!(error = %e, "invalid session ID");
         e.to_string()
     })?;
+    let provenance = parse_provenance(origin_worker, cause_seq)?;
     let _session = manager.delete_session(&uuid).map_err(|e| {
         tracing::error!(error = %e, "failed to delete session");
         e.to_string()
     })?;
 
-    sink.emit(SwarmEvent::SessionDeleted(SessionDeletedPayload {
-        session_id: uuid,
-    }));
+    sink.emit_with(
+        SwarmEvent::SessionDeleted(SessionDeletedPayload { session_id: uuid }),
+        provenance,
+    );
 
     // Auto-save after deletion via spawn_blocking (blocking disk I/O)
     let app_clone = app.clone();

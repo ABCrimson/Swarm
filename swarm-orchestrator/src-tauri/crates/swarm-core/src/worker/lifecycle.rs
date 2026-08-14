@@ -27,8 +27,8 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::events::{
-    EventSink, SwarmEvent, WorkerKilledPayload, WorkerSpawnedPayload, WorkerStatePayload,
-    WorktreeCreatedPayload, WorktreeRemovedPayload,
+    EventSink, Provenance, SwarmEvent, WorkerInputPayload, WorkerKilledPayload,
+    WorkerSpawnedPayload, WorkerStatePayload, WorktreeCreatedPayload, WorktreeRemovedPayload,
 };
 use crate::git::{self, RemoveOutcome, RepoLocks};
 use crate::worker::handle::{WorkerConfig, WorkerHandle, WorkerIsolation, WorkerState};
@@ -193,6 +193,13 @@ fn cleanup_orphaned_worktree(repo_locks: &RepoLocks, repo_root: &Path, worktree_
 /// * `registry` - The shared worker registry
 /// * `repo_locks` - Per-repo serialization for mutating git operations
 /// * `config` - Worker spawn configuration (name, shell, cwd, env, PTY size, isolation)
+/// * `provenance` - Causal attribution for this spawn (e.g. the AI
+///   turn that requested it via the `spawn_worker` tool). The new
+///   worker's own id is the SUBJECT (`payload.workerId` on the emitted
+///   `worker_spawned`/`worktree_created` events); `provenance.origin_worker`
+///   is the CAUSER — for a tool-driven spawn the two differ, and that
+///   difference is the causal edge. `Provenance::default()` for a
+///   human-initiated spawn (nothing caused it but the user).
 ///
 /// # Returns
 ///
@@ -210,6 +217,7 @@ pub fn do_spawn_worker(
     registry: &WorkerRegistry,
     repo_locks: &RepoLocks,
     config: WorkerConfig,
+    provenance: Provenance,
 ) -> Result<Uuid, AppError> {
     let default_shell = registry.config.read().default_shell.clone();
     let shell = if config.shell.is_empty() {
@@ -282,22 +290,28 @@ pub fn do_spawn_worker(
     } else {
         "none"
     };
-    sink.emit(SwarmEvent::WorkerSpawned(WorkerSpawnedPayload {
-        worker_id,
-        name: config.name,
-        pid,
-        isolation: Some(isolation_tag.to_string()),
-    }));
+    sink.emit_with(
+        SwarmEvent::WorkerSpawned(WorkerSpawnedPayload {
+            worker_id,
+            name: config.name,
+            pid,
+            isolation: Some(isolation_tag.to_string()),
+        }),
+        provenance.clone(),
+    );
 
     if let Some(w) = &isolation {
-        sink.emit(SwarmEvent::WorktreeCreated(WorktreeCreatedPayload {
-            worker_id,
-            session_id: None,
-            repo_root: w.repo_root.clone(),
-            worktree_path: w.worktree_path.clone(),
-            branch: w.branch.clone(),
-            base_commit: w.base_commit.clone(),
-        }));
+        sink.emit_with(
+            SwarmEvent::WorktreeCreated(WorktreeCreatedPayload {
+                worker_id,
+                session_id: None,
+                repo_root: w.repo_root.clone(),
+                worktree_path: w.worktree_path.clone(),
+                branch: w.branch.clone(),
+                base_commit: w.base_commit.clone(),
+            }),
+            provenance,
+        );
     }
 
     Ok(worker_id)
@@ -332,13 +346,17 @@ pub fn do_pause_worker(
     sink: &EventSink,
     registry: &WorkerRegistry,
     id: Uuid,
+    provenance: Provenance,
 ) -> Result<(), AppError> {
     registry.update_state_if(&id, WorkerState::Running, WorkerState::Paused)?;
 
-    sink.emit(SwarmEvent::WorkerState(WorkerStatePayload {
-        worker_id: id,
-        state: WorkerState::Paused,
-    }));
+    sink.emit_with(
+        SwarmEvent::WorkerState(WorkerStatePayload {
+            worker_id: id,
+            state: WorkerState::Paused,
+        }),
+        provenance,
+    );
 
     Ok(())
 }
@@ -367,13 +385,17 @@ pub fn do_resume_worker(
     sink: &EventSink,
     registry: &WorkerRegistry,
     id: Uuid,
+    provenance: Provenance,
 ) -> Result<(), AppError> {
     registry.update_state_if(&id, WorkerState::Paused, WorkerState::Running)?;
 
-    sink.emit(SwarmEvent::WorkerState(WorkerStatePayload {
-        worker_id: id,
-        state: WorkerState::Running,
-    }));
+    sink.emit_with(
+        SwarmEvent::WorkerState(WorkerStatePayload {
+            worker_id: id,
+            state: WorkerState::Running,
+        }),
+        provenance,
+    );
 
     Ok(())
 }
@@ -411,6 +433,7 @@ pub fn do_kill_worker(
     registry: &WorkerRegistry,
     repo_locks: &RepoLocks,
     id: Uuid,
+    provenance: Provenance,
 ) -> Result<(), AppError> {
     let handle = registry.remove_worker(&id)?;
 
@@ -531,19 +554,23 @@ pub fn do_kill_worker(
             );
         }
 
-        sink.emit(SwarmEvent::WorktreeRemoved(WorktreeRemovedPayload {
-            worker_id: id,
-            worktree_path,
-            branch,
-            disposition,
-            head_commit,
-            reason,
-        }));
+        sink.emit_with(
+            SwarmEvent::WorktreeRemoved(WorktreeRemovedPayload {
+                worker_id: id,
+                worktree_path,
+                branch,
+                disposition,
+                head_commit,
+                reason,
+            }),
+            provenance.clone(),
+        );
     }
 
-    sink.emit(SwarmEvent::WorkerKilled(WorkerKilledPayload {
-        worker_id: id,
-    }));
+    sink.emit_with(
+        SwarmEvent::WorkerKilled(WorkerKilledPayload { worker_id: id }),
+        provenance,
+    );
 
     tracing::info!(worker_id = %id, "worker killed and removed");
     Ok(())
@@ -603,35 +630,80 @@ fn delete_isolation_branch_if_unchanged(
     }
 }
 
-/// Writes input data to a worker's PTY.
+/// First ~120 characters of `data`, control characters stripped and
+/// invalid UTF-8 lossily replaced. Used only for `source ∈ {tool,
+/// automation}` — never for `source == "terminal"` (see
+/// [`do_worker_input`]'s doc and `WorkerInputPayload`'s "never carries
+/// raw keystrokes" note).
+fn stamped_preview(data: &[u8]) -> String {
+    String::from_utf8_lossy(data)
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(120)
+        .collect()
+}
+
+/// Writes input data to a worker's PTY, then emits a stamped
+/// `worker_input` event recording that it happened.
 ///
 /// Looks up the worker in the registry, acquires the PTY writer
-/// mutex, and writes the data bytes to the PTY master fd.
+/// mutex, and writes the data bytes to the PTY master fd. The event is
+/// emitted only AFTER a successful write — a failed write caused no
+/// side effect worth recording.
 ///
 /// # Arguments
 ///
+/// * `sink` - Event sink for recording the `worker_input` event
 /// * `registry` - The shared worker registry
 /// * `id` - UUID of the worker to send input to
 /// * `data` - Raw bytes to write to the PTY
+/// * `source` - `"terminal"` (human keystrokes — no `preview`, and
+///   excluded from persistence, see
+///   [`crate::orchestration::is_persistent`]), `"tool"`, or
+///   `"automation"` (machine-issued — both get a control-stripped
+///   `preview`)
+/// * `provenance` - Causal attribution; `Provenance::default()` for
+///   `source == "terminal"` (the causer is a human, not another
+///   worker's turn)
 ///
 /// # Errors
 ///
 /// * [`AppError::WorkerNotFound`] - No worker with the given ID exists
 /// * [`AppError::Ipc`] - The worker has no PTY writer, or the write failed
-#[tracing::instrument(skip(registry, data))]
-pub fn do_worker_input(registry: &WorkerRegistry, id: Uuid, data: &[u8]) -> Result<(), AppError> {
-    let entry = registry
-        .workers
-        .get(&id)
-        .ok_or_else(|| AppError::WorkerNotFound { id: id.to_string() })?;
+#[tracing::instrument(skip(sink, registry, data))]
+pub fn do_worker_input(
+    sink: &EventSink,
+    registry: &WorkerRegistry,
+    id: Uuid,
+    data: &[u8],
+    source: &str,
+    provenance: Provenance,
+) -> Result<(), AppError> {
+    {
+        let entry = registry
+            .workers
+            .get(&id)
+            .ok_or_else(|| AppError::WorkerNotFound { id: id.to_string() })?;
 
-    if let Some(writer_mutex) = &entry.pty_writer {
-        let mut writer = writer_mutex.lock();
-        crate::worker::pty::write_to_pty(writer.as_mut(), data)
-            .map_err(|e| AppError::Ipc(e.to_string()))?;
-    } else {
-        return Err(AppError::Ipc(format!("worker {} has no PTY writer", id)));
-    }
+        if let Some(writer_mutex) = &entry.pty_writer {
+            let mut writer = writer_mutex.lock();
+            crate::worker::pty::write_to_pty(writer.as_mut(), data)
+                .map_err(|e| AppError::Ipc(e.to_string()))?;
+        } else {
+            return Err(AppError::Ipc(format!("worker {} has no PTY writer", id)));
+        }
+    } // drop the registry entry guard before emitting
+
+    let preview = (source != "terminal").then(|| stamped_preview(data));
+    sink.emit_with(
+        SwarmEvent::WorkerInput(WorkerInputPayload {
+            worker_id: id,
+            bytes: data.len(),
+            source: source.to_string(),
+            preview,
+        }),
+        provenance,
+    );
 
     Ok(())
 }
@@ -801,14 +873,173 @@ mod tests {
         let handle = make_handle(WorkerState::Running);
         let id = handle.id;
         registry.spawn_worker(handle).unwrap();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sink = EventSink::new(tx);
 
-        let result = do_worker_input(&registry, id, b"hello");
+        let result = do_worker_input(
+            &sink,
+            &registry,
+            id,
+            b"hello",
+            "terminal",
+            Provenance::default(),
+        );
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("no PTY writer"),
             "expected 'no PTY writer' in error, got: {err_msg}"
         );
+    }
+
+    /// A `Write` impl over a shared buffer — stands in for a real PTY
+    /// writer so `do_worker_input`'s happy path is testable
+    /// synchronously, without spawning an actual PTY process.
+    struct SharedBuf(std::sync::Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for SharedBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn make_handle_with_pty(state: WorkerState) -> (WorkerHandle, std::sync::Arc<Mutex<Vec<u8>>>) {
+        let buf = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let handle = WorkerHandle {
+            id: Uuid::new_v4(),
+            state,
+            name: "test-worker".to_string(),
+            pid: Some(9999),
+            started_at: 0,
+            pty_writer: Some(Mutex::new(
+                Box::new(SharedBuf(buf.clone())) as Box<dyn std::io::Write + Send>
+            )),
+            child: None,
+            worktree_path: None,
+            repo_root: None,
+            branch: None,
+            base_commit: None,
+            last_shipped_seq: None,
+            last_shipped_commit: None,
+        };
+        (handle, buf)
+    }
+
+    /// DIRECTIVE: `do_worker_input` writes to the PTY, THEN emits a
+    /// stamped `worker_input` event carrying the caller's provenance —
+    /// the tool-driven-input case (Phase 5b/5a wiring).
+    #[test]
+    fn test_worker_input_writes_then_emits_stamped_event() {
+        let registry = WorkerRegistry::new();
+        let (handle, buf) = make_handle_with_pty(WorkerState::Running);
+        let id = handle.id;
+        registry.spawn_worker(handle).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let sink = EventSink::new(tx);
+        let origin = Uuid::new_v4();
+
+        do_worker_input(
+            &sink,
+            &registry,
+            id,
+            b"pnpm build\n",
+            "tool",
+            Provenance {
+                origin_worker: Some(origin),
+                cause_seq: Some(41),
+            },
+        )
+        .expect("write should succeed");
+
+        assert_eq!(buf.lock().as_slice(), b"pnpm build\n");
+
+        let msg = rx.recv().expect("worker_input message on writer channel");
+        assert_eq!(msg.provenance.origin_worker, Some(origin));
+        assert_eq!(msg.provenance.cause_seq, Some(41));
+        match msg.event {
+            SwarmEvent::WorkerInput(p) => {
+                assert_eq!(p.worker_id, id);
+                assert_eq!(p.bytes, 11);
+                assert_eq!(p.source, "tool");
+                // Trailing `\n` is a control character — stripped, per
+                // `stamped_preview`'s "control-stripped" contract.
+                assert_eq!(p.preview.as_deref(), Some("pnpm build"));
+            }
+            other => panic!("expected WorkerInput event, got {other:?}"),
+        }
+    }
+
+    /// DIRECTIVE: terminal-source input NEVER carries a preview — human
+    /// keystrokes are logged as a byte count only (see
+    /// `WorkerInputPayload`'s "never carries raw keystrokes" note).
+    #[test]
+    fn test_worker_input_terminal_source_has_no_preview() {
+        let registry = WorkerRegistry::new();
+        let (handle, _buf) = make_handle_with_pty(WorkerState::Running);
+        let id = handle.id;
+        registry.spawn_worker(handle).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let sink = EventSink::new(tx);
+
+        do_worker_input(
+            &sink,
+            &registry,
+            id,
+            b"super-secret-password\n",
+            "terminal",
+            Provenance::default(),
+        )
+        .unwrap();
+
+        let msg = rx.recv().unwrap();
+        match msg.event {
+            SwarmEvent::WorkerInput(p) => {
+                assert_eq!(p.preview, None, "terminal input must never carry a preview");
+                assert_eq!(p.bytes, 22);
+            }
+            other => panic!("expected WorkerInput event, got {other:?}"),
+        }
+    }
+
+    /// DIRECTIVE: preview is control-stripped and capped at ~120 chars.
+    #[test]
+    fn test_worker_input_preview_strips_control_chars_and_truncates() {
+        let registry = WorkerRegistry::new();
+        let (handle, _buf) = make_handle_with_pty(WorkerState::Running);
+        let id = handle.id;
+        registry.spawn_worker(handle).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let sink = EventSink::new(tx);
+
+        let long_line = "a".repeat(200);
+        let mut data = format!("\x1b[31m{long_line}").into_bytes();
+        data.push(0x07); // BEL, a control char
+
+        do_worker_input(
+            &sink,
+            &registry,
+            id,
+            &data,
+            "automation",
+            Provenance::default(),
+        )
+        .unwrap();
+
+        let msg = rx.recv().unwrap();
+        match msg.event {
+            SwarmEvent::WorkerInput(p) => {
+                let preview = p.preview.expect("automation source must carry a preview");
+                assert!(preview.chars().count() <= 120);
+                assert!(
+                    !preview.chars().any(|c| c.is_control()),
+                    "preview must strip control characters, got: {preview:?}"
+                );
+            }
+            other => panic!("expected WorkerInput event, got {other:?}"),
+        }
     }
 
     // ── Worktree isolation tests ─────────────────────────────────────
@@ -836,7 +1067,7 @@ mod tests {
             ..WorkerConfig::default()
         };
 
-        let result = do_spawn_worker(&sink, &registry, &repo_locks, config);
+        let result = do_spawn_worker(&sink, &registry, &repo_locks, config, Provenance::default());
         assert!(result.is_err(), "expected a hard failure, got {result:?}");
         assert_eq!(
             registry.count(),
@@ -877,8 +1108,9 @@ mod tests {
         };
         assert!(config.repo_root.is_none());
 
-        let worker_id = do_spawn_worker(&sink, &registry, &repo_locks, config)
-            .expect("unisolated spawn must succeed exactly as before");
+        let worker_id =
+            do_spawn_worker(&sink, &registry, &repo_locks, config, Provenance::default())
+                .expect("unisolated spawn must succeed exactly as before");
 
         let info = registry.get_worker(&worker_id).unwrap();
         assert!(info.worktree_path.is_none());
@@ -886,7 +1118,7 @@ mod tests {
 
         // First emitted event must be worker_spawned with isolation: "none"
         // — no worktree_created event for an unisolated worker.
-        match rx.recv().unwrap() {
+        match rx.recv().unwrap().event {
             SwarmEvent::WorkerSpawned(p) => {
                 assert_eq!(p.isolation.as_deref(), Some("none"));
             }
@@ -897,7 +1129,14 @@ mod tests {
             "no worktree_created event should follow an unisolated spawn"
         );
 
-        do_kill_worker(&sink, &registry, &repo_locks, worker_id).expect("kill should succeed");
+        do_kill_worker(
+            &sink,
+            &registry,
+            &repo_locks,
+            worker_id,
+            Provenance::default(),
+        )
+        .expect("kill should succeed");
     }
 
     /// Sets up a disposable git repo with one commit, returning its
@@ -945,8 +1184,9 @@ mod tests {
             ..WorkerConfig::default()
         };
 
-        let worker_id = do_spawn_worker(&sink, &registry, &repo_locks, config)
-            .expect("isolated spawn should succeed against a real git repo");
+        let worker_id =
+            do_spawn_worker(&sink, &registry, &repo_locks, config, Provenance::default())
+                .expect("isolated spawn should succeed against a real git repo");
 
         let info = registry.get_worker(&worker_id).unwrap();
         let worktree_path = info
@@ -962,13 +1202,13 @@ mod tests {
                 .exists()
         );
 
-        let spawned_isolation = match rx.recv().unwrap() {
+        let spawned_isolation = match rx.recv().unwrap().event {
             SwarmEvent::WorkerSpawned(p) => p.isolation.clone(),
             other => panic!("expected WorkerSpawned, got {other:?}"),
         };
         assert_eq!(spawned_isolation.as_deref(), Some("worktree"));
 
-        match rx.recv().unwrap() {
+        match rx.recv().unwrap().event {
             SwarmEvent::WorktreeCreated(p) => {
                 assert_eq!(p.worker_id, worker_id);
                 assert_eq!(p.worktree_path, worktree_path);
@@ -978,10 +1218,17 @@ mod tests {
             other => panic!("expected WorktreeCreated, got {other:?}"),
         }
 
-        do_kill_worker(&sink, &registry, &repo_locks, worker_id).expect("kill should succeed");
+        do_kill_worker(
+            &sink,
+            &registry,
+            &repo_locks,
+            worker_id,
+            Provenance::default(),
+        )
+        .expect("kill should succeed");
 
         // worktree_removed comes before worker_killed.
-        match rx.recv().unwrap() {
+        match rx.recv().unwrap().event {
             SwarmEvent::WorktreeRemoved(p) => {
                 assert_eq!(p.disposition, "removed");
                 assert_eq!(p.worktree_path, worktree_path);
@@ -989,7 +1236,7 @@ mod tests {
             }
             other => panic!("expected WorktreeRemoved, got {other:?}"),
         }
-        match rx.recv().unwrap() {
+        match rx.recv().unwrap().event {
             SwarmEvent::WorkerKilled(p) => assert_eq!(p.worker_id, worker_id),
             other => panic!("expected WorkerKilled, got {other:?}"),
         }
@@ -1019,24 +1266,32 @@ mod tests {
             repo_root: Some(repo_root.display().to_string()),
             ..WorkerConfig::default()
         };
-        let worker_id = do_spawn_worker(&sink, &registry, &repo_locks, config).unwrap();
+        let worker_id =
+            do_spawn_worker(&sink, &registry, &repo_locks, config, Provenance::default()).unwrap();
         let branch = registry.get_worker(&worker_id).unwrap().branch.unwrap();
 
         // Sanity: branch exists right after spawn.
         assert!(git::repo::rev_parse(&repo_root, &branch).is_ok());
 
-        do_kill_worker(&sink, &registry, &repo_locks, worker_id).unwrap();
+        do_kill_worker(
+            &sink,
+            &registry,
+            &repo_locks,
+            worker_id,
+            Provenance::default(),
+        )
+        .unwrap();
 
         // worktree_removed must report "removed" (nothing changed).
-        match rx.recv().unwrap() {
+        match rx.recv().unwrap().event {
             SwarmEvent::WorkerSpawned(_) => {}
             other => panic!("expected WorkerSpawned first, got {other:?}"),
         }
-        match rx.recv().unwrap() {
+        match rx.recv().unwrap().event {
             SwarmEvent::WorktreeCreated(_) => {}
             other => panic!("expected WorktreeCreated, got {other:?}"),
         }
-        match rx.recv().unwrap() {
+        match rx.recv().unwrap().event {
             SwarmEvent::WorktreeRemoved(p) => assert_eq!(p.disposition, "removed"),
             other => panic!("expected WorktreeRemoved, got {other:?}"),
         }
@@ -1070,7 +1325,8 @@ mod tests {
             repo_root: Some(repo_root.display().to_string()),
             ..WorkerConfig::default()
         };
-        let worker_id = do_spawn_worker(&sink, &registry, &repo_locks, config).unwrap();
+        let worker_id =
+            do_spawn_worker(&sink, &registry, &repo_locks, config, Provenance::default()).unwrap();
         let info = registry.get_worker(&worker_id).unwrap();
         let branch = info.branch.unwrap();
         let worktree_path = info.worktree_path.unwrap();
@@ -1091,10 +1347,17 @@ mod tests {
         rx.recv().unwrap();
         rx.recv().unwrap();
 
-        do_kill_worker(&sink, &registry, &repo_locks, worker_id).unwrap();
+        do_kill_worker(
+            &sink,
+            &registry,
+            &repo_locks,
+            worker_id,
+            Provenance::default(),
+        )
+        .unwrap();
 
         // Worktree is clean (the commit cleaned it) so removal still succeeds.
-        match rx.recv().unwrap() {
+        match rx.recv().unwrap().event {
             SwarmEvent::WorktreeRemoved(p) => assert_eq!(p.disposition, "removed"),
             other => panic!("expected WorktreeRemoved, got {other:?}"),
         }
@@ -1124,7 +1387,8 @@ mod tests {
             repo_root: Some(repo_root.display().to_string()),
             ..WorkerConfig::default()
         };
-        let worker_id = do_spawn_worker(&sink, &registry, &repo_locks, config).unwrap();
+        let worker_id =
+            do_spawn_worker(&sink, &registry, &repo_locks, config, Provenance::default()).unwrap();
         let worktree_path = registry
             .get_worker(&worker_id)
             .unwrap()
@@ -1139,9 +1403,16 @@ mod tests {
         rx.recv().unwrap();
         rx.recv().unwrap();
 
-        do_kill_worker(&sink, &registry, &repo_locks, worker_id).unwrap();
+        do_kill_worker(
+            &sink,
+            &registry,
+            &repo_locks,
+            worker_id,
+            Provenance::default(),
+        )
+        .unwrap();
 
-        match rx.recv().unwrap() {
+        match rx.recv().unwrap().event {
             SwarmEvent::WorktreeRemoved(p) => {
                 assert_eq!(p.disposition, "failed");
                 assert!(p.reason.is_some());
@@ -1174,7 +1445,8 @@ mod tests {
             repo_root: Some(repo_root.display().to_string()),
             ..WorkerConfig::default()
         };
-        let worker_id = do_spawn_worker(&sink, &registry, &repo_locks, config).unwrap();
+        let worker_id =
+            do_spawn_worker(&sink, &registry, &repo_locks, config, Provenance::default()).unwrap();
         let worktree_path = registry
             .get_worker(&worker_id)
             .unwrap()
@@ -1193,9 +1465,16 @@ mod tests {
         )
         .unwrap();
 
-        do_kill_worker(&sink, &registry, &repo_locks, worker_id).unwrap();
+        do_kill_worker(
+            &sink,
+            &registry,
+            &repo_locks,
+            worker_id,
+            Provenance::default(),
+        )
+        .unwrap();
 
-        match rx.recv().unwrap() {
+        match rx.recv().unwrap().event {
             SwarmEvent::WorktreeRemoved(p) => {
                 assert_eq!(p.disposition, "preserved_dirty");
                 assert!(

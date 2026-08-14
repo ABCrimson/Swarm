@@ -176,9 +176,13 @@ pub fn run() {
             commands::session::session_add_worker,
             // AI commands
             commands::ai::ai_request,
+            commands::ai::agent_turn_started,
             // Config commands
             commands::config::read_config,
             commands::config::write_config,
+            // File system commands
+            commands::fs::read_file,
+            commands::fs::write_file,
             // Metrics commands
             commands::metrics::get_metrics,
             // Orchestration commands
