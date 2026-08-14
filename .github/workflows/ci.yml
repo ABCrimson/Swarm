@@ -16,17 +16,24 @@ jobs:
   lint-frontend:
     name: Frontend Lint & Type Check
     runs-on: ubuntu-latest
+    # The app lives one level below the repo root.
+    defaults:
+      run:
+        working-directory: swarm-orchestrator
     steps:
       - uses: actions/checkout@v6
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
+        with:
+          package_json_file: swarm-orchestrator/package.json
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+          cache-dependency-path: swarm-orchestrator/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -54,23 +61,23 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          # Keep in sync with rust-toolchain.toml
+          # Keep in sync with swarm-orchestrator/rust-toolchain.toml
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy, rustfmt
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: swarm-orchestrator/src-tauri
 
       - name: Clippy
-        working-directory: src-tauri
+        working-directory: swarm-orchestrator/src-tauri
         run: cargo clippy -- -D warnings
 
       - name: Rust tests
-        working-directory: src-tauri
+        working-directory: swarm-orchestrator/src-tauri
         run: cargo test
 
       - name: Rust format check
-        working-directory: src-tauri
+        working-directory: swarm-orchestrator/src-tauri
         run: cargo fmt -- --check
