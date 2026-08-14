@@ -1284,8 +1284,8 @@ onEvent("bus_message", (e) => {
   console.log(`[${topic}]`, payload);
 });
 
-// A receipt: await a specific ai_stream_settled instead of polling
-const settled = await waitFor((e) => e.type === "ai_stream_settled");
+// A receipt: await a specific ship_settled instead of polling
+const settled = await waitFor((e) => e.type === "ship_settled");
 ```
 
 ---

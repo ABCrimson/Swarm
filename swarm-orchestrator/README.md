@@ -30,7 +30,7 @@ SWARM Orchestrator is a high-performance desktop application for managing and or
 - **Multi-agent orchestration** -- Spawn, pause, resume, and kill worker agents with real-time state tracking across a concurrent registry supporting up to 64 simultaneous workers
 - **Interactive topology graph** -- Visualize workers using XYFlow + ELK layout, connected by animated "Spawn Order" edges (the order workers were added, not a dependency graph -- see the graph's own legend), with sparkline badges and context menus
 - **Integrated terminal per worker** -- Each worker runs in its own PTY with @xterm/xterm (WebGL2 renderer), bridged to Tokio via non-blocking mpsc channels
-- **Streaming AI responses** -- `@anthropic-ai/sdk` streams directly from the webview to the Anthropic Messages API (SSE), gated by a frontend priority queue and concurrency limit (`useAiStore`), with an agentic tool-use loop. (Rust also ships an `ai_request`/`AiQueue`/SSE-parser path with the same shape -- it has no frontend caller yet; see [Built, Not Wired](docs/architecture.md#built-not-wired).)
+- **Streaming AI responses** -- `@anthropic-ai/sdk` streams directly from the webview to the Anthropic Messages API (SSE), gated by a frontend priority queue and concurrency limit (`useAiStore`), with an agentic tool-use loop. (The Rust-side `ai_request`/`AiQueue`/SSE-parser path this used to sit beside was deleted; its tested queueing machinery now lives as `swarm_core::agent::scheduler::AgentScheduler`, feeding the multi-provider agent adapter layer -- see [Built, Not Wired](docs/architecture.md#built-not-wired) and [docs/architecture.md's Adapter Layer section](docs/architecture.md#adapter-layer).)
 - **Per-worker AI chat** -- `WorkerAIPanel` mounts a combined terminal + AI chat split view on the Workers page, with tool execution routed through the worker's PTY
 - **Inter-agent message bus** -- Direct, broadcast, and pipeline routing between workers with a unified single-delivery event contract
 - **Real-time metrics dashboard** -- CPU, memory, throughput, and AI queue metrics displayed via Recharts with 500ms refresh, a `perWorker` process breakdown, and a performance overlay
@@ -173,17 +173,16 @@ swarm-orchestrator/
 │   └── main.tsx                  # React entry point
 ├── src-tauri/                    # Rust backend
 │   ├── src/
-│   │   ├── ai/                   # AI client, priority queue, SSE stream parser
-│   │   │   ├── client.rs         # Anthropic API client with streaming
-│   │   │   ├── queue.rs          # Priority queue with concurrency limiting
-│   │   │   └── stream.rs         # SSE event parser
+│   │   ├── agent/                # Multi-provider agent execution: AgentAdapter/AgentSession traits, scheduler
+│   │   │   ├── adapter.rs        # Trait pair, Capabilities, ProviderId (absorbed the deleted ai/client.rs, ai/stream.rs)
+│   │   │   └── scheduler.rs      # AgentScheduler -- priority queue + concurrency limiting (absorbed the deleted ai/queue.rs)
 │   │   ├── bus/                  # Inter-agent message bus
 │   │   │   ├── channel.rs        # MessageBus (per-topic broadcast channels)
 │   │   │   └── router.rs         # Direct / broadcast / pipeline routing
 │   │   ├── commands/             # Tauri IPC command handlers
 │   │   │   ├── worker.rs         # spawn, pause, resume, kill, list, input
 │   │   │   ├── session.rs        # create, delete, list, get, session_add_worker
-│   │   │   ├── ai.rs             # ai_request
+│   │   │   ├── agent.rs          # agent_turn_started (ai_request/ai.rs removed -- see docs/architecture.md's Adapter Layer)
 │   │   │   ├── bus.rs            # bus_send, bus_subscribe, bus_create_pipeline, bus_list_channels, bus_list_pipelines
 │   │   │   ├── metrics.rs        # get_metrics (incl. perWorker) + background loop
 │   │   │   ├── updater.rs        # check_for_updates
@@ -297,7 +296,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed release notes per milestone.
 
 Full IPC command documentation is available at [docs/api.md](docs/api.md).
 
-> `ai_request` and the five `bus_*` commands below are implemented and tested but have no frontend caller in the shipped app -- see [Built, Not Wired](docs/architecture.md#built-not-wired).
+> The `agent_*` event family (Phase 2 of the multi-provider plan -- typed, tested, persistence-classified, but with no concrete `AgentAdapter` implementation yet to emit them) and the five `bus_*` commands below are implemented and tested but have no frontend caller in the shipped app -- see [Built, Not Wired](docs/architecture.md#built-not-wired). `ai_request` was removed (not merely unwired) in Phase 2; its queueing machinery was absorbed into `AgentScheduler`.
 
 **Commands at a glance:**
 
@@ -314,7 +313,7 @@ Full IPC command documentation is available at [docs/api.md](docs/api.md).
 | `list_sessions`        | Session       | List all sessions                               |
 | `get_session`          | Session       | Get a session by ID                             |
 | `session_add_worker`   | Session       | Register a worker against a session             |
-| `ai_request`           | AI            | Enqueue an AI streaming request                 |
+| `agent_turn_started`   | Agent         | Record an AI/agent turn's start, returning its causal seq |
 | `get_metrics`          | Metrics       | Get current system metrics snapshot (incl. `perWorker`) |
 | `bus_send`             | Bus           | Send a direct or broadcast message between workers |
 | `bus_subscribe`        | Bus           | Subscribe to a topic and stream messages as events |
