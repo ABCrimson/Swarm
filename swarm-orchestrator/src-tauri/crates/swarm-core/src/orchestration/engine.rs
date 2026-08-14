@@ -73,9 +73,17 @@ pub struct DomainEvent {
 /// this function, so the guarantee never depends on string spelling.
 pub fn is_persistent(event: &SwarmEvent) -> bool {
     match event {
-        SwarmEvent::WorkerOutput(_) | SwarmEvent::SystemMetrics(_) | SwarmEvent::SystemLog(_) => {
-            false
-        }
+        SwarmEvent::WorkerOutput(_)
+        | SwarmEvent::SystemMetrics(_)
+        | SwarmEvent::SystemLog(_)
+        // `agent_turn_delta` is the provider-adapter analogue of
+        // `ai_stream_delta` (see the LATENT BUG note in the
+        // multi-provider plan: `ai_stream_delta` itself stays
+        // persisted here — retired only in Phase 5 alongside the
+        // webview path it serves). Persisting per-clause streaming
+        // rows would be ~800 SQLite rows/s at 8 workers; the durable
+        // counterpart is `agent_block`, persisted normally below.
+        | SwarmEvent::AgentTurnDelta(_) => false,
         SwarmEvent::WorkerInput(p) => p.source.is_machine_issued(),
         _ => true,
     }
@@ -409,6 +417,112 @@ mod tests {
                 branch: "swarm/x-abcd1234".to_string(),
                 seq_from: 0,
                 seq_to: 1,
+            }
+        )));
+    }
+
+    // ── agent_* persistence pinning ──────────────────────────────────
+
+    /// DIRECTIVE: `agent_turn_delta` is the ONLY new `agent_*` variant
+    /// excluded from persistence — every other new variant persists by
+    /// construction (the exclusion list is by name; anything absent
+    /// from it defaults to `true`). Pins every new variant's class down
+    /// explicitly so a future refactor of the exclusion list can't
+    /// silently flip one.
+    #[test]
+    fn test_agent_turn_delta_is_ephemeral() {
+        assert!(!is_persistent(&SwarmEvent::AgentTurnDelta(
+            crate::events::AgentTurnDeltaPayload {
+                worker_id: Uuid::nil(),
+                turn_id: "t1".to_string(),
+                block_index: 0,
+                kind: "text".to_string(),
+                text: "hi".to_string(),
+            }
+        )));
+    }
+
+    #[test]
+    fn test_every_other_new_agent_variant_is_persistent() {
+        use crate::agent::adapter::{
+            CancelGranularity, Capabilities, PermissionDecision, ProviderId,
+        };
+        use crate::events::{
+            AgentBlockPayload, AgentPermissionRequestPayload, AgentSessionExitedPayload,
+            AgentSessionStartedPayload, AgentToolCallPayload, AgentToolResultPayload,
+            AgentTurnSettledPayload,
+        };
+
+        assert!(is_persistent(&SwarmEvent::AgentSessionStarted(
+            AgentSessionStartedPayload {
+                worker_id: Uuid::nil(),
+                provider: ProviderId::ClaudeCode,
+                session_key: "sess".to_string(),
+                model: "m".to_string(),
+                cwd: "/repo".to_string(),
+                capabilities: Capabilities {
+                    partial_deltas: true,
+                    resume: true,
+                    native_cost: true,
+                    permission_modes: vec![],
+                    cancel_granularity: CancelGranularity::KillOnly,
+                    interrupt_midturn: false,
+                    worktree_aware: true,
+                },
+            }
+        )));
+        assert!(is_persistent(&SwarmEvent::AgentBlock(AgentBlockPayload {
+            worker_id: Uuid::nil(),
+            turn_id: "t1".to_string(),
+            block_index: 0,
+            kind: "text".to_string(),
+            content: serde_json::json!({}),
+        })));
+        assert!(is_persistent(&SwarmEvent::AgentToolCall(
+            AgentToolCallPayload {
+                worker_id: Uuid::nil(),
+                turn_id: "t1".to_string(),
+                tool_use_id: "tu1".to_string(),
+                name: "run_command".to_string(),
+                input: serde_json::json!({}),
+            }
+        )));
+        assert!(is_persistent(&SwarmEvent::AgentToolResult(
+            AgentToolResultPayload {
+                worker_id: Uuid::nil(),
+                turn_id: "t1".to_string(),
+                tool_use_id: "tu1".to_string(),
+                is_error: false,
+                content: serde_json::json!("ok"),
+            }
+        )));
+        assert!(is_persistent(&SwarmEvent::AgentPermissionRequest(
+            AgentPermissionRequestPayload {
+                worker_id: Uuid::nil(),
+                turn_id: "t1".to_string(),
+                request_id: "p1".to_string(),
+                tool: "Bash".to_string(),
+                input: serde_json::json!({}),
+                suggested_decision: Some(PermissionDecision::Deny),
+            }
+        )));
+        assert!(is_persistent(&SwarmEvent::AgentTurnSettled(
+            AgentTurnSettledPayload {
+                worker_id: Uuid::nil(),
+                turn_id: "t1".to_string(),
+                status: "ok".to_string(),
+                error: None,
+                cost_usd: Some(0.01),
+                usage: None,
+                duration_ms: 10,
+                num_turns: Some(1),
+            }
+        )));
+        assert!(is_persistent(&SwarmEvent::AgentSessionExited(
+            AgentSessionExitedPayload {
+                worker_id: Uuid::nil(),
+                exit_code: Some(0),
+                signal: None,
             }
         )));
     }

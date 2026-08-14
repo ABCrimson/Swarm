@@ -30,6 +30,14 @@
 //! | `worker_input`      | [`WorkerInputPayload`]     | Bytes written to a worker's PTY stdin |
 //! | `agent_turn_started`| [`AgentTurnStartedPayload`]| An AI/agent turn started (causal root) |
 //! | `file_written`      | [`FileWrittenPayload`]     | A file was written via `write_file` |
+//! | `agent_session_started` | [`AgentSessionStartedPayload`] | A provider-adapter session started |
+//! | `agent_turn_delta`  | [`AgentTurnDeltaPayload`]  | One streamed sub-message chunk (EPHEMERAL) |
+//! | `agent_block`       | [`AgentBlockPayload`]      | One complete content block within a turn |
+//! | `agent_tool_call`    | [`AgentToolCallPayload`]   | A provider-agent tool call |
+//! | `agent_tool_result`  | [`AgentToolResultPayload`] | The result of a provider-agent tool call |
+//! | `agent_permission_request` | [`AgentPermissionRequestPayload`] | The provider is asking for tool approval |
+//! | `agent_turn_settled` | [`AgentTurnSettledPayload`] | Terminal receipt for one provider-adapter turn |
+//! | `agent_session_exited` | [`AgentSessionExitedPayload`] | A provider-adapter session's process exited |
 //!
 //! ## Provenance
 //!
@@ -45,10 +53,12 @@ pub mod emitter;
 
 pub(crate) use emitter::WriterMsg;
 pub use emitter::{
-    AgentTurnStartedPayload, AiStreamDeltaPayload, AiStreamSettledPayload, BusMessagePayload,
-    CommitCreatedPayload, EventSink, FileWrittenPayload, InputSource, Provenance,
-    SessionCreatedPayload, SessionDeletedPayload, ShipProgressPayload, ShipSettledPayload,
-    SwarmEvent, SystemLogPayload, SystemMetricsPayload, WorkerInputPayload, WorkerKilledPayload,
-    WorkerOutputPayload, WorkerSpawnedPayload, WorkerStatePayload, WorktreeCreatedPayload,
-    WorktreeRemovedPayload,
+    AgentBlockPayload, AgentPermissionRequestPayload, AgentSessionExitedPayload,
+    AgentSessionStartedPayload, AgentToolCallPayload, AgentToolResultPayload,
+    AgentTurnDeltaPayload, AgentTurnSettledPayload, AgentTurnStartedPayload, AiStreamDeltaPayload,
+    AiStreamSettledPayload, BusMessagePayload, CommitCreatedPayload, EventSink, FileWrittenPayload,
+    InputSource, Provenance, SessionCreatedPayload, SessionDeletedPayload, ShipProgressPayload,
+    ShipSettledPayload, SwarmEvent, SystemLogPayload, SystemMetricsPayload, WorkerInputPayload,
+    WorkerKilledPayload, WorkerOutputPayload, WorkerSpawnedPayload, WorkerStatePayload,
+    WorktreeCreatedPayload, WorktreeRemovedPayload,
 };

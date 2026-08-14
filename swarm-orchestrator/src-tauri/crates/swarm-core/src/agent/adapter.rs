@@ -388,3 +388,229 @@ pub trait AgentSession: Send + Sync {
     /// `None`, honestly, not a fabricated estimate.
     fn shutdown(self: Box<Self>) -> BoxFuture<'static, Result<ExitSummary, AppError>>;
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::{
+        AgentBlockPayload, AgentSessionExitedPayload, AgentSessionStartedPayload, SwarmEvent,
+    };
+    use crate::orchestration::{EventLog, OrchestrationEngine};
+
+    /// An adapter/session pair proving the trait contract compiles and
+    /// is object-safe (`spawn` returns a real `Box<dyn AgentSession>`),
+    /// and driving a full session lifecycle — spawn → turn → deltas →
+    /// settled → shutdown — through a LIVE `OrchestrationEngine`, the
+    /// same integration depth `agent_turn_started`'s own live-engine
+    /// test uses (`orchestration::engine`'s
+    /// `test_agent_turn_started_mechanism_returns_a_real_seq_through_a_live_engine`).
+    struct MockAdapter {
+        sink: crate::events::EventSink,
+    }
+
+    impl AgentAdapter for MockAdapter {
+        fn provider(&self) -> ProviderId {
+            ProviderId::ClaudeCode
+        }
+
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                partial_deltas: true,
+                resume: true,
+                native_cost: true,
+                permission_modes: vec!["default".to_string()],
+                cancel_granularity: CancelGranularity::KillOnly,
+                interrupt_midturn: false,
+                worktree_aware: true,
+            }
+        }
+
+        fn probe(&self) -> BoxFuture<'_, Result<ProbeReport, AppError>> {
+            Box::pin(async {
+                Ok(ProbeReport {
+                    available: true,
+                    version: Some("2.1.232".to_string()),
+                    detail: None,
+                })
+            })
+        }
+
+        fn spawn(
+            &self,
+            spec: AgentSpawnSpec,
+        ) -> BoxFuture<'_, Result<Box<dyn AgentSession>, AppError>> {
+            let sink = self.sink.clone();
+            let capabilities = self.capabilities();
+            Box::pin(async move {
+                let session_key: SessionKey = Uuid::new_v4().to_string();
+                sink.emit(SwarmEvent::AgentSessionStarted(
+                    AgentSessionStartedPayload {
+                        worker_id: spec.worker_id,
+                        provider: ProviderId::ClaudeCode,
+                        session_key: session_key.clone(),
+                        model: spec
+                            .model
+                            .clone()
+                            .unwrap_or_else(|| "mock-model".to_string()),
+                        cwd: spec.cwd.clone(),
+                        capabilities,
+                    },
+                ));
+                Ok(Box::new(MockAgentSession {
+                    sink,
+                    worker_id: spec.worker_id,
+                    session_key,
+                }) as Box<dyn AgentSession>)
+            })
+        }
+    }
+
+    struct MockAgentSession {
+        sink: crate::events::EventSink,
+        worker_id: Uuid,
+        session_key: SessionKey,
+    }
+
+    impl AgentSession for MockAgentSession {
+        fn session_key(&self) -> &SessionKey {
+            &self.session_key
+        }
+
+        fn send_turn(&self, turn: TurnInput) -> BoxFuture<'_, Result<TurnId, AppError>> {
+            let sink = self.sink.clone();
+            let worker_id = self.worker_id;
+            Box::pin(async move {
+                let turn_id: TurnId = Uuid::new_v4().to_string();
+                sink.emit(SwarmEvent::AgentTurnDelta(
+                    crate::events::AgentTurnDeltaPayload {
+                        worker_id,
+                        turn_id: turn_id.clone(),
+                        block_index: 0,
+                        kind: "text".to_string(),
+                        text: turn.prompt.clone(),
+                    },
+                ));
+                sink.emit(SwarmEvent::AgentBlock(AgentBlockPayload {
+                    worker_id,
+                    turn_id: turn_id.clone(),
+                    block_index: 0,
+                    kind: "text".to_string(),
+                    content: serde_json::json!({ "text": turn.prompt }),
+                }));
+                sink.emit(SwarmEvent::AgentTurnSettled(
+                    crate::events::AgentTurnSettledPayload {
+                        worker_id,
+                        turn_id: turn_id.clone(),
+                        status: "ok".to_string(),
+                        error: None,
+                        cost_usd: Some(0.001),
+                        usage: None,
+                        duration_ms: 12,
+                        num_turns: Some(1),
+                    },
+                ));
+                Ok(turn_id)
+            })
+        }
+
+        fn cancel(&self, _turn: TurnId) -> BoxFuture<'_, Result<(), AppError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn respond_permission(
+            &self,
+            _req: PermissionId,
+            _decision: PermissionDecision,
+        ) -> BoxFuture<'_, Result<(), AppError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn shutdown(self: Box<Self>) -> BoxFuture<'static, Result<ExitSummary, AppError>> {
+            Box::pin(async move {
+                // Awaiting the ack here (rather than a bare `emit`) is
+                // the test's ordering guarantee: `std::sync::mpsc` is
+                // FIFO single-consumer, so by the time this ack
+                // resolves, every earlier `emit` from this session
+                // (spawn's AgentSessionStarted, send_turn's delta/
+                // block/settled) has already been processed and
+                // persisted by the single writer thread.
+                let ack = self.sink.emit_awaiting_seq(
+                    SwarmEvent::AgentSessionExited(AgentSessionExitedPayload {
+                        worker_id: self.worker_id,
+                        exit_code: Some(0),
+                        signal: None,
+                    }),
+                    crate::events::Provenance::default(),
+                );
+                let _ = ack.await;
+                Ok(ExitSummary {
+                    exit_code: Some(0),
+                    signal: None,
+                })
+            })
+        }
+    }
+
+    /// DIRECTIVE: proves both the trait contract compiles as a real
+    /// `Box<dyn AgentSession>` object (`spawn`'s return type) AND that
+    /// a full session lifecycle drives the `agent_*` family through a
+    /// live engine with the correct persistence class for each variant
+    /// — `agent_turn_delta` absent from the persisted rows,
+    /// everything else present, in emission order.
+    #[tokio::test]
+    async fn test_mock_adapter_session_lifecycle_drives_agent_event_family_through_live_engine() {
+        let db_path =
+            std::env::temp_dir().join(format!("swarm-agent-lifecycle-{}.db", Uuid::new_v4()));
+        let log = EventLog::open(&db_path).expect("open file-backed log");
+        let engine = OrchestrationEngine::start(log, Some(db_path.clone()), |_| {});
+        let sink = engine.sink();
+
+        let adapter = MockAdapter { sink: sink.clone() };
+        let worker_id = Uuid::new_v4();
+
+        let session = adapter
+            .spawn(AgentSpawnSpec {
+                worker_id,
+                cwd: "/tmp/worktree".to_string(),
+                model: Some("mock-model".to_string()),
+                resume: None,
+                permission_mode: None,
+            })
+            .await
+            .expect("spawn should succeed");
+
+        assert!(!session.session_key().is_empty());
+
+        let turn_id = session
+            .send_turn(TurnInput {
+                prompt: "hello".to_string(),
+            })
+            .await
+            .expect("send_turn should succeed");
+        assert!(!turn_id.is_empty());
+
+        let summary = session.shutdown().await.expect("shutdown should succeed");
+        assert_eq!(summary.exit_code, Some(0));
+
+        // Reopen the log from disk — everything the writer thread
+        // persisted (and only that) must be there.
+        let verify_log = EventLog::open(&db_path).expect("reopen log");
+        let events = verify_log.events_since(0, 100).expect("read events");
+        let types: Vec<&str> = events.iter().map(|e| e.event_type.as_str()).collect();
+
+        assert_eq!(
+            types,
+            vec![
+                "agent_session_started",
+                "agent_block",
+                "agent_turn_settled",
+                "agent_session_exited",
+            ],
+            "agent_turn_delta must be absent (ephemeral); every other \
+             variant persists in emission order, got: {types:?}"
+        );
+
+        std::fs::remove_file(&db_path).ok();
+        std::fs::remove_file(format!("{}-wal", db_path.display())).ok();
+        std::fs::remove_file(format!("{}-shm", db_path.display())).ok();
+    }
+}
