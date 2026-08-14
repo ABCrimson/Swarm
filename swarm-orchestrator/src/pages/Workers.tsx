@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { WorkerAIPanel } from "#components/ai/WorkerAIPanel";
+import { CausalityPanel } from "#components/graph/CausalityPanel";
 import { WorkerDetail } from "#components/graph/WorkerDetail";
 import { WorkerGraph } from "#components/graph/WorkerGraph";
 import { ShipPanel } from "#components/ship/ShipPanel";
@@ -14,6 +15,7 @@ import { matchesBinding } from "#lib/keybindings";
 import { DEFAULT_REPO_ROOT_KEY, getPersistedRepoRoot } from "#lib/project-root";
 import { spawnWorker, validateRepoRoot, writeConfig } from "#lib/tauri";
 import {
+  causalityInspectorAtom,
   detailPanelOpenAtom,
   graphViewAtom,
   keybindingsAtom,
@@ -163,6 +165,7 @@ export function Workers(): React.ReactElement {
   const [viewMode, setViewMode] = useAtom(graphViewAtom);
   const detailOpen = useAtomValue(detailPanelOpenAtom);
   const selectedId = useAtomValue(selectedWorkerIdAtom);
+  const [causalityTarget, setCausalityTarget] = useAtom(causalityInspectorAtom);
   const workers = useWorkerStore((s) => s.workers);
   const selectedWorker = selectedId ? workers.get(selectedId) : undefined;
   const [isSpawning, setIsSpawning] = useState(false);
@@ -543,6 +546,17 @@ export function Workers(): React.ReactElement {
           </div>
         )}
       </div>
+
+      {/* Causality inspector overlay — shared between an edge click in
+          WorkerGraph and WorkerDetail's "View Causality" action, both
+          of which just set `causalityInspectorAtom`. Rendered once here
+          rather than in either entry point so it works from both. */}
+      {causalityTarget && (
+        <CausalityPanel
+          startSeq={causalityTarget.startSeq}
+          onClose={() => setCausalityTarget(null)}
+        />
+      )}
     </div>
   );
 }

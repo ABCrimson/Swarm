@@ -9,6 +9,14 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 
 ## [Unreleased]
 
+### Added — Measured causality graph + inspector (Phases 6–7)
+
+- **The Workers topology graph now renders MEASURED causal edges, never fabricated ones.** Deleted the phase0 "Spawn Order" chain (`SpawnOrderEdge.tsx`, which connected every worker in Map insertion order regardless of whether anything actually happened between them) in favor of edges derived from stamped `swarm://events` envelopes — a new `src/store/provenance.ts` Zustand store ingests every envelope, deriving `spawn`/`kill`/`command`/`message` edges only from a real `originWorker` plus a resolvable target. Repeated same-kind occurrences collapse into one edge with a `×N` label and a thickness ramp; `file_written` becomes a `"Wrote N Files"` node badge instead of an edge (files aren't workers).
+- **The empty state is the deliverable:** hand-spawned workers with no measured causality render as nodes with ZERO edges and a quiet "No Measured Causality Yet" hint — an honest empty canvas rather than a meaningless line. `GraphLegend.tsx` shows a row only for edge kinds actually present, and nothing at all when the graph has none.
+- **User-drawn annotations stay visually and structurally distinct:** hand-drawing an edge (`onConnect`, unchanged UX) now tags it `kind: "manual"` with its own desaturated style and legend row — measured facts and user annotations are never merged.
+- **Causality inspector (`CausalityPanel.tsx`):** click a measured edge, or use a worker's new "View Causality" action, to walk its causal chain backward — the bySeq ring first, falling back to a single-row `events_since({ limit: 1 })` backfill on a miss — terminating at a real root (typically `agent_turn_started`) or a 50-hop cap. Renders as a vertical, root-first trace with tabular-nums seqs; rows click through to the worker they name.
+- Endpoint-drop: an edge whose endpoint worker was killed drops off the canvas but is never deleted from the provenance store — still findable via the inspector by seq.
+
 ### Added — Provenance stamping (ordered log → causality graph, Phases 2–5)
 
 - **Envelope-level causal attribution:** every `swarm://events` envelope and persisted row can now carry `originWorker`/`causeSeq` — who caused an event and what it was reacting to, distinct from a payload's own subject `workerId` (see the subject-vs-causer rule in `docs/architecture.md`). Absent (not `null`) when unattributed, so the common case (e.g. `worker_output`) pays no wire tax. The engine records provenance; it never infers it.

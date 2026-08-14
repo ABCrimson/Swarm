@@ -20,7 +20,13 @@ export interface DomainEvent {
   readonly payload: unknown;
 }
 
-const DomainEventSchema = z.object({
+/**
+ * Exported (not just used internally) so seams beyond this file's own
+ * `connectEventBus`/backfill path — e.g. `CausalityPanel.tsx`'s
+ * single-row `events_since` lookups — can validate against the exact
+ * same envelope shape rather than duplicating it.
+ */
+export const DomainEventSchema = z.object({
   seq: z.number(),
   ts: z.number(),
   // MANDATORY, not cosmetic: this schema is non-strict (extra keys are

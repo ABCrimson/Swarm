@@ -1,12 +1,13 @@
 import { open } from "@tauri-apps/plugin-shell";
 import { formatDistanceToNow } from "date-fns";
-import { useAtom } from "jotai";
+import { useAtom, useSetAtom } from "jotai";
 import { toast } from "sonner";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Pill } from "#components/ui/Pill";
 import { useWorker } from "#hooks/useWorker";
+import { selectMostRecentSeqForWorker, useProvenanceStore } from "#store/provenance";
 import type { Worker } from "#store/types";
-import { detailPanelOpenAtom } from "#store/ui";
+import { causalityInspectorAtom, detailPanelOpenAtom } from "#store/ui";
 
 interface WorkerDetailProps {
   readonly worker: Worker;
@@ -52,6 +53,15 @@ function DetailRow({
 export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement {
   const [, setDetailOpen] = useAtom(detailPanelOpenAtom);
   const { pause, resume, kill, optimisticState } = useWorker(worker.id);
+  // Most recent measured edge (either endpoint) involving this worker —
+  // the CausalityPanel walk's starting seq. `null` when this worker has
+  // no measured causality at all, in which case "View Causality" is
+  // simply not shown (a dead-end button would contradict the "quiet,
+  // honest empty state" the graph itself uses).
+  const mostRecentCausalitySeq = useProvenanceStore((s) =>
+    selectMostRecentSeqForWorker(s.edges, worker.id),
+  );
+  const setCausalityTarget = useSetAtom(causalityInspectorAtom);
 
   const currentState = optimisticState ?? worker.state;
   const canPause = currentState === "running";
@@ -208,6 +218,21 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
             </DetailRow>
           )}
         </div>
+
+        {/* Causality — only shown when this worker actually has measured
+            causality to walk; a worker with none gets no dead-end button,
+            consistent with the graph's own quiet empty state. */}
+        {mostRecentCausalitySeq !== null && (
+          <Pill
+            interactive
+            tone="info"
+            size="sm"
+            style={{ alignSelf: "flex-start" }}
+            onClick={() => setCausalityTarget({ startSeq: mostRecentCausalitySeq })}
+          >
+            View Causality
+          </Pill>
+        )}
 
         {/* Output preview */}
         {worker.output && (

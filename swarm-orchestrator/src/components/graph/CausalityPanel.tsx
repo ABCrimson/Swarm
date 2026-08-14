@@ -1,0 +1,417 @@
+import { useAtom } from "jotai";
+import { useEffect, useRef, useState } from "react";
+import * as z from "zod";
+import { Spinner } from "#components/ui/Spinner";
+import { type DomainEvent, DomainEventSchema } from "#lib/event-bus";
+import { invoke } from "#lib/tauri";
+import { useProvenanceStore } from "#store/provenance";
+import type { Worker } from "#store/types";
+import { detailPanelOpenAtom, selectedWorkerIdAtom } from "#store/ui";
+import { useWorkerStore } from "#store/workers";
+
+/**
+ * Hard cap on backward hops. Forward traversal (following a `causeSeq`
+ * forward to everything it caused) is deliberately out of scope for v1
+ * — this cap only bounds the backward walk against a pathological
+ * chain; the engine's own invariant (provenance is recorded, never
+ * inferred — see `EventSink::emit_with`'s doc) means a real cycle
+ * should never occur, but a UI-side cap costs nothing and never trusts
+ * that invariant blindly.
+ */
+export const MAX_CAUSALITY_HOPS = 50;
+
+/**
+ * Validates one `events_since` page at this seam — reused from
+ * `event-bus.ts`'s canonical envelope shape so a malformed backfill
+ * response degrades to "lookup failed" (the walk just stops early)
+ * instead of throwing into render.
+ */
+const EventsSincePageSchema = z.array(DomainEventSchema);
+
+/**
+ * Resolves the event at `seq`: the bySeq ring first (the inspector's
+ * fast path — populated by every non-telemetry envelope that has
+ * flowed through this session, see `#store/provenance`), falling back
+ * to a single-row `events_since` backfill on a miss. This is why
+ * `events_since` grew an optional `limit` (see
+ * `docs/api.md#events_since`) — a bulk backfill page would be
+ * needlessly wasteful for "what happened at exactly this one seq".
+ * Returns `null` when nothing is found at that exact seq (a malformed
+ * response, or a seq that was never persisted).
+ */
+async function resolveEvent(
+  seq: number,
+  ring: ReadonlyMap<number, DomainEvent>,
+): Promise<DomainEvent | null> {
+  const cached = ring.get(seq);
+  if (cached) return cached;
+
+  try {
+    const raw = await invoke<unknown>("events_since", { afterSeq: seq - 1, limit: 1 });
+    const parsed = EventsSincePageSchema.safeParse(raw);
+    if (!parsed.success) return null;
+    const row = parsed.data[0];
+    if (!row || row.seq !== seq) return null;
+    return row;
+  } catch {
+    return null;
+  }
+}
+
+export interface CausalityWalkResult {
+  /** Root-first order — index 0 is the earliest cause found; the last entry is the event at the walk's starting seq. */
+  readonly rows: DomainEvent[];
+  /** `true` when the walk stopped at {@link MAX_CAUSALITY_HOPS} rather than reaching a real root. */
+  readonly truncated: boolean;
+}
+
+/**
+ * Walks backward from `startSeq` via each event's own `causeSeq`,
+ * terminating on an absent `causeSeq` (a real root — typically
+ * `agent_turn_started`, which never carries one) or
+ * {@link MAX_CAUSALITY_HOPS} hops, whichever comes first. A lookup miss
+ * ends the walk early with whatever was found so far, rather than
+ * throwing — the rows already collected are still true, just possibly
+ * short of the root.
+ */
+export async function walkCausalityChain(
+  startSeq: number,
+  ring: ReadonlyMap<number, DomainEvent>,
+): Promise<CausalityWalkResult> {
+  const chain: DomainEvent[] = []; // collected most-recent-first
+  let currentSeq: number | undefined = startSeq;
+
+  while (currentSeq !== undefined && chain.length < MAX_CAUSALITY_HOPS) {
+    const event = await resolveEvent(currentSeq, ring);
+    if (!event) break; // lookup miss -- stop with whatever's already collected
+    chain.push(event);
+    currentSeq = event.causeSeq;
+  }
+
+  const truncated = currentSeq !== undefined && chain.length >= MAX_CAUSALITY_HOPS;
+  return { rows: chain.toReversed(), truncated };
+}
+
+function workerLabel(id: string | undefined, workers: ReadonlyMap<string, Worker>): string {
+  if (!id) return "An Unknown Worker";
+  return workers.get(id)?.name ?? id.slice(0, 8);
+}
+
+function titleCaseType(type: string): string {
+  return type
+    .split("_")
+    .map((word) => (word.length > 0 ? word[0]?.toUpperCase() + word.slice(1) : word))
+    .join(" ");
+}
+
+interface RowDescription {
+  readonly text: string;
+  /** Worker this row click-throughs to, when resolvable and still live. */
+  readonly workerId?: string;
+}
+
+/** Renders one causality row's chrome per event type — Title Case, matching the plan's "Worker A's Turn @412 -> Spawned B @418" example shape. */
+function describeRow(event: DomainEvent, workers: ReadonlyMap<string, Worker>): RowDescription {
+  const payload = (event.payload ?? {}) as Record<string, unknown>;
+  const workerIdOf = (key: string): string | undefined =>
+    typeof payload[key] === "string" ? (payload[key] as string) : undefined;
+
+  switch (event.type) {
+    case "agent_turn_started": {
+      const workerId = workerIdOf("workerId");
+      return { text: `${workerLabel(workerId, workers)}'s Turn`, workerId };
+    }
+    case "worker_spawned": {
+      const workerId = workerIdOf("workerId");
+      return { text: `Spawned ${workerLabel(workerId, workers)}`, workerId };
+    }
+    case "worker_killed": {
+      const workerId = workerIdOf("workerId");
+      return { text: `Killed ${workerLabel(workerId, workers)}`, workerId };
+    }
+    case "worker_input": {
+      const workerId = workerIdOf("workerId");
+      const preview = typeof payload.preview === "string" ? payload.preview.trim() : "";
+      const label = workerLabel(workerId, workers);
+      return { text: preview ? `${label} Ran ${preview}` : `${label} Received Input`, workerId };
+    }
+    case "bus_message": {
+      const fromWorker = workerIdOf("fromWorker");
+      const toWorker = workerIdOf("toWorker");
+      const topic = typeof payload.topic === "string" ? payload.topic : "A Topic";
+      return {
+        text: `${workerLabel(fromWorker, workers)} Sent "${topic}" To ${workerLabel(toWorker, workers)}`,
+        workerId: toWorker ?? fromWorker,
+      };
+    }
+    case "file_written": {
+      const path = typeof payload.path === "string" ? payload.path : "A File";
+      return { text: `Wrote ${path}` };
+    }
+    default:
+      return { text: titleCaseType(event.type) };
+  }
+}
+
+interface CausalityPanelProps {
+  /** Seq of the measured event to walk backward from — an edge's `lastSeq`, or a worker's most recent inbound event. */
+  readonly startSeq: number;
+  readonly onClose: () => void;
+}
+
+/**
+ * Causality inspector — opened from a measured edge click
+ * (`WorkerGraph.tsx`'s `handleEdgeClick`) or from `WorkerDetail`'s
+ * "View Causality" action, both via the shared `causalityInspectorAtom`.
+ * Walks backward from `startSeq` (see {@link walkCausalityChain}) and
+ * renders the trace as a vertical, root-first list — rows click through
+ * to the worker they name, when that worker is still live.
+ *
+ * Forward traversal (from a cause to everything it caused) is
+ * deliberately out of scope for v1.
+ */
+export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): React.ReactElement {
+  const workers = useWorkerStore((s) => s.workers);
+  const [, setSelectedWorkerId] = useAtom(selectedWorkerIdAtom);
+  const [, setDetailOpen] = useAtom(detailPanelOpenAtom);
+  const [result, setResult] = useState<CausalityWalkResult | null>(null);
+  const [loading, setLoading] = useState(true);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setResult(null);
+    // Read the ring imperatively (not via a reactive selector) -- the
+    // ring's Map reference changes on nearly every incoming event, and
+    // subscribing to it here would re-run the walk (and flicker the
+    // loading state) on every tick the panel happens to stay open for.
+    // A snapshot taken once, at walk-start, is correct: a ring miss
+    // always falls through to a live backfill regardless of how stale
+    // the snapshot is.
+    const ring = useProvenanceStore.getState().bySeq;
+    void walkCausalityChain(startSeq, ring).then((r) => {
+      if (!cancelled) {
+        setResult(r);
+        setLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [startSeq]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  // Click-outside-to-close via a document-level listener (same pattern as
+  // GraphContextMenu.tsx) rather than an onClick handler on the backdrop
+  // div itself — a full-viewport div is not a semantically interactive
+  // element, and this avoids needing to fake one up with a role/tabIndex
+  // just to catch a click.
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClose]);
+
+  const handleRowClick = (workerId: string | undefined) => {
+    if (!workerId || !workers.has(workerId)) return;
+    setSelectedWorkerId(workerId);
+    setDetailOpen(true);
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 60,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "oklch(0.04 0.01 220 / 0.55)",
+        backdropFilter: "blur(2px)",
+      }}
+    >
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Causality Trace"
+        style={{
+          width: 420,
+          maxHeight: "70vh",
+          display: "flex",
+          flexDirection: "column",
+          background: "oklch(0.10 0.03 220)",
+          border: "1px solid oklch(0.28 0.05 220)",
+          borderRadius: 12,
+          boxShadow: "0 0 0 1px oklch(0.78 0.18 205 / 0.1), 0 16px 48px oklch(0.06 0.02 220 / 0.6)",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "14px 16px",
+            borderBottom: "1px solid oklch(0.22 0.04 220)",
+          }}
+        >
+          <h2
+            style={{
+              fontFamily: "var(--font-display)",
+              fontSize: "0.9375rem",
+              fontWeight: 600,
+              color: "oklch(0.95 0.02 220)",
+              margin: 0,
+            }}
+          >
+            Causality Trace
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close Causality Trace"
+            style={{
+              width: 28,
+              height: 28,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "oklch(0 0 0 / 0)",
+              border: "none",
+              borderRadius: 6,
+              color: "oklch(0.55 0.04 220)",
+              cursor: "pointer",
+              fontSize: "1rem",
+            }}
+          >
+            <svg width={14} height={14} viewBox="0 0 14 14" fill="none">
+              <title>Close</title>
+              <path
+                d="M2 2l10 10M12 2L2 12"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+        </div>
+
+        <div
+          className="scroll-area"
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            padding: 16,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {loading && (
+            <div style={{ display: "flex", justifyContent: "center", padding: 24 }}>
+              <Spinner size="md" />
+            </div>
+          )}
+
+          {!loading && result && result.rows.length === 0 && (
+            <span
+              style={{
+                fontFamily: "var(--font-body)",
+                fontSize: "0.8125rem",
+                color: "oklch(0.55 0.04 220)",
+                textAlign: "center",
+                padding: "24px 0",
+              }}
+            >
+              Causality Trace Unavailable.
+            </span>
+          )}
+
+          {!loading &&
+            result &&
+            result.rows.map((row, index) => {
+              const { text, workerId } = describeRow(row, workers);
+              const clickable = workerId != null && workers.has(workerId);
+              return (
+                <div key={row.seq} style={{ display: "flex", flexDirection: "column" }}>
+                  {index > 0 && (
+                    <div
+                      aria-hidden="true"
+                      style={{
+                        alignSelf: "center",
+                        color: "oklch(0.45 0.04 220)",
+                        fontSize: "0.875rem",
+                        lineHeight: 1,
+                        padding: "2px 0",
+                      }}
+                    >
+                      ↓
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleRowClick(workerId)}
+                    disabled={!clickable}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      width: "100%",
+                      padding: "10px 12px",
+                      background: "oklch(0.13 0.03 220 / 0.7)",
+                      border: "1px solid oklch(0.24 0.04 220)",
+                      borderRadius: 8,
+                      textAlign: "left",
+                      cursor: clickable ? "pointer" : "default",
+                      color: "oklch(0.85 0.03 220)",
+                      fontFamily: "var(--font-body)",
+                      fontSize: "0.8125rem",
+                    }}
+                  >
+                    <span>{text}</span>
+                    <span
+                      style={{
+                        fontFamily: "var(--font-mono)",
+                        fontSize: "0.6875rem",
+                        color: "oklch(0.55 0.04 220)",
+                        fontVariantNumeric: "tabular-nums",
+                        flexShrink: 0,
+                      }}
+                    >
+                      @{row.seq}
+                    </span>
+                  </button>
+                </div>
+              );
+            })}
+
+          {!loading && result?.truncated && (
+            <span
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.6875rem",
+                color: "oklch(0.55 0.04 220)",
+                textAlign: "center",
+                marginTop: 12,
+              }}
+            >
+              Trace Truncated At {MAX_CAUSALITY_HOPS} Hops.
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
