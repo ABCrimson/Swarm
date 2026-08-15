@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use crate::Paths;
 use crate::agent::{
     AgentScheduler, AgentSchedulerConfig, AgentSessionRegistry, AgentTurnRequest,
-    ClaudeCodeAdapter, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY,
+    ClaudeCodeAdapter, CodexAdapter, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY,
 };
 use crate::bus::channel::MessageBus;
 use crate::bus::router::Router;
@@ -104,6 +104,8 @@ pub struct Runtime {
     /// instance without requiring `ClaudeCodeAdapter` itself to be
     /// `Clone`.
     pub claude_adapter: Arc<ClaudeCodeAdapter>,
+    /// `Arc`-wrapped — same reasoning as [`Self::claude_adapter`]'s doc.
+    pub codex_adapter: Arc<CodexAdapter>,
     pub agent_session_registry: AgentSessionRegistry,
     /// `Arc`-wrapped — see the [`Self::claude_adapter`] doc; same
     /// reasoning applies to `AgentScheduler`.
@@ -139,13 +141,16 @@ impl Runtime {
         let session_manager = SessionManager::new();
         let repo_locks = RepoLocks::new();
         let message_bus = MessageBus::new();
-        let router = Router::new(message_bus.clone());
         let shared_system = SharedSystem::new();
 
         let db_path = config.paths.data_dir.join(EVENT_LOG_FILE);
         let event_log = EventLog::open(&db_path).map_err(RuntimeStartError::EventLog)?;
         let engine = OrchestrationEngine::start(event_log, Some(db_path), emit);
         let sink = engine.sink();
+        // Constructed AFTER `sink` exists — Phase 4's `Router` emits
+        // `bus_message` directly (see `crate::bus::router`'s module
+        // doc), so it needs the sink from the moment it's built.
+        let router = Router::new(message_bus.clone(), sink.clone());
 
         if let Err(e) = crate::session::persist::load(&config.paths, &session_manager) {
             tracing::warn!(error = %e, "failed to load persisted sessions");
@@ -205,6 +210,7 @@ impl Runtime {
         );
 
         let claude_adapter = Arc::new(ClaudeCodeAdapter::new(sink.clone()));
+        let codex_adapter = Arc::new(CodexAdapter::new(sink.clone()));
         let agent_session_registry = AgentSessionRegistry::new();
 
         let scheduler_registry = agent_session_registry.clone();
@@ -282,6 +288,7 @@ impl Runtime {
             engine,
             sink,
             claude_adapter,
+            codex_adapter,
             agent_session_registry,
             scheduler,
             metrics_cancel,

@@ -139,6 +139,7 @@ pub fn run() {
             commands::agent::agent_cancel,
             commands::agent::agent_shutdown,
             commands::agent::agent_probe,
+            commands::agent::agent_permission_respond,
             commands::agent::set_agent_concurrency,
             // Config commands
             commands::config::read_config,
@@ -150,12 +151,11 @@ pub fn run() {
             commands::metrics::get_metrics,
             // Orchestration commands
             commands::orchestration::events_since,
-            // Bus commands
+            // Bus commands — bus_subscribe/bus_create_pipeline/
+            // bus_list_pipelines DELETED in Phase 4 (see
+            // swarm_core::bus::router's module doc).
             commands::bus::bus_send,
-            commands::bus::bus_subscribe,
-            commands::bus::bus_create_pipeline,
             commands::bus::bus_list_channels,
-            commands::bus::bus_list_pipelines,
             // Updater commands
             commands::updater::check_for_updates,
             // Notification commands

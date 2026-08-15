@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use crate::agent::adapter::AgentAdapter;
 use crate::agent::{
-    AgentSpawnSpec, AgentTurnRequest, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY, ProviderId,
-    TurnInput, TurnPriority,
+    AgentSpawnSpec, AgentTurnRequest, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY,
+    PermissionDecision, ProviderId, TurnInput, TurnPriority,
 };
 use crate::events::{AgentTurnStartedPayload, Provenance, SwarmEvent};
 use crate::worker::handle::WorkerConfig;
@@ -87,10 +87,10 @@ pub async fn agent_spawn(ctx: Ctx, args: Value) -> Result<Value, Value> {
     } = parse_args(args)?;
 
     let provider_id = parse_provider(&provider)?;
-    if provider_id != ProviderId::ClaudeCode {
+    if !matches!(provider_id, ProviderId::ClaudeCode | ProviderId::Codex) {
         return Err(agent_spawn_error(
             None,
-            format!("Provider Not Yet Supported: {provider} (only claude_code today)"),
+            format!("Provider Not Yet Supported: {provider} (only claude_code/codex today)"),
         ));
     }
 
@@ -129,7 +129,20 @@ pub async fn agent_spawn(ctx: Ctx, args: Value) -> Result<Value, Value> {
         permission_mode: trust_tier,
     };
 
-    match ctx.claude_adapter.spawn(spec).await {
+    // Provider-generic dispatch — `agent_spawn`/`agent_send_turn`/
+    // `agent_cancel`/`agent_shutdown`/`agent_probe` never grew a
+    // provider-specific twin; only this one `match` (and `agent_probe`'s
+    // below) knows which adapter a `ProviderId` maps to. Every other
+    // command reaches the live session purely through
+    // `ctx.agent_session_registry`, keyed by worker id, never by
+    // provider — see `crate::agent::registry`'s doc.
+    let spawn_result = match provider_id {
+        ProviderId::ClaudeCode => ctx.claude_adapter.spawn(spec).await,
+        ProviderId::Codex => ctx.codex_adapter.spawn(spec).await,
+        _ => unreachable!("rejected above"),
+    };
+
+    match spawn_result {
         Ok(session) => {
             ctx.agent_session_registry
                 .insert(worker_id, std::sync::Arc::from(session));
@@ -199,11 +212,71 @@ pub async fn agent_shutdown(ctx: Ctx, args: Value) -> Result<Value, Value> {
     ok_value(&())
 }
 
-pub async fn agent_probe(ctx: Ctx, _args: Value) -> Result<Value, Value> {
-    match ctx.claude_adapter.probe().await {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentProbeArgs {
+    /// Which provider to probe. `None`/absent/explicit `null` all
+    /// default to `claude_code` — the pre-Phase-4 wire shape (`{}`)
+    /// stays a valid call, never a breaking change for an existing
+    /// caller (and tolerant of a Tauri wrapper serializing an omitted
+    /// optional argument as an explicit `null` rather than dropping the
+    /// key).
+    #[serde(default)]
+    provider: Option<String>,
+}
+
+pub async fn agent_probe(ctx: Ctx, args: Value) -> Result<Value, Value> {
+    let AgentProbeArgs { provider } = parse_args(args)?;
+    let provider = provider.unwrap_or_else(|| "claude_code".to_string());
+    let provider_id = parse_provider(&provider)?;
+    let probe_result = match provider_id {
+        ProviderId::ClaudeCode => ctx.claude_adapter.probe().await,
+        ProviderId::Codex => ctx.codex_adapter.probe().await,
+        other => {
+            return Err(Value::String(format!(
+                "Provider Not Yet Probeable: {other:?}"
+            )));
+        }
+    };
+    match probe_result {
         Ok(report) => ok_value(&report),
         Err(e) => Err(err_value(&e)),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentPermissionRespondArgs {
+    worker_id: String,
+    request_id: String,
+    decision: PermissionDecision,
+}
+
+/// Answers a pending `agent_permission_request` (`CodexSession::respond_permission`'s
+/// REAL round-trip — see that method's doc; a documented no-op against a
+/// `ClaudeCodeAdapter` session, per Condition C/§0b). Not part of the
+/// original Phase 2/3 command surface — the multi-provider plan
+/// anticipated it ("a future `agent_permission_respond` command",
+/// `src/lib/agent-events.ts`'s header doc) but nothing needed to CALL
+/// [`crate::agent::adapter::AgentSession::respond_permission`] through
+/// the command layer until Codex made it a genuine round-trip rather
+/// than an inert no-op.
+pub async fn agent_permission_respond(ctx: Ctx, args: Value) -> Result<Value, Value> {
+    let AgentPermissionRespondArgs {
+        worker_id,
+        request_id,
+        decision,
+    } = parse_args(args)?;
+    let uuid = parse_uuid(&worker_id)?;
+    let session = ctx
+        .agent_session_registry
+        .get(&uuid)
+        .map_err(|e| err_value(&e))?;
+    session
+        .respond_permission(request_id, decision)
+        .await
+        .map_err(|e| err_value(&e))?;
+    ok_value(&())
 }
 
 #[derive(Deserialize)]
