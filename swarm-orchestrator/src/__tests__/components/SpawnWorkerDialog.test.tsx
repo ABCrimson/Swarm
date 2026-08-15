@@ -125,7 +125,7 @@ describe("SpawnWorkerDialog", () => {
     expect(onSpawned).toHaveBeenCalledWith("22222222-3333-4444-8555-666666666666");
   });
 
-  it("submits via agentSpawn with the model/trust-tier shape when Claude Code is selected", async () => {
+  it("submits via agentSpawn with the provider/model/trust-tier shape when Claude Code is selected", async () => {
     const user = userEvent.setup();
     render(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitForProbeSettled();
@@ -140,8 +140,51 @@ describe("SpawnWorkerDialog", () => {
     await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
 
     await waitFor(() => expect(agentSpawn).toHaveBeenCalledTimes(1));
-    expect(agentSpawn).toHaveBeenCalledWith({ name: "Worker" }, "opus", "write_enabled");
+    expect(agentSpawn).toHaveBeenCalledWith(
+      { name: "Worker" },
+      "claude_code",
+      "opus",
+      "write_enabled",
+    );
     expect(spawnWorker).not.toHaveBeenCalled();
+  });
+
+  it('submits via agentSpawn with provider "codex" when Codex is selected (Phase 4)', async () => {
+    const user = userEvent.setup();
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await waitForProbeSettled();
+
+    await user.click(screen.getByRole("radio", { name: "Codex" }));
+
+    const modelInput = screen.getByLabelText("Model Alias");
+    await user.clear(modelInput);
+    await user.type(modelInput, "gpt-5-codex");
+
+    await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
+
+    await waitFor(() => expect(agentSpawn).toHaveBeenCalledTimes(1));
+    expect(agentSpawn).toHaveBeenCalledWith({ name: "Worker" }, "codex", "gpt-5-codex", "standard");
+    expect(spawnWorker).not.toHaveBeenCalled();
+  });
+
+  it("probes Claude Code and Codex independently — one unavailable does not disable the other (Phase 4)", async () => {
+    vi.mocked(agentProbe).mockImplementation((provider) =>
+      Promise.resolve(
+        provider === "codex"
+          ? { available: false, version: null, detail: "Codex CLI Not Found On PATH" }
+          : AVAILABLE,
+      ),
+    );
+
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await waitForProbeSettled();
+
+    const codexRadio = await screen.findByRole("radio", { name: "Codex" });
+    await waitFor(() => expect(codexRadio).toBeDisabled());
+    expect(screen.getByRole("radio", { name: "Claude Code" })).not.toBeDisabled();
+    expect(screen.getByText(/Codex Unavailable/)).toHaveTextContent(
+      "Codex Unavailable — Codex CLI Not Found On PATH",
+    );
   });
 
   it("includes repoRoot in the spawn options once a project root has loaded", async () => {

@@ -26,7 +26,15 @@ import { DEFAULT_REPO_ROOT_KEY, getPersistedRepoRoot } from "#lib/project-root";
 import { agentProbe, agentSpawn, spawnWorker, validateRepoRoot, writeConfig } from "#lib/tauri";
 
 /** Worker spawn provider — "Webview Anthropic" is the existing, default behavior. */
-export type SpawnProvider = "webview_anthropic" | "claude_code";
+export type SpawnProvider = "webview_anthropic" | "claude_code" | "codex";
+
+/** The providers this dialog can attach an `AgentSession` to — every one of these takes the shared model-alias/trust-tier fields below. */
+type AgentProvider = Extract<SpawnProvider, "claude_code" | "codex">;
+
+const AGENT_PROVIDER_LABELS: Record<AgentProvider, string> = {
+  claude_code: "Claude Code",
+  codex: "Codex",
+};
 
 interface SpawnWorkerDialogProps {
   readonly onClose: () => void;
@@ -34,31 +42,55 @@ interface SpawnWorkerDialogProps {
   readonly onSpawned?: (workerId: string) => void;
 }
 
-// ── Trust tier copy — matches MEASURED reality, not aspiration ──────
-// Restricted: `--permission-mode dontAsk` + a full deny of
-// Bash/Write/Edit/NotebookEdit (read-only exploration).
-// Standard: no `--permission-mode` flag (the CLI's own default) — Bash
-// runs, but the default `-p` mode auto-denies Write/Edit.
-// Write-Enabled: `--permission-mode acceptEdits`, canary-verified
-// (module doc's "acceptEdits canary") — writes execute with zero
-// `permission_denied` events.
+// ── Trust tier copy — matches MEASURED reality for Claude Code, the
+// provider's own documented approval-policy vocabulary for Codex (no
+// live install to measure against yet — see codex.rs's module doc) ──
+// Restricted: Claude Code `--permission-mode dontAsk` + a full deny of
+// Bash/Write/Edit/NotebookEdit; Codex `approvalPolicy: "untrusted"` +
+// `sandboxPolicy: "read-only"` — both read-only exploration.
+// Standard: Claude Code's own default (`-p` auto-denies Write/Edit);
+// Codex `approvalPolicy: "on-request"` (the model decides when to ask)
+// + `sandboxPolicy: "workspace-write"`.
+// Write-Enabled: Claude Code `--permission-mode acceptEdits`,
+// canary-verified (module doc's "acceptEdits canary"); Codex
+// `approvalPolicy: "on-failure"` (only asks if a sandboxed action fails
+// on its own) — fewer prompts than Standard, never Codex's "never"
+// full-auto mode (unconstructible, mirrors bypassPermissions).
 const TRUST_TIER_INFO: Record<
-  ClaudeCodeTrustTier,
-  { readonly label: string; readonly explanation: string }
+  AgentProvider,
+  Record<ClaudeCodeTrustTier, { readonly label: string; readonly explanation: string }>
 > = {
-  restricted: {
-    label: "Restricted",
-    explanation: "Commands And File Writes Are Denied By Default — Read-Only Exploration.",
+  claude_code: {
+    restricted: {
+      label: "Restricted",
+      explanation: "Commands And File Writes Are Denied By Default — Read-Only Exploration.",
+    },
+    standard: {
+      label: "Standard",
+      explanation:
+        "Commands Run Normally; File Writes Are Gated And Denied By Default. Destructive Commands Like sudo And rm -rf Are Always Blocked.",
+    },
+    write_enabled: {
+      label: "Write-Enabled",
+      explanation:
+        "Commands Run And File Writes Are Automatically Accepted — No Prompt. Destructive Commands Like sudo And rm -rf Are Always Blocked.",
+    },
   },
-  standard: {
-    label: "Standard",
-    explanation:
-      "Commands Run Normally; File Writes Are Gated And Denied By Default. Destructive Commands Like sudo And rm -rf Are Always Blocked.",
-  },
-  write_enabled: {
-    label: "Write-Enabled",
-    explanation:
-      "Commands Run And File Writes Are Automatically Accepted — No Prompt. Destructive Commands Like sudo And rm -rf Are Always Blocked.",
+  codex: {
+    restricted: {
+      label: "Restricted",
+      explanation: "Every Gated Action Asks First; The Sandbox Is Read-Only.",
+    },
+    standard: {
+      label: "Standard",
+      explanation:
+        "The Model Decides When To Ask For Approval; File Writes Are Sandboxed To The Worktree.",
+    },
+    write_enabled: {
+      label: "Write-Enabled",
+      explanation:
+        "Approval Is Only Requested If A Sandboxed Action Fails On Its Own — Fewer Prompts Than Standard.",
+    },
   },
 };
 
@@ -279,13 +311,15 @@ const footerStyle: CSSProperties = {
 /**
  * The Workers page's spawn dialog. Fields:
  *
- * - Provider (Webview Anthropic default | Claude Code) — Claude Code
- *   disabled with a Title Case, `agentProbe`-sourced reason when the
- *   CLI is unavailable. Probed fresh on every open (not just app
- *   mount), so an install/`claude setup-token` done while the app was
- *   already running is picked up the next time this dialog opens.
- * - Model alias + trust tier (Claude Code only), the latter with a
- *   plain-language, measured-behavior explanation per tier.
+ * - Provider (Webview Anthropic default | Claude Code | Codex) — each
+ *   agent provider disabled with a Title Case, `agentProbe`-sourced
+ *   reason when its CLI is unavailable. Every provider probed fresh on
+ *   every open (not just app mount), so an install/auth done while the
+ *   app was already running is picked up the next time this dialog
+ *   opens — capability-honest per-provider, not a single shared flag.
+ * - Model alias + trust tier (Claude Code / Codex — shared fields, same
+ *   3-token trust-tier vocabulary), the latter with a plain-language
+ *   explanation per tier per provider (see `TRUST_TIER_INFO`'s doc).
  * - Working directory — the persisted default project root, changeable
  *   via the native folder picker; persists immediately like the prior
  *   header widget did.
@@ -301,14 +335,17 @@ export function SpawnWorkerDialog({
   onSpawned,
 }: SpawnWorkerDialogProps): React.ReactElement {
   const [provider, setProvider] = useState<SpawnProvider>("webview_anthropic");
-  const [claudeModel, setClaudeModel] = useState("sonnet");
-  const [claudeTrustTier, setClaudeTrustTier] = useState<ClaudeCodeTrustTier>("standard");
+  const [agentModel, setAgentModel] = useState("sonnet");
+  const [agentTrustTier, setAgentTrustTier] = useState<ClaudeCodeTrustTier>("standard");
   // undefined = still probing (the option stays enabled meanwhile — an
   // early click can't be blocked by a probe that hasn't resolved yet),
-  // null = available, string = unavailable, holding the reason.
-  const [claudeUnavailableReason, setClaudeUnavailableReason] = useState<string | null | undefined>(
-    undefined,
-  );
+  // null = available, string = unavailable, holding the reason. One
+  // entry per agent provider — each probed and disabled independently,
+  // never a single shared flag that would make Codex's availability
+  // lie about Claude Code's (or vice versa).
+  const [unavailableReasons, setUnavailableReasons] = useState<
+    Record<AgentProvider, string | null | undefined>
+  >({ claude_code: undefined, codex: undefined });
   // undefined = still loading, null = explicitly none, string = a picked directory.
   const [projectRoot, setProjectRoot] = useState<string | null | undefined>(undefined);
   const [isSpawning, setIsSpawning] = useState(false);
@@ -319,16 +356,23 @@ export function SpawnWorkerDialog({
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
 
-  // Probe on open, every time — capability-honesty means this dialog
-  // never trusts a probe result from an earlier open cycle.
+  // Probe every agent provider on open, every time — capability-honesty
+  // means this dialog never trusts a probe result from an earlier open
+  // cycle.
   useEffect(() => {
     let cancelled = false;
-    void agentProbe().then((report) => {
-      if (cancelled) return;
-      setClaudeUnavailableReason(
-        report.available ? null : (report.detail ?? "Claude Code CLI Not Available"),
-      );
-    });
+    const providers: readonly AgentProvider[] = ["claude_code", "codex"];
+    for (const p of providers) {
+      void agentProbe(p).then((report) => {
+        if (cancelled) return;
+        setUnavailableReasons((prev) => ({
+          ...prev,
+          [p]: report.available
+            ? null
+            : (report.detail ?? `${AGENT_PROVIDER_LABELS[p]} CLI Not Available`),
+        }));
+      });
+    }
     return () => {
       cancelled = true;
     };
@@ -443,9 +487,14 @@ export function SpawnWorkerDialog({
     }
   };
 
+  const isAgentProvider = (p: SpawnProvider): p is AgentProvider =>
+    p === "claude_code" || p === "codex";
+
   const handleSpawn = async () => {
-    if (provider === "claude_code" && claudeUnavailableReason != null) {
-      setSpawnError(`Claude Code Unavailable: ${claudeUnavailableReason}`);
+    if (isAgentProvider(provider) && unavailableReasons[provider] != null) {
+      setSpawnError(
+        `${AGENT_PROVIDER_LABELS[provider]} Unavailable: ${unavailableReasons[provider]}`,
+      );
       return;
     }
     setSpawnError(null);
@@ -455,10 +504,9 @@ export function SpawnWorkerDialog({
         name: "Worker",
         ...(projectRoot ? { repoRoot: projectRoot } : {}),
       };
-      const id =
-        provider === "claude_code"
-          ? await agentSpawn(options, claudeModel, claudeTrustTier)
-          : await spawnWorker(options);
+      const id = isAgentProvider(provider)
+        ? await agentSpawn(options, provider, agentModel, agentTrustTier)
+        : await spawnWorker(options);
       if (id) {
         toast.success(`Worker Spawned: ${id.slice(0, 8)}`);
         onSpawned?.(id);
@@ -479,7 +527,7 @@ export function SpawnWorkerDialog({
     }
   };
 
-  const claudeDisabled = claudeUnavailableReason != null;
+  const currentTierInfo = isAgentProvider(provider) ? TRUST_TIER_INFO[provider] : null;
 
   return (
     <div style={overlayStyle}>
@@ -531,30 +579,38 @@ export function SpawnWorkerDialog({
                 />
                 Webview Anthropic
               </label>
-              <label
-                style={segmentButtonStyle(provider === "claude_code", claudeDisabled)}
-                title={claudeDisabled ? (claudeUnavailableReason ?? undefined) : undefined}
-              >
-                <input
-                  type="radio"
-                  name="spawn-dialog-provider"
-                  checked={provider === "claude_code"}
-                  disabled={claudeDisabled}
-                  onChange={() => setProvider("claude_code")}
-                  style={radioInputStyle}
-                />
-                Claude Code
-              </label>
+              {(["claude_code", "codex"] as const).map((p) => {
+                const disabled = unavailableReasons[p] != null;
+                return (
+                  <label
+                    key={p}
+                    style={segmentButtonStyle(provider === p, disabled)}
+                    title={disabled ? (unavailableReasons[p] ?? undefined) : undefined}
+                  >
+                    <input
+                      type="radio"
+                      name="spawn-dialog-provider"
+                      checked={provider === p}
+                      disabled={disabled}
+                      onChange={() => setProvider(p)}
+                      style={radioInputStyle}
+                    />
+                    {AGENT_PROVIDER_LABELS[p]}
+                  </label>
+                );
+              })}
             </div>
-            {claudeDisabled && (
-              <span style={unavailableNoteStyle}>
-                Claude Code Unavailable — {claudeUnavailableReason}
-              </span>
-            )}
+            {(["claude_code", "codex"] as const)
+              .filter((p) => unavailableReasons[p] != null)
+              .map((p) => (
+                <span key={p} style={unavailableNoteStyle}>
+                  {AGENT_PROVIDER_LABELS[p]} Unavailable — {unavailableReasons[p]}
+                </span>
+              ))}
           </fieldset>
 
-          {/* Claude Code-specific fields */}
-          {provider === "claude_code" && (
+          {/* Shared agent-provider fields (Claude Code / Codex) */}
+          {isAgentProvider(provider) && currentTierInfo && (
             <>
               <div style={fieldGroupStyle}>
                 <label htmlFor="spawn-dialog-model" style={fieldLabelStyle}>
@@ -562,8 +618,8 @@ export function SpawnWorkerDialog({
                 </label>
                 <input
                   id="spawn-dialog-model"
-                  value={claudeModel}
-                  onChange={(e) => setClaudeModel(e.target.value)}
+                  value={agentModel}
+                  onChange={(e) => setAgentModel(e.target.value)}
                   placeholder="E.g. Sonnet"
                   style={textInputStyle}
                 />
@@ -573,8 +629,8 @@ export function SpawnWorkerDialog({
                 <legend style={{ ...fieldLabelStyle, padding: 0 }}>Trust Tier</legend>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {TRUST_TIER_ORDER.map((tier) => {
-                    const info = TRUST_TIER_INFO[tier];
-                    const active = claudeTrustTier === tier;
+                    const info = currentTierInfo[tier];
+                    const active = agentTrustTier === tier;
                     const explanationId = `spawn-dialog-tier-${tier}-explanation`;
                     return (
                       <label key={tier} style={tierCardStyle(active)}>
@@ -582,7 +638,7 @@ export function SpawnWorkerDialog({
                           type="radio"
                           name="spawn-dialog-trust-tier"
                           checked={active}
-                          onChange={() => setClaudeTrustTier(tier)}
+                          onChange={() => setAgentTrustTier(tier)}
                           aria-label={info.label}
                           aria-describedby={explanationId}
                           style={radioInputStyle}
@@ -627,7 +683,10 @@ export function SpawnWorkerDialog({
             variant="primary"
             size="sm"
             loading={isSpawning}
-            disabled={projectRoot === undefined || (provider === "claude_code" && claudeDisabled)}
+            disabled={
+              projectRoot === undefined ||
+              (isAgentProvider(provider) && unavailableReasons[provider] != null)
+            }
             onClick={() => void handleSpawn()}
           >
             Spawn Worker

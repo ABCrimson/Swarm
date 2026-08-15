@@ -1,6 +1,11 @@
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import * as z from "zod";
-import type { ClaudeCodeTrustTier, ProbeReport } from "#lib/agent-events";
+import type {
+  ClaudeCodeTrustTier,
+  PermissionDecision,
+  ProbeReport,
+  ProviderId,
+} from "#lib/agent-events";
 import { ProbeReportSchema } from "#lib/agent-events";
 import { transport } from "#lib/transport";
 import type {
@@ -188,26 +193,30 @@ function toAgentSpawnCommandError(err: unknown): Error {
 
 /**
  * Spawns a new worker (via the same worktree-isolation path as
- * {@link spawnWorker}) AND attaches a Claude Code provider-adapter
- * session to it in one call (Rust's `agent_spawn` command,
- * `src-tauri/src/commands/agent.rs`).
+ * {@link spawnWorker}) AND attaches a provider-adapter session to it in
+ * one call (Rust's `agent_spawn` command, `src-tauri/src/commands/agent.rs`,
+ * routed by `provider` to `ClaudeCodeAdapter` or `CodexAdapter` — Phase 4).
  *
  * `options` maps to `WorkerConfig` exactly like {@link spawnWorker}.
- * `model`/`trustTier` are Claude-Code-specific: `trustTier` defaults to
- * `"standard"` server-side when omitted. The attached session's
+ * `model`/`trustTier` mean the same 3-token trust-tier vocabulary for
+ * EITHER provider (`ClaudeCodeTrustTier`/`CodexTrustTier` share their
+ * wire values by deliberate design symmetry — see
+ * `#lib/agent-events`'s `CodexTrustTierSchema` doc): `trustTier` defaults
+ * to `"standard"` server-side when omitted. The attached session's
  * `sessionKey`/`capabilities`/provider badge arrive via the
  * `agent_session_started` event (`#hooks/useAgentSessionEvents`), not
  * this call's return value — mirroring how `worker_spawned` (not
  * `spawnWorker`'s return) is `useWorkerStore`'s source of truth.
  *
  * If the PTY worker spawns but the agent session fails to attach (e.g.
- * `claude` is not installed or not authenticated), the worker still
- * exists — usable as a plain terminal — and this call rejects with the
- * attach failure. Callers should treat that as "spawned, but Not
+ * the provider CLI is not installed or not authenticated), the worker
+ * still exists — usable as a plain terminal — and this call rejects with
+ * the attach failure. Callers should treat that as "spawned, but Not
  * Signed In," not "nothing happened."
  */
 export async function agentSpawn(
   options: WorkerProcessOptions,
+  provider: Extract<ProviderId, "claude_code" | "codex">,
   model: string | undefined,
   trustTier: ClaudeCodeTrustTier | undefined,
   prov?: ProvenanceArgs,
@@ -224,7 +233,7 @@ export async function agentSpawn(
   try {
     const raw = await invoke<unknown>("agent_spawn", {
       config,
-      provider: "claude_code",
+      provider,
       model,
       trustTier,
       originWorker: prov?.originWorker,
@@ -272,25 +281,48 @@ export async function agentShutdown(workerId: string): Promise<void> {
 }
 
 /**
- * Checks whether the Claude Code CLI is installed and responds to
- * `--version` (Rust's `agent_probe` command). Bounded — never hangs.
- * Returns `{ available: false }` (never throws) when the provider is
- * unusable; `detail` carries a human-readable reason, never a
- * credential. When Tauri is unavailable (e.g. `pnpm dev` in a plain
- * browser), resolves to `{ available: false, detail: "..." }` rather
- * than throwing, matching every other graceful-degradation command
- * here.
+ * Checks whether `provider`'s CLI is installed and responds to
+ * `--version` (Rust's `agent_probe` command). Defaults to
+ * `"claude_code"` — the pre-Phase-4 call shape (no argument) stays
+ * valid. Bounded — never hangs. Returns `{ available: false }` (never
+ * throws) when the provider is unusable; `detail` carries a
+ * human-readable reason, never a credential (e.g. `CodexAdapter`'s
+ * probe honestly reports "Codex CLI Not Found On PATH" when absent, the
+ * same capability-honest pattern as Claude Code's). When Tauri is
+ * unavailable (e.g. `pnpm dev` in a plain browser), resolves to
+ * `{ available: false, detail: "..." }` rather than throwing, matching
+ * every other graceful-degradation command here.
  */
-export async function agentProbe(): Promise<ProbeReport> {
+export async function agentProbe(
+  provider: Extract<ProviderId, "claude_code" | "codex"> = "claude_code",
+): Promise<ProbeReport> {
   if (!hasTransport()) {
     return { available: false, detail: "No Backend Transport Available." };
   }
-  const raw = await invoke<unknown>("agent_probe");
+  const raw = await invoke<unknown>("agent_probe", { provider });
   const parsed = ProbeReportSchema.safeParse(raw);
   if (!parsed.success) {
     throw new Error("Agent Probe Returned An Unexpected Shape.");
   }
   return parsed.data;
+}
+
+/**
+ * Answers a pending `agent_permission_request` (Rust's
+ * `agent_permission_respond` command, Phase 4). A REAL round-trip
+ * against a `CodexAdapter` session (`CodexSession::respond_permission`
+ * writes a matching JSON-RPC response back to the child) — a documented
+ * no-op against a `ClaudeCodeAdapter` session (see
+ * `AgentPermissionRequestPayloadSchema`'s semantics-shift doc). Check
+ * the session's `capabilities.interactivePermissions` before rendering
+ * an Allow/Deny affordance in the first place — see that field's doc.
+ */
+export async function agentPermissionRespond(
+  workerId: string,
+  requestId: string,
+  decision: PermissionDecision,
+): Promise<void> {
+  return invoke<void>("agent_permission_respond", { workerId, requestId, decision });
 }
 
 /** Pause a running worker, suspending its PTY process. */
