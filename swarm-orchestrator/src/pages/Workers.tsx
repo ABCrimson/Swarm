@@ -1,7 +1,5 @@
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useAtom, useAtomValue } from "jotai";
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
 
 import { WorkerAIPanel } from "#components/ai/WorkerAIPanel";
 import { CausalityPanel } from "#components/graph/CausalityPanel";
@@ -11,10 +9,8 @@ import { ShipPanel } from "#components/ship/ShipPanel";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Button } from "#components/ui/Button";
 import { Pill } from "#components/ui/Pill";
-import type { ClaudeCodeTrustTier } from "#lib/agent-events";
+import { SpawnWorkerDialog } from "#components/worker/SpawnWorkerDialog";
 import { matchesBinding } from "#lib/keybindings";
-import { DEFAULT_REPO_ROOT_KEY, getPersistedRepoRoot } from "#lib/project-root";
-import { agentProbe, agentSpawn, spawnWorker, validateRepoRoot, writeConfig } from "#lib/tauri";
 import { useAgentSessionStore } from "#store/agent-sessions";
 import {
   causalityInspectorAtom,
@@ -26,9 +22,6 @@ import {
 import { useWorkerStore } from "#store/workers";
 
 type DetailTab = "detail" | "ai" | "ship";
-
-/** Worker spawn provider — "Webview Anthropic" is the existing, default behavior. */
-type SpawnProvider = "webview_anthropic" | "claude_code";
 
 function WorkerListView(): React.ReactElement {
   const workers = useWorkerStore((s) => s.workers);
@@ -185,126 +178,16 @@ function WorkerListView(): React.ReactElement {
  */
 export function Workers(): React.ReactElement {
   const [viewMode, setViewMode] = useAtom(graphViewAtom);
-  const detailOpen = useAtomValue(detailPanelOpenAtom);
-  const selectedId = useAtomValue(selectedWorkerIdAtom);
+  const [detailOpen, setDetailOpen] = useAtom(detailPanelOpenAtom);
+  const [selectedId, setSelectedWorkerId] = useAtom(selectedWorkerIdAtom);
   const [causalityTarget, setCausalityTarget] = useAtom(causalityInspectorAtom);
   const workers = useWorkerStore((s) => s.workers);
   const selectedWorker = selectedId ? workers.get(selectedId) : undefined;
-  const [isSpawning, setIsSpawning] = useState(false);
   const [detailTab, setDetailTab] = useState<DetailTab>("detail");
-  // Project root for worktree isolation on the next spawn — undefined =
-  // "unset" (still loading or never picked), null = "explicitly none",
-  // string = a picked directory. Pre-filled from the persisted
-  // "default_repo_root" config key so the choice survives a restart.
-  const [projectRoot, setProjectRoot] = useState<string | null | undefined>(undefined);
-  // Provider picker for the NEXT spawn — "Webview Anthropic" reproduces
-  // today's spawnWorker behavior exactly; "Claude Code" routes through
-  // agent_spawn instead (Phase 3's minimal command surface — the full
-  // spawn-dialog UI overhaul is a follow-up branch).
-  const [spawnProvider, setSpawnProvider] = useState<SpawnProvider>("webview_anthropic");
-  const [claudeModel, setClaudeModel] = useState("sonnet");
-  const [claudeTrustTier, setClaudeTrustTier] = useState<ClaudeCodeTrustTier>("standard");
-  // Claude Code availability (review F7) — undefined = "still probing"
-  // (the option stays enabled meanwhile — an early click can't be
-  // blocked by a probe that hasn't resolved yet), null = "available",
-  // string = "unavailable," holding the Title Case reason the option's
-  // title/disabled state surfaces.
-  const [claudeUnavailableReason, setClaudeUnavailableReason] = useState<string | null | undefined>(
-    undefined,
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    void agentProbe().then((report) => {
-      if (cancelled) return;
-      setClaudeUnavailableReason(
-        report.available ? null : (report.detail ?? "Claude Code CLI Not Available"),
-      );
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Load path: the persisted root is Zod-validated at the seam by
-  // getPersistedRepoRoot, then revalidated as a REAL git repo — a repo
-  // that was deleted/moved since it was picked must not silently keep
-  // failing every spawn with a raw git toast. A stale root surfaces a
-  // warning and falls back to "no project root" (today's behavior)
-  // rather than being used anyway.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const persisted = await getPersistedRepoRoot();
-      if (!persisted) {
-        if (!cancelled) setProjectRoot(null);
-        return;
-      }
-      try {
-        const toplevel = await validateRepoRoot(persisted);
-        if (!cancelled) setProjectRoot(toplevel);
-      } catch {
-        if (!cancelled) {
-          setProjectRoot(null);
-          toast.warning(`Saved Project Root Is No Longer A Git Repository: ${persisted}`);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handlePickProjectRoot = async () => {
-    const selected = await openDialog({
-      title: "Choose Project Root For Worktree Isolation",
-      directory: true,
-      multiple: false,
-    });
-    if (!selected) return;
-
-    let toplevel: string;
-    try {
-      toplevel = await validateRepoRoot(selected);
-    } catch {
-      toast.error(`Not A Git Repository: ${selected}`);
-      return;
-    }
-
-    setProjectRoot(toplevel);
-    try {
-      await writeConfig(DEFAULT_REPO_ROOT_KEY, toplevel);
-    } catch (err) {
-      toast.error(
-        `Could Not Save Project Root: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  };
-
-  const handleSpawn = async () => {
-    if (spawnProvider === "claude_code" && claudeUnavailableReason != null) {
-      toast.error(`Claude Code Unavailable: ${claudeUnavailableReason}`);
-      return;
-    }
-    setIsSpawning(true);
-    try {
-      const options = {
-        name: "Worker",
-        ...(projectRoot ? { repoRoot: projectRoot } : {}),
-      };
-      const id =
-        spawnProvider === "claude_code"
-          ? await agentSpawn(options, claudeModel, claudeTrustTier)
-          : await spawnWorker(options);
-      if (id) {
-        toast.success(`Worker Spawned: ${id.slice(0, 8)}`);
-      }
-    } catch (err) {
-      toast.error(`Spawn Failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setIsSpawning(false);
-    }
-  };
+  // The spawn dialog is conditionally mounted (not driven by its own
+  // `open` prop) so every field/probe/error resets cleanly on each
+  // open cycle — see SpawnWorkerDialog's doc.
+  const [spawnDialogOpen, setSpawnDialogOpen] = useState(false);
 
   // Graph/list toggle — binding is remappable in Settings.
   const keybindings = useAtomValue(keybindingsAtom);
@@ -358,117 +241,10 @@ export function Workers(): React.ReactElement {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          {/* Provider picker for the next spawn — "Webview Anthropic" is
-              the existing, default behavior; "Claude Code" routes through
-              agent_spawn (Phase 3's minimal command surface). */}
-          <select
-            aria-label="Provider For Next Spawn"
-            value={spawnProvider}
-            onChange={(e) => setSpawnProvider(e.target.value as SpawnProvider)}
-            title={claudeUnavailableReason ? `Claude Code: ${claudeUnavailableReason}` : undefined}
-            style={{
-              padding: "6px 10px",
-              background: "oklch(0.12 0.03 220 / 0.7)",
-              border: "1px solid oklch(0.28 0.05 220)",
-              borderRadius: 8,
-              color: "oklch(0.82 0.04 220)",
-              fontFamily: "var(--font-body)",
-              fontSize: "0.75rem",
-            }}
-          >
-            <option value="webview_anthropic">Webview Anthropic</option>
-            <option value="claude_code" disabled={claudeUnavailableReason != null}>
-              Claude Code{claudeUnavailableReason ? ` (${claudeUnavailableReason})` : ""}
-            </option>
-          </select>
-
-          {spawnProvider === "claude_code" && (
-            <>
-              <input
-                aria-label="Claude Code Model Alias"
-                value={claudeModel}
-                onChange={(e) => setClaudeModel(e.target.value)}
-                placeholder="Model Alias (E.g. Sonnet)"
-                style={{
-                  width: 120,
-                  padding: "6px 10px",
-                  background: "oklch(0.12 0.03 220 / 0.7)",
-                  border: "1px solid oklch(0.28 0.05 220)",
-                  borderRadius: 8,
-                  color: "oklch(0.82 0.04 220)",
-                  fontFamily: "var(--font-mono)",
-                  fontSize: "0.6875rem",
-                }}
-              />
-              <select
-                aria-label="Trust Tier For Next Spawn"
-                value={claudeTrustTier}
-                onChange={(e) => setClaudeTrustTier(e.target.value as ClaudeCodeTrustTier)}
-                title="Restricted: Read-Only. Standard: Can Run Commands, Cannot Edit Files. Write Enabled: Can Run Commands And Edit Files."
-                style={{
-                  padding: "6px 10px",
-                  background: "oklch(0.12 0.03 220 / 0.7)",
-                  border: "1px solid oklch(0.28 0.05 220)",
-                  borderRadius: 8,
-                  color: "oklch(0.82 0.04 220)",
-                  fontFamily: "var(--font-body)",
-                  fontSize: "0.75rem",
-                }}
-              >
-                <option value="restricted">Restricted</option>
-                <option value="standard">Standard</option>
-                <option value="write_enabled">Write Enabled</option>
-              </select>
-            </>
-          )}
-
-          {/* Project root — worktree isolation source for the next spawn.
-              Absent selection = today's behavior (no isolation). */}
-          <button
-            type="button"
-            onClick={() => void handlePickProjectRoot()}
-            title={
-              projectRoot
-                ? `Project Root: ${projectRoot} — New Workers Isolate Into A Worktree Here`
-                : "Choose A Project Root To Isolate New Workers Into Their Own Git Worktree"
-            }
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "6px 12px",
-              background: "oklch(0.12 0.03 220 / 0.7)",
-              border: "1px solid oklch(0.28 0.05 220)",
-              borderRadius: 8,
-              color: projectRoot ? "oklch(0.82 0.04 220)" : "oklch(0.55 0.04 220)",
-              fontFamily: "var(--font-mono)",
-              fontSize: "0.6875rem",
-              cursor: "pointer",
-              maxWidth: 220,
-            }}
-          >
-            <span
-              style={{
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {projectRoot ? projectRoot : "No Project Root"}
-            </span>
-          </button>
-
-          {/* Spawn button — disabled while the persisted project root is
-              still loading (`undefined`), so an early click can't
-              silently spawn unisolated before we know whether one is
-              configured. */}
-          <Button
-            variant="primary"
-            size="sm"
-            loading={isSpawning}
-            disabled={projectRoot === undefined}
-            onClick={() => void handleSpawn()}
-          >
+          {/* Opens the designed spawn dialog (provider, Claude Code
+              model/trust-tier, working directory) — replaces the old
+              inline header picker. */}
+          <Button variant="primary" size="sm" onClick={() => setSpawnDialogOpen(true)}>
             Spawn Worker
           </Button>
 
@@ -677,6 +453,20 @@ export function Workers(): React.ReactElement {
         <CausalityPanel
           startSeq={causalityTarget.startSeq}
           onClose={() => setCausalityTarget(null)}
+        />
+      )}
+
+      {/* Spawn dialog — conditionally mounted so it resets fresh (fresh
+          probe, fresh fields) every open cycle. Selects + opens the
+          detail panel on the newly spawned worker, matching the list
+          view's own click-to-select behavior. */}
+      {spawnDialogOpen && (
+        <SpawnWorkerDialog
+          onClose={() => setSpawnDialogOpen(false)}
+          onSpawned={(workerId) => {
+            setSelectedWorkerId(workerId);
+            setDetailOpen(true);
+          }}
         />
       )}
     </div>
