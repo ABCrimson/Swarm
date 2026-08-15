@@ -55,6 +55,21 @@ struct EventsSinceArgs {
 
 pub async fn events_since(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let EventsSinceArgs { after_seq, limit } = super::parse_args(args)?;
+    // Two different "missing DB" cases, two different outcomes — worth
+    // being explicit about which is which (security-review NIT):
+    // `db_path() == None` (no path configured at all, e.g. an
+    // in-memory-only engine in tests) is handled HERE, gracefully, as
+    // "no events" rather than an error. That is NOT the same case as
+    // `Some(path)` pointing at a file that has never actually been
+    // created on disk — since `EventLog::open_readonly` now opens with
+    // `SQLITE_OPEN_READ_WRITE` (never `SQLITE_OPEN_CREATE`, see its
+    // doc), a genuinely absent file at `path` surfaces as a hard `Err`
+    // below, not a silent empty page. In practice this second case
+    // shouldn't occur: `Runtime::start` opens the writer's own
+    // `EventLog::open` (which DOES create the file) before any reader
+    // — including this handler — can run. If it ever does happen, the
+    // loud error is the correct behavior: a configured-but-missing
+    // database is a bug to surface, not a page to swallow.
     let Some(path) = ctx.engine.db_path().map(std::path::Path::to_path_buf) else {
         return super::ok_value(&Vec::<Value>::new());
     };

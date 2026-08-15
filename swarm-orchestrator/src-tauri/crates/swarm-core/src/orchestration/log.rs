@@ -57,10 +57,13 @@ impl EventLog {
     /// under load (reproduced by
     /// `swarmd`'s `test_reconnect_with_last_seq_replays_exactly_the_missed_events`
     /// integration test, which without this fix intermittently observed
-    /// an empty replay page). Read-only at the SQLite connection-flag
-    /// level (`SQLITE_OPEN_READ_ONLY`) — an accidental write call
-    /// through this handle fails loudly rather than silently degrading
-    /// consistency.
+    /// an empty replay page). "Read-only" describes this constructor's
+    /// INTENDED USE (this type exposes no mutating method over an
+    /// instance built this way) — see the "Why not
+    /// `SQLITE_OPEN_READ_ONLY`" section below for why the underlying
+    /// SQLite connection flag is deliberately NOT the literal read-only
+    /// one (security-review FIX-5: this doc comment used to claim it
+    /// was, contradicting the section right below it).
     ///
     /// # Errors
     ///

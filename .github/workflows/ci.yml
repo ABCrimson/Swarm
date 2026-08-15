@@ -95,3 +95,16 @@ jobs:
             cargo tree -p swarm-core -e normal --prefix none --format "{p}" | grep -E "^tauri"
             exit 1
           fi
+
+      - name: Verify swarmd has no Tauri dependency
+        working-directory: swarm-orchestrator/src-tauri
+        run: |
+          # swarmd depends on swarm-core but must never itself grow a
+          # tauri/tauri-plugin-* dependency (the swarm-core-only gate
+          # above would never catch one added directly to
+          # crates/swarmd/Cargo.toml) — security-review FIX-5.
+          if cargo tree -p swarmd -e normal --prefix none --format "{p}" | grep -qE "^tauri"; then
+            echo "::error::swarmd must not depend on tauri (directly or transitively)"
+            cargo tree -p swarmd -e normal --prefix none --format "{p}" | grep -E "^tauri"
+            exit 1
+          fi

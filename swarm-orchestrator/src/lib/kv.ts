@@ -65,6 +65,28 @@ class TauriStoreKv implements Kv {
  * round-trip to `swarmd`; under a bare browser preview with neither
  * transport connected it inherits `invoke`'s existing graceful
  * `undefined`-on-absent-bridge behavior.
+ *
+ * # Suffix-rule read/write asymmetry (latent until wired)
+ *
+ * `read_config`/`write_config` are both `RemotePolicy::SecretFiltered`
+ * over WS — a request is denied identically for `get` and `set` when
+ * its namespaced key (`"<storeName>:<key>"`) matches
+ * `config::is_secret_key`'s suffix rule (`_key`/`_token`/`_secret`, or
+ * the literal `anthropic_api_key`). The `storeName:` prefix never
+ * defeats that suffix match (it only extends the string, never
+ * truncates it), so filtering IS symmetric between `get` and `set`
+ * for any one `Kv` instance today. The real asymmetry this section
+ * exists to flag is TRANSPORT-shaped, not verb-shaped:
+ * `TauriStoreKv` applies no filtering at all (by design — see
+ * `commands::config`'s module doc, the local desktop IPC path is not
+ * a network boundary), so a future migrated call site whose key
+ * happens to end in `_key`/`_token`/`_secret` for reasons unrelated to
+ * being an actual secret (e.g. a hypothetical `"favorite_key"`
+ * setting) would succeed silently under Tauri and be denied — on both
+ * `get` and `set` — the moment the exact same call runs over
+ * `wsTransport`. Currently inert (`createKv` has no real call site
+ * yet, per the migration-status note above); worth checking against
+ * this rule before wiring the first one.
  */
 class DaemonConfigKv implements Kv {
   constructor(private readonly storeName: string) {}
