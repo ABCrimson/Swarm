@@ -182,11 +182,29 @@ fn permission_mode_flag(tier: ClaudeCodeTrustTier) -> Option<&'static str> {
 /// `settings.json` `permissions.deny` entries for `tier`. The bare tool
 /// name form (`"Bash"`) is spike-verified verbatim
 /// (`scratchpad/spike-permissions/harness/settings-deny-bash.json.bak`,
-/// cells 6a/6b). The `Tool(pattern)` glob form used for Standard/
-/// WriteEnabled's dangerous-Bash-pattern denials follows Claude Code's
-/// documented settings.json permission-rule grammar but was NOT itself
-/// spike-verified beyond the bare-tool-name case — flagged here as a
-/// plan-vs-landed adaptation, not a claimed empirical result.
+/// cells 6a/6b): it removes the tool from the model's available tool
+/// list entirely — a full-tool deny, not a per-call one.
+///
+/// The `Tool(pattern)` glob form used for Standard/WriteEnabled's
+/// dangerous-Bash-pattern denials is now ALSO spike-verified, and
+/// confirmed **pattern-granular** — MEASURED, not assumed. Canary run:
+/// `--settings '{"permissions":{"deny":["Bash(echo*)"]}}'
+/// --setting-sources project` (inline settings, no on-disk
+/// `.claude/settings.json`), one turn instructed to invoke Bash for
+/// both `echo hi` and `pwd`. Result, same run: `echo hi` was denied
+/// (`is_error: true`, content `"Permission to use Bash with command
+/// echo hi has been denied."`, and a matching `permission_denials`
+/// entry naming exactly that command) while `pwd` executed normally
+/// (`is_error: false`, real cwd in the tool result) — `Bash` itself
+/// stayed listed in the init message's `tools` array throughout,
+/// unlike the bare-tool-name case above. Neither "deny all Bash" nor
+/// "deny nothing"; the glob restricts exactly the matching invocation.
+/// (`scratchpad/spike-permissions/harness/specs/15-glob-deny-echo-vs-pwd.json`
+/// and the matching `logs/15-glob-deny-echo-vs-pwd.summary.json` — run
+/// used `--model haiku` rather than the harness's usual `sonnet` solely
+/// to stay under a $0.10 run budget, since permission gating is
+/// enforced by the CLI around the tool call rather than by the model
+/// itself, so the swap doesn't affect what's being measured here.)
 fn deny_list(tier: ClaudeCodeTrustTier) -> Vec<&'static str> {
     match tier {
         ClaudeCodeTrustTier::Restricted => vec!["Bash", "Write", "Edit", "NotebookEdit"],
