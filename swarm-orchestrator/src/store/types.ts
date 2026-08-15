@@ -381,3 +381,64 @@ export const PushOutcomeSchema = z.object({
 
 /** Result of a successful push. */
 export type PushOutcome = z.infer<typeof PushOutcomeSchema>;
+
+/**
+ * Zod schema for one tool call within a `ship_context` turn — the row
+ * shape the ship preview's Causal Record table renders, and the same
+ * shape fed to the AI prose model (see `#lib/ship-causal`). `target` is a
+ * best-effort extraction from an allowlist of path/command-shaped input
+ * fields on the Rust side (`git::causal::extract_target`) — never a raw
+ * tool input, which can legitimately contain file contents.
+ */
+export const CausalToolCallSchema = z.object({
+  seq: z.number().int(),
+  name: z.string(),
+  target: z.string().nullable(),
+  ok: z.boolean().nullable(),
+});
+
+/** A tool call row in a `ship_context` turn's Causal Record table. */
+export type CausalToolCall = z.infer<typeof CausalToolCallSchema>;
+
+/**
+ * Zod schema for one AI/agent turn within a `ship_context` range,
+ * identified by the `turnId` its `agent_block`/`agent_tool_call`/
+ * `agent_tool_result`/`agent_turn_settled` events share.
+ */
+export const CausalTurnSchema = z.object({
+  turnId: z.string(),
+  status: z.string().nullable(),
+  toolCalls: z.array(CausalToolCallSchema),
+});
+
+/** One AI/agent turn in a `ship_context` range. */
+export type CausalTurn = z.infer<typeof CausalTurnSchema>;
+
+/** Zod schema for a commit made within a `ship_context` range. */
+export const CausalCommitSchema = z.object({
+  sha: z.string(),
+  branch: z.string(),
+  seqFrom: z.number().int(),
+  seqTo: z.number().int(),
+});
+
+/** A commit made within a `ship_context` range. */
+export type CausalCommit = z.infer<typeof CausalCommitSchema>;
+
+/**
+ * Zod schema for the full `ship_context` response — the evidence half of
+ * a ship's PR body. See `#lib/ship-causal`'s `renderCausalRecordSection`
+ * for how this renders into the deterministic "Causal Record" section a
+ * model never writes.
+ */
+export const ShipContextSchema = z.object({
+  workerId: z.uuid(),
+  seqFrom: z.number().int(),
+  seqTo: z.number().int(),
+  turns: z.array(CausalTurnSchema),
+  commits: z.array(CausalCommitSchema),
+  omittedTurnCount: z.number().int(),
+});
+
+/** The causal record for one worker's ship range. */
+export type ShipContext = z.infer<typeof ShipContextSchema>;
