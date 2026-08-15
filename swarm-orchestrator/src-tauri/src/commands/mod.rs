@@ -1,28 +1,27 @@
 //! Tauri IPC command handlers.
 //!
-//! Each submodule exposes `#[tauri::command]` functions that are
-//! registered in [`crate::run`] via `tauri::generate_handler!`.
-//! Commands bridge the React frontend to the Rust backend over
-//! Tauri's IPC invoke/listen protocol.
+//! Every command here is now a THIN wrapper: it packs its typed
+//! parameters into a `serde_json::Value`, calls
+//! [`swarm_core::commands::Registry::dispatch`] (the SAME dispatch
+//! table `swarmd`'s WS `rpc` frames use), and unpacks the result back
+//! into the command's declared return type. The actual logic lives
+//! entirely in `swarm_core::commands::*` — see that module's doc for
+//! the drift-proof contract this split exists to make CI-checkable
+//! (`registry_contract` test, below).
 //!
 //! ## Modules
 //!
 //! - [`worker`] — Worker lifecycle commands (spawn, pause, resume, kill, list, input)
 //! - [`session`] — Session CRUD commands (create, delete, list, get)
-//! - [`agent`] — `agent_turn_started`, the webview chat intake onto the
-//!   ordered spine (the Rust `ai_request`/`AiQueue` path it used to sit
-//!   beside was deleted in Phase 2 of the multi-provider plan — see
-//!   `docs/api.md`'s "Built, Not Wired" section)
+//! - [`agent`] — Provider-adapter agent commands
 //! - [`config`] — App config file commands (read_config, write_config)
-//! - [`metrics`] — System metrics collection and retrieval
+//! - [`metrics`] — System metrics retrieval
 //! - [`bus`] — Message bus commands (send, subscribe, pipeline, list channels)
-//! - [`fs`] — `read_file`/`write_file` commands (stamped, persisted
-//!   `file_written` on write); `tauri-plugin-fs` itself continues to
-//!   back non-tool UI file access (`#lib/fs.ts`)
-//! - [`git`] — Git repo-root validation command (validate_repo_root)
-//! - [`notification`] — OS notification command
+//! - [`fs`] — `read_file`/`write_file` commands
+//! - [`git`] — Git repo-root validation + the ship chain
+//! - [`notification`] — OS notification command (NATIVE_ONLY — no registry entry)
 //! - [`orchestration`] — Ordered event core commands (events_since)
-//! - [`updater`] — Auto-updater check command
+//! - [`updater`] — Auto-updater check command (NATIVE_ONLY — no registry entry)
 
 pub mod agent;
 pub mod bus;
@@ -36,31 +35,65 @@ pub mod session;
 pub mod updater;
 pub mod worker;
 
-use swarm_core::events::Provenance;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+use swarm_core::commands::{Ctx, Registry};
 
-/// Parses optional `originWorker`/`causeSeq` IPC args into a
-/// [`Provenance`]. Shared by every command that accepts explicit
-/// causal-attribution args (see Phase 4's "explicit IPC args, not
-/// ambient cause state" decision) — `spawn_worker`, `kill_worker`,
-/// `pause_worker`, `resume_worker`, `worker_input`, `write_file`,
-/// `create_session`, `delete_session`.
-///
-/// Absent `originWorker` yields `Provenance::default()` — the honest
-/// "unattributed" value every existing caller keeps producing. A
-/// present-but-malformed `originWorker` is rejected (same treatment as
-/// a malformed worker `id` elsewhere in this codebase) rather than
-/// silently downgraded to `None`, since it is a caller/programming bug,
-/// not a legitimate "I don't know" case.
-pub(crate) fn parse_provenance(
-    origin_worker: Option<String>,
-    cause_seq: Option<u64>,
-) -> Result<Provenance, String> {
-    let origin_worker = origin_worker
-        .map(|s| uuid::Uuid::parse_str(&s))
-        .transpose()
-        .map_err(|e| e.to_string())?;
-    Ok(Provenance {
-        origin_worker,
-        cause_seq,
-    })
+/// Dispatches `cmd` through the shared [`Registry`], deserializing a
+/// successful result into `T` and an error into a plain `String` — the
+/// shape every command that used to return `Result<T, String>` still
+/// returns.
+pub(crate) async fn call<T: DeserializeOwned>(
+    registry: &Registry,
+    ctx: Ctx,
+    cmd: &'static str,
+    args: Value,
+) -> Result<T, String> {
+    match registry.dispatch(cmd, ctx, args).await {
+        Ok(v) => serde_json::from_value(v).map_err(|e| {
+            format!("Internal Error: Registry Result For \"{cmd}\" Did Not Match The Expected Shape: {e}")
+        }),
+        Err(e) => Err(value_to_message(e)),
+    }
 }
+
+/// Same as [`call`], but for the handful of commands whose Tauri IPC
+/// error type is a STRUCTURED value (`ShipError`, `AgentSpawnError`),
+/// not a plain string — deserializes the registry's error `Value` back
+/// into `E` (constructed the same way by
+/// [`swarm_core::commands::err_value`] on the registry side, so this
+/// round-trips exactly for every real error the handler produces;
+/// `on_shape_mismatch` builds a fallback `E` only for the
+/// (never-expected-in-practice) case where that round-trip itself
+/// fails, so a JSON-shape bug degrades to a truthful "something is
+/// wrong" error instead of a panic across the IPC boundary).
+pub(crate) async fn call_typed_err<T: DeserializeOwned, E: DeserializeOwned>(
+    registry: &Registry,
+    ctx: Ctx,
+    cmd: &'static str,
+    args: Value,
+    on_shape_mismatch: impl FnOnce(String) -> E,
+) -> Result<T, E> {
+    match registry.dispatch(cmd, ctx, args).await {
+        Ok(v) => match serde_json::from_value(v) {
+            Ok(t) => Ok(t),
+            Err(e) => Err(on_shape_mismatch(format!(
+                "Internal Error: Registry Result For \"{cmd}\" Did Not Match The Expected Shape: {e}"
+            ))),
+        },
+        Err(e) => match serde_json::from_value(e.clone()) {
+            Ok(typed) => Err(typed),
+            Err(_) => Err(on_shape_mismatch(value_to_message(e))),
+        },
+    }
+}
+
+fn value_to_message(v: Value) -> String {
+    match v {
+        Value::String(s) => s,
+        other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod registry_contract;

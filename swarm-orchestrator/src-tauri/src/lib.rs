@@ -8,33 +8,39 @@
 //! filesystem paths from `app.path()`, and forwards the ordered event
 //! stream onto the `swarm://events` webview channel.
 //!
-//! ## Runtime
+//! ## Runtime construction (headless-daemon plan Phase 2)
+//!
+//! Everything that used to be built by hand in this file's `setup()`
+//! closure (the worker registry, session manager, message bus, ordered
+//! event log, agent scheduler, background metrics loop, git capability
+//! probe, startup worktree prune) is now
+//! [`swarm_core::runtime::Runtime::start`] — the SAME constructor
+//! `swarmd` calls. This shell's only remaining jobs are: resolve
+//! `Paths` from `app.path()`, supply the PRIMARY lossless `emit`
+//! closure (`app.emit(EVENT_CHANNEL, envelope)` — unchanged from
+//! before the split), and `app.manage()` the result. Every
+//! `#[tauri::command]` wrapper in `commands::*` is now thin: it packs
+//! its args into JSON and calls
+//! [`swarm_core::commands::Registry::dispatch`] — the SAME dispatch
+//! table `swarmd`'s WS `rpc` frames use (see `commands::mod`'s doc and
+//! `commands::registry_contract`'s drift-proof test).
 //!
 //! All async work runs on a Tokio multi-threaded runtime scaled to the
 //! number of logical CPU cores. CPU-bound operations are dispatched
 //! through `tokio::task::spawn_blocking` to avoid starving the async
 //! executor.
 
+use std::sync::Arc;
+
 use tauri::{Emitter, Manager};
-use tokio_util::sync::CancellationToken;
 
 mod commands;
-mod session;
 
-use commands::metrics::SharedSystem;
 use swarm_core::Paths;
-use swarm_core::agent::{
-    AgentScheduler, AgentSchedulerConfig, AgentSessionRegistry, AgentTurnRequest,
-    ClaudeCodeAdapter, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY,
-};
-use swarm_core::bus::channel::MessageBus;
-use swarm_core::bus::router::Router;
+use swarm_core::commands::{Ctx, Registry};
 use swarm_core::error::AppError;
-use swarm_core::events::{SwarmEvent, SystemLogPayload};
-use swarm_core::git::{self, GitCapability, RepoLocks};
-use swarm_core::orchestration::{EVENT_CHANNEL, EventLog, OrchestrationEngine};
-use swarm_core::session::SessionManager;
-use swarm_core::worker::registry::WorkerRegistry;
+use swarm_core::orchestration::EVENT_CHANNEL;
+use swarm_core::runtime::{Runtime, RuntimeConfig, RuntimeStartError};
 
 /// Initializes the tracing subscriber for structured logging.
 ///
@@ -44,13 +50,6 @@ use swarm_core::worker::registry::WorkerRegistry;
 ///
 /// The default log filter is `swarm_core=debug,swarm_desktop=debug,warn`
 /// unless overridden by the `RUST_LOG` environment variable.
-///
-/// # Examples
-///
-/// ```bash
-/// # Override log level at runtime
-/// RUST_LOG=swarm_core=trace,swarm_desktop=trace cargo run
-/// ```
 fn init_tracing() {
     use tracing_subscriber::EnvFilter;
 
@@ -77,10 +76,6 @@ fn init_tracing() {
 
 /// Resolves the shared [`swarm_core::Paths`] from the Tauri app handle,
 /// creating the app data directory if it does not exist yet.
-///
-/// Used both by `setup()` (to locate the event log) and by the config
-/// commands (to locate `swarm-config.json`) — one resolution site keeps
-/// the two from ever disagreeing on where app data lives.
 pub(crate) fn resolve_paths(app: &tauri::AppHandle) -> Result<Paths, AppError> {
     let data_dir = app
         .path()
@@ -92,51 +87,19 @@ pub(crate) fn resolve_paths(app: &tauri::AppHandle) -> Result<Paths, AppError> {
 
 /// Builds and runs the SWARM Orchestrator Tauri application.
 ///
-/// This is the main application entry point called from `main.rs`.
-/// It performs the following setup sequence:
-///
-/// 1. Initializes structured tracing/logging
-/// 2. Creates the [`WorkerRegistry`], [`SessionManager`], [`MessageBus`],
-///    and [`Router`] shared state
-/// 3. Registers Tauri plugins (fs, dialog, shell, store, updater, notification)
-/// 4. Registers all IPC command handlers
-/// 5. In the `setup` closure:
-///    - Sets the window icon programmatically for crisp taskbar rendering
-///    - Starts the ordered event core (SQLite log + single-writer engine),
-///      passing it a closure that synchronously emits each event on
-///      `swarm://events` — the primary, lossless delivery path
-///    - Loads persisted sessions from disk
-///    - Starts the background metrics collection loop (500ms interval)
-///
 /// # Panics
 ///
 /// Panics if:
 /// - The main webview window cannot be found
+/// - The single-instance lock is already held by another process (see
+///   [`swarm_core::lock::SingleInstanceLock`]) — this is the ONE
+///   intentional early exit: a second engine on the same data
+///   directory would collide on the event log's primary key (see the
+///   headless-daemon plan's Phase 2 item 1), so this shell refuses to
+///   proceed at all rather than run in a corrupted state.
 /// - The Tauri application fails to start
-///
-/// # Examples
-///
-/// ```no_run
-/// // Called from the binary entry point:
-/// swarm_desktop::run();
-/// ```
 pub fn run() {
     init_tracing();
-
-    let registry = WorkerRegistry::new();
-    let session_manager = SessionManager::new();
-
-    // Per-repo git-operation serialization for worktree-per-worker
-    // isolation (spawn/kill). See swarm_core::git::RepoLocks.
-    let repo_locks = RepoLocks::new();
-
-    // Inter-agent message bus and router
-    let message_bus = MessageBus::new();
-    let router = Router::new(message_bus.clone());
-
-    // Single shared sysinfo::System, reused by both the background metrics
-    // loop and the on-demand get_metrics command for one CPU-delta tracker.
-    let shared_system = SharedSystem::new();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -145,12 +108,6 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .manage(registry.clone())
-        .manage(session_manager.clone())
-        .manage(shared_system.clone())
-        .manage(message_bus)
-        .manage(router)
-        .manage(repo_locks.clone())
         .invoke_handler(tauri::generate_handler![
             // Worker commands
             commands::worker::spawn_worker,
@@ -172,7 +129,6 @@ pub fn run() {
             commands::session::list_sessions,
             commands::session::get_session,
             commands::session::session_add_worker,
-            commands::session::session_remove_worker,
             // Agent commands
             commands::agent::agent_turn_started,
             commands::agent::agent_spawn,
@@ -180,7 +136,6 @@ pub fn run() {
             commands::agent::agent_cancel,
             commands::agent::agent_shutdown,
             commands::agent::agent_probe,
-            commands::agent::set_agent_concurrency,
             // Config commands
             commands::config::read_config,
             commands::config::write_config,
@@ -211,218 +166,55 @@ pub fn run() {
             let icon = tauri::image::Image::from_bytes(icon_bytes)?;
             window.set_icon(icon)?;
 
-            // Ordered event core: SQLite log + single-writer engine. The
-            // `emit` closure below is the PRIMARY delivery path — called
-            // synchronously, in order, for every event, exactly mirroring
-            // the pre-split direct `app.emit` call (lossless; a slow
-            // webview backs up the writer channel rather than dropping
-            // events). No forwarder task is spawned: the engine's
-            // broadcast fanout (OrchestrationEngine::subscribe) is a
-            // secondary, intentionally-lossy path reserved for future
-            // remote (Phase 2 swarmd) subscribers, which this shell does
-            // not use.
             let paths = resolve_paths(app.handle())?;
-            let db_path = paths.data_dir.join("swarm-events.db");
-            let event_log = EventLog::open(&db_path)
-                .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
 
+            // The PRIMARY delivery path — called synchronously, in
+            // order, for every event, exactly mirroring the pre-split
+            // direct `app.emit` call (lossless; a slow webview backs up
+            // the writer channel rather than dropping events). Passed
+            // straight through to `Runtime::start`, which wires it into
+            // the engine exactly as `lib.rs` used to do by hand.
             let emit_app = app.handle().clone();
-            let engine = OrchestrationEngine::start(event_log, Some(db_path), move |envelope| {
-                if let Err(e) = emit_app.emit(EVENT_CHANNEL, envelope) {
-                    tracing::error!(error = %e, "failed to emit domain event");
+            let runtime = Runtime::start(
+                RuntimeConfig {
+                    paths,
+                    shell_name: "swarm-desktop",
+                    bind: None, // no network listener — this is the desktop shell
+                },
+                move |envelope| {
+                    if let Err(e) = emit_app.emit(EVENT_CHANNEL, envelope) {
+                        tracing::error!(error = %e, "failed to emit domain event");
+                    }
+                },
+            )
+            .unwrap_or_else(|e| match e {
+                RuntimeStartError::Lock(lock_err) => {
+                    // Title Case, pid-bearing message per the plan's
+                    // single-instance-lock requirement. `eprintln!` is
+                    // the best available surface pre-window-creation on
+                    // a `windows_subsystem = "windows"` release build
+                    // (no console) — visible in debug builds and in any
+                    // log capture wrapping the release binary; see
+                    // docs/architecture.md's "Runtime Modes" section for
+                    // the documented limitation.
+                    eprintln!("{lock_err}");
+                    tracing::error!(error = %lock_err, "single-instance lock held by another process");
+                    std::process::exit(1);
+                }
+                other => {
+                    eprintln!("Failed To Start The SWARM Runtime: {other}");
+                    std::process::exit(1);
                 }
             });
 
-            let sink = engine.sink();
-            app.manage(sink.clone());
-            app.manage(engine);
-
-            // Load persisted sessions
-            let app_handle = app.handle().clone();
-            if let Err(e) = session::store::load_sessions(&app_handle, &session_manager) {
-                tracing::warn!(error = %e, "failed to load persisted sessions");
-            }
-
-            // Apply the persisted worker-registry cap (set via Settings →
-            // set_max_workers). An absent/invalid value keeps the default.
-            if let Some(max) = commands::config::read_config_value_sync(&app_handle, "max_workers")
-                .and_then(|v| v.as_u64())
-            {
-                let reg = app.state::<WorkerRegistry>();
-                if let Err(e) = reg.set_max_workers(max as usize) {
-                    tracing::warn!(error = %e, "ignoring persisted max_workers");
-                }
-            }
-
-            // Worktree isolation startup probe (item 1 of Phase 1): never
-            // silently degrade. A missing/too-old git only actually blocks
-            // a spawn that supplies `repoRoot` (see
-            // `worker::lifecycle::do_spawn_worker`'s hard-fail path) — this
-            // just makes that fact visible up front, in the console, before
-            // the user hits it as a spawn error.
-            match git::probe_capability() {
-                GitCapability::Available { version } => {
-                    tracing::info!(
-                        version = format!("{}.{}.{}", version.0, version.1, version.2),
-                        "git worktree isolation available"
-                    );
-                }
-                GitCapability::Unavailable { reason } => {
-                    tracing::warn!(reason = %reason, "git worktree isolation unavailable");
-                    // DIRECTIVE F4: the old copy ("Workers Will Spawn
-                    // Without Isolation") was a lie — do_spawn_worker
-                    // hard-fails a repoRoot-bearing spawn when git is
-                    // unavailable (see worker::lifecycle's failure
-                    // policy), it never silently drops isolation.
-                    sink.emit(SwarmEvent::SystemLog(SystemLogPayload {
-                        level: "warn".to_string(),
-                        message: format!(
-                            "Git Unavailable — Isolated Spawns Will Fail Until Git Is Installed Or Upgraded: {reason}"
-                        ),
-                        target: "swarm_core::git".to_string(),
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_millis() as i64)
-                            .unwrap_or(0),
-                    }));
-                }
-            }
-
-            // `git worktree prune` for the one repo Phase 1 tracks by
-            // default (the persisted "default_repo_root" — see
-            // commands::config), logging the count. A fuller multi-repo
-            // orphan reconciliation is out of scope for Phase 1.
-            if let Some(default_repo_root) =
-                commands::config::read_config_value_sync(&app_handle, "default_repo_root")
-                    .and_then(|v| v.as_str().map(str::to_string))
-            {
-                match git::worktree::prune(std::path::Path::new(&default_repo_root)) {
-                    Ok(count) => {
-                        tracing::info!(
-                            repo_root = %default_repo_root,
-                            pruned = count,
-                            "startup worktree prune complete"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            repo_root = %default_repo_root,
-                            error = %e,
-                            "startup worktree prune failed"
-                        );
-                    }
-                }
-            }
-
-            // Start metrics collection loop with cancellation token
-            let metrics_cancel = CancellationToken::new();
-            app.manage(metrics_cancel.clone());
-            commands::metrics::start_metrics_loop(
-                sink.clone(),
-                registry.clone(),
-                shared_system.clone(),
-                metrics_cancel,
-            );
-
-            // Phase 3: the Claude Code provider adapter, its live-session
-            // registry, and the agent-turn scheduler that gates
-            // concurrency across every session's turns.
-            let claude_adapter = ClaudeCodeAdapter::new(sink.clone());
-            app.manage(claude_adapter);
-
-            let agent_session_registry = AgentSessionRegistry::new();
-            app.manage(agent_session_registry.clone());
-
-            // `AgentSchedulerConfig::default().concurrent_limit == 3`
-            // mirrors the existing AI concurrency setting's own default
-            // (`useAiStore`'s `concurrentLimit: 3`, `src/store/ai.ts`).
-            // `set_agent_concurrency` (below, applied from the
-            // persisted `agent_concurrency` config key) is what keeps
-            // this live scheduler and the frontend's Settings ->
-            // aiConcurrentLimit in sync going forward — see
-            // `useSettingsBridge.ts`, which calls it on every change,
-            // not just `useAiStore`'s client-side-only limiter.
-            // Review B2 (binding): the OLD executor dropped a turn
-            // silently on `AgentSessionBusy` and released the
-            // semaphore permit the instant `send_turn` returned (a
-            // stdin write — the REAL work happens afterward,
-            // asynchronously) — meaning the concurrency limit bounded
-            // nothing, and two turns queued back-to-back for one
-            // worker deterministically lost the second. Fixed:
-            // (1) `send_turn` -> `await_turn_completion` -> THEN the
-            //     closure (and therefore the permit) resolves, so the
-            //     semaphore bounds actual EXECUTING turns.
-            // (2) A per-session lock (`AgentSessionRegistry::turn_lock`)
-            //     held across both calls serializes two turns queued
-            //     for the SAME worker instead of racing them into a
-            //     `Busy` rejection.
-            // (3) If a turn is STILL rejected through any path (no
-            //     live session, or a direct caller outside this lock
-            //     raced a `Busy`), a synthesized `agent_turn_settled`
-            //     is emitted so the frontend never has an admitted
-            //     turn that silently never terminates (the wedged-chat
-            //     failure mode, review B3).
-            let scheduler_registry = agent_session_registry.clone();
-            let scheduler_sink = sink.clone();
-            let scheduler = AgentScheduler::new(AgentSchedulerConfig::default(), move |request: AgentTurnRequest| {
-                let registry = scheduler_registry.clone();
-                let sink = scheduler_sink.clone();
-                async move {
-                    let turn_lock = registry.turn_lock(&request.worker_id);
-                    let _guard = turn_lock.lock().await;
-
-                    let dispatch_error = match registry.get(&request.worker_id) {
-                        Ok(session) => match session.send_turn(request.turn).await {
-                            Ok(turn_id) => {
-                                if let Err(e) = session.await_turn_completion(turn_id).await {
-                                    tracing::warn!(
-                                        worker_id = %request.worker_id,
-                                        error = %e,
-                                        "agent turn dispatch: await_turn_completion failed"
-                                    );
-                                }
-                                None
-                            }
-                            Err(e) => Some(format!("Turn Rejected: {e}")),
-                        },
-                        Err(e) => Some(format!("No Live Session For This Worker: {e}")),
-                    };
-
-                    if let Some(error) = dispatch_error {
-                        tracing::warn!(worker_id = %request.worker_id, %error, "agent turn dispatch failed — synthesizing a terminal receipt");
-                        sink.emit(SwarmEvent::AgentTurnSettled(
-                            swarm_core::events::AgentTurnSettledPayload {
-                                worker_id: request.worker_id,
-                                turn_id: uuid::Uuid::new_v4().to_string(),
-                                status: swarm_core::agent::AgentTurnStatus::Error,
-                                error: Some(error),
-                                cost_usd: None,
-                                usage: None,
-                                duration_ms: 0,
-                                num_turns: None,
-                            },
-                        ));
-                    }
-                }
-            });
-            // Apply the persisted agent-turn concurrency cap (set via
-            // Settings -> set_agent_concurrency). An absent or
-            // out-of-range value keeps AgentSchedulerConfig::default()'s
-            // 3 — same "invalid/missing persisted value degrades to the
-            // constructor default" discipline as `max_workers` above.
-            if let Some(limit) =
-                commands::config::read_config_value_sync(&app_handle, "agent_concurrency")
-                    .and_then(|v| v.as_u64())
-                    .and_then(|v| u32::try_from(v).ok())
-            {
-                if (MIN_AGENT_CONCURRENCY..=MAX_AGENT_CONCURRENCY).contains(&limit) {
-                    scheduler.set_concurrency(limit as usize);
-                } else {
-                    tracing::warn!(limit, "ignoring out-of-range persisted agent_concurrency");
-                }
-            }
-
-            app.manage(scheduler);
+            let ctx = Ctx::from_runtime(&runtime);
+            app.manage(ctx);
+            app.manage(Arc::new(Registry::new()));
+            // Keeps the single-instance lock (and every background task
+            // `Runtime::start` spawned) alive for the app's entire
+            // lifetime — dropping `runtime` early would release the
+            // lock immediately, defeating its purpose.
+            app.manage(runtime);
 
             tracing::info!("SWARM Orchestrator setup complete");
             Ok(())

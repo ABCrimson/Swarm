@@ -45,6 +45,58 @@ impl EventLog {
         Self::init(conn)
     }
 
+    /// Opens an EXISTING log at `path` for reads only — skips the
+    /// `CREATE TABLE IF NOT EXISTS`/migration write-transaction
+    /// [`Self::open`] runs on every call, which is unnecessary (the
+    /// schema is guaranteed to already exist: the single-writer
+    /// engine's own `EventLog::open` created it before any reader could
+    /// possibly run) and was a real contention/correctness hazard on a
+    /// hot read path — `swarmd`'s WS replay opens a fresh `EventLog`
+    /// per replay page, and doing a write-transaction schema check on
+    /// every single one raced the writer thread's own transactions
+    /// under load (reproduced by
+    /// `swarmd`'s `test_reconnect_with_last_seq_replays_exactly_the_missed_events`
+    /// integration test, which without this fix intermittently observed
+    /// an empty replay page). Read-only at the SQLite connection-flag
+    /// level (`SQLITE_OPEN_READ_ONLY`) — an accidental write call
+    /// through this handle fails loudly rather than silently degrading
+    /// consistency.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::EventLog`] if `path` does not exist or cannot be
+    /// opened.
+    ///
+    /// # Why not `SQLITE_OPEN_READ_ONLY`
+    ///
+    /// A WAL-mode database's shared-memory index (`-shm`) needs a
+    /// connection to take out byte-range locks to coordinate readers
+    /// with the writer — which SQLite implements by opening `-shm`
+    /// read-write internally, EVEN for a connection whose main database
+    /// file handle is read-only. On some platforms this leaves a
+    /// strictly `SQLITE_OPEN_READ_ONLY` connection unable to see
+    /// committed-but-not-yet-checkpointed WAL frames at all (observed:
+    /// `events_since` silently returning zero rows for a cursor with
+    /// genuinely persisted rows past it). This connection is opened
+    /// `SQLITE_OPEN_READ_WRITE` (never `SQLITE_OPEN_CREATE`) instead —
+    /// technically capable of writing at the OS/SQLite level, but never
+    /// asked to (this type exposes no mutating method over a
+    /// `open_readonly`-constructed instance's intended use) — the
+    /// meaningful optimization this constructor provides over
+    /// [`Self::open`] is skipping the schema/migration write
+    /// transaction, not the (unreliable, on this workload) read-only
+    /// connection flag.
+    pub fn open_readonly(path: &Path) -> Result<Self, AppError> {
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| AppError::EventLog(e.to_string()))?;
+        conn.busy_timeout(std::time::Duration::from_secs(2))
+            .map_err(|e| AppError::EventLog(e.to_string()))?;
+        Ok(Self { conn })
+    }
+
     /// In-memory log for tests.
     pub fn open_in_memory() -> Result<Self, AppError> {
         let conn = Connection::open_in_memory().map_err(|e| AppError::EventLog(e.to_string()))?;
