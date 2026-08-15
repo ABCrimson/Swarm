@@ -50,6 +50,12 @@ jobs:
   e2e:
     name: End-to-End Tests (Playwright)
     runs-on: ubuntu-latest
+    # Bounds a wedged Vite dev-server or browser hang to 15 min instead of
+    # the 6h default. webServer.timeout (30s) already fails a boot-hang fast;
+    # this is the backstop for anything downstream.
+    timeout-minutes: 15
+    env:
+      CI: "true"
     # The app lives one level below the repo root.
     defaults:
       run:
