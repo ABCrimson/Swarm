@@ -20,11 +20,13 @@
 
 use std::time::Duration;
 
+use tauri::AppHandle;
 use uuid::Uuid;
 
 use swarm_core::agent::{
     AgentAdapter, AgentScheduler, AgentSessionRegistry, AgentSpawnSpec, AgentTurnRequest,
-    ClaudeCodeAdapter, ProbeReport, ProviderId, TurnInput, TurnPriority,
+    ClaudeCodeAdapter, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY, ProbeReport, ProviderId,
+    TurnInput, TurnPriority,
 };
 use swarm_core::error::AppError;
 use swarm_core::events::{AgentTurnStartedPayload, EventSink, Provenance, SwarmEvent};
@@ -424,4 +426,57 @@ pub async fn agent_probe(
         .probe()
         .await
         .map_err(|e: AppError| e.to_string())
+}
+
+/// Updates the agent-turn scheduler's live concurrency cap — the
+/// backend counterpart to the frontend's `aiConcurrentLimit` Settings
+/// control ([`crate::hooks::useSettingsBridge`] in `src/hooks`, wired
+/// via `#lib/tauri.ts`'s `setAgentConcurrency`). Applies immediately
+/// (see [`AgentScheduler::set_concurrency`]) and persists to
+/// `swarm-config.json` (key `agent_concurrency`) so it survives
+/// restarts — the setup hook in `lib.rs` re-applies it on launch, same
+/// pattern as [`crate::commands::worker::set_max_workers`]'s
+/// `max_workers`.
+///
+/// Ordering: validate → persist → apply. Persistence failure must not
+/// leave the live scheduler enforcing a cap that neither the UI nor
+/// disk agrees with.
+///
+/// # Arguments
+///
+/// * `app` - Tauri app handle (injected by Tauri)
+/// * `scheduler` - Agent-turn scheduler state (injected by Tauri)
+/// * `limit` - New concurrency cap; must be within
+///   [`MIN_AGENT_CONCURRENCY`]..=[`MAX_AGENT_CONCURRENCY`]
+///
+/// # Errors
+///
+/// Returns a Title Case `String` error if `limit` is out of range or
+/// persistence fails; in both cases the live cap keeps its previous
+/// value.
+#[tauri::command]
+#[tracing::instrument(skip(app, scheduler))]
+pub async fn set_agent_concurrency(
+    app: AppHandle,
+    scheduler: tauri::State<'_, AgentScheduler>,
+    limit: u32,
+) -> Result<(), String> {
+    tracing::info!(limit, "set_agent_concurrency called");
+
+    if !(MIN_AGENT_CONCURRENCY..=MAX_AGENT_CONCURRENCY).contains(&limit) {
+        tracing::error!(limit, "rejected out-of-range agent_concurrency update");
+        return Err(format!(
+            "Agent Concurrency Must Be Between {MIN_AGENT_CONCURRENCY} And {MAX_AGENT_CONCURRENCY}, Got {limit}."
+        ));
+    }
+
+    crate::commands::config::write_config(
+        app,
+        "agent_concurrency".to_string(),
+        serde_json::json!(limit),
+    )
+    .await?;
+
+    scheduler.set_concurrency(limit as usize);
+    Ok(())
 }

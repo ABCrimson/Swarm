@@ -345,6 +345,21 @@ export async function setMaxWorkers(max: number): Promise<void> {
   return invoke<void>("set_max_workers", { max });
 }
 
+/**
+ * Update the backend agent-turn scheduler's live concurrency cap.
+ * Applies immediately (resizing the scheduler's semaphore — see
+ * `AgentScheduler::set_concurrency` in `crates/swarm-core`) and persists
+ * across restarts (see `set_agent_concurrency` in src-tauri, config key
+ * `agent_concurrency`). This is the backend counterpart to
+ * `useAiStore`'s `concurrentLimit`, which only bounds the webview-direct
+ * chat streaming path (`AIChat.tsx`) — `useSettingsBridge` calls both on
+ * every `aiConcurrentLimit` change so the client-side limiter and the
+ * `agent_spawn`/`agent_send_turn` provider-adapter path never drift.
+ */
+export async function setAgentConcurrency(limit: number): Promise<void> {
+  return invoke<void>("set_agent_concurrency", { limit });
+}
+
 /** Validates the raw `validate_repo_root` IPC response is a non-empty path string. */
 const ValidateRepoRootResponseSchema = z.string().min(1);
 
