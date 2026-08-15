@@ -1,9 +1,8 @@
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { listen as tauriListen } from "@tauri-apps/api/event";
 import * as z from "zod";
 import type { ClaudeCodeTrustTier, ProbeReport } from "#lib/agent-events";
 import { ProbeReportSchema } from "#lib/agent-events";
+import { transport } from "#lib/transport";
 import type {
   CommitOutcome,
   PushOutcome,
@@ -22,29 +21,57 @@ import {
   ShipPreflightSchema,
 } from "#store/types";
 
-/** Returns `true` when running inside a Tauri webview (IPC bridge is available). */
+/**
+ * Returns `true` when running inside a Tauri webview (IPC bridge is
+ * available) — unchanged from before the headless-daemon transport
+ * split. Feature-gated call sites that need something ONLY the Tauri
+ * bridge provides (`tauri-plugin-fs`/`-dialog`/`-shell`/`-notification`/
+ * `-updater`, and the webview-direct AI chat path) keep using this
+ * exactly as before: a `wsTransport` connection is real backend
+ * connectivity but is NOT a Tauri bridge, so this correctly stays
+ * `false` there — see `#lib/transport`'s `TransportCapabilities` for
+ * the explicit, named version of the same distinction.
+ */
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-const noop: UnlistenFn = () => {};
-
 /**
- * Type-safe wrapper around Tauri's invoke command.
- * Returns `undefined` as `T` when Tauri is not available.
+ * `true` when SOME backend transport is active — the Tauri IPC bridge
+ * OR a `wsTransport` connection — as opposed to {@link isTauri}, which
+ * means specifically "the Tauri bridge." The handful of command
+ * wrappers below that work identically over EITHER transport
+ * (`spawnWorker`, `agentSpawn`, `listSessions`, `agentProbe`) use this
+ * for their graceful-degradation pre-check instead of `isTauri()`, so
+ * they keep working under a `swarmd`-served remote page — where
+ * `isTauri()` is `false` but a real backend is very much present — and
+ * still degrade gracefully under a plain `pnpm dev` browser preview
+ * (`TRANSPORT` unset, `tauriTransport` selected, no bridge present),
+ * exactly as before this split.
  */
-export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (!isTauri()) return undefined as T;
-  return tauriInvoke<T>(cmd, args);
+export function hasTransport(): boolean {
+  return transport.capabilities.kind === "ws" || isTauri();
 }
 
 /**
- * Type-safe wrapper around Tauri's event listener.
- * Returns a no-op unlisten function when Tauri is not available.
+ * Type-safe wrapper around the active transport's `invoke` — Tauri IPC
+ * or a `swarmd` WebSocket `rpc` round-trip, selected once at module
+ * load by `#lib/transport`. Every existing caller is unaffected: the
+ * signature, the graceful `undefined` return when no Tauri bridge is
+ * present under `tauriTransport`, and the promise-rejects-on-failure
+ * contract all carry through unchanged.
+ */
+export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  return transport.invoke<T>(cmd, args);
+}
+
+/**
+ * Type-safe wrapper around the active transport's event listener.
+ * Returns a no-op unlisten function when neither transport can deliver
+ * events (e.g. `tauriTransport` with no bridge present).
  */
 export async function listen<T>(event: string, handler: (payload: T) => void): Promise<UnlistenFn> {
-  if (!isTauri()) return noop;
-  return tauriListen<T>(event, (e) => handler(e.payload));
+  return transport.listen<T>(event, handler);
 }
 
 // ── Worker commands ──────────────────────────────────
@@ -101,7 +128,7 @@ export async function spawnWorker(
   options: WorkerProcessOptions,
   prov?: ProvenanceArgs,
 ): Promise<string | null> {
-  if (!isTauri()) return null;
+  if (!hasTransport()) return null;
 
   const config: Record<string, unknown> = { name: options.name };
   if (options.shell !== undefined) config.shell = options.shell;
@@ -183,7 +210,7 @@ export async function agentSpawn(
   trustTier: ClaudeCodeTrustTier | undefined,
   prov?: ProvenanceArgs,
 ): Promise<string | null> {
-  if (!isTauri()) return null;
+  if (!hasTransport()) return null;
 
   const config: Record<string, unknown> = { name: options.name };
   if (options.shell !== undefined) config.shell = options.shell;
@@ -253,8 +280,8 @@ export async function agentShutdown(workerId: string): Promise<void> {
  * here.
  */
 export async function agentProbe(): Promise<ProbeReport> {
-  if (!isTauri()) {
-    return { available: false, detail: "No Tauri IPC Bridge Available." };
+  if (!hasTransport()) {
+    return { available: false, detail: "No Backend Transport Available." };
   }
   const raw = await invoke<unknown>("agent_probe");
   const parsed = ProbeReportSchema.safeParse(raw);
@@ -462,7 +489,7 @@ export async function deleteSession(id: string): Promise<void> {
  * detonate the instant session restore is.
  */
 export async function listSessions(): Promise<Session[]> {
-  if (!isTauri()) return [];
+  if (!hasTransport()) return [];
   const raw = await invoke<unknown[]>("list_sessions");
   return raw.map(normalizeSession);
 }
@@ -504,8 +531,17 @@ export async function sessionRemoveWorker(sessionId: string, workerId: string): 
 
 // ── Notifications ────────────────────────────────────
 
-/** Display a native OS notification (see `send_notification` in src-tauri). */
+/**
+ * Display a native OS notification (see `send_notification` in
+ * src-tauri) — NATIVE_ONLY (`swarm_core::commands::NATIVE_ONLY`): no
+ * registry entry exists, so a `wsTransport` `rpc` call would reject
+ * with "Unknown Command" rather than silently no-op. Gated on
+ * `isTauri()` (not `hasTransport()`) so it degrades to a harmless no-op
+ * under both a `wsTransport` remote page AND a plain browser preview,
+ * exactly like the fs/dialog-backed surfaces.
+ */
 export async function sendNotification(title: string, body: string): Promise<void> {
+  if (!isTauri()) return;
   return invoke<void>("send_notification", { title, body });
 }
 
@@ -519,8 +555,14 @@ export interface UpdateCheckResult {
   readonly date?: string;
 }
 
-/** Query the configured update endpoint for an available app update. */
+/**
+ * Query the configured update endpoint for an available app update —
+ * NATIVE_ONLY, same reasoning as {@link sendNotification}. Resolves
+ * `{ available: false }` rather than throwing under a non-Tauri
+ * transport, matching every other graceful-degradation command here.
+ */
 export async function checkForUpdates(): Promise<UpdateCheckResult> {
+  if (!isTauri()) return { available: false };
   return invoke<UpdateCheckResult>("check_for_updates");
 }
 
