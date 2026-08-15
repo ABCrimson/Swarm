@@ -51,10 +51,25 @@
 //! 1. The exact method names for session start, turn submission, and
 //!    turn termination (this adapter assumes `thread/start` /
 //!    `thread/sendMessage` / `turn/completed` / `turn/failed`).
+//!    `turn/failed` specifically is now exercised by a fixture
+//!    (`tests::test_turn_failed_settles_with_the_reported_error`,
+//!    review FIX-3) — the CODE PATH is proven (exactly one
+//!    `agent_turn_settled{status: error}` with the reported text
+//!    surfaced), the METHOD NAME itself is still unverified against a
+//!    live install, same as every other name in this list.
 //! 2. Whether `thread/sendMessage` truly round-trips a `turnId` in its
 //!    RESPONSE (this adapter's design leans on that — see
 //!    [`CodexSession::send_turn`]'s doc) or whether turn acceptance is
-//!    signaled some other way (e.g. a notification).
+//!    signaled some other way (e.g. a notification). **Updated after
+//!    review FIX-1: this is no longer a correctness dependency, only an
+//!    open naming/shape question.** The adapter now HANDLES EITHER WIRE
+//!    ORDER between that response and a terminal notification for the
+//!    same turn — [`settle_turn`]'s doc covers the order-independent
+//!    fix and `tests::test_terminal_notification_arriving_before_the_send_message_response_still_settles_exactly_once`
+//!    proves it. What still genuinely needs live-codex confirmation is
+//!    narrower: the exact method/param names themselves, and whether a
+//!    turn's acceptance is signaled via a response at all versus some
+//!    other shape this adapter hasn't anticipated.
 //! 3. The approval request's exact shape (`approval/request` with
 //!    `kind`/`command`/`itemId` params is invented; real Codex may use a
 //!    different method name or split exec-vs-patch approvals into two
@@ -486,7 +501,14 @@ async fn teardown(shared: &Arc<Shared>) -> ExitSummary {
     let (in_flight, child_opt) = {
         let mut inner = shared.state.lock();
         let taken = inner.in_flight_turn.take();
-        if let Some(ref t) = taken {
+        // Only record a REAL id — the sentinel is a placeholder, never a
+        // [`TurnId`] any caller could be polling `await_turn_completion`
+        // with, so recording it as "the last settled turn" would be a
+        // bogus value (see `settle_turn`'s doc for the matching
+        // order-independence fix on the other side of this handshake).
+        if let Some(ref t) = taken
+            && t != RESERVED_TURN_SENTINEL
+        {
             inner.last_settled_turn = Some(t.clone());
         }
         (taken, inner.child.take())
@@ -553,6 +575,31 @@ async fn teardown(shared: &Arc<Shared>) -> ExitSummary {
 
 // ── JSON-RPC line mapping ────────────────────────────────────────────
 
+/// Settles a turn from its terminal notification (`turn/completed`/
+/// `turn/failed`). `notification_turn_id` is that notification's OWN
+/// `params.turnId` when present — the authoritative id Codex itself
+/// reports, independent of whether THIS session has locally promoted
+/// [`RESERVED_TURN_SENTINEL`] to it yet.
+///
+/// # Order-independence (review FIX-1, binding)
+///
+/// This adapter's design leans on `thread/sendMessage`'s RESPONSE to
+/// learn a turn's real [`TurnId`] (see [`CodexSession::send_turn`]'s
+/// doc) — but nothing in JSON-RPC 2.0 guarantees a response arrives
+/// before every notification about the same turn; `handle_response`'s
+/// doc already covers the same-task-different-lines ordering hazard,
+/// but a genuinely reordered WIRE (the terminal notification arriving
+/// before the response that confirms the turn at all) is a DIFFERENT,
+/// live possibility this function must not assume away. If `turn_id ==
+/// RESERVED_TURN_SENTINEL` at this moment — the terminal notification
+/// beat the response — this function no longer skips: it settles using
+/// `notification_turn_id` as the best-available id (Codex's own
+/// notification already told us definitively which turn this is, same
+/// as every other per-item handler in this file already trusts). Never
+/// zero settled events for a turn Codex told us is done, regardless of
+/// which line won the race. `handle_response`'s own promotion attempt,
+/// arriving after, finds `in_flight_turn` already cleared and correctly
+/// no-ops rather than re-settling — see its doc.
 fn settle_turn(
     shared: &Arc<Shared>,
     status: AgentTurnStatus,
@@ -560,26 +607,54 @@ fn settle_turn(
     cost_usd: Option<f64>,
     usage: Option<serde_json::Value>,
     duration_ms: u64,
+    notification_turn_id: Option<&str>,
 ) {
     // Ownership handshake with `teardown` — mirrors
-    // `crate::agent::claude_code::handle_result` exactly: whichever of
-    // "a real terminal notification" or a concurrent `teardown` gets
-    // here first claims the turn id and owns emitting its ONE settled
-    // event.
+    // `crate::agent::claude_code::handle_result`: whichever of "a real
+    // terminal notification" or a concurrent `teardown` gets here first
+    // claims the turn id and owns emitting its ONE settled event.
     let turn_id = {
         let mut inner = shared.state.lock();
-        let taken = inner.in_flight_turn.take();
-        if let Some(ref t) = taken {
-            inner.last_settled_turn = Some(t.clone());
+
+        // Two cases where nothing should be settled, checked before
+        // taking anything:
+        // 1. The session already fully tore down (teardown reached its
+        //    own terminal state) — a notification arriving from a
+        //    buffered batch racing teardown's later steps (kill/wait/
+        //    emit, which run AFTER releasing this same lock) must never
+        //    emit a settlement chronologically after `agent_session_exited`
+        //    already did.
+        // 2. A duplicate/stray terminal notification for a turn THIS
+        //    session already settled (via either order) — never a
+        //    second emit, checked against the id this notification
+        //    itself claims to be about.
+        let already_final = inner.shutdown_result.is_some()
+            || (notification_turn_id.is_some()
+                && inner.last_settled_turn.as_deref() == notification_turn_id);
+        if already_final {
+            None
+        } else {
+            let taken = inner.in_flight_turn.take();
+            let resolved = match taken.as_deref() {
+                // Already promoted to a real id (the common, response-
+                // first order) — use it directly.
+                Some(id) if id != RESERVED_TURN_SENTINEL => Some(id.to_string()),
+                // Still the sentinel (or nothing recorded at all) — the
+                // reordered-wire case this fix exists for, OR a
+                // notification arriving with no local bookkeeping to
+                // fall back on. Either way, trust the notification's own
+                // claimed id if it has one.
+                _ => notification_turn_id.map(str::to_string),
+            };
+            if let Some(ref t) = resolved {
+                inner.last_settled_turn = Some(t.clone());
+            }
+            resolved
         }
-        taken
     };
     let Some(turn_id) = turn_id else {
         return;
     };
-    if turn_id == RESERVED_TURN_SENTINEL {
-        return;
-    }
 
     shared
         .sink
@@ -745,6 +820,7 @@ fn handle_turn_completed(shared: &Arc<Shared>, params: &serde_json::Value) {
         .get("durationMs")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    let notification_turn_id = params.get("turnId").and_then(|v| v.as_str());
     settle_turn(
         shared,
         AgentTurnStatus::Ok,
@@ -752,6 +828,7 @@ fn handle_turn_completed(shared: &Arc<Shared>, params: &serde_json::Value) {
         cost_usd,
         usage,
         duration_ms,
+        notification_turn_id,
     );
 }
 
@@ -761,7 +838,16 @@ fn handle_turn_failed(shared: &Arc<Shared>, params: &serde_json::Value) {
         .and_then(|v| v.as_str())
         .map(str::to_string)
         .unwrap_or_else(|| "codex reported a turn failure".to_string());
-    settle_turn(shared, AgentTurnStatus::Error, Some(error), None, None, 0);
+    let notification_turn_id = params.get("turnId").and_then(|v| v.as_str());
+    settle_turn(
+        shared,
+        AgentTurnStatus::Error,
+        Some(error),
+        None,
+        None,
+        0,
+        notification_turn_id,
+    );
 }
 
 /// Handles a server -> client REQUEST (an `id`-bearing approval) — the
@@ -831,21 +917,24 @@ fn handle_approval_request(
 /// item/completed, and crucially `turn/completed`) BEFORE the scheduler
 /// ever gets a chance to resume `send_turn`'s continuation. Every one of
 /// those per-item notifications reads its `turnId` straight from its own
-/// `params` (see [`current_turn_id`]), so they are unaffected — but
-/// `settle_turn`'s OWNERSHIP handshake reads `Inner::in_flight_turn`,
-/// which would still be [`RESERVED_TURN_SENTINEL`] at that moment,
-/// making `turn/completed` a silent no-op and — worse — leaving
-/// `send_turn`'s later, now-stale write of the real id stuck in
-/// `in_flight_turn` with nothing left to ever clear it, which
-/// `teardown` then synthesizes an ERRONEOUS `Error` settlement for once
-/// the child naturally exits. The fix: promote the sentinel to the real
-/// id HERE, synchronously, in the SAME reader-task execution that is
-/// about to go on and process this turn's own notifications next — by
-/// construction, everything downstream in this line-processing pass
-/// (and every later one) now sees the real id, never the sentinel.
-/// [`CodexSession::send_turn`]'s own post-await code only promotes the
-/// sentinel as a defensive fallback for the (spec-violating) case where
-/// the response carries no `turnId` at all.
+/// `params` (see [`current_turn_id`]), so they are unaffected — the fix
+/// promotes the sentinel to the real id HERE, synchronously, in the SAME
+/// reader-task execution that is about to go on and process this turn's
+/// own notifications next, so everything downstream in this line-
+/// processing pass (and every later one) sees the real id, never the
+/// sentinel — the fast, common-case path.
+///
+/// This is now belt-and-suspenders, not load-bearing for correctness
+/// (review FIX-1): [`settle_turn`] independently handles the case where
+/// a terminal notification wins the race and arrives while `turn_id` is
+/// STILL the sentinel — the wire itself gives no ordering guarantee
+/// between a request's response and later notifications, only THIS
+/// adapter's own single-task processing does, and only for lines that
+/// happen to already be buffered together. See `settle_turn`'s own doc
+/// for the order-independent fix. [`CodexSession::send_turn`]'s post-
+/// await code also promotes the sentinel, as a final defensive fallback
+/// for the (spec-violating) case where the response carries no `turnId`
+/// at all.
 fn handle_response(shared: &Arc<Shared>, id: u64, value: &serde_json::Value) {
     let Some(sender) = shared.pending_requests.lock().remove(&id) else {
         // No matching outstanding request — a duplicate, a stale
@@ -1576,6 +1665,158 @@ mod tests {
             .expect("settled row");
         assert_eq!(settled.payload["status"], "ok");
         assert_eq!(settled.payload["turnId"], "turn-happy-0001");
+
+        cleanup(&db_path);
+    }
+
+    // ── Review FIX-1/FIX-2: confirmation/terminal wire-order interleaving ─
+
+    /// DIRECTIVE (review FIX-2a): a dedicated, explicitly-named test for
+    /// the wire order `happy_turn.ndjson` already rides on implicitly —
+    /// `thread/sendMessage`'s response arrives, THEN the terminal
+    /// `turn/completed` notification. Asserts the interleaving invariant
+    /// directly (exactly one settled event, using the confirmed
+    /// `TurnId`) rather than only as a side effect of a broader
+    /// happy-path assertion.
+    #[tokio::test]
+    async fn test_send_message_response_before_terminal_notification_settles_exactly_once() {
+        let (_sink, db_path, session) = spawn_test_session("happy_turn.ndjson").await;
+        let turn_id = session
+            .send_turn(TurnInput {
+                prompt: "explain binary search".to_string(),
+            })
+            .await
+            .expect("send_turn should succeed");
+        assert_eq!(turn_id, "turn-happy-0001");
+
+        wait_for_event_type(
+            &db_path,
+            "agent_turn_settled",
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+        session.shutdown().await.ok();
+
+        let log = EventLog::open(&db_path).expect("reopen log");
+        let events = log.events_since(0, 500).expect("read events");
+        let settled: Vec<serde_json::Value> = events
+            .iter()
+            .filter(|e| e.event_type == "agent_turn_settled")
+            .map(|e| e.payload.clone())
+            .collect();
+        assert_eq!(
+            settled.len(),
+            1,
+            "exactly one settled event for the response-first order, got: {settled:?}"
+        );
+        assert_eq!(settled[0]["status"], "ok");
+        assert_eq!(settled[0]["turnId"], turn_id);
+
+        cleanup(&db_path);
+    }
+
+    /// DIRECTIVE (review FIX-1/FIX-2b, the regression this whole fix
+    /// exists for): the REVERSE wire order — `item/started`/
+    /// `item/completed`/`turn/completed` ALL arrive BEFORE
+    /// `thread/sendMessage`'s response confirms the real `TurnId`. Before
+    /// FIX-1, `settle_turn` found the sentinel still in place and
+    /// silently skipped (ZERO settled events for a turn Codex told us is
+    /// done), then `handle_response`'s later promotion attempt found
+    /// nothing left to promote — a permanently stuck `in_flight_turn`
+    /// that `teardown` would eventually settle with an ERRONEOUS
+    /// `PROCESS_EXITED_WITHOUT_RECEIPT`, even though the turn genuinely
+    /// succeeded. After the fix: `settle_turn` trusts the terminal
+    /// notification's OWN `turnId` and settles immediately; `send_turn`
+    /// still returns the correct, matching `TurnId` once the (now
+    /// redundant) response arrives.
+    #[tokio::test]
+    async fn test_terminal_notification_arriving_before_the_send_message_response_still_settles_exactly_once()
+     {
+        let (_sink, db_path, session) = spawn_test_session("terminal_before_response.ndjson").await;
+        let turn_id = session
+            .send_turn(TurnInput {
+                prompt: "trigger the reordered wire".to_string(),
+            })
+            .await
+            .expect("send_turn should still succeed even though the terminal notification won the wire race");
+        assert_eq!(turn_id, "turn-reorder-0001");
+
+        wait_for_event_type(
+            &db_path,
+            "agent_turn_settled",
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+        session.shutdown().await.ok();
+        wait_for_event_type(
+            &db_path,
+            "agent_session_exited",
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+
+        let log = EventLog::open(&db_path).expect("reopen log");
+        let events = log.events_since(0, 500).expect("read events");
+        let settled: Vec<serde_json::Value> = events
+            .iter()
+            .filter(|e| e.event_type == "agent_turn_settled")
+            .map(|e| e.payload.clone())
+            .collect();
+        assert_eq!(
+            settled.len(),
+            1,
+            "exactly one settled event despite the reordered wire — never zero, never two, got: {settled:?}"
+        );
+        assert_eq!(
+            settled[0]["status"], "ok",
+            "the turn genuinely succeeded — must not be reported as a synthesized Condition-B error"
+        );
+        assert_eq!(settled[0]["turnId"], "turn-reorder-0001");
+        assert_ne!(
+            settled[0]["error"],
+            serde_json::json!(PROCESS_EXITED_WITHOUT_RECEIPT),
+            "must never be misreported as the ungraceful-exit synthesis"
+        );
+
+        cleanup(&db_path);
+    }
+
+    // ── Review FIX-3: turn/failed coverage ────────────────────────
+
+    /// DIRECTIVE (review FIX-3): `turn/failed` was previously entirely
+    /// untested and its method name is an ASSUMED one (see the module
+    /// doc's ASSUMPTIONS list item 1) — this proves the CODE PATH: exactly
+    /// one `agent_turn_settled{status: "error"}` with the provider's
+    /// reported error text surfaced verbatim.
+    #[tokio::test]
+    async fn test_turn_failed_settles_with_the_reported_error() {
+        let (_sink, db_path, session) = spawn_test_session("turn_failed.ndjson").await;
+        let turn_id = session
+            .send_turn(TurnInput {
+                prompt: "run something that fails".to_string(),
+            })
+            .await
+            .expect("send_turn should succeed");
+
+        wait_for_event_type(
+            &db_path,
+            "agent_turn_settled",
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+        session.shutdown().await.ok();
+
+        let log = EventLog::open(&db_path).expect("reopen log");
+        let events = log.events_since(0, 500).expect("read events");
+        let settled: Vec<serde_json::Value> = events
+            .iter()
+            .filter(|e| e.event_type == "agent_turn_settled")
+            .map(|e| e.payload.clone())
+            .collect();
+        assert_eq!(settled.len(), 1, "got: {settled:?}");
+        assert_eq!(settled[0]["status"], "error");
+        assert_eq!(settled[0]["error"], "sandboxed command exited non-zero");
+        assert_eq!(settled[0]["turnId"], turn_id);
 
         cleanup(&db_path);
     }

@@ -1,0 +1,18 @@
+# Fixture for crates/swarm-core/src/agent/codex.rs unit tests.
+# AUTHORED (not captured) — see happy_turn.ndjson's header. Review FIX-1
+# regression coverage: the REVERSE wire order from every other turn
+# fixture here — item/started, item/completed, and turn/completed ALL
+# arrive BEFORE the thread/sendMessage response (id 2) that confirms the
+# turn's real TurnId. Exercises settle_turn's order-independent fallback
+# (it must synthesize exactly one settled receipt using the terminal
+# notification's OWN turnId, since the sentinel hasn't been promoted
+# yet) and handle_response's later promotion attempt correctly no-op'ing
+# once settle_turn already claimed the turn.
+
+#DIRECTIVE AWAIT_STDIN_LINE
+{"jsonrpc":"2.0","id":1,"result":{"threadId":"thread-reorder-0001","model":"gpt-5-codex"}}
+#DIRECTIVE AWAIT_STDIN_LINE
+{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread-reorder-0001","turnId":"turn-reorder-0001","item":{"id":"item-1","type":"agentMessage"}}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread-reorder-0001","turnId":"turn-reorder-0001","item":{"id":"item-1","type":"agentMessage","text":"Reordered wire order."}}}
+{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread-reorder-0001","turnId":"turn-reorder-0001","durationMs":123}}
+{"jsonrpc":"2.0","id":2,"result":{"turnId":"turn-reorder-0001"}}
