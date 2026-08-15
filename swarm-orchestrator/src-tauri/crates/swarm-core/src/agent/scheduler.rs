@@ -261,8 +261,6 @@ impl AgentScheduler {
     /// `tokio::sync::Semaphore` has no built-in "resize" operation, so
     /// this composes its two primitives that come closest:
     ///
-    /// * **Increase:** `Semaphore::add_permits` — always succeeds
-    ///   immediately, admitting more turns as soon as they're queued.
     /// * **Decrease:** `Semaphore::forget_permits` first reclaims as
     ///   many currently-**idle** permits as it can (permanently — a
     ///   forgotten permit never returns to the pool). If every permit
@@ -274,6 +272,24 @@ impl AgentScheduler {
     ///   own permit instead of dropping it normally, until the debt
     ///   reaches zero. This guarantees the cap is honored going forward
     ///   without forcibly cancelling any turn already running.
+    /// * **Increase:** retires any outstanding `pending_forgets` debt
+    ///   FIRST (a CAS loop that only ever decreases the debt counter —
+    ///   no semaphore call), then calls `Semaphore::add_permits` for
+    ///   whatever increase is left over. **Binding invariant, proven
+    ///   necessary by a real regression** (a reviewer harness measured
+    ///   13 concurrent turns at a configured limit of 4 after three
+    ///   down/up cycles): `pending_forgets` is capacity still checked
+    ///   out by RUNNING turns, not capacity already returned to the
+    ///   pool. Calling `add_permits` for the full delta while debt is
+    ///   outstanding creates brand-new permits on top of capacity
+    ///   that's still logically live, making real concurrency
+    ///   `new_limit + debt` — and repeated down/up cycles compound it,
+    ///   since each cycle can leave its own unpaid remainder. Cancelling
+    ///   debt first means the turns already holding those permits
+    ///   simply return them normally instead of forgetting them on
+    ///   release — exactly the capacity being asked for back — so total
+    ///   capacity never exceeds `new_limit` at any point in the
+    ///   transition.
     ///
     /// Idempotent for `new_limit == ` the current limit (no-op).
     pub fn set_concurrency(&self, new_limit: usize) {
@@ -282,7 +298,48 @@ impl AgentScheduler {
             .swap(new_limit, AtomicOrdering::SeqCst);
         match new_limit.cmp(&old_limit) {
             Ordering::Greater => {
-                self.semaphore.add_permits(new_limit - old_limit);
+                // BLOCK-1 fix (review): `pending_forgets` is capacity
+                // still checked out by RUNNING turns, not capacity
+                // already returned to the semaphore — a prior decrease
+                // that couldn't reclaim anything synchronously left
+                // that many permits "owed" to be forgotten on release.
+                // Calling `add_permits` for the full delta here, before
+                // retiring that debt, creates BRAND NEW permits on top
+                // of capacity that's still logically outstanding: real
+                // concurrency becomes `limit + debt`, and repeated
+                // down/up cycles compound it further (each cycle can
+                // leave its own unpaid remainder). Cancelling debt
+                // first — which just means the in-flight turns holding
+                // those permits will return them normally instead of
+                // forgetting them, exactly the capacity we now want
+                // back — and only calling `add_permits` for whatever
+                // increase debt-cancellation didn't cover keeps total
+                // capacity pinned to `new_limit`, never higher.
+                let mut remaining = new_limit - old_limit;
+                while remaining > 0 {
+                    let debt = self.pending_forgets.load(AtomicOrdering::SeqCst);
+                    if debt == 0 {
+                        break;
+                    }
+                    let pay = debt.min(remaining);
+                    if self
+                        .pending_forgets
+                        .compare_exchange(
+                            debt,
+                            debt - pay,
+                            AtomicOrdering::SeqCst,
+                            AtomicOrdering::SeqCst,
+                        )
+                        .is_ok()
+                    {
+                        remaining -= pay;
+                    }
+                    // CAS lost the race (a concurrent release just paid
+                    // some debt) — reload and retry.
+                }
+                if remaining > 0 {
+                    self.semaphore.add_permits(remaining);
+                }
             }
             Ordering::Less => {
                 let want = old_limit - new_limit;
@@ -923,6 +980,94 @@ mod tests {
         );
 
         drain_all(&in_flight, &release).await;
+    }
+
+    /// DIRECTIVE (BLOCK-1 regression, binding): reproduces the
+    /// reviewer's exact repro shape — three down/up cycles while the
+    /// original long-running turns never release their permits (mirrors
+    /// a user stepping the Settings NumberField 4 -> 1 -> 4 -> 1 -> 4 ->
+    /// 1 -> 4 mid-turn, since the bridge fires on every step) — and
+    /// asserts peak concurrency NEVER exceeds the configured limit at
+    /// any point during the transition, not just that capacity
+    /// eventually converges. This is the test whose absence let the bug
+    /// ship: every other test here (including
+    /// `test_set_concurrency_decrease_under_full_load_is_realized_on_release`
+    /// above) only asserts FINAL capacity after the in-flight turns
+    /// drain — none of them covered an INCREASE while debt from an
+    /// earlier decrease was still outstanding, which is exactly the gap
+    /// the buggy `add_permits`-before-retiring-debt Greater arm hid in.
+    ///
+    /// With the bug: each "up" call to `add_permits` ignores
+    /// `pending_forgets` entirely, minting brand-new permits on top of
+    /// capacity the still-running original turns already hold — so a
+    /// newly enqueued turn at each cycle gets admitted immediately
+    /// instead of queueing, driving `in_flight` past `concurrent_limit`
+    /// and compounding further each cycle (the reviewer's harness
+    /// measured 13 concurrent turns at a configured limit of 4 after
+    /// three such cycles). With the fix, cancelling debt before adding
+    /// any permits means every enqueued-during-a-cycle turn stays
+    /// queued until the fixed pool of originals actually finishes.
+    #[tokio::test]
+    async fn test_set_concurrency_down_up_cycles_under_full_load_never_exceed_the_configured_peak()
+    {
+        let concurrent_limit = 4;
+        let (scheduler, in_flight, release) = gated_scheduler(concurrent_limit);
+        let peak = AtomicUsize::new(0);
+        let sample = |peak: &AtomicUsize| {
+            peak.fetch_max(
+                in_flight.load(AtomicOrdering::SeqCst),
+                AtomicOrdering::SeqCst,
+            );
+        };
+
+        // Fill every permit with a long-running turn that won't release
+        // until this test explicitly notifies it.
+        for _ in 0..concurrent_limit {
+            scheduler
+                .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+                .unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(in_flight.load(AtomicOrdering::SeqCst), concurrent_limit);
+        sample(&peak);
+
+        // Three down/up cycles. The original `concurrent_limit` turns
+        // are STILL in flight (never released) throughout every one of
+        // them, so every decrease's `forget_permits` finds nothing idle
+        // to reclaim — every decrease is a pure-debt cycle, exactly the
+        // scenario `set_concurrency`'s Greater arm must not mishandle.
+        for _ in 0..3 {
+            scheduler.set_concurrency(1);
+            sample(&peak);
+            scheduler.set_concurrency(concurrent_limit);
+            sample(&peak);
+
+            // Try to admit one MORE turn at each "up". If the bug is
+            // present, extra permits minted from the unpaid debt let
+            // this run concurrently with the still-in-flight originals,
+            // driving in_flight (and therefore peak) past
+            // concurrent_limit. If fixed, it just queues.
+            scheduler
+                .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+                .unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            sample(&peak);
+        }
+
+        assert!(
+            peak.load(AtomicOrdering::SeqCst) <= concurrent_limit,
+            "peak concurrency {} exceeded the configured limit {} across down/up cycles under full load",
+            peak.load(AtomicOrdering::SeqCst),
+            concurrent_limit
+        );
+
+        // Drain everything — the original `concurrent_limit` turns plus
+        // the 3 enqueued during the cycles (none of which should have
+        // been admitted early; they were still queued behind the
+        // originals the whole time).
+        drain_all(&in_flight, &release).await;
+        assert_eq!(scheduler.concurrency_limit(), concurrent_limit);
+        assert_eq!(scheduler.pending_forgets.load(AtomicOrdering::SeqCst), 0);
     }
 
     #[tokio::test]
