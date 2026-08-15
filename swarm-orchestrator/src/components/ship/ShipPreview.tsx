@@ -1,6 +1,8 @@
 import type { CSSProperties } from "react";
-import { Pill } from "#components/ui/Pill";
-import type { ShipPreflight, StagingMode } from "#store/types";
+import { Pill, type PillTone } from "#components/ui/Pill";
+import type { AiProseState } from "#hooks/useShip";
+import { resultLabel, turnStatusLabel } from "#lib/ship-causal";
+import type { CausalTurn, ShipContext, ShipPreflight, StagingMode } from "#store/types";
 
 interface ShipPreviewProps {
   readonly preflight: ShipPreflight;
@@ -12,6 +14,12 @@ interface ShipPreviewProps {
   readonly onCommitOnly: () => void;
   readonly onCommitAndPush: () => void;
   readonly onCommitPushAndOpenCompare: () => void;
+  /** The causal record for this ship range — `null` while `ship_context` is still loading or failed (best-effort; never blocks the rest of the preview). */
+  readonly context: ShipContext | null;
+  readonly aiProse: string | null;
+  readonly onAiProseChange: (prose: string) => void;
+  readonly aiProseState: AiProseState;
+  readonly onRegenerateProse: () => void;
 }
 
 const sectionStyle: CSSProperties = {
@@ -145,6 +153,164 @@ function commandPlanFor(mode: StagingMode, includePush: boolean, includeCompare:
   return `Will Run: ${steps.join(" · ")}`;
 }
 
+// ── Causal Record (code-generated — see #lib/ship-causal) ────────────
+
+const causalMutedStyle: CSSProperties = {
+  fontFamily: "var(--font-body)",
+  fontSize: "0.75rem",
+  color: "oklch(0.55 0.04 220)",
+  fontStyle: "italic",
+};
+
+const causalTableWrapStyle: CSSProperties = {
+  maxHeight: 220,
+  overflowY: "auto",
+  border: "1px solid oklch(0.14 0.03 220)",
+  borderRadius: 8,
+};
+
+const causalTableStyle: CSSProperties = {
+  width: "100%",
+  borderCollapse: "collapse",
+  fontFamily: "var(--font-mono)",
+  fontSize: "0.6875rem",
+};
+
+const causalHeadCellStyle: CSSProperties = {
+  textAlign: "left",
+  padding: "6px 10px",
+  color: "oklch(0.55 0.04 220)",
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
+  fontSize: "0.625rem",
+  borderBottom: "1px solid oklch(0.14 0.03 220)",
+  position: "sticky",
+  top: 0,
+  background: "oklch(0.06 0.02 220)",
+};
+
+const causalCellStyle: CSSProperties = {
+  padding: "5px 10px",
+  color: "oklch(0.82 0.04 220)",
+  borderBottom: "1px solid oklch(0.11 0.02 220)",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  maxWidth: 220,
+};
+
+function resultTone(ok: boolean | null): PillTone {
+  if (ok === true) return "success";
+  if (ok === false) return "danger";
+  return "neutral";
+}
+
+/** Every tool call across every turn, flattened into `{ turnLabel, name, target, ok }` rows for the table — one DOM row per call, matching `renderCausalRecordSection`'s markdown table shape. */
+function causalTableRows(
+  turns: readonly CausalTurn[],
+): Array<{ key: string; turnLabel: string; name: string; target: string; ok: boolean | null }> {
+  const rows: Array<{
+    key: string;
+    turnLabel: string;
+    name: string;
+    target: string;
+    ok: boolean | null;
+  }> = [];
+  turns.forEach((turn, turnIndex) => {
+    const turnLabel = `${turnIndex + 1} (${turnStatusLabel(turn.status)})`;
+    turn.toolCalls.forEach((call, callIndex) => {
+      rows.push({
+        key: `${turn.turnId}-${callIndex}`,
+        turnLabel,
+        name: call.name,
+        target: call.target ?? "—",
+        ok: call.ok,
+      });
+    });
+  });
+  return rows;
+}
+
+interface CausalRecordSectionProps {
+  readonly context: ShipContext | null;
+}
+
+/**
+ * The deterministic, code-generated Causal Record: seq range, turn
+ * count, and a tool-call table (turn, tool, target, result) read
+ * directly off `ShipContext` — no free text rendered here, matching
+ * `#lib/ship-causal`'s `renderCausalRecordSection` (the markdown
+ * counterpart that actually ships in the PR body). `context == null`
+ * (still loading, or `ship_context` failed) and a genuinely empty range
+ * both render an honest muted message rather than a table — the two
+ * are visually distinct so a user isn't left wondering whether "no
+ * rows" means "still loading" or "nothing was recorded".
+ */
+function CausalRecordSection({ context }: CausalRecordSectionProps): React.ReactElement {
+  if (context == null) {
+    return <span style={causalMutedStyle}>Loading Causal Record…</span>;
+  }
+
+  if (context.turns.length === 0) {
+    return (
+      <span style={causalMutedStyle}>
+        Causal Record Unavailable For This Range — No Recorded Agent Turns.
+      </span>
+    );
+  }
+
+  const rows = causalTableRows(context.turns);
+
+  return (
+    <>
+      <div style={monoRowStyle}>
+        <span>
+          {context.seqFrom}..{context.seqTo}
+        </span>
+        <span style={{ color: "oklch(0.45 0.03 220)" }}>{"·"}</span>
+        <span>
+          {context.turns.length} Turn{context.turns.length === 1 ? "" : "s"}
+        </span>
+        {context.omittedTurnCount > 0 && (
+          <Pill tone="warning" size="sm">
+            {context.omittedTurnCount} Earlier Turns Omitted
+          </Pill>
+        )}
+      </div>
+      {rows.length > 0 && (
+        <div style={causalTableWrapStyle}>
+          <table style={causalTableStyle}>
+            <thead>
+              <tr>
+                <th style={causalHeadCellStyle}>Turn</th>
+                <th style={causalHeadCellStyle}>Tool</th>
+                <th style={causalHeadCellStyle}>Target</th>
+                <th style={causalHeadCellStyle}>Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.key}>
+                  <td style={causalCellStyle}>{row.turnLabel}</td>
+                  <td style={causalCellStyle}>{row.name}</td>
+                  <td style={{ ...causalCellStyle, maxWidth: 260 }} title={row.target}>
+                    {row.target}
+                  </td>
+                  <td style={causalCellStyle}>
+                    <Pill tone={resultTone(row.ok)} size="sm">
+                      {resultLabel(row.ok)}
+                    </Pill>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
 /**
  * The confirm step of the ship flow: branch/base/remote summary,
  * ahead/behind, diff stat + per-file rows (including Skipped), the
@@ -165,6 +331,11 @@ export function ShipPreview({
   onCommitOnly,
   onCommitAndPush,
   onCommitPushAndOpenCompare,
+  context,
+  aiProse,
+  onAiProseChange,
+  aiProseState,
+  onRegenerateProse,
 }: ShipPreviewProps): React.ReactElement {
   const fileRows = buildFileRows(preflight);
   const messageEmpty = message.trim().length === 0;
@@ -283,6 +454,43 @@ export function ShipPreview({
           Trailers Added Automatically: Swarm-Seq-Range (When Determinable), Co-Authored-By (When
           Configured)
         </span>
+      </div>
+
+      <div style={sectionStyle}>
+        <span style={labelStyle}>What Changed / Why (AI-Generated, Editable)</span>
+        <textarea
+          value={aiProse ?? ""}
+          onChange={(e) => onAiProseChange(e.target.value)}
+          style={textareaStyle}
+          aria-label="AI-Generated Pull Request Description"
+          spellCheck={true}
+          placeholder="Click Generate To Draft A Summary From The Causal Record Below — Optional, Editable, Never Required To Ship."
+        />
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Pill
+            interactive
+            tone="neutral"
+            size="sm"
+            disabled={aiProseState === "generating" || context == null}
+            onClick={onRegenerateProse}
+          >
+            {aiProseState === "generating"
+              ? "Generating…"
+              : aiProse != null
+                ? "Regenerate"
+                : "Generate"}
+          </Pill>
+          {aiProseState === "failed" && (
+            <span style={actionReasonStyle}>
+              Generation Failed — Shipping With The Causal Record Alone Still Works.
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div style={sectionStyle}>
+        <span style={labelStyle}>Causal Record</span>
+        <CausalRecordSection context={context} />
       </div>
 
       <div style={actionsStyle}>

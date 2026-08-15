@@ -1,7 +1,10 @@
 import { open } from "@tauri-apps/plugin-shell";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useAtomValue } from "jotai";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { onEvent, waitFor } from "#lib/event-bus";
+import { CLAUDE_MODELS } from "#lib/models";
+import { composeShipBody, generateCausalProse } from "#lib/ship-causal";
 import { generateCommitMessage } from "#lib/ship-message";
 import {
   gitPush,
@@ -9,8 +12,13 @@ import {
   gitStageCommit,
   ShipCommandError,
   shipCompareUrl,
+  shipContext,
 } from "#lib/tauri";
-import type { ShipError, ShipPreflight, StagingMode } from "#store/types";
+import type { ShipContext, ShipError, ShipPreflight, StagingMode } from "#store/types";
+import { selectedModelAtom } from "#store/ui";
+
+/** Generation status for the optional AI prose section — see `regenerateProse`. */
+export type AiProseState = "idle" | "generating" | "ready" | "failed";
 
 /** Ship state machine states — see the module doc for transitions. */
 export type ShipState = "idle" | "preflighting" | "previewing" | "running" | "settled" | "failed";
@@ -47,6 +55,24 @@ interface UseShipReturn {
   readonly commitPushAndOpenCompare: () => Promise<void>;
   /** Returns to `"idle"` and clears all transient state — does not touch `message`/`mode`. */
   readonly reset: () => void;
+
+  /**
+   * The causal record for this worker's current ship range —
+   * `ship_context`'s response, fetched best-effort right after a
+   * successful preflight. `null` while loading or if the fetch failed;
+   * a failure here never blocks shipping (see `fetchContext`'s doc) —
+   * `ShipPreview` renders the honest "unavailable" state for `null`
+   * exactly as it would for a genuinely empty range.
+   */
+  readonly context: ShipContext | null;
+  /** The editable AI prose (the "What Changed / Why" section) — `null` until a successful `regenerateProse` call, or after one fails. User edits go straight into this via `setAiProse`, independent of `aiProseState`. */
+  readonly aiProse: string | null;
+  readonly setAiProse: (prose: string) => void;
+  readonly aiProseState: AiProseState;
+  /** Calls `generateCausalProse` against the current `context`/`preflight`, using the app's selected chat model. A no-op while `context`/`preflight` aren't loaded yet. */
+  readonly regenerateProse: () => Promise<void>;
+  /** `composeShipBody(context, preflight.diffStat, aiProse)` — `null` until both `context` and `preflight` are loaded. This is what `commitPushAndOpenCompare` sends as the compare URL's `body`. */
+  readonly composedBody: string | null;
 }
 
 /**
@@ -96,6 +122,10 @@ export function useShip(workerId: string): UseShipReturn {
   const [progress, setProgress] = useState<readonly ShipProgressRow[]>([]);
   const [error, setError] = useState<ShipError | null>(null);
   const [result, setResult] = useState<ShipResult | null>(null);
+  const [context, setContext] = useState<ShipContext | null>(null);
+  const [aiProse, setAiProse] = useState<string | null>(null);
+  const [aiProseState, setAiProseState] = useState<AiProseState>("idle");
+  const selectedModel = useAtomValue(selectedModelAtom);
 
   // Reset all per-worker transient state when the panel switches to a
   // different worker — a stale preview/progress from the previously
@@ -111,10 +141,30 @@ export function useShip(workerId: string): UseShipReturn {
       setProgress([]);
       setError(null);
       setResult(null);
+      setContext(null);
+      setAiProse(null);
+      setAiProseState("idle");
     }
   }, [workerId]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally keyed on workerId only — mode is read fresh via closure at call time but must not itself be a dependency (that would redefine runPreflight's identity on every mode change, which ShipPanel's effect treats as "re-run preflight"; setMode below already handles a mode-change refresh directly, without going through this callback).
+  /**
+   * Best-effort: fetches the causal record for the worker's current ship
+   * range. Failure never surfaces as a ship error and never blocks the
+   * `"previewing"` transition — the Causal Record section is a preview
+   * enhancement, not a precondition for shipping (Phase 1's commit/push/
+   * compare path works with zero AI/causal dependency, and this must not
+   * regress that).
+   */
+  const fetchContext = useCallback(async () => {
+    try {
+      const fetched = await shipContext(workerId);
+      setContext(fetched);
+    } catch {
+      setContext(null);
+    }
+  }, [workerId]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally excludes `mode` — mode is read fresh via closure at call time but must not itself be a dependency (that would redefine runPreflight's identity on every mode change, which ShipPanel's effect treats as "re-run preflight"; setMode below already handles a mode-change refresh directly, without going through this callback). `fetchContext` itself only changes identity when `workerId` does, so this callback's own identity still only changes with the worker.
   const runPreflight = useCallback(async () => {
     setState("preflighting");
     setError(null);
@@ -123,11 +173,48 @@ export function useShip(workerId: string): UseShipReturn {
       setPreflight(result);
       setMessage((prev) => (prev.trim().length > 0 ? prev : generateCommitMessage(result)));
       setState("previewing");
+      void fetchContext();
     } catch (err) {
       setError(toShipError(err));
       setState("failed");
     }
-  }, [workerId]);
+  }, [workerId, fetchContext]);
+
+  /**
+   * Calls `generateCausalProse` with the current `context`/`preflight`
+   * and the app's currently-selected chat model (the same catalog/atom
+   * `AIChat.tsx` reads) — a no-op until both are loaded. Failure (no API
+   * key, network, refusal) sets `aiProseState: "failed"` and leaves
+   * `aiProse` exactly as it was (untouched on a *re*-generate failure,
+   * still `null` on a first-attempt failure) — `ShipPreview` falls back
+   * to the deterministic Causal Record section alone via
+   * `composedBody`'s `null`-`aiProse` handling, never a synthesized
+   * placeholder.
+   */
+  const regenerateProse = useCallback(async () => {
+    if (context == null || preflight == null) return;
+    setAiProseState("generating");
+    try {
+      const prose = await generateCausalProse(
+        {
+          context,
+          diffStat: preflight.diffStat,
+          branch: preflight.branch,
+          baseBranch: preflight.baseBranch,
+        },
+        CLAUDE_MODELS[selectedModel].id,
+      );
+      setAiProse(prose);
+      setAiProseState("ready");
+    } catch {
+      setAiProseState("failed");
+    }
+  }, [context, preflight, selectedModel]);
+
+  const composedBody = useMemo(() => {
+    if (context == null || preflight == null) return null;
+    return composeShipBody(context, preflight.diffStat, aiProse);
+  }, [context, preflight, aiProse]);
 
   /**
    * DIRECTIVE (B3): the deny-list/diffStat preview must reflect the
@@ -234,6 +321,13 @@ export function useShip(workerId: string): UseShipReturn {
       );
       const push = await gitPush(workerId, shipId, false);
       const [title, ...bodyLines] = message.split("\n");
+      // The compare-URL body is the composed causal body (deterministic
+      // Causal Record + optional AI prose) when it's loaded; falling
+      // back to the commit message's own trailing lines exactly
+      // reproduces Phase 1's behavior for the (rare, best-effort-only)
+      // case where `ship_context` never resolved in time — shipping
+      // must never be blocked on the causal record being ready.
+      const body = composedBody ?? bodyLines.join("\n").trim();
       // Same ordering rule as commitAndPush above — arm the listener
       // before the call that might trigger it.
       const settled = armSettledWait(shipId);
@@ -243,7 +337,7 @@ export function useShip(workerId: string): UseShipReturn {
         commitSha ?? push.sha,
         push.pushedRef,
         title ?? message,
-        bodyLines.join("\n").trim(),
+        body,
       );
       await settled;
       return { commitSha: commitSha ?? push.sha, pushedRef: push.pushedRef, prUrl: url };
@@ -263,7 +357,7 @@ export function useShip(workerId: string): UseShipReturn {
         );
       }
     }
-  }, [runAction, workerId, message, mode, preflight]);
+  }, [runAction, workerId, message, mode, preflight, composedBody]);
 
   const reset = useCallback(() => {
     setState("idle");
@@ -271,6 +365,9 @@ export function useShip(workerId: string): UseShipReturn {
     setProgress([]);
     setError(null);
     setResult(null);
+    setContext(null);
+    setAiProse(null);
+    setAiProseState("idle");
   }, []);
 
   return {
@@ -283,6 +380,12 @@ export function useShip(workerId: string): UseShipReturn {
     progress,
     error,
     result,
+    context,
+    aiProse,
+    setAiProse,
+    aiProseState,
+    regenerateProse,
+    composedBody,
     runPreflight,
     commitOnly,
     commitAndPush,

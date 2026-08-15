@@ -29,6 +29,7 @@ Events are received on a single ordered channel, `swarm://events` -- see [Events
   - [git_stage_commit](#git_stage_commit)
   - [git_push](#git_push)
   - [ship_compare_url](#ship_compare_url)
+  - [ship_context](#ship_context)
 - [Session Commands](#session-commands)
   - [create_session](#create_session)
   - [delete_session](#delete_session)
@@ -599,6 +600,50 @@ await open(url); // @tauri-apps/plugin-shell
 ```
 
 **Emits:** `ship_progress` (`step: "compare"`), then `ship_settled` with `prUrl` set.
+
+---
+
+### `ship_context`
+
+**Phase 2.** Read-only: the causal record for a worker's current ship range — the evidence half of the PR body `src/lib/ship-causal.ts` composes (see [docs/architecture.md#phase-2--the-causal-record](architecture.md#phase-2--the-causal-record) for the full design and the plan-vs-landed adaptation this command's turn-grouping is based on). Resolves `(seqFrom, seqTo]` via the exact same algorithm `git_stage_commit` uses (`lastShippedSeq ?? worktree_created seq .. current max`), then filters the event log to that worker's `agent_block`/`agent_tool_call`/`agent_tool_result`/`agent_turn_settled`/`commit_created` rows in range. Emits no events (a query, not a mutation).
+
+**Parameters:**
+
+| Name       | Type     | Required | Description         |
+|------------|----------|----------|----------------------|
+| `workerId` | `string` | Yes      | UUID of the worker    |
+
+**Returns:** `ShipContext`
+
+**`ShipContext` object:**
+
+| Field              | Type              | Description                                                          |
+|--------------------|-------------------|------------------------------------------------------------------------|
+| `workerId`         | `string` (UUID)   | The worker this context was computed for                                |
+| `seqFrom`          | `number`          | Start of the resolved range (exclusive)                                 |
+| `seqTo`            | `number`          | End of the resolved range (inclusive)                                   |
+| `turns`            | `CausalTurn[]`    | Turns in range, oldest first, capped at 200 (newest kept on overflow — see `omittedTurnCount`) |
+| `commits`          | `CausalCommit[]`  | `commit_created` rows for this worker in range — ordinarily empty at preview time, populated on a re-preview after an earlier "Commit Only" step |
+| `omittedTurnCount` | `number`          | How many turns were dropped to respect the 200-turn cap — `0` when nothing was dropped |
+
+**`CausalTurn` object:** `{ turnId: string, status: "ok" | "error" | null, toolCalls: CausalToolCall[] }` — `status` is `null` when no `agent_turn_settled` was observed in range (the turn was still open at `seqTo`, or settled outside the window).
+
+**`CausalToolCall` object:** `{ seq: number, name: string, target: string | null, ok: boolean | null }` — `target` is a best-effort extraction from the call's `input`, via an allowlist of path/command-shaped fields (`path`, `file_path`, `filePath`, `command`, `cmd`, `pattern`, `url`, `query`, `name`) capped at 200 characters — **never** a raw `input`/`content` field, which can legitimately carry file contents. `ok` is `null` until a matching `agent_tool_result` is seen in range — never defaulted to `true`.
+
+**`CausalCommit` object:** `{ sha: string, branch: string, seqFrom: number, seqTo: number }` — mirrors the commit's own `Swarm-Seq-Range` trailer.
+
+**Errors:** `ShipError` with kind `workerNotFound` (no worker with `workerId`) — every other failure (an `EventLog`/task-panic error) also surfaces as a `ShipError` (kind `unknown`) via the same `ship_error_fallback` every other ship command's Tauri wrapper uses, even though the registry handler itself can also reject with a plain string.
+
+**Example:**
+
+```typescript
+const context = await invoke("ship_context", { workerId });
+if (context.turns.length === 0) {
+  // Causal Record Unavailable For This Range — render the honest empty state.
+}
+```
+
+**Emits:** nothing.
 
 ---
 
