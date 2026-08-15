@@ -651,6 +651,23 @@ fn is_claude_settings_json(rel_path: &str) -> bool {
 /// pre-existing file, and whether to ship it is the user's call, same
 /// as any other tracked file. This function never denies a tracked copy
 /// on that basis alone.
+///
+/// **Honest scope (review NIT-3):** `is_untracked` reflects the
+/// `git status` snapshot taken at the moment [`preflight`] or
+/// [`stage_and_commit`] runs its own [`status_porcelain`] call — this
+/// is a point-in-time check, not a standing guarantee. If something
+/// (a human, or the worker's own agent shelling out inside its
+/// worktree) runs `git add -A`/`git add .claude/settings.json` BEFORE
+/// that call, the file is already staged by the time this function
+/// ever sees it, `is_untracked` is `false`, and `mode: "all"` ships it
+/// like any other staged file — the deny only ever fires for a file
+/// this specific ship attempt would otherwise have picked up as an
+/// untracked survivor itself. This is a deliberate tradeoff, not an
+/// oversight: catching every possible prior-staging path would mean
+/// denying tracked files unconditionally, which would override a
+/// user's or agent's own explicit intent to commit a file they just
+/// staged — the one case this defense is explicitly NOT meant to
+/// override (see the tracked-copy paragraph above).
 fn deny_reason(worktree_path: &Path, rel_path: &str, is_untracked: bool) -> Option<String> {
     if is_untracked && is_claude_settings_json(rel_path) {
         return Some("Skipped — SWARM Configuration File".to_string());

@@ -198,13 +198,24 @@ fn permission_mode_flag(tier: ClaudeCodeTrustTier) -> Option<&'static str> {
 /// (`is_error: false`, real cwd in the tool result) — `Bash` itself
 /// stayed listed in the init message's `tools` array throughout,
 /// unlike the bare-tool-name case above. Neither "deny all Bash" nor
-/// "deny nothing"; the glob restricts exactly the matching invocation.
+/// "deny nothing"; the glob restricts exactly the matching invocation
+/// (the run terminated via `error_max_turns` after both tool results
+/// were already captured — same harmless `--max-turns`-bounds-the-
+/// harness nuance as the `acceptEdits` canary elsewhere in this
+/// module's tests; the measurement stands regardless).
 /// (`scratchpad/spike-permissions/harness/specs/15-glob-deny-echo-vs-pwd.json`
 /// and the matching `logs/15-glob-deny-echo-vs-pwd.summary.json` — run
 /// used `--model haiku` rather than the harness's usual `sonnet` solely
 /// to stay under a $0.10 run budget, since permission gating is
 /// enforced by the CLI around the tool call rather than by the model
 /// itself, so the swap doesn't affect what's being measured here.)
+///
+/// Only `Bash(echo*)` was exercised: the Standard/WriteEnabled deny
+/// list's other four pattern-form entries below (`Bash(rm -rf*)`,
+/// `Bash(git push --force*)`, `Bash(git push -f*)`,
+/// `Bash(git reset --hard*)`, `Bash(sudo*)`) follow the same
+/// `Tool(pattern)` glob grammar just verified pattern-granular above,
+/// not a separately confirmed empirical result apiece.
 fn deny_list(tier: ClaudeCodeTrustTier) -> Vec<&'static str> {
     match tier {
         ClaudeCodeTrustTier::Restricted => vec!["Bash", "Write", "Edit", "NotebookEdit"],
