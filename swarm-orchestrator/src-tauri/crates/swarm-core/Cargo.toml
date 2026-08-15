@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 tokio         = { workspace = true }
+tokio-util    = { workspace = true }
 tokio-stream  = { workspace = true }
 portable-pty  = { workspace = true }
 reqwest       = { workspace = true }
@@ -18,6 +19,16 @@ dashmap       = { workspace = true }
 parking_lot   = { workspace = true }
 rusqlite      = { workspace = true }
 regex         = { workspace = true }
+# `swarm_core::metrics` (moved here from the desktop shell so both
+# shells' Runtime construction can start the same background collection
+# loop) — already a workspace dep the desktop shell used at runtime;
+# zero new crate.
+sysinfo       = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+# `swarm_core::lock`'s flock(2) call — already present transitively
+# (tokio/mio), made a direct target-gated dependency.
+libc          = { workspace = true }
 
 [dev-dependencies]
 # Test-only, for the credential-leak-in-waiting span-capture test

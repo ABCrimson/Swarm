@@ -47,8 +47,12 @@ pub mod config;
 pub mod error;
 pub mod events;
 pub mod git;
+pub mod lock;
+pub mod metrics;
 pub mod orchestration;
 mod paths;
+pub mod protocol;
+pub mod runtime;
 pub mod session;
 pub mod worker;
 
