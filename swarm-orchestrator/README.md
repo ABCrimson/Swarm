@@ -32,7 +32,7 @@ SWARM Orchestrator is a high-performance desktop application for managing and or
 - **Integrated terminal per worker** -- Each worker runs in its own PTY with @xterm/xterm (WebGL2 renderer), bridged to Tokio via non-blocking mpsc channels
 - **Streaming AI responses** -- `@anthropic-ai/sdk` streams directly from the webview to the Anthropic Messages API (SSE), gated by a frontend priority queue and concurrency limit (`useAiStore`), with an agentic tool-use loop. (The Rust-side `ai_request`/`AiQueue`/SSE-parser path this used to sit beside was deleted; its tested queueing machinery now lives as `swarm_core::agent::scheduler::AgentScheduler`, feeding the multi-provider agent adapter layer -- see [Built, Not Wired](docs/architecture.md#built-not-wired) and [docs/architecture.md's Adapter Layer section](docs/architecture.md#adapter-layer).)
 - **Per-worker AI chat** -- `WorkerAIPanel` mounts a combined terminal + AI chat split view on the Workers page, with tool execution routed through the worker's PTY
-- **Inter-agent message bus** -- Direct, broadcast, and pipeline routing between workers with a unified single-delivery event contract
+- **Inter-agent message bus** -- Direct and broadcast routing between workers, with a unified, unconditional single-delivery event contract
 - **Real-time metrics dashboard** -- CPU, memory, throughput, and AI queue metrics displayed via Recharts with 500ms refresh, a `perWorker` process breakdown, and a performance overlay
 - **WebGPU particle system** -- GPU-driven compute shaders, instanced billboard rendering, and post-processing (bloom, chromatic aberration, vignette)
 - **Persistent sessions** -- Create, restore, and export workspace sessions with crash recovery via `tauri-plugin-store`
@@ -175,15 +175,17 @@ swarm-orchestrator/
 │   ├── src/
 │   │   ├── agent/                # Multi-provider agent execution: AgentAdapter/AgentSession traits, scheduler
 │   │   │   ├── adapter.rs        # Trait pair, Capabilities, ProviderId (absorbed the deleted ai/client.rs, ai/stream.rs)
+│   │   │   ├── claude_code.rs    # ClaudeCodeAdapter/ClaudeCodeSession -- claude CLI's stream-json over piped stdio
+│   │   │   ├── codex.rs          # CodexAdapter/CodexSession -- codex app-server's bidirectional JSON-RPC over piped stdio
 │   │   │   └── scheduler.rs      # AgentScheduler -- priority queue + concurrency limiting (absorbed the deleted ai/queue.rs)
-│   │   ├── bus/                  # Inter-agent message bus
+│   │   ├── bus/                  # Inter-agent message bus -- the routing layer, not dead (see docs/architecture.md)
 │   │   │   ├── channel.rs        # MessageBus (per-topic broadcast channels)
-│   │   │   └── router.rs         # Direct / broadcast / pipeline routing
+│   │   │   └── router.rs         # Direct / broadcast routing; emits bus_message onto the spine itself
 │   │   ├── commands/             # Tauri IPC command handlers
 │   │   │   ├── worker.rs         # spawn, pause, resume, kill, list, input
 │   │   │   ├── session.rs        # create, delete, list, get, session_add_worker
-│   │   │   ├── agent.rs          # agent_turn_started (ai_request/ai.rs removed -- see docs/architecture.md's Adapter Layer)
-│   │   │   ├── bus.rs            # bus_send, bus_subscribe, bus_create_pipeline, bus_list_channels, bus_list_pipelines
+│   │   │   ├── agent.rs          # agent_turn_started, agent_spawn/agent_probe (provider-routed), agent_send_turn/agent_cancel/agent_shutdown/agent_permission_respond (provider-generic)
+│   │   │   ├── bus.rs            # bus_send, bus_list_channels
 │   │   │   ├── metrics.rs        # get_metrics (incl. perWorker) + background loop
 │   │   │   ├── updater.rs        # check_for_updates
 │   │   │   ├── notification.rs   # send_notification
@@ -297,7 +299,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed release notes per milestone.
 
 Full IPC command documentation is available at [docs/api.md](docs/api.md).
 
-> The `agent_*` event family (Phase 2 of the multi-provider plan -- typed, tested, persistence-classified, but with no concrete `AgentAdapter` implementation yet to emit them) and the five `bus_*` commands below are implemented and tested but have no frontend caller in the shipped app -- see [Built, Not Wired](docs/architecture.md#built-not-wired). `ai_request` was removed (not merely unwired) in Phase 2; its queueing machinery was absorbed into `AgentScheduler`.
+> The `agent_*` event family is live: `ClaudeCodeAdapter` (Phase 3) and `CodexAdapter` (Phase 4) both emit it, routed by `agent_spawn`/`agent_probe`'s `provider` argument. `bus_send`/`bus_list_channels` are implemented and tested (the bus is the real inter-agent routing layer as of Phase 4 -- see [Message Bus](docs/architecture.md#message-bus)) but have no frontend caller in the shipped app yet -- see [Built, Not Wired](docs/architecture.md#built-not-wired). `ai_request` was removed (not merely unwired) in Phase 2; its queueing machinery was absorbed into `AgentScheduler`.
 
 **Commands at a glance:**
 
@@ -315,12 +317,15 @@ Full IPC command documentation is available at [docs/api.md](docs/api.md).
 | `get_session`          | Session       | Get a session by ID                             |
 | `session_add_worker`   | Session       | Register a worker against a session             |
 | `agent_turn_started`   | Agent         | Record an AI/agent turn's start, returning its causal seq |
+| `agent_spawn`          | Agent         | Spawn a worker + attach a provider session (Claude Code or Codex) |
+| `agent_send_turn`      | Agent         | Enqueue one turn for a worker's attached session |
+| `agent_cancel`         | Agent         | Cancel a worker's in-flight turn                |
+| `agent_shutdown`       | Agent         | Shut down a worker's attached agent session     |
+| `agent_probe`          | Agent         | Check whether a provider CLI is installed/usable |
+| `agent_permission_respond` | Agent     | Answer a pending permission request (real round-trip for Codex, no-op for Claude Code) |
 | `get_metrics`          | Metrics       | Get current system metrics snapshot (incl. `perWorker`) |
-| `bus_send`             | Bus           | Send a direct or broadcast message between workers |
-| `bus_subscribe`        | Bus           | Subscribe to a topic and stream messages as events |
-| `bus_create_pipeline`  | Bus           | Create a multi-stage message processing pipeline |
+| `bus_send`             | Bus           | Send a direct or broadcast message between workers, emitting `bus_message` onto the spine unconditionally |
 | `bus_list_channels`    | Bus           | List all active message bus topic channels      |
-| `bus_list_pipelines`   | Bus           | List all registered pipelines                   |
 | `check_for_updates`    | Updater       | Check for an available application update       |
 | `send_notification`    | Notification  | Send a native OS notification                   |
 
