@@ -1,0 +1,291 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildCausalPromptInput,
+  composeShipBody,
+  generateCausalProse,
+  renderCausalRecordSection,
+  stripUnknownSeqCitations,
+} from "#lib/ship-causal";
+import type { CausalTurn, DiffStat, ShipContext } from "#store/types";
+
+const mockStreamMessage = vi.fn();
+vi.mock("#lib/anthropic", () => ({
+  streamMessage: (...args: unknown[]) => mockStreamMessage(...args),
+}));
+
+function makeTurn(overrides: Partial<CausalTurn> = {}): CausalTurn {
+  return {
+    turnId: "t1",
+    status: "ok",
+    toolCalls: [{ seq: 11, name: "Write", target: "src/lib.rs", ok: true }],
+    ...overrides,
+  };
+}
+
+function makeContext(overrides: Partial<ShipContext> = {}): ShipContext {
+  return {
+    workerId: "11111111-2222-3333-8444-555555555555",
+    seqFrom: 9,
+    seqTo: 14,
+    turns: [makeTurn()],
+    commits: [],
+    omittedTurnCount: 0,
+    ...overrides,
+  };
+}
+
+const diffStat: DiffStat = { filesChanged: 2, insertions: 10, deletions: 3 };
+
+async function* fakeStream(
+  deltas: Array<{ content: string; toolUse?: unknown }>,
+): AsyncGenerator<{ content: string; toolUse?: unknown }> {
+  for (const d of deltas) yield d;
+}
+
+beforeEach(() => {
+  mockStreamMessage.mockReset();
+});
+
+// ── renderCausalRecordSection (deterministic, code-generated) ────────
+
+describe("renderCausalRecordSection", () => {
+  it("renders the seq range, turn count, diff stat, and a tool-call table row per call", () => {
+    const section = renderCausalRecordSection(makeContext(), diffStat);
+    expect(section).toContain("## Causal Record");
+    expect(section).toContain("**Seq Range:** `9..14` — 1 Turn");
+    expect(section).toContain("**Diff:** 2 Files Changed, +10/-3");
+    expect(section).toContain("| 1 (Completed) | Write | src/lib.rs | OK |");
+  });
+
+  it("renders a Pending row for a tool call with no observed result", () => {
+    const context = makeContext({
+      turns: [makeTurn({ toolCalls: [{ seq: 5, name: "Bash", target: "pnpm test", ok: null }] })],
+    });
+    const section = renderCausalRecordSection(context, diffStat);
+    expect(section).toContain("| 1 (Completed) | Bash | pnpm test | Pending |");
+  });
+
+  it("renders an Error row and a null target as an em dash", () => {
+    const context = makeContext({
+      turns: [makeTurn({ toolCalls: [{ seq: 5, name: "Read", target: null, ok: false }] })],
+    });
+    const section = renderCausalRecordSection(context, diffStat);
+    expect(section).toContain("| 1 (Completed) | Read | — | Error |");
+  });
+
+  it("includes a commit line when the range already has one", () => {
+    const context = makeContext({
+      commits: [{ sha: "abcdef1234567890", branch: "swarm/x", seqFrom: 9, seqTo: 13 }],
+    });
+    const section = renderCausalRecordSection(context, diffStat);
+    expect(section).toContain("**Commit:** `abcdef123456` On `swarm/x`");
+  });
+
+  it("reports omitted turns honestly rather than silently truncating", () => {
+    const context = makeContext({ omittedTurnCount: 7 });
+    const section = renderCausalRecordSection(context, diffStat);
+    expect(section).toContain("(7 Earlier Turns Omitted)");
+  });
+
+  // ── DIRECTIVE: the empty-range honest degradation ───────────────────
+  it("renders the honest unavailable message for a zero-turn range, never a fabricated table", () => {
+    const context = makeContext({ turns: [] });
+    const section = renderCausalRecordSection(context, diffStat);
+    expect(section).toContain(
+      "_Causal Record Unavailable For This Range — No Recorded Agent Turns._",
+    );
+    expect(section).not.toContain("| Turn | Tool | Target | Result |");
+    // The diff stat still renders — this is "diff-only body", not an
+    // empty one, per the ship-chain plan's degradation rule.
+    expect(section).toContain("**Diff:** 2 Files Changed, +10/-3");
+  });
+
+  it("escapes markdown table pipes and newlines in a tool name/target", () => {
+    const context = makeContext({
+      turns: [makeTurn({ toolCalls: [{ seq: 1, name: "Weird|Tool", target: "a\nb", ok: true }] })],
+    });
+    const section = renderCausalRecordSection(context, diffStat);
+    expect(section).toContain("Weird\\|Tool");
+    expect(section).toContain("a b");
+    expect(section).not.toContain("a\nb |");
+  });
+});
+
+// ── stripUnknownSeqCitations (the honesty gate) ──────────────────────
+
+describe("stripUnknownSeqCitations", () => {
+  it("keeps a citation whose seq falls within (seqFrom, seqTo]", () => {
+    const context = makeContext({ seqFrom: 9, seqTo: 14 });
+    const prose = "The Write call [seq 11] updated the file.";
+    expect(stripUnknownSeqCitations(prose, context)).toBe(prose);
+  });
+
+  it("strips an invented citation not present in the fetched range", () => {
+    const context = makeContext({ seqFrom: 9, seqTo: 14 });
+    const prose = "This was caused by [seq 9999], a turn we never fetched.";
+    const stripped = stripUnknownSeqCitations(prose, context);
+    expect(stripped).not.toContain("[seq 9999]");
+    expect(stripped).toBe("This was caused by, a turn we never fetched.");
+  });
+
+  it("strips a citation at or below seqFrom (exclusive lower bound) and above seqTo", () => {
+    const context = makeContext({ seqFrom: 9, seqTo: 14 });
+    expect(stripUnknownSeqCitations("[seq 9] boundary", context)).toBe("boundary");
+    expect(stripUnknownSeqCitations("[seq 15] boundary", context)).toBe("boundary");
+    expect(stripUnknownSeqCitations("[seq 14] boundary", context)).toBe("[seq 14] boundary");
+  });
+
+  it("strips multiple invalid citations independently, keeping valid ones interleaved", () => {
+    const context = makeContext({ seqFrom: 9, seqTo: 14 });
+    const prose = "First [seq 999] then [seq 11] then [seq 12345].";
+    expect(stripUnknownSeqCitations(prose, context)).toBe("First then [seq 11] then.");
+  });
+
+  it("is case-insensitive on the seq keyword", () => {
+    const context = makeContext({ seqFrom: 9, seqTo: 14 });
+    expect(stripUnknownSeqCitations("[SEQ 11] works", context)).toBe("[SEQ 11] works");
+  });
+});
+
+// ── buildCausalPromptInput (the no-secrets-in-prompt boundary) ───────
+
+describe("buildCausalPromptInput", () => {
+  it("includes only diffStat/branch/turn-shaped data, nothing else", () => {
+    const { system, user } = buildCausalPromptInput({
+      context: makeContext(),
+      diffStat,
+      branch: "swarm/agent-abcd1234",
+      baseBranch: "main",
+    });
+    expect(user).toContain("swarm/agent-abcd1234");
+    expect(user).toContain("main");
+    expect(user).toContain("+10/-3");
+    expect(user).toContain("[seq 11] Write (src/lib.rs) -> OK");
+    expect(system).toContain("[seq N]");
+  });
+
+  // DIRECTIVE: the prompt-assembly no-secrets test. `ShipContext` is
+  // built entirely server-side from an allowlist extraction
+  // (git::causal::extract_target) that never reads a tool's raw
+  // input/content — but this test proves the FRONTEND composer doesn't
+  // introduce a leak of its own even if a malformed/compromised context
+  // object somehow carried extra fields: buildCausalPromptInput reads
+  // only the named fields it destructures, so an injected extra property
+  // never reaches the prompt text.
+  it("never lets an unexpected field on the context object reach the prompt text", () => {
+    const contaminated = {
+      ...makeContext(),
+      // Simulates a hypothetical future field carrying something
+      // sensitive that this function must never read.
+      secretApiKey: "sk-ant-do-not-leak-this-anywhere",
+      rawToolInput: { path: "/etc/passwd", content: "ANTHROPIC_API_KEY=sk-ant-abcdef" },
+    } as unknown as ShipContext;
+
+    const { system, user } = buildCausalPromptInput({
+      context: contaminated,
+      diffStat,
+      branch: "swarm/x",
+      baseBranch: "main",
+    });
+
+    expect(system).not.toContain("sk-ant");
+    expect(user).not.toContain("sk-ant");
+    expect(user).not.toContain("/etc/passwd");
+    expect(user).not.toContain("ANTHROPIC_API_KEY");
+  });
+
+  it("the module source never imports readConfig or #lib/tauri at all (static proof)", () => {
+    // DIRECTIVE (prompt-assembly no-secrets test, static half): the only
+    // source of a config value/token in this codebase is `readConfig`
+    // from `#lib/tauri` (see anthropic.ts's `getClient`, which calls it
+    // for the API key — but that's the HTTP auth header, never prompt
+    // text). Reading ship-causal.ts's own source and asserting it never
+    // imports that function at all means no future edit to this file can
+    // introduce a config-value leak into the prompt without also
+    // failing this test, regardless of what runtime behavior looks like.
+    const modulePath = join(process.cwd(), "src", "lib", "ship-causal.ts");
+    const source = readFileSync(modulePath, "utf-8");
+    // Matches an actual call/import, not this test's own doc-comment
+    // prose mentioning "readConfig" as a name (see the module's JSDoc,
+    // which explains the absence in words).
+    expect(source).not.toMatch(/\breadConfig\(/);
+    expect(source).not.toMatch(/from ["']#lib\/tauri["']/);
+    expect(source).not.toMatch(/process\.env/);
+  });
+
+  it("renders '(No Recorded Turns In This Range)' for an empty turn list, not a blank section", () => {
+    const { user } = buildCausalPromptInput({
+      context: makeContext({ turns: [] }),
+      diffStat,
+      branch: "swarm/x",
+      baseBranch: "main",
+    });
+    expect(user).toContain("(No Recorded Turns In This Range)");
+  });
+});
+
+// ── generateCausalProse (degrades gracefully) ────────────────────────
+
+describe("generateCausalProse", () => {
+  it("collects streamed deltas into one string and strips invalid citations", async () => {
+    mockStreamMessage.mockReturnValue(
+      fakeStream([
+        { content: "Added a helper " },
+        { content: "in [seq 11] " },
+        { content: "and referenced [seq 9999] which was never fetched." },
+      ]),
+    );
+    const prose = await generateCausalProse(
+      { context: makeContext(), diffStat, branch: "swarm/x", baseBranch: "main" },
+      "claude-sonnet-4-5",
+    );
+    expect(prose).toContain("[seq 11]");
+    expect(prose).not.toContain("[seq 9999]");
+  });
+
+  it("propagates a streamMessage failure rather than swallowing it (caller falls back to the deterministic section alone)", async () => {
+    // A hand-rolled async iterable (rather than an `async function*`
+    // that never yields, which biome's `useYield` rule rejects): the
+    // first `next()` rejects immediately, which is exactly what a real
+    // `streamMessage` does when `getClient()` throws before the first
+    // `yield`.
+    mockStreamMessage.mockReturnValue({
+      [Symbol.asyncIterator]() {
+        return {
+          next: () => Promise.reject(new Error("API Key Not Configured — Update In Settings.")),
+        };
+      },
+    });
+    await expect(
+      generateCausalProse(
+        { context: makeContext(), diffStat, branch: "swarm/x", baseBranch: "main" },
+        "claude-sonnet-4-5",
+      ),
+    ).rejects.toThrow(/API Key Not Configured/);
+  });
+});
+
+// ── composeShipBody ───────────────────────────────────────────────────
+
+describe("composeShipBody", () => {
+  it("puts AI prose above the deterministic Causal Record when prose is present", () => {
+    const body = composeShipBody(makeContext(), diffStat, "This change adds a helper function.");
+    const proseIndex = body.indexOf("This change adds a helper function.");
+    const recordIndex = body.indexOf("## Causal Record");
+    expect(proseIndex).toBeGreaterThanOrEqual(0);
+    expect(recordIndex).toBeGreaterThan(proseIndex);
+  });
+
+  it("falls back to the deterministic section alone when aiProse is null (no key / failure)", () => {
+    const body = composeShipBody(makeContext(), diffStat, null);
+    expect(body).toContain("## Causal Record");
+    expect(body.trim().startsWith("## Causal Record")).toBe(true);
+  });
+
+  it("falls back to the deterministic section alone when aiProse is empty/whitespace", () => {
+    const body = composeShipBody(makeContext(), diffStat, "   \n  ");
+    expect(body.trim().startsWith("## Causal Record")).toBe(true);
+  });
+});

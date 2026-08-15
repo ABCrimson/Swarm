@@ -7,6 +7,7 @@ import type {
   CommitOutcome,
   PushOutcome,
   Session,
+  ShipContext,
   ShipError,
   ShipPreflight,
   StagingMode,
@@ -17,6 +18,7 @@ import {
   CommitOutcomeSchema,
   PushOutcomeSchema,
   SessionSchema,
+  ShipContextSchema,
   ShipErrorSchema,
   ShipPreflightSchema,
 } from "#store/types";
@@ -745,6 +747,28 @@ export async function shipCompareUrl(
     const parsed = ShipCompareUrlResponseSchema.safeParse(raw);
     if (!parsed.success) {
       throw new Error("Ship Compare URL Returned An Unexpected Shape.");
+    }
+    return parsed.data;
+  } catch (err) {
+    throw toShipCommandError(err);
+  }
+}
+
+/**
+ * Fetches the causal record for `workerId`'s current ship range —
+ * turns, tool calls, and any commits already made in the range the next
+ * `gitStageCommit` call would use. Read-only; the range itself is
+ * resolved server-side (the same algorithm `git_stage_commit` uses), so
+ * this always describes what a ship attempt starting *right now* would
+ * cite. See `#lib/ship-causal`'s `renderCausalRecordSection` for how
+ * this renders into the ship preview.
+ */
+export async function shipContext(workerId: string): Promise<ShipContext> {
+  try {
+    const raw = await invoke<unknown>("ship_context", { workerId });
+    const parsed = ShipContextSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("Ship Context Returned An Unexpected Shape.");
     }
     return parsed.data;
   } catch (err) {
