@@ -25,7 +25,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::Paths;
 use crate::agent::{
-    AgentScheduler, AgentSchedulerConfig, AgentSessionRegistry, AgentTurnRequest, ClaudeCodeAdapter,
+    AgentScheduler, AgentSchedulerConfig, AgentSessionRegistry, AgentTurnRequest,
+    ClaudeCodeAdapter, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY,
 };
 use crate::bus::channel::MessageBus;
 use crate::bus::router::Router;
@@ -252,6 +253,22 @@ impl Runtime {
                 }
             },
         ));
+
+        // Apply the persisted agent-turn concurrency cap (set via
+        // Settings -> set_agent_concurrency). An absent or
+        // out-of-range value keeps AgentSchedulerConfig::default()'s
+        // 3 — same "invalid/missing persisted value degrades to the
+        // constructor default" discipline as `max_workers` above.
+        if let Some(limit) = crate::config::read_value(&config.paths, "agent_concurrency")
+            .and_then(|v| v.as_u64())
+            .and_then(|v| u32::try_from(v).ok())
+        {
+            if (MIN_AGENT_CONCURRENCY..=MAX_AGENT_CONCURRENCY).contains(&limit) {
+                scheduler.set_concurrency(limit as usize);
+            } else {
+                tracing::warn!(limit, "ignoring out-of-range persisted agent_concurrency");
+            }
+        }
 
         Ok(Self {
             paths: config.paths,

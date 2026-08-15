@@ -90,3 +90,20 @@ pub async fn session_add_worker(
     )
     .await
 }
+
+#[tauri::command]
+#[tracing::instrument(skip(registry, ctx))]
+pub async fn session_remove_worker(
+    registry: tauri::State<'_, std::sync::Arc<Registry>>,
+    ctx: tauri::State<'_, swarm_core::commands::Ctx>,
+    session_id: String,
+    worker_id: String,
+) -> Result<(), String> {
+    call(
+        &registry,
+        ctx.inner().clone(),
+        "session_remove_worker",
+        serde_json::json!({ "sessionId": session_id, "workerId": worker_id }),
+    )
+    .await
+}

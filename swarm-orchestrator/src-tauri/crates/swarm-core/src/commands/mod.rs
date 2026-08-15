@@ -274,6 +274,11 @@ impl Registry {
             entry("list_sessions", session::list_sessions, Allowed),
             entry("get_session", session::get_session, Allowed),
             entry("session_add_worker", session::session_add_worker, Allowed),
+            entry(
+                "session_remove_worker",
+                session::session_remove_worker,
+                Allowed,
+            ),
             // Agent commands
             entry("agent_turn_started", agent::agent_turn_started, Allowed),
             entry("agent_spawn", agent::agent_spawn, Allowed),
@@ -281,6 +286,11 @@ impl Registry {
             entry("agent_cancel", agent::agent_cancel, Allowed),
             entry("agent_shutdown", agent::agent_shutdown, Allowed),
             entry("agent_probe", agent::agent_probe, Allowed),
+            entry(
+                "set_agent_concurrency",
+                agent::set_agent_concurrency,
+                Allowed,
+            ),
             // Config commands — secret-shaped keys filtered both ways
             // (read = exfiltration, write = poisoning).
             entry("read_config", config::read_config, SecretFiltered),
@@ -443,9 +453,9 @@ mod tests {
     }
 
     #[test]
-    fn test_registry_has_34_entries() {
-        // 36 tauri commands total minus the 2 NATIVE_ONLY.
-        assert_eq!(Registry::new().keys().len(), 34);
+    fn test_registry_has_36_entries() {
+        // 38 tauri commands total minus the 2 NATIVE_ONLY.
+        assert_eq!(Registry::new().keys().len(), 36);
     }
 
     #[tokio::test]
