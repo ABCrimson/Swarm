@@ -158,95 +158,206 @@ pub type BoxFuture = Pin<Box<dyn Future<Output = Result<Value, Value>> + Send>>;
 
 type HandlerBox = Arc<dyn Fn(Ctx, Value) -> BoxFuture + Send + Sync>;
 
-/// Builds one `(name, handler)` registry entry from a plain `async fn(Ctx,
-/// Value) -> Result<Value, Value>` — no manual boxing boilerplate per
-/// command.
-fn entry<F, Fut>(name: &'static str, f: F) -> (&'static str, HandlerBox)
+/// Declarative remote-network policy for one registry entry — the
+/// `security-review` finding BLOCK-1 fix: a network client (`swarmd`'s
+/// WS `rpc` dispatcher) must never reach a handler through anything
+/// OTHER than this declared policy. Before this type existed, the only
+/// gate was `swarmd::ws`'s own `cmd == "read_config"` string check,
+/// which caught the ONE command someone thought to special-case and let
+/// `read_file`/`write_file` through uninspected — reproduced as a live
+/// exfiltration of `<data_dir>/daemon-token`, `swarm-config.json` (the
+/// Anthropic API key), and arbitrary `$HOME` files (`~/.gitconfig`,
+/// `~/.claude/settings.json`) over an authenticated WS connection.
+///
+/// The Tauri desktop path is UNAFFECTED — [`Registry::dispatch`] (used
+/// by every `#[tauri::command]` wrapper) never consults this; only
+/// [`Registry::dispatch_remote`] (used exclusively by `swarmd`'s WS `rpc`
+/// handler) does. Local IPC and local file access were never the
+/// vulnerability — the network boundary was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemotePolicy {
+    /// Safe to expose to any authenticated remote client verbatim — the
+    /// default for the worker/session/agent/bus/metrics/orchestration
+    /// surface. Note this still means "an authenticated remote client
+    /// can run arbitrary shell commands as this user" via
+    /// `spawn_worker`'s `shell`/`env`/`cwd` — that is the product's
+    /// actual trust model (see `docs/architecture.md`'s Runtime Modes
+    /// trust-boundary paragraph), not an oversight this enum fixes.
+    Allowed,
+    /// Never reachable over the network under ANY arguments —
+    /// `read_file`/`write_file` read/write the DAEMON HOST's
+    /// filesystem, including outside `Paths::data_dir` (their own
+    /// `FsScopes` boundary permits all of `$HOME`) — not on the MVP
+    /// remote surface (Dashboard/Workers/Terminals/Metrics/Agent chat),
+    /// and the exact vector this fix closes.
+    Denied,
+    /// Reachable, but [`secret_filtered_denial`] inspects `args` first
+    /// and can still deny — `read_config`/`write_config` both take a
+    /// free-form `key: String`; a remote client must not be able to
+    /// READ a secret-shaped key (credential exfiltration) or WRITE one
+    /// (credential poisoning — a remote client planting its own
+    /// `anthropic_api_key` that the desktop app would then trust).
+    SecretFiltered,
+}
+
+/// `true` when `args`' `key` field (the shape both `read_config` and
+/// `write_config` share) names a secret-prefixed key — see
+/// [`config::is_secret_key`]. Applied uniformly to every
+/// [`RemotePolicy::SecretFiltered`] entry by
+/// [`Registry::dispatch_remote`] — a declarative, argument-shape check,
+/// never a `cmd ==` string comparison at the call site.
+fn secret_filtered_denial(args: &Value) -> Option<Value> {
+    let is_secret = args
+        .get("key")
+        .and_then(|v| v.as_str())
+        .is_some_and(config::is_secret_key);
+    is_secret
+        .then(|| Value::String("Remote Access To Secret-Shaped Config Keys Is Denied.".to_string()))
+}
+
+struct RegistryEntry {
+    handler: HandlerBox,
+    policy: RemotePolicy,
+}
+
+/// Builds one `(name, entry)` registry row from a plain `async fn(Ctx,
+/// Value) -> Result<Value, Value>` plus its declared [`RemotePolicy`] —
+/// no manual boxing boilerplate per command, and no command can be
+/// added to the registry without SOME explicit policy (the parameter is
+/// required, not defaulted).
+fn entry<F, Fut>(name: &'static str, f: F, policy: RemotePolicy) -> (&'static str, RegistryEntry)
 where
     F: Fn(Ctx, Value) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<Value, Value>> + Send + 'static,
 {
     (
         name,
-        Arc::new(move |ctx, args| Box::pin(f(ctx, args)) as BoxFuture),
+        RegistryEntry {
+            handler: Arc::new(move |ctx, args| Box::pin(f(ctx, args)) as BoxFuture),
+            policy,
+        },
     )
 }
 
 /// `name -> handler` dispatch table. See the module doc for the
 /// drift-proof contract with `generate_handler!`.
 pub struct Registry {
-    handlers: std::collections::HashMap<&'static str, HandlerBox>,
+    entries: std::collections::HashMap<&'static str, RegistryEntry>,
 }
 
 impl Registry {
     /// Builds the full registry. Every entry here is a command BOTH
     /// shells must expose identically — see [`NATIVE_ONLY`] for the two
-    /// that are deliberately absent.
+    /// that are deliberately absent. Every entry ALSO declares a
+    /// [`RemotePolicy`] — see that type's doc for why this is not
+    /// optional.
     pub fn new() -> Self {
-        let entries: Vec<(&'static str, HandlerBox)> = vec![
+        use RemotePolicy::{Allowed, Denied, SecretFiltered};
+        let entries: Vec<(&'static str, RegistryEntry)> = vec![
             // Worker commands
-            entry("spawn_worker", worker::spawn_worker),
-            entry("pause_worker", worker::pause_worker),
-            entry("resume_worker", worker::resume_worker),
-            entry("kill_worker", worker::kill_worker),
-            entry("list_workers", worker::list_workers),
-            entry("worker_input", worker::worker_input),
-            entry("set_max_workers", worker::set_max_workers),
+            entry("spawn_worker", worker::spawn_worker, Allowed),
+            entry("pause_worker", worker::pause_worker, Allowed),
+            entry("resume_worker", worker::resume_worker, Allowed),
+            entry("kill_worker", worker::kill_worker, Allowed),
+            entry("list_workers", worker::list_workers, Allowed),
+            entry("worker_input", worker::worker_input, Allowed),
+            entry("set_max_workers", worker::set_max_workers, Allowed),
             // Git / ship commands
-            entry("validate_repo_root", git::validate_repo_root),
-            entry("git_ship_preflight", git::git_ship_preflight),
-            entry("git_stage_commit", git::git_stage_commit),
-            entry("git_push", git::git_push),
-            entry("ship_compare_url", git::ship_compare_url),
+            entry("validate_repo_root", git::validate_repo_root, Allowed),
+            entry("git_ship_preflight", git::git_ship_preflight, Allowed),
+            entry("git_stage_commit", git::git_stage_commit, Allowed),
+            entry("git_push", git::git_push, Allowed),
+            entry("ship_compare_url", git::ship_compare_url, Allowed),
             // Session commands
-            entry("create_session", session::create_session),
-            entry("delete_session", session::delete_session),
-            entry("list_sessions", session::list_sessions),
-            entry("get_session", session::get_session),
-            entry("session_add_worker", session::session_add_worker),
+            entry("create_session", session::create_session, Allowed),
+            entry("delete_session", session::delete_session, Allowed),
+            entry("list_sessions", session::list_sessions, Allowed),
+            entry("get_session", session::get_session, Allowed),
+            entry("session_add_worker", session::session_add_worker, Allowed),
             // Agent commands
-            entry("agent_turn_started", agent::agent_turn_started),
-            entry("agent_spawn", agent::agent_spawn),
-            entry("agent_send_turn", agent::agent_send_turn),
-            entry("agent_cancel", agent::agent_cancel),
-            entry("agent_shutdown", agent::agent_shutdown),
-            entry("agent_probe", agent::agent_probe),
-            // Config commands
-            entry("read_config", config::read_config),
-            entry("write_config", config::write_config),
-            // File system commands
-            entry("read_file", fs::read_file),
-            entry("write_file", fs::write_file),
+            entry("agent_turn_started", agent::agent_turn_started, Allowed),
+            entry("agent_spawn", agent::agent_spawn, Allowed),
+            entry("agent_send_turn", agent::agent_send_turn, Allowed),
+            entry("agent_cancel", agent::agent_cancel, Allowed),
+            entry("agent_shutdown", agent::agent_shutdown, Allowed),
+            entry("agent_probe", agent::agent_probe, Allowed),
+            // Config commands — secret-shaped keys filtered both ways
+            // (read = exfiltration, write = poisoning).
+            entry("read_config", config::read_config, SecretFiltered),
+            entry("write_config", config::write_config, SecretFiltered),
+            // File system commands — NEVER remote. Arbitrary daemon-host
+            // file read/write, not on the MVP remote surface.
+            entry("read_file", fs::read_file, Denied),
+            entry("write_file", fs::write_file, Denied),
             // Metrics commands
-            entry("get_metrics", metrics::get_metrics),
+            entry("get_metrics", metrics::get_metrics, Allowed),
             // Orchestration commands
-            entry("events_since", orchestration::events_since),
+            entry("events_since", orchestration::events_since, Allowed),
             // Bus commands
-            entry("bus_send", bus::bus_send),
-            entry("bus_subscribe", bus::bus_subscribe),
-            entry("bus_create_pipeline", bus::bus_create_pipeline),
-            entry("bus_list_channels", bus::bus_list_channels),
-            entry("bus_list_pipelines", bus::bus_list_pipelines),
+            entry("bus_send", bus::bus_send, Allowed),
+            entry("bus_subscribe", bus::bus_subscribe, Allowed),
+            entry("bus_create_pipeline", bus::bus_create_pipeline, Allowed),
+            entry("bus_list_channels", bus::bus_list_channels, Allowed),
+            entry("bus_list_pipelines", bus::bus_list_pipelines, Allowed),
         ];
         Self {
-            handlers: entries.into_iter().collect(),
+            entries: entries.into_iter().collect(),
         }
     }
 
     /// Sorted command names — deterministic for the contract test and
     /// for any diagnostic listing.
     pub fn keys(&self) -> Vec<&'static str> {
-        let mut v: Vec<&'static str> = self.handlers.keys().copied().collect();
+        let mut v: Vec<&'static str> = self.entries.keys().copied().collect();
         v.sort_unstable();
         v
     }
 
-    /// Dispatches `cmd` with `args`, or an `"Unknown Command"` error
-    /// `Value` if no handler is registered under that name.
+    /// The declared [`RemotePolicy`] for `cmd`, or `None` if `cmd` has
+    /// no registry entry at all.
+    pub fn policy(&self, cmd: &str) -> Option<RemotePolicy> {
+        self.entries.get(cmd).map(|e| e.policy)
+    }
+
+    /// Dispatches `cmd` with `args` for a LOCAL (Tauri IPC) caller — no
+    /// [`RemotePolicy`] check. `swarm-desktop`'s command wrappers call
+    /// this exclusively; they need the real `anthropic_api_key`, real
+    /// file contents, etc. — the desktop app running on the user's own
+    /// machine was never the threat model `RemotePolicy` defends
+    /// against.
+    ///
+    /// Returns an `"Unknown Command"` error `Value` if no handler is
+    /// registered under that name.
     pub async fn dispatch(&self, cmd: &str, ctx: Ctx, args: Value) -> Result<Value, Value> {
-        match self.handlers.get(cmd) {
-            Some(handler) => handler(ctx, args).await,
+        match self.entries.get(cmd) {
+            Some(entry) => (entry.handler)(ctx, args).await,
             None => Err(Value::String(format!("Unknown Command: \"{cmd}\"."))),
+        }
+    }
+
+    /// Dispatches `cmd` with `args` for a REMOTE (WS `rpc`) caller —
+    /// `swarmd`'s WS handler calls this EXCLUSIVELY, never
+    /// [`Self::dispatch`], and never inspects `cmd` itself to decide
+    /// what's safe (see [`RemotePolicy`]'s doc for why that string-check
+    /// pattern was the vulnerability). [`RemotePolicy::Denied`] entries
+    /// return a typed denial without ever invoking the handler;
+    /// [`RemotePolicy::SecretFiltered`] entries run
+    /// [`secret_filtered_denial`] first.
+    pub async fn dispatch_remote(&self, cmd: &str, ctx: Ctx, args: Value) -> Result<Value, Value> {
+        let Some(entry) = self.entries.get(cmd) else {
+            return Err(Value::String(format!("Unknown Command: \"{cmd}\".")));
+        };
+        match entry.policy {
+            RemotePolicy::Denied => Err(Value::String(format!(
+                "\"{cmd}\" Is Not Available Over A Remote Connection."
+            ))),
+            RemotePolicy::SecretFiltered => {
+                if let Some(denial) = secret_filtered_denial(&args) {
+                    return Err(denial);
+                }
+                (entry.handler)(ctx, args).await
+            }
+            RemotePolicy::Allowed => (entry.handler)(ctx, args).await,
         }
     }
 }
@@ -353,6 +464,167 @@ mod tests {
         let ctx = test_support::test_ctx();
         let result = registry
             .dispatch("list_workers", ctx, serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(result, serde_json::json!([]));
+    }
+
+    // ── RemotePolicy (BLOCK-1 fix) ───────────────────────────────────
+
+    /// DIRECTIVE (BLOCK-1): every registry entry has SOME policy — this
+    /// is structurally guaranteed by `entry()`'s required parameter, but
+    /// asserted here anyway as an explicit, readable contract: iterating
+    /// `Registry::keys()` and asking `policy()` for each must never
+    /// return `None` for a name the registry itself just returned.
+    #[test]
+    fn test_every_registry_entry_declares_a_policy() {
+        let registry = Registry::new();
+        for key in registry.keys() {
+            assert!(
+                registry.policy(key).is_some(),
+                "{key} is a registry key but has no declared RemotePolicy"
+            );
+        }
+    }
+
+    /// DIRECTIVE (BLOCK-1): the remote-denied set, asserted EXPLICITLY
+    /// by name — read_file/write_file, and nothing else. A regression
+    /// that widens or narrows this set fails here, not silently.
+    #[test]
+    fn test_remote_denied_set_is_exactly_read_file_and_write_file() {
+        let registry = Registry::new();
+        let denied: std::collections::BTreeSet<&str> = registry
+            .keys()
+            .into_iter()
+            .filter(|k| registry.policy(k) == Some(RemotePolicy::Denied))
+            .collect();
+        assert_eq!(
+            denied,
+            std::collections::BTreeSet::from(["read_file", "write_file"])
+        );
+    }
+
+    /// DIRECTIVE (BLOCK-1): the secret-filtered set, asserted EXPLICITLY
+    /// — read_config/write_config, both directions (read = exfiltration,
+    /// write = poisoning).
+    #[test]
+    fn test_secret_filtered_set_is_exactly_read_config_and_write_config() {
+        let registry = Registry::new();
+        let filtered: std::collections::BTreeSet<&str> = registry
+            .keys()
+            .into_iter()
+            .filter(|k| registry.policy(k) == Some(RemotePolicy::SecretFiltered))
+            .collect();
+        assert_eq!(
+            filtered,
+            std::collections::BTreeSet::from(["read_config", "write_config"])
+        );
+    }
+
+    /// DIRECTIVE (BLOCK-1, the reproduced exfiltration, closed): a
+    /// remote `read_file` call — for ANY path, including the daemon
+    /// token file itself — is denied without the handler ever running
+    /// (so a filesystem error from an unscoped path can't leak path
+    /// existence either).
+    #[tokio::test]
+    async fn test_dispatch_remote_denies_read_file_unconditionally() {
+        let registry = Registry::new();
+        let ctx = test_support::test_ctx();
+        // The exact reproduced exfiltration target — daemon-token — but
+        // the point of `Denied` is that ANY path is refused before the
+        // handler (and therefore the path itself) is ever inspected.
+        let daemon_token_path = ctx.paths.data_dir.join("daemon-token");
+        let result = registry
+            .dispatch_remote(
+                "read_file",
+                ctx,
+                serde_json::json!({ "path": daemon_token_path.display().to_string() }),
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "read_file must be denied over dispatch_remote"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_remote_denies_write_file_unconditionally() {
+        let registry = Registry::new();
+        let ctx = test_support::test_ctx();
+        let result = registry
+            .dispatch_remote(
+                "write_file",
+                ctx,
+                serde_json::json!({ "path": "/tmp/whatever", "content": "x" }),
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "write_file must be denied over dispatch_remote"
+        );
+    }
+
+    /// DIRECTIVE (BLOCK-1): `read_config("anthropic_api_key")` over
+    /// `dispatch_remote` is denied — the exact reproduced exfiltration
+    /// path, now closed at the registry layer instead of a
+    /// `swarmd::ws`-local string check.
+    #[tokio::test]
+    async fn test_dispatch_remote_denies_reading_the_anthropic_key() {
+        let registry = Registry::new();
+        let ctx = test_support::test_ctx();
+        let result = registry
+            .dispatch_remote(
+                "read_config",
+                ctx,
+                serde_json::json!({ "key": "anthropic_api_key" }),
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    /// DIRECTIVE (BLOCK-1, poisoning half): a remote client must not be
+    /// able to WRITE a secret-shaped key either — planting a value the
+    /// desktop app (or `swarmd` itself) would later trust.
+    #[tokio::test]
+    async fn test_dispatch_remote_denies_writing_a_secret_shaped_key() {
+        let registry = Registry::new();
+        let ctx = test_support::test_ctx();
+        let result = registry
+            .dispatch_remote(
+                "write_config",
+                ctx,
+                serde_json::json!({ "key": "anthropic_api_key", "value": "sk-attacker-planted" }),
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    /// An ordinary (non-secret) config key still works over
+    /// `dispatch_remote` — the filter is narrow, not a blanket ban.
+    #[tokio::test]
+    async fn test_dispatch_remote_allows_an_ordinary_config_key() {
+        let registry = Registry::new();
+        let ctx = test_support::test_ctx();
+        let result = registry
+            .dispatch_remote(
+                "read_config",
+                ctx,
+                serde_json::json!({ "key": "max_workers" }),
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    /// DIRECTIVE (BLOCK-1): an `Allowed` command (e.g. `list_workers`)
+    /// behaves identically through `dispatch_remote` as through
+    /// `dispatch` — the policy layer adds a gate, not a behavior change,
+    /// for the commands that were always meant to be remote.
+    #[tokio::test]
+    async fn test_dispatch_remote_allowed_command_behaves_like_local_dispatch() {
+        let registry = Registry::new();
+        let ctx = test_support::test_ctx();
+        let result = registry
+            .dispatch_remote("list_workers", ctx, serde_json::json!({}))
             .await
             .unwrap();
         assert_eq!(result, serde_json::json!([]));
