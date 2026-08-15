@@ -78,7 +78,18 @@ impl std::fmt::Display for LockError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LockError::AlreadyRunning(info) => {
-                write!(f, "SWARM Is Already Running (Pid {})", info.pid)?;
+                // security-review FIX-7: name the holding shell — a
+                // Title Case message that only said "SWARM Is Already
+                // Running (Pid N)" left the reader unable to tell
+                // whether that pid was another swarm-desktop window or
+                // a swarmd instance, which matters for what to do next
+                // (close the window vs. kill the daemon).
+                write!(
+                    f,
+                    "SWARM Is Already Running ({}, Pid {})",
+                    shell_display_name(&info.shell),
+                    info.pid
+                )?;
                 if let Some(bind) = &info.bind {
                     write!(f, " — Connect At {bind}")?;
                 }
@@ -86,6 +97,18 @@ impl std::fmt::Display for LockError {
             }
             LockError::Io(e) => write!(f, "Failed To Acquire The SWARM Instance Lock: {e}"),
         }
+    }
+}
+
+/// Human-readable name for a lock-holder's `shell` identifier —
+/// `"swarmd"` stays lowercase (a program name, not prose); anything
+/// else falls back to the raw identifier verbatim so a future third
+/// shell (or a value from an old/foreign build) is never displayed as
+/// an empty or garbled string.
+fn shell_display_name(shell: &str) -> &str {
+    match shell {
+        "swarm-desktop" => "SWARM Desktop",
+        other => other,
     }
 }
 
@@ -165,6 +188,21 @@ fn try_lock(lock_path: &Path, info_path: &Path) -> Result<File, LockError> {
     // share_mode(0) denies ANY other open (read or write) while this
     // handle is alive — the OS itself refuses a second opener rather
     // than us implementing locking semantics by hand.
+    //
+    // Tradeoff (security-review NIT, documented rather than "fixed" —
+    // there is no strictly-better alternative that keeps the same
+    // crash-safety property): a share_mode(0) handle is briefly
+    // scannable/openable by antivirus/EDR software that opens files for
+    // signature scanning on creation, which can occasionally produce a
+    // transient ERROR_SHARING_VIOLATION against a LEGITIMATE first
+    // acquire (indistinguishable, from this function's error code
+    // alone, from a genuine second-instance collision). This is the
+    // same tradeoff every exclusive-open-based Windows single-instance
+    // lock makes (mutex-handle-based locks avoid it but lose automatic
+    // cleanup semantics tied to file lifetime); if this proves to be a
+    // real-world problem, the fix is a short bounded retry around this
+    // `open()` call, not abandoning share_mode(0).
+    //
     // `truncate(false)` — see the Unix `try_lock`'s matching comment:
     // this file's content is never meaningful, only the exclusive
     // handle itself.
@@ -247,9 +285,17 @@ mod tests {
         // A second attempt against the same dir while the first guard is
         // still alive must fail as AlreadyRunning — this is the core
         // guarantee: two engines can never both hold the lock, even
-        // within a single process (the realistic cross-process case is
-        // exercised by CI via two real binary invocations, not
-        // reproducible in a unit test without spawning a subprocess).
+        // within a single process. This test proves the IN-PROCESS
+        // primitive; the realistic cross-process case (two actual OS
+        // processes, the scenario that matters — an in-process double
+        // acquire proves nothing about whether the OS-level advisory
+        // lock survives being held by a genuinely different process) is
+        // exercised for real by
+        // `swarmd::tests::test_second_daemon_on_the_same_data_dir_is_refused_by_the_single_instance_lock`,
+        // which spawns two actual compiled `swarmd` binaries via
+        // `std::process::Command` and runs as an ordinary `cargo test`
+        // in CI (security-review FIX-5 — a prior version of this
+        // comment claimed that test already existed; it did not).
         let dir = std::env::temp_dir().join(format!("swarm-lock-test-{}", uuid::Uuid::new_v4()));
         let _cleanup = TempDir(dir.clone());
         let first = SingleInstanceLock::acquire(&dir, "swarm-desktop", None).unwrap();
@@ -289,6 +335,30 @@ mod tests {
         assert!(msg.contains("SWARM Is Already Running"));
         assert!(msg.contains("4242"));
         assert!(msg.contains("http://127.0.0.1:8787"));
+    }
+
+    /// DIRECTIVE (security-review FIX-7): the message names WHICH shell
+    /// holds the lock — a bare pid alone doesn't tell the reader whether
+    /// to close a desktop window or stop a daemon.
+    #[test]
+    fn test_already_running_message_names_the_holding_shell() {
+        let swarmd_msg = LockError::AlreadyRunning(LockInfo {
+            pid: 1,
+            shell: "swarmd".to_string(),
+            bind: None,
+            started_at: 0,
+        })
+        .to_string();
+        assert!(swarmd_msg.contains("swarmd"));
+
+        let desktop_msg = LockError::AlreadyRunning(LockInfo {
+            pid: 2,
+            shell: "swarm-desktop".to_string(),
+            bind: None,
+            started_at: 0,
+        })
+        .to_string();
+        assert!(desktop_msg.contains("SWARM Desktop"));
     }
 
     struct TempDir(PathBuf);

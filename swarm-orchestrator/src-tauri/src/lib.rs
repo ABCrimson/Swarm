@@ -33,6 +33,7 @@
 use std::sync::Arc;
 
 use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::DialogExt;
 
 mod commands;
 
@@ -175,7 +176,7 @@ pub fn run() {
             // straight through to `Runtime::start`, which wires it into
             // the engine exactly as `lib.rs` used to do by hand.
             let emit_app = app.handle().clone();
-            let runtime = Runtime::start(
+            let runtime = match Runtime::start(
                 RuntimeConfig {
                     paths,
                     shell_name: "swarm-desktop",
@@ -186,26 +187,38 @@ pub fn run() {
                         tracing::error!(error = %e, "failed to emit domain event");
                     }
                 },
-            )
-            .unwrap_or_else(|e| match e {
-                RuntimeStartError::Lock(lock_err) => {
-                    // Title Case, pid-bearing message per the plan's
-                    // single-instance-lock requirement. `eprintln!` is
-                    // the best available surface pre-window-creation on
-                    // a `windows_subsystem = "windows"` release build
-                    // (no console) — visible in debug builds and in any
-                    // log capture wrapping the release binary; see
-                    // docs/architecture.md's "Runtime Modes" section for
-                    // the documented limitation.
+            ) {
+                Ok(rt) => rt,
+                Err(RuntimeStartError::Lock(lock_err)) => {
+                    // security-review FIX-7: `eprintln!` alone is
+                    // invisible on a `windows_subsystem = "windows"`
+                    // release build (no console) — this runs INSIDE
+                    // `setup()`, where the app handle (and therefore
+                    // `tauri-plugin-dialog`, already a registered
+                    // plugin) exists, so a blocking native dialog
+                    // surfaces the SAME Title Case, pid-and-shell-bearing
+                    // message (see `LockError`'s `Display`, which now
+                    // names which shell holds the lock) on every
+                    // platform, console or not.
                     eprintln!("{lock_err}");
                     tracing::error!(error = %lock_err, "single-instance lock held by another process");
+                    app.dialog()
+                        .message(lock_err.to_string())
+                        .title("SWARM Orchestrator")
+                        .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+                        .blocking_show();
                     std::process::exit(1);
                 }
-                other => {
+                Err(other) => {
                     eprintln!("Failed To Start The SWARM Runtime: {other}");
+                    app.dialog()
+                        .message(other.to_string())
+                        .title("SWARM Orchestrator")
+                        .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+                        .blocking_show();
                     std::process::exit(1);
                 }
-            });
+            };
 
             let ctx = Ctx::from_runtime(&runtime);
             app.manage(ctx);
