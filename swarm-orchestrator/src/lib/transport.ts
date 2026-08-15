@@ -76,43 +76,75 @@ const EVENT_CHANNEL_NAME = "swarm://events";
 const BASE_RECONNECT_DELAY_MS = 500;
 const MAX_RECONNECT_DELAY_MS = 15_000;
 const JITTER_FRACTION = 0.3;
+/**
+ * security-review FIX-8: without a bound, a `swarmd` connection that
+ * never resolves an `rpc` call (server hung, response lost, the
+ * daemon killed mid-request) left `invoke()`'s promise pending
+ * forever — which is also what made `hasTransport()`'s optimistic
+ * "ws is configured, assume reachable" pre-check (`#lib/tauri`) a real
+ * footgun: a caller had no way to distinguish "still working" from
+ * "will never resolve." Every `wsTransport.invoke()` call now rejects
+ * with a typed timeout error after this many milliseconds if no
+ * matching `rpcResult` arrives.
+ */
+const RPC_TIMEOUT_MS = 30_000;
+
+/** Thrown by {@link WsTransport.invoke} when no `rpcResult` arrives within {@link RPC_TIMEOUT_MS}. */
+export class RpcTimeoutError extends Error {
+  constructor(cmd: string) {
+    super(`RPC "${cmd}" Timed Out After ${RPC_TIMEOUT_MS}ms.`);
+    this.name = "RpcTimeoutError";
+  }
+}
 
 /** In-memory fallback for when `sessionStorage` throws (private-mode Safari, etc.) — keeps the CURRENT tab working even though a reload would lose it. */
 let inMemoryToken: string | null = null;
 
 /**
- * Reads the daemon token: from `location.hash` on first load (then
- * persisted to `sessionStorage` and the fragment IMMEDIATELY scrubbed —
- * never left in browser history, a shared screenshot, or a
- * `Referer`-leaking outbound request), or from `sessionStorage` on
- * every subsequent call (reconnects, page reloads within the same tab
- * session).
+ * Reads a token out of `location.hash`, if present, persists it to
+ * `sessionStorage`, and IMMEDIATELY scrubs the fragment — never left in
+ * browser history, a shared screenshot, or a `Referer`-leaking outbound
+ * request (headless-daemon plan: "Token: URL fragment ...
+ * never transmitted/logged" — the same must hold once it lands in the
+ * browser).
+ *
+ * Called once at MODULE INIT (bottom of this file), not lazily from
+ * inside the WS `open` handler (security-review FIX-8): the earlier
+ * lazy-on-first-connect version left the raw token sitting in the
+ * visible URL for the ENTIRE first-connect-attempt window — a slow
+ * network, or a connection that fails and retries, stretched that
+ * window well past "a single synchronous tick." Scrubbing at import
+ * time (synchronous, before any network I/O) minimizes it to
+ * effectively zero. Exported (not `#`-private) so tests can re-invoke
+ * it after mutating `location.hash` to simulate a fresh page load,
+ * since the module itself only runs it the one time it's first
+ * imported.
+ */
+export function initTokenFromLocationHash(): void {
+  if (typeof window === "undefined") return;
+  const hash = window.location.hash;
+  if (!hash.startsWith("#t=")) return;
+
+  const token = decodeURIComponent(hash.slice(3));
+  inMemoryToken = token;
+  try {
+    window.sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+  } catch {
+    // sessionStorage unavailable — `inMemoryToken` still covers this tab.
+  }
+  const scrubbed = window.location.pathname + window.location.search;
+  window.history.replaceState(null, "", scrubbed);
+}
+
+/**
+ * Reads the daemon token for a `hello`/reconnect: from `sessionStorage`
+ * (the authoritative, freshest persisted value — populated by
+ * {@link initTokenFromLocationHash}), falling back to `inMemoryToken`
+ * only when `sessionStorage` itself throws. Never touches
+ * `location.hash` — that happens exactly once, at module init.
  */
 function readToken(): string | null {
   if (typeof window === "undefined") return null;
-
-  const hash = window.location.hash;
-  if (hash.startsWith("#t=")) {
-    const token = decodeURIComponent(hash.slice(3));
-    inMemoryToken = token;
-    try {
-      window.sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
-    } catch {
-      // sessionStorage unavailable — `inMemoryToken` still covers this tab.
-    }
-    // Scrub the fragment immediately (headless-daemon plan: "Token: URL
-    // fragment ... never transmitted/logged" — the SAME must hold once
-    // it lands in the browser: it must not survive as part of a
-    // shareable/bookmarkable/screenshottable URL either).
-    const scrubbed = window.location.pathname + window.location.search;
-    window.history.replaceState(null, "", scrubbed);
-    return token;
-  }
-
-  // `sessionStorage` (the authoritative, freshest persisted value) is
-  // consulted BEFORE `inMemoryToken` — the latter is only a fallback
-  // for when `sessionStorage` itself throws (private-mode Safari,
-  // etc.), never a cache that should shadow a real read.
   try {
     const stored = window.sessionStorage.getItem(TOKEN_STORAGE_KEY);
     if (stored !== null) return stored;
@@ -161,7 +193,8 @@ function errorMessage(raw: unknown): string {
 
 /**
  * Backs `#lib/tauri`'s `invoke`/`listen` when the active transport is
- * WebSocket-based (`TRANSPORT=ws` build, `swarmd --serve-ui`).
+ * WebSocket-based (`__SWARM_TRANSPORT__ === "ws"`, the `pnpm build:web`
+ * build served by `swarmd --serve-ui`).
  *
  * One shared socket for the whole tab: `rpc` calls and the live
  * `swarm://events` subscription share it, matching the plan's "one
@@ -307,7 +340,21 @@ export class WsTransport implements Transport {
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+      // security-review FIX-8: bounded — see RPC_TIMEOUT_MS's doc.
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new RpcTimeoutError(cmd));
+      }, RPC_TIMEOUT_MS);
+      this.pending.set(id, {
+        resolve: (v) => {
+          clearTimeout(timer);
+          (resolve as (v: unknown) => void)(v);
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+      });
       socket.send(JSON.stringify({ frame: "rpc", id, cmd, args }));
     });
   }
@@ -332,13 +379,19 @@ export class WsTransport implements Transport {
   }
 }
 
+// Runs once, at import time — see `initTokenFromLocationHash`'s doc
+// (security-review FIX-8) for why this must not wait for the first
+// connect attempt.
+initTokenFromLocationHash();
+
 export const wsTransport: Transport = new WsTransport();
 
 // ── Selection ────────────────────────────────────────────────────────
 
 /**
- * Vite `define` set by `pnpm build:web` (`TRANSPORT=ws`); undefined for
- * every other build (`pnpm dev`, `tauri dev`/`tauri build`) — those keep
+ * Vite `define` (see `vite.config.ts`), set to `"ws"` only by `pnpm
+ * build:web`; undefined for every other build (`pnpm dev`, `tauri
+ * dev`/`tauri build`) — those keep
  * `tauriTransport` unconditionally, preserving today's exact behavior
  * (including the graceful no-op when previewing in a plain browser with
  * no Tauri bridge, e.g. `pnpm dev`). `wsTransport` is chosen ONLY when
