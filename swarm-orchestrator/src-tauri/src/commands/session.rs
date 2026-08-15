@@ -10,7 +10,10 @@
 use tauri::AppHandle;
 use uuid::Uuid;
 
-use swarm_core::events::{EventSink, SessionCreatedPayload, SessionDeletedPayload, SwarmEvent};
+use swarm_core::events::{
+    EventSink, SessionCreatedPayload, SessionDeletedPayload, SessionWorkerRemovedPayload,
+    SwarmEvent,
+};
 use swarm_core::session::manager::{Session, SessionManager};
 
 use crate::commands::parse_provenance;
@@ -213,6 +216,90 @@ pub async fn session_add_worker(
         }
         Err(e) => {
             tracing::error!(error = %e, "save_sessions task panicked after add_worker");
+        }
+        Ok(Ok(())) => {}
+    }
+
+    Ok(())
+}
+
+/// Removes a worker from a session's `workerIds` list.
+///
+/// The counterpart to `session_add_worker` — without it, `workerIds`
+/// only ever grew across a worker's kill/crash (see `SessionCard.tsx`'s
+/// render-time live-worker-store intersection, which exists precisely
+/// to work around that). Removes the worker from the in-memory manager
+/// ([`SessionManager::remove_worker_from_session`]), emits a persisted
+/// `session_worker_removed` event, and auto-saves the updated session
+/// list to the persistent store — same shape as every other
+/// session-mutating command here.
+///
+/// # Arguments
+///
+/// * `app` - Tauri app handle (injected by Tauri)
+/// * `sink` - Event sink for recording the `session_worker_removed` event (managed state)
+/// * `manager` - Shared session manager (managed state)
+/// * `session_id` - UUID string of the target session
+/// * `worker_id` - UUID string of the worker to remove
+///
+/// # Errors
+///
+/// Returns a `String` error if:
+/// - Either UUID string is invalid
+/// - No session with the given ID exists
+///
+/// Removing a worker id that isn't currently a member of the session is
+/// a benign no-op (see
+/// [`SessionManager::remove_worker_from_session`]'s idempotence doc),
+/// not an error.
+#[tauri::command]
+#[tracing::instrument(skip(app, sink, manager))]
+pub async fn session_remove_worker(
+    app: AppHandle,
+    sink: tauri::State<'_, EventSink>,
+    manager: tauri::State<'_, SessionManager>,
+    session_id: String,
+    worker_id: String,
+    origin_worker: Option<String>,
+    cause_seq: Option<u64>,
+) -> Result<(), String> {
+    tracing::info!(session_id = %session_id, worker_id = %worker_id, "session_remove_worker called");
+    let session_uuid = Uuid::parse_str(&session_id).map_err(|e| {
+        tracing::error!(error = %e, "invalid session ID");
+        e.to_string()
+    })?;
+    let worker_uuid = Uuid::parse_str(&worker_id).map_err(|e| {
+        tracing::error!(error = %e, "invalid worker ID");
+        e.to_string()
+    })?;
+    let provenance = parse_provenance(origin_worker, cause_seq)?;
+
+    manager
+        .remove_worker_from_session(&session_uuid, worker_uuid)
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to remove worker from session");
+            e.to_string()
+        })?;
+
+    sink.emit_with(
+        SwarmEvent::SessionWorkerRemoved(SessionWorkerRemovedPayload {
+            session_id: session_uuid,
+            worker_id: worker_uuid,
+        }),
+        provenance,
+    );
+
+    // Auto-save after mutation via spawn_blocking (blocking disk I/O)
+    let app_clone = app.clone();
+    let manager_clone = manager.inner().clone();
+    match tokio::task::spawn_blocking(move || store::save_sessions(&app_clone, &manager_clone))
+        .await
+    {
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "failed to auto-save sessions after remove_worker");
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "save_sessions task panicked after remove_worker");
         }
         Ok(Ok(())) => {}
     }

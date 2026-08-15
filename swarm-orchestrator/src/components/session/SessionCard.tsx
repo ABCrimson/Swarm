@@ -36,11 +36,13 @@ export function SessionCard({
     addSuffix: true,
   });
 
-  // `session.workerIds` only ever grows (there is no `session_remove_worker`
-  // command in Rust to prune it when a worker is killed) — intersecting
-  // with the live worker store gives an honest count of workers that
-  // still actually exist, instead of a number that climbs forever. The
-  // persisted `workerIds` list itself is left untouched.
+  // `useWorkerEvents`'s `worker_killed` handler now calls
+  // `session_remove_worker` to prune `session.workerIds` promptly, but
+  // that round-trip is async and best-effort (fire-and-forget IPC,
+  // never awaited or retried here) — this intersection with the live
+  // worker store stays as the render-time truth regardless, so a
+  // momentary lag (or a failed prune call) never shows a stale count
+  // for a worker that's actually gone.
   //
   // Selects the derived count itself, not the whole `workers` Map:
   // `appendOutput` (PTY output, arriving at high frequency) produces a

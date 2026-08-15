@@ -488,6 +488,20 @@ export async function sessionAddWorker(sessionId: string, workerId: string): Pro
   return invoke<void>("session_add_worker", { sessionId, workerId });
 }
 
+/**
+ * Remove a worker from a session's `workerIds` list (backend command
+ * `session_remove_worker`) — the counterpart to {@link sessionAddWorker}
+ * that previously didn't exist (see `SessionCard.tsx`'s now-fixed
+ * comment on why it intersected against the live worker store instead
+ * of trusting `workerIds` directly). Unlike `sessionAddWorker`, this
+ * DOES emit a `session_worker_removed` envelope on `swarm://events` —
+ * callers rely on `useSessionEvents` to mirror the result into
+ * `useSessionStore`, they never need to update it themselves.
+ */
+export async function sessionRemoveWorker(sessionId: string, workerId: string): Promise<void> {
+  return invoke<void>("session_remove_worker", { sessionId, workerId });
+}
+
 // ── Notifications ────────────────────────────────────
 
 /** Display a native OS notification (see `send_notification` in src-tauri). */

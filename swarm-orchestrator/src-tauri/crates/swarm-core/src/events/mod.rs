@@ -17,6 +17,7 @@
 //! | `worker_state`      | [`WorkerStatePayload`]     | Worker state transition        |
 //! | `session_created`   | [`SessionCreatedPayload`]  | New session created            |
 //! | `session_deleted`   | [`SessionDeletedPayload`]  | Session removed                |
+//! | `session_worker_removed` | [`SessionWorkerRemovedPayload`] | A worker was pruned from a session's `workerIds` |
 //! | `system_metrics`    | [`SystemMetricsPayload`]   | Periodic metrics update        |
 //! | `ai_stream_delta`   | [`AiStreamDeltaPayload`]   | AI response text chunk         |
 //! | `ai_stream_settled` | [`AiStreamSettledPayload`] | AI stream terminal receipt     |
@@ -57,8 +58,9 @@ pub use emitter::{
     AgentSessionStartedPayload, AgentToolCallPayload, AgentToolResultPayload,
     AgentTurnDeltaPayload, AgentTurnSettledPayload, AgentTurnStartedPayload, AiStreamDeltaPayload,
     AiStreamSettledPayload, BusMessagePayload, CommitCreatedPayload, EventSink, FileWrittenPayload,
-    InputSource, Provenance, SessionCreatedPayload, SessionDeletedPayload, ShipProgressPayload,
-    ShipSettledPayload, SwarmEvent, SystemLogPayload, SystemMetricsPayload, WorkerInputPayload,
-    WorkerKilledPayload, WorkerOutputPayload, WorkerSpawnedPayload, WorkerStatePayload,
-    WorktreeCreatedPayload, WorktreeRemovedPayload,
+    InputSource, Provenance, SessionCreatedPayload, SessionDeletedPayload,
+    SessionWorkerRemovedPayload, ShipProgressPayload, ShipSettledPayload, SwarmEvent,
+    SystemLogPayload, SystemMetricsPayload, WorkerInputPayload, WorkerKilledPayload,
+    WorkerOutputPayload, WorkerSpawnedPayload, WorkerStatePayload, WorktreeCreatedPayload,
+    WorktreeRemovedPayload,
 };

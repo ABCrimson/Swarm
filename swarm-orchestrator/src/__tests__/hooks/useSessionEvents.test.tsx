@@ -103,4 +103,69 @@ describe("useSessionEvents", () => {
 
     expect(useSessionStore.getState().sessions.has("session-4")).toBe(false);
   });
+
+  // ── session_worker_removed (workerIds pruning, task 3) ────────────
+
+  const SESSION_ID = "11111111-2222-3333-8444-555555555555";
+  const WORKER_ID = "66666666-7777-8888-8999-aaaaaaaaaaaa";
+  const OTHER_WORKER_ID = "bbbbbbbb-cccc-dddd-8eee-ffffffffffff";
+
+  it("removes exactly the named worker from session.workerIds on session_worker_removed", () => {
+    useSessionStore.getState().addSession({
+      id: SESSION_ID,
+      name: "Pruned",
+      workerIds: [WORKER_ID, OTHER_WORKER_ID],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    renderHook(() => useSessionEvents());
+    registered.get("session_worker_removed")?.({
+      payload: { sessionId: SESSION_ID, workerId: WORKER_ID },
+    });
+
+    expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([
+      OTHER_WORKER_ID,
+    ]);
+  });
+
+  it("is a no-op (logged, not thrown) for a malformed session_worker_removed payload", () => {
+    useSessionStore.getState().addSession({
+      id: SESSION_ID,
+      name: "Untouched",
+      workerIds: [WORKER_ID],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    renderHook(() => useSessionEvents());
+    expect(() =>
+      registered.get("session_worker_removed")?.({
+        payload: { sessionId: "not-a-uuid", workerId: WORKER_ID },
+      }),
+    ).not.toThrow();
+
+    expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([WORKER_ID]);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("is a no-op for a session id session_worker_removed doesn't name", () => {
+    useSessionStore.getState().addSession({
+      id: SESSION_ID,
+      name: "Unrelated",
+      workerIds: [WORKER_ID],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const otherSessionId = "77777777-8888-9999-8aaa-bbbbbbbbbbbb";
+
+    renderHook(() => useSessionEvents());
+    registered.get("session_worker_removed")?.({
+      payload: { sessionId: otherSessionId, workerId: WORKER_ID },
+    });
+
+    expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([WORKER_ID]);
+  });
 });

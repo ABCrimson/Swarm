@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { onEvent } from "#lib/event-bus";
 import { useSessionStore } from "#store/sessions";
+import { SessionWorkerRemovedPayloadSchema } from "#store/types";
 
 /**
  * Global session event subscription hook.
@@ -8,14 +9,17 @@ import { useSessionStore } from "#store/sessions";
  * Must be called once at the app root level. Connects the single
  * ordered event bus to the Zustand session store:
  *
- * - `session_created` -> store.addSession() (merged, see below)
- * - `session_deleted` -> store.removeSession()
+ * - `session_created`        -> store.addSession() (merged, see below)
+ * - `session_deleted`        -> store.removeSession()
+ * - `session_worker_removed` -> store.removeWorkerFromSession()
+ *   (`safeParse`'d — an unexpected shape is logged and dropped, never
+ *   trusted via `as`, matching `useAgentSessionEvents`'s discipline)
  *
  * All listeners are cleaned up on unmount — zero event listener leaks.
  */
 export function useSessionEvents(): void {
   useEffect(() => {
-    const { addSession, removeSession } = useSessionStore.getState();
+    const { addSession, removeSession, removeWorkerFromSession } = useSessionStore.getState();
 
     const offs = [
       onEvent("session_created", (e) => {
@@ -50,6 +54,14 @@ export function useSessionEvents(): void {
       onEvent("session_deleted", (e) => {
         const p = e.payload as { sessionId: string };
         removeSession(p.sessionId);
+      }),
+      onEvent("session_worker_removed", (e) => {
+        const parsed = SessionWorkerRemovedPayloadSchema.safeParse(e.payload);
+        if (!parsed.success) {
+          console.error("useSessionEvents: invalid session_worker_removed payload", parsed.error);
+          return;
+        }
+        removeWorkerFromSession(parsed.data.sessionId, parsed.data.workerId);
       }),
     ];
 

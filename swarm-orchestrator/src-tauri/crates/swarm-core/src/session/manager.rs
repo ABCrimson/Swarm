@@ -198,6 +198,44 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Removes a worker from a session's worker list.
+    ///
+    /// The counterpart to [`Self::add_worker_to_session`] — without it,
+    /// `worker_ids` only ever grew across a worker's kill/crash, never
+    /// shrinking (see `SessionCard.tsx`'s render-time
+    /// live-worker-store intersection, which exists precisely because
+    /// this method didn't).
+    ///
+    /// Idempotent: removing a worker id that is not currently a member
+    /// of `worker_ids` is a benign no-op, not an error — mirrors the
+    /// "already gone is fine" discipline
+    /// [`crate::agent::registry::AgentSessionRegistry::remove`] applies
+    /// elsewhere in this codebase. Only a nonexistent SESSION id fails.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The UUID of the target session
+    /// * `worker_id` - The UUID of the worker to remove
+    ///
+    /// # Errors
+    ///
+    /// * [`AppError::SessionNotFound`] - No session with the given ID exists
+    pub fn remove_worker_from_session(
+        &self,
+        session_id: &Uuid,
+        worker_id: Uuid,
+    ) -> Result<(), AppError> {
+        let mut entry =
+            self.sessions
+                .get_mut(session_id)
+                .ok_or_else(|| AppError::SessionNotFound {
+                    id: session_id.to_string(),
+                })?;
+        entry.worker_ids.retain(|id| *id != worker_id);
+        tracing::info!(session_id = %session_id, worker_id = %worker_id, "worker removed from session");
+        Ok(())
+    }
+
     /// Loads sessions from a stored list for restore on startup.
     ///
     /// Inserts each session into the DashMap, replacing any
@@ -217,5 +255,80 @@ impl SessionManager {
 impl Default for SessionManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remove_worker_from_session_roundtrips_with_add() {
+        let manager = SessionManager::new();
+        let session = manager.create_session("Roundtrip".to_string(), serde_json::json!({}));
+        let worker_id = Uuid::new_v4();
+
+        manager
+            .add_worker_to_session(&session.id, worker_id)
+            .unwrap();
+        assert_eq!(
+            manager.get_session(&session.id).unwrap().worker_ids,
+            vec![worker_id]
+        );
+
+        manager
+            .remove_worker_from_session(&session.id, worker_id)
+            .unwrap();
+        assert!(
+            manager
+                .get_session(&session.id)
+                .unwrap()
+                .worker_ids
+                .is_empty()
+        );
+    }
+
+    /// DIRECTIVE: removing a worker id that never joined (or already
+    /// left) the session is a benign no-op, not an error — only a
+    /// nonexistent SESSION id fails.
+    #[test]
+    fn test_remove_worker_from_session_is_idempotent_for_a_non_member() {
+        let manager = SessionManager::new();
+        let session = manager.create_session("Idempotent".to_string(), serde_json::json!({}));
+        let stranger = Uuid::new_v4();
+
+        let result = manager.remove_worker_from_session(&session.id, stranger);
+        assert!(result.is_ok());
+        assert!(
+            manager
+                .get_session(&session.id)
+                .unwrap()
+                .worker_ids
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_remove_worker_from_session_only_removes_the_target_worker() {
+        let manager = SessionManager::new();
+        let session = manager.create_session("Selective".to_string(), serde_json::json!({}));
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        manager.add_worker_to_session(&session.id, a).unwrap();
+        manager.add_worker_to_session(&session.id, b).unwrap();
+
+        manager.remove_worker_from_session(&session.id, a).unwrap();
+
+        assert_eq!(
+            manager.get_session(&session.id).unwrap().worker_ids,
+            vec![b]
+        );
+    }
+
+    #[test]
+    fn test_remove_worker_from_session_not_found() {
+        let manager = SessionManager::new();
+        let result = manager.remove_worker_from_session(&Uuid::new_v4(), Uuid::new_v4());
+        assert!(matches!(result, Err(AppError::SessionNotFound { .. })));
     }
 }
