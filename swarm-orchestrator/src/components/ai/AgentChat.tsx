@@ -346,13 +346,39 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
   const [items, setItems] = useState<TranscriptItem[]>([]);
   const [streaming, setStreaming] = useState<Map<string, StreamingBlock>>(new Map());
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
+  // Count of turns admitted-but-not-yet-settled, NOT a boolean (review
+  // FIX-1) — with queueing, N sends means N outstanding settlements;
+  // a single `busy` flag cleared by the FIRST agent_turn_settled would
+  // flip the UI back to idle (wrong label, Cancel disappearing) while
+  // later queued turns are still executing. `busy` is derived, never
+  // set directly.
+  const [pendingCount, setPendingCount] = useState(0);
+  const busy = pendingCount > 0;
   // The most recently observed turnId for THIS worker's in-flight turn
   // (review F7) — agent_send_turn is fire-and-forget and never hands
   // back a turnId directly, so Cancel correlates via whatever the
-  // event stream has told us about the turn actually running.
+  // event stream has told us about the turn actually running. Still
+  // correct under queueing: Claude Code processes turns strictly
+  // sequentially in one process (module doc's "multi-turn reality") —
+  // turn K+1 emits no events at all until turn K's agent_turn_settled
+  // fires, so "the turnId of the most recent event" is always the
+  // ACTIVELY PROCESSING turn, queue or no queue.
   const [currentTurnId, setCurrentTurnId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // FIFO correlation between optimistic user bubbles and the turnId
+  // the backend eventually assigns them (review FIX-2) — agentSendTurn
+  // never returns a turnId, and there is no separate agent_turn_started
+  // EVENT for this provider (only the webview-direct AIChat path has a
+  // synchronous agentTurnStarted COMMAND). Sound because: (a) Claude
+  // Code executes admitted turns strictly in submission order (same
+  // process, same stdin, one at a time — see the module doc), so the
+  // FIRST event carrying a turnId not yet mapped belongs to the OLDEST
+  // still-queued bubble; (b) a bubble whose admission fails outright is
+  // removed from this queue immediately, in its own .catch, by id — not
+  // by shifting — so a later turn's mapping can never be thrown off by
+  // an earlier one that was never actually admitted.
+  const pendingBubbleIdsRef = useRef<string[]>([]);
+  const turnIdToBubbleRef = useRef<Map<string, string>>(new Map());
 
   // Capability-honesty: whether THIS session's provider can actually
   // interrupt an in-flight turn (`Capabilities.interruptMidturn`, off
@@ -366,17 +392,29 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
   useEffect(() => {
     setItems([]);
     setStreaming(new Map());
-    setBusy(false);
+    setPendingCount(0);
     setCurrentTurnId(null);
+    pendingBubbleIdsRef.current = [];
+    turnIdToBubbleRef.current = new Map();
 
     const push = (item: TranscriptItem) => setItems((prev) => [...prev, item]);
     const streamKey = (turnId: string, blockIndex: number) => `${turnId}:${blockIndex}`;
+    // Maps `turnId` to the oldest still-unmapped pending bubble, once —
+    // see the FIFO-correlation doc on `pendingBubbleIdsRef` above. A
+    // no-op once `turnId` is already mapped, so every event handler
+    // below can call this unconditionally as its first line.
+    const ensureTurnMapped = (turnId: string) => {
+      if (turnIdToBubbleRef.current.has(turnId)) return;
+      const bubbleId = pendingBubbleIdsRef.current.shift();
+      if (bubbleId) turnIdToBubbleRef.current.set(turnId, bubbleId);
+    };
 
     const offs = [
       onEvent("agent_turn_delta", (e) => {
         const parsed = AgentTurnDeltaPayloadSchema.safeParse(e.payload);
         if (!parsed.success || parsed.data.workerId !== workerId) return;
         setCurrentTurnId(parsed.data.turnId);
+        ensureTurnMapped(parsed.data.turnId);
         const key = streamKey(parsed.data.turnId, parsed.data.blockIndex);
         setStreaming((prev) => {
           const next = new Map(prev);
@@ -392,6 +430,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
         const parsed = AgentBlockPayloadSchema.safeParse(e.payload);
         if (!parsed.success || parsed.data.workerId !== workerId) return;
         setCurrentTurnId(parsed.data.turnId);
+        ensureTurnMapped(parsed.data.turnId);
         // The finalized block supersedes any in-progress streaming
         // bubble for the same (turnId, blockIndex) — drop it so the
         // content isn't shown twice.
@@ -408,6 +447,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
         const parsed = AgentToolCallPayloadSchema.safeParse(e.payload);
         if (parsed.success && parsed.data.workerId === workerId) {
           setCurrentTurnId(parsed.data.turnId);
+          ensureTurnMapped(parsed.data.turnId);
           push({ id: `${e.seq}`, kind: "tool_call", payload: parsed.data, result: null });
         }
       }),
@@ -450,35 +490,40 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
       onEvent("agent_permission_request", (e) => {
         const parsed = AgentPermissionRequestPayloadSchema.safeParse(e.payload);
         if (parsed.success && parsed.data.workerId === workerId) {
+          ensureTurnMapped(parsed.data.turnId);
           push({ id: `${e.seq}`, kind: "permission_denied", payload: parsed.data });
         }
       }),
       onEvent("agent_turn_settled", (e) => {
         const parsed = AgentTurnSettledPayloadSchema.safeParse(e.payload);
         if (!parsed.success || parsed.data.workerId !== workerId) return;
+        // Covers a turn that settles having emitted no other event at
+        // all (e.g. an immediate error) — without this, such a turn's
+        // bubble would never get mapped and an error on it would be
+        // silently unattributed instead of marked.
+        ensureTurnMapped(parsed.data.turnId);
         push({ id: `${e.seq}`, kind: "settled", payload: parsed.data });
-        setBusy(false);
+        // One settlement retires exactly one admitted turn — decrement,
+        // never reset to 0/false (review FIX-1): other queued turns may
+        // still be outstanding.
+        setPendingCount((c) => Math.max(0, c - 1));
         setCurrentTurnId(null);
-        // Reconcile the optimistic bubble (review B3): every admitted
-        // turn now reaches exactly one terminal agent_turn_settled
-        // (guaranteed by the B2 scheduler fix, including the
-        // synthesized-on-rejection case) — mark the most recent
-        // pending user bubble as failed on an error settlement so the
-        // failure is visually attached to the message that caused it,
-        // not just a floating status line at the bottom.
-        if (parsed.data.status === "error") {
-          setItems((prev) => {
-            const idx = [...prev].reverse().findIndex((it) => it.kind === "user" && !it.failed);
-            if (idx === -1) return prev;
-            const realIdx = prev.length - 1 - idx;
-            const next = [...prev];
-            const target = next[realIdx];
-            if (target.kind === "user") {
-              next[realIdx] = { ...target, failed: true };
-            }
-            return next;
-          });
+        // Reconcile the optimistic bubble (review B3, corrected by
+        // FIX-2): every admitted turn reaches exactly one terminal
+        // agent_turn_settled — mark the bubble THIS turnId was mapped
+        // to (via ensureTurnMapped's FIFO correlation above), not
+        // "whichever pending bubble is most recent." With 2+ queued
+        // turns settling FIFO, that heuristic attached an early turn's
+        // failure to the LAST bubble instead of the first.
+        const bubbleId = turnIdToBubbleRef.current.get(parsed.data.turnId);
+        if (parsed.data.status === "error" && bubbleId) {
+          setItems((prev) =>
+            prev.map((it) =>
+              it.id === bubbleId && it.kind === "user" ? { ...it, failed: true } : it,
+            ),
+          );
         }
+        turnIdToBubbleRef.current.delete(parsed.data.turnId);
       }),
     ];
 
@@ -496,40 +541,44 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
     const trimmed = draft.trim();
     if (!trimmed) return;
 
-    setItems((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), kind: "user", text: trimmed, failed: false },
-    ]);
+    const bubbleId = crypto.randomUUID();
+    pendingBubbleIdsRef.current.push(bubbleId);
+    setItems((prev) => [...prev, { id: bubbleId, kind: "user", text: trimmed, failed: false }]);
     setDraft("");
     // A submit while a turn is already in flight does NOT block — see
     // this component's header doc. `agentSendTurn` itself is what
     // determines whether that's a true interrupt or a queued follow-up
     // (see `canInterruptMidturn` above); this call is identical either
     // way, it just admits the new turn to the backend scheduler.
-    setBusy(true);
+    setPendingCount((c) => c + 1);
 
     void agentSendTurn(workerId, trimmed).catch((err) => {
-      setBusy(false);
-      setCurrentTurnId(null);
+      setPendingCount((c) => Math.max(0, c - 1));
       toast.error(`Send Turn Failed: ${err instanceof Error ? err.message : String(err)}`);
       // Admission itself failed (e.g. the scheduler's queue is full) —
       // no agent_turn_settled will ever arrive for this message, so
-      // reconcile the optimistic bubble here directly (review B3).
-      setItems((prev) => {
-        const idx = [...prev].reverse().findIndex((it) => it.kind === "user" && !it.failed);
-        if (idx === -1) return prev;
-        const realIdx = prev.length - 1 - idx;
-        const next = [...prev];
-        const target = next[realIdx];
-        if (target.kind === "user") {
-          next[realIdx] = { ...target, failed: true };
-        }
-        return next;
-      });
+      // reconcile the optimistic bubble here directly (review B3),
+      // via its own known id (review FIX-2) rather than "whichever
+      // pending bubble is most recent" — with queueing, a LATER send
+      // may already be pending too. Removed from the FIFO queue by id,
+      // not by position, so a still-outstanding EARLIER turn's eventual
+      // first event can never be mis-shifted onto this bubble instead
+      // of its own (see ensureTurnMapped's doc above). Does NOT touch
+      // currentTurnId — an earlier turn may still be actively running.
+      pendingBubbleIdsRef.current = pendingBubbleIdsRef.current.filter((id) => id !== bubbleId);
+      setItems((prev) =>
+        prev.map((it) => (it.id === bubbleId && it.kind === "user" ? { ...it, failed: true } : it)),
+      );
     });
   };
 
   const handleCancel = () => {
+    // Cancel is visible whenever busy (pendingCount > 0, review FIX-1)
+    // so it doesn't flicker off between one queued turn's settle and
+    // the next one's first event — currentTurnId can be briefly null
+    // in that gap even though work is still outstanding. There is
+    // genuinely nothing to target yet in that split second; a no-op
+    // here (rather than hiding the button) is the honest behavior.
     if (!currentTurnId) return;
     void agentCancel(workerId, currentTurnId).catch((err) => {
       toast.error(`Cancel Failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -584,7 +633,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
           placeholder="Message Claude Code…"
           aria-label="Message Claude Code"
         />
-        {busy && currentTurnId && (
+        {busy && (
           <button
             type="button"
             style={cancelButtonStyle}

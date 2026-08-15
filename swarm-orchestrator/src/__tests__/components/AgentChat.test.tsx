@@ -64,6 +64,16 @@ function resetSessionStore(): void {
   }
 }
 
+async function submit(text: string): Promise<void> {
+  const input = screen.getByLabelText("Message Claude Code");
+  fireEvent.change(input, { target: { value: text } });
+  const form = input.closest("form");
+  if (!form) throw new Error("chat form not found");
+  await act(async () => {
+    fireEvent.submit(form);
+  });
+}
+
 describe("AgentChat", () => {
   beforeEach(() => {
     registered.clear();
@@ -282,5 +292,89 @@ describe("AgentChat", () => {
     expect(agentSendTurn).toHaveBeenCalledTimes(2);
     expect(agentSendTurn).toHaveBeenNthCalledWith(1, WORKER_ID, "first");
     expect(agentSendTurn).toHaveBeenNthCalledWith(2, WORKER_ID, "second");
+  });
+
+  it("FIX-1: stays busy (Queue Next Turn label, Cancel visible) until BOTH of two queued turns settle, not just the first", async () => {
+    render(<AgentChat workerId={WORKER_ID} />);
+
+    await submit("first");
+    await submit("second");
+
+    // Both admitted, neither settled yet.
+    expect(screen.getByRole("button", { name: "Queue Next Turn" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel Turn" })).toBeInTheDocument();
+
+    // turn-1 starts producing events, then settles — the FIRST of the
+    // two outstanding turns.
+    fire("agent_turn_delta", {
+      workerId: WORKER_ID,
+      turnId: "turn-1",
+      blockIndex: 0,
+      kind: "text",
+      text: "working",
+    });
+    fire("agent_turn_settled", {
+      workerId: WORKER_ID,
+      turnId: "turn-1",
+      status: "ok",
+      durationMs: 100,
+    });
+
+    // The old boolean `busy` would have flipped to idle here even
+    // though "second" is still outstanding — must still read busy.
+    expect(screen.getByRole("button", { name: "Queue Next Turn" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel Turn" })).toBeInTheDocument();
+
+    // turn-2 (the actually-queued one) now settles too.
+    fire("agent_turn_delta", {
+      workerId: WORKER_ID,
+      turnId: "turn-2",
+      blockIndex: 0,
+      kind: "text",
+      text: "working",
+    });
+    fire("agent_turn_settled", {
+      workerId: WORKER_ID,
+      turnId: "turn-2",
+      status: "ok",
+      durationMs: 100,
+    });
+
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel Turn" })).not.toBeInTheDocument();
+  });
+
+  it("FIX-2: an error on the FIRST of two queued turns marks the FIRST bubble failed, never the last", async () => {
+    render(<AgentChat workerId={WORKER_ID} />);
+
+    await submit("first");
+    await submit("second");
+
+    // turn-1 (correlates to "first", the oldest pending bubble) is the
+    // one that errors — "second" is still queued behind it and has
+    // produced no events of its own yet.
+    fire("agent_turn_delta", {
+      workerId: WORKER_ID,
+      turnId: "turn-1",
+      blockIndex: 0,
+      kind: "text",
+      text: "working",
+    });
+    fire("agent_turn_settled", {
+      workerId: WORKER_ID,
+      turnId: "turn-1",
+      status: "error",
+      error: "boom",
+      durationMs: 100,
+    });
+
+    const firstBubble = screen.getByText("first");
+    const secondBubble = screen.getByText("second");
+    // userBubbleFailedStyle sets a red border; plain userBubbleStyle
+    // does not — assert via the actual failed-state color rather than
+    // a snapshot, so this fails loudly if the wrong bubble is marked.
+    expect(firstBubble).toHaveStyle({ border: "1px solid oklch(0.45 0.18 25)" });
+    expect(secondBubble).not.toHaveStyle({ border: "1px solid oklch(0.45 0.18 25)" });
   });
 });
