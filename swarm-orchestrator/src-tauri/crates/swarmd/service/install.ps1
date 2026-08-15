@@ -39,9 +39,13 @@ if ((Resolve-Path -LiteralPath $src).Path -ne $BinDest) {
 Write-Host "Installed binary: $BinDest"
 
 # Run through powershell so all output (the connect URL carries the token)
-# is redirected into a user-private log under %APPDATA%. Single-quoted paths
-# inside -Command avoid quote escaping; hidden window = no console flash.
-$psArg = "-NoProfile -NonInteractive -WindowStyle Hidden -Command `"& '$BinDest' *>> '$LogFile'`""
+# is redirected into a user-private log under %APPDATA%. Hidden window = no
+# console flash. Paths are wrapped in single quotes inside -Command; double
+# any embedded apostrophe first so a username like O'Brien (which lands in
+# %LOCALAPPDATA%/%APPDATA%) can't break out of the quoting.
+$binEsc = $BinDest -replace "'", "''"
+$logEsc = $LogFile -replace "'", "''"
+$psArg = "-NoProfile -NonInteractive -WindowStyle Hidden -Command `"& '$binEsc' *>> '$logEsc'`""
 $action    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $psArg
 $trigger   = New-ScheduledTaskTrigger -AtLogOn
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
