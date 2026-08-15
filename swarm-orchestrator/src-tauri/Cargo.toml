@@ -10,7 +10,7 @@ members = ["crates/swarm-core"]
 # Single source of truth for the workspace crate version. tauri.conf.json
 # and swarm-orchestrator/package.json are the other two version sites and
 # are intentionally not derived from this one.
-version = "0.11.2"
+version = "0.12.0"
 
 [workspace.dependencies]
 tauri                      = { version = "=2.11.5",  features = ["devtools", "image-png"] }
