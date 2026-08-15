@@ -4,7 +4,7 @@ version.workspace = true
 edition = "2024"
 
 [workspace]
-members = ["crates/swarm-core"]
+members = ["crates/swarm-core", "crates/swarmd"]
 
 [workspace.package]
 # Single source of truth for the workspace crate version. tauri.conf.json
@@ -38,6 +38,35 @@ tauri-plugin-updater        = "=2.10.1"
 tauri-plugin-notification   = "=2.3.3"
 tokio-util                  = { version = "=0.7.19", features = ["rt"] }
 tauri-build                 = { version = "=2.6.3", features = [] }
+# ── swarmd (Phase 2 headless daemon) ─────────────────────────────────
+# axum is the one genuinely NEW dependency this workspace takes on for
+# swarmd — nothing else in the tree pulled in an HTTP/WS server stack.
+# See docs/architecture.md's "Runtime Modes" section for the
+# cargo-tree-verified justification.
+axum                       = { version = "=0.8.7", features = ["ws"] }
+# Already present transitively (tauri's asset protocol pulls it in) —
+# made a direct swarmd dependency for ServeDir (--serve-ui) and the
+# browser-build CSP response header, adding zero new crates to the tree.
+tower-http                  = { version = "=0.6.8", features = ["fs", "set-header", "trace"] }
+tower                       = { version = "=0.5.3", features = ["util"] }
+# Already present transitively at this exact version (uuid v4's own
+# randomness source) — made direct for the 256-bit daemon-token.
+getrandom                   = "=0.4.2"
+# Already present transitively at this exact version (pulled in by
+# something in the existing dependency tree) — made direct for the
+# constant-time token comparison on the WS auth path.
+subtle                      = "=2.6.1"
+# Unix-only, already present transitively via tokio/mio — made a direct
+# target-gated dependency for the single-instance advisory flock().
+libc                        = "=0.2.183"
+# Dev-only, swarmd's integration test: drives a real WS client against a
+# real swarmd instance. Same tokio-tungstenite version axum's own `ws`
+# feature resolves internally, so this adds no new crate VERSION to the
+# tree, only a dev-time direct dependency on one already present.
+tokio-tungstenite            = "=0.28.0"
+# Already present transitively (hyper/tower's own plumbing) — made
+# direct for `WebSocket::split()` in swarmd's per-connection handler.
+futures-util                 = "=0.3.32"
 
 [dependencies]
 tauri                      = { workspace = true }

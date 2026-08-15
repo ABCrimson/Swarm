@@ -11,6 +11,7 @@
 //! - [`manager`] — Thread-safe session CRUD with `DashMap` storage
 
 pub mod manager;
+pub mod persist;
 
 pub use manager::SessionManager;
 
