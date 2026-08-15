@@ -1,16 +1,21 @@
 // ── AgentChat ───────────────────────────────────────
-// Minimal event-driven transcript for a worker with a live Claude Code
-// session (Phase 3's command surface — see docs/architecture.md's
-// adapter-layer section). Renders directly from the agent_* event
-// stream; sends turns via agentSendTurn. The polished, richly
-// interactive version (tool-call cards, permission timeline) is the
-// follow-up UI-overhaul branch — this is deliberately the minimal
-// surface: one append-only list, one input, live streaming text, and a
-// Cancel affordance.
+// Event-driven transcript for a worker with a live Claude Code session
+// (Phase 3's command surface — see docs/architecture.md's adapter-layer
+// section). Renders directly from the agent_* event stream; sends
+// turns via agentSendTurn. Follow-up UI-overhaul refinement over PR
+// #11's minimal surface: streaming text reuses AIMessageStream's
+// markdown/code rendering, tool calls render as ToolCallDisplay's
+// labeled collapsible blocks (name + input + result, is_error
+// styling), permission denials get a distinct report-style notice, the
+// settled receipt shows cost/duration/turns, and the input's
+// send-during-turn affordance is labeled per the session's actual
+// `Capabilities.interruptMidturn` rather than assuming one behavior
+// for every provider.
 
 import type { CSSProperties, FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { Pill } from "#components/ui/Pill";
 import type {
   AgentBlockPayload,
   AgentPermissionRequestPayload,
@@ -28,6 +33,9 @@ import {
 } from "#lib/agent-events";
 import { onEvent } from "#lib/event-bus";
 import { agentCancel, agentSendTurn } from "#lib/tauri";
+import { useAgentSessionStore } from "#store/agent-sessions";
+import { AIMessageStream } from "./AIMessageStream.tsx";
+import { ToolCallDisplay } from "./ToolCallDisplay.tsx";
 
 interface AgentChatProps {
   readonly workerId: string;
@@ -36,8 +44,13 @@ interface AgentChatProps {
 type TranscriptItem =
   | { readonly id: string; readonly kind: "user"; readonly text: string; readonly failed: boolean }
   | { readonly id: string; readonly kind: "block"; readonly payload: AgentBlockPayload }
-  | { readonly id: string; readonly kind: "tool_call"; readonly payload: AgentToolCallPayload }
-  | { readonly id: string; readonly kind: "tool_result"; readonly payload: AgentToolResultPayload }
+  | {
+      readonly id: string;
+      readonly kind: "tool_call";
+      readonly payload: AgentToolCallPayload;
+      /** `null` until the matching `agent_tool_result` (same `toolUseId`) arrives. */
+      readonly result: AgentToolResultPayload | null;
+    }
   | {
       readonly id: string;
       readonly kind: "permission_denied";
@@ -62,6 +75,25 @@ const DENIAL_SUBCLASS_LABELS: Record<string, string> = {
 function denialSubclassLabel(subclass: string | null | undefined): string {
   if (subclass && subclass in DENIAL_SUBCLASS_LABELS) return DENIAL_SUBCLASS_LABELS[subclass];
   return "Permission Denied";
+}
+
+/** `ToolCallDisplay` wants a record; a tool input that isn't an object (rare, but `unknown` on the wire) is wrapped rather than dropped. */
+function toRecord(value: unknown): Record<string, unknown> {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return { value };
+}
+
+/** A tool result's `content` is `unknown` on the wire — pass strings through verbatim (the common case, already human text), stringify anything else so `ToolCallDisplay`'s own JSON viewer can parse it back. */
+function toResultString(content: unknown): string {
+  return typeof content === "string" ? content : JSON.stringify(content);
+}
+
+/** Compact duration label — sub-second in ms, otherwise one decimal of seconds. */
+function formatDurationMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 // ── Styles (OKLCH) ───────────────────────────────────
@@ -105,17 +137,10 @@ const userBubbleFailedStyle: CSSProperties = {
   border: "1px solid oklch(0.45 0.18 25)",
 };
 
-const textBlockStyle: CSSProperties = {
-  ...bubbleBaseStyle,
+const streamWrapStyle: CSSProperties = {
   alignSelf: "flex-start",
-  background: "oklch(0.12 0.03 220 / 0.7)",
-  color: "oklch(0.90 0.02 220)",
   maxWidth: "90%",
-};
-
-const streamingBlockStyle: CSSProperties = {
-  ...textBlockStyle,
-  border: "1px dashed oklch(0.45 0.10 205 / 0.6)",
+  width: "100%",
 };
 
 const thinkingBlockStyle: CSSProperties = {
@@ -127,40 +152,34 @@ const thinkingBlockStyle: CSSProperties = {
   maxWidth: "90%",
 };
 
-const toolChipStyle: CSSProperties = {
-  alignSelf: "flex-start",
-  padding: "4px 10px",
-  borderRadius: 6,
-  border: "1px solid oklch(0.35 0.10 70)",
-  background: "oklch(0.14 0.06 70 / 0.5)",
-  color: "oklch(0.82 0.19 70)",
-  fontFamily: "var(--font-mono, monospace)",
-  fontSize: 11.5,
-};
-
-const toolResultOkStyle: CSSProperties = {
-  ...toolChipStyle,
-  borderColor: "oklch(0.35 0.10 150)",
-  background: "oklch(0.14 0.06 150 / 0.5)",
-  color: "oklch(0.75 0.16 150)",
-};
-
-const toolResultErrorStyle: CSSProperties = {
-  ...toolChipStyle,
-  borderColor: "oklch(0.45 0.18 25)",
-  background: "oklch(0.16 0.08 25 / 0.5)",
-  color: "oklch(0.78 0.20 25)",
-};
-
 const permissionDeniedStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
   alignSelf: "stretch",
   padding: "8px 12px",
   borderRadius: 8,
   border: "1px solid oklch(0.45 0.18 25)",
   background: "oklch(0.16 0.08 25 / 0.4)",
-  color: "oklch(0.82 0.19 25)",
+};
+
+const permissionDeniedHeaderStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+};
+
+const permissionDeniedToolStyle: CSSProperties = {
   fontFamily: "var(--font-mono, monospace)",
   fontSize: 11.5,
+  color: "oklch(0.82 0.19 25)",
+};
+
+const permissionDeniedMessageStyle: CSSProperties = {
+  fontFamily: "var(--font-body)",
+  fontSize: 12,
+  color: "oklch(0.85 0.10 25)",
+  lineHeight: 1.4,
 };
 
 const settledStyle: CSSProperties = {
@@ -168,6 +187,19 @@ const settledStyle: CSSProperties = {
   color: "oklch(0.50 0.04 220)",
   fontFamily: "var(--font-mono, monospace)",
   fontSize: 10.5,
+};
+
+const settledErrorStyle: CSSProperties = {
+  ...settledStyle,
+  color: "oklch(0.72 0.20 25)",
+};
+
+const capabilityNoteStyle: CSSProperties = {
+  padding: "4px 12px",
+  fontFamily: "var(--font-mono, monospace)",
+  fontSize: 10.5,
+  color: "oklch(0.55 0.04 220)",
+  flexShrink: 0,
 };
 
 const formStyle: CSSProperties = {
@@ -242,39 +274,57 @@ function TranscriptRow({ item }: { readonly item: TranscriptItem }): React.React
         return <div style={thinkingBlockStyle}>{text}</div>;
       }
       if (item.payload.kind === "tool_use") return null; // rendered via the tool_call event instead
-      return <div style={textBlockStyle}>{text}</div>;
+      // Finalized assistant text reuses AIMessageStream (not streaming)
+      // so code blocks/inline code render identically whether the text
+      // is still live or already settled.
+      return (
+        <div style={streamWrapStyle}>
+          <AIMessageStream content={text} isStreaming={false} />
+        </div>
+      );
     }
     case "tool_call":
       return (
-        <div style={toolChipStyle}>
-          {item.payload.name}({JSON.stringify(item.payload.input)})
-        </div>
-      );
-    case "tool_result":
-      return (
-        <div style={item.payload.isError ? toolResultErrorStyle : toolResultOkStyle}>
-          {item.payload.isError ? "Error: " : "Result: "}
-          {typeof item.payload.content === "string"
-            ? item.payload.content
-            : JSON.stringify(item.payload.content)}
-        </div>
+        <ToolCallDisplay
+          name={item.payload.name}
+          input={toRecord(item.payload.input)}
+          result={item.result ? toResultString(item.result.content) : undefined}
+          status={item.result ? (item.result.isError ? "error" : "complete") : "executing"}
+        />
       );
     case "permission_denied":
       return (
         <div style={permissionDeniedStyle}>
-          {denialSubclassLabel(item.payload.denialSubclass)} — {item.payload.tool}
-          {item.payload.message ? `: ${item.payload.message}` : ""}
+          <div style={permissionDeniedHeaderStyle}>
+            <Pill tone="danger" size="sm">
+              {denialSubclassLabel(item.payload.denialSubclass)}
+            </Pill>
+            <span style={permissionDeniedToolStyle}>{item.payload.tool}</span>
+          </div>
+          {item.payload.message && (
+            <span style={permissionDeniedMessageStyle}>{item.payload.message}</span>
+          )}
         </div>
       );
-    case "settled":
+    case "settled": {
+      const parts = [
+        item.payload.status === "ok"
+          ? "Turn Complete"
+          : `Turn Failed${item.payload.error ? `: ${item.payload.error}` : ""}`,
+        formatDurationMs(item.payload.durationMs),
+      ];
+      if (item.payload.numTurns != null) {
+        parts.push(`${item.payload.numTurns} Turn${item.payload.numTurns === 1 ? "" : "s"}`);
+      }
+      if (item.payload.costUsd != null) {
+        parts.push(`$${item.payload.costUsd.toFixed(4)}`);
+      }
       return (
-        <div style={settledStyle}>
-          {item.payload.status === "ok"
-            ? "Turn Complete"
-            : `Turn Failed${item.payload.error ? `: ${item.payload.error}` : ""}`}
-          {item.payload.costUsd != null ? ` · $${item.payload.costUsd.toFixed(4)}` : ""}
+        <div style={item.payload.status === "ok" ? settledStyle : settledErrorStyle}>
+          {parts.join(" · ")}
         </div>
       );
+    }
     default:
       return null;
   }
@@ -283,14 +333,14 @@ function TranscriptRow({ item }: { readonly item: TranscriptItem }): React.React
 // ── Component ─────────────────────────────────────────
 
 /**
- * Minimal event-driven transcript + input for a worker's attached
- * Claude Code session. Every persisted `TranscriptItem` traces to a
- * real `agent_*` event (or the caller's own optimistic outgoing
- * message) — nothing here fabricates content client-side, matching
- * AIChat's own discipline for the webview path. `agent_turn_delta`
- * (ephemeral, review F6) additionally renders as a live, in-progress
- * bubble per (turnId, blockIndex) that gets replaced by the real
- * `agent_block` once the provider finalizes it.
+ * Event-driven transcript + input for a worker's attached Claude Code
+ * session. Every persisted `TranscriptItem` traces to a real `agent_*`
+ * event (or the caller's own optimistic outgoing message) — nothing
+ * here fabricates content client-side, matching AIChat's own
+ * discipline for the webview path. `agent_turn_delta` (ephemeral,
+ * review F6) additionally renders as a live, in-progress bubble per
+ * (turnId, blockIndex) that gets replaced by the real `agent_block`
+ * once the provider finalizes it.
  */
 export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
   const [items, setItems] = useState<TranscriptItem[]>([]);
@@ -303,6 +353,15 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
   // event stream has told us about the turn actually running.
   const [currentTurnId, setCurrentTurnId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Capability-honesty: whether THIS session's provider can actually
+  // interrupt an in-flight turn (`Capabilities.interruptMidturn`, off
+  // `agent_session_started`). Claude Code's is always `false` (no
+  // provider currently reports `true`) — defaulting to `false` when
+  // the session hasn't announced itself yet means the UI never claims
+  // an interrupt capability it hasn't measured.
+  const canInterruptMidturn =
+    useAgentSessionStore((s) => s.sessions.get(workerId)?.capabilities.interruptMidturn) ?? false;
 
   useEffect(() => {
     setItems([]);
@@ -349,14 +408,44 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
         const parsed = AgentToolCallPayloadSchema.safeParse(e.payload);
         if (parsed.success && parsed.data.workerId === workerId) {
           setCurrentTurnId(parsed.data.turnId);
-          push({ id: `${e.seq}`, kind: "tool_call", payload: parsed.data });
+          push({ id: `${e.seq}`, kind: "tool_call", payload: parsed.data, result: null });
         }
       }),
       onEvent("agent_tool_result", (e) => {
         const parsed = AgentToolResultPayloadSchema.safeParse(e.payload);
-        if (parsed.success && parsed.data.workerId === workerId) {
-          push({ id: `${e.seq}`, kind: "tool_result", payload: parsed.data });
-        }
+        if (!parsed.success || parsed.data.workerId !== workerId) return;
+        setItems((prev) => {
+          const idx = prev.findIndex(
+            (it) => it.kind === "tool_call" && it.payload.toolUseId === parsed.data.toolUseId,
+          );
+          // No matching agent_tool_call in this transcript (e.g. the
+          // chat mounted mid-turn) — still show the result honestly
+          // rather than silently dropping it, labeled as an unknown
+          // tool rather than guessing a name.
+          if (idx === -1) {
+            return [
+              ...prev,
+              {
+                id: `${e.seq}`,
+                kind: "tool_call",
+                payload: {
+                  workerId,
+                  turnId: parsed.data.turnId,
+                  toolUseId: parsed.data.toolUseId,
+                  name: "Unknown Tool",
+                  input: {},
+                },
+                result: parsed.data,
+              },
+            ];
+          }
+          const next = [...prev];
+          const target = next[idx];
+          if (target.kind === "tool_call") {
+            next[idx] = { ...target, result: parsed.data };
+          }
+          return next;
+        });
       }),
       onEvent("agent_permission_request", (e) => {
         const parsed = AgentPermissionRequestPayloadSchema.safeParse(e.payload);
@@ -405,13 +494,18 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = draft.trim();
-    if (!trimmed || busy) return;
+    if (!trimmed) return;
 
     setItems((prev) => [
       ...prev,
       { id: crypto.randomUUID(), kind: "user", text: trimmed, failed: false },
     ]);
     setDraft("");
+    // A submit while a turn is already in flight does NOT block — see
+    // this component's header doc. `agentSendTurn` itself is what
+    // determines whether that's a true interrupt or a queued follow-up
+    // (see `canInterruptMidturn` above); this call is identical either
+    // way, it just admits the new turn to the backend scheduler.
     setBusy(true);
 
     void agentSendTurn(workerId, trimmed).catch((err) => {
@@ -443,6 +537,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
   };
 
   const streamingEntries = [...streaming.entries()];
+  const sendLabel = busy ? (canInterruptMidturn ? "Interrupt" : "Queue Next Turn") : "Send";
 
   return (
     <div style={containerStyle}>
@@ -455,41 +550,53 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
         {items.map((item) => (
           <TranscriptRow key={item.id} item={item} />
         ))}
-        {streamingEntries.map(([key, block]) =>
-          block.text.trim() ? (
-            <div
-              key={key}
-              style={block.kind === "thinking" ? thinkingBlockStyle : streamingBlockStyle}
-            >
-              {block.text}
+        {streamingEntries.map(([key, block]) => {
+          if (!block.text.trim()) return null;
+          if (block.kind === "thinking") {
+            return (
+              <div key={key} style={thinkingBlockStyle}>
+                {block.text}
+              </div>
+            );
+          }
+          return (
+            <div key={key} style={streamWrapStyle}>
+              <AIMessageStream content={block.text} isStreaming={true} />
             </div>
-          ) : null,
-        )}
-        {busy && <div style={settledStyle}>Working…</div>}
+          );
+        })}
+        {busy && streamingEntries.length === 0 && <div style={settledStyle}>Working…</div>}
       </div>
+
+      {busy && (
+        <div style={capabilityNoteStyle}>
+          {canInterruptMidturn
+            ? "Sending Now Interrupts The Current Turn."
+            : "This Provider Has No Mid-Turn Interrupt — Sending Now Queues Behind The Current Turn."}
+        </div>
+      )}
+
       <form style={formStyle} onSubmit={handleSubmit}>
         <input
           style={inputStyle}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder="Message Claude Code…"
-          disabled={busy}
           aria-label="Message Claude Code"
         />
-        {busy && currentTurnId ? (
+        {busy && currentTurnId && (
           <button
             type="button"
             style={cancelButtonStyle}
             onClick={handleCancel}
-            aria-label="Cancel"
+            aria-label="Cancel Turn"
           >
             Cancel
           </button>
-        ) : (
-          <button type="submit" style={sendButtonStyle} disabled={busy || !draft.trim()}>
-            Send
-          </button>
         )}
+        <button type="submit" style={sendButtonStyle} disabled={!draft.trim()}>
+          {sendLabel}
+        </button>
       </form>
     </div>
   );
