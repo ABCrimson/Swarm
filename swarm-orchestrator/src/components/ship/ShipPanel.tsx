@@ -172,6 +172,11 @@ export function ShipPanel({ workerId }: ShipPanelProps): React.ReactElement {
             onCommitOnly={() => void ship.commitOnly()}
             onCommitAndPush={() => void ship.commitAndPush()}
             onCommitPushAndOpenCompare={() => void ship.commitPushAndOpenCompare()}
+            context={ship.context}
+            aiProse={ship.aiProse}
+            onAiProseChange={ship.setAiProse}
+            aiProseState={ship.aiProseState}
+            onRegenerateProse={() => void ship.regenerateProse()}
           />
         )}
         <div style={{ padding: "0 16px 16px" }} role="alert">
@@ -210,6 +215,11 @@ export function ShipPanel({ workerId }: ShipPanelProps): React.ReactElement {
         onCommitOnly={() => void ship.commitOnly()}
         onCommitAndPush={() => void ship.commitAndPush()}
         onCommitPushAndOpenCompare={() => void ship.commitPushAndOpenCompare()}
+        context={ship.context}
+        aiProse={ship.aiProse}
+        onAiProseChange={ship.setAiProse}
+        aiProseState={ship.aiProseState}
+        onRegenerateProse={() => void ship.regenerateProse()}
       />
     </div>
   );

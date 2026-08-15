@@ -28,13 +28,15 @@ function pluralize(count: number, singular: string, plural = `${singular}s`): st
   return count === 1 ? singular : plural;
 }
 
-function resultLabel(ok: boolean | null): "OK" | "Error" | "Pending" {
+/** Exported for `ShipPreview.tsx`'s in-app Causal Record table, which renders the same labeling as this module's markdown output rather than re-deriving it. */
+export function resultLabel(ok: boolean | null): "OK" | "Error" | "Pending" {
   if (ok === true) return "OK";
   if (ok === false) return "Error";
   return "Pending";
 }
 
-function turnStatusLabel(status: string | null): "Completed" | "Failed" | "In Progress" {
+/** Exported for `ShipPreview.tsx` — see `resultLabel`'s doc. */
+export function turnStatusLabel(status: string | null): "Completed" | "Failed" | "In Progress" {
   if (status === "ok") return "Completed";
   if (status === "error") return "Failed";
   return "In Progress";

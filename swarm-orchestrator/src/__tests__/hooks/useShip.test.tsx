@@ -70,6 +70,20 @@ const mockGitShipPreflight = vi.fn();
 const mockGitStageCommit = vi.fn();
 const mockGitPush = vi.fn();
 const mockShipCompareUrl = vi.fn();
+// Resolves to an empty-but-valid ShipContext by default so the
+// fire-and-forget `fetchContext` call `runPreflight` makes settles
+// promptly and deterministically instead of falling through to the real
+// `invoke()` (no Tauri bridge in jsdom) — see `fetchContext`'s own doc
+// for why its failure mode is silent (never a ship error), which this
+// default keeps this whole suite from ever having to think about.
+const mockShipContext = vi.fn().mockResolvedValue({
+  workerId: "11111111-2222-3333-8444-555555555555",
+  seqFrom: 0,
+  seqTo: 0,
+  turns: [],
+  commits: [],
+  omittedTurnCount: 0,
+});
 
 vi.mock("#lib/tauri", async (importOriginal) => {
   const actual = await importOriginal<typeof import("#lib/tauri")>();
@@ -79,6 +93,7 @@ vi.mock("#lib/tauri", async (importOriginal) => {
     gitStageCommit: (...args: unknown[]) => mockGitStageCommit(...args),
     gitPush: (...args: unknown[]) => mockGitPush(...args),
     shipCompareUrl: (...args: unknown[]) => mockShipCompareUrl(...args),
+    shipContext: (...args: unknown[]) => mockShipContext(...args),
   };
 });
 
