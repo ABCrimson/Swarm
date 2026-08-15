@@ -17,6 +17,7 @@ interface SessionStoreState {
 interface SessionStoreActions {
   readonly addSession: (session: Session) => void;
   readonly removeSession: (id: string) => void;
+  readonly removeWorkerFromSession: (sessionId: string, workerId: string) => void;
   readonly setActiveSession: (id: string | null) => void;
   readonly updateSession: (id: string, updates: Partial<Session>) => void;
 }
@@ -43,6 +44,14 @@ export const useSessionStore = create<SessionStoreState & SessionStoreActions>()
         set((s) => {
           s.sessions.delete(id);
           if (s.activeSessionId === id) s.activeSessionId = null;
+        });
+      },
+
+      removeWorkerFromSession(sessionId, workerId) {
+        set((s) => {
+          const session = s.sessions.get(sessionId);
+          if (!session) return;
+          session.workerIds = session.workerIds.filter((id) => id !== workerId);
         });
       },
 

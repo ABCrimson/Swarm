@@ -71,6 +71,10 @@ pub enum SwarmEvent {
     SessionCreated(SessionCreatedPayload),
     /// A session has been deleted.
     SessionDeleted(SessionDeletedPayload),
+    /// A worker was pruned from a session's `workerIds` list (typically
+    /// because the worker was killed or exited) — see
+    /// [`crate::session::manager::SessionManager::remove_worker_from_session`].
+    SessionWorkerRemoved(SessionWorkerRemovedPayload),
     /// Periodic system metrics snapshot.
     SystemMetrics(SystemMetricsPayload),
     /// A delta chunk from an AI streaming response.
@@ -209,6 +213,22 @@ pub struct SessionCreatedPayload {
 pub struct SessionDeletedPayload {
     /// UUID of the deleted session.
     pub session_id: Uuid,
+}
+
+/// Payload for the `session_worker_removed` event.
+///
+/// Emitted when a worker is pruned from a session's `workerIds` list.
+/// Persisted (the default policy — see
+/// [`crate::orchestration::is_persistent`]), so a backfilling client
+/// reconstructs the same membership a live listener would have
+/// observed, rather than only ever seeing `workerIds` grow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionWorkerRemovedPayload {
+    /// UUID of the session the worker was removed from.
+    pub session_id: Uuid,
+    /// UUID of the removed worker.
+    pub worker_id: Uuid,
 }
 
 /// Payload for the `system_metrics` event.
@@ -1021,6 +1041,25 @@ mod tests {
             assert_eq!(p.name, "My Session");
         } else {
             panic!("expected SessionCreated variant");
+        }
+    }
+
+    #[test]
+    fn test_session_worker_removed_roundtrip() {
+        let session_id = Uuid::new_v4();
+        let worker_id = Uuid::new_v4();
+        let event = SwarmEvent::SessionWorkerRemoved(SessionWorkerRemovedPayload {
+            session_id,
+            worker_id,
+        });
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"type\":\"session_worker_removed\""));
+        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
+        if let SwarmEvent::SessionWorkerRemoved(p) = deserialized {
+            assert_eq!(p.session_id, session_id);
+            assert_eq!(p.worker_id, worker_id);
+        } else {
+            panic!("expected SessionWorkerRemoved variant");
         }
     }
 

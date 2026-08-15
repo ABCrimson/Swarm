@@ -9,6 +9,7 @@
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkerEvents } from "#hooks/useWorkerEvents";
+import { useSessionStore } from "#store/sessions";
 import { useWorkerAgentStore } from "#store/worker-agents";
 import { useWorkerStore } from "#store/workers";
 
@@ -23,17 +24,28 @@ vi.mock("#lib/event-bus", () => ({
   },
 }));
 
+// Spies on the session_remove_worker IPC wrapper the worker_killed
+// handler now calls — this hook only ever needs sessionRemoveWorker
+// from #lib/tauri, so a full-replacement mock is safe.
+const mockSessionRemoveWorker = vi.fn().mockResolvedValue(undefined);
+vi.mock("#lib/tauri", () => ({
+  sessionRemoveWorker: (...args: unknown[]) => mockSessionRemoveWorker(...args),
+}));
+
 function resetStores(): void {
   for (const [id] of useWorkerStore.getState().workers) useWorkerStore.getState().removeWorker(id);
   for (const [id] of useWorkerAgentStore.getState().metadata) {
     useWorkerAgentStore.getState().removeAgentMetadata(id);
   }
+  for (const [id] of useSessionStore.getState().sessions)
+    useSessionStore.getState().removeSession(id);
 }
 
 describe("useWorkerEvents", () => {
   beforeEach(() => {
     resetStores();
     registered.clear();
+    mockSessionRemoveWorker.mockClear();
   });
   afterEach(resetStores);
 
@@ -96,5 +108,78 @@ describe("useWorkerEvents", () => {
     const worker = useWorkerStore.getState().workers.get(workerId);
     expect(worker?.worktreePath).toBe("/home/user/.swarm/worktrees/repo-abcd1234/w-11112222");
     expect(worker?.branch).toBe("swarm/isolated-worker-11112222");
+  });
+
+  // ── session_remove_worker pruning (workerIds stops growing forever) ──
+
+  it("calls session_remove_worker for every session that still lists the killed worker", () => {
+    const workerId = "44444444-5555-6666-8777-888888888888";
+    const sessionId = "99999999-8888-7777-8666-555555555555";
+    const now = new Date().toISOString();
+    useSessionStore.getState().addSession({
+      id: sessionId,
+      name: "Test Session",
+      workerIds: [workerId],
+      createdAt: now,
+      updatedAt: now,
+    });
+    useWorkerStore.getState().addWorker({
+      id: workerId,
+      state: "running",
+      name: "Session Worker",
+      startedAt: now,
+    });
+
+    renderHook(() => useWorkerEvents());
+    registered.get("worker_killed")?.({ payload: { workerId } });
+
+    expect(mockSessionRemoveWorker).toHaveBeenCalledTimes(1);
+    expect(mockSessionRemoveWorker).toHaveBeenCalledWith(sessionId, workerId);
+  });
+
+  it("calls session_remove_worker for every session containing the worker, not just the first", () => {
+    const workerId = "55555555-6666-7777-8888-999999999999";
+    const sessionA = "aaaaaaaa-1111-2222-8333-444444444444";
+    const sessionB = "bbbbbbbb-1111-2222-8333-444444444444";
+    const now = new Date().toISOString();
+    useSessionStore.getState().addSession({
+      id: sessionA,
+      name: "A",
+      workerIds: [workerId],
+      createdAt: now,
+      updatedAt: now,
+    });
+    useSessionStore.getState().addSession({
+      id: sessionB,
+      name: "B",
+      workerIds: [workerId],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    renderHook(() => useWorkerEvents());
+    registered.get("worker_killed")?.({ payload: { workerId } });
+
+    expect(mockSessionRemoveWorker).toHaveBeenCalledWith(sessionA, workerId);
+    expect(mockSessionRemoveWorker).toHaveBeenCalledWith(sessionB, workerId);
+    expect(mockSessionRemoveWorker).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not call session_remove_worker for a session that never listed the killed worker", () => {
+    const workerId = "aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee";
+    const sessionId = "bbbbbbbb-cccc-dddd-8eee-ffffffffffff";
+    const now = new Date().toISOString();
+    useSessionStore.getState().addSession({
+      id: sessionId,
+      name: "Unrelated",
+      workerIds: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    renderHook(() => useWorkerEvents());
+    registered.get("worker_killed")?.({ payload: { workerId } });
+
+    expect(mockSessionRemoveWorker).not.toHaveBeenCalled();
   });
 });

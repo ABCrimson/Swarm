@@ -172,6 +172,7 @@ pub fn run() {
             commands::session::list_sessions,
             commands::session::get_session,
             commands::session::session_add_worker,
+            commands::session::session_remove_worker,
             // Agent commands
             commands::agent::agent_turn_started,
             commands::agent::agent_spawn,

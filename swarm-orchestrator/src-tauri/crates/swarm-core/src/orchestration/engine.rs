@@ -421,6 +421,22 @@ mod tests {
         )));
     }
 
+    /// DIRECTIVE: `session_worker_removed` persists by construction
+    /// (absent from the exclusion list) — a backfilling client must be
+    /// able to reconstruct the same `workerIds` pruning a live listener
+    /// observed, not just the growth side (`session_created`).
+    #[test]
+    fn test_session_worker_removed_is_persistent() {
+        use crate::events::SessionWorkerRemovedPayload;
+
+        assert!(is_persistent(&SwarmEvent::SessionWorkerRemoved(
+            SessionWorkerRemovedPayload {
+                session_id: Uuid::nil(),
+                worker_id: Uuid::nil(),
+            }
+        )));
+    }
+
     // ── agent_* persistence pinning ──────────────────────────────────
 
     /// DIRECTIVE: `agent_turn_delta` is the ONLY new `agent_*` variant
