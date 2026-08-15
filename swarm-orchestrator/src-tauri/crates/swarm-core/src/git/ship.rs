@@ -614,6 +614,18 @@ pub struct SkippedFile {
     pub reason: String,
 }
 
+/// `true` when `rel_path`'s basename is `settings.json` and some
+/// component of its path is literally `.claude` — matches both the
+/// worktree root (`.claude/settings.json`) and any nested occurrence
+/// (`worker/.claude/settings.json`). A pure path-shape check, no
+/// filesystem access — see [`deny_reason`]'s untracked-only gating for
+/// why matching the shape alone is not sufficient to deny a path.
+fn is_claude_settings_json(rel_path: &str) -> bool {
+    let path = Path::new(rel_path);
+    path.file_name().and_then(|n| n.to_str()) == Some("settings.json")
+        && path.components().any(|c| c.as_os_str() == ".claude")
+}
+
 /// Whether `rel_path` should be skipped from staging — secret-shaped
 /// filenames (`.env*`, `*.pem`, `*.key`, `id_rsa*`, case-insensitive,
 /// matched against the basename) or a `secret` substring anywhere in
@@ -623,7 +635,27 @@ pub struct SkippedFile {
 /// is checked against the file as it exists in `worktree_path` right
 /// now; a path with no existing file (already deleted) can't be
 /// size-skipped, only name-skipped.
-fn deny_reason(worktree_path: &Path, rel_path: &str) -> Option<String> {
+///
+/// # Defense in depth: untracked `.claude/settings.json`
+///
+/// Nothing writes `.claude/settings.json` into a worker's worktree
+/// anymore (PR #11 removed that) — so an UNTRACKED copy (`is_untracked`,
+/// derived from a `git status` `??` entry — see this function's
+/// callers) can only be stray droppings from an older build or an
+/// out-of-band write, never something the user or SWARM itself is
+/// intentionally tracking. It is always denied, regardless of the
+/// credential/size heuristics below.
+///
+/// A TRACKED `.claude/settings.json` (already committed, or staged —
+/// `is_untracked == false`) is a different story: it is the user's own
+/// pre-existing file, and whether to ship it is the user's call, same
+/// as any other tracked file. This function never denies a tracked copy
+/// on that basis alone.
+fn deny_reason(worktree_path: &Path, rel_path: &str, is_untracked: bool) -> Option<String> {
+    if is_untracked && is_claude_settings_json(rel_path) {
+        return Some("Skipped — SWARM Configuration File".to_string());
+    }
+
     let full_path_lower = rel_path.to_ascii_lowercase();
     let basename = Path::new(rel_path)
         .file_name()
@@ -915,9 +947,11 @@ pub fn preflight(
         StagingMode::Staged => staged.clone(),
     };
 
+    let untracked_set: HashSet<&str> = untracked.iter().map(|s| s.as_str()).collect();
     let mut skipped = Vec::new();
     for path in &candidates {
-        if let Some(reason) = deny_reason(wt, path) {
+        let is_untracked = untracked_set.contains(path.as_str());
+        if let Some(reason) = deny_reason(wt, path, is_untracked) {
             skipped.push(SkippedFile {
                 path: path.clone(),
                 reason,
@@ -1117,11 +1151,13 @@ pub fn stage_and_commit(
 
     let skipped = match mode {
         StagingMode::All => {
+            let untracked_set: HashSet<&str> = untracked.iter().map(|s| s.as_str()).collect();
             let candidates = union_paths(&staged, &unstaged, &untracked);
             let mut skipped = Vec::new();
             let mut survivors = Vec::new();
             for path in candidates {
-                match deny_reason(wt, &path) {
+                let is_untracked = untracked_set.contains(path.as_str());
+                match deny_reason(wt, &path, is_untracked) {
                     Some(reason) => skipped.push(SkippedFile { path, reason }),
                     None => survivors.push(path),
                 }
@@ -1156,7 +1192,11 @@ pub fn stage_and_commit(
             let mut skipped = Vec::new();
             let mut denied_paths = Vec::new();
             for path in &staged {
-                if let Some(reason) = deny_reason(wt, path) {
+                // `staged` entries are index_status != ' ' — by
+                // definition already tracked, never an untracked `??`
+                // entry — so this is never the untracked-artifact case
+                // deny_reason's `is_untracked` gates on.
+                if let Some(reason) = deny_reason(wt, path, false) {
                     denied_paths.push(path.clone());
                     skipped.push(SkippedFile {
                         path: path.clone(),
@@ -1512,13 +1552,13 @@ mod tests {
             "MY_SECRET.txt",
         ] {
             assert!(
-                deny_reason(&tmp, name).is_some(),
+                deny_reason(&tmp, name, false).is_some(),
                 "expected {name} to be denied"
             );
         }
         for name in ["README.md", "src/main.rs", "package.json"] {
             assert!(
-                deny_reason(&tmp, name).is_none(),
+                deny_reason(&tmp, name, false).is_none(),
                 "expected {name} to survive the deny list"
             );
         }
@@ -1535,10 +1575,54 @@ mod tests {
         std::fs::write(&small, vec![0u8; 10]).unwrap();
 
         assert_eq!(
-            deny_reason(&tmp, "blob.bin").as_deref(),
+            deny_reason(&tmp, "blob.bin", false).as_deref(),
             Some("Skipped — Larger Than 5 MB")
         );
-        assert!(deny_reason(&tmp, "tiny.bin").is_none());
+        assert!(deny_reason(&tmp, "tiny.bin", false).is_none());
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── Untracked `.claude/settings.json` defense in depth ────────────
+
+    #[test]
+    fn test_is_claude_settings_json_matches_root_and_nested_paths() {
+        assert!(is_claude_settings_json(".claude/settings.json"));
+        assert!(is_claude_settings_json("worker/.claude/settings.json"));
+        assert!(is_claude_settings_json("a/b/.claude/settings.json"));
+        assert!(!is_claude_settings_json("settings.json"));
+        assert!(!is_claude_settings_json(".claude/other.json"));
+        assert!(!is_claude_settings_json("claude/settings.json"));
+        assert!(!is_claude_settings_json(".claude-old/settings.json"));
+    }
+
+    #[test]
+    fn test_deny_reason_skips_untracked_claude_settings_json() {
+        let tmp = std::env::temp_dir().join(format!("swarm-deny-claude-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(tmp.join(".claude")).unwrap();
+        std::fs::write(tmp.join(".claude/settings.json"), "{}").unwrap();
+
+        assert_eq!(
+            deny_reason(&tmp, ".claude/settings.json", true).as_deref(),
+            Some("Skipped — SWARM Configuration File")
+        );
+        assert_eq!(
+            deny_reason(&tmp, "worker/.claude/settings.json", true).as_deref(),
+            Some("Skipped — SWARM Configuration File")
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn test_deny_reason_leaves_tracked_claude_settings_json_alone() {
+        let tmp = std::env::temp_dir().join(format!("swarm-deny-claude-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(tmp.join(".claude")).unwrap();
+        std::fs::write(tmp.join(".claude/settings.json"), "{}").unwrap();
+
+        // Same path, `is_untracked: false` — this is a tracked/staged
+        // copy (the user's own file), never denied on that basis.
+        assert!(deny_reason(&tmp, ".claude/settings.json", false).is_none());
 
         std::fs::remove_dir_all(&tmp).ok();
     }
@@ -1941,6 +2025,146 @@ mod tests {
         .unwrap();
         assert!(!show.stdout.contains("id_rsa"));
         assert!(!show.stdout.contains("blob.bin"));
+        assert!(show.stdout.contains("safe.txt"));
+
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    /// DIRECTIVE: an UNTRACKED `.claude/settings.json` in a worker's
+    /// worktree — never written by SWARM itself since PR #11, so this
+    /// can only be stray droppings — is deny-listed and never reaches
+    /// the commit, same real-git proof shape as the secret/size guard
+    /// test above.
+    #[tokio::test]
+    async fn test_untracked_claude_settings_json_is_skipped() {
+        let repo = setup_repo("untracked-claude-settings");
+        let worktree = repo.parent().unwrap().join("wt");
+        let head = super::super::repo::head_sha(&repo).unwrap();
+        super::super::worktree::add(&repo, &worktree, "swarm/untracked-settings-abcd1234", &head)
+            .unwrap();
+
+        std::fs::create_dir_all(worktree.join(".claude")).unwrap();
+        std::fs::write(worktree.join(".claude/settings.json"), "{}").unwrap();
+        std::fs::write(worktree.join("safe.txt"), "totally fine").unwrap();
+
+        let registry = WorkerRegistry::new();
+        let repo_locks = RepoLocks::new();
+        let handle = make_isolated_handle(
+            &worktree.display().to_string(),
+            &repo.display().to_string(),
+            "swarm/untracked-settings-abcd1234",
+        );
+        let id = handle.id;
+        registry.spawn_worker(handle).unwrap();
+
+        let outcome = stage_and_commit(
+            &registry,
+            &repo_locks,
+            id,
+            "chore: add safe file",
+            StagingMode::All,
+            0,
+            1,
+            None,
+        )
+        .expect("commit of the surviving file should succeed");
+
+        let skipped_paths: Vec<&str> = outcome.skipped.iter().map(|s| s.path.as_str()).collect();
+        assert!(skipped_paths.contains(&".claude/settings.json"));
+        assert!(!skipped_paths.contains(&"safe.txt"));
+
+        let show = cli::run(
+            &{
+                let mut a = base_args(&repo);
+                a.extend(
+                    ["show", "--name-only", "--format=", &outcome.sha]
+                        .iter()
+                        .map(|s| s.to_string()),
+                );
+                a
+            },
+            READ_TIMEOUT,
+        )
+        .unwrap();
+        assert!(!show.stdout.contains(".claude/settings.json"));
+        assert!(show.stdout.contains("safe.txt"));
+
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    /// DIRECTIVE: the flip side — a `.claude/settings.json` the user
+    /// already committed into repo history (tracked, not SWARM
+    /// droppings) is left entirely to the user's own shipping intent.
+    /// Modifying it in the worktree and shipping must NOT deny-list it,
+    /// proven against a real commit the same way the untracked case is
+    /// proven absent.
+    #[tokio::test]
+    async fn test_tracked_claude_settings_json_is_not_skipped() {
+        let repo = setup_repo("tracked-claude-settings");
+        std::fs::create_dir_all(repo.join(".claude")).unwrap();
+        std::fs::write(repo.join(".claude/settings.json"), "{\"permissions\":{}}").unwrap();
+        run_setup(&repo, &["add", "-A"]);
+        run_setup(&repo, &["commit", "-m", "chore: track user settings"]);
+
+        let worktree = repo.parent().unwrap().join("wt");
+        let head = super::super::repo::head_sha(&repo).unwrap();
+        super::super::worktree::add(&repo, &worktree, "swarm/tracked-settings-abcd1234", &head)
+            .unwrap();
+
+        // The worker modifies the already-tracked file (still tracked,
+        // just dirty) and adds an unrelated safe file.
+        std::fs::write(
+            worktree.join(".claude/settings.json"),
+            "{\"permissions\":{\"allow\":[\"Bash\"]}}",
+        )
+        .unwrap();
+        std::fs::write(worktree.join("safe.txt"), "totally fine").unwrap();
+
+        let registry = WorkerRegistry::new();
+        let repo_locks = RepoLocks::new();
+        let handle = make_isolated_handle(
+            &worktree.display().to_string(),
+            &repo.display().to_string(),
+            "swarm/tracked-settings-abcd1234",
+        );
+        let id = handle.id;
+        registry.spawn_worker(handle).unwrap();
+
+        let outcome = stage_and_commit(
+            &registry,
+            &repo_locks,
+            id,
+            "chore: update settings + safe file",
+            StagingMode::All,
+            0,
+            1,
+            None,
+        )
+        .expect("commit should succeed");
+
+        let skipped_paths: Vec<&str> = outcome.skipped.iter().map(|s| s.path.as_str()).collect();
+        assert!(
+            !skipped_paths.contains(&".claude/settings.json"),
+            "a tracked, user-owned .claude/settings.json must never be deny-listed: {skipped_paths:?}"
+        );
+
+        let show = cli::run(
+            &{
+                let mut a = base_args(&repo);
+                a.extend(
+                    ["show", "--name-only", "--format=", &outcome.sha]
+                        .iter()
+                        .map(|s| s.to_string()),
+                );
+                a
+            },
+            READ_TIMEOUT,
+        )
+        .unwrap();
+        assert!(
+            show.stdout.contains(".claude/settings.json"),
+            "the modified tracked file should have been committed"
+        );
         assert!(show.stdout.contains("safe.txt"));
 
         std::fs::remove_dir_all(repo.parent().unwrap()).ok();
@@ -2351,7 +2575,7 @@ mod tests {
         std::fs::create_dir_all(tmp.join("config/secrets")).unwrap();
         std::fs::write(tmp.join("config/secrets/api.yaml"), "key: x").unwrap();
         assert!(
-            deny_reason(&tmp, "config/secrets/api.yaml").is_some(),
+            deny_reason(&tmp, "config/secrets/api.yaml", false).is_some(),
             "a path with 'secret' in a directory segment must be denied even though the basename doesn't mention it"
         );
         std::fs::remove_dir_all(&tmp).ok();
