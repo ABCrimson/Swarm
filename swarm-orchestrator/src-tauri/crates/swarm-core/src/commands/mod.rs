@@ -268,6 +268,7 @@ impl Registry {
             entry("git_stage_commit", git::git_stage_commit, Allowed),
             entry("git_push", git::git_push, Allowed),
             entry("ship_compare_url", git::ship_compare_url, Allowed),
+            entry("ship_context", git::ship_context, Allowed),
             // Session commands
             entry("create_session", session::create_session, Allowed),
             entry("delete_session", session::delete_session, Allowed),
@@ -453,9 +454,9 @@ mod tests {
     }
 
     #[test]
-    fn test_registry_has_36_entries() {
-        // 38 tauri commands total minus the 2 NATIVE_ONLY.
-        assert_eq!(Registry::new().keys().len(), 36);
+    fn test_registry_has_37_entries() {
+        // 39 tauri commands total minus the 2 NATIVE_ONLY (ship_context added, Phase 2).
+        assert_eq!(Registry::new().keys().len(), 37);
     }
 
     #[tokio::test]

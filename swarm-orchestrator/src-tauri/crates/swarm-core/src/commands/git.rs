@@ -11,11 +11,21 @@ use uuid::Uuid;
 use crate::events::{
     CommitCreatedPayload, EventSink, ShipProgressPayload, ShipSettledPayload, SwarmEvent,
 };
-use crate::git::{self, ShipError, ShipErrorKind, StagingMode};
+use crate::git::{self, ShipContext, ShipError, ShipErrorKind, StagingMode};
 use crate::orchestration::{EventLog, OrchestrationEngine};
 use crate::worker::registry::WorkerRegistry;
 
 use super::{Ctx, err_value, ok_value, parse_args};
+
+/// Cap on rows fetched per `ship_context` call — deliberately generous
+/// (well above `commands::orchestration::events_since`'s IPC-facing
+/// `PAGE_LIMIT` of 5000): a single busy turn can emit a dozen-plus rows
+/// (block + tool_call + tool_result per tool use), so 200 turns'
+/// worth easily exceeds 5000 raw event rows even though
+/// `git::causal::build_ship_context`'s own `MAX_TURNS` cap keeps the
+/// *returned* turn count bounded regardless of how many rows this
+/// fetches.
+const SHIP_CONTEXT_EVENT_LIMIT: u32 = 50_000;
 
 fn parse_worker_id(raw: &str) -> Result<Uuid, ShipError> {
     Uuid::parse_str(raw).map_err(|_| ShipError {
@@ -400,5 +410,132 @@ pub async fn ship_compare_url(ctx: Ctx, args: Value) -> Result<Value, Value> {
             emit_settled(&sink, sid, id, None, None, None, Some(err.clone()));
             Err(err_value(&err))
         }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShipContextArgs {
+    worker_id: String,
+}
+
+/// Read-only: the causal record for a worker's ship range. Resolves
+/// `(seqFrom, seqTo]` via the exact same [`resolve_seq_range`] algorithm
+/// `git_stage_commit` uses (`lastShippedSeq ?? worktree_created seq ..
+/// current max`) — so a `ship_context` call made just before "Commit +
+/// Push" describes the same range the resulting commit's `Swarm-Seq-Range`
+/// trailer will (barring new events landing in the gap between preview
+/// and commit, which is unavoidable and harmless: the trailer is always
+/// the source of truth, this is a preview of it).
+///
+/// Runs on a [`EventLog::open_readonly`] connection inside `spawn_blocking`
+/// — the identical pattern `commands::orchestration::events_since` already
+/// uses for a read-only backfill query. Emits no events (a query, not a
+/// mutation) — `RemotePolicy::Allowed` in the registry, same as every
+/// other ship command (`git_ship_preflight` is the closest analog: also
+/// read-only, also `Allowed`, and a remote client legitimately previewing
+/// a ship it's about to trigger needs this exactly as much as it needs
+/// the preflight).
+pub async fn ship_context(ctx: Ctx, args: Value) -> Result<Value, Value> {
+    let ShipContextArgs { worker_id } = parse_args(args)?;
+    let id = parse_worker_id(&worker_id).map_err(|e| err_value(&e))?;
+    let registry = ctx.registry.clone();
+
+    let (seq_from, seq_to) = resolve_seq_range(&ctx.engine, &registry, id).await;
+
+    let Some(db_path) = ctx.engine.db_path().map(std::path::Path::to_path_buf) else {
+        return ok_value(&ShipContext::empty(id, seq_from, seq_to));
+    };
+
+    let context = tokio::task::spawn_blocking(move || -> Result<ShipContext, String> {
+        let log = EventLog::open_readonly(&db_path).map_err(|e| e.to_string())?;
+        let events = log
+            .events_between(seq_from, seq_to, SHIP_CONTEXT_EVENT_LIMIT)
+            .map_err(|e| e.to_string())?;
+        Ok(git::build_ship_context(events, id, seq_from, seq_to))
+    })
+    .await
+    .map_err(|e| Value::String(format!("ship_context task panicked: {e}")))?
+    .map_err(Value::String)?;
+
+    ok_value(&context)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::Provenance;
+
+    /// DIRECTIVE: exercises the exact two-step composition
+    /// `ship_context` performs — `EventLog::events_between` then
+    /// `git::build_ship_context` — against a real (in-memory) `EventLog`,
+    /// proving the seam between the data layer and the pure builder
+    /// works end-to-end, not just each half in isolation (the data-layer
+    /// half is covered in `orchestration::log`'s own tests; the builder
+    /// half in `git::causal`'s). Goes around the full `Ctx`/registry
+    /// wiring deliberately: `resolve_seq_range` and the worker-lookup
+    /// plumbing above are already exercised by the ship command tests in
+    /// `git::ship`, and standing up a fake `WorkerHandle` here would
+    /// duplicate that coverage without adding anything this seam test
+    /// doesn't already prove.
+    #[test]
+    fn test_ship_context_composition_seeded_log_excludes_other_worker() {
+        let mut log = EventLog::open_in_memory().unwrap();
+        let me = uuid::Uuid::new_v4();
+        let other = uuid::Uuid::new_v4();
+
+        log.append(
+            1,
+            1,
+            "worktree_created",
+            &serde_json::json!({ "workerId": me }).to_string(),
+            &Provenance::default(),
+        )
+        .unwrap();
+        log.append(
+            2,
+            2,
+            "agent_tool_call",
+            &serde_json::json!({
+                "workerId": other, "turnId": "ot1", "toolUseId": "ou1",
+                "name": "Read", "input": {}
+            })
+            .to_string(),
+            &Provenance::default(),
+        )
+        .unwrap();
+        log.append(
+            3,
+            3,
+            "agent_tool_call",
+            &serde_json::json!({
+                "workerId": me, "turnId": "t1", "toolUseId": "u1",
+                "name": "Bash", "input": { "command": "pnpm build" }
+            })
+            .to_string(),
+            &Provenance::default(),
+        )
+        .unwrap();
+
+        let events = log.events_between(0, 3, SHIP_CONTEXT_EVENT_LIMIT).unwrap();
+        let context = git::build_ship_context(events, me, 0, 3);
+
+        assert_eq!(context.turns.len(), 1);
+        assert_eq!(context.turns[0].turn_id, "t1");
+        assert_eq!(context.turns[0].tool_calls[0].name, "Bash");
+        assert_eq!(
+            context.turns[0].tool_calls[0].target.as_deref(),
+            Some("pnpm build")
+        );
+    }
+
+    #[test]
+    fn test_ship_context_empty_range_has_no_turns() {
+        let log = EventLog::open_in_memory().unwrap();
+        let me = uuid::Uuid::new_v4();
+        let events = log.events_between(5, 5, SHIP_CONTEXT_EVENT_LIMIT).unwrap();
+        let context = git::build_ship_context(events, me, 5, 5);
+        assert!(context.turns.is_empty());
+        assert!(context.commits.is_empty());
     }
 }

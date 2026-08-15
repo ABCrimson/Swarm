@@ -14,6 +14,14 @@ use crate::events::Provenance;
 /// [`EventLog::migrate`].
 const SCHEMA_VERSION: i64 = 1;
 
+/// One raw `events` row, in column order (`seq, ts, type, payload,
+/// origin_worker, cause_seq`) — the shared intermediate shape between
+/// [`EventLog::row_to_tuple`] and [`EventLog::collect_stored_events`],
+/// factored out so the two range-query methods that use it
+/// ([`EventLog::events_since`], [`EventLog::events_between`]) don't each
+/// restate the six-tuple type.
+type RawEventRow = (i64, i64, String, String, Option<String>, Option<i64>);
+
 /// One persisted event row.
 #[derive(Debug, Clone)]
 pub struct StoredEvent {
@@ -258,18 +266,67 @@ impl EventLog {
             )
             .map_err(|e| AppError::EventLog(e.to_string()))?;
         let rows = stmt
-            .query_map((after_seq_i64, limit), |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, Option<i64>>(5)?,
-                ))
-            })
+            .query_map((after_seq_i64, limit), Self::row_to_tuple)
             .map_err(|e| AppError::EventLog(e.to_string()))?;
+        Self::collect_stored_events(rows)
+    }
 
+    /// Returns up to `limit` persisted events with `from_seq < seq <=
+    /// to_seq`, ascending — the bounded-range counterpart to
+    /// [`Self::events_since`] (which has no upper bound). Exists for the
+    /// ship chain's causal-record query (`commands::git::ship_context`,
+    /// via `git::causal::build_ship_context`): a ship attempt's range is
+    /// always closed at both ends (`fromSeq` = the worker's last-shipped
+    /// seq or its `worktree_created` seq; `toSeq` = the log's current max
+    /// at preview time), and fetching only that window — rather than
+    /// paging `events_since` from `fromSeq` and discarding everything
+    /// past `toSeq` in Rust — keeps the query itself honest about the
+    /// range it represents. `limit` is **not** capped internally (unlike
+    /// `commands::orchestration::events_since`'s `clamp_limit`, which
+    /// applies only to that IPC-facing handler) — this is a lower-level
+    /// method callers are expected to size deliberately.
+    pub fn events_between(
+        &self,
+        from_seq: u64,
+        to_seq: u64,
+        limit: u32,
+    ) -> Result<Vec<StoredEvent>, AppError> {
+        // Same clamp-not-wrap reasoning as `events_since`.
+        let from_seq_i64 = i64::try_from(from_seq).unwrap_or(i64::MAX);
+        let to_seq_i64 = i64::try_from(to_seq).unwrap_or(i64::MAX);
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT seq, ts, type, payload, origin_worker, cause_seq FROM events \
+                 WHERE seq > ?1 AND seq <= ?2 ORDER BY seq ASC LIMIT ?3",
+            )
+            .map_err(|e| AppError::EventLog(e.to_string()))?;
+        let rows = stmt
+            .query_map((from_seq_i64, to_seq_i64, limit), Self::row_to_tuple)
+            .map_err(|e| AppError::EventLog(e.to_string()))?;
+        Self::collect_stored_events(rows)
+    }
+
+    /// Row-mapping closure shared by [`Self::events_since`] and
+    /// [`Self::events_between`] — both select the identical six columns
+    /// in the identical order; only the `WHERE` clause differs.
+    fn row_to_tuple(row: &rusqlite::Row) -> rusqlite::Result<RawEventRow> {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<i64>>(5)?,
+        ))
+    }
+
+    /// Converts the raw row tuples [`Self::row_to_tuple`] produces into
+    /// [`StoredEvent`]s — the deserialization/error-mapping tail shared
+    /// by [`Self::events_since`] and [`Self::events_between`].
+    fn collect_stored_events(
+        rows: impl Iterator<Item = rusqlite::Result<RawEventRow>>,
+    ) -> Result<Vec<StoredEvent>, AppError> {
         let mut out = Vec::new();
         for row in rows {
             let (seq, ts, event_type, payload, origin_worker, cause_seq) =
@@ -396,6 +453,86 @@ mod tests {
         let limited = log.events_since(0, 3).unwrap();
         assert_eq!(limited.len(), 3);
         assert_eq!(limited[0].seq, 1);
+    }
+
+    // ── events_between ───────────────────────────────────────────────
+
+    #[test]
+    fn test_events_between_is_bounded_at_both_ends() {
+        let mut log = EventLog::open_in_memory().unwrap();
+        for seq in 1..=10 {
+            log.append(
+                seq,
+                1000 + seq as i64,
+                "worker_output",
+                "{}",
+                &Provenance::default(),
+            )
+            .unwrap();
+        }
+        // (3, 7] -> seqs 4,5,6,7 — never 3 (excluded, matching
+        // events_since's `seq > after_seq`) and never 8+ (the new upper
+        // bound events_since doesn't have).
+        let events = log.events_between(3, 7, 100).unwrap();
+        assert_eq!(
+            events.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![4, 5, 6, 7]
+        );
+    }
+
+    #[test]
+    fn test_events_between_empty_range_yields_nothing() {
+        let mut log = EventLog::open_in_memory().unwrap();
+        log.append(1, 1, "worker_output", "{}", &Provenance::default())
+            .unwrap();
+        // from == to: the (from, to] interval is empty by construction.
+        assert!(log.events_between(1, 1, 100).unwrap().is_empty());
+        // A degenerate 0..0 range (the "no seq data at all" case ship's
+        // resolve_seq_range can produce) must not panic or wrap around —
+        // it's just another empty interval.
+        assert!(log.events_between(0, 0, 100).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_events_between_respects_limit() {
+        let mut log = EventLog::open_in_memory().unwrap();
+        for seq in 1..=10 {
+            log.append(
+                seq,
+                seq as i64,
+                "worker_output",
+                "{}",
+                &Provenance::default(),
+            )
+            .unwrap();
+        }
+        let events = log.events_between(0, 10, 3).unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].seq, 1);
+    }
+
+    #[test]
+    fn test_events_between_matches_events_since_row_shape() {
+        // Same shape guarantee events_since already provides — payload,
+        // origin_worker, cause_seq all round-trip identically, since both
+        // methods now share the same row mapper.
+        let mut log = EventLog::open_in_memory().unwrap();
+        let origin = Uuid::new_v4();
+        log.append(
+            1,
+            1000,
+            "commit_created",
+            r#"{"workerId":"a"}"#,
+            &Provenance {
+                origin_worker: Some(origin),
+                cause_seq: Some(0),
+            },
+        )
+        .unwrap();
+        let events = log.events_between(0, 1, 10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].origin_worker, Some(origin));
+        assert_eq!(events[0].payload["workerId"], "a");
     }
 
     #[test]
