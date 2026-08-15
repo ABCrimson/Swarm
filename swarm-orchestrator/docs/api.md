@@ -43,6 +43,7 @@ Events are received on a single ordered channel, `swarm://events` -- see [Events
   - [agent_cancel](#agent_cancel)
   - [agent_shutdown](#agent_shutdown)
   - [agent_probe](#agent_probe)
+  - [agent_permission_respond](#agent_permission_respond)
 - [File System Commands](#file-system-commands)
   - [read_file](#read_file)
   - [write_file](#write_file)
@@ -50,10 +51,7 @@ Events are received on a single ordered channel, `swarm://events` -- see [Events
   - [get_metrics](#get_metrics)
 - [Bus Commands](#bus-commands)
   - [bus_send](#bus_send)
-  - [bus_subscribe](#bus_subscribe)
-  - [bus_create_pipeline](#bus_create_pipeline)
   - [bus_list_channels](#bus_list_channels)
-  - [bus_list_pipelines](#bus_list_pipelines)
 - [Updater Commands](#updater-commands)
   - [check_for_updates](#check_for_updates)
 - [Notification Commands](#notification-commands)
@@ -854,16 +852,16 @@ await invoke("worker_input", {
 
 ### `agent_spawn`
 
-Phase 3. Spawns a new worker via the existing worktree-isolation path (`do_spawn_worker` -- the same machinery [`spawn_worker`](#spawn_worker) uses) and attaches a Claude Code provider-adapter session to it in one call. The PTY worker and the attached agent session are independent resources sharing only the worker id and cwd (see `docs/architecture.md`'s "Session state -- three owners, no mirroring" table): the PTY continues to back the plain terminal view, while the agent session drives the AI conversation via [`agent_send_turn`](#agent_send_turn) et al.
+Phase 3/4. Spawns a new worker via the existing worktree-isolation path (`do_spawn_worker` -- the same machinery [`spawn_worker`](#spawn_worker) uses) and attaches a provider-adapter session to it in one call, routed by `provider` to `ClaudeCodeAdapter` or (Phase 4) `CodexAdapter`. The PTY worker and the attached agent session are independent resources sharing only the worker id and cwd (see `docs/architecture.md`'s "Session state -- three owners, no mirroring" table): the PTY continues to back the plain terminal view, while the agent session drives the AI conversation via [`agent_send_turn`](#agent_send_turn) et al.
 
 **Parameters:**
 
 | Name        | Type                                    | Required | Description |
 |-------------|------------------------------------------|----------|--------------|
 | `config`    | `WorkerConfig`                           | Yes      | Same shape [`spawn_worker`](#spawn_worker) takes (`name`/`shell`/`cwd`/`env`/`repoRoot`/`isolation`) |
-| `provider`  | `string`                                 | Yes      | Wire provider id -- only `"claude_code"` is supported today |
-| `model`     | `string`                                 | No       | Model alias (e.g. `"sonnet"`); omitted defers to the adapter's default |
-| `trustTier` | `"restricted" \| "standard" \| "write_enabled"` | No | Spawn-time trust dial (see `docs/architecture.md`'s adapter-layer section); omitted defers to `"standard"` |
+| `provider`  | `string`                                 | Yes      | Wire provider id -- `"claude_code"` or `"codex"` |
+| `model`     | `string`                                 | No       | Model alias (e.g. `"sonnet"`, `"gpt-5-codex"`); omitted defers to the adapter's default |
+| `trustTier` | `"restricted" \| "standard" \| "write_enabled"` | No | Spawn-time trust dial -- the SAME 3-token vocabulary for both providers, mapped onto each one's own permission mechanism (`ClaudeCodeTrustTier`/`CodexTrustTier`, see `docs/architecture.md`'s adapter-layer section); omitted defers to `"standard"` |
 | `originWorker` | `string` | No | Causal attribution, same convention as `spawn_worker` |
 | `causeSeq`     | `number` | No | Causal attribution, same convention as `spawn_worker` |
 
@@ -874,10 +872,10 @@ Phase 3. Spawns a new worker via the existing worktree-isolation path (`do_spawn
 | Error | Condition |
 |-------|-----------|
 | Same as `spawn_worker` | The PTY worker spawn itself fails (registry full, worktree creation failed, etc.) |
-| `Unknown Provider: ...` / `Provider Not Yet Supported: ...` | `provider` is not `"claude_code"` |
-| The agent adapter's own error, verbatim | The Claude Code session failed to attach (binary missing, `system/init` timeout, ...) -- **the PTY worker still exists and is usable as a plain terminal** in this case; this is not rolled back |
+| `Unknown Provider: ...` / `Provider Not Yet Supported: ...` | `provider` is not `"claude_code"` or `"codex"` |
+| The agent adapter's own error, verbatim | The session failed to attach (binary missing, an init/handshake timeout, `CodexAdapter` explicitly rejecting a `resume` it doesn't implement, ...) -- **the PTY worker still exists and is usable as a plain terminal** in this case; this is not rolled back |
 
-**Emits:** `worker_spawned` (+ `worktree_created` if isolated) from the underlying `do_spawn_worker` call, then `agent_session_started` once the adapter's `spawn()` resolves.
+**Emits:** `worker_spawned` (+ `worktree_created` if isolated) from the underlying `do_spawn_worker` call, then `agent_session_started` once the adapter's `spawn()` resolves -- `payload.capabilities.interactivePermissions` tells the frontend whether [`agent_permission_respond`](#agent_permission_respond) is a real round-trip (`true`, Codex) or a documented no-op (`false`, Claude Code) for this session.
 
 ---
 
@@ -907,7 +905,7 @@ A session already mid-turn does **not** surface as an error here -- the underlyi
 
 ### `agent_cancel`
 
-Phase 3. Cancels `workerId`'s in-flight turn. `turnId` comes from that turn's own `agent_block`/`agent_tool_call` events' `turnId` field. `ClaudeCodeAdapter`'s `cancel_granularity` is `KillOnly` -- this kills the whole child process (43ms measured in the Phase 1 spike), then synthesizes the terminal receipt (Condition B). A stale or already-settled `turnId` is a benign no-op.
+Phase 3/4. Cancels `workerId`'s in-flight turn. `turnId` comes from that turn's own `agent_block`/`agent_tool_call` events' `turnId` field. Both adapters' `cancel_granularity` is `KillOnly` -- this kills the whole child process (43ms measured in the Phase 1 spike for Claude Code; `CodexAdapter` uses the same conservative default, unverified against a live install -- see `docs/architecture.md`'s adapter-layer section), then synthesizes the terminal receipt (Condition B). A stale or already-settled `turnId` is a benign no-op.
 
 **Parameters:**
 
@@ -944,9 +942,13 @@ Phase 3. Shuts down `workerId`'s attached agent session (idempotent) and removes
 
 ### `agent_probe`
 
-Phase 3. Checks whether the Claude Code CLI is installed and responds to `--version`, bounded by a 5-second timeout -- never a hang. Never touches or reports a credential.
+Phase 3/4. Checks whether `provider`'s CLI is installed and responds to `--version`, bounded by a 5-second timeout -- never a hang. Never touches or reports a credential.
 
-**Parameters:** none.
+**Parameters:**
+
+| Name       | Type     | Required | Description |
+|------------|----------|----------|--------------|
+| `provider` | `string` | No       | `"claude_code"` or `"codex"`. Omitted (or `null`) defaults to `"claude_code"` -- the pre-Phase-4 call shape (`{}`) stays valid |
 
 **Returns:** `ProbeReport`:
 
@@ -954,9 +956,37 @@ Phase 3. Checks whether the Claude Code CLI is installed and responds to `--vers
 { available: boolean; version?: string | null; detail?: string | null }
 ```
 
-An unusable provider is reported as `{ available: false, detail: "..." }`, never an `Err` -- `detail` is always human-readable (e.g. `"Claude Code CLI Not Found On PATH: ..."`), never a credential or raw auth error. `detail` is also `Some("Signed-In State Unknown Until First Spawn")` on a successful probe -- this command never makes a network call, so "authenticated or not" is only actually observable at the first real spawn.
+An unusable provider is reported as `{ available: false, detail: "..." }`, never an `Err` -- `detail` is always human-readable (e.g. `"Claude Code CLI Not Found On PATH: ..."` / `"Codex CLI Not Found On PATH: ..."`), never a credential or raw auth error. `detail` is also `Some("Signed-In State Unknown Until First Spawn")` on a successful probe -- this command never makes a network call, so "authenticated or not" is only actually observable at the first real spawn.
 
 **Errors:** This command itself never fails (see above) -- the `Result` wrapper exists only for Tauri's IPC error-transport convention.
+
+---
+
+### `agent_permission_respond`
+
+Phase 4. Answers a pending [`agent_permission_request`](#type-tags) by `requestId`. A **REAL round-trip** against a `CodexAdapter` session -- `CodexSession::respond_permission` writes a matching JSON-RPC response back to the child process, unblocking a turn that is genuinely waiting on it. A **documented no-op** against a `ClaudeCodeAdapter` session -- `--permission-mode manual` is a silent no-op on the real CLI, so there is nothing on the provider side left to answer; every `agent_permission_request` that adapter emits is already a REPORT of a decision the provider already made. Check the session's `agent_session_started.capabilities.interactivePermissions` before offering an Allow/Deny affordance in the UI at all -- rendering one against a `false` session would silently do nothing.
+
+**Parameters:**
+
+| Name        | Type                    | Required | Description |
+|-------------|--------------------------|----------|--------------|
+| `workerId`  | `string`                 | Yes      | UUID of the worker whose session should answer |
+| `requestId` | `string`                 | Yes      | The pending request's id, from `agent_permission_request.requestId` |
+| `decision`  | `"allow" \| "deny"`      | Yes      | The human's (or a policy's) answer |
+
+**Returns:** `void`.
+
+**Errors:** Invalid UUID, or no attached agent session for `workerId`. An unknown/already-answered `requestId` is a benign no-op, not an error -- a caller racing a stale or duplicate answer must not fail.
+
+**Example:**
+
+```typescript
+await invoke("agent_permission_respond", {
+  workerId,
+  requestId: "100", // from the agent_permission_request event
+  decision: "deny",
+});
+```
 
 ---
 
@@ -1081,13 +1111,13 @@ for (const w of metrics.perWorker) {
 
 ## Bus Commands
 
-> **Built, not wired.** No shipped UI surface calls any of the five commands below -- see [Built, Not Wired](#built-not-wired). They are fully implemented and tested; inter-agent messaging just is not exposed to a user in the app today.
+> **Routing is real (Phase 4); the frontend caller is not.** `bus_send` emits `bus_message` onto the ordered spine unconditionally -- see [Message Bus](../docs/architecture.md#message-bus) for the Phase 4 disposition. No shipped UI surface calls `bus_send` today -- see [Built, Not Wired](#built-not-wired). `bus_subscribe`/`bus_create_pipeline`/`bus_list_pipelines` and the pipeline machinery behind them were **DELETED** in Phase 4 (`execute_pipeline` never awaited a stage's completion; `bus_subscribe` was a second subscription primitive with zero callers) -- they are not merely undocumented, they no longer exist.
 
-The message bus enables direct, broadcast, and pipeline-routed communication between workers. It is composed of a `MessageBus` (per-topic `tokio::sync::broadcast` channels) and a `Router` (direct/broadcast send + pipeline orchestration), both held as Tauri managed state.
+The message bus enables direct and broadcast communication between workers. It is composed of a `MessageBus` (per-topic `tokio::sync::broadcast` channels) and a `Router` (direct/broadcast send, now also the sole emitter of `bus_message`), both held as Tauri managed state.
 
 ### `bus_send`
 
-Sends a message from one worker to another (or broadcasts it) on a topic.
+Sends a message from one worker to another (or broadcasts it) on a topic, and emits it onto the ordered spine as a `bus_message` event.
 
 **Parameters:**
 
@@ -1097,8 +1127,9 @@ Sends a message from one worker to another (or broadcasts it) on a topic.
 | `toWorkerId`   | `string \| null`    | No       | UUID of the target worker. Omit/`null` to broadcast     |
 | `topic`        | `string`            | Yes      | Topic channel to send on                                |
 | `payload`      | `unknown` (JSON)    | Yes      | Arbitrary JSON payload                                  |
+| `causeSeq`     | `number \| null`    | No       | The `seq` of the event that caused this send (e.g. an `agent_turn_started`/`agent_tool_call` a handoff is reacting to) -- threaded onto the emitted `bus_message`'s envelope-level `causeSeq` |
 
-**Returns:** `number` -- the count of receivers that received the message. `0` means no [`bus_subscribe`](#bus_subscribe) caller is currently listening on this topic.
+**Returns:** `number` -- the count of BUS-LEVEL receivers (`MessageBus::subscribe` subscribers) that received the message. Independent of, and typically `0` for, the `bus_message` event emission below -- that reaches the frontend regardless of whether anything is subscribed at the bus level.
 
 **Errors:**
 
@@ -1114,83 +1145,11 @@ const receiverCount = await invoke("bus_send", {
   toWorkerId: workerB, // omit for broadcast
   topic: "task:result",
   payload: { status: "done", output: "..." },
+  causeSeq: null,
 });
 ```
 
-**Important:** `bus_send` only publishes to the internal bus -- it does **not** emit a frontend event itself. Delivery to the frontend happens exclusively via [`bus_subscribe`](#bus_subscribe)'s forwarding task (see [Unified Bus Event Contract](#unified-bus-event-contract) below).
-
----
-
-### `bus_subscribe`
-
-Subscribes to a topic and streams matching messages to the frontend as `bus_message` envelopes on `swarm://events`.
-
-**Parameters:**
-
-| Name    | Type     | Required | Description         |
-|---------|----------|----------|----------------------|
-| `topic` | `string` | Yes      | Topic to subscribe to |
-
-**Returns:** `void` -- resolves once the background forwarding task is spawned; messages arrive later as events.
-
-**Errors:**
-
-| Error              | Condition                          |
-|--------------------|--------------------------------------|
-| Subscription failed | Failed to create/attach to the broadcast channel |
-
-**Example:**
-
-```typescript
-import { onEvent } from "#lib/event-bus";
-
-await invoke("bus_subscribe", { topic: "task:result" });
-
-const off = onEvent("bus_message", (e) => {
-  const { messageId, fromWorker, toWorker, topic, payload } = e.payload as {
-    messageId: string;
-    fromWorker: string;
-    toWorker: string | null;
-    topic: string;
-    payload: unknown;
-  };
-  console.log(`[${topic}] ${fromWorker} -> ${toWorker ?? "*"}:`, payload);
-});
-```
-
-**Emits:** `bus_message` envelope on `swarm://events` with payload `{ messageId, fromWorker, toWorker, topic, payload }` for every message received on the subscribed topic, for the lifetime of the subscription task. The envelope's `originWorker` is stamped from `fromWorker` -- real attribution for every bus message with no extra plumbing on the sending side (`causeSeq` stays absent; the sender would need to thread its own turn's seq through `bus_send` to populate that, deferred to v2).
-
----
-
-### `bus_create_pipeline`
-
-Creates a new multi-stage message processing pipeline. Each stage names a worker and an optional jq-like dot-notation transform (e.g., `".result"`, `".data.items"`) applied to the payload before it is forwarded to the next stage.
-
-**Parameters:**
-
-| Name     | Type              | Required | Description                              |
-|----------|-------------------|----------|--------------------------------------------|
-| `stages` | `PipelineStage[]` | Yes      | Ordered list of pipeline stages            |
-
-**`PipelineStage` object:**
-
-| Field       | Type              | Description                                            |
-|-------------|-------------------|-----------------------------------------------------------|
-| `workerId`  | `string` (UUID)   | Worker that processes this stage                          |
-| `transform` | `string \| null`  | Optional dot-notation field selector applied to the payload |
-
-**Returns:** `string` -- UUID of the newly created pipeline.
-
-**Example:**
-
-```typescript
-const pipelineId = await invoke("bus_create_pipeline", {
-  stages: [
-    { workerId: workerA, transform: null },
-    { workerId: workerB, transform: ".result" },
-  ],
-});
-```
+**Emits:** `bus_message` envelope on `swarm://events` with payload `{ messageId, fromWorker, toWorker, topic, payload }`, unconditionally -- `Router::send_direct`/`send_broadcast` emit it themselves (Phase 4), not a background forwarder task that requires an active subscription. The envelope's `originWorker` is stamped from `fromWorker`; `causeSeq` is stamped from this call's `causeSeq` argument, when given.
 
 ---
 
@@ -1206,30 +1165,6 @@ Lists all active message bus topic channels.
 
 ```typescript
 const topics = await invoke("bus_list_channels");
-```
-
----
-
-### `bus_list_pipelines`
-
-Lists all registered pipelines.
-
-**Parameters:** None
-
-**Returns:** `PipelineInfo[]`
-
-**`PipelineInfo` object:**
-
-| Field        | Type             | Description                        |
-|--------------|------------------|--------------------------------------|
-| `id`         | `string` (UUID)  | Pipeline identifier                  |
-| `stageCount` | `number`         | Number of stages in the pipeline     |
-| `workerIds`  | `string[]`       | Worker IDs in pipeline order         |
-
-**Example:**
-
-```typescript
-const pipelines = await invoke("bus_list_pipelines");
 ```
 
 ---
@@ -1353,7 +1288,7 @@ A stamped envelope additionally carries `originWorker`/`causeSeq`:
 | `agent_block`         | `{ workerId, turnId, blockIndex, kind, content }` -- durable counterpart to `agent_turn_delta`; replay reconstructs full turns from these rows, only the typing animation is lost | Yes |
 | `agent_tool_call`     | `{ workerId, turnId, toolUseId, name, input }`                   | Yes |
 | `agent_tool_result`   | `{ workerId, turnId, toolUseId, isError, content }` -- `toolUseId` correlates with the originating `agent_tool_call` | Yes |
-| `agent_permission_request` | `{ workerId, turnId, requestId, tool, input, suggestedDecision?, denialSubclass?, message? }` -- the ONLY legitimate permission-gating surface; never `allowedTools` (Condition C). **For `ClaudeCodeAdapter` (Phase 3), this is a REPORT of an already-decided denial, not a pending request** -- `suggestedDecision` is always `"deny"`, `denialSubclass` is one of `"mode"` / `"ungranted_write"` / `"redirection_guard"`, and `message` is the provider's raw denial text. See `docs/architecture.md`'s adapter-layer section for the semantics shift. | Yes |
+| `agent_permission_request` | `{ workerId, turnId, requestId, tool, input, suggestedDecision?, denialSubclass?, message? }` -- the ONLY legitimate permission-gating surface; never `allowedTools` (Condition C). **For `ClaudeCodeAdapter`, this is a REPORT of an already-decided denial, not a pending request** -- `suggestedDecision` is always `"deny"`, `denialSubclass` is one of `"mode"` / `"ungranted_write"` / `"redirection_guard"`, and `message` is the provider's raw denial text. **For `CodexAdapter` (Phase 4), this IS a genuinely pending request** -- `suggestedDecision`/`denialSubclass` are absent (nothing to suggest yet), and [`agent_permission_respond`](#agent_permission_respond) actually answers it over the wire. See `docs/architecture.md`'s adapter-layer section for the semantics shift. | Yes |
 | `agent_turn_settled`  | `{ workerId, turnId, status, error, costUsd, usage, durationMs, numTurns }` -- terminal receipt, exactly once per turn, synthesized on ungraceful child exit too (Condition B) | Yes |
 | `agent_session_exited` | `{ workerId, exitCode, signal }`                                | Yes |
 | `system_log`          | `{ level, message, target, timestamp }`                          | No (ephemeral) |
@@ -1367,7 +1302,7 @@ A stamped envelope additionally carries `originWorker`/`causeSeq`:
 
 ### Unified Bus Event Contract
 
-`bus_message` envelopes are delivered through exactly one path: the background task spawned by [`bus_subscribe`](#bus_subscribe). `bus_send` never emits directly. This guarantees each message reaches the frontend **at most once**, in one consistent shape, regardless of how many (if any) `bus_subscribe` calls are active for a topic -- there is no double-delivery and no risk of the emit-on-send and emit-on-subscribe paths drifting out of sync.
+`bus_message` envelopes are delivered through exactly one path (Phase 4): `Router::send_direct`/`send_broadcast` emit the event THEMSELVES, synchronously, the moment a message is sent -- see [Message Bus](../docs/architecture.md#message-bus). This guarantees each message reaches the frontend **exactly once**, in one consistent shape, unconditionally -- no active subscriber is required (before Phase 4, delivery depended entirely on a `bus_subscribe` forwarder task that nothing in the shipped app ever started, so in practice no message was ever delivered at all). `bus_subscribe`, the second delivery path that could have drifted out of sync with this one, is deleted, not merely deprecated.
 
 ### Persistence Policy
 
@@ -1441,8 +1376,8 @@ onEvent("system_metrics", (e) => {
   updateMetricsChart({ cpuPercent, memoryMb, workerCount, timestamp });
 });
 
-// Bus messages (requires an active bus_subscribe call for the topic)
-await invoke("bus_subscribe", { topic: "task:result" });
+// Bus messages -- delivered unconditionally as of Phase 4 (no
+// subscription call needed; see Message Bus in docs/architecture.md)
 onEvent("bus_message", (e) => {
   const { topic, payload } = e.payload as { topic: string; payload: unknown };
   console.log(`[${topic}]`, payload);
@@ -1521,10 +1456,10 @@ This reference document also covers commands and events that are fully implement
 | Piece | No caller because... |
 |-------|------------------------|
 | `ai_request` | **Removed** (Phase 2 of the multi-provider plan) -- absorbed into the agent scheduler. The shipped AI flow runs `@anthropic-ai/sdk` directly in the webview (`src/lib/anthropic.ts`, `dangerouslyAllowBrowser: true`) and streams straight to `api.anthropic.com`; it never invoked this command, and its tested queueing machinery now lives as `swarm_core::agent::scheduler::AgentScheduler`. See [Agent Commands](#agent-commands) and `docs/architecture.md`'s adapter-layer section. |
-| `agent_*` (Phase 3+ family) | **No longer built-not-wired for Claude Code** -- [`agent_spawn`](#agent_spawn)/[`agent_send_turn`](#agent_send_turn)/etc. emit the full family, consumed by `useAgentSessionEvents` + `AgentChat.tsx` as of Phase 3. Still true for Codex/OpenCode/Gemini -- the `AgentAdapter`/`AgentSession` traits are provider-agnostic and tested via `MockAdapter`, but only `ClaudeCodeAdapter` exists. See `docs/architecture.md`'s adapter-layer section. |
-| [`bus_send`](#bus_send), [`bus_subscribe`](#bus_subscribe), [`bus_create_pipeline`](#bus_create_pipeline), [`bus_list_channels`](#bus_list_channels), [`bus_list_pipelines`](#bus_list_pipelines) | No UI surface invokes any of them -- inter-agent messaging is implemented but not exposed to a user today. |
+| `agent_*` (Phase 3+ family) | **No longer built-not-wired for Claude Code or Codex** -- [`agent_spawn`](#agent_spawn)/[`agent_send_turn`](#agent_send_turn)/etc. emit the full family for both, consumed by `useAgentSessionEvents` + `AgentChat.tsx`. Still true for OpenCode/Gemini -- the `AgentAdapter`/`AgentSession` traits are provider-agnostic and tested via `MockAdapter`, but no concrete adapter exists for either yet. See `docs/architecture.md`'s adapter-layer section. |
+| [`bus_send`](#bus_send), [`bus_list_channels`](#bus_list_channels) | **Routing is real as of Phase 4** (`Router::send_direct`/`send_broadcast` emit `bus_message` onto the spine unconditionally -- see [Message Bus](../docs/architecture.md#message-bus)); no UI surface invokes `bus_send` today, so it stays in this table on the FRONTEND-caller half alone. `bus_subscribe`/`bus_create_pipeline`/`bus_list_pipelines` are DELETED, not merely unwired -- they no longer exist. |
 | The `ai_stream_settled` receipt | Downstream of the removed `ai_request` -- kept as a `SwarmEvent` variant (unused) until the webview path is retired in Phase 5; never emitted in the app as shipped. |
-| The interactive `agent_permission_request` -> `respond_permission` round-trip | `ClaudeCodeSession::respond_permission` is a documented no-op (`Ok(())` always) -- `--permission-mode manual` is a silent no-op on the real CLI (verified empirically), so there is nothing on the provider side to answer. The event fires only as a post-hoc REPORT of an already-decided denial. See `docs/architecture.md`'s adapter-layer section. |
-| The full spawn-dialog / polished `WorkerAIPanel` redesign | Phase 3 ships the minimal command surface + a basic provider picker only (see [`agent_spawn`](#agent_spawn) and `docs/architecture.md`'s adapter-layer section) -- the richer UI (auth-health dot, tool-call cards, permission timeline, capability-driven "Queue Next Turn" labeling) is an explicitly deferred follow-up branch. |
+| The interactive `agent_permission_request` -> `agent_permission_respond` round-trip, for `ClaudeCodeAdapter` sessions specifically | `ClaudeCodeSession::respond_permission` is a documented no-op (`Ok(())` always) -- `--permission-mode manual` is a silent no-op on the real CLI (verified empirically), so there is nothing on the provider side to answer. The event fires only as a post-hoc REPORT of an already-decided denial. **`CodexAdapter` sessions are the exception** -- `CodexSession::respond_permission` is a real, fixture-proven round-trip; see `docs/architecture.md`'s adapter-layer section. |
+| The full spawn-dialog / polished `WorkerAIPanel` redesign | Ships the minimal command surface + a provider picker (Claude Code + Codex, each probed and disabled independently) only -- the richer UI (auth-health dot, tool-call cards, an interactive Allow/Deny permission affordance gated on `capabilities.interactivePermissions`, capability-driven "Queue Next Turn" labeling) is an explicitly deferred follow-up branch. |
 
-Read every code example and contract above involving these commands and events as documentation of what the Rust side does *if* called -- not necessarily as a description of what the shipped app's default (webview Anthropic) path does when a user sends a chat message; Claude Code workers ARE live via `agent_spawn` as of Phase 3.
+Read every code example and contract above involving these commands and events as documentation of what the Rust side does *if* called -- not necessarily as a description of what the shipped app's default (webview Anthropic) path does when a user sends a chat message; Claude Code and Codex workers are BOTH live via `agent_spawn`.
