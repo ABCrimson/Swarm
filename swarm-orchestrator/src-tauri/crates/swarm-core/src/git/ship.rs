@@ -607,7 +607,9 @@ fn union_paths(staged: &[String], unstaged: &[String], untracked: &[String]) -> 
 // ── Secret/size deny list ────────────────────────────────────────────
 
 /// A file the deny list catches, with its Title Case skip reason.
-#[derive(Debug, Clone, Serialize)]
+// `Deserialize` added alongside `Serialize` — see `ShipPreflight`'s note
+// (this type nests inside `ShipPreflight`/`CommitOutcome`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkippedFile {
     pub path: String,
@@ -848,7 +850,12 @@ fn probe_gh_authed() -> bool {
 
 // ── Preflight ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize)]
+// `Deserialize` added alongside `Serialize` (headless-daemon Phase 2):
+// the shell's thin Tauri command wrapper round-trips this type through
+// `swarm_core::commands::Registry`'s JSON `Value` boundary — the same
+// shape it already serialized to over Tauri IPC, now also read back on
+// the Rust side once before being handed to Tauri's own IPC layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShipPreflight {
     pub worker_id: Uuid,
@@ -1036,7 +1043,8 @@ pub enum StagingMode {
     Staged,
 }
 
-#[derive(Debug, Clone, Serialize)]
+// `Deserialize` added alongside `Serialize` — see `ShipPreflight`'s note.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitOutcome {
     pub sha: String,
@@ -1301,7 +1309,8 @@ pub fn stage_and_commit(
 
 // ── Push ──────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize)]
+// `Deserialize` added alongside `Serialize` — see `ShipPreflight`'s note.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PushOutcome {
     pub pushed_ref: String,

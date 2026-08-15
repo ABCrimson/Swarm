@@ -1,5 +1,9 @@
 //! OS notification Tauri IPC command.
 //!
+//! NATIVE_ONLY (see `swarm_core::commands::NATIVE_ONLY`): needs
+//! `tauri-plugin-notification`, which has no meaning over a network RPC
+//! call, so this has no registry entry.
+//!
 //! Provides a `send_notification` command that uses `tauri-plugin-notification`
 //! to display native OS notifications from the frontend.
 

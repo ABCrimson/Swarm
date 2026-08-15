@@ -43,6 +43,7 @@
 
 pub mod agent;
 pub mod bus;
+pub mod commands;
 pub mod config;
 pub mod error;
 pub mod events;

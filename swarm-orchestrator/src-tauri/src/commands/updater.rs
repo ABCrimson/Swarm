@@ -1,5 +1,9 @@
 //! Auto-updater Tauri IPC command.
 //!
+//! NATIVE_ONLY (see `swarm_core::commands::NATIVE_ONLY`): needs
+//! `tauri-plugin-updater`, which has no meaning over a network RPC
+//! call, so this has no registry entry.
+//!
 //! Provides a `check_for_updates` command that uses `tauri-plugin-updater`
 //! to check for available application updates and return their details
 //! to the frontend.
