@@ -430,12 +430,20 @@ struct ShipContextArgs {
 ///
 /// Runs on a [`EventLog::open_readonly`] connection inside `spawn_blocking`
 /// — the identical pattern `commands::orchestration::events_since` already
-/// uses for a read-only backfill query. Emits no events (a query, not a
-/// mutation) — `RemotePolicy::Allowed` in the registry, same as every
-/// other ship command (`git_ship_preflight` is the closest analog: also
-/// read-only, also `Allowed`, and a remote client legitimately previewing
-/// a ship it's about to trigger needs this exactly as much as it needs
-/// the preflight).
+/// uses for a read-only backfill query. Fetches via
+/// [`EventLog::events_for_worker_between`] (worker-and-type-scoped, newest
+/// survives any truncation — see that method's doc for the FIX-1 bug this
+/// closes: a plain range-wide cap applied before filtering to one worker
+/// let a busy multi-worker session's other workers crowd the shipping
+/// worker's own newest turns out of the fetched window entirely), then
+/// threads the returned truncation flag straight into
+/// [`git::build_ship_context`] so [`ShipContext::events_truncated`] is
+/// never silently `false` when it shouldn't be. Emits no events (a query,
+/// not a mutation) — `RemotePolicy::Allowed` in the registry, same as
+/// every other ship command (`git_ship_preflight` is the closest analog:
+/// also read-only, also `Allowed`, and a remote client legitimately
+/// previewing a ship it's about to trigger needs this exactly as much as
+/// it needs the preflight).
 pub async fn ship_context(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let ShipContextArgs { worker_id } = parse_args(args)?;
     let id = parse_worker_id(&worker_id).map_err(|e| err_value(&e))?;
@@ -447,12 +455,21 @@ pub async fn ship_context(ctx: Ctx, args: Value) -> Result<Value, Value> {
         return ok_value(&ShipContext::empty(id, seq_from, seq_to));
     };
 
+    let worker_id_str = id.to_string();
     let context = tokio::task::spawn_blocking(move || -> Result<ShipContext, String> {
         let log = EventLog::open_readonly(&db_path).map_err(|e| e.to_string())?;
-        let events = log
-            .events_between(seq_from, seq_to, SHIP_CONTEXT_EVENT_LIMIT)
+        let (events, truncated) = log
+            .events_for_worker_between(
+                git::causal::RELEVANT_EVENT_TYPES,
+                &worker_id_str,
+                seq_from,
+                seq_to,
+                SHIP_CONTEXT_EVENT_LIMIT,
+            )
             .map_err(|e| e.to_string())?;
-        Ok(git::build_ship_context(events, id, seq_from, seq_to))
+        Ok(git::build_ship_context(
+            events, id, seq_from, seq_to, truncated,
+        ))
     })
     .await
     .map_err(|e| Value::String(format!("ship_context task panicked: {e}")))?
@@ -466,18 +483,33 @@ mod tests {
     use super::*;
     use crate::events::Provenance;
 
+    fn append_agent_tool_call(log: &mut EventLog, seq: u64, worker_id: uuid::Uuid, command: &str) {
+        log.append(
+            seq,
+            seq as i64,
+            "agent_tool_call",
+            &serde_json::json!({
+                "workerId": worker_id, "turnId": format!("t{seq}"), "toolUseId": format!("u{seq}"),
+                "name": "Bash", "input": { "command": command }
+            })
+            .to_string(),
+            &Provenance::default(),
+        )
+        .unwrap();
+    }
+
     /// DIRECTIVE: exercises the exact two-step composition
-    /// `ship_context` performs — `EventLog::events_between` then
-    /// `git::build_ship_context` — against a real (in-memory) `EventLog`,
-    /// proving the seam between the data layer and the pure builder
-    /// works end-to-end, not just each half in isolation (the data-layer
-    /// half is covered in `orchestration::log`'s own tests; the builder
-    /// half in `git::causal`'s). Goes around the full `Ctx`/registry
-    /// wiring deliberately: `resolve_seq_range` and the worker-lookup
-    /// plumbing above are already exercised by the ship command tests in
-    /// `git::ship`, and standing up a fake `WorkerHandle` here would
-    /// duplicate that coverage without adding anything this seam test
-    /// doesn't already prove.
+    /// `ship_context` performs — `EventLog::events_for_worker_between`
+    /// then `git::build_ship_context` — against a real (in-memory)
+    /// `EventLog`, proving the seam between the data layer and the pure
+    /// builder works end-to-end, not just each half in isolation (the
+    /// data-layer half is covered in `orchestration::log`'s own tests;
+    /// the builder half in `git::causal`'s). Goes around the full
+    /// `Ctx`/registry wiring deliberately: `resolve_seq_range` and the
+    /// worker-lookup plumbing above are already exercised by the ship
+    /// command tests in `git::ship`, and standing up a fake
+    /// `WorkerHandle` here would duplicate that coverage without adding
+    /// anything this seam test doesn't already prove.
     #[test]
     fn test_ship_context_composition_seeded_log_excludes_other_worker() {
         let mut log = EventLog::open_in_memory().unwrap();
@@ -492,36 +524,23 @@ mod tests {
             &Provenance::default(),
         )
         .unwrap();
-        log.append(
-            2,
-            2,
-            "agent_tool_call",
-            &serde_json::json!({
-                "workerId": other, "turnId": "ot1", "toolUseId": "ou1",
-                "name": "Read", "input": {}
-            })
-            .to_string(),
-            &Provenance::default(),
-        )
-        .unwrap();
-        log.append(
-            3,
-            3,
-            "agent_tool_call",
-            &serde_json::json!({
-                "workerId": me, "turnId": "t1", "toolUseId": "u1",
-                "name": "Bash", "input": { "command": "pnpm build" }
-            })
-            .to_string(),
-            &Provenance::default(),
-        )
-        .unwrap();
+        append_agent_tool_call(&mut log, 2, other, "npm test");
+        append_agent_tool_call(&mut log, 3, me, "pnpm build");
 
-        let events = log.events_between(0, 3, SHIP_CONTEXT_EVENT_LIMIT).unwrap();
-        let context = git::build_ship_context(events, me, 0, 3);
+        let (events, truncated) = log
+            .events_for_worker_between(
+                git::causal::RELEVANT_EVENT_TYPES,
+                &me.to_string(),
+                0,
+                3,
+                SHIP_CONTEXT_EVENT_LIMIT,
+            )
+            .unwrap();
+        let context = git::build_ship_context(events, me, 0, 3, truncated);
 
+        assert!(!truncated);
         assert_eq!(context.turns.len(), 1);
-        assert_eq!(context.turns[0].turn_id, "t1");
+        assert_eq!(context.turns[0].turn_id, "t3");
         assert_eq!(context.turns[0].tool_calls[0].name, "Bash");
         assert_eq!(
             context.turns[0].tool_calls[0].target.as_deref(),
@@ -533,9 +552,67 @@ mod tests {
     fn test_ship_context_empty_range_has_no_turns() {
         let log = EventLog::open_in_memory().unwrap();
         let me = uuid::Uuid::new_v4();
-        let events = log.events_between(5, 5, SHIP_CONTEXT_EVENT_LIMIT).unwrap();
-        let context = git::build_ship_context(events, me, 5, 5);
+        let (events, truncated) = log
+            .events_for_worker_between(
+                git::causal::RELEVANT_EVENT_TYPES,
+                &me.to_string(),
+                5,
+                5,
+                SHIP_CONTEXT_EVENT_LIMIT,
+            )
+            .unwrap();
+        let context = git::build_ship_context(events, me, 5, 5, truncated);
         assert!(context.turns.is_empty());
         assert!(context.commits.is_empty());
+        assert!(!context.events_truncated);
+    }
+
+    /// DIRECTIVE (review FIX-1, the bug reproduced and closed): a range
+    /// where OTHER workers' rows vastly outnumber the shipping worker's
+    /// own — enough that a naive range-wide cap (the original
+    /// `events_between(fromSeq, toSeq, N)` call this replaced) would fill
+    /// entirely on the oldest cross-worker rows before ever reaching the
+    /// shipping worker's own newest turn. `events_for_worker_between`
+    /// filters to `me` in SQL before any cap is applied, so this must
+    /// still find `me`'s one turn, untruncated, regardless of how much
+    /// other-worker noise sits in the same range.
+    #[test]
+    fn test_ship_context_worker_scoping_survives_heavy_cross_worker_noise() {
+        let mut log = EventLog::open_in_memory().unwrap();
+        let me = uuid::Uuid::new_v4();
+        let other = uuid::Uuid::new_v4();
+
+        let mut seq = 1u64;
+        // Far more "noise" rows from another worker than the tiny limit
+        // below — the bug this test pins would have let these crowd out
+        // `me`'s single real row entirely.
+        for _ in 0..20 {
+            append_agent_tool_call(&mut log, seq, other, "noise");
+            seq += 1;
+        }
+        append_agent_tool_call(&mut log, seq, me, "pnpm build");
+        let to_seq = seq;
+
+        let small_limit = 3;
+        let (events, truncated) = log
+            .events_for_worker_between(
+                git::causal::RELEVANT_EVENT_TYPES,
+                &me.to_string(),
+                0,
+                to_seq,
+                small_limit,
+            )
+            .unwrap();
+        let context = git::build_ship_context(events, me, 0, to_seq, truncated);
+
+        assert!(
+            !truncated,
+            "only one matching row for `me` — never truncated"
+        );
+        assert_eq!(context.turns.len(), 1);
+        assert_eq!(
+            context.turns[0].tool_calls[0].target.as_deref(),
+            Some("pnpm build")
+        );
     }
 }

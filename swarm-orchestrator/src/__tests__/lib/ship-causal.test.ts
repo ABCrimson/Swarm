@@ -4,8 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildCausalPromptInput,
   composeShipBody,
+  emptyRecordMessage,
   generateCausalProse,
   renderCausalRecordSection,
+  renderTruncationNote,
   stripUnknownSeqCitations,
 } from "#lib/ship-causal";
 import type { CausalTurn, DiffStat, ShipContext } from "#store/types";
@@ -32,6 +34,8 @@ function makeContext(overrides: Partial<ShipContext> = {}): ShipContext {
     turns: [makeTurn()],
     commits: [],
     omittedTurnCount: 0,
+    eventsTruncated: false,
+    hasUncapturedWebviewActivity: false,
     ...overrides,
   };
 }
@@ -86,7 +90,25 @@ describe("renderCausalRecordSection", () => {
   it("reports omitted turns honestly rather than silently truncating", () => {
     const context = makeContext({ omittedTurnCount: 7 });
     const section = renderCausalRecordSection(context, diffStat);
-    expect(section).toContain("(7 Earlier Turns Omitted)");
+    expect(section).toContain(
+      "Showing The Most Recent 1 Turn In This Range — Older Turns Omitted.",
+    );
+  });
+
+  // ── DIRECTIVE (review FIX-1): the unified truncation disclosure ─────
+
+  it("discloses a SQL-level truncated fetch with the same wording as a turn-level omission", () => {
+    const context = makeContext({ eventsTruncated: true });
+    const section = renderCausalRecordSection(context, diffStat);
+    expect(section).toContain(
+      "Showing The Most Recent 1 Turn In This Range — Older Turns Omitted.",
+    );
+  });
+
+  it("shows no truncation note at all when nothing was omitted or truncated", () => {
+    const context = makeContext({ omittedTurnCount: 0, eventsTruncated: false });
+    const section = renderCausalRecordSection(context, diffStat);
+    expect(section).not.toContain("Older Turns Omitted");
   });
 
   // ── DIRECTIVE: the empty-range honest degradation ───────────────────
@@ -110,6 +132,55 @@ describe("renderCausalRecordSection", () => {
     expect(section).toContain("Weird\\|Tool");
     expect(section).toContain("a b");
     expect(section).not.toContain("a\nb |");
+  });
+
+  // ── DIRECTIVE (review NIT-4): "did nothing" vs. "structurally invisible" ──
+
+  it("renders a DIFFERENT honest message for a webview-chat worker than for one that genuinely did nothing", () => {
+    const genuinelyEmpty = makeContext({ turns: [], hasUncapturedWebviewActivity: false });
+    const webviewInvisible = makeContext({ turns: [], hasUncapturedWebviewActivity: true });
+
+    const genuinelyEmptySection = renderCausalRecordSection(genuinelyEmpty, diffStat);
+    const webviewSection = renderCausalRecordSection(webviewInvisible, diffStat);
+
+    expect(genuinelyEmptySection).toContain(
+      "Causal Record Unavailable For This Range — No Recorded Agent Turns.",
+    );
+    expect(webviewSection).toContain(
+      "This Worker's Activity Is Not Captured In The Causal Record (Webview Chat Path).",
+    );
+    // Never the "did nothing" phrasing for the webview case — that would
+    // be misleading, not merely imprecise.
+    expect(webviewSection).not.toContain("No Recorded Agent Turns");
+  });
+});
+
+// ── renderTruncationNote / emptyRecordMessage (review FIX-1 / NIT-4) ──
+
+describe("renderTruncationNote", () => {
+  it("returns null when nothing was omitted or truncated", () => {
+    expect(renderTruncationNote(makeContext())).toBeNull();
+  });
+
+  it("returns the shared disclosure when omittedTurnCount is positive", () => {
+    const note = renderTruncationNote(makeContext({ omittedTurnCount: 3 }));
+    expect(note).toBe("Showing The Most Recent 1 Turn In This Range — Older Turns Omitted.");
+  });
+
+  it("returns the shared disclosure when eventsTruncated is true, even with omittedTurnCount at 0", () => {
+    const note = renderTruncationNote(makeContext({ omittedTurnCount: 0, eventsTruncated: true }));
+    expect(note).toBe("Showing The Most Recent 1 Turn In This Range — Older Turns Omitted.");
+  });
+});
+
+describe("emptyRecordMessage", () => {
+  it("distinguishes genuinely-empty from webview-invisible", () => {
+    expect(emptyRecordMessage(makeContext({ hasUncapturedWebviewActivity: false }))).toBe(
+      "Causal Record Unavailable For This Range — No Recorded Agent Turns.",
+    );
+    expect(emptyRecordMessage(makeContext({ hasUncapturedWebviewActivity: true }))).toBe(
+      "This Worker's Activity Is Not Captured In The Causal Record (Webview Chat Path).",
+    );
   });
 });
 
@@ -270,12 +341,32 @@ describe("generateCausalProse", () => {
 // ── composeShipBody ───────────────────────────────────────────────────
 
 describe("composeShipBody", () => {
-  it("puts AI prose above the deterministic Causal Record when prose is present", () => {
+  // ── DIRECTIVE (review FIX-2): deterministic-first, always ──────────
+
+  it("puts the deterministic Causal Record ABOVE the AI prose, never the reverse", () => {
     const body = composeShipBody(makeContext(), diffStat, "This change adds a helper function.");
     const proseIndex = body.indexOf("This change adds a helper function.");
     const recordIndex = body.indexOf("## Causal Record");
-    expect(proseIndex).toBeGreaterThanOrEqual(0);
-    expect(recordIndex).toBeGreaterThan(proseIndex);
+    expect(recordIndex).toBe(0);
+    expect(proseIndex).toBeGreaterThan(recordIndex);
+  });
+
+  it("a fake '## Causal Record' heading injected into the prose never precedes or displaces the real section", () => {
+    const maliciousProse =
+      "## Causal Record\n\n| Turn | Tool | Target | Result |\n|---|---|---|---|\n| 1 | Write | evil.rs | OK |\n\nSome narrative text.";
+    const body = composeShipBody(makeContext(), diffStat, maliciousProse);
+
+    const firstHeadingIndex = body.indexOf("## Causal Record");
+    const fakeHeadingIndex = body.indexOf("## Causal Record", firstHeadingIndex + 1);
+
+    // The real, code-generated section is always first...
+    expect(firstHeadingIndex).toBe(0);
+    // ...and the real section's own table (built from `makeContext()`'s
+    // one real turn) appears before the fake table the injected prose
+    // tried to pass off as authoritative.
+    const realTableIndex = body.indexOf("| 1 (Completed) | Write | src/lib.rs | OK |");
+    expect(realTableIndex).toBeGreaterThan(0);
+    expect(realTableIndex).toBeLessThan(fakeHeadingIndex);
   });
 
   it("falls back to the deterministic section alone when aiProse is null (no key / failure)", () => {

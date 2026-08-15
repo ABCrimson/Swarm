@@ -42,6 +42,8 @@ function makeContext(overrides: Partial<ShipContext> = {}): ShipContext {
     turns: [makeTurn()],
     commits: [],
     omittedTurnCount: 0,
+    eventsTruncated: false,
+    hasUncapturedWebviewActivity: false,
     ...overrides,
   };
 }
@@ -98,7 +100,32 @@ describe("ShipPreview — Causal Record section", () => {
   it("surfaces an omitted-turn-count warning honestly rather than silently truncating", () => {
     renderPreview({ context: makeContext({ omittedTurnCount: 5 }) });
 
-    expect(screen.getByText("5 Earlier Turns Omitted")).toBeInTheDocument();
+    expect(
+      screen.getByText("Showing The Most Recent 1 Turn In This Range — Older Turns Omitted."),
+    ).toBeInTheDocument();
+  });
+
+  // ── DIRECTIVE (review FIX-1): SQL-level truncation, same disclosure ──
+  it("surfaces the same truncation disclosure when the fetch itself was capped, not just when turns were", () => {
+    renderPreview({ context: makeContext({ omittedTurnCount: 0, eventsTruncated: true }) });
+
+    expect(
+      screen.getByText("Showing The Most Recent 1 Turn In This Range — Older Turns Omitted."),
+    ).toBeInTheDocument();
+  });
+
+  // ── DIRECTIVE (review NIT-4): "did nothing" vs. "structurally invisible" ──
+  it("renders the webview-chat-path message instead of 'did nothing' when the worker had uncaptured webview activity", () => {
+    renderPreview({
+      context: makeContext({ turns: [], hasUncapturedWebviewActivity: true }),
+    });
+
+    expect(
+      screen.getByText(
+        "This Worker's Activity Is Not Captured In The Causal Record (Webview Chat Path).",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No Recorded Agent Turns/)).not.toBeInTheDocument();
   });
 
   it("renders an Error badge and an em-dash target for a failed, target-less tool call", () => {
