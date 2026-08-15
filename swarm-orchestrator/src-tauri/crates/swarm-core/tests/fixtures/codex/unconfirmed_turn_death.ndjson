@@ -1,0 +1,13 @@
+# Fixture for crates/swarm-core/src/agent/codex.rs unit tests.
+# AUTHORED (not captured) — see happy_turn.ndjson's header. The
+# Codex-specific Condition-B corollary: thread/start succeeds, but the
+# process exits BEFORE ever responding to thread/sendMessage — no TurnId
+# is ever confirmed, so there is nothing for teardown to attach a
+# synthesized agent_turn_settled to. send_turn must resolve with an
+# error (via teardown's pending-request drain), never hang, and zero
+# agent_turn_settled rows must be persisted.
+
+#DIRECTIVE AWAIT_STDIN_LINE
+{"jsonrpc":"2.0","id":1,"result":{"threadId":"thread-unconfirmed-0001","model":"gpt-5-codex"}}
+#DIRECTIVE AWAIT_STDIN_LINE
+#DIRECTIVE EXIT_CODE 1

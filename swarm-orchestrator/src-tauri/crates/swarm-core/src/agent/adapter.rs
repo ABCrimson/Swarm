@@ -187,6 +187,23 @@ pub struct Capabilities {
     /// (`--add-dir` or equivalent) rather than requiring the CLI's own
     /// ambient working directory.
     pub worktree_aware: bool,
+    /// The provider's own protocol supports a REAL `agent_permission_request`
+    /// -> `respond_permission` round-trip — [`AgentSession::respond_permission`]
+    /// actually replies to a pending question on the wire, as opposed to
+    /// [`crate::events::emitter::AgentPermissionRequestPayload`] being a
+    /// report-only notice of an already-decided denial (see that type's
+    /// "semantics shift" doc for `ClaudeCodeAdapter`, where this is
+    /// `false`: `--permission-mode manual` is a silent no-op, so there is
+    /// nothing on the other end to answer). Added in Phase 4 alongside
+    /// `CodexAdapter` — a Capabilities-flag addition, not a trait-signature
+    /// change (see the module doc's "zero trait-signature changes" bar):
+    /// Codex's JSON-RPC app-server protocol issues a genuine server -> client
+    /// request (an `id`-bearing approval message) that blocks the provider
+    /// until answered, so `true` there is an honest, wire-verified-by-fixture
+    /// claim, not an aspiration. UI affordances (e.g. rendering Allow/Deny
+    /// buttons instead of a read-only denial report) MUST branch on this
+    /// flag rather than assuming every provider behaves like Claude Code.
+    pub interactive_permissions: bool,
 }
 
 /// Result of [`AgentAdapter::probe`] — "is this provider usable right
@@ -327,11 +344,13 @@ pub trait AgentAdapter: Send + Sync {
     /// Which provider this adapter drives.
     fn provider(&self) -> ProviderId;
 
-    /// What this adapter can honestly promise — see the "Capabilities
-    /// honesty doctrine" in the module doc. Synchronous: capability
-    /// support is a static fact about the adapter's implementation, not
-    /// something that requires I/O to learn (unlike [`Self::probe`],
-    /// which checks runtime availability).
+    /// What this adapter can honestly promise (`partial_deltas`, `resume`,
+    /// `native_cost`, `permission_modes`, `cancel_granularity`,
+    /// `interrupt_midturn`, `worktree_aware`, `interactive_permissions`) —
+    /// see the "Capabilities honesty doctrine" in the module doc.
+    /// Synchronous: capability support is a static fact about the
+    /// adapter's implementation, not something that requires I/O to learn
+    /// (unlike [`Self::probe`], which checks runtime availability).
     fn capabilities(&self) -> Capabilities;
 
     /// Checks whether the provider CLI is installed, on `PATH`, and
@@ -526,6 +545,7 @@ mod tests {
                 cancel_granularity: CancelGranularity::KillOnly,
                 interrupt_midturn: false,
                 worktree_aware: true,
+                interactive_permissions: false,
             }
         }
 

@@ -279,6 +279,12 @@ fn claude_code_capabilities() -> Capabilities {
         cancel_granularity: CancelGranularity::KillOnly,
         interrupt_midturn: false,
         worktree_aware: true,
+        // §0b: `--permission-mode manual` is a silent no-op in `-p` mode
+        // — there is no pending question on the wire to answer. Contrast
+        // with `codex::codex_capabilities` (`true`) — see that function's
+        // doc for the JSON-RPC approval round-trip that makes it honest
+        // there.
+        interactive_permissions: false,
     }
 }
 

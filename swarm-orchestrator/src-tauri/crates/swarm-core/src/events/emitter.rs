@@ -1458,6 +1458,7 @@ mod tests {
                 cancel_granularity: CancelGranularity::KillOnly,
                 interrupt_midturn: false,
                 worktree_aware: true,
+                interactive_permissions: false,
             },
         });
         let json = serde_json::to_string(&event).expect("serialize");
