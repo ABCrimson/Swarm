@@ -24,7 +24,8 @@ mod session;
 use commands::metrics::SharedSystem;
 use swarm_core::Paths;
 use swarm_core::agent::{
-    AgentScheduler, AgentSchedulerConfig, AgentSessionRegistry, AgentTurnRequest, ClaudeCodeAdapter,
+    AgentScheduler, AgentSchedulerConfig, AgentSessionRegistry, AgentTurnRequest,
+    ClaudeCodeAdapter, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY,
 };
 use swarm_core::bus::channel::MessageBus;
 use swarm_core::bus::router::Router;
@@ -178,6 +179,7 @@ pub fn run() {
             commands::agent::agent_cancel,
             commands::agent::agent_shutdown,
             commands::agent::agent_probe,
+            commands::agent::set_agent_concurrency,
             // Config commands
             commands::config::read_config,
             commands::config::write_config,
@@ -333,12 +335,12 @@ pub fn run() {
             // `AgentSchedulerConfig::default().concurrent_limit == 3`
             // mirrors the existing AI concurrency setting's own default
             // (`useAiStore`'s `concurrentLimit: 3`, `src/store/ai.ts`).
-            // That TS store is client-side-only (never persisted to
-            // `swarm-config.json`), so this Rust-side scheduler cannot
-            // read its live value at startup — seeding from the same
-            // default is the honest approximation; wiring a
-            // `set_agent_concurrency` command to keep the two in sync
-            // live is a follow-up, not part of this minimal surface.
+            // `set_agent_concurrency` (below, applied from the
+            // persisted `agent_concurrency` config key) is what keeps
+            // this live scheduler and the frontend's Settings ->
+            // aiConcurrentLimit in sync going forward — see
+            // `useSettingsBridge.ts`, which calls it on every change,
+            // not just `useAiStore`'s client-side-only limiter.
             // Review B2 (binding): the OLD executor dropped a turn
             // silently on `AgentSessionBusy` and released the
             // semaphore permit the instant `send_turn` returned (a
@@ -402,6 +404,23 @@ pub fn run() {
                     }
                 }
             });
+            // Apply the persisted agent-turn concurrency cap (set via
+            // Settings -> set_agent_concurrency). An absent or
+            // out-of-range value keeps AgentSchedulerConfig::default()'s
+            // 3 — same "invalid/missing persisted value degrades to the
+            // constructor default" discipline as `max_workers` above.
+            if let Some(limit) =
+                commands::config::read_config_value_sync(&app_handle, "agent_concurrency")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|v| u32::try_from(v).ok())
+            {
+                if (MIN_AGENT_CONCURRENCY..=MAX_AGENT_CONCURRENCY).contains(&limit) {
+                    scheduler.set_concurrency(limit as usize);
+                } else {
+                    tracing::warn!(limit, "ignoring out-of-range persisted agent_concurrency");
+                }
+            }
+
             app.manage(scheduler);
 
             tracing::info!("SWARM Orchestrator setup complete");

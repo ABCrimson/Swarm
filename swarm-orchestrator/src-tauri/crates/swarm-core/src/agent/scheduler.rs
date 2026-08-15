@@ -55,10 +55,11 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
@@ -67,6 +68,17 @@ use super::adapter::TurnInput;
 /// Bounded channel capacity for the agent-turn scheduler — unchanged
 /// from `ai/queue.rs`'s `AI_QUEUE_CAPACITY`.
 const AGENT_TURN_QUEUE_CAPACITY: usize = 256;
+
+/// Lowest accepted live agent-turn concurrency limit
+/// ([`AgentScheduler::set_concurrency`] / the `set_agent_concurrency`
+/// shell command).
+pub const MIN_AGENT_CONCURRENCY: u32 = 1;
+/// Highest accepted live agent-turn concurrency limit — beyond this,
+/// running more concurrent Claude Code processes against one repo is
+/// almost certainly a misconfiguration (mirrors
+/// `worker::registry::MAX_MAX_WORKERS`'s reasoning for a different
+/// resource).
+pub const MAX_AGENT_CONCURRENCY: u32 = 16;
 
 /// Priority levels for scheduled agent turns.
 ///
@@ -186,6 +198,22 @@ impl Default for AgentSchedulerConfig {
 pub struct AgentScheduler {
     /// Channel sender for submitting new requests.
     sender: mpsc::Sender<AgentTurnRequest>,
+    /// The live concurrency gate — shared with [`Self::process_loop`] so
+    /// [`Self::set_concurrency`] can resize it from outside the
+    /// background task. `tokio::sync::Semaphore` has no direct
+    /// "set capacity" method; see [`Self::set_concurrency`]'s doc for
+    /// how increases/decreases are realized on top of `add_permits`/
+    /// `forget_permits`.
+    semaphore: Arc<Semaphore>,
+    /// Permits still owed to be permanently forgotten (rather than
+    /// returned to `semaphore`) the next time an in-flight turn's
+    /// permit is released — see [`Self::set_concurrency`].
+    pending_forgets: Arc<AtomicUsize>,
+    /// The current target concurrency limit, tracked independently of
+    /// `semaphore.available_permits()` (which fluctuates with in-flight
+    /// turns and can't alone tell `set_concurrency` how big a delta to
+    /// apply).
+    concurrency_limit: Arc<AtomicUsize>,
 }
 
 impl AgentScheduler {
@@ -209,10 +237,71 @@ impl AgentScheduler {
         Fut: Future<Output = ()> + Send + 'static,
     {
         let (sender, receiver) = mpsc::channel::<AgentTurnRequest>(AGENT_TURN_QUEUE_CAPACITY);
+        let semaphore = Arc::new(Semaphore::new(config.concurrent_limit));
+        let pending_forgets = Arc::new(AtomicUsize::new(0));
+        let concurrency_limit = Arc::new(AtomicUsize::new(config.concurrent_limit));
 
-        tokio::spawn(Self::process_loop(receiver, config, Arc::new(executor)));
+        tokio::spawn(Self::process_loop(
+            receiver,
+            semaphore.clone(),
+            pending_forgets.clone(),
+            Arc::new(executor),
+        ));
 
-        Self { sender }
+        Self {
+            sender,
+            semaphore,
+            pending_forgets,
+            concurrency_limit,
+        }
+    }
+
+    /// Adjusts the scheduler's live concurrency cap.
+    ///
+    /// `tokio::sync::Semaphore` has no built-in "resize" operation, so
+    /// this composes its two primitives that come closest:
+    ///
+    /// * **Increase:** `Semaphore::add_permits` — always succeeds
+    ///   immediately, admitting more turns as soon as they're queued.
+    /// * **Decrease:** `Semaphore::forget_permits` first reclaims as
+    ///   many currently-**idle** permits as it can (permanently — a
+    ///   forgotten permit never returns to the pool). If every permit
+    ///   happens to be checked out by in-flight turns at the moment of
+    ///   the call, `forget_permits` can reclaim nothing (it only acts on
+    ///   *available* permits); the shortfall is recorded in
+    ///   `pending_forgets` and paid off lazily — the next in-flight
+    ///   turns to finish call [`OwnedSemaphorePermit::forget`] on their
+    ///   own permit instead of dropping it normally, until the debt
+    ///   reaches zero. This guarantees the cap is honored going forward
+    ///   without forcibly cancelling any turn already running.
+    ///
+    /// Idempotent for `new_limit == ` the current limit (no-op).
+    pub fn set_concurrency(&self, new_limit: usize) {
+        let old_limit = self
+            .concurrency_limit
+            .swap(new_limit, AtomicOrdering::SeqCst);
+        match new_limit.cmp(&old_limit) {
+            Ordering::Greater => {
+                self.semaphore.add_permits(new_limit - old_limit);
+            }
+            Ordering::Less => {
+                let want = old_limit - new_limit;
+                let forgotten = self.semaphore.forget_permits(want);
+                let debt = want - forgotten;
+                if debt > 0 {
+                    self.pending_forgets.fetch_add(debt, AtomicOrdering::SeqCst);
+                }
+            }
+            Ordering::Equal => {}
+        }
+    }
+
+    /// The current live concurrency cap (reflects the target set by the
+    /// most recent [`Self::set_concurrency`] call, or the constructor's
+    /// [`AgentSchedulerConfig::concurrent_limit`] if none has been
+    /// made).
+    pub fn concurrency_limit(&self) -> usize {
+        self.concurrency_limit.load(AtomicOrdering::SeqCst)
     }
 
     /// Enqueues an agent turn for processing.
@@ -250,22 +339,27 @@ impl AgentScheduler {
     ///
     /// When the channel closes, drains the `JoinSet` to wait for all
     /// in-flight tasks to complete before exiting.
-    #[tracing::instrument(skip(receiver, executor), fields(concurrent_limit = config.concurrent_limit))]
+    ///
+    /// `semaphore` and `pending_forgets` are owned jointly with the
+    /// [`AgentScheduler`] handle this loop was spawned from — this is
+    /// what lets [`AgentScheduler::set_concurrency`] resize live
+    /// capacity from outside this task.
+    #[tracing::instrument(skip(receiver, semaphore, pending_forgets, executor), fields(initial_permits = semaphore.available_permits()))]
     async fn process_loop<F, Fut>(
         mut receiver: mpsc::Receiver<AgentTurnRequest>,
-        config: AgentSchedulerConfig,
+        semaphore: Arc<Semaphore>,
+        pending_forgets: Arc<AtomicUsize>,
         executor: Arc<F>,
     ) where
         F: Fn(AgentTurnRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let semaphore = Arc::new(Semaphore::new(config.concurrent_limit));
         let heap = Arc::new(Mutex::new(BinaryHeap::<PrioritizedRequest>::new()));
         let sequence = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let mut join_set = JoinSet::new();
 
         tracing::info!(
-            concurrent_limit = config.concurrent_limit,
+            initial_permits = semaphore.available_permits(),
             channel_capacity = AGENT_TURN_QUEUE_CAPACITY,
             "agent turn scheduler processing loop started"
         );
@@ -312,9 +406,10 @@ impl AgentScheduler {
                 };
 
                 let executor = executor.clone();
+                let pending_forgets = pending_forgets.clone();
                 join_set.spawn(async move {
                     executor(prioritized.request).await;
-                    drop(permit);
+                    release_or_forget_permit(permit, &pending_forgets);
                 });
             }
         }
@@ -327,6 +422,41 @@ impl AgentScheduler {
             }
         }
         tracing::info!("agent turn scheduler processing loop stopped");
+    }
+}
+
+/// Releases `permit` back to `semaphore`'s pool, unless a
+/// `set_concurrency` decrease is still owed a forgotten permit — in
+/// that case `permit` is [`OwnedSemaphorePermit::forget`]ten instead of
+/// dropped, permanently reducing capacity by one and realizing (or
+/// partially realizing) the deferred shrink. See
+/// [`AgentScheduler::set_concurrency`]'s doc for why the debt can't
+/// always be paid off synchronously at the moment `set_concurrency` is
+/// called.
+///
+/// The compare-exchange loop (rather than a plain `fetch_sub`) avoids
+/// underflowing `pending_forgets` if it reaches `0` between the initial
+/// load and the decrement — e.g. two turns finishing back-to-back.
+fn release_or_forget_permit(permit: OwnedSemaphorePermit, pending_forgets: &AtomicUsize) {
+    loop {
+        let current = pending_forgets.load(AtomicOrdering::SeqCst);
+        if current == 0 {
+            drop(permit);
+            return;
+        }
+        if pending_forgets
+            .compare_exchange(
+                current,
+                current - 1,
+                AtomicOrdering::SeqCst,
+                AtomicOrdering::SeqCst,
+            )
+            .is_ok()
+        {
+            permit.forget();
+            return;
+        }
+        // Lost the race against a concurrent release — reload and retry.
     }
 }
 
@@ -623,5 +753,194 @@ mod tests {
             concurrent_limit,
             "expected exactly concurrent_limit executors in flight at peak"
         );
+    }
+
+    // ── set_agent_concurrency: live semaphore resize ─────────────────
+
+    /// Builds an executor + `AgentScheduler` pair where each admitted
+    /// turn increments `in_flight` on entry and blocks on `release`
+    /// until the test explicitly wakes it — giving tests precise
+    /// control over exactly which turns are in flight at the moment
+    /// `set_concurrency` is called.
+    fn gated_scheduler(
+        concurrent_limit: usize,
+    ) -> (AgentScheduler, Arc<AtomicUsize>, Arc<tokio::sync::Notify>) {
+        use tokio::sync::Notify;
+
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(Notify::new());
+
+        let scheduler = AgentScheduler::new(AgentSchedulerConfig { concurrent_limit }, {
+            let in_flight = in_flight.clone();
+            let release = release.clone();
+            move |_req: AgentTurnRequest| {
+                let in_flight = in_flight.clone();
+                let release = release.clone();
+                async move {
+                    in_flight.fetch_add(1, AtomicOrdering::SeqCst);
+                    release.notified().await;
+                    in_flight.fetch_sub(1, AtomicOrdering::SeqCst);
+                }
+            }
+        });
+
+        (scheduler, in_flight, release)
+    }
+
+    /// Drains every turn currently in flight (and any queued behind it)
+    /// through `release`, waiting until `in_flight` reaches `0`.
+    ///
+    /// `Notify::notify_waiters` only wakes tasks that are *already*
+    /// waiting on `.notified()` at the moment it's called — at
+    /// `concurrent_limit == 1`, turns run strictly sequentially, so a
+    /// single `notify_waiters()` call only ever wakes the current one;
+    /// the next turn doesn't start (and doesn't register as a waiter)
+    /// until after the first has already returned. This loop re-fires
+    /// `notify_waiters()` every poll so no sequential admission is ever
+    /// left permanently blocked on a notification that fired before it
+    /// existed.
+    async fn drain_all(in_flight: &std::sync::atomic::AtomicUsize, release: &tokio::sync::Notify) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while in_flight.load(AtomicOrdering::SeqCst) > 0 {
+            assert!(std::time::Instant::now() < deadline, "turns never drained");
+            release.notify_waiters();
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    /// DIRECTIVE: raising the live limit admits an already-queued turn
+    /// immediately via `Semaphore::add_permits`, without waiting for any
+    /// in-flight turn to finish first.
+    #[tokio::test]
+    async fn test_set_concurrency_increase_admits_a_queued_turn_immediately() {
+        let (scheduler, in_flight, release) = gated_scheduler(1);
+
+        scheduler
+            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+            .unwrap();
+        scheduler
+            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+            .unwrap();
+
+        // Give the first turn a moment to actually start; at
+        // concurrent_limit=1 the second must still be queued.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(in_flight.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(scheduler.concurrency_limit(), 1);
+
+        scheduler.set_concurrency(2);
+        assert_eq!(scheduler.concurrency_limit(), 2);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            in_flight.load(AtomicOrdering::SeqCst),
+            2,
+            "raising the limit should admit the second queued turn without waiting on the first"
+        );
+
+        drain_all(&in_flight, &release).await;
+    }
+
+    /// DIRECTIVE: shrinking the limit while every permit is checked out
+    /// by in-flight turns can't reclaim anything synchronously
+    /// (`Semaphore::forget_permits` only acts on idle permits) — the
+    /// shortfall must be deferred and realized the next time those
+    /// turns release their permits, so the NEW, smaller cap is actually
+    /// enforced for the turns admitted afterward.
+    #[tokio::test]
+    async fn test_set_concurrency_decrease_under_full_load_is_realized_on_release() {
+        let (scheduler, in_flight, release) = gated_scheduler(2);
+
+        scheduler
+            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+            .unwrap();
+        scheduler
+            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            in_flight.load(AtomicOrdering::SeqCst),
+            2,
+            "both permits should be checked out before the shrink"
+        );
+
+        // Every permit is in use — forget_permits can reclaim nothing
+        // right now; the debt must be deferred.
+        scheduler.set_concurrency(1);
+        assert_eq!(scheduler.concurrency_limit(), 1);
+
+        // Release both in-flight turns. The debt-aware release path
+        // forgets one of the two permits instead of returning it.
+        drain_all(&in_flight, &release).await;
+
+        // Two fresh turns: only ONE should be admitted concurrently now
+        // that the deferred forget has been realized.
+        scheduler
+            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+            .unwrap();
+        scheduler
+            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            in_flight.load(AtomicOrdering::SeqCst),
+            1,
+            "capacity should now be 1 — the deferred forget must have been paid off"
+        );
+
+        drain_all(&in_flight, &release).await;
+    }
+
+    /// DIRECTIVE: a decrease applied while permits ARE idle reclaims
+    /// synchronously — no deferred debt needed, proving the "happy
+    /// path" doesn't rely on the lazy-forget machinery at all.
+    #[tokio::test]
+    async fn test_set_concurrency_decrease_while_idle_applies_synchronously() {
+        let (scheduler, in_flight, release) = gated_scheduler(3);
+
+        scheduler.set_concurrency(1);
+        assert_eq!(scheduler.concurrency_limit(), 1);
+        assert_eq!(
+            scheduler.pending_forgets.load(AtomicOrdering::SeqCst),
+            0,
+            "shrinking fully-idle capacity should not need to defer anything"
+        );
+
+        scheduler
+            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+            .unwrap();
+        scheduler
+            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            in_flight.load(AtomicOrdering::SeqCst),
+            1,
+            "the new limit of 1 should already be in effect"
+        );
+
+        drain_all(&in_flight, &release).await;
+    }
+
+    #[tokio::test]
+    async fn test_set_concurrency_same_limit_is_a_no_op() {
+        let scheduler = AgentScheduler::new(
+            AgentSchedulerConfig {
+                concurrent_limit: 4,
+            },
+            |_req: AgentTurnRequest| async {},
+        );
+        scheduler.set_concurrency(4);
+        assert_eq!(scheduler.concurrency_limit(), 4);
+        assert_eq!(scheduler.pending_forgets.load(AtomicOrdering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_min_max_agent_concurrency_bounds() {
+        assert_eq!(MIN_AGENT_CONCURRENCY, 1);
+        assert_eq!(MAX_AGENT_CONCURRENCY, 16);
     }
 }

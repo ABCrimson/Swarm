@@ -38,4 +38,7 @@ pub use adapter::{
 };
 pub use claude_code::{ClaudeCodeAdapter, ClaudeCodeSession, ClaudeCodeTrustTier};
 pub use registry::AgentSessionRegistry;
-pub use scheduler::{AgentScheduler, AgentSchedulerConfig, AgentTurnRequest, TurnPriority};
+pub use scheduler::{
+    AgentScheduler, AgentSchedulerConfig, AgentTurnRequest, MAX_AGENT_CONCURRENCY,
+    MIN_AGENT_CONCURRENCY, TurnPriority,
+};
