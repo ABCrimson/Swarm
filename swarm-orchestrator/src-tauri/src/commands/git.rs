@@ -2,7 +2,7 @@
 //! thin wrappers over [`swarm_core::commands::git`].
 
 use swarm_core::commands::Registry;
-use swarm_core::git::{self, ShipError, ShipErrorKind, StagingMode};
+use swarm_core::git::{self, ShipContext, ShipError, ShipErrorKind, StagingMode};
 
 use crate::commands::{call, call_typed_err};
 
@@ -113,6 +113,29 @@ pub async fn ship_compare_url(
             "workerId": worker_id, "shipId": ship_id, "commitSha": commit_sha,
             "pushedRef": pushed_ref, "title": title, "body": body
         }),
+        ship_error_fallback,
+    )
+    .await
+}
+
+/// Unlike the other ship commands, `ship_context` never itself fails
+/// mid-mutation (it's read-only) — but its error path is still a mix of
+/// a structured `ShipError` (an invalid `workerId`) and a plain string
+/// (an `EventLog`/task-panic failure), so it uses [`call_typed_err`] with
+/// the same [`ship_error_fallback`] every other ship command uses, rather
+/// than [`call`]'s plain-string convention.
+#[tauri::command]
+#[tracing::instrument(skip(registry, ctx))]
+pub async fn ship_context(
+    registry: tauri::State<'_, std::sync::Arc<Registry>>,
+    ctx: tauri::State<'_, swarm_core::commands::Ctx>,
+    worker_id: String,
+) -> Result<ShipContext, ShipError> {
+    call_typed_err(
+        &registry,
+        ctx.inner().clone(),
+        "ship_context",
+        serde_json::json!({ "workerId": worker_id }),
         ship_error_fallback,
     )
     .await

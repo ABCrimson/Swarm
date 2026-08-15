@@ -23,6 +23,7 @@
 //! user's own hooks/LFS/attributes. Shelling out to the user's real
 //! `git` reuses exactly the checkout behavior they already trust.
 
+pub mod causal;
 pub mod cli;
 pub mod redact;
 pub mod remote;
@@ -30,6 +31,7 @@ pub mod repo;
 pub mod ship;
 pub mod worktree;
 
+pub use causal::{CausalCommit, CausalToolCall, CausalTurn, ShipContext, build_ship_context};
 pub use cli::{GitCapability, MIN_GIT_VERSION, probe_capability};
 pub use ship::{
     CommitOutcome, PushOutcome, ShipError, ShipErrorKind, ShipPreflight, ShipRemedy,
