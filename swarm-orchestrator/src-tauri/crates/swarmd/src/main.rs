@@ -147,22 +147,51 @@ async fn main() {
         }
     };
 
-    // ── Auth gate FIRST (before the lock/event log): a non-loopback
+    // ── Auth gate FIRST (before the lock/event log, and BEFORE the
+    // token is ever minted — security-review BLOCK-2): a non-loopback
     // bind against a data dir that has never seen a loopback run yet is
-    // refused outright — see auth.rs's module doc.
-    let (token, token_pre_existing) = match auth::DaemonToken::load_or_create(&data_dir) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Failed To Establish The Daemon Token: {e}");
-            std::process::exit(1);
-        }
-    };
-    if !auth::is_loopback_host(&bind_addr.to_string()) && !token_pre_existing {
+    // refused outright. `DaemonToken::exists` is a PURE check with no
+    // side effects; evaluating the gate against it before calling
+    // `load_or_create` is what makes the refusal durable — the earlier
+    // (vulnerable) ordering called `load_or_create` FIRST, which minted
+    // the token file as a side effect even on a run this gate went on
+    // to refuse, so a SECOND identical invocation found
+    // `token_pre_existing == true` and slipped through. See auth.rs's
+    // module doc.
+    let bind_is_loopback = auth::is_loopback_host(&bind_addr.to_string());
+    if !bind_is_loopback && !auth::DaemonToken::exists(&data_dir) {
         eprintln!(
             "Refusing To Bind A Non-Loopback Address On A Fresh Data Directory. \
              Run `swarmd` Once With The Default Loopback Bind First (Establishes The Token And \
              Prints The Connect URL), Then Retry With --bind {}.",
             args.bind
+        );
+        std::process::exit(1);
+    }
+
+    // Only NOW — after the gate above has already decided this run may
+    // proceed — is the token allowed to be minted (on a loopback bind)
+    // or loaded (on a non-loopback bind, where `exists()` just proved a
+    // token file is already there).
+    let (token, _pre_existing, perms_restricted) =
+        match auth::DaemonToken::load_or_create(&data_dir) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("Failed To Establish The Daemon Token: {e}");
+                std::process::exit(1);
+            }
+        };
+    // security-review NIT: an `icacls`/chmod failure escalates to a
+    // hard startup error specifically when binding non-loopback — other
+    // local accounts being able to read the token file is a real
+    // credential-exposure risk exactly when the daemon is reachable
+    // off-box; a loopback-only daemon already requires local access to
+    // reach it at all, so a permissions warning is enough there.
+    if !bind_is_loopback && !perms_restricted {
+        eprintln!(
+            "Refusing To Bind A Non-Loopback Address: Could Not Restrict The Daemon Token \
+             File's Permissions. Fix Or Delete <data-dir>/daemon-token (It Will Be Re-Minted) \
+             Before Binding Non-Loopback."
         );
         std::process::exit(1);
     }
