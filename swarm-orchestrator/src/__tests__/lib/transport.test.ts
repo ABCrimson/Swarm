@@ -89,7 +89,7 @@ vi.mock("#lib/event-bus", () => ({
 }));
 let mockLastSeq = 0;
 
-import { WsTransport } from "#lib/transport";
+import { initTokenFromLocationHash, WsTransport } from "#lib/transport";
 
 function latestSocket(): FakeWebSocket {
   const s = FakeWebSocket.instances.at(-1);
@@ -123,6 +123,12 @@ describe("wsTransport", () => {
     it("sends hello with token from the URL fragment, then scrubs it", async () => {
       window.location.hash = "#t=secret-token-123";
       const replaceStateSpy = vi.spyOn(window.history, "replaceState");
+      // Production reads the hash exactly ONCE, at module init
+      // (security-review FIX-8 — see `initTokenFromLocationHash`'s
+      // doc) — the module already ran it once, before this test set
+      // the hash, so it must be re-invoked explicitly to simulate a
+      // fresh page load carrying a fresh token fragment.
+      initTokenFromLocationHash();
 
       const connectPromise = transport.connect();
       const socket = latestSocket();
@@ -389,6 +395,20 @@ describe("wsTransport", () => {
         error: "Worker Not Found",
       });
       await expect(invokePromise).rejects.toThrow("Worker Not Found");
+    });
+
+    // DIRECTIVE (security-review FIX-8): invoke() must not hang
+    // forever when no rpcResult ever arrives — it rejects with a
+    // typed RpcTimeoutError after RPC_TIMEOUT_MS (30s).
+    it("rejects with RpcTimeoutError when no rpcResult ever arrives", async () => {
+      vi.useFakeTimers();
+      const invokePromise = transport.invoke("list_workers");
+      const socket = latestSocket();
+      socket.simulateOpen();
+      socket.simulateServerFrame({ frame: "ready", serverSeq: 0, version: 1, caps: {} });
+      const assertion = expect(invokePromise).rejects.toThrow(/timed out/i);
+      await vi.advanceTimersByTimeAsync(30_001);
+      await assertion;
     });
   });
 
