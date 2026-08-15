@@ -20,22 +20,38 @@
 //! "start receiving live events": anything published while the SQLite
 //! pages are being read is already buffered in the subscriber's
 //! channel, and the live-forwarding loop's own `seq > cursor` filter
-//! (in [`forward_live`]) discards whatever the replay already covered,
+//! (in [`forward_one`]) discards whatever the replay already covered,
 //! rather than the replay needing to somehow know the exact live
 //! cutoff in advance.
 //!
-//! # Two-lane backpressure
+//! # ONE ordered lane for ready/replayEnd/events (security-review FIX-3)
 //!
-//! Every outgoing frame is classified [`Lane::Persistent`] or
-//! [`Lane::Ephemeral`] by [`crate::ws::lane_for`]. The persistent lane
-//! is an effectively-unbounded queue (blocks the CONNECTION on
-//! backpressure, never the engine — the feeder task awaits `send`).
-//! The ephemeral lane is bounded and uses `try_send`: above the
-//! watermark, the NEWEST arrival is dropped (the channel is full, so
-//! the item that can't fit is always the one just produced) —
-//! `worker_output`/`system_metrics`/`system_log`/`agent_turn_delta`/
-//! terminal `worker_input` never back up the writer, they degrade to
-//! choppy/sparse instead.
+//! `ready`, `replayEnd`, and every `event` frame (replayed or live) ride
+//! the SAME bounded, FIFO `mpsc` channel (`event_tx`/`event_rx`) — this
+//! is the only way to guarantee wire order matches seq order. An
+//! earlier three-channel design (separate control/persistent/ephemeral
+//! lanes, `select!`-merged in the writer task) let wire order diverge
+//! from seq order even for events that both landed on the "persistent"
+//! lane, whenever a live event and a lag-heal replay page raced across
+//! the `select!` — a client backfilling a gap, seeing the OUT-of-order
+//! seq, would advance `lastSeq` past a later-arriving-but-lower-seq
+//! frame and silently treat it as already-seen, discarding real PTY
+//! output. The fix collapses persistent + replay/control-that-carries-a-seq
+//! onto ONE lane; only `rpcResult` (which carries no seq and has no
+//! ordering relationship to the event stream) keeps a separate lane.
+//!
+//! Backpressure still has two behaviors, now expressed as two ENQUEUE
+//! functions over the ONE lane rather than two lanes: persistent frames
+//! (replay, and any live event whose type isn't in [`lane_for`]'s
+//! ephemeral set) always enqueue — blocking the CONNECTION, never the
+//! engine, if the lane is full. Ephemeral frames
+//! (`worker_output`/`system_metrics`/`system_log`/`agent_turn_delta`/
+//! terminal `worker_input`) are dropped newest-first once the lane's
+//! OCCUPIED length reaches [`EPHEMERAL_WATERMARK`] (below the lane's
+//! full [`EVENT_LANE_CAPACITY`], reserving headroom so an ephemeral
+//! flood can never fully starve a persistent frame's `send().await` of
+//! room) — but anything that DOES get enqueued keeps its FIFO position,
+//! so wire order among enqueued frames is always seq order.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -47,7 +63,7 @@ use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{Semaphore, broadcast, mpsc};
 
 use swarm_core::commands::Ctx;
 use swarm_core::orchestration::DomainEvent;
@@ -56,17 +72,39 @@ use swarm_core::protocol::{ClientFrame, PROTOCOL_VERSION, ServerCaps, ServerFram
 use crate::AppState;
 use crate::auth;
 
-/// Bound on the ephemeral lane — small on purpose: this is a queue of
-/// frames waiting to be WRITTEN to a socket, not a data store. Above
-/// this, newest-arrival drop kicks in.
-const EPHEMERAL_LANE_CAPACITY: usize = 256;
+/// Total capacity of the single ordered event lane (`ready`/`replayEnd`/
+/// `event`). This is a queue of frames awaiting write to the socket,
+/// not a data store — sized generously so a real replay burst never
+/// spuriously blocks, while still bounding memory under a genuinely
+/// wedged connection.
+const EVENT_LANE_CAPACITY: usize = 4096;
+
+/// Once the event lane's OCCUPIED length reaches this, new ephemeral
+/// frames are dropped (newest-first) instead of enqueued — see the
+/// module doc. Deliberately well below [`EVENT_LANE_CAPACITY`] so a
+/// burst of ephemeral traffic can never consume the headroom a
+/// persistent frame's blocking `send().await` needs.
+const EPHEMERAL_WATERMARK: usize = 512;
+
+/// Bound on the separate `rpcResult` lane (security-review FIX-4 — the
+/// prior unbounded channel let an unbounded number of in-flight RPC
+/// tasks queue results with nothing to slow them down).
+const CONTROL_LANE_CAPACITY: usize = 256;
+
+/// Cap on concurrently in-flight `rpc` tasks per connection
+/// (security-review FIX-4). Above this, a NEW `rpc` frame is answered
+/// immediately with a typed busy `rpcResult` rather than spawning an
+/// unbounded number of tasks per malicious/misbehaving client.
+const MAX_CONCURRENT_RPC_PER_CONNECTION: usize = 8;
 
 /// Replay page size, matching [`swarm_core::commands::orchestration::PAGE_LIMIT`].
 const REPLAY_PAGE_SIZE: u32 = 5000;
 
 /// How long a connection has to send `hello` (with a valid token, if
 /// not already Bearer-authenticated at upgrade time) before the socket
-/// is closed.
+/// is closed. Enforced for BOTH auth paths (security-review FIX-5) — a
+/// Bearer-pre-authed connection that never sends a `hello` at all would
+/// otherwise hang forever with no `ready`/replay ever delivered.
 const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -79,7 +117,7 @@ enum Lane {
 /// [`swarm_core::orchestration::is_persistent`]'s own ephemeral set,
 /// plus terminal (human-keystroke) `worker_input`, which the log itself
 /// never persists either (see that function's doc) so it is a natural
-/// fit for the same "may be dropped" lane.
+/// fit for the same "may be dropped" class.
 fn lane_for(event_type: &str) -> Lane {
     match event_type {
         "worker_output" | "system_metrics" | "system_log" | "agent_turn_delta" => Lane::Ephemeral,
@@ -127,20 +165,19 @@ async fn handle_socket(socket: WebSocket, state: AppState, bearer_pre_authed: bo
 
     let (mut sender, mut receiver) = socket.split();
 
-    // ── Handshake: hello -> auth -> ready ───────────────────────────
+    // ── Handshake: hello -> auth -> ready, bounded for EVERY caller,
+    // Bearer-pre-authed included (security-review FIX-5: a
+    // pre-authed-but-hello-less connection used to hang forever). ────
     let hello = match tokio::time::timeout(HANDSHAKE_DEADLINE, receiver.next()).await {
         Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str::<ClientFrame>(&text).ok(),
         _ => None,
     };
 
-    let ClientFrame::Hello { last_seq, token } = hello.unwrap_or(ClientFrame::Hello {
-        last_seq: None,
-        token: None,
-    }) else {
+    let Some(ClientFrame::Hello { last_seq, token }) = hello else {
         let _ = sender
             .send(Message::Close(Some(axum::extract::ws::CloseFrame {
                 code: 1008,
-                reason: "Expected `hello` As The First Frame.".into(),
+                reason: "Expected `hello` Within The Handshake Deadline.".into(),
             })))
             .await;
         return;
@@ -162,42 +199,29 @@ async fn handle_socket(socket: WebSocket, state: AppState, bearer_pre_authed: bo
     let mut broadcast_rx = state.ctx.engine.subscribe();
     let server_seq = current_max_seq(&state.ctx);
 
-    let (persistent_tx, mut persistent_rx) = mpsc::channel::<String>(4096);
-    let (ephemeral_tx, mut ephemeral_rx) = mpsc::channel::<String>(EPHEMERAL_LANE_CAPACITY);
-    let (control_tx, mut control_rx) = mpsc::unbounded_channel::<String>();
+    let (event_tx, mut event_rx) = mpsc::channel::<String>(EVENT_LANE_CAPACITY);
+    let (control_tx, mut control_rx) = mpsc::channel::<String>(CONTROL_LANE_CAPACITY);
 
-    // `ready` goes on the PERSISTENT lane, not the separate `control_tx`
-    // channel — see the `feeder` task below for why: `replayEnd` and
-    // every replayed `event` frame must arrive in that exact relative
-    // order, which is only guaranteed by putting them on the SAME
-    // ordered channel. `ready` itself has no such constraint (it is
-    // always first), but sharing the lane keeps one mental model for
-    // "everything that must preserve wire order relative to events."
+    // `ready` goes on the SAME ordered event lane as everything that
+    // follows it (replay, then live) — see the module doc's FIX-3 note.
     let ready = ServerFrame::Ready {
         server_seq,
         version: PROTOCOL_VERSION,
         caps: state.caps.clone(),
     };
-    if persistent_tx
-        .send(serde_json::to_string(&ready).unwrap())
-        .await
-        .is_err()
-    {
+    if !enqueue_persistent(&event_tx, serde_json::to_string(&ready).unwrap()).await {
         return;
     }
 
-    // ── Writer task: drains all three lanes onto the socket ────────
+    // ── Writer task: drains the event lane and the control lane ────
     let writer = tokio::spawn(async move {
         loop {
             tokio::select! {
                 biased;
+                Some(frame) = event_rx.recv() => {
+                    if sender.send(Message::Text(frame.into())).await.is_err() { break; }
+                }
                 Some(frame) = control_rx.recv() => {
-                    if sender.send(Message::Text(frame.into())).await.is_err() { break; }
-                }
-                Some(frame) = persistent_rx.recv() => {
-                    if sender.send(Message::Text(frame.into())).await.is_err() { break; }
-                }
-                Some(frame) = ephemeral_rx.recv() => {
                     if sender.send(Message::Text(frame.into())).await.is_err() { break; }
                 }
                 else => break,
@@ -207,8 +231,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, bearer_pre_authed: bo
 
     // ── Feeder task: replay (if warm) + live forwarding with Lagged healing ──
     let feed_ctx = state.ctx.clone();
-    let feed_persistent = persistent_tx.clone();
-    let feed_ephemeral = ephemeral_tx.clone();
+    let feed_event_tx = event_tx.clone();
     let feeder = tokio::spawn(async move {
         let mut cursor = if last_seq.is_some() {
             last_seq.unwrap_or(0)
@@ -216,29 +239,21 @@ async fn handle_socket(socket: WebSocket, state: AppState, bearer_pre_authed: bo
             server_seq
         };
         if last_seq.is_some() {
-            cursor = replay_from(&feed_ctx, cursor, &feed_persistent).await;
+            cursor = replay_from(&feed_ctx, cursor, &feed_event_tx).await;
         }
-        // `replayEnd` MUST be sent on the SAME persistent lane the
-        // replayed events themselves used — not the separate unbounded
-        // `control_tx` channel. Two independent mpsc channels give no
-        // ordering guarantee relative to each other once both have
-        // pending items (a `biased` `select!` in the writer task always
-        // drains `control_rx` first when both are ready, which — since
-        // `replayEnd` is enqueued only microseconds after the last
-        // replayed event — could otherwise deliver `replayEnd` to the
-        // client BEFORE some of the events it claims to conclude,
-        // corrupting the client's gap/backfill bookkeeping). Reproduced
-        // by this crate's `test_reconnect_with_last_seq_replays_exactly_the_missed_events`
-        // integration test before this fix.
-        let _ = feed_persistent
-            .send(serde_json::to_string(&ServerFrame::ReplayEnd { seq: cursor }).unwrap())
-            .await;
+        // `replayEnd` shares the event lane with the replayed events it
+        // concludes — FIFO on one channel is what makes this ordering
+        // guarantee unconditional (see the module doc's FIX-3 note).
+        let _ = enqueue_persistent(
+            &feed_event_tx,
+            serde_json::to_string(&ServerFrame::ReplayEnd { seq: cursor }).unwrap(),
+        )
+        .await;
 
         loop {
             match broadcast_rx.recv().await {
                 Ok(envelope) => {
-                    cursor =
-                        forward_one(&envelope, cursor, &feed_persistent, &feed_ephemeral).await;
+                    cursor = forward_one(&envelope, cursor, &feed_event_tx).await;
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
@@ -246,7 +261,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, bearer_pre_authed: bo
                         cursor,
                         "WS connection lagged the broadcast fanout — healing via replay"
                     );
-                    cursor = replay_from(&feed_ctx, cursor, &feed_persistent).await;
+                    cursor = replay_from(&feed_ctx, cursor, &feed_event_tx).await;
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             }
@@ -254,42 +269,43 @@ async fn handle_socket(socket: WebSocket, state: AppState, bearer_pre_authed: bo
     });
 
     // ── Reader loop: this task's own life IS the connection's life —
-    // rpc frames dispatched inline, exits on socket close ───────────
+    // rpc frames dispatched inline (capped concurrency), exits on
+    // socket close ───────────────────────────────────────────────────
     let rpc_ctx = state.ctx.clone();
     let rpc_registry = state.registry.clone();
     let rpc_control = control_tx.clone();
+    let rpc_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_RPC_PER_CONNECTION));
     loop {
         match receiver.next().await {
             Some(Ok(Message::Text(text))) => match serde_json::from_str::<ClientFrame>(&text) {
                 Ok(ClientFrame::Rpc { id, cmd, args }) => {
-                    let ctx = rpc_ctx.clone();
-                    let registry = rpc_registry.clone();
                     let control = rpc_control.clone();
-                    let secret_denied = cmd == "read_config" && is_secret_read(&args);
-                    tokio::spawn(async move {
-                        let result = if secret_denied {
-                            Err(serde_json::json!(
-                                "Remote Read Of Secret Config Keys Is Denied."
-                            ))
-                        } else {
-                            registry.dispatch(&cmd, ctx, args).await
-                        };
-                        let frame = match result {
-                            Ok(value) => ServerFrame::RpcResult {
+                    match Arc::clone(&rpc_semaphore).try_acquire_owned() {
+                        Ok(permit) => {
+                            let ctx = rpc_ctx.clone();
+                            let registry = rpc_registry.clone();
+                            tokio::spawn(async move {
+                                let _permit = permit; // held until this task ends
+                                // BLOCK-1 fix: dispatch_remote, never
+                                // dispatch — the registry's declared
+                                // RemotePolicy is consulted for every
+                                // command, never a `cmd == "..."` string
+                                // check at this call site.
+                                let result = registry.dispatch_remote(&cmd, ctx, args).await;
+                                send_rpc_result(&control, id, result).await;
+                            });
+                        }
+                        Err(_) => {
+                            send_rpc_result(
+                                &control,
                                 id,
-                                ok: true,
-                                result: Some(value),
-                                error: None,
-                            },
-                            Err(value) => ServerFrame::RpcResult {
-                                id,
-                                ok: false,
-                                result: None,
-                                error: Some(value),
-                            },
-                        };
-                        let _ = control.send(serde_json::to_string(&frame).unwrap());
-                    });
+                                Err(serde_json::json!(
+                                    "Too Many Concurrent RPC Calls On This Connection."
+                                )),
+                            )
+                            .await;
+                        }
+                    }
                 }
                 Ok(ClientFrame::Hello { .. }) => {
                     // Only the first frame may be `hello` — a second one
@@ -314,14 +330,31 @@ async fn handle_socket(socket: WebSocket, state: AppState, bearer_pre_authed: bo
     feeder.abort();
 }
 
-/// `true` when `args` names a secret-shaped `read_config` key — see
-/// [`swarm_core::commands::config::is_secret_key`]'s doc for why this
-/// gate lives here (the network boundary) rather than in the shared
-/// registry handler.
-fn is_secret_read(args: &serde_json::Value) -> bool {
-    args.get("key")
-        .and_then(|v| v.as_str())
-        .is_some_and(swarm_core::commands::config::is_secret_key)
+async fn send_rpc_result(
+    control: &mpsc::Sender<String>,
+    id: String,
+    result: Result<serde_json::Value, serde_json::Value>,
+) {
+    let frame = match result {
+        Ok(value) => ServerFrame::RpcResult {
+            id,
+            ok: true,
+            result: Some(value),
+            error: None,
+        },
+        Err(value) => ServerFrame::RpcResult {
+            id,
+            ok: false,
+            result: None,
+            error: Some(value),
+        },
+    };
+    // Bounded, blocking send: a congested control lane slows this RPC
+    // task down rather than silently dropping the client's correlated
+    // response (which the client has no other way to recover — see
+    // `wsTransport`'s pending-map, which would otherwise wait out its
+    // own 30s timeout for nothing).
+    let _ = control.send(serde_json::to_string(&frame).unwrap()).await;
 }
 
 fn current_max_seq(ctx: &Ctx) -> u64 {
@@ -333,12 +366,33 @@ fn current_max_seq(ctx: &Ctx) -> u64 {
     }
 }
 
+/// Enqueues `frame` onto the event lane, ALWAYS — blocking the
+/// connection (never dropping) if the lane is momentarily full. Used
+/// for `ready`, `replayEnd`, every replayed event, and every live event
+/// NOT classified [`Lane::Ephemeral`]. Returns `false` if the lane's
+/// receiver is gone (connection torn down).
+async fn enqueue_persistent(event_tx: &mpsc::Sender<String>, frame: String) -> bool {
+    event_tx.send(frame).await.is_ok()
+}
+
+/// Enqueues `frame` onto the event lane UNLESS the lane's occupied
+/// length has already reached [`EPHEMERAL_WATERMARK`], in which case
+/// this arrival is dropped (newest-first — it is, by construction, the
+/// newest thing anyone tried to enqueue). Never blocks.
+fn enqueue_ephemeral(event_tx: &mpsc::Sender<String>, frame: String) {
+    let occupied = EVENT_LANE_CAPACITY.saturating_sub(event_tx.capacity());
+    if occupied >= EPHEMERAL_WATERMARK {
+        return; // dropped
+    }
+    let _ = event_tx.try_send(frame);
+}
+
 /// Pages `events_since(cursor, REPLAY_PAGE_SIZE)` until a short page
-/// arrives, sending each row (always on the persistent lane — replay
+/// arrives, sending each row (always via [`enqueue_persistent`] — replay
 /// must never drop) and returning the new cursor (the highest seq
 /// actually sent, or the original `cursor` if there was nothing to
 /// replay).
-async fn replay_from(ctx: &Ctx, mut cursor: u64, persistent_tx: &mpsc::Sender<String>) -> u64 {
+async fn replay_from(ctx: &Ctx, mut cursor: u64, event_tx: &mpsc::Sender<String>) -> u64 {
     loop {
         let ctx2 = ctx.clone();
         let page = tokio::task::spawn_blocking(move || {
@@ -362,11 +416,7 @@ async fn replay_from(ctx: &Ctx, mut cursor: u64, persistent_tx: &mpsc::Sender<St
         for stored in page {
             let seq = stored.seq;
             let json = swarm_core::commands::orchestration::stored_event_to_json(stored);
-            if persistent_tx
-                .send(serde_json::to_string(&json).unwrap())
-                .await
-                .is_err()
-            {
+            if !enqueue_persistent(event_tx, serde_json::to_string(&json).unwrap()).await {
                 return cursor;
             }
             cursor = seq;
@@ -381,12 +431,12 @@ async fn replay_from(ctx: &Ctx, mut cursor: u64, persistent_tx: &mpsc::Sender<St
 
 /// Forwards one live [`DomainEvent`] if it is newer than `cursor`
 /// (dedupe against whatever replay/a prior lag-heal already sent),
-/// routing it to the correct lane. Returns the new cursor.
+/// routing it onto the event lane via the enqueue function matching its
+/// lane classification. Returns the new cursor.
 async fn forward_one(
     envelope: &Arc<DomainEvent>,
     cursor: u64,
-    persistent_tx: &mpsc::Sender<String>,
-    ephemeral_tx: &mpsc::Sender<String>,
+    event_tx: &mpsc::Sender<String>,
 ) -> u64 {
     if envelope.seq <= cursor {
         return cursor;
@@ -395,13 +445,10 @@ async fn forward_one(
     let event_type = envelope_type(envelope);
     match lane_for(&event_type) {
         Lane::Persistent => {
-            // Blocks the CONNECTION (never the engine) — exactly the
-            // plan's backpressure contract.
-            let _ = persistent_tx.send(json).await;
+            let _ = enqueue_persistent(event_tx, json).await;
         }
         Lane::Ephemeral => {
-            // Newest-first drop above the watermark.
-            let _ = ephemeral_tx.try_send(json);
+            enqueue_ephemeral(event_tx, json);
         }
     }
     envelope.seq
