@@ -97,6 +97,42 @@ jobs:
           prerelease: ${{ startsWith(github.ref_name, 'v0.') }}
           args: ${{ matrix.args }}
 
+      # ── swarmd headless daemon ──
+      # Built on BOTH tag pushes and workflow_dispatch dry runs, so a
+      # tag-free dispatch validates the build+package across all four
+      # targets before any real release. Upload is gated to tag pushes
+      # (a dispatch creates no release to attach to), mirroring how the
+      # tauri-action step above only publishes when tagName is non-empty.
+      - name: Build swarmd daemon
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml -p swarmd --target ${{ matrix.target }}
+
+      - name: Package swarmd binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          ext=""
+          [ "${{ matrix.platform }}" = "windows-latest" ] && ext=".exe"
+          src="src-tauri/target/${{ matrix.target }}/release/swarmd${ext}"
+          out="swarmd-${{ matrix.target }}${ext}"
+          cp "$src" "$out"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$out" > "$out.sha256"
+          else
+            shasum -a 256 "$out" > "$out.sha256"
+          fi
+          echo "SWARMD_ARTIFACT=$out" >> "$GITHUB_ENV"
+
+      - name: Upload swarmd to the release
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ github.ref_name }}" \
+            "$SWARMD_ARTIFACT" "$SWARMD_ARTIFACT.sha256" \
+            --repo "${{ github.repository }}" --clobber
+
   verify-updater-manifest:
     name: Verify Updater Manifest
     needs: build
@@ -122,3 +158,34 @@ jobs:
             exit 1
           fi
           echo "latest.json carries all four platform keys."
+
+  verify-swarmd-binaries:
+    name: Verify swarmd Binaries
+    needs: build
+    # Tag pushes only — dispatch dry runs attach nothing to verify.
+    if: always() && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert all four swarmd binaries are attached
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          assets=$(gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" \
+            --json assets --jq '.assets[].name')
+          missing=()
+          for target in \
+            x86_64-pc-windows-msvc.exe \
+            aarch64-apple-darwin \
+            x86_64-apple-darwin \
+            x86_64-unknown-linux-gnu; do
+            name="swarmd-$target"
+            if ! grep -qxF "$name" <<< "$assets"; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::release is missing swarmd binary(ies): ${missing[*]}"
+            exit 1
+          fi
+          echo "All four swarmd binaries are attached to the release."

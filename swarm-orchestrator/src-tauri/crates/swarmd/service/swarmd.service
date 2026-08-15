@@ -1,0 +1,52 @@
+# SWARM Orchestrator headless daemon — systemd USER unit.
+#
+# This is a USER service, not a system service: swarmd runs worker agents
+# as you, reads and writes your app-data directory under $HOME, and shells
+# out to git against your repositories and worktrees. Running it as root
+# (a system unit) would both break that ownership model and needlessly
+# expand its blast radius. Install it with `systemctl --user`, never
+# `systemctl` (see docs/daemon.md, or run service/install.sh).
+#
+# Install:   cp swarmd.service ~/.config/systemd/user/
+#            systemctl --user daemon-reload
+#            systemctl --user enable --now swarmd
+# Token:     journalctl --user -u swarmd | grep 'Listening On'
+# Logs:      journalctl --user -u swarmd -f
+
+[Unit]
+Description=SWARM Orchestrator headless daemon (swarmd)
+Documentation=https://github.com/ABCrimson/Swarm/blob/main/swarm-orchestrator/docs/daemon.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# %h is the user's home. install.sh drops the binary here; adjust if you
+# installed swarmd elsewhere on PATH.
+ExecStart=%h/.local/bin/swarmd
+Restart=on-failure
+RestartSec=3
+
+# Loopback-only by default. swarmd refuses a non-loopback bind on a data
+# directory that has never completed a loopback run (it has no token yet),
+# so this unit deliberately passes no --bind. To reach the daemon off-box,
+# establish the token with one loopback run, then front it with your own
+# TLS/tunnel — see docs/daemon.md. Do NOT add `--bind 0.0.0.0:...` here
+# expecting it to be safe on its own; the token is the only auth.
+
+# Hardening — deliberately conservative. swarmd must keep $HOME writable
+# (its app-data dir and your worktrees live there) and must be able to
+# exec git, so ProtectHome and a locked-down ReadWritePaths are NOT used.
+# Everything below is safe for a userspace daemon that writes user files
+# and spawns git/agent subprocesses.
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=default.target

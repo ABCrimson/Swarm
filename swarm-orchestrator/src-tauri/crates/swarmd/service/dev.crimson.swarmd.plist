@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SWARM Orchestrator headless daemon — launchd LaunchAgent (macOS).
+
+  A LaunchAgent (per-user, ~/Library/LaunchAgents), NOT a LaunchDaemon:
+  swarmd runs as you and touches your home, app-data, and repos. launchd
+  does not expand `~` or environment variables inside ProgramArguments or
+  the log paths, so the @PLACEHOLDER@ tokens below are filled in with
+  absolute paths by service/install.sh at install time. If you install by
+  hand, replace them yourself.
+
+  Install:   service/install.sh   (substitutes paths, copies to
+             ~/Library/LaunchAgents, and `launchctl bootstrap`s it)
+  Token:     grep 'Listening On' @LOG_DIR@/swarmd.log
+  Logs are written under your ~/Library/Logs (mode 0700), never /tmp —
+  the connect URL carries the daemon token, so the log must not be
+  world-readable.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.crimson.swarmd</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@SWARMD_BIN@</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>StandardOutPath</key>
+    <string>@LOG_DIR@/swarmd.log</string>
+    <key>StandardErrorPath</key>
+    <string>@LOG_DIR@/swarmd.err.log</string>
+</dict>
+</plist>
