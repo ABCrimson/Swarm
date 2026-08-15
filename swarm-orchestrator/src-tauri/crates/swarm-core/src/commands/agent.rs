@@ -8,7 +8,10 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::agent::adapter::AgentAdapter;
-use crate::agent::{AgentSpawnSpec, AgentTurnRequest, ProviderId, TurnInput, TurnPriority};
+use crate::agent::{
+    AgentSpawnSpec, AgentTurnRequest, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY, ProviderId,
+    TurnInput, TurnPriority,
+};
 use crate::events::{AgentTurnStartedPayload, Provenance, SwarmEvent};
 use crate::worker::handle::WorkerConfig;
 use crate::worker::lifecycle;
@@ -201,4 +204,42 @@ pub async fn agent_probe(ctx: Ctx, _args: Value) -> Result<Value, Value> {
         Ok(report) => ok_value(&report),
         Err(e) => Err(err_value(&e)),
     }
+}
+
+#[derive(Deserialize)]
+struct SetAgentConcurrencyArgs {
+    limit: u32,
+}
+
+/// Updates the agent-turn scheduler's live concurrency cap — the
+/// backend counterpart to the frontend's `aiConcurrentLimit` Settings
+/// control. Applies immediately (see
+/// [`crate::agent::AgentScheduler::set_concurrency`]) and persists to
+/// `swarm-config.json` (key `agent_concurrency`) so it survives
+/// restarts — [`crate::runtime::Runtime::start`] re-applies the
+/// persisted value on launch, same pattern as
+/// [`crate::commands::worker::set_max_workers`]'s `max_workers`.
+///
+/// Ordering: validate -> persist -> apply. A persistence failure must
+/// not leave the live scheduler enforcing a cap that neither the UI
+/// nor disk agrees with.
+pub async fn set_agent_concurrency(ctx: Ctx, args: Value) -> Result<Value, Value> {
+    let SetAgentConcurrencyArgs { limit } = parse_args(args)?;
+
+    if !(MIN_AGENT_CONCURRENCY..=MAX_AGENT_CONCURRENCY).contains(&limit) {
+        return Err(Value::String(format!(
+            "Agent Concurrency Must Be Between {MIN_AGENT_CONCURRENCY} And {MAX_AGENT_CONCURRENCY}, Got {limit}."
+        )));
+    }
+
+    let paths = ctx.paths.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::config::write_value(&paths, "agent_concurrency", serde_json::json!(limit))
+    })
+    .await
+    .map_err(|e| Value::String(e.to_string()))?
+    .map_err(|e| err_value(&e))?;
+
+    ctx.scheduler.set_concurrency(limit as usize);
+    ok_value(&())
 }

@@ -130,6 +130,7 @@ pub fn run() {
             commands::session::list_sessions,
             commands::session::get_session,
             commands::session::session_add_worker,
+            commands::session::session_remove_worker,
             // Agent commands
             commands::agent::agent_turn_started,
             commands::agent::agent_spawn,
@@ -137,6 +138,7 @@ pub fn run() {
             commands::agent::agent_cancel,
             commands::agent::agent_shutdown,
             commands::agent::agent_probe,
+            commands::agent::set_agent_concurrency,
             // Config commands
             commands::config::read_config,
             commands::config::write_config,

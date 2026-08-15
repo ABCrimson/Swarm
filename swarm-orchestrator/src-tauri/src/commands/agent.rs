@@ -137,3 +137,19 @@ pub async fn agent_probe(
     )
     .await
 }
+
+#[tauri::command]
+#[tracing::instrument(skip(registry, ctx))]
+pub async fn set_agent_concurrency(
+    registry: tauri::State<'_, std::sync::Arc<Registry>>,
+    ctx: tauri::State<'_, swarm_core::commands::Ctx>,
+    limit: u32,
+) -> Result<(), String> {
+    call(
+        &registry,
+        ctx.inner().clone(),
+        "set_agent_concurrency",
+        serde_json::json!({ "limit": limit }),
+    )
+    .await
+}
