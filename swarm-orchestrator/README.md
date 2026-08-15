@@ -210,6 +210,7 @@ swarm-orchestrator/
 │   ├── architecture.md           # System architecture deep dive
 │   ├── api.md                    # Tauri IPC command reference
 │   ├── performance.md            # Performance targets and budgets
+│   ├── e2e.md                    # Playwright coverage, its no-backend boundary, tauri-driver roadmap
 │   └── contributing.md           # Development and contribution guide
 ├── vite.config.ts                # Vite 8 + Rolldown configuration
 ├── biome.json                    # Biome linter/formatter config
