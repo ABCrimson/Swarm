@@ -18,6 +18,7 @@
 - [Event System](#event-system)
 - [Built, Not Wired](#built-not-wired)
 - [Error Handling](#error-handling)
+- [Runtime Modes](#runtime-modes)
 
 ---
 
@@ -818,5 +819,64 @@ Tauri IPC (sends { kind, message, remedy } object to frontend)
 Frontend (#lib/tauri wraps it in ShipCommandError, a real Error subclass carrying .shipError;
           the Ship tab UI branches on .shipError.kind for the right second-click remedy)
 ```
+
+---
+
+## Runtime Modes
+
+SWARM Orchestrator runs in one of two shells over the SAME domain layer (`swarm-core`, tauri-free): the desktop app (`swarm-desktop`, this document's default assumption throughout) or the headless daemon (`swarmd`). Both are thin adapters over one constructor and one command registry — see `crates/swarm-core/src/runtime.rs` and `crates/swarm-core/src/commands/mod.rs`.
+
+```text
+                    ┌─────────────────────────────┐
+                    │   swarm_core::runtime::Runtime   │
+                    │  (worker registry, session mgr,  │
+                    │   ordered event log, agent        │
+                    │   scheduler, metrics loop --      │
+                    │   ONE constructor, ONE lock)      │
+                    └───────────────┬───────────────┘
+                                    │
+                 ┌──────────────────┴──────────────────┐
+                 ▼                                      ▼
+    ┌─────────────────────────┐          ┌─────────────────────────────┐
+    │      swarm-desktop       │          │            swarmd            │
+    │  Tauri IPC (invoke/listen)│          │  WebSocket (hello/rpc/event) │
+    │  webview, native plugins  │          │  no webview, no tauri link    │
+    └─────────────────────────┘          └─────────────────────────────┘
+```
+
+### Single-instance lock
+
+Both shells call `swarm_core::lock::SingleInstanceLock::acquire(data_dir, ...)` as the FIRST action inside `Runtime::start`, before the event log is even opened. Two engines writing the same `swarm-events.db` would both resume `seq` from `max_seq()` and collide on the primary key -- appends would silently fail while live emission kept assigning duplicate sequence numbers. The lock is OS-native and advisory (`flock(2)` on Unix, a deny-all share mode on Windows via `OpenOptionsExt::share_mode(0)`) -- it releases itself automatically on process exit or crash, so there is no stale-lock file to clean up by hand. A losing contender gets a Title Case message naming the winning process's pid (and, for `swarmd`, its bind address) sourced from a small sidecar info file (`daemon.lock.json`) the winner refreshes on every successful acquire.
+
+### The command registry
+
+Every command handler's REAL logic lives exactly once, in `swarm_core::commands::*`, keyed by name in a `Registry`. Both shells are pure marshaling around it:
+
+- `swarm-desktop`'s `#[tauri::command]` functions pack their typed parameters into a `serde_json::Value`, call `Registry::dispatch(name, ctx, args)`, and unpack the result back into the command's declared return type.
+- `swarmd`'s WebSocket `rpc` frame handler does the identical `Registry::dispatch` call, sourcing `cmd`/`args` from the frame instead of typed Tauri parameters.
+
+A contract test (`src-tauri/src/commands/registry_contract.rs`) parses `swarm-desktop/src/lib.rs`'s own `tauri::generate_handler![...]` block via `include_str!` (re-read every test run, never a hand-maintained snapshot) and asserts its command-name set equals `Registry::new().keys()` union `swarm_core::commands::NATIVE_ONLY` -- the two commands (`check_for_updates`, `send_notification`) that need a live webview/OS plugin and therefore have no registry entry at all. A command added to `generate_handler!` without a matching registry entry (or the reverse) fails this test.
+
+### `swarmd`: the headless daemon
+
+A separate binary, not a `--headless` flag -- Tauri links `libwebkit2gtk` at BUILD time on Linux (a runtime flag cannot unlink it), and the release desktop binary is `windows_subsystem = "windows"` (no console for error output). `swarmd` drops the updater/dialog/notification plugins entirely, shrinking the network-exposed dependency surface.
+
+**Transport:** one authenticated WebSocket (`/ws`), both directions -- PTY input is a command per keystroke, so separate HTTP requests per keystroke would both flood the connection count and lose cross-request ordering. Frame shapes live in `swarm_core::protocol` (serde-only, no networking code) -- see `docs/api.md`'s [Wire Protocol](api.md#wire-protocol-swarmd) section for the full frame catalogue.
+
+**Event delivery:** the desktop shell's PRIMARY delivery path (a synchronous `app.emit` closure passed into `OrchestrationEngine::start`, lossless by construction) has no webview to emit into under `swarmd`. Every WS connection instead rides the engine's SECONDARY `broadcast::Sender<Arc<DomainEvent>>` fanout -- documented since Phase 1 as "lossy under lag by design, reserved for future `swarmd` subscribers." `swarmd` is that first real consumer: each connection's own feeder task subscribes to the broadcast channel BEFORE reading any SQLite history (no hole between snapshot and live cutover), pages `events_since` for replay, and re-runs the identical paging routine whenever it observes `RecvError::Lagged` -- the client's own gap-detection logic (`#lib/event-bus.ts`) stays as defense-in-depth, not the only safety net.
+
+**Backpressure, two lanes per connection:** persistent events (everything durable) queue on a large-but-bounded channel that blocks the CONNECTION, never the engine, on backpressure. Ephemeral events (`worker_output`, `system_metrics`, `system_log`, `agent_turn_delta`, terminal-source `worker_input`) queue on a small bounded channel with newest-arrival drop above the watermark -- a slow link gets a choppy terminal and sparse metrics, never a wrong or stale state.
+
+**Auth, never bypassable:** a 256-bit token (`getrandom`, hex-encoded) persists at `<data_dir>/daemon-token` across restarts, permissioned 0600 on Unix and a current-user-only DACL via `icacls` on Windows. Binding a non-loopback address is refused outright unless a token file already existed BEFORE that run -- a fresh install must complete one loopback-bound run first (where the token is minted and the connect URL is printed), so `--bind 0.0.0.0` can never be the very first thing a fresh install does unattended. Every WS upgrade validates `Host` against the daemon's own bind address and, when present, `Origin` against `Host` -- WebSocket upgrades are exempt from CORS, so without this check any web page a user's browser has open could reach a localhost daemon, and DNS rebinding could reach it from off-box. The connect URL is printed with the token ONLY in the fragment (`http://host:port/#t=...`) -- fragments are never sent to the server or logged by an intermediary proxy. `read_config` additionally denies any secret-shaped key (`anthropic_api_key`, or any key ending `_key`/`_token`/`_secret`) at the WS `rpc` dispatch layer -- BEFORE the request ever reaches the shared registry handler -- since the desktop shell's webview-direct AI chat path still legitimately reads the real key locally over Tauri IPC; the denylist is a network-boundary policy, not a `read_config`-the-command policy.
+
+**Serving the UI:** `swarmd --serve-ui <dir>` serves a `pnpm build:web` bundle via `tower-http`'s `ServeDir` (SPA fallback to `index.html`), with a `Content-Security-Policy` response header scoped to `connect-src 'self' ws: wss:` and deliberately without `api.anthropic.com` -- the browser build's webview-direct AI chat path is capability-gated off (`TransportCapabilities.localAiChat`); remote AI goes entirely through the agent-adapter RPC surface (Rust-side, same as local `agent_spawn`), never a direct browser fetch to Anthropic. Embedding the bundle into the `swarmd` binary itself (`include_dir`, for a single-file release artifact) is deferred to the service-units release-wiring phase -- today's `--serve-ui` points at a plain directory on disk, which is what a Tailscale/`ssh -L` deployment needs.
+
+### The frontend transport seam
+
+`src/lib/transport.ts` exports a `Transport` interface (`invoke`/`listen`/`connect`/`capabilities`) with two implementations: `tauriTransport` (today's Tauri IPC code, moved intact) and `wsTransport` (a WebSocket client matching `swarmd`'s wire protocol, with backoff+jitter reconnect and `hello{lastSeq}` on every reconnect, sourcing that cursor from `event-bus.ts`'s `getLastSeq()`). Which one backs `src/lib/tauri.ts`'s `invoke`/`listen` is chosen ONCE, at module load, by a Vite `define` (`__SWARM_TRANSPORT__`, set to `"ws"` only by `pnpm build:web` -- every other build keeps `tauriTransport` unconditionally, so a plain `pnpm dev` browser preview's existing graceful no-op behavior is completely unaffected).
+
+`tauri.ts` keeps its entire existing public API -- every one of the 18+ files that import from it needed zero changes. `isTauri()` keeps its original meaning ("the Tauri IPC bridge specifically") for the handful of call sites gating genuinely Tauri-only features (`tauri-plugin-fs`/`-dialog`/`-shell`/`-notification`/`-updater`, the webview-direct AI chat path); a new `hasTransport()` ("some backend is reachable, Tauri or WS") backs the small set of command wrappers (`spawnWorker`, `agentSpawn`, `listSessions`, `agentProbe`) that work identically over either transport.
+
+The MVP remote surface is intentionally narrow: Dashboard, Workers, Terminals, Metrics, and Agent chat. Filesystem browsing (`FileTree`/`FileViewer`/`WorkspacePanel`/`useWorkspaceWatcher`) and the plugin-store-backed settings surfaces (`lazy-store`/`templates`/`snapshots`/`store-integrity`) still import `@tauri-apps/plugin-*` directly and are gated by their own existing `isTauri()` checks, which now doubles as the remote-capability gate for free. `src/lib/kv.ts` (a `TauriStoreKv`/`DaemonConfigKv`-backed key-value abstraction) exists as the migration target for the plugin-store surfaces but is not yet wired to any of the four call sites -- five surfaces that work over the network beat twelve that half-work.
 
 This exists because the UI needs to distinguish `pushRejected` (remedy: fetch-and-rebase, re-preview, ship again) from `authExpired` (remedy: re-authenticate) from `nothingToCommit` (no remedy, just report it) — a bare string can carry the message but not a machine-checkable `kind` to switch on. `AppError::Git` errors from lower-level git plumbing (e.g. a `rev-parse` failure) are bridged into `ShipError` via a `From<AppError> for ShipError` impl that classifies a timeout message into `kind: "timeout"` and everything else into `kind: "unknown"`, so the divergence is contained to the ship module's own boundary rather than requiring `AppError` itself to change shape. See [docs/api.md#ship-commands](api.md#ship-commands) for the full `ShipErrorKind`/`ShipRemedy` enumerations.

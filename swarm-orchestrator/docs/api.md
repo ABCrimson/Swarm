@@ -58,6 +58,7 @@ Events are received on a single ordered channel, `swarm://events` -- see [Events
 - [Notification Commands](#notification-commands)
   - [send_notification](#send_notification)
 - [Events](#events)
+- [Wire Protocol (swarmd)](#wire-protocol-swarmd)
 - [Built, Not Wired](#built-not-wired)
 
 ---
@@ -1402,6 +1403,65 @@ onEvent("bus_message", (e) => {
 // A receipt: await a specific ship_settled instead of polling
 const settled = await waitFor((e) => e.type === "ship_settled");
 ```
+
+---
+
+## Wire Protocol (swarmd)
+
+Everything above describes the Tauri IPC transport (`invoke`/`listen` over `@tauri-apps/api`). `swarmd`, the headless daemon, exposes the SAME command surface (every command in this document except [Updater Commands](#updater-commands) and [Notification Commands](#notification-commands) -- `swarm_core::commands::NATIVE_ONLY`) and the SAME `swarm://events` envelope shape, over one authenticated WebSocket at `/ws` instead. Frame types are defined once, serde-only, in `swarm_core::protocol` (`src-tauri/crates/swarm-core/src/protocol.rs`); the browser-side client is `src/lib/transport.ts`'s `wsTransport`.
+
+### Connecting
+
+```text
+1. Open a WebSocket to  ws://<host>:<port>/ws  (wss:// if the page is https://)
+2. Send  hello  as the FIRST frame, within 5 seconds, or the server closes the socket
+3. Receive  ready  (handshake ack)
+4. If hello.lastSeq was non-null: receive zero or more  event  frames (replay), then  replayEnd
+   If hello.lastSeq was null (cold attach): receive  replayEnd  immediately, no replay
+5. Live: event frames continue arriving; send  rpc  at any time, receive matching  rpcResult
+```
+
+Reconnects are just a new socket, from step 1 -- the client's own gap-detection (`event-bus.ts`) treats every reattach identically to the original connection.
+
+### Frames
+
+Every frame is one JSON text WebSocket message. Five carry a `"frame"` tag; the sixth (`event`) is deliberately BARE:
+
+| Frame | Direction | Wrapped? | Shape |
+|-------|-----------|----------|-------|
+| `hello` | client -> server | `{"frame":"hello", ...}` | `{ lastSeq: number \| null, token?: string }` |
+| `ready` | server -> client | `{"frame":"ready", ...}` | `{ serverSeq: number, version: number, caps: { maxFrameBytes, maxConnections, replayPageSize } }` |
+| `event` | server -> client | **bare** -- no `"frame"` key | The exact `DomainEvent` envelope shape from [Events](#events) (`{ seq, ts, originWorker?, causeSeq?, type, payload }`) |
+| `replayEnd` | server -> client | `{"frame":"replayEnd", ...}` | `{ seq: number }` -- the replay burst (possibly empty) for THIS hello is over |
+| `rpc` | client -> server | `{"frame":"rpc", ...}` | `{ id: string, cmd: string, args: object }` -- `cmd` is any command name from this document (minus the two NATIVE_ONLY ones) |
+| `rpcResult` | server -> client | `{"frame":"rpcResult", ...}` | `{ id: string, ok: boolean, result?: unknown, error?: unknown }` -- correlated to the `rpc` frame by `id`; exactly one of `result`/`error` is present |
+
+A receiver distinguishes an `event` frame from every control frame by the ABSENCE of a `"frame"` key -- a `DomainEvent` never has one, and every control frame always does. This is the exact demux `wsTransport`'s `message` handler performs.
+
+### Auth
+
+`hello.token` (or an `Authorization: Bearer <token>` header at the HTTP-upgrade request, checked before the WS handshake even starts) must match the daemon's 256-bit token, constant-time compared. The token is minted once per data directory (`getrandom`, hex-encoded) and persists at `<data_dir>/daemon-token` across restarts. The daemon prints its connect URL at startup with the token ONLY in the fragment:
+
+```text
+SWARM Daemon Listening On http://127.0.0.1:8787/#t=<token>
+```
+
+The browser client reads the fragment on first load, persists it to `sessionStorage`, and scrubs it from the URL immediately (`history.replaceState`) -- it never survives as part of a bookmarkable, shareable, or screenshot-visible URL, and (being a fragment, not a query param) is never sent to the server or logged by an intermediary proxy.
+
+`Host` (always) and `Origin` (when present) are validated against the daemon's own bind address on every WS upgrade -- WebSocket upgrades are exempt from CORS, so without this a malicious web page open in the same browser could reach a localhost daemon, and DNS rebinding could reach it from off-box.
+
+`read_config` denies any secret-shaped key (`anthropic_api_key`, or any key ending `_key`/`_token`/`_secret`) at this layer, before the request ever reaches the shared command registry -- see `docs/architecture.md`'s [Runtime Modes](architecture.md#runtime-modes) section.
+
+### Replay and backpressure
+
+`lastSeq` in `hello` resumes exactly where a disconnected client left off: the server pages `events_since(lastSeq, 5000)` (same pagination as the [`events_since`](#events_since) command) until a short page arrives, sending each row as an `event` frame, then sends `replayEnd`. `lastSeq: null` is a cold attach -- no replay at all; the client hydrates via the normal snapshot commands (`list_workers`, `list_sessions`, etc.), exactly like a fresh Tauri app launch.
+
+Once live, every event still classifies into one of two lanes per connection:
+
+- **Persistent** (everything durable) -- an effectively-unbounded queue that blocks the CONNECTION, never the engine, under backpressure.
+- **Ephemeral** (`worker_output`, `system_metrics`, `system_log`, `agent_turn_delta`, terminal-source `worker_input`) -- a small bounded queue; above the watermark the NEWEST arrival is dropped. A slow link degrades to a choppy terminal and sparse metrics, never a stale or wrong application state.
+
+A connection that falls behind the server's broadcast fanout (`tokio::sync::broadcast`'s own bounded capacity) sees `RecvError::Lagged` internally -- the server heals this by re-running the identical `events_since` paging routine from its own last-sent cursor, transparently to the client (no special "lag" frame exists; it looks like an ordinary, possibly-larger replay burst).
 
 ---
 
