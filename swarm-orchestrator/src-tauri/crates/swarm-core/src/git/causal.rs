@@ -58,6 +58,30 @@ use crate::orchestration::log::StoredEvent;
 /// of it.
 const MAX_TURNS: usize = 200;
 
+/// Event types [`build_ship_context`] extracts anything from — the
+/// caller (`commands::git::ship_context`, via
+/// `EventLog::events_for_worker_between`) filters the SQL fetch to
+/// exactly this set so the per-worker row cap (`SHIP_CONTEXT_EVENT_LIMIT`
+/// in `commands/git.rs`) is spent entirely on rows this function can
+/// actually use, never crowded out by a busy worker's `worker_output`/
+/// `worker_state`/etc. rows in the same range.
+///
+/// `"agent_turn_started"` is deliberately included even though
+/// [`build_ship_context`] never builds a [`CausalTurn`] from it (see the
+/// module doc's turn-id-space mismatch note) — its presence in range is
+/// used only to set [`ShipContext::has_uncaptured_webview_activity`], the
+/// signal that distinguishes "this worker genuinely did nothing" from
+/// "this worker's activity used the webview chat path, which this query
+/// structurally cannot see turn-level detail for."
+pub const RELEVANT_EVENT_TYPES: &[&str] = &[
+    "agent_block",
+    "agent_tool_call",
+    "agent_tool_result",
+    "agent_turn_settled",
+    "commit_created",
+    "agent_turn_started",
+];
+
 /// Fields [`extract_target`] is willing to read out of a tool call's
 /// `input` object. Deliberately an **allowlist of path/command/query-shaped
 /// keys**, never a generic "first string field" or "content"/"body"/"text"/
@@ -158,6 +182,26 @@ pub struct ShipContext {
     /// can say "and N earlier turns" honestly instead of silently
     /// truncating.
     pub omitted_turn_count: u32,
+    /// `true` when the SQL-level row fetch that produced `events` hit its
+    /// own cap (`SHIP_CONTEXT_EVENT_LIMIT`/`EventLog::events_for_worker_between`)
+    /// — meaning turns older than what's visible in `turns` may exist
+    /// beyond what `omitted_turn_count` can even count (that count is
+    /// only exact when this is `false`). Review FIX-1: a naive fetch that
+    /// applied this cap BEFORE filtering to `worker_id` could silently
+    /// drop the shipping worker's NEWEST, most ship-relevant turns while
+    /// leaving `omitted_turn_count` at `0` — `events_for_worker_between`
+    /// fetches newest-first specifically so that failure mode can't
+    /// happen, and reports here whenever the newest-first cap itself was
+    /// exhausted.
+    pub events_truncated: bool,
+    /// `true` when an `agent_turn_started` row for this worker was
+    /// observed in range but produced no `CausalTurn` (see the module
+    /// doc's turn-id-space mismatch note) — the signal that distinguishes
+    /// "this worker genuinely had no recorded activity in this range"
+    /// from "this worker's activity used the webview chat path
+    /// (`AIChat.tsx`), which this query structurally cannot see
+    /// turn-level detail for." Review NIT-4.
+    pub has_uncaptured_webview_activity: bool,
 }
 
 impl ShipContext {
@@ -171,6 +215,8 @@ impl ShipContext {
             turns: Vec::new(),
             commits: Vec::new(),
             omitted_turn_count: 0,
+            events_truncated: false,
+            has_uncaptured_webview_activity: false,
         }
     }
 }
@@ -202,20 +248,31 @@ fn payload_str<'a>(payload: &'a serde_json::Value, field: &str) -> Option<&'a st
 }
 
 /// Builds a [`ShipContext`] from an already-fetched, seq-bounded slice of
-/// the event log (`events`, typically `EventLog::events_between(seqFrom,
-/// seqTo, _)`'s result) — pure and tauri-free, so it's unit-testable
-/// without a real `EventLog`. Filters to `worker_id` (matching `payload.workerId`,
-/// never the envelope's `originWorker` — see the module doc: none of the
-/// `agent_*` family stamps envelope provenance today, `.emit()` not
-/// `.emit_with()`, so payload is the only reliable subject field) and to
-/// the five event types the causal record cares about; everything else in
-/// `events` is silently ignored (a worker's `worker_output`/`system_metrics`
-/// rows, another worker's events, etc.).
+/// the event log (`events`, typically
+/// `EventLog::events_for_worker_between(RELEVANT_EVENT_TYPES, workerId,
+/// seqFrom, seqTo, _)`'s result, in ascending seq order) — pure and
+/// tauri-free, so it's unit-testable without a real `EventLog`. Filters to
+/// `worker_id` (matching `payload.workerId`, never the envelope's
+/// `originWorker` — see the module doc: none of the `agent_*` family
+/// stamps envelope provenance today, `.emit()` not `.emit_with()`, so
+/// payload is the only reliable subject field) and to
+/// [`RELEVANT_EVENT_TYPES`]; everything else in `events` is silently
+/// ignored (a worker's `worker_output`/`system_metrics` rows, another
+/// worker's events, etc.) — harmless if the caller passed an unfiltered
+/// slice (e.g. a test fixture), since this function re-checks both
+/// conditions itself rather than trusting the caller's query shape.
+///
+/// `events_truncated` is threaded straight through onto
+/// [`ShipContext::events_truncated`] — this function has no way to know
+/// whether the SQL fetch that produced `events` was itself capped, so the
+/// caller (which does know) must tell it; see that field's doc for what a
+/// caller should pass here.
 pub fn build_ship_context(
     events: Vec<StoredEvent>,
     worker_id: Uuid,
     seq_from: u64,
     seq_to: u64,
+    events_truncated: bool,
 ) -> ShipContext {
     let worker_id_str = worker_id.to_string();
 
@@ -228,6 +285,7 @@ pub fn build_ship_context(
     let mut turns: HashMap<String, CausalTurn> = HashMap::new();
     let mut tool_use_index: HashMap<String, (String, usize)> = HashMap::new();
     let mut commits: Vec<CausalCommit> = Vec::new();
+    let mut has_uncaptured_webview_activity = false;
 
     let ensure_turn =
         |turn_order: &mut Vec<String>, turns: &mut HashMap<String, CausalTurn>, turn_id: &str| {
@@ -334,6 +392,14 @@ pub fn build_ship_context(
                     seq_to: commit_seq_to,
                 });
             }
+            "agent_turn_started" => {
+                // Deliberately NOT `ensure_turn` — this event's
+                // `requestId` is not a `TurnId` (see the module doc).
+                // Its only job here is proving this worker had SOME
+                // activity in range that the turn-level query above
+                // can't see.
+                has_uncaptured_webview_activity = true;
+            }
             _ => {}
         }
     }
@@ -358,6 +424,8 @@ pub fn build_ship_context(
         turns: ordered_turns,
         commits,
         omitted_turn_count,
+        events_truncated,
+        has_uncaptured_webview_activity,
     }
 }
 
@@ -426,7 +494,7 @@ mod tests {
                 serde_json::json!({ "workerId": me, "turnId": "t2", "toolUseId": "u2", "name": "Bash", "input": { "command": "pnpm test" } }),
             ),
         ];
-        let ctx = build_ship_context(events, me, 0, 10);
+        let ctx = build_ship_context(events, me, 0, 10, false);
         assert_eq!(ctx.turns.len(), 1);
         assert_eq!(ctx.turns[0].turn_id, "t2");
         assert_eq!(ctx.turns[0].tool_calls[0].name, "Bash");
@@ -452,7 +520,7 @@ mod tests {
                 serde_json::json!({ "workerId": me, "turnId": "t1", "toolUseId": "u1", "name": "Read", "input": {} }),
             ),
         ];
-        let ctx = build_ship_context(events, me, 0, 10);
+        let ctx = build_ship_context(events, me, 0, 10, false);
         assert_eq!(ctx.turns.len(), 1);
     }
 
@@ -492,7 +560,7 @@ mod tests {
                 serde_json::json!({ "workerId": me, "sha": "abc123", "branch": "swarm/x", "seqFrom": 9, "seqTo": 13 }),
             ),
         ];
-        let ctx = build_ship_context(events, me, 9, 14);
+        let ctx = build_ship_context(events, me, 9, 14, false);
 
         assert_eq!(ctx.turns.len(), 1);
         let turn = &ctx.turns[0];
@@ -518,7 +586,7 @@ mod tests {
             "agent_tool_call",
             serde_json::json!({ "workerId": me, "turnId": "t1", "toolUseId": "u1", "name": "Bash", "input": {} }),
         )];
-        let ctx = build_ship_context(events, me, 0, 10);
+        let ctx = build_ship_context(events, me, 0, 10, false);
         assert_eq!(ctx.turns[0].tool_calls[0].ok, None);
     }
 
@@ -530,7 +598,7 @@ mod tests {
             "agent_tool_result",
             serde_json::json!({ "workerId": me, "turnId": "t1", "toolUseId": "u1", "isError": false, "content": "ok" }),
         )];
-        let ctx = build_ship_context(events, me, 0, 10);
+        let ctx = build_ship_context(events, me, 0, 10, false);
         // No agent_tool_call/agent_block/agent_turn_settled for t1 in
         // range at all — the orphan result must not fabricate a turn.
         assert!(ctx.turns.is_empty());
@@ -544,14 +612,14 @@ mod tests {
             "agent_block",
             serde_json::json!({ "workerId": me, "turnId": "t1", "blockIndex": 0, "kind": "text", "content": {} }),
         )];
-        let ctx = build_ship_context(events, me, 0, 10);
+        let ctx = build_ship_context(events, me, 0, 10, false);
         assert_eq!(ctx.turns[0].status, None);
     }
 
     #[test]
     fn test_empty_range_yields_empty_context_not_fabricated_turns() {
         let me = Uuid::new_v4();
-        let ctx = build_ship_context(Vec::new(), me, 5, 5);
+        let ctx = build_ship_context(Vec::new(), me, 5, 5, false);
         assert!(ctx.turns.is_empty());
         assert!(ctx.commits.is_empty());
         assert_eq!(ctx.omitted_turn_count, 0);
@@ -571,7 +639,7 @@ mod tests {
                 serde_json::json!({ "workerId": me, "turnId": format!("t{i}"), "blockIndex": 0, "kind": "text", "content": {} }),
             ));
         }
-        let ctx = build_ship_context(events, me, 0, total as u64);
+        let ctx = build_ship_context(events, me, 0, total as u64, false);
         assert_eq!(ctx.turns.len(), MAX_TURNS);
         assert_eq!(ctx.omitted_turn_count, 5);
         // The kept turns are the NEWEST ones — t5..t{total-1}, not t0..
@@ -589,5 +657,72 @@ mod tests {
         assert!(ctx.turns.is_empty());
         assert!(ctx.commits.is_empty());
         assert_eq!(ctx.omitted_turn_count, 0);
+        assert!(!ctx.events_truncated);
+        assert!(!ctx.has_uncaptured_webview_activity);
+    }
+
+    // ── events_truncated (review FIX-1) ─────────────────────────────────
+
+    #[test]
+    fn test_events_truncated_flag_flows_straight_through_from_the_caller() {
+        // build_ship_context has no way to know whether the fetch that
+        // produced `events` was itself capped — the caller (which does
+        // know, via EventLog::events_for_worker_between's own return)
+        // must tell it. This pins that the value is threaded through
+        // verbatim, not derived/recomputed here.
+        let me = Uuid::new_v4();
+        let events = vec![ev(
+            1,
+            "agent_block",
+            serde_json::json!({ "workerId": me, "turnId": "t1", "blockIndex": 0, "kind": "text", "content": {} }),
+        )];
+        let truncated_ctx = build_ship_context(events.clone(), me, 0, 10, true);
+        assert!(truncated_ctx.events_truncated);
+
+        let not_truncated_ctx = build_ship_context(events, me, 0, 10, false);
+        assert!(!not_truncated_ctx.events_truncated);
+    }
+
+    // ── has_uncaptured_webview_activity (review NIT-4) ───────────────────
+
+    #[test]
+    fn test_agent_turn_started_sets_the_webview_activity_flag_without_fabricating_a_turn() {
+        let me = Uuid::new_v4();
+        let events = vec![ev(
+            5,
+            "agent_turn_started",
+            serde_json::json!({ "workerId": me, "model": "claude-sonnet-4-5", "requestId": "chat-item-1" }),
+        )];
+        let ctx = build_ship_context(events, me, 0, 10, false);
+        // The webview path leaves a signal, but never a fabricated
+        // CausalTurn — agent_turn_started's requestId is not a TurnId
+        // (see the module doc).
+        assert!(ctx.turns.is_empty());
+        assert!(ctx.has_uncaptured_webview_activity);
+    }
+
+    #[test]
+    fn test_no_agent_turn_started_row_leaves_the_webview_activity_flag_false() {
+        let me = Uuid::new_v4();
+        let events = vec![ev(
+            1,
+            "agent_tool_call",
+            serde_json::json!({ "workerId": me, "turnId": "t1", "toolUseId": "u1", "name": "Read", "input": {} }),
+        )];
+        let ctx = build_ship_context(events, me, 0, 10, false);
+        assert!(!ctx.has_uncaptured_webview_activity);
+    }
+
+    #[test]
+    fn test_other_workers_agent_turn_started_never_sets_this_workers_flag() {
+        let me = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let events = vec![ev(
+            5,
+            "agent_turn_started",
+            serde_json::json!({ "workerId": other, "model": "claude-sonnet-4-5", "requestId": "chat-item-1" }),
+        )];
+        let ctx = build_ship_context(events, me, 0, 10, false);
+        assert!(!ctx.has_uncaptured_webview_activity);
     }
 }

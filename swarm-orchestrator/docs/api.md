@@ -605,7 +605,7 @@ await open(url); // @tauri-apps/plugin-shell
 
 ### `ship_context`
 
-**Phase 2.** Read-only: the causal record for a worker's current ship range — the evidence half of the PR body `src/lib/ship-causal.ts` composes (see [docs/architecture.md#phase-2--the-causal-record](architecture.md#phase-2--the-causal-record) for the full design and the plan-vs-landed adaptation this command's turn-grouping is based on). Resolves `(seqFrom, seqTo]` via the exact same algorithm `git_stage_commit` uses (`lastShippedSeq ?? worktree_created seq .. current max`), then filters the event log to that worker's `agent_block`/`agent_tool_call`/`agent_tool_result`/`agent_turn_settled`/`commit_created` rows in range. Emits no events (a query, not a mutation).
+**Phase 2.** Read-only: the causal record for a worker's current ship range — the evidence half of the PR body `src/lib/ship-causal.ts` composes (see [docs/architecture.md#phase-2--the-causal-record](architecture.md#phase-2--the-causal-record) for the full design, the plan-vs-landed adaptation this command's turn-grouping is based on, and the FIX-1/FIX-2/NIT-4 review fixes below). Resolves `(seqFrom, seqTo]` via the exact same algorithm `git_stage_commit` uses (`lastShippedSeq ?? worktree_created seq .. current max`), then fetches that worker's `agent_block`/`agent_tool_call`/`agent_tool_result`/`agent_turn_settled`/`commit_created`/`agent_turn_started` rows in range via `EventLog::events_for_worker_between` — filtered by `workerId` AND type IN the SQL itself (not a range-wide fetch filtered afterward — see `eventsTruncated` below for why that distinction is load-bearing), newest-first with the oldest rows dropped on overflow. Emits no events (a query, not a mutation).
 
 **Parameters:**
 
@@ -617,14 +617,16 @@ await open(url); // @tauri-apps/plugin-shell
 
 **`ShipContext` object:**
 
-| Field              | Type              | Description                                                          |
-|--------------------|-------------------|------------------------------------------------------------------------|
-| `workerId`         | `string` (UUID)   | The worker this context was computed for                                |
-| `seqFrom`          | `number`          | Start of the resolved range (exclusive)                                 |
-| `seqTo`            | `number`          | End of the resolved range (inclusive)                                   |
-| `turns`            | `CausalTurn[]`    | Turns in range, oldest first, capped at 200 (newest kept on overflow — see `omittedTurnCount`) |
-| `commits`          | `CausalCommit[]`  | `commit_created` rows for this worker in range — ordinarily empty at preview time, populated on a re-preview after an earlier "Commit Only" step |
-| `omittedTurnCount` | `number`          | How many turns were dropped to respect the 200-turn cap — `0` when nothing was dropped |
+| Field                          | Type              | Description                                                          |
+|--------------------------------|-------------------|------------------------------------------------------------------------|
+| `workerId`                     | `string` (UUID)   | The worker this context was computed for                                |
+| `seqFrom`                      | `number`          | Start of the resolved range (exclusive)                                 |
+| `seqTo`                        | `number`          | End of the resolved range (inclusive)                                   |
+| `turns`                        | `CausalTurn[]`    | Turns in range, oldest first, capped at 200 (newest kept on overflow — see `omittedTurnCount`) |
+| `commits`                      | `CausalCommit[]`  | `commit_created` rows for this worker in range — ordinarily empty at preview time, populated on a re-preview after an earlier "Commit Only" step |
+| `omittedTurnCount`             | `number`          | How many turns were dropped to respect the 200-turn cap — `0` when nothing was dropped |
+| `eventsTruncated`              | `boolean`         | `true` when the underlying SQL row fetch itself hit its cap — turns older than what's visible may exist beyond what `omittedTurnCount` alone can count. Folded into the same disclosure `omittedTurnCount` renders (`src/lib/ship-causal.ts`'s `renderTruncationNote`) — never a second, easy-to-miss signal |
+| `hasUncapturedWebviewActivity` | `boolean`         | `true` when this worker had `agent_turn_started` (webview chat) activity in range that produced no `CausalTurn` — distinguishes "genuinely no activity" from "activity this query structurally cannot see" (see `emptyRecordMessage`) |
 
 **`CausalTurn` object:** `{ turnId: string, status: "ok" | "error" | null, toolCalls: CausalToolCall[] }` — `status` is `null` when no `agent_turn_settled` was observed in range (the turn was still open at `seqTo`, or settled outside the window).
 
@@ -639,7 +641,8 @@ await open(url); // @tauri-apps/plugin-shell
 ```typescript
 const context = await invoke("ship_context", { workerId });
 if (context.turns.length === 0) {
-  // Causal Record Unavailable For This Range — render the honest empty state.
+  // emptyRecordMessage(context) — render one of two honest messages,
+  // depending on context.hasUncapturedWebviewActivity.
 }
 ```
 

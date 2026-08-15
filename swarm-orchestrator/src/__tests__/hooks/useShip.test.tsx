@@ -83,6 +83,8 @@ const mockShipContext = vi.fn().mockResolvedValue({
   turns: [],
   commits: [],
   omittedTurnCount: 0,
+  eventsTruncated: false,
+  hasUncapturedWebviewActivity: false,
 });
 
 vi.mock("#lib/tauri", async (importOriginal) => {

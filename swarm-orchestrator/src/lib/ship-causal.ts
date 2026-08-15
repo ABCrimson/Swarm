@@ -66,25 +66,68 @@ function renderToolCallRows(turns: readonly CausalTurn[]): string[] {
 }
 
 /**
+ * The single, honest disclosure for "you are not seeing this worker's
+ * complete history" — folds BOTH truncation sources into one message
+ * (review FIX-1) rather than two separate ones a reader would have to
+ * reconcile themselves:
+ *
+ * - `omittedTurnCount > 0` — `build_ship_context`'s own `MAX_TURNS` (200)
+ *   cap dropped older turns from an otherwise-complete fetch; the exact
+ *   count is known.
+ * - `eventsTruncated` — the SQL-level row fetch itself hit its cap
+ *   (`EventLog::events_for_worker_between`'s `limit`) before reaching
+ *   every matching row for this worker in range; turns older than
+ *   what's visible may exist beyond what `omittedTurnCount` alone can
+ *   count, so this case is phrased in terms of what IS shown
+ *   (`context.turns.length`) rather than an exact omitted count that
+ *   would overstate precision.
+ *
+ * Exported for `ShipPreview.tsx`'s in-app rendering, so the composed PR
+ * body and the UI panel never drift on this wording. `null` when neither
+ * condition holds.
+ */
+export function renderTruncationNote(context: ShipContext): string | null {
+  if (context.omittedTurnCount === 0 && !context.eventsTruncated) return null;
+  const shown = context.turns.length;
+  return `Showing The Most Recent ${shown} ${pluralize(shown, "Turn")} In This Range — Older Turns Omitted.`;
+}
+
+/**
+ * The honest message for a zero-turn range — two DISTINCT messages,
+ * never one blurring both (review NIT-4): a worker with genuinely no
+ * recorded activity in range reads differently from a worker whose
+ * activity used the webview chat path (`AIChat.tsx`), which
+ * `ship_context` structurally cannot see turn-level detail for (see
+ * `git::causal`'s module doc on the `agent_turn_started`/`turnId`
+ * id-space mismatch) — asserting "did nothing" about the latter would be
+ * misleading, not merely imprecise. Exported for `ShipPreview.tsx` — see
+ * `renderTruncationNote`'s doc for why this is shared rather than
+ * re-derived per call site.
+ */
+export function emptyRecordMessage(context: ShipContext): string {
+  return context.hasUncapturedWebviewActivity
+    ? "This Worker's Activity Is Not Captured In The Causal Record (Webview Chat Path)."
+    : "Causal Record Unavailable For This Range — No Recorded Agent Turns.";
+}
+
+/**
  * Renders the deterministic "Causal Record" section: seq range, turn
  * count, diff stat, any commits already made in range, and a tool-call
  * table (turn, tool name, target, ok/err) — every value read directly
  * off `context`/`diffStat`, no free text, no model involvement. Empty
- * `context.turns` renders the honest "Causal Record Unavailable For
- * This Range" message instead of an empty table — never a fabricated
- * "no changes were made" claim, which would be a positive assertion
- * this function has no way to actually verify.
+ * `context.turns` renders one of two honest messages (see
+ * `emptyRecordMessage`) instead of an empty table — never a fabricated
+ * "no changes were made" claim, which would be a positive assertion this
+ * function has no way to actually verify. A truncated fetch (see
+ * `renderTruncationNote`) is disclosed alongside whichever branch
+ * applies, never silently.
  */
 export function renderCausalRecordSection(context: ShipContext, diffStat: DiffStat): string {
   const lines: string[] = ["## Causal Record", ""];
 
   const turnCount = context.turns.length;
-  const omittedNote =
-    context.omittedTurnCount > 0
-      ? ` (${context.omittedTurnCount} Earlier ${pluralize(context.omittedTurnCount, "Turn")} Omitted)`
-      : "";
   lines.push(
-    `**Seq Range:** \`${context.seqFrom}..${context.seqTo}\` — ${turnCount} ${pluralize(turnCount, "Turn")}${omittedNote}`,
+    `**Seq Range:** \`${context.seqFrom}..${context.seqTo}\` — ${turnCount} ${pluralize(turnCount, "Turn")}`,
   );
   lines.push(
     `**Diff:** ${diffStat.filesChanged} ${pluralize(diffStat.filesChanged, "File")} Changed, +${diffStat.insertions}/-${diffStat.deletions}`,
@@ -94,9 +137,18 @@ export function renderCausalRecordSection(context: ShipContext, diffStat: DiffSt
   }
   lines.push("");
 
+  const truncationNote = renderTruncationNote(context);
+
   if (turnCount === 0) {
-    lines.push("_Causal Record Unavailable For This Range — No Recorded Agent Turns._");
+    lines.push(`_${emptyRecordMessage(context)}_`);
+    if (truncationNote != null) {
+      lines.push("", `_${truncationNote}_`);
+    }
     return lines.join("\n");
+  }
+
+  if (truncationNote != null) {
+    lines.push(`_${truncationNote}_`, "");
   }
 
   lines.push("| Turn | Tool | Target | Result |");
@@ -227,10 +279,22 @@ export async function generateCausalProse(
 // ── Compose ───────────────────────────────────────────────────────────
 
 /**
- * Composes the final ship body: the AI prose section (when present and
- * non-empty) followed by the deterministic Causal Record — the shape fed
+ * Composes the final ship body: the deterministic Causal Record FIRST,
+ * then the AI prose section (when present and non-empty) — the shape fed
  * to `git_stage_commit`'s trailer-bearing message is untouched by this;
  * this is specifically the `ship_compare_url` `body` (see `useShip.ts`).
+ *
+ * **Review FIX-2: deterministic-first is a deliberate ordering, not
+ * cosmetic.** `stripUnknownSeqCitations` removes an out-of-range `[seq
+ * N]` citation, but nothing stops a model from writing its OWN `##
+ * Causal Record` heading (plus a fabricated table) inside its prose —
+ * which, if the prose rendered first, would appear ABOVE the real
+ * section and read as the authoritative one to anyone skimming the PR
+ * body. Rendering the real section first removes the ambiguity
+ * entirely: the machine-generated truth always leads, whatever the model
+ * writes always follows it, so the first "## Causal Record" a reader
+ * ever encounters in the composed body is always the real one.
+ *
  * `aiProse` should already be stripped (i.e. the return value of
  * `generateCausalProse`, or `null`) — this function does not re-strip,
  * since re-validating already-validated text would just be redundant
@@ -241,10 +305,9 @@ export function composeShipBody(
   diffStat: DiffStat,
   aiProse: string | null,
 ): string {
-  const sections: string[] = [];
+  const sections: string[] = [renderCausalRecordSection(context, diffStat)];
   if (aiProse != null && aiProse.trim().length > 0) {
     sections.push(aiProse.trim());
   }
-  sections.push(renderCausalRecordSection(context, diffStat));
   return sections.join("\n\n---\n\n");
 }

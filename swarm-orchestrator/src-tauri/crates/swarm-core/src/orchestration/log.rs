@@ -273,18 +273,17 @@ impl EventLog {
 
     /// Returns up to `limit` persisted events with `from_seq < seq <=
     /// to_seq`, ascending — the bounded-range counterpart to
-    /// [`Self::events_since`] (which has no upper bound). Exists for the
-    /// ship chain's causal-record query (`commands::git::ship_context`,
-    /// via `git::causal::build_ship_context`): a ship attempt's range is
-    /// always closed at both ends (`fromSeq` = the worker's last-shipped
-    /// seq or its `worktree_created` seq; `toSeq` = the log's current max
-    /// at preview time), and fetching only that window — rather than
-    /// paging `events_since` from `fromSeq` and discarding everything
-    /// past `toSeq` in Rust — keeps the query itself honest about the
-    /// range it represents. `limit` is **not** capped internally (unlike
-    /// `commands::orchestration::events_since`'s `clamp_limit`, which
-    /// applies only to that IPC-facing handler) — this is a lower-level
-    /// method callers are expected to size deliberately.
+    /// [`Self::events_since`] (which has no upper bound). A general-purpose
+    /// primitive (kept for symmetry with `events_since` and for any future
+    /// caller that genuinely wants "everything in this range"); the ship
+    /// chain's own causal-record query does **not** use this directly —
+    /// see [`Self::events_for_worker_between`], its worker-and-type-scoped
+    /// sibling, and that method's doc for why a plain range cap here would
+    /// be the wrong tool for that specific job (review FIX-1). `limit` is
+    /// **not** capped internally (unlike `commands::orchestration::events_since`'s
+    /// `clamp_limit`, which applies only to that IPC-facing handler) —
+    /// this is a lower-level method callers are expected to size
+    /// deliberately.
     pub fn events_between(
         &self,
         from_seq: u64,
@@ -305,6 +304,101 @@ impl EventLog {
             .query_map((from_seq_i64, to_seq_i64, limit), Self::row_to_tuple)
             .map_err(|e| AppError::EventLog(e.to_string()))?;
         Self::collect_stored_events(rows)
+    }
+
+    /// Returns up to `limit` of one worker's events matching
+    /// `event_types` within `(from_seq, to_seq]`, ascending by seq,
+    /// plus whether the fetch hit `limit` (meaning older matching rows
+    /// may exist beyond what was returned). The dedicated,
+    /// worker-and-type-scoped counterpart to [`Self::events_between`],
+    /// built for `commands::git::ship_context`.
+    ///
+    /// # Review FIX-1: why a plain range cap is the wrong tool here
+    ///
+    /// `ship_context`'s first cut called `events_between(fromSeq, toSeq,
+    /// 50_000)` — a range-wide cap applied BEFORE filtering to one
+    /// worker in Rust. On a long, busy, multi-worker session (SWARM's
+    /// real workload) with more than 50,000 persisted events across ALL
+    /// workers in that range, the oldest 50,000 fill the cap and the
+    /// shipping worker's own NEWEST, most ship-relevant turns are
+    /// silently dropped — while `ShipContext::omitted_turn_count` stays
+    /// `0`, because that count is computed from whatever made it through
+    /// the cap, with no way to know what didn't. This method closes that
+    /// gap two ways: `event_types`/`worker_id` are filtered in the SQL
+    /// itself, so `limit` is spent entirely on rows this specific
+    /// worker's causal record can use; and the fetch is `ORDER BY seq
+    /// DESC` (newest first) with the truncation cut taken off the OLD
+    /// end (dropping the sentinel row, keeping the newest `limit`) before
+    /// reversing back to the ascending order every other range query in
+    /// this module returns — so even a single worker whose OWN matching
+    /// row count exceeds `limit` still keeps its newest activity, not its
+    /// oldest.
+    ///
+    /// `worker_id` matches against `json_extract(payload, '$.workerId')`
+    /// — the `agent_*` family stamps no envelope `originWorker` today
+    /// (see `git::causal`'s module doc), so the payload is the only
+    /// reliable subject field to filter on. Returns `(Vec::new(), false)`
+    /// without touching the database if `event_types` is empty or `limit`
+    /// is `0`.
+    pub fn events_for_worker_between(
+        &self,
+        event_types: &[&str],
+        worker_id: &str,
+        from_seq: u64,
+        to_seq: u64,
+        limit: u32,
+    ) -> Result<(Vec<StoredEvent>, bool), AppError> {
+        if event_types.is_empty() || limit == 0 {
+            return Ok((Vec::new(), false));
+        }
+
+        let from_seq_i64 = i64::try_from(from_seq).unwrap_or(i64::MAX);
+        let to_seq_i64 = i64::try_from(to_seq).unwrap_or(i64::MAX);
+        // One extra row as a truncation sentinel: getting back
+        // `limit + 1` rows (rather than <= `limit`) proves at least one
+        // older matching row exists beyond what's kept below.
+        let fetch_limit = i64::from(limit.saturating_add(1));
+
+        let placeholders = event_types
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT seq, ts, type, payload, origin_worker, cause_seq FROM events \
+             WHERE seq > ? AND seq <= ? AND type IN ({placeholders}) \
+             AND json_extract(payload, '$.workerId') = ? \
+             ORDER BY seq DESC LIMIT ?"
+        );
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| AppError::EventLog(e.to_string()))?;
+
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(4 + event_types.len());
+        params.push(&from_seq_i64);
+        params.push(&to_seq_i64);
+        for event_type in event_types {
+            params.push(event_type);
+        }
+        params.push(&worker_id);
+        params.push(&fetch_limit);
+
+        let rows = stmt
+            .query_map(params.as_slice(), Self::row_to_tuple)
+            .map_err(|e| AppError::EventLog(e.to_string()))?;
+        let mut events = Self::collect_stored_events(rows)?;
+
+        // `events` is currently newest-first (DESC). Drop the sentinel
+        // (the oldest row of the fetched batch) when present, then
+        // reverse to ascending order.
+        let truncated = events.len() as u32 > limit;
+        if truncated {
+            events.truncate(limit as usize);
+        }
+        events.reverse();
+        Ok((events, truncated))
     }
 
     /// Row-mapping closure shared by [`Self::events_since`] and
@@ -533,6 +627,127 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].origin_worker, Some(origin));
         assert_eq!(events[0].payload["workerId"], "a");
+    }
+
+    // ── events_for_worker_between (review FIX-1) ─────────────────────
+
+    fn append_agent_tool_call(log: &mut EventLog, seq: u64, worker_id: &str) {
+        log.append(
+            seq,
+            seq as i64,
+            "agent_tool_call",
+            &format!(r#"{{"workerId":"{worker_id}","turnId":"t{seq}","toolUseId":"u{seq}","name":"Read","input":{{}}}}"#),
+            &Provenance::default(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_events_for_worker_between_filters_by_worker_in_sql_not_just_in_rust() {
+        let mut log = EventLog::open_in_memory().unwrap();
+        // Interleave two workers' rows across the range.
+        append_agent_tool_call(&mut log, 1, "a");
+        append_agent_tool_call(&mut log, 2, "b");
+        append_agent_tool_call(&mut log, 3, "a");
+        append_agent_tool_call(&mut log, 4, "b");
+
+        let (events, truncated) = log
+            .events_for_worker_between(&["agent_tool_call"], "a", 0, 10, 100)
+            .unwrap();
+        assert!(!truncated);
+        assert_eq!(events.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 3]);
+    }
+
+    #[test]
+    fn test_events_for_worker_between_filters_by_type() {
+        let mut log = EventLog::open_in_memory().unwrap();
+        append_agent_tool_call(&mut log, 1, "a");
+        log.append(
+            2,
+            2,
+            "worker_output",
+            r#"{"workerId":"a","data":"hi"}"#,
+            &Provenance::default(),
+        )
+        .unwrap();
+
+        let (events, _) = log
+            .events_for_worker_between(&["agent_tool_call"], "a", 0, 10, 100)
+            .unwrap();
+        assert_eq!(events.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1]);
+    }
+
+    /// DIRECTIVE (review FIX-1): a range with more matching rows for one
+    /// worker than `limit` allows must keep the NEWEST rows (never the
+    /// oldest — the naive cap-then-filter bug this method exists to
+    /// close) and report `truncated: true` honestly, never silently.
+    #[test]
+    fn test_events_for_worker_between_truncation_keeps_newest_and_reports_it_honestly() {
+        let mut log = EventLog::open_in_memory().unwrap();
+        for seq in 1..=5u64 {
+            append_agent_tool_call(&mut log, seq, "a");
+        }
+
+        let (events, truncated) = log
+            .events_for_worker_between(&["agent_tool_call"], "a", 0, 10, 3)
+            .unwrap();
+        assert!(
+            truncated,
+            "5 matching rows against a limit of 3 must report truncation"
+        );
+        // The newest 3 — seqs 3, 4, 5 — survive, in ascending order; the
+        // oldest (1, 2) are the ones dropped.
+        assert_eq!(
+            events.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
+    }
+
+    #[test]
+    fn test_events_for_worker_between_exact_limit_is_not_reported_as_truncated() {
+        let mut log = EventLog::open_in_memory().unwrap();
+        for seq in 1..=3u64 {
+            append_agent_tool_call(&mut log, seq, "a");
+        }
+        let (events, truncated) = log
+            .events_for_worker_between(&["agent_tool_call"], "a", 0, 10, 3)
+            .unwrap();
+        assert!(
+            !truncated,
+            "exactly `limit` matching rows must not be misreported as truncated"
+        );
+        assert_eq!(events.len(), 3);
+    }
+
+    #[test]
+    fn test_events_for_worker_between_empty_event_types_or_zero_limit_short_circuits() {
+        let mut log = EventLog::open_in_memory().unwrap();
+        append_agent_tool_call(&mut log, 1, "a");
+
+        let (events, truncated) = log.events_for_worker_between(&[], "a", 0, 10, 100).unwrap();
+        assert!(events.is_empty());
+        assert!(!truncated);
+
+        let (events, truncated) = log
+            .events_for_worker_between(&["agent_tool_call"], "a", 0, 10, 0)
+            .unwrap();
+        assert!(events.is_empty());
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn test_events_for_worker_between_respects_the_seq_range_bounds() {
+        let mut log = EventLog::open_in_memory().unwrap();
+        for seq in 1..=10u64 {
+            append_agent_tool_call(&mut log, seq, "a");
+        }
+        let (events, _) = log
+            .events_for_worker_between(&["agent_tool_call"], "a", 3, 7, 100)
+            .unwrap();
+        assert_eq!(
+            events.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![4, 5, 6, 7]
+        );
     }
 
     #[test]

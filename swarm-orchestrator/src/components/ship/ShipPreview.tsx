@@ -1,7 +1,12 @@
 import type { CSSProperties } from "react";
 import { Pill, type PillTone } from "#components/ui/Pill";
 import type { AiProseState } from "#hooks/useShip";
-import { resultLabel, turnStatusLabel } from "#lib/ship-causal";
+import {
+  emptyRecordMessage,
+  renderTruncationNote,
+  resultLabel,
+  turnStatusLabel,
+} from "#lib/ship-causal";
 import type { CausalTurn, ShipContext, ShipPreflight, StagingMode } from "#store/types";
 
 interface ShipPreviewProps {
@@ -240,11 +245,16 @@ interface CausalRecordSectionProps {
  * count, and a tool-call table (turn, tool, target, result) read
  * directly off `ShipContext` — no free text rendered here, matching
  * `#lib/ship-causal`'s `renderCausalRecordSection` (the markdown
- * counterpart that actually ships in the PR body). `context == null`
- * (still loading, or `ship_context` failed) and a genuinely empty range
- * both render an honest muted message rather than a table — the two
- * are visually distinct so a user isn't left wondering whether "no
- * rows" means "still loading" or "nothing was recorded".
+ * counterpart that actually ships in the PR body — both share
+ * `emptyRecordMessage`/`renderTruncationNote` so the two never drift on
+ * wording). `context == null` (still loading, or `ship_context` failed)
+ * and a genuinely empty range both render an honest muted message rather
+ * than a table — the two are visually distinct so a user isn't left
+ * wondering whether "no rows" means "still loading" or "nothing was
+ * recorded". A genuinely empty range further distinguishes "this worker
+ * did nothing" from "this worker's activity used the webview chat path,
+ * invisible to this query" (`emptyRecordMessage`, review NIT-4) — never
+ * one message papering over both.
  */
 function CausalRecordSection({ context }: CausalRecordSectionProps): React.ReactElement {
   if (context == null) {
@@ -252,14 +262,11 @@ function CausalRecordSection({ context }: CausalRecordSectionProps): React.React
   }
 
   if (context.turns.length === 0) {
-    return (
-      <span style={causalMutedStyle}>
-        Causal Record Unavailable For This Range — No Recorded Agent Turns.
-      </span>
-    );
+    return <span style={causalMutedStyle}>{emptyRecordMessage(context)}</span>;
   }
 
   const rows = causalTableRows(context.turns);
+  const truncationNote = renderTruncationNote(context);
 
   return (
     <>
@@ -271,12 +278,8 @@ function CausalRecordSection({ context }: CausalRecordSectionProps): React.React
         <span>
           {context.turns.length} Turn{context.turns.length === 1 ? "" : "s"}
         </span>
-        {context.omittedTurnCount > 0 && (
-          <Pill tone="warning" size="sm">
-            {context.omittedTurnCount} Earlier Turns Omitted
-          </Pill>
-        )}
       </div>
+      {truncationNote != null && <span style={causalMutedStyle}>{truncationNote}</span>}
       {rows.length > 0 && (
         <div style={causalTableWrapStyle}>
           <table style={causalTableStyle}>
