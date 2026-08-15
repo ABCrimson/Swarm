@@ -26,10 +26,26 @@ use std::collections::BTreeSet;
 const LIB_RS: &str = include_str!("../lib.rs");
 
 /// Extracts every `commands::<module>::<name>` path's final segment
-/// from the `tauri::generate_handler![...]` block in `lib.rs`.
-fn parse_generate_handler_names() -> BTreeSet<String> {
+/// from the `tauri::generate_handler![...]` block in `source`.
+///
+/// # security-review FIX-9: comment-stripping order
+///
+/// A WHOLE-LINE comment (`// commands::worker::foo,` — a handler
+/// someone commented out to disable it) must NEVER be recovered as a
+/// live entry. The earlier version of this parser stripped a leading
+/// `"// "` from every line BEFORE checking whether it looked like a
+/// command path — meaning a commented-out entry and an actual
+/// `// Section Header`-style comment both had their `// ` prefix
+/// removed the SAME way, and a commented-out `// commands::worker::foo,`
+/// would come out looking exactly like a live `commands::worker::foo,`
+/// line and get counted as present in `generate_handler!`. This version
+/// discards any line that STARTS with `//` outright (whole-line
+/// comments never survive to the shape check at all) and only strips a
+/// TRAILING inline `// ...` comment from an otherwise-live line (e.g.
+/// `commands::worker::spawn_worker, // still WIP`).
+fn parse_generate_handler_names(source: &str) -> BTreeSet<String> {
     let start_marker = "tauri::generate_handler![";
-    let start = LIB_RS
+    let start = source
         .find(start_marker)
         .expect("lib.rs must contain a `tauri::generate_handler![...]` call — has it been renamed/restructured?")
         + start_marker.len();
@@ -39,7 +55,7 @@ fn parse_generate_handler_names() -> BTreeSet<String> {
     // paths and comments), so this is exact, not a heuristic.
     let mut depth = 1i32;
     let mut end = start;
-    for (i, ch) in LIB_RS[start..].char_indices() {
+    for (i, ch) in source[start..].char_indices() {
         match ch {
             '[' => depth += 1,
             ']' => {
@@ -57,13 +73,24 @@ fn parse_generate_handler_names() -> BTreeSet<String> {
         "could not find the closing `]` of generate_handler!'s block"
     );
 
-    let block = &LIB_RS[start..end];
+    let block = &source[start..end];
     let mut names = BTreeSet::new();
-    for line in block.lines() {
-        let line = line.trim();
-        let line = line.strip_prefix("// ").unwrap_or(line);
+    for raw_line in block.lines() {
+        let line = raw_line.trim();
+        // A whole-line comment — section header OR a commented-out
+        // handler — is NEVER live. Discarded before any further
+        // shape-checking, on purpose (see this function's doc).
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        // A trailing inline comment on an otherwise-live line is
+        // stripped, not treated as disqualifying.
+        let line = match line.find("//") {
+            Some(idx) => line[..idx].trim(),
+            None => line,
+        };
         if line.is_empty() || !line.starts_with("commands::") {
-            continue; // blank lines and `// Worker commands`-style section comments
+            continue;
         }
         let path = line.trim_end_matches(',').trim();
         let name = path
@@ -77,7 +104,7 @@ fn parse_generate_handler_names() -> BTreeSet<String> {
 
 #[test]
 fn test_registry_matches_generate_handler_minus_native_only() {
-    let handler_names = parse_generate_handler_names();
+    let handler_names = parse_generate_handler_names(LIB_RS);
     assert!(
         handler_names.len() >= 30,
         "sanity check: parsed suspiciously few generate_handler! entries ({}) — parser likely broke",
@@ -130,11 +157,39 @@ fn test_native_only_commands_are_still_wired_in_generate_handler() {
     // this app exposes (just not through the registry) — catches a
     // typo in NATIVE_ONLY silently exempting a command that should have
     // a registry entry.
-    let handler_names = parse_generate_handler_names();
+    let handler_names = parse_generate_handler_names(LIB_RS);
     for native in swarm_core::commands::NATIVE_ONLY {
         assert!(
             handler_names.contains(*native),
             "{native} is listed in NATIVE_ONLY but is not a real generate_handler! command — typo?"
         );
     }
+}
+
+/// DIRECTIVE (security-review FIX-9): a commented-out handler line must
+/// NEVER be recovered as a live entry — the exact regression the
+/// leading-`"// "`-strip-before-shape-check bug produced. Exercises the
+/// parser against synthetic source, not the real `lib.rs` (which has no
+/// commented-out entries to test against).
+#[test]
+fn test_a_commented_out_handler_line_is_not_counted_as_live() {
+    let synthetic = r#"
+        .invoke_handler(tauri::generate_handler![
+            // Worker commands
+            commands::worker::spawn_worker,
+            // commands::worker::disabled_handler,
+            commands::worker::list_workers, // still landing, see #123
+        ])
+    "#;
+    let names = parse_generate_handler_names(synthetic);
+    assert!(names.contains("spawn_worker"));
+    assert!(
+        names.contains("list_workers"),
+        "a trailing inline comment must not disqualify a live entry"
+    );
+    assert!(
+        !names.contains("disabled_handler"),
+        "a whole-line-commented-out handler must never be counted as live"
+    );
+    assert_eq!(names.len(), 2);
 }
