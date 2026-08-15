@@ -1,7 +1,8 @@
 //! Message bus Tauri IPC command handlers — thin wrappers over
-//! [`swarm_core::commands::bus`].
+//! [`swarm_core::commands::bus`]. `bus_subscribe`/`bus_create_pipeline`/
+//! `bus_list_pipelines` DELETED in Phase 4 — see
+//! `swarm_core::bus::router`'s module doc.
 
-use swarm_core::bus::router::{PipelineInfo, PipelineStage};
 use swarm_core::commands::Registry;
 
 use crate::commands::call;
@@ -15,6 +16,7 @@ pub async fn bus_send(
     to_worker_id: Option<String>,
     topic: String,
     payload: serde_json::Value,
+    cause_seq: Option<u64>,
 ) -> Result<usize, String> {
     call(
         &registry,
@@ -22,40 +24,8 @@ pub async fn bus_send(
         "bus_send",
         serde_json::json!({
             "fromWorkerId": from_worker_id, "toWorkerId": to_worker_id,
-            "topic": topic, "payload": payload
+            "topic": topic, "payload": payload, "causeSeq": cause_seq
         }),
-    )
-    .await
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(registry, ctx))]
-pub async fn bus_subscribe(
-    registry: tauri::State<'_, std::sync::Arc<Registry>>,
-    ctx: tauri::State<'_, swarm_core::commands::Ctx>,
-    topic: String,
-) -> Result<(), String> {
-    call(
-        &registry,
-        ctx.inner().clone(),
-        "bus_subscribe",
-        serde_json::json!({ "topic": topic }),
-    )
-    .await
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(registry, ctx, stages))]
-pub async fn bus_create_pipeline(
-    registry: tauri::State<'_, std::sync::Arc<Registry>>,
-    ctx: tauri::State<'_, swarm_core::commands::Ctx>,
-    stages: Vec<PipelineStage>,
-) -> Result<String, String> {
-    call(
-        &registry,
-        ctx.inner().clone(),
-        "bus_create_pipeline",
-        serde_json::json!({ "stages": stages }),
     )
     .await
 }
@@ -70,21 +40,6 @@ pub async fn bus_list_channels(
         &registry,
         ctx.inner().clone(),
         "bus_list_channels",
-        serde_json::json!({}),
-    )
-    .await
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(registry, ctx))]
-pub async fn bus_list_pipelines(
-    registry: tauri::State<'_, std::sync::Arc<Registry>>,
-    ctx: tauri::State<'_, swarm_core::commands::Ctx>,
-) -> Result<Vec<PipelineInfo>, String> {
-    call(
-        &registry,
-        ctx.inner().clone(),
-        "bus_list_pipelines",
         serde_json::json!({}),
     )
     .await

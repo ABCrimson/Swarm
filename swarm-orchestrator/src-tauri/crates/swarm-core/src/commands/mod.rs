@@ -36,7 +36,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::agent::{AgentScheduler, AgentSessionRegistry, ClaudeCodeAdapter};
+use crate::agent::{AgentScheduler, AgentSessionRegistry, ClaudeCodeAdapter, CodexAdapter};
 use crate::bus::channel::MessageBus;
 use crate::bus::router::Router;
 use crate::events::Provenance;
@@ -83,6 +83,7 @@ pub struct CtxInner {
     pub engine: OrchestrationEngine,
     pub sink: EventSink,
     pub claude_adapter: Arc<ClaudeCodeAdapter>,
+    pub codex_adapter: Arc<CodexAdapter>,
     pub agent_session_registry: AgentSessionRegistry,
     pub scheduler: Arc<AgentScheduler>,
 }
@@ -111,6 +112,7 @@ impl Ctx {
             engine: rt.engine.clone(),
             sink: rt.sink.clone(),
             claude_adapter: rt.claude_adapter.clone(),
+            codex_adapter: rt.codex_adapter.clone(),
             agent_session_registry: rt.agent_session_registry.clone(),
             scheduler: rt.scheduler.clone(),
         }))
@@ -133,6 +135,7 @@ impl Ctx {
         engine: OrchestrationEngine,
         sink: EventSink,
         claude_adapter: Arc<ClaudeCodeAdapter>,
+        codex_adapter: Arc<CodexAdapter>,
         agent_session_registry: AgentSessionRegistry,
         scheduler: Arc<AgentScheduler>,
     ) -> Self {
@@ -147,6 +150,7 @@ impl Ctx {
             engine,
             sink,
             claude_adapter,
+            codex_adapter,
             agent_session_registry,
             scheduler,
         }))
@@ -288,6 +292,11 @@ impl Registry {
             entry("agent_shutdown", agent::agent_shutdown, Allowed),
             entry("agent_probe", agent::agent_probe, Allowed),
             entry(
+                "agent_permission_respond",
+                agent::agent_permission_respond,
+                Allowed,
+            ),
+            entry(
                 "set_agent_concurrency",
                 agent::set_agent_concurrency,
                 Allowed,
@@ -304,12 +313,13 @@ impl Registry {
             entry("get_metrics", metrics::get_metrics, Allowed),
             // Orchestration commands
             entry("events_since", orchestration::events_since, Allowed),
-            // Bus commands
+            // Bus commands — bus_subscribe/bus_create_pipeline/
+            // bus_list_pipelines DELETED in Phase 4 (see
+            // crate::bus::router's module doc): bus_send now emits
+            // bus_message directly, and the pipeline machinery never
+            // awaited a real stage's completion.
             entry("bus_send", bus::bus_send, Allowed),
-            entry("bus_subscribe", bus::bus_subscribe, Allowed),
-            entry("bus_create_pipeline", bus::bus_create_pipeline, Allowed),
             entry("bus_list_channels", bus::bus_list_channels, Allowed),
-            entry("bus_list_pipelines", bus::bus_list_pipelines, Allowed),
         ];
         Self {
             entries: entries.into_iter().collect(),
@@ -454,9 +464,13 @@ mod tests {
     }
 
     #[test]
-    fn test_registry_has_37_entries() {
-        // 39 tauri commands total minus the 2 NATIVE_ONLY (ship_context added, Phase 2).
-        assert_eq!(Registry::new().keys().len(), 37);
+    fn test_registry_has_35_entries() {
+        // 37 tauri commands total minus the 2 NATIVE_ONLY. Ship added
+        // ship_context (Phase 2, +1); Codex added agent_permission_respond
+        // (the real round-trip its interactive approvals need, +1) and
+        // deleted bus_subscribe/bus_create_pipeline/bus_list_pipelines
+        // (−3, see crate::bus::router's module doc). 36 + 1 + 1 − 3 = 35.
+        assert_eq!(Registry::new().keys().len(), 35);
     }
 
     #[tokio::test]
@@ -652,7 +666,7 @@ pub(crate) mod test_support {
     use super::Ctx;
     use crate::Paths;
     use crate::agent::{
-        AgentScheduler, AgentSchedulerConfig, AgentSessionRegistry, ClaudeCodeAdapter,
+        AgentScheduler, AgentSchedulerConfig, AgentSessionRegistry, ClaudeCodeAdapter, CodexAdapter,
     };
     use crate::bus::channel::MessageBus;
     use crate::bus::router::Router;
@@ -676,12 +690,13 @@ pub(crate) mod test_support {
         let session_manager = SessionManager::new();
         let repo_locks = RepoLocks::new();
         let message_bus = MessageBus::new();
-        let router = Router::new(message_bus.clone());
         let shared_system = SharedSystem::new();
         let log = EventLog::open_in_memory().unwrap();
         let engine = OrchestrationEngine::start(log, None, |_| {});
         let sink = engine.sink();
+        let router = Router::new(message_bus.clone(), sink.clone());
         let claude_adapter = Arc::new(ClaudeCodeAdapter::new(sink.clone()));
+        let codex_adapter = Arc::new(CodexAdapter::new(sink.clone()));
         let agent_session_registry = AgentSessionRegistry::new();
         let scheduler = Arc::new(AgentScheduler::new(
             AgentSchedulerConfig::default(),
@@ -699,6 +714,7 @@ pub(crate) mod test_support {
             engine,
             sink,
             claude_adapter,
+            codex_adapter,
             agent_session_registry,
             scheduler,
         )

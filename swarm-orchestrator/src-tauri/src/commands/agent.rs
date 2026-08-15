@@ -2,7 +2,7 @@
 //! over [`swarm_core::commands::agent`].
 
 use serde::Serialize;
-use swarm_core::agent::ProbeReport;
+use swarm_core::agent::{PermissionDecision, ProbeReport};
 use swarm_core::commands::Registry;
 use swarm_core::worker::handle::WorkerConfig;
 
@@ -128,12 +128,31 @@ pub async fn agent_shutdown(
 pub async fn agent_probe(
     registry: tauri::State<'_, std::sync::Arc<Registry>>,
     ctx: tauri::State<'_, swarm_core::commands::Ctx>,
+    provider: Option<String>,
 ) -> Result<ProbeReport, String> {
     call(
         &registry,
         ctx.inner().clone(),
         "agent_probe",
-        serde_json::json!({}),
+        serde_json::json!({ "provider": provider }),
+    )
+    .await
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(registry, ctx))]
+pub async fn agent_permission_respond(
+    registry: tauri::State<'_, std::sync::Arc<Registry>>,
+    ctx: tauri::State<'_, swarm_core::commands::Ctx>,
+    worker_id: String,
+    request_id: String,
+    decision: PermissionDecision,
+) -> Result<(), String> {
+    call(
+        &registry,
+        ctx.inner().clone(),
+        "agent_permission_respond",
+        serde_json::json!({ "workerId": worker_id, "requestId": request_id, "decision": decision }),
     )
     .await
 }

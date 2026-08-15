@@ -16,7 +16,7 @@
 //! - [`agent`] — Provider-adapter agent commands
 //! - [`config`] — App config file commands (read_config, write_config)
 //! - [`metrics`] — System metrics retrieval
-//! - [`bus`] — Message bus commands (send, subscribe, pipeline, list channels)
+//! - [`bus`] — Message bus commands (send, list channels)
 //! - [`fs`] — `read_file`/`write_file` commands
 //! - [`git`] — Git repo-root validation + the ship chain
 //! - [`notification`] — OS notification command (NATIVE_ONLY — no registry entry)
