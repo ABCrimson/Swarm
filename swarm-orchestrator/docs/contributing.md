@@ -385,3 +385,12 @@ Frontend tests run via Vitest (`pnpm test`): **52 test files, 515 tests**, cover
 | `src/__tests__/store/`            | `ai`, `sessions`, `system`, `workers` Zustand stores             |
 
 Tauri IPC is mocked globally in `src/__tests__/setup.ts` via `vi.mock("@tauri-apps/api/core")` (stubs `invoke`) and `vi.mock("@tauri-apps/api/event")` (stubs `listen`), plus mocks for the `dialog`, `fs`, `shell`, and `store` plugins. Individual tests override the default rejected/no-op behavior with `vi.mocked(invoke).mockResolvedValueOnce(...)` as needed. There is no standalone `src/lib/test-utils.ts` module -- the old `agent-loop`, `diff`, `replay`, `test-utils`, and `token-costs` modules under `src/lib/` were removed along with the (dead) session-replay feature.
+
+### End-to-End Tests (Playwright)
+
+```bash
+pnpm exec playwright install --with-deps chromium   # once per machine
+pnpm test:e2e
+```
+
+29 tests across `e2e/navigation.spec.ts`, `e2e/palette.spec.ts`, `e2e/settings.spec.ts`, and `e2e/dialogs.spec.ts`, run headless against the real Vite build with no Tauri backend -- routing, the command palette, Settings' client-side controls, and dialog open/close/focus all pass without a webview or Rust process, since `invoke()` degrades gracefully rather than throwing (see `src/lib/tauri.ts`). Wired into CI as its own `e2e` job (`.github/workflows/ci.yml`). See **[docs/e2e.md](e2e.md)** for the full per-file coverage table, the exact no-backend boundary, and the `tauri-driver` + event-log-oracle design for the next phase (real worker spawn, `seq`-continuity assertions against the ordered event log) -- documented, not yet built.
