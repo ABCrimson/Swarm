@@ -9,6 +9,7 @@ import { ShipPanel } from "#components/ship/ShipPanel";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Button } from "#components/ui/Button";
 import { Pill } from "#components/ui/Pill";
+import { ProviderBadge } from "#components/worker/ProviderBadge";
 import { SpawnWorkerDialog } from "#components/worker/SpawnWorkerDialog";
 import { matchesBinding } from "#lib/keybindings";
 import { useAgentSessionStore } from "#store/agent-sessions";
@@ -83,90 +84,80 @@ function WorkerListView(): React.ReactElement {
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: 16 }} className="scroll-area">
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {[...workers.entries()].map(([id, worker]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => {
-              setSelectedId(id);
-              setDetailOpen(true);
-            }}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "12px 16px",
-              background:
-                selectedId === id ? "oklch(0.78 0.18 205 / 0.08)" : "oklch(0.12 0.03 220 / 0.7)",
-              backdropFilter: "blur(12px) saturate(1.5)",
-              border: `1px solid ${selectedId === id ? "oklch(0.78 0.18 205 / 0.3)" : "oklch(0.28 0.05 220)"}`,
-              borderRadius: 8,
-              cursor: "pointer",
-              textAlign: "left",
-              width: "100%",
-              outline: "none",
-              transition:
-                "background 0.12s cubic-bezier(0, 0, 0.2, 1), border-color 0.12s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0, 0, 0.2, 1)",
-            }}
-            onFocus={(e) => {
-              e.currentTarget.style.boxShadow = "0 0 0 2px oklch(0.78 0.18 205 / 0.4)";
-            }}
-            onBlur={(e) => {
-              e.currentTarget.style.boxShadow = "none";
-            }}
-          >
-            <span
+        {[...workers.entries()].map(([id, worker]) => {
+          const agentSession = agentSessions.get(id);
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => {
+                setSelectedId(id);
+                setDetailOpen(true);
+              }}
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 8,
-                minWidth: 0,
+                justifyContent: "space-between",
+                padding: "12px 16px",
+                background:
+                  selectedId === id ? "oklch(0.78 0.18 205 / 0.08)" : "oklch(0.12 0.03 220 / 0.7)",
+                backdropFilter: "blur(12px) saturate(1.5)",
+                border: `1px solid ${selectedId === id ? "oklch(0.78 0.18 205 / 0.3)" : "oklch(0.28 0.05 220)"}`,
+                borderRadius: 8,
+                cursor: "pointer",
+                textAlign: "left",
+                width: "100%",
+                outline: "none",
+                transition:
+                  "background 0.12s cubic-bezier(0, 0, 0.2, 1), border-color 0.12s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0, 0, 0.2, 1)",
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.boxShadow = "0 0 0 2px oklch(0.78 0.18 205 / 0.4)";
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.boxShadow = "none";
               }}
             >
               <span
                 style={{
-                  fontFamily: "var(--font-display)",
-                  fontSize: "0.8125rem",
-                  fontWeight: 600,
-                  color: "oklch(0.95 0.02 220)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  minWidth: 0,
                 }}
               >
-                {worker.name ?? id.slice(0, 8)}
-              </span>
-              {worker.branch != null && (
-                <Pill
-                  tone="info"
-                  size="sm"
-                  maxWidth={160}
-                  title={worker.branch}
-                  style={{ fontFamily: "var(--font-mono)" }}
-                >
-                  {worker.branch}
-                </Pill>
-              )}
-              {agentSessions.has(id) && (
                 <span
                   style={{
-                    padding: "2px 7px",
-                    borderRadius: 5,
-                    border: "1px solid oklch(0.45 0.14 290)",
-                    background: "oklch(0.16 0.06 290 / 0.5)",
-                    color: "oklch(0.80 0.14 290)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "0.625rem",
+                    fontFamily: "var(--font-display)",
+                    fontSize: "0.8125rem",
                     fontWeight: 600,
+                    color: "oklch(0.95 0.02 220)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
                   }}
                 >
-                  Claude Code
+                  {worker.name ?? id.slice(0, 8)}
                 </span>
-              )}
-            </span>
-            <Badge state={worker.state}>{stateLabels[worker.state]}</Badge>
-          </button>
-        ))}
+                {worker.branch != null && (
+                  <Pill
+                    tone="info"
+                    size="sm"
+                    maxWidth={160}
+                    title={worker.branch}
+                    style={{ fontFamily: "var(--font-mono)" }}
+                  >
+                    {worker.branch}
+                  </Pill>
+                )}
+                {agentSession && (
+                  <ProviderBadge provider={agentSession.provider} model={agentSession.model} />
+                )}
+              </span>
+              <Badge state={worker.state}>{stateLabels[worker.state]}</Badge>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

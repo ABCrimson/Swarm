@@ -6,6 +6,7 @@
 import type { CSSProperties } from "react";
 import { useState } from "react";
 import { SplitPane } from "#components/layout/SplitPane";
+import { ProviderBadge } from "#components/worker/ProviderBadge";
 import { WorkerTerminal } from "#components/worker/WorkerTerminal";
 import { useAgentSessionStore } from "#store/agent-sessions";
 import { AgentChat } from "./AgentChat.tsx";
@@ -235,20 +236,6 @@ function InjectModal({
  * - Inject instruction button for mid-conversation commands
  * - Bidirectional flow: AI sends commands to PTY, results flow back
  */
-const providerBadgeStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  padding: "3px 8px",
-  borderRadius: 6,
-  border: "1px solid oklch(0.45 0.14 290)",
-  background: "oklch(0.16 0.06 290 / 0.5)",
-  color: "oklch(0.80 0.14 290)",
-  fontFamily: "var(--font-mono, monospace)",
-  fontSize: 10.5,
-  fontWeight: 600,
-  letterSpacing: "0.03em",
-};
-
 export function WorkerAIPanel({
   workerId,
   canShip = true,
@@ -273,9 +260,7 @@ export function WorkerAIPanel({
     <div style={panelContainerStyle}>
       <div style={toolbarStyle}>
         {agentSession ? (
-          <span style={providerBadgeStyle} title={`Model: ${agentSession.model}`}>
-            Claude Code
-          </span>
+          <ProviderBadge provider={agentSession.provider} model={agentSession.model} />
         ) : (
           <ModelSelector workerId={workerId} />
         )}
