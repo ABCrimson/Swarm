@@ -197,6 +197,38 @@ async fn test_wrong_token_closes_the_connection_without_a_ready_frame() {
 /// midpoint, and assert the replayed tail plus the events already seen
 /// pre-disconnect reconstructs the exact same seq sequence a
 /// continuously-connected client would see — no dupes, no gaps.
+///
+/// CI-flake root cause (2026-08-15, reproduced locally by shrinking
+/// `start_metrics_loop`'s tick to 5ms): the background metrics loop
+/// (`crates/swarm-core/src/metrics.rs`, 500ms interval, EPHEMERAL —
+/// `is_persistent(SystemMetrics) == false`) runs unconditionally for
+/// the lifetime of every `Runtime`, this test's included. The 30
+/// paced `create_session` round-trips below take ~0.5s wall-clock
+/// locally — right at the tick boundary — so whether a `system_metrics`
+/// tick fires DURING that window (and gets counted) is a function of
+/// CI-runner speed, not of anything this test controls; a slower
+/// Linux runner crosses the boundary where a fast Windows one doesn't.
+/// The original collection loops below counted ANY live `event` frame
+/// toward their 30/15 targets, so an interleaved ephemeral tick could
+/// consume one of those slots on client A but not client B (or vice
+/// versa) — client B's "first 30 frames" and client A's "first 15
+/// frames + persisted-only replay tail" are then no longer the same
+/// multiset, purely because of a race with a background timer neither
+/// client's side of the comparison was ever supposed to depend on.
+///
+/// Fix: both collection loops below filter to `type == "session_created"`
+/// — the one event type this test actually produces and cares about.
+/// This makes the property hold BY CONSTRUCTION, independent of
+/// wall-clock timing on any runner: exactly 30 `session_created`
+/// events exist (one per paced, awaited RPC), every connected client
+/// receives all of them in seq order on the single ordered lane
+/// (FIX-3), and replay only ever returns persisted rows — so counting
+/// only that one type can never be perturbed by however many
+/// `system_metrics` (or any other future ephemeral type) ticks happen
+/// to interleave. No sleeps, no timing assumptions, and the reproduction
+/// above is a positive control: this exact test WOULD have failed with
+/// the pre-fix loops the moment metrics ticks became frequent enough,
+/// on any platform.
 #[tokio::test]
 async fn test_reconnect_with_last_seq_replays_exactly_the_missed_events() {
     let server = start_test_server().await;
@@ -279,18 +311,34 @@ async fn test_reconnect_with_last_seq_replays_exactly_the_missed_events() {
         }
     }
 
-    // Client B collects every live seq (30 events).
+    // Only `create_session` produces a `session_created` event in this
+    // test — filtering to it (rather than counting ANY live `event`
+    // frame) is what makes the 30/15 targets below deterministic
+    // regardless of how many ephemeral `system_metrics` ticks (500ms
+    // background loop, unconditionally running for the whole test) or
+    // any other incidental event happen to interleave on a given
+    // platform/runner. See this test's own doc comment above for the
+    // reproduced CI-flake this filter fixes.
+    fn is_session_created(e: &serde_json::Value) -> bool {
+        e["type"].as_str() == Some("session_created")
+    }
+
+    // Client B collects every live `session_created` seq (30 events).
     let mut b_seqs = Vec::new();
     while b_seqs.len() < 30 {
-        if let Frame::Event(e) = classify(&recv_text(&mut client_b).await) {
+        if let Frame::Event(e) = classify(&recv_text(&mut client_b).await)
+            && is_session_created(&e)
+        {
             b_seqs.push(e["seq"].as_u64().unwrap());
         }
     }
 
-    // Client A collects the first 15 live, then disconnects.
+    // Client A collects the first 15 live `session_created` events, then disconnects.
     let mut a_seqs = Vec::new();
     while a_seqs.len() < 15 {
-        if let Frame::Event(e) = classify(&recv_text(&mut client_a).await) {
+        if let Frame::Event(e) = classify(&recv_text(&mut client_a).await)
+            && is_session_created(&e)
+        {
             a_seqs.push(e["seq"].as_u64().unwrap());
         }
     }
@@ -311,10 +359,19 @@ async fn test_reconnect_with_last_seq_replays_exactly_the_missed_events() {
     .await;
     let _ready = recv_text(&mut client_a2).await;
 
+    // Replay only ever returns persisted rows (ephemeral types like
+    // `system_metrics` are never written to the log), so this filter is
+    // redundant given today's set of persisted event types — kept for
+    // symmetry with the two loops above and so this test stays correct
+    // by construction if a future change ever persists another event
+    // type that could fire in this window.
     let mut replayed = Vec::new();
     loop {
         match classify(&recv_text(&mut client_a2).await) {
-            Frame::Event(e) => replayed.push(e["seq"].as_u64().unwrap()),
+            Frame::Event(e) if is_session_created(&e) => {
+                replayed.push(e["seq"].as_u64().unwrap());
+            }
+            Frame::Event(_) => {}
             Frame::Control(ServerFrame::ReplayEnd { .. }) => break,
             Frame::Control(_) => {}
         }
