@@ -48,6 +48,28 @@ type Handler = (e: DomainEvent) => void;
 const handlers = new Map<string, Set<Handler>>();
 const wildcard = new Set<Handler>();
 let lastSeq = 0;
+
+/**
+ * The highest seq successfully dispatched so far — the SAME cursor
+ * `dispatch()`'s own dedup check (`e.seq <= lastSeq`) uses, including
+ * after the ephemeral-gap skip-ahead adjustment in `backfill()`'s
+ * `finally` block. Headless-daemon plan Phase 3: `wsTransport`
+ * (`#lib/transport`) reads this to populate `hello{lastSeq}` on every
+ * reconnect, so a reattach resumes from exactly what this tab has
+ * already processed — not a naive "last event frame seen on the wire"
+ * count, which would under-count across an ephemeral-only gap this
+ * module already decided to skip past.
+ *
+ * A plain getter function (not a re-exported `let` binding) — safe
+ * across the `transport.ts` <-> `event-bus.ts` <-> `tauri.ts` import
+ * cycle regardless of module-evaluation order, since it is only ever
+ * called from inside a later-executing function body (never read at
+ * another module's top level).
+ */
+export function getLastSeq(): number {
+  return lastSeq;
+}
+
 let backfilling = false;
 /** Live events that arrive while a backfill is in flight — flushed seq-sorted after. */
 let pending: DomainEvent[] = [];

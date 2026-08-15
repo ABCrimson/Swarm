@@ -36,6 +36,13 @@ export default defineConfig(async ({ mode }) => {
 
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
+      // Headless-daemon plan Phase 3: selects `wsTransport` at build
+      // time for `pnpm build:web` (`--mode web`, see below); every
+      // other mode leaves this undefined, so `#lib/transport`'s
+      // `selectTransport()` keeps `tauriTransport` — the existing
+      // `tauri dev`/`tauri build`/plain `pnpm dev` behavior is
+      // completely unaffected by this define's existence.
+      __SWARM_TRANSPORT__: JSON.stringify(mode === "web" ? "ws" : "tauri"),
     },
 
     resolve: {
@@ -53,8 +60,13 @@ export default defineConfig(async ({ mode }) => {
     build: {
       minify: "oxc",
       sourcemap: true,
-      // Tauri renders in Chromium 146+ (WebView2/WKWebView) — no downleveling needed
+      // Tauri renders in Chromium 146+ (WebView2/WKWebView) — no downleveling needed;
+      // `build:web`'s target is any modern evergreen browser, close enough not to warrant a second target.
       target: "esnext",
+      // `build:web` writes to a separate directory so it never collides
+      // with (or gets clobbered by) the Tauri bundle's own `dist/` —
+      // `swarmd --serve-ui dist-web` points at this one.
+      outDir: mode === "web" ? "dist-web" : "dist",
       modulePreload: { polyfill: false },
       rolldownOptions: {
         output: {

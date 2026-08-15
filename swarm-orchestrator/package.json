@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && tsc -p tsconfig.worker.json --noEmit && vite build",
+    "build:web": "tsc --noEmit && tsc -p tsconfig.worker.json --noEmit && vite build --mode web",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.worker.json --noEmit",
     "check": "biome check --write .",
     "lint": "biome lint .",
