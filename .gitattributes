@@ -1,0 +1,7 @@
+# Shell scripts and Unix service units MUST stay LF regardless of the
+# committer's core.autocrlf setting: a CRLF breaks a `#!/usr/bin/env sh`
+# shebang on Linux/macOS (`bad interpreter: sh^M`) and corrupts systemd
+# and launchd unit parsing.
+*.sh        text eol=lf
+*.service   text eol=lf
+*.plist     text eol=lf
