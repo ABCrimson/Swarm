@@ -12,7 +12,11 @@ import * as z from "zod";
  * (`#components/ai/AgentChat`) consume this module's schemas via
  * `safeParse` at the event-bus seam, the same discipline
  * `#lib/event-bus`'s `DomainEventSchema` already applies at the
- * envelope level.
+ * envelope level. Phase 4 adds `CodexAdapter`
+ * (`crates/swarm-core/src/agent/codex.rs`) as a second, structurally
+ * different provider (stateful JSON-RPC vs. one-way stream-json) behind
+ * the SAME event family — see `Capabilities.interactivePermissions` for
+ * the one wire-visible difference a consumer needs to branch on.
  *
  * Field names are camelCase, mirroring the Rust payload structs'
  * `#[serde(rename_all = "camelCase")]` convention exactly.
@@ -59,6 +63,20 @@ export const CapabilitiesSchema = z.object({
   cancelGranularity: CancelGranularitySchema,
   interruptMidturn: z.boolean(),
   worktreeAware: z.boolean(),
+  /**
+   * Phase 4: the provider's own protocol supports a REAL
+   * `agent_permission_request` -> `agentPermissionRespond` round-trip —
+   * `respondPermission` (`#lib/tauri`) actually answers a pending
+   * question on the wire, as opposed to the event being a report-only
+   * notice of an already-decided denial (Claude Code: `false` —
+   * `--permission-mode manual` is a silent no-op, see
+   * `AgentPermissionRequestPayloadSchema`'s doc). Codex: `true` — its
+   * JSON-RPC app-server protocol issues a genuine server -> client
+   * request that blocks until answered. A consumer MUST branch on this
+   * flag before rendering Allow/Deny affordances rather than assuming
+   * every provider behaves like Claude Code.
+   */
+  interactivePermissions: z.boolean(),
 });
 export type Capabilities = z.infer<typeof CapabilitiesSchema>;
 
@@ -192,6 +210,19 @@ export type AgentSessionExitedPayload = z.infer<typeof AgentSessionExitedPayload
  */
 export const ClaudeCodeTrustTierSchema = z.enum(["restricted", "standard", "write_enabled"]);
 export type ClaudeCodeTrustTier = z.infer<typeof ClaudeCodeTrustTierSchema>;
+
+/**
+ * Phase 4: `CodexAdapter`'s spawn-time trust dial
+ * (`crates/swarm-core/src/agent/codex.rs`'s `CodexTrustTier`). The same
+ * three wire tokens as {@link ClaudeCodeTrustTierSchema} by deliberate
+ * design symmetry, but mapped onto Codex's own
+ * `approvalPolicy`/`sandboxPolicy` vocabulary
+ * (`untrusted`/`on-request`/`on-failure`, never `"never"` — Codex's
+ * full-auto/bypass-equivalent mode is unconstructible through this
+ * vocabulary, mirroring Claude Code's `bypassPermissions`/`manual`).
+ */
+export const CodexTrustTierSchema = z.enum(["restricted", "standard", "write_enabled"]);
+export type CodexTrustTier = z.infer<typeof CodexTrustTierSchema>;
 
 /**
  * Payload schema for the `agent_probe` command's response

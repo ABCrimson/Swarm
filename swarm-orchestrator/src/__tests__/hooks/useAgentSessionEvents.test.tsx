@@ -32,6 +32,7 @@ const CAPABILITIES: Capabilities = {
   cancelGranularity: "kill_only",
   interruptMidturn: false,
   worktreeAware: true,
+  interactivePermissions: false,
 };
 
 describe("useAgentSessionEvents", () => {

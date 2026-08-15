@@ -50,6 +50,7 @@ const CAPABILITIES_NO_INTERRUPT: Capabilities = {
   cancelGranularity: "kill_only",
   interruptMidturn: false,
   worktreeAware: true,
+  interactivePermissions: false,
 };
 
 function fire(type: string, payload: unknown, seq = 1): void {
