@@ -1,0 +1,17 @@
+# Fixture for crates/swarm-core/src/agent/codex.rs unit tests.
+# AUTHORED (not captured) — see happy_turn.ndjson's header. The
+# interactive-permissions finding: after item/started for a gated
+# commandExecution, the fake server sends an id-bearing approval/request
+# (a genuine server -> client REQUEST) and BLOCKS (AWAIT_STDIN_LINE) until
+# CodexSession::respond_permission actually writes a matching response —
+# proving the real round-trip rather than a report-only no-op.
+
+#DIRECTIVE AWAIT_STDIN_LINE
+{"jsonrpc":"2.0","id":1,"result":{"threadId":"thread-approval-0001","model":"gpt-5-codex"}}
+#DIRECTIVE AWAIT_STDIN_LINE
+{"jsonrpc":"2.0","id":2,"result":{"turnId":"turn-approval-0001"}}
+{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread-approval-0001","turnId":"turn-approval-0001","item":{"id":"item-cmd-1","type":"commandExecution","command":"rm -rf build/"}}}
+{"jsonrpc":"2.0","id":100,"method":"approval/request","params":{"threadId":"thread-approval-0001","turnId":"turn-approval-0001","itemId":"item-cmd-1","kind":"exec","command":"rm -rf build/"}}
+#DIRECTIVE AWAIT_STDIN_LINE
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread-approval-0001","turnId":"turn-approval-0001","item":{"id":"item-cmd-1","type":"commandExecution","command":"rm -rf build/","exitCode":0,"output":"removed"}}}
+{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread-approval-0001","turnId":"turn-approval-0001","durationMs":300}}

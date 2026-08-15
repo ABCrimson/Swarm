@@ -1,0 +1,13 @@
+# Fixture for crates/swarm-core/src/agent/codex.rs unit tests.
+# AUTHORED (not captured) — see happy_turn.ndjson's header. The turn IS
+# confirmed accepted (real turnId) BEFORE the oversized, unterminated
+# line breaks the NDJSON framer — exercises Condition B's synthesized
+# settlement for a turn already in flight (contrast
+# unconfirmed_turn_death.ndjson, which breaks BEFORE confirmation).
+
+#DIRECTIVE AWAIT_STDIN_LINE
+{"jsonrpc":"2.0","id":1,"result":{"threadId":"thread-oversized-0001","model":"gpt-5-codex"}}
+#DIRECTIVE AWAIT_STDIN_LINE
+{"jsonrpc":"2.0","id":2,"result":{"turnId":"turn-oversized-0001"}}
+{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread-oversized-0001","turnId":"turn-oversized-0001","item":{"id":"item-1","type":"agentMessage"}}}
+#DIRECTIVE EMIT_OVERSIZED_LINE

@@ -1,0 +1,15 @@
+# Fixture for crates/swarm-core/src/agent/codex.rs unit tests.
+# AUTHORED (not captured) — see happy_turn.ndjson's header. The turn IS
+# confirmed accepted (a real turnId comes back), then the process hangs
+# forever with no turn/completed — used to put a turn genuinely "in
+# flight" (with a REAL TurnId a caller could be holding) so a test can
+# exercise kill-mid-turn / busy-rejection against a real child process
+# rather than a timing race.
+
+#DIRECTIVE AWAIT_STDIN_LINE
+{"jsonrpc":"2.0","id":1,"result":{"threadId":"thread-hang-0001","model":"gpt-5-codex"}}
+#DIRECTIVE AWAIT_STDIN_LINE
+{"jsonrpc":"2.0","id":2,"result":{"turnId":"turn-hang-0001"}}
+{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread-hang-0001","turnId":"turn-hang-0001","item":{"id":"item-1","type":"agentMessage"}}}
+{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread-hang-0001","turnId":"turn-hang-0001","itemId":"item-1","delta":"Working"}}
+#DIRECTIVE HANG
