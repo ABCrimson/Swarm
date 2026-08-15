@@ -52,11 +52,13 @@ const TRUST_TIER_INFO: Record<
   },
   standard: {
     label: "Standard",
-    explanation: "Commands Run Normally; File Writes Are Gated And Denied By Default.",
+    explanation:
+      "Commands Run Normally; File Writes Are Gated And Denied By Default. Destructive Commands Like sudo And rm -rf Are Always Blocked.",
   },
   write_enabled: {
     label: "Write-Enabled",
-    explanation: "Commands Run And File Writes Are Automatically Accepted — No Prompt.",
+    explanation:
+      "Commands Run And File Writes Are Automatically Accepted — No Prompt. Destructive Commands Like sudo And rm -rf Are Always Blocked.",
   },
 };
 
@@ -374,8 +376,14 @@ export function SpawnWorkerDialog({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Tab" || !panelRef.current) return;
+      // input:not([disabled]) — this dialog, unlike CausalityPanel's
+      // (where this selector originated), has real disabled inputs
+      // (the Claude Code radio when unavailable); a bare `input` would
+      // count one as the trap's first/last element even though a
+      // disabled control is never actually tab-reachable, throwing off
+      // the wrap-around checks below.
       const focusable = panelRef.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
       );
       if (focusable.length === 0) return;
       const first = focusable[0];
