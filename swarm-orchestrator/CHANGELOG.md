@@ -9,7 +9,7 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 
 ## [0.13.0] - 2026-08-15
 
-Six PRs since the 0.12.0 tag: the headless `swarmd` daemon shipped end-to-end — remote WebSocket transport with reattach-by-seq-replay, then release binaries and non-elevated per-user service units for all three platforms; a second agent provider (`CodexAdapter` over `codex app-server` JSON-RPC) that proves the adapter trait survives a structurally different protocol family; the ship chain's machine-verifiable causal PR body; the agent-UI polish pass; and Playwright end-to-end tests running in CI for the first time in the project's history.
+Seven PRs since the 0.12.0 tag: the headless `swarmd` daemon shipped end-to-end — remote WebSocket transport with reattach-by-seq-replay, then release binaries and non-elevated per-user service units for all three platforms; a second agent provider (`CodexAdapter` over `codex app-server` JSON-RPC) that proves the adapter trait survives a structurally different protocol family; the ship chain's machine-verifiable causal PR body; the agent-UI polish pass; Playwright end-to-end tests running in CI for the first time in the project's history; and a small-debts hardening wave (live-adjustable concurrency, session pruning, ship config-leak defense).
 
 ### Added — Headless daemon: `swarmd` + remote WebSocket transport (Phases 2-3)
 
@@ -62,6 +62,13 @@ Six PRs since the 0.12.0 tag: the headless `swarmd` daemon shipped end-to-end �
 
 - **Playwright wired into CI** via a dedicated `e2e` job (`timeout-minutes: 15`, explicit `CI: "true"` env) — the suite had never run in the project's history until this landed.
 - **Coverage expanded 3 → 29 tests** across the frontend shell, its hard no-Tauri-backend boundary, and the documented path past it; `docs/e2e.md` covers the suite and the `tauri-driver` / event-log-as-oracle roadmap.
+
+### Added — Small debts: live concurrency, session pruning, ship hardening
+
+- **`set_agent_concurrency` command** — the agent-turn scheduler's concurrency is now live-adjustable instead of fixed at 3. Review caught a cap-violation (permits added before the old debt was retired let 13 turns run at a limit of 4, proven by an out-of-tree harness) and a settings bridge that clobbered the persisted cap with the pre-hydration default on every launch; both fixed, with a revert-verified peak-concurrency regression test.
+- **`session_remove_worker` command** — closes the grows-forever `workerIds` set; a removed worker cannot be resurrected.
+- **Ship defense-in-depth** — the ship chain now denies an untracked `.claude/settings.json` from being committed (real-git proof in both directions), so SWARM's own agent config can never leak into a user's repository.
+- **`Bash(pattern)` deny-glob canaried pattern-granular** — a real-CLI canary confirmed the glob deny form gates per-pattern (`echo*` denied while `pwd` allowed in the same run), not just bare tool names.
 
 ---
 
