@@ -15,7 +15,7 @@
 
 [Unit]
 Description=SWARM Orchestrator headless daemon (swarmd)
-Documentation=https://github.com/ABCrimson/Swarm/blob/main/swarm-orchestrator/docs/daemon.md
+Documentation=https://github.com/ABCrimson/Swarm/blob/main/docs/daemon.md
 After=network-online.target
 Wants=network-online.target
 

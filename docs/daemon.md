@@ -48,7 +48,7 @@ checksum, and mark it executable (`chmod +x` on Unix).
 **From source:**
 
 ```sh
-cd swarm-orchestrator/src-tauri
+cd src-tauri
 cargo build -p swarmd --release
 # binary at src-tauri/target/release/swarmd[.exe]
 ```
@@ -83,7 +83,7 @@ to upgrade the binary or refresh the unit.
 ### Linux (systemd)
 
 ```sh
-cd swarm-orchestrator/src-tauri/crates/swarmd/service
+cd src-tauri/crates/swarmd/service
 ./install.sh
 ```
 
@@ -98,7 +98,7 @@ sudo loginctl enable-linger "$USER"
 ### macOS (launchd)
 
 ```sh
-cd swarm-orchestrator/src-tauri/crates/swarmd/service
+cd src-tauri/crates/swarmd/service
 ./install.sh
 ```
 
@@ -110,7 +110,7 @@ to `~/Library/Logs/` at mode `0700` — never `/tmp`.
 ### Windows (Scheduled Task)
 
 ```powershell
-cd swarm-orchestrator\src-tauri\crates\swarmd\service
+cd src-tauri\crates\swarmd\service
 .\install.ps1
 ```
 

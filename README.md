@@ -9,7 +9,7 @@
   <img alt="Rust nightly" src="https://img.shields.io/badge/Rust-nightly--2026--08--13-ebb84a?style=flat-square&labelColor=0a0e1a&logo=rust&logoColor=ebb84a" />
   <img alt="React 19.3" src="https://img.shields.io/badge/React-19.3%20canary-ebb84a?style=flat-square&labelColor=0a0e1a&logo=react&logoColor=ebb84a" />
   <img alt="TypeScript 7.0" src="https://img.shields.io/badge/TypeScript-7.0-ebb84a?style=flat-square&labelColor=0a0e1a&logo=typescript&logoColor=ebb84a" />
-  <a href="swarm-orchestrator/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-ebb84a?style=flat-square&labelColor=0a0e1a" /></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-ebb84a?style=flat-square&labelColor=0a0e1a" /></a>
 </p>
 
 <p align="center">
@@ -18,8 +18,8 @@
   <a href="#architecture">Architecture</a> &middot;
   <a href="#quick-start">Quick Start</a> &middot;
   <a href="#the-swarmd-daemon">The Daemon</a> &middot;
-  <a href="swarm-orchestrator/docs/architecture.md">Docs</a> &middot;
-  <a href="swarm-orchestrator/CHANGELOG.md">Changelog</a>
+  <a href="docs/architecture.md">Docs</a> &middot;
+  <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 ---
@@ -100,7 +100,7 @@ flowchart TB
     LOG --> CAUSE["Causality graph<br/>measured provenance edges"]
 ```
 
-The Rust side is a **three-crate workspace**: `swarm-core` (tauri-free domain logic), `swarmd` (the headless daemon), and `swarm-desktop` (the thin Tauri shell). Both shells call the *same* core through the *same* command `Registry`. Full detail in [`docs/architecture.md`](swarm-orchestrator/docs/architecture.md).
+The Rust side is a **three-crate workspace**: `swarm-core` (tauri-free domain logic), `swarmd` (the headless daemon), and `swarm-desktop` (the thin Tauri shell). Both shells call the *same* core through the *same* command `Registry`. Full detail in [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
@@ -118,7 +118,7 @@ The Rust side is a **three-crate workspace**: `swarm-core` (tauri-free domain lo
 
 ```bash
 git clone https://github.com/ABCrimson/Swarm.git
-cd Swarm/swarm-orchestrator
+cd Swarm
 
 pnpm install
 pnpm tauri:dev      # builds the Rust core and launches the desktop app
@@ -147,7 +147,7 @@ swarmd                       # binds 127.0.0.1:8787 by default
 - **`RemotePolicy` at the boundary** — `read_file`/`write_file` are denied over the wire and config reads are secret-filtered, so a remote client can't exfiltrate the daemon token or arbitrary files.
 - **Ships as a service** — per-user units for **systemd** (Linux), **launchd** (macOS), and a **logon Scheduled Task** (Windows), all non-elevated and loopback-only by default.
 
-Full operator guide: [`docs/daemon.md`](swarm-orchestrator/docs/daemon.md).
+Full operator guide: [`docs/daemon.md`](docs/daemon.md).
 
 ---
 
@@ -199,17 +199,20 @@ Full operator guide: [`docs/daemon.md`](swarm-orchestrator/docs/daemon.md).
 
 ```text
 Swarm/
-├── .github/workflows/          # CI + four-platform release pipeline
-└── swarm-orchestrator/
-    ├── src/                     # React 19 frontend
-    ├── src-tauri/
-    │   ├── src/                 # swarm-desktop — the thin Tauri shell (command Registry wrappers)
-    │   └── crates/
-    │       ├── swarm-core/      # tauri-free domain core:
-    │       │   └── src/{agent,bus,commands,events,git,orchestration,session,worker}/
-    │       └── swarmd/          # headless daemon: ws.rs, auth.rs, serve_ui.rs + service/ units
-    ├── docs/                    # architecture.md · api.md · daemon.md · e2e.md · performance.md
-    └── CHANGELOG.md
+├── .github/
+│   ├── assets/                 # the README hero
+│   └── workflows/              # CI + four-platform release pipeline
+├── src/                        # React 19 frontend
+├── src-tauri/
+│   ├── src/                    # swarm-desktop — the thin Tauri shell (command Registry wrappers)
+│   └── crates/
+│       ├── swarm-core/         # tauri-free domain core:
+│       │   └── src/{agent,bus,commands,events,git,orchestration,session,worker}/
+│       └── swarmd/             # headless daemon: ws.rs, auth.rs, serve_ui.rs + service/ units
+├── docs/                       # architecture.md · api.md · daemon.md · e2e.md · performance.md
+├── e2e/                        # Playwright specs
+├── package.json                # frontend deps + scripts
+└── CHANGELOG.md
 ```
 
 </details>
@@ -218,10 +221,10 @@ Swarm/
 
 ## Status
 
-**v0.13.0** — published across four platforms with standalone `swarmd` binaries. The full beyond-T3 product loop is live: worktree isolation, the causal ship chain, the provenance/causality spine, two agent providers behind one trait, and the headless daemon. See the [changelog](swarm-orchestrator/CHANGELOG.md) for the per-release detail.
+**v0.13.0** — published across four platforms with standalone `swarmd` binaries. The full beyond-T3 product loop is live: worktree isolation, the causal ship chain, the provenance/causality spine, two agent providers behind one trait, and the headless daemon. See the [changelog](CHANGELOG.md) for the per-release detail.
 
 ---
 
 ## Contributing & License
 
-Development setup, code standards, and the review process live in [`docs/contributing.md`](swarm-orchestrator/docs/contributing.md). Licensed under the [MIT License](swarm-orchestrator/LICENSE).
+Development setup, code standards, and the review process live in [`docs/contributing.md`](docs/contributing.md). Licensed under the [MIT License](LICENSE).
