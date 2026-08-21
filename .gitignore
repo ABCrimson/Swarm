@@ -46,3 +46,6 @@ test-results/
 
 # Agent tooling
 .superpowers/
+
+# Local agent settings
+.claude/settings.local.json

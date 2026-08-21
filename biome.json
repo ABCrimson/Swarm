@@ -8,7 +8,9 @@
       "!**/dist",
       "!**/node_modules",
       "!**/*.svg",
-      "!src/styles/tokens.css"
+      "!src/styles/tokens.css",
+      "!.claude",
+      "!.superpowers"
     ]
   },
   "formatter": {
