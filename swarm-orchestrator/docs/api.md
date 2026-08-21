@@ -312,6 +312,16 @@ await invoke("worker_input", {
 
 ---
 
+### `set_max_workers`
+
+Set the worker registry's concurrency ceiling at runtime; the live registry is resized immediately and the value is persisted so it survives a restart.
+
+**Arguments:** `{ max: number }` -- clamped to `1..=256` (default 64); an out-of-range value is rejected.
+
+**Returns:** `void`.
+
+---
+
 ### Worktree Isolation Lifecycle
 
 Giving a worker its own `git worktree` is opt-in per spawn, via [`spawn_worker`](#spawn_worker)'s `repoRoot`/`isolation` fields -- no `repoRoot` reproduces exactly the pre-worktree-isolation behavior.
@@ -800,6 +810,16 @@ await invoke("session_add_worker", {
 
 ---
 
+### `session_remove_worker`
+
+Remove a worker from a session. Idempotent -- removing an absent worker is a no-op; only a missing session errors. Closes the "session `workerIds` grow forever" leak.
+
+**Arguments:** `{ sessionId: string, workerId: string, originWorker?, causeSeq? }`.
+
+**Returns:** `void`. **Emits:** `session_worker_removed` on `swarm://events`.
+
+---
+
 ## Agent Commands
 
 > **`ai_request` was removed in Phase 2 of the multi-provider agent-execution rework.** It enqueued raw Anthropic Messages API requests through a Rust-side priority queue (`AiQueue`) that no shipped frontend code ever called -- the chat flow you get by running the app streams `@anthropic-ai/sdk` directly from the webview to `api.anthropic.com` (`src/lib/anthropic.ts`) and never reached this command. Its tested queueing machinery (BinaryHeap priority + Semaphore concurrency gate + bounded mpsc backpressure) was **absorbed, not deleted** -- it now lives as `swarm_core::agent::scheduler::AgentScheduler`, retyped to schedule provider-adapter turns instead of raw API requests. See `docs/architecture.md`'s adapter-layer section for the trait pair (`AgentAdapter`/`AgentSession`) Phase 3's concrete adapters will implement, and the [`agent_*` event family](#type-tags) below for the normalized events those adapters will emit in place of `ai_stream_delta`/`ai_stream_settled`.
@@ -990,6 +1010,16 @@ await invoke("agent_permission_respond", {
 
 ---
 
+### `set_agent_concurrency`
+
+Set the agent scheduler's concurrent-turn limit at runtime (how many worker turns execute simultaneously). Persisted to config.
+
+**Arguments:** `{ limit: number }` -- clamped to the scheduler's `MIN..=MAX` range; an out-of-range value is rejected.
+
+**Returns:** `void`.
+
+---
+
 ## File System Commands
 
 Real Rust commands for the `read_file`/`write_file` AI tools (`src/lib/tools.ts`) -- previously (Phase 0) both tools ran over `tauri-plugin-fs`'s capability-scoped helpers (`src/lib/fs.ts`) because these commands didn't exist yet. Path validation mirrors the same scopes the plugin-fs capability config (`src-tauri/capabilities/default.json`) declares -- reads permitted under `$APPDATA/**` and `$HOME/**`, writes permitted under `$APPDATA/**` and `$HOME/.swarm/**` -- enforced by hand in `commands/fs.rs::FsScopes` (that capability scope doesn't apply here; these are plain custom commands, not plugin-fs calls), with the identical truthful, Title Case error wording as the plugin-fs path. `src/lib/fs.ts` and its other (non-tool) UI consumers are unaffected by this migration.
@@ -1062,6 +1092,26 @@ await invoke("write_file", {
 ```
 
 **Emits:** `file_written` envelope on `swarm://events` with payload `{ path, bytes }`, carrying `originWorker`/`causeSeq` when given.
+
+---
+
+## Config Commands
+
+Read and write the app's persisted key/value configuration. Over the `swarmd` WebSocket these are **`SecretFiltered`**: secret-shaped keys (e.g. the Anthropic API key) are denied before the handler runs, so a remote client cannot read or write them.
+
+### `read_config`
+
+**Arguments:** `{ key: string }`.
+
+**Returns:** the stored value, or `null` if the key is unset.
+
+---
+
+### `write_config`
+
+**Arguments:** `{ key: string, value: <any JSON value> }`.
+
+**Returns:** `void`.
 
 ---
 

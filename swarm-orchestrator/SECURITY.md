@@ -4,9 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.10.x  | :white_check_mark: |
-| 0.9.x   | :white_check_mark: |
-| < 0.9   | :x:                |
+| 0.13.x  | :white_check_mark: |
+| < 0.13  | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -14,7 +13,7 @@ If you discover a security vulnerability in SWARM Orchestrator, please report it
 
 **Do NOT open a public issue.**
 
-Instead, please use [GitHub Security Advisories](https://github.com/crimson-dev/swarm-orchestrator/security/advisories/new) or email security@crimson.dev. Include:
+Instead, please use [GitHub Security Advisories](https://github.com/ABCrimson/Swarm/security/advisories/new) or email security@crimson.dev. Include:
 
 1. Description of the vulnerability
 2. Steps to reproduce

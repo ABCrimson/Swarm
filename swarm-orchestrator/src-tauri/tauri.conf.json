@@ -44,7 +44,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/crimson-dev/swarm-orchestrator/releases/latest/download/latest.json"
+        "https://github.com/ABCrimson/Swarm/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMxRkJBM0MwMjdBNDRDMDMKUldRRFRLUW53S1A3TWRFaUtVM3FrODZOTWJwVHUrQys4eGovakpxc1ZzSEtXanJLbEMwN2xEV0MK"
     },

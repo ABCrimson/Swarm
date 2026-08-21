@@ -53,11 +53,11 @@ SWARM Orchestrator is a Tauri 2.11 desktop application with a clear separation b
 
 ## Backend Architecture
 
-The backend is organized into five domain modules under `src-tauri/src/`:
+The backend's domain logic lives in the tauri-free `crates/swarm-core/src/`, organized into modules (`agent`, `bus`, `commands`, `events`, `git`, `orchestration`, `session`, `worker`, plus `runtime`/`lock`/`protocol`/`paths`/`error`):
 
 ### Module Map
 
-The Rust side is a two-crate workspace: domain logic lives in the tauri-free `swarm-core` library crate, the Tauri shell (`swarm-desktop`) wires it to IPC commands and platform paths. CI enforces that `swarm-core` never depends on `tauri`/`tauri-plugin-*` (`cargo tree -p swarm-core -e normal`).
+The Rust side is a three-crate workspace: domain logic lives in the tauri-free `swarm-core` library crate, the Tauri shell (`swarm-desktop`) wires it to IPC commands and platform paths, and the headless `swarmd` daemon serves the same core over an authenticated WebSocket (see [Runtime Modes](#runtime-modes)). CI enforces that `swarm-core` never depends on `tauri`/`tauri-plugin-*` (`cargo tree -p swarm-core -e normal`).
 
 ```text
 src-tauri/crates/swarm-core/src/   (swarm-core -- tauri-free domain crate)
@@ -458,7 +458,7 @@ Sessions are stored in `DashMap<Uuid, Session>` and persisted to disk:
 - **`Router`** (`bus/router.rs`): sends direct messages (`send_direct`, tagged with a `to_worker`) and broadcasts (`send_broadcast`) -- and now ALSO emits `bus_message` onto the ordered spine itself, synchronously, via the `EventSink` it's constructed with (`Router::new(bus, sink)`). This is the actual fix: every send reaches the frontend unconditionally, the same guarantee every other `agent_*`/`worker_*` event already had, instead of requiring an active subscriber that nothing ever started. `causeSeq`/`originWorker` thread straight through from the caller onto the envelope, so a Rust-side adapter handing a turn off to another worker (or a human-initiated `bus_send`) can cite the real causing event.
 - **DELETED (~150 lines): `create_pipeline`/`execute_pipeline`/`PipelineStage`/`apply_transform`.** `execute_pipeline` never awaited any stage's completion, and `apply_transform` only ever narrowed the INITIAL payload -- never a worker's actual output. A synchronous fan-out wearing a pipeline's name, not a real one. Real multi-stage handoffs are handoff CHAINS derived from `causedBySeq` on successive `bus_message`/`agent_turn_started` events -- the ordered causal log already gives you a pipeline for free, without a separate stage-registration API that can silently drift from what actually happened.
 - **DELETED: `bus_subscribe`/`bus_create_pipeline`/`bus_list_pipelines` commands.** `bus_subscribe` was a second subscription primitive recreating the exact ad-hoc-events problem the ordered spine already eliminated -- and had zero callers anywhere in the shipped app. `grep -rn "create_pipeline|execute_pipeline|PipelineStage|apply_transform|bus_subscribe|bus_create_pipeline|bus_list_pipelines" --include="*.rs"` returns zero live references (doc-comment mentions of the deletion itself aside).
-- **KEPT: `bus_send`, `bus_list_channels`.** Registry entry count: 36 -> 34 (net of +1 `agent_permission_respond`, -3 deleted bus commands) -- see [docs/api.md](api.md#unified-bus-event-contract).
+- **KEPT: `bus_send`, `bus_list_channels`.** Registry entry count settled at 35 (ship Phase 2's `ship_context` had brought it to 37; this change's net +1 `agent_permission_respond`, -3 deleted bus commands then landed it at 35) -- see [docs/api.md](api.md#unified-bus-event-contract).
 
 ### Ordered Event Core
 
@@ -835,7 +835,7 @@ Read the [Adapter Layer](#adapter-layer) section and the `agent/`/`bus_*` entrie
 
 ### Backend Errors
 
-All backend errors flow through the `AppError` enum (11 variants), which implements:
+All backend errors flow through the `AppError` enum (16 variants), which implements:
 
 - `thiserror::Error` for `Display` and `From` impls
 - Custom `Serialize` that serializes as a plain string for IPC
@@ -852,7 +852,12 @@ AppError
 ├── Serialization(serde_json)    JSON error
 ├── SessionNotFound { id }       Session ID missing
 ├── ChannelClosed(String)        Channel dropped
-└── QueueFull { capacity }       AI queue backpressure
+├── EventLog(String)             Ordered event log / WAL failure
+├── QueueFull { capacity }       Agent turn queue backpressure
+├── Config(String)               Config read/write failure
+├── Git(String)                  Git / worktree / ship error
+├── AgentSessionBusy             A turn is already in flight for this worker
+└── LineTooLong { ... }          NDJSON framer line-length cap exceeded
 ```
 
 ### Error Propagation
