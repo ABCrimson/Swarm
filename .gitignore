@@ -1,6 +1,48 @@
+# Dependencies
 node_modules/
-target/
+
+# Build output
 dist/
-.playwright-mcp/
+dist-web/
+target/
+src-tauri/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+
+# Logs
+*.log
+npm-debug.log*
+
+# Tauri
+src-tauri/gen/
+
+# Test output
 coverage/
+playwright-report/
+test-results/
+.playwright-mcp/
+
+# TypeScript
+*.tsbuildinfo
+
+# Security
+*.pem
+*.key
+*.cert
+*.key.pub
+.tauri/
+
+# Agent tooling
 .superpowers/

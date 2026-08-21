@@ -19,21 +19,21 @@ jobs:
     # The app lives one level below the repo root.
     defaults:
       run:
-        working-directory: swarm-orchestrator
+        working-directory: .
     steps:
       - uses: actions/checkout@v6
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
-          package_json_file: swarm-orchestrator/package.json
+          package_json_file: package.json
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          cache-dependency-path: swarm-orchestrator/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -59,21 +59,21 @@ jobs:
     # The app lives one level below the repo root.
     defaults:
       run:
-        working-directory: swarm-orchestrator
+        working-directory: .
     steps:
       - uses: actions/checkout@v6
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
-          package_json_file: swarm-orchestrator/package.json
+          package_json_file: package.json
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          cache-dependency-path: swarm-orchestrator/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -92,7 +92,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
-          path: swarm-orchestrator/playwright-report/
+          path: playwright-report/
           retention-days: 14
 
   lint-backend:
@@ -109,29 +109,29 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          # Keep in sync with swarm-orchestrator/rust-toolchain.toml
+          # Keep in sync with rust-toolchain.toml
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy, rustfmt
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: swarm-orchestrator/src-tauri
+          workspaces: src-tauri
 
       - name: Clippy
-        working-directory: swarm-orchestrator/src-tauri
+        working-directory: src-tauri
         run: cargo clippy --workspace -- -D warnings
 
       - name: Rust tests
-        working-directory: swarm-orchestrator/src-tauri
+        working-directory: src-tauri
         run: cargo test --workspace
 
       - name: Rust format check
-        working-directory: swarm-orchestrator/src-tauri
+        working-directory: src-tauri
         run: cargo fmt --all -- --check
 
       - name: Verify swarm-core has no Tauri dependency
-        working-directory: swarm-orchestrator/src-tauri
+        working-directory: src-tauri
         run: |
           # --prefix none --format "{p}" prints one bare "name version"
           # per line (no tree-drawing indentation, no path). Anchored
@@ -145,7 +145,7 @@ jobs:
           fi
 
       - name: Verify swarmd has no Tauri dependency
-        working-directory: swarm-orchestrator/src-tauri
+        working-directory: src-tauri
         run: |
           # swarmd depends on swarm-core but must never itself grow a
           # tauri/tauri-plugin-* dependency (the swarm-core-only gate
