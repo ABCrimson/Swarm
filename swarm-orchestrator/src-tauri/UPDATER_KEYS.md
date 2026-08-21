@@ -33,9 +33,9 @@ env:
 
 - **Private key:** Generated at `~/.tauri/swarm-orchestrator.key` (no password set on the key). It is not committed to the repository and exists only on the machine(s) that generated it and in the `TAURI_SIGNING_PRIVATE_KEY` GitHub Actions secret.
 - **Public key:** Populated in `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`.
-- **Update endpoint:** `plugins.updater.endpoints` in `tauri.conf.json` points at the `crimson-dev/swarm-orchestrator` GitHub Releases `latest.json` asset:
+- **Update endpoint:** `plugins.updater.endpoints` in `tauri.conf.json` points at the `ABCrimson/Swarm` GitHub Releases `latest.json` asset:
   ```
-  https://github.com/crimson-dev/swarm-orchestrator/releases/latest/download/latest.json
+  https://github.com/ABCrimson/Swarm/releases/latest/download/latest.json
   ```
 - **CI signing:** `.github/workflows/release.yml` runs on `v*` tag pushes (and manual `workflow_dispatch`), builds with `tauri-apps/tauri-action`, and passes `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (both GitHub Actions secrets) as env vars to the build step, so every tagged release is signed automatically across all four build matrix targets (`x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`).
 - **`verify-updater-manifest` job:** runs after `build` (`if: always()`) and asserts `latest.json` on the draft release carries all four platform keys (`windows-x86_64`, `darwin-aarch64`, `darwin-x86_64`, `linux-x86_64`) before a human publishes it — the four build jobs fetch-modify-upload the same release asset non-atomically, so a lost entry would otherwise be silent.

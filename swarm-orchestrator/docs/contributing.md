@@ -21,9 +21,9 @@
 
 | Tool      | Version        | Purpose                              |
 |-----------|----------------|--------------------------------------|
-| Node.js   | 26.5.0         | Frontend build and dev server        |
-| pnpm      | 11.11.0        | Package management (pinned via `packageManager` in `package.json`; npm is not used in this project) |
-| Rust      | 1.98.0-beta    | Backend compilation                  |
+| Node.js   | 26.7.0         | Frontend build and dev server        |
+| pnpm      | 11.21.0        | Package management (pinned via `packageManager` in `package.json`; npm is not used in this project) |
+| Rust      | nightly-2026-08-13 | Backend compilation              |
 
 ### Rust Toolchain
 
@@ -31,7 +31,7 @@ The Rust toolchain is automatically configured by `rust-toolchain.toml`:
 
 ```toml
 [toolchain]
-channel    = "1.98.0-beta"
+channel    = "nightly-2026-08-13"
 profile    = "minimal"
 components = ["rustfmt", "clippy", "rust-src", "rust-analyzer"]
 targets    = [
@@ -47,8 +47,8 @@ Running any `cargo` command in the project will auto-install the correct toolcha
 
 ```bash
 # Clone the repository
-git clone https://github.com/crimson-dev/swarm-orchestrator.git
-cd swarm-orchestrator
+git clone https://github.com/ABCrimson/Swarm.git
+cd Swarm/swarm-orchestrator
 
 # Install frontend dependencies
 pnpm install
@@ -89,7 +89,7 @@ pnpm tauri:dev
 
 ### TypeScript / React
 
-**Formatter/Linter:** Biome 2.5.3
+**Formatter/Linter:** Biome 2.5.8
 
 ```bash
 # Lint + format (auto-fix)
@@ -274,7 +274,7 @@ specific error variant instead of a generic AI error.
 ```
 
 ```text
-docs(api): document ai_request streaming protocol
+docs(api): document the ship_context causal record
 ```
 
 ---
@@ -363,19 +363,19 @@ cargo test --doc
 | `orchestration::log`       | 12    | SQLite append/read, migration ladder, partial index |
 | `git::*` (7 files)         | 101   | Binary discovery, worktree add/lock/unlock/remove, ship preflight/commit/push, secret redaction |
 | `bus::channel`             | 4     | Channel creation, send/receive, broadcast, message serialization |
-| `bus::router`              | 6     | Direct/broadcast send, pipeline creation, transform application |
+| `bus::router`              | 6     | Direct/broadcast send; unconditional `bus_message` emission onto the ordered spine |
 | `config`                   | 7     | Atomic key-value JSON config persistence |
 | `commands::metrics`        | 5     | `SharedSystem` construction, lock behavior, per-worker metric collection |
 | `commands::orchestration`  | 6     | `events_since` paging, live/backfilled envelope shape parity |
 | `commands::fs`             | 6     | Path scoping, truthful error classification |
 | `commands::worker`         | 3     | Argument-shape regression, credential-leak span-capture (command layer) |
-| **Total**                  | **251 (swarm-core) + 20 (swarm-desktop) = 271** | + 15 doc-tests passing (1 more `ignore`-annotated) |
+| **Total**                  | **377 (swarm-core) + 27 (swarmd) + 20 (swarm-desktop)** _(as of v0.13.0)_ | + 16 doc-tests passing |
 
 Run `cargo test` from `src-tauri/` to reproduce this locally; run `cargo test --doc` for just the doc-tests.
 
 ### Frontend Testing
 
-Frontend tests run via Vitest (`pnpm test`): **52 test files, 515 tests**, covering components, hooks, stores, and `lib/` utilities.
+Frontend tests run via Vitest (`pnpm test`): **61 test files, 621 tests** _(as of v0.13.0)_, covering components, hooks, stores, and `lib/` utilities.
 
 | Directory                        | Focus                                                          |
 |-----------------------------------|-----------------------------------------------------------------|

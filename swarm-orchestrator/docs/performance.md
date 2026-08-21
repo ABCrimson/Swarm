@@ -74,19 +74,19 @@ let runtime = tokio::runtime::Builder::new_multi_thread()
 
 - `spawn_blocking` for all blocking I/O: PTY reads (`pty.rs`), sysinfo refresh (`metrics.rs`), worker metrics aggregation (`metrics.rs`), session persistence (`session.rs`)
 - `CancellationToken::run_until_cancelled` races the 500ms metrics interval tick against shutdown, replacing an earlier two-armed `tokio::select! { biased; }` with a more direct single-future expression
-- `JoinSet` for tracking spawned AI streaming tasks with clean drain on shutdown
+- `JoinSet` for tracking spawned agent-turn tasks with clean drain on shutdown
 - A single `SharedSystem` (one `sysinfo::System` behind a `parking_lot::Mutex`, managed as Tauri state) is shared between the background metrics loop and the on-demand `get_metrics` command, so CPU-usage deltas come from one tracker instead of two independently-refreshing `System` instances
 
 ### Concurrency
 
 | Primitive | Version / Crate | Usage |
 |-----------|----------------|-------|
-| `DashMap` | 7.0.0-rc2 | Lock-free worker registry (`WorkerRegistry`), session manager, bus pipelines |
-| `parking_lot::Mutex` | 0.12.5 | PTY writer/child wrapping, shared sysinfo `System` (`SharedSystem`), AI queue heap |
+| `DashMap` | 6.2.1 | Lock-free worker registry (`WorkerRegistry`), session manager, bus channels |
+| `parking_lot::Mutex` | 0.12.5 | PTY writer/child wrapping, shared sysinfo `System` (`SharedSystem`), agent turn queue heap |
 | `parking_lot::RwLock` | 0.12.5 | System configuration (max workers, default shell) |
-| `tokio::sync::Semaphore` | tokio 1.52.3 | AI concurrency limiting (default: 3 concurrent requests) |
-| `tokio::sync::mpsc` | tokio 1.52.3 | PTY output channel (4096 capacity), AI queue (256 capacity) |
-| `tokio::sync::broadcast` | tokio 1.52.3 | Per-topic message bus channels (`bus::channel::MessageBus`) |
+| `tokio::sync::Semaphore` | tokio 1.53.1 | agent-turn concurrency limiting (`AgentScheduler`, default: 3 concurrent turns) |
+| `tokio::sync::mpsc` | tokio 1.53.1 | PTY output channel (4096 capacity), agent turn queue (256 capacity) |
+| `tokio::sync::broadcast` | tokio 1.53.1 | Per-topic message bus channels (`bus::channel::MessageBus`) |
 
 `rayon` was removed from `Cargo.toml` -- it was an unused dependency. Worker metrics aggregation runs as sequential iteration inside `tokio::task::spawn_blocking`; the 64-worker registry cap makes `rayon`-style parallel dispatch overhead not worth paying for.
 
@@ -96,7 +96,7 @@ let runtime = tokio::runtime::Builder::new_multi_thread()
 
 - **Log store:** Bounded at 10,000 entries (`MAX_ENTRIES` in `log-store.ts`), oldest entries evicted on overflow
 - **Metrics loop:** 500ms interval with a shared `sysinfo::System` instance (reused across ticks for accurate CPU deltas, not re-allocated)
-- **AI queue:** Bounded mpsc channel (256 capacity) with `BinaryHeap` priority ordering and `try_send` for non-blocking backpressure
+- **Agent turn queue:** Bounded mpsc channel (256 capacity) with `BinaryHeap` priority ordering and `try_send` for non-blocking backpressure
 - **PTY buffers:** 4 KB read buffer per worker, bounded mpsc channel (4096 capacity) bridges blocking reads to async world with backpressure
 
 ---
@@ -144,7 +144,7 @@ When the `timestamp-query` device feature is available, the compute pass records
 
 ### Vite 8.1 + Rolldown
 
-The frontend builds with Vite 8.1.4 using the Rolldown bundler. React Compiler runs via `@rolldown/plugin-babel` (`reactCompilerPreset()` from `@vitejs/plugin-react` 6.0.3), since `@vitejs/plugin-react` itself is oxc-based and no longer runs Babel directly:
+The frontend builds with Vite 8.2.1 using the Rolldown bundler. React Compiler runs via `@rolldown/plugin-babel` (`reactCompilerPreset()` from `@vitejs/plugin-react` 6.0.5), since `@vitejs/plugin-react` itself is oxc-based and no longer runs Babel directly:
 
 ```ts
 build: {
@@ -174,7 +174,7 @@ build: {
 | `ai` | `@anthropic-ai/sdk` |
 | `charts` | `recharts` |
 
-> `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 12.42.2, not `framer-motion`.
+> `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 13.1.0, not `framer-motion`.
 
 ### Rust Release Profile
 
