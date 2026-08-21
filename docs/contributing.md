@@ -23,7 +23,7 @@
 |-----------|----------------|--------------------------------------|
 | Node.js   | 26.7.0         | Frontend build and dev server        |
 | pnpm      | 11.21.0        | Package management (pinned via `packageManager` in `package.json`; npm is not used in this project) |
-| Rust      | nightly-2026-08-13 | Backend compilation              |
+| Rust      | nightly-2026-08-21 | Backend compilation              |
 
 ### Rust Toolchain
 
@@ -31,7 +31,7 @@ The Rust toolchain is automatically configured by `rust-toolchain.toml`:
 
 ```toml
 [toolchain]
-channel    = "nightly-2026-08-13"
+channel    = "nightly-2026-08-21"
 profile    = "minimal"
 components = ["rustfmt", "clippy", "rust-src", "rust-analyzer"]
 targets    = [
@@ -89,7 +89,7 @@ pnpm tauri:dev
 
 ### TypeScript / React
 
-**Formatter/Linter:** Biome 2.5.8
+**Formatter/Linter:** Biome 2.5.10
 
 ```bash
 # Lint + format (auto-fix)

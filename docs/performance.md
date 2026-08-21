@@ -142,9 +142,9 @@ When the `timestamp-query` device feature is available, the compute pass records
 
 ## Build Optimization
 
-### Vite 8.1 + Rolldown
+### Vite 8.2 + Rolldown
 
-The frontend builds with Vite 8.2.1 using the Rolldown bundler. React Compiler runs via `@rolldown/plugin-babel` (`reactCompilerPreset()` from `@vitejs/plugin-react` 6.0.5), since `@vitejs/plugin-react` itself is oxc-based and no longer runs Babel directly:
+The frontend builds with Vite 8.2.2 using the Rolldown bundler. React Compiler runs via `@rolldown/plugin-babel` (`reactCompilerPreset()` from `@vitejs/plugin-react` 6.1.0), since `@vitejs/plugin-react` itself is oxc-based and no longer runs Babel directly:
 
 ```ts
 build: {
@@ -174,7 +174,7 @@ build: {
 | `ai` | `@anthropic-ai/sdk` |
 | `charts` | `recharts` |
 
-> `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 13.1.0, not `framer-motion`.
+> `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 13.1.1, not `framer-motion`.
 
 ### Rust Release Profile
 

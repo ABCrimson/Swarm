@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>End-to-End Testing · SWARM Orchestrator</title>
+<style>
+  :root{
+    color-scheme: dark;
+    --bg: oklch(0.145 0.014 265);
+    --deep: oklch(0.12 0.012 265);
+    --card: oklch(0.185 0.016 265);
+    --ink: oklch(0.93 0.01 265);
+    --muted: oklch(from var(--ink) l c h / .60);
+    --faint: oklch(from var(--ink) l c h / .38);
+    --line: oklch(0.96 0.008 265 / .09);
+    --gold: oklch(0.8 0.14 85);
+    --gold-dim: oklch(from var(--gold) l c h / .5);
+    --violet: oklch(0.7 0.15 295);
+    --ok: oklch(0.75 0.15 150);
+    --bad: oklch(0.7 0.17 25);
+    --code-bg: oklch(0.16 0.014 265);
+    --sp: 1rem;
+    --r: 14px;
+    --maxw: 82ch;
+  }
+  @property --glow{ syntax:'<percentage>'; inherits:false; initial-value:0%; }
+  *{ box-sizing:border-box; }
+  html{ scroll-behavior:smooth; scrollbar-color: var(--gold-dim) transparent; }
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font: clamp(0.95rem,0.9rem + 0.25vw,1.0625rem)/1.65 system-ui, -apple-system, Inter, sans-serif;
+    text-rendering:optimizeLegibility; -webkit-font-smoothing:antialiased;
+    scrollbar-gutter: stable;
+  }
+  body::before{
+    content:""; position:fixed; inset:-25% -15% auto auto; width:60vw; height:60vw; z-index:-1;
+    background: radial-gradient(closest-side, oklch(from var(--gold) l c h / .06), transparent 70%);
+    pointer-events:none;
+  }
+  body::after{
+    content:""; position:fixed; inset:auto auto -25% -15%; width:55vw; height:55vw; z-index:-1;
+    background: radial-gradient(closest-side, oklch(from var(--violet) l c h / .05), transparent 70%);
+    pointer-events:none;
+  }
+  a{ color:var(--gold); text-underline-offset:3px; text-decoration-color: var(--gold-dim); }
+  a:hover{ text-decoration-color: var(--gold); }
+  ::selection{ background: oklch(from var(--gold) l c h / .25); }
+
+  /* ---- skip link ---- */
+  .skip{ position:absolute; left:-999px; top:0; background:var(--gold); color:oklch(0.15 0.02 265); padding:.5rem 1rem; border-radius:0 0 8px 0; z-index:100; }
+  .skip:focus{ left:0; }
+
+  /* ---- sticky header ---- */
+  header.top{
+    position:sticky; top:0; z-index:50;
+    display:flex; align-items:center; gap:1.25rem; flex-wrap:wrap;
+    padding:.75rem clamp(1rem,3vw,2rem);
+    background: oklch(0.14 0.014 265 / .72);
+    backdrop-filter: blur(14px) saturate(1.4);
+    border-bottom:1px solid var(--line);
+  }
+  .brand{ display:flex; align-items:center; gap:.6rem; font-weight:800; letter-spacing:-.02em; font-size:1.05rem; }
+  .brand b{ background:linear-gradient(100deg,var(--ink),var(--gold)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .brand .dot{ width:9px; height:9px; border-radius:50%; background:var(--gold); box-shadow:0 0 12px var(--gold); }
+  nav.nav{ display:flex; gap:.25rem; flex-wrap:wrap; margin-left:auto; }
+  nav.nav a{
+    font-size:.85rem; padding:.35rem .7rem; border-radius:999px; text-decoration:none; color:var(--muted);
+    transition: background .15s, color .15s;
+  }
+  nav.nav a:hover{ color:var(--ink); background:var(--line); }
+  nav.nav a[aria-current="page"]{ color:oklch(0.15 0.02 265); background:var(--gold); font-weight:600; }
+
+  /* ---- reading progress ---- */
+  .progress{ position:fixed; top:0; left:0; height:2px; width:100%; transform-origin:0 50%; background:var(--gold); z-index:60; transform:scaleX(0); }
+  @supports (animation-timeline: scroll()){
+    .progress{ animation: grow linear both; animation-timeline: scroll(root); }
+    @keyframes grow{ from{transform:scaleX(0)} to{transform:scaleX(1)} }
+  }
+
+  /* ---- layout ---- */
+  .wrap{ display:grid; grid-template-columns: minmax(0,1fr); max-width:1200px; margin-inline:auto; padding:0 clamp(1rem,3vw,2rem); }
+  @media (min-width: 960px){ .wrap{ grid-template-columns: 220px minmax(0,1fr); gap:3rem; } }
+  aside.toc{ display:none; }
+  @media (min-width: 960px){
+    aside.toc{ display:block; position:sticky; top:5rem; align-self:start; max-height:calc(100vh - 6rem); overflow-y:auto; padding-top:2.5rem; }
+    aside.toc .lbl{ font-size:.72rem; text-transform:uppercase; letter-spacing:.12em; color:var(--faint); margin:0 0 .75rem; }
+    aside.toc ol{ list-style:none; margin:0; padding:0; border-left:1px solid var(--line); }
+    aside.toc li a{ display:block; padding:.3rem 0 .3rem .9rem; margin-left:-1px; border-left:2px solid transparent; font-size:.85rem; color:var(--muted); text-decoration:none; line-height:1.4; }
+    aside.toc li a:hover{ color:var(--ink); }
+    aside.toc li a.active{ color:var(--gold); border-left-color:var(--gold); }
+    aside.toc li.sub a{ padding-left:1.7rem; font-size:.8rem; }
+  }
+
+  main{ min-width:0; padding: 2.5rem 0 5rem; max-width: var(--maxw); }
+
+  /* ---- hero ---- */
+  .hero{ margin-bottom:2.5rem; }
+  .eyebrow{ font-size:.78rem; text-transform:uppercase; letter-spacing:.14em; color:var(--gold); font-weight:600; }
+  h1{ font-size:clamp(2rem,5vw,3rem); line-height:1.08; letter-spacing:-.025em; margin:.5rem 0 .5rem; text-wrap:balance;
+      background:linear-gradient(120deg,var(--ink) 30%,var(--gold)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .dek{ color:var(--muted); font-size:1.1rem; max-width:70ch; text-wrap:pretty; margin:0; }
+
+  /* ---- prose ---- */
+  h2{ font-size:1.5rem; letter-spacing:-.015em; margin:2.75rem 0 .85rem; padding-top:.6rem; scroll-margin-top:5rem; }
+  h3{ font-size:1.15rem; margin:2rem 0 .6rem; color: oklch(from var(--ink) l c h / .92); scroll-margin-top:5rem; }
+  h2 + p, h3 + p{ margin-top:0; }
+  p, li{ text-wrap:pretty; }
+  main :is(h2,h3) a.anchor{ color:var(--faint); text-decoration:none; margin-left:.4rem; opacity:0; font-weight:400; }
+  main :is(h2,h3):hover a.anchor{ opacity:1; }
+  ul, ol{ padding-left:1.3rem; }
+  li{ margin:.35rem 0; }
+  li::marker{ color: var(--gold-dim); }
+  hr{ border:none; border-top:1px solid var(--line); margin:2.5rem 0; }
+  blockquote{ margin:1.25rem 0; padding:.5rem 0 .5rem 1.15rem; border-left:3px solid var(--gold-dim); color:var(--muted); }
+  strong{ color: oklch(0.97 0.02 90); font-weight:650; }
+
+  /* ---- code ---- */
+  code{ font-family: ui-monospace,'JetBrains Mono','Cascadia Code',Menlo,Consolas,monospace; font-size:.86em; }
+  :not(pre) > code{ background:var(--code-bg); border:1px solid var(--line); border-radius:6px; padding:.12em .4em; color: oklch(0.9 0.03 90); overflow-wrap:anywhere; }
+  pre{ background:var(--code-bg); border:1px solid var(--line); border-radius:var(--r); padding:1.1rem 1.25rem; overflow-x:auto; max-width:100%; overscroll-behavior:contain; line-height:1.6;
+       box-shadow: 0 1px 2px oklch(0 0 0 / .3), inset 0 1px 0 oklch(1 0 0 / .04); }
+  pre code{ color: oklch(0.88 0.02 265); background:none; border:none; padding:0; }
+
+  /* ---- tables ---- */
+  .tablewrap{ overflow-x:auto; max-width:100%; overscroll-behavior:contain; margin:1.25rem 0; border:1px solid var(--line); border-radius:var(--r); }
+  table{ border-collapse:collapse; width:100%; font-size:.92rem; }
+  thead th{ position:sticky; top:0; background:var(--card); text-align:left; font-weight:650; color:var(--ink); padding:.7rem .95rem; border-bottom:1px solid var(--line); white-space:nowrap; }
+  td{ padding:.6rem .95rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:nth-child(even){ background: oklch(from var(--ink) l c h / .02); }
+  tbody tr:hover{ background: oklch(from var(--gold) l c h / .05); }
+  td:has(code), th{ font-variant-numeric: tabular-nums; }
+
+  /* ---- callout (blockquote starting with NOTE-ish) reused as .note ---- */
+  .note{ background: oklch(from var(--gold) l c h / .06); border:1px solid var(--gold-dim); border-radius:var(--r); padding:.9rem 1.15rem; margin:1.25rem 0; color: oklch(0.9 0.02 90); }
+
+  /* ---- footer ---- */
+  footer.foot{ border-top:1px solid var(--line); margin-top:4rem; padding:2rem clamp(1rem,3vw,2rem); color:var(--faint); font-size:.85rem; display:flex; gap:1rem; flex-wrap:wrap; justify-content:space-between; max-width:1200px; margin-inline:auto; }
+  footer.foot a{ color:var(--muted); text-decoration:none; }
+  footer.foot a:hover{ color:var(--gold); }
+
+  @media (prefers-reduced-motion: reduce){ *{ animation:none !important; transition:none !important; scroll-behavior:auto; } }
+  @media print{ header.top,aside.toc,.progress,body::before,body::after{ display:none } a{ color:inherit } pre,table{ border-color:#999 } }
+</style>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<div class="progress" aria-hidden="true"></div>
+
+<header class="top">
+  <a class="brand" href="./index.html"><span class="dot"></span><span>SWARM <b>Docs</b></span></a>
+  <nav class="nav" aria-label="Documentation">
+    <a href="./architecture.html">Architecture</a>
+    <a href="./api.html">API</a>
+    <a href="./daemon.html">Daemon</a>
+    <a href="./performance.html">Performance</a>
+    <a href="./e2e.html" aria-current="page">E2E</a>
+    <a href="./contributing.html">Contributing</a>
+    <a href="https://github.com/ABCrimson/Swarm">GitHub ↗</a>
+  </nav>
+</header>
+
+<div class="wrap">
+  <aside class="toc" aria-label="On this page">
+    <p class="lbl">On this page</p>
+    <ol id="toc"><!-- TOC --></ol>
+  </aside>
+
+  <main id="content">
+    <div class="hero">
+      <p class="eyebrow">Documentation</p>
+      <h1>End-to-End Testing</h1>
+      <p class="dek">Playwright coverage for SWARM Orchestrator's frontend shell, its hard boundary, and the documented (not yet built) path past it.</p>
+    </div>
+
+    <hr>
+
+    <hr>
+
+    <h2 id="current-suite">Current Suite</h2>
+    <p>Playwright drives the real Vite build (<code>pnpm dev</code>, port 1420) headless in Chromium — no mocking, no component harness. 29 tests across four files:</p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Covers</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>e2e/navigation.spec.ts</code></td>
+            <td>Dashboard load, the sidebar nav landmark, click-through to all 5 sidebar pages, arrow/Home/End keyboard nav, palette-only routing to Tools/Logs/Workspace (no sidebar entry for these three), the Workers empty state (graph + list view), the Sessions empty state</td>
+          </tr>
+          <tr>
+            <td><code>e2e/palette.spec.ts</code></td>
+            <td>Ctrl+K open, Escape close, query filtering (a matching query narrows the list; a non-matching one hits <code>Command.Empty</code>), selecting a nav command routes and closes the palette, frecency (a used command shows a usage-count badge on next open)</td>
+          </tr>
+          <tr>
+            <td><code>e2e/settings.spec.ts</code></td>
+            <td>Every settings section renders, the AI model catalog (switching selection, the gated-model warning toast), keybinding capture (accepting a new binding, rejecting a binding already in use), number-field min/max clamping on blur</td>
+          </tr>
+          <tr>
+            <td><code>e2e/dialogs.spec.ts</code></td>
+            <td>The Spawn Worker dialog: opens from the Workers toolbar, provider radios render, Claude Code is deterministically disabled with the real <code>agentProbe()</code>-sourced reason, Escape/click-outside close it and restore focus</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>This replaces the previous 3-assertion smoke suite (<code>e2e/app.spec.ts</code> — SWARM branding, sidebar presence, Ctrl+K open) with grouped, role/text-selector assertions on every headless-reachable surface. All 29 pass locally against <code>pnpm test:e2e</code> (<code>workers: 1</code>, matching CI — see <a href="#running-it">Running It</a> for why worker count matters).</p>
+
+    <h2 id="running-it">Running It</h2>
+    <pre><code>cd swarm-orchestrator
+pnpm exec playwright install --with-deps chromium   # once per machine
+pnpm test:e2e</code></pre>
+
+    <p><code>playwright.config.ts</code>'s <code>webServer</code> block starts <code>pnpm dev</code> itself and waits for <code>http://localhost:1420</code> — no manual server step needed. <code>workers: process.env.CI ? 1 : undefined</code> means a bare local run auto-parallelizes across CPU cores; on a many-core machine this can start to contend for CPU with the Chromium instances themselves (GSAP/WebGPU-particle/recharts/elkjs rendering work) and produce timeouts that aren't real bugs — the app never touches a shared server-side data store, so nothing about the SUITE requires parallel isolation, it's purely a local speed/stability trade-off. To reproduce CI's exact behavior locally (serial, 2 retries, <code>forbidOnly</code>), run <code>CI=true pnpm test:e2e</code>.</p>
+
+    <h2 id="ci">CI</h2>
+    <p><code>.github/workflows/ci.yml</code>'s <code>e2e</code> job runs on every push/PR to <code>main</code>: <code>pnpm install --frozen-lockfile</code> → <code>pnpm exec playwright install --with-deps chromium</code> → <code>pnpm test:e2e</code>. Chromium only, matching <code>playwright.config.ts</code>'s single <code>chromium</code> project — Firefox/WebKit aren't configured, so installing them would burn CI minutes for zero coverage gain. The HTML report (<code>playwright-report/</code>) uploads as a build artifact on failure only, kept 14 days.</p>
+
+    <h2 id="the-hard-boundary-no-tauri-backend">The Hard Boundary: No Tauri Backend</h2>
+    <p>Playwright runs the Vite dev build directly in a browser — there is no <code>tauri dev</code>, no WebView2/WebKitGTK host, no Rust process. <code>src/lib/tauri.ts</code>'s <code>isTauri()</code> checks for <code>"__TAURI_INTERNALS__" in window</code>, which is only ever true inside an actual Tauri-hosted webview; under Playwright it's permanently <code>false</code>, and <code>#lib/transport</code>'s <code>wsTransport</code> is never selected either (that requires the <code>pnpm build:web</code> + <code>swarmd --serve-ui</code> combination, a different build entirely). So every <code>invoke()</code> call in this suite runs through <code>tauriTransport</code>'s no-bridge branch and resolves <code>undefined</code> rather than rejecting — see that file's doc comment. Most command wrappers in <code>#lib/tauri</code> are written to degrade gracefully from there (<code>agentProbe()</code> returns <code>{ available: false, detail: "No Backend Transport Available." }</code>, <code>spawnWorker</code>/<code>agentSpawn</code> resolve <code>null</code>, <code>readConfig</code> resolves <code>null</code>), which is exactly what lets <code>dialogs.spec.ts</code> assert the Spawn Worker dialog's Claude Code-disabled state deterministically instead of skipping it.</p>
+
+    <p><strong>What this means concretely:</strong></p>
+
+    <ul>
+      <li><strong>Testable headless (and tested here):</strong> routing between pages, the command palette's open/filter/select/frecency behavior, Settings' client-side state (model selection, keybinding capture, number-field clamping — none of these round-trip through <code>invoke</code> for their observable UI effect), dialog open/close/focus/Escape, and every empty state that's reachable with zero workers/sessions (because zero workers/sessions is also the ONLY reachable state — nothing can spawn).</li>
+      <li><strong>NOT testable headless, and not claimed here:</strong> worker spawn (<code>spawn_worker</code>/<code>agent_spawn</code> never reach a real PTY), any PTY output or terminal I/O, real IPC round-trips (<code>read_config</code>/<code>write_config</code>/<code>set_max_workers</code> etc. no-op rather than persisting), the causality graph's non-empty state (<code>CausalityPanel</code>'s "measured" hint requires real <code>agent_*</code> events flowing from a real worker), session CRUD against the backend session manager, and — the motivating case for this whole document — the ordered event log's <code>seq</code> continuity under real load.</li>
+    </ul>
+
+    <p>No test in this suite spawns a worker and asserts on the result. Where a command wrapper degrades to a no-op (<code>spawnWorker</code> → <code>null</code>) the corresponding UI path is asserted only up to that point (the dialog opens, the button is enabled, the disabled-reason renders) — never past it.</p>
+
+    <h2 id="roadmap-tauri-driver--the-event-log-as-oracle-design">Roadmap: <code>tauri-driver</code> + The Event-Log-As-Oracle Design</h2>
+    <p>The event log (<code>orchestration::log</code>, <code>&lt;app-data&gt;/swarm-events.db</code>) is SWARM's actual source of truth: one writer thread, monotonically increasing <code>seq</code>, resumed from <code>EventLog::max_seq()</code> across restarts (see <code>docs/architecture.md</code>'s <a href="./architecture.html#ordered-event-core">Ordered Event Core</a>). Everything this frontend suite touches is upstream of that log — a real regression in <code>seq</code> assignment, persistence-policy classification (<code>is_persistent()</code>), or <code>events_since</code> paging under concurrent worker load would be invisible here no matter how much UI surface gets covered, because none of it happens without a live <code>swarm-core::runtime::Runtime</code> behind real IPC.</p>
+
+    <p>Closing that gap needs a real Tauri backend under WebDriver, i.e. <a href="https://github.com/tauri-apps/tauri-driver"><code>tauri-driver</code></a> (<code>tauri build</code>/<code>tauri dev</code>'s WebDriver-compatible harness) driven by a <code>webdriverio</code>- or Playwright-over-CDP-style client, in place of (or alongside) the current Vite-only <code>webServer</code>. This is a substantial separate lift — a new CI job with a built desktop binary, a display server (<code>xvfb-run</code> on <code>ubuntu-latest</code>, since WebKitGTK still needs one headed even "headless"), and a WebDriver client library not currently a project dependency — and is deliberately <strong>not built as part of this work</strong>. What follows is the documented design for when that lift happens, not a stub test that pretends to exercise it today.</p>
+
+    <p><strong>The design — an "event-log-as-oracle" e2e test:</strong></p>
+
+    <ol>
+      <li><strong>Drive real worker load through the actual UI</strong>, not a backdoor: open the Spawn Worker dialog, spawn N workers via the Webview Anthropic provider (no external CLI dependency — <code>spawn_worker</code>, not <code>agent_spawn</code>), let a mix run to completion / get killed / error out.</li>
+      <li><strong>Matrix over the worker registry cap</strong> (<code>set_max_workers</code>, Settings' "Worker Registry Cap" field, backed by <code>swarm_core</code>'s worker registry capacity) — at minimum: cap=1 (serialized spawns, exercises queueing/rejection at the boundary), a mid-size cap (e.g. 8, concurrent spawns), and a cap deliberately undersized relative to the spawn count (asserts the registry's honest rejection path, not a silent drop).</li>
+      <li><strong>Poll <code>events_since(afterSeq, limit)</code></strong> (the same command <code>CausalityPanel</code>'s backward-hop fallback and <code>swarmd</code>'s replay path already use — see <code>docs/api.md#events_since</code>) across the run and assert, for the returned persisted rows:
+        <ul>
+          <li><strong>Seq continuity:</strong> no gaps in the ascending <code>seq</code> sequence among persisted rows (a gap would mean either a persistence-policy bug letting a supposedly-durable event fall through, or a writer-thread ordering violation — either is a real regression <code>is_persistent()</code>'s unit tests can't catch, since those test classification in isolation, not the live writer under concurrent load).</li>
+          <li><strong>Monotonicity across the poll window</strong>, not just within one page (catches an <code>events_since</code> paging regression that returns rows out of order or re-orders on a boundary).</li>
+          <li><strong>Expected event presence per worker lifecycle</strong>: <code>worker_spawned</code> → (<code>worker_state</code> transitions) → <code>worker_killed</code>/exit, present exactly once each per worker, matching the persistence table in <code>docs/architecture.md</code>'s <a href="./architecture.html#ordered-event-core">Ordered Event Core</a> section.</li>
+          <li><strong>Provenance where the UI path stamps it</strong>: a spawn triggered via the palette's <code>worker:spawn</code> command has no <code>originWorker</code>/<code>causeSeq</code> (human-initiated); this is the negative case worth pinning alongside the AI-tool-driven positive case documented in <code>architecture.md</code>'s provenance table, once agent-driven spawns are in scope for this harness too.</li>
+        </ul>
+      </li>
+      <li><strong>Assert the failure path too</strong>: spawning past the registry cap should produce a truthful rejection (not a silently dropped <code>seq</code>) — this is where cap=1-and-oversubscribed in the matrix above earns its place; a passing "happy path" run alone wouldn't catch a registry that just drops requests instead of rejecting them.</li>
+    </ol>
+
+    <p>This is intentionally scoped to <code>spawn_worker</code> (Webview Anthropic), not <code>agent_spawn</code> (Claude Code) — the latter needs the <code>claude</code> CLI installed and authenticated in the CI image, which is its own separate provisioning problem orthogonal to standing up <code>tauri-driver</code> in the first place. A <code>claude</code>-CLI-in-CI variant is a natural follow-up once the base harness exists, not a blocker for it.</p>
+  </main>
+</div>
+
+<footer class="foot">
+  <span>SWARM Orchestrator · MIT · built with the OKLCH design system</span>
+  <span><a href="https://github.com/ABCrimson/Swarm">ABCrimson/Swarm</a></span>
+</footer>
+
+<script>
+  // Build scroll-spy TOC from h2/h3 in <main>, no deps.
+  (function(){
+    var main=document.getElementById('content'), toc=document.getElementById('toc');
+    if(!main||!toc) return;
+    var heads=[].slice.call(main.querySelectorAll('h2, h3'));
+    heads.forEach(function(h){
+      if(!h.id){ h.id=h.textContent.trim().toLowerCase().replace(/[^\w]+/g,'-').replace(/^-|-$/g,''); }
+      var a=document.createElement('a'); a.href='#'+h.id; a.textContent=h.textContent.replace(/#$/,'').trim();
+      var li=document.createElement('li'); if(h.tagName==='H3') li.className='sub'; li.appendChild(a); toc.appendChild(li);
+      var anc=document.createElement('a'); anc.className='anchor'; anc.href='#'+h.id; anc.textContent='#'; anc.setAttribute('aria-hidden','true'); h.appendChild(anc);
+    });
+    var links={}; [].slice.call(toc.querySelectorAll('a')).forEach(function(a){ links[a.getAttribute('href').slice(1)]=a; });
+    var io=new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ for(var k in links) links[k].classList.remove('active'); var l=links[e.target.id]; if(l) l.classList.add('active'); } });
+    },{ rootMargin:'-10% 0px -80% 0px' });
+    heads.forEach(function(h){ io.observe(h); });
+  })();
+</script>
+</body>
+</html>
