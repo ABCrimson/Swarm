@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SWARM Orchestrator · Documentation</title>
+<meta name="description" content="Documentation for SWARM Orchestrator — multi-agent AI orchestration with isolated worktrees, a single ordered event log, a causal ship chain, and a headless daemon.">
+<style>
+  :root{
+    color-scheme: dark;
+    --bg: oklch(0.145 0.014 265);
+    --deep: oklch(0.12 0.012 265);
+    --card: oklch(0.185 0.016 265);
+    --ink: oklch(0.93 0.01 265);
+    --muted: oklch(from var(--ink) l c h / .60);
+    --faint: oklch(from var(--ink) l c h / .38);
+    --line: oklch(0.96 0.008 265 / .09);
+    --gold: oklch(0.8 0.14 85);
+    --gold-dim: oklch(from var(--gold) l c h / .5);
+    --violet: oklch(0.7 0.15 295);
+    --r: 16px;
+  }
+  *{ box-sizing:border-box; }
+  html{ scroll-behavior:smooth; scrollbar-color: var(--gold-dim) transparent; }
+  body{ margin:0; background:var(--bg); color:var(--ink);
+    font: clamp(0.95rem,0.9rem + 0.25vw,1.0625rem)/1.65 system-ui,-apple-system,Inter,sans-serif;
+    -webkit-font-smoothing:antialiased; }
+  body::before{ content:""; position:fixed; inset:-30% -10% auto auto; width:70vw; height:70vw; z-index:-1;
+    background: radial-gradient(closest-side, oklch(from var(--gold) l c h / .08), transparent 70%); pointer-events:none; }
+  body::after{ content:""; position:fixed; inset:auto auto -25% -20%; width:60vw; height:60vw; z-index:-1;
+    background: radial-gradient(closest-side, oklch(from var(--violet) l c h / .06), transparent 70%); pointer-events:none; }
+  a{ color:var(--gold); text-underline-offset:3px; }
+  ::selection{ background: oklch(from var(--gold) l c h / .25); }
+  .skip{ position:absolute; left:-999px; top:0; background:var(--gold); color:oklch(0.15 0.02 265); padding:.5rem 1rem; }
+  .skip:focus{ left:0; }
+
+  header.top{ position:sticky; top:0; z-index:50; display:flex; align-items:center; gap:1.25rem; flex-wrap:wrap;
+    padding:.75rem clamp(1rem,3vw,2rem); background: oklch(0.14 0.014 265 / .72);
+    backdrop-filter: blur(14px) saturate(1.4); border-bottom:1px solid var(--line); }
+  .brand{ display:flex; align-items:center; gap:.6rem; font-weight:800; letter-spacing:-.02em; font-size:1.05rem; text-decoration:none; color:var(--ink); }
+  .brand b{ background:linear-gradient(100deg,var(--ink),var(--gold)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .brand .dot{ width:9px; height:9px; border-radius:50%; background:var(--gold); box-shadow:0 0 12px var(--gold); }
+  nav.nav{ display:flex; gap:.25rem; flex-wrap:wrap; margin-left:auto; }
+  nav.nav a{ font-size:.85rem; padding:.35rem .7rem; border-radius:999px; text-decoration:none; color:var(--muted); transition:background .15s,color .15s; }
+  nav.nav a:hover{ color:var(--ink); background:var(--line); }
+
+  main{ max-width:1080px; margin-inline:auto; padding: clamp(3rem,8vw,6rem) clamp(1rem,3vw,2rem) 4rem; }
+  .eyebrow{ font-size:.8rem; text-transform:uppercase; letter-spacing:.16em; color:var(--gold); font-weight:600; }
+  h1{ font-size:clamp(2.4rem,7vw,4.2rem); line-height:1.04; letter-spacing:-.03em; margin:.6rem 0 .75rem; text-wrap:balance;
+    background:linear-gradient(120deg,var(--ink) 35%,var(--gold)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .dek{ color:var(--muted); font-size:clamp(1.05rem,2.5vw,1.3rem); max-width:64ch; text-wrap:pretty; margin:0 0 1.5rem; }
+  .chips{ display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:1rem; }
+  .chip{ font-size:.8rem; padding:.3rem .8rem; border:1px solid var(--line); border-radius:999px; background:var(--card); color:var(--muted); font-variant-numeric:tabular-nums; }
+  .chip b{ color:var(--gold); font-weight:600; }
+
+  .cards{ display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:1.15rem; margin-top:3rem; }
+  .card{ position:relative; display:block; text-decoration:none; color:inherit; background:var(--card);
+    border:1px solid var(--line); border-radius:var(--r); padding:1.4rem 1.5rem;
+    box-shadow: 0 1px 2px oklch(0 0 0 / .3), 0 12px 40px -20px oklch(0 0 0 / .5), inset 0 1px 0 oklch(1 0 0 / .05);
+    transition: transform .18s cubic-bezier(.2,.7,.3,1), border-color .18s, box-shadow .18s; }
+  .card:hover{ transform: translateY(-3px); border-color: var(--gold-dim);
+    box-shadow: 0 1px 2px oklch(0 0 0 / .3), 0 22px 50px -18px oklch(0 0 0 / .6), inset 0 1px 0 oklch(1 0 0 / .07); }
+  .card .n{ font-size:.75rem; color:var(--faint); font-variant-numeric:tabular-nums; }
+  .card h2{ font-size:1.25rem; letter-spacing:-.01em; margin:.3rem 0 .5rem; }
+  .card p{ color:var(--muted); font-size:.92rem; margin:0; text-wrap:pretty; }
+  .card .go{ color:var(--gold); font-size:.85rem; font-weight:600; margin-top:.9rem; display:inline-flex; align-items:center; gap:.3rem; }
+  .card:hover .go{ gap:.5rem; }
+
+  .quick{ display:flex; gap:1.5rem; flex-wrap:wrap; margin-top:3rem; padding-top:2rem; border-top:1px solid var(--line); }
+  .quick a{ color:var(--muted); text-decoration:none; font-size:.9rem; }
+  .quick a:hover{ color:var(--gold); }
+
+  footer.foot{ border-top:1px solid var(--line); padding:2rem clamp(1rem,3vw,2rem); color:var(--faint); font-size:.85rem;
+    display:flex; gap:1rem; flex-wrap:wrap; justify-content:space-between; max-width:1080px; margin-inline:auto; }
+  footer.foot a{ color:var(--muted); text-decoration:none; }
+  footer.foot a:hover{ color:var(--gold); }
+  @media (prefers-reduced-motion: reduce){ *{ transition:none !important; } }
+</style>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+  <a class="brand" href="./index.html"><span class="dot"></span><span>SWARM <b>Docs</b></span></a>
+  <nav class="nav" aria-label="Documentation">
+    <a href="./architecture.html">Architecture</a>
+    <a href="./api.html">API</a>
+    <a href="./daemon.html">Daemon</a>
+    <a href="./performance.html">Performance</a>
+    <a href="./e2e.html">E2E</a>
+    <a href="./contributing.html">Contributing</a>
+    <a href="https://github.com/ABCrimson/Swarm">GitHub ↗</a>
+  </nav>
+</header>
+
+<main id="content">
+  <p class="eyebrow">Documentation</p>
+  <h1>SWARM Orchestrator</h1>
+  <p class="dek">Many AI coding agents in parallel — each in an isolated git worktree, on its own PTY, feeding a single ordered event log. A Rust core on Tauri 2, a React 19 frontend, and a headless daemon you reattach to remotely.</p>
+  <div class="chips">
+    <span class="chip"><b>v0.13.0</b></span>
+    <span class="chip">Windows · macOS · Linux</span>
+    <span class="chip">Tauri 2 · Rust · React 19</span>
+    <span class="chip">MIT</span>
+  </div>
+
+  <div class="cards">
+    <a class="card" href="./architecture.html">
+      <div class="n">01</div><h2>Architecture</h2>
+      <p>The single ordered event spine, the three-crate workspace, the agent adapter layer, ship chain, and runtime modes.</p>
+      <span class="go">Read →</span>
+    </a>
+    <a class="card" href="./api.html">
+      <div class="n">02</div><h2>API Reference</h2>
+      <p>Every command in the drift-proof Registry — workers, sessions, agents, ship, config, bus — plus the swarmd wire protocol.</p>
+      <span class="go">Read →</span>
+    </a>
+    <a class="card" href="./daemon.html">
+      <div class="n">03</div><h2>The Daemon</h2>
+      <p>Running <code>swarmd</code> headless: CLI flags, the token model, reaching it off-box, and per-user service units.</p>
+      <span class="go">Read →</span>
+    </a>
+    <a class="card" href="./performance.html">
+      <div class="n">04</div><h2>Performance</h2>
+      <p>Frame budgets, virtualization, the WebGPU particle pipeline, chunk-splitting, and the concurrency model.</p>
+      <span class="go">Read →</span>
+    </a>
+    <a class="card" href="./e2e.html">
+      <div class="n">05</div><h2>End-to-End Testing</h2>
+      <p>The Playwright suite, its hard no-Tauri-backend boundary, and the roadmap past it.</p>
+      <span class="go">Read →</span>
+    </a>
+    <a class="card" href="./contributing.html">
+      <div class="n">06</div><h2>Contributing</h2>
+      <p>Development setup, the toolchain, code standards, commit conventions, and the review process.</p>
+      <span class="go">Read →</span>
+    </a>
+  </div>
+
+  <div class="quick">
+    <a href="https://github.com/ABCrimson/Swarm">Source ↗</a>
+    <a href="https://github.com/ABCrimson/Swarm/blob/main/CHANGELOG.md">Changelog ↗</a>
+    <a href="https://github.com/ABCrimson/Swarm/releases">Releases ↗</a>
+    <a href="https://github.com/ABCrimson/Swarm/blob/main/README.md">README ↗</a>
+  </div>
+</main>
+
+<footer class="foot">
+  <span>SWARM Orchestrator · MIT · built with the OKLCH design system</span>
+  <span><a href="https://github.com/ABCrimson/Swarm">ABCrimson/Swarm</a></span>
+</footer>
+</body>
+</html>

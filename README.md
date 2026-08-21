@@ -4,11 +4,12 @@
 
 <p align="center">
   <img alt="Version 0.13.0" src="https://img.shields.io/badge/version-0.13.0-ebb84a?style=flat-square&labelColor=0a0e1a" />
+  <a href="https://github.com/ABCrimson/Swarm/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/ABCrimson/Swarm/ci.yml?branch=main&style=flat-square&labelColor=0a0e1a&color=ebb84a&label=CI" /></a>
   <img alt="Platforms: Windows, macOS, Linux" src="https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-ebb84a?style=flat-square&labelColor=0a0e1a" />
   <img alt="Tauri 2.11" src="https://img.shields.io/badge/Tauri-2.11-ebb84a?style=flat-square&labelColor=0a0e1a&logo=tauri&logoColor=ebb84a" />
-  <img alt="Rust nightly" src="https://img.shields.io/badge/Rust-nightly--2026--08--13-ebb84a?style=flat-square&labelColor=0a0e1a&logo=rust&logoColor=ebb84a" />
+  <img alt="Rust nightly" src="https://img.shields.io/badge/Rust-nightly--2026--08--21-ebb84a?style=flat-square&labelColor=0a0e1a&logo=rust&logoColor=ebb84a" />
   <img alt="React 19.3" src="https://img.shields.io/badge/React-19.3%20canary-ebb84a?style=flat-square&labelColor=0a0e1a&logo=react&logoColor=ebb84a" />
-  <img alt="TypeScript 7.0" src="https://img.shields.io/badge/TypeScript-7.0-ebb84a?style=flat-square&labelColor=0a0e1a&logo=typescript&logoColor=ebb84a" />
+  <img alt="TypeScript 7.1" src="https://img.shields.io/badge/TypeScript-7.1-ebb84a?style=flat-square&labelColor=0a0e1a&logo=typescript&logoColor=ebb84a" />
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-ebb84a?style=flat-square&labelColor=0a0e1a" /></a>
 </p>
 
@@ -18,7 +19,7 @@
   <a href="#architecture">Architecture</a> &middot;
   <a href="#quick-start">Quick Start</a> &middot;
   <a href="#the-swarmd-daemon">The Daemon</a> &middot;
-  <a href="docs/architecture.md">Docs</a> &middot;
+  <a href="https://abcrimson.github.io/Swarm/">Docs ↗</a> &middot;
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
@@ -112,7 +113,7 @@ The Rust side is a **three-crate workspace**: `swarm-core` (tauri-free domain lo
 |---|---|---|
 | Node.js | 26.7.0 | pinned via `engines` |
 | pnpm | 11.21.0 | `corepack enable` (pinned via `packageManager`) |
-| Rust | nightly-2026-08-13 | auto-configured by `rust-toolchain.toml` |
+| Rust | nightly-2026-08-21 | auto-configured by `rust-toolchain.toml` |
 
 ### Desktop
 
@@ -159,17 +160,17 @@ Full operator guide: [`docs/daemon.md`](docs/daemon.md).
 | Layer | Technology | Version |
 |---|---|---|
 | Desktop shell | Tauri | 2.11.5 |
-| UI | React | 19.3.0-canary-22e4f993-20260811 |
-| Language | TypeScript | 7.0.2 (native compiler) |
-| Build | Vite (Rolldown) | 8.2.1 (oxc minify) |
+| UI | React | 19.3.0-canary-eafeac09-20260819 |
+| Language | TypeScript | 7.1.0-dev (native compiler) |
+| Build | Vite (Rolldown) | 8.2.2 (oxc minify) |
 | Compiler | React Compiler (`babel-plugin-react-compiler`) | 1.0.0 |
 | Styling | Tailwind CSS | 4.3.3 |
-| State | Zustand / Jotai / Immer | 5.0.15 / 2.20.2 / 11.1.16 |
+| State | Zustand / Jotai / Immer | 5.0.15 / 2.20.2 / 11.1.18 |
 | Validation | Zod | 4.5.0-canary |
 | Graph | @xyflow/react + elkjs | 12.11.3 / 0.12.0 |
 | Terminal | @xterm/xterm | 6.1.0-beta.302 |
-| Charts / Motion | Recharts / motion | 3.10.1 / 13.1.0 |
-| Lint · Test · E2E | Biome / Vitest / Playwright | 2.5.8 / 4.1.10 / 1.62.1 |
+| Charts / Motion | Recharts / motion | 3.10.1 / 13.1.1 |
+| Lint · Test · E2E | Biome / Vitest / Playwright | 2.5.10 / 4.1.10 / 1.63.0-alpha |
 
 </details>
 
@@ -178,9 +179,9 @@ Full operator guide: [`docs/daemon.md`](docs/daemon.md).
 
 | Layer | Technology | Version |
 |---|---|---|
-| Language | Rust | nightly-2026-08-13 (rustc 1.99.0-nightly) |
+| Language | Rust | nightly-2026-08-21 (rustc 1.100.0-nightly) |
 | Async runtime | Tokio | 1.53.1 |
-| Daemon transport | axum (WebSocket) | 0.8.7 |
+| Daemon transport | axum (WebSocket) | 0.8.9 |
 | Event log | rusqlite (bundled, WAL) | 0.40.2 |
 | Concurrency | DashMap / parking_lot | 6.2.1 / 0.12.5 |
 | HTTP | reqwest (rustls) | 0.13.4 |

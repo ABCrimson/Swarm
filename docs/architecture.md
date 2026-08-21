@@ -715,7 +715,7 @@ The application uses a three-tier state management strategy:
 
 ### Tier 1: Domain State (Zustand 5)
 
-Zustand stores manage domain entities with `subscribeWithSelector` for minimal re-renders and `immer` (11.1.11, with `enableMapSet()` enabled in production) for immutable updates:
+Zustand stores manage domain entities with `subscribeWithSelector` for minimal re-renders and `immer` (11.1.18, with `enableMapSet()` enabled in production) for immutable updates:
 
 | Store            | Purpose                        | Persistence         |
 |------------------|--------------------------------|----------------------|
