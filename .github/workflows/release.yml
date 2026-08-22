@@ -93,8 +93,19 @@ jobs:
           tagName: ${{ github.event_name == 'push' && github.ref_name || '' }}
           releaseName: ${{ github.event_name == 'push' && format('SWARM Orchestrator {0}', github.ref_name) || '' }}
           releaseBody: "See CHANGELOG.md for details."
+          # A DRAFT is created for a human to verify assets before going live.
+          # When publishing it, run:  gh release edit <tag> --draft=false --latest
+          # The explicit --latest is required: GitHub does NOT recompute the
+          # "latest release" pointer when you merely flip draft/prerelease flags.
           releaseDraft: true
-          prerelease: ${{ startsWith(github.ref_name, 'v0.') }}
+          # Only true semver pre-release tags (v0.14.0-beta.1, v1.0.0-rc.2) are
+          # GitHub pre-releases. A plain vX.Y.Z tag — including the whole 0.x
+          # line — publishes as a FULL release so /releases/latest resolves to
+          # it and the updater's `releases/latest/download/latest.json` endpoint
+          # is fetchable. (Flagging all v0.* as pre-release silently broke the
+          # in-app updater through v0.13.0: /releases/latest skips pre-releases,
+          # so it fell back to an asset-less older tag and 404'd — fixed v0.13.1.)
+          prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
 
       # ── swarmd headless daemon ──
