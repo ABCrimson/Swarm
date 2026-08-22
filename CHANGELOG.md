@@ -7,6 +7,26 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 
 ---
 
+## [0.13.1] - 2026-08-22
+
+Maintenance & modernization release — no new user-facing features (the app behaves identically to 0.13.0). The repo went public, the whole stack moved to its bleeding edge, the layout was flattened, and the human-facing docs became a hosted site.
+
+### Changed
+
+- **Bleeding-edge dependency sweep** — canary/pre-release tips where they exist plus safe bumps: React/React-DOM `19.3.0-canary-eafeac09`, Zod `4.5.0-canary`, TypeScript `7.1.0-dev`, `@playwright/test` `1.63.0-alpha`, Biome `2.5.10`, Vite `8.2.2`, `@vitejs/plugin-react` `6.1.0`, motion `13.1.1`, immer `11.1.18`, `@anthropic-ai/sdk` `0.120.0`; Rust toolchain → **nightly-2026-08-21**, axum `0.8.9`, tower-http `0.7.0`, tokio-tungstenite `0.29.0` (aligned to axum's `ws` to keep one copy), uuid `1.24.1`, getrandom `0.4.3`, futures-util `0.3.34`; CI actions → v7. Day-one-alpha / stalled-rc majors (dashmap 7-rc2, libc 1.0-alpha, vitest 5-rc, jsdom 30, pnpm 12-rc, jotai 3-alpha, date-fns 5-alpha, radix 1.7-rc) were deliberately **held** pending dedicated migrations.
+- **Repo flattened to root** — the app moved out of the `swarm-orchestrator/` subfolder; the repo root is now the project (CI, Tauri config, and every doc path repointed; git history preserved as renames).
+- **Updater endpoint corrected** — `tauri.conf.json`'s updater slug pointed at the dead `crimson-dev/swarm-orchestrator`; repointed to `ABCrimson/Swarm`. With the repo now public, its `releases/latest` `latest.json` is publicly fetchable, so in-app updates resolve and work.
+
+### Added
+
+- **Documentation site** — the six human-facing docs (architecture, API, daemon, performance, e2e, contributing) are now a dark-only, self-contained crimson-design site deployed to **GitHub Pages** at [abcrimson.github.io/Swarm](https://abcrimson.github.io/Swarm/), with a sticky scroll-spy TOC and a bleeding-edge SVG favicon.
+
+### Docs
+
+- Full accuracy sweep: every project `.md` was audited against the code, and the top-level docs (README, SECURITY, contributing, architecture, API, performance) were corrected from 0.10.0-era drift to the shipped v0.13.x reality — plus a new root README with a hand-crafted SVG hero and a native Mermaid architecture diagram.
+
+---
+
 ## [0.13.0] - 2026-08-15
 
 Seven PRs since the 0.12.0 tag: the headless `swarmd` daemon shipped end-to-end — remote WebSocket transport with reattach-by-seq-replay, then release binaries and non-elevated per-user service units for all three platforms; a second agent provider (`CodexAdapter` over `codex app-server` JSON-RPC) that proves the adapter trait survives a structurally different protocol family; the ship chain's machine-verifiable causal PR body; the agent-UI polish pass; Playwright end-to-end tests running in CI for the first time in the project's history; and a small-debts hardening wave (live-adjustable concurrency, session pruning, ship config-leak defense).
