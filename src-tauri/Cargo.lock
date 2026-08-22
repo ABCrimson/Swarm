@@ -4447,7 +4447,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "swarm-core"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -4471,7 +4471,7 @@ dependencies = [
 
 [[package]]
 name = "swarm-desktop"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "anyhow",
  "parking_lot",
@@ -4496,7 +4496,7 @@ dependencies = [
 
 [[package]]
 name = "swarmd"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "axum",
  "futures-util",
