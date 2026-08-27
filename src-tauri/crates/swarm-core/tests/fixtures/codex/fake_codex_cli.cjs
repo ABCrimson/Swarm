@@ -46,8 +46,8 @@
  *                                      (default: 0)
  */
 
-const fs = require("fs");
-const readline = require("readline");
+const fs = require("node:fs");
+const readline = require("node:readline");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -109,7 +109,7 @@ async function main() {
     // hasn't finished flushing to the OS pipe yet. Writing directly to
     // fd 1 synchronously guarantees every line actually reaches the
     // pipe before this loop (and the process) moves on.
-    fs.writeSync(1, line + "\n");
+    fs.writeSync(1, `${line}\n`);
   }
 
   process.exit(exitCode);

@@ -21,9 +21,9 @@
 
 | Tool      | Version        | Purpose                              |
 |-----------|----------------|--------------------------------------|
-| Node.js   | 26.7.0         | Frontend build and dev server        |
-| pnpm      | 11.21.0        | Package management (pinned via `packageManager` in `package.json`; npm is not used in this project) |
-| Rust      | nightly-2026-08-21 | Backend compilation              |
+| Node.js   | 26.8.1         | Frontend build and dev server        |
+| pnpm      | 12.0.0        | Package management (pinned via `packageManager` in `package.json`; npm is not used in this project) |
+| Rust      | nightly-2026-08-27 | Backend compilation              |
 
 ### Rust Toolchain
 
@@ -31,7 +31,7 @@ The Rust toolchain is automatically configured by `rust-toolchain.toml`:
 
 ```toml
 [toolchain]
-channel    = "nightly-2026-08-21"
+channel    = "nightly-2026-08-27"
 profile    = "minimal"
 components = ["rustfmt", "clippy", "rust-src", "rust-analyzer"]
 targets    = [

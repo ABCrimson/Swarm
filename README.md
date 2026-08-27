@@ -111,9 +111,9 @@ The Rust side is a **three-crate workspace**: `swarm-core` (tauri-free domain lo
 
 | Tool | Version | Notes |
 |---|---|---|
-| Node.js | 26.7.0 | pinned via `engines` |
-| pnpm | 11.21.0 | `corepack enable` (pinned via `packageManager`) |
-| Rust | nightly-2026-08-21 | auto-configured by `rust-toolchain.toml` |
+| Node.js | 26.8.1 | pinned via `engines` |
+| pnpm | 12.0.0 | `corepack enable` (pinned via `packageManager`) |
+| Rust | nightly-2026-08-27 | auto-configured by `rust-toolchain.toml` |
 
 ### Desktop
 
@@ -179,7 +179,7 @@ Full operator guide: [`docs/daemon.md`](docs/daemon.md).
 
 | Layer | Technology | Version |
 |---|---|---|
-| Language | Rust | nightly-2026-08-21 (rustc 1.100.0-nightly) |
+| Language | Rust | nightly-2026-08-27 (rustc 1.100.0-nightly) |
 | Async runtime | Tokio | 1.53.1 |
 | Daemon transport | axum (WebSocket) | 0.8.9 |
 | Event log | rusqlite (bundled, WAL) | 0.40.2 |

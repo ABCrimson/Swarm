@@ -38,8 +38,8 @@
  *                                      (default: 0)
  */
 
-const fs = require("fs");
-const readline = require("readline");
+const fs = require("node:fs");
+const readline = require("node:readline");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -103,7 +103,7 @@ async function main() {
     // every line actually reaches the pipe before this loop (and the
     // process) moves on, which matters here because this script emits
     // many lines back-to-back with no natural backpressure pause.
-    fs.writeSync(1, line + "\n");
+    fs.writeSync(1, `${line}\n`);
   }
 
   process.exit(exitCode);

@@ -182,16 +182,16 @@
     <div class="tablewrap"><table>
       <thead><tr><th>Tool</th><th>Version</th><th>Purpose</th></tr></thead>
       <tbody>
-        <tr><td>Node.js</td><td>26.7.0</td><td>Frontend build and dev server</td></tr>
-        <tr><td>pnpm</td><td>11.21.0</td><td>Package management (pinned via <code>packageManager</code> in <code>package.json</code>; npm is not used in this project)</td></tr>
-        <tr><td>Rust</td><td>nightly-2026-08-21</td><td>Backend compilation</td></tr>
+        <tr><td>Node.js</td><td>26.8.1</td><td>Frontend build and dev server</td></tr>
+        <tr><td>pnpm</td><td>12.0.0</td><td>Package management (pinned via <code>packageManager</code> in <code>package.json</code>; npm is not used in this project)</td></tr>
+        <tr><td>Rust</td><td>nightly-2026-08-27</td><td>Backend compilation</td></tr>
       </tbody>
     </table></div>
 
     <h3>Rust Toolchain</h3>
     <p>The Rust toolchain is automatically configured by <code>rust-toolchain.toml</code>:</p>
     <pre><code>[toolchain]
-channel    = "nightly-2026-08-21"
+channel    = "nightly-2026-08-27"
 profile    = "minimal"
 components = ["rustfmt", "clippy", "rust-src", "rust-analyzer"]
 targets    = [

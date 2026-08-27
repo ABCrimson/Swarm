@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
 
 env:
-  NODE_VERSION: "26.7.0"
+  NODE_VERSION: "26.8.1"
   # Keep in sync with rust-toolchain.toml
-  RUST_TOOLCHAIN: "nightly-2026-08-21"
+  RUST_TOOLCHAIN: "nightly-2026-08-27"
 
 jobs:
   audit-pnpm:
