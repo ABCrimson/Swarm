@@ -22,6 +22,7 @@ Events are received on a single ordered channel, `swarm://events` -- see [Events
   - [kill_worker](#kill_worker)
   - [list_workers](#list_workers)
   - [worker_input](#worker_input)
+  - [set_max_workers](#set_max_workers)
   - [Worktree Isolation Lifecycle](#worktree-isolation-lifecycle)
   - [validate_repo_root](#validate_repo_root)
 - [Ship Commands](#ship-commands)
@@ -36,6 +37,7 @@ Events are received on a single ordered channel, `swarm://events` -- see [Events
   - [list_sessions](#list_sessions)
   - [get_session](#get_session)
   - [session_add_worker](#session_add_worker)
+  - [session_remove_worker](#session_remove_worker)
 - [Agent Commands](#agent-commands)
   - [agent_turn_started](#agent_turn_started)
   - [agent_spawn](#agent_spawn)
@@ -44,9 +46,13 @@ Events are received on a single ordered channel, `swarm://events` -- see [Events
   - [agent_shutdown](#agent_shutdown)
   - [agent_probe](#agent_probe)
   - [agent_permission_respond](#agent_permission_respond)
+  - [set_agent_concurrency](#set_agent_concurrency)
 - [File System Commands](#file-system-commands)
   - [read_file](#read_file)
   - [write_file](#write_file)
+- [Config Commands](#config-commands)
+  - [read_config](#read_config)
+  - [write_config](#write_config)
 - [Metrics Commands](#metrics-commands)
   - [get_metrics](#get_metrics)
 - [Bus Commands](#bus-commands)
@@ -1329,6 +1335,7 @@ A stamped envelope additionally carries `originWorker`/`causeSeq`:
 | `worker_input`        | `{ workerId, bytes, source, preview? }` -- `source` is `"terminal"`, `"tool"`, or `"automation"`; `preview` (first ~120 chars, control-stripped) is present only for `source ∈ {tool, automation}` -- see [Persistence Policy](#persistence-policy) | Only when `source != "terminal"` |
 | `session_created`     | `{ sessionId, name }`                                            | Yes       |
 | `session_deleted`     | `{ sessionId }`                                                  | Yes       |
+| `session_worker_removed` | `{ sessionId, workerId }` -- emitted by [`session_remove_worker`](#session_remove_worker) when a worker is pruned from a session's `workerIds`; persisted so a backfilling client reconstructs the same membership a live listener observed | Yes |
 | `system_metrics`      | `{ cpuPercent, memoryMb, workerCount, aiReqPerSec, timestamp }`  | No (ephemeral) |
 | `ai_stream_delta`     | `{ requestId, delta, done }` -- webview-path SwarmEvent variant, kept (unused) after `ai_request`'s Phase 2 removal; retired alongside the webview path itself in Phase 5 | Yes |
 | `ai_stream_settled`   | `{ requestId, status, error }` -- terminal receipt, exactly once per request; same kept-but-unused status as above | Yes |

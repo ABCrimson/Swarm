@@ -154,15 +154,15 @@ build: {
   modulePreload: { polyfill: false },
   rolldownOptions: {
     output: {
-      advancedChunks: { groups: [ /* ... */ ] },  // manualChunks is gone in Vite 8/Rolldown
+      codeSplitting: { groups: [ /* ... */ ] },  // manualChunks is gone in Vite 8/Rolldown
     },
   },
 }
 ```
 
-### Chunk Splitting (`advancedChunks`)
+### Chunk Splitting (`codeSplitting`)
 
-`manualChunks` was removed in Vite 8/Rolldown; vendor code is split into dedicated chunks via `rolldownOptions.output.advancedChunks.groups` to maximize caching:
+`manualChunks` was removed in Vite 8/Rolldown; vendor code is split into dedicated chunks via `rolldownOptions.output.codeSplitting.groups` to maximize caching:
 
 | Chunk | Contents |
 |-------|----------|
@@ -172,7 +172,7 @@ build: {
 | `terminal` | `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-webgl` |
 | `state` | `zustand`, `immer`, `jotai` |
 | `ai` | `@anthropic-ai/sdk` |
-| `charts` | `recharts` |
+| `charts` | `recharts`, `d3-*` |
 
 > `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 13.1.1, not `framer-motion`.
 

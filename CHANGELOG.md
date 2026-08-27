@@ -7,6 +7,19 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Modern layout + de-bloat (2026-08-27)** — a house-rules `CLAUDE.md` was added at the root (distilled from the original build spec), the build spec itself was archived to `docs/history/SWARM_NEW.md`, and the superpowers plans moved under `docs/superpowers/plans/`.
+- **Evergreen bump + idiom pass (2026-08-27)** — Rust `nightly-2026-08-21` → `nightly-2026-08-27`, pnpm `11.21.0` → `12.0.0` GA, Node engines `26.7.0` → `26.8.1`; React/React-DOM → `canary-a1124489-20260826`, Zod → `4.5.0-canary.20260827`, TypeScript → `7.1.0-dev.20260826.1`, `@playwright/test` → `1.63.0-alpha-2026-08-27`, Vitest + `@vitest/coverage-v8` `4.1.10` → `5.0.0-rc.2`, jsdom → `30.0.1`, `@testing-library/jest-dom` → `7.0.1`, `radix-ui` → `1.7.0-rc`, recharts → `3.11.0-canary.0`, xterm betas, `@xyflow/react` `12.11.5`, jotai `2.20.3`, uuid `1.26.0` plus a full `cargo update` of the transitive tree. Several of 0.13.1's deliberately-held pre-releases (Vitest 5, jsdom 30, pnpm 12, radix 1.7) landed here now that they've stabilized; dashmap 7-rc, libc 1.0-alpha, jotai 3-alpha, and date-fns 5-alpha remain held. Gate: 621 Vitest + 391 cargo tests green, typecheck/lint/build clean.
+
+### Docs
+
+- **Accuracy + aesthetics overhaul (2026-08-27)** — every doc re-verified against the modernized tree: README badges/tech-stack/status synced to `v0.13.1` and the new pins, the Rust test-coverage table rebuilt from current per-module counts, stale `swarm-orchestrator/` paths removed from the setup guides, Vite chunk-splitting terminology corrected to `codeSplitting` (the shipped `vite.config.ts` API), and the docs site pages synced to match. The API reference's table of contents now lists every Registry command (`set_max_workers`, `session_remove_worker`, `set_agent_concurrency`, the Config commands); the previously-undocumented `session_worker_removed` event joined both type-tag tables; the architecture module map and invoke-table were completed against the live command surface; the contributing guide's frontend-test table now covers all five `src/__tests__/` directories with real file counts; and SECURITY.md's release-pipeline gap note was refreshed to the post-v0.13.1 reality.
+
+---
+
 ## [0.13.1] - 2026-08-22
 
 Maintenance & modernization release — no new user-facing features (the app behaves identically to 0.13.0). The repo went public, the whole stack moved to its bleeding edge, the layout was flattened, and the human-facing docs became a hosted site.

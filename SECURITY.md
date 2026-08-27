@@ -36,5 +36,5 @@ We will acknowledge receipt within 48 hours and provide a detailed response with
 
 ## Known Gaps / In Progress
 
-- Update artifacts are signed and verified, but the release pipeline has not yet been exercised end-to-end against a production update server; treat the first few tagged releases as a soak test for the updater path.
+- Update artifacts are signed, and the release pipeline has now shipped real releases (v0.13.0, v0.13.1) with the four-platform `latest.json` manifest machine-verified per release (`verify-updater-manifest` in `.github/workflows/release.yml`). The in-app apply path (download → signature check → install) has not yet been observed completing a real version-to-version update on every platform; treat the updater as still in its soak period.
 - The broad read scope (`$HOME/**`) is intentionally permissive to support arbitrary workspace directories; if this proves too broad in practice, a future release should move to a user-configured allowlist of workspace roots instead of blanket `$HOME` read access.

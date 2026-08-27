@@ -204,7 +204,7 @@ targets    = [
     <h3>First-Time Setup</h3>
     <pre><code># Clone the repository
 git clone https://github.com/ABCrimson/Swarm.git
-cd Swarm/swarm-orchestrator
+cd Swarm
 
 # Install frontend dependencies
 pnpm install
@@ -251,13 +251,13 @@ pnpm format</code></pre>
     <p><strong>Exclusion note:</strong> <code>src/styles/tokens.css</code> is excluded from Biome's <code>files.includes</code> (<code>biome.json</code>). Biome's CSS parser does not yet support the <code>@function</code> at-rule syntax used in that file for OKLCH token derivation, so it is formatted/linted by hand until upstream support lands. Do not remove the exclusion without first confirming Biome's CSS parser handles <code>@function</code>.</p>
     <p><strong>Import style:</strong> Use hash imports exclusively.</p>
     <pre><code>// Correct
-import { Button } from "#components/Button";
+import { Button } from "#components/ui/Button";
 import { useWorker } from "#hooks/useWorker";
-import { workerStore } from "#store/workers";
+import { useWorkerStore } from "#store/workers";
 
 // Incorrect
-import { Button } from "../../components/Button";
-import { Button } from "@/components/Button";</code></pre>
+import { Button } from "../../components/ui/Button";
+import { Button } from "@/components/ui/Button";</code></pre>
     <p><strong>React patterns:</strong></p>
     <ul>
       <li>React 19 canary with React Compiler — no manual <code>useMemo</code>, <code>useCallback</code>, or <code>React.memo</code></li>
@@ -481,36 +481,42 @@ cargo test --doc</code></pre>
       <thead><tr><th>Module</th><th>Tests</th><th>Description</th></tr></thead>
       <tbody>
         <tr><td><code>error</code></td><td>13</td><td>Display formatting, serialization</td></tr>
-        <tr><td><code>events::emitter</code></td><td>39</td><td>Roundtrip serialization, <code>snake_case</code> type tags, <code>camelCase</code> payload fields, provenance, the <code>agent_*</code> family</td></tr>
+        <tr><td><code>events::emitter</code></td><td>40</td><td>Roundtrip serialization, <code>snake_case</code> type tags, <code>camelCase</code> payload fields, provenance, the <code>agent_*</code> family</td></tr>
         <tr><td><code>worker::registry</code></td><td>12</td><td>Insert, get, remove, <code>update_state_if</code> compare-and-set, capacity, aggregate metrics</td></tr>
         <tr><td><code>worker::lifecycle</code></td><td>17</td><td>Spawn/pause/resume/kill lifecycle transitions, worktree isolation, credential-leak span-capture regression</td></tr>
         <tr><td><code>worker::proc</code></td><td>12</td><td>NDJSON framer (linear-scan + line-cap regressions), <code>spawn_piped</code> round-trip, <code>kill_and_wait</code>, stderr tail</td></tr>
         <tr><td><code>agent::adapter</code></td><td>5</td><td><code>AgentAdapter</code>/<code>AgentSession</code> trait contract + object safety, session lifecycle through a live engine, concurrency contract (busy/idempotent shutdown/exactly-once settlement), <code>ProviderId</code> wire-value pin</td></tr>
-        <tr><td><code>agent::scheduler</code></td><td>9</td><td>Priority ordering, concurrency limiting, enqueue/dequeue</td></tr>
-        <tr><td><code>orchestration::engine</code></td><td>14</td><td>Persistence policy, envelope shape, provenance stamping, <code>agent_*</code> persistence pinning</td></tr>
-        <tr><td><code>orchestration::log</code></td><td>12</td><td>SQLite append/read, migration ladder, partial index</td></tr>
-        <tr><td><code>git::*</code> (7 files)</td><td>101</td><td>Binary discovery, worktree add/lock/unlock/remove, ship preflight/commit/push, secret redaction</td></tr>
+        <tr><td><code>agent::claude_code</code></td><td>17</td><td><code>ClaudeCodeAdapter</code> against the fake <code>claude</code> CLI fixture: turn settlement, tool-call/result ID pairing, permission-denied subclassing, inline-JSON settings flag, probe availability</td></tr>
+        <tr><td><code>agent::codex</code></td><td>17</td><td><code>CodexAdapter</code> against the fake <code>codex</code> app-server fixture: JSON-RPC settlement ordering, approval round-trip, kill-mid-turn, resume rejection, trust-tier policy pins</td></tr>
+        <tr><td><code>agent::registry</code></td><td>5</td><td><code>AgentSessionRegistry</code>: rapid-turn ordering, semaphore-bounded concurrency across sessions</td></tr>
+        <tr><td><code>agent::scheduler</code></td><td>15</td><td>Priority ordering, concurrency limiting, enqueue/dequeue</td></tr>
+        <tr><td><code>orchestration::engine</code></td><td>15</td><td>Persistence policy, envelope shape, provenance stamping, <code>agent_*</code> persistence pinning</td></tr>
+        <tr><td><code>orchestration::log</code></td><td>22</td><td>SQLite append/read, migration ladder, partial index</td></tr>
+        <tr><td><code>git::*</code> (8 files)</td><td>123</td><td>Binary discovery, worktree add/lock/unlock/remove, ship preflight/commit/push, causal-record generation, secret redaction</td></tr>
         <tr><td><code>bus::channel</code></td><td>4</td><td>Channel creation, send/receive, broadcast, message serialization</td></tr>
-        <tr><td><code>bus::router</code></td><td>6</td><td>Direct/broadcast send; unconditional <code>bus_message</code> emission onto the ordered spine</td></tr>
+        <tr><td><code>bus::router</code></td><td>2</td><td>Direct/broadcast send; unconditional <code>bus_message</code> emission onto the ordered spine</td></tr>
+        <tr><td><code>session::*</code></td><td>8</td><td>Session manager CRUD + atomic persistence (plugin-store-era file compatibility, no-tmp-file-left-behind)</td></tr>
         <tr><td><code>config</code></td><td>7</td><td>Atomic key-value JSON config persistence</td></tr>
-        <tr><td><code>commands::metrics</code></td><td>5</td><td><code>SharedSystem</code> construction, lock behavior, per-worker metric collection</td></tr>
-        <tr><td><code>commands::orchestration</code></td><td>6</td><td><code>events_since</code> paging, live/backfilled envelope shape parity</td></tr>
-        <tr><td><code>commands::fs</code></td><td>6</td><td>Path scoping, truthful error classification</td></tr>
-        <tr><td><code>commands::worker</code></td><td>3</td><td>Argument-shape regression, credential-leak span-capture (command layer)</td></tr>
-        <tr><td><strong>Total</strong></td><td><strong>377 (swarm-core) + 27 (swarmd) + 20 (swarm-desktop)</strong> <em>(as of v0.13.0)</em></td><td>+ 16 doc-tests passing</td></tr>
+        <tr><td><code>lock</code></td><td>5</td><td>Single-instance advisory lock, holder-naming error message</td></tr>
+        <tr><td><code>metrics</code></td><td>3</td><td><code>SharedSystem</code> construction, collection loop</td></tr>
+        <tr><td><code>protocol</code></td><td>6</td><td><code>swarmd</code> wire-frame serde: <code>hello</code>/<code>ready</code>/<code>rpc</code>/<code>rpcResult</code> shapes, cold-attach <code>lastSeq</code></td></tr>
+        <tr><td><code>runtime</code></td><td>2</td><td>Fresh-data-dir startup, second-instance lock refusal</td></tr>
+        <tr><td><code>commands::*</code> (6 files)</td><td>27</td><td>Registry dispatch + <code>RemotePolicy</code> gating, <code>events_since</code> paging, path scoping, argument-shape and credential-leak regressions</td></tr>
+        <tr><td><strong>Total</strong></td><td><strong>377 (swarm-core) + 27 (swarmd) + 4 (swarm-desktop <code>registry_contract</code>)</strong> test functions in-tree</td><td>the 2026-08-27 evergreen gate ran <strong>391 green</strong> on Windows (platform-gated tests vary by OS), plus the doc-tests via <code>cargo test --doc</code></td></tr>
       </tbody>
     </table></div>
-    <p>Run <code>cargo test</code> from <code>src-tauri/</code> to reproduce this locally; run <code>cargo test --doc</code> for just the doc-tests.</p>
+    <p>Run <code>cargo test --workspace</code> from <code>src-tauri/</code> to reproduce this locally; run <code>cargo test --doc</code> for just the doc-tests.</p>
 
     <h3>Frontend Testing</h3>
-    <p>Frontend tests run via Vitest (<code>pnpm test</code>): <strong>61 test files, 621 tests</strong> <em>(as of v0.13.0)</em>, covering components, hooks, stores, and <code>lib/</code> utilities.</p>
+    <p>Frontend tests run via Vitest (<code>pnpm test</code>): <strong>61 test files, 621 tests</strong> <em>(all green on the 2026-08-27 evergreen gate)</em>, covering components, hooks, stores, and <code>lib/</code> utilities.</p>
     <div class="tablewrap"><table>
-      <thead><tr><th>Directory</th><th>Focus</th></tr></thead>
+      <thead><tr><th>Directory</th><th>Files</th><th>Focus</th></tr></thead>
       <tbody>
-        <tr><td><code>src/__tests__/components/</code></td><td><code>Badge</code>, <code>Button</code>, <code>ErrorBoundary</code>, <code>MetricCard</code></td></tr>
-        <tr><td><code>src/__tests__/hooks/</code></td><td><code>useAiStream</code>, <code>useSession</code>, <code>useStream</code>, <code>useWorker</code></td></tr>
-        <tr><td><code>src/__tests__/lib/</code></td><td><code>alerts</code>, <code>export</code>, <code>metrics-aggregation</code>, <code>theme</code></td></tr>
-        <tr><td><code>src/__tests__/store/</code></td><td><code>ai</code>, <code>sessions</code>, <code>system</code>, <code>workers</code> Zustand stores</td></tr>
+        <tr><td><code>src/__tests__/components/</code></td><td>19</td><td>UI primitives (<code>Badge</code>, <code>Button</code>, <code>Pill</code>, <code>ErrorBoundary</code>, <code>MetricCard</code>), graph surfaces (<code>WorkerGraph</code>, <code>CausalityPanel</code>, <code>GraphControls</code>, <code>GraphLegend</code>, <code>ParticleBackground</code>), and agent/ship surfaces (<code>SpawnWorkerDialog</code>, <code>AgentChat</code>, <code>AIChat</code>, <code>ShipPreview</code>, <code>ProviderBadge</code>, ...)</td></tr>
+        <tr><td><code>src/__tests__/hooks/</code></td><td>12</td><td><code>useAiStream</code>, <code>useSession</code>, <code>useShip</code>, <code>useStream</code>, <code>useWorker</code>, <code>useElkLayout</code>, <code>useSettingsBridge</code>, and the event-stream hooks (<code>useWorkerEvents</code>, <code>useSessionEvents</code>, <code>useAgentSessionEvents</code>, <code>useProvenanceEvents</code>, <code>useSystemLogEvents</code>)</td></tr>
+        <tr><td><code>src/__tests__/lib/</code></td><td>24</td><td><code>alerts</code>, <code>anthropic</code>, <code>event-bus</code>, <code>export</code>, <code>keybindings</code>, <code>kv</code>, <code>metrics-aggregation</code>, <code>ship-causal</code>/<code>ship-message</code>, <code>theme</code>, the <code>tools*</code> suites, <code>transport</code> (the <code>wsTransport</code> client), <code>webgpu</code>, <code>worker-spawn</code>, ...</td></tr>
+        <tr><td><code>src/__tests__/pages/</code></td><td>1</td><td><code>Settings</code> -- the settings page's full control surface</td></tr>
+        <tr><td><code>src/__tests__/store/</code></td><td>5</td><td><code>ai</code>, <code>provenance</code>, <code>sessions</code>, <code>system</code>, <code>workers</code> Zustand stores</td></tr>
       </tbody>
     </table></div>
     <p>Tauri IPC is mocked globally in <code>src/__tests__/setup.ts</code> via <code>vi.mock("@tauri-apps/api/core")</code> (stubs <code>invoke</code>) and <code>vi.mock("@tauri-apps/api/event")</code> (stubs <code>listen</code>), plus mocks for the <code>dialog</code>, <code>fs</code>, <code>shell</code>, and <code>store</code> plugins. Individual tests override the default rejected/no-op behavior with <code>vi.mocked(invoke).mockResolvedValueOnce(...)</code> as needed. There is no standalone <code>src/lib/test-utils.ts</code> module — the old <code>agent-loop</code>, <code>diff</code>, <code>replay</code>, <code>test-utils</code>, and <code>token-costs</code> modules under <code>src/lib/</code> were removed along with the (dead) session-replay feature.</p>

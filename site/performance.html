@@ -328,13 +328,13 @@
   modulePreload: { polyfill: false },
   rolldownOptions: {
     output: {
-      advancedChunks: { groups: [ /* ... */ ] },  // manualChunks is gone in Vite 8/Rolldown
+      codeSplitting: { groups: [ /* ... */ ] },  // manualChunks is gone in Vite 8/Rolldown
     },
   },
 }</code></pre>
 
-    <h3>Chunk Splitting (<code>advancedChunks</code>)</h3>
-    <p><code>manualChunks</code> was removed in Vite 8/Rolldown; vendor code is split into dedicated chunks via <code>rolldownOptions.output.advancedChunks.groups</code> to maximize caching:</p>
+    <h3>Chunk Splitting (<code>codeSplitting</code>)</h3>
+    <p><code>manualChunks</code> was removed in Vite 8/Rolldown; vendor code is split into dedicated chunks via <code>rolldownOptions.output.codeSplitting.groups</code> to maximize caching:</p>
     <div class="tablewrap">
       <table>
         <thead>
@@ -347,7 +347,7 @@
           <tr><td><code>terminal</code></td><td><code>@xterm/xterm</code>, <code>@xterm/addon-fit</code>, <code>@xterm/addon-webgl</code></td></tr>
           <tr><td><code>state</code></td><td><code>zustand</code>, <code>immer</code>, <code>jotai</code></td></tr>
           <tr><td><code>ai</code></td><td><code>@anthropic-ai/sdk</code></td></tr>
-          <tr><td><code>charts</code></td><td><code>recharts</code></td></tr>
+          <tr><td><code>charts</code></td><td><code>recharts</code>, <code>d3-*</code></td></tr>
         </tbody>
       </table>
     </div>

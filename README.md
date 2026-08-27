@@ -3,11 +3,11 @@
 </p>
 
 <p align="center">
-  <img alt="Version 0.13.0" src="https://img.shields.io/badge/version-0.13.0-ebb84a?style=flat-square&labelColor=0a0e1a" />
+  <img alt="Version 0.13.1" src="https://img.shields.io/badge/version-0.13.1-ebb84a?style=flat-square&labelColor=0a0e1a" />
   <a href="https://github.com/ABCrimson/Swarm/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/ABCrimson/Swarm/ci.yml?branch=main&style=flat-square&labelColor=0a0e1a&color=ebb84a&label=CI" /></a>
   <img alt="Platforms: Windows, macOS, Linux" src="https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-ebb84a?style=flat-square&labelColor=0a0e1a" />
   <img alt="Tauri 2.11" src="https://img.shields.io/badge/Tauri-2.11-ebb84a?style=flat-square&labelColor=0a0e1a&logo=tauri&logoColor=ebb84a" />
-  <img alt="Rust nightly" src="https://img.shields.io/badge/Rust-nightly--2026--08--21-ebb84a?style=flat-square&labelColor=0a0e1a&logo=rust&logoColor=ebb84a" />
+  <img alt="Rust nightly" src="https://img.shields.io/badge/Rust-nightly--2026--08--27-ebb84a?style=flat-square&labelColor=0a0e1a&logo=rust&logoColor=ebb84a" />
   <img alt="React 19.3" src="https://img.shields.io/badge/React-19.3%20canary-ebb84a?style=flat-square&labelColor=0a0e1a&logo=react&logoColor=ebb84a" />
   <img alt="TypeScript 7.1" src="https://img.shields.io/badge/TypeScript-7.1-ebb84a?style=flat-square&labelColor=0a0e1a&logo=typescript&logoColor=ebb84a" />
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-ebb84a?style=flat-square&labelColor=0a0e1a" /></a>
@@ -128,7 +128,7 @@ pnpm tauri:dev      # builds the Rust core and launches the desktop app
 Production bundles:
 
 ```bash
-pnpm tauri:build    # signed installers land in src-tauri/target/release/
+pnpm tauri:build    # signed installers land in src-tauri/target/release/bundle/
 ```
 
 Tagged releases (`v*`) build signed installers for **Windows, macOS (Intel + Apple Silicon), and Linux (`.deb` + `.AppImage`)** and attach the standalone `swarmd` binary for each target — see [`.github/workflows/release.yml`](.github/workflows/release.yml).
@@ -148,6 +148,9 @@ swarmd                       # binds 127.0.0.1:8787 by default
 - **`RemotePolicy` at the boundary** — `read_file`/`write_file` are denied over the wire and config reads are secret-filtered, so a remote client can't exfiltrate the daemon token or arbitrary files.
 - **Ships as a service** — per-user units for **systemd** (Linux), **launchd** (macOS), and a **logon Scheduled Task** (Windows), all non-elevated and loopback-only by default.
 
+> [!WARNING]
+> The token is the **only** authentication and the WebSocket is plain `ws://` — never expose `--bind 0.0.0.0` to the open internet. Reach a remote daemon through an SSH tunnel or a TLS-terminating reverse proxy instead ([off-box guide](docs/daemon.md#reaching-the-daemon-off-box)).
+
 Full operator guide: [`docs/daemon.md`](docs/daemon.md).
 
 ---
@@ -160,17 +163,17 @@ Full operator guide: [`docs/daemon.md`](docs/daemon.md).
 | Layer | Technology | Version |
 |---|---|---|
 | Desktop shell | Tauri | 2.11.5 |
-| UI | React | 19.3.0-canary-eafeac09-20260819 |
+| UI | React | 19.3.0-canary-a1124489-20260826 |
 | Language | TypeScript | 7.1.0-dev (native compiler) |
 | Build | Vite (Rolldown) | 8.2.2 (oxc minify) |
 | Compiler | React Compiler (`babel-plugin-react-compiler`) | 1.0.0 |
 | Styling | Tailwind CSS | 4.3.3 |
-| State | Zustand / Jotai / Immer | 5.0.15 / 2.20.2 / 11.1.18 |
+| State | Zustand / Jotai / Immer | 5.0.15 / 2.20.3 / 11.1.18 |
 | Validation | Zod | 4.5.0-canary |
-| Graph | @xyflow/react + elkjs | 12.11.3 / 0.12.0 |
-| Terminal | @xterm/xterm | 6.1.0-beta.302 |
-| Charts / Motion | Recharts / motion | 3.10.1 / 13.1.1 |
-| Lint · Test · E2E | Biome / Vitest / Playwright | 2.5.10 / 4.1.10 / 1.63.0-alpha |
+| Graph | @xyflow/react + elkjs | 12.11.5 / 0.12.0 |
+| Terminal | @xterm/xterm | 6.1.0-beta.303 |
+| Charts / Motion | Recharts / motion | 3.11.0-canary.0 / 13.1.1 |
+| Lint · Test · E2E | Biome / Vitest / Playwright | 2.5.10 / 5.0.0-rc.2 / 1.63.0-alpha |
 
 </details>
 
@@ -210,7 +213,9 @@ Swarm/
 │       ├── swarm-core/         # tauri-free domain core:
 │       │   └── src/{agent,bus,commands,events,git,orchestration,session,worker}/
 │       └── swarmd/             # headless daemon: ws.rs, auth.rs, serve_ui.rs + service/ units
-├── docs/                       # architecture.md · api.md · daemon.md · e2e.md · performance.md
+├── docs/                       # architecture · api · daemon · e2e · performance · contributing
+│   ├── history/                # the original build spec (SWARM_NEW.md), archived
+│   └── superpowers/plans/      # dated execution plans, archived
 ├── e2e/                        # Playwright specs
 ├── package.json                # frontend deps + scripts
 └── CHANGELOG.md
@@ -222,7 +227,7 @@ Swarm/
 
 ## Status
 
-**v0.13.0** — published across four platforms with standalone `swarmd` binaries. The full beyond-T3 product loop is live: worktree isolation, the causal ship chain, the provenance/causality spine, two agent providers behind one trait, and the headless daemon. See the [changelog](CHANGELOG.md) for the per-release detail.
+**v0.13.1** — published across four platforms with standalone `swarmd` binaries. The full beyond-T3 product loop is live: worktree isolation, the causal ship chain, the provenance/causality spine, two agent providers behind one trait, and the headless daemon. See the [changelog](CHANGELOG.md) for the per-release detail.
 
 ---
 

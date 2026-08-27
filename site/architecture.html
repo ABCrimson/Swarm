@@ -228,10 +228,14 @@
 <pre><code>src-tauri/crates/swarm-core/src/   (swarm-core -- tauri-free domain crate)
 ├── agent/           Multi-provider agent execution -- see "Adapter Layer" below
 │   ├── adapter.rs   AgentAdapter/AgentSession trait pair, Capabilities, ProviderId
+│   ├── claude_code.rs ClaudeCodeAdapter/ClaudeCodeSession -- claude CLI stream-json over piped stdio
+│   ├── codex.rs     CodexAdapter/CodexSession -- codex app-server bidirectional JSON-RPC
+│   ├── registry.rs  AgentSessionRegistry -- live Arc&lt;dyn AgentSession&gt; by worker id
 │   └── scheduler.rs AgentScheduler -- priority queue + semaphore concurrency control (absorbed the deleted ai/queue.rs)
 ├── bus/             Inter-agent message bus
 │   ├── channel.rs   MessageBus -- per-topic tokio::sync::broadcast channels
-│   └── router.rs    Router -- direct/broadcast send + pipeline orchestration
+│   └── router.rs    Router -- direct/broadcast send, emits bus_message onto the ordered spine (pipeline machinery deleted in Phase 4)
+├── commands/        The drift-proof command Registry (35 entries) + per-command RemotePolicy -- both shells dispatch through it
 ├── events/          Event emission system
 │   └── emitter.rs   SwarmEvent enum + EventSink (routes into OrchestrationEngine)
 ├── git/             Worktree-per-worker isolation + ship chain -- see "Worktree Isolation"/"Ship Chain" below
@@ -246,7 +250,8 @@
 │   ├── engine.rs    OrchestrationEngine (single writer thread) + DomainEvent envelope
 │   └── log.rs       EventLog -- SQLite (WAL) append-only event log
 ├── session/         Session management
-│   └── manager.rs   DashMap-backed CRUD + SessionStore port
+│   ├── manager.rs   DashMap-backed CRUD + SessionStore port
+│   └── persist.rs   JsonSessionStore -- tauri-free atomic sessions.json persistence, shared by both shells
 ├── worker/          Worker management
 │   ├── handle.rs    WorkerHandle, WorkerState, WorkerConfig, WorkerIsolation, WorkerInfo (incl. lastShippedSeq/lastShippedCommit, written only by the ship chain)
 │   ├── lifecycle.rs Spawn, pause, resume, kill, input operations (worktree create/remove on spawn/kill)
@@ -254,25 +259,29 @@
 │   ├── proc.rs      Piped-stdio process spawning + NDJSON framer -- JSON-protocol provider CLIs only (a PTY corrupts NDJSON; see "Adapter Layer" below)
 │   └── registry.rs  DashMap registry, TOCTOU-safe update_state_if, aggregate metrics
 ├── config.rs        Atomic key-value JSON config persistence
-├── paths.rs         Paths (data dir), constructed by the shell and passed in
 ├── error.rs         AppError enum (thiserror + Serialize for IPC)
+├── lock.rs          SingleInstanceLock -- OS-native advisory lock, one engine per data directory
+├── metrics.rs       Background metrics collection loop (500ms, SharedSystem)
+├── paths.rs         Paths (data dir), constructed by the shell and passed in
+├── protocol.rs      swarmd wire frames (hello/ready/event/replayEnd/rpc/rpcResult), serde-only
+├── runtime.rs       Runtime -- the shared constructor both shells call (incl. git capability probe + startup worktree prune)
 └── lib.rs           Crate root, module re-exports
 
 src-tauri/src/   (swarm-desktop -- Tauri shell)
 ├── commands/        Tauri IPC command handlers, thin wrappers over swarm-core
-│   ├── worker.rs        spawn, pause, resume, kill, list, input
-│   ├── session.rs       create, delete, list, get, session_add_worker
-│   ├── agent.rs         agent_turn_started, agent_spawn/agent_probe (provider-routed), agent_send_turn/agent_cancel/agent_shutdown/agent_permission_respond (provider-generic); ai_request/ai.rs removed in Phase 2, see "Adapter Layer"
+│   ├── worker.rs        spawn, pause, resume, kill, list, input, set_max_workers
+│   ├── session.rs       create, delete, list, get, session_add_worker, session_remove_worker
+│   ├── agent.rs         agent_turn_started, agent_spawn/agent_probe (provider-routed), agent_send_turn/agent_cancel/agent_shutdown/agent_permission_respond/set_agent_concurrency (provider-generic); ai_request/ai.rs removed in Phase 2, see "Adapter Layer"
 │   ├── bus.rs           bus_send, bus_list_channels (bus_subscribe/bus_create_pipeline/bus_list_pipelines DELETED in Phase 4, see "Message Bus")
 │   ├── metrics.rs       get_metrics (incl. perWorker) + background collection loop
 │   ├── orchestration.rs events_since
 │   ├── config.rs        read_config, write_config
-│   ├── git.rs           validate_repo_root, git_ship_preflight, git_stage_commit, git_push, ship_compare_url
+│   ├── git.rs           validate_repo_root, git_ship_preflight, git_stage_commit, git_push, ship_compare_url, ship_context
 │   ├── updater.rs       check_for_updates
 │   ├── notification.rs  send_notification
-│   └── fs.rs            read_file, write_file (path-scoped like tauri-plugin-fs; write_file emits a stamped file_written event)
-├── session/         Session persistence via tauri-plugin-store
-├── lib.rs           Tauri app builder and setup (git capability probe + startup prune live here)
+│   ├── fs.rs            read_file, write_file (path-scoped like tauri-plugin-fs; write_file emits a stamped file_written event)
+│   └── registry_contract.rs  contract test: generate_handler! command set == Registry::keys() ∪ NATIVE_ONLY
+├── lib.rs           Tauri app builder and setup (path resolution + swarm_core Runtime::start + app.manage())
 └── main.rs          Binary entry point (Tokio runtime)
 </code></pre>
 
@@ -629,8 +638,8 @@ pub trait AgentSession: Send + Sync {
 <p>Sessions are stored in <code>DashMap&lt;Uuid, Session&gt;</code> and persisted to disk:</p>
 
 <ul>
-  <li><strong>Storage file:</strong> <code>sessions.json</code> in Tauri's app data directory</li>
-  <li><strong>Backend:</strong> <code>tauri-plugin-store</code> 2.4.3</li>
+  <li><strong>Storage file:</strong> <code>sessions.json</code> in the app data directory — same file and <code>{"sessions": [...]}</code> shape the pre-Phase-2 <code>tauri-plugin-store</code> backend wrote, so an existing file loads unmodified (no migration step)</li>
+  <li><strong>Backend:</strong> <code>swarm_core::session::persist::JsonSessionStore</code> — tauri-free atomic JSON (write-then-rename), shared by both shells since headless-daemon Phase 2; <code>tauri-plugin-store</code> remains in the desktop shell only for frontend key-value stores (<code>src/lib/kv.ts</code>)</li>
   <li><strong>Auto-save:</strong> After every create/delete/<code>session_add_worker</code> operation, offloaded to <code>spawn_blocking</code></li>
   <li><strong>Restore:</strong> Loaded once during app setup, before any commands are processed</li>
 </ul>
@@ -668,7 +677,7 @@ pub trait AgentSession: Send + Sync {
 <ul>
   <li><strong>Single writer, one thread:</strong> <code>OrchestrationEngine::start</code> spawns one dedicated <code>swarm-event-writer</code> OS thread owning an <code>mpsc::Receiver&lt;WriterMsg&gt;</code> and the <code>EventLog</code> connection. <code>EventSink::emit</code>/<code>emit_with</code> are a non-blocking <code>Sender::send</code> callable from any thread/task; the writer loop is the <em>only</em> place that assigns <code>seq</code>, so wire order is totally ordered by construction -- there is no window where two threads could race to claim the same sequence number.</li>
   <li><strong>SQLite WAL log, migrated:</strong> <code>EventLog</code> (<code>orchestration/log.rs</code>) opens a SQLite database at <code>&lt;app-data&gt;/swarm-events.db</code> in WAL journal mode (<code>synchronous = NORMAL</code>). The base <code>events(seq INTEGER PRIMARY KEY, ts, type, payload) STRICT</code> table is created legacy-shape-first, then a <code>PRAGMA user_version</code> migration ladder adds <code>origin_worker TEXT</code>/<code>cause_seq INTEGER</code> (both nullable -- existing rows come back <code>NULL</code>, the truthful historical value) plus a partial index <code>idx_events_origin_seq(origin_worker, seq) WHERE origin_worker IS NOT NULL</code> for worker-scoped seq-range queries. <code>seq</code> is the primary key, so a duplicate-seq append is a hard error -- an invariant the writer thread's exclusive ownership of <code>seq</code> assignment guarantees never fires in practice. On startup, the engine resumes numbering from <code>EventLog::max_seq()</code>, so sequence numbers stay monotonic across restarts, not just within one process lifetime.</li>
-  <li><strong>Persistence policy:</strong> every event consumes a <code>seq</code>, but only some are written to the log. <code>is_persistent()</code> (<code>orchestration/engine.rs</code>) excludes <code>WorkerOutput</code>, <code>SystemMetrics</code>, and <code>SystemLog</code> by variant -- high-frequency telemetry that flows live but is not history -- plus <code>WorkerInput</code> by a <strong>field-level</strong> carve-out: <code>source == InputSource::Terminal</code> (raw human keystrokes) is excluded even though the <code>WorkerInput</code> variant itself persists for <code>source.is_machine_issued()</code> (<code>Tool</code>/<code>Automation</code>). <code>source</code> is a closed, typed enum (<code>crate::events::InputSource</code>, <code>#[serde(rename_all = "snake_case")]</code>), not a bare string -- an unrecognized wire value fails IPC deserialization before this function ever runs, so the "raw keystrokes/secrets never archived" guarantee doesn't depend on the webview spelling <code>"terminal"</code> correctly. A per-keystroke durable row would both flood the log and archive whatever a human typed into a shell, secrets included. Everything else (<code>worker_spawned</code>, <code>worker_killed</code>, <code>worker_state</code>, <code>worker_input</code> [non-terminal], <code>session_created</code>, <code>session_deleted</code>, <code>ai_stream_delta</code>, <code>ai_stream_settled</code>, <code>agent_turn_started</code>, <code>agent_session_started</code>, <code>agent_block</code>, <code>agent_tool_call</code>, <code>agent_tool_result</code>, <code>agent_permission_request</code>, <code>agent_turn_settled</code>, <code>agent_session_exited</code>, <code>bus_message</code>, <code>worktree_created</code>, <code>worktree_removed</code>, <code>ship_progress</code>, <code>ship_settled</code>, <code>commit_created</code>, <code>file_written</code>) persists before being emitted -- <strong>except <code>agent_turn_delta</code></strong>, excluded by variant alongside <code>WorkerOutput</code>/<code>SystemMetrics</code>/<code>SystemLog</code> above (per-clause streaming rows would be ~800 SQLite rows/s at 8 workers; its durable counterpart is <code>agent_block</code>). <code>is_persistent()</code> excludes by name (or, for <code>WorkerInput</code>, by field) rather than allowlisting, so a new variant is persistent by construction unless explicitly added to the exclusion list -- pinned down for the two worktree events by <code>orchestration::engine::tests::test_worktree_events_are_persistent</code>, the three ship events by <code>orchestration::engine::tests::test_ship_events_are_persistent</code>, every new <code>agent_*</code> variant by <code>test_agent_turn_delta_is_ephemeral</code>/<code>test_every_other_new_agent_variant_is_persistent</code>, and the <code>worker_input</code> source carve-out by <code>test_worker_input_persistence_depends_on_source</code>.</li>
+  <li><strong>Persistence policy:</strong> every event consumes a <code>seq</code>, but only some are written to the log. <code>is_persistent()</code> (<code>orchestration/engine.rs</code>) excludes <code>WorkerOutput</code>, <code>SystemMetrics</code>, and <code>SystemLog</code> by variant -- high-frequency telemetry that flows live but is not history -- plus <code>WorkerInput</code> by a <strong>field-level</strong> carve-out: <code>source == InputSource::Terminal</code> (raw human keystrokes) is excluded even though the <code>WorkerInput</code> variant itself persists for <code>source.is_machine_issued()</code> (<code>Tool</code>/<code>Automation</code>). <code>source</code> is a closed, typed enum (<code>crate::events::InputSource</code>, <code>#[serde(rename_all = "snake_case")]</code>), not a bare string -- an unrecognized wire value fails IPC deserialization before this function ever runs, so the "raw keystrokes/secrets never archived" guarantee doesn't depend on the webview spelling <code>"terminal"</code> correctly. A per-keystroke durable row would both flood the log and archive whatever a human typed into a shell, secrets included. Everything else (<code>worker_spawned</code>, <code>worker_killed</code>, <code>worker_state</code>, <code>worker_input</code> [non-terminal], <code>session_created</code>, <code>session_deleted</code>, <code>session_worker_removed</code>, <code>ai_stream_delta</code>, <code>ai_stream_settled</code>, <code>agent_turn_started</code>, <code>agent_session_started</code>, <code>agent_block</code>, <code>agent_tool_call</code>, <code>agent_tool_result</code>, <code>agent_permission_request</code>, <code>agent_turn_settled</code>, <code>agent_session_exited</code>, <code>bus_message</code>, <code>worktree_created</code>, <code>worktree_removed</code>, <code>ship_progress</code>, <code>ship_settled</code>, <code>commit_created</code>, <code>file_written</code>) persists before being emitted -- <strong>except <code>agent_turn_delta</code></strong>, excluded by variant alongside <code>WorkerOutput</code>/<code>SystemMetrics</code>/<code>SystemLog</code> above (per-clause streaming rows would be ~800 SQLite rows/s at 8 workers; its durable counterpart is <code>agent_block</code>). <code>is_persistent()</code> excludes by name (or, for <code>WorkerInput</code>, by field) rather than allowlisting, so a new variant is persistent by construction unless explicitly added to the exclusion list -- pinned down for the two worktree events by <code>orchestration::engine::tests::test_worktree_events_are_persistent</code>, the three ship events by <code>orchestration::engine::tests::test_ship_events_are_persistent</code>, every new <code>agent_*</code> variant by <code>test_agent_turn_delta_is_ephemeral</code>/<code>test_every_other_new_agent_variant_is_persistent</code>, and the <code>worker_input</code> source carve-out by <code>test_worker_input_persistence_depends_on_source</code>.</li>
   <li><strong>Causal attribution (<code>Provenance</code>):</strong> every <code>WriterMsg</code> carries a <code>Provenance { origin_worker: Option&lt;Uuid&gt;, cause_seq: Option&lt;u64&gt; }</code> alongside its event -- <code>Provenance::default()</code> (both <code>None</code>) for <code>EventSink::emit</code>, an explicit value for <code>emit_with</code>/<code>emit_awaiting_seq</code>. The writer stamps it straight onto the <code>DomainEvent</code> envelope as <code>originWorker</code>/<code>causeSeq</code> (<code>skip_serializing_if</code> keeps the common unattributed case wire-lean -- absent, not <code>null</code>) and into the persisted row's <code>origin_worker</code>/<code>cause_seq</code> columns. <strong>The subject-vs-causer rule:</strong> a payload's own <code>workerId</code> field is the SUBJECT of the event (whose worker spawned, whose PTY got input); <code>originWorker</code> on the envelope is the CAUSER (who made it happen). For a human-driven action the two are typically unrelated or <code>originWorker</code> is simply absent; for a tool-driven action (an AI turn's <code>spawn_worker</code>/<code>kill_worker</code>/<code>worker_input</code>/<code>write_file</code> tool call) <code>originWorker</code> is the panel worker whose turn issued the call, distinct from the payload's own <code>workerId</code> -- and that difference IS the causal edge the provenance graph is built from (see <a href="#causality-graph">Causality Graph</a> below). <strong>The invariant, enforced by doc-comment and review, not by the type system:</strong> the engine <em>records</em> provenance, it never <em>infers</em> it -- there is no "the last AI turn probably caused this" heuristic anywhere in this codebase; every <code>Provenance</code> passed to <code>emit_with</code>/<code>emit_awaiting_seq</code> traces back to an explicit, caller-supplied value (an IPC argument, a bus message's own <code>from_worker</code>, a turn's own recorded seq).</li>
   <li><strong>The ack-oneshot (<code>emit_awaiting_seq</code>):</strong> returns a <code>tokio::sync::oneshot::Receiver&lt;u64&gt;</code> that resolves to the seq the writer thread assigns the event -- deterministic, no polling, no timeout-bound <code>waitFor</code> correlation. Used by the <code>agent_turn_started</code> command (see <a href="./api.html#agent_turn_started">docs/api.md#agent_turn_started</a>) so a chat turn can learn its own seq before any tool call needs to cite it as <code>causeSeq</code>. Non-blocking and stall-proof by oneshot construction: if the caller drops the receiver (e.g. a cancelled IPC call) before the writer gets to it, <code>ack.send(seq)</code> simply returns <code>Err</code> and is ignored -- the writer thread never waits on, or even notices, a disinterested receiver.</li>
   <li><strong>Emission:</strong> after the persistence step, the writer wraps the event in a <code>DomainEvent { seq, ts, originWorker?, causeSeq?, ..flattened SwarmEvent }</code> and hands it to the primary <code>emit</code> closure passed to <code>OrchestrationEngine::start</code> (the Tauri shell's closure forwards it onto the single <code>swarm://events</code> channel). See <a href="./api.html#events">docs/api.md#events</a> for the wire shape and full type-tag list.</li>
@@ -909,10 +918,10 @@ Zustand metrics store → Recharts re-renders
 <div class="tablewrap"><table>
 <thead><tr><th>Store</th><th>Purpose</th><th>Persistence</th></tr></thead>
 <tbody>
-  <tr><td><code>workerStore</code></td><td>Worker list, states, metadata</td><td>In-memory</td></tr>
-  <tr><td><code>sessionStore</code></td><td>Session list and active session</td><td><code>tauri-plugin-store</code></td></tr>
-  <tr><td><code>aiQueueStore</code></td><td>AI request queue and history</td><td>In-memory</td></tr>
-  <tr><td><code>metricsStore</code></td><td>System metrics time series</td><td>In-memory</td></tr>
+  <tr><td><code>useWorkerStore</code></td><td>Worker list, states, metadata</td><td>In-memory</td></tr>
+  <tr><td><code>useSessionStore</code></td><td>Session list and active session</td><td>In-memory (backend persists <code>sessions.json</code> via <code>JsonSessionStore</code>)</td></tr>
+  <tr><td><code>useAiStore</code></td><td>AI request queue and history</td><td>In-memory</td></tr>
+  <tr><td><code>useSystemStore</code></td><td>System metrics time series</td><td>In-memory</td></tr>
 </tbody>
 </table></div>
 
@@ -929,14 +938,14 @@ Zustand metrics store → Recharts re-renders
   <li>Selected worker/session IDs</li>
 </ul>
 
-<h3>Tier 3: Persistent State (tauri-plugin-store)</h3>
+<h3>Tier 3: Persistent State</h3>
 
 <p>Long-lived state that must survive restarts:</p>
 
 <ul>
-  <li>Session data (<code>sessions.json</code>)</li>
-  <li>Theme preferences</li>
-  <li>Layout preferences (pane sizes)</li>
+  <li>Session data (<code>sessions.json</code>) — persisted backend-side by <code>swarm_core</code>'s atomic <code>JsonSessionStore</code>, not by the frontend</li>
+  <li>Theme preferences — <code>tauri-plugin-store</code> behind the <code>Kv</code> wrapper (<code>src/lib/kv.ts</code>)</li>
+  <li>Layout preferences (pane sizes) — same <code>Kv</code>-backed plugin-store files</li>
 </ul>
 
 <hr>
@@ -956,7 +965,7 @@ Zustand metrics store → Recharts re-renders
   <tr><td><code>worker_state</code></td><td><code>{ workerId, state }</code></td><td>State transition</td><td>Yes</td></tr>
   <tr><td><code>worker_input</code></td><td><code>{ workerId, bytes, source, preview? }</code></td><td>Input written to a worker's PTY</td><td>Only when <code>source != "terminal"</code></td></tr>
   <tr><td><code>session_created</code></td><td><code>{ sessionId, name }</code></td><td>Session created</td><td>Yes</td></tr>
-  <tr><td><code>session_deleted</code></td><td><code>{ sessionId }</code></td><td>Session removed</td><td>Yes</td></tr>
+  <tr><td><code>session_deleted</code></td><td><code>{ sessionId }</code></td><td>Session removed</td><td>Yes</td></tr><tr><td><code>session_worker_removed</code></td><td><code>{ sessionId, workerId }</code></td><td>Worker pruned from a session's <code>workerIds</code> (<code>session_remove_worker</code>)</td><td>Yes</td></tr>
   <tr><td><code>system_metrics</code></td><td><code>{ cpuPercent, memoryMb, workerCount, aiReqPerSec, timestamp }</code></td><td>500ms metrics tick</td><td>No</td></tr>
   <tr><td><code>ai_stream_delta</code></td><td><code>{ requestId, delta, done }</code></td><td>Webview-path variant, kept but unemitted since <code>ai_request</code>'s Phase 2 removal</td><td>Yes</td></tr>
   <tr><td><code>ai_stream_settled</code></td><td><code>{ requestId, status, error }</code></td><td>Same kept-but-unemitted status</td><td>Yes</td></tr>
@@ -995,18 +1004,31 @@ Zustand metrics store → Recharts re-renders
   <tr><td><code>kill_worker</code></td><td><code>()</code></td></tr>
   <tr><td><code>list_workers</code></td><td><code>WorkerInfo[]</code></td></tr>
   <tr><td><code>worker_input</code></td><td><code>()</code></td></tr>
+  <tr><td><code>set_max_workers</code></td><td><code>()</code> -- registry ceiling resized live, persisted (<code>1..=256</code>)</td></tr>
   <tr><td><code>create_session</code></td><td><code>Session</code></td></tr>
   <tr><td><code>delete_session</code></td><td><code>()</code></td></tr>
   <tr><td><code>list_sessions</code></td><td><code>Session[]</code></td></tr>
   <tr><td><code>get_session</code></td><td><code>Session</code></td></tr>
   <tr><td><code>session_add_worker</code></td><td><code>()</code></td></tr>
+  <tr><td><code>session_remove_worker</code></td><td><code>()</code> -- emits <code>session_worker_removed</code></td></tr>
   <tr><td><code>validate_repo_root</code></td><td>Canonical toplevel path string</td></tr>
   <tr><td><code>git_ship_preflight</code></td><td><code>ShipPreflight</code></td></tr>
   <tr><td><code>git_stage_commit</code></td><td><code>CommitOutcome</code></td></tr>
   <tr><td><code>git_push</code></td><td><code>PushOutcome</code></td></tr>
   <tr><td><code>ship_compare_url</code></td><td>Compare URL string</td></tr>
+  <tr><td><code>ship_context</code></td><td><code>ShipContext</code> -- the machine-readable causal record for a worker's pending seq range</td></tr>
   <tr><td><code>agent_turn_started</code></td><td><code>number</code> (the assigned seq)</td></tr>
+  <tr><td><code>agent_spawn</code></td><td><code>string</code> (worker UUID, same contract as <code>spawn_worker</code>)</td></tr>
+  <tr><td><code>agent_send_turn</code></td><td><code>()</code> -- fire-and-forget; confirms scheduler admission, not completion</td></tr>
+  <tr><td><code>agent_cancel</code></td><td><code>()</code></td></tr>
+  <tr><td><code>agent_shutdown</code></td><td><code>()</code></td></tr>
+  <tr><td><code>agent_probe</code></td><td><code>ProbeReport</code></td></tr>
   <tr><td><code>agent_permission_respond</code></td><td><code>()</code> -- real round-trip against <code>CodexAdapter</code>, documented no-op against <code>ClaudeCodeAdapter</code></td></tr>
+  <tr><td><code>set_agent_concurrency</code></td><td><code>()</code> -- scheduler limit adjusted live, persisted</td></tr>
+  <tr><td><code>read_file</code></td><td>File content string (path-scoped)</td></tr>
+  <tr><td><code>write_file</code></td><td><code>()</code> -- emits <code>file_written</code></td></tr>
+  <tr><td><code>read_config</code></td><td>Stored value, or <code>null</code> when unset</td></tr>
+  <tr><td><code>write_config</code></td><td><code>()</code></td></tr>
   <tr><td><code>get_metrics</code></td><td>Metrics JSON, incl. <code>perWorker</code></td></tr>
   <tr><td><code>bus_send</code></td><td>Receiver count (<code>number</code>) -- emits <code>bus_message</code> onto the spine unconditionally (Phase 4, see <a href="#message-bus">Message Bus</a>); no UI caller yet</td></tr>
   <tr><td><code>bus_list_channels</code></td><td><code>string[]</code> (no shipped caller -- see <a href="#built-not-wired">Built, Not Wired</a>)</td></tr>
@@ -1161,7 +1183,7 @@ Frontend (#lib/tauri wraps it in ShipCommandError, a real Error subclass carryin
 
 <p><code>src/lib/transport.ts</code> exports a <code>Transport</code> interface (<code>invoke</code>/<code>listen</code>/<code>connect</code>/<code>capabilities</code>) with two implementations: <code>tauriTransport</code> (today's Tauri IPC code, moved intact) and <code>wsTransport</code> (a WebSocket client matching <code>swarmd</code>'s wire protocol, with backoff+jitter reconnect and <code>hello{lastSeq}</code> on every reconnect, sourcing that cursor from <code>event-bus.ts</code>'s <code>getLastSeq()</code>). Which one backs <code>src/lib/tauri.ts</code>'s <code>invoke</code>/<code>listen</code> is chosen ONCE, at module load, by a Vite <code>define</code> (<code>__SWARM_TRANSPORT__</code>, set to <code>"ws"</code> only by <code>pnpm build:web</code> -- every other build keeps <code>tauriTransport</code> unconditionally, so a plain <code>pnpm dev</code> browser preview's existing graceful no-op behavior is completely unaffected).</p>
 
-<p><code>tauri.ts</code> keeps its entire existing public API -- every one of the 41 other files that reference <code>#lib/tauri</code> (source and tests combined) needed zero changes. <code>isTauri()</code> keeps its original meaning ("the Tauri IPC bridge specifically") for the handful of call sites gating genuinely Tauri-only features (<code>tauri-plugin-fs</code>/<code>-dialog</code>/<code>-shell</code>/<code>-notification</code>/<code>-updater</code>, the webview-direct AI chat path); a new <code>hasTransport()</code> ("some backend is reachable, Tauri or WS") backs the small set of command wrappers (<code>spawnWorker</code>, <code>agentSpawn</code>, <code>listSessions</code>, <code>agentProbe</code>) that work identically over either transport.</p>
+<p><code>tauri.ts</code> keeps its entire existing public API -- every one of the 41 other files that referenced <code>#lib/tauri</code> when the transport seam landed (source and tests combined) needed zero changes. <code>isTauri()</code> keeps its original meaning ("the Tauri IPC bridge specifically") for the handful of call sites gating genuinely Tauri-only features (<code>tauri-plugin-fs</code>/<code>-dialog</code>/<code>-shell</code>/<code>-notification</code>/<code>-updater</code>, the webview-direct AI chat path); a new <code>hasTransport()</code> ("some backend is reachable, Tauri or WS") backs the small set of command wrappers (<code>spawnWorker</code>, <code>agentSpawn</code>, <code>listSessions</code>, <code>agentProbe</code>) that work identically over either transport.</p>
 
 <p>The MVP remote surface is intentionally narrow: Dashboard, Workers, Terminals, Metrics, and Agent chat. Filesystem browsing (<code>FileTree</code>/<code>FileViewer</code>/<code>WorkspacePanel</code>/<code>useWorkspaceWatcher</code>) and the plugin-store-backed settings surfaces (<code>lazy-store</code>/<code>templates</code>/<code>snapshots</code>/<code>store-integrity</code>) still import <code>@tauri-apps/plugin-*</code> directly and are gated by their own existing <code>isTauri()</code> checks, which now doubles as the remote-capability gate for free. <code>src/lib/kv.ts</code> (a <code>TauriStoreKv</code>/<code>DaemonConfigKv</code>-backed key-value abstraction) exists as the migration target for the plugin-store surfaces but is not yet wired to any of the four call sites -- five surfaces that work over the network beat twelve that half-work.</p>
 

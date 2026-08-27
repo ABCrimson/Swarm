@@ -30,7 +30,6 @@ This replaces the previous 3-assertion smoke suite (`e2e/app.spec.ts` — SWARM 
 ## Running It
 
 ```bash
-cd swarm-orchestrator
 pnpm exec playwright install --with-deps chromium   # once per machine
 pnpm test:e2e
 ```

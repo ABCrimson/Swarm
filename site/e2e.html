@@ -213,8 +213,7 @@
     <p>This replaces the previous 3-assertion smoke suite (<code>e2e/app.spec.ts</code> — SWARM branding, sidebar presence, Ctrl+K open) with grouped, role/text-selector assertions on every headless-reachable surface. All 29 pass locally against <code>pnpm test:e2e</code> (<code>workers: 1</code>, matching CI — see <a href="#running-it">Running It</a> for why worker count matters).</p>
 
     <h2 id="running-it">Running It</h2>
-    <pre><code>cd swarm-orchestrator
-pnpm exec playwright install --with-deps chromium   # once per machine
+    <pre><code>pnpm exec playwright install --with-deps chromium   # once per machine
 pnpm test:e2e</code></pre>
 
     <p><code>playwright.config.ts</code>'s <code>webServer</code> block starts <code>pnpm dev</code> itself and waits for <code>http://localhost:1420</code> — no manual server step needed. <code>workers: process.env.CI ? 1 : undefined</code> means a bare local run auto-parallelizes across CPU cores; on a many-core machine this can start to contend for CPU with the Chromium instances themselves (GSAP/WebGPU-particle/recharts/elkjs rendering work) and produce timeouts that aren't real bugs — the app never touches a shared server-side data store, so nothing about the SUITE requires parallel isolation, it's purely a local speed/stability trade-off. To reproduce CI's exact behavior locally (serial, 2 retries, <code>forbidOnly</code>), run <code>CI=true pnpm test:e2e</code>.</p>

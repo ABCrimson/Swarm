@@ -48,7 +48,7 @@ Running any `cargo` command in the project will auto-install the correct toolcha
 ```bash
 # Clone the repository
 git clone https://github.com/ABCrimson/Swarm.git
-cd Swarm/swarm-orchestrator
+cd Swarm
 
 # Install frontend dependencies
 pnpm install
@@ -108,13 +108,13 @@ pnpm format
 
 ```typescript
 // Correct
-import { Button } from "#components/Button";
+import { Button } from "#components/ui/Button";
 import { useWorker } from "#hooks/useWorker";
-import { workerStore } from "#store/workers";
+import { useWorkerStore } from "#store/workers";
 
 // Incorrect
-import { Button } from "../../components/Button";
-import { Button } from "@/components/Button";
+import { Button } from "../../components/ui/Button";
+import { Button } from "@/components/ui/Button";
 ```
 
 **React patterns:**
@@ -353,36 +353,42 @@ cargo test --doc
 | Module                    | Tests | Description                                              |
 |----------------------------|-------|-------------------------------------------------------------|
 | `error`                    | 13    | Display formatting, serialization                            |
-| `events::emitter`          | 39    | Roundtrip serialization, `snake_case` type tags, `camelCase` payload fields, provenance, the `agent_*` family |
+| `events::emitter`          | 40    | Roundtrip serialization, `snake_case` type tags, `camelCase` payload fields, provenance, the `agent_*` family |
 | `worker::registry`         | 12    | Insert, get, remove, `update_state_if` compare-and-set, capacity, aggregate metrics |
 | `worker::lifecycle`        | 17    | Spawn/pause/resume/kill lifecycle transitions, worktree isolation, credential-leak span-capture regression |
 | `worker::proc`             | 12    | NDJSON framer (linear-scan + line-cap regressions), `spawn_piped` round-trip, `kill_and_wait`, stderr tail |
 | `agent::adapter`           | 5     | `AgentAdapter`/`AgentSession` trait contract + object safety, session lifecycle through a live engine, concurrency contract (busy/idempotent shutdown/exactly-once settlement), `ProviderId` wire-value pin |
-| `agent::scheduler`         | 9     | Priority ordering, concurrency limiting, enqueue/dequeue |
-| `orchestration::engine`    | 14    | Persistence policy, envelope shape, provenance stamping, `agent_*` persistence pinning |
-| `orchestration::log`       | 12    | SQLite append/read, migration ladder, partial index |
-| `git::*` (7 files)         | 101   | Binary discovery, worktree add/lock/unlock/remove, ship preflight/commit/push, secret redaction |
+| `agent::claude_code`       | 17    | `ClaudeCodeAdapter` against the fake `claude` CLI fixture: turn settlement, tool-call/result ID pairing, permission-denied subclassing, inline-JSON settings flag, probe availability |
+| `agent::codex`             | 17    | `CodexAdapter` against the fake `codex` app-server fixture: JSON-RPC settlement ordering, approval round-trip, kill-mid-turn, resume rejection, trust-tier policy pins |
+| `agent::registry`          | 5     | `AgentSessionRegistry`: rapid-turn ordering, semaphore-bounded concurrency across sessions |
+| `agent::scheduler`         | 15    | Priority ordering, concurrency limiting, enqueue/dequeue |
+| `orchestration::engine`    | 15    | Persistence policy, envelope shape, provenance stamping, `agent_*` persistence pinning |
+| `orchestration::log`       | 22    | SQLite append/read, migration ladder, partial index |
+| `git::*` (8 files)         | 123   | Binary discovery, worktree add/lock/unlock/remove, ship preflight/commit/push, causal-record generation, secret redaction |
 | `bus::channel`             | 4     | Channel creation, send/receive, broadcast, message serialization |
-| `bus::router`              | 6     | Direct/broadcast send; unconditional `bus_message` emission onto the ordered spine |
+| `bus::router`              | 2     | Direct/broadcast send; unconditional `bus_message` emission onto the ordered spine |
+| `session::*`               | 8     | Session manager CRUD + atomic persistence (plugin-store-era file compatibility, no-tmp-file-left-behind) |
 | `config`                   | 7     | Atomic key-value JSON config persistence |
-| `commands::metrics`        | 5     | `SharedSystem` construction, lock behavior, per-worker metric collection |
-| `commands::orchestration`  | 6     | `events_since` paging, live/backfilled envelope shape parity |
-| `commands::fs`             | 6     | Path scoping, truthful error classification |
-| `commands::worker`         | 3     | Argument-shape regression, credential-leak span-capture (command layer) |
-| **Total**                  | **377 (swarm-core) + 27 (swarmd) + 20 (swarm-desktop)** _(as of v0.13.0)_ | + 16 doc-tests passing |
+| `lock`                     | 5     | Single-instance advisory lock, holder-naming error message |
+| `metrics`                  | 3     | `SharedSystem` construction, collection loop |
+| `protocol`                 | 6     | `swarmd` wire-frame serde: `hello`/`ready`/`rpc`/`rpcResult` shapes, cold-attach `lastSeq` |
+| `runtime`                  | 2     | Fresh-data-dir startup, second-instance lock refusal |
+| `commands::*` (6 files)    | 27    | Registry dispatch + `RemotePolicy` gating, `events_since` paging, path scoping, argument-shape and credential-leak regressions |
+| **Total**                  | **377 (swarm-core) + 27 (swarmd) + 4 (swarm-desktop `registry_contract`)** test functions in-tree | the 2026-08-27 evergreen gate ran **391 green** on Windows (platform-gated tests vary by OS), plus the doc-tests via `cargo test --doc` |
 
-Run `cargo test` from `src-tauri/` to reproduce this locally; run `cargo test --doc` for just the doc-tests.
+Run `cargo test --workspace` from `src-tauri/` to reproduce this locally; run `cargo test --doc` for just the doc-tests.
 
 ### Frontend Testing
 
-Frontend tests run via Vitest (`pnpm test`): **61 test files, 621 tests** _(as of v0.13.0)_, covering components, hooks, stores, and `lib/` utilities.
+Frontend tests run via Vitest (`pnpm test`): **61 test files, 621 tests** _(all green on the 2026-08-27 evergreen gate)_, covering components, hooks, stores, and `lib/` utilities.
 
-| Directory                        | Focus                                                          |
-|-----------------------------------|-----------------------------------------------------------------|
-| `src/__tests__/components/`       | `Badge`, `Button`, `ErrorBoundary`, `MetricCard`                 |
-| `src/__tests__/hooks/`            | `useAiStream`, `useSession`, `useStream`, `useWorker`            |
-| `src/__tests__/lib/`              | `alerts`, `export`, `metrics-aggregation`, `theme`               |
-| `src/__tests__/store/`            | `ai`, `sessions`, `system`, `workers` Zustand stores             |
+| Directory                        | Files | Focus                                                          |
+|-----------------------------------|-------|-----------------------------------------------------------------|
+| `src/__tests__/components/`       | 19    | UI primitives (`Badge`, `Button`, `Pill`, `ErrorBoundary`, `MetricCard`), graph surfaces (`WorkerGraph`, `CausalityPanel`, `GraphControls`, `GraphLegend`, `ParticleBackground`), and agent/ship surfaces (`SpawnWorkerDialog`, `AgentChat`, `AIChat`, `ShipPreview`, `ProviderBadge`, ...) |
+| `src/__tests__/hooks/`            | 12    | `useAiStream`, `useSession`, `useShip`, `useStream`, `useWorker`, `useElkLayout`, `useSettingsBridge`, and the event-stream hooks (`useWorkerEvents`, `useSessionEvents`, `useAgentSessionEvents`, `useProvenanceEvents`, `useSystemLogEvents`) |
+| `src/__tests__/lib/`              | 24    | `alerts`, `anthropic`, `event-bus`, `export`, `keybindings`, `kv`, `metrics-aggregation`, `ship-causal`/`ship-message`, `theme`, the `tools*` suites, `transport` (the `wsTransport` client), `webgpu`, `worker-spawn`, ... |
+| `src/__tests__/pages/`            | 1     | `Settings` -- the settings page's full control surface           |
+| `src/__tests__/store/`            | 5     | `ai`, `provenance`, `sessions`, `system`, `workers` Zustand stores |
 
 Tauri IPC is mocked globally in `src/__tests__/setup.ts` via `vi.mock("@tauri-apps/api/core")` (stubs `invoke`) and `vi.mock("@tauri-apps/api/event")` (stubs `listen`), plus mocks for the `dialog`, `fs`, `shell`, and `store` plugins. Individual tests override the default rejected/no-op behavior with `vi.mocked(invoke).mockResolvedValueOnce(...)` as needed. There is no standalone `src/lib/test-utils.ts` module -- the old `agent-loop`, `diff`, `replay`, `test-utils`, and `token-costs` modules under `src/lib/` were removed along with the (dead) session-replay feature.
 
