@@ -11,7 +11,8 @@
 
 If you discover a security vulnerability in SWARM Orchestrator, please report it responsibly.
 
-**Do NOT open a public issue.**
+> [!IMPORTANT]
+> **Do NOT open a public issue.**
 
 Instead, please use [GitHub Security Advisories](https://github.com/ABCrimson/Swarm/security/advisories/new) or email security@crimson.dev. Include:
 

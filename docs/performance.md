@@ -174,6 +174,7 @@ build: {
 | `ai` | `@anthropic-ai/sdk` |
 | `charts` | `recharts`, `d3-*` |
 
+> [!NOTE]
 > `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 13.1.1, not `framer-motion`.
 
 ### Rust Release Profile

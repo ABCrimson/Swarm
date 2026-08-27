@@ -27,18 +27,18 @@
 SWARM Orchestrator is a Tauri 2.11 desktop application with a clear separation between a Rust backend and a React 19 frontend. Communication between the two layers happens exclusively through Tauri's IPC mechanism: **invoke** (request/response) and **listen** (event stream).
 
 ```text
- ┌──────────────────────────────────────────────────────┐
- │                   React 19 Frontend                  │
- │  Components  │  Hooks  │  Stores  │  WebGPU Canvas  │
- ├──────────────────────────────────────────────────────┤
- │              Tauri IPC Bridge                        │
- │         invoke() ↕ listen() / emit()                │
- ├──────────────────────────────────────────────────────┤
- │                   Rust Backend                       │
- │  Commands  │  Worker Registry  │  Agent Scheduler  │  Store│
- │                                                      │
- │            Tokio Multi-Thread Runtime                │
- └──────────────────────────────────────────────────────┘
+ ┌──────────────────────────────────────────────────────────────┐
+ │                      React 19 Frontend                       │
+ │  Components  │  Hooks  │  Stores  │  WebGPU Canvas           │
+ ├──────────────────────────────────────────────────────────────┤
+ │                       Tauri IPC Bridge                       │
+ │                 invoke() ↕ listen() / emit()                 │
+ ├──────────────────────────────────────────────────────────────┤
+ │                         Rust Backend                         │
+ │  Commands  │  Worker Registry  │  Agent Scheduler  │  Store  │
+ │                                                              │
+ │                  Tokio Multi-Thread Runtime                  │
+ └──────────────────────────────────────────────────────────────┘
 ```
 
 **Design principles:**
@@ -918,6 +918,8 @@ Frontend (#lib/tauri wraps it in ShipCommandError, a real Error subclass carryin
           the Ship tab UI branches on .shipError.kind for the right second-click remedy)
 ```
 
+This exists because the UI needs to distinguish `pushRejected` (remedy: fetch-and-rebase, re-preview, ship again) from `authExpired` (remedy: re-authenticate) from `nothingToCommit` (no remedy, just report it) — a bare string can carry the message but not a machine-checkable `kind` to switch on. `AppError::Git` errors from lower-level git plumbing (e.g. a `rev-parse` failure) are bridged into `ShipError` via a `From<AppError> for ShipError` impl that classifies a timeout message into `kind: "timeout"` and everything else into `kind: "unknown"`, so the divergence is contained to the ship module's own boundary rather than requiring `AppError` itself to change shape. See [docs/api.md#ship-commands](api.md#ship-commands) for the full `ShipErrorKind`/`ShipRemedy` enumerations.
+
 ---
 
 ## Runtime Modes
@@ -925,21 +927,21 @@ Frontend (#lib/tauri wraps it in ShipCommandError, a real Error subclass carryin
 SWARM Orchestrator runs in one of two shells over the SAME domain layer (`swarm-core`, tauri-free): the desktop app (`swarm-desktop`, this document's default assumption throughout) or the headless daemon (`swarmd`). Both are thin adapters over one constructor and one command registry — see `crates/swarm-core/src/runtime.rs` and `crates/swarm-core/src/commands/mod.rs`.
 
 ```text
-                    ┌─────────────────────────────┐
-                    │   swarm_core::runtime::Runtime   │
-                    │  (worker registry, session mgr,  │
-                    │   ordered event log, agent        │
-                    │   scheduler, metrics loop --      │
-                    │   ONE constructor, ONE lock)      │
-                    └───────────────┬───────────────┘
+                  ┌──────────────────────────────────┐
+                  │   swarm_core::runtime::Runtime   │
+                  │  (worker registry, session mgr,  │
+                  │     ordered event log, agent     │
+                  │    scheduler, metrics loop --    │
+                  │    ONE constructor, ONE lock)    │
+                  └─────────────────┬────────────────┘
                                     │
-                 ┌──────────────────┴──────────────────┐
-                 ▼                                      ▼
-    ┌─────────────────────────┐          ┌─────────────────────────────┐
-    │      swarm-desktop       │          │            swarmd            │
-    │  Tauri IPC (invoke/listen)│          │  WebSocket (hello/rpc/event) │
-    │  webview, native plugins  │          │  no webview, no tauri link    │
-    └─────────────────────────┘          └─────────────────────────────┘
+                   ┌────────────────┴────────────────────┐
+                   ▼                                     ▼
+    ┌─────────────────────────────┐       ┌─────────────────────────────┐
+    │        swarm-desktop        │       │           swarmd            │
+    │  Tauri IPC (invoke/listen)  │       │ WebSocket (hello/rpc/event) │
+    │   webview, native plugins   │       │  no webview, no tauri link  │
+    └─────────────────────────────┘       └─────────────────────────────┘
 ```
 
 ### Single-instance lock
@@ -982,5 +984,3 @@ A separate binary, not a `--headless` flag -- Tauri links `libwebkit2gtk` at BUI
 `tauri.ts` keeps its entire existing public API -- every one of the 41 other files that referenced `#lib/tauri` when the transport seam landed (source and tests combined) needed zero changes. `isTauri()` keeps its original meaning ("the Tauri IPC bridge specifically") for the handful of call sites gating genuinely Tauri-only features (`tauri-plugin-fs`/`-dialog`/`-shell`/`-notification`/`-updater`, the webview-direct AI chat path); a new `hasTransport()` ("some backend is reachable, Tauri or WS") backs the small set of command wrappers (`spawnWorker`, `agentSpawn`, `listSessions`, `agentProbe`) that work identically over either transport.
 
 The MVP remote surface is intentionally narrow: Dashboard, Workers, Terminals, Metrics, and Agent chat. Filesystem browsing (`FileTree`/`FileViewer`/`WorkspacePanel`/`useWorkspaceWatcher`) and the plugin-store-backed settings surfaces (`lazy-store`/`templates`/`snapshots`/`store-integrity`) still import `@tauri-apps/plugin-*` directly and are gated by their own existing `isTauri()` checks, which now doubles as the remote-capability gate for free. `src/lib/kv.ts` (a `TauriStoreKv`/`DaemonConfigKv`-backed key-value abstraction) exists as the migration target for the plugin-store surfaces but is not yet wired to any of the four call sites -- five surfaces that work over the network beat twelve that half-work.
-
-This exists because the UI needs to distinguish `pushRejected` (remedy: fetch-and-rebase, re-preview, ship again) from `authExpired` (remedy: re-authenticate) from `nothingToCommit` (no remedy, just report it) — a bare string can carry the message but not a machine-checkable `kind` to switch on. `AppError::Git` errors from lower-level git plumbing (e.g. a `rev-parse` failure) are bridged into `ShipError` via a `From<AppError> for ShipError` impl that classifies a timeout message into `kind: "timeout"` and everything else into `kind: "unknown"`, so the divergence is contained to the ship module's own boundary rather than requiring `AppError` itself to change shape. See [docs/api.md#ship-commands](api.md#ship-commands) for the full `ShipErrorKind`/`ShipRemedy` enumerations.

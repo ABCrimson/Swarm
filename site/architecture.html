@@ -191,18 +191,18 @@
 
 <p>SWARM Orchestrator is a Tauri 2.11 desktop application with a clear separation between a Rust backend and a React 19 frontend. Communication between the two layers happens exclusively through Tauri's IPC mechanism: <strong>invoke</strong> (request/response) and <strong>listen</strong> (event stream).</p>
 
-<pre><code> ┌──────────────────────────────────────────────────────┐
- │                   React 19 Frontend                  │
- │  Components  │  Hooks  │  Stores  │  WebGPU Canvas  │
- ├──────────────────────────────────────────────────────┤
- │              Tauri IPC Bridge                        │
- │         invoke() ↕ listen() / emit()                │
- ├──────────────────────────────────────────────────────┤
- │                   Rust Backend                       │
- │  Commands  │  Worker Registry  │  Agent Scheduler  │  Store│
- │                                                      │
- │            Tokio Multi-Thread Runtime                │
- └──────────────────────────────────────────────────────┘
+<pre><code> ┌──────────────────────────────────────────────────────────────┐
+ │                      React 19 Frontend                       │
+ │  Components  │  Hooks  │  Stores  │  WebGPU Canvas           │
+ ├──────────────────────────────────────────────────────────────┤
+ │                       Tauri IPC Bridge                       │
+ │                 invoke() ↕ listen() / emit()                 │
+ ├──────────────────────────────────────────────────────────────┤
+ │                         Rust Backend                         │
+ │  Commands  │  Worker Registry  │  Agent Scheduler  │  Store  │
+ │                                                              │
+ │                  Tokio Multi-Thread Runtime                  │
+ └──────────────────────────────────────────────────────────────┘
 </code></pre>
 
 <p><strong>Design principles:</strong></p>
@@ -1121,27 +1121,29 @@ Frontend (#lib/tauri wraps it in ShipCommandError, a real Error subclass carryin
           the Ship tab UI branches on .shipError.kind for the right second-click remedy)
 </code></pre>
 
+<p>This exists because the UI needs to distinguish <code>pushRejected</code> (remedy: fetch-and-rebase, re-preview, ship again) from <code>authExpired</code> (remedy: re-authenticate) from <code>nothingToCommit</code> (no remedy, just report it) — a bare string can carry the message but not a machine-checkable <code>kind</code> to switch on. <code>AppError::Git</code> errors from lower-level git plumbing (e.g. a <code>rev-parse</code> failure) are bridged into <code>ShipError</code> via a <code>From&lt;AppError&gt; for ShipError</code> impl that classifies a timeout message into <code>kind: "timeout"</code> and everything else into <code>kind: "unknown"</code>, so the divergence is contained to the ship module's own boundary rather than requiring <code>AppError</code> itself to change shape. See <a href="./api.html#ship-commands">docs/api.md#ship-commands</a> for the full <code>ShipErrorKind</code>/<code>ShipRemedy</code> enumerations.</p>
+
 <hr>
 
 <h2>Runtime Modes</h2>
 
 <p>SWARM Orchestrator runs in one of two shells over the SAME domain layer (<code>swarm-core</code>, tauri-free): the desktop app (<code>swarm-desktop</code>, this document's default assumption throughout) or the headless daemon (<code>swarmd</code>). Both are thin adapters over one constructor and one command registry — see <code>crates/swarm-core/src/runtime.rs</code> and <code>crates/swarm-core/src/commands/mod.rs</code>.</p>
 
-<pre><code>                    ┌─────────────────────────────┐
-                    │   swarm_core::runtime::Runtime   │
-                    │  (worker registry, session mgr,  │
-                    │   ordered event log, agent        │
-                    │   scheduler, metrics loop --      │
-                    │   ONE constructor, ONE lock)      │
-                    └───────────────┬───────────────┘
+<pre><code>                  ┌──────────────────────────────────┐
+                  │   swarm_core::runtime::Runtime   │
+                  │  (worker registry, session mgr,  │
+                  │     ordered event log, agent     │
+                  │    scheduler, metrics loop --    │
+                  │    ONE constructor, ONE lock)    │
+                  └─────────────────┬────────────────┘
                                     │
-                 ┌──────────────────┴──────────────────┐
-                 ▼                                      ▼
-    ┌─────────────────────────┐          ┌─────────────────────────────┐
-    │      swarm-desktop       │          │            swarmd            │
-    │  Tauri IPC (invoke/listen)│          │  WebSocket (hello/rpc/event) │
-    │  webview, native plugins  │          │  no webview, no tauri link    │
-    └─────────────────────────┘          └─────────────────────────────┘
+                   ┌────────────────┴────────────────────┐
+                   ▼                                     ▼
+    ┌─────────────────────────────┐       ┌─────────────────────────────┐
+    │        swarm-desktop        │       │           swarmd            │
+    │  Tauri IPC (invoke/listen)  │       │ WebSocket (hello/rpc/event) │
+    │   webview, native plugins   │       │  no webview, no tauri link  │
+    └─────────────────────────────┘       └─────────────────────────────┘
 </code></pre>
 
 <h3>Single-instance lock</h3>
@@ -1186,8 +1188,6 @@ Frontend (#lib/tauri wraps it in ShipCommandError, a real Error subclass carryin
 <p><code>tauri.ts</code> keeps its entire existing public API -- every one of the 41 other files that referenced <code>#lib/tauri</code> when the transport seam landed (source and tests combined) needed zero changes. <code>isTauri()</code> keeps its original meaning ("the Tauri IPC bridge specifically") for the handful of call sites gating genuinely Tauri-only features (<code>tauri-plugin-fs</code>/<code>-dialog</code>/<code>-shell</code>/<code>-notification</code>/<code>-updater</code>, the webview-direct AI chat path); a new <code>hasTransport()</code> ("some backend is reachable, Tauri or WS") backs the small set of command wrappers (<code>spawnWorker</code>, <code>agentSpawn</code>, <code>listSessions</code>, <code>agentProbe</code>) that work identically over either transport.</p>
 
 <p>The MVP remote surface is intentionally narrow: Dashboard, Workers, Terminals, Metrics, and Agent chat. Filesystem browsing (<code>FileTree</code>/<code>FileViewer</code>/<code>WorkspacePanel</code>/<code>useWorkspaceWatcher</code>) and the plugin-store-backed settings surfaces (<code>lazy-store</code>/<code>templates</code>/<code>snapshots</code>/<code>store-integrity</code>) still import <code>@tauri-apps/plugin-*</code> directly and are gated by their own existing <code>isTauri()</code> checks, which now doubles as the remote-capability gate for free. <code>src/lib/kv.ts</code> (a <code>TauriStoreKv</code>/<code>DaemonConfigKv</code>-backed key-value abstraction) exists as the migration target for the plugin-store surfaces but is not yet wired to any of the four call sites -- five surfaces that work over the network beat twelve that half-work.</p>
-
-<p>This exists because the UI needs to distinguish <code>pushRejected</code> (remedy: fetch-and-rebase, re-preview, ship again) from <code>authExpired</code> (remedy: re-authenticate) from <code>nothingToCommit</code> (no remedy, just report it) — a bare string can carry the message but not a machine-checkable <code>kind</code> to switch on. <code>AppError::Git</code> errors from lower-level git plumbing (e.g. a <code>rev-parse</code> failure) are bridged into <code>ShipError</code> via a <code>From&lt;AppError&gt; for ShipError</code> impl that classifies a timeout message into <code>kind: "timeout"</code> and everything else into <code>kind: "unknown"</code>, so the divergence is contained to the ship module's own boundary rather than requiring <code>AppError</code> itself to change shape. See <a href="./api.html#ship-commands">docs/api.md#ship-commands</a> for the full <code>ShipErrorKind</code>/<code>ShipRemedy</code> enumerations.</p>
 
   </main>
 </div>

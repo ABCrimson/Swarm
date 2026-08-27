@@ -102,7 +102,8 @@ pnpm lint
 pnpm format
 ```
 
-**Exclusion note:** `src/styles/tokens.css` is excluded from Biome's `files.includes` (`biome.json`). Biome's CSS parser does not yet support the `@function` at-rule syntax used in that file for OKLCH token derivation, so it is formatted/linted by hand until upstream support lands. Do not remove the exclusion without first confirming Biome's CSS parser handles `@function`.
+> [!WARNING]
+> **Exclusion note:** `src/styles/tokens.css` is excluded from Biome's `files.includes` (`biome.json`). Biome's CSS parser does not yet support the `@function` at-rule syntax used in that file for OKLCH token derivation, so it is formatted/linted by hand until upstream support lands. Do not remove the exclusion without first confirming Biome's CSS parser handles `@function`.
 
 **Import style:** Use hash imports exclusively.
 
