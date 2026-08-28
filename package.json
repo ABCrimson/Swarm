@@ -1,5 +1,6 @@
 {
   "name": "swarm-orchestrator",
+  "license": "MIT",
   "version": "0.13.1",
   "type": "module",
   "packageManager": "pnpm@12.0.0",
