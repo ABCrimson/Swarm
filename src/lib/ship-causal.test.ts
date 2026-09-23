@@ -14,8 +14,8 @@ import {
 import type { CausalTurn, DiffStat, ShipContext } from "#store/types";
 
 const mockStreamMessage = vi.fn();
-vi.mock("#lib/anthropic", () => ({
-  streamMessage: (...args: unknown[]) => mockStreamMessage(...args),
+vi.mock(import("#lib/anthropic"), () => ({
+  streamMessage: (...args) => mockStreamMessage(...args),
 }));
 
 function makeTurn(overrides: Partial<CausalTurn> = {}): CausalTurn {
