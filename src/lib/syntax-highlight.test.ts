@@ -88,7 +88,7 @@ describe("tokenizeJson", () => {
 
   it("gives every token its type's OKLCH color", () => {
     for (const token of tokenizeJson('{"a": [1, true, null, "s"]} // c ?')) {
-      expect(token.color).toMatch(token.type === "whitespace" ? /^transparent$/ : /^oklch\(/);
+      expect(token.color).toMatch(/^oklch\(/);
     }
   });
 });

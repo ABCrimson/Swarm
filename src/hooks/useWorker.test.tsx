@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, configure, renderHook } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorker } from "#hooks/useWorker";
@@ -6,6 +6,9 @@ import { killWorker, pauseWorker, resumeWorker } from "#lib/tauri";
 import type { Worker } from "#store/types";
 import { useWorkerAgentStore } from "#store/worker-agents";
 import { useWorkerStore } from "#store/workers";
+
+// Like the app (main.tsx): effects run twice on mount.
+configure({ reactStrictMode: true });
 
 vi.mock("#lib/tauri", () => ({
   pauseWorker: vi.fn(),

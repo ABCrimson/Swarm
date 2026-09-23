@@ -1,10 +1,13 @@
-import { renderHook } from "@testing-library/react";
+import { configure, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoSnapshot } from "#hooks/useAutoSnapshot";
 import { connectEventBus, resetEventBus } from "#lib/event-bus";
 import { clearSnapshots, createSnapshot } from "#lib/snapshots";
 import { useSessionStore } from "#store/sessions";
 import { DEFAULT_APP_SETTINGS } from "#store/ui";
+
+// Like the app (main.tsx): effects run twice on mount.
+configure({ reactStrictMode: true });
 
 const listeners = new Map<string, (payload: unknown) => void>();
 

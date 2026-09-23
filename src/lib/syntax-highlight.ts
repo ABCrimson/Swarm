@@ -15,7 +15,7 @@ const TOKEN_COLORS = {
   comma: "oklch(0.45 0.03 220)",
   /** `//` and `/* *\/` comments (JSONC: tsconfig.json, biome.jsonc). */
   comment: "oklch(0.55 0.02 220)",
-  whitespace: "transparent",
+  whitespace: "oklch(0 0 0 / 0)",
   /** Anything that is not JSON, e.g. `NaN` or trailing garbage: shown as is. */
   plain: "oklch(0.82 0.04 220)",
 } as const;

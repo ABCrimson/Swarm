@@ -1,7 +1,7 @@
 // useWorkerEvents against the real event bus: Rust-shaped envelopes go
 // in through the `swarm://events` listener, and the stores come out.
 
-import { renderHook, waitFor } from "@testing-library/react";
+import { configure, renderHook, waitFor } from "@testing-library/react";
 import { getDefaultStore } from "jotai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkerEvents } from "#hooks/useWorkerEvents";
@@ -11,6 +11,9 @@ import type { Worker } from "#store/types";
 import { selectedWorkerIdAtom } from "#store/ui";
 import { useWorkerAgentStore } from "#store/worker-agents";
 import { useWorkerStore } from "#store/workers";
+
+// Like the app (main.tsx): effects run twice on mount.
+configure({ reactStrictMode: true });
 
 const listeners = new Map<string, (payload: unknown) => void>();
 const mockListWorkers = vi.fn<() => Promise<Worker[]>>();
