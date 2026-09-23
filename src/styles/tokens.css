@@ -1,43 +1,32 @@
-/* Variable fonts are provided by @fontsource-variable packages,
-   imported in src/main.tsx — bundled locally, CSP stays 'self'. */
-
-@layer reset {
-  *,
-  *::before,
-  *::after {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-  }
-  html {
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    text-rendering: optimizeLegibility;
-    color-scheme: dark;
-  }
-
-  /* OKLCH text selection highlight */
-  ::selection {
-    background: oklch(0.78 0.18 205 / 0.3);
-    color: oklch(0.95 0.02 220);
-  }
-}
+/*
+ * Design tokens — the single source of truth for color, type, radius and
+ * easing. Tailwind turns every `@theme` variable into utilities
+ * (`--color-surface-1` → `bg-surface-1`, `text-surface-1`, `border-…`;
+ * `--font-display` → `font-display`; `--ease-out-cubic` → `ease-out-cubic`)
+ * and emits the variable itself when a utility or a `var(--…)` in source
+ * uses it, so inline styles can reference the same tokens.
+ *
+ * Colors are OKLCH only. Alpha variants use Tailwind's `/N` modifier
+ * (`bg-plasma/15`) or relative color syntax
+ * (`oklch(from var(--color-plasma) l c h / 0.15)`).
+ *
+ * Variable fonts come from @fontsource-variable packages imported in
+ * src/main.tsx, bundled locally so the CSP can stay `'self'`.
+ */
 
 @theme {
-  /* ── OKLCH Color System ────────────────────── */
+  /* ── Accents (OKLCH) ──────────────────────────── */
   --color-plasma: oklch(0.78 0.18 205);
+  --color-plasma-bright: oklch(0.84 0.16 205);
   --color-plasma-dim: oklch(0.55 0.12 205);
-  --color-plasma-glow: oklch(0.78 0.18 205 / 0.25);
   --color-amber: oklch(0.82 0.19 70);
-  --color-amber-dim: oklch(0.55 0.12 70);
   --color-rose: oklch(0.72 0.2 10);
-  --color-rose-dim: oklch(0.5 0.14 10);
+  --color-rose-bright: oklch(0.78 0.18 10);
   --color-lime: oklch(0.82 0.18 140);
-  --color-lime-dim: oklch(0.55 0.12 140);
   --color-violet: oklch(0.72 0.2 290);
-  --color-violet-dim: oklch(0.5 0.14 290);
   --color-cyan: oklch(0.8 0.14 195);
-  --color-cyan-dim: oklch(0.55 0.12 195);
+
+  /* ── Surfaces, darkest to lightest ─────────────── */
   --color-void: oklch(0.06 0.02 220);
   --color-surface-0: oklch(0.08 0.02 220);
   --color-surface-1: oklch(0.11 0.03 220);
@@ -45,116 +34,84 @@
   --color-surface-3: oklch(0.17 0.04 220);
   --color-border: oklch(0.22 0.04 220);
   --color-border-2: oklch(0.28 0.05 220);
-  --color-text: oklch(0.82 0.04 220);
-  --color-text-dim: oklch(0.55 0.04 220);
-  --color-text-bright: oklch(0.95 0.02 220);
+  --color-border-3: oklch(0.35 0.06 220);
+
+  /*
+   * ── Foreground ───────────────────────────────────
+   * Lowest contrast against any surface above (void … surface-3), WCAG 2:
+   * fg-bright 16.4:1, fg 10.9:1, fg-muted 7.1:1, fg-dim 5.2:1 — every step
+   * clears the 4.5:1 AA minimum for small text.
+   */
+  --color-fg-bright: oklch(0.95 0.02 220);
+  --color-fg: oklch(0.82 0.04 220);
+  --color-fg-muted: oklch(0.7 0.04 220);
+  --color-fg-dim: oklch(0.62 0.04 220);
 
   /* ── Typography ──────────────────────────────── */
+  --font-sans: "DM Sans Variable", system-ui, sans-serif;
+  /* Alias kept for inline `fontFamily: "var(--font-body)"` styles. */
+  --font-body: var(--font-sans);
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
   --font-display: "Syne Variable", sans-serif;
-  --font-body: "DM Sans Variable", system-ui, sans-serif;
 
-  /* ── Type Scale (minor third, 1.2 ratio) ───── */
+  /* ── Type scale: size + line height per step ───── */
   --text-2xs: 0.625rem; /* 10px — micro labels */
+  --text-2xs--line-height: calc(0.875 / 0.625);
   --text-xs: 0.6875rem; /* 11px — badges, mono captions */
+  --text-xs--line-height: calc(1 / 0.6875);
   --text-sm: 0.75rem; /* 12px — secondary text */
+  --text-sm--line-height: 1.5;
   --text-md: 0.8125rem; /* 13px — body default */
-  --text-lg: 0.9375rem; /* 15px — input, large body */
+  --text-md--line-height: calc(1.25 / 0.8125);
+  --text-lg: 0.9375rem; /* 15px — inputs, large body */
+  --text-lg--line-height: calc(1.375 / 0.9375);
   --text-xl: 1.125rem; /* 18px — section titles */
+  --text-xl--line-height: calc(1.625 / 1.125);
   --text-2xl: 1.5rem; /* 24px — page headings */
-  --text-3xl: 2rem; /* 32px — hero/display */
+  --text-2xl--line-height: calc(2 / 1.5);
 
-  /* ── Spacing (4px base) ──────────────────────── */
-  --spacing-1: 4px;
-  --spacing-2: 8px;
-  --spacing-3: 12px;
-  --spacing-4: 16px;
-  --spacing-5: 20px;
-  --spacing-6: 24px;
-  --spacing-8: 32px;
-  --spacing-10: 40px;
-  --spacing-12: 48px;
-
-  /* ── Border Radius ───────────────────────────── */
-  --radius-sm: 4px;
-  --radius-md: 8px;
+  /* ── Radius (sm/md keep Tailwind's 4px/6px) ────── */
   --radius-lg: 12px;
   --radius-xl: 16px;
 
   /* ── Easing ──────────────────────────────────── */
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-  --ease-out: cubic-bezier(0, 0, 0.2, 1);
-  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
-  --ease-bounce: cubic-bezier(0.34, 1.75, 0.64, 1);
-
-  /* ── Transition Durations ──────────────────── */
-  --duration-fast: 0.12s;
-  --duration-normal: 0.2s;
-  --duration-slow: 0.35s;
+  /* The shell's entrance curve (a cubic ease-out; GSAP calls it power3.out). */
+  --ease-out-cubic: cubic-bezier(0.215, 0.61, 0.355, 1);
 }
 
-/* ── Semantic color tokens (dark default) ──────── */
-:root {
-  --bg-base: oklch(0.06 0.02 220);
-  --bg-surface: oklch(0.08 0.02 220);
-  --bg-elevated: oklch(0.12 0.03 220);
-  --bg-surface-1: oklch(0.11 0.03 220);
-  --bg-surface-2: oklch(0.14 0.03 220);
-  --bg-surface-3: oklch(0.17 0.04 220);
-  --text-primary: oklch(0.82 0.04 220);
-  --text-secondary: oklch(0.55 0.04 220);
-  --text-muted: oklch(0.55 0.04 220);
-  --text-bright: oklch(0.95 0.02 220);
-  --border: oklch(0.22 0.04 220);
-  --border-2: oklch(0.28 0.05 220);
-  --glass-bg: oklch(0.12 0.03 220 / 0.7);
-  --glass-fallback: oklch(0.12 0.03 220 / 0.95);
-  --overlay-bg: oklch(0.06 0.02 220 / 0.6);
-  --scrollbar-thumb: oklch(0.28 0.05 220);
-  --scrollbar-thumb-hover: oklch(0.35 0.06 220);
-  --clear-value-r: 0.024;
-  --clear-value-g: 0.022;
-  --clear-value-b: 0.027;
-}
+@layer base {
+  html {
+    color-scheme: dark;
+    background: var(--color-void);
+    color: var(--color-fg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
 
-/* ── CSS @function — dynamic OKLCH worker colors ── */
-@function --worker-color(--idx: integer) -> color {
-  result: oklch(from var(--color-plasma) calc(l - (--idx * 0.04)) c calc(h + (--idx * 36)));
-}
+  ::selection {
+    background: oklch(from var(--color-plasma) l c h / 0.3);
+    color: var(--color-fg-bright);
+  }
 
-@function --worker-glow(--idx: integer) -> color {
-  result: oklch(from var(--color-plasma) calc(l - (--idx * 0.04)) c calc(h + (--idx * 36)) / 0.3);
-}
-
-/* ── @utility blocks ─────────────────────────────── */
-@utility plasma-glow {
-  box-shadow:
-    0 0 0 1px oklch(0.78 0.18 205 / 0.4),
-    0 0 20px oklch(0.78 0.18 205 / 0.2),
-    0 0 40px oklch(0.78 0.18 205 / 0.1);
-}
-
-@utility glass-panel {
-  background: var(--glass-bg);
-  backdrop-filter: blur(12px) saturate(1.5);
-  border: 1px solid var(--border-2);
-
-  @supports not (backdrop-filter: blur(1px)) {
-    background: var(--glass-fallback);
+  /*
+   * One visible keyboard-focus ring for every focusable element. An
+   * outline (not a box-shadow) so it survives forced-colors mode
+   * (Windows High Contrast), where the UA repaints it in a system color.
+   */
+  :focus-visible {
+    outline: 2px solid var(--color-plasma);
+    outline-offset: 2px;
   }
 }
 
-@utility surface-raised {
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border);
-}
+/* ── @utility blocks ─────────────────────────────── */
+@utility glass-panel {
+  background: oklch(from var(--color-surface-1) l c h / 0.7);
+  backdrop-filter: blur(12px) saturate(1.5);
+  border: 1px solid var(--color-border-2);
 
-@utility surface-sunken {
-  background: var(--bg-base);
-  border: 1px solid var(--bg-surface-2);
+  @supports not (backdrop-filter: blur(1px)) {
+    background: oklch(from var(--color-surface-1) l c h / 0.95);
+  }
 }
-
-/* ── @custom-variant blocks ──────────────────────── */
-@custom-variant worker-active (&[data-state="running"]);
-@custom-variant worker-error (&[data-state="error"]);
-@custom-variant worker-paused (&[data-state="paused"]);

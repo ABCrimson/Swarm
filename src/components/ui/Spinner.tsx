@@ -1,12 +1,7 @@
-import { useEffect, useRef } from "react";
-
 type SpinnerSize = "sm" | "md" | "lg";
 
-const sizeMap: Record<SpinnerSize, number> = {
-  sm: 16,
-  md: 24,
-  lg: 32,
-};
+/** Rendered width/height in CSS pixels for each size. */
+const SIZE_PX = { sm: 16, md: 24, lg: 32 } as const satisfies Record<SpinnerSize, number>;
 
 interface SpinnerProps {
   readonly size?: SpinnerSize;
@@ -14,60 +9,30 @@ interface SpinnerProps {
 }
 
 /**
- * OKLCH-themed SVG loading spinner with configurable size.
+ * OKLCH-themed SVG loading spinner, announced as a "Loading" status.
  *
- * Optimises `will-change` by removing it after the first animation cycle.
+ * The rotation is Tailwind's `animate-spin` (a stylesheet animation), so
+ * the global reduced-motion override in animations.css stops it.
  */
 export function Spinner({ size = "md", className }: SpinnerProps): React.ReactElement {
-  const ref = useRef<SVGSVGElement>(null);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-
-    const handler = () => {
-      el.style.willChange = "auto";
-    };
-
-    el.style.willChange = "transform";
-    el.addEventListener("animationiteration", handler, { once: true });
-
-    return () => {
-      el.removeEventListener("animationiteration", handler);
-    };
-  }, []);
-
-  const px = sizeMap[size];
+  const px = SIZE_PX[size];
 
   return (
-    <output aria-label="Loading" style={{ display: "inline-flex", lineHeight: 0 }}>
+    <output aria-label="Loading" className={`inline-flex leading-none ${className ?? ""}`}>
       <svg
-        ref={ref}
         width={px}
         height={px}
         viewBox="0 0 24 24"
         fill="none"
-        className={className}
         aria-hidden="true"
-        style={{
-          animation: "spinner-rotate 0.8s linear infinite",
-          willChange: "transform",
-        }}
+        className="animate-spin"
       >
-        <circle
-          cx={12}
-          cy={12}
-          r={10}
-          stroke="oklch(0.78 0.18 205 / 0.25)"
-          strokeWidth={2.5}
-          fill="none"
-        />
+        <circle cx={12} cy={12} r={10} strokeWidth={2.5} className="stroke-plasma/25" />
         <path
           d="M12 2a10 10 0 0 1 10 10"
-          stroke="oklch(0.78 0.18 205)"
           strokeWidth={2.5}
           strokeLinecap="round"
-          fill="none"
+          className="stroke-plasma"
         />
       </svg>
     </output>

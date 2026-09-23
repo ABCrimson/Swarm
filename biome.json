@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/*.svg", "!src/styles/tokens.css", "!.claude", "!site"]
+    "includes": ["**", "!**/*.svg", "!.claude", "!site"]
   },
   "formatter": {
     "enabled": true,

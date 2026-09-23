@@ -4,6 +4,7 @@ import { CommandPalette } from "#components/command/CommandPalette";
 import { AppShell } from "#components/layout/AppShell";
 import { PerformanceOverlay } from "#components/metrics/PerformanceOverlay";
 import { ErrorBoundary } from "#components/ui/ErrorBoundary";
+import { Spinner } from "#components/ui/Spinner";
 import { SwarmToaster } from "#components/ui/Toast";
 import { useAgentSessionEvents } from "#hooks/useAgentSessionEvents";
 import { useAlerts } from "#hooks/useAlerts";
@@ -50,28 +51,11 @@ const PAGE_MAP: Record<PageId, React.LazyExoticComponent<() => React.ReactElemen
   workspace: Workspace,
 };
 
-/** Minimal inline loading spinner — OKLCH colors only. */
+/** Centered spinner shown while a page chunk loads. */
 function PageFallback(): React.ReactElement {
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        width: "100%",
-        height: "100%",
-      }}
-    >
-      <div
-        style={{
-          width: 24,
-          height: 24,
-          border: "2px solid oklch(0.3 0.02 220)",
-          borderTop: "2px solid oklch(0.78 0.18 205)",
-          borderRadius: "50%",
-          animation: "spinner-rotate 0.8s linear infinite",
-        }}
-      />
+    <div className="flex size-full items-center justify-center">
+      <Spinner size="md" />
     </div>
   );
 }

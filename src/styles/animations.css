@@ -1,39 +1,17 @@
 /* ── Typed custom properties ─────────────────────── */
+
+/*
+ * Animated by `glow-breathe`. The initial value is the resting glow, so a
+ * running worker still glows when the animation is off (reduced motion,
+ * see below) instead of dropping to 0.
+ */
 @property --glow-intensity {
   syntax: "<number>";
-  initial-value: 0;
+  initial-value: 0.3;
   inherits: false;
 }
 
-@property --pulse-scale {
-  syntax: "<number>";
-  initial-value: 1;
-  inherits: false;
-}
-
-@property --scan-alpha {
-  syntax: "<number>";
-  initial-value: 0;
-  inherits: false;
-}
-
-@property --worker-hue {
-  syntax: "<angle>";
-  initial-value: 205deg;
-  inherits: false;
-}
-
-/* ── @keyframes ──────────────────────────────────── */
-@keyframes pulse-ring {
-  0% {
-    transform: scale(1);
-    opacity: 0.8;
-  }
-  100% {
-    transform: scale(2.5);
-    opacity: 0;
-  }
-}
+/* ── @keyframes (referenced from component inline styles) ── */
 
 @keyframes glow-breathe {
   0%,
@@ -46,60 +24,21 @@
 }
 
 @keyframes dash-flow {
-  0% {
+  from {
     stroke-dashoffset: 24;
   }
-  100% {
+  to {
     stroke-dashoffset: 0;
-  }
-}
-
-@keyframes scan-line {
-  0% {
-    --scan-alpha: 0;
-    transform: translateY(-100%);
-  }
-  10% {
-    --scan-alpha: 0.4;
-  }
-  90% {
-    --scan-alpha: 0.4;
-  }
-  100% {
-    --scan-alpha: 0;
-    transform: translateY(100vh);
-  }
-}
-
-@keyframes shimmer {
-  0% {
-    background-position: -200% center;
-  }
-  100% {
-    background-position: 200% center;
-  }
-}
-
-@keyframes spinner-rotate {
-  0% {
-    transform: rotate(0deg);
-  }
-  100% {
-    transform: rotate(360deg);
   }
 }
 
 @keyframes cursor-blink {
   0%,
+  40%,
   100% {
     opacity: 1;
   }
-  40% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0;
-  }
+  50%,
   90% {
     opacity: 0;
   }
@@ -117,22 +56,68 @@
   }
 }
 
-/* ── Reduced motion ──────────────────────────────── */
+/* ── Page transitions (React <ViewTransition>, see AppShell) ── */
+
 /*
- * No !important: this rule is intentionally unlayered (see layers.css —
- * `reset, base, tokens, layout, components, overrides`), and unlayered
- * styles always win the cascade over every named layer regardless of
- * selector specificity, so a plain universal selector already overrides
- * animation/transition durations declared in `@layer components` (and any
- * other named layer) without needing to fight the cascade with !important.
+ * The document root is not captured, so everything outside the page
+ * (particles, sidebar, status bar) stays live and clickable while the
+ * page snapshots animate above it.
  */
+:root {
+  view-transition-name: none;
+}
+
+::view-transition {
+  pointer-events: none;
+}
+
+::view-transition-old(.swarm-page) {
+  animation: swarm-page-out 150ms ease-in both;
+}
+
+::view-transition-new(.swarm-page) {
+  animation: swarm-page-in 250ms var(--ease-out-cubic) both;
+}
+
+@keyframes swarm-page-out {
+  to {
+    opacity: 0;
+    translate: 0 -8px;
+  }
+}
+
+@keyframes swarm-page-in {
+  from {
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
+
+/* ── Reduced motion ──────────────────────────────── */
+
+/*
+ * `!important` is required: most animations in the app are set through
+ * inline `style` attributes, and an inline declaration beats every
+ * normal stylesheet rule regardless of layer or specificity. Only an
+ * important declaration outranks it. Animations collapse to their end
+ * state in one frame instead of being removed, so anything that listens
+ * for `animationend`/`transitionend` still gets its event.
+ */
+/* biome-ignore-start lint/complexity/noImportantStyles: only !important outranks inline animation styles (see above) */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
-    animation-duration: 0.001ms;
-    animation-iteration-count: 1;
-    transition-duration: 0.001ms;
-    scroll-behavior: auto;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }
+/* biome-ignore-end lint/complexity/noImportantStyles: end of the reduced-motion override */
