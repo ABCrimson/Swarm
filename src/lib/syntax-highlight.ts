@@ -1,7 +1,9 @@
-// ── JSON Syntax Highlighter (OKLCH) ─────────────────
-// Produces spans with inline OKLCH colors for JSON rendering.
+// ── JSON / JSONC Syntax Highlighter (OKLCH) ─────────
+// Splits JSON text into colored tokens. Lossless: the token values
+// joined back together are exactly the input, so a viewer shows the
+// file as it is on disk, comments and invalid text included.
 
-/** OKLCH colour palette mapped to JSON token types. */
+/** OKLCH color per token type. */
 const TOKEN_COLORS = {
   key: "oklch(0.78 0.18 205)",
   string: "oklch(0.82 0.18 140)",
@@ -11,156 +13,59 @@ const TOKEN_COLORS = {
   brace: "oklch(0.55 0.03 220)",
   colon: "oklch(0.45 0.03 220)",
   comma: "oklch(0.45 0.03 220)",
+  /** `//` and `/* *\/` comments (JSONC: tsconfig.json, biome.jsonc). */
+  comment: "oklch(0.55 0.02 220)",
+  whitespace: "transparent",
+  /** Anything that is not JSON, e.g. `NaN` or trailing garbage: shown as is. */
+  plain: "oklch(0.82 0.04 220)",
 } as const;
 
-/** Discriminated union of JSON token categories. */
+/** A token category. */
 export type TokenType = keyof typeof TOKEN_COLORS;
 
-/** A single syntax-highlighted JSON token with its OKLCH colour. */
+/** One highlighted token and its OKLCH color. */
 export interface HighlightToken {
-  type: TokenType;
-  value: string;
-  color: string;
+  readonly type: TokenType;
+  readonly value: string;
+  readonly color: string;
 }
 
 /**
- * Tokenizes a JSON string into styled tokens for rendering.
- *
- * Handles keys, strings, numbers, booleans, null, and structural characters.
- * Returns an array of tokens with OKLCH color assignments.
+ * One alternative per token type, tried in order at every position
+ * (sticky + global, so `matchAll` walks the input without gaps). A
+ * string directly followed by `:` is a key. An unterminated string or
+ * block comment runs to the end of its line or of the input.
+ */
+const TOKEN_PATTERN = new RegExp(
+  [
+    String.raw`(?<whitespace>\s+)`,
+    String.raw`(?<comment>//[^\n]*|/\*[\s\S]*?(?:\*/|$))`,
+    String.raw`(?<key>"(?:[^"\\\n]|\\.)*"(?=\s*:))`,
+    String.raw`(?<string>"(?:[^"\\\n]|\\.)*"?)`,
+    String.raw`(?<number>-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)`,
+    String.raw`(?<boolean>(?:true|false)\b)`,
+    String.raw`(?<null>null\b)`,
+    String.raw`(?<brace>[{}[\]])`,
+    "(?<colon>:)",
+    "(?<comma>,)",
+    String.raw`(?<plain>[^\s{}[\]:,"/]+|[\s\S])`,
+  ].join("|"),
+  "gy",
+);
+
+const TOKEN_TYPES = Object.keys(TOKEN_COLORS) as TokenType[];
+
+/**
+ * Tokenizes JSON or JSONC text for rendering: keys, strings, numbers,
+ * booleans, `null`, structure, comments, whitespace, and a `plain`
+ * token for anything else.
  */
 export function tokenizeJson(input: string): HighlightToken[] {
-  const tokens: HighlightToken[] = [];
-  const len = input.length;
-  let i = 0;
-
-  const push = (type: TokenType, value: string) => {
-    tokens.push({ type, value, color: TOKEN_COLORS[type] });
-  };
-
-  while (i < len) {
-    const ch = input[i];
-
-    // Whitespace — preserve for formatting
-    if (ch === " " || ch === "\n" || ch === "\r" || ch === "\t") {
-      let ws = "";
-      while (
-        i < len &&
-        (input[i] === " " || input[i] === "\n" || input[i] === "\r" || input[i] === "\t")
-      ) {
-        ws += input[i];
-        i++;
-      }
-      // Whitespace tokens don't need color but must be present for layout
-      tokens.push({ type: "brace", value: ws, color: "transparent" });
-      continue;
-    }
-
-    // Structural characters
-    if (ch === "{" || ch === "}" || ch === "[" || ch === "]") {
-      push("brace", ch);
-      i++;
-      continue;
-    }
-
-    if (ch === ":") {
-      push("colon", ": ");
-      i++;
-      // Skip optional space after colon
-      if (i < len && input[i] === " ") i++;
-      continue;
-    }
-
-    if (ch === ",") {
-      push("comma", ",");
-      i++;
-      continue;
-    }
-
-    // Strings (both keys and values)
-    if (ch === '"') {
-      let str = '"';
-      i++;
-      while (i < len && input[i] !== '"') {
-        if (input[i] === "\\") {
-          str += input[i];
-          i++;
-          if (i < len) {
-            str += input[i];
-            i++;
-          }
-        } else {
-          str += input[i];
-          i++;
-        }
-      }
-      if (i < len) {
-        str += '"';
-        i++;
-      }
-
-      // Determine if this is a key or a value by looking ahead for ':'
-      let lookAhead = i;
-      while (lookAhead < len && (input[lookAhead] === " " || input[lookAhead] === "\t")) {
-        lookAhead++;
-      }
-
-      if (lookAhead < len && input[lookAhead] === ":") {
-        push("key", str);
-      } else {
-        push("string", str);
-      }
-      continue;
-    }
-
-    // Numbers
-    if (ch === "-" || (ch >= "0" && ch <= "9")) {
-      let num = "";
-      while (
-        i < len &&
-        (input[i] === "-" ||
-          input[i] === "+" ||
-          input[i] === "." ||
-          input[i] === "e" ||
-          input[i] === "E" ||
-          (input[i] >= "0" && input[i] <= "9"))
-      ) {
-        num += input[i];
-        i++;
-      }
-      push("number", num);
-      continue;
-    }
-
-    // Booleans: true / false
-    if (input.startsWith("true", i)) {
-      push("boolean", "true");
-      i += 4;
-      continue;
-    }
-    if (input.startsWith("false", i)) {
-      push("boolean", "false");
-      i += 5;
-      continue;
-    }
-
-    // Null
-    if (input.startsWith("null", i)) {
-      push("null", "null");
-      i += 4;
-      continue;
-    }
-
-    // Fallback — skip unknown character
-    i++;
-  }
-
-  return tokens;
-}
-
-/**
- * Returns OKLCH color for a given token type.
- */
-export function getTokenColor(type: TokenType): string {
-  return TOKEN_COLORS[type];
+  return input
+    .matchAll(TOKEN_PATTERN)
+    .map((match): HighlightToken => {
+      const type = TOKEN_TYPES.find((t) => match.groups?.[t] !== undefined) ?? "plain";
+      return { type, value: match[0], color: TOKEN_COLORS[type] };
+    })
+    .toArray();
 }
