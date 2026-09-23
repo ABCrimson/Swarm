@@ -1,20 +1,20 @@
-import { useEffect, useRef, useState } from "react";
-
+import { Button } from "#components/ui/Button";
 import type { LogLevel } from "#lib/log-store";
+import { LOG_LEVEL_LABEL, LOG_LEVELS } from "#lib/log-store";
 
 /** Props for the log filter toolbar. */
 interface LogFilterProps {
   /** Currently active log levels. */
-  readonly activeLevels: Set<LogLevel>;
+  readonly activeLevels: ReadonlySet<LogLevel>;
   /** Toggle a log level on/off. */
   readonly onToggleLevel: (level: LogLevel) => void;
   /** All known log sources. */
-  readonly sources: Set<string>;
+  readonly sources: ReadonlySet<string>;
   /** Currently selected source filter, or null for all. */
   readonly selectedSource: string | null;
   /** Set the source filter. */
   readonly onSelectSource: (source: string | null) => void;
-  /** Current search query text. */
+  /** Current search query text (controlled — LogViewer defers the filtering, not the input). */
   readonly searchQuery: string;
   /** Update the search query. */
   readonly onSearchChange: (query: string) => void;
@@ -22,25 +22,10 @@ interface LogFilterProps {
   readonly onClear: () => void;
 }
 
-const LOG_LEVELS: LogLevel[] = ["debug", "info", "warn", "error"];
-
-const LEVEL_COLORS: Record<LogLevel, string> = {
-  debug: "oklch(0.65 0.04 220)",
-  info: "oklch(0.78 0.18 205)",
-  warn: "oklch(0.82 0.19 70)",
-  error: "oklch(0.72 0.20 10)",
-};
-
-const LEVEL_BG_ACTIVE: Record<LogLevel, string> = {
-  debug: "oklch(0.65 0.04 220 / 0.2)",
-  info: "oklch(0.78 0.18 205 / 0.2)",
-  warn: "oklch(0.82 0.19 70 / 0.2)",
-  error: "oklch(0.72 0.20 10 / 0.2)",
-};
-
 /**
- * Filter toolbar for the log viewer with level toggles, source dropdown,
- * text search input, and a clear button. OKLCH glass-panel styling.
+ * Filter toolbar for the log viewer: level toggle buttons (`aria-pressed`),
+ * a source dropdown, a search box and a clear button. Hover and
+ * `:focus-visible` states live in `logs.css`, not inline styles.
  */
 export function LogFilter({
   activeLevels,
@@ -52,147 +37,49 @@ export function LogFilter({
   onSearchChange,
   onClear,
 }: LogFilterProps): React.ReactElement {
-  const [localSearch, setLocalSearch] = useState(searchQuery);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const handleSearchChange = (value: string) => {
-    setLocalSearch(value);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      onSearchChange(value);
-    }, 300);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, []);
-
-  const handleSourceChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    onSelectSource(e.target.value === "" ? null : e.target.value);
-  };
-
-  const sortedSources = [...sources].sort();
-
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "8px 12px",
-        borderBottom: "1px solid oklch(0.22 0.04 220)",
-        background: "oklch(0.10 0.03 220 / 0.6)",
-        backdropFilter: "blur(12px) saturate(1.5)",
-        flexWrap: "wrap",
-      }}
-    >
-      {/* Level toggle buttons */}
-      <div style={{ display: "flex", gap: 4 }}>
-        {LOG_LEVELS.map((level) => {
-          const isActive = activeLevels.has(level);
-          return (
-            <button
-              key={level}
-              type="button"
-              onClick={() => onToggleLevel(level)}
-              style={{
-                padding: "4px 10px",
-                borderRadius: 6,
-                border: `1px solid ${isActive ? LEVEL_COLORS[level] : "oklch(0.22 0.04 220)"}`,
-                background: isActive ? LEVEL_BG_ACTIVE[level] : "oklch(0 0 0 / 0)",
-                color: isActive ? LEVEL_COLORS[level] : "oklch(0.45 0.04 220)",
-                fontFamily: "var(--font-mono)",
-                fontSize: "0.6875rem",
-                fontWeight: 600,
-                textTransform: "uppercase",
-                cursor: "pointer",
-                transition: "all 0.15s ease",
-                letterSpacing: "0.04em",
-              }}
-            >
-              {level}
-            </button>
-          );
-        })}
+    <search className="log-filter">
+      <div className="log-filter__levels">
+        {LOG_LEVELS.map((level) => (
+          <button
+            key={level}
+            type="button"
+            className="log-filter__level"
+            data-level={level}
+            aria-pressed={activeLevels.has(level)}
+            onClick={() => onToggleLevel(level)}
+          >
+            {LOG_LEVEL_LABEL[level]}
+          </button>
+        ))}
       </div>
 
-      {/* Source dropdown */}
       <select
+        className="log-filter__source"
         value={selectedSource ?? ""}
-        onChange={handleSourceChange}
+        onChange={(e) => onSelectSource(e.target.value === "" ? null : e.target.value)}
         aria-label="Filter By Source"
-        style={{
-          padding: "4px 8px",
-          borderRadius: 6,
-          border: "1px solid oklch(0.22 0.04 220)",
-          background: "oklch(0.10 0.03 220)",
-          color: "oklch(0.72 0.04 220)",
-          fontFamily: "var(--font-mono)",
-          fontSize: "0.75rem",
-          cursor: "pointer",
-          outline: "none",
-          minWidth: 120,
-        }}
       >
         <option value="">All Sources</option>
-        {sortedSources.map((source) => (
+        {[...sources].sort().map((source) => (
           <option key={source} value={source}>
             {source}
           </option>
         ))}
       </select>
 
-      {/* Search input */}
-      <div style={{ flex: 1, minWidth: 140 }}>
-        <input
-          type="text"
-          placeholder="Search Logs..."
-          value={localSearch}
-          onChange={(e) => handleSearchChange(e.target.value)}
-          aria-label="Search Log Messages"
-          style={{
-            width: "100%",
-            padding: "5px 10px",
-            borderRadius: 6,
-            border: "1px solid oklch(0.22 0.04 220)",
-            background: "oklch(0.08 0.02 220)",
-            color: "oklch(0.82 0.04 220)",
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.75rem",
-            outline: "none",
-          }}
-        />
-      </div>
+      <input
+        type="search"
+        className="swarm-input log-filter__search"
+        placeholder="Search Logs…"
+        value={searchQuery}
+        onChange={(e) => onSearchChange(e.target.value)}
+        aria-label="Search Log Messages"
+      />
 
-      {/* Clear button */}
-      <button
-        type="button"
-        onClick={onClear}
-        aria-label="Clear All Logs"
-        style={{
-          padding: "4px 10px",
-          borderRadius: 6,
-          border: "1px solid oklch(0.22 0.04 220)",
-          background: "oklch(0 0 0 / 0)",
-          color: "oklch(0.55 0.04 220)",
-          fontFamily: "var(--font-body)",
-          fontSize: "0.75rem",
-          cursor: "pointer",
-          transition: "all 0.15s ease",
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.borderColor = "oklch(0.72 0.20 10)";
-          e.currentTarget.style.color = "oklch(0.72 0.20 10)";
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.borderColor = "oklch(0.22 0.04 220)";
-          e.currentTarget.style.color = "oklch(0.55 0.04 220)";
-        }}
-      >
+      <Button variant="ghost" size="sm" onClick={onClear} aria-label="Clear All Logs">
         Clear
-      </button>
-    </div>
+      </Button>
+    </search>
   );
 }
