@@ -58,6 +58,7 @@ mod paths;
 pub mod protocol;
 pub mod runtime;
 pub mod session;
+mod state_file;
 pub mod worker;
 
 pub use paths::Paths;
