@@ -70,7 +70,7 @@ src-tauri/crates/swarm-core/src/   (swarm-core -- tauri-free domain crate)
 ├── bus/             Inter-agent message bus
 │   ├── channel.rs   MessageBus -- per-topic tokio::sync::broadcast channels
 │   └── router.rs    Router -- direct/broadcast send, emits bus_message onto the ordered spine (pipeline machinery deleted in Phase 4)
-├── commands/        The drift-proof command Registry (35 entries) + per-command RemotePolicy -- both shells dispatch through it
+├── commands/        The drift-proof command Registry (36 entries) + per-command RemotePolicy -- both shells dispatch through it
 ├── events/          Event emission system
 │   └── emitter.rs   SwarmEvent enum + EventSink (routes into OrchestrationEngine)
 ├── git/             Worktree-per-worker isolation + ship chain -- see "Worktree Isolation"/"Ship Chain" below
@@ -136,32 +136,35 @@ let runtime = tokio::runtime::Builder::new_multi_thread()
 
 The `WorkerRegistry` is the central data structure for worker management:
 
-- **Storage:** `DashMap<Uuid, WorkerHandle>` -- lock-free concurrent reads, per-shard write locks
-- **Configuration:** `parking_lot::RwLock<SystemConfig>` -- max workers (64) and default shell
+- **Storage:** `DashMap<Uuid, WorkerHandle>` -- a sharded map: reads take a shard read lock, writes a shard write lock. Callers clone what they need (a PTY writer or master `Arc`) out of an entry before any blocking call, so a blocked PTY write can never stall a kill on the same shard
+- **Configuration:** `parking_lot::RwLock<SystemConfig>` -- max workers (default 64, 1-256) and the worktrees root (default `~/.swarm/worktrees`)
 - **Metrics:** Sequential iteration over worker states for aggregate counts, run inside `tokio::task::spawn_blocking` so the async executor is never blocked. (The 64-worker cap makes sequential aggregation cheaper than `rayon`-style parallel dispatch overhead, so `rayon` was removed from the dependency tree.)
-- **Capacity:** Enforces `max_workers` limit, returns `AppError::RegistryFull` on overflow
+- **Capacity:** `reserve()` admits a spawn against `max_workers` (registered workers plus outstanding reservations, under one lock) before the spawn creates anything, returning `AppError::RegistryFull` when full; the slot is filled at registration or given back when the spawn fails
 - **State transitions:** `update_state_if(id, expected, new)` performs an atomic compare-and-set against the current state under the entry's lock, eliminating the read-then-write TOCTOU window that a separate `get` + `insert` would have
 
 ### PTY Management
 
-Workers spawn real processes via `portable-pty` 0.9.0:
+Workers run their shell on a real pseudo-terminal via `portable-pty` (ConPTY on Windows):
 
 ```text
 spawn_pty()
     │
     ├── native_pty_system().openpty()     Create PTY pair
-    ├── slave.spawn_command(shell)        Spawn shell in slave PTY
-    ├── master.take_writer()              Get writer for input
-    ├── master.try_clone_reader()         Get reader for output
-    │
-    ├── spawn_blocking(reader loop)       4KB buffer, blocking reads
-    │       │
-    │       └── mpsc::channel(4096)        Bridge to async world (bounded)
-    │               │
-    └── tokio::spawn(event emitter)       Forward as worker_output events (ephemeral)
+    ├── slave.spawn_command(shell)        Spawn the shell, then drop the slave
+    ├── master.take_writer()              Input (worker_input)
+    ├── master.try_clone_reader()         Output
+    └── master                            Kept for the worker's lifetime: resize_worker,
+                                          and on Windows it owns the pseudoconsole
+
+do_spawn_worker() then starts two named threads per worker, parked until
+worker_spawned has been emitted:
+    ├── pty-<id8>        blocking 8 KiB reads, UTF-8 decoded across read
+    │                    boundaries, emitted as worker_output (ephemeral)
+    └── pty-exit-<id8>   polls the shell (try_wait); a shell that exits on its
+                         own moves the worker to "error" (worker_state)
 ```
 
-The PTY writer and child process are wrapped in `parking_lot::Mutex` to satisfy `Sync` requirements for `DashMap` storage.
+The writer, master and shell process each sit in an `Arc<parking_lot::Mutex<..>>` on the `WorkerHandle`. The kill path reaps the shell first and only then releases the writer and master: on Windows, dropping the master closes the pseudoconsole under the shell.
 
 ### Worktree Isolation
 

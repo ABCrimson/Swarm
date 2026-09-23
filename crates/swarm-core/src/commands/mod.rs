@@ -268,6 +268,7 @@ impl Registry {
             entry("kill_worker", worker::kill_worker, Allowed),
             entry("list_workers", worker::list_workers, Allowed),
             entry("worker_input", worker::worker_input, Allowed),
+            entry("resize_worker", worker::resize_worker, Allowed),
             entry("set_max_workers", worker::set_max_workers, Allowed),
             // Git / ship commands
             entry("validate_repo_root", git::validate_repo_root, Allowed),
@@ -467,13 +468,14 @@ mod tests {
     }
 
     #[test]
-    fn test_registry_has_35_entries() {
-        // 37 tauri commands total minus the 2 NATIVE_ONLY. Ship added
+    fn test_registry_has_36_entries() {
+        // 38 tauri commands total minus the 2 NATIVE_ONLY. Ship added
         // ship_context (Phase 2, +1); Codex added agent_permission_respond
         // (the real round-trip its interactive approvals need, +1) and
         // deleted bus_subscribe/bus_create_pipeline/bus_list_pipelines
-        // (−3, see crate::bus::router's module doc). 36 + 1 + 1 − 3 = 35.
-        assert_eq!(Registry::new().keys().len(), 35);
+        // (−3, see crate::bus::router's module doc); resize_worker
+        // (+1). 36 + 1 + 1 − 3 + 1 = 36.
+        assert_eq!(Registry::new().keys().len(), 36);
     }
 
     #[tokio::test]

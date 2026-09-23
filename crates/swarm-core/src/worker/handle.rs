@@ -1,59 +1,72 @@
 //! Worker handle types, state machine, and configuration.
 //!
-//! Defines the core data structures for representing a worker
-//! instance in the SWARM Orchestrator: its state, configuration
-//! for spawning, serializable info snapshot, and the runtime handle
-//! containing PTY communication channels.
+//! Defines how a worker is described on the wire ([`WorkerState`],
+//! [`WorkerIsolation`], [`WorkerConfig`], [`WorkerInfo`]) and the
+//! runtime [`WorkerHandle`] the registry keeps for each live worker,
+//! including the OS resources of its PTY ([`PtyChild`]).
+
+use std::collections::HashMap;
+use std::io::Write;
+use std::sync::Arc;
 
 use parking_lot::Mutex;
+use portable_pty::{Child, MasterPty};
 use serde::{Deserialize, Serialize};
-use std::io::Write;
 use uuid::Uuid;
 
-/// Represents the current state of a worker in its lifecycle.
+/// Lifecycle state of a worker.
 ///
-/// Workers transition through these states:
 /// ```text
-/// Idle ──> Running ──> Paused ──> Running ──> ...
-///                  └──> Error
+/// spawn ──▶ Running ◀── pause / resume ──▶ Paused
+///              │                              │
+///              └─────── the shell exits ──────┴──▶ Error
 /// ```
+///
+/// Every transition is announced with a `worker_state` event. A kill
+/// removes the worker from the registry from any state (and emits
+/// `worker_killed`); there is no "killed" state.
 ///
 /// # Serialization
 ///
-/// Serialized as camelCase strings for Tauri IPC transport
-/// (e.g., `"running"`, `"paused"`).
+/// camelCase strings on the wire (`"running"`, `"paused"`, ...).
 ///
 /// # Examples
 ///
 /// ```
 /// use swarm_core::worker::handle::WorkerState;
 ///
-/// let state = WorkerState::Running;
-/// assert_eq!(state.to_string(), "running");
+/// assert_eq!(WorkerState::Running.to_string(), "running");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WorkerState {
-    /// Worker is registered but not yet executing.
+    /// Registered but not executing. The backend never produces this
+    /// state today (a worker is `Running` from the moment it is
+    /// registered); it stays in the wire enum because the frontend's
+    /// `WorkerStateSchema` and older persisted `worker_state` rows
+    /// carry it.
     Idle,
-    /// Worker process is actively running.
+    /// The worker's process is running.
     Running,
-    /// Worker process is suspended. This is state-only on all
-    /// platforms today — no `SIGSTOP`/`SIGCONT` (or Windows
-    /// equivalent) is sent to the underlying process yet.
+    /// Suspended by the user. State-only on every platform: no
+    /// `SIGSTOP`/`SIGCONT` (or Windows equivalent) reaches the process.
     Paused,
-    /// Worker encountered a fatal error.
+    /// Terminal: the worker's shell exited on its own (a clean `exit`,
+    /// a crash, or a shell that died while starting). The worker stays
+    /// registered, with its output and worktree intact, but accepts no
+    /// more input or pause/resume; killing it removes it and cleans up
+    /// its worktree.
     Error,
 }
 
 impl std::fmt::Display for WorkerState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WorkerState::Idle => write!(f, "idle"),
-            WorkerState::Running => write!(f, "running"),
-            WorkerState::Paused => write!(f, "paused"),
-            WorkerState::Error => write!(f, "error"),
-        }
+        f.write_str(match self {
+            Self::Idle => "idle",
+            Self::Running => "running",
+            Self::Paused => "paused",
+            Self::Error => "error",
+        })
     }
 }
 
@@ -61,44 +74,50 @@ impl std::fmt::Display for WorkerState {
 ///
 /// # Serialization
 ///
-/// Serialized as lowercase `snake_case` strings for Tauri IPC
-/// transport (`"worktree"`, `"none"`).
+/// `snake_case` strings on the wire (`"worktree"`, `"none"`); `Display`
+/// renders the same strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerIsolation {
-    /// Spawn inside a fresh `git worktree` rooted at `WorkerConfig::repo_root`.
-    /// The default when `repo_root` is present.
+    /// Spawn inside a fresh `git worktree` of [`WorkerConfig::repo_root`].
+    /// The default; it only takes effect when `repo_root` is present.
     Worktree,
-    /// No isolation — spawn directly at `WorkerConfig::cwd`, exactly
-    /// today's (pre-worktree-isolation) behavior.
+    /// No isolation: spawn directly at [`WorkerConfig::cwd`].
     None,
 }
 
 impl std::fmt::Display for WorkerIsolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WorkerIsolation::Worktree => write!(f, "worktree"),
-            WorkerIsolation::None => write!(f, "none"),
-        }
+        f.write_str(match self {
+            Self::Worktree => "worktree",
+            Self::None => "none",
+        })
     }
 }
 
-/// Default isolation mode: `worktree`. Only takes effect when
-/// [`WorkerConfig::repo_root`] is also present — a worker with no
-/// `repo_root` spawns exactly as it did before worktree isolation
-/// existed, regardless of this field.
-fn default_isolation() -> WorkerIsolation {
+/// `#[serde(default)]` for [`WorkerConfig::isolation`].
+const fn default_isolation() -> WorkerIsolation {
     WorkerIsolation::Worktree
+}
+
+/// Default PTY height (24 rows, the classic terminal size).
+const fn default_rows() -> u16 {
+    24
+}
+
+/// Default PTY width (80 columns, the classic terminal size).
+const fn default_cols() -> u16 {
+    80
 }
 
 /// Configuration for spawning a new worker process.
 ///
-/// Passed from the frontend via Tauri IPC when the user
-/// requests a new worker. All fields have sensible defaults.
+/// Sent by the frontend with `spawn_worker`/`agent_spawn`. Every field
+/// but `name` has a default.
 ///
 /// # Serialization
 ///
-/// Uses camelCase field names for Tauri IPC transport.
+/// camelCase field names on the wire.
 ///
 /// # Examples
 ///
@@ -106,8 +125,7 @@ fn default_isolation() -> WorkerIsolation {
 /// use swarm_core::worker::handle::WorkerConfig;
 ///
 /// let config = WorkerConfig::default();
-/// assert_eq!(config.rows, 24);
-/// assert_eq!(config.cols, 80);
+/// assert_eq!((config.rows, config.cols), (24, 80));
 /// assert!(config.repo_root.is_none());
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,27 +133,30 @@ fn default_isolation() -> WorkerIsolation {
 pub struct WorkerConfig {
     /// Display name for the worker.
     pub name: String,
-    /// Shell command to execute (defaults to system shell if empty).
+    /// Shell program to run: a path or a name resolved on `PATH`, with
+    /// no arguments (`"pwsh -NoLogo"` is not a program name). Empty
+    /// selects the platform default shell (see
+    /// [`crate::worker::pty::spawn_pty`]).
     #[serde(default)]
     pub shell: String,
-    /// Initial working directory. Ignored when a worktree is actually
-    /// created (`repo_root` present and `isolation` resolves to
-    /// `worktree`) — the PTY's cwd becomes the new worktree path
-    /// instead.
+    /// Initial working directory. Ignored when a worktree is created
+    /// (`repo_root` present and `isolation` is `worktree`): the shell
+    /// then starts in the new worktree.
     #[serde(default)]
     pub cwd: String,
-    /// Environment variables to set.
+    /// Environment variables added to the shell's inherited
+    /// environment. Values may be credentials (per-profile API keys), so
+    /// they are never logged — only the key count is.
     #[serde(default)]
-    pub env: std::collections::HashMap<String, String>,
-    /// Number of rows for PTY.
+    pub env: HashMap<String, String>,
+    /// Initial PTY height in rows; resize later with `resize_worker`.
     #[serde(default = "default_rows")]
     pub rows: u16,
-    /// Number of columns for PTY.
+    /// Initial PTY width in columns; resize later with `resize_worker`.
     #[serde(default = "default_cols")]
     pub cols: u16,
     /// Root of the git repository to isolate this worker into. `None`
-    /// (the default) reproduces exactly today's (pre-worktree-isolation)
-    /// spawn behavior — no git anywhere, PTY cwd is `cwd` as given.
+    /// (the default) spawns without touching git, at `cwd`.
     #[serde(default)]
     pub repo_root: Option<String>,
     /// Isolation mode, effective only when `repo_root` is present.
@@ -143,23 +164,13 @@ pub struct WorkerConfig {
     pub isolation: WorkerIsolation,
 }
 
-/// Default PTY row count (24 rows, standard terminal height).
-fn default_rows() -> u16 {
-    24
-}
-
-/// Default PTY column count (80 columns, standard terminal width).
-fn default_cols() -> u16 {
-    80
-}
-
 impl Default for WorkerConfig {
     fn default() -> Self {
         Self {
-            name: "Worker".to_string(),
+            name: "Worker".to_owned(),
             shell: String::new(),
             cwd: String::new(),
-            env: std::collections::HashMap::new(),
+            env: HashMap::new(),
             rows: default_rows(),
             cols: default_cols(),
             repo_root: None,
@@ -168,44 +179,31 @@ impl Default for WorkerConfig {
     }
 }
 
-/// Serializable summary of a worker for IPC transport.
-///
-/// A lightweight, `Clone`-able snapshot of a worker's metadata
-/// that can be sent to the frontend. Does not contain PTY handles
-/// or process references.
-///
-/// # Fields
-///
-/// * `id` - Unique worker identifier (UUID v4)
-/// * `state` - Current lifecycle state
-/// * `name` - Human-readable display name
-/// * `pid` - OS process ID (if available)
-/// * `started_at` - Unix timestamp (seconds) when the worker was spawned
+/// Serializable snapshot of a worker for IPC transport: the metadata
+/// of a [`WorkerHandle`], without its PTY handles.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerInfo {
-    /// Unique worker identifier.
+    /// Unique worker identifier (UUID v4).
     pub id: Uuid,
     /// Current lifecycle state.
     pub state: WorkerState,
     /// Human-readable display name.
     pub name: String,
-    /// OS process ID of the PTY child, if available.
+    /// OS process ID of the worker's shell, if the OS reported one.
     pub pid: Option<u32>,
-    /// Unix timestamp (seconds) when the worker was spawned.
+    /// Unix timestamp in **seconds** when the worker was spawned.
     pub started_at: i64,
-    /// Absolute path of this worker's git worktree, if it was spawned
-    /// with isolation. `None` for an unisolated worker.
-    #[serde(default)]
-    pub worktree_path: Option<String>,
-    /// Branch name checked out in `worktree_path` (`swarm/<slug>-<id8>`),
-    /// if this worker was spawned with isolation. `None` for an
+    /// Absolute path of this worker's git worktree; `None` for an
     /// unisolated worker.
     #[serde(default)]
+    pub worktree_path: Option<String>,
+    /// Branch checked out in `worktree_path` (`swarm/<slug>-<id8>`);
+    /// `None` for an unisolated worker.
+    #[serde(default)]
     pub branch: Option<String>,
-    /// Log `seq` the most recent successful ship pushed through, if
-    /// any. `None` until the first successful `git_push` for this
-    /// worker.
+    /// Log `seq` the most recent successful ship pushed through; `None`
+    /// until the first successful `git_push` for this worker.
     #[serde(default)]
     pub last_shipped_seq: Option<u64>,
     /// Commit sha of the most recent successful ship, mirroring
@@ -214,69 +212,87 @@ pub struct WorkerInfo {
     pub last_shipped_commit: Option<String>,
 }
 
-/// Runtime handle to a running worker instance.
+/// The shell a worker runs on its PTY, together with the PTY master it
+/// is attached to.
 ///
-/// Contains all metadata and communication channels for interacting
-/// with the worker's PTY process. Stored in the [`super::registry::WorkerRegistry`]
-/// `DashMap`.
+/// Both live exactly as long as the worker. The master is the only
+/// handle that can resize the terminal, and on Windows it owns the
+/// pseudoconsole: dropping it calls `ClosePseudoConsole`, which tears
+/// the console down under the shell. It must therefore outlive the
+/// shell, and is released only after the kill path has reaped it (see
+/// [`crate::worker::lifecycle::do_kill_worker`]).
+pub struct PtyChild {
+    /// The shell process. The worker's exit watcher holds a `Weak`
+    /// reference and polls it with the non-blocking `try_wait`; the kill
+    /// path locks it to `kill` and `wait`.
+    pub process: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+    /// Master side of the PTY. Shared (`Arc`) so a resize can clone it
+    /// out of the registry and release the map's shard lock first.
+    pub master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+}
+
+/// Runtime handle to a live worker, stored in the
+/// [`super::registry::WorkerRegistry`]'s map.
 ///
-/// The PTY writer and child process handle are wrapped in
-/// `parking_lot::Mutex` to satisfy `Sync` requirements for
-/// DashMap storage, since `dyn Write + Send` and
-/// `dyn portable_pty::Child + Send` are not inherently `Sync`.
+/// # Thread safety
 ///
-/// # Thread Safety
-///
-/// All non-`Sync` fields are wrapped in `parking_lot::Mutex`, so the
-/// compiler derives `Sync` for the struct on its own — no `unsafe impl`.
-/// Sharing the registry's `DashMap` across threads requires it, so a
-/// future non-`Sync` field fails to compile instead of being masked.
+/// The handle is `Send + Sync` because every non-`Sync` resource (the
+/// PTY writer, master and child) sits behind a `parking_lot::Mutex`.
+/// The compiler derives both traits (asserted at compile time below),
+/// so adding a non-thread-safe field is a compile error rather than a
+/// silently unsound handle.
 pub struct WorkerHandle {
     /// Unique worker identifier (UUID v4).
     pub id: Uuid,
-    /// Current lifecycle state of this worker.
+    /// Current lifecycle state.
     pub state: WorkerState,
     /// Human-readable display name.
     pub name: String,
-    /// OS process ID of the PTY child, if available.
+    /// OS process ID of the worker's shell, if the OS reported one.
     pub pid: Option<u32>,
-    /// Unix timestamp (seconds) when the worker was spawned.
+    /// Unix timestamp in **seconds** when the worker was spawned.
     pub started_at: i64,
-    /// PTY writer for sending input to the worker process.
-    /// Wrapped in Mutex because `dyn Write + Send` is not Sync.
-    pub pty_writer: Option<Mutex<Box<dyn Write + Send>>>,
-    /// Handle to the child process (for kill/signal).
-    /// Wrapped in Mutex because `dyn Child + Send` is not Sync.
-    pub child: Option<Mutex<Box<dyn portable_pty::Child + Send>>>,
+    /// Input side of the worker's PTY. Shared (`Arc`) so a caller can
+    /// clone it out of the registry and release the map's shard lock
+    /// before writing: a write blocks while the child is not reading its
+    /// stdin, and holding the shard lock across it would stall every
+    /// other operation on that shard, including the kill that would
+    /// unblock the write. `None` only for handles built without a PTY
+    /// (tests).
+    pub pty_writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
+    /// The worker's PTY process and master. `None` only for handles
+    /// built without a PTY (tests).
+    pub child: Option<PtyChild>,
     /// Absolute path of this worker's git worktree, if it was spawned
-    /// with isolation (`repo_root` present, resolved `isolation ==
-    /// worktree`, and worktree creation succeeded).
+    /// with isolation.
     pub worktree_path: Option<String>,
-    /// Root of the git repository this worker's worktree was created
-    /// from, if isolated. Needed at kill time to run `git -C
-    /// <repo_root> worktree remove` — the worktree's own directory is
-    /// not itself a valid `-C` target once removed.
+    /// Root of the repository the worktree was created from, if
+    /// isolated. The kill path runs `git -C <repo_root> worktree remove`
+    /// from here, since the worktree itself is no valid `-C` target
+    /// once removed.
     pub repo_root: Option<String>,
     /// Branch checked out in `worktree_path`, if isolated.
     pub branch: Option<String>,
-    /// Commit sha `branch` was created from (`HEAD` of `repo_root` at
-    /// spawn time), if isolated. Compared against the branch's tip at
-    /// kill time to decide whether the isolation branch can be safely
-    /// `git branch -d`'d (tip == base_commit means the agent made no
-    /// commits) — never exposed to the frontend, purely an internal
-    /// bookkeeping field for that one decision.
+    /// `HEAD` of `repo_root` the branch was created from, if isolated.
+    /// Internal bookkeeping, never sent to the frontend: at kill time a
+    /// branch whose tip still equals it (the worker made no commits) is
+    /// deleted with `git branch -d`.
     pub base_commit: Option<String>,
     /// Log `seq` the most recent successful ship pushed through, if
-    /// any. Written **only** by the ship chain
-    /// (`swarm_core::git::ship`) via
-    /// [`super::registry::WorkerRegistry::set_last_shipped`] — every
-    /// other field on this struct is owned by the worktree feature.
-    /// `None` until the first successful `git_push` for this worker.
+    /// any. Written only by the ship chain, through
+    /// [`super::registry::WorkerRegistry::set_last_shipped`].
     pub last_shipped_seq: Option<u64>,
     /// Commit sha of the most recent successful ship, mirroring
     /// `last_shipped_seq`.
     pub last_shipped_commit: Option<String>,
 }
+
+// Compile-time proof that the registry's map can be shared across
+// threads; see the struct's "Thread safety" section.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<WorkerHandle>();
+};
 
 impl std::fmt::Debug for WorkerHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -289,9 +305,11 @@ impl std::fmt::Debug for WorkerHandle {
             .field("has_pty_writer", &self.pty_writer.is_some())
             .field("has_child", &self.child.is_some())
             .field("worktree_path", &self.worktree_path)
+            .field("repo_root", &self.repo_root)
             .field("branch", &self.branch)
             .field("base_commit", &self.base_commit)
             .field("last_shipped_seq", &self.last_shipped_seq)
+            .field("last_shipped_commit", &self.last_shipped_commit)
             .finish()
     }
 }
@@ -299,13 +317,8 @@ impl std::fmt::Debug for WorkerHandle {
 impl WorkerHandle {
     /// Creates a serializable [`WorkerInfo`] snapshot of this worker.
     ///
-    /// Clones only the lightweight metadata fields, omitting the
-    /// PTY writer and child process handle.
-    ///
-    /// # Returns
-    ///
-    /// A [`WorkerInfo`] containing the worker's ID, state, name, PID,
-    /// and start timestamp.
+    /// Copies every metadata field the frontend sees (everything but
+    /// the PTY handles and the internal `repo_root`/`base_commit`).
     ///
     /// # Examples
     ///
@@ -316,9 +329,9 @@ impl WorkerHandle {
     /// let handle = WorkerHandle {
     ///     id: Uuid::new_v4(),
     ///     state: WorkerState::Running,
-    ///     name: "agent-1".to_string(),
+    ///     name: "agent-1".to_owned(),
     ///     pid: Some(1234),
-    ///     started_at: 1700000000,
+    ///     started_at: 1_700_000_000,
     ///     pty_writer: None,
     ///     child: None,
     ///     worktree_path: None,
@@ -328,8 +341,7 @@ impl WorkerHandle {
     ///     last_shipped_seq: None,
     ///     last_shipped_commit: None,
     /// };
-    /// let info = handle.to_info();
-    /// assert_eq!(info.name, "agent-1");
+    /// assert_eq!(handle.to_info().name, "agent-1");
     /// ```
     pub fn to_info(&self) -> WorkerInfo {
         WorkerInfo {

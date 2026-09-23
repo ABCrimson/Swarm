@@ -11,7 +11,7 @@
 //!
 //! ## Modules
 //!
-//! - [`worker`] — Worker lifecycle commands (spawn, pause, resume, kill, list, input)
+//! - [`worker`] — Worker lifecycle commands (spawn, pause, resume, kill, list, input, resize)
 //! - [`session`] — Session CRUD commands (create, delete, list, get)
 //! - [`agent`] — Provider-adapter agent commands
 //! - [`config`] — App config file commands (read_config, write_config)
