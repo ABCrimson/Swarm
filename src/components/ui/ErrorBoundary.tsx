@@ -2,6 +2,7 @@ import type { ErrorInfo, ReactNode } from "react";
 import { Component } from "react";
 import { Button } from "#components/ui/Button";
 import { toast } from "#components/ui/Toast";
+import { isError } from "#lib/is-error";
 
 /** Retries allowed before the fallback offers only a full reload. */
 export const MAX_RETRIES = 3;
@@ -22,15 +23,6 @@ interface TauriError {
   readonly message: string;
   readonly kind?: string;
 }
-
-/**
- * `Error.isError` (ES2026; also true for errors from another realm),
- * falling back to `instanceof` in a webview that predates it.
- */
-const isError: (value: unknown) => value is Error =
-  typeof Error.isError === "function"
-    ? Error.isError
-    : (value: unknown): value is Error => value instanceof Error;
 
 function isTauriError(error: unknown): error is TauriError {
   return (
