@@ -1,50 +1,36 @@
 // ── OKLCH Theme Utilities ───────────────────────────
-// Dark-only theme system for SWARM Orchestrator.
-// All colors produced in OKLCH color space.
+// Worker colors for SWARM Orchestrator's dark theme, all in OKLCH.
 
-/** Base hue for the plasma accent color. */
+/** Hue of the plasma accent, and of worker 0. */
 const BASE_HUE = 205;
-/** Base lightness for worker colors. */
+/** Lightness of worker 0. */
 const BASE_LIGHTNESS = 0.78;
-/** Base chroma for worker colors. */
+/** Chroma of every worker color. */
 const BASE_CHROMA = 0.18;
-/** Hue rotation step per worker index. */
+/** Hue rotation per worker index, in degrees. */
 const HUE_STEP = 36;
 /** Lightness reduction per worker index. */
 const LIGHTNESS_STEP = 0.04;
+/** Lightness floor, reached at index 10. */
+const MIN_LIGHTNESS = 0.4;
 
 /**
- * Returns an OKLCH color string for a given worker index,
- * rotating hue by 36deg per step and slightly reducing lightness.
+ * The OKLCH color of the worker at `idx`: the hue rotates 36° per index
+ * and the lightness drops 0.04 per index down to 0.40.
  */
 export function workerColor(idx: number): string {
-  const lightness = Math.max(0.4, BASE_LIGHTNESS - idx * LIGHTNESS_STEP);
+  const lightness = Math.max(MIN_LIGHTNESS, BASE_LIGHTNESS - idx * LIGHTNESS_STEP);
   const hue = (BASE_HUE + idx * HUE_STEP) % 360;
   return `oklch(${lightness.toFixed(2)} ${BASE_CHROMA} ${hue})`;
 }
 
 /**
- * Adds an alpha channel to an OKLCH color string.
- *
- * Handles both `oklch(L C H)` and `oklch(L C H / A)` formats.
- * If the color already contains an alpha, it is replaced.
+ * `color` with its alpha set to `alpha` (clamped to 0–1), as CSS
+ * relative color syntax: the browser parses `color`, so any CSS color
+ * works, including one that already has an alpha (it is replaced) or a
+ * `var()` reference.
  */
 export function withAlpha(color: string, alpha: number): string {
-  const clamped = Math.max(0, Math.min(1, alpha));
-  // Strip existing alpha if present
-  const base = color.replace(/\s*\/\s*[\d.]+\s*\)/, ")");
-  // Insert alpha before closing paren
-  return base.replace(")", ` / ${clamped})`);
+  const clamped = Math.min(1, Math.max(0, alpha));
+  return `oklch(from ${color} l c h / ${clamped})`;
 }
-
-/**
- * Detects whether the user prefers reduced motion.
- * Returns `true` if `prefers-reduced-motion: reduce` matches.
- */
-export function prefersReducedMotion(): boolean {
-  if (typeof globalThis.matchMedia !== "function") return false;
-  return globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
-
-/** Palette of OKLCH worker colors for up to 10 workers. */
-export const WORKER_PALETTE = Array.from({ length: 10 }, (_, i) => workerColor(i));

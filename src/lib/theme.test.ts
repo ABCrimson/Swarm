@@ -1,96 +1,55 @@
 import { describe, expect, it } from "vitest";
-import { WORKER_PALETTE, withAlpha, workerColor } from "#lib/theme";
+import { withAlpha, workerColor } from "#lib/theme";
 
 describe("workerColor", () => {
-  it("returns an OKLCH color string for index 0", () => {
-    const color = workerColor(0);
-    expect(color).toMatch(/^oklch\(/);
-    expect(color).toContain("0.18");
-    expect(color).toContain("205");
+  it("starts at the accent: lightness 0.78, chroma 0.18, hue 205", () => {
+    expect(workerColor(0)).toBe("oklch(0.78 0.18 205)");
   });
 
-  it("rotates hue by 36 degrees per index", () => {
-    const color0 = workerColor(0);
-    const color1 = workerColor(1);
-
-    // Index 0: hue = 205
-    expect(color0).toContain("205");
-    // Index 1: hue = (205 + 36) % 360 = 241
-    expect(color1).toContain("241");
+  it("rotates the hue 36° and lowers the lightness 0.04 per index", () => {
+    expect(workerColor(1)).toBe("oklch(0.74 0.18 241)");
+    expect(workerColor(2)).toBe("oklch(0.70 0.18 277)");
   });
 
-  it("reduces lightness per index but clamps at 0.4", () => {
-    const color0 = workerColor(0);
-    const color1 = workerColor(1);
-    // Index 0 lightness = 0.78
-    expect(color0).toContain("0.78");
-    // Index 1 lightness = 0.78 - 0.04 = 0.74
-    expect(color1).toContain("0.74");
+  it("wraps the hue around 360°", () => {
+    // (205 + 5 × 36) % 360 = 25
+    expect(workerColor(5)).toBe("oklch(0.58 0.18 25)");
   });
 
-  it("clamps lightness at 0.40 for high indices", () => {
-    // At index 10, lightness would be 0.78 - 10*0.04 = 0.38, but clamped to 0.40
-    const color = workerColor(10);
-    expect(color).toContain("0.40");
+  it("clamps the lightness at 0.40", () => {
+    // 0.78 − 10 × 0.04 = 0.38, clamped
+    expect(workerColor(10)).toBe("oklch(0.40 0.18 205)");
+    expect(workerColor(25)).toBe("oklch(0.40 0.18 25)");
   });
 
-  it("wraps hue around 360 degrees", () => {
-    // Index 5: hue = (205 + 5*36) % 360 = 385 % 360 = 25
-    const color = workerColor(5);
-    expect(color).toContain("25");
-  });
-
-  it("produces distinct colors for consecutive indices", () => {
-    const colors = [workerColor(0), workerColor(1), workerColor(2)];
-    const uniqueColors = new Set(colors);
-    expect(uniqueColors.size).toBe(3);
+  it("gives ten consecutive workers ten distinct colors", () => {
+    expect(new Set(Array.from({ length: 10 }, (_, i) => workerColor(i))).size).toBe(10);
   });
 });
 
 describe("withAlpha", () => {
-  it("adds alpha to an OKLCH color without existing alpha", () => {
-    const result = withAlpha("oklch(0.78 0.18 205)", 0.5);
-    expect(result).toBe("oklch(0.78 0.18 205 / 0.5)");
+  it("sets the alpha through relative color syntax", () => {
+    expect(withAlpha("oklch(0.78 0.18 205)", 0.5)).toBe(
+      "oklch(from oklch(0.78 0.18 205) l c h / 0.5)",
+    );
   });
 
-  it("replaces existing alpha", () => {
-    const result = withAlpha("oklch(0.78 0.18 205 / 0.3)", 0.8);
-    expect(result).toBe("oklch(0.78 0.18 205 / 0.8)");
+  it("replaces an existing alpha, whatever its notation", () => {
+    expect(withAlpha("oklch(0.7 0.1 200 / 50%)", 0.8)).toBe(
+      "oklch(from oklch(0.7 0.1 200 / 50%) l c h / 0.8)",
+    );
   });
 
-  it("clamps alpha at 0", () => {
-    const result = withAlpha("oklch(0.78 0.18 205)", -0.5);
-    expect(result).toBe("oklch(0.78 0.18 205 / 0)");
+  it("accepts any CSS color, including a custom property", () => {
+    expect(withAlpha("var(--accent)", 0.25)).toBe("oklch(from var(--accent) l c h / 0.25)");
   });
 
-  it("clamps alpha at 1", () => {
-    const result = withAlpha("oklch(0.78 0.18 205)", 1.5);
-    expect(result).toBe("oklch(0.78 0.18 205 / 1)");
-  });
-
-  it("handles alpha of exactly 0", () => {
-    const result = withAlpha("oklch(0.78 0.18 205)", 0);
-    expect(result).toBe("oklch(0.78 0.18 205 / 0)");
-  });
-
-  it("handles alpha of exactly 1", () => {
-    const result = withAlpha("oklch(0.78 0.18 205)", 1);
-    expect(result).toBe("oklch(0.78 0.18 205 / 1)");
-  });
-});
-
-describe("WORKER_PALETTE", () => {
-  it("contains 10 pre-generated colors", () => {
-    expect(WORKER_PALETTE).toHaveLength(10);
-  });
-
-  it("all entries are OKLCH color strings", () => {
-    for (const color of WORKER_PALETTE) {
-      expect(color).toMatch(/^oklch\(/);
-    }
-  });
-
-  it("palette[0] matches workerColor(0)", () => {
-    expect(WORKER_PALETTE[0]).toBe(workerColor(0));
+  it("clamps the alpha to 0–1", () => {
+    expect(withAlpha("oklch(0.78 0.18 205)", -0.5)).toBe(
+      "oklch(from oklch(0.78 0.18 205) l c h / 0)",
+    );
+    expect(withAlpha("oklch(0.78 0.18 205)", 1.5)).toBe(
+      "oklch(from oklch(0.78 0.18 205) l c h / 1)",
+    );
   });
 });
