@@ -95,7 +95,9 @@ describe("Settings — AI Model selection (Task 8 item 2)", () => {
     await user.click(screen.getByRole("button", { name: /Claude Mythos 5/ }));
 
     expect(toast.warning).toHaveBeenCalledTimes(1);
-    expect(toast.warning).toHaveBeenCalledWith("Claude Mythos 5 Requires Project Glasswing Access");
+    expect(toast.warning).toHaveBeenCalledWith(
+      "Claude Mythos 5.1 Requires Project Glasswing Access",
+    );
     expect(toast.success).not.toHaveBeenCalled();
   });
 
@@ -103,10 +105,10 @@ describe("Settings — AI Model selection (Task 8 item 2)", () => {
     const user = userEvent.setup();
     render(<Settings />);
 
-    await user.click(screen.getByRole("button", { name: /Claude Opus 4\.8/ }));
+    await user.click(screen.getByRole("button", { name: /Claude Opus 5.5/ }));
 
     expect(toast.success).toHaveBeenCalledTimes(1);
-    expect(toast.success).toHaveBeenCalledWith("Switched To Claude Opus 4.8");
+    expect(toast.success).toHaveBeenCalledWith("Switched To Claude Opus 5.5");
     expect(toast.warning).not.toHaveBeenCalled();
   });
 });

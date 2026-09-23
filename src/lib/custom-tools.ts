@@ -4,8 +4,8 @@
 // sandboxed Blob Worker — off the main thread, no Tauri IPC bridge,
 // hard-terminated on timeout.
 
-import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
 import * as z from "zod";
+import type { ChatTool } from "#lib/anthropic";
 import type { SwarmToolResult } from "#lib/tools";
 
 // ── Canonical definition types + persistence schema ─
@@ -86,7 +86,7 @@ const SCRIPT_TIMEOUT_MS = 10_000;
  * empty name are skipped (the builder allows adding a row before
  * naming it); all named params are required, matching the preview.
  */
-export function customToolToAnthropic(def: CustomToolDef): Tool {
+export function customToolToAnthropic(def: CustomToolDef): ChatTool {
   const properties: Record<string, { type: string; description: string }> = {};
   const required: string[] = [];
 

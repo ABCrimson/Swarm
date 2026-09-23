@@ -12,7 +12,7 @@ import { useAiStream } from "#hooks/useAiStream";
 import { truncateMessages } from "#lib/ai-error";
 import type { StreamParams } from "#lib/anthropic";
 import { estimateTokens } from "#lib/context-manager";
-import { CLAUDE_MODELS, getContextWindow } from "#lib/models";
+import { CLAUDE_MODELS, getModelById } from "#lib/models";
 import { agentTurnStarted } from "#lib/tauri";
 import type { ToolProvenance } from "#lib/tools";
 import { executeTool, getAllAnthropicTools } from "#lib/tools";
@@ -308,7 +308,10 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
     const systemPromptTokens = agentMetadata?.systemPrompt
       ? estimateTokens(agentMetadata.systemPrompt)
       : 0;
-    const truncated = truncateMessages(apiMessages, getContextWindow(modelId) - systemPromptTokens);
+    const truncated = truncateMessages(
+      apiMessages,
+      (getModelById(modelId)?.contextWindow ?? 200_000) - systemPromptTokens,
+    );
 
     let buffer = "";
     let rafId = 0;

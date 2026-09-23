@@ -108,7 +108,7 @@ describe("ModelSelector portal", () => {
     render(<ModelSelector />);
     const user = await openDropdown();
 
-    const option = screen.getByRole("option", { name: /Claude Opus 4\.8/ });
+    const option = screen.getByRole("option", { name: /Claude Opus 5.5/ });
     option.focus();
     await user.keyboard("{Enter}");
 
@@ -121,7 +121,7 @@ describe("ModelSelector portal", () => {
       expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     });
     expect(screen.getByRole("button", { name: "Select AI Model" })).toHaveTextContent(
-      "Claude Opus 4.8",
+      "Claude Opus 5.5",
     );
   });
 
@@ -181,7 +181,7 @@ describe("ModelSelector portal", () => {
     await openDropdown();
     expect(screen.getByRole("listbox")).toBeInTheDocument();
 
-    const option = screen.getByRole("option", { name: /Claude Opus 4\.8/ });
+    const option = screen.getByRole("option", { name: /Claude Opus 5.5/ });
     option.focus();
     fireEvent.focusIn(option);
 
@@ -208,7 +208,7 @@ describe("ModelSelector portal", () => {
 
       expect(toast.warning).toHaveBeenCalledTimes(1);
       expect(toast.warning).toHaveBeenCalledWith(
-        "Claude Mythos 5 Requires Project Glasswing Access",
+        "Claude Mythos 5.1 Requires Project Glasswing Access",
       );
       expect(toast.success).not.toHaveBeenCalled();
     });
@@ -217,7 +217,7 @@ describe("ModelSelector portal", () => {
       render(<ModelSelector />);
       const user = await openDropdown();
 
-      const option = screen.getByRole("option", { name: /Claude Opus 4\.8/ });
+      const option = screen.getByRole("option", { name: /Claude Opus 5.5/ });
       option.focus();
       await user.keyboard("{Enter}");
 
@@ -246,7 +246,7 @@ describe("ModelSelector portal", () => {
       render(<ModelSelector workerId={WORKER_ID} />);
 
       expect(screen.getByRole("button", { name: "Select AI Model" })).toHaveTextContent(
-        "Claude Opus 4.8",
+        "Claude Opus 5.5",
       );
       expect(store.get(selectedModelAtom)).toBe("sonnet");
     });
@@ -302,7 +302,7 @@ describe("ModelSelector portal", () => {
         "Claude Sonnet 5",
       );
 
-      const option = screen.getByRole("option", { name: /Claude Opus 4\.8/ });
+      const option = screen.getByRole("option", { name: /Claude Opus 5.5/ });
       option.focus();
       await user.keyboard("{Enter}");
 

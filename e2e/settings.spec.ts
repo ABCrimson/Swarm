@@ -61,7 +61,9 @@ test.describe("Settings", () => {
 
     await page.getByRole("button", { name: /Claude Mythos 5/ }).click();
 
-    await expect(page.getByText("Claude Mythos 5 Requires Project Glasswing Access")).toBeVisible();
+    await expect(
+      page.getByText("Claude Mythos 5.1 Requires Project Glasswing Access"),
+    ).toBeVisible();
     await expect(page.getByText("Switched To Claude Mythos 5")).toHaveCount(0);
   });
 

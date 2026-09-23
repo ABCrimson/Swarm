@@ -2,8 +2,8 @@
 // Defines SWARM tools as Zod v4 schemas → Anthropic tool format.
 // Each tool has a name, description, input schema, and execute function.
 
-import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
 import * as z from "zod";
+import type { ChatTool } from "#lib/anthropic";
 import { zodToTool } from "#lib/anthropic";
 import { customToolToAnthropic, isValidToolName, runCustomTool } from "#lib/custom-tools";
 import type { ProvenanceArgs } from "#lib/tauri";
@@ -51,7 +51,7 @@ export interface SwarmTool {
   /** Title Case description rendered in the Tools page UI (`ToolCard`). */
   readonly uiDescription: string;
   readonly schema: z.ZodType;
-  readonly anthropicTool: Tool;
+  readonly anthropicTool: ChatTool;
   readonly execute: (
     input: Record<string, unknown>,
     prov?: ToolProvenance,
@@ -272,7 +272,7 @@ const TOOLS: SwarmTool[] = [
 export const toolRegistry: Map<string, SwarmTool> = new Map(TOOLS.map((t) => [t.name, t]));
 
 /** Returns an array of Anthropic Tool definitions for use in API calls. */
-export function getAnthropicTools(): Tool[] {
+export function getAnthropicTools(): ChatTool[] {
   return TOOLS.map((t) => t.anthropicTool);
 }
 
@@ -286,9 +286,9 @@ export function getAnthropicTools(): Tool[] {
  * name colliding with a built-in loses to the built-in, and duplicate
  * custom names keep only the first.
  */
-export function getAllAnthropicTools(): Tool[] {
+export function getAllAnthropicTools(): ChatTool[] {
   const seen = new Set<string>(toolRegistry.keys());
-  const customs: Tool[] = [];
+  const customs: ChatTool[] = [];
   for (const t of useCustomToolsStore.getState().customTools) {
     if (!isValidToolName(t.name) || seen.has(t.name)) continue;
     seen.add(t.name);

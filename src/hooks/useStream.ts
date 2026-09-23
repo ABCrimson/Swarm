@@ -6,7 +6,7 @@ import { startTransition, useEffect, useRef, useState } from "react";
 import { truncateMessages, withRetry } from "#lib/ai-error";
 import type { StreamParams } from "#lib/anthropic";
 import { streamMessage } from "#lib/anthropic";
-import { CLAUDE_MODELS, getContextWindow } from "#lib/models";
+import { CLAUDE_MODELS, getModelById } from "#lib/models";
 import { useAiStore } from "#store/ai";
 import type { AiMessage } from "#store/types";
 
@@ -51,7 +51,7 @@ export function useStream(
   const send = (content: string, params?: Partial<StreamParams>) => {
     const model = params?.model ?? defaultModel;
     const maxTokens = params?.maxTokens ?? 4096;
-    const contextLimit = getContextWindow(model);
+    const contextLimit = getModelById(model)?.contextWindow ?? 200_000;
 
     // Add user message
     const userMessage: AiMessage = {
