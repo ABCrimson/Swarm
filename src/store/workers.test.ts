@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { Worker } from "#store/types";
-import { useWorkerStore } from "#store/workers";
+import { OUTPUT_BUFFER_CHARS, useWorkerStore } from "#store/workers";
 
 function createWorker(overrides?: Partial<Worker>): Worker {
   return {
@@ -14,19 +14,7 @@ function createWorker(overrides?: Partial<Worker>): Worker {
 
 describe("WorkerStore", () => {
   beforeEach(() => {
-    // Reset the store to a clean state before each test
-    const state = useWorkerStore.getState();
-    for (const [id] of state.workers) {
-      state.removeWorker(id);
-    }
-    state.selectWorker(null);
-  });
-
-  afterEach(() => {
-    const state = useWorkerStore.getState();
-    for (const [id] of state.workers) {
-      state.removeWorker(id);
-    }
+    useWorkerStore.setState({ workers: new Map() });
   });
 
   describe("addWorker", () => {
@@ -62,30 +50,25 @@ describe("WorkerStore", () => {
 
       expect(useWorkerStore.getState().workers.has(worker.id)).toBe(false);
     });
+  });
 
-    it("clears selectedId when the selected worker is removed", () => {
-      const worker = createWorker();
-      const { addWorker, selectWorker, removeWorker } = useWorkerStore.getState();
-      addWorker(worker);
-      selectWorker(worker.id);
-      expect(useWorkerStore.getState().selectedId).toBe(worker.id);
-
-      removeWorker(worker.id);
-
-      expect(useWorkerStore.getState().selectedId).toBeNull();
-    });
-
-    it("does not clear selectedId when a different worker is removed", () => {
+  describe("hydrateWorkers", () => {
+    it("adds listed workers the store does not know", () => {
       const w1 = createWorker({ name: "w1" });
       const w2 = createWorker({ name: "w2" });
-      const { addWorker, selectWorker, removeWorker } = useWorkerStore.getState();
-      addWorker(w1);
-      addWorker(w2);
-      selectWorker(w1.id);
 
-      removeWorker(w2.id);
+      useWorkerStore.getState().hydrateWorkers([w1, w2]);
 
-      expect(useWorkerStore.getState().selectedId).toBe(w1.id);
+      expect([...useWorkerStore.getState().workers.values()]).toStrictEqual([w1, w2]);
+    });
+
+    it("keeps a worker that live events already put in the store", () => {
+      const live = createWorker({ state: "paused", output: "hello" });
+      useWorkerStore.getState().addWorker(live);
+
+      useWorkerStore.getState().hydrateWorkers([{ ...live, state: "running", output: undefined }]);
+
+      expect(useWorkerStore.getState().workers.get(live.id)).toStrictEqual(live);
     });
   });
 
@@ -140,17 +123,15 @@ describe("WorkerStore", () => {
       expect(useWorkerStore.getState().workers.get(worker.id)?.output).toBe("hello world");
     });
 
-    it("ring-buffers output at 10,000 characters", () => {
+    it("ring-buffers output to OUTPUT_BUFFER_CHARS characters", () => {
       const worker = createWorker();
       const { addWorker, appendOutput } = useWorkerStore.getState();
       addWorker(worker);
 
-      // Write 12,000 characters
-      const bigChunk = "x".repeat(12_000);
-      appendOutput(worker.id, bigChunk);
+      appendOutput(worker.id, "x".repeat(OUTPUT_BUFFER_CHARS + 2_000));
 
       const output = useWorkerStore.getState().workers.get(worker.id)?.output;
-      expect(output?.length).toBe(10_000);
+      expect(output?.length).toBe(OUTPUT_BUFFER_CHARS);
     });
 
     it("preserves the most recent data when ring-buffering", () => {
@@ -159,19 +140,19 @@ describe("WorkerStore", () => {
       addWorker(worker);
 
       // Fill to near capacity
-      appendOutput(worker.id, "a".repeat(9_990));
-      // Append data that pushes past the 10k limit
+      appendOutput(worker.id, "a".repeat(OUTPUT_BUFFER_CHARS - 10));
+      // Append data that pushes past the limit
       appendOutput(worker.id, "RECENT_DATA_END");
 
       const output = useWorkerStore.getState().workers.get(worker.id)?.output ?? "";
       expect(output.endsWith("RECENT_DATA_END")).toBe(true);
-      expect(output.length).toBe(10_000);
+      expect(output.length).toBe(OUTPUT_BUFFER_CHARS);
     });
 
     it("does nothing for a non-existent worker", () => {
-      const { appendOutput } = useWorkerStore.getState();
-      // Should not throw
-      appendOutput("non-existent", "data");
+      useWorkerStore.getState().appendOutput("non-existent", "data");
+
+      expect(useWorkerStore.getState().workers.size).toBe(0);
     });
   });
 
@@ -204,29 +185,6 @@ describe("WorkerStore", () => {
       const stored = useWorkerStore.getState().workers.get(worker.id);
       expect(stored?.worktreePath).toBeUndefined();
       expect(stored?.branch).toBeUndefined();
-    });
-  });
-
-  describe("selectWorker", () => {
-    it("selects a worker by id", () => {
-      const worker = createWorker();
-      const { addWorker, selectWorker } = useWorkerStore.getState();
-      addWorker(worker);
-
-      selectWorker(worker.id);
-
-      expect(useWorkerStore.getState().selectedId).toBe(worker.id);
-    });
-
-    it("deselects when set to null", () => {
-      const worker = createWorker();
-      const { addWorker, selectWorker } = useWorkerStore.getState();
-      addWorker(worker);
-      selectWorker(worker.id);
-
-      selectWorker(null);
-
-      expect(useWorkerStore.getState().selectedId).toBeNull();
     });
   });
 });

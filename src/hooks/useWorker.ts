@@ -1,72 +1,78 @@
-import { useOptimistic } from "react";
+import { useOptimistic, useTransition } from "react";
+import { toast } from "#components/ui/Toast";
 import { killWorker, pauseWorker, resumeWorker } from "#lib/tauri";
 import type { Worker, WorkerState } from "#store/types";
 import { useWorkerAgentStore } from "#store/worker-agents";
 import { useWorkerStore } from "#store/workers";
 
 interface UseWorkerReturn {
-  /** The current worker data (with optimistic state applied). */
+  /** The worker, with {@link UseWorkerReturn.optimisticState} applied. */
   readonly worker: Worker | undefined;
-  /** Optimistic state — reflects the UI intent before backend confirms. */
+  /** The state a pending action is heading to, or the store's state when none is pending. */
   readonly optimisticState: WorkerState | undefined;
-  readonly pause: () => Promise<void>;
-  readonly resume: () => Promise<void>;
-  readonly kill: () => Promise<void>;
+  /** `true` while a pause/resume/kill call is in flight. */
+  readonly isPending: boolean;
+  readonly pause: () => void;
+  readonly resume: () => void;
+  readonly kill: () => void;
 }
 
 /**
- * Provides worker data and IPC-backed actions for a single worker.
+ * One worker's data and its pause/resume/kill actions.
  *
- * Uses React 19 `useOptimistic` for instant UI feedback before
- * the Tauri backend confirms the state change.
+ * Each action is a React transition: the button shows the target state
+ * at once (`useOptimistic`) while the backend call is in flight, and
+ * React drops the optimistic value when the action settles. On success
+ * the store already holds the new state; on failure the worker shows
+ * its real state again and a toast says what failed.
  */
 export function useWorker(id: string): UseWorkerReturn {
   const worker = useWorkerStore((s) => s.workers.get(id));
-  const updateState = useWorkerStore((s) => s.updateState);
-  const removeWorker = useWorkerStore((s) => s.removeWorker);
+  const [isPending, startTransition] = useTransition();
+  const [optimisticState, setOptimisticState] = useOptimistic(worker?.state);
 
-  const [optimisticState, setOptimisticState] = useOptimistic<WorkerState | undefined, WorkerState>(
-    worker?.state,
-    (_current, next) => next,
-  );
-
-  const pause = async () => {
-    const previousState = worker?.state;
-    setOptimisticState("paused");
-    try {
-      await pauseWorker(id);
-      updateState(id, "paused");
-    } catch {
-      setOptimisticState(previousState ?? "idle");
-    }
+  const run = (
+    target: WorkerState,
+    command: (id: string) => Promise<void>,
+    failure: string,
+    onSuccess: () => void,
+  ): void => {
+    startTransition(async () => {
+      setOptimisticState(target);
+      try {
+        await command(id);
+        onSuccess();
+      } catch (err) {
+        toast.error(failure, { description: Error.isError(err) ? err.message : String(err) });
+      }
+    });
   };
 
-  const resume = async () => {
-    const previousState = worker?.state;
-    setOptimisticState("running");
-    try {
-      await resumeWorker(id);
-      updateState(id, "running");
-    } catch {
-      setOptimisticState(previousState ?? "idle");
-    }
+  const pause = (): void => {
+    run("paused", pauseWorker, "Could Not Pause Worker", () => {
+      useWorkerStore.getState().updateState(id, "paused");
+    });
   };
 
-  const kill = async () => {
-    const previousState = worker?.state;
-    setOptimisticState("idle");
-    try {
-      await killWorker(id);
-      removeWorker(id);
+  const resume = (): void => {
+    run("running", resumeWorker, "Could Not Resume Worker", () => {
+      useWorkerStore.getState().updateState(id, "running");
+    });
+  };
+
+  const kill = (): void => {
+    run("idle", killWorker, "Could Not Kill Worker", () => {
+      useWorkerStore.getState().removeWorker(id);
       useWorkerAgentStore.getState().removeAgentMetadata(id);
-    } catch {
-      setOptimisticState(previousState ?? "idle");
-    }
+    });
   };
 
-  const optimisticWorker = worker
-    ? { ...worker, state: optimisticState ?? worker.state }
-    : undefined;
-
-  return { worker: optimisticWorker, optimisticState, pause, resume, kill };
+  return {
+    worker: worker && { ...worker, state: optimisticState ?? worker.state },
+    optimisticState,
+    isPending,
+    pause,
+    resume,
+    kill,
+  };
 }
