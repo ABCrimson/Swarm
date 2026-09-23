@@ -4,13 +4,13 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import type { RefObject } from "react";
 import { useEffect, useRef } from "react";
+import { onEvent } from "#lib/event-bus";
 import { workerInput } from "#lib/tauri";
 import { useWorkerStore } from "#store/workers";
 
 /**
- * OKLCH terminal theme. All colors are specified in OKLCH color space.
- *
- * 16-color palette covers the standard ANSI color range plus bright variants.
+ * OKLCH terminal theme: background, foreground, cursor, selection and the
+ * 16-color ANSI palette (standard 0-7, bright 8-15).
  */
 const TERMINAL_THEME = {
   background: "oklch(0.06 0.02 220)",
@@ -19,7 +19,6 @@ const TERMINAL_THEME = {
   cursorAccent: "oklch(0.06 0.02 220)",
   selectionBackground: "oklch(0.78 0.18 205 / 0.25)",
   selectionForeground: "oklch(0.92 0.02 220)",
-  // Standard ANSI colors (0-7)
   black: "oklch(0.15 0.02 220)",
   red: "oklch(0.60 0.20 15)",
   green: "oklch(0.68 0.18 145)",
@@ -28,7 +27,6 @@ const TERMINAL_THEME = {
   magenta: "oklch(0.62 0.20 320)",
   cyan: "oklch(0.72 0.12 195)",
   white: "oklch(0.82 0.04 220)",
-  // Bright ANSI colors (8-15)
   brightBlack: "oklch(0.38 0.02 220)",
   brightRed: "oklch(0.72 0.22 15)",
   brightGreen: "oklch(0.78 0.20 145)",
@@ -39,33 +37,39 @@ const TERMINAL_THEME = {
   brightWhite: "oklch(0.92 0.02 220)",
 } as const;
 
-interface UseTerminalOptions {
-  /** Worker ID to connect terminal input/output to. */
-  workerId: string;
-  /** Container element ref for mounting the terminal. */
-  containerRef: RefObject<HTMLDivElement | null>;
+/** `worker_output` event payload (see `#hooks/useWorkerEvents`). */
+interface WorkerOutputPayload {
+  readonly workerId: string;
+  readonly data: string;
 }
 
-interface UseTerminalReturn {
-  /** The xterm Terminal instance (available after mount). */
-  terminal: Terminal | null;
+interface UseTerminalOptions {
+  /** Worker whose PTY this terminal shows and types into. */
+  readonly workerId: string;
+  /** Element the terminal mounts into; must be rendered on the first commit. */
+  readonly containerRef: RefObject<HTMLElement | null>;
 }
 
 /**
- * Hook managing an xterm.js terminal instance with WebGL rendering.
+ * Mounts an xterm.js terminal for a worker's PTY into `containerRef`.
  *
- * - Creates a Terminal with `allowProposedApi: true` (required for beta).
- * - Loads FitAddon first, then WebglAddon for GPU-accelerated rendering.
- * - Uses `@crimson_dev/use-resize-observer` to auto-fit on container resize.
- * - Sends input data to the Rust backend via `invoke("worker_input")`.
- * - Subscribes to the worker store for output data.
- * - Disposes the terminal on unmount.
+ * - Output: on mount the worker store's buffered history (its last 10,000
+ *   characters) is written first, then every `worker_output` chunk for
+ *   this worker is written straight from the ordered event bus. The live
+ *   path never diffs the store's capped string — that stopped updating
+ *   for good once the 10k buffer was full (old and new strings then have
+ *   the same length, so the "delta" was always empty).
+ * - Input: keystrokes go to the backend with `workerInput(…, "terminal")`
+ *   (human input: no provenance, never persisted).
+ * - Rendering: the WebGL renderer when the context is available (it
+ *   disposes itself on context loss and xterm falls back to the DOM
+ *   renderer); the grid is refit whenever the container resizes.
+ *
+ * Everything is disposed on unmount or when `workerId` changes.
  */
-export function useTerminal({ workerId, containerRef }: UseTerminalOptions): UseTerminalReturn {
-  const termRef = useRef<Terminal | null>(null);
+export function useTerminal({ workerId, containerRef }: UseTerminalOptions): void {
   const fitAddonRef = useRef<FitAddon | null>(null);
 
-  // Resize observer to auto-fit terminal to container
   useResizeObserver({
     ref: containerRef,
     onResize() {
@@ -77,9 +81,7 @@ export function useTerminal({ workerId, containerRef }: UseTerminalOptions): Use
     const container = containerRef.current;
     if (!container) return;
 
-    // Create terminal with OKLCH theme
     const term = new Terminal({
-      allowProposedApi: true,
       fontFamily: "'JetBrains Mono Variable', 'JetBrains Mono', monospace",
       fontSize: 13,
       lineHeight: 1.5,
@@ -90,58 +92,41 @@ export function useTerminal({ workerId, containerRef }: UseTerminalOptions): Use
       convertEol: true,
     });
 
-    termRef.current = term;
-
-    // Load order: FitAddon -> open -> WebglAddon
+    // Load order: FitAddon -> open -> WebglAddon (it needs the DOM).
     const fitAddon = new FitAddon();
     fitAddonRef.current = fitAddon;
     term.loadAddon(fitAddon);
-
     term.open(container);
 
-    // WebGL2 renderer (mandatory for performance)
     const webglAddon = new WebglAddon();
-    webglAddon.onContextLoss(() => {
-      webglAddon.dispose();
-    });
-    term.loadAddon(webglAddon);
-
-    // Initial fit
+    webglAddon.onContextLoss(() => webglAddon.dispose());
+    try {
+      term.loadAddon(webglAddon);
+    } catch (err) {
+      // No WebGL2 context: xterm keeps its DOM renderer.
+      console.warn("[terminal] WebGL renderer unavailable:", err);
+    }
     fitAddon.fit();
 
-    // Input: send keystrokes to the backend. source: "terminal" — no
-    // provenance (the causer is a human, not a worker's turn) and no
-    // preview ever generated server-side (see WorkerInputPayload's
-    // "never carries raw keystrokes" note); also excluded from
-    // persistence entirely, so typed secrets are never archived.
-    const inputDisposable = term.onData((data) => {
+    // History first, then the live stream. Both happen in this one
+    // synchronous block, so no chunk can land in between and be lost
+    // or written twice.
+    const history = useWorkerStore.getState().workers.get(workerId)?.output;
+    if (history) term.write(history);
+    const offOutput = onEvent("worker_output", (e) => {
+      const { workerId: from, data } = e.payload as WorkerOutputPayload;
+      if (from === workerId) term.write(data);
+    });
+
+    const input = term.onData((data) => {
       void workerInput(workerId, data, "terminal");
     });
 
-    // Subscribe to worker output from the store
-    const unsubscribeOutput = useWorkerStore.subscribe(
-      (s) => s.workers.get(workerId)?.output,
-      (output, prevOutput) => {
-        if (output && output !== prevOutput) {
-          // Write only the new delta
-          const delta = prevOutput ? output.slice(prevOutput.length) : output;
-          if (delta) {
-            term.write(delta);
-          }
-        }
-      },
-    );
-
     return () => {
-      inputDisposable.dispose();
-      unsubscribeOutput();
-      webglAddon.dispose();
-      fitAddon.dispose();
+      offOutput();
+      input.dispose();
       term.dispose();
-      termRef.current = null;
       fitAddonRef.current = null;
     };
   }, [workerId, containerRef]);
-
-  return { terminal: termRef.current };
 }
