@@ -1,15 +1,10 @@
-// ── useSettingsBridge — aiConcurrentLimit bridge gating (review fix-2) ──
+// ── useSettingsBridge — agent concurrency push ──────
 //
-// createTauriStorage's getItem (#store/ui) always returns the DEFAULT
-// synchronously; the real persisted value only arrives later,
-// asynchronously, via subscribe. Without a guard, the aiConcurrentLimit
-// effect fired setAgentConcurrency on that pre-hydration default FIRST —
-// silently clobbering a real custom value on disk if the app died (or
-// hydration simply hadn't resolved yet) in that window, and feeding a
-// spurious down/up resize cycle into the scheduler on every launch (the
-// exact transition shape BLOCK-1's scheduler bug cared about). These
-// tests pin the fix: the very first render must not call the bridge; a
-// later value change (hydration completing, or a live user edit) must.
+// The backend persists its own agent concurrency cap and restores it at
+// startup, so the bridge pushes only a change made during this launch:
+// never the value it mounts with (which would be a redundant disk write
+// and a scheduler down/up resize on every launch), not even under
+// StrictMode's extra effect run.
 
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { getDefaultStore } from "jotai";
@@ -25,7 +20,7 @@ vi.mock("#lib/tauri", () => ({
   setAgentConcurrency: (...args: unknown[]) => mockSetAgentConcurrency(...args),
 }));
 
-describe("useSettingsBridge — aiConcurrentLimit bridge gating", () => {
+describe("useSettingsBridge — agent concurrency push", () => {
   const store = getDefaultStore();
 
   beforeEach(() => {
@@ -38,49 +33,61 @@ describe("useSettingsBridge — aiConcurrentLimit bridge gating", () => {
     store.set(appSettingsAtom, DEFAULT_APP_SETTINGS);
   });
 
-  it("does not call setAgentConcurrency on the first (pre-hydration-default) render", () => {
+  it("does not push the value it mounts with", () => {
     renderHook(() => useSettingsBridge());
 
     expect(mockSetAgentConcurrency).not.toHaveBeenCalled();
   });
 
-  it("calls setAgentConcurrency once the value changes after mount (hydration completing, or a live edit)", () => {
-    renderHook(() => useSettingsBridge());
+  it("does not push on mount under StrictMode's double effect run either", () => {
+    store.set(appSettingsAtom, { ...DEFAULT_APP_SETTINGS, aiConcurrentLimit: 7 });
+    renderHook(() => useSettingsBridge(), { reactStrictMode: true });
+
     expect(mockSetAgentConcurrency).not.toHaveBeenCalled();
+  });
+
+  it("pushes a change made after mount", () => {
+    renderHook(() => useSettingsBridge(), { reactStrictMode: true });
 
     act(() => {
       store.set(appSettingsAtom, { ...DEFAULT_APP_SETTINGS, aiConcurrentLimit: 8 });
     });
 
-    expect(mockSetAgentConcurrency).toHaveBeenCalledTimes(1);
-    expect(mockSetAgentConcurrency).toHaveBeenCalledWith(8);
+    expect(mockSetAgentConcurrency.mock.calls).toStrictEqual([[8]]);
   });
 
-  it("still calls setAgentConcurrency on a second real change, not just the first post-mount one", () => {
+  it("pushes every later change, including a change back to the mount value", () => {
     renderHook(() => useSettingsBridge());
 
     act(() => {
       store.set(appSettingsAtom, { ...DEFAULT_APP_SETTINGS, aiConcurrentLimit: 8 });
     });
     act(() => {
-      store.set(appSettingsAtom, { ...DEFAULT_APP_SETTINGS, aiConcurrentLimit: 2 });
+      store.set(appSettingsAtom, DEFAULT_APP_SETTINGS);
     });
 
-    expect(mockSetAgentConcurrency).toHaveBeenCalledTimes(2);
-    expect(mockSetAgentConcurrency).toHaveBeenNthCalledWith(1, 8);
-    expect(mockSetAgentConcurrency).toHaveBeenNthCalledWith(2, 2);
+    expect(mockSetAgentConcurrency.mock.calls).toStrictEqual([
+      [8],
+      [DEFAULT_APP_SETTINGS.aiConcurrentLimit],
+    ]);
   });
 
-  it("logs a rejected setAgentConcurrency call instead of silently swallowing it", async () => {
-    mockSetAgentConcurrency.mockRejectedValueOnce(new Error("out of range"));
+  it("logs a rejected push instead of silently swallowing it", async () => {
+    const failure = new Error("out of range");
+    mockSetAgentConcurrency.mockRejectedValueOnce(failure);
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
     renderHook(() => useSettingsBridge());
     act(() => {
-      store.set(appSettingsAtom, { ...DEFAULT_APP_SETTINGS, aiConcurrentLimit: 99 });
+      store.set(appSettingsAtom, { ...DEFAULT_APP_SETTINGS, aiConcurrentLimit: 9 });
     });
 
-    await vi.waitFor(() => expect(consoleError).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(consoleError).toHaveBeenCalledWith(
+        "useSettingsBridge: setAgentConcurrency failed",
+        failure,
+      ),
+    );
     consoleError.mockRestore();
   });
 });

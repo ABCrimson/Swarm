@@ -1,39 +1,26 @@
 import { useAtomValue } from "jotai";
-import { useEffect, useRef } from "react";
-
+import { useEffect } from "react";
 import { createSnapshot } from "#lib/snapshots";
 import { useSessionStore } from "#store/sessions";
 import { appSettingsAtom } from "#store/ui";
 
 /**
- * Hook that automatically creates snapshots of the active session at
- * the interval configured in Settings (Auto-Snapshot Interval). Should
- * be called once at the app root level.
+ * Snapshots the active session every Auto-Snapshot Interval minutes
+ * (Settings; validated to at least one minute by `appSettingsAtom`).
+ * Called once, at the app root.
  */
 export function useAutoSnapshot(): void {
   const intervalMin = useAtomValue(appSettingsAtom).snapshotIntervalMin;
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    intervalRef.current = setInterval(
-      () => {
-        const { activeSessionId, sessions } = useSessionStore.getState();
-        if (!activeSessionId) return;
-
-        const session = sessions.get(activeSessionId);
-        if (!session) return;
-
-        createSnapshot(session).catch((err: unknown) => {
-          console.warn("[auto-snapshot] Failed:", err);
-        });
-      },
-      intervalMin * 60 * 1000,
-    );
-
-    return () => {
-      if (intervalRef.current !== null) {
-        clearInterval(intervalRef.current);
-      }
-    };
+    const timer = setInterval(() => {
+      const { activeSessionId, sessions } = useSessionStore.getState();
+      const session = activeSessionId === null ? undefined : sessions.get(activeSessionId);
+      if (!session) return;
+      createSnapshot(session).catch((err: unknown) => {
+        console.warn("[auto-snapshot] Failed:", err);
+      });
+    }, intervalMin * 60_000);
+    return () => clearInterval(timer);
   }, [intervalMin]);
 }

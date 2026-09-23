@@ -1,221 +1,179 @@
-import { load } from "@tauri-apps/plugin-store";
+// ── Persisted-store integrity check ─────────────────
+//
+// Validates every key the webview persists through tauri-plugin-store
+// and deletes the ones that fail, so each falls back to its default.
+// `swarm-config.json` is deliberately absent: the Rust side owns that
+// file (`read_config`/`write_config`) and validates it on load, and
+// opening it through plugin-store would make the plugin overwrite it
+// with a stale copy when the app exits (see `#lib/lazy-store`).
+
+import type { LazyStore } from "@tauri-apps/plugin-store";
 import { toast } from "sonner";
 import * as z from "zod";
-import { MODEL_KEYS } from "#lib/models";
+import type { AlertThresholds } from "#lib/alerts";
+import { settingsStore, snapshotsStore, templatesStore } from "#lib/lazy-store";
 import { isTauri } from "#lib/tauri";
-import { SessionSchema, SessionTemplateSchema, SnapshotSchema } from "#store/types";
+import { persistedSettings, removePersistedSetting } from "#store/persisted";
+import { SessionTemplateSchema, SnapshotSchema } from "#store/types";
 
-/** Schema for the full sessions store. */
-const SessionsStoreSchema = z.array(SessionSchema);
+/** Outcome of validating one persisted key (`key: "*"` when the file itself could not be read). */
+export interface ValidationResult {
+  readonly file: string;
+  readonly key: string;
+  readonly valid: boolean;
+  readonly error?: string;
+}
 
-/** Schema for config store. */
-const ConfigStoreSchema = z.record(z.string(), z.unknown());
+/** A key (or key family) in one plugin-store file, with the schema its value must satisfy. */
+interface IntegrityRule {
+  /** Title Case name shown in the reset toast. */
+  readonly label: string;
+  readonly matches: (key: string) => boolean;
+  readonly schema: z.ZodType;
+  /** Removes the key from disk (and from any in-memory copy). */
+  readonly reset: (key: string) => Promise<void>;
+}
 
-/** Schema for UI store. */
-const UiStoreSchema = z.object({
-  paneSizes: z
-    .object({
-      main: z.number(),
-      detail: z.number(),
-    })
-    .optional(),
-  theme: z
-    .object({
-      particlesEnabled: z.boolean(),
-      gpuOverlay: z.boolean(),
-    })
-    .optional(),
-  model: z.enum(MODEL_KEYS).optional(),
-});
+interface IntegrityTarget {
+  readonly file: string;
+  readonly store: LazyStore;
+  readonly rules: () => readonly IntegrityRule[];
+}
 
-/** Schema for snapshots (per-session). */
-const SnapshotsStoreSchema = z.array(SnapshotSchema);
+const Percent = z.number().min(0).max(100);
 
-/** Schema for templates store. */
-const TemplatesStoreSchema = z.array(SessionTemplateSchema);
+/** `swarm:alerts:thresholds` (`alertThresholdsAtom`, `#lib/alerts`). */
+const AlertThresholdsSchema = z.object({
+  cpuWarning: Percent,
+  cpuCritical: Percent,
+  memoryWarning: Percent,
+  memoryCritical: Percent,
+}) satisfies z.ZodType<AlertThresholds>;
 
-/** Result of validating a single store key against its Zod schema. */
-interface ValidationResult {
-  key: string;
-  valid: boolean;
-  error?: string;
+const deleteFrom =
+  (store: LazyStore) =>
+  async (key: string): Promise<void> => {
+    await store.delete(key);
+  };
+
+/** Every plugin-store file the webview persists, with the keys it writes. */
+const TARGETS: readonly IntegrityTarget[] = [
+  {
+    file: "swarm-settings.json",
+    store: settingsStore,
+    // Built per run: `persistedSettings` fills as the atom modules load.
+    rules: () => [
+      ...persistedSettings.entries().map(
+        ([key, { label, schema }]): IntegrityRule => ({
+          label,
+          matches: (k) => k === key,
+          schema,
+          reset: async (k) => removePersistedSetting(k),
+        }),
+      ),
+      {
+        label: "Alert Thresholds",
+        matches: (k) => k === "swarm:alerts:thresholds",
+        schema: AlertThresholdsSchema,
+        reset: deleteFrom(settingsStore),
+      },
+      {
+        // `useCustomToolsStore` (#store/custom-tools) validates each
+        // entry on load; only a non-array value is unrecoverable.
+        label: "Custom Tools",
+        matches: (k) => k === "swarm:tools:custom",
+        schema: z.array(z.unknown()),
+        reset: deleteFrom(settingsStore),
+      },
+    ],
+  },
+  {
+    file: "swarm-snapshots.json",
+    store: snapshotsStore,
+    rules: () => [
+      {
+        label: "Session Snapshots",
+        matches: (k) => k.startsWith("swarm:snapshots:"),
+        schema: z.array(SnapshotSchema),
+        reset: deleteFrom(snapshotsStore),
+      },
+    ],
+  },
+  {
+    file: "swarm-templates.json",
+    store: templatesStore,
+    rules: () => [
+      {
+        label: "Session Templates",
+        matches: (k) => k === "swarm:templates",
+        schema: z.array(SessionTemplateSchema),
+        reset: deleteFrom(templatesStore),
+      },
+    ],
+  },
+];
+
+async function validateTarget(
+  target: IntegrityTarget,
+  resetLabels: Set<string>,
+): Promise<ValidationResult[]> {
+  const results: ValidationResult[] = [];
+  const rules = target.rules();
+  for (const [key, value] of await target.store.entries<unknown>()) {
+    const rule = rules.find((r) => r.matches(key));
+    if (!rule) continue;
+    const parsed = rule.schema.safeParse(value);
+    if (parsed.success) {
+      results.push({ file: target.file, key, valid: true });
+      continue;
+    }
+    await rule.reset(key);
+    resetLabels.add(rule.label);
+    results.push({
+      file: target.file,
+      key,
+      valid: false,
+      error: `Invalid data was deleted: ${z.prettifyError(parsed.error)}`,
+    });
+  }
+  return results;
 }
 
 /**
- * Validate all stored data against Zod v4 schemas.
- * On corrupt data: logs warning, resets to defaults, shows Sonner toast.
- *
- * Should be called on app startup before hydrating stores.
+ * Validates every persisted plugin-store key against its schema and
+ * deletes the ones that fail, so each falls back to its default. Shows
+ * one toast naming what was reset. Called once after startup (App.tsx)
+ * and a no-op outside the desktop shell.
  */
 export async function validateStoreData(): Promise<ValidationResult[]> {
   if (!isTauri()) return [];
 
   const results: ValidationResult[] = [];
-
-  // Validate sessions
-  try {
-    const sessionsStore = await load("swarm-sessions.json", { defaults: {}, autoSave: false });
-    const sessionsData = await sessionsStore.get<unknown[]>("swarm:sessions");
-
-    if (sessionsData !== null && sessionsData !== undefined) {
-      const parsed = SessionsStoreSchema.safeParse(sessionsData);
-      if (!parsed.success) {
-        console.warn("[store-integrity] Corrupt sessions data, resetting to defaults");
-        await sessionsStore.set("swarm:sessions", []);
-        await sessionsStore.save();
-        results.push({
-          key: "swarm:sessions",
-          valid: false,
-          error: "Data did not match SessionSchema — reset to empty array",
-        });
-        toast.warning("Session Data Was Corrupted And Has Been Reset.");
-      } else {
-        results.push({ key: "swarm:sessions", valid: true });
-      }
-    } else {
-      results.push({ key: "swarm:sessions", valid: true });
+  const resetLabels = new Set<string>();
+  for (const target of TARGETS) {
+    try {
+      results.push(...(await validateTarget(target, resetLabels)));
+    } catch (err) {
+      results.push({
+        file: target.file,
+        key: "*",
+        valid: false,
+        error: `Store read failed: ${Error.isError(err) ? err.message : String(err)}`,
+      });
     }
-  } catch (err) {
-    results.push({
-      key: "swarm:sessions",
-      valid: false,
-      error: `Store read failed: ${err instanceof Error ? err.message : String(err)}`,
-    });
   }
 
-  // Validate config
-  try {
-    const configStore = await load("swarm-config.json", { defaults: {}, autoSave: false });
-    const configData = await configStore.get<unknown>("swarm:config");
-
-    if (configData !== null && configData !== undefined) {
-      const parsed = ConfigStoreSchema.safeParse(configData);
-      if (!parsed.success) {
-        console.warn("[store-integrity] Corrupt config data, resetting to defaults");
-        await configStore.set("swarm:config", {});
-        await configStore.save();
-        results.push({
-          key: "swarm:config",
-          valid: false,
-          error: "Data did not match ConfigSchema — reset to empty object",
-        });
-        toast.warning("Configuration Data Was Corrupted And Has Been Reset.");
-      } else {
-        results.push({ key: "swarm:config", valid: true });
-      }
-    } else {
-      results.push({ key: "swarm:config", valid: true });
-    }
-  } catch (err) {
-    results.push({
-      key: "swarm:config",
-      valid: false,
-      error: `Store read failed: ${err instanceof Error ? err.message : String(err)}`,
-    });
-  }
-
-  // Validate UI settings
-  try {
-    const uiStore = await load("swarm-ui.json", { defaults: {}, autoSave: false });
-    const uiData = await uiStore.get<unknown>("swarm:ui");
-
-    if (uiData !== null && uiData !== undefined) {
-      const parsed = UiStoreSchema.safeParse(uiData);
-      if (!parsed.success) {
-        console.warn("[store-integrity] Corrupt UI data, resetting to defaults");
-        await uiStore.set("swarm:ui", {});
-        await uiStore.save();
-        results.push({
-          key: "swarm:ui",
-          valid: false,
-          error: "Data did not match UiSchema — reset to defaults",
-        });
-        toast.warning("UI Settings Were Corrupted And Have Been Reset.");
-      } else {
-        results.push({ key: "swarm:ui", valid: true });
-      }
-    } else {
-      results.push({ key: "swarm:ui", valid: true });
-    }
-  } catch (err) {
-    results.push({
-      key: "swarm:ui",
-      valid: false,
-      error: `Store read failed: ${err instanceof Error ? err.message : String(err)}`,
-    });
-  }
-
-  // Validate snapshots
-  try {
-    const snapshotsStore = await load("swarm-snapshots.json", { defaults: {}, autoSave: false });
-    const entries = await snapshotsStore.entries<unknown[]>();
-
-    for (const [key, value] of entries) {
-      if (key.startsWith("swarm:snapshots:")) {
-        const parsed = SnapshotsStoreSchema.safeParse(value);
-        if (!parsed.success) {
-          console.warn(`[store-integrity] Corrupt snapshots for ${key}, resetting`);
-          await snapshotsStore.set(key, []);
-          results.push({
-            key,
-            valid: false,
-            error: "Snapshot data corrupted — reset to empty array",
-          });
-        } else {
-          results.push({ key, valid: true });
-        }
-      }
-    }
-    await snapshotsStore.save();
-  } catch (err) {
-    results.push({
-      key: "swarm:snapshots",
-      valid: false,
-      error: `Store read failed: ${err instanceof Error ? err.message : String(err)}`,
-    });
-  }
-
-  // Validate templates
-  try {
-    const templatesStore = await load("swarm-templates.json", { defaults: {}, autoSave: false });
-    const templatesData = await templatesStore.get<unknown[]>("swarm:templates");
-
-    if (templatesData !== null && templatesData !== undefined) {
-      const parsed = TemplatesStoreSchema.safeParse(templatesData);
-      if (!parsed.success) {
-        console.warn("[store-integrity] Corrupt templates data, resetting to defaults");
-        await templatesStore.set("swarm:templates", []);
-        await templatesStore.save();
-        results.push({
-          key: "swarm:templates",
-          valid: false,
-          error: "Template data corrupted — reset to empty array",
-        });
-        toast.warning("Template Data Was Corrupted And Has Been Reset.");
-      } else {
-        results.push({ key: "swarm:templates", valid: true });
-      }
-    } else {
-      results.push({ key: "swarm:templates", valid: true });
-    }
-  } catch (err) {
-    results.push({
-      key: "swarm:templates",
-      valid: false,
-      error: `Store read failed: ${err instanceof Error ? err.message : String(err)}`,
-    });
-  }
-
-  // Log results summary
   const failures = results.filter((r) => !r.valid);
   if (failures.length > 0) {
     console.warn(
-      `[store-integrity] ${failures.length} store(s) had integrity issues:`,
-      failures.map((f) => `${f.key}: ${f.error}`),
+      `[store-integrity] ${failures.length} persisted key(s) failed validation:`,
+      failures.map((f) => `${f.file} ${f.key}: ${f.error}`),
     );
-  } else {
-    console.info("[store-integrity] All stores validated successfully");
   }
-
+  if (resetLabels.size > 0) {
+    toast.warning("Some Saved Data Was Corrupted And Has Been Reset.", {
+      description: [...resetLabels].join(", "),
+    });
+  }
   return results;
 }
