@@ -6,7 +6,7 @@
 // attribution actually reaches the IPC layer for every side-effectful
 // built-in tool (kill_worker, run_command/worker_input) — spawn_worker
 // and write_file are covered in their own dedicated test files
-// (tools-spawn-worker.test.ts, tools-file-io.test.ts).
+// (tools.spawn-worker.test.ts, tools.file-io.test.ts).
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { executeTool, toolRegistry } from "#lib/tools";

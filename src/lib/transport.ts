@@ -204,7 +204,7 @@ function errorMessage(raw: unknown): string {
  */
 /**
  * Exported (not just the singleton instance below) so
- * `__tests__/lib/transport.test.ts` can construct isolated instances
+ * `src/lib/transport.test.ts` can construct isolated instances
  * against a fake `WebSocket` rather than sharing/resetting one global.
  */
 export class WsTransport implements Transport {

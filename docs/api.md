@@ -1257,7 +1257,7 @@ if (update.available) {
 }
 ```
 
-Updates are signed with an Ed25519 keypair; see [`src-tauri/UPDATER_KEYS.md`](../src-tauri/UPDATER_KEYS.md) for key setup and the `plugins.updater.pubkey` value configured in `tauri.conf.json`.
+Updates are signed with an Ed25519 keypair; see [Updater Keys](updater-keys.md) for key setup, signed-version enforcement, and the `plugins.updater.pubkey` value configured in `tauri.conf.json`.
 
 ---
 

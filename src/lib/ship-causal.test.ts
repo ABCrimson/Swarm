@@ -276,8 +276,11 @@ describe("buildCausalPromptInput", () => {
     // imports that function at all means no future edit to this file can
     // introduce a config-value leak into the prompt without also
     // failing this test, regardless of what runtime behavior looks like.
-    const modulePath = join(process.cwd(), "src", "lib", "ship-causal.ts");
-    const source = readFileSync(modulePath, "utf-8");
+    // Resolved against this file (the test sits next to its module), so
+    // the scan never depends on the directory vitest was launched from.
+    // (Not `new URL(..., import.meta.url)`: Vite rewrites that pattern
+    // into a served asset URL, which readFileSync rejects.)
+    const source = readFileSync(join(import.meta.dirname, "ship-causal.ts"), "utf-8");
     // Matches an actual call/import, not this test's own doc-comment
     // prose mentioning "readConfig" as a name (see the module's JSDoc,
     // which explains the absence in words).

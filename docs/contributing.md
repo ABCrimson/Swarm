@@ -381,17 +381,19 @@ Run `cargo test --workspace` from `src-tauri/` to reproduce this locally; run `c
 
 ### Frontend Testing
 
-Frontend tests run via Vitest (`pnpm test`): **61 test files, 621 tests** _(all green on the 2026-08-27 evergreen gate)_, covering components, hooks, stores, and `lib/` utilities.
+Frontend tests run via Vitest (`pnpm test`): **62 test files, 621 tests** _(all green on the 2026-09-23 modernization gate)_, covering components, hooks, stores, and `lib/` utilities.
 
-| Directory                        | Files | Focus                                                          |
+Tests are **colocated**: `X.test.ts(x)` sits next to the `X.ts(x)` it covers, and a suite that covers one facet of a larger module takes a dotted suffix (`src/lib/tools.file-io.test.ts`, `src/lib/tauri.worker-spawn.test.ts`). Import the module under test through its `#` alias like any other code. Vitest collects `src/**/*.test.{ts,tsx}` only, so the Playwright `e2e/*.spec.ts` suites are never picked up.
+
+| Location                          | Files | Focus                                                          |
 |-----------------------------------|-------|-----------------------------------------------------------------|
-| `src/__tests__/components/`       | 19    | UI primitives (`Badge`, `Button`, `Pill`, `ErrorBoundary`, `MetricCard`), graph surfaces (`WorkerGraph`, `CausalityPanel`, `GraphControls`, `GraphLegend`, `ParticleBackground`), and agent/ship surfaces (`SpawnWorkerDialog`, `AgentChat`, `AIChat`, `ShipPreview`, `ProviderBadge`, ...) |
-| `src/__tests__/hooks/`            | 12    | `useAiStream`, `useSession`, `useShip`, `useStream`, `useWorker`, `useElkLayout`, `useSettingsBridge`, and the event-stream hooks (`useWorkerEvents`, `useSessionEvents`, `useAgentSessionEvents`, `useProvenanceEvents`, `useSystemLogEvents`) |
-| `src/__tests__/lib/`              | 24    | `alerts`, `anthropic`, `event-bus`, `export`, `keybindings`, `kv`, `metrics-aggregation`, `ship-causal`/`ship-message`, `theme`, the `tools*` suites, `transport` (the `wsTransport` client), `webgpu`, `worker-spawn`, ... |
-| `src/__tests__/pages/`            | 1     | `Settings` -- the settings page's full control surface           |
-| `src/__tests__/store/`            | 5     | `ai`, `provenance`, `sessions`, `system`, `workers` Zustand stores |
+| `src/components/**/*.test.tsx`    | 19    | UI primitives (`Badge`, `Button`, `Pill`, `ErrorBoundary`, `MetricCard`), graph surfaces (`WorkerGraph`, `CausalityPanel`, `GraphControls`, `GraphLegend`, `ParticleBackground`), and agent/ship surfaces (`SpawnWorkerDialog`, `AgentChat`, `AIChat`, `ShipPreview`, `ProviderBadge`, ...) |
+| `src/hooks/*.test.tsx`            | 12    | `useAiStream`, `useSession`, `useShip`, `useStream`, `useWorker`, `useElkLayout`, `useSettingsBridge`, and the event-stream hooks (`useWorkerEvents`, `useSessionEvents`, `useAgentSessionEvents`, `useProvenanceEvents`, `useSystemLogEvents`) |
+| `src/lib/*.test.ts`               | 24    | `alerts`, `anthropic`, `event-bus`, `export`, `keybindings`, `kv`, `log-store`, `metrics-aggregation`, `ship-causal`/`ship-message`, `theme`, the `tools*` suites, `transport` (the `wsTransport` client), `webgpu`, `worker-spawn`, ... |
+| `src/pages/*.test.tsx`            | 1     | `Settings` -- the settings page's full control surface |
+| `src/store/*.test.ts`             | 6     | `ai`, `message-history`, `provenance`, `sessions`, `system`, `workers` Zustand stores |
 
-Tauri IPC is mocked globally in `src/__tests__/setup.ts` via `vi.mock("@tauri-apps/api/core")` (stubs `invoke`) and `vi.mock("@tauri-apps/api/event")` (stubs `listen`), plus mocks for the `dialog`, `fs`, `shell`, and `store` plugins. Individual tests override the default rejected/no-op behavior with `vi.mocked(invoke).mockResolvedValueOnce(...)` as needed. There is no standalone `src/lib/test-utils.ts` module -- the old `agent-loop`, `diff`, `replay`, `test-utils`, and `token-costs` modules under `src/lib/` were removed along with the (dead) session-replay feature.
+Tauri IPC is mocked globally in `src/test/setup.ts` via `vi.mock("@tauri-apps/api/core")` (stubs `invoke`) and `vi.mock("@tauri-apps/api/event")` (stubs `listen`), plus mocks for the `dialog`, `fs`, `shell`, and `store` plugins. Individual tests override the default rejected/no-op behavior with `vi.mocked(invoke).mockResolvedValueOnce(...)` as needed. There is no standalone `src/lib/test-utils.ts` module -- the old `agent-loop`, `diff`, `replay`, `test-utils`, and `token-costs` modules under `src/lib/` were removed along with the (dead) session-replay feature.
 
 ### End-to-End Tests (Playwright)
 

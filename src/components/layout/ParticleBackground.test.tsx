@@ -11,7 +11,7 @@
 // (ParticleCanvas → useWebGPU), which depends on ResizeObserver (not
 // implemented by jsdom) and a full WebGPU adapter/device/context object
 // graph. That deeper path's reason-propagation is covered at the
-// `initWebGPU()` unit level in `__tests__/lib/webgpu.test.ts`; mounting
+// `initWebGPU()` unit level in `src/lib/webgpu.test.ts`; mounting
 // it end-to-end is not practical under jsdom (see Task 5 report).
 
 import { cleanup, render, waitFor } from "@testing-library/react";
@@ -33,7 +33,7 @@ import { reducedMotionAtom } from "#store/ui";
 // `getWebGPUUnavailableReason()` in `#lib/webgpu`), so a second, distinct
 // reason is modeled here by overriding that lookup for one render — this
 // stands in for the deeper useWebGPU()/initWebGPU() path (covered at the
-// unit level in `__tests__/lib/webgpu.test.ts`) producing e.g.
+// unit level in `src/lib/webgpu.test.ts`) producing e.g.
 // "No Compatible GPU Adapter Found" on a retry, without needing a full
 // WebGPU adapter/device/ResizeObserver mock (see file header).
 vi.mock("#lib/webgpu", async (importOriginal) => {

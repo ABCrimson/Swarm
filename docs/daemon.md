@@ -114,7 +114,7 @@ cd src-tauri\crates\swarmd\service
 .\install.ps1
 ```
 
-This installs `swarmd.exe` under `%LOCALAPPDATA%\Programs\swarmd\` and
+This installs `swarmd.exe` under `%LOCALAPPDATA%\Programs\swarmd` and
 registers a logon Scheduled Task, *"SWARM Daemon (swarmd)"*, that runs in
 your interactive session, **non-elevated**, restarting up to 3× on failure.
 Output is redirected to a user-private log under `%APPDATA%`.

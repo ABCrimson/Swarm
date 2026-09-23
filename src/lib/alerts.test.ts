@@ -134,3 +134,34 @@ describe("evaluateThresholds", () => {
     });
   });
 });
+
+// The parametrized cooldown behind the Settings catalog's alert-cooldown field.
+describe("alert cooldown (parametrized)", () => {
+  const thresholds: AlertThresholds = {
+    cpuWarning: 70,
+    cpuCritical: 90,
+    memoryWarning: 75,
+    memoryCritical: 90,
+  };
+  const hotSnapshot: MetricsSnapshot = { cpuPercent: 95, memoryPercent: 10 };
+
+  it("suppresses a repeat alert inside a custom cooldown window", () => {
+    const cooldowns = { cpu: 10_000 };
+    // 55s after the last alert, with a 60s cooldown — still suppressed.
+    const alerts = evaluateThresholds(hotSnapshot, thresholds, cooldowns, 65_000, 60_000);
+    expect(alerts).toHaveLength(0);
+  });
+
+  it("fires again once the custom cooldown has elapsed", () => {
+    const cooldowns = { cpu: 10_000 };
+    const alerts = evaluateThresholds(hotSnapshot, thresholds, cooldowns, 75_000, 60_000);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].severity).toBe("critical");
+  });
+
+  it("defaults to the 30s constant when no cooldown is passed", () => {
+    const cooldowns = { cpu: 0 };
+    expect(evaluateThresholds(hotSnapshot, thresholds, cooldowns, 29_000)).toHaveLength(0);
+    expect(evaluateThresholds(hotSnapshot, thresholds, cooldowns, 31_000)).toHaveLength(1);
+  });
+});

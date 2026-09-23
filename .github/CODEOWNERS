@@ -1,10 +1,1 @@
-# Default owner for everything
-* @crimson-dev
-
-# Rust backend
-/src-tauri/ @crimson-dev
-
-# WebGPU effects
-/src/lib/particles.ts @crimson-dev
-/src/lib/postprocess.ts @crimson-dev
-/src/lib/webgpu.ts @crimson-dev
+* @ABCrimson
