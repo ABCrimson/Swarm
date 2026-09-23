@@ -174,6 +174,9 @@ export interface UserTemplatesResult {
 /** The in-flight or settled user-template read `userTemplatesResource` hands out, until a write invalidates it. */
 let userTemplatesCache: Promise<UserTemplatesResult> | null = null;
 
+/** Who to tell when the cached read is dropped (see `subscribeUserTemplates`). */
+const invalidationListeners = new Set<() => void>();
+
 /**
  * The user templates as one cached promise, for a render-time `use()`
  * (`TemplateSelector`). Every call returns the same promise until
@@ -182,6 +185,10 @@ let userTemplatesCache: Promise<UserTemplatesResult> | null = null;
  * first read after a write sees that write. A store failure resolves to
  * `{ failed: true }` instead of rejecting, so the UI can say so in place
  * rather than hand the error to an error boundary.
+ *
+ * Doubles as the `getSnapshot` of a `useSyncExternalStore` over
+ * `subscribeUserTemplates`: the snapshot is the promise itself, stable
+ * until a write replaces it.
  */
 export function userTemplatesResource(): Promise<UserTemplatesResult> {
   userTemplatesCache ??= loadUserTemplates().then(
@@ -194,9 +201,24 @@ export function userTemplatesResource(): Promise<UserTemplatesResult> {
   return userTemplatesCache;
 }
 
-/** Drops the cached `userTemplatesResource` read so the next call reads the store again. */
+/**
+ * Registers `listener` to run whenever the cached read is dropped, so a
+ * component that stays mounted (e.g. inside a hidden `<Activity>`) can
+ * read the store again after a write.
+ *
+ * @returns The unsubscribe function.
+ */
+export function subscribeUserTemplates(listener: () => void): () => void {
+  invalidationListeners.add(listener);
+  return () => {
+    invalidationListeners.delete(listener);
+  };
+}
+
+/** Drops the cached `userTemplatesResource` read so the next call reads the store again, and tells subscribers. */
 export function invalidateUserTemplates(): void {
   userTemplatesCache = null;
+  for (const listener of invalidationListeners) listener();
 }
 
 /** Tail of the serialized template-store writes (see `serializeWrite`). */

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TemplateSelector } from "#components/session/TemplateSelector";
 import type { UserTemplatesResult } from "#lib/templates";
-import { BUILT_IN_TEMPLATES } from "#lib/templates";
+import { BUILT_IN_TEMPLATES, invalidateUserTemplates } from "#lib/templates";
 import type { SessionTemplate } from "#store/types";
 
 const mockResource = vi.fn<() => Promise<UserTemplatesResult>>();
@@ -62,6 +62,20 @@ describe("TemplateSelector", () => {
       expect(screen.queryByText("Loading Your Templates…")).not.toBeInTheDocument();
     });
     expect(screen.queryByRole("region", { name: "Your Templates" })).not.toBeInTheDocument();
+  });
+
+  // It stays mounted inside a hidden <Activity> on the Sessions page, so a
+  // template saved meanwhile must show up without a remount.
+  it("re-reads the user templates after a template write, while staying mounted", async () => {
+    await renderSelector({ templates: [], failed: false });
+    expect(screen.queryByRole("region", { name: "Your Templates" })).not.toBeInTheDocument();
+
+    mockResource.mockReturnValue(Promise.resolve({ templates: [USER_TEMPLATE], failed: false }));
+    await act(async () => {
+      invalidateUserTemplates();
+    });
+
+    expect(await screen.findByRole("button", { name: /My Review Crew/ })).toBeInTheDocument();
   });
 
   it("closes from its labelled close button", async () => {

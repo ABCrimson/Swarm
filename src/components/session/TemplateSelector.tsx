@@ -1,8 +1,8 @@
 import { motion } from "motion/react";
-import { Suspense, use } from "react";
+import { Suspense, use, useSyncExternalStore } from "react";
 import { Pill } from "#components/ui/Pill";
 import { pluralizeWorkers } from "#lib/format";
-import { BUILT_IN_TEMPLATES, userTemplatesResource } from "#lib/templates";
+import { BUILT_IN_TEMPLATES, subscribeUserTemplates, userTemplatesResource } from "#lib/templates";
 import type { SessionTemplate } from "#store/types";
 
 interface TemplateSelectorProps {
@@ -19,9 +19,10 @@ const sectionHeadingClass =
 
 /**
  * Template chooser: the built-in templates render at once; the user's own
- * templates stream in beneath them (read once through the cached
- * `userTemplatesResource` and `use()`), and a store that cannot be read
- * says so instead of silently showing the built-ins alone.
+ * templates stream in beneath them (the cached `userTemplatesResource`
+ * read through `use()`, re-read after every template write), and a store
+ * that cannot be read says so instead of silently showing the built-ins
+ * alone.
  */
 export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): React.ReactElement {
   return (
@@ -77,7 +78,12 @@ function UserTemplates({
 }: {
   readonly onSelect: (template: SessionTemplate) => void;
 }): React.ReactElement | null {
-  const { templates, failed } = use(userTemplatesResource());
+  // The cached read, swapped for a fresh one whenever a template is saved
+  // or deleted — this stays mounted inside a hidden <Activity> on the
+  // Sessions page, so it must not keep showing the list it first read.
+  const { templates, failed } = use(
+    useSyncExternalStore(subscribeUserTemplates, userTemplatesResource),
+  );
 
   if (failed) {
     return (

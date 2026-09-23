@@ -15,6 +15,7 @@ import {
   invalidateUserTemplates,
   loadUserTemplates,
   saveUserTemplate,
+  subscribeUserTemplates,
   userTemplatesResource,
   workerSpecsForSession,
 } from "#lib/templates";
@@ -248,6 +249,21 @@ describe("user template persistence", () => {
     const next = userTemplatesResource();
     expect(next).not.toBe(first);
     expect(await next).toEqual({ templates: [saved], failed: false });
+  });
+
+  it("tells subscribers after every write, until they unsubscribe", async () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeUserTemplates(listener);
+    const saved = userTemplate();
+
+    await saveUserTemplate(saved);
+    expect(listener).toHaveBeenCalledOnce();
+    await deleteUserTemplate(saved.id);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    await saveUserTemplate(userTemplate());
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 
   it("resolves a store failure to { failed: true } instead of rejecting", async () => {
