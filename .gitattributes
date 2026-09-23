@@ -1,7 +1,18 @@
-# Shell scripts and Unix service units MUST stay LF regardless of the
-# committer's core.autocrlf setting: a CRLF breaks a `#!/usr/bin/env sh`
-# shebang on Linux/macOS (`bad interpreter: sh^M`) and corrupts systemd
-# and launchd unit parsing.
+# Every text file is LF in the index AND in the working tree, on every OS,
+# regardless of the committer's core.autocrlf setting. Biome formats with
+# `lineEnding: "lf"` (biome.json), so a CRLF checkout would make
+# `biome ci` fail on Windows while passing on Linux CI.
+* text=auto eol=lf
+
+# Shell scripts and Unix service units are named explicitly as a second
+# line of defence: a CRLF breaks a `#!/usr/bin/env sh` shebang on
+# Linux/macOS (`bad interpreter: sh^M`) and corrupts systemd and launchd
+# unit parsing.
 *.sh        text eol=lf
 *.service   text eol=lf
 *.plist     text eol=lf
+
+# Binary assets — never normalized, never diffed as text.
+*.png       binary
+*.ico       binary
+*.icns      binary
