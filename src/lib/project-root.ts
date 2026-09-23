@@ -1,42 +1,29 @@
 // ── Persisted Project Root (worktree isolation) ──────────
 //
-// Single source of truth for reading the `default_repo_root` config
-// key set by the Workers page's Project Root picker
-// (`#pages/Workers`) and consumed by both that picker (on load) and
-// `spawnWorkerFromSpec` (`#lib/worker-spawn`, adversarial review F6 —
-// template/session spawns previously never populated `repoRoot` at
-// all, silently skipping isolation).
+// The one reader of the `default_repo_root` config key that the
+// Project Root picker (`SpawnWorkerDialog`) writes. Both that picker (on
+// load) and `spawnWorkerFromSpec` (`#lib/worker-spawn`) read it, so
+// template, session and tool spawns get worktree isolation too, not
+// only spawns started from the picker's own dialog.
 
 import * as z from "zod";
 import { readConfig } from "#lib/tauri";
 
-/** Config key persisting the last-picked project root (write_config/read_config). */
+/** Config key persisting the last-picked project root (`write_config`/`read_config`). */
 export const DEFAULT_REPO_ROOT_KEY = "default_repo_root";
 
 /**
- * `read_config` returns arbitrary JSON (`serde_json::Value` on the
- * Rust side) for any key — it is never typed. Validate at the seam
- * (matching this codebase's `safeParse`-at-the-seam discipline, see
- * `#lib/event-bus` and `spawnWorker`'s response validation in this
- * same file) rather than trusting a bare `as string` cast.
- */
-const RepoRootConfigSchema = z.string().min(1).nullable();
-
-/**
- * Reads the persisted default project root, Zod-validating the raw
- * `read_config` response. Returns `null` for a missing, empty, or
- * malformed value.
+ * The persisted default project root, or `null` when it is unset,
+ * empty or not a string (`read_config` returns arbitrary JSON, so the
+ * value is validated at the seam like every other command response in
+ * `#lib/tauri`).
  *
- * Deliberately does **not** re-verify the path is still a real git
- * repository (that would mean an extra IPC round-trip on every read)
- * — callers that need that guarantee before acting on the UI (e.g.
- * the Workers page on mount) should follow up with
- * `validateRepoRoot` (`#lib/tauri`). `spawnWorkerFromSpec` skips that
- * extra check entirely and relies on Rust's `do_spawn_worker`
- * hard-fail guarantee to catch a since-invalidated root.
+ * Does not re-check that the path is still a git repository (an extra
+ * round trip on every read). Callers that need that before acting on it
+ * follow up with `validateRepoRoot` (`#lib/tauri`); `spawnWorkerFromSpec`
+ * relies instead on the backend failing a spawn whose root is no longer
+ * a repository.
  */
 export async function getPersistedRepoRoot(): Promise<string | null> {
-  const raw = await readConfig<unknown>(DEFAULT_REPO_ROOT_KEY);
-  const parsed = RepoRootConfigSchema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
+  return readConfig(DEFAULT_REPO_ROOT_KEY, z.string().min(1));
 }

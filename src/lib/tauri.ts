@@ -27,7 +27,18 @@ import {
   ShipContextSchema,
   ShipErrorSchema,
   ShipPreflightSchema,
+  WorkerStateSchema,
 } from "#store/types";
+
+// ── Transport ────────────────────────────────────────
+//
+// Every backend command goes through the transport `#lib/transport`
+// selects once at load: Tauri IPC in the desktop shell, a swarmd
+// WebSocket `rpc` round trip in the `pnpm build:web` page. Both reject
+// with the command's own error value (a string, or a structured object
+// for ship and `agent_spawn` errors) and with an `Error` for transport
+// failures. The typed wrappers below validate every response with zod
+// before handing it on, and keep the original failure as the `cause`.
 
 /**
  * `true` inside the Tauri desktop webview: `@tauri-apps/api/core`'s
@@ -42,41 +53,44 @@ import {
 export { isTauri };
 
 /**
- * `true` when SOME backend transport is active — the Tauri IPC bridge
- * OR a `wsTransport` connection — as opposed to {@link isTauri}, which
- * means specifically "the Tauri bridge." The handful of command
- * wrappers below that work identically over EITHER transport
- * (`spawnWorker`, `agentSpawn`, `listSessions`, `agentProbe`) use this
- * for their graceful-degradation pre-check instead of `isTauri()`, so
- * they keep working under a `swarmd`-served remote page — where
- * `isTauri()` is `false` but a real backend is very much present — and
- * still degrade gracefully under a plain `pnpm dev` browser preview
- * (`TRANSPORT` unset, `tauriTransport` selected, no bridge present),
- * exactly as before this split.
+ * `true` when some backend is reachable: the Tauri bridge or a swarmd
+ * `wsTransport` connection. Commands that work over either transport
+ * degrade on this instead of {@link isTauri}, so they work on a
+ * swarmd-served page and still degrade in a plain `pnpm dev` browser
+ * preview, where `tauriTransport` has no bridge.
  */
 export function hasTransport(): boolean {
   return transport.capabilities.kind === "ws" || isTauri();
 }
 
 /**
- * Type-safe wrapper around the active transport's `invoke` — Tauri IPC
- * or a `swarmd` WebSocket `rpc` round-trip, selected once at module
- * load by `#lib/transport`. Every existing caller is unaffected: the
- * signature, the graceful `undefined` return when no Tauri bridge is
- * present under `tauriTransport`, and the promise-rejects-on-failure
- * contract all carry through unchanged.
+ * Runs one backend command on the active transport. `T` is not checked:
+ * validate the result (the typed wrappers below do) unless it is
+ * `void`. Under `tauriTransport` without a bridge it resolves
+ * `undefined`.
  */
-export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+export async function invoke<T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   return transport.invoke<T>(cmd, args);
 }
 
 /**
- * Type-safe wrapper around the active transport's event listener.
- * Returns a no-op unlisten function when neither transport can deliver
- * events (e.g. `tauriTransport` with no bridge present).
+ * Subscribes to a backend event channel on the active transport. A
+ * no-op (with a no-op unlisten) when no transport can deliver events.
  */
 export async function listen<T>(event: string, handler: (payload: T) => void): Promise<UnlistenFn> {
   return transport.listen<T>(event, handler);
+}
+
+/** Validates a command response, throwing `message` (with the zod error as `cause`) on a mismatch. */
+function parseResponse<S extends z.ZodType>(schema: S, raw: unknown, message: string): z.output<S> {
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) throw new Error(message, { cause: parsed.error });
+  return parsed.data;
+}
+
+/** Wraps a rejection value that is not already an `Error`, keeping it as the `cause`. */
+function asError(err: unknown): Error {
+  return Error.isError(err) ? err : new Error(String(err), { cause: err });
 }
 
 // ── Worker commands ──────────────────────────────────
@@ -93,89 +107,72 @@ export interface ProvenanceArgs {
   readonly causeSeq?: number;
 }
 
-/** Validates the raw `spawn_worker` IPC response is a worker UUID before trusting it. */
-const SpawnWorkerResponseSchema = z.uuid();
+/**
+ * The IPC `config` for a spawn: exactly the process options Rust's
+ * `WorkerConfig` (`crates/swarm-core/src/worker/handle.rs`) reads, each
+ * omitted when unset so Rust's `#[serde(default)]` applies.
+ */
+function workerConfig(options: WorkerProcessOptions): Record<string, unknown> {
+  const { name, shell, cwd, env, repoRoot, isolation } = options;
+  return Object.fromEntries(
+    Object.entries({ name, shell, cwd, env, repoRoot, isolation }).filter(
+      ([, value]) => value !== undefined,
+    ),
+  );
+}
 
 /**
- * Spawn a new worker process from process options only — `name`,
- * optionally `shell`/`cwd`/`env`/`repoRoot`/`isolation` — which map
- * 1:1 onto Rust's `WorkerConfig`
- * (`src-tauri/crates/swarm-core/src/worker/handle.rs`) and are the
- * only fields sent over IPC. Agent metadata (role/model/systemPrompt)
- * never belongs here — see `WorkerSpawnSpec` (`#store/types`) and
- * `spawnWorkerFromSpec` (`#lib/worker-spawn`), which splits the two and
- * stores agent metadata client-side instead.
+ * Spawns a worker process from process options only: `name`, and
+ * optionally `shell`/`cwd`/`env`/`repoRoot`/`isolation`, which map 1:1
+ * onto Rust's `WorkerConfig`. Agent metadata (role/model/systemPrompt)
+ * never belongs here: `spawnWorkerFromSpec` (`#lib/worker-spawn`) splits
+ * a `WorkerSpawnSpec` (`#store/types`) and keeps that part client-side.
  *
- * `repoRoot`/`isolation` are additive and optional. Omitting `repoRoot`
- * reproduces exactly the pre-worktree-isolation spawn — no git touched
- * server-side. When `repoRoot` is given and worktree creation fails,
- * Rust hard-fails the whole spawn (see `spawn_worker`'s `Errors`
- * section in `docs/api.md`) rather than silently falling back to a
- * shared cwd, so this function's promise rejects in that case exactly
- * like any other spawn failure.
+ * Without `repoRoot` no git is touched. With it, a failed worktree
+ * creation fails the whole spawn (see `spawn_worker`'s Errors in
+ * `docs/api.md`) instead of falling back to a shared cwd, and this
+ * promise rejects.
  *
- * The response is Zod-validated (a bare worker UUID) rather than cast,
- * matching the event-bus's `safeParse`-at-the-seam discipline
- * (`#lib/event-bus`) — an unexpected shape throws instead of handing
- * callers an untrusted value typed as `string`.
- *
- * Returns `null` (rather than throwing) when there is no Tauri IPC
- * bridge at all (e.g. `pnpm dev` in a plain browser) — `invoke()`
- * degrades to a no-op there, and a `null` return lets callers (see
- * `spawnWorkerFromSpec`) skip their store writes gracefully instead of
- * this function synthesizing a fake failure from an absent response.
- *
- * `prov` is optional causal attribution (e.g. the AI turn whose
- * `spawn_worker` tool call triggered this spawn) — omitted for a
- * human-initiated spawn from the Workers page.
+ * Resolves the new worker's UUID (zod-validated), or `null` when there
+ * is no backend transport at all (a plain `pnpm dev` browser preview),
+ * so callers can skip their store writes. `prov` attributes the spawn
+ * to its cause, e.g. the AI turn whose `spawn_worker` tool call made it.
  */
 export async function spawnWorker(
   options: WorkerProcessOptions,
   prov?: ProvenanceArgs,
 ): Promise<string | null> {
   if (!hasTransport()) return null;
-
-  const config: Record<string, unknown> = { name: options.name };
-  if (options.shell !== undefined) config.shell = options.shell;
-  if (options.cwd !== undefined) config.cwd = options.cwd;
-  if (options.env !== undefined) config.env = options.env;
-  if (options.repoRoot !== undefined) config.repoRoot = options.repoRoot;
-  if (options.isolation !== undefined) config.isolation = options.isolation;
-
-  const raw = await invoke<unknown>("spawn_worker", {
-    config,
+  const raw = await invoke("spawn_worker", {
+    config: workerConfig(options),
     originWorker: prov?.originWorker,
     causeSeq: prov?.causeSeq,
   });
-  const parsed = SpawnWorkerResponseSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new Error("Spawn Worker Returned An Invalid Worker ID.");
-  }
-  return parsed.data;
+  return parseResponse(z.uuid(), raw, "Spawn Worker Returned An Invalid Worker ID.");
 }
 
-/** Validates the raw `agent_spawn` IPC response is a worker UUID before trusting it. */
-const AgentSpawnResponseSchema = z.uuid();
-
-/** Mirrors Rust's `AgentSpawnError` (`src-tauri/src/commands/agent.rs`). */
+/**
+ * An `agent_spawn` error value: `{ workerId, message }` (built by
+ * `agent_spawn_error` in `crates/swarm-core/src/commands/agent.rs`;
+ * `AgentSpawnError` in `src-tauri/src/commands/agent.rs` over IPC).
+ */
 const AgentSpawnErrorSchema = z.object({
-  workerId: z.uuid().nullable().optional(),
+  workerId: z.uuid().nullish(),
   message: z.string(),
 });
 
 /**
  * An `agent_spawn` failure, carrying the worker id when the PTY worker
- * was already created before the agent-session attach step failed
- * (review F9) — a caller can still find/show that worker instead of
- * being left with a bare, unattributable error message. Thrown by
- * {@link agentSpawn} in place of the raw IPC rejection value, mirroring
- * {@link ShipCommandError}'s pattern.
+ * was already created before the agent-session attach step failed, so
+ * a caller can still find and show that worker. Thrown by
+ * {@link agentSpawn} in place of the raw rejection value (kept as the
+ * `cause`), like {@link ShipCommandError}.
  */
 export class AgentSpawnCommandError extends Error {
   readonly workerId: string | null;
 
-  constructor(workerId: string | null, message: string) {
-    super(message);
+  constructor(workerId: string | null, message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "AgentSpawnCommandError";
     this.workerId = workerId;
   }
@@ -183,34 +180,28 @@ export class AgentSpawnCommandError extends Error {
 
 function toAgentSpawnCommandError(err: unknown): Error {
   const parsed = AgentSpawnErrorSchema.safeParse(err);
-  if (parsed.success) {
-    return new AgentSpawnCommandError(parsed.data.workerId ?? null, parsed.data.message);
-  }
-  return err instanceof Error ? err : new Error(String(err));
+  return parsed.success
+    ? new AgentSpawnCommandError(parsed.data.workerId ?? null, parsed.data.message, { cause: err })
+    : asError(err);
 }
 
 /**
- * Spawns a new worker (via the same worktree-isolation path as
- * {@link spawnWorker}) AND attaches a provider-adapter session to it in
- * one call (Rust's `agent_spawn` command, `src-tauri/src/commands/agent.rs`,
- * routed by `provider` to `ClaudeCodeAdapter` or `CodexAdapter` — Phase 4).
+ * Spawns a worker (through the same worktree-isolation path as
+ * {@link spawnWorker}) and attaches a provider-adapter session to it in
+ * one call: Rust's `agent_spawn`, routed by `provider` to
+ * `ClaudeCodeAdapter` or `CodexAdapter`.
  *
  * `options` maps to `WorkerConfig` exactly like {@link spawnWorker}.
- * `model`/`trustTier` mean the same 3-token trust-tier vocabulary for
- * EITHER provider (`ClaudeCodeTrustTier`/`CodexTrustTier` share their
- * wire values by deliberate design symmetry — see
- * `#lib/agent-events`'s `CodexTrustTierSchema` doc): `trustTier` defaults
- * to `"standard"` server-side when omitted. The attached session's
- * `sessionKey`/`capabilities`/provider badge arrive via the
- * `agent_session_started` event (`#hooks/useAgentSessionEvents`), not
- * this call's return value — mirroring how `worker_spawned` (not
- * `spawnWorker`'s return) is `useWorkerStore`'s source of truth.
+ * `model`/`trustTier` use the same trust-tier vocabulary for either
+ * provider (see `#lib/agent-events`' `CodexTrustTierSchema`); the
+ * backend defaults `trustTier` to `"standard"`. The session's
+ * `sessionKey`/`capabilities` arrive with the `agent_session_started`
+ * event (`#hooks/useAgentSessionEvents`), not in this call's result.
  *
- * If the PTY worker spawns but the agent session fails to attach (e.g.
- * the provider CLI is not installed or not authenticated), the worker
- * still exists — usable as a plain terminal — and this call rejects with
- * the attach failure. Callers should treat that as "spawned, but Not
- * Signed In," not "nothing happened."
+ * If the PTY worker spawns but the session fails to attach (provider
+ * CLI missing or signed out), the worker still exists as a plain
+ * terminal and this rejects with an {@link AgentSpawnCommandError}
+ * carrying its id: "spawned, but Not Signed In", not "nothing happened".
  */
 export async function agentSpawn(
   options: WorkerProcessOptions,
@@ -220,76 +211,58 @@ export async function agentSpawn(
   prov?: ProvenanceArgs,
 ): Promise<string | null> {
   if (!hasTransport()) return null;
-
-  const config: Record<string, unknown> = { name: options.name };
-  if (options.shell !== undefined) config.shell = options.shell;
-  if (options.cwd !== undefined) config.cwd = options.cwd;
-  if (options.env !== undefined) config.env = options.env;
-  if (options.repoRoot !== undefined) config.repoRoot = options.repoRoot;
-  if (options.isolation !== undefined) config.isolation = options.isolation;
-
+  let raw: unknown;
   try {
-    const raw = await invoke<unknown>("agent_spawn", {
-      config,
+    raw = await invoke("agent_spawn", {
+      config: workerConfig(options),
       provider,
       model,
       trustTier,
       originWorker: prov?.originWorker,
       causeSeq: prov?.causeSeq,
     });
-    const parsed = AgentSpawnResponseSchema.safeParse(raw);
-    if (!parsed.success) {
-      throw new Error("Agent Spawn Returned An Invalid Worker ID.");
-    }
-    return parsed.data;
   } catch (err) {
     throw toAgentSpawnCommandError(err);
   }
+  return parseResponse(z.uuid(), raw, "Agent Spawn Returned An Invalid Worker ID.");
 }
 
 /**
- * Sends one turn to `workerId`'s attached Claude Code session (Rust's
- * `agent_send_turn` command). Fire-and-forget by design — resolves once
- * the turn is ADMITTED to the backend scheduler, not once it completes;
- * the transcript renders from the live `agent_*` event stream, not this
- * call's return value (there is none). Rejects if `workerId` has no
- * attached session, or if the backend's admission queue is full.
+ * Sends one turn to `workerId`'s attached agent session (Claude Code or
+ * Codex; Rust's `agent_send_turn`). Resolves once the backend scheduler
+ * admits the turn, not when it completes: the transcript renders from
+ * the `agent_*` event stream. Rejects when `workerId` has no attached
+ * session or the admission queue is full.
  */
 export async function agentSendTurn(workerId: string, prompt: string): Promise<void> {
   return invoke<void>("agent_send_turn", { workerId, prompt });
 }
 
 /**
- * Cancels `workerId`'s in-flight turn (Rust's `agent_cancel` command).
- * `turnId` comes from that turn's own `agent_block`/`agent_tool_call`
- * events. A stale or already-settled `turnId` is a benign no-op.
+ * Cancels `workerId`'s in-flight turn (Rust's `agent_cancel`). `turnId`
+ * comes from that turn's own `agent_block`/`agent_tool_call` events. A
+ * stale or already-settled `turnId` is a benign no-op.
  */
 export async function agentCancel(workerId: string, turnId: string): Promise<void> {
   return invoke<void>("agent_cancel", { workerId, turnId });
 }
 
 /**
- * Shuts down `workerId`'s attached Claude Code session (Rust's
- * `agent_shutdown` command) without killing the underlying PTY worker —
- * see {@link killWorker} for that. Idempotent; a worker with no
- * attached session is a benign no-op.
+ * Shuts down `workerId`'s attached agent session (Claude Code or Codex;
+ * Rust's `agent_shutdown`) without killing the PTY worker, which
+ * {@link killWorker} does. Idempotent; a worker with no attached session
+ * is a benign no-op.
  */
 export async function agentShutdown(workerId: string): Promise<void> {
   return invoke<void>("agent_shutdown", { workerId });
 }
 
 /**
- * Checks whether `provider`'s CLI is installed and responds to
- * `--version` (Rust's `agent_probe` command). Defaults to
- * `"claude_code"` — the pre-Phase-4 call shape (no argument) stays
- * valid. Bounded — never hangs. Returns `{ available: false }` (never
- * throws) when the provider is unusable; `detail` carries a
- * human-readable reason, never a credential (e.g. `CodexAdapter`'s
- * probe honestly reports "Codex CLI Not Found On PATH" when absent, the
- * same capability-honest pattern as Claude Code's). When Tauri is
- * unavailable (e.g. `pnpm dev` in a plain browser), resolves to
- * `{ available: false, detail: "..." }` rather than throwing, matching
- * every other graceful-degradation command here.
+ * Checks whether `provider`'s CLI is installed and answers `--version`
+ * (Rust's `agent_probe`, bounded, never hangs). Resolves
+ * `{ available: false, detail }` rather than throwing when the provider
+ * is unusable or there is no backend transport; `detail` is a
+ * human-readable reason, never a credential.
  */
 export async function agentProbe(
   provider: Extract<ProviderId, "claude_code" | "codex"> = "claude_code",
@@ -297,23 +270,18 @@ export async function agentProbe(
   if (!hasTransport()) {
     return { available: false, detail: "No Backend Transport Available." };
   }
-  const raw = await invoke<unknown>("agent_probe", { provider });
-  const parsed = ProbeReportSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new Error("Agent Probe Returned An Unexpected Shape.");
-  }
-  return parsed.data;
+  const raw = await invoke("agent_probe", { provider });
+  return parseResponse(ProbeReportSchema, raw, "Agent Probe Returned An Unexpected Shape.");
 }
 
 /**
  * Answers a pending `agent_permission_request` (Rust's
- * `agent_permission_respond` command, Phase 4). A REAL round-trip
- * against a `CodexAdapter` session (`CodexSession::respond_permission`
- * writes a matching JSON-RPC response back to the child) — a documented
- * no-op against a `ClaudeCodeAdapter` session (see
- * `AgentPermissionRequestPayloadSchema`'s semantics-shift doc). Check
- * the session's `capabilities.interactivePermissions` before rendering
- * an Allow/Deny affordance in the first place — see that field's doc.
+ * `agent_permission_respond`). A real round trip for a `CodexAdapter`
+ * session (`CodexSession::respond_permission` answers the child's
+ * JSON-RPC request); a documented no-op for a `ClaudeCodeAdapter`
+ * session (see `AgentPermissionRequestPayloadSchema`). Render an
+ * Allow/Deny affordance only when the session's
+ * `capabilities.interactivePermissions` is `true`.
  */
 export async function agentPermissionRespond(
   workerId: string,
@@ -323,24 +291,61 @@ export async function agentPermissionRespond(
   return invoke<void>("agent_permission_respond", { workerId, requestId, decision });
 }
 
-/** Pause a running worker, suspending its PTY process. */
+/** Pauses a running worker (`pause_worker`). */
 export async function pauseWorker(id: string): Promise<void> {
   return invoke<void>("pause_worker", { id });
 }
 
-/** Resume a previously paused worker. */
+/** Resumes a paused worker (`resume_worker`). */
 export async function resumeWorker(id: string): Promise<void> {
   return invoke<void>("resume_worker", { id });
 }
 
-/** Terminate a worker process by UUID. */
+/** Terminates a worker process by UUID (`kill_worker`). */
 export async function killWorker(id: string): Promise<void> {
   return invoke<void>("kill_worker", { id });
 }
 
-/** Retrieve the list of all known workers from the backend. */
+/**
+ * One entry of `list_workers`: Rust's `WorkerInfo`
+ * (`crates/swarm-core/src/worker/handle.rs`). `startedAt` is Unix
+ * seconds; it becomes the ISO string `Worker.startedAt` holds.
+ */
+const WorkerInfoSchema = z
+  .object({
+    id: z.uuid(),
+    state: WorkerStateSchema,
+    name: z.string(),
+    pid: z.int().nonnegative().nullish(),
+    startedAt: z.int(),
+    worktreePath: z.string().nullish(),
+    branch: z.string().nullish(),
+  })
+  .transform(
+    ({ id, state, name, pid, startedAt, worktreePath, branch }): Worker => ({
+      id,
+      state,
+      name,
+      startedAt: new Date(startedAt * 1000).toISOString(),
+      ...(pid == null ? {} : { pid }),
+      ...(worktreePath == null ? {} : { worktreePath }),
+      ...(branch == null ? {} : { branch }),
+    }),
+  );
+
+/**
+ * Every worker the backend is running, e.g. to repopulate the worker
+ * store after a reload (`#hooks/useWorkerEvents`). Resolves `[]` when
+ * there is no backend transport.
+ */
 export async function listWorkers(): Promise<Worker[]> {
-  return invoke<Worker[]>("list_workers");
+  if (!hasTransport()) return [];
+  const raw = await invoke("list_workers");
+  return parseResponse(
+    z.array(WorkerInfoSchema),
+    raw,
+    "List Workers Returned An Unexpected Shape.",
+  );
 }
 
 /**
@@ -353,11 +358,8 @@ export async function listWorkers(): Promise<Worker[]> {
 export type WorkerInputSource = "terminal" | "tool" | "automation";
 
 /**
- * Send raw input data to a worker's PTY stdin.
- *
- * `data` is a plain string (not bytes) — matches every caller and what
- * the Rust `worker_input` command's `data: String` parameter expects
- * (see its doc for the `Vec<u8>` contract bug this replaced).
+ * Writes `data` to a worker's PTY stdin. A string, not bytes: Rust's
+ * `worker_input` takes `data: String`.
  */
 export async function workerInput(
   id: string,
@@ -374,188 +376,123 @@ export async function workerInput(
   });
 }
 
-/** Validates the raw `agent_turn_started` IPC response is a non-negative integer seq. */
-const AgentTurnStartedResponseSchema = z.number().int().nonnegative();
-
 /**
- * Records the start of one AI/agent turn and returns the real,
- * persisted seq the engine assigned it — the `causeSeq` every
- * tool-driven side effect in that turn then cites (see
- * `AIChat.tsx`'s `doSend`).
+ * Records the start of one AI/agent turn and returns the persisted seq
+ * the engine assigned it: the `causeSeq` every tool-driven side effect
+ * of that turn then cites (see `AIChat.tsx`'s `doSend`).
  */
 export async function agentTurnStarted(
   workerId: string,
   model: string,
   requestId: string,
 ): Promise<number> {
-  const raw = await invoke<unknown>("agent_turn_started", { workerId, model, requestId });
-  const parsed = AgentTurnStartedResponseSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new Error("Agent Turn Started Returned An Invalid Seq.");
-  }
-  return parsed.data;
+  const raw = await invoke("agent_turn_started", { workerId, model, requestId });
+  return parseResponse(z.int().nonnegative(), raw, "Agent Turn Started Returned An Invalid Seq.");
 }
 
 /**
- * Update the backend worker-registry cap. Applies immediately to new
- * spawns and persists across restarts (see `set_max_workers` in src-tauri).
+ * Sets the backend worker-registry cap. Applies to new spawns at once
+ * and persists across restarts (config key `max_workers`).
  */
 export async function setMaxWorkers(max: number): Promise<void> {
   return invoke<void>("set_max_workers", { max });
 }
 
 /**
- * Update the backend agent-turn scheduler's live concurrency cap.
- * Applies immediately (resizing the scheduler's semaphore — see
+ * Sets the backend agent-turn scheduler's concurrency cap. Applies at
+ * once (resizing the scheduler's semaphore, see
  * `AgentScheduler::set_concurrency` in `crates/swarm-core`) and persists
- * across restarts (see `set_agent_concurrency` in src-tauri, config key
- * `agent_concurrency`). This is the backend counterpart to
- * `useAiStore`'s `concurrentLimit`, which only bounds the webview-direct
- * chat streaming path (`AIChat.tsx`) — `useSettingsBridge` calls both on
- * every `aiConcurrentLimit` change so the client-side limiter and the
- * `agent_spawn`/`agent_send_turn` provider-adapter path never drift.
+ * across restarts (config key `agent_concurrency`). The backend
+ * counterpart of `useAiStore`'s `concurrentLimit`, which only bounds the
+ * webview-direct chat path; `useSettingsBridge` keeps the two in step.
  */
 export async function setAgentConcurrency(limit: number): Promise<void> {
   return invoke<void>("set_agent_concurrency", { limit });
 }
 
-/** Validates the raw `validate_repo_root` IPC response is a non-empty path string. */
-const ValidateRepoRootResponseSchema = z.string().min(1);
-
 /**
- * Validates that `path` is inside a git repository (via
- * `swarm_core::git::repo::discover_toplevel` on the Rust side),
- * returning the repo's canonical toplevel path on success. Used by
- * the Workers page's Project Root picker to confirm a chosen directory
- * *before* persisting it as `default_repo_root` config, instead of
- * letting every subsequent isolated spawn hard-fail with a raw git
- * error the user never asked to see.
+ * Checks that `path` is inside a git repository (Rust's
+ * `swarm_core::git::repo::discover_toplevel`) and resolves the repo's
+ * canonical toplevel. The Project Root picker calls it before saving
+ * `default_repo_root`, so an invalid root is caught up front instead of
+ * failing every later isolated spawn.
  *
- * Throws (does not return `null`) on an invalid path or a missing
- * Tauri bridge — callers are expected to catch and show a truthful
- * Title Case toast, not treat this like the graceful-degradation
- * commands above.
+ * Rejects (never resolves `null`) for an invalid path or a missing
+ * backend; callers show a Title Case toast.
  */
 export async function validateRepoRoot(path: string): Promise<string> {
-  const raw = await invoke<unknown>("validate_repo_root", { path });
-  const parsed = ValidateRepoRootResponseSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new Error("Validate Repo Root Returned An Invalid Response.");
-  }
-  return parsed.data;
+  const raw = await invoke("validate_repo_root", { path });
+  return parseResponse(z.string().min(1), raw, "Validate Repo Root Returned An Invalid Response.");
 }
 
 // ── Session commands ─────────────────────────────────
 
 /**
- * Raw shape of a Session exactly as Rust returns it — shared by every
- * command that hands back a `Session` (`create_session`,
- * `list_sessions`, `get_session` all serialize the same struct).
- * Mirrors Rust's `Session` struct (`src-tauri/src/session/manager.rs`)
- * exactly: `createdAt` is Unix seconds, and there is no `updatedAt`
- * field at all — Rust never tracks one.
+ * A `Session` as every session command returns it: Rust's `Session`
+ * (`crates/swarm-core/src/session/manager.rs`), with `createdAt` in Unix
+ * seconds and no `updatedAt` (Rust does not track one). Normalized into
+ * a frontend `Session`: `createdAt` becomes an ISO string, `updatedAt`
+ * starts equal to it, and the result must pass `SessionSchema`, so the
+ * session store never holds an `updatedAt` that `date-fns` or a sort
+ * cannot read.
  */
-const RawSessionResponseSchema = z.object({
-  id: z.uuid(),
-  name: z.string(),
-  workerIds: z.array(z.uuid()),
-  createdAt: z.number(),
-  config: z.record(z.string(), z.unknown()).optional(),
-});
+const SessionResponseSchema = z
+  .object({
+    id: z.uuid(),
+    name: z.string(),
+    workerIds: z.array(z.uuid()),
+    createdAt: z.number(),
+    config: z.record(z.string(), z.unknown()).optional(),
+  })
+  .transform((raw) => {
+    const createdAt = new Date(raw.createdAt * 1000).toISOString();
+    return { ...raw, createdAt, updatedAt: createdAt };
+  })
+  .pipe(SessionSchema);
+
+const SESSION_SHAPE_ERROR = "The Session Backend Returned An Unexpected Shape.";
 
 /**
- * Normalizes one raw Session IPC response into a validated frontend
- * `Session`: converts `createdAt` from Unix seconds to an ISO-8601
- * string and seeds `updatedAt` with that same value (Rust has no
- * `updatedAt` field at all — a session is "updated" the instant it's
- * created), then validates the result against `SessionSchema`. Shared
- * by `createSession`/`listSessions`/`getSession` so none of them can
- * hand a caller a value that fails `SessionSchema` downstream — an
- * unexpected shape throws here instead of poisoning the session store
- * with a value whose `updatedAt` is `undefined`, which throws a
- * `RangeError` inside `date-fns`' `formatDistanceToNow` in
- * `SessionCard` and sorts as `NaN` in `SessionList`.
- */
-function normalizeSession(raw: unknown): Session {
-  const parsedRaw = RawSessionResponseSchema.safeParse(raw);
-  if (!parsedRaw.success) {
-    throw new Error("The Session Backend Returned An Unexpected Shape.");
-  }
-
-  const createdAtIso = new Date(parsedRaw.data.createdAt * 1000).toISOString();
-  const parsed = SessionSchema.safeParse({
-    ...parsedRaw.data,
-    createdAt: createdAtIso,
-    updatedAt: createdAtIso,
-  });
-  if (!parsed.success) {
-    throw new Error("The Session Backend Returned An Unexpected Shape.");
-  }
-
-  return parsed.data;
-}
-
-/**
- * Create a new orchestration session with the given name.
- *
- * Sends `config: {}` — Rust's `create_session` command requires this
- * argument (`config: serde_json::Value`, no `#[serde(default)]`); a
- * call that omits it fails IPC deserialization outright ("missing
- * required key config") before any handler code runs.
+ * Creates a session named `name`. Sends `config: {}` because Rust's
+ * `create_session` requires the argument (no `#[serde(default)]`).
  */
 export async function createSession(name: string): Promise<Session> {
-  const raw = await invoke<unknown>("create_session", { name, config: {} });
-  return normalizeSession(raw);
+  const raw = await invoke("create_session", { name, config: {} });
+  return parseResponse(SessionResponseSchema, raw, SESSION_SHAPE_ERROR);
 }
 
-/** Delete a session by UUID and remove its associated data. */
+/** Deletes a session by UUID, with its associated data. */
 export async function deleteSession(id: string): Promise<void> {
   return invoke<void>("delete_session", { id });
 }
 
-/**
- * Retrieve all sessions from the backend store, each normalized the
- * same way as `createSession` (see `normalizeSession`). Currently
- * unreachable in the shipped app (`useSessionActions`, its only
- * caller, has no consumers) — but wired now rather than left to
- * detonate the instant session restore is.
- */
+/** Every session in the backend store; `[]` without a backend transport. */
 export async function listSessions(): Promise<Session[]> {
   if (!hasTransport()) return [];
-  const raw = await invoke<unknown[]>("list_sessions");
-  return raw.map(normalizeSession);
+  const raw = await invoke("list_sessions");
+  return parseResponse(z.array(SessionResponseSchema), raw, SESSION_SHAPE_ERROR);
 }
 
-/**
- * Retrieve a single session by UUID, normalized the same way as
- * `createSession` (see `normalizeSession`).
- */
+/** One session by UUID. */
 export async function getSession(id: string): Promise<Session> {
-  const raw = await invoke<unknown>("get_session", { id });
-  return normalizeSession(raw);
+  const raw = await invoke("get_session", { id });
+  return parseResponse(SessionResponseSchema, raw, SESSION_SHAPE_ERROR);
 }
 
 /**
- * Register a worker against a session's `workerIds` list (backend
- * command `session_add_worker`, registered in `generate_handler!` but
- * previously called from nowhere in the frontend). Does not emit a
- * `swarm://events` envelope on success — callers must mirror the
- * result into `useSessionStore` themselves (see `spawnWorkerFromSpec`
- * in `#lib/worker-spawn`).
+ * Adds a worker to a session's `workerIds` (`session_add_worker`). No
+ * event is emitted: callers mirror the result into `useSessionStore`
+ * themselves (see `spawnWorkerFromSpec` in `#lib/worker-spawn`).
  */
 export async function sessionAddWorker(sessionId: string, workerId: string): Promise<void> {
   return invoke<void>("session_add_worker", { sessionId, workerId });
 }
 
 /**
- * Remove a worker from a session's `workerIds` list (backend command
- * `session_remove_worker`) — the counterpart to {@link sessionAddWorker}
- * that previously didn't exist (see `SessionCard.tsx`'s now-fixed
- * comment on why it intersected against the live worker store instead
- * of trusting `workerIds` directly). Unlike `sessionAddWorker`, this
- * DOES emit a `session_worker_removed` envelope on `swarm://events` —
- * callers rely on `useSessionEvents` to mirror the result into
- * `useSessionStore`, they never need to update it themselves.
+ * Removes a worker from a session's `workerIds`
+ * (`session_remove_worker`). Unlike {@link sessionAddWorker} this emits
+ * `session_worker_removed`, which `useSessionEvents` mirrors into
+ * `useSessionStore`; callers do not update the store themselves.
  */
 export async function sessionRemoveWorker(sessionId: string, workerId: string): Promise<void> {
   return invoke<void>("session_remove_worker", { sessionId, workerId });
@@ -564,13 +501,10 @@ export async function sessionRemoveWorker(sessionId: string, workerId: string): 
 // ── Notifications ────────────────────────────────────
 
 /**
- * Display a native OS notification (see `send_notification` in
- * src-tauri) — NATIVE_ONLY (`swarm_core::commands::NATIVE_ONLY`): no
- * registry entry exists, so a `wsTransport` `rpc` call would reject
- * with "Unknown Command" rather than silently no-op. Gated on
- * `isTauri()` (not `hasTransport()`) so it degrades to a harmless no-op
- * under both a `wsTransport` remote page AND a plain browser preview,
- * exactly like the fs/dialog-backed surfaces.
+ * Shows a native OS notification (`send_notification`). Desktop-only:
+ * swarmd has no such command (`swarm_core::commands::NATIVE_ONLY`), so
+ * this gates on {@link isTauri} and is a no-op on a swarmd-served page
+ * and in a browser preview.
  */
 export async function sendNotification(title: string, body: string): Promise<void> {
   if (!isTauri()) return;
@@ -579,113 +513,129 @@ export async function sendNotification(title: string, body: string): Promise<voi
 
 // ── Updater ──────────────────────────────────────────
 
-/** Result of a manual or on-launch update check (see `check_for_updates` in src-tauri). */
-export interface UpdateCheckResult {
-  readonly available: boolean;
-  readonly version?: string;
-  readonly body?: string;
-  readonly date?: string;
-}
+/** `check_for_updates`' result (`src-tauri/src/commands/updater.rs`). */
+const UpdateCheckResultSchema = z.object({
+  available: z.boolean(),
+  version: z.string().optional(),
+  body: z.string().nullish(),
+  date: z.string().nullish(),
+});
+
+/** Result of a manual or on-launch update check. */
+export type UpdateCheckResult = z.output<typeof UpdateCheckResultSchema>;
 
 /**
- * Query the configured update endpoint for an available app update —
- * NATIVE_ONLY, same reasoning as {@link sendNotification}. Resolves
- * `{ available: false }` rather than throwing under a non-Tauri
- * transport, matching every other graceful-degradation command here.
+ * Asks the configured update endpoint for a newer version.
+ * Desktop-only, like {@link sendNotification}: resolves
+ * `{ available: false }` outside the Tauri shell.
  */
 export async function checkForUpdates(): Promise<UpdateCheckResult> {
   if (!isTauri()) return { available: false };
-  return invoke<UpdateCheckResult>("check_for_updates");
+  const raw = await invoke("check_for_updates");
+  return parseResponse(UpdateCheckResultSchema, raw, "Update Check Returned An Unexpected Shape.");
 }
 
-// ── FS utilities ─────────────────────────────────────
+// ── Config ───────────────────────────────────────────
 
-/** Read a typed configuration value by key from the flat `swarm-config.json` file (via the `read_config` custom command). */
-export async function readConfig<T>(key: string): Promise<T | null> {
-  return invoke<T | null>("read_config", { key });
+/**
+ * Reads `key` from the Rust-owned flat `swarm-config.json`
+ * (`read_config`), validated with `schema`. Resolves `null` when the
+ * key is unset, the value does not match `schema`, or there is no
+ * backend.
+ */
+export async function readConfig<S extends z.ZodType>(
+  key: string,
+  schema: S,
+): Promise<z.output<S> | null>;
+/**
+ * Reads `key` from `swarm-config.json` without validation; `T` is not
+ * checked.
+ *
+ * @deprecated Pass a zod schema as the second argument.
+ */
+export async function readConfig<T = unknown>(key: string): Promise<T | null>;
+export async function readConfig(key: string, schema?: z.ZodType): Promise<unknown> {
+  const raw = (await invoke("read_config", { key })) ?? null;
+  if (schema === undefined || raw === null) return raw;
+  const parsed = schema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
-/** Write a typed configuration value by key to the flat `swarm-config.json` file (via the `write_config` custom command). */
+/** Writes `key` to the Rust-owned `swarm-config.json` (`write_config`). */
 export async function writeConfig<T>(key: string, value: T): Promise<void> {
   return invoke<void>("write_config", { key, value });
 }
 
 // ── Ship chain ────────────────────────────────────────
 //
-// Every command here can reject with a typed `ShipError` object
-// (`{ kind, message, remedy }`), not a bare string — a documented
-// divergence from the rest of this file's `Result<T, String>`
-// convention (see `swarm_core::git::ship::ShipError`'s doc). Rather
-// than make every call site `safeParse` the rejection value itself,
-// each wrapper below funnels it through `toShipCommandError`, which
-// re-throws it as a real `Error` subclass carrying the parsed
-// `ShipError` at `.shipError` — callers can `catch` normally and, when
-// they need to branch on `kind`, narrow with `instanceof ShipCommandError`.
+// Every ship command can reject with a typed `ShipError`
+// (`{ kind, message, remedy }`, see `swarm_core::git::ship::ShipError`)
+// instead of a string. Each wrapper re-throws that as a
+// `ShipCommandError`, so callers catch a real `Error` and narrow with
+// `instanceof ShipCommandError` when they need `kind`/`remedy`.
 
 /**
- * A ship command failure, carrying the typed `ShipError` the backend
- * returned. Thrown by every `git*`/`ship*` function below in place of
- * the raw IPC rejection value (which Tauri delivers as the plain
- * `{ kind, message, remedy }` object, not an `Error` instance).
+ * A ship command failure carrying the typed `ShipError` the backend
+ * returned (Tauri and swarmd both deliver it as the plain object, kept
+ * here as the `cause`).
  */
 export class ShipCommandError extends Error {
   readonly shipError: ShipError;
 
-  constructor(shipError: ShipError) {
-    super(shipError.message);
+  constructor(shipError: ShipError, options?: ErrorOptions) {
+    super(shipError.message, options);
     this.name = "ShipCommandError";
     this.shipError = shipError;
   }
 }
 
 /**
- * Normalizes any thrown value from a ship command call into an
- * `Error`: a rejection matching `ShipErrorSchema` becomes a
- * `ShipCommandError`; anything else (a task panic, a missing Tauri
- * bridge) is coerced into a plain `Error` rather than re-thrown as an
- * unknown value.
+ * Runs a ship command: a rejection matching `ShipErrorSchema` becomes a
+ * {@link ShipCommandError}, any other one (a task panic, a missing
+ * backend) an `Error`; the result is validated with `schema`.
  */
-function toShipCommandError(err: unknown): Error {
-  const parsed = ShipErrorSchema.safeParse(err);
-  if (parsed.success) return new ShipCommandError(parsed.data);
-  return err instanceof Error ? err : new Error(String(err));
+async function shipCommand<S extends z.ZodType>(
+  cmd: string,
+  args: Record<string, unknown>,
+  schema: S,
+  shapeError: string,
+): Promise<z.output<S>> {
+  let raw: unknown;
+  try {
+    raw = await invoke(cmd, args);
+  } catch (err) {
+    const parsed = ShipErrorSchema.safeParse(err);
+    throw parsed.success ? new ShipCommandError(parsed.data, { cause: err }) : asError(err);
+  }
+  return parseResponse(schema, raw, shapeError);
 }
 
 /**
- * Computes the ship preflight for `workerId`, evaluated for `mode`
- * (defaults to `"all"` — the app default, and what the first preflight
- * of a session is computed for before the user has picked anything):
- * branch/remote/tracking state, working-tree status, the secret/size
- * deny-list preview (accurate for the given `mode` — a `"staged"`
- * preview reflects only what's already indexed, matching what
- * `gitStageCommit` would actually commit), and the `canShip`/
- * `blockers` verdict — read-only, no mutation.
+ * Computes the read-only ship preflight for `workerId`, evaluated for
+ * `mode` (the backend defaults to `"all"`): branch/remote/tracking
+ * state, working-tree status, the secret/size deny-list preview (a
+ * `"staged"` preview covers only what is already indexed, exactly what
+ * `gitStageCommit` would commit) and the `canShip`/`blockers` verdict.
  */
 export async function gitShipPreflight(
   workerId: string,
   mode?: StagingMode,
 ): Promise<ShipPreflight> {
-  try {
-    const raw = await invoke<unknown>("git_ship_preflight", { workerId, mode });
-    const parsed = ShipPreflightSchema.safeParse(raw);
-    if (!parsed.success) {
-      throw new Error("Ship Preflight Returned An Unexpected Shape.");
-    }
-    return parsed.data;
-  } catch (err) {
-    throw toShipCommandError(err);
-  }
+  return shipCommand(
+    "git_ship_preflight",
+    { workerId, mode },
+    ShipPreflightSchema,
+    "Ship Preflight Returned An Unexpected Shape.",
+  );
 }
 
 /**
- * Stages (per `mode`) and commits `workerId`'s worktree, appending the
- * `Swarm-Seq-Range` trailer server-side. `shipId` correlates the
- * `ship_progress`/`ship_settled` events this call emits with the
- * caller's own progress UI — generate a fresh one (`crypto.randomUUID()`)
- * per ship attempt. `finalStep` should be `true` only for the "Commit
- * Only" action (no push/compare follows) — it controls whether this
- * call also emits the terminal `ship_settled` receipt on success (a
- * failure always emits it regardless).
+ * Stages (per `mode`) and commits `workerId`'s worktree; the backend
+ * appends the `Swarm-Seq-Range` trailer. `shipId` (a fresh
+ * `crypto.randomUUID()` per ship attempt) correlates the
+ * `ship_progress`/`ship_settled` events with the caller's progress UI.
+ * `finalStep` is `true` only for "Commit Only": it makes a success also
+ * emit the terminal `ship_settled` receipt (a failure always does).
  */
 export async function gitStageCommit(
   workerId: string,
@@ -694,68 +644,42 @@ export async function gitStageCommit(
   mode: StagingMode,
   finalStep: boolean,
 ): Promise<CommitOutcome> {
-  try {
-    const raw = await invoke<unknown>("git_stage_commit", {
-      workerId,
-      shipId,
-      message,
-      mode,
-      finalStep,
-    });
-    const parsed = CommitOutcomeSchema.safeParse(raw);
-    if (!parsed.success) {
-      throw new Error("Git Stage Commit Returned An Unexpected Shape.");
-    }
-    return parsed.data;
-  } catch (err) {
-    throw toShipCommandError(err);
-  }
+  return shipCommand(
+    "git_stage_commit",
+    { workerId, shipId, message, mode, finalStep },
+    CommitOutcomeSchema,
+    "Git Stage Commit Returned An Unexpected Shape.",
+  );
 }
 
 /**
  * Pushes `workerId`'s branch (`origin <branch> --set-upstream`, fixed
- * argv, never force). Takes no commit sha from the caller — the
- * backend resolves `HEAD` itself, live, at push time (see
- * `swarm_core::git::ship::push`'s doc). This is what lets a worker
- * with already-committed, unpushed work (`ShipPreflight.ahead > 0`,
- * e.g. from an earlier "Commit Only") go straight to `gitPush` without
- * a preceding `gitStageCommit` call in the same ship attempt. On
- * success, the backend records `lastShippedSeq`/`lastShippedCommit`
- * for this worker. `finalStep` should be `true` for the "Commit +
- * Push" action (no compare-page step follows); `false` when a
- * `shipCompareUrl` call is coming next.
+ * argv, never forced). The backend resolves `HEAD` itself at push time
+ * (see `swarm_core::git::ship::push`), so already-committed, unpushed
+ * work (`ShipPreflight.ahead > 0`) can be pushed without a
+ * `gitStageCommit` in the same attempt. On success the backend records
+ * `lastShippedSeq`/`lastShippedCommit`. `finalStep` is `true` for
+ * "Commit + Push" and `false` when a {@link shipCompareUrl} call follows.
  */
 export async function gitPush(
   workerId: string,
   shipId: string,
   finalStep: boolean,
 ): Promise<PushOutcome> {
-  try {
-    const raw = await invoke<unknown>("git_push", {
-      workerId,
-      shipId,
-      finalStep,
-    });
-    const parsed = PushOutcomeSchema.safeParse(raw);
-    if (!parsed.success) {
-      throw new Error("Git Push Returned An Unexpected Shape.");
-    }
-    return parsed.data;
-  } catch (err) {
-    throw toShipCommandError(err);
-  }
+  return shipCommand(
+    "git_push",
+    { workerId, shipId, finalStep },
+    PushOutcomeSchema,
+    "Git Push Returned An Unexpected Shape.",
+  );
 }
 
-/** Validates the raw `ship_compare_url` IPC response is a non-empty URL string. */
-const ShipCompareUrlResponseSchema = z.string().min(1);
-
 /**
- * Builds the GitHub-style compare URL for `workerId`'s worktree,
- * prefilled with `title`/`body` via `quick_pull=1` query params
- * (server-side capped at 6000 characters total, truncating `body`
- * first). Always the true final step of the "Commit + Push + Open
- * Compare Page" action — emits the terminal `ship_settled` receipt on
- * both success and failure.
+ * Builds the GitHub compare URL for `workerId`'s worktree, prefilled
+ * with `title`/`body` through `quick_pull=1` (capped server-side at 6000
+ * characters, `body` truncated first). Always the final step of "Commit
+ * + Push + Open Compare Page": emits the terminal `ship_settled` receipt
+ * on success and failure.
  */
 export async function shipCompareUrl(
   workerId: string,
@@ -765,43 +689,26 @@ export async function shipCompareUrl(
   title: string,
   body: string,
 ): Promise<string> {
-  try {
-    const raw = await invoke<unknown>("ship_compare_url", {
-      workerId,
-      shipId,
-      commitSha,
-      pushedRef,
-      title,
-      body,
-    });
-    const parsed = ShipCompareUrlResponseSchema.safeParse(raw);
-    if (!parsed.success) {
-      throw new Error("Ship Compare URL Returned An Unexpected Shape.");
-    }
-    return parsed.data;
-  } catch (err) {
-    throw toShipCommandError(err);
-  }
+  return shipCommand(
+    "ship_compare_url",
+    { workerId, shipId, commitSha, pushedRef, title, body },
+    z.string().min(1),
+    "Ship Compare URL Returned An Unexpected Shape.",
+  );
 }
 
 /**
- * Fetches the causal record for `workerId`'s current ship range —
- * turns, tool calls, and any commits already made in the range the next
- * `gitStageCommit` call would use. Read-only; the range itself is
- * resolved server-side (the same algorithm `git_stage_commit` uses), so
- * this always describes what a ship attempt starting *right now* would
- * cite. See `#lib/ship-causal`'s `renderCausalRecordSection` for how
- * this renders into the ship preview.
+ * The causal record of `workerId`'s current ship range: turns, tool
+ * calls and any commits already made in the range the next
+ * `gitStageCommit` would cite. Read-only; the range is resolved
+ * server-side with the same algorithm `git_stage_commit` uses. See
+ * `#lib/ship-causal`'s `renderCausalRecordSection` for its rendering.
  */
 export async function shipContext(workerId: string): Promise<ShipContext> {
-  try {
-    const raw = await invoke<unknown>("ship_context", { workerId });
-    const parsed = ShipContextSchema.safeParse(raw);
-    if (!parsed.success) {
-      throw new Error("Ship Context Returned An Unexpected Shape.");
-    }
-    return parsed.data;
-  } catch (err) {
-    throw toShipCommandError(err);
-  }
+  return shipCommand(
+    "ship_context",
+    { workerId },
+    ShipContextSchema,
+    "Ship Context Returned An Unexpected Shape.",
+  );
 }
