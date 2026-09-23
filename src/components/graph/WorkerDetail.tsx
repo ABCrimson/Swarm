@@ -1,4 +1,4 @@
-import { open } from "@tauri-apps/plugin-shell";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { formatDistanceToNow } from "date-fns";
 import { useSetAtom } from "jotai";
 import { toast } from "sonner";
@@ -70,19 +70,19 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
 
   const handleOpenWorktree = async () => {
     if (!worker.worktreePath) return;
-    // Reject a ".." path-traversal segment before ever reaching
-    // open(). tauri.conf.json's plugins.shell.open regex validates the
-    // path is a real filesystem path (drive/UNC/absolute), but the
-    // `regex` crate the plugin validates with has no lookahead
-    // support, so "does this string contain '..' anywhere" cannot be
-    // expressed there — this check does it here instead, on the one
-    // path that ever reaches open() in the app today.
+    // Defense in depth: reject a ".." path-traversal segment before the
+    // path ever reaches the opener plugin. The opener capability's path
+    // scope (src-tauri/capabilities) is the authoritative allowlist;
+    // this check keeps a traversal-shaped worktree path from even
+    // being attempted, on the one path the app ever opens.
     if (worker.worktreePath.includes("..")) {
       toast.error("Refusing To Open A Path Containing '..'.");
       return;
     }
     try {
-      await open(worker.worktreePath);
+      // openPath (not revealItemInDir): the worktree folder itself
+      // opens in the system file manager, which is what the link says.
+      await openPath(worker.worktreePath);
     } catch (err) {
       toast.error(`Could Not Open Worktree: ${err instanceof Error ? err.message : String(err)}`);
     }

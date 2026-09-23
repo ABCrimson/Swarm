@@ -30,9 +30,10 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
   BaseDirectory: { AppData: 0 },
 }));
 
-vi.mock("@tauri-apps/plugin-shell", () => ({
-  Command: { sidecar: vi.fn() },
-  open: vi.fn().mockResolvedValue(undefined),
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: vi.fn().mockResolvedValue(undefined),
+  openPath: vi.fn().mockResolvedValue(undefined),
+  revealItemInDir: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@tauri-apps/plugin-store", () => {

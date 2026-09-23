@@ -6,9 +6,9 @@ import type { CommitOutcome, PushOutcome, ShipPreflight } from "#store/types";
 
 // ── Mocks ─────────────────────────────────────────────
 
-const mockOpen = vi.fn().mockResolvedValue(undefined);
-vi.mock("@tauri-apps/plugin-shell", () => ({
-  open: (...args: unknown[]) => mockOpen(...args),
+const mockOpenUrl = vi.fn().mockResolvedValue(undefined);
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: (...args: unknown[]) => mockOpenUrl(...args),
 }));
 
 const mockToastWarning = vi.fn();
@@ -272,10 +272,10 @@ describe("useShip", () => {
     expect(result.current.state).toBe("failed");
     expect(result.current.error?.kind).toBe("pushRejected");
     expect(mockShipCompareUrl).not.toHaveBeenCalled();
-    expect(mockOpen).not.toHaveBeenCalled();
+    expect(mockOpenUrl).not.toHaveBeenCalled();
   });
 
-  it("opens the compare URL only after settling, and a shell-open failure downgrades to a warning toast without flipping state to failed (nit)", async () => {
+  it("opens the compare URL only after settling, and an opener failure downgrades to a warning toast without flipping state to failed (nit)", async () => {
     mockGitShipPreflight.mockResolvedValue(makePreflight());
     mockGitStageCommit.mockResolvedValue(makeCommitOutcome());
     mockGitPush.mockResolvedValue(makePushOutcome());
@@ -283,7 +283,7 @@ describe("useShip", () => {
       emit("ship_settled", { shipId, workerId });
       return "https://github.com/example/repo/compare/main...swarm/agent-abcd1234";
     });
-    mockOpen.mockRejectedValueOnce(new Error("no default browser configured"));
+    mockOpenUrl.mockRejectedValueOnce(new Error("no default browser configured"));
 
     const { result } = renderHook(() => useShip(WORKER_ID));
     await act(async () => {
@@ -297,8 +297,14 @@ describe("useShip", () => {
     expect(result.current.result?.prUrl).toBe(
       "https://github.com/example/repo/compare/main...swarm/agent-abcd1234",
     );
-    expect(mockOpen).toHaveBeenCalledTimes(1);
+    expect(mockOpenUrl).toHaveBeenCalledTimes(1);
+    expect(mockOpenUrl).toHaveBeenCalledWith(
+      "https://github.com/example/repo/compare/main...swarm/agent-abcd1234",
+    );
     expect(mockToastWarning).toHaveBeenCalledTimes(1);
+    expect(mockToastWarning).toHaveBeenCalledWith(
+      "Shipped, But Could Not Open The Compare Page: no default browser configured",
+    );
   });
 
   it("collects live ship_progress rows scoped to this worker's shipId", async () => {

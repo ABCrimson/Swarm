@@ -1,6 +1,7 @@
-import { open } from "@tauri-apps/plugin-shell";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { CSSProperties } from "react";
 import { useEffect } from "react";
+import { toast } from "sonner";
 import { Pill } from "#components/ui/Pill";
 import { Spinner } from "#components/ui/Spinner";
 import { useShip } from "#hooks/useShip";
@@ -51,6 +52,22 @@ const receiptRowStyle: CSSProperties = {
   gap: 8,
   color: "oklch(0.80 0.03 220)",
 };
+
+/**
+ * Re-opens the compare page from the receipt. An opener failure (no
+ * default browser, a URL outside the opener capability's scope) is
+ * surfaced as an error toast — never left as an unhandled rejection
+ * from a click handler.
+ */
+async function openComparePage(url: string): Promise<void> {
+  try {
+    await openUrl(url);
+  } catch (err) {
+    toast.error(
+      `Could Not Open The Compare Page: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
 
 /**
  * Ship tab content for a worker's worktree: a preflight-driven
@@ -109,6 +126,7 @@ export function ShipPanel({ workerId }: ShipPanelProps): React.ReactElement {
   }
 
   if (ship.state === "settled") {
+    const prUrl = ship.result?.prUrl;
     return (
       <div style={containerStyle}>
         <div style={receiptStyle}>
@@ -127,12 +145,12 @@ export function ShipPanel({ workerId }: ShipPanelProps): React.ReactElement {
               <span>{ship.result.pushedRef}</span>
             </div>
           )}
-          {ship.result?.prUrl != null && (
+          {prUrl != null && (
             <div style={receiptRowStyle}>
               <span>Compare Page</span>
               <button
                 type="button"
-                onClick={() => void open(ship.result?.prUrl ?? "")}
+                onClick={() => void openComparePage(prUrl)}
                 style={{
                   background: "none",
                   border: "none",

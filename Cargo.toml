@@ -51,7 +51,26 @@ unused_workspace_dependencies = "deny"
 
 [workspace.dependencies]
 swarm-core                = { path = "crates/swarm-core" }
-tauri                     = { version = "=2.11.6", features = ["devtools", "image-png"] }
+# ── Tauri 3.0 alpha stack (desktop shell) ────────────────────────────
+# v3 selects the webview runtime by depending on a runtime crate and
+# passing its attributes to `Builder::runtime`; the runtime-wide
+# features (`devtools`, `macos-private-api`, `unstable`) moved onto
+# tauri-runtime-wry. swarm-desktop's own `devtools` feature forwards to
+# it; debug builds get the inspector regardless (tauri-runtime-wry and
+# wry gate it on `any(debug_assertions, feature = "devtools")`).
+tauri                     = { version = "=3.0.0-alpha.2", features = ["image-png"] }
+tauri-runtime-wry         = "=3.0.0-alpha.2"
+tauri-build               = "=3.0.0-alpha.1"
+tauri-plugin-fs           = "=3.0.0-alpha.1"
+tauri-plugin-dialog       = "=3.0.0-alpha.1"
+tauri-plugin-opener       = "=3.0.0-alpha.1"
+tauri-plugin-store        = "=3.0.0-alpha.1"
+tauri-plugin-updater      = "=3.0.0-alpha.1"
+tauri-plugin-notification = "=3.0.0-alpha.1"
+# Dev-only, swarm-desktop's capability contract test: the matcher
+# tauri-plugin-opener evaluates URL scopes with (already in the tree
+# through it, at this exact version).
+glob                      = "=0.3.4"
 tokio                     = { version = "=1.53.1", features = ["full"] }
 portable-pty              = "=0.9.0"
 serde                     = { version = "=1.0.229", features = ["derive"] }
@@ -61,19 +80,12 @@ thiserror                 = "=2.0.20"
 tracing                   = "=0.1.44"
 tracing-subscriber        = { version = "=0.3.23", features = ["json", "env-filter"] }
 uuid                      = { version = "=1.26.1", features = ["v4", "serde"] }
-dashmap                   = "=6.2.1"
+dashmap                   = "=7.0.0-rc2"
 parking_lot               = "=0.12.5"
 rusqlite                  = { version = "=0.40.2", features = ["bundled"] }
 regex                     = "=1.13.1"
-tauri-plugin-fs           = "=2.5.2"
-tauri-plugin-dialog       = "=2.7.3"
-tauri-plugin-shell        = "=2.3.6"
-tauri-plugin-store        = "=2.4.5"
 sysinfo                   = "=0.39.6"
-tauri-plugin-updater      = "=2.12.0"
-tauri-plugin-notification = "=2.4.0"
 tokio-util                = { version = "=0.7.19", features = ["rt"] }
-tauri-build               = { version = "=2.6.3", features = [] }
 # ── swarmd (Phase 2 headless daemon) ─────────────────────────────────
 # axum is the one genuinely NEW dependency this workspace takes on for
 # swarmd — nothing else in the tree pulled in an HTTP/WS server stack.
@@ -94,10 +106,10 @@ getrandom                 = "=0.4.3"
 # constant-time token comparison on the WS auth path.
 subtle                    = "=2.6.1"
 # Dev-only, swarmd's integration test: drives a real WS client against a
-# real swarmd instance. Same tokio-tungstenite version axum's own `ws`
-# feature resolves internally, so this adds no new crate VERSION to the
-# tree, only a dev-time direct dependency on one already present.
-tokio-tungstenite         = "=0.29.0"
+# real swarmd instance. The newest release; axum 0.8's `ws` feature still
+# resolves the 0.29 line, so the dev graph carries both tungstenite
+# versions while the shipped swarmd binary carries only axum's.
+tokio-tungstenite         = "=0.30.0"
 # Already present transitively (hyper/tower's own plumbing) — made
 # direct for `WebSocket::split()` in swarmd's per-connection handler.
 futures-util              = "=0.3.34"

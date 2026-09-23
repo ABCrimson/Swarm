@@ -3,6 +3,11 @@ import pkg from "./package.json" with { type: "json" };
 
 // `#components/*`, `#lib/*`, … resolve through package.json `imports`
 // (see vite.config.ts) — no alias block here either.
+//
+// Deliberately no plugins: unit tests run on Vite's built-in Oxc JSX/TS
+// transform WITHOUT the React Compiler, on both compiler pipelines, so
+// they exercise plain component semantics. Compiler coverage is gated
+// separately by `pnpm check:compiler` (scripts/check-react-compiler.ts).
 export default defineConfig({
   // Mirrors vite.config.ts's `define` — components reading __APP_VERSION__
   // (e.g. Settings, Sidebar) need it defined to render under vitest/jsdom.
@@ -16,13 +21,15 @@ export default defineConfig({
     // vmThreads ran 6.6–8.6s vs forks 6.0–6.4s. Set explicitly so Vitest stops hinting at them.
     pool: "forks",
     isolate: true,
-    setupFiles: ["./src/__tests__/setup.ts"],
-    include: ["src/__tests__/**/*.test.{ts,tsx}"],
+    setupFiles: ["./src/test/setup.ts"],
+    // Tests are colocated with their source. Keep this explicit: Vitest's
+    // default glob would also collect the Playwright e2e/*.spec.ts suites.
+    include: ["src/**/*.test.{ts,tsx}"],
     css: false,
     coverage: {
       provider: "v8",
       include: ["src/**/*.{ts,tsx}"],
-      exclude: ["src/__tests__/**", "src/workers/**", "src/vite-env.d.ts"],
+      exclude: ["src/**/*.test.{ts,tsx}", "src/test/**", "src/workers/**", "src/vite-env.d.ts"],
       thresholds: {
         statements: 40,
         branches: 40,

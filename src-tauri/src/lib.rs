@@ -35,6 +35,8 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
+#[cfg(test)]
+mod capability_contract;
 mod commands;
 
 use swarm_core::Paths;
@@ -102,10 +104,26 @@ pub(crate) fn resolve_paths(app: &tauri::AppHandle) -> Result<Paths, AppError> {
 pub fn run() {
     init_tracing();
 
+    // Tauri 3 selects the webview runtime on the builder, not through
+    // Cargo features of `tauri`: `Builder::default()` is the type-erased
+    // `tauri::DynRuntime` builder, and building without `.runtime(..)`
+    // fails with `RuntimeNotConfigured`. wry is the system webview
+    // (WebView2 / WKWebView / webkit2gtk).
     tauri::Builder::default()
+        .runtime(tauri_runtime_wry::Wry::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
+        // The frontend opens exactly two things, both explicitly: the
+        // ship chain's GitHub compare page (`openUrl`) and a worker's
+        // worktree folder (`openPath`), each scoped in
+        // capabilities/default.json. The plugin's default injected
+        // click handler (routing `target="_blank"` links to `open_url`)
+        // is left out: the app renders no such links.
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())

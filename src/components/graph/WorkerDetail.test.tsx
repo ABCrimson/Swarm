@@ -11,16 +11,17 @@
 // is correct; (d) accessible names stay Title Case ("Kill", "Pause",
 // "Resume").
 
-import { open as openWorktree } from "@tauri-apps/plugin-shell";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkerDetail } from "#components/graph/WorkerDetail";
 import type { Worker } from "#store/types";
 import { useWorkerStore } from "#store/workers";
 
 // Mock the Tauri IPC commands used by useWorker (same pattern as
-// src/__tests__/hooks/useWorker.test.tsx and src/__tests__/hooks/useStream.test.tsx —
+// src/hooks/useWorker.test.tsx and src/hooks/useStream.test.tsx —
 // module-scope `mock`-prefixed refs so assertions can use them directly).
 const mockPauseWorker = vi.fn().mockResolvedValue(undefined);
 const mockResumeWorker = vi.fn().mockResolvedValue(undefined);
@@ -202,7 +203,7 @@ describe("WorkerDetail", () => {
     ).toBeInTheDocument();
   });
 
-  it("opens the worktree path via the shell plugin when clicked", async () => {
+  it("opens the worktree folder via the opener plugin when clicked", async () => {
     const user = userEvent.setup();
     const worker = createWorker({
       branch: "swarm/agent-11112222",
@@ -213,8 +214,34 @@ describe("WorkerDetail", () => {
 
     await user.click(screen.getByText("/home/user/.swarm/worktrees/repo-abcd1234/w-11112222"));
 
-    expect(openWorktree).toHaveBeenCalledWith(
-      "/home/user/.swarm/worktrees/repo-abcd1234/w-11112222",
-    );
+    expect(openPath).toHaveBeenCalledWith("/home/user/.swarm/worktrees/repo-abcd1234/w-11112222");
+  });
+
+  it("surfaces an opener rejection as a Title Case error toast", async () => {
+    const user = userEvent.setup();
+    vi.mocked(openPath).mockRejectedValueOnce(new Error("not allowed by scope"));
+    const worker = createWorker({
+      worktreePath: "/home/user/.swarm/worktrees/repo-abcd1234/w-33334444",
+    });
+    seedWorker(worker);
+    render(<WorkerDetail worker={worker} />);
+
+    await user.click(screen.getByText("/home/user/.swarm/worktrees/repo-abcd1234/w-33334444"));
+
+    expect(toast.error).toHaveBeenCalledWith("Could Not Open Worktree: not allowed by scope");
+  });
+
+  it("refuses a '..' traversal path without calling the opener", async () => {
+    const user = userEvent.setup();
+    const worker = createWorker({
+      worktreePath: "/home/user/.swarm/worktrees/../../etc",
+    });
+    seedWorker(worker);
+    render(<WorkerDetail worker={worker} />);
+
+    await user.click(screen.getByText("/home/user/.swarm/worktrees/../../etc"));
+
+    expect(openPath).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith("Refusing To Open A Path Containing '..'.");
   });
 });

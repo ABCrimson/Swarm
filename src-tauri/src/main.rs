@@ -18,9 +18,9 @@
 /// Launch the application via:
 ///
 /// ```bash
-/// cargo run
-/// # or
-/// npm run tauri:dev
+/// pnpm tauri:dev
+/// # or, against an already-running `pnpm dev` server:
+/// cargo run -p swarm-desktop
 /// ```
 fn main() {
     // Explicit Tokio multi-thread runtime with CPU-scaled worker threads

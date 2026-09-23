@@ -1,4 +1,5 @@
 {
+  "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capabilities for SWARM Orchestrator",
   "windows": ["main"],
@@ -32,9 +33,16 @@
       "identifier": "fs:allow-rename",
       "allow": [{ "path": "$APPDATA/**" }, { "path": "$HOME/.swarm/**" }]
     },
+    "fs:deny-default",
     "dialog:default",
-    "shell:allow-open",
-    "store:default",
-    "updater:default"
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://github.com/*/*/compare/*" }]
+    },
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "$HOME/.swarm/worktrees/**" }]
+    },
+    "store:default"
   ]
 }

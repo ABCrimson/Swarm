@@ -12,8 +12,10 @@ minimumReleaseAge: 1440
 trustPolicy: no-downgrade
 trustPolicyExclude:
   # Babel 7's semver range (^6.3.1) — a 2023 backport published without the
-  # provenance the 7.x line already had. Required by @babel/core 7.29.7,
-  # pinned because babel-plugin-react-compiler 1.0.0 is broken on Babel 8.
+  # provenance the 7.x line already had. Required by @babel/core 7.29.7, the
+  # React Compiler's Babel fallback (vite.config.ts): on Babel 8 every
+  # babel-plugin-react-compiler build silently skips destructured-default
+  # components (react#36868; re-measured 2026-09-23 with 8.0.6).
   - semver@6.3.1
 
 # Same-day pins that deliberately bypass the 24h gate. `pnpm add`,
@@ -34,3 +36,7 @@ minimumReleaseAgeExclude:
   - motion@13.4.2
   - framer-motion@13.4.2
   - motion-dom@13.4.2
+  - react@19.3.0-canary-d083ec1d-20260922
+  - react-dom@19.3.0-canary-d083ec1d-20260922
+  - react-is@19.3.0-canary-d083ec1d-20260922
+  - scheduler@0.28.0-canary-d083ec1d-20260922

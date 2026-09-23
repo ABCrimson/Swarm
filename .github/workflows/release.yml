@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  NODE_VERSION: "26.10.0"
+  NODE_VERSION: "27.0.0-nightly202609233d85c94cfa"
   # Keep in sync with rust-toolchain.toml
   RUST_TOOLCHAIN: "nightly-2026-09-23"
 

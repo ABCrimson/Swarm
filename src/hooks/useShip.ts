@@ -1,4 +1,4 @@
-import { open } from "@tauri-apps/plugin-shell";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAtomValue } from "jotai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -344,13 +344,13 @@ export function useShip(workerId: string): UseShipReturn {
     });
     // Nit: opening the URL happens *outside* runAction's try/catch —
     // commit + push + compare-URL generation already fully succeeded
-    // by this point (the state is already "settled"); a shell-open
-    // failure (e.g. no default browser configured) downgrades to a
-    // warning toast, it never flips a successful ship back to
-    // "failed".
+    // by this point (the state is already "settled"); an opener
+    // failure (e.g. no default browser configured, or a URL outside
+    // the opener capability's scope) downgrades to a warning toast,
+    // it never flips a successful ship back to "failed".
     if (outcome?.prUrl != null) {
       try {
-        await open(outcome.prUrl);
+        await openUrl(outcome.prUrl);
       } catch (err) {
         toast.warning(
           `Shipped, But Could Not Open The Compare Page: ${err instanceof Error ? err.message : String(err)}`,

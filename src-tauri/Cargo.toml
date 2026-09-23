@@ -13,12 +13,21 @@ publish.workspace      = true
 [lints]
 workspace = true
 
+[features]
+# Ships the web inspector in RELEASE builds (e.g. `pnpm tauri build
+# --features devtools` for a debuggable release). Off by default so
+# signed releases never carry it; debug builds (`pnpm tauri:dev`,
+# `cargo run`) have the inspector without this feature, because
+# tauri-runtime-wry and wry enable it on `debug_assertions`.
+devtools = ["tauri-runtime-wry/devtools"]
+
 [dependencies]
 swarm-core                = { workspace = true }
 tauri                     = { workspace = true }
+tauri-runtime-wry         = { workspace = true }
 tauri-plugin-fs           = { workspace = true }
 tauri-plugin-dialog       = { workspace = true }
-tauri-plugin-shell        = { workspace = true }
+tauri-plugin-opener       = { workspace = true }
 tauri-plugin-store        = { workspace = true }
 tauri-plugin-updater      = { workspace = true }
 tauri-plugin-notification = { workspace = true }
@@ -32,6 +41,9 @@ tracing-subscriber        = { workspace = true }
 anyhow                    = { workspace = true }
 sysinfo                   = { workspace = true }
 parking_lot               = { workspace = true }
+
+[dev-dependencies]
+glob = { workspace = true }
 
 [build-dependencies]
 tauri-build = { workspace = true }
