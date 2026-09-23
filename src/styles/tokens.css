@@ -106,10 +106,16 @@
 }
 
 /* ── @utility blocks ─────────────────────────────── */
+
+/*
+ * Frosted chrome (sidebar, top bar, status bar): a translucent surface
+ * that blurs the particle background behind it. Borders stay with the
+ * caller (`glass-panel border-b border-border`), so this never fights a
+ * border utility in the cascade.
+ */
 @utility glass-panel {
   background: oklch(from var(--color-surface-1) l c h / 0.7);
   backdrop-filter: blur(12px) saturate(1.5);
-  border: 1px solid var(--color-border-2);
 
   @supports not (backdrop-filter: blur(1px)) {
     background: oklch(from var(--color-surface-1) l c h / 0.95);

@@ -9,19 +9,21 @@ import { expect, test } from "@playwright/test";
 // spawn/PTY/real IPC — see `docs/e2e.md` for the documented boundary and
 // the tauri-driver roadmap for closing it.
 
+// Every page, in sidebar order (see NAV_ITEMS in Sidebar.tsx).
 const SIDEBAR_PAGES = [
   { name: "Dashboard", heading: "Dashboard" },
   { name: "Workers", heading: "Workers" },
   { name: "Sessions", heading: "Sessions" },
   { name: "Metrics", heading: "Metrics" },
+  { name: "Logs", heading: "Logs" },
+  { name: "Tools", heading: "Tools" },
+  { name: "Workspace", heading: "Workspace" },
   { name: "Settings", heading: "Settings" },
 ] as const;
 
-// Tools/Logs/Workspace have no sidebar entry — the command palette is
-// their only navigation path (see CommandPalette.tsx's nav command
-// comments). Covered here (not palette.spec.ts) because the assertion
-// under test is "the page is reachable," not palette behavior itself.
-const PALETTE_ONLY_PAGES = [
+// Pages the command palette also navigates to (a sync, untransitioned
+// page change — the path that used to leave <main> empty).
+const PALETTE_PAGES = [
   { command: "Go To Tools", heading: "Tools" },
   { command: "Go To Logs", heading: "Logs" },
   { command: "Go To Workspace", heading: "Workspace" },
@@ -80,14 +82,10 @@ test.describe("Navigation", () => {
     await expect(buttons.last()).toBeFocused();
   });
 
-  for (const { command, heading } of PALETTE_ONLY_PAGES) {
-    test(`"${heading}" has no sidebar entry and is reachable only via the command palette`, async ({
-      page,
-    }) => {
+  for (const { command, heading } of PALETTE_PAGES) {
+    test(`the command palette navigates to "${heading}"`, async ({ page }) => {
       await page.goto("/");
-
-      const nav = page.getByRole("navigation", { name: "Page Navigation" });
-      await expect(nav.getByRole("button", { name: heading })).toHaveCount(0);
+      await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 
       await page.keyboard.press("Control+k");
       const palette = page.getByRole("dialog");
@@ -96,8 +94,39 @@ test.describe("Navigation", () => {
 
       await expect(palette).toBeHidden();
       await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
+      await expect(
+        page.getByRole("navigation", { name: "Page Navigation" }).getByRole("button", {
+          name: heading,
+        }),
+      ).toHaveAttribute("aria-current", "page");
     });
   }
+
+  test("a visited page keeps its state when you navigate away and back", async ({ page }) => {
+    await page.goto("/");
+    const nav = page.getByRole("navigation", { name: "Page Navigation" });
+
+    await nav.getByRole("button", { name: "Workers" }).click();
+    await page.getByRole("tab", { name: "List" }).click();
+    await expect(page.getByRole("tab", { name: "List" })).toHaveAttribute("aria-selected", "true");
+
+    await nav.getByRole("button", { name: "Metrics" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Metrics" })).toBeVisible();
+    await nav.getByRole("button", { name: "Workers" }).click();
+
+    await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+    await expect(page.getByText("No Workers Running", { exact: true })).toBeVisible();
+  });
+
+  test("Tab reaches the sidebar from any page", async ({ page }) => {
+    await page.goto("/");
+    const nav = page.getByRole("navigation", { name: "Page Navigation" });
+    await nav.getByRole("button", { name: "Logs" }).click();
+
+    const tabStops = nav.locator('button[tabindex="0"]');
+    await expect(tabStops).toHaveCount(1);
+    await expect(tabStops).toHaveAccessibleName("Logs");
+  });
 
   test("Workers page shows the empty state (graph view) when no workers exist", async ({
     page,

@@ -2,68 +2,28 @@ import { pluralizeWorkers } from "#lib/format";
 import { useSystemStore } from "#store/system";
 
 /**
- * Top bar for the SWARM Orchestrator.
- * Shows app title in Syne Variable and worker count.
- * Acts as the Tauri frameless window drag region.
+ * Top bar: the app name and the live worker count.
+ *
+ * The window keeps its native title bar (`decorations: true` in
+ * tauri.conf.json), so this is ordinary page chrome, not a drag region.
+ * The name is not a heading: every page renders its own `<h1>`.
  */
-export function Topbar(): React.ReactElement {
+export function TopBar(): React.ReactElement {
   const workerCount = useSystemStore((s) => s.metrics.workerCount) ?? 0;
 
   return (
-    <header
-      data-tauri-drag-region
-      className="flex items-center justify-between px-6"
-      style={{
-        height: 48,
-        borderBottom: "1px solid oklch(0.22 0.04 220)",
-        background: "oklch(0.08 0.02 220 / 0.8)",
-        backdropFilter: "blur(8px) saturate(1.5)",
-      }}
-    >
-      <div className="flex items-center gap-3">
-        <h1
-          style={{
-            fontFamily: "var(--font-display)",
-            fontWeight: 700,
-            fontSize: "0.875rem",
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-            color: "oklch(0.78 0.18 205)",
-          }}
-        >
+    <header className="glass-panel flex h-12 items-center justify-between border-border border-b px-6">
+      <p className="flex items-baseline gap-3">
+        <span className="font-bold font-display text-plasma text-sm uppercase tracking-[0.08em]">
           SWARM
-        </h1>
-        <span
-          style={{
-            fontFamily: "var(--font-body)",
-            fontSize: "0.75rem",
-            color: "oklch(0.55 0.04 220)",
-          }}
-        >
-          Orchestrator
         </span>
-      </div>
+        <span className="text-fg-muted text-sm">Orchestrator</span>
+      </p>
 
-      {/* Worker count badge */}
-      <div
-        className="flex items-center gap-2"
-        style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: "0.75rem",
-          color: "oklch(0.55 0.04 220)",
-        }}
-      >
-        <span
-          aria-hidden="true"
-          className="inline-block rounded-full"
-          style={{
-            width: 6,
-            height: 6,
-            background: "oklch(0.82 0.18 140)",
-          }}
-        />
-        <span>{pluralizeWorkers(workerCount)}</span>
-      </div>
+      <p className="flex items-center gap-2 font-mono text-fg-muted text-sm">
+        <span aria-hidden="true" className="size-1.5 rounded-full bg-lime" />
+        {pluralizeWorkers(workerCount)}
+      </p>
     </header>
   );
 }
