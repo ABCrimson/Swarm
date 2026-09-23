@@ -12,14 +12,14 @@ body:
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed solution
+      label: Proposed Solution
       description: Describe the solution you'd like to see
     validations:
       required: true
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives considered
+      label: Alternatives Considered
       description: Any alternative solutions or features you've considered
     validations:
       required: false

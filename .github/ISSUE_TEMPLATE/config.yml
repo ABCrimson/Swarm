@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report A Security Vulnerability
+    url: https://github.com/ABCrimson/Swarm/security/advisories/new
+    about: Report vulnerabilities privately. Never open a public issue for one (see SECURITY.md).
+  - name: Code Of Conduct
+    url: https://github.com/ABCrimson/Swarm/blob/main/CODE_OF_CONDUCT.md
+    about: How to report conduct concerns.

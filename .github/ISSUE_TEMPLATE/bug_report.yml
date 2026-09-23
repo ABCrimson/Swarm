@@ -6,32 +6,45 @@ body:
     id: version
     attributes:
       label: App Version
-      description: Which version of SWARM Orchestrator are you using?
-      placeholder: "0.9.9"
+      description: >-
+        The desktop app shows it under Settings → About; the daemon prints it
+        with `swarmd --version`.
+      placeholder: "0.13.1"
     validations:
       required: true
   - type: dropdown
     id: platform
     attributes:
       label: Platform
-      description: Which operating system are you on?
+      description: Where does the bug occur?
       options:
-        - Windows 11
-        - macOS (ARM64)
-        - macOS (x86_64)
+        - Windows (x86_64)
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (AppImage)
+        - Linux (.deb)
+        - swarmd Daemon / Browser UI
+        - Other
     validations:
       required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS Version
+      placeholder: "Windows 11 26H1, macOS 26.1, Ubuntu 26.04, …"
+    validations:
+      required: false
   - type: textarea
     id: description
     attributes:
-      label: Describe the bug
+      label: Describe The Bug
       description: A clear description of what the bug is
     validations:
       required: true
   - type: textarea
     id: repro
     attributes:
-      label: Steps to reproduce
+      label: Steps To Reproduce
       description: Steps to reproduce the behavior
       placeholder: |
         1. Go to '...'
@@ -42,14 +55,15 @@ body:
   - type: textarea
     id: expected
     attributes:
-      label: Expected behavior
+      label: Expected Behavior
       description: What you expected to happen
     validations:
       required: true
   - type: textarea
     id: logs
     attributes:
-      label: Logs or screenshots
+      label: Logs Or Screenshots
       description: Paste any relevant logs or attach screenshots
+      render: text
     validations:
       required: false
