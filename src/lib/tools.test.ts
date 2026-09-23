@@ -1,11 +1,8 @@
-// ── SWARM Tool description split (Task 8 item 3) ────
-//
-// Built-in tool descriptions are dual-use: `description` is sent to the
-// Anthropic API as the tool-schema description (via `zodToTool`) and reads
-// better in natural sentence case, while `uiDescription` is what the Tools
-// page (`ToolCard`, via `ToolList`) renders and follows this app's
-// Title Case UI convention. This asserts both halves of the split hold for
-// every built-in tool, and that the API-bound value never leaks Title Case.
+// Built-in tool descriptions are dual-use: `description` is the
+// model-facing tool-schema text (natural sentence case reads better as an
+// instruction), `uiDescription` is what the Tools page renders (Title
+// Case, the app's UI convention). Both halves of the split must hold for
+// every built-in tool, and the API-bound value must never be Title Case.
 
 import { describe, expect, it } from "vitest";
 import { getAnthropicTools, toolRegistry } from "#lib/tools";

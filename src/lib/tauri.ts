@@ -335,9 +335,16 @@ export async function resumeWorker(id: string): Promise<void> {
   return invoke<void>("resume_worker", { id });
 }
 
-/** Terminate a worker process by UUID. */
-export async function killWorker(id: string): Promise<void> {
-  return invoke<void>("kill_worker", { id });
+/**
+ * Terminate a worker process by UUID. `prov` stamps the resulting
+ * `worker_killed` event with its causer (an AI turn's tool call).
+ */
+export async function killWorker(id: string, prov?: ProvenanceArgs): Promise<void> {
+  return invoke<void>("kill_worker", {
+    id,
+    originWorker: prov?.originWorker,
+    causeSeq: prov?.causeSeq,
+  });
 }
 
 /** Retrieve the list of all known workers from the backend. */
