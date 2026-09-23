@@ -88,7 +88,17 @@ export function Sessions(): React.ReactElement {
     }
 
     // step === "description" — save the template
-    const template = createTemplateFromSession(templateForm.name, templateForm.description, []);
+    const session = sessions.get(templateForm.sessionId);
+    if (!session) return;
+    const template = createTemplateFromSession(session, {
+      name: templateForm.name,
+      description: templateForm.description,
+    });
+    if (template.workerConfigs.length === 0) {
+      toast.error("This Session Has No Workers To Save As A Template");
+      setTemplateForm(null);
+      return;
+    }
     try {
       await saveUserTemplate(template);
       toast.success(`Template "${templateForm.name}" Saved`);

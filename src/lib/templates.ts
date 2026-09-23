@@ -1,25 +1,43 @@
-import { load } from "@tauri-apps/plugin-store";
+/**
+ * Session templates: the built-in presets, user templates persisted in
+ * plugin-store (`swarm-templates.json`, key `swarm:templates`), building
+ * a template from a live session, and applying a template (one new
+ * session plus one spawned worker per `workerConfigs` entry).
+ *
+ * A template is a list of worker spawn specs and nothing more: applying
+ * one spawns independent workers, each with its own role, model and
+ * system prompt. Nothing routes work between them, so the built-in
+ * descriptions only promise what applying actually does.
+ *
+ * @module templates
+ */
 
+import { load } from "@tauri-apps/plugin-store";
 import { createSession as createSessionIpc } from "#lib/tauri";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
 import { useSessionStore } from "#store/sessions";
 import type { Session, SessionTemplate, WorkerSpawnSpec } from "#store/types";
+import { SessionTemplateSchema } from "#store/types";
+import { useWorkerAgentStore } from "#store/worker-agents";
+import { useWorkerStore } from "#store/workers";
+
+/** Just enough of a stored entry to match it by id, whatever else it holds. */
+const TemplateIdSchema = SessionTemplateSchema.pick({ id: true });
 
 /** plugin-store key for user templates. */
 const USER_TEMPLATES_KEY = "swarm:templates";
 
 /**
- * Built-in session templates shipped with the application.
- *
- * Includes presets for single-agent, multi-agent parallel,
- * supervisor-worker hierarchy, and sequential pipeline patterns.
+ * Built-in session templates shipped with the application: a single
+ * agent, three parallel specialists, a supervisor with two workers, and
+ * a three-stage pipeline.
  */
 export const BUILT_IN_TEMPLATES: readonly SessionTemplate[] = [
   {
     id: "00000000-0000-0000-0000-000000000001",
     name: "Single Agent",
     description:
-      "A Single Autonomous Agent For Focused Tasks. Ideal For Simple Queries Or Standalone Operations.",
+      "Spawns One General-Purpose Agent. Ideal For Simple Queries Or Standalone Operations.",
     workerConfigs: [
       {
         name: "Agent",
@@ -34,7 +52,7 @@ export const BUILT_IN_TEMPLATES: readonly SessionTemplate[] = [
     id: "00000000-0000-0000-0000-000000000002",
     name: "Multi-Agent Parallel",
     description:
-      "Multiple Agents Working Independently In Parallel. Great For Batch Processing Or Diverse Task Sets.",
+      "Spawns An Analyst, A Coder And A Reviewer That Work Independently. Great For Batch Processing Or Diverse Task Sets.",
     workerConfigs: [
       {
         name: "Agent Alpha",
@@ -61,7 +79,7 @@ export const BUILT_IN_TEMPLATES: readonly SessionTemplate[] = [
     id: "00000000-0000-0000-0000-000000000003",
     name: "Supervisor + Workers",
     description:
-      "A Supervisor Agent Coordinates Task Distribution Across Worker Agents. Best For Complex Multi-Step Workflows.",
+      "Spawns A Supervisor Agent (Opus) And Two Worker Agents (Sonnet), Each Prompted For Its Role. Agents Run Independently — You Hand Work Between Them.",
     workerConfigs: [
       {
         name: "Supervisor",
@@ -91,7 +109,7 @@ export const BUILT_IN_TEMPLATES: readonly SessionTemplate[] = [
     id: "00000000-0000-0000-0000-000000000004",
     name: "Pipeline",
     description:
-      "Sequential Processing Pipeline Where Each Agent's Output Feeds Into The Next. Ideal For Staged Transformations.",
+      "Spawns Input, Process And Output Stage Agents, Each Prompted For Its Stage. Agents Run Independently — You Pass Each Stage's Output To The Next.",
     workerConfigs: [
       {
         name: "Stage 1: Input",
@@ -117,70 +135,144 @@ export const BUILT_IN_TEMPLATES: readonly SessionTemplate[] = [
     ],
     builtIn: true,
   },
-] as const;
+];
 
-/**
- * Get the plugin-store instance for templates.
- */
-async function getTemplateStore() {
+/** The plugin-store instance backing user templates. */
+function getTemplateStore() {
   return load("swarm-templates.json", { defaults: {}, autoSave: true });
 }
 
+/** The persisted list exactly as stored (anything but an array reads as empty). */
+async function readStoredEntries(
+  store: Awaited<ReturnType<typeof getTemplateStore>>,
+): Promise<unknown[]> {
+  const stored = await store.get<unknown>(USER_TEMPLATES_KEY);
+  return Array.isArray(stored) ? stored : [];
+}
+
 /**
- * Load user-created templates from plugin-store.
+ * Loads user-created templates from plugin-store. Entries that no longer
+ * validate against `SessionTemplateSchema` (hand-edited, or saved by a
+ * different build) are skipped instead of reaching the UI half-shaped;
+ * they stay in the store untouched.
  */
 export async function loadUserTemplates(): Promise<SessionTemplate[]> {
-  const store = await getTemplateStore();
-  const templates = await store.get<SessionTemplate[]>(USER_TEMPLATES_KEY);
-  return templates ?? [];
+  const entries = await readStoredEntries(await getTemplateStore());
+  return entries.flatMap((entry) => {
+    const parsed = SessionTemplateSchema.safeParse(entry);
+    return parsed.success ? [parsed.data] : [];
+  });
 }
 
+/** What `userTemplatesResource` resolves to — it never rejects. */
+export interface UserTemplatesResult {
+  readonly templates: readonly SessionTemplate[];
+  /** `true` when the store could not be read; `templates` is then empty. */
+  readonly failed: boolean;
+}
+
+/** The in-flight or settled user-template read `userTemplatesResource` hands out, until a write invalidates it. */
+let userTemplatesCache: Promise<UserTemplatesResult> | null = null;
+
 /**
- * Save a user template to plugin-store.
+ * The user templates as one cached promise, for a render-time `use()`
+ * (`TemplateSelector`). Every call returns the same promise until
+ * `saveUserTemplate`/`deleteUserTemplate` (or `invalidateUserTemplates`)
+ * drops it, so re-rendering or re-mounting never refetches, while the
+ * first read after a write sees that write. A store failure resolves to
+ * `{ failed: true }` instead of rejecting, so the UI can say so in place
+ * rather than hand the error to an error boundary.
  */
-export async function saveUserTemplate(template: SessionTemplate): Promise<void> {
-  const store = await getTemplateStore();
-  const existing = await store.get<SessionTemplate[]>(USER_TEMPLATES_KEY);
-  const templates = existing ?? [];
-  templates.push(template);
-  await store.set(USER_TEMPLATES_KEY, templates);
+export function userTemplatesResource(): Promise<UserTemplatesResult> {
+  userTemplatesCache ??= loadUserTemplates().then(
+    (templates) => ({ templates, failed: false }),
+    (err: unknown) => {
+      console.error("userTemplatesResource: could not read the template store", err);
+      return { templates: [], failed: true };
+    },
+  );
+  return userTemplatesCache;
 }
 
+/** Drops the cached `userTemplatesResource` read so the next call reads the store again. */
+export function invalidateUserTemplates(): void {
+  userTemplatesCache = null;
+}
+
+/** Tail of the serialized template-store writes (see `serializeWrite`). */
+let writeQueue: Promise<unknown> = Promise.resolve();
+
 /**
- * Delete a user template from plugin-store.
+ * Runs `write` after every earlier template write has finished. Each
+ * write is a read-modify-write of one array, so two overlapping writes
+ * (a double-clicked Save, a delete during a save) would otherwise both
+ * read the old list and the second would drop the first's change.
  */
-export async function deleteUserTemplate(templateId: string): Promise<void> {
-  const store = await getTemplateStore();
-  const existing = await store.get<SessionTemplate[]>(USER_TEMPLATES_KEY);
-  if (!existing) return;
-  const filtered = existing.filter((t) => t.id !== templateId);
-  await store.set(USER_TEMPLATES_KEY, filtered);
+function serializeWrite(write: () => Promise<void>): Promise<void> {
+  const run = writeQueue.then(write, write);
+  writeQueue = run.catch(() => {});
+  return run.finally(invalidateUserTemplates);
+}
+
+/** Appends a user template to plugin-store. */
+export function saveUserTemplate(template: SessionTemplate): Promise<void> {
+  return serializeWrite(async () => {
+    const store = await getTemplateStore();
+    await store.set(USER_TEMPLATES_KEY, [...(await readStoredEntries(store)), template]);
+  });
+}
+
+/** Deletes a user template from plugin-store by id; entries it cannot read an id from are kept. */
+export function deleteUserTemplate(templateId: string): Promise<void> {
+  return serializeWrite(async () => {
+    const store = await getTemplateStore();
+    const entries = await readStoredEntries(store);
+    await store.set(
+      USER_TEMPLATES_KEY,
+      entries.filter((entry) => TemplateIdSchema.safeParse(entry).data?.id !== templateId),
+    );
+  });
 }
 
 /**
- * Create a template from a session's current configuration.
+ * Rebuilds spawn specs for the workers a session references: each
+ * worker's name from the live worker store plus its role/model/system
+ * prompt from the agent-metadata store. Workers known to neither store
+ * (killed before this run, or never spawned here) are skipped: nothing
+ * about them is left to reproduce. Process options the frontend never
+ * learns (`cwd`, `repoRoot`, …) are omitted; `spawnWorkerFromSpec` falls
+ * back to the persisted default project root when the template is
+ * applied.
+ */
+export function workerSpecsForSession(session: Session): WorkerSpawnSpec[] {
+  const { workers } = useWorkerStore.getState();
+  const { metadata } = useWorkerAgentStore.getState();
+  return session.workerIds.flatMap((workerId, index) => {
+    const worker = workers.get(workerId);
+    const agent = metadata.get(workerId);
+    if (worker == null && agent == null) return [];
+    return [{ name: worker?.name ?? `Worker ${index + 1}`, ...agent }];
+  });
+}
+
+/**
+ * Creates a template from a session's workers (see
+ * `workerSpecsForSession`). `workerConfigs` is empty when none of the
+ * session's workers can be reproduced; callers should refuse to save
+ * that, since applying it would spawn nothing.
  */
 export function createTemplateFromSession(
-  name: string,
-  description: string,
-  workerConfigs: WorkerSpawnSpec[],
+  session: Session,
+  details: { readonly name: string; readonly description: string },
 ): SessionTemplate {
   return {
     id: crypto.randomUUID(),
-    name,
-    description,
-    workerConfigs,
+    name: details.name,
+    description: details.description,
+    workerConfigs: workerSpecsForSession(session),
     builtIn: false,
     createdAt: new Date().toISOString(),
   };
-}
-
-/**
- * Get all templates: built-in + user-created.
- */
-export async function getAllTemplates(): Promise<SessionTemplate[]> {
-  const userTemplates = await loadUserTemplates();
-  return [...BUILT_IN_TEMPLATES, ...userTemplates];
 }
 
 /**
@@ -192,7 +284,7 @@ export async function getAllTemplates(): Promise<SessionTemplate[]> {
  * session via `session_add_worker`. This is what makes a template's
  * agent configuration real instead of decorative.
  *
- * Adds the created session to `useSessionStore` itself (safe now that
+ * Adds the created session to `useSessionStore` itself (safe because
  * `createSession`, `#lib/tauri`, returns a validated, normalized
  * `Session`) — Rust also emits `session_created` as part of
  * `create_session`, which `useSessionEvents` (mounted at the app root)
