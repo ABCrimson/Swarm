@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ShipPreview } from "#components/ship/ShipPreview";
 import type { CausalTurn, ShipContext, ShipPreflight } from "#store/types";
@@ -15,9 +16,9 @@ function makePreflight(overrides: Partial<ShipPreflight> = {}): ShipPreflight {
     ahead: 0,
     behind: 0,
     staged: [],
-    unstaged: [],
-    untracked: [],
-    skipped: [],
+    unstaged: ["src/main.rs"],
+    untracked: ["notes.env"],
+    skipped: [{ path: "notes.env", reason: "Skipped — Looks Like A Credential" }],
     diffStat: { filesChanged: 2, insertions: 10, deletions: 3 },
     canShip: true,
     blockers: [],
@@ -55,18 +56,20 @@ function renderPreview(overrides: Partial<React.ComponentProps<typeof ShipPrevie
     onMessageChange: vi.fn(),
     mode: "all",
     onModeChange: vi.fn(),
-    busy: false,
     onCommitOnly: vi.fn(),
     onCommitAndPush: vi.fn(),
     onCommitPushAndOpenCompare: vi.fn(),
     context: makeContext(),
+    contextState: "ready",
+    onRetryContext: vi.fn(),
     aiProse: null,
     onAiProseChange: vi.fn(),
     aiProseState: "idle",
     onRegenerateProse: vi.fn(),
     ...overrides,
   };
-  return render(<ShipPreview {...props} />);
+  render(<ShipPreview {...props} />);
+  return props;
 }
 
 describe("ShipPreview — Causal Record section", () => {
@@ -81,7 +84,7 @@ describe("ShipPreview — Causal Record section", () => {
   });
 
   it("renders a distinct loading state while context is null, never an empty table", () => {
-    renderPreview({ context: null });
+    renderPreview({ context: null, contextState: "loading" });
 
     expect(screen.getByText("Loading Causal Record…")).toBeInTheDocument();
     expect(screen.queryByText("Causal Record Unavailable For This Range")).not.toBeInTheDocument();
@@ -181,7 +184,133 @@ describe("ShipPreview — AI prose section", () => {
   });
 
   it("disables the generate button while context hasn't loaded yet", () => {
-    renderPreview({ context: null, aiProseState: "idle" });
+    renderPreview({ context: null, contextState: "loading", aiProseState: "idle" });
     expect(screen.getByText("Generate").closest("button")).toBeDisabled();
+  });
+});
+
+describe("ShipPreview — Causal Record load failure", () => {
+  it("says the record could not be loaded (never an endless loading state) and offers a retry", async () => {
+    const user = userEvent.setup();
+    const props = renderPreview({ context: null, contextState: "failed" });
+
+    expect(screen.getByText("Causal Record Could Not Be Loaded.")).toBeInTheDocument();
+    expect(screen.queryByText("Loading Causal Record…")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(props.onRetryContext).toHaveBeenCalledOnce();
+  });
+});
+
+describe("ShipPreview — ship action gating", () => {
+  const actionNames = ["Commit Only", "Commit + Push", "Commit + Push + Open Compare Page"];
+
+  it("enables all three actions for a shippable preflight and a non-empty message, each wired to its own handler", async () => {
+    const user = userEvent.setup();
+    const props = renderPreview();
+
+    for (const name of actionNames) {
+      expect(screen.getByRole("button", { name })).toBeEnabled();
+    }
+    await user.click(screen.getByRole("button", { name: "Commit Only" }));
+    await user.click(screen.getByRole("button", { name: "Commit + Push" }));
+    await user.click(screen.getByRole("button", { name: "Commit + Push + Open Compare Page" }));
+    expect(props.onCommitOnly).toHaveBeenCalledOnce();
+    expect(props.onCommitAndPush).toHaveBeenCalledOnce();
+    expect(props.onCommitPushAndOpenCompare).toHaveBeenCalledOnce();
+  });
+
+  it("renders blockers as an alert and disables every action when preflight says it can't ship", () => {
+    renderPreview({
+      preflight: makePreflight({
+        canShip: false,
+        blockers: ["Worker Is On The Primary Checkout."],
+      }),
+    });
+
+    expect(
+      within(screen.getByRole("alert")).getByText("Worker Is On The Primary Checkout."),
+    ).toBeInTheDocument();
+    for (const name of actionNames) {
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+    }
+  });
+
+  it("disables every action while the commit message is blank", () => {
+    renderPreview({ message: "   \n " });
+    for (const name of actionNames) {
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+    }
+  });
+
+  it("disables only the compare action for a non-GitHub remote, and says why", () => {
+    renderPreview({ preflight: makePreflight({ hostSupportsCompare: false }) });
+
+    expect(screen.getByRole("button", { name: "Commit Only" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Commit + Push" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Commit + Push + Open Compare Page" }),
+    ).toBeDisabled();
+    expect(screen.getByText("Compare Links Require A GitHub Remote")).toBeInTheDocument();
+  });
+
+  it("labels each action with only the commands that action runs", () => {
+    renderPreview();
+    expect(screen.getByText("Will Run: git add -- <files> · git commit")).toBeInTheDocument();
+    expect(
+      screen.getByText("Will Run: git add -- <files> · git commit · git push -u origin <branch>"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Will Run: git add -- <files> · git commit · git push -u origin <branch> · Open Compare Page",
+      ),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("ShipPreview — preview details and editing", () => {
+  it("lists each changed file once, with its skip reason, and pluralizes the counts", () => {
+    renderPreview({
+      preflight: makePreflight({ ahead: 1, behind: 2, staged: ["src/main.rs"] }),
+    });
+
+    const files = within(screen.getByRole("list", { name: "Changed Files" })).getAllByRole(
+      "listitem",
+    );
+    expect(files.map((item) => item.textContent)).toEqual([
+      "src/main.rs",
+      "notes.envSkipped — Looks Like A Credential",
+    ]);
+    expect(screen.getByText("2 Files")).toBeInTheDocument();
+    expect(screen.getByText("1 Unpushed Commit")).toBeInTheDocument();
+    expect(screen.getByText("2 Commits Behind")).toBeInTheDocument();
+  });
+
+  it("offers the staging-mode toggle only when files are pre-staged, reporting the choice", async () => {
+    const user = userEvent.setup();
+    const props = renderPreview({ preflight: makePreflight({ staged: ["src/main.rs"] }) });
+
+    expect(screen.getByRole("button", { name: "All Changes" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await user.click(screen.getByRole("button", { name: "Already Staged" }));
+    expect(props.onModeChange).toHaveBeenCalledExactlyOnceWith("staged");
+  });
+
+  it("hides the staging-mode toggle when nothing is pre-staged", () => {
+    renderPreview();
+    expect(screen.queryByRole("button", { name: "Already Staged" })).not.toBeInTheDocument();
+  });
+
+  it("gives both text areas a visible label and reports edits", async () => {
+    const user = userEvent.setup();
+    const props = renderPreview({ message: "" });
+
+    await user.type(screen.getByLabelText("Commit Message"), "x");
+    expect(props.onMessageChange).toHaveBeenLastCalledWith("x");
+
+    await user.type(screen.getByLabelText("What Changed / Why (AI-Generated, Editable)"), "y");
+    expect(props.onAiProseChange).toHaveBeenLastCalledWith("y");
   });
 });
