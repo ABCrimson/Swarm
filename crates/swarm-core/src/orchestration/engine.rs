@@ -1,57 +1,84 @@
-//! Single-writer orchestration engine: seq assignment, persistence, emission.
+//! Single-writer orchestration engine: seq assignment, persistence,
+//! emission.
+//!
+//! Every [`SwarmEvent`] recorded through an [`EventSink`] lands on one
+//! FIFO channel drained by one OS thread (`swarm-event-writer`). For each
+//! event that thread assigns the next seq, persists the event when
+//! [`is_persistent`] says so, and only then emits the envelope — so the
+//! wire order is the seq order, and every persisted event a client sees
+//! live is already readable from the log.
+//!
+//! # Seq guarantees
+//!
+//! Seqs are unique and strictly increasing for the lifetime of the data
+//! directory, across restarts and crashes: the writer reserves seqs in
+//! the log in blocks of [`SEQ_RESERVATION_BLOCK`] BEFORE issuing them,
+//! and a restarted engine resumes after the highest seq any earlier run
+//! could have issued ([`EventLog::resume_seq`]). A crash therefore costs
+//! at most one unused block of seqs, never a reused one; a clean
+//! [`OrchestrationEngine::shutdown`] records its exact head, so a clean
+//! restart continues without a gap.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::mpsc::Receiver;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use parking_lot::Mutex;
 use serde::Serialize;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot};
 use uuid::Uuid;
 
 use super::log::EventLog;
-use crate::events::{EventSink, SwarmEvent, WriterMsg};
+use crate::error::AppError;
+use crate::events::{EventSink, Provenance, SwarmEvent, WriterCmd, WriterMsg};
 
 /// The single ordered channel name every backend event is logically
-/// pushed on. Not a Tauri-specific mechanism — the primary delivery
-/// path is the `emit` closure passed to [`OrchestrationEngine::start`]
-/// (the Tauri shell's closure emits under this name on the webview
-/// event channel).
+/// pushed on. The desktop shell's `emit` closure (see
+/// [`OrchestrationEngine::start`]) emits each envelope under this name
+/// on its webview event channel.
 pub const EVENT_CHANNEL: &str = "swarm://events";
 
-/// Buffer capacity for the SECONDARY broadcast fanout (see the
-/// `broadcast_tx` field doc) — future multi-client use, not exercised
-/// by the desktop shell today.
+/// Buffer capacity of the secondary broadcast fanout
+/// ([`OrchestrationEngine::subscribe`]).
 const BROADCAST_CAPACITY: usize = 4096;
 
 /// Minimum interval between "broadcast send failed" log lines. A send
 /// only fails when every receiver disconnected between the
-/// `receiver_count() > 0` check and the send itself — rare, racy, and
-/// diagnostic rather than routine, so it's rate-limited instead of
-/// logged on every occurrence.
+/// `receiver_count() > 0` check and the send itself — rare and
+/// diagnostic, so it is rate-limited rather than logged every time.
 const BROADCAST_WARN_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How many seqs one reservation write covers. A crash skips at most
+/// this many seqs; a busy writer pays one tiny `meta` write per block.
+const SEQ_RESERVATION_BLOCK: u64 = 1024;
 
 /// Ordered envelope wrapping every [`SwarmEvent`] on the wire.
 ///
-/// Serializes as `{"seq": n, "ts": n, "type": "...", "payload": {...}}` —
-/// the flattened `SwarmEvent` contributes `type` + `payload` (its existing
-/// adjacently-tagged representation), preserving all payload shapes.
+/// Serializes as `{"seq", "ts", "originWorker"?, "causeSeq"?, "type",
+/// "payload"}` — the flattened `SwarmEvent` contributes `type` and
+/// `payload` (its adjacently-tagged representation). A replayed
+/// [`super::StoredEvent`] serializes to the same JSON value, keys in
+/// the same order (only the key order INSIDE `payload` can differ, as
+/// the log hands it back as a [`serde_json::Value`]).
 #[derive(Debug, Clone, Serialize)]
 pub struct DomainEvent {
-    /// Monotonic sequence number. Wire order == seq order.
+    /// Unique, monotonic sequence number. Wire order == seq order.
     pub seq: u64,
     /// Unix timestamp in milliseconds, assigned by the writer thread.
     pub ts: i64,
     /// UUID of the worker whose action caused this event (the CAUSER),
     /// when known. Absent (not `null`) when unattributed — see
-    /// [`Provenance`]'s doc; `skip_serializing_if` keeps the common
-    /// unattributed case (e.g. every `worker_output` chunk) from paying
-    /// a wire tax for a field that's almost always absent.
+    /// [`Provenance`]'s doc — so the common unattributed case (e.g.
+    /// every `worker_output` chunk) pays no wire tax for it.
     #[serde(rename = "originWorker", skip_serializing_if = "Option::is_none")]
     pub origin_worker: Option<Uuid>,
     /// Seq of the event this one is causally reacting to, when known.
     #[serde(rename = "causeSeq", skip_serializing_if = "Option::is_none")]
     pub cause_seq: Option<u64>,
+    /// The event itself (`type` + `payload` on the wire).
     #[serde(flatten)]
     pub event: SwarmEvent,
 }
@@ -59,136 +86,134 @@ pub struct DomainEvent {
 /// Whether an event belongs in the durable log.
 ///
 /// High-frequency telemetry flows through the ordered stream (it still
-/// consumes sequence numbers) but is not history: it cannot be backfilled
-/// after a gap and is not replayed.
-///
-/// `WorkerInput` gets a field-level carve-out on top of the
-/// variant-level exclusions below: `source == InputSource::Terminal`
-/// (raw human keystrokes) is excluded too — a persisted row per
-/// keystroke would both flood the log and archive whatever the user
-/// typed, secrets included. `source.is_machine_issued()` (`Tool`/
-/// `Automation`) persists normally. Matched on the typed
-/// [`crate::events::InputSource`] enum, not a string — an unrecognized
-/// source value fails IPC deserialization long before it could reach
-/// this function, so the guarantee never depends on string spelling.
+/// consumes seqs) but is not history: it cannot be backfilled after a
+/// gap and is never replayed. Ephemeral: `worker_output`,
+/// `system_metrics`, `system_log`, `agent_turn_delta` (its durable
+/// counterpart is `agent_block`; persisting per-chunk rows would mean
+/// hundreds of rows per second per streaming worker), and `worker_input`
+/// whose source is [`crate::events::InputSource::Terminal`] — raw human
+/// keystrokes, which would both flood the log and archive whatever the
+/// user typed, secrets included. Machine-issued `worker_input` persists.
+/// Every other variant persists, so a new variant is durable unless it
+/// is added here.
 pub fn is_persistent(event: &SwarmEvent) -> bool {
     match event {
         SwarmEvent::WorkerOutput(_)
         | SwarmEvent::SystemMetrics(_)
         | SwarmEvent::SystemLog(_)
-        // `agent_turn_delta` is the provider-adapter analogue of
-        // `ai_stream_delta` (see the LATENT BUG note in the
-        // multi-provider plan: `ai_stream_delta` itself stays
-        // persisted here — retired only in Phase 5 alongside the
-        // webview path it serves). Persisting per-clause streaming
-        // rows would be ~800 SQLite rows/s at 8 workers; the durable
-        // counterpart is `agent_block`, persisted normally below.
         | SwarmEvent::AgentTurnDelta(_) => false,
         SwarmEvent::WorkerInput(p) => p.source.is_machine_issued(),
         _ => true,
     }
 }
 
-/// Handle to the single-writer orchestration engine.
-///
-/// [`Self::record`] (via [`EventSink`]) is fire-and-forget from any
-/// thread; the dedicated writer thread assigns seq, persists (per
-/// policy), and emits — guaranteeing total order on the wire.
+/// The engine is shut down, or its writer thread is gone.
+fn writer_unavailable() -> AppError {
+    AppError::EventLog("The Event Writer Is Shut Down.".to_string())
+}
+
+/// Handle to the single-writer orchestration engine. Cheap to clone:
+/// every clone drives the same writer thread.
 #[derive(Clone)]
 pub struct OrchestrationEngine {
     sink: EventSink,
     db_path: Option<PathBuf>,
-    /// Secondary fanout; lossy under lag by design. The primary shell
-    /// path is the synchronous `emit` closure passed to [`Self::start`],
-    /// which never drops an event — this broadcast channel exists only
-    /// for future multi-client use (Phase 2's `swarmd`, per the
-    /// headless-daemon plan), where a per-connection two-lane
-    /// backpressure scheme handles lag by design. Remote subscribers
-    /// must heal lag via `events_since` replay; the desktop shell does
-    /// not subscribe to this at all today.
+    /// Secondary fanout; lossy under lag by design. The primary path is
+    /// the synchronous `emit` closure passed to [`Self::start`], which
+    /// never drops an event. `swarmd` gives each WebSocket client a
+    /// receiver and heals lag by replaying from the log.
     broadcast_tx: broadcast::Sender<Arc<DomainEvent>>,
+    /// See [`Self::head_seq`].
+    head: Arc<AtomicU64>,
+    /// Shared with every [`EventSink`] clone; set by [`Self::shutdown`].
+    closed: Arc<AtomicBool>,
+    /// The writer thread, taken and joined by [`Self::shutdown`].
+    writer: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl OrchestrationEngine {
-    /// Spawns the writer thread and returns the engine handle.
+    /// Starts the writer thread over `log` and returns the engine
+    /// handle.
     ///
-    /// `emit` is the PRIMARY delivery path: called synchronously, in
-    /// sequence-number order, for every event (persisted or not) —
-    /// exactly mirroring the pre-split direct `app.emit` call. It must
-    /// not be lossy; a slow consumer should back up the (unbounded)
-    /// writer channel rather than have events silently vanish, since
-    /// ephemeral event types (`worker_output`, `system_metrics`,
-    /// `system_log`) are never persisted and can never be backfilled
-    /// once dropped.
+    /// `emit` is the PRIMARY delivery path: called on the writer thread,
+    /// in seq order, for every event (persisted or not). It must not be
+    /// lossy — a slow consumer should back up the (unbounded) writer
+    /// channel rather than drop events, since ephemeral events can never
+    /// be backfilled. Every event is also offered to the secondary
+    /// broadcast fanout ([`Self::subscribe`]), which costs nothing while
+    /// nothing is subscribed.
     ///
-    /// Every event is additionally offered to a SECONDARY broadcast
-    /// fanout (see the `broadcast_tx` field and [`Self::subscribe`])
-    /// for future multi-client use — that path is intentionally lossy
-    /// under lag and is skipped entirely (no clone, no send) when
-    /// nothing is subscribed, which is the common case for a
-    /// desktop-only shell.
+    /// `db_path` lets readers ([`Self::db_path`]) open their own
+    /// read-only connections to the same file; pass `None` for an
+    /// in-memory log.
     ///
-    /// `db_path` is retained so read-only connections (e.g. the
-    /// `events_since` command) can be opened against the same file;
-    /// pass `None` for in-memory logs.
+    /// # Errors
+    ///
+    /// [`AppError::EventLog`] if the log's resume seq cannot be read (a
+    /// writer that guessed would reissue seqs clients have already
+    /// seen) or the writer thread cannot be spawned.
+    pub fn try_start(
+        log: EventLog,
+        db_path: Option<PathBuf>,
+        emit: impl FnMut(&DomainEvent) + Send + 'static,
+    ) -> Result<Self, AppError> {
+        if let Err(e) = log.optimize_on_open() {
+            tracing::warn!(error = %e, "event log PRAGMA optimize failed");
+        }
+
+        let (broadcast_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
+        let head = Arc::new(AtomicU64::new(0));
+        let writer = Writer::new(
+            log,
+            Arc::clone(&head),
+            emit,
+            Fanout::new(broadcast_tx.clone()),
+        )?;
+        let (tx, rx) = mpsc::channel();
+        let handle = std::thread::Builder::new()
+            .name("swarm-event-writer".to_owned())
+            .spawn(move || {
+                writer.run(&rx);
+            })
+            .map_err(|e| {
+                AppError::EventLog(format!("Failed To Spawn The Event Writer Thread: {e}"))
+            })?;
+
+        let closed = Arc::new(AtomicBool::new(false));
+        Ok(Self {
+            sink: EventSink::for_writer(tx, Arc::clone(&closed)),
+            db_path,
+            broadcast_tx,
+            head,
+            closed,
+            writer: Arc::new(Mutex::new(Some(handle))),
+        })
+    }
+
+    /// [`Self::try_start`] for callers that cannot recover from a failed
+    /// start (tests, mostly).
+    ///
+    /// # Panics
+    ///
+    /// When [`Self::try_start`] fails.
     pub fn start(
         log: EventLog,
         db_path: Option<PathBuf>,
-        mut emit: impl FnMut(&DomainEvent) + Send + 'static,
+        emit: impl FnMut(&DomainEvent) + Send + 'static,
     ) -> Self {
-        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
-        let (broadcast_tx, _) = broadcast::channel::<Arc<DomainEvent>>(BROADCAST_CAPACITY);
-        let writer_broadcast_tx = broadcast_tx.clone();
-        std::thread::Builder::new()
-            .name("swarm-event-writer".to_string())
-            .spawn(move || {
-                let mut last_broadcast_warn: Option<Instant> = None;
-                run_writer_loop(rx, log, move |envelope| {
-                    // Primary path first, synchronous and lossless.
-                    emit(envelope);
-
-                    // Secondary path: only pay for the Arc + clone when
-                    // someone is actually subscribed.
-                    if writer_broadcast_tx.receiver_count() > 0 {
-                        let arc = Arc::new(envelope.clone());
-                        if writer_broadcast_tx.send(arc).is_err() {
-                            let now = Instant::now();
-                            let should_warn = last_broadcast_warn
-                                .is_none_or(|t| now.duration_since(t) >= BROADCAST_WARN_INTERVAL);
-                            if should_warn {
-                                tracing::warn!(
-                                    "broadcast fanout send failed (all receivers disconnected \
-                                     between the receiver_count check and send)"
-                                );
-                                last_broadcast_warn = Some(now);
-                            }
-                        }
-                    }
-                });
-            })
-            .expect("failed to spawn event writer thread");
-        Self {
-            sink: EventSink::new(tx),
-            db_path,
-            broadcast_tx,
-        }
+        Self::try_start(log, db_path, emit)
+            .unwrap_or_else(|e| panic!("failed to start the orchestration engine: {e}"))
     }
 
-    /// Enqueues an event for ordering, persistence, and emission.
-    pub fn record(&self, event: SwarmEvent) {
-        self.sink.emit(event);
-    }
-
-    /// Returns a cloneable [`EventSink`] for callers that only need to
-    /// record events (workers, the AI client/queue, metrics loop, bus
-    /// forwarding) without the rest of the engine's surface.
+    /// A cloneable [`EventSink`] for callers that only record events.
     pub fn sink(&self) -> EventSink {
         self.sink.clone()
     }
 
-    /// Subscribes to the SECONDARY broadcast fanout — see the doc on
-    /// the `broadcast_tx` field. Not used by the desktop shell; exists
-    /// for future multi-client (Phase 2 `swarmd`) use.
+    /// Subscribes to the secondary broadcast fanout — see the
+    /// `broadcast_tx` field. Lossy under lag: a receiver that falls
+    /// behind gets `RecvError::Lagged` and must heal by replaying from
+    /// the log.
     pub fn subscribe(&self) -> broadcast::Receiver<Arc<DomainEvent>> {
         self.broadcast_tx.subscribe()
     }
@@ -197,68 +222,248 @@ impl OrchestrationEngine {
     pub fn db_path(&self) -> Option<&Path> {
         self.db_path.as_deref()
     }
+
+    /// The seq of the newest event the writer has emitted — or, before
+    /// the first one, the seq this engine resumed after. An in-memory
+    /// read (no SQLite), safe on any thread.
+    ///
+    /// It counts every event, ephemeral ones included, so it can run
+    /// ahead of [`EventLog::max_seq`]. The writer publishes it after
+    /// persisting and emitting an event but BEFORE offering that event
+    /// to the broadcast fanout, which gives two guarantees:
+    ///
+    /// - every persisted event with `seq <= head_seq()` is already
+    ///   readable from the log;
+    /// - a receiver from [`Self::subscribe`] obtained BEFORE this call
+    ///   receives every event with a larger seq (lag aside) — so
+    ///   "subscribe, then read the head" is a gap-free attach point.
+    pub fn head_seq(&self) -> u64 {
+        self.head.load(Ordering::Acquire)
+    }
+
+    /// Resolves once every event recorded before this call has been
+    /// persisted and emitted, with the head seq at that point.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::EventLog`] when the engine is shut down.
+    pub async fn flush(&self) -> Result<u64, AppError> {
+        let (done_tx, done_rx) = oneshot::channel();
+        if !self.sink.send_command(WriterCmd::Flush(done_tx)) {
+            return Err(writer_unavailable());
+        }
+        done_rx.await.map_err(|_| writer_unavailable())
+    }
+
+    /// Drains every event recorded before this call, finalizes the log
+    /// (records the exact head as the seq reservation, runs `PRAGMA
+    /// optimize`, checkpoints the WAL), and stops the writer thread.
+    /// Returns the final head seq.
+    ///
+    /// Events recorded after shutdown begins are dropped (with a debug
+    /// log), and [`EventSink::emit_awaiting_seq`] receivers for them
+    /// resolve to an error. Calling it again returns the head without
+    /// doing anything.
+    ///
+    /// # Blocking
+    ///
+    /// Waits up to `timeout` for the writer to drain. From async code,
+    /// call it through `tokio::task::spawn_blocking` (as
+    /// [`crate::runtime::Runtime::shutdown`] does).
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::EventLog`] if the writer thread is already gone or
+    /// does not drain within `timeout`.
+    pub fn shutdown(&self, timeout: Duration) -> Result<u64, AppError> {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return Ok(self.head_seq());
+        }
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        if !self.sink.send_command(WriterCmd::Shutdown(done_tx)) {
+            return Err(writer_unavailable());
+        }
+        let head = done_rx.recv_timeout(timeout).map_err(|_| {
+            AppError::EventLog(format!(
+                "The Event Writer Did Not Drain Within {} ms.",
+                timeout.as_millis()
+            ))
+        })?;
+        if let Some(handle) = self.writer.lock().take()
+            && handle.join().is_err()
+        {
+            tracing::error!("the event writer thread panicked while shutting down");
+        }
+        Ok(head)
+    }
 }
 
-/// The writer loop. Extracted from the thread body so unit tests can
-/// drive it synchronously with a plain closure instead of a live
-/// broadcast channel.
-fn run_writer_loop(
-    rx: Receiver<WriterMsg>,
-    mut log: EventLog,
-    mut emit: impl FnMut(&DomainEvent),
-) -> EventLog {
-    let mut seq = log.max_seq().unwrap_or(0);
-    while let Ok(WriterMsg {
-        event,
-        provenance,
-        ack,
-    }) = rx.recv()
-    {
-        seq += 1;
-        let ts = crate::clock::unix_millis();
-        let envelope = DomainEvent {
+/// The secondary broadcast fanout, as the writer thread drives it.
+struct Fanout {
+    tx: broadcast::Sender<Arc<DomainEvent>>,
+    /// When the last "send failed" warning was logged.
+    last_warn: Option<Instant>,
+}
+
+impl Fanout {
+    const fn new(tx: broadcast::Sender<Arc<DomainEvent>>) -> Self {
+        Self {
+            tx,
+            last_warn: None,
+        }
+    }
+
+    /// Offers `envelope` to every current subscriber. Costs nothing (no
+    /// `Arc`, no clone) while nothing is subscribed.
+    fn offer(&mut self, envelope: &DomainEvent) {
+        if self.tx.receiver_count() == 0 || self.tx.send(Arc::new(envelope.clone())).is_ok() {
+            return;
+        }
+        let now = Instant::now();
+        if self
+            .last_warn
+            .is_none_or(|t| now.duration_since(t) >= BROADCAST_WARN_INTERVAL)
+        {
+            tracing::warn!(
+                "broadcast fanout send failed (every receiver disconnected between \
+                 the receiver_count check and the send)"
+            );
+            self.last_warn = Some(now);
+        }
+    }
+}
+
+/// The writer thread's state: the log, the seq counter, and both
+/// delivery paths.
+struct Writer<E> {
+    log: EventLog,
+    /// Seq of the last event issued.
+    seq: u64,
+    /// Highest seq already reserved in the log; seqs up to it may be
+    /// issued without another reservation write.
+    reserved: u64,
+    /// Published copy of `seq` — see [`OrchestrationEngine::head_seq`].
+    head: Arc<AtomicU64>,
+    /// The primary, lossless delivery path.
+    emit: E,
+    fanout: Fanout,
+}
+
+impl<E: FnMut(&DomainEvent)> Writer<E> {
+    fn new(log: EventLog, head: Arc<AtomicU64>, emit: E, fanout: Fanout) -> Result<Self, AppError> {
+        let seq = log.resume_seq()?;
+        head.store(seq, Ordering::Release);
+        Ok(Self {
+            log,
             seq,
-            ts,
+            reserved: seq,
+            head,
+            emit,
+            fanout,
+        })
+    }
+
+    /// Processes commands until a shutdown barrier arrives or every
+    /// sender is gone, finalizes the log either way, and returns it.
+    fn run(mut self, rx: &Receiver<WriterCmd>) -> EventLog {
+        while let Ok(cmd) = rx.recv() {
+            match cmd {
+                WriterCmd::Record(msg) => self.record(msg),
+                // Oneshot/sync-channel sends never block; a dropped
+                // receiver (a cancelled caller) is simply ignored.
+                WriterCmd::Flush(done) => {
+                    let _ = done.send(self.seq);
+                }
+                WriterCmd::Shutdown(done) => {
+                    self.finalize();
+                    let _ = done.send(self.seq);
+                    return self.log;
+                }
+            }
+        }
+        self.finalize();
+        self.log
+    }
+
+    /// Orders one event: reserves its seq (when past the reservation),
+    /// persists it (per [`is_persistent`]), emits it, publishes the new
+    /// head, offers it to the fanout, and resolves its ack — in exactly
+    /// that order (see [`OrchestrationEngine::head_seq`] for why the
+    /// head is published between the emit and the fanout).
+    fn record(&mut self, msg: WriterMsg) {
+        let WriterMsg {
+            event,
+            provenance,
+            ack,
+        } = msg;
+
+        self.seq += 1;
+        if self.seq > self.reserved {
+            let through = self.seq + SEQ_RESERVATION_BLOCK - 1;
+            match self.log.reserve_seqs(through) {
+                Ok(()) => self.reserved = through,
+                Err(e) => tracing::error!(
+                    seq = self.seq,
+                    error = %e,
+                    "failed to reserve event seqs; a restart after a crash may reissue this seq"
+                ),
+            }
+        }
+
+        let envelope = DomainEvent {
+            seq: self.seq,
+            ts: crate::clock::unix_millis(),
             origin_worker: provenance.origin_worker,
             cause_seq: provenance.cause_seq,
             event,
         };
-
         if is_persistent(&envelope.event) {
-            match serde_json::to_value(&envelope.event) {
-                Ok(tagged) => {
-                    let event_type = tagged["type"].as_str().unwrap_or("unknown").to_string();
-                    let payload = tagged["payload"].to_string();
-                    if let Err(e) = log.append(seq, ts, &event_type, &payload, &provenance) {
-                        tracing::error!(seq, error = %e, "failed to persist event");
-                    }
-                }
-                Err(e) => tracing::error!(seq, error = %e, "failed to serialize event"),
-            }
+            self.persist(&envelope, &provenance);
         }
+        (self.emit)(&envelope);
+        self.head.store(self.seq, Ordering::Release);
+        self.fanout.offer(&envelope);
 
-        emit(&envelope);
-
-        // Non-blocking by oneshot construction — a dropped receiver
+        // Non-blocking by oneshot construction: a dropped receiver
         // (e.g. a cancelled IPC call) makes `send` return `Err`, which
-        // is intentionally ignored: this thread never waits on, or even
-        // notices, a disinterested receiver (see `EventSink::emit_awaiting_seq`'s doc).
+        // is ignored — the writer never waits on a disinterested caller.
         if let Some(ack) = ack {
-            let _ = ack.send(seq);
+            let _ = ack.send(self.seq);
         }
     }
-    log
+
+    fn persist(&mut self, envelope: &DomainEvent, provenance: &Provenance) {
+        let event_type = envelope.event.type_tag();
+        let result = envelope
+            .event
+            .payload_json()
+            .map_err(AppError::from)
+            .and_then(|payload| {
+                self.log
+                    .append(envelope.seq, envelope.ts, event_type, &payload, provenance)
+            });
+        if let Err(e) = result {
+            tracing::error!(seq = envelope.seq, event_type, error = %e, "failed to persist event");
+        }
+    }
+
+    fn finalize(&mut self) {
+        if let Err(e) = self.log.finalize(self.seq) {
+            tracing::warn!(error = %e, "failed to finalize the event log");
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
     use crate::events::{
-        AiStreamSettledPayload, CommitCreatedPayload, Provenance, ShipProgressPayload,
-        ShipSettledPayload, SwarmEvent, SystemMetricsPayload, WorkerInputPayload,
-        WorkerOutputPayload, WorkerSpawnedPayload, WorktreeCreatedPayload, WorktreeRemovedPayload,
+        CommitCreatedPayload, InputSource, ShipProgressPayload, ShipSettledPayload,
+        SystemMetricsPayload, WorkerInputPayload, WorkerOutputPayload, WorkerSpawnedPayload,
+        WorktreeCreatedPayload, WorktreeRemovedPayload,
     };
-    use uuid::Uuid;
 
     fn spawned() -> SwarmEvent {
         SwarmEvent::WorkerSpawned(WorkerSpawnedPayload {
@@ -269,9 +474,15 @@ mod tests {
         })
     }
 
-    /// Wraps a bare event with default (unattributed) provenance and no
-    /// ack — the shape every pre-provenance test used to send directly.
-    fn msg(event: SwarmEvent) -> WriterMsg {
+    fn output() -> SwarmEvent {
+        SwarmEvent::WorkerOutput(WorkerOutputPayload {
+            worker_id: Uuid::nil(),
+            data: "ephemeral".to_string(),
+        })
+    }
+
+    /// A bare event with unattributed provenance and no ack.
+    fn bare(event: SwarmEvent) -> WriterMsg {
         WriterMsg {
             event,
             provenance: Provenance::default(),
@@ -279,15 +490,46 @@ mod tests {
         }
     }
 
+    fn msg(event: SwarmEvent) -> WriterCmd {
+        WriterCmd::Record(bare(event))
+    }
+
+    /// Runs `cmds` through a writer over `log` on the current thread
+    /// (the channel is closed after the last command), returning the
+    /// finalized log and every emitted envelope.
+    fn drive(log: EventLog, cmds: Vec<WriterCmd>) -> (EventLog, Vec<DomainEvent>) {
+        let (tx, rx) = mpsc::channel();
+        for cmd in cmds {
+            tx.send(cmd).unwrap();
+        }
+        drop(tx);
+        let mut seen = Vec::new();
+        let log = Writer::new(
+            log,
+            Arc::default(),
+            |e: &DomainEvent| seen.push(e.clone()),
+            idle_fanout(),
+        )
+        .unwrap()
+        .run(&rx);
+        (log, seen)
+    }
+
+    /// A fanout nothing subscribes to.
+    fn idle_fanout() -> Fanout {
+        Fanout::new(broadcast::channel(1).0)
+    }
+
+    fn seqs(events: &[DomainEvent]) -> Vec<u64> {
+        events.iter().map(|e| e.seq).collect()
+    }
+
+    // ── Persistence policy ───────────────────────────────────────────
+
     #[test]
     fn test_persistence_policy() {
         assert!(is_persistent(&spawned()));
-        assert!(!is_persistent(&SwarmEvent::WorkerOutput(
-            WorkerOutputPayload {
-                worker_id: Uuid::nil(),
-                data: "x".to_string(),
-            }
-        )));
+        assert!(!is_persistent(&output()));
         assert!(!is_persistent(&SwarmEvent::SystemMetrics(
             SystemMetricsPayload {
                 cpu_percent: 0.0,
@@ -298,23 +540,14 @@ mod tests {
                 timestamp: 0,
             }
         )));
-        assert!(is_persistent(&SwarmEvent::AiStreamSettled(
-            AiStreamSettledPayload {
-                request_id: "req-1".to_string(),
-                status: "ok".to_string(),
-                error: None,
-            }
-        )));
     }
 
-    /// DIRECTIVE: `worker_input` persistence depends on `source`, not
-    /// just the variant — `terminal` (raw human keystrokes) is excluded
-    /// (would flood the log AND archive typed secrets); `tool` and
-    /// `automation` (machine-issued input) persist normally like any
-    /// other event.
+    /// `worker_input` persistence depends on `source`: raw terminal
+    /// keystrokes are excluded (they would flood the log AND archive
+    /// typed secrets); machine-issued input persists.
     #[test]
     fn test_worker_input_persistence_depends_on_source() {
-        let input = |source: crate::events::InputSource| {
+        let input = |source| {
             SwarmEvent::WorkerInput(WorkerInputPayload {
                 worker_id: Uuid::nil(),
                 bytes: 3,
@@ -322,153 +555,87 @@ mod tests {
                 preview: None,
             })
         };
-        assert!(!is_persistent(&input(crate::events::InputSource::Terminal)));
-        assert!(is_persistent(&input(crate::events::InputSource::Tool)));
-        assert!(is_persistent(&input(
-            crate::events::InputSource::Automation
-        )));
+        assert!(!is_persistent(&input(InputSource::Terminal)));
+        assert!(is_persistent(&input(InputSource::Tool)));
+        assert!(is_persistent(&input(InputSource::Automation)));
     }
 
-    /// DIRECTIVE: `file_written` and `agent_turn_started` both persist —
-    /// same "excluded by name, persistent by construction" guarantee as
-    /// the worktree/ship events below. `file_written` in particular is
-    /// the whole point of Phase 5d (a worker's file write joining the
-    /// causality graph) — it would be silently useless as history if a
-    /// future refactor of the exclusion list dropped it.
+    /// Pins the durable events the causal graph, the ship chain and
+    /// session replay depend on, so a change to the exclusion list
+    /// cannot silently drop one of them out of the log.
     #[test]
-    fn test_file_written_and_agent_turn_started_are_persistent() {
-        assert!(is_persistent(&SwarmEvent::FileWritten(
-            crate::events::FileWrittenPayload {
-                path: "/home/user/.swarm/out.txt".to_string(),
-                bytes: 7,
-            }
-        )));
-        assert!(is_persistent(&SwarmEvent::AgentTurnStarted(
-            crate::events::AgentTurnStartedPayload {
-                worker_id: Uuid::nil(),
-                model: "claude-sonnet-4-5".to_string(),
-                request_id: "turn-1".to_string(),
-            }
-        )));
-    }
-
-    /// DIRECTIVE: worktree_created and worktree_removed both persist —
-    /// `is_persistent` excludes by name (`WorkerOutput`, `SystemMetrics`,
-    /// `SystemLog`), so any new variant is persistent by construction
-    /// unless explicitly added to that list. These pin the outcome down
-    /// so a future refactor of the exclusion list can't silently drop
-    /// worktree lifecycle events out of the durable log.
-    #[test]
-    fn test_worktree_events_are_persistent() {
-        assert!(is_persistent(&SwarmEvent::WorktreeCreated(
-            WorktreeCreatedPayload {
-                worker_id: Uuid::nil(),
-                session_id: None,
-                repo_root: "/repo".to_string(),
-                worktree_path: "/repo-wt".to_string(),
-                branch: "swarm/x-abcd1234".to_string(),
-                base_commit: "sha".to_string(),
-            }
-        )));
-        assert!(is_persistent(&SwarmEvent::WorktreeRemoved(
-            WorktreeRemovedPayload {
-                worker_id: Uuid::nil(),
-                worktree_path: "/repo-wt".to_string(),
-                branch: "swarm/x-abcd1234".to_string(),
-                disposition: "removed".to_string(),
-                head_commit: None,
-                reason: None,
-            }
-        )));
-    }
-
-    /// DIRECTIVE: `ship_progress`/`ship_settled`/`commit_created` all
-    /// persist — same "excluded by name, persistent by construction"
-    /// guarantee as the worktree events (see the test above).
-    #[test]
-    fn test_ship_events_are_persistent() {
-        assert!(is_persistent(&SwarmEvent::ShipProgress(
-            ShipProgressPayload {
-                ship_id: Uuid::nil(),
-                worker_id: Uuid::nil(),
-                step: "commit".to_string(),
-                status: "running".to_string(),
-                detail: None,
-            }
-        )));
-        assert!(is_persistent(&SwarmEvent::ShipSettled(
-            ShipSettledPayload {
-                ship_id: Uuid::nil(),
-                worker_id: Uuid::nil(),
-                commit_sha: None,
-                pushed_ref: None,
-                pr_url: None,
-                status: "ok".to_string(),
-                error: None,
-            }
-        )));
-        assert!(is_persistent(&SwarmEvent::CommitCreated(
-            CommitCreatedPayload {
-                worker_id: Uuid::nil(),
-                sha: "sha".to_string(),
-                branch: "swarm/x-abcd1234".to_string(),
-                seq_from: 0,
-                seq_to: 1,
-            }
-        )));
-    }
-
-    /// DIRECTIVE: `session_worker_removed` persists by construction
-    /// (absent from the exclusion list) — a backfilling client must be
-    /// able to reconstruct the same `workerIds` pruning a live listener
-    /// observed, not just the growth side (`session_created`).
-    #[test]
-    fn test_session_worker_removed_is_persistent() {
-        use crate::events::SessionWorkerRemovedPayload;
-
-        assert!(is_persistent(&SwarmEvent::SessionWorkerRemoved(
-            SessionWorkerRemovedPayload {
-                session_id: Uuid::nil(),
-                worker_id: Uuid::nil(),
-            }
-        )));
-    }
-
-    // ── agent_* persistence pinning ──────────────────────────────────
-
-    /// DIRECTIVE: `agent_turn_delta` is the ONLY new `agent_*` variant
-    /// excluded from persistence — every other new variant persists by
-    /// construction (the exclusion list is by name; anything absent
-    /// from it defaults to `true`). Pins every new variant's class down
-    /// explicitly so a future refactor of the exclusion list can't
-    /// silently flip one.
-    #[test]
-    fn test_agent_turn_delta_is_ephemeral() {
-        assert!(!is_persistent(&SwarmEvent::AgentTurnDelta(
-            crate::events::AgentTurnDeltaPayload {
-                worker_id: Uuid::nil(),
-                turn_id: "t1".to_string(),
-                block_index: 0,
-                kind: "text".to_string(),
-                text: "hi".to_string(),
-            }
-        )));
-    }
-
-    #[test]
-    fn test_every_other_new_agent_variant_is_persistent() {
+    fn test_history_events_are_persistent() {
         use crate::agent::adapter::{
             AgentTurnStatus, CancelGranularity, Capabilities, PermissionDecision, ProviderId,
         };
         use crate::events::{
             AgentBlockPayload, AgentPermissionRequestPayload, AgentSessionExitedPayload,
             AgentSessionStartedPayload, AgentToolCallPayload, AgentToolResultPayload,
-            AgentTurnSettledPayload,
+            AgentTurnSettledPayload, AgentTurnStartedPayload, FileWrittenPayload,
+            SessionWorkerAddedPayload, SessionWorkerRemovedPayload,
         };
 
-        assert!(is_persistent(&SwarmEvent::AgentSessionStarted(
-            AgentSessionStartedPayload {
-                worker_id: Uuid::nil(),
+        let worker_id = Uuid::nil();
+        let session_id = Uuid::nil();
+        let durable = [
+            SwarmEvent::FileWritten(FileWrittenPayload {
+                path: "/home/user/.swarm/out.txt".to_string(),
+                bytes: 7,
+            }),
+            SwarmEvent::AgentTurnStarted(AgentTurnStartedPayload {
+                worker_id,
+                model: "claude-sonnet-5".to_string(),
+                request_id: "turn-1".to_string(),
+            }),
+            SwarmEvent::WorktreeCreated(WorktreeCreatedPayload {
+                worker_id,
+                session_id: None,
+                repo_root: "/repo".to_string(),
+                worktree_path: "/repo-wt".to_string(),
+                branch: "swarm/x-abcd1234".to_string(),
+                base_commit: "sha".to_string(),
+            }),
+            SwarmEvent::WorktreeRemoved(WorktreeRemovedPayload {
+                worker_id,
+                worktree_path: "/repo-wt".to_string(),
+                branch: "swarm/x-abcd1234".to_string(),
+                disposition: "removed".to_string(),
+                head_commit: None,
+                reason: None,
+            }),
+            SwarmEvent::ShipProgress(ShipProgressPayload {
+                ship_id: Uuid::nil(),
+                worker_id,
+                step: "commit".to_string(),
+                status: "running".to_string(),
+                detail: None,
+            }),
+            SwarmEvent::ShipSettled(ShipSettledPayload {
+                ship_id: Uuid::nil(),
+                worker_id,
+                commit_sha: None,
+                pushed_ref: None,
+                pr_url: None,
+                status: "ok".to_string(),
+                error: None,
+            }),
+            SwarmEvent::CommitCreated(CommitCreatedPayload {
+                worker_id,
+                sha: "sha".to_string(),
+                branch: "swarm/x-abcd1234".to_string(),
+                seq_from: 0,
+                seq_to: 1,
+            }),
+            SwarmEvent::SessionWorkerAdded(SessionWorkerAddedPayload {
+                session_id,
+                worker_id,
+            }),
+            SwarmEvent::SessionWorkerRemoved(SessionWorkerRemovedPayload {
+                session_id,
+                worker_id,
+            }),
+            SwarmEvent::AgentSessionStarted(AgentSessionStartedPayload {
+                worker_id,
                 provider: ProviderId::ClaudeCode,
                 session_key: "sess".to_string(),
                 model: "m".to_string(),
@@ -483,36 +650,30 @@ mod tests {
                     worktree_aware: true,
                     interactive_permissions: false,
                 },
-            }
-        )));
-        assert!(is_persistent(&SwarmEvent::AgentBlock(AgentBlockPayload {
-            worker_id: Uuid::nil(),
-            turn_id: "t1".to_string(),
-            block_index: 0,
-            kind: "text".to_string(),
-            content: serde_json::json!({}),
-        })));
-        assert!(is_persistent(&SwarmEvent::AgentToolCall(
-            AgentToolCallPayload {
-                worker_id: Uuid::nil(),
+            }),
+            SwarmEvent::AgentBlock(AgentBlockPayload {
+                worker_id,
+                turn_id: "t1".to_string(),
+                block_index: 0,
+                kind: "text".to_string(),
+                content: serde_json::json!({}),
+            }),
+            SwarmEvent::AgentToolCall(AgentToolCallPayload {
+                worker_id,
                 turn_id: "t1".to_string(),
                 tool_use_id: "tu1".to_string(),
                 name: "run_command".to_string(),
                 input: serde_json::json!({}),
-            }
-        )));
-        assert!(is_persistent(&SwarmEvent::AgentToolResult(
-            AgentToolResultPayload {
-                worker_id: Uuid::nil(),
+            }),
+            SwarmEvent::AgentToolResult(AgentToolResultPayload {
+                worker_id,
                 turn_id: "t1".to_string(),
                 tool_use_id: "tu1".to_string(),
                 is_error: false,
                 content: serde_json::json!("ok"),
-            }
-        )));
-        assert!(is_persistent(&SwarmEvent::AgentPermissionRequest(
-            AgentPermissionRequestPayload {
-                worker_id: Uuid::nil(),
+            }),
+            SwarmEvent::AgentPermissionRequest(AgentPermissionRequestPayload {
+                worker_id,
                 turn_id: "t1".to_string(),
                 request_id: "p1".to_string(),
                 tool: "Bash".to_string(),
@@ -520,11 +681,9 @@ mod tests {
                 suggested_decision: Some(PermissionDecision::Deny),
                 denial_subclass: None,
                 message: None,
-            }
-        )));
-        assert!(is_persistent(&SwarmEvent::AgentTurnSettled(
-            AgentTurnSettledPayload {
-                worker_id: Uuid::nil(),
+            }),
+            SwarmEvent::AgentTurnSettled(AgentTurnSettledPayload {
+                worker_id,
                 turn_id: "t1".to_string(),
                 status: AgentTurnStatus::Ok,
                 error: None,
@@ -532,16 +691,34 @@ mod tests {
                 usage: None,
                 duration_ms: 10,
                 num_turns: Some(1),
-            }
-        )));
-        assert!(is_persistent(&SwarmEvent::AgentSessionExited(
-            AgentSessionExitedPayload {
-                worker_id: Uuid::nil(),
+            }),
+            SwarmEvent::AgentSessionExited(AgentSessionExitedPayload {
+                worker_id,
                 exit_code: Some(0),
                 signal: None,
+            }),
+        ];
+        for event in &durable {
+            assert!(is_persistent(event), "{} must persist", event.type_tag());
+        }
+    }
+
+    /// `agent_turn_delta` is ephemeral; its durable counterpart is
+    /// `agent_block`.
+    #[test]
+    fn test_agent_turn_delta_is_ephemeral() {
+        assert!(!is_persistent(&SwarmEvent::AgentTurnDelta(
+            crate::events::AgentTurnDeltaPayload {
+                worker_id: Uuid::nil(),
+                turn_id: "t1".to_string(),
+                block_index: 0,
+                kind: "text".to_string(),
+                text: "hi".to_string(),
             }
         )));
     }
+
+    // ── Envelope shape ───────────────────────────────────────────────
 
     #[test]
     fn test_domain_event_envelope_shape() {
@@ -560,16 +737,12 @@ mod tests {
             json["payload"]["workerId"],
             "00000000-0000-0000-0000-000000000000"
         );
-        // Unattributed provenance must be absent from the wire, not `null`.
+        // Unattributed provenance is absent from the wire, not `null`.
         assert!(json.get("originWorker").is_none());
         assert!(json.get("causeSeq").is_none());
     }
 
-    /// DIRECTIVE: a stamped envelope serializes `originWorker`/`causeSeq`
-    /// as camelCase, present (not null) — the tripwire for the whole
-    /// point of Phase 2: an unattributed event's envelope must stay
-    /// lean (see the test above) while a stamped one actually carries
-    /// the causal attribution over the wire.
+    /// A stamped envelope carries `originWorker`/`causeSeq` in camelCase.
     #[test]
     fn test_domain_event_envelope_shape_stamped() {
         let origin = Uuid::new_v4();
@@ -585,149 +758,281 @@ mod tests {
         assert_eq!(json["causeSeq"], 3);
     }
 
+    /// A replayed row serializes to the same JSON as the live envelope
+    /// it records, stamped or not — the backfill path and the live path
+    /// must be indistinguishable to a client.
+    #[test]
+    fn test_stored_event_json_matches_the_live_envelope() {
+        for provenance in [
+            Provenance::default(),
+            Provenance {
+                origin_worker: Some(Uuid::new_v4()),
+                cause_seq: Some(3),
+            },
+        ] {
+            let (tx, rx) = mpsc::channel();
+            tx.send(WriterCmd::Record(WriterMsg {
+                event: spawned(),
+                provenance,
+                ack: None,
+            }))
+            .unwrap();
+            drop(tx);
+            let mut live = Vec::new();
+            let log = Writer::new(
+                EventLog::open_in_memory().unwrap(),
+                Arc::default(),
+                |e: &DomainEvent| live.push(serde_json::to_value(e).unwrap()),
+                idle_fanout(),
+            )
+            .unwrap()
+            .run(&rx);
+
+            let stored = log.events_since(0, 10).unwrap();
+            assert_eq!(serde_json::to_value(&stored[0]).unwrap(), live[0]);
+        }
+    }
+
+    // ── Writer loop ──────────────────────────────────────────────────
+
     #[test]
     fn test_writer_persists_with_monotonic_seq() {
-        // Drive the writer loop directly (no Tauri AppHandle in unit tests).
-        let log = EventLog::open_in_memory().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
-        tx.send(msg(spawned())).unwrap();
-        tx.send(msg(SwarmEvent::WorkerOutput(WorkerOutputPayload {
-            worker_id: Uuid::nil(),
-            data: "ephemeral".to_string(),
-        })))
-        .unwrap();
-        tx.send(msg(spawned())).unwrap();
-        drop(tx);
-
-        let log = run_writer_loop(rx, log, |_envelope| {});
+        let (log, seen) = drive(
+            EventLog::open_in_memory().unwrap(),
+            vec![msg(spawned()), msg(output()), msg(spawned())],
+        );
+        assert_eq!(seqs(&seen), vec![1, 2, 3]);
         let stored = log.events_since(0, 100).unwrap();
-        // WorkerOutput consumed seq 2 but was not persisted.
+        // worker_output consumed seq 2 but was not persisted.
         assert_eq!(stored.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 3]);
         assert_eq!(stored[0].event_type, "worker_spawned");
     }
 
+    /// CONFIRMED regression: seqs issued to ephemeral events after the
+    /// last persisted row must never be reissued after a crash. The old
+    /// writer resumed from the highest PERSISTED seq, so a reconnecting
+    /// client (holding `lastSeq` = 5 here) silently dropped every new
+    /// event up to seq 5.
     #[test]
-    fn test_writer_resumes_seq_after_restart() {
-        let log = EventLog::open_in_memory().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
-        tx.send(msg(spawned())).unwrap();
-        drop(tx);
-        let mut log = run_writer_loop(rx, log, |_| {});
-        // Simulate a prior run reaching seq 41.
-        log.append(41, 1, "session_created", "{}", &Provenance::default())
-            .unwrap();
+    fn test_restart_after_a_crash_never_reissues_an_ephemeral_seq() {
+        let mut writer = Writer::new(
+            EventLog::open_in_memory().unwrap(),
+            Arc::default(),
+            |_: &DomainEvent| {},
+            idle_fanout(),
+        )
+        .unwrap();
+        writer.record(bare(spawned()));
+        for _ in 0..4 {
+            writer.record(bare(output()));
+        }
+        let issued = writer.seq;
+        assert_eq!(issued, 5);
+        // Crash: the writer stops without finalizing.
+        let log = writer.log;
+        assert_eq!(log.max_seq().unwrap(), 1, "the ephemeral tail left no rows");
 
-        let (tx2, rx2) = std::sync::mpsc::channel::<WriterMsg>();
-        let mut seen = Vec::new();
-        tx2.send(msg(spawned())).unwrap();
-        drop(tx2);
-        let log = run_writer_loop(rx2, log, |envelope| seen.push(envelope.seq));
-        assert_eq!(seen, vec![42]);
-        assert_eq!(log.max_seq().unwrap(), 42);
+        let (_, seen) = drive(log, vec![msg(spawned())]);
+        assert!(
+            seen[0].seq > issued,
+            "resumed at {} but seq {issued} was already issued",
+            seen[0].seq
+        );
     }
 
-    /// DIRECTIVE: the writer loop stamps `provenance` from the
-    /// `WriterMsg` onto the emitted `DomainEvent` AND persists it — both
-    /// halves asserted here, not just the emitted envelope (see
-    /// emitter.rs's unit tests for the `EventSink` half in isolation).
-    /// This is the one seam — `run_writer_loop` → `log.append(..,
-    /// provenance)` — that a change to either side (e.g. forgetting to
-    /// pass `provenance` through to `append`) could silently break
-    /// without a test reading the persisted row back out.
+    /// A clean stop records the exact head, so a clean restart continues
+    /// at head + 1 with no gap.
     #[test]
-    fn test_writer_stamps_provenance_onto_emitted_envelope() {
-        let log = EventLog::open_in_memory().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
-        let origin = Uuid::new_v4();
-        tx.send(WriterMsg {
-            event: spawned(),
-            provenance: Provenance {
-                origin_worker: Some(origin),
-                cause_seq: Some(5),
-            },
-            ack: None,
-        })
-        .unwrap();
-        drop(tx);
+    fn test_clean_restart_continues_without_a_gap() {
+        let (log, seen) = drive(
+            EventLog::open_in_memory().unwrap(),
+            vec![msg(spawned()), msg(output()), msg(output())],
+        );
+        assert_eq!(seqs(&seen), vec![1, 2, 3]);
+        let (_, seen) = drive(log, vec![msg(output())]);
+        assert_eq!(seqs(&seen), vec![4]);
+    }
 
-        let mut seen = Vec::new();
-        let log = run_writer_loop(rx, log, |envelope| seen.push(envelope.clone()));
-        assert_eq!(seen.len(), 1);
+    /// The writer stamps `provenance` onto the emitted envelope AND the
+    /// persisted row.
+    #[test]
+    fn test_writer_stamps_provenance_onto_envelope_and_row() {
+        let origin = Uuid::new_v4();
+        let (log, seen) = drive(
+            EventLog::open_in_memory().unwrap(),
+            vec![WriterCmd::Record(WriterMsg {
+                event: spawned(),
+                provenance: Provenance {
+                    origin_worker: Some(origin),
+                    cause_seq: Some(5),
+                },
+                ack: None,
+            })],
+        );
         assert_eq!(seen[0].origin_worker, Some(origin));
         assert_eq!(seen[0].cause_seq, Some(5));
 
-        // The persisted-row half: read straight back out of SQLite,
-        // independent of the emitted envelope above.
         let stored = log.events_since(0, 10).unwrap();
-        assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].origin_worker, Some(origin));
         assert_eq!(stored[0].cause_seq, Some(5));
     }
 
-    /// DIRECTIVE (ack-oneshot no-stall): a dropped `emit_awaiting_seq`
-    /// receiver must not stall or panic the writer loop — it must
-    /// finish processing every message on the channel exactly as if no
-    /// ack had been requested at all.
+    /// A dropped `emit_awaiting_seq` receiver neither stalls nor skips
+    /// anything in the writer loop.
     #[test]
     fn test_writer_loop_survives_dropped_ack_receiver() {
-        let log = EventLog::open_in_memory().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
-        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<u64>();
-        drop(ack_rx); // caller lost interest before the writer runs
-        tx.send(WriterMsg {
-            event: spawned(),
-            provenance: Provenance::default(),
-            ack: Some(ack_tx),
-        })
-        .unwrap();
-        tx.send(msg(spawned())).unwrap();
-        drop(tx);
-
-        let mut seen = Vec::new();
-        let _log = run_writer_loop(rx, log, |envelope| seen.push(envelope.seq));
-        // Both messages processed, in order — the dropped ack neither
-        // stalled nor skipped anything.
-        assert_eq!(seen, vec![1, 2]);
+        let (ack_tx, ack_rx) = oneshot::channel::<u64>();
+        drop(ack_rx);
+        let (_, seen) = drive(
+            EventLog::open_in_memory().unwrap(),
+            vec![
+                WriterCmd::Record(WriterMsg {
+                    event: spawned(),
+                    provenance: Provenance::default(),
+                    ack: Some(ack_tx),
+                }),
+                msg(spawned()),
+            ],
+        );
+        assert_eq!(seqs(&seen), vec![1, 2]);
     }
 
-    /// DIRECTIVE: `agent_turn_started` returns a real seq — integration
-    /// through the ACTUAL engine (a live `OrchestrationEngine::start`,
-    /// spawning the real `swarm-event-writer` OS thread), not just the
-    /// raw-channel unit tests above. This is the exact mechanism
-    /// `commands::ai::agent_turn_started` uses: `EventSink::emit_awaiting_seq`
-    /// resolved by a running writer thread, end-to-end, proving the
-    /// returned seq is both the one the ack resolves to AND the one
-    /// actually persisted for that event.
+    // ── Live engine ──────────────────────────────────────────────────
+
+    /// `emit_awaiting_seq` through a live engine resolves to the seq the
+    /// event was actually given — the mechanism `agent_turn_started`
+    /// relies on.
     #[tokio::test]
-    async fn test_agent_turn_started_mechanism_returns_a_real_seq_through_a_live_engine() {
-        let log = EventLog::open_in_memory().unwrap();
-        let engine = OrchestrationEngine::start(log, None, |_envelope| {});
+    async fn test_emit_awaiting_seq_resolves_to_the_assigned_seq() {
+        let engine = OrchestrationEngine::start(EventLog::open_in_memory().unwrap(), None, |_| {});
         let sink = engine.sink();
-        let worker_id = Uuid::new_v4();
+        for expected in 1..=2 {
+            let seq = sink
+                .emit_awaiting_seq(spawned(), Provenance::default())
+                .await
+                .expect("a live engine resolves the ack");
+            assert_eq!(seq, expected);
+        }
+        assert_eq!(engine.head_seq(), 2);
+    }
 
-        let ack = sink.emit_awaiting_seq(
-            SwarmEvent::AgentTurnStarted(crate::events::AgentTurnStartedPayload {
-                worker_id,
-                model: "claude-sonnet-4-5".to_string(),
-                request_id: "turn-1".to_string(),
-            }),
-            Provenance::default(),
-        );
-        let turn_seq = ack.await.expect("live engine must resolve the ack");
-        assert_eq!(turn_seq, 1, "first event through a fresh engine gets seq 1");
+    /// A subscriber never sees an event before the head covers it — the
+    /// ordering that makes "subscribe, then read `head_seq`" gap-free.
+    #[tokio::test]
+    async fn test_head_seq_is_published_before_the_fanout_delivers() {
+        let engine = OrchestrationEngine::start(EventLog::open_in_memory().unwrap(), None, |_| {});
+        let mut rx = engine.subscribe();
+        let sink = engine.sink();
+        for _ in 0..200 {
+            sink.emit(output());
+        }
+        for _ in 0..200 {
+            let event = rx.recv().await.unwrap();
+            assert!(engine.head_seq() >= event.seq);
+        }
+    }
 
-        // A second turn on the same live engine gets a distinct,
-        // monotonically-increasing seq — proving this isn't a
-        // coincidental always-1 stub.
-        let ack2 = sink.emit_awaiting_seq(
-            SwarmEvent::AgentTurnStarted(crate::events::AgentTurnStartedPayload {
-                worker_id,
-                model: "claude-sonnet-4-5".to_string(),
-                request_id: "turn-2".to_string(),
-            }),
-            Provenance::default(),
+    #[tokio::test]
+    async fn test_flush_waits_for_every_queued_event() {
+        let engine = OrchestrationEngine::start(EventLog::open_in_memory().unwrap(), None, |_| {});
+        let sink = engine.sink();
+        for _ in 0..50 {
+            sink.emit(output());
+        }
+        assert_eq!(engine.flush().await.unwrap(), 50);
+        assert_eq!(engine.head_seq(), 50);
+    }
+
+    /// A temp database file removed (with its WAL siblings) on drop.
+    fn temp_db() -> (PathBuf, std::mem::DropGuard<PathBuf, impl FnOnce(PathBuf)>) {
+        let path = std::env::temp_dir().join(format!("swarm-engine-test-{}.db", Uuid::new_v4()));
+        let guard = std::mem::DropGuard::new(path.clone(), |path: PathBuf| {
+            for suffix in ["-wal", "-shm"] {
+                let mut sibling = path.clone().into_os_string();
+                sibling.push(suffix);
+                let _ = std::fs::remove_file(sibling);
+            }
+            let _ = std::fs::remove_file(&path);
+        });
+        (path, guard)
+    }
+
+    /// CONFIRMED regression: shutdown drains everything queued before it
+    /// (nothing lost on exit), later events are refused, and a restart
+    /// on the same file continues exactly after the final head.
+    #[tokio::test]
+    async fn test_shutdown_drains_the_queue_and_a_restart_continues_after_it() {
+        let (path, _cleanup) = temp_db();
+        let engine = OrchestrationEngine::try_start(
+            EventLog::open(&path).unwrap(),
+            Some(path.clone()),
+            |_| {},
+        )
+        .unwrap();
+        let sink = engine.sink();
+        for _ in 0..100 {
+            sink.emit(spawned());
+            sink.emit(output());
+        }
+
+        let head = tokio::task::spawn_blocking({
+            let engine = engine.clone();
+            move || engine.shutdown(Duration::from_secs(10))
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(head, 200);
+        assert_eq!(engine.head_seq(), 200);
+
+        let reader = EventLog::open_readonly(&path).unwrap();
+        assert_eq!(reader.events_since(0, 1000).unwrap().len(), 100);
+
+        // After shutdown: new events are dropped, acks and flushes fail,
+        // and a second shutdown is a no-op.
+        assert!(
+            sink.emit_awaiting_seq(spawned(), Provenance::default())
+                .await
+                .is_err()
         );
-        let turn_seq_2 = ack2.await.expect("live engine must resolve the second ack");
-        assert_eq!(turn_seq_2, 2);
+        assert_matches!(engine.flush().await, Err(AppError::EventLog(_)));
+        assert_eq!(engine.shutdown(Duration::from_secs(1)).unwrap(), 200);
+        assert_eq!(reader.max_seq().unwrap(), 199);
+
+        let restarted = OrchestrationEngine::try_start(
+            EventLog::open(&path).unwrap(),
+            Some(path.clone()),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(restarted.head_seq(), 200);
+        let seq = restarted
+            .sink()
+            .emit_awaiting_seq(output(), Provenance::default())
+            .await
+            .unwrap();
+        assert_eq!(seq, 201);
+    }
+
+    /// A log whose resume seq cannot be read fails the start instead of
+    /// silently restarting seqs at 1.
+    #[test]
+    fn test_try_start_propagates_an_unreadable_resume_seq() {
+        let (path, _cleanup) = temp_db();
+        // A v1-shaped file (no `meta` table), opened without migrating.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (seq INTEGER PRIMARY KEY, ts INTEGER NOT NULL, \
+             type TEXT NOT NULL, payload TEXT NOT NULL, origin_worker TEXT, \
+             cause_seq INTEGER) STRICT;
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+        drop(conn);
+
+        let result =
+            OrchestrationEngine::try_start(EventLog::open_readonly(&path).unwrap(), None, |_| {});
+        // `.err()`: the engine handle is not `Debug`.
+        assert_matches!(result.err(), Some(AppError::EventLog(_)));
     }
 }
