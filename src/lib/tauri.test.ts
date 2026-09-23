@@ -20,13 +20,13 @@ import {
 
 const WORKER_UUID = "550e8400-e29b-41d4-a716-446655440000";
 
-/** Forces isTauri() true so #lib/tauri's invoke() wrapper doesn't short-circuit. */
+/** Sets the flag the desktop shell injects, so `isTauri()` is true and IPC is not short-circuited. */
 function enableTauri(): void {
-  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  vi.stubGlobal("isTauri", true);
 }
 
 function disableTauri(): void {
-  Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+  vi.unstubAllGlobals();
 }
 
 describe("spawnWorker", () => {

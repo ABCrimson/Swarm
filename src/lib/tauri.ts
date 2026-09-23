@@ -1,3 +1,4 @@
+import { isTauri } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import * as z from "zod";
 import type {
@@ -29,19 +30,16 @@ import {
 } from "#store/types";
 
 /**
- * Returns `true` when running inside a Tauri webview (IPC bridge is
- * available) — unchanged from before the headless-daemon transport
- * split. Feature-gated call sites that need something ONLY the Tauri
- * bridge provides (`tauri-plugin-fs`/`-dialog`/`-shell`/`-notification`/
- * `-updater`, and the webview-direct AI chat path) keep using this
- * exactly as before: a `wsTransport` connection is real backend
- * connectivity but is NOT a Tauri bridge, so this correctly stays
- * `false` there — see `#lib/transport`'s `TransportCapabilities` for
- * the explicit, named version of the same distinction.
+ * `true` inside the Tauri desktop webview: `@tauri-apps/api/core`'s
+ * `isTauri()`, which reads the `globalThis.isTauri` flag the shell
+ * injects. Call sites that need something only the desktop shell
+ * provides (`tauri-plugin-fs`/`-dialog`/`-opener`/`-notification`/
+ * `-updater`, the webview-direct AI chat path) gate on this. A
+ * `wsTransport` connection is a real backend but not a Tauri bridge, so
+ * this is `false` there; see {@link hasTransport} and
+ * `#lib/transport`'s `TransportCapabilities`.
  */
-export function isTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+export { isTauri };
 
 /**
  * `true` when SOME backend transport is active — the Tauri IPC bridge
