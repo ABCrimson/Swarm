@@ -5,9 +5,9 @@ import { Button } from "#components/ui/Button";
 
 describe("Button", () => {
   it("renders children text", () => {
-    render(<Button>Click me</Button>);
+    render(<Button>Click Me</Button>);
 
-    expect(screen.getByRole("button", { name: "Click me" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Click Me" })).toBeInTheDocument();
   });
 
   it("handles click events", async () => {
@@ -17,10 +17,10 @@ describe("Button", () => {
     render(<Button onClick={handleClick}>Click</Button>);
     await user.click(screen.getByRole("button"));
 
-    expect(handleClick).toHaveBeenCalledTimes(1);
+    expect(handleClick).toHaveBeenCalledOnce();
   });
 
-  it("does not fire click when disabled", async () => {
+  it("disables for real and ignores clicks when disabled", async () => {
     const user = userEvent.setup();
     const handleClick = vi.fn();
 
@@ -31,25 +31,62 @@ describe("Button", () => {
     );
     await user.click(screen.getByRole("button"));
 
+    expect(screen.getByRole("button")).toBeDisabled();
     expect(handleClick).not.toHaveBeenCalled();
   });
 
-  it("renders as disabled when disabled prop is true", () => {
-    render(<Button disabled>Disabled</Button>);
+  it("marks a loading button busy and swallows clicks without disabling it", async () => {
+    const user = userEvent.setup();
+    const handleClick = vi.fn();
 
-    expect(screen.getByRole("button")).toBeDisabled();
+    render(
+      <Button loading onClick={handleClick}>
+        Saving
+      </Button>,
+    );
+    const button = screen.getByRole("button", { name: "Saving" });
+    await user.click(button);
+
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).toBeEnabled();
+    expect(handleClick).not.toHaveBeenCalled();
   });
 
-  it("renders as disabled when loading is true", () => {
-    render(<Button loading>Loading</Button>);
+  // Regression: `disabled` on the focused button dropped keyboard focus
+  // to <body> the moment it started loading.
+  it("keeps keyboard focus when it starts loading", () => {
+    const { rerender } = render(<Button>Save</Button>);
+    const button = screen.getByRole("button", { name: "Save" });
+    button.focus();
 
-    expect(screen.getByRole("button")).toBeDisabled();
+    rerender(<Button loading>Save</Button>);
+
+    expect(button).toHaveFocus();
   });
 
-  it("sets aria-busy when loading", () => {
-    render(<Button loading>Loading</Button>);
+  it("does not submit its form while loading", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn((e: React.FormEvent) => e.preventDefault());
 
-    expect(screen.getByRole("button")).toHaveAttribute("aria-busy", "true");
+    render(
+      <form onSubmit={onSubmit}>
+        <Button type="submit" loading>
+          Submit
+        </Button>
+      </form>,
+    );
+    await user.click(screen.getByRole("button"));
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("shows a decorative spinner that stays out of the accessible name", () => {
+    const { container } = render(<Button loading>Saving</Button>);
+
+    expect(container.querySelector("svg.animate-spin")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("button")).toHaveAccessibleName("Saving");
   });
 
   it("does not set aria-busy when not loading", () => {
@@ -58,70 +95,45 @@ describe("Button", () => {
     expect(screen.getByRole("button")).not.toHaveAttribute("aria-busy");
   });
 
-  it("applies the primary variant by default", () => {
-    render(<Button>Primary</Button>);
+  it.for([
+    ["primary", undefined],
+    ["secondary", "secondary"],
+    ["ghost", "ghost"],
+    ["danger", "danger"],
+  ] as const)("applies the %s variant", ([expected, variant]) => {
+    render(<Button variant={variant}>Label</Button>);
 
-    expect(screen.getByRole("button")).toHaveAttribute("data-variant", "primary");
+    expect(screen.getByRole("button")).toHaveAttribute("data-variant", expected);
   });
 
-  it("applies the secondary variant", () => {
-    render(<Button variant="secondary">Secondary</Button>);
+  it.for([
+    ["md", undefined],
+    ["sm", "sm"],
+    ["lg", "lg"],
+  ] as const)("applies the %s size", ([expected, size]) => {
+    render(<Button size={size}>Label</Button>);
 
-    expect(screen.getByRole("button")).toHaveAttribute("data-variant", "secondary");
+    expect(screen.getByRole("button")).toHaveAttribute("data-size", expected);
   });
 
-  it("applies the ghost variant", () => {
-    render(<Button variant="ghost">Ghost</Button>);
-
-    expect(screen.getByRole("button")).toHaveAttribute("data-variant", "ghost");
-  });
-
-  it("applies the danger variant", () => {
-    render(<Button variant="danger">Danger</Button>);
-
-    expect(screen.getByRole("button")).toHaveAttribute("data-variant", "danger");
-  });
-
-  it("applies the md size by default", () => {
-    render(<Button>Medium</Button>);
-
-    expect(screen.getByRole("button")).toHaveAttribute("data-size", "md");
-  });
-
-  it("applies the sm size", () => {
-    render(<Button size="sm">Small</Button>);
-
-    expect(screen.getByRole("button")).toHaveAttribute("data-size", "sm");
-  });
-
-  it("applies the lg size", () => {
-    render(<Button size="lg">Large</Button>);
-
-    expect(screen.getByRole("button")).toHaveAttribute("data-size", "lg");
-  });
-
-  it("shows a loading spinner when loading", () => {
-    render(<Button loading>Saving</Button>);
-
-    // The Spinner component renders an output element with aria-label "Loading"
-    expect(screen.getByLabelText("Loading")).toBeInTheDocument();
-  });
-
-  it("sets type=button by default", () => {
-    render(<Button>Default</Button>);
-
+  it("sets type=button by default and accepts a custom type", () => {
+    const { rerender } = render(<Button>Default</Button>);
     expect(screen.getByRole("button")).toHaveAttribute("type", "button");
-  });
 
-  it("accepts a custom type", () => {
-    render(<Button type="submit">Submit</Button>);
-
+    rerender(<Button type="submit">Submit</Button>);
     expect(screen.getByRole("button")).toHaveAttribute("type", "submit");
   });
 
-  it("applies the swarm-btn CSS class", () => {
-    render(<Button>Styled</Button>);
+  it("applies the swarm-btn class alongside a caller's class", () => {
+    render(<Button className="w-full">Styled</Button>);
 
-    expect(screen.getByRole("button").className).toContain("swarm-btn");
+    expect(screen.getByRole("button")).toHaveClass("swarm-btn", "w-full");
+  });
+
+  it("forwards a ref to the underlying button (React 19 ref-as-prop)", () => {
+    const ref = { current: null as HTMLButtonElement | null };
+    render(<Button ref={ref}>Ref</Button>);
+
+    expect(ref.current).toBe(screen.getByRole("button"));
   });
 });

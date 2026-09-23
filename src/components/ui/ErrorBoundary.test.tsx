@@ -1,123 +1,172 @@
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ErrorBoundary } from "#components/ui/ErrorBoundary";
+import { ErrorBoundary, MAX_RETRIES, STABLE_RESET_MS } from "#components/ui/ErrorBoundary";
 
-// A component that throws on render
-function ThrowingComponent({ shouldThrow }: { shouldThrow: boolean }): React.ReactElement {
-  if (shouldThrow) {
-    throw new Error("Test render error");
-  }
-  return <div>Rendered successfully</div>;
+/** What the child throws on render; `null` renders normally. */
+const failure: { thrown: unknown } = { thrown: null };
+
+function Child(): React.ReactElement {
+  if (failure.thrown !== null) throw failure.thrown;
+  return <p>Rendered Successfully</p>;
 }
 
-// Suppress React's noisy error boundary console output in tests
-const originalConsoleError = console.error;
+function renderBoundary(props: Partial<React.ComponentProps<typeof ErrorBoundary>> = {}) {
+  return render(
+    <ErrorBoundary {...props}>
+      <Child />
+    </ErrorBoundary>,
+  );
+}
+
+const retryButton = () => screen.getByRole("button", { name: /Retry/ });
 
 describe("ErrorBoundary", () => {
   beforeEach(() => {
-    console.error = vi.fn();
+    failure.thrown = new Error("Test Render Error");
+    // React reports caught render errors through console.error.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(toast.error).mockClear();
+    vi.mocked(toast.info).mockClear();
   });
 
   afterEach(() => {
-    console.error = originalConsoleError;
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
-  it("renders children when there is no error", () => {
-    render(
-      <ErrorBoundary>
-        <div>Hello World</div>
-      </ErrorBoundary>,
-    );
+  it("renders children when nothing throws", () => {
+    failure.thrown = null;
+    renderBoundary();
 
-    expect(screen.getByText("Hello World")).toBeInTheDocument();
+    expect(screen.getByText("Rendered Successfully")).toBeInTheDocument();
   });
 
-  it("catches errors and displays the default fallback UI", () => {
-    render(
-      <ErrorBoundary>
-        <ThrowingComponent shouldThrow={true} />
-      </ErrorBoundary>,
-    );
+  it("shows the default fallback as an alert with the error message", () => {
+    renderBoundary();
 
-    expect(screen.getByText("Something Went Wrong")).toBeInTheDocument();
-    expect(screen.getByText("Test render error")).toBeInTheDocument();
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Something Went Wrong");
+    expect(alert).toHaveTextContent("Test Render Error");
+    expect(retryButton()).toHaveTextContent(`Retry (${MAX_RETRIES} Remaining)`);
   });
 
-  it("shows a retry button in the default fallback", () => {
-    render(
-      <ErrorBoundary>
-        <ThrowingComponent shouldThrow={true} />
-      </ErrorBoundary>,
-    );
+  // Regression: every Error has a string `message`, so the old duck-typed
+  // check labelled plain render errors "IPC Error" and the `instanceof
+  // Error` branch could never run.
+  it("toasts a plain Error with its own message, not as an IPC error", () => {
+    renderBoundary();
 
-    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith("Test Render Error");
   });
 
-  it("displays retry count in the button text", () => {
-    render(
-      <ErrorBoundary>
-        <ThrowingComponent shouldThrow={true} />
-      </ErrorBoundary>,
-    );
+  it("toasts a serialized Tauri error object as an IPC error", () => {
+    failure.thrown = { message: "Worker Not Found", kind: "NotFound" };
+    renderBoundary();
 
-    // Initially 3 retries remaining
-    expect(screen.getByRole("button", { name: /3 remaining/i })).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith("IPC Error: Worker Not Found", {
+      description: "NotFound",
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("Worker Not Found");
   });
 
-  it("uses custom fallback when provided", () => {
-    const customFallback = (error: Error, reset: () => void) => (
-      <div>
-        <span>Custom error: {error.message}</span>
-        <button type="button" onClick={reset}>
-          Custom reset
-        </button>
-      </div>
-    );
-
-    render(
-      <ErrorBoundary fallback={customFallback}>
-        <ThrowingComponent shouldThrow={true} />
-      </ErrorBoundary>,
-    );
-
-    expect(screen.getByText("Custom error: Test render error")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Custom reset" })).toBeInTheDocument();
-  });
-
-  it("calls onError callback when an error is caught", () => {
+  it("normalizes a thrown non-Error value into a readable message", () => {
+    failure.thrown = "Plain String Failure";
     const onError = vi.fn();
+    renderBoundary({ onError });
 
-    render(
-      <ErrorBoundary onError={onError}>
-        <ThrowingComponent shouldThrow={true} />
-      </ErrorBoundary>,
-    );
-
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError.mock.calls[0][0]).toBeInstanceOf(Error);
-    expect(onError.mock.calls[0][0].message).toBe("Test render error");
+    expect(screen.getByRole("alert")).toHaveTextContent("Plain String Failure");
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    expect(onError.mock.calls[0]?.[0].message).toBe("Plain String Failure");
   });
 
-  it("retry button is clickable and triggers the backoff mechanism", async () => {
-    const user = userEvent.setup();
-
+  it("uses a custom fallback when provided", () => {
     render(
-      <ErrorBoundary>
-        <ThrowingComponent shouldThrow={true} />
+      <ErrorBoundary
+        fallback={(error, reset) => (
+          <button type="button" onClick={reset}>
+            Custom: {error.message}
+          </button>
+        )}
+      >
+        <Child />
       </ErrorBoundary>,
     );
 
-    const retryButton = screen.getByRole("button", { name: /retry/i });
-    expect(retryButton).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Custom: Test Render Error" })).toBeInTheDocument();
+  });
 
-    // Click retry -- this schedules a setTimeout with backoff delay
-    // The component still shows the error UI because of the delay,
-    // but the click itself should not throw
-    await user.click(retryButton);
+  it("retries after a 1s backoff and renders the recovered children", () => {
+    vi.useFakeTimers();
+    renderBoundary();
 
-    // The button should still be in the document (the error persists
-    // because the child will throw again on re-render)
-    expect(screen.getByText("Something Went Wrong")).toBeInTheDocument();
+    fireEvent.click(retryButton());
+    expect(toast.info).toHaveBeenCalledExactlyOnceWith("Retrying In 1s…");
+    expect(retryButton()).toHaveAttribute("aria-busy", "true");
+
+    failure.thrown = null;
+    act(() => vi.advanceTimersByTime(999));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.getByText("Rendered Successfully")).toBeInTheDocument();
+  });
+
+  // Regression: each click scheduled its own timer and spent a retry.
+  it("ignores extra Retry clicks while a retry is pending", () => {
+    vi.useFakeTimers();
+    renderBoundary();
+
+    fireEvent.click(retryButton());
+    fireEvent.click(retryButton());
+    fireEvent.click(retryButton());
+    expect(toast.info).toHaveBeenCalledOnce();
+
+    act(() => vi.advanceTimersByTime(1000));
+    expect(retryButton()).toHaveTextContent(`Retry (${MAX_RETRIES - 1} Remaining)`);
+  });
+
+  it("backs off 1s, 2s, 4s and then offers only a reload", () => {
+    vi.useFakeTimers();
+    const reload = vi.fn();
+    vi.stubGlobal("location", { ...location, reload });
+    renderBoundary();
+
+    for (const [attempt, delay] of [1000, 2000, 4000].entries()) {
+      fireEvent.click(retryButton());
+      expect(toast.info).toHaveBeenLastCalledWith(`Retrying In ${delay / 1000}s…`);
+      act(() => vi.advanceTimersByTime(delay));
+      if (attempt < MAX_RETRIES - 1) {
+        expect(retryButton()).toHaveTextContent(`Retry (${MAX_RETRIES - attempt - 1} Remaining)`);
+      }
+    }
+
+    expect(screen.queryByRole("button", { name: /Retry/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reload Application" }));
+    expect(reload).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+
+  // Regression: the budget never refilled, so the app-lifetime root
+  // boundary could retry only three times ever.
+  it("refills the retry budget once the children stay up", () => {
+    vi.useFakeTimers();
+    const { rerender } = renderBoundary();
+
+    fireEvent.click(retryButton());
+    failure.thrown = null;
+    act(() => vi.advanceTimersByTime(1000));
+    act(() => vi.advanceTimersByTime(STABLE_RESET_MS));
+
+    failure.thrown = new Error("Second Failure");
+    rerender(
+      <ErrorBoundary>
+        <Child key="remount" />
+      </ErrorBoundary>,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Second Failure");
+    expect(retryButton()).toHaveTextContent(`Retry (${MAX_RETRIES} Remaining)`);
   });
 });
