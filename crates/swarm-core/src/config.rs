@@ -104,6 +104,8 @@ pub fn write_value(paths: &Paths, key: &str, value: Value) -> Result<(), AppErro
 
 #[cfg(test)]
 mod tests {
+    use std::mem::DropGuard;
+
     use super::*;
     use uuid::Uuid;
 
@@ -113,19 +115,19 @@ mod tests {
         std::env::temp_dir().join(format!("swarm-config-test-{}.json", Uuid::new_v4()))
     }
 
-    /// RAII cleanup so a failing assertion still removes the temp file.
-    struct TempFile(PathBuf);
-    impl Drop for TempFile {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-            let _ = std::fs::remove_file(format!("{}.tmp", self.0.display()));
-        }
+    /// RAII cleanup so a failing assertion still removes the temp file
+    /// and its atomic-write `.tmp` sibling.
+    fn remove_on_drop(path: PathBuf) -> DropGuard<PathBuf, impl FnOnce(PathBuf)> {
+        DropGuard::new(path, |path| {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(format!("{}.tmp", path.display()));
+        })
     }
 
     #[test]
     fn test_missing_file_defaults_to_empty_map() {
         let path = temp_config_path();
-        let _cleanup = TempFile(path.clone());
+        let _cleanup = remove_on_drop(path.clone());
 
         let map = load_config_map(&path);
         assert!(map.is_empty(), "expected empty map for a nonexistent file");
@@ -135,7 +137,7 @@ mod tests {
     fn test_preexisting_empty_object_file_is_tolerated() {
         // Matches the real earlier-era swarm-config.json content: `{}`.
         let path = temp_config_path();
-        let _cleanup = TempFile(path.clone());
+        let _cleanup = remove_on_drop(path.clone());
         std::fs::write(&path, "{}").unwrap();
 
         let map = load_config_map(&path);
@@ -145,7 +147,7 @@ mod tests {
     #[test]
     fn test_malformed_file_is_tolerated() {
         let path = temp_config_path();
-        let _cleanup = TempFile(path.clone());
+        let _cleanup = remove_on_drop(path.clone());
         std::fs::write(&path, "{not valid json at all").unwrap();
 
         let map = load_config_map(&path);
@@ -155,7 +157,7 @@ mod tests {
     #[test]
     fn test_write_then_read_roundtrip() {
         let path = temp_config_path();
-        let _cleanup = TempFile(path.clone());
+        let _cleanup = remove_on_drop(path.clone());
 
         let mut map = HashMap::new();
         map.insert(
@@ -174,7 +176,7 @@ mod tests {
     #[test]
     fn test_write_preserves_other_keys() {
         let path = temp_config_path();
-        let _cleanup = TempFile(path.clone());
+        let _cleanup = remove_on_drop(path.clone());
 
         let mut map = HashMap::new();
         map.insert("other_setting".to_string(), Value::Bool(true));
@@ -200,7 +202,7 @@ mod tests {
     #[test]
     fn test_save_leaves_no_tmp_file_behind_on_success() {
         let path = temp_config_path();
-        let _cleanup = TempFile(path.clone());
+        let _cleanup = remove_on_drop(path.clone());
 
         let map = HashMap::new();
         save_config_map(&path, &map).expect("save should succeed");
@@ -215,7 +217,7 @@ mod tests {
     #[test]
     fn test_load_missing_key_returns_none() {
         let path = temp_config_path();
-        let _cleanup = TempFile(path.clone());
+        let _cleanup = remove_on_drop(path.clone());
 
         let mut map = HashMap::new();
         map.insert("unrelated".to_string(), Value::Bool(false));

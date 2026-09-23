@@ -105,6 +105,7 @@ impl AgentSessionRegistry {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
@@ -172,7 +173,9 @@ mod tests {
     fn test_get_missing_worker_returns_worker_not_found() {
         let registry = AgentSessionRegistry::new();
         let result = registry.get(&Uuid::new_v4());
-        assert!(matches!(result, Err(AppError::WorkerNotFound { .. })));
+        // `.err()`: `dyn AgentSession` is not `Debug`, which
+        // `assert_matches!` needs to print a mismatch.
+        assert_matches!(result.err(), Some(AppError::WorkerNotFound { .. }));
     }
 
     #[test]

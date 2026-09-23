@@ -222,7 +222,7 @@ impl EventLog {
             .query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |row| {
                 row.get::<_, i64>(0)
             })
-            .map(|v| v as u64)
+            .map(i64::cast_unsigned)
             .map_err(|e| AppError::EventLog(e.to_string()))
     }
 
@@ -240,12 +240,12 @@ impl EventLog {
             .execute(
                 "INSERT INTO events (seq, ts, type, payload, origin_worker, cause_seq) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 (
-                    seq as i64,
+                    seq.cast_signed(),
                     ts,
                     event_type,
                     payload_json,
                     provenance.origin_worker.map(|u| u.to_string()),
-                    provenance.cause_seq.map(|s| s as i64),
+                    provenance.cause_seq.map(u64::cast_signed),
                 ),
             )
             .map(|_| ())
@@ -430,11 +430,11 @@ impl EventLog {
                 .transpose()
                 .map_err(|e| AppError::EventLog(format!("stored origin_worker: {e}")))?;
             out.push(StoredEvent {
-                seq: seq as u64,
+                seq: seq.cast_unsigned(),
                 ts,
                 event_type,
                 origin_worker,
-                cause_seq: cause_seq.map(|s| s as u64),
+                cause_seq: cause_seq.map(i64::cast_unsigned),
                 payload: serde_json::from_str(&payload)
                     .map_err(|e| AppError::EventLog(e.to_string()))?,
             });
@@ -464,7 +464,7 @@ impl EventLog {
                 |row| row.get::<_, i64>(0),
             )
             .optional()
-            .map(|opt| opt.map(|v| v as u64))
+            .map(|opt| opt.map(i64::cast_unsigned))
             .map_err(|e| AppError::EventLog(e.to_string()))
     }
 }
@@ -531,7 +531,7 @@ mod tests {
         for seq in 1..=10 {
             log.append(
                 seq,
-                1000 + seq as i64,
+                1000 + seq.cast_signed(),
                 "worker_output",
                 "{}",
                 &Provenance::default(),
@@ -557,7 +557,7 @@ mod tests {
         for seq in 1..=10 {
             log.append(
                 seq,
-                1000 + seq as i64,
+                1000 + seq.cast_signed(),
                 "worker_output",
                 "{}",
                 &Provenance::default(),
@@ -593,7 +593,7 @@ mod tests {
         for seq in 1..=10 {
             log.append(
                 seq,
-                seq as i64,
+                seq.cast_signed(),
                 "worker_output",
                 "{}",
                 &Provenance::default(),
@@ -634,7 +634,7 @@ mod tests {
     fn append_agent_tool_call(log: &mut EventLog, seq: u64, worker_id: &str) {
         log.append(
             seq,
-            seq as i64,
+            seq.cast_signed(),
             "agent_tool_call",
             &format!(r#"{{"workerId":"{worker_id}","turnId":"t{seq}","toolUseId":"u{seq}","name":"Read","input":{{}}}}"#),
             &Provenance::default(),
@@ -1057,7 +1057,7 @@ mod tests {
         for seq in 1..=5 {
             log.append(
                 seq,
-                seq as i64,
+                seq.cast_signed(),
                 "bus_message",
                 "{}",
                 &Provenance {

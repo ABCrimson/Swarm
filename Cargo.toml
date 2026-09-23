@@ -1,0 +1,113 @@
+# Rust workspace root (virtual manifest). Members:
+#   src-tauri/         swarm-desktop, the Tauri desktop shell
+#   crates/swarm-core  the Tauri-free domain library both shells embed
+#   crates/swarmd      the headless daemon
+# Cargo.lock, clippy.toml and deny.toml live here too, and `target/` is
+# created here: run cargo from the repo root.
+[workspace]
+members  = ["src-tauri", "crates/*"]
+# Explicit: a virtual manifest has no root package whose edition could
+# imply the edition-2024 resolver.
+resolver = "3"
+
+[workspace.package]
+# Crate version for every workspace member. package.json is the app's
+# version source: src-tauri/tauri.conf.json sets `version` to
+# "../package.json", so the bundle and updater version derive from it.
+# Cargo cannot read package.json, so this value is held in lockstep with
+# it by swarm-desktop's `app_version_resolves_from_package_json` test.
+version      = "0.13.1"
+edition      = "2024"
+# The trim_prefix/trim_suffix and std::mem::DropGuard APIs the code uses
+# are new in 1.100; rust-toolchain.toml pins the matching nightly.
+rust-version = "1.100"
+license      = "MIT"
+repository   = "https://github.com/ABCrimson/Swarm"
+publish      = false
+
+# Every crate opts in with `[lints] workspace = true`.
+[workspace.lints.rust]
+unsafe_code              = "deny"
+unsafe_op_in_unsafe_fn   = "deny"
+missing_unsafe_on_extern = "deny"
+
+[workspace.lints.clippy]
+# Suppressions must be `#[expect(lint, reason = "...")]`, which fails
+# the build once the suppressed lint stops firing.
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"
+undocumented_unsafe_blocks      = "deny"
+# Enforce clippy.toml's house rules (std::sync::Mutex/RwLock are banned
+# in favour of parking_lot).
+disallowed_types                = "deny"
+disallowed_methods              = "deny"
+dbg_macro                       = "deny"
+todo                            = "deny"
+unimplemented                   = "deny"
+
+[workspace.lints.cargo]
+unused_dependencies           = "deny"
+unused_workspace_dependencies = "deny"
+
+[workspace.dependencies]
+swarm-core                = { path = "crates/swarm-core" }
+tauri                     = { version = "=2.11.6", features = ["devtools", "image-png"] }
+tokio                     = { version = "=1.53.1", features = ["full"] }
+portable-pty              = "=0.9.0"
+serde                     = { version = "=1.0.229", features = ["derive"] }
+serde_json                = "=1.0.151"
+anyhow                    = "=1.0.104"
+thiserror                 = "=2.0.20"
+tracing                   = "=0.1.44"
+tracing-subscriber        = { version = "=0.3.23", features = ["json", "env-filter"] }
+uuid                      = { version = "=1.26.1", features = ["v4", "serde"] }
+dashmap                   = "=6.2.1"
+parking_lot               = "=0.12.5"
+rusqlite                  = { version = "=0.40.2", features = ["bundled"] }
+regex                     = "=1.13.1"
+tauri-plugin-fs           = "=2.5.2"
+tauri-plugin-dialog       = "=2.7.3"
+tauri-plugin-shell        = "=2.3.6"
+tauri-plugin-store        = "=2.4.5"
+sysinfo                   = "=0.39.6"
+tauri-plugin-updater      = "=2.12.0"
+tauri-plugin-notification = "=2.4.0"
+tokio-util                = { version = "=0.7.19", features = ["rt"] }
+tauri-build               = { version = "=2.6.3", features = [] }
+# ── swarmd (Phase 2 headless daemon) ─────────────────────────────────
+# axum is the one genuinely NEW dependency this workspace takes on for
+# swarmd — nothing else in the tree pulled in an HTTP/WS server stack.
+# See docs/architecture.md's "Runtime Modes" section for the
+# cargo-tree-verified justification.
+axum                      = { version = "=0.8.9", features = ["ws"] }
+# swarmd-only: ServeDir (--serve-ui) and the browser-build CSP response
+# header. Not shared with the desktop shell: tauri reaches tower-http only
+# through reqwest, which resolves the 0.6 line, so the lock carries 0.6
+# (desktop) and 0.7 (swarmd) side by side.
+tower-http                = { version = "=0.7.1", features = ["fs", "set-header", "trace"] }
+tower                     = { version = "=0.5.3", features = ["util"] }
+# Already present transitively at this exact version (uuid v4's own
+# randomness source) — made direct for the 256-bit daemon-token.
+getrandom                 = "=0.4.3"
+# Already present transitively at this exact version (pulled in by
+# something in the existing dependency tree) — made direct for the
+# constant-time token comparison on the WS auth path.
+subtle                    = "=2.6.1"
+# Dev-only, swarmd's integration test: drives a real WS client against a
+# real swarmd instance. Same tokio-tungstenite version axum's own `ws`
+# feature resolves internally, so this adds no new crate VERSION to the
+# tree, only a dev-time direct dependency on one already present.
+tokio-tungstenite         = "=0.29.0"
+# Already present transitively (hyper/tower's own plumbing) — made
+# direct for `WebSocket::split()` in swarmd's per-connection handler.
+futures-util              = "=0.3.34"
+
+[profile.release]
+opt-level     = 3
+lto           = "fat"
+codegen-units = 1
+panic         = "abort"
+strip         = "symbols"
+
+[profile.dev]
+opt-level = 1

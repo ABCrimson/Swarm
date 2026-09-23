@@ -282,10 +282,7 @@ pub fn do_spawn_worker(
         AppError::PtySpawn(e.to_string())
     })?;
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let now = crate::clock::unix_secs();
 
     let pid = pty_handle.pid;
     let handle = WorkerHandle {

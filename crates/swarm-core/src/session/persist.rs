@@ -101,21 +101,20 @@ pub fn save(paths: &Paths, manager: &SessionManager) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::mem::DropGuard;
+
     use super::*;
     use uuid::Uuid;
 
-    fn temp_paths() -> (Paths, TempDir) {
+    /// A fresh data dir plus a guard that removes it when dropped, so a
+    /// failing assertion still cleans up.
+    fn temp_paths() -> (Paths, DropGuard<PathBuf, impl FnOnce(PathBuf)>) {
         let dir = std::env::temp_dir().join(format!("swarm-sessions-test-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let cleanup = TempDir(dir.clone());
+        let cleanup = DropGuard::new(dir.clone(), |dir| {
+            let _ = std::fs::remove_dir_all(dir);
+        });
         (Paths { data_dir: dir }, cleanup)
-    }
-
-    struct TempDir(PathBuf);
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
     }
 
     #[test]

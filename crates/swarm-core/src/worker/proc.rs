@@ -442,6 +442,8 @@ pub fn write_to_piped(writer: &mut dyn Write, data: &[u8]) -> anyhow::Result<()>
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
 
     // ── NdjsonFramer ──────────────────────────────────────────────────
@@ -570,10 +572,10 @@ mod tests {
         let mut framer = NdjsonFramer::new();
         let oversized = vec![b'z'; MAX_LINE_BYTES + 1];
         let result = framer.push(&oversized);
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(AppError::LineTooLong { max, .. }) if max == MAX_LINE_BYTES
-        ));
+        );
     }
 
     /// DIRECTIVE (review FIX-2): after an overrun error, the framer's

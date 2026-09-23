@@ -40,9 +40,12 @@
 //!   shelling out to the system `git` binary via arg-vector `Command`
 //!   invocations (never a shell string)
 //! - [`error`] — Shared application error type
+//! - `clock` (crate-private) — the one wall-clock-to-epoch conversion
+//!   every timestamp goes through
 
 pub mod agent;
 pub mod bus;
+mod clock;
 pub mod commands;
 pub mod config;
 pub mod error;

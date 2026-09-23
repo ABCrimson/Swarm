@@ -178,7 +178,7 @@ impl Runtime {
                         "Git Unavailable — Isolated Spawns Will Fail Until Git Is Installed Or Upgraded: {reason}"
                     ),
                     target: "swarm_core::git".to_string(),
-                    timestamp: now_ms(),
+                    timestamp: crate::clock::unix_millis(),
                 }));
             }
         }
@@ -296,29 +296,23 @@ impl Runtime {
     }
 }
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+    use std::mem::DropGuard;
+    use std::path::PathBuf;
+
     use super::*;
 
-    fn temp_paths() -> (Paths, TempDir) {
+    /// A fresh data dir plus a guard that removes it when dropped, so a
+    /// failing assertion still cleans up.
+    fn temp_paths() -> (Paths, DropGuard<PathBuf, impl FnOnce(PathBuf)>) {
         let dir = std::env::temp_dir().join(format!("swarm-runtime-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let cleanup = TempDir(dir.clone());
+        let cleanup = DropGuard::new(dir.clone(), |dir| {
+            let _ = std::fs::remove_dir_all(dir);
+        });
         (Paths { data_dir: dir }, cleanup)
-    }
-
-    struct TempDir(std::path::PathBuf);
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
     }
 
     #[tokio::test]
@@ -356,7 +350,9 @@ mod tests {
             },
             |_| {},
         );
-        assert!(matches!(rt2, Err(RuntimeStartError::Lock(_))));
+        // `.err()`: `Runtime` is not `Debug`, which `assert_matches!` needs
+        // to print a mismatch.
+        assert_matches!(rt2.err(), Some(RuntimeStartError::Lock(_)));
         drop(rt1);
     }
 }

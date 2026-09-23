@@ -478,6 +478,8 @@ impl Default for WorkerRegistry {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
     use crate::worker::handle::{WorkerHandle, WorkerState};
 
@@ -514,7 +516,7 @@ mod tests {
         reg.spawn_worker(make_handle("a")).unwrap();
         reg.spawn_worker(make_handle("b")).unwrap();
         let err = reg.spawn_worker(make_handle("c")).unwrap_err();
-        assert!(matches!(err, AppError::RegistryFull { max: 2 }));
+        assert_matches!(err, AppError::RegistryFull { max: 2 });
 
         // Shrinking below the live count never evicts running workers —
         // it only blocks new spawns.

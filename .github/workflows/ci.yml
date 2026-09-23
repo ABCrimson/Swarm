@@ -8,9 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  NODE_VERSION: "26.8.1"
+  NODE_VERSION: "26.10.0"
   # Keep in sync with rust-toolchain.toml
-  RUST_TOOLCHAIN: "nightly-2026-08-27"
+  RUST_TOOLCHAIN: "nightly-2026-09-23"
 
 jobs:
   lint-frontend:
@@ -116,22 +116,18 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: ". -> target"
 
       - name: Clippy
-        working-directory: src-tauri
         run: cargo clippy --workspace -- -D warnings
 
       - name: Rust tests
-        working-directory: src-tauri
         run: cargo test --workspace
 
       - name: Rust format check
-        working-directory: src-tauri
         run: cargo fmt --all -- --check
 
       - name: Verify swarm-core has no Tauri dependency
-        working-directory: src-tauri
         run: |
           # --prefix none --format "{p}" prints one bare "name version"
           # per line (no tree-drawing indentation, no path). Anchored
@@ -145,7 +141,6 @@ jobs:
           fi
 
       - name: Verify swarmd has no Tauri dependency
-        working-directory: src-tauri
         run: |
           # swarmd depends on swarm-core but must never itself grow a
           # tauri/tauri-plugin-* dependency (the swarm-core-only gate

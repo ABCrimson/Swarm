@@ -11,12 +11,16 @@
 //!
 //! Two files under [`crate::Paths::data_dir`]:
 //!
-//! - `daemon.lock` — the actual mutex: opened and held exclusively for
-//!   the life of the process. Never read for content; the mere fact of
-//!   holding an OS-exclusive handle to it IS the lock. Advisory and
-//!   OS-native (`flock(2)` on Unix, a deny-all share mode on Windows),
-//!   so it releases itself automatically on process exit OR crash — no
-//!   stale-lock cleanup, no PID-liveness polling.
+//! - `daemon.lock` — the actual mutex: opened with shared access, then
+//!   locked exclusively for the life of the process (the lock, not the
+//!   open, is exclusive). Never read for content; the mere fact of
+//!   holding the lock IS the lock. OS-native via std's
+//!   [`File::try_lock`]: an advisory `flock(LOCK_EX | LOCK_NB)` on Unix,
+//!   a mandatory `LockFileEx` byte-range lock with
+//!   `LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY` on Windows.
+//!   Either way it releases itself
+//!   automatically when the handle closes, including on process exit OR
+//!   crash — no stale-lock cleanup, no PID-liveness polling, no `unsafe`.
 //! - `daemon.lock.json` — informational only (pid, which shell, bind
 //!   address if any, start time), overwritten after every successful
 //!   acquire. A losing contender reads it (best-effort — a missing or
@@ -27,7 +31,7 @@
 //!   expected and harmless, since it is never consulted to decide
 //!   whether the lock is held — only to describe who holds it.
 
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -130,13 +134,6 @@ pub struct SingleInstanceLock {
     _file: File,
 }
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 fn read_info(info_path: &Path) -> LockInfo {
     std::fs::read_to_string(info_path)
         .ok()
@@ -151,13 +148,22 @@ fn write_info(info_path: &Path, info: &LockInfo) -> io::Result<()> {
     std::fs::rename(&tmp_path, info_path)
 }
 
-#[cfg(unix)]
+/// Opens (creating if needed) `daemon.lock` and takes a non-blocking
+/// exclusive OS lock on it with [`File::try_lock`]. One code path for
+/// every platform: the lock is tied to the open handle, so the OS drops
+/// it when the handle closes (on drop, exit or crash).
+///
+/// On Windows this replaced an exclusive open (`share_mode(0)`), which
+/// failed with a sharing violation whenever any other handle was open —
+/// including an antivirus/EDR scanner briefly opening the new file. The
+/// file is now opened with std's default sharing and locked with
+/// `LockFileEx`, so a scanner's handle (opened with the usual sharing
+/// flags) no longer turns a legitimate first acquire into a false
+/// "already running".
 fn try_lock(lock_path: &Path, info_path: &Path) -> Result<File, LockError> {
-    use std::os::unix::io::AsRawFd;
-
     // `truncate(false)`: this file's CONTENT is never read or written —
-    // only the OS-level `flock` on the open handle matters — so opening
-    // it must not destroy whatever (irrelevant) bytes a prior run left
+    // only the OS-level lock on the open handle matters — so opening it
+    // must not destroy whatever (irrelevant) bytes a prior run left
     // behind.
     let file = OpenOptions::new()
         .read(true)
@@ -165,66 +171,10 @@ fn try_lock(lock_path: &Path, info_path: &Path) -> Result<File, LockError> {
         .create(true)
         .truncate(false)
         .open(lock_path)?;
-    let fd = file.as_raw_fd();
-    // SAFETY: fd is a valid, open file descriptor owned by `file` for
-    // the duration of this call; flock only mutates kernel-side lock
-    // state, no memory safety concerns.
-    let rc = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
-    if rc != 0 {
-        let err = io::Error::last_os_error();
-        if err.kind() == io::ErrorKind::WouldBlock || err.raw_os_error() == Some(libc::EWOULDBLOCK)
-        {
-            return Err(LockError::AlreadyRunning(read_info(info_path)));
-        }
-        return Err(LockError::Io(err));
-    }
-    Ok(file)
-}
-
-#[cfg(windows)]
-fn try_lock(lock_path: &Path, info_path: &Path) -> Result<File, LockError> {
-    use std::os::windows::fs::OpenOptionsExt;
-
-    // share_mode(0) denies ANY other open (read or write) while this
-    // handle is alive — the OS itself refuses a second opener rather
-    // than us implementing locking semantics by hand.
-    //
-    // Tradeoff (security-review NIT, documented rather than "fixed" —
-    // there is no strictly-better alternative that keeps the same
-    // crash-safety property): a share_mode(0) handle is briefly
-    // scannable/openable by antivirus/EDR software that opens files for
-    // signature scanning on creation, which can occasionally produce a
-    // transient ERROR_SHARING_VIOLATION against a LEGITIMATE first
-    // acquire (indistinguishable, from this function's error code
-    // alone, from a genuine second-instance collision). This is the
-    // same tradeoff every exclusive-open-based Windows single-instance
-    // lock makes (mutex-handle-based locks avoid it but lose automatic
-    // cleanup semantics tied to file lifetime); if this proves to be a
-    // real-world problem, the fix is a short bounded retry around this
-    // `open()` call, not abandoning share_mode(0).
-    //
-    // `truncate(false)` — see the Unix `try_lock`'s matching comment:
-    // this file's content is never meaningful, only the exclusive
-    // handle itself.
-    match OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .share_mode(0)
-        .open(lock_path)
-    {
-        Ok(f) => Ok(f),
-        Err(e) => {
-            // ERROR_SHARING_VIOLATION = 32, ERROR_LOCK_VIOLATION = 33 —
-            // the two codes Windows returns for "someone else has this
-            // open exclusively already."
-            if matches!(e.raw_os_error(), Some(32) | Some(33)) {
-                Err(LockError::AlreadyRunning(read_info(info_path)))
-            } else {
-                Err(LockError::Io(e))
-            }
-        }
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(TryLockError::WouldBlock) => Err(LockError::AlreadyRunning(read_info(info_path))),
+        Err(TryLockError::Error(e)) => Err(LockError::Io(e)),
     }
 }
 
@@ -258,7 +208,7 @@ impl SingleInstanceLock {
                 pid: std::process::id(),
                 shell: shell.to_string(),
                 bind,
-                started_at: now_ms(),
+                started_at: crate::clock::unix_millis(),
             },
         ) {
             tracing::warn!(error = %e, "failed to write daemon.lock.json (lock itself is still held)");
@@ -270,12 +220,22 @@ impl SingleInstanceLock {
 
 #[cfg(test)]
 mod tests {
+    use std::mem::DropGuard;
+
     use super::*;
+
+    /// Recursively removes `dir` when the guard drops, so a failing
+    /// assertion still cleans up.
+    fn remove_on_drop(dir: PathBuf) -> DropGuard<PathBuf, impl FnOnce(PathBuf)> {
+        DropGuard::new(dir, |dir| {
+            let _ = std::fs::remove_dir_all(dir);
+        })
+    }
 
     #[test]
     fn test_acquire_succeeds_on_a_fresh_data_dir() {
         let dir = std::env::temp_dir().join(format!("swarm-lock-test-{}", uuid::Uuid::new_v4()));
-        let _cleanup = TempDir(dir.clone());
+        let _cleanup = remove_on_drop(dir.clone());
         let lock = SingleInstanceLock::acquire(&dir, "swarmd", Some("127.0.0.1:8787".to_string()));
         assert!(lock.is_ok());
     }
@@ -297,7 +257,7 @@ mod tests {
         // in CI (security-review FIX-5 — a prior version of this
         // comment claimed that test already existed; it did not).
         let dir = std::env::temp_dir().join(format!("swarm-lock-test-{}", uuid::Uuid::new_v4()));
-        let _cleanup = TempDir(dir.clone());
+        let _cleanup = remove_on_drop(dir.clone());
         let first = SingleInstanceLock::acquire(&dir, "swarm-desktop", None).unwrap();
 
         let second =
@@ -315,7 +275,7 @@ mod tests {
     #[test]
     fn test_lock_released_on_drop_allows_reacquire() {
         let dir = std::env::temp_dir().join(format!("swarm-lock-test-{}", uuid::Uuid::new_v4()));
-        let _cleanup = TempDir(dir.clone());
+        let _cleanup = remove_on_drop(dir.clone());
         {
             let _first = SingleInstanceLock::acquire(&dir, "swarmd", None).unwrap();
         } // dropped here — OS lock released
@@ -359,12 +319,5 @@ mod tests {
         })
         .to_string();
         assert!(desktop_msg.contains("SWARM Desktop"));
-    }
-
-    struct TempDir(PathBuf);
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
     }
 }

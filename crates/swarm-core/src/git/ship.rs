@@ -289,7 +289,7 @@ fn origin_head_branch(repo_root: &Path) -> Option<String> {
     if raw.is_empty() {
         return None;
     }
-    Some(raw.strip_prefix("origin/").unwrap_or(raw).to_string())
+    Some(raw.trim_prefix("origin/").to_string())
 }
 
 fn configured_default_branch(repo_root: &Path) -> Option<String> {
@@ -793,7 +793,7 @@ fn commit_diff_stat(worktree_path: &Path, sha: &str) -> Result<DiffStat, AppErro
 //
 // Phase 1 never acts on `gh` availability (PR creation is Phase 3), so
 // none of the three items below are wired into `preflight` — they are
-// kept, `#[allow(dead_code)]`, as the ready-made probe the Phase 3
+// kept, `#[expect(dead_code)]`, as the ready-made probe the Phase 3
 // `create_pr` command will call. Wiring an unused-in-Phase-1
 // capability field into `ShipPreflight` was reviewed and rejected: a
 // preflight field nothing reads is exactly the kind of "looks acted
@@ -801,7 +801,10 @@ fn commit_diff_stat(worktree_path: &Path, sha: &str) -> Result<DiffStat, AppErro
 
 /// Runs `bin args...` with stdio suppressed and a short kill-on-timeout
 /// budget, returning whether it exited successfully.
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "gh capability probe reserved for the Phase 3 create_pr command"
+)]
 fn command_succeeds_quickly(bin: &str, args: &[&str], timeout: Duration) -> bool {
     let mut command = Command::new(bin);
     command
@@ -814,8 +817,7 @@ fn command_succeeds_quickly(bin: &str, args: &[&str], timeout: Duration) -> bool
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
+        command.creation_flags(cli::CREATE_NO_WINDOW);
     }
 
     let Ok(mut child) = command.spawn() else {
@@ -838,12 +840,18 @@ fn command_succeeds_quickly(bin: &str, args: &[&str], timeout: Duration) -> bool
     }
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "gh capability probe reserved for the Phase 3 create_pr command"
+)]
 fn probe_gh_available() -> bool {
     command_succeeds_quickly("gh", &["--version"], Duration::from_secs(3))
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "gh capability probe reserved for the Phase 3 create_pr command"
+)]
 fn probe_gh_authed() -> bool {
     command_succeeds_quickly("gh", &["auth", "status"], Duration::from_secs(3))
 }
@@ -1154,7 +1162,10 @@ fn classify_commit_error(stderr: &str) -> ShipError {
 ///   empty.
 /// * [`ShipErrorKind::IdentityMissing`] / [`ShipErrorKind::HookFailed`]
 ///   — `git commit` itself failed; see [`classify_commit_error`].
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is an independent input of one staged commit"
+)]
 pub fn stage_and_commit(
     registry: &WorkerRegistry,
     repo_locks: &RepoLocks,

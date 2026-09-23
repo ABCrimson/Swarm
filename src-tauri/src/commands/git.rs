@@ -50,7 +50,6 @@ pub async fn git_ship_preflight(
 
 #[tauri::command]
 #[tracing::instrument(skip(registry, ctx, message))]
-#[allow(clippy::too_many_arguments)]
 pub async fn git_stage_commit(
     registry: tauri::State<'_, std::sync::Arc<Registry>>,
     ctx: tauri::State<'_, swarm_core::commands::Ctx>,
@@ -94,7 +93,10 @@ pub async fn git_push(
 
 #[tauri::command]
 #[tracing::instrument(skip(registry, ctx, title, body))]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri IPC command: two injected States plus one parameter per wire argument"
+)]
 pub async fn ship_compare_url(
     registry: tauri::State<'_, std::sync::Arc<Registry>>,
     ctx: tauri::State<'_, swarm_core::commands::Ctx>,

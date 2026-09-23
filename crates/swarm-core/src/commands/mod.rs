@@ -123,7 +123,10 @@ impl Ctx {
     /// single-instance lock). Used by this module's own unit tests and
     /// by `swarmd`'s integration test harness where convenient.
     #[doc(hidden)]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "takes every Runtime part separately so tests can supply each one"
+    )]
     pub fn new_for_test(
         paths: Paths,
         registry: WorkerRegistry,

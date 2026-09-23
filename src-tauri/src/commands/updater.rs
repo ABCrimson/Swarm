@@ -64,3 +64,42 @@ pub async fn check_for_updates(app: AppHandle) -> Result<serde_json::Value, Stri
         }
     }
 }
+
+/// Contract tests for `tauri.conf.json`, the file the updater plugin and
+/// the bundler both read at build time.
+#[cfg(test)]
+mod tests {
+    const TAURI_CONF: &str = include_str!("../../tauri.conf.json");
+
+    /// `plugins.updater` must deserialize into the plugin's own config
+    /// type with signed-version enforcement on: `download()` then also
+    /// rejects a signature whose minisign trusted comment carries no
+    /// `version:` at all (`MissingSignedVersion`). A comment naming a
+    /// different version than `latest.json` announces is rejected by the
+    /// plugin regardless of this flag.
+    #[test]
+    fn updater_config_requires_signed_versions() {
+        let conf: serde_json::Value = serde_json::from_str(TAURI_CONF).unwrap();
+        let updater: tauri_plugin_updater::Config =
+            serde_json::from_value(conf["plugins"]["updater"].clone()).unwrap();
+        assert!(updater.require_signed_version);
+        assert!(!updater.allow_downgrades);
+        assert_eq!(updater.endpoints.len(), 1);
+    }
+
+    /// `version` is the path `../package.json`, so the bundle and updater
+    /// version come from package.json. tauri-build and tauri-codegen
+    /// resolve that path against src-tauri/; cargo runs this test from the
+    /// same directory, so the parse below resolves it exactly as the build
+    /// does. The Cargo workspace version is the one site that cannot be
+    /// derived, so it is held in lockstep here.
+    #[test]
+    fn app_version_resolves_from_package_json() {
+        let conf: tauri::utils::config::Config = serde_json::from_str(TAURI_CONF).unwrap();
+        let package_json: serde_json::Value =
+            serde_json::from_str(include_str!("../../../package.json")).unwrap();
+        let resolved = conf.version.as_deref();
+        assert_eq!(resolved, package_json["version"].as_str());
+        assert_eq!(resolved, Some(env!("CARGO_PKG_VERSION")));
+    }
+}

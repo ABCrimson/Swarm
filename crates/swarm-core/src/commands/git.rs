@@ -132,7 +132,6 @@ fn emit_progress(
     }));
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_settled(
     sink: &EventSink,
     ship_id: Uuid,
@@ -486,7 +485,7 @@ mod tests {
     fn append_agent_tool_call(log: &mut EventLog, seq: u64, worker_id: uuid::Uuid, command: &str) {
         log.append(
             seq,
-            seq as i64,
+            seq.cast_signed(),
             "agent_tool_call",
             &serde_json::json!({
                 "workerId": worker_id, "turnId": format!("t{seq}"), "toolUseId": format!("u{seq}"),

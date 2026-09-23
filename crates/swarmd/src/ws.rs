@@ -53,9 +53,10 @@
 //! room) — but anything that DOES get enqueued keeps its FIFO position,
 //! so wire order among enqueued frames is always seq order.
 
+use std::mem::DropGuard;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -161,7 +162,9 @@ pub async fn ws_handler(
 
 async fn handle_socket(socket: WebSocket, state: AppState, bearer_pre_authed: bool) {
     state.active_connections.fetch_add(1, Ordering::SeqCst);
-    let _decrement_on_drop = ConnectionGuard(state.active_connections.clone());
+    let _decrement_on_drop = DropGuard::new(Arc::clone(&state.active_connections), |count| {
+        count.fetch_sub(1, Ordering::SeqCst);
+    });
 
     let (mut sender, mut receiver) = socket.split();
 
@@ -459,13 +462,6 @@ fn envelope_type(envelope: &DomainEvent) -> String {
         .ok()
         .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_string))
         .unwrap_or_default()
-}
-
-struct ConnectionGuard(Arc<AtomicUsize>);
-impl Drop for ConnectionGuard {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
-    }
 }
 
 pub(crate) fn default_caps() -> ServerCaps {

@@ -63,9 +63,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Windows `CREATE_NO_WINDOW` process creation flag — prevents a
 /// console window from flashing when a GUI app (the Tauri shell)
-/// spawns a console subprocess.
+/// spawns a console subprocess. Shared with `ship`'s `gh` probe.
 #[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+pub(super) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// The result of a completed (non-timed-out) `git` invocation.
 #[derive(Debug, Clone)]

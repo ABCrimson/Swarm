@@ -46,7 +46,10 @@ pub async fn agent_turn_started(
 
 #[tauri::command]
 #[tracing::instrument(skip(registry, ctx, config))]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri IPC command: two injected States plus one parameter per wire argument"
+)]
 pub async fn agent_spawn(
     registry: tauri::State<'_, std::sync::Arc<Registry>>,
     ctx: tauri::State<'_, swarm_core::commands::Ctx>,

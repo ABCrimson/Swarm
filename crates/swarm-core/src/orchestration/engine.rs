@@ -215,10 +215,7 @@ fn run_writer_loop(
     }) = rx.recv()
     {
         seq += 1;
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
+        let ts = crate::clock::unix_millis();
         let envelope = DomainEvent {
             seq,
             ts,

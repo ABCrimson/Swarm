@@ -436,7 +436,7 @@ mod tests {
     fn ev(seq: u64, event_type: &str, payload: serde_json::Value) -> StoredEvent {
         StoredEvent {
             seq,
-            ts: seq as i64,
+            ts: seq.cast_signed(),
             event_type: event_type.to_string(),
             payload,
             origin_worker: None,

@@ -51,7 +51,7 @@ static SCP_FORM: LazyLock<Regex> =
 
 /// Strips a trailing `.git` suffix, if present.
 fn strip_dot_git(s: &str) -> &str {
-    s.strip_suffix(".git").unwrap_or(s)
+    s.trim_suffix(".git")
 }
 
 /// Parses a `git remote get-url` value into its host/owner/repo parts.

@@ -106,10 +106,7 @@ impl SessionManager {
     ///
     /// The newly created [`Session`].
     pub fn create_session(&self, name: String, config: serde_json::Value) -> Session {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+        let now = crate::clock::unix_secs();
 
         let session = Session {
             id: Uuid::new_v4(),
@@ -260,6 +257,8 @@ impl Default for SessionManager {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
 
     #[test]
@@ -329,6 +328,6 @@ mod tests {
     fn test_remove_worker_from_session_not_found() {
         let manager = SessionManager::new();
         let result = manager.remove_worker_from_session(&Uuid::new_v4(), Uuid::new_v4());
-        assert!(matches!(result, Err(AppError::SessionNotFound { .. })));
+        assert_matches!(result, Err(AppError::SessionNotFound { .. }));
     }
 }

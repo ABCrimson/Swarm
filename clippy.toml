@@ -1,0 +1,7 @@
+# Clippy configuration for every crate in the workspace (clippy reads the
+# nearest clippy.toml up the directory tree). The workspace lints table
+# sets `disallowed_types = "deny"`, which turns these into build errors.
+disallowed-types = [
+  { path = "std::sync::Mutex", reason = "house rule: use parking_lot::Mutex" },
+  { path = "std::sync::RwLock", reason = "house rule: use parking_lot::RwLock" },
+]

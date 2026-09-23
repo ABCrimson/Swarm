@@ -82,10 +82,7 @@ pub fn start_metrics_loop(
                 }
             };
 
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
+            let now = crate::clock::unix_millis();
 
             sink.emit(SwarmEvent::SystemMetrics(SystemMetricsPayload {
                 cpu_percent,

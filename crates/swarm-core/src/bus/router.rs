@@ -34,6 +34,7 @@
 use uuid::Uuid;
 
 use super::channel::{BusMessage, MessageBus};
+use crate::clock::unix_millis;
 use crate::events::{BusMessagePayload, EventSink, Provenance, SwarmEvent};
 
 /// Routes messages between workers using direct and broadcast modes.
@@ -106,7 +107,7 @@ impl Router {
             to_worker: Some(to),
             topic: topic.to_string(),
             payload: payload.clone(),
-            timestamp: now_ms(),
+            timestamp: unix_millis(),
         };
 
         let count = self.bus.send(msg.clone())?;
@@ -143,7 +144,7 @@ impl Router {
             to_worker: None,
             topic: topic.to_string(),
             payload: payload.clone(),
-            timestamp: now_ms(),
+            timestamp: unix_millis(),
         };
 
         let count = self.bus.send(msg.clone())?;
@@ -166,13 +167,6 @@ impl Router {
             },
         );
     }
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

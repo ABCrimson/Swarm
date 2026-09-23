@@ -384,6 +384,8 @@ pub fn delete_branch(repo_root: &Path, branch: &str) -> Result<(), AppError> {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
     use uuid::Uuid;
 
@@ -515,7 +517,7 @@ mod tests {
             reason: "contains modified or untracked files".to_string(),
         };
         assert_ne!(removed, preserved);
-        assert!(matches!(preserved, RemoveOutcome::Preserved { .. }));
+        assert_matches!(preserved, RemoveOutcome::Preserved { .. });
     }
 
     /// DIRECTIVE (B2): "preserved_dirty" is reserved strictly for

@@ -10,9 +10,9 @@ permissions:
   contents: write
 
 env:
-  NODE_VERSION: "26.8.1"
+  NODE_VERSION: "26.10.0"
   # Keep in sync with rust-toolchain.toml
-  RUST_TOOLCHAIN: "nightly-2026-08-27"
+  RUST_TOOLCHAIN: "nightly-2026-09-23"
 
 jobs:
   build:
@@ -75,7 +75,7 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: ". -> target"
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
@@ -115,7 +115,7 @@ jobs:
       # (a dispatch creates no release to attach to), mirroring how the
       # tauri-action step above only publishes when tagName is non-empty.
       - name: Build swarmd daemon
-        run: cargo build --release --manifest-path src-tauri/Cargo.toml -p swarmd --target ${{ matrix.target }}
+        run: cargo build --release -p swarmd --target ${{ matrix.target }}
 
       - name: Package swarmd binary
         shell: bash
@@ -123,7 +123,7 @@ jobs:
           set -euo pipefail
           ext=""
           [ "${{ matrix.platform }}" = "windows-latest" ] && ext=".exe"
-          src="src-tauri/target/${{ matrix.target }}/release/swarmd${ext}"
+          src="target/${{ matrix.target }}/release/swarmd${ext}"
           out="swarmd-${{ matrix.target }}${ext}"
           cp "$src" "$out"
           if command -v sha256sum >/dev/null 2>&1; then

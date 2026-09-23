@@ -1,0 +1,52 @@
+# cargo-deny 0.20 supply-chain gate for the Rust workspace:
+# `cargo deny check` (advisories, licenses, bans, sources).
+[graph]
+# The four release triples; platform-only dependencies of other targets
+# are not part of any shipped binary.
+targets = [
+  "x86_64-pc-windows-msvc",
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+]
+
+[advisories]
+yanked = "deny"
+# Unmaintained notices only fail for direct dependencies; Tauri 2's
+# GTK3/urlpattern stack carries several transitively.
+unmaintained = "workspace"
+
+[licenses]
+confidence-threshold = 0.93
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "0BSD",
+  "Unicode-3.0",
+  "MPL-2.0",
+  "Unlicense",
+  "CC0-1.0",
+]
+
+[licenses.private]
+# The workspace crates are `publish = false`.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[bans.std-replacements]
+scope = "workspace"
+level = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

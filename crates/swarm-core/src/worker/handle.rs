@@ -227,9 +227,10 @@ pub struct WorkerInfo {
 ///
 /// # Thread Safety
 ///
-/// All non-`Sync` fields are wrapped in `parking_lot::Mutex`,
-/// making the entire struct safe for concurrent access. An
-/// `unsafe impl Sync` is provided with this invariant documented.
+/// All non-`Sync` fields are wrapped in `parking_lot::Mutex`, so the
+/// compiler derives `Sync` for the struct on its own — no `unsafe impl`.
+/// Sharing the registry's `DashMap` across threads requires it, so a
+/// future non-`Sync` field fails to compile instead of being masked.
 pub struct WorkerHandle {
     /// Unique worker identifier (UUID v4).
     pub id: Uuid,
@@ -276,10 +277,6 @@ pub struct WorkerHandle {
     /// `last_shipped_seq`.
     pub last_shipped_commit: Option<String>,
 }
-
-// SAFETY: All non-Sync fields are wrapped in parking_lot::Mutex,
-// which provides Sync. The remaining fields are all Sync.
-unsafe impl Sync for WorkerHandle {}
 
 impl std::fmt::Debug for WorkerHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
