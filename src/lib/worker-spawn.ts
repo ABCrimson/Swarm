@@ -34,21 +34,18 @@ import { useWorkerStore } from "#store/workers";
  *   `useSessionStore` (the backend does not emit an event for this
  *   mutation, so the frontend must update its own copy).
  * - When `spec` doesn't specify its own `repoRoot`, falls back to the
- *   persisted `default_repo_root` (the Workers page's Project Root
- *   picker) — without this, every template/tool-driven spawn silently
- *   skipped isolation even when a project root was configured,
- *   because only the Workers page's own "Spawn Worker" button ever
- *   read it.
+ *   persisted `default_repo_root` (the Project Root picker in the Spawn
+ *   Worker dialog), so template and tool-driven spawns get worktree
+ *   isolation too, not only spawns started from that dialog.
  *
  * @returns The new worker's UUID, or `null` when `spawnWorker` degraded
- * gracefully because there is no Tauri IPC bridge (e.g. `pnpm dev` in a
- * plain browser) — no store writes happen in that case, since there is
- * no worker id to key them on.
+ * gracefully because there is no backend transport (neither Tauri IPC
+ * nor a swarmd connection, e.g. `pnpm dev` in a plain browser). No
+ * store writes happen then, since there is no worker id to key them on.
  *
  * `prov` is optional causal attribution (e.g. an AI turn's `spawn_worker`
- * tool call) — forwarded to `spawnWorker` only when given, so a
- * human-initiated spawn from the Workers page keeps calling `spawnWorker`
- * with exactly the same single-argument shape as before this parameter existed.
+ * tool call), forwarded to `spawnWorker` only when given: an
+ * unattributed spawn passes the process options alone.
  */
 export async function spawnWorkerFromSpec(
   spec: WorkerSpawnSpec,

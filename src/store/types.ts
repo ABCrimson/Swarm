@@ -60,10 +60,8 @@ export type Session = z.infer<typeof SessionSchema>;
 /**
  * Zod schema for the `session_worker_removed` event payload (mirrors
  * Rust's `SessionWorkerRemovedPayload`,
- * `crates/swarm-core/src/events/emitter.rs`) — validated via
- * `safeParse` at the event-bus seam in `#hooks/useSessionEvents`, same
- * discipline `#lib/agent-events.ts`'s schemas apply for the `agent_*`
- * family.
+ * `crates/swarm-core/src/events/emitter.rs`). The event bus validates
+ * payloads with it (`#lib/event-payloads`).
  */
 export const SessionWorkerRemovedPayloadSchema = z.object({
   sessionId: z.uuid(),
