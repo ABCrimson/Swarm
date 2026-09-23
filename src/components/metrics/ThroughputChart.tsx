@@ -1,169 +1,119 @@
 // ── ThroughputChart ─────────────────────────────────
-// Tokens/sec per model line chart keeping the trailing MAX_CHART_POINTS
-// samples, computed from real token-usage records in useAiStore's
-// cumulativeUsage.history.
-// OKLCH colors: opus=violet, sonnet=plasma, haiku=lime.
-// Recharts LineChart with ResponsiveContainer, isAnimationActive={false}.
+// Tokens/sec per Claude model family, sampled once a second from the AI
+// store's token-usage records and kept to the trailing MAX_CHART_POINTS
+// samples. Families come from the model catalog (`#lib/models`), so a
+// newly catalogued model gets its own series without touching this file;
+// usage from a model outside the catalog is plotted as "Other", never
+// dropped.
 
-import type { CSSProperties } from "react";
-import { useEffect, useRef, useState } from "react";
-import {
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import {
-  axisProps,
-  formatTime,
-  formatTokens,
-  glassPanelStyle,
-  gridProps,
-  legendStyle,
-  tooltipProps,
-} from "#lib/chart-theme";
+import { useEffect, useState } from "react";
+import { CartesianGrid, Legend, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
+import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
+import { formatTime, formatTokens } from "#lib/chart-theme";
 import { lastN, MAX_CHART_POINTS } from "#lib/chart-window";
+import { tokensPerSecond } from "#lib/metrics-aggregation";
+import type { ModelKey } from "#lib/models";
+import { CLAUDE_MODELS, MODEL_KEYS } from "#lib/models";
 import { useAiStore } from "#store/ai";
+import type { TokenUsageRecord } from "#store/types";
 
-// OKLCH model colors
-const COLOR_OPUS = "oklch(0.68 0.22 290)";
-const COLOR_SONNET = "oklch(0.72 0.18 205)";
-const COLOR_HAIKU = "oklch(0.78 0.18 130)";
+/** A series: one catalogued model family, or everything else. */
+export type ThroughputSeries = ModelKey | "other";
 
 const SAMPLE_MS = 1000;
-/** Trailing window used to compute a tokens/sec rate for each sample. */
-const RATE_WINDOW_MS = 10_000;
 
-interface ThroughputPoint {
-  readonly time: number;
-  readonly opus: number;
-  readonly sonnet: number;
-  readonly haiku: number;
+/** OKLCH colour per series. */
+const SERIES_COLOR: Readonly<Record<ThroughputSeries, string>> = {
+  fable: "oklch(0.8 0.15 70)",
+  mythos: "oklch(0.72 0.19 330)",
+  opus: "oklch(0.68 0.22 290)",
+  sonnet: "oklch(0.72 0.18 205)",
+  haiku: "oklch(0.78 0.18 130)",
+  other: "oklch(0.6 0.03 220)",
+};
+
+/** Legend name per series: the catalog's model label. */
+function seriesLabel(series: ThroughputSeries): string {
+  return series === "other" ? "Other" : CLAUDE_MODELS[series].label;
 }
 
-const containerStyle: CSSProperties = {
-  ...glassPanelStyle,
-  padding: 12,
-  width: "100%",
-  height: "100%",
-  minHeight: 240,
-};
+const ALL_SERIES: readonly ThroughputSeries[] = [...MODEL_KEYS, "other"];
 
-const headerStyle: CSSProperties = {
-  fontFamily: "var(--font-display)",
-  fontSize: 14,
-  fontWeight: 600,
-  color: "oklch(0.85 0.04 220)",
-  marginBottom: 8,
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-};
+/**
+ * The series a usage record belongs to: the catalog family whose key its
+ * model id names (`claude-sonnet-5`, a dated `claude-sonnet-5-2026…` or a
+ * `…-latest` alias all resolve to `sonnet`), else `"other"`.
+ */
+export function seriesOf(model: string): ThroughputSeries {
+  const id = model.toLowerCase();
+  return MODEL_KEYS.find((key) => id.includes(key)) ?? "other";
+}
 
-/** Sums input+output tokens for records matching `keyword` within the trailing rate window. */
-function tokensPerSecFor(
-  history: { model: string; inputTokens: number; outputTokens: number; timestamp: number }[],
-  keyword: string,
+/** One sampled row: time plus tokens/sec per series. */
+export type ThroughputPoint = { readonly time: number } & Readonly<
+  Record<ThroughputSeries, number>
+>;
+
+/** Samples tokens/sec per series at `now` over the shared trailing rate window. */
+export function sampleThroughput(
+  records: readonly TokenUsageRecord[],
   now: number,
-): number {
-  const cutoff = now - RATE_WINDOW_MS;
-  const tokens = history
-    .filter((r) => r.timestamp > cutoff && r.model.toLowerCase().includes(keyword))
-    .reduce((sum, r) => sum + r.inputTokens + r.outputTokens, 0);
-  return tokens / (RATE_WINDOW_MS / 1000);
+): ThroughputPoint {
+  const rates = ALL_SERIES.map((series) => [
+    series,
+    tokensPerSecond(records, now, undefined, (r) => seriesOf(r.model) === series),
+  ]);
+  return { time: now, ...Object.fromEntries(rates) } as ThroughputPoint;
 }
 
 /**
- * Line chart showing real AI throughput (tokens/sec) per model over the
- * trailing `MAX_CHART_POINTS` samples, derived from
- * `useAiStore().cumulativeUsage.history` token-usage records.
- *
- * Colours: Opus (violet), Sonnet (plasma blue), Haiku (lime green).
+ * Real AI throughput (tokens/sec) per model family over the trailing
+ * `MAX_CHART_POINTS` samples. Only families with usage in the window get
+ * a line, so the legend never lists models that were not used.
  */
 export function ThroughputChart(): React.ReactElement {
   const [data, setData] = useState<ThroughputPoint[]>([]);
-  const intervalRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
   useEffect(() => {
-    intervalRef.current = setInterval(() => {
-      setData((prev) => {
-        const now = Date.now();
-        const history = useAiStore.getState().cumulativeUsage.history;
-        const point: ThroughputPoint = {
-          time: now,
-          opus: tokensPerSecFor(history, "opus", now),
-          sonnet: tokensPerSecFor(history, "sonnet", now),
-          haiku: tokensPerSecFor(history, "haiku", now),
-        };
-        return lastN([...prev, point]);
-      });
+    const id = setInterval(() => {
+      const point = sampleThroughput(useAiStore.getState().cumulativeUsage.history, Date.now());
+      setData((prev) => lastN([...prev, point]));
     }, SAMPLE_MS);
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
+    return () => clearInterval(id);
   }, []);
 
-  return (
-    <div style={containerStyle}>
-      <div style={headerStyle}>
-        <span>AI Throughput</span>
-        <span
-          style={{
-            fontSize: 11,
-            fontWeight: 400,
-            fontFamily: "var(--font-mono)",
-            color: "oklch(0.55 0.03 220)",
-          }}
-        >
-          Tokens/Sec &middot; Last {MAX_CHART_POINTS}
-        </span>
-      </div>
-      <ResponsiveContainer width="100%" height="85%">
-        <LineChart data={data} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-          <CartesianGrid {...gridProps} />
-          <XAxis dataKey="time" tickFormatter={formatTime} {...axisProps} />
-          <YAxis tickFormatter={formatTokens} {...axisProps} />
-          <Tooltip
-            {...tooltipProps}
-            labelFormatter={(label) => formatTime(Number(label))}
-            formatter={(value) => `${Number(value).toFixed(1)} tok/s`}
-          />
-          <Legend wrapperStyle={legendStyle} />
+  const activeSeries = ALL_SERIES.filter((series) => data.some((p) => p[series] > 0));
 
+  return (
+    <ChartPanel title="AI Throughput" caption={`Tokens/Sec · Last ${MAX_CHART_POINTS}`}>
+      <LineChart
+        responsive
+        style={CHART_FILL_STYLE}
+        data={data}
+        margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
+        title="Tokens Per Second By Model"
+      >
+        <CartesianGrid />
+        <XAxis dataKey="time" tickFormatter={formatTime} />
+        <YAxis tickFormatter={formatTokens} />
+        <Tooltip
+          labelFormatter={(label) => formatTime(Number(label))}
+          formatter={(value) => `${Number(value).toFixed(1)} tok/s`}
+        />
+        <Legend />
+        {activeSeries.map((series) => (
           <Line
+            key={series}
             type="monotone"
-            dataKey="opus"
-            name="Opus"
-            stroke={COLOR_OPUS}
+            dataKey={series}
+            name={seriesLabel(series)}
+            stroke={SERIES_COLOR[series]}
             strokeWidth={2}
             dot={false}
             isAnimationActive={false}
           />
-          <Line
-            type="monotone"
-            dataKey="sonnet"
-            name="Sonnet"
-            stroke={COLOR_SONNET}
-            strokeWidth={2}
-            dot={false}
-            isAnimationActive={false}
-          />
-          <Line
-            type="monotone"
-            dataKey="haiku"
-            name="Haiku"
-            stroke={COLOR_HAIKU}
-            strokeWidth={2}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
-    </div>
+        ))}
+      </LineChart>
+    </ChartPanel>
   );
 }

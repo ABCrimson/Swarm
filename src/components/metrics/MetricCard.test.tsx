@@ -1,68 +1,61 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { MetricCard } from "#components/metrics/MetricCard";
+import type { Trend } from "#components/metrics/MetricCard";
+import { MetricCard, MetricCardList, SEVERITY_COLOR } from "#components/metrics/MetricCard";
+import type { Severity } from "#lib/severity";
+
+function renderCard(props: {
+  label: string;
+  value: string;
+  severity?: Severity;
+  trend?: Trend;
+}): void {
+  render(
+    <MetricCardList>
+      <MetricCard {...props} />
+    </MetricCardList>,
+  );
+}
 
 describe("MetricCard", () => {
-  it("renders the label text", () => {
-    render(<MetricCard label="CPU" value="75%" />);
+  it("renders the label as the term and the value as its description", () => {
+    renderCard({ label: "CPU", value: "75%" });
 
-    expect(screen.getByText("CPU")).toBeInTheDocument();
+    expect(screen.getByRole("term")).toHaveTextContent("CPU");
+    expect(screen.getByRole("definition")).toHaveTextContent("75%");
   });
 
-  it("renders the value text", () => {
-    render(<MetricCard label="Memory" value="1.2 GB" />);
+  it.each([
+    ["good", undefined],
+    ["good", "good"],
+    ["warning", "warning"],
+    ["critical", "critical"],
+  ] as const)("colours the value with the exact %s token", (expected, severity) => {
+    renderCard({ label: "CPU", value: "50%", severity });
 
-    expect(screen.getByText("1.2 GB")).toBeInTheDocument();
+    expect(screen.getByText("50%").style.color).toBe(SEVERITY_COLOR[expected]);
   });
 
-  it("sets the correct aria-label on the fieldset", () => {
-    render(<MetricCard label="Workers" value="5" />);
+  it("renders no trend arrow when no trend was measured", () => {
+    renderCard({ label: "Workers", value: "3" });
 
-    const fieldset = screen.getByRole("group", { name: "Workers: 5" });
-    expect(fieldset).toBeInTheDocument();
+    for (const arrow of ["↑", "↓", "→"]) {
+      expect(screen.queryByText(arrow)).not.toBeInTheDocument();
+    }
+    expect(screen.getByRole("definition")).toHaveTextContent(/^3$/);
   });
 
-  it("applies the good severity color by default", () => {
-    render(<MetricCard label="CPU" value="30%" />);
+  it.each([
+    ["up", "↑", "Trending Up"],
+    ["down", "↓", "Trending Down"],
+    ["stable", "→", "Stable"],
+  ] as const)(
+    "renders the %s arrow hidden from assistive tech, with text for it",
+    (trend, arrow, text) => {
+      renderCard({ label: "CPU", value: "50%", trend });
 
-    const valueEl = screen.getByText("30%");
-    expect(valueEl.style.color).toContain("oklch");
-    // Good severity: oklch(0.78 0.18 140)
-    expect(valueEl.style.color).toContain("140");
-  });
-
-  it("applies the warning severity color", () => {
-    render(<MetricCard label="CPU" value="75%" severity="warning" />);
-
-    const valueEl = screen.getByText("75%");
-    // Warning severity: oklch(0.78 0.18 70)
-    expect(valueEl.style.color).toContain("70");
-  });
-
-  it("applies the critical severity color", () => {
-    render(<MetricCard label="CPU" value="95%" severity="critical" />);
-
-    const valueEl = screen.getByText("95%");
-    // Critical severity: oklch(0.68 0.22 15)
-    expect(valueEl.style.color).toContain("15");
-  });
-
-  it("renders the stable trend arrow by default", () => {
-    render(<MetricCard label="CPU" value="50%" />);
-
-    // Stable trend symbol is a right arrow
-    expect(screen.getByText("\u2192")).toBeInTheDocument();
-  });
-
-  it("renders the up trend arrow", () => {
-    render(<MetricCard label="CPU" value="80%" trend="up" />);
-
-    expect(screen.getByText("\u2191")).toBeInTheDocument();
-  });
-
-  it("renders the down trend arrow", () => {
-    render(<MetricCard label="CPU" value="20%" trend="down" />);
-
-    expect(screen.getByText("\u2193")).toBeInTheDocument();
-  });
+      expect(screen.getByText(arrow)).toHaveAttribute("aria-hidden", "true");
+      expect(screen.getByText(text)).toHaveClass("sr-only");
+    },
+  );
 });

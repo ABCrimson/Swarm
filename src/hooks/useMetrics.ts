@@ -1,50 +1,44 @@
 import { useEffect } from "react";
+import * as z from "zod";
 import { onEvent } from "#lib/event-bus";
+import { tokensPerSecond } from "#lib/metrics-aggregation";
+import { useAiStore } from "#store/ai";
 import { useSystemStore } from "#store/system";
 
+/** The backend's `system_metrics` payload (swarm-core `SystemMetricsPayload`, camelCase). */
+const SystemMetricsPayloadSchema = z.object({
+  cpuPercent: z.number(),
+  memoryMb: z.number(),
+  memoryTotalMb: z.number(),
+  workerCount: z.number().int(),
+  aiReqPerSec: z.number(),
+});
+
 /**
- * Global metrics event subscription hook.
+ * Global metrics event subscription hook. Call once at the app root.
  *
- * Must be called once at the app root level. Listens for `system_metrics`
- * events on the single ordered event bus and updates the Zustand system
- * store:
- *
- * - Updates current metric values (CPU%, memory, etc.)
- * - Pushes a history point for charting
- *
- * The listener is cleaned up on unmount.
+ * Each `system_metrics` envelope is validated and recorded as one sample
+ * in the system store, its history point stamped with the envelope's own
+ * `ts` — so samples replayed by the event bus's gap backfill land at the
+ * time they were measured, not the time they arrived. The backend payload
+ * has no token figure, so Tokens/s is derived here from the AI store's
+ * token-usage records over `TOKEN_RATE_WINDOW_MS`.
  */
 export function useMetrics(): void {
-  useEffect(() => {
-    const { updateMetrics, pushHistory } = useSystemStore.getState();
-
-    const off = onEvent("system_metrics", (e) => {
-      const p = e.payload as {
-        cpuPercent: number;
-        memoryMb: number;
-        memoryTotalMb: number;
-        workerCount: number;
-        aiReqPerSec: number;
-      };
-
-      updateMetrics({
-        cpuPercent: p.cpuPercent,
-        memoryMb: p.memoryMb,
-        memoryTotalMb: p.memoryTotalMb,
-        workerCount: p.workerCount,
-        aiReqPerSec: p.aiReqPerSec,
-      });
-
-      pushHistory({
-        time: Date.now(),
-        cpu: p.cpuPercent,
-        memory: p.memoryMb,
-        workerCount: p.workerCount,
-      });
-    });
-
-    return () => {
-      off();
-    };
-  }, []);
+  useEffect(
+    () =>
+      onEvent("system_metrics", (e) => {
+        const parsed = SystemMetricsPayloadSchema.safeParse(e.payload);
+        if (!parsed.success) {
+          console.warn("[metrics] Ignoring malformed system_metrics payload:", parsed.error);
+          return;
+        }
+        const tokensPerSec = tokensPerSecond(
+          useAiStore.getState().cumulativeUsage.history,
+          Date.now(),
+        );
+        useSystemStore.getState().recordSample({ ...parsed.data, tokensPerSec }, e.ts);
+      }),
+    [],
+  );
 }
