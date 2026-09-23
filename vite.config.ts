@@ -1,18 +1,14 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
-import type { PluginOption } from "vite";
+import type { PluginOption, UserConfig } from "vite";
 import { defineConfig } from "vite";
+import pkg from "./package.json" with { type: "json" };
 
-const rootDir = import.meta.dirname;
-
-const pkg = JSON.parse(readFileSync(resolve(rootDir, "package.json"), "utf8")) as {
-  version: string;
-};
-
-export default defineConfig(async ({ mode }) => {
+// `#components/*`, `#lib/*`, … resolve through package.json `imports` —
+// Vite, Vitest and TypeScript all read that map natively, so there is no
+// `resolve.alias` block to keep in sync.
+export default defineConfig(async ({ mode }): Promise<UserConfig> => {
   const analyzePlugins: PluginOption[] = [];
   if (mode === "analyze") {
     const { visualizer } = await import("rollup-plugin-visualizer");
@@ -45,20 +41,7 @@ export default defineConfig(async ({ mode }) => {
       __SWARM_TRANSPORT__: JSON.stringify(mode === "web" ? "ws" : "tauri"),
     },
 
-    resolve: {
-      alias: {
-        "#components": resolve(rootDir, "src/components"),
-        "#store": resolve(rootDir, "src/store"),
-        "#lib": resolve(rootDir, "src/lib"),
-        "#workers": resolve(rootDir, "src/workers"),
-        "#hooks": resolve(rootDir, "src/hooks"),
-        "#pages": resolve(rootDir, "src/pages"),
-        "#styles": resolve(rootDir, "src/styles"),
-      },
-    },
-
     build: {
-      minify: "oxc",
       sourcemap: true,
       // Tauri renders in Chromium 146+ (WebView2/WKWebView) — no downleveling needed;
       // `build:web`'s target is any modern evergreen browser, close enough not to warrant a second target.
@@ -74,7 +57,7 @@ export default defineConfig(async ({ mode }) => {
           codeSplitting: {
             groups: [
               { name: "react-vendor", test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
-              { name: "motion", test: /node_modules[\\/](motion|gsap)[\\/]/ },
+              { name: "motion", test: /node_modules[\\/]motion[\\/]/ },
               { name: "graph", test: /node_modules[\\/](@xyflow|elkjs)[\\/]/ },
               { name: "terminal", test: /node_modules[\\/]@xterm[\\/]/ },
               { name: "state", test: /node_modules[\\/](zustand|immer|jotai)[\\/]/ },
@@ -87,7 +70,11 @@ export default defineConfig(async ({ mode }) => {
     },
 
     optimizeDeps: {
-      include: ["gsap", "elkjs"],
+      // useElkLayout imports only the thin elk-api driver; the layout engine
+      // runs in src/workers/elk.worker.ts. The dep scanner never crawls worker
+      // entries, so without the explicit elk-worker entry a cold dev server
+      // discovers it on first graph render and force-reloads every open page.
+      include: ["elkjs/lib/elk-api.js", "elkjs/lib/elk-worker.js"],
     },
 
     worker: {
@@ -98,10 +85,16 @@ export default defineConfig(async ({ mode }) => {
       port: 1420,
       strictPort: true,
       watch: {
-        ignored: ["**/src-tauri/**", "**/node_modules/**", "**/dist/**", "**/.git/**"],
-        usePolling: false,
+        // Vite already ignores .git, node_modules, test-results and its cache
+        // dir. Cargo's target/ may live under src-tauri/ or at the repo root.
+        ignored: [
+          "**/src-tauri/**",
+          "**/crates/**",
+          "**/target/**",
+          "**/dist/**",
+          "**/dist-web/**",
+        ],
       },
-      fs: { strict: true },
     },
   };
 });

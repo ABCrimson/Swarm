@@ -19,7 +19,7 @@ import {
   ReactFlowProvider,
   useReactFlow,
 } from "@xyflow/react";
-import { useAtom } from "jotai";
+import { useAtom, useSetAtom } from "jotai";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { Spinner } from "#components/ui/Spinner";
@@ -129,8 +129,8 @@ function WorkerGraphInner(): React.ReactElement {
   const removeWorker = useWorkerStore((s) => s.removeWorker);
   const provenanceEdges = useProvenanceStore((s) => s.edges);
   const fileWriteCounts = useProvenanceStore((s) => s.fileWriteCounts);
-  const [, setSelectedId] = useAtom(selectedWorkerIdAtom);
-  const [, setDetailOpen] = useAtom(detailPanelOpenAtom);
+  const setSelectedId = useSetAtom(selectedWorkerIdAtom);
+  const setDetailOpen = useSetAtom(detailPanelOpenAtom);
   // Read (not just set): the delete-key handler below must gate itself
   // on whether the causality inspector is open — a document-level
   // listener stays live underneath any overlay, so without this a
@@ -208,7 +208,7 @@ function WorkerGraphInner(): React.ReactElement {
     if (!isLayouting && nodes.length > 0 && !initialFitDone.current) {
       const raf = requestAnimationFrame(() => {
         initialFitDone.current = true;
-        fitView({ duration: 300, padding: 0.2 });
+        void fitView({ duration: 300, padding: 0.2 });
       });
       return () => cancelAnimationFrame(raf);
     }

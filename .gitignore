@@ -5,7 +5,6 @@ node_modules/
 dist/
 dist-web/
 target/
-src-tauri/target/
 
 # IDE
 .vscode/
@@ -32,6 +31,7 @@ src-tauri/gen/
 coverage/
 playwright-report/
 test-results/
+.vitest/
 .playwright-mcp/
 
 # TypeScript

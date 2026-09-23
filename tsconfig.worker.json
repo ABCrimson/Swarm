@@ -4,5 +4,5 @@
     "lib": ["esnext", "webworker"]
   },
   "include": ["src/workers", "src/vite-env.d.ts"],
-  "exclude": ["node_modules", "src-tauri"]
+  "exclude": []
 }

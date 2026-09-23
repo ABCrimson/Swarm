@@ -8,7 +8,7 @@ import {
   ringBufferPush,
   ringBufferToArray,
 } from "#lib/metrics-aggregation";
-import type { MetricPoint, SystemMetrics } from "./types";
+import type { MetricPoint, SystemMetrics } from "#store/types";
 
 /** Reactive state slice for system-level metrics. */
 interface SystemStoreState {

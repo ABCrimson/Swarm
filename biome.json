@@ -1,22 +1,12 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.10/schema.json",
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
     "useIgnoreFile": true
   },
   "files": {
-    "includes": [
-      "**",
-      "!**/src-tauri/target",
-      "!**/dist",
-      "!**/node_modules",
-      "!**/*.svg",
-      "!src/styles/tokens.css",
-      "!.claude",
-      "!.superpowers",
-      "!site"
-    ]
+    "includes": ["**", "!**/*.svg", "!src/styles/tokens.css", "!.claude", "!site"]
   },
   "formatter": {
     "enabled": true,
@@ -28,7 +18,9 @@
   "linter": {
     "enabled": true,
     "domains": {
+      "playwright": "recommended",
       "react": "recommended",
+      "tailwind": "recommended",
       "test": "recommended"
     },
     "rules": {
@@ -39,13 +31,30 @@
       },
       "style": {
         "noNonNullAssertion": "warn",
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "patterns": [
+              {
+                "group": ["../*", "../**"],
+                "message": "Use a # subpath import"
+              }
+            ]
+          }
+        },
         "useConst": "error"
       },
       "suspicious": {
         "noExplicitAny": "error"
       },
       "nursery": {
-        "noFloatingPromises": "error"
+        "noFloatingPromises": "error",
+        "noReturnInFinally": "error",
+        "noUnmodifiedLoopCondition": "error",
+        "noXorAsExponentiation": "error",
+        "useFlatMathMinMax": "error",
+        "useModernMathApis": "error",
+        "useReactCompiler": "warn"
       }
     }
   },

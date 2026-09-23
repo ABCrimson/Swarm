@@ -36,7 +36,11 @@ export interface Kv {
  * nothing about its persisted file.
  */
 class TauriStoreKv implements Kv {
-  constructor(private readonly storeName: string) {}
+  private readonly storeName: string;
+
+  constructor(storeName: string) {
+    this.storeName = storeName;
+  }
 
   async get<T>(key: string): Promise<T | null> {
     if (!isTauri()) return null;
@@ -89,7 +93,11 @@ class TauriStoreKv implements Kv {
  * this rule before wiring the first one.
  */
 class DaemonConfigKv implements Kv {
-  constructor(private readonly storeName: string) {}
+  private readonly storeName: string;
+
+  constructor(storeName: string) {
+    this.storeName = storeName;
+  }
 
   private namespacedKey(key: string): string {
     return `${this.storeName}:${key}`;

@@ -1,9 +1,6 @@
-import { useResizeObserver } from "@crimson_dev/use-resize-observer";
-import gsap from "gsap";
 import { useAtomValue } from "jotai";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ReactNode } from "react";
-import { useEffect, useRef } from "react";
 import { reducedMotionAtom, sidebarCollapsedAtom } from "#store/ui";
 import { ParticleBackground } from "./ParticleBackground.tsx";
 import { Sidebar } from "./Sidebar.tsx";
@@ -16,87 +13,27 @@ interface AppShellProps {
   readonly pageKey: string;
 }
 
+/** GSAP's `power3.out` / `power2.out` as cubic-bezier curves. */
+const POWER3_OUT = [0.215, 0.61, 0.355, 1] as const;
+const POWER2_OUT = [0.25, 0.46, 0.45, 0.94] as const;
+
 /**
  * Root layout shell with CSS Grid: sidebar (220px) + main (1fr).
  *
- * GSAP startup sequence:
+ * Startup sequence (plays once, on mount):
  *  1. Sidebar slides in from left (x: -20, 0.4s, power3.out)
- *  2. Topbar fades in from top (y: -12, 0.3s, overlaps by 0.1s)
- *  3. Main content fades in (0.4s, overlaps by 0.15s)
+ *  2. Topbar fades in from top (y: -12, 0.3s, starts 0.1s later)
+ *  3. Main content fades in (0.4s, power2.out, starts 0.25s in)
  *
- * Framer Motion `<AnimatePresence mode="popLayout">` wraps page content.
+ * `<AnimatePresence mode="popLayout">` wraps page content.
  */
 export function AppShell({ children, pageKey }: AppShellProps): React.ReactElement {
-  const shellRef = useRef<HTMLDivElement>(null);
-  const sidebarRef = useRef<HTMLDivElement>(null);
-  const topbarRef = useRef<HTMLDivElement>(null);
-  const mainRef = useRef<HTMLDivElement>(null);
   const reducedMotion = useAtomValue(reducedMotionAtom);
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
-
-  // Track container size via resize observer
-  const { ref: containerRef } = useResizeObserver<HTMLDivElement>({
-    ref: shellRef,
-    box: "border-box",
-  });
-
-  // GSAP startup animation — StrictMode-safe (cleanup resets elements to visible)
-  useEffect(() => {
-    const sidebar = sidebarRef.current;
-    const topbar = topbarRef.current;
-    const main = mainRef.current;
-
-    if (!sidebar || !topbar || !main) return;
-
-    if (reducedMotion) {
-      gsap.set([sidebar, topbar, main], { opacity: 1, x: 0, y: 0 });
-      return;
-    }
-
-    // Set initial states
-    gsap.set(sidebar, { opacity: 0, x: -20 });
-    gsap.set(topbar, { opacity: 0, y: -12 });
-    gsap.set(main, { opacity: 0 });
-
-    const tl = gsap.timeline();
-
-    // 1. Sidebar slides in
-    tl.to(sidebar, {
-      opacity: 1,
-      x: 0,
-      duration: 0.4,
-      ease: "power3.out",
-    });
-
-    // 2. Topbar fades in (0.1s overlap)
-    tl.to(
-      topbar,
-      {
-        opacity: 1,
-        y: 0,
-        duration: 0.3,
-        ease: "power3.out",
-      },
-      "<0.1",
-    );
-
-    // 3. Main fades in (0.15s overlap)
-    tl.to(
-      main,
-      {
-        opacity: 1,
-        duration: 0.4,
-        ease: "power2.out",
-      },
-      "<0.15",
-    );
-
-    return () => {
-      tl.kill();
-      // Reset elements to visible so StrictMode remount doesn't leave them invisible
-      gsap.set([sidebar, topbar, main], { opacity: 1, x: 0, y: 0 });
-    };
-  }, [reducedMotion]);
+  // The intro is decided on the first render, before App's useTheme effect
+  // syncs `reducedMotionAtom` from the media query — so read the preference
+  // synchronously here instead of from the (still-default) atom.
+  const skipIntro = useReducedMotion() === true;
 
   return (
     <>
@@ -125,7 +62,6 @@ export function AppShell({ children, pageKey }: AppShellProps): React.ReactEleme
       </a>
       <ParticleBackground />
       <div
-        ref={containerRef}
         className="grid h-screen w-screen overflow-hidden"
         style={{
           gridTemplateColumns: sidebarCollapsed ? "56px 1fr" : "220px 1fr",
@@ -136,17 +72,32 @@ export function AppShell({ children, pageKey }: AppShellProps): React.ReactEleme
         }}
       >
         {/* Sidebar */}
-        <div ref={sidebarRef} className="row-span-full">
+        <motion.div
+          className="row-span-full"
+          initial={skipIntro ? false : { opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.4, ease: POWER3_OUT }}
+        >
           <Sidebar />
-        </div>
+        </motion.div>
 
         {/* Main area: topbar + content */}
         <div className="grid" style={{ gridTemplateRows: "auto 1fr auto" }}>
-          <div ref={topbarRef}>
+          <motion.div
+            initial={skipIntro ? false : { opacity: 0, y: -12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.1, ease: POWER3_OUT }}
+          >
             <Topbar />
-          </div>
+          </motion.div>
 
-          <main id="main-content" ref={mainRef} className="overflow-hidden relative">
+          <motion.main
+            id="main-content"
+            className="overflow-hidden relative"
+            initial={skipIntro ? false : { opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.4, delay: 0.25, ease: POWER2_OUT }}
+          >
             <AnimatePresence mode="popLayout">
               <motion.div
                 key={pageKey}
@@ -159,7 +110,7 @@ export function AppShell({ children, pageKey }: AppShellProps): React.ReactEleme
                 {children}
               </motion.div>
             </AnimatePresence>
-          </main>
+          </motion.main>
 
           <StatusBar />
         </div>

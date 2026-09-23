@@ -2,7 +2,7 @@ import { enableMapSet } from "immer";
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
-import type { Worker, WorkerState } from "./types";
+import type { Worker, WorkerState } from "#store/types";
 
 // Required for immer producers that mutate native Map instances (below).
 enableMapSet();

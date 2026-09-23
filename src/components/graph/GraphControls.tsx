@@ -80,15 +80,15 @@ export function GraphControls({
   const causalityTarget = useAtomValue(causalityInspectorAtom);
 
   const handleZoomIn = () => {
-    zoomIn({ duration: 200 });
+    void zoomIn({ duration: 200 });
   };
 
   const handleZoomOut = () => {
-    zoomOut({ duration: 200 });
+    void zoomOut({ duration: 200 });
   };
 
   const handleFitView = () => {
-    fitView({ duration: 300, padding: 0.2 });
+    void fitView({ duration: 300, padding: 0.2 });
   };
 
   // Export workflow to JSON file
@@ -156,13 +156,13 @@ export function GraphControls({
 
       if (e.key === "+" || e.key === "=") {
         e.preventDefault();
-        zoomIn({ duration: 200 });
+        void zoomIn({ duration: 200 });
       } else if (e.key === "-") {
         e.preventDefault();
-        zoomOut({ duration: 200 });
+        void zoomOut({ duration: 200 });
       } else if (e.key === "0") {
         e.preventDefault();
-        fitView({ duration: 300, padding: 0.2 });
+        void fitView({ duration: 300, padding: 0.2 });
       }
     };
     document.addEventListener("keydown", handler);

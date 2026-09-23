@@ -5,7 +5,7 @@
 // Glass-panel OKLCH backgrounds, Suspense boundary.
 
 import { useAtom } from "jotai";
-import type { CSSProperties, FormEvent } from "react";
+import type { CSSProperties } from "react";
 import { Suspense, startTransition, useEffect, useRef, useState } from "react";
 import { Spinner } from "#components/ui/Spinner";
 import { useAiStream } from "#hooks/useAiStream";
@@ -595,7 +595,7 @@ function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.Re
     });
   };
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
     doSubmit();
   };

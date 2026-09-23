@@ -6,13 +6,6 @@ import "@fontsource-variable/dm-sans/wght-italic.css";
 // must load before our OKLCH theming overrides in global.css.
 import "modern-cmdk/styles.css";
 import "#styles/global.css";
-import { enableMapSet } from "immer";
-
-// Must run before any store module (all of which use immer's `produce` on
-// Map-valued state, e.g. useWorkerStore's `workers: Map`) is evaluated —
-// otherwise every Map-mutating store action throws in production.
-enableMapSet();
-
 import { StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";

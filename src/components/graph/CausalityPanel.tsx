@@ -1,4 +1,4 @@
-import { useAtom } from "jotai";
+import { useSetAtom } from "jotai";
 import { useEffect, useRef, useState } from "react";
 import * as z from "zod";
 import { Spinner } from "#components/ui/Spinner";
@@ -188,8 +188,8 @@ interface CausalityPanelProps {
  */
 export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): React.ReactElement {
   const workers = useWorkerStore((s) => s.workers);
-  const [, setSelectedWorkerId] = useAtom(selectedWorkerIdAtom);
-  const [, setDetailOpen] = useAtom(detailPanelOpenAtom);
+  const setSelectedWorkerId = useSetAtom(selectedWorkerIdAtom);
+  const setDetailOpen = useSetAtom(detailPanelOpenAtom);
   const [result, setResult] = useState<CausalityWalkResult | null>(null);
   const [loading, setLoading] = useState(true);
   const panelRef = useRef<HTMLDivElement>(null);

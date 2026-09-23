@@ -1,6 +1,6 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { ElkExtendedEdge, ElkNode } from "elkjs";
-import ELK from "elkjs/lib/elk.bundled.js";
+import ELK from "elkjs/lib/elk-api.js";
 import { useEffect, useRef, useState } from "react";
 
 interface ElkLayoutReturn {

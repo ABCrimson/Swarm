@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
 import { CLAUDE_MODELS } from "#lib/models";
-import type { AiQueueItem, CumulativeUsage, ProviderConfig, TokenUsageRecord } from "./types";
+import type { AiQueueItem, CumulativeUsage, ProviderConfig, TokenUsageRecord } from "#store/types";
 
 /** Reactive state slice for the AI request queue, provider selection, and cost tracking. */
 interface AiStoreState {

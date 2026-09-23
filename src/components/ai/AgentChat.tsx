@@ -12,7 +12,7 @@
 // `Capabilities.interruptMidturn` rather than assuming one behavior
 // for every provider.
 
-import type { CSSProperties, FormEvent } from "react";
+import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Pill } from "#components/ui/Pill";
@@ -536,7 +536,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, []);
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
     const trimmed = draft.trim();
     if (!trimmed) return;

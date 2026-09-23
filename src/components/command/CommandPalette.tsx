@@ -1,4 +1,4 @@
-import { useAtom, useAtomValue } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { Command } from "modern-cmdk/react";
 import { useEffect } from "react";
 import { toast } from "sonner";
@@ -37,8 +37,8 @@ interface CommandDef {
  */
 export function CommandPalette(): React.ReactElement {
   const [open, setOpen] = useAtom(commandPaletteOpenAtom);
-  const [, setPage] = useAtom(currentPageAtom);
-  const [, setSidebarCollapsed] = useAtom(sidebarCollapsedAtom);
+  const setPage = useSetAtom(currentPageAtom);
+  const setSidebarCollapsed = useSetAtom(sidebarCollapsedAtom);
   const [frecency, setFrecency] = useAtom(frecencyAtom);
   const getScore = useAtomValue(frecencyScoreAtom);
 

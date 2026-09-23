@@ -1,4 +1,4 @@
-import { useAtom, useAtomValue } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useEffect, useState } from "react";
 
 import { WorkerAIPanel } from "#components/ai/WorkerAIPanel";
@@ -28,7 +28,7 @@ function WorkerListView(): React.ReactElement {
   const workers = useWorkerStore((s) => s.workers);
   const agentSessions = useAgentSessionStore((s) => s.sessions);
   const [selectedId, setSelectedId] = useAtom(selectedWorkerIdAtom);
-  const [, setDetailOpen] = useAtom(detailPanelOpenAtom);
+  const setDetailOpen = useSetAtom(detailPanelOpenAtom);
 
   if (workers.size === 0) {
     return (

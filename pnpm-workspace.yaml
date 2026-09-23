@@ -1,29 +1,36 @@
+# pnpm 11+ reads project settings only from this file — `.npmrc` is
+# consulted for auth and registry keys alone, so the house exact-pin and
+# engine rules live here.
+saveExact: true
+engineStrict: true
+
+# Supply-chain gates: a version must be at least 24h old before it
+# resolves (an explicit value also makes the check strict), and a package
+# may never lose trust evidence (provenance / trusted publishing) relative
+# to its earlier releases.
+minimumReleaseAge: 1440
+trustPolicy: no-downgrade
+trustPolicyExclude:
+  # Babel 7's semver range (^6.3.1) — a 2023 backport published without the
+  # provenance the 7.x line already had. Required by @babel/core 7.29.7,
+  # pinned because babel-plugin-react-compiler 1.0.0 is broken on Babel 8.
+  - semver@6.3.1
+
+# Same-day pins that deliberately bypass the 24h gate. `pnpm add`,
+# `update` and `remove` prune entries the lockfile no longer resolves.
+minimumReleaseAgeExcludePrune: true
 minimumReleaseAgeExclude:
-  - react@19.3.0-canary-a1124489-20260826
-  - react-dom@19.3.0-canary-a1124489-20260826
-  - scheduler@0.28.0-canary-a1124489-20260826
-  - zod@4.5.0-canary.20260827T054049
-  - typescript@7.1.0-dev.20260826.1
-  - vite@8.2.2
-  - '@anthropic-ai/sdk@0.121.0'
-  - '@vitejs/plugin-react@6.1.0'
-  - '@playwright/test@1.63.0-alpha-2026-08-27'
-  - '@biomejs/biome@2.5.10'
-  - '@biomejs/cli-darwin-arm64@2.5.10'
-  - '@biomejs/cli-darwin-x64@2.5.10'
-  - '@biomejs/cli-linux-arm64-musl@2.5.10'
-  - '@biomejs/cli-linux-arm64@2.5.10'
-  - '@biomejs/cli-linux-x64-musl@2.5.10'
-  - '@biomejs/cli-linux-x64@2.5.10'
-  - '@biomejs/cli-win32-arm64@2.5.10'
-  - '@biomejs/cli-win32-x64@2.5.10'
-  - '@typescript/typescript-darwin-arm64@7.1.0-dev.20260826.1'
-  - '@typescript/typescript-darwin-x64@7.1.0-dev.20260826.1'
-  - '@typescript/typescript-linux-arm64@7.1.0-dev.20260826.1'
-  - '@typescript/typescript-linux-arm@7.1.0-dev.20260826.1'
-  - '@typescript/typescript-linux-x64@7.1.0-dev.20260826.1'
-  - '@typescript/typescript-win32-arm64@7.1.0-dev.20260826.1'
-  - '@typescript/typescript-win32-x64@7.1.0-dev.20260826.1'
-  - playwright-core@1.63.0-alpha-2026-08-27
-  - playwright@1.63.0-alpha-2026-08-27
-  - '@types/node@26.4.0'
+  - typescript@7.1.0-dev.20260923.1
+  - '@typescript/typescript-darwin-arm64@7.1.0-dev.20260923.1'
+  - '@typescript/typescript-darwin-x64@7.1.0-dev.20260923.1'
+  - '@typescript/typescript-linux-arm64@7.1.0-dev.20260923.1'
+  - '@typescript/typescript-linux-arm@7.1.0-dev.20260923.1'
+  - '@typescript/typescript-linux-x64@7.1.0-dev.20260923.1'
+  - '@typescript/typescript-win32-arm64@7.1.0-dev.20260923.1'
+  - '@typescript/typescript-win32-x64@7.1.0-dev.20260923.1'
+  - '@playwright/test@1.64.0-alpha-2026-09-23'
+  - playwright@1.64.0-alpha-2026-09-23
+  - playwright-core@1.64.0-alpha-2026-09-23
+  - motion@13.4.2
+  - framer-motion@13.4.2
+  - motion-dom@13.4.2

@@ -1,6 +1,6 @@
 import { open } from "@tauri-apps/plugin-shell";
 import { formatDistanceToNow } from "date-fns";
-import { useAtom, useSetAtom } from "jotai";
+import { useSetAtom } from "jotai";
 import { toast } from "sonner";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Pill } from "#components/ui/Pill";
@@ -51,7 +51,7 @@ function DetailRow({
  * output preview, and action buttons (pause, resume, kill).
  */
 export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement {
-  const [, setDetailOpen] = useAtom(detailPanelOpenAtom);
+  const setDetailOpen = useSetAtom(detailPanelOpenAtom);
   const { pause, resume, kill, optimisticState } = useWorker(worker.id);
   // Most recent measured edge (either endpoint) involving this worker —
   // the CausalityPanel walk's starting seq. `null` when this worker has
