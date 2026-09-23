@@ -1,128 +1,166 @@
-// ── session_created merge semantics (fix wave, item NEW-1) ──
-//
-// applyTemplate's own addSession(session) (from create_session's IPC
-// response) and this hook's session_created handler (from the same
-// command's emitted event) race in either order — Rust emits the event
-// as part of create_session, so nothing guarantees which one reaches
-// the frontend store first. A naive session_created handler that always
-// replaces the store entry would reset workerIds back to [] if it lands
-// AFTER spawns have already grown it via applyTemplate's own addSession.
-// The handler now merges into any existing record instead.
-
-import { renderHook } from "@testing-library/react";
+import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionEvents } from "#hooks/useSessionEvents";
+import type { DomainEvent } from "#lib/event-bus";
 import { useSessionStore } from "#store/sessions";
 import type { Session } from "#store/types";
 
-type Handler = (e: { payload: unknown }) => void;
-
+type Handler = (e: DomainEvent) => void;
 const registered = new Map<string, Handler>();
 
-vi.mock("#lib/event-bus", () => ({
-  onEvent: (type: string, handler: Handler) => {
+vi.mock(import("#lib/event-bus"), () => ({
+  onEvent: (type, handler) => {
     registered.set(type, handler);
-    return () => registered.delete(type);
+    return () => {
+      registered.delete(type);
+    };
   },
 }));
 
-function resetStores(): void {
-  for (const [id] of useSessionStore.getState().sessions)
-    useSessionStore.getState().removeSession(id);
+const mockListSessions = vi.fn<() => Promise<Session[]>>();
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  listSessions: () => mockListSessions(),
+}));
+
+function deliver(type: string, payload: unknown): void {
+  registered.get(type)?.({ seq: 1, ts: 0, type, payload });
 }
+
+function makeSession(overrides: Partial<Session> = {}): Session {
+  return {
+    id: crypto.randomUUID(),
+    name: "Session",
+    workerIds: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function resetStore(): void {
+  for (const [id] of useSessionStore.getState().sessions) {
+    useSessionStore.getState().removeSession(id);
+  }
+}
+
+const SESSION_ID = "11111111-2222-4333-8444-555555555555";
+const WORKER_ID = "66666666-7777-4888-8999-aaaaaaaaaaaa";
+const OTHER_WORKER_ID = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
 
 describe("useSessionEvents", () => {
   beforeEach(() => {
-    resetStores();
+    resetStore();
     registered.clear();
+    mockListSessions.mockResolvedValue([]);
   });
-  afterEach(resetStores);
+  afterEach(() => {
+    cleanup();
+    resetStore();
+  });
+
+  // ── startup restore ──
+
+  it("restores the backend's persisted sessions into the store on mount", async () => {
+    const restored = makeSession({ id: SESSION_ID, name: "From Last Run" });
+    mockListSessions.mockResolvedValue([restored]);
+
+    renderHook(() => useSessionEvents());
+
+    await waitFor(() => {
+      expect(useSessionStore.getState().sessions.get(SESSION_ID)).toEqual(restored);
+    });
+  });
+
+  it("logs, and keeps working, when the restore fails", async () => {
+    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockListSessions.mockRejectedValue(new Error("backend not ready"));
+
+    renderHook(() => useSessionEvents());
+    await waitFor(() => {
+      expect(consoleError).toHaveBeenCalledWith(
+        "useSessionEvents: could not restore persisted sessions",
+        expect.any(Error),
+      );
+    });
+
+    deliver("session_created", { sessionId: SESSION_ID, name: "Still Live" });
+    expect(useSessionStore.getState().sessions.get(SESSION_ID)?.name).toBe("Still Live");
+  });
+
+  // ── session_created merge semantics ──
+  // applyTemplate's own addSession() (from create_session's IPC response)
+  // and this handler (from the same command's emitted event) race in
+  // either order. A handler that replaced the store entry would reset
+  // workerIds to [] when it lands after spawns already grew it.
 
   it("creates a fresh, empty-workerIds session when nothing exists yet for that id", () => {
     renderHook(() => useSessionEvents());
 
-    registered.get("session_created")?.({ payload: { sessionId: "session-1", name: "Fresh" } });
+    deliver("session_created", { sessionId: SESSION_ID, name: "Fresh" });
 
-    const session = useSessionStore.getState().sessions.get("session-1");
+    const session = useSessionStore.getState().sessions.get(SESSION_ID);
     expect(session?.name).toBe("Fresh");
     expect(session?.workerIds).toEqual([]);
   });
 
-  it("preserves an already-grown workerIds list instead of resetting it to empty (event arrives after applyTemplate's addSession + spawns)", () => {
-    const richSession: Session = {
-      id: "session-2",
-      name: "Richer Already",
-      workerIds: ["worker-a", "worker-b"],
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:05.000Z",
-    };
-    useSessionStore.getState().addSession(richSession);
+  it("preserves an already-grown workerIds list and createdAt instead of resetting them", () => {
+    const rich = makeSession({ id: SESSION_ID, workerIds: [WORKER_ID, OTHER_WORKER_ID] });
+    useSessionStore.getState().addSession(rich);
 
     renderHook(() => useSessionEvents());
-    registered.get("session_created")?.({
-      payload: { sessionId: "session-2", name: "Richer Already" },
-    });
+    deliver("session_created", { sessionId: SESSION_ID, name: "Renamed" });
 
-    // The event payload never carries workerIds — a naive replace would
-    // have reset this to []. It must not.
-    expect(useSessionStore.getState().sessions.get("session-2")?.workerIds).toEqual([
-      "worker-a",
-      "worker-b",
-    ]);
+    const merged = useSessionStore.getState().sessions.get(SESSION_ID);
+    expect(merged?.workerIds).toEqual([WORKER_ID, OTHER_WORKER_ID]);
+    expect(merged?.createdAt).toBe(rich.createdAt);
+    expect(merged?.name).toBe("Renamed");
   });
 
-  it("preserves the existing createdAt instead of overwriting it with the event's arrival time", () => {
-    const original: Session = {
-      id: "session-3",
-      name: "Original",
-      workerIds: [],
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    };
-    useSessionStore.getState().addSession(original);
-
+  it("drops (and logs) a malformed session_created payload", () => {
+    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     renderHook(() => useSessionEvents());
-    registered.get("session_created")?.({ payload: { sessionId: "session-3", name: "Original" } });
 
-    expect(useSessionStore.getState().sessions.get("session-3")?.createdAt).toBe(
-      "2026-01-01T00:00:00.000Z",
+    deliver("session_created", { sessionId: "not-a-uuid", name: "Nope" });
+
+    expect(useSessionStore.getState().sessions.size).toBe(0);
+    expect(consoleError).toHaveBeenCalledWith(
+      "useSessionEvents: invalid session_created payload",
+      expect.anything(),
     );
   });
 
-  it("still removes a session on session_deleted", () => {
-    useSessionStore.getState().addSession({
-      id: "session-4",
-      name: "Goes Away",
-      workerIds: [],
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    });
+  // ── session_deleted ──
+
+  it("removes a session on session_deleted", () => {
+    useSessionStore.getState().addSession(makeSession({ id: SESSION_ID }));
 
     renderHook(() => useSessionEvents());
-    registered.get("session_deleted")?.({ payload: { sessionId: "session-4" } });
+    deliver("session_deleted", { sessionId: SESSION_ID });
 
-    expect(useSessionStore.getState().sessions.has("session-4")).toBe(false);
+    expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(false);
   });
 
-  // ── session_worker_removed (workerIds pruning, task 3) ────────────
-
-  const SESSION_ID = "11111111-2222-3333-8444-555555555555";
-  const WORKER_ID = "66666666-7777-8888-8999-aaaaaaaaaaaa";
-  const OTHER_WORKER_ID = "bbbbbbbb-cccc-dddd-8eee-ffffffffffff";
-
-  it("removes exactly the named worker from session.workerIds on session_worker_removed", () => {
-    useSessionStore.getState().addSession({
-      id: SESSION_ID,
-      name: "Pruned",
-      workerIds: [WORKER_ID, OTHER_WORKER_ID],
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    });
+  it("drops (and logs) a malformed session_deleted payload", () => {
+    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    useSessionStore.getState().addSession(makeSession({ id: SESSION_ID }));
 
     renderHook(() => useSessionEvents());
-    registered.get("session_worker_removed")?.({
-      payload: { sessionId: SESSION_ID, workerId: WORKER_ID },
-    });
+    deliver("session_deleted", { id: SESSION_ID });
+
+    expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(true);
+    expect(consoleError).toHaveBeenCalledOnce();
+  });
+
+  // ── session_worker_removed ──
+
+  it("removes exactly the named worker from session.workerIds", () => {
+    useSessionStore
+      .getState()
+      .addSession(makeSession({ id: SESSION_ID, workerIds: [WORKER_ID, OTHER_WORKER_ID] }));
+
+    renderHook(() => useSessionEvents());
+    deliver("session_worker_removed", { sessionId: SESSION_ID, workerId: WORKER_ID });
 
     expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([
       OTHER_WORKER_ID,
@@ -130,42 +168,45 @@ describe("useSessionEvents", () => {
   });
 
   it("is a no-op (logged, not thrown) for a malformed session_worker_removed payload", () => {
-    useSessionStore.getState().addSession({
-      id: SESSION_ID,
-      name: "Untouched",
-      workerIds: [WORKER_ID],
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    });
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    useSessionStore.getState().addSession(makeSession({ id: SESSION_ID, workerIds: [WORKER_ID] }));
 
     renderHook(() => useSessionEvents());
     expect(() =>
-      registered.get("session_worker_removed")?.({
-        payload: { sessionId: "not-a-uuid", workerId: WORKER_ID },
-      }),
+      deliver("session_worker_removed", { sessionId: "not-a-uuid", workerId: WORKER_ID }),
     ).not.toThrow();
 
     expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([WORKER_ID]);
-    expect(consoleError).toHaveBeenCalled();
-    consoleError.mockRestore();
+    expect(consoleError).toHaveBeenCalledOnce();
   });
 
-  it("is a no-op for a session id session_worker_removed doesn't name", () => {
-    useSessionStore.getState().addSession({
-      id: SESSION_ID,
-      name: "Unrelated",
-      workerIds: [WORKER_ID],
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    });
-    const otherSessionId = "77777777-8888-9999-8aaa-bbbbbbbbbbbb";
+  it("is a no-op for a valid payload naming another session", () => {
+    // A valid RFC 9562 id (version 4, variant 8), and a console spy that
+    // must stay silent: this proves the payload got PAST validation, so
+    // the assertion exercises the session-id match, not the schema.
+    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    useSessionStore.getState().addSession(makeSession({ id: SESSION_ID, workerIds: [WORKER_ID] }));
 
     renderHook(() => useSessionEvents());
-    registered.get("session_worker_removed")?.({
-      payload: { sessionId: otherSessionId, workerId: WORKER_ID },
+    deliver("session_worker_removed", {
+      sessionId: "77777777-8888-4999-8aaa-bbbbbbbbbbbb",
+      workerId: WORKER_ID,
     });
 
     expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([WORKER_ID]);
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it("unsubscribes every listener on unmount", () => {
+    const { unmount } = renderHook(() => useSessionEvents());
+    expect([...registered.keys()].sort()).toEqual([
+      "session_created",
+      "session_deleted",
+      "session_worker_removed",
+    ]);
+
+    unmount();
+
+    expect(registered.size).toBe(0);
   });
 });

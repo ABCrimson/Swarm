@@ -1,8 +1,8 @@
 import { motion } from "motion/react";
-import { useEffect, useState } from "react";
+import { Suspense, use } from "react";
 import { Pill } from "#components/ui/Pill";
 import { pluralizeWorkers } from "#lib/format";
-import { BUILT_IN_TEMPLATES, loadUserTemplates } from "#lib/templates";
+import { BUILT_IN_TEMPLATES, userTemplatesResource } from "#lib/templates";
 import type { SessionTemplate } from "#store/types";
 
 interface TemplateSelectorProps {
@@ -10,64 +10,36 @@ interface TemplateSelectorProps {
   readonly onClose: () => void;
 }
 
+/** Entrance stagger per card, capped so a long template list never waits seconds to appear. */
+const STAGGER_S = 0.05;
+const MAX_STAGGERED = 8;
+
+const sectionHeadingClass =
+  "mb-3 text-xs font-semibold tracking-widest text-[oklch(0.50_0.06_220)] uppercase font-[family-name:var(--font-mono)]";
+
 /**
- * Template chooser displaying built-in and user-created session templates.
- *
- * Templates are displayed as animated cards in a responsive grid.
+ * Template chooser: the built-in templates render at once; the user's own
+ * templates stream in beneath them (read once through the cached
+ * `userTemplatesResource` and `use()`), and a store that cannot be read
+ * says so instead of silently showing the built-ins alone.
  */
 export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): React.ReactElement {
-  const [userTemplates, setUserTemplates] = useState<SessionTemplate[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void loadUserTemplates()
-      .then((templates) => {
-        if (!cancelled) setUserTemplates(templates);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handleSelect = (template: SessionTemplate) => {
-    onSelect(template);
-  };
-
   return (
     <div
-      className="rounded-xl p-6"
-      style={{
-        background: "oklch(0.12 0.02 220 / 0.8)",
-        backdropFilter: "blur(16px) saturate(1.5)",
-        border: "1px solid oklch(0.28 0.04 220)",
-      }}
+      className="rounded-xl border border-[oklch(0.28_0.04_220)] bg-[oklch(0.12_0.02_220/0.8)] p-6"
+      style={{ backdropFilter: "blur(16px) saturate(1.5)" }}
     >
-      <div className="flex items-center justify-between mb-5">
-        <h2
-          className="text-lg font-semibold"
-          style={{
-            fontFamily: "var(--font-display)",
-            color: "oklch(0.92 0.02 220)",
-          }}
-        >
+      <div className="mb-5 flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-[oklch(0.92_0.02_220)] font-[family-name:var(--font-display)]">
           Choose A Template
         </h2>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close Template Selector"
-          className="p-1 rounded-lg transition-colors cursor-pointer"
-          style={{ color: "oklch(0.55 0.03 220)" }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLElement).style.background = "oklch(0.22 0.04 220 / 0.5)";
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLElement).style.background = "oklch(0 0 0 / 0)";
-          }}
+          className="cursor-pointer rounded-lg p-1 text-[oklch(0.55_0.03_220)] transition-colors hover:bg-[oklch(0.22_0.04_220/0.5)] focus-visible:outline-2 focus-visible:outline-plasma"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <title>Close</title>
             <path
               d="M4 4l8 8M12 4l-8 8"
               stroke="currentColor"
@@ -78,54 +50,61 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
         </button>
       </div>
 
-      {/* Built-in templates */}
-      <div className="mb-5">
-        <h3
-          className="text-xs font-semibold uppercase tracking-widest mb-3"
-          style={{
-            fontFamily: "var(--font-mono, 'JetBrains Mono Variable', monospace)",
-            color: "oklch(0.50 0.06 220)",
-          }}
-        >
-          Built-In
-        </h3>
+      <section aria-label="Built-In Templates" className="mb-5">
+        <h3 className={sectionHeadingClass}>Built-In</h3>
         <div className="grid grid-cols-2 gap-3">
-          {BUILT_IN_TEMPLATES.map((template, idx) => (
-            <TemplateCard
-              key={template.id}
-              template={template}
-              index={idx}
-              onSelect={handleSelect}
-            />
+          {BUILT_IN_TEMPLATES.map((template, index) => (
+            <TemplateCard key={template.id} template={template} index={index} onSelect={onSelect} />
           ))}
         </div>
-      </div>
+      </section>
 
-      {/* User templates */}
-      {userTemplates.length > 0 && (
-        <div>
-          <h3
-            className="text-xs font-semibold uppercase tracking-widest mb-3"
-            style={{
-              fontFamily: "var(--font-mono, 'JetBrains Mono Variable', monospace)",
-              color: "oklch(0.50 0.06 220)",
-            }}
-          >
-            Your Templates
-          </h3>
-          <div className="grid grid-cols-2 gap-3">
-            {userTemplates.map((template, idx) => (
-              <TemplateCard
-                key={template.id}
-                template={template}
-                index={idx + BUILT_IN_TEMPLATES.length}
-                onSelect={handleSelect}
-              />
-            ))}
-          </div>
-        </div>
-      )}
+      <Suspense
+        fallback={
+          <p className="text-xs text-[oklch(0.50_0.04_220)] font-[family-name:var(--font-body)]">
+            Loading Your Templates…
+          </p>
+        }
+      >
+        <UserTemplates onSelect={onSelect} />
+      </Suspense>
     </div>
+  );
+}
+
+function UserTemplates({
+  onSelect,
+}: {
+  readonly onSelect: (template: SessionTemplate) => void;
+}): React.ReactElement | null {
+  const { templates, failed } = use(userTemplatesResource());
+
+  if (failed) {
+    return (
+      <p
+        role="alert"
+        className="text-xs text-[oklch(0.72_0.20_25)] font-[family-name:var(--font-body)]"
+      >
+        Could Not Load Your Templates.
+      </p>
+    );
+  }
+  if (templates.length === 0) return null;
+
+  return (
+    <section aria-label="Your Templates">
+      <h3 className={sectionHeadingClass}>Your Templates</h3>
+      <div className="grid grid-cols-2 gap-3">
+        {templates.map((template, index) => (
+          <TemplateCard
+            key={template.id}
+            template={template}
+            index={index + BUILT_IN_TEMPLATES.length}
+            onSelect={onSelect}
+          />
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -143,43 +122,19 @@ function TemplateCard({
       type="button"
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: index * 0.05, duration: 0.2 }}
+      transition={{ delay: Math.min(index, MAX_STAGGERED) * STAGGER_S, duration: 0.2 }}
       whileHover={{ scale: 1.02 }}
       whileTap={{ scale: 0.98 }}
       onClick={() => onSelect(template)}
-      className="text-left rounded-lg p-4 cursor-pointer transition-colors"
-      style={{
-        background: "oklch(0.16 0.03 220 / 0.6)",
-        backdropFilter: "blur(8px)",
-        border: "1px solid oklch(0.26 0.04 220 / 0.5)",
-      }}
-      onMouseEnter={(e) => {
-        (e.currentTarget as HTMLElement).style.borderColor = "oklch(0.50 0.18 290 / 0.5)";
-        (e.currentTarget as HTMLElement).style.background = "oklch(0.18 0.05 290 / 0.3)";
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.borderColor = "oklch(0.26 0.04 220 / 0.5)";
-        (e.currentTarget as HTMLElement).style.background = "oklch(0.16 0.03 220 / 0.6)";
-      }}
+      className="cursor-pointer rounded-lg border border-[oklch(0.26_0.04_220/0.5)] bg-[oklch(0.16_0.03_220/0.6)] p-4 text-left transition-colors hover:border-[oklch(0.50_0.18_290/0.5)] hover:bg-[oklch(0.18_0.05_290/0.3)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-plasma"
+      style={{ backdropFilter: "blur(8px)" }}
     >
-      <h4
-        className="text-sm font-semibold mb-1"
-        style={{
-          fontFamily: "var(--font-display)",
-          color: "oklch(0.88 0.04 220)",
-        }}
-      >
+      <span className="mb-1 block text-sm font-semibold text-[oklch(0.88_0.04_220)] font-[family-name:var(--font-display)]">
         {template.name}
-      </h4>
-      <p
-        className="text-xs mb-2 line-clamp-2"
-        style={{
-          fontFamily: "var(--font-body)",
-          color: "oklch(0.55 0.03 220)",
-        }}
-      >
+      </span>
+      <span className="mb-2 line-clamp-2 text-xs text-[oklch(0.55_0.03_220)] font-[family-name:var(--font-body)]">
         {template.description}
-      </p>
+      </span>
       <Pill tone="info" size="sm">
         {pluralizeWorkers(template.workerConfigs.length)}
       </Pill>

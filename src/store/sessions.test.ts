@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionStore } from "#store/sessions";
 import type { Session } from "#store/types";
 
@@ -96,7 +96,7 @@ describe("SessionStore", () => {
     it("preserves fields not included in the update", () => {
       const session = createSession({
         name: "original",
-        workerIds: ["id-1", "id-2"],
+        workerIds: [crypto.randomUUID(), crypto.randomUUID()],
       });
       const { addSession, updateSession } = useSessionStore.getState();
       addSession(session);
@@ -104,13 +104,64 @@ describe("SessionStore", () => {
       updateSession(session.id, { name: "renamed" });
 
       const stored = useSessionStore.getState().sessions.get(session.id);
-      expect(stored?.workerIds).toEqual(["id-1", "id-2"]);
+      expect(stored?.workerIds).toEqual(session.workerIds);
     });
 
     it("does nothing for a non-existent session", () => {
       const { updateSession } = useSessionStore.getState();
       // Should not throw
       updateSession("non-existent", { name: "nope" });
+      expect(useSessionStore.getState().sessions.size).toBe(0);
+    });
+  });
+
+  describe("hydrateSessions", () => {
+    it("adds every session the store does not have, in one update", () => {
+      const listener = vi.fn();
+      const unsubscribe = useSessionStore.subscribe((state) => state.sessions, listener);
+      const s1 = createSession({ name: "restored-1" });
+      const s2 = createSession({ name: "restored-2" });
+
+      useSessionStore.getState().hydrateSessions([s1, s2]);
+      unsubscribe();
+
+      expect([...useSessionStore.getState().sessions.keys()]).toEqual([s1.id, s2.id]);
+      expect(listener).toHaveBeenCalledOnce();
+    });
+
+    it("keeps a session the store already holds instead of the persisted copy", () => {
+      const live = createSession({ name: "live", workerIds: [crypto.randomUUID()] });
+      useSessionStore.getState().addSession(live);
+
+      useSessionStore.getState().hydrateSessions([{ ...live, name: "persisted", workerIds: [] }]);
+
+      expect(useSessionStore.getState().sessions.get(live.id)).toEqual(live);
+    });
+  });
+
+  describe("removeWorkerFromSession", () => {
+    it("removes exactly that worker from the session", () => {
+      const [keep, drop] = [crypto.randomUUID(), crypto.randomUUID()];
+      const session = createSession({ workerIds: [keep, drop] });
+      useSessionStore.getState().addSession(session);
+
+      useSessionStore.getState().removeWorkerFromSession(session.id, drop);
+
+      expect(useSessionStore.getState().sessions.get(session.id)?.workerIds).toEqual([keep]);
+    });
+
+    it("is a no-op for a worker the session does not list", () => {
+      const worker = crypto.randomUUID();
+      const session = createSession({ workerIds: [worker] });
+      useSessionStore.getState().addSession(session);
+
+      useSessionStore.getState().removeWorkerFromSession(session.id, crypto.randomUUID());
+
+      expect(useSessionStore.getState().sessions.get(session.id)?.workerIds).toEqual([worker]);
+    });
+
+    it("is a no-op for an unknown session", () => {
+      useSessionStore.getState().removeWorkerFromSession(crypto.randomUUID(), crypto.randomUUID());
       expect(useSessionStore.getState().sessions.size).toBe(0);
     });
   });

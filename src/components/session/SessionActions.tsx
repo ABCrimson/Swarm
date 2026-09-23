@@ -1,139 +1,71 @@
-import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { useState } from "react";
+import { useActionState, useId, useState, useTransition } from "react";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { toast } from "#components/ui/Toast";
-import { readScopedTextFile, writeScopedTextFile } from "#lib/fs";
-import { createSession as createSessionIpc, deleteSession as deleteSessionIpc } from "#lib/tauri";
-import { useSessionStore } from "#store/sessions";
-import type { Session } from "#store/types";
-import { SessionSchema } from "#store/types";
+import { createAndActivateSession, importSessionFromFile } from "#lib/session-lifecycle";
 
-interface SessionActionsProps {
-  readonly onSessionCreated?: (session: Session) => void;
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** What the create-session form action leaves behind for the next render. */
+interface CreateFormState {
+  /** The Title Case failure to show under the field, or `null`. */
+  readonly error: string | null;
+  /** The submitted name, so a failed submit (which resets the form) keeps what was typed. */
+  readonly name: string;
+  readonly created: boolean;
+}
+
+const INITIAL_FORM_STATE: CreateFormState = { error: null, name: "", created: false };
+
+/** Validates the name, creates the session (made active, see `createAndActivateSession`) and toasts. */
+async function submitNewSession(form: FormData): Promise<CreateFormState> {
+  const name = String(form.get("name") ?? "").trim();
+  if (name === "") return { error: "Enter A Session Name.", name, created: false };
+  try {
+    const session = await createAndActivateSession(name);
+    toast.success(`Session "${session.name}" Created`);
+    return { error: null, name: "", created: true };
+  } catch (err) {
+    return { error: `Failed To Create Session: ${errorMessage(err)}`, name, created: false };
+  }
+}
+
+async function importSession(): Promise<void> {
+  try {
+    const session = await importSessionFromFile();
+    if (session != null) toast.success(`Session "${session.name}" Imported`);
+  } catch (err) {
+    toast.error(`Import Failed: ${errorMessage(err)}`);
+  }
 }
 
 /**
- * Action bar for creating and importing sessions.
- *
- * Toggles an inline name input for new sessions and supports
- * JSON file import via the Tauri dialog plugin.
+ * Action bar for creating and importing sessions: "New Session" opens an
+ * inline form, "Import" reads a session JSON file through the native
+ * dialog (`#lib/session-lifecycle`) and is disabled while one is running.
  */
-export function SessionActions({ onSessionCreated }: SessionActionsProps): React.ReactElement {
-  const addSession = useSessionStore((s) => s.addSession);
-
-  const [showNameInput, setShowNameInput] = useState(false);
-  const [nameValue, setNameValue] = useState("");
-  const [isCreating, setIsCreating] = useState(false);
-
-  const handleCreate = async () => {
-    const trimmed = nameValue.trim();
-    if (!trimmed) return;
-
-    setIsCreating(true);
-    try {
-      const session = await createSessionIpc(trimmed);
-      addSession(session);
-      toast.success(`Session "${trimmed}" Created`);
-      onSessionCreated?.(session);
-      setNameValue("");
-      setShowNameInput(false);
-    } catch (err) {
-      toast.error(`Failed To Create Session: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setIsCreating(false);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      void handleCreate();
-    } else if (e.key === "Escape") {
-      setShowNameInput(false);
-      setNameValue("");
-    }
-  };
-
-  const handleImport = async () => {
-    try {
-      const filePath = await open({
-        title: "Import Session",
-        multiple: false,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-
-      if (!filePath) return;
-
-      const content = await readScopedTextFile(filePath);
-      if (!content) {
-        toast.error("Could Not Read File");
-        return;
-      }
-
-      const parsed = JSON.parse(content) as unknown;
-      const result = SessionSchema.safeParse(parsed);
-
-      if (!result.success) {
-        toast.error("Invalid Session File Format");
-        return;
-      }
-
-      const session = result.data;
-
-      // Assign new ID and timestamps for imported session
-      const imported: Session = {
-        ...session,
-        id: crypto.randomUUID(),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      addSession(imported);
-      toast.success(`Session "${imported.name}" Imported`);
-    } catch (err) {
-      toast.error(`Import Failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
+export function SessionActions(): React.ReactElement {
+  const [naming, setNaming] = useState(false);
+  const [importing, startImport] = useTransition();
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {showNameInput ? (
-        <div className="flex items-center gap-2">
-          <Input
-            placeholder="Session Name..."
-            value={nameValue}
-            onChange={(e) => setNameValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            autoFocus
-            className="w-48"
-          />
-          <Button
-            variant="primary"
-            size="sm"
-            loading={isCreating}
-            onClick={() => void handleCreate()}
-            disabled={!nameValue.trim()}
-          >
-            Create
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setShowNameInput(false);
-              setNameValue("");
-            }}
-          >
-            Cancel
-          </Button>
-        </div>
+      {naming ? (
+        <NewSessionForm onClose={() => setNaming(false)} />
       ) : (
-        <Button variant="primary" size="sm" onClick={() => setShowNameInput(true)}>
+        <Button variant="primary" size="sm" onClick={() => setNaming(true)}>
           New Session
         </Button>
       )}
 
-      <Button variant="secondary" size="sm" onClick={() => void handleImport()}>
+      <Button
+        variant="secondary"
+        size="sm"
+        loading={importing}
+        onClick={() => startImport(importSession)}
+      >
         Import
       </Button>
     </div>
@@ -141,59 +73,51 @@ export function SessionActions({ onSessionCreated }: SessionActionsProps): React
 }
 
 /**
- * Hook providing session lifecycle operations (delete with confirmation, export as JSON).
- *
- * Used by context menus and action bars to manage session CRUD.
+ * The inline create form. Submission is a form action: while it is
+ * pending the submit button is disabled, so neither a second click nor a
+ * held Enter can start a second `create_session`. Escape cancels.
  */
-export function useSessionLifecycle(): {
-  deleteWithConfirm: (id: string) => Promise<void>;
-  exportSession: (id: string) => Promise<void>;
-} {
-  const sessions = useSessionStore((s) => s.sessions);
-  const removeSession = useSessionStore((s) => s.removeSession);
+function NewSessionForm({ onClose }: { readonly onClose: () => void }): React.ReactElement {
+  const errorId = useId();
+  const [state, createAction, creating] = useActionState(
+    async (_previous: CreateFormState, form: FormData) => {
+      const next = await submitNewSession(form);
+      if (next.created) onClose();
+      return next;
+    },
+    INITIAL_FORM_STATE,
+  );
 
-  const deleteWithConfirm = async (id: string) => {
-    const session = sessions.get(id);
-    const name = session?.name ?? id.slice(0, 8);
-
-    const confirmed = await ask(
-      `Are You Sure You Want To Delete Session "${name}"? This Action Cannot Be Undone.`,
-      { title: "Delete Session", kind: "warning" },
-    );
-    if (!confirmed) return;
-
-    try {
-      await deleteSessionIpc(id);
-      removeSession(id);
-      toast.success(`Session "${name}" Deleted`);
-    } catch (err) {
-      toast.error(`Failed To Delete Session: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
-  const exportSession = async (id: string) => {
-    const session = sessions.get(id);
-    if (!session) {
-      toast.error("Session Not Found");
-      return;
-    }
-
-    try {
-      const filePath = await save({
-        title: "Export Session",
-        defaultPath: `${session.name.replaceAll(/\s+/g, "-").toLowerCase()}.json`,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-
-      if (!filePath) return;
-
-      const data = JSON.stringify(session, null, 2);
-      await writeScopedTextFile(filePath, data);
-      toast.success(`Session Exported To ${filePath}`);
-    } catch (err) {
-      toast.error(`Export Failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
-  return { deleteWithConfirm, exportSession };
+  return (
+    <form
+      action={createAction}
+      className="flex items-center gap-2"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
+      <Input
+        name="name"
+        aria-label="Session Name"
+        placeholder="Session Name…"
+        defaultValue={state.name}
+        required
+        autoFocus
+        aria-invalid={state.error != null || undefined}
+        aria-describedby={state.error != null ? errorId : undefined}
+        className="w-48"
+      />
+      <Button type="submit" variant="primary" size="sm" loading={creating}>
+        Create
+      </Button>
+      <Button variant="ghost" size="sm" onClick={onClose}>
+        Cancel
+      </Button>
+      {state.error != null && (
+        <span id={errorId} role="alert" className="text-xs text-[oklch(0.72_0.20_25)]">
+          {state.error}
+        </span>
+      )}
+    </form>
+  );
 }
