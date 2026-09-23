@@ -1,0 +1,8 @@
+# actionlint 1.7.12 (the newest release) predates the Ubuntu 26.04 hosted
+# images, which went GA on 2026-09-17 (actions/runner-images#14747); list
+# their labels so the runner-label check accepts them. Drop this file once
+# an actionlint release knows them.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type SidebarPage, test } from "./fixtures.ts";
 
 // ── Navigation ────────────────────────────────────────
 //
@@ -10,12 +10,12 @@ import { expect, test } from "@playwright/test";
 // the tauri-driver roadmap for closing it.
 
 const SIDEBAR_PAGES = [
-  { name: "Dashboard", heading: "Dashboard" },
-  { name: "Workers", heading: "Workers" },
-  { name: "Sessions", heading: "Sessions" },
-  { name: "Metrics", heading: "Metrics" },
-  { name: "Settings", heading: "Settings" },
-] as const;
+  "Dashboard",
+  "Workers",
+  "Sessions",
+  "Metrics",
+  "Settings",
+] as const satisfies readonly SidebarPage[];
 
 // Tools/Logs/Workspace have no sidebar entry — the command palette is
 // their only navigation path (see CommandPalette.tsx's nav command
@@ -28,41 +28,29 @@ const PALETTE_ONLY_PAGES = [
 ] as const;
 
 test.describe("Navigation", () => {
-  test("loads the dashboard on first load", async ({ page }) => {
-    await page.goto("/");
-
-    await expect(page.getByText(/swarm/i).first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  test("loads the dashboard inside the app shell's landmarks", async ({ app, page }) => {
+    await expect(page).toHaveTitle("SWARM Orchestrator");
+    await expect(page.getByRole("banner").getByRole("heading", { name: "SWARM" })).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "Main Navigation" })).toBeVisible();
+    await expect(app.heading("Dashboard")).toBeVisible();
   });
 
-  test("sidebar exposes an accessible nav landmark with every top-level page", async ({ page }) => {
-    await page.goto("/");
-
-    const nav = page.getByRole("navigation", { name: "Page Navigation" });
-    await expect(nav).toBeVisible();
-
-    for (const { name } of SIDEBAR_PAGES) {
-      await expect(nav.getByRole("button", { name })).toBeVisible();
+  test("sidebar exposes an accessible nav landmark with every top-level page", async ({ app }) => {
+    await expect(app.nav).toBeVisible();
+    for (const name of SIDEBAR_PAGES) {
+      await expect(app.nav.getByRole("button", { name })).toBeVisible();
     }
   });
 
-  test("clicking each sidebar item navigates to the corresponding page", async ({ page }) => {
-    await page.goto("/");
-    const nav = page.getByRole("navigation", { name: "Page Navigation" });
-
-    for (const { name, heading } of SIDEBAR_PAGES) {
-      const navButton = nav.getByRole("button", { name });
-      await navButton.click();
-
-      await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
-      await expect(navButton).toHaveAttribute("aria-current", "page");
+  test("clicking each sidebar item navigates to the corresponding page", async ({ app }) => {
+    for (const name of SIDEBAR_PAGES) {
+      await app.goTo(name);
+      await expect(app.nav.getByRole("button", { name })).toHaveAttribute("aria-current", "page");
     }
   });
 
-  test("arrow keys move focus between sidebar nav items", async ({ page }) => {
-    await page.goto("/");
-    const nav = page.getByRole("navigation", { name: "Page Navigation" });
-    const buttons = nav.getByRole("button");
+  test("arrow keys move focus between sidebar nav items", async ({ app, page }) => {
+    const buttons = app.nav.getByRole("button");
 
     await buttons.first().focus();
     await expect(buttons.first()).toBeFocused();
@@ -82,31 +70,23 @@ test.describe("Navigation", () => {
 
   for (const { command, heading } of PALETTE_ONLY_PAGES) {
     test(`"${heading}" has no sidebar entry and is reachable only via the command palette`, async ({
-      page,
+      app,
     }) => {
-      await page.goto("/");
+      await expect(app.nav.getByRole("button", { name: heading })).toHaveCount(0);
 
-      const nav = page.getByRole("navigation", { name: "Page Navigation" });
-      await expect(nav.getByRole("button", { name: heading })).toHaveCount(0);
-
-      await page.keyboard.press("Control+k");
-      const palette = page.getByRole("dialog");
-      await expect(palette).toBeVisible();
+      const palette = await app.openPalette();
       await palette.getByRole("option", { name: command }).click();
 
       await expect(palette).toBeHidden();
-      await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
+      await expect(app.heading(heading)).toBeVisible();
     });
   }
 
   test("Workers page shows the empty state (graph view) when no workers exist", async ({
+    app,
     page,
   }) => {
-    await page.goto("/");
-    await page
-      .getByRole("navigation", { name: "Page Navigation" })
-      .getByRole("button", { name: "Workers" })
-      .click();
+    await app.goTo("Workers");
 
     // Graph view is the default (see graphViewAtom's default in #store/ui).
     await expect(page.getByRole("tab", { name: "Graph" })).toHaveAttribute("aria-selected", "true");
@@ -115,24 +95,19 @@ test.describe("Navigation", () => {
     ).toBeVisible();
   });
 
-  test("Workers page shows the empty state (list view) when no workers exist", async ({ page }) => {
-    await page.goto("/");
-    await page
-      .getByRole("navigation", { name: "Page Navigation" })
-      .getByRole("button", { name: "Workers" })
-      .click();
+  test("Workers page shows the empty state (list view) when no workers exist", async ({
+    app,
+    page,
+  }) => {
+    await app.goTo("Workers");
     await page.getByRole("tab", { name: "List" }).click();
 
     await expect(page.getByText("No Workers Running")).toBeVisible();
     await expect(page.getByText('Click "Spawn Worker" Or Press Ctrl+K')).toBeVisible();
   });
 
-  test("Sessions page shows the empty state when no sessions exist", async ({ page }) => {
-    await page.goto("/");
-    await page
-      .getByRole("navigation", { name: "Page Navigation" })
-      .getByRole("button", { name: "Sessions" })
-      .click();
+  test("Sessions page shows the empty state when no sessions exist", async ({ app, page }) => {
+    await app.goTo("Sessions");
 
     await expect(page.getByText("No Sessions Yet")).toBeVisible();
     await expect(page.getByText("Create A New Session To Get Started.")).toBeVisible();
