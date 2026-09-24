@@ -1,124 +1,128 @@
-// ── SpawnWorkerDialog ───────────────────────────────
-// The Workers page's spawn dialog — replaces the inline header picker
-// (PR #11's minimal provider/model/trust-tier select) with a designed
-// modal/form. Follows the app's hand-rolled dialog convention seen in
-// CausalityPanel.tsx: role="dialog", focus trap, Escape/click-outside
-// to close, focus restored to whatever had it on open.
-//
-// Capability-honesty (docs/architecture.md's "honesty doctrine"): the
-// Claude Code provider option is disabled — never silently no-op'd —
-// the instant `agentProbe()` reports the CLI unavailable, re-probed
-// EVERY time this dialog opens (not just once at app mount) so a CLI
-// installed/authenticated after the app launched is picked up without
-// a restart. Trust-tier copy below is a plain-language restatement of
-// the MEASURED behavior in `ClaudeCodeTrustTier`'s Rust doc
-// (`src-tauri/crates/swarm-core/src/agent/claude_code.rs`) — spawn-time
-// flags, never a marketing gloss.
-
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
 import type { CSSProperties } from "react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useActionState, useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
-import type { ClaudeCodeTrustTier } from "#lib/agent-events";
-import { TrustTierSchema } from "#lib/agent-events";
+import { PROVIDER_LABELS, type TrustTier, TrustTierSchema } from "#lib/agent-events";
 import { DEFAULT_REPO_ROOT_KEY, getPersistedRepoRoot } from "#lib/project-root";
 import { agentProbe, agentSpawn, spawnWorker, validateRepoRoot, writeConfig } from "#lib/tauri";
 
-/** Worker spawn provider — "Webview Anthropic" is the existing, default behavior. */
+/** Where a new worker's chat runs: the webview's own Claude client, or an attached agent CLI. */
 export type SpawnProvider = "webview_anthropic" | "claude_code" | "codex";
 
-/** The providers this dialog can attach an `AgentSession` to — every one of these takes the shared model-alias/trust-tier fields below. */
+/** Providers that attach an agent session (and take a model alias and trust tier). */
 type AgentProvider = Extract<SpawnProvider, "claude_code" | "codex">;
 
-const AGENT_PROVIDER_LABELS: Record<AgentProvider, string> = {
-  claude_code: "Claude Code",
-  codex: "Codex",
-};
+const AGENT_PROVIDERS: readonly AgentProvider[] = ["claude_code", "codex"];
 
 interface SpawnWorkerDialogProps {
   readonly onClose: () => void;
-  /** Invoked with the new worker's id after a successful spawn, before the dialog closes itself. */
+  /** Called with the new worker's id after a successful spawn, before the dialog closes. */
   readonly onSpawned?: (workerId: string) => void;
 }
 
-// ── Trust tier copy — matches MEASURED reality for Claude Code, the
-// provider's own documented approval-policy vocabulary for Codex (no
-// live install to measure against yet — see codex.rs's module doc) ──
-// Restricted: Claude Code `--permission-mode dontAsk` + a full deny of
-// Bash/Write/Edit/NotebookEdit; Codex `approvalPolicy: "untrusted"` +
-// `sandboxPolicy: "read-only"` — both read-only exploration.
-// Standard: Claude Code's own default (`-p` auto-denies Write/Edit);
-// Codex `approvalPolicy: "on-request"` (the model decides when to ask)
-// + `sandboxPolicy: "workspace-write"`.
-// Write-Enabled: Claude Code `--permission-mode acceptEdits`,
-// canary-verified (module doc's "acceptEdits canary"); Codex
-// `approvalPolicy: "on-failure"` (only asks if a sandboxed action fails
-// on its own) — fewer prompts than Standard, never Codex's "never"
-// full-auto mode (unconstructible, mirrors bypassPermissions).
-const TRUST_TIER_INFO: Record<
-  AgentProvider,
-  Record<ClaudeCodeTrustTier, { readonly label: string; readonly explanation: string }>
-> = {
+/**
+ * Plain-language trust tiers, restating what each adapter actually
+ * configures (`crates/swarm-core/src/agent/claude_code.rs`,
+ * `agent/codex.rs`):
+ *
+ * - Claude Code: Restricted = `--permission-mode dontAsk` plus a deny
+ *   list for Bash/Write/Edit; Standard = the CLI's default mode (file
+ *   writes denied); Write-Enabled = `--permission-mode acceptEdits`.
+ *   Destructive commands stay denied in every tier.
+ * - Codex: Restricted = `approvalPolicy: "untrusted"` + read-only
+ *   sandbox; Standard = `untrusted` + workspace-write sandbox;
+ *   Write-Enabled = `on-request` + workspace-write. Codex's approval
+ *   requests are answered from the worker's chat.
+ */
+const TRUST_TIER_INFO = {
   claude_code: {
     restricted: {
       label: "Restricted",
-      explanation: "Commands And File Writes Are Denied By Default — Read-Only Exploration.",
+      explanation: "Commands And File Writes Are Denied — Read-Only Exploration.",
     },
     standard: {
       label: "Standard",
       explanation:
-        "Commands Run Normally; File Writes Are Gated And Denied By Default. Destructive Commands Like sudo And rm -rf Are Always Blocked.",
+        "Commands Run Normally; File Writes Are Denied. Destructive Commands Like sudo And rm -rf Are Always Blocked.",
     },
     write_enabled: {
       label: "Write-Enabled",
       explanation:
-        "Commands Run And File Writes Are Automatically Accepted — No Prompt. Destructive Commands Like sudo And rm -rf Are Always Blocked.",
+        "Commands Run And File Writes Are Accepted Without Asking. Destructive Commands Like sudo And rm -rf Are Always Blocked.",
     },
   },
   codex: {
     restricted: {
       label: "Restricted",
-      explanation: "Every Gated Action Asks First; The Sandbox Is Read-Only.",
+      explanation: "Every Gated Action Asks You First, And The Sandbox Is Read-Only.",
     },
     standard: {
       label: "Standard",
-      explanation:
-        "The Model Decides When To Ask For Approval; File Writes Are Sandboxed To The Worktree.",
+      explanation: "Every Gated Action Asks You First; File Writes Are Sandboxed To The Worktree.",
     },
     write_enabled: {
       label: "Write-Enabled",
       explanation:
-        "Approval Is Only Requested If A Sandboxed Action Fails On Its Own — Fewer Prompts Than Standard.",
+        "The Model Asks Only When It Decides To; File Writes Are Sandboxed To The Worktree.",
     },
   },
-};
+} as const satisfies Record<
+  AgentProvider,
+  Record<TrustTier, { readonly label: string; readonly explanation: string }>
+>;
 
-const TRUST_TIER_ORDER: readonly ClaudeCodeTrustTier[] = TrustTierSchema.options;
+/** A model alias each CLI understands; Codex runs its own configured default when blank. */
+const DEFAULT_MODEL_ALIAS = { claude_code: "sonnet", codex: "" } as const satisfies Record<
+  AgentProvider,
+  string
+>;
+
+const MODEL_PLACEHOLDER = {
+  claude_code: "E.g. Sonnet Or Opus",
+  codex: "Blank Uses Codex's Configured Default",
+} as const satisfies Record<AgentProvider, string>;
+
+function isAgentProvider(p: SpawnProvider): p is AgentProvider {
+  return p === "claude_code" || p === "codex";
+}
+
+/**
+ * Ref callback that opens its `<dialog>` as a modal when it mounts.
+ * Unmounting needs no cleanup — removing a dialog from the document takes
+ * it out of the top layer without a `close` event — and returning none
+ * keeps React Strict Mode's dev-only ref re-run from closing (and so
+ * dismissing) the dialog it just opened.
+ */
+function showModalOnMount(dialog: HTMLDialogElement | null): void {
+  if (dialog && !dialog.open) dialog.showModal();
+}
+
+function errorText(err: unknown): string {
+  return Error.isError(err) ? err.message : String(err);
+}
 
 // ── Styles (OKLCH) ───────────────────────────────────
 
-const overlayStyle: CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  zIndex: 200,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  background: "oklch(0.04 0.01 220 / 0.55)",
-  backdropFilter: "blur(2px)",
-};
-
-const panelStyle: CSSProperties = {
+/** Tailwind's preflight zeroes dialog margins; `margin: auto` re-centers the modal. */
+const dialogStyle: CSSProperties = {
+  margin: "auto",
   width: 480,
+  maxWidth: "calc(100vw - 32px)",
   maxHeight: "85vh",
-  display: "flex",
-  flexDirection: "column",
+  padding: 0,
   background: "oklch(0.10 0.03 220)",
   border: "1px solid oklch(0.28 0.05 220)",
   borderRadius: 12,
   boxShadow: "0 0 0 1px oklch(0.78 0.18 205 / 0.1), 0 16px 48px oklch(0.06 0.02 220 / 0.6)",
+  color: "oklch(0.88 0.03 220)",
   overflow: "hidden",
+};
+
+const formStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  maxHeight: "85vh",
 };
 
 const headerStyle: CSSProperties = {
@@ -149,7 +153,6 @@ const closeButtonStyle: CSSProperties = {
   borderRadius: 6,
   color: "oklch(0.55 0.04 220)",
   cursor: "pointer",
-  fontSize: "1rem",
 };
 
 const bodyStyle: CSSProperties = {
@@ -161,13 +164,12 @@ const bodyStyle: CSSProperties = {
   gap: 18,
 };
 
-const fieldGroupStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-};
+const fieldGroupStyle: CSSProperties = { display: "flex", flexDirection: "column", gap: 8 };
+
+const fieldsetStyle: CSSProperties = { ...fieldGroupStyle, border: "none", margin: 0, padding: 0 };
 
 const fieldLabelStyle: CSSProperties = {
+  padding: 0,
   fontFamily: "var(--font-body)",
   fontSize: "0.75rem",
   fontWeight: 600,
@@ -184,7 +186,7 @@ const segmentedGroupStyle: CSSProperties = {
   padding: 2,
 };
 
-function segmentButtonStyle(active: boolean, disabled: boolean): CSSProperties {
+function segmentStyle(active: boolean, disabled: boolean): CSSProperties {
   return {
     flex: 1,
     display: "flex",
@@ -192,8 +194,7 @@ function segmentButtonStyle(active: boolean, disabled: boolean): CSSProperties {
     justifyContent: "center",
     gap: 6,
     padding: "8px 12px",
-    background: active ? "oklch(0.78 0.18 205 / 0.15)" : "transparent",
-    border: "none",
+    background: active ? "oklch(0.78 0.18 205 / 0.15)" : "oklch(0 0 0 / 0)",
     borderRadius: 6,
     color: disabled
       ? "oklch(0.38 0.03 220)"
@@ -214,23 +215,9 @@ const unavailableNoteStyle: CSSProperties = {
   lineHeight: 1.5,
 };
 
-const textInputStyle: CSSProperties = {
-  width: "100%",
-  padding: "8px 12px",
-  borderRadius: 8,
-  border: "1px solid oklch(0.28 0.05 220)",
-  background: "oklch(0.08 0.02 220)",
-  color: "oklch(0.88 0.03 220)",
-  fontFamily: "var(--font-mono)",
-  fontSize: "0.8125rem",
-  outline: "none",
-  boxSizing: "border-box",
-};
-
 function tierCardStyle(active: boolean): CSSProperties {
   return {
     display: "flex",
-    flexDirection: "row",
     alignItems: "flex-start",
     gap: 10,
     padding: "10px 12px",
@@ -238,13 +225,11 @@ function tierCardStyle(active: boolean): CSSProperties {
     border: `1px solid ${active ? "oklch(0.55 0.14 205)" : "oklch(0.22 0.04 220)"}`,
     background: active ? "oklch(0.78 0.18 205 / 0.10)" : "oklch(0.08 0.02 220 / 0.6)",
     cursor: "pointer",
-    textAlign: "left",
-    width: "100%",
   };
 }
 
-/** Native `accent-color` themes the browser's own radio dot to the house OKLCH accent — real `<input type="radio">` elements throughout this dialog, never a `role="radio"` div/button (semantic-elements). */
-const radioInputStyle: CSSProperties = {
+/** `accent-color` themes the native radio dot to the house accent. */
+const radioStyle: CSSProperties = {
   accentColor: "oklch(0.78 0.18 205)",
   cursor: "pointer",
   flexShrink: 0,
@@ -263,12 +248,6 @@ const tierExplanationStyle: CSSProperties = {
   fontSize: "0.71875rem",
   color: "oklch(0.58 0.04 220)",
   lineHeight: 1.4,
-};
-
-const repoRootRowStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
 };
 
 const repoRootPathStyle: CSSProperties = {
@@ -309,166 +288,118 @@ const footerStyle: CSSProperties = {
 // ── Component ─────────────────────────────────────────
 
 /**
- * The Workers page's spawn dialog. Fields:
+ * The Workers page's spawn dialog, a native modal `<dialog>` opened with
+ * `showModal()` (top layer, inert page, native focus handling and focus
+ * return; Escape and backdrop clicks close it via `closedby="any"`).
  *
- * - Provider (Webview Anthropic default | Claude Code | Codex) — each
- *   agent provider disabled with a Title Case, `agentProbe`-sourced
- *   reason when its CLI is unavailable. Every provider probed fresh on
- *   every open (not just app mount), so an install/auth done while the
- *   app was already running is picked up the next time this dialog
- *   opens — capability-honest per-provider, not a single shared flag.
- * - Model alias + trust tier (Claude Code / Codex — shared fields, same
- *   3-token trust-tier vocabulary), the latter with a plain-language
- *   explanation per tier per provider (see `TRUST_TIER_INFO`'s doc).
- * - Working directory — the persisted default project root, changeable
- *   via the native folder picker; persists immediately like the prior
- *   header widget did.
+ * - Provider: Webview Anthropic (default), Claude Code or Codex. Each
+ *   agent CLI is probed every time the dialog opens, so an install or
+ *   sign-in done while the app runs is picked up; an unavailable (or
+ *   unprobeable) provider is disabled with the reason shown, never
+ *   silently accepted. A provider stays enabled while its probe is in
+ *   flight.
+ * - Model alias and trust tier for agent providers, each tier explained
+ *   per provider.
+ * - Working directory: the persisted project root (revalidated as a git
+ *   repository), changeable with the native folder picker.
  *
- * Conditionally mounted by the caller (`{open && <SpawnWorkerDialog .../>}`)
- * rather than driven by its own `open` prop — mirrors the house
- * "remount dialog per open cycle" fix (see CommandPalette's `key={String(open)}`
- * doc) so every field/probe/error resets cleanly between opens without
- * this component needing to track that itself.
+ * The caller mounts it only while open, so every field, probe and error
+ * starts fresh on each open.
  */
 export function SpawnWorkerDialog({
   onClose,
   onSpawned,
 }: SpawnWorkerDialogProps): React.ReactElement {
-  const [provider, setProvider] = useState<SpawnProvider>("webview_anthropic");
-  const [agentModel, setAgentModel] = useState("sonnet");
-  const [agentTrustTier, setAgentTrustTier] = useState<ClaudeCodeTrustTier>("standard");
-  // undefined = still probing (the option stays enabled meanwhile — an
-  // early click can't be blocked by a probe that hasn't resolved yet),
-  // null = available, string = unavailable, holding the reason. One
-  // entry per agent provider — each probed and disabled independently,
-  // never a single shared flag that would make Codex's availability
-  // lie about Claude Code's (or vice versa).
-  const [unavailableReasons, setUnavailableReasons] = useState<
-    Record<AgentProvider, string | null | undefined>
-  >({ claude_code: undefined, codex: undefined });
-  // undefined = still loading, null = explicitly none, string = a picked directory.
-  const [projectRoot, setProjectRoot] = useState<string | null | undefined>(undefined);
-  const [isSpawning, setIsSpawning] = useState(false);
-  const [spawnError, setSpawnError] = useState<string | null>(null);
-
-  const panelRef = useRef<HTMLDivElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  const closeDialog = () => formRef.current?.closest("dialog")?.close();
   const titleId = useId();
+  const [provider, setProvider] = useState<SpawnProvider>("webview_anthropic");
+  const [modelAliases, setModelAliases] = useState<Record<AgentProvider, string>>({
+    ...DEFAULT_MODEL_ALIAS,
+  });
+  const [trustTier, setTrustTier] = useState<TrustTier>("standard");
+  // Per provider: undefined = probing, null = available, string = why not.
+  const [unavailable, setUnavailable] = useState<Record<AgentProvider, string | null | undefined>>({
+    claude_code: undefined,
+    codex: undefined,
+  });
+  // undefined = loading, null = none, string = the validated repository root.
+  const [projectRoot, setProjectRoot] = useState<string | null | undefined>(undefined);
 
-  // Probe every agent provider on open, every time — capability-honesty
-  // means this dialog never trusts a probe result from an earlier open
-  // cycle.
   useEffect(() => {
     let cancelled = false;
-    const providers: readonly AgentProvider[] = ["claude_code", "codex"];
-    for (const p of providers) {
-      void agentProbe(p).then((report) => {
-        if (cancelled) return;
-        setUnavailableReasons((prev) => ({
-          ...prev,
-          [p]: report.available
-            ? null
-            : (report.detail ?? `${AGENT_PROVIDER_LABELS[p]} CLI Not Available`),
-        }));
-      });
+    for (const p of AGENT_PROVIDERS) {
+      void agentProbe(p)
+        .then(
+          (report) =>
+            report.available ? null : (report.detail ?? `${PROVIDER_LABELS[p]} CLI Not Available`),
+          (err: unknown) => `Probe Failed: ${errorText(err)}`,
+        )
+        .then((reason) => {
+          if (!cancelled) setUnavailable((prev) => ({ ...prev, [p]: reason }));
+        });
     }
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Load + revalidate the persisted project root (same discipline as
-  // the prior Workers.tsx header widget) — a since-deleted/moved repo
-  // surfaces a warning and falls back to "none" rather than silently
-  // failing every subsequent spawn.
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      const persisted = await getPersistedRepoRoot();
-      if (!persisted) {
-        if (!cancelled) setProjectRoot(null);
-        return;
-      }
+    const load = async (): Promise<string | null> => {
+      let persisted: string | null;
       try {
-        const toplevel = await validateRepoRoot(persisted);
-        if (!cancelled) setProjectRoot(toplevel);
-      } catch {
-        if (!cancelled) {
-          setProjectRoot(null);
-          toast.warning(`Saved Project Root Is No Longer A Git Repository: ${persisted}`);
-        }
+        persisted = await getPersistedRepoRoot();
+      } catch (err) {
+        toast.warning(`Could Not Read The Saved Project Root: ${errorText(err)}`);
+        return null;
       }
-    })();
+      if (!persisted) return null;
+      try {
+        return await validateRepoRoot(persisted);
+      } catch {
+        toast.warning(`Saved Project Root Is No Longer A Git Repository: ${persisted}`);
+        return null;
+      }
+    };
+    void load().then((root) => {
+      if (!cancelled) setProjectRoot(root);
+    });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Focus management: move focus in on open, restore it on close (see
-  // CausalityPanel.tsx's identical doc for why this can't rely on
-  // role="dialog" alone).
-  useEffect(() => {
-    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
-    closeButtonRef.current?.focus();
-    return () => {
-      previouslyFocusedRef.current?.focus?.();
-    };
-  }, []);
-
-  // Focus trap.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== "Tab" || !panelRef.current) return;
-      // input:not([disabled]) — this dialog, unlike CausalityPanel's
-      // (where this selector originated), has real disabled inputs
-      // (the Claude Code radio when unavailable); a bare `input` would
-      // count one as the trap's first/last element even though a
-      // disabled control is never actually tab-reachable, throwing off
-      // the wrap-around checks below.
-      const focusable = panelRef.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
-      );
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
+  const [spawnError, spawn, isSpawning] = useActionState(async (): Promise<string | null> => {
+    const reason = isAgentProvider(provider) ? unavailable[provider] : null;
+    if (reason != null) return `${PROVIDER_LABELS[provider]} Unavailable: ${reason}`;
+    const options = { name: "Worker", ...(projectRoot ? { repoRoot: projectRoot } : {}) };
+    try {
+      const id = isAgentProvider(provider)
+        ? await agentSpawn(options, provider, modelAliases[provider].trim() || undefined, trustTier)
+        : await spawnWorker(options);
+      if (id) {
+        toast.success(`Worker Spawned: ${id.slice(0, 8)}`);
+        onSpawned?.(id);
       }
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, []);
+      closeDialog();
+      return null;
+    } catch (err) {
+      // The adapter's own report (an init timeout, a non-zero exit…),
+      // never a guessed cause.
+      const message = `Spawn Failed: ${errorText(err)}`;
+      toast.error(message);
+      return message;
+    }
+  }, null);
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [onClose]);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [onClose]);
-
-  const handlePickProjectRoot = async () => {
-    const selected = await openDialog({
+  const pickProjectRoot = async () => {
+    const selected = await openFolderPicker({
       title: "Choose Project Root For Worktree Isolation",
       directory: true,
       multiple: false,
     });
     if (!selected) return;
-
     let toplevel: string;
     try {
       toplevel = await validateRepoRoot(selected);
@@ -476,81 +407,41 @@ export function SpawnWorkerDialog({
       toast.error(`Not A Git Repository: ${selected}`);
       return;
     }
-
     setProjectRoot(toplevel);
     try {
       await writeConfig(DEFAULT_REPO_ROOT_KEY, toplevel);
     } catch (err) {
-      toast.error(
-        `Could Not Save Project Root: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      toast.error(`Could Not Save Project Root: ${errorText(err)}`);
     }
   };
 
-  const isAgentProvider = (p: SpawnProvider): p is AgentProvider =>
-    p === "claude_code" || p === "codex";
-
-  const handleSpawn = async () => {
-    if (isAgentProvider(provider) && unavailableReasons[provider] != null) {
-      setSpawnError(
-        `${AGENT_PROVIDER_LABELS[provider]} Unavailable: ${unavailableReasons[provider]}`,
-      );
-      return;
-    }
-    setSpawnError(null);
-    setIsSpawning(true);
-    try {
-      const options = {
-        name: "Worker",
-        ...(projectRoot ? { repoRoot: projectRoot } : {}),
-      };
-      const id = isAgentProvider(provider)
-        ? await agentSpawn(options, provider, agentModel, agentTrustTier)
-        : await spawnWorker(options);
-      if (id) {
-        toast.success(`Worker Spawned: ${id.slice(0, 8)}`);
-        onSpawned?.(id);
-      }
-      onClose();
-    } catch (err) {
-      // Surfaced honestly, not guessed at — an AgentSpawnCommandError's
-      // message (it extends Error) is whatever the adapter actually
-      // reported (e.g. an init timeout or non-zero exit), never a
-      // synthesized "Not Signed In" classification `agent_probe` has
-      // no way to measure ahead of a real spawn attempt (see this
-      // file's header doc).
-      const message = err instanceof Error ? err.message : String(err);
-      setSpawnError(`Spawn Failed: ${message}`);
-      toast.error(`Spawn Failed: ${message}`);
-    } finally {
-      setIsSpawning(false);
-    }
-  };
-
-  const currentTierInfo = isAgentProvider(provider) ? TRUST_TIER_INFO[provider] : null;
+  const agent = isAgentProvider(provider) ? provider : null;
 
   return (
-    <div style={overlayStyle}>
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        style={panelStyle}
-      >
+    <dialog
+      ref={showModalOnMount}
+      closedby="any"
+      aria-labelledby={titleId}
+      onClose={onClose}
+      onCancel={(e) => {
+        // Never dismiss mid-spawn: the result has nowhere to go.
+        if (isSpawning) e.preventDefault();
+      }}
+      style={dialogStyle}
+      className="backdrop:bg-[oklch(0.04_0.01_220/0.55)] backdrop:backdrop-blur-[2px]"
+    >
+      <form ref={formRef} action={spawn} style={formStyle}>
         <div style={headerStyle}>
           <h2 id={titleId} style={titleStyle}>
             Spawn Worker
           </h2>
           <button
-            ref={closeButtonRef}
             type="button"
-            onClick={onClose}
+            onClick={closeDialog}
             aria-label="Close Spawn Worker Dialog"
             style={closeButtonStyle}
           >
-            <svg width={14} height={14} viewBox="0 0 14 14" fill="none">
-              <title>Close</title>
+            <svg width={14} height={14} viewBox="0 0 14 14" fill="none" aria-hidden="true">
               <path
                 d="M2 2l10 10M12 2L2 12"
                 stroke="currentColor"
@@ -562,86 +453,76 @@ export function SpawnWorkerDialog({
         </div>
 
         <div style={bodyStyle}>
-          {/* Provider — real <input type="radio"> elements sharing one
-              `name`, so browsers/AT get native radio-group semantics for
-              free (no role="radio" div-button, which the a11y linter
-              rightly rejects since a real form control exists). */}
-          <fieldset style={{ ...fieldGroupStyle, border: "none", margin: 0, padding: 0 }}>
-            <legend style={{ ...fieldLabelStyle, padding: 0 }}>Provider</legend>
+          <fieldset style={fieldsetStyle}>
+            <legend style={fieldLabelStyle}>Provider</legend>
             <div style={segmentedGroupStyle}>
-              <label style={segmentButtonStyle(provider === "webview_anthropic", false)}>
-                <input
-                  type="radio"
-                  name="spawn-dialog-provider"
-                  checked={provider === "webview_anthropic"}
-                  onChange={() => setProvider("webview_anthropic")}
-                  style={radioInputStyle}
-                />
-                Webview Anthropic
-              </label>
-              {(["claude_code", "codex"] as const).map((p) => {
-                const disabled = unavailableReasons[p] != null;
+              {(["webview_anthropic", ...AGENT_PROVIDERS] as const).map((p) => {
+                const reason = isAgentProvider(p) ? unavailable[p] : null;
+                const disabled = reason != null;
                 return (
                   <label
                     key={p}
-                    style={segmentButtonStyle(provider === p, disabled)}
-                    title={disabled ? (unavailableReasons[p] ?? undefined) : undefined}
+                    style={segmentStyle(provider === p, disabled)}
+                    title={reason ?? undefined}
                   >
                     <input
                       type="radio"
-                      name="spawn-dialog-provider"
+                      name="provider"
+                      value={p}
                       checked={provider === p}
                       disabled={disabled}
                       onChange={() => setProvider(p)}
-                      style={radioInputStyle}
+                      style={radioStyle}
                     />
-                    {AGENT_PROVIDER_LABELS[p]}
+                    {PROVIDER_LABELS[p]}
                   </label>
                 );
               })}
             </div>
-            {(["claude_code", "codex"] as const)
-              .filter((p) => unavailableReasons[p] != null)
-              .map((p) => (
-                <span key={p} style={unavailableNoteStyle}>
-                  {AGENT_PROVIDER_LABELS[p]} Unavailable — {unavailableReasons[p]}
-                </span>
-              ))}
+            {AGENT_PROVIDERS.filter((p) => unavailable[p] != null).map((p) => (
+              <span key={p} style={unavailableNoteStyle}>
+                {PROVIDER_LABELS[p]} Unavailable — {unavailable[p]}
+              </span>
+            ))}
           </fieldset>
 
-          {/* Shared agent-provider fields (Claude Code / Codex) */}
-          {isAgentProvider(provider) && currentTierInfo && (
+          {agent && (
             <>
               <div style={fieldGroupStyle}>
-                <label htmlFor="spawn-dialog-model" style={fieldLabelStyle}>
+                <label htmlFor={`${titleId}-model`} style={fieldLabelStyle}>
                   Model Alias
                 </label>
                 <input
-                  id="spawn-dialog-model"
-                  value={agentModel}
-                  onChange={(e) => setAgentModel(e.target.value)}
-                  placeholder="E.g. Sonnet"
-                  style={textInputStyle}
+                  id={`${titleId}-model`}
+                  className="swarm-input"
+                  value={modelAliases[agent]}
+                  onChange={(e) =>
+                    setModelAliases((prev) => ({ ...prev, [agent]: e.target.value }))
+                  }
+                  placeholder={MODEL_PLACEHOLDER[agent]}
+                  autoComplete="off"
+                  spellCheck={false}
+                  style={{ fontFamily: "var(--font-mono)", fontSize: "0.8125rem" }}
                 />
               </div>
 
-              <fieldset style={{ ...fieldGroupStyle, border: "none", margin: 0, padding: 0 }}>
-                <legend style={{ ...fieldLabelStyle, padding: 0 }}>Trust Tier</legend>
+              <fieldset style={fieldsetStyle}>
+                <legend style={fieldLabelStyle}>Trust Tier</legend>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {TRUST_TIER_ORDER.map((tier) => {
-                    const info = currentTierInfo[tier];
-                    const active = agentTrustTier === tier;
-                    const explanationId = `spawn-dialog-tier-${tier}-explanation`;
+                  {TrustTierSchema.options.map((tier) => {
+                    const info = TRUST_TIER_INFO[agent][tier];
+                    const explanationId = `${titleId}-tier-${tier}`;
                     return (
-                      <label key={tier} style={tierCardStyle(active)}>
+                      <label key={tier} style={tierCardStyle(trustTier === tier)}>
                         <input
                           type="radio"
-                          name="spawn-dialog-trust-tier"
-                          checked={active}
-                          onChange={() => setAgentTrustTier(tier)}
+                          name="trust-tier"
+                          value={tier}
+                          checked={trustTier === tier}
+                          onChange={() => setTrustTier(tier)}
                           aria-label={info.label}
                           aria-describedby={explanationId}
-                          style={radioInputStyle}
+                          style={radioStyle}
                         />
                         <span style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                           <span style={tierLabelStyle}>{info.label}</span>
@@ -657,42 +538,42 @@ export function SpawnWorkerDialog({
             </>
           )}
 
-          {/* Working directory / repo root */}
           <div style={fieldGroupStyle}>
             <span style={fieldLabelStyle}>Working Directory</span>
-            <div style={repoRootRowStyle}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={repoRootPathStyle} title={projectRoot ?? undefined}>
                 {projectRoot === undefined
                   ? "Loading…"
                   : (projectRoot ?? "No Project Root — Spawns Without Worktree Isolation")}
               </span>
-              <Button variant="secondary" size="sm" onClick={() => void handlePickProjectRoot()}>
+              <Button variant="secondary" size="sm" onClick={() => void pickProjectRoot()}>
                 Choose…
               </Button>
             </div>
           </div>
 
-          {spawnError && <div style={errorBannerStyle}>{spawnError}</div>}
+          {spawnError && (
+            <div role="alert" style={errorBannerStyle}>
+              {spawnError}
+            </div>
+          )}
         </div>
 
         <div style={footerStyle}>
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={isSpawning}>
+          <Button variant="ghost" size="sm" onClick={closeDialog} disabled={isSpawning}>
             Cancel
           </Button>
           <Button
+            type="submit"
             variant="primary"
             size="sm"
             loading={isSpawning}
-            disabled={
-              projectRoot === undefined ||
-              (isAgentProvider(provider) && unavailableReasons[provider] != null)
-            }
-            onClick={() => void handleSpawn()}
+            disabled={projectRoot === undefined || (agent !== null && unavailable[agent] != null)}
           >
             Spawn Worker
           </Button>
         </div>
-      </div>
-    </div>
+      </form>
+    </dialog>
   );
 }

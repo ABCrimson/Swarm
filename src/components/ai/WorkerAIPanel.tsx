@@ -75,7 +75,9 @@ const toolbarButtonStyle: CSSProperties = {
   transition: "background 0.15s ease",
 };
 
+/** Tailwind's preflight zeroes dialog margins; `margin: auto` re-centers the modal. */
 const dialogStyle: CSSProperties = {
+  margin: "auto",
   width: 400,
   padding: 20,
   borderRadius: 12,
@@ -112,6 +114,17 @@ const paneWrapperStyle: CSSProperties = {
 // ── Inject Instruction Dialog ───────────────────────
 
 /**
+ * Ref callback that opens its `<dialog>` as a modal when it mounts.
+ * Unmounting needs no cleanup — removing a dialog from the document takes
+ * it out of the top layer without a `close` event — and returning none
+ * keeps React Strict Mode's dev-only ref re-run from closing (and so
+ * dismissing) the dialog it just opened.
+ */
+function showModalOnMount(dialog: HTMLDialogElement | null): void {
+  if (dialog && !dialog.open) dialog.showModal();
+}
+
+/**
  * Modal for injecting an instruction into the running conversation — a
  * native `<dialog>` opened with `showModal()` (top layer, inert page,
  * Escape and backdrop-click dismissal via `closedby="any"`).
@@ -128,12 +141,7 @@ function InjectDialog({
 
   return (
     <dialog
-      // React 19 ref callbacks return their own cleanup.
-      ref={(dialog) => {
-        if (!dialog) return undefined;
-        if (!dialog.open) dialog.showModal();
-        return () => dialog.close();
-      }}
+      ref={showModalOnMount}
       closedby="any"
       aria-labelledby={titleId}
       onClose={onClose}

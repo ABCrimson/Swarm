@@ -101,7 +101,7 @@ describe("CommandPalette", () => {
 
     await user.click(await screen.findByRole("option", { name: "Go To Workers" }));
 
-    expect(store.get(currentPageAtom)).toBe("workers");
+    await vi.waitFor(() => expect(store.get(currentPageAtom)).toBe("workers"));
     await vi.waitFor(() => expect(store.get(frecencyAtom).get("nav:workers")?.uses).toBe(1));
 
     act(() => store.set(commandPaletteOpenAtom, true));
