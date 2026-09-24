@@ -17,12 +17,17 @@ export type FilePreview =
 /**
  * Reads a file for the read-only viewer, refusing what it cannot show.
  *
- * The size comes from `stat()` before anything is read. The desktop
- * capability may not grant `stat` for a path (it is a separate
- * permission from `read_text_file`); then the file is read and its
- * decoded length checked instead, so an oversized file is still never
- * rendered. A NUL byte near the start marks the file as binary.
- * Never rejects: failures resolve to `{ kind: "error" }`.
+ * It first asks `stat()` for the size, so an oversized file is refused
+ * before it is read. **With the capabilities shipped today that check
+ * never runs:** `src-tauri/capabilities/default.json` does not grant
+ * `fs:allow-stat`, so `stat()` is rejected and the whole file is read
+ * over IPC (memory and transfer cost included) before its decoded length
+ * is checked. The viewer still never renders an oversized file; granting
+ * `fs:allow-stat` (scoped like `read-dir`) makes the pre-read check
+ * effective with no code change here.
+ *
+ * A NUL byte near the start marks the file as binary. Never rejects:
+ * failures resolve to `{ kind: "error" }`.
  */
 export async function loadFilePreview(path: string): Promise<FilePreview> {
   try {
