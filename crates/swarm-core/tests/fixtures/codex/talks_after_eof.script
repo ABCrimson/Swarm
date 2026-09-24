@@ -1,0 +1,18 @@
+# A server that keeps talking after its stdin closed. SWARM closes stdin
+# only after its teardown began, so none of the lines written after EOF
+# (a delta, a tool item, a message, an approval request and the turn's
+# completion) may reach the event log.
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_THREAD_START 019a7c00-0000-7000-8000-000000000001
+#DIRECTIVE EXPECT_REQUEST turn/start
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000c9
+#DIRECTIVE REPEAT 50 {"method":"item/agentMessage/delta","params":{"threadId":"@THREAD","turnId":"@TURN","itemId":"item-1","delta":"chunk @N "}}
+#DIRECTIVE ON_STDIN_EOF {"method":"item/agentMessage/delta","params":{"threadId":"@THREAD","turnId":"@TURN","itemId":"item-1","delta":"after-eof"}}
+#DIRECTIVE ON_STDIN_EOF {"method":"item/started","params":{"item":{"type":"commandExecution","id":"cmd-after-eof","pluginId":null,"scriptPath":null,"command":"true","cwd":"/work","processId":null,"source":"agent","status":"inProgress","commandActions":[],"aggregatedOutput":null,"exitCode":null,"durationMs":null},"threadId":"@THREAD","turnId":"@TURN","startedAtMs":1790201250000}}
+#DIRECTIVE ON_STDIN_EOF {"method":"item/completed","params":{"item":{"type":"agentMessage","id":"item-1","text":"after-eof","phase":null,"memoryCitation":null,"delivery":null,"questions":null},"threadId":"@THREAD","turnId":"@TURN","completedAtMs":1790201251000}}
+#DIRECTIVE ON_STDIN_EOF {"id":99,"method":"item/commandExecution/requestApproval","params":{"kind":"command","threadId":"@THREAD","turnId":"@TURN","itemId":"cmd-after-eof","startedAtMs":1790201250300,"environmentId":null,"command":"true","cwd":"/work"}}
+#DIRECTIVE ON_STDIN_EOF {"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"completed","error":null,"startedAt":1790201250,"completedAt":1790201252,"durationMs":5}}}
+#DIRECTIVE HANG

@@ -1,0 +1,20 @@
+# Approvals: a command (numeric id 7), a patch asking for a session-long
+# root grant (string id "7", which must stay distinct from 7), a
+# permissions request (id 9), and a command approval the server withdraws
+# (id 10) before anyone answers it.
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_THREAD_START 019a7c00-0000-7000-8000-000000000001
+#DIRECTIVE EXPECT_REQUEST turn/start
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000e1
+{"id":7,"method":"item/commandExecution/requestApproval","params":{"kind":"command","threadId":"@THREAD","turnId":"@TURN","itemId":"cmd-1","startedAtMs":1790201250000,"environmentId":null,"reason":"needs network","command":"curl example.com","cwd":"/work"}}
+#DIRECTIVE EXPECT_RESPONSE 7
+{"id":"7","method":"item/fileChange/requestApproval","params":{"threadId":"@THREAD","turnId":"@TURN","itemId":"patch-1","startedAtMs":1790201250100,"reason":null,"grantRoot":"/work"}}
+#DIRECTIVE EXPECT_RESPONSE "7"
+{"id":9,"method":"item/permissions/requestApproval","params":{"threadId":"@THREAD","turnId":"@TURN","itemId":"perm-1","environmentId":null,"startedAtMs":1790201250200,"cwd":"/work","reason":"fetch docs","permissions":{"network":{"enabled":true},"fileSystem":null}}}
+#DIRECTIVE EXPECT_RESPONSE 9
+{"id":10,"method":"item/commandExecution/requestApproval","params":{"kind":"command","threadId":"@THREAD","turnId":"@TURN","itemId":"cmd-2","startedAtMs":1790201250300,"environmentId":null,"command":"rm -rf build","cwd":"/work"}}
+{"method":"serverRequest/resolved","params":{"threadId":"@THREAD","requestId":10}}
+{"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"completed","error":null,"startedAt":1790201250,"completedAt":1790201252,"durationMs":700}}}

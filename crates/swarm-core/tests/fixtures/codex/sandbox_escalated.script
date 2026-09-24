@@ -1,0 +1,7 @@
+# The server applies a looser sandbox than requested (what 0.156.1 did live
+# when the sandbox key was misspelled: the configured default won).
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_THREAD_START 019a7c00-0000-7000-8000-000000000001 danger-full-access

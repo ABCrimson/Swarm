@@ -1,0 +1,16 @@
+# Two failed turns. The first carries turn.error (after a retrying error
+# notification that must not settle anything); the second has no
+# turn.error, so the non-retrying error notification's message is used.
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_THREAD_START 019a7c00-0000-7000-8000-000000000001
+#DIRECTIVE EXPECT_REQUEST turn/start
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000c1
+{"method":"error","params":{"error":{"message":"Reconnecting 1/5","codexErrorInfo":null,"additionalDetails":null,"misalignment":null},"willRetry":true,"threadId":"@THREAD","turnId":"@TURN"}}
+{"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"failed","error":{"message":"Usage limit reached","codexErrorInfo":"usageLimitExceeded","additionalDetails":"resets at 18:00","misalignment":null},"startedAt":1790201250,"completedAt":1790201252,"durationMs":400}}}
+#DIRECTIVE EXPECT_REQUEST turn/start
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000c2
+{"method":"error","params":{"error":{"message":"stream disconnected","codexErrorInfo":null,"additionalDetails":null,"misalignment":null},"willRetry":false,"threadId":"@THREAD","turnId":"@TURN"}}
+{"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"failed","error":null,"startedAt":1790201250,"completedAt":1790201252,"durationMs":200}}}
