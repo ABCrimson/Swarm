@@ -16,6 +16,7 @@ interface FakeTerminal {
   readonly dispose: ReturnType<typeof vi.fn>;
   readonly options: Record<string, unknown>;
   typed: (data: string) => void;
+  resized: (size: { rows: number; cols: number }) => void;
 }
 
 vi.mock("@xterm/xterm", () => ({
@@ -25,6 +26,10 @@ vi.mock("@xterm/xterm", () => ({
     readonly open = vi.fn();
     readonly loadAddon = vi.fn();
     typed: (data: string) => void = () => {};
+    resized: (size: { rows: number; cols: number }) => void = () => {};
+    // xterm defaults; read by a PTY-size sync (rows/cols + onResize).
+    rows = 24;
+    cols = 80;
     readonly options: Record<string, unknown>;
     constructor(options: Record<string, unknown>) {
       this.options = options;
@@ -32,6 +37,10 @@ vi.mock("@xterm/xterm", () => ({
     }
     onData(listener: (data: string) => void) {
       this.typed = listener;
+      return { dispose: vi.fn() };
+    }
+    onResize(listener: (size: { rows: number; cols: number }) => void) {
+      this.resized = listener;
       return { dispose: vi.fn() };
     }
   },
