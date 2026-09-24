@@ -63,13 +63,17 @@ test.describe("Settings", () => {
   }) => {
     await gotoSettings(page);
 
+    // Matched by family, not the exact label, so a point release (e.g.
+    // "Claude Mythos 5.1") does not break the spec.
     await page
       .getByRole("radiogroup", { name: "AI Model" })
-      .getByText("Claude Mythos 5", { exact: true })
+      .getByText(/^Claude Mythos \d[\d.]*$/)
       .click();
 
-    await expect(page.getByText("Claude Mythos 5 Requires Project Glasswing Access")).toBeVisible();
-    await expect(page.getByText("Switched To Claude Mythos 5")).toHaveCount(0);
+    await expect(
+      page.getByText(/^Claude Mythos \d[\d.]* Requires Project Glasswing Access$/),
+    ).toBeVisible();
+    await expect(page.getByText(/^Switched To Claude Mythos/)).toHaveCount(0);
   });
 
   test("keybinding capture accepts a new binding", async ({ page }) => {
@@ -187,5 +191,8 @@ test.describe("Settings accessibility", () => {
       page.getByRole("alert").filter({ hasText: "CPU Warning Must Be Below CPU Critical" }),
     ).toBeVisible();
     await expect(page.getByLabel("CPU Warning")).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByLabel("CPU Critical")).toHaveAttribute("aria-invalid", "true");
+    // Only the offending pair is marked invalid.
+    await expect(page.getByLabel("Memory Warning")).not.toHaveAttribute("aria-invalid");
   });
 });

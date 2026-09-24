@@ -4,6 +4,7 @@ import { getDefaultStore } from "jotai";
 import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { alertThresholdsAtom } from "#lib/alerts";
+import { CLAUDE_MODELS } from "#lib/models";
 import { checkForUpdates, readConfig, setMaxWorkers, writeConfig } from "#lib/tauri";
 import { clampNumberInput, Settings, thresholdsError } from "#pages/Settings";
 import { appSettingsAtom, DEFAULT_APP_SETTINGS, selectedModelAtom } from "#store/ui";
@@ -49,16 +50,20 @@ describe("thresholdsError", () => {
     expect(thresholdsError(DEFAULT_THRESHOLDS)).toBeNull();
   });
 
-  it("rejects an inverted or equal CPU pair", () => {
-    expect(thresholdsError({ ...DEFAULT_THRESHOLDS, cpuWarning: 90, cpuCritical: 90 })).toBe(
-      "CPU Warning Must Be Below CPU Critical",
-    );
+  it("rejects an inverted or equal CPU pair and names only the CPU fields", () => {
+    expect(thresholdsError({ ...DEFAULT_THRESHOLDS, cpuWarning: 90, cpuCritical: 90 })).toEqual({
+      message: "CPU Warning Must Be Below CPU Critical",
+      keys: new Set(["cpuWarning", "cpuCritical"]),
+    });
   });
 
-  it("rejects an inverted memory pair", () => {
-    expect(thresholdsError({ ...DEFAULT_THRESHOLDS, memoryWarning: 95, memoryCritical: 50 })).toBe(
-      "Memory Warning Must Be Below Memory Critical",
-    );
+  it("rejects an inverted memory pair and names only the memory fields", () => {
+    expect(
+      thresholdsError({ ...DEFAULT_THRESHOLDS, memoryWarning: 95, memoryCritical: 50 }),
+    ).toEqual({
+      message: "Memory Warning Must Be Below Memory Critical",
+      keys: new Set(["memoryWarning", "memoryCritical"]),
+    });
   });
 });
 
@@ -138,10 +143,13 @@ describe("Settings — AI model", () => {
     const user = userEvent.setup();
     render(<Settings />);
 
-    await user.click(screen.getByRole("radio", { name: "Claude Mythos 5" }));
+    // Looked up from the catalog so a relabel (e.g. a point release) cannot break this.
+    const gated = Object.values(CLAUDE_MODELS).find((model) => model.gated !== undefined);
+    if (!gated) throw new Error("the catalog has no gated model");
+    await user.click(screen.getByRole("radio", { name: gated.label }));
 
     expect(toast.warning).toHaveBeenCalledTimes(1);
-    expect(toast.warning).toHaveBeenCalledWith("Claude Mythos 5 Requires Project Glasswing Access");
+    expect(toast.warning).toHaveBeenCalledWith(`${gated.label} Requires Project Glasswing Access`);
     expect(toast.success).not.toHaveBeenCalled();
   });
 });
@@ -272,8 +280,18 @@ describe("Settings — alert thresholds", () => {
     await user.type(cpuWarning, "95");
     await user.click(screen.getByRole("button", { name: "Save Thresholds" }));
 
-    expect(screen.getByRole("alert")).toHaveTextContent("CPU Warning Must Be Below CPU Critical");
-    expect(cpuWarning).toHaveAttribute("aria-invalid", "true");
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("CPU Warning Must Be Below CPU Critical");
+    // Only the offending pair is invalid, and each names the message.
+    for (const label of ["CPU Warning", "CPU Critical"]) {
+      const input = screen.getByLabelText(label);
+      expect(input).toHaveAttribute("aria-invalid", "true");
+      expect(input).toHaveAccessibleDescription("CPU Warning Must Be Below CPU Critical");
+    }
+    for (const label of ["Memory Warning", "Memory Critical"]) {
+      expect(screen.getByLabelText(label)).not.toHaveAttribute("aria-invalid");
+      expect(screen.getByLabelText(label)).not.toHaveAttribute("aria-describedby");
+    }
     expect(toast.error).toHaveBeenCalledWith("CPU Warning Must Be Below CPU Critical");
     expect(store.get(alertThresholdsAtom)).toEqual(DEFAULT_THRESHOLDS);
     // Still editing, with the typed value kept for correction.

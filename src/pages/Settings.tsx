@@ -38,13 +38,31 @@ export function clampNumberInput(raw: string, min: number, max: number, fallback
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
 }
 
-/** Why a set of alert thresholds is unusable, or `null` when it is valid. */
-export function thresholdsError(thresholds: AlertThresholds): string | null {
+type ThresholdKey = keyof AlertThresholds;
+
+/** An unusable pair of alert thresholds: what is wrong, and which fields. */
+export interface ThresholdsProblem {
+  readonly message: string;
+  /** The fields to mark invalid (the offending warning/critical pair). */
+  readonly keys: ReadonlySet<ThresholdKey>;
+}
+
+/**
+ * The first warning/critical pair whose warning level is not below its
+ * critical level, or `null` when every pair is valid.
+ */
+export function thresholdsError(thresholds: AlertThresholds): ThresholdsProblem | null {
   if (thresholds.cpuWarning >= thresholds.cpuCritical) {
-    return "CPU Warning Must Be Below CPU Critical";
+    return {
+      message: "CPU Warning Must Be Below CPU Critical",
+      keys: new Set(["cpuWarning", "cpuCritical"]),
+    };
   }
   if (thresholds.memoryWarning >= thresholds.memoryCritical) {
-    return "Memory Warning Must Be Below Memory Critical";
+    return {
+      message: "Memory Warning Must Be Below Memory Critical",
+      keys: new Set(["memoryWarning", "memoryCritical"]),
+    };
   }
   return null;
 }
@@ -350,8 +368,6 @@ function ModelPicker({ labelledBy }: { readonly labelledBy: string }): React.Rea
   );
 }
 
-type ThresholdKey = keyof AlertThresholds;
-
 const THRESHOLD_FIELDS: ReadonlyArray<{
   readonly key: ThresholdKey;
   readonly label: string;
@@ -378,8 +394,9 @@ function AlertThresholdsSection({
   const [thresholds, setThresholds] = useAtom(alertThresholdsAtom);
   /** Typed values while editing; `null` when not editing. */
   const [draft, setDraft] = useState<Record<ThresholdKey, string> | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ThresholdsProblem | null>(null);
   const editing = draft !== null;
+  const errorId = `${id}-error`;
 
   const parsed = (values: Record<ThresholdKey, string>): AlertThresholds => ({
     cpuWarning: clampNumberInput(values.cpuWarning, 0, 100, thresholds.cpuWarning),
@@ -405,7 +422,7 @@ function AlertThresholdsSection({
     const problem = thresholdsError(next);
     if (problem) {
       setError(problem);
-      toast.error(problem);
+      toast.error(problem.message);
       return;
     }
     setThresholds(next);
@@ -415,7 +432,7 @@ function AlertThresholdsSection({
   };
 
   return (
-    <form onSubmit={save} aria-describedby={error ? `${id}-error` : undefined} noValidate>
+    <form onSubmit={save} noValidate>
       <SettingsSection
         title="Alert Thresholds"
         action={
@@ -443,40 +460,49 @@ function AlertThresholdsSection({
         }
       >
         <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-          {THRESHOLD_FIELDS.map(({ key, label, tone }) => (
-            <div key={key}>
-              <label htmlFor={`${id}-${key}`} className="mb-1.5 block text-sm font-medium text-fg">
-                {label}
-              </label>
-              <div className="flex items-center gap-1.5">
-                <Input
-                  id={`${id}-${key}`}
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  max={100}
-                  value={draft?.[key] ?? String(thresholds[key])}
-                  disabled={!editing}
-                  aria-invalid={error !== null && editing ? true : undefined}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
-                  }}
-                  onBlur={(e) => {
-                    const value = String(clampNumberInput(e.target.value, 0, 100, thresholds[key]));
-                    setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
-                  }}
-                  data-tone={tone}
-                  className="h-8 w-18 font-mono font-semibold data-[tone=critical]:text-rose data-[tone=warning]:text-amber aria-invalid:border-rose"
-                />
-                <span className="font-mono text-xs text-fg-dim">%</span>
+          {THRESHOLD_FIELDS.map(({ key, label, tone }) => {
+            const invalid = editing && error?.keys.has(key) === true;
+            return (
+              <div key={key}>
+                <label
+                  htmlFor={`${id}-${key}`}
+                  className="mb-1.5 block text-sm font-medium text-fg"
+                >
+                  {label}
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    id={`${id}-${key}`}
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    max={100}
+                    value={draft?.[key] ?? String(thresholds[key])}
+                    disabled={!editing}
+                    aria-invalid={invalid || undefined}
+                    aria-describedby={invalid ? errorId : undefined}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
+                    }}
+                    onBlur={(e) => {
+                      const value = String(
+                        clampNumberInput(e.target.value, 0, 100, thresholds[key]),
+                      );
+                      setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
+                    }}
+                    data-tone={tone}
+                    className="h-8 w-18 font-mono font-semibold data-[tone=critical]:text-rose data-[tone=warning]:text-amber aria-invalid:border-rose"
+                  />
+                  <span className="font-mono text-xs text-fg-dim">%</span>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
         {error && editing && (
-          <p id={`${id}-error`} role="alert" className="mt-3 text-sm text-rose">
-            {error}
+          <p id={errorId} role="alert" className="mt-3 text-sm text-rose">
+            {error.message}
           </p>
         )}
         <div className="mt-4 divide-y divide-border border-t border-border">{children}</div>
