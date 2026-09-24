@@ -81,12 +81,13 @@ if (typeof proto.showPopover !== "function") {
     showPopover(this: HTMLElement) {
       if (openPopovers.has(this)) return;
       openPopovers.add(this);
-      this.dataset.popoverOpen = "true";
+      // jsdom's UA sheet hides every [popover]; show the open one.
+      this.style.setProperty("display", "block");
       firePopoverToggle(this, "closed", "open");
     },
     hidePopover(this: HTMLElement) {
       if (!openPopovers.delete(this)) return;
-      delete this.dataset.popoverOpen;
+      this.style.removeProperty("display");
       firePopoverToggle(this, "open", "closed");
     },
     togglePopover(this: HTMLElement, force?: boolean) {
