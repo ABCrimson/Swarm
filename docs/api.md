@@ -1156,7 +1156,7 @@ Read and write the app's persisted key/value configuration. Over the `swarmd` We
 
 ### `get_metrics`
 
-Returns a snapshot of the current aggregate worker metrics.
+Returns a snapshot of host usage, the worker count per state, and each worker's process-tree usage.
 
 **Parameters:** None
 
@@ -1166,6 +1166,7 @@ Returns a snapshot of the current aggregate worker metrics.
 |----------------|-----------------|-------------------------------------------|
 | `cpuPercent`   | `number`        | Global CPU usage percentage, via `sysinfo` |
 | `memoryMb`     | `number`        | Used system memory in megabytes, via `sysinfo` |
+| `memoryTotalMb` | `number`       | Installed system memory in megabytes, via `sysinfo` |
 | `totalWorkers` | `number`        | Total registered workers                 |
 | `running`      | `number`        | Workers in `running` state               |
 | `paused`       | `number`        | Workers in `paused` state                |
@@ -1178,9 +1179,9 @@ Returns a snapshot of the current aggregate worker metrics.
 | Field         | Type             | Description                                         |
 |---------------|------------------|------------------------------------------------------|
 | `workerId`    | `string` (UUID)  | UUID of the worker                                  |
-| `pid`         | `number \| null` | OS process ID, if the worker has one                |
-| `cpuPercent`  | `number`         | Process-level CPU usage percentage (`0` if no PID or process not found) |
-| `memoryBytes` | `number`         | Process-level resident memory in bytes (`0` if no PID or process not found) |
+| `pid`         | `number \| null` | OS process ID of the worker's shell, if it has one  |
+| `cpuPercent`  | `number`         | CPU usage of the shell and every process descended from it, in percent of one core (`0` if no PID or the shell is gone, and on the first call: usage is a delta between refreshes) |
+| `memoryBytes` | `number`         | Resident memory of the shell and every process descended from it, in bytes (`0` if no PID or the shell is gone) |
 
 **Example:**
 
