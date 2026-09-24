@@ -21,7 +21,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import type { ClaudeCodeTrustTier } from "#lib/agent-events";
-import { ClaudeCodeTrustTierSchema } from "#lib/agent-events";
+import { TrustTierSchema } from "#lib/agent-events";
 import { DEFAULT_REPO_ROOT_KEY, getPersistedRepoRoot } from "#lib/project-root";
 import { agentProbe, agentSpawn, spawnWorker, validateRepoRoot, writeConfig } from "#lib/tauri";
 
@@ -94,7 +94,7 @@ const TRUST_TIER_INFO: Record<
   },
 };
 
-const TRUST_TIER_ORDER: readonly ClaudeCodeTrustTier[] = ClaudeCodeTrustTierSchema.options;
+const TRUST_TIER_ORDER: readonly ClaudeCodeTrustTier[] = TrustTierSchema.options;
 
 // ── Styles (OKLCH) ───────────────────────────────────
 

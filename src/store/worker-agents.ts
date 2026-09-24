@@ -1,6 +1,5 @@
 import { enableMapSet } from "immer";
 import { create } from "zustand";
-import { subscribeWithSelector } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
 import type { WorkerAgentMetadata } from "#store/types";
 
@@ -8,23 +7,18 @@ import type { WorkerAgentMetadata } from "#store/types";
 enableMapSet();
 
 /**
- * Reactive state slice for per-worker agent metadata (role/model/system
- * prompt) — the half of a `WorkerSpawnSpec` (`#store/types`) that never
- * travels over IPC to Rust's `WorkerConfig`. Populated at spawn time
- * (see `#lib/worker-spawn`'s `spawnWorkerFromSpec`) for workers spawned
- * from a session template, keyed by worker id.
+ * Per-worker agent metadata (role, model, system prompt) — the half of a
+ * template's `WorkerSpawnSpec` (`#store/types`) that never crosses IPC
+ * to Rust's `WorkerConfig`. Written at spawn time by
+ * `#lib/worker-spawn`'s `spawnWorkerFromSpec`, removed when the worker
+ * goes away (`#hooks/useWorker`, `#hooks/useWorkerEvents`).
  *
- * `AIChat` reads `model`/`systemPrompt` to resolve that worker's
- * effective model at request time and inject its system prompt.
- * `ModelSelector` (given a `workerId` prop, e.g. from `WorkerAIPanel`)
- * treats a set `model` as that worker's single source of truth for both
- * display and selection — showing the model requests actually use, and
- * writing a manual pick back into this same entry instead of the
- * global, persisted `selectedModelAtom`. Together this is what makes a
- * template's model/systemPrompt real instead of decorative, and keeps
- * the dropdown from ever lying about which model a templated worker's
- * requests use. `role` is not consumed by either yet — it is kept for
- * the upcoming multi-provider (ACP) work.
+ * - `model`: the worker's pinned model. The chat engine
+ *   (`#lib/ai-chat`) uses it instead of the global `selectedModelAtom`,
+ *   and `ModelSelector` shows it and writes a manual pick for that
+ *   worker back here.
+ * - `systemPrompt`: sent as the `system` prompt of the worker's chat.
+ * - `role`: descriptive only; nothing consumes it yet.
  */
 interface WorkerAgentStoreState {
   readonly metadata: Map<string, WorkerAgentMetadata>;
@@ -36,28 +30,21 @@ interface WorkerAgentStoreActions {
   readonly removeAgentMetadata: (workerId: string) => void;
 }
 
-/**
- * Zustand store mapping worker id -> agent metadata.
- *
- * Uses immer for immutable updates and `subscribeWithSelector` for
- * fine-grained subscriptions, matching `useWorkerStore`/`useSessionStore`.
- */
+/** Worker id → agent metadata. */
 export const useWorkerAgentStore = create<WorkerAgentStoreState & WorkerAgentStoreActions>()(
-  subscribeWithSelector(
-    immer((set) => ({
-      metadata: new Map(),
+  immer((set) => ({
+    metadata: new Map(),
 
-      setAgentMetadata(workerId, metadata) {
-        set((s) => {
-          s.metadata.set(workerId, metadata);
-        });
-      },
+    setAgentMetadata(workerId, metadata) {
+      set((s) => {
+        s.metadata.set(workerId, metadata);
+      });
+    },
 
-      removeAgentMetadata(workerId) {
-        set((s) => {
-          s.metadata.delete(workerId);
-        });
-      },
-    })),
-  ),
+    removeAgentMetadata(workerId) {
+      set((s) => {
+        s.metadata.delete(workerId);
+      });
+    },
+  })),
 );

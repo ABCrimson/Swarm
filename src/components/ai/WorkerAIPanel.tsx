@@ -288,7 +288,11 @@ export function WorkerAIPanel({
                 {agentSession ? PROVIDER_LABELS[agentSession.provider] : "AI Chat"}
               </div>
               <div style={{ flex: 1, minHeight: 0 }}>
-                {agentSession ? <AgentChat workerId={workerId} /> : <AIChat workerId={workerId} />}
+                {agentSession ? (
+                  <AgentChat key={workerId} workerId={workerId} />
+                ) : (
+                  <AIChat key={workerId} workerId={workerId} />
+                )}
               </div>
             </div>
           }
