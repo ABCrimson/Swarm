@@ -71,6 +71,12 @@ jobs:
     timeout-minutes: 75
     env:
       TARGET: ${{ matrix.target }}
+    # One shell on every leg: without this the Windows leg runs `run:`
+    # steps in pwsh, where "$TARGET" is an unset PowerShell variable rather
+    # than the job's environment variable.
+    defaults:
+      run:
+        shell: bash
     steps:
       # The container starts bare (root, no sudo). librsvg2 renders the
       # icons and patchelf is needed by the AppImage bundler; nothing links
@@ -140,7 +146,6 @@ jobs:
         run: cargo build --release --locked -p swarmd --target "$TARGET"
 
       - name: Stage swarmd
-        shell: bash
         run: |
           ext=""
           [[ $RUNNER_OS == Windows ]] && ext=".exe"
@@ -171,8 +176,9 @@ jobs:
   swarmd:
     name: Publish swarmd
     needs: build
-    # Publish whatever legs succeeded; verify-swarmd reports the gaps.
-    if: ${{ !cancelled() && github.event_name == 'push' }}
+    # Publish whatever legs succeeded; verify-swarmd reports the gaps. A
+    # skipped build (the CI gate failed) leaves nothing to publish.
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.build.result != 'skipped' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
@@ -209,8 +215,9 @@ jobs:
   verify-updater-manifest:
     name: Verify Updater Manifest
     needs: build
-    # Tag pushes only: a dry run creates no release to verify.
-    if: ${{ !cancelled() && github.event_name == 'push' }}
+    # Tag pushes only: a dry run creates no release to verify, and neither
+    # does a build skipped because the CI gate failed.
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.build.result != 'skipped' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -238,7 +245,7 @@ jobs:
   verify-swarmd:
     name: Verify swarmd Binaries
     needs: swarmd
-    if: ${{ !cancelled() && github.event_name == 'push' }}
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.swarmd.result != 'skipped' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:

@@ -162,11 +162,14 @@ jobs:
       # line, so an anchored ^tauri match cannot hit a path that merely
       # contains "src-tauri". swarmd is checked on its own: a tauri crate
       # added straight to its manifest would not show up under swarm-core.
+      # The tree is captured before grepping so a failing `cargo tree`
+      # fails the step instead of reading as "no tauri found".
       - name: swarm-core and swarmd stay Tauri-free
         run: |
           status=0
           for crate in swarm-core swarmd; do
-            if cargo tree --locked -p "$crate" -e normal --prefix none --format "{p}" | grep -E "^tauri"; then
+            deps=$(cargo tree --locked -p "$crate" -e normal --prefix none --format "{p}")
+            if grep -E "^tauri" <<<"$deps"; then
               echo "::error::$crate must not depend on tauri (directly or transitively)"
               status=1
             fi
