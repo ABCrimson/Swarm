@@ -1,6 +1,8 @@
 // ── Post-Processing Pipeline ─────────────────────────
-// Milestone 0.6.3: Bloom, Chromatic Aberration, Vignette
-// All passes chained via ping-pong framebuffers.
+// Bloom (threshold + dual Kawase blur + composite), chromatic aberration
+// and vignette over the particle scene, chained through ping-pong
+// textures. Every texture view and bind group is built once per pipeline
+// (per canvas size); a frame only encodes passes.
 
 // ── Shared fullscreen triangle vertex shader ────────
 const FULLSCREEN_VERTEX_WGSL = /* wgsl */ `
@@ -110,7 +112,6 @@ fn main(@location(0) uv: vec2f) -> @location(0) vec4f {
 // ── Chromatic Aberration ───────────────────────────
 const CHROMATIC_ABERRATION_WGSL = /* wgsl */ `
 struct CAParams {
-  texelSize: vec2f,
   intensity: f32,
 }
 
@@ -155,224 +156,248 @@ fn main(@location(0) uv: vec2f) -> @location(0) vec4f {
 // ── Bloom mip levels ────────────────────────────────
 const BLOOM_MIP_COUNT = 4;
 
-/** GPU resource handles for the full post-processing chain (bloom, CA, vignette). */
+/** Radial chromatic-aberration strength (distortion = dist² × intensity). */
+const CA_INTENSITY = 2.0;
+
+/** Bind groups that sample the scene texture, rebuilt only when that texture changes. */
+interface InputBindGroups {
+  readonly input: GPUTexture;
+  readonly threshold: GPUBindGroup;
+  readonly composite: GPUBindGroup;
+}
+
+/**
+ * GPU resources for the post-processing chain at one canvas size. Treat
+ * it as opaque: create it with {@link createPostProcessPipeline}, draw
+ * with {@link renderPostProcess}, release it with
+ * {@link destroyPostProcessPipeline}.
+ */
 export interface PostProcessPipeline {
-  bloomThresholdPipeline: GPURenderPipeline;
-  kawaseDownPipeline: GPURenderPipeline;
-  kawaseUpPipeline: GPURenderPipeline;
-  bloomCompositePipeline: GPURenderPipeline;
-  chromaticPipeline: GPURenderPipeline;
-  vignettePipeline: GPURenderPipeline;
-  sampler: GPUSampler;
-  blurParamsBuffers: GPUBuffer[];
-  caParamsBuffer: GPUBuffer;
-  pingTexture: GPUTexture;
-  pongTexture: GPUTexture;
-  bloomMips: GPUTexture[];
-  width: number;
-  height: number;
+  readonly width: number;
+  readonly height: number;
+  /** Bind groups for a scene texture (cached per texture). */
+  readonly inputBindGroups: (input: GPUTexture) => InputBindGroups;
+  readonly passes: {
+    readonly threshold: GPURenderPipeline;
+    readonly down: GPURenderPipeline;
+    readonly up: GPURenderPipeline;
+    readonly composite: GPURenderPipeline;
+    readonly chromatic: GPURenderPipeline;
+    readonly vignette: GPURenderPipeline;
+  };
+  /** Bloom mip views (index 0 = half resolution). */
+  readonly mipViews: readonly GPUTextureView[];
+  /** Down pass k reads mip k into mip k + 1. */
+  readonly downBindGroups: readonly GPUBindGroup[];
+  /** Up pass i reads mip i + 1 into mip i. */
+  readonly upBindGroups: readonly GPUBindGroup[];
+  readonly pingView: GPUTextureView;
+  readonly pongView: GPUTextureView;
+  readonly chromaticBindGroup: GPUBindGroup;
+  readonly vignetteBindGroup: GPUBindGroup;
+  /** Everything {@link destroyPostProcessPipeline} releases. */
+  readonly owned: readonly (GPUTexture | GPUBuffer)[];
 }
 
-/** Create a fullscreen pass pipeline with the given fragment shader. */
-async function createFullscreenPipeline(
-  device: GPUDevice,
-  format: GPUTextureFormat,
-  fragmentCode: string,
-  bindGroupLayout: GPUBindGroupLayout,
-  label: string,
-): Promise<GPURenderPipeline> {
-  return await device.createRenderPipelineAsync({
-    label,
-    layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
-    vertex: {
-      module: device.createShaderModule({ code: FULLSCREEN_VERTEX_WGSL }),
-      entryPoint: "main",
-    },
-    fragment: {
-      module: device.createShaderModule({ code: fragmentCode }),
-      entryPoint: "main",
-      targets: [{ format }],
-    },
-    primitive: { topology: "triangle-list" },
-  });
+/** Indexes a list the caller has just sized; throws instead of yielding `undefined`. */
+function at<T>(items: readonly T[], index: number): T {
+  const item = items[index];
+  if (item === undefined) throw new RangeError(`post-process index ${index} out of range`);
+  return item;
 }
 
-/** Create the full post-processing pipeline. */
+/**
+ * Creates the post-processing chain for a `width` × `height` scene: its
+ * six pipelines (compiled concurrently, sharing one vertex module), the
+ * ping-pong and bloom-mip textures, uniforms, views and bind groups.
+ */
 export async function createPostProcessPipeline(
   device: GPUDevice,
   format: GPUTextureFormat,
   width: number,
   height: number,
 ): Promise<PostProcessPipeline> {
-  const sampler = device.createSampler({
-    magFilter: "linear",
-    minFilter: "linear",
-    mipmapFilter: "linear",
+  const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
+  const vertexModule = device.createShaderModule({
+    label: "fullscreen-vertex",
+    code: FULLSCREEN_VERTEX_WGSL,
   });
 
-  // Texture creation helper
-  const createTex = (w: number, h: number, label: string): GPUTexture =>
+  const texture = (w: number, h: number, label: string): GPUTexture =>
     device.createTexture({
       label,
       size: { width: Math.max(1, w), height: Math.max(1, h) },
       format,
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     });
-
-  const pingTexture = createTex(width, height, "ping");
-  const pongTexture = createTex(width, height, "pong");
-
-  // Bloom mip chain
-  const bloomMips: GPUTexture[] = [];
-  for (let i = 0; i < BLOOM_MIP_COUNT; i++) {
-    const mipW = Math.max(1, width >> (i + 1));
-    const mipH = Math.max(1, height >> (i + 1));
-    bloomMips.push(createTex(mipW, mipH, `bloom-mip-${i}`));
-  }
-
-  // ── Bind group layouts ─────────────────────────
-  const texSamplerLayout = device.createBindGroupLayout({
-    entries: [
-      { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
-      { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
-    ],
-  });
-
-  const texSamplerUniformLayout = device.createBindGroupLayout({
-    entries: [
-      { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
-      { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
-      { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-    ],
-  });
-
-  const bloomCompositeLayout = device.createBindGroupLayout({
-    entries: [
-      { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
-      { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} },
-      { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
-    ],
-  });
-
-  // ── Pipelines ──────────────────────────────────
-  const bloomThresholdPipeline = await createFullscreenPipeline(
-    device,
-    format,
-    BLOOM_THRESHOLD_WGSL,
-    texSamplerLayout,
-    "bloom-threshold",
-  );
-
-  const kawaseDownPipeline = await createFullscreenPipeline(
-    device,
-    format,
-    KAWASE_DOWN_WGSL,
-    texSamplerUniformLayout,
-    "kawase-down",
-  );
-
-  const kawaseUpPipeline = await createFullscreenPipeline(
-    device,
-    format,
-    KAWASE_UP_WGSL,
-    texSamplerUniformLayout,
-    "kawase-up",
-  );
-
-  const bloomCompositePipeline = await createFullscreenPipeline(
-    device,
-    format,
-    BLOOM_COMPOSITE_WGSL,
-    bloomCompositeLayout,
-    "bloom-composite",
-  );
-
-  const chromaticPipeline = await createFullscreenPipeline(
-    device,
-    format,
-    CHROMATIC_ABERRATION_WGSL,
-    texSamplerUniformLayout,
-    "chromatic-aberration",
-  );
-
-  const vignettePipeline = await createFullscreenPipeline(
-    device,
-    format,
-    VIGNETTE_WGSL,
-    texSamplerLayout,
-    "vignette",
-  );
-
-  // ── Uniform buffers ───────────────────────────
-  const blurParamsBuffers: GPUBuffer[] = [];
-  for (let i = 0; i < BLOOM_MIP_COUNT * 2; i++) {
-    const buf = device.createBuffer({
-      size: 8, // vec2f
+  const uniform = (data: Float32Array<ArrayBuffer>, label: string): GPUBuffer => {
+    const buffer = device.createBuffer({
+      label,
+      // Uniform buffers are allocated in 16-byte steps.
+      size: Math.ceil(data.byteLength / 16) * 16,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    blurParamsBuffers.push(buf);
-  }
+    device.queue.writeBuffer(buffer, 0, data);
+    return buffer;
+  };
 
-  const caParamsBuffer = device.createBuffer({
-    size: 16, // vec2f + f32 + padding
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  // ── Layouts ────────────────────────────────────
+  const fragment = GPUShaderStage.FRAGMENT;
+  const texSamplerLayout = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: fragment, texture: {} },
+      { binding: 1, visibility: fragment, sampler: {} },
+    ],
+  });
+  const texSamplerUniformLayout = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: fragment, texture: {} },
+      { binding: 1, visibility: fragment, sampler: {} },
+      { binding: 2, visibility: fragment, buffer: { type: "uniform" } },
+    ],
+  });
+  const compositeLayout = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: fragment, texture: {} },
+      { binding: 1, visibility: fragment, texture: {} },
+      { binding: 2, visibility: fragment, sampler: {} },
+    ],
   });
 
-  // Write initial blur params
-  for (let i = 0; i < BLOOM_MIP_COUNT; i++) {
-    const mipW = Math.max(1, width >> (i + 1));
-    const mipH = Math.max(1, height >> (i + 1));
-    const data = new Float32Array([1.0 / mipW, 1.0 / mipH]);
-    device.queue.writeBuffer(blurParamsBuffers[i], 0, data);
-    device.queue.writeBuffer(blurParamsBuffers[BLOOM_MIP_COUNT + i], 0, data);
-  }
+  // Single-entry-point modules: the entry points are implied.
+  const fullscreenPipeline = (
+    label: string,
+    code: string,
+    layout: GPUBindGroupLayout,
+  ): Promise<GPURenderPipeline> =>
+    device.createRenderPipelineAsync({
+      label,
+      layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+      vertex: { module: vertexModule },
+      fragment: { module: device.createShaderModule({ label, code }), targets: [{ format }] },
+    });
 
-  // Write chromatic aberration params
-  const caData = new Float32Array([1.0 / width, 1.0 / height, 2.0, 0.0]);
-  device.queue.writeBuffer(caParamsBuffer, 0, caData);
+  const [threshold, down, up, composite, chromatic, vignette] = await Promise.all([
+    fullscreenPipeline("bloom-threshold", BLOOM_THRESHOLD_WGSL, texSamplerLayout),
+    fullscreenPipeline("kawase-down", KAWASE_DOWN_WGSL, texSamplerUniformLayout),
+    fullscreenPipeline("kawase-up", KAWASE_UP_WGSL, texSamplerUniformLayout),
+    fullscreenPipeline("bloom-composite", BLOOM_COMPOSITE_WGSL, compositeLayout),
+    fullscreenPipeline("chromatic-aberration", CHROMATIC_ABERRATION_WGSL, texSamplerUniformLayout),
+    fullscreenPipeline("vignette", VIGNETTE_WGSL, texSamplerLayout),
+  ]);
+
+  // ── Textures, views, uniforms ──────────────────
+  const ping = texture(width, height, "ping");
+  const pong = texture(width, height, "pong");
+  const mips = Array.from({ length: BLOOM_MIP_COUNT }, (_, i) =>
+    texture(width >> (i + 1), height >> (i + 1), `bloom-mip-${i}`),
+  );
+  const mipViews = mips.map((mip) => mip.createView());
+  // One texel-size uniform per mip: the pass that writes mip i samples
+  // with mip i's texel size, going down and coming back up alike.
+  const texelBuffers = mips.map((mip, i) =>
+    uniform(Float32Array.of(1 / mip.width, 1 / mip.height), `bloom-texel-${i}`),
+  );
+  const caBuffer = uniform(Float32Array.of(CA_INTENSITY), "chromatic-params");
+  const pingView = ping.createView();
+  const pongView = pong.createView();
+
+  const blurBindGroup = (source: GPUTextureView, texel: GPUBuffer): GPUBindGroup =>
+    device.createBindGroup({
+      layout: texSamplerUniformLayout,
+      entries: [
+        { binding: 0, resource: source },
+        { binding: 1, resource: sampler },
+        { binding: 2, resource: { buffer: texel } },
+      ],
+    });
+
+  const downBindGroups = mipViews
+    .slice(1)
+    .map((_, k) => blurBindGroup(at(mipViews, k), at(texelBuffers, k + 1)));
+  const upBindGroups = mipViews
+    .slice(1)
+    .map((_, i) => blurBindGroup(at(mipViews, i + 1), at(texelBuffers, i)));
+
+  const chromaticBindGroup = device.createBindGroup({
+    layout: texSamplerUniformLayout,
+    entries: [
+      { binding: 0, resource: pingView },
+      { binding: 1, resource: sampler },
+      { binding: 2, resource: { buffer: caBuffer } },
+    ],
+  });
+  const vignetteBindGroup = device.createBindGroup({
+    layout: texSamplerLayout,
+    entries: [
+      { binding: 0, resource: pongView },
+      { binding: 1, resource: sampler },
+    ],
+  });
+
+  let cached: InputBindGroups | null = null;
+  const inputBindGroups = (input: GPUTexture): InputBindGroups => {
+    if (cached?.input === input) return cached;
+    const inputView = input.createView();
+    cached = {
+      input,
+      threshold: device.createBindGroup({
+        layout: texSamplerLayout,
+        entries: [
+          { binding: 0, resource: inputView },
+          { binding: 1, resource: sampler },
+        ],
+      }),
+      composite: device.createBindGroup({
+        layout: compositeLayout,
+        entries: [
+          { binding: 0, resource: inputView },
+          { binding: 1, resource: at(mipViews, 0) },
+          { binding: 2, resource: sampler },
+        ],
+      }),
+    };
+    return cached;
+  };
 
   return {
-    bloomThresholdPipeline,
-    kawaseDownPipeline,
-    kawaseUpPipeline,
-    bloomCompositePipeline,
-    chromaticPipeline,
-    vignettePipeline,
-    sampler,
-    blurParamsBuffers,
-    caParamsBuffer,
-    pingTexture,
-    pongTexture,
-    bloomMips,
     width,
     height,
+    inputBindGroups,
+    passes: { threshold, down, up, composite, chromatic, vignette },
+    mipViews,
+    downBindGroups,
+    upBindGroups,
+    pingView,
+    pongView,
+    chromaticBindGroup,
+    vignetteBindGroup,
+    owned: [ping, pong, ...mips, ...texelBuffers, caBuffer],
   };
 }
 
-/** Run all post-processing passes. Renders from inputTexture to outputView. */
+/**
+ * Encodes and submits the whole chain, reading the scene from
+ * `inputTexture` and writing the final image to `outputView` — the only
+ * per-frame resource (normally the canvas's current texture). The scene
+ * texture's bind groups are built on first use and reused while the same
+ * texture comes back.
+ */
 export function renderPostProcess(
   device: GPUDevice,
   pipeline: PostProcessPipeline,
   inputTexture: GPUTexture,
   outputView: GPUTextureView,
 ): void {
-  const { sampler } = pipeline;
-
-  // Helper: fullscreen draw into a target
-  const fullscreenPass = (
-    encoder: GPUCommandEncoder,
+  const encoder = device.createCommandEncoder({ label: "post-process" });
+  const draw = (
     renderPipeline: GPURenderPipeline,
     bindGroup: GPUBindGroup,
     target: GPUTextureView,
   ): void => {
     const pass = encoder.beginRenderPass({
       colorAttachments: [
-        {
-          view: target,
-          loadOp: "clear",
-          storeOp: "store",
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-        },
+        { view: target, loadOp: "clear", storeOp: "store", clearValue: [0, 0, 0, 0] },
       ],
     });
     pass.setPipeline(renderPipeline);
@@ -381,105 +406,27 @@ export function renderPostProcess(
     pass.end();
   };
 
-  const encoder = device.createCommandEncoder({ label: "post-process" });
+  const { passes, mipViews } = pipeline;
+  const input = pipeline.inputBindGroups(inputTexture);
 
-  // ── Pass 1: Bloom ──────────────────────────────
-
-  // 1a. Threshold
-  const thresholdBG = device.createBindGroup({
-    layout: pipeline.bloomThresholdPipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: inputTexture.createView() },
-      { binding: 1, resource: sampler },
-    ],
+  // Bloom: bright-pass into mip 0, blur down the chain and back up, then
+  // add it onto the scene.
+  draw(passes.threshold, input.threshold, at(mipViews, 0));
+  pipeline.downBindGroups.forEach((bindGroup, k) => {
+    draw(passes.down, bindGroup, at(mipViews, k + 1));
   });
-  fullscreenPass(
-    encoder,
-    pipeline.bloomThresholdPipeline,
-    thresholdBG,
-    pipeline.bloomMips[0].createView(),
-  );
-
-  // 1b. Downsample chain
-  for (let i = 1; i < BLOOM_MIP_COUNT; i++) {
-    const downBG = device.createBindGroup({
-      layout: pipeline.kawaseDownPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: pipeline.bloomMips[i - 1].createView() },
-        { binding: 1, resource: sampler },
-        { binding: 2, resource: { buffer: pipeline.blurParamsBuffers[i] } },
-      ],
-    });
-    fullscreenPass(
-      encoder,
-      pipeline.kawaseDownPipeline,
-      downBG,
-      pipeline.bloomMips[i].createView(),
-    );
+  for (let i = pipeline.upBindGroups.length - 1; i >= 0; i--) {
+    draw(passes.up, at(pipeline.upBindGroups, i), at(mipViews, i));
   }
+  draw(passes.composite, input.composite, pipeline.pingView);
 
-  // 1c. Upsample chain
-  for (let i = BLOOM_MIP_COUNT - 2; i >= 0; i--) {
-    const upBG = device.createBindGroup({
-      layout: pipeline.kawaseUpPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: pipeline.bloomMips[i + 1].createView() },
-        { binding: 1, resource: sampler },
-        { binding: 2, resource: { buffer: pipeline.blurParamsBuffers[BLOOM_MIP_COUNT + i] } },
-      ],
-    });
-    fullscreenPass(encoder, pipeline.kawaseUpPipeline, upBG, pipeline.bloomMips[i].createView());
-  }
-
-  // 1d. Composite bloom onto original
-  const compositeBG = device.createBindGroup({
-    layout: pipeline.bloomCompositePipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: inputTexture.createView() },
-      { binding: 1, resource: pipeline.bloomMips[0].createView() },
-      { binding: 2, resource: sampler },
-    ],
-  });
-  fullscreenPass(
-    encoder,
-    pipeline.bloomCompositePipeline,
-    compositeBG,
-    pipeline.pingTexture.createView(),
-  );
-
-  // ── Pass 2: Chromatic Aberration ───────────────
-  const caBG = device.createBindGroup({
-    layout: pipeline.chromaticPipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: pipeline.pingTexture.createView() },
-      { binding: 1, resource: sampler },
-      { binding: 2, resource: { buffer: pipeline.caParamsBuffer } },
-    ],
-  });
-  fullscreenPass(encoder, pipeline.chromaticPipeline, caBG, pipeline.pongTexture.createView());
-
-  // ── Pass 3: Vignette ──────────────────────────
-  const vignetteBG = device.createBindGroup({
-    layout: pipeline.vignettePipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: pipeline.pongTexture.createView() },
-      { binding: 1, resource: sampler },
-    ],
-  });
-  fullscreenPass(encoder, pipeline.vignettePipeline, vignetteBG, outputView);
+  draw(passes.chromatic, pipeline.chromaticBindGroup, pipeline.pongView);
+  draw(passes.vignette, pipeline.vignetteBindGroup, outputView);
 
   device.queue.submit([encoder.finish()]);
 }
 
-/** Destroy all post-process GPU resources. */
+/** Destroys every texture and buffer the pipeline owns. */
 export function destroyPostProcessPipeline(pipeline: PostProcessPipeline): void {
-  pipeline.pingTexture.destroy();
-  pipeline.pongTexture.destroy();
-  for (const mip of pipeline.bloomMips) {
-    mip.destroy();
-  }
-  for (const buf of pipeline.blurParamsBuffers) {
-    buf.destroy();
-  }
-  pipeline.caParamsBuffer.destroy();
+  for (const resource of pipeline.owned) resource.destroy();
 }

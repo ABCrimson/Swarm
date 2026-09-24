@@ -1,5 +1,6 @@
 // ── WebGPU Device Initialization ──────────────────────
-// Milestone 0.6.0: Device init, context loss recovery, fallback
+// Adapter + device + canvas context for the particle background, with a
+// reason-specific result on every failure path and device-loss reporting.
 
 export interface WebGPUContext {
   readonly device: GPUDevice;
@@ -43,14 +44,20 @@ export function getWebGPUUnavailableReason(): WebGPUUnavailableReason | null {
 }
 
 /**
- * Initialize WebGPU device with high-performance adapter,
- * timestamp-query feature, and generous buffer limits.
+ * Initializes a WebGPU device on a high-performance adapter with the
+ * spec's default limits (the particle shaders need far less than those)
+ * and configures `canvas` for it.
  *
  * Returns a discriminated result: `{ ok: true, value }` on success, or
  * `{ ok: false, reason }` when WebGPU is unavailable or initialization
  * fails — every failure path also `console.warn`s the same reason so the
- * gap is diagnosable from devtools even before any UI surfaces it.
- * Automatically reinitializes on device loss via the provided callback.
+ * gap is diagnosable from devtools even before any UI surfaces it. A
+ * device requested for a canvas that then yields no context is destroyed.
+ *
+ * `onDeviceLost` runs when the device is lost for any reason other than
+ * an intentional `device.destroy()` (a driver reset, a GPU process
+ * crash); the loss message is logged. Validation errors nobody captured
+ * are logged as warnings.
  */
 export async function initWebGPU(
   canvas: HTMLCanvasElement,
@@ -63,53 +70,34 @@ export async function initWebGPU(
   }
 
   try {
-    const adapter = await navigator.gpu.requestAdapter({
-      powerPreference: "high-performance",
-    });
-
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) {
       const reason: WebGPUUnavailableReason = "No Compatible GPU Adapter Found";
       console.warn(`[webgpu] ${reason} — navigator.gpu.requestAdapter() resolved null.`);
       return { ok: false, reason };
     }
 
-    // Check which features are actually supported
-    const requiredFeatures: GPUFeatureName[] = [];
-    if (adapter.features.has("timestamp-query")) {
-      requiredFeatures.push("timestamp-query");
-    }
-
-    const device = await adapter.requestDevice({
-      requiredFeatures,
-      requiredLimits: {
-        maxBufferSize: Math.min(256 * 1024 * 1024, adapter.limits.maxBufferSize),
-        maxStorageBufferBindingSize: Math.min(
-          128 * 1024 * 1024,
-          adapter.limits.maxStorageBufferBindingSize,
-        ),
-        maxComputeWorkgroupSizeX: 256,
-      },
-    });
-
-    device.lost.then((info) => {
-      console.error("WebGPU lost:", info.reason);
-      onDeviceLost?.();
-    });
+    const device = await adapter.requestDevice();
 
     const context = canvas.getContext("webgpu");
     if (!context) {
+      device.destroy();
       const reason: WebGPUUnavailableReason = "Failed To Acquire Canvas Rendering Context";
       console.warn(`[webgpu] ${reason} — canvas.getContext("webgpu") returned null.`);
       return { ok: false, reason };
     }
 
-    const format = navigator.gpu.getPreferredCanvasFormat();
-
-    context.configure({
-      device,
-      format,
-      alphaMode: "premultiplied",
+    void device.lost.then((info) => {
+      if (info.reason === "destroyed") return;
+      console.error("[webgpu] Device lost:", info.message);
+      onDeviceLost?.();
     });
+    device.addEventListener("uncapturederror", (event) => {
+      console.warn("[webgpu] Uncaptured error:", event.error.message);
+    });
+
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    context.configure({ device, format, alphaMode: "premultiplied" });
 
     return { ok: true, value: { device, adapter, context, format } };
   } catch (err) {
