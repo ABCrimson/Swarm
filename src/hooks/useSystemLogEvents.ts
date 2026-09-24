@@ -1,22 +1,25 @@
 import { useEffect } from "react";
+import * as z from "zod";
 import { onEvent } from "#lib/event-bus";
-import type { LogLevel } from "#lib/log-store";
-import { useLogStore } from "#lib/log-store";
-
-const KNOWN_LEVELS: ReadonlySet<string> = new Set<LogLevel>(["debug", "info", "warn", "error"]);
+import { LOG_LEVELS, useLogStore } from "#lib/log-store";
 
 /**
- * Global `system_log` event subscription hook — the first live
- * consumer of the backend's `system_log` envelope. Before this, the
- * event type existed and was documented ("Bridges backend log
- * messages to the frontend console") but nothing ever emitted it in
- * the shipped app, and nothing consumed it: `useLogStore`/`LogViewer`
- * (the Logs page) rendered only test-seeded data. The worktree
- * isolation startup probe (`swarm-desktop`'s `setup()`) is the first
- * real emitter (a `level: "warn"` envelope when git is
- * missing/too-old); this hook is the minimal fix that actually
- * surfaces it, closing the pre-existing zero-consumer hole rather than
- * building new UI beyond what `LogViewer` already renders.
+ * The backend's `SystemLogPayload` (swarm-core `events/emitter.rs`),
+ * validated at this seam. An unknown level is shown as `info` rather
+ * than dropped; a payload without a message is dropped.
+ */
+const SystemLogPayloadSchema = z.object({
+  level: z.enum(LOG_LEVELS).catch("info"),
+  message: z.string(),
+  target: z.string().optional(),
+  /** Unix milliseconds; the envelope's `ts` stands in when absent. */
+  timestamp: z.number().optional(),
+});
+
+/**
+ * Global `system_log` subscription: every backend log envelope (e.g. the
+ * worktree-isolation startup probe's warning when git is missing or too
+ * old) becomes a `backend` entry in the Logs page's store.
  *
  * Must be called exactly once at the app root level, alongside
  * `useWorkerEvents`.
@@ -25,18 +28,20 @@ export function useSystemLogEvents(): void {
   useEffect(() => {
     const { addEntry } = useLogStore.getState();
 
-    const off = onEvent("system_log", (e) => {
-      const p = e.payload as { level: string; message: string; target: string; timestamp: number };
-      const level: LogLevel = (KNOWN_LEVELS.has(p.level) ? p.level : "info") as LogLevel;
+    return onEvent("system_log", (e) => {
+      const parsed = SystemLogPayloadSchema.safeParse(e.payload);
+      if (!parsed.success) {
+        console.warn("[logs] Dropped a malformed system_log payload:", parsed.error.issues);
+        return;
+      }
+      const { level, message, target, timestamp } = parsed.data;
       addEntry({
-        timestamp: p.timestamp,
+        timestamp: timestamp ?? e.ts,
         level,
         source: "backend",
-        message: p.message,
-        metadata: { target: p.target },
+        message,
+        ...(target !== undefined && { metadata: { target } }),
       });
     });
-
-    return off;
   }, []);
 }
