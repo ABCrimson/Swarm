@@ -1,3 +1,5 @@
+/// <reference lib="dom" />
+// `evaluate` callbacks run in the browser: type them against the DOM lib.
 import { expect, test } from "@playwright/test";
 
 // ── Settings ──────────────────────────────────────────
@@ -40,17 +42,19 @@ test.describe("Settings", () => {
   test("the AI model catalog lets you switch the selected model", async ({ page }) => {
     await gotoSettings(page);
 
-    const sonnetCard = page.getByRole("button", { name: /Claude Sonnet 5/ });
-    const haikuCard = page.getByRole("button", { name: /Claude Haiku 4\.5/ });
+    const models = page.getByRole("radiogroup", { name: "AI Model" });
+    const sonnetCard = models.getByRole("radio", { name: "Claude Sonnet 5" });
+    const haikuCard = models.getByRole("radio", { name: "Claude Haiku 4.5" });
 
     // "sonnet" is the default selection (see selectedModelAtom in #store/ui).
-    await expect(sonnetCard).toHaveAttribute("aria-pressed", "true");
-    await expect(haikuCard).toHaveAttribute("aria-pressed", "false");
+    await expect(sonnetCard).toBeChecked();
+    await expect(haikuCard).not.toBeChecked();
 
-    await haikuCard.click();
+    // The radio itself is visually hidden; its card (a <label>) takes the click.
+    await models.getByText("Claude Haiku 4.5", { exact: true }).click();
 
-    await expect(haikuCard).toHaveAttribute("aria-pressed", "true");
-    await expect(sonnetCard).toHaveAttribute("aria-pressed", "false");
+    await expect(haikuCard).toBeChecked();
+    await expect(sonnetCard).not.toBeChecked();
     await expect(page.getByText("Switched To Claude Haiku 4.5")).toBeVisible();
   });
 
@@ -59,7 +63,10 @@ test.describe("Settings", () => {
   }) => {
     await gotoSettings(page);
 
-    await page.getByRole("button", { name: /Claude Mythos 5/ }).click();
+    await page
+      .getByRole("radiogroup", { name: "AI Model" })
+      .getByText("Claude Mythos 5", { exact: true })
+      .click();
 
     await expect(page.getByText("Claude Mythos 5 Requires Project Glasswing Access")).toBeVisible();
     await expect(page.getByText("Switched To Claude Mythos 5")).toHaveCount(0);
@@ -117,5 +124,68 @@ test.describe("Settings", () => {
     await streamLimit.blur();
 
     await expect(streamLimit).toHaveValue("1");
+  });
+});
+
+test.describe("Settings accessibility", () => {
+  test("switches, model cards and number fields show a keyboard focus ring", async ({ page }) => {
+    await gotoSettings(page);
+
+    const particles = page.getByRole("switch", { name: "Particle Background" });
+    await particles.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await expect(particles).toBeFocused();
+    await expect(particles).toHaveCSS("outline-style", "solid");
+
+    // The model radio is visually hidden; its card draws the ring.
+    const selected = page.getByRole("radio", { name: "Claude Sonnet 5" });
+    await selected.focus();
+    await page.keyboard.press("ArrowRight");
+    const card = page.locator("label[data-model-id]:has(input:focus-visible)");
+    await expect(card).toHaveCSS("outline-style", "solid");
+
+    const streamLimit = page.getByLabel("AI Concurrent Stream Limit");
+    await streamLimit.focus();
+    await expect(streamLimit).toHaveCSS("outline-style", "solid");
+  });
+
+  test("the primary buttons use dark text on the accent", async ({ page }) => {
+    await gotoSettings(page);
+
+    // --color-void text on --color-plasma: ~11.8:1, not the old 1.54:1 near-white.
+    const button = page.getByRole("button", { name: "Check For Updates" });
+    const [text, background, voidColor, plasma] = await button.evaluate((el) => {
+      const probe = (value: string): string => {
+        const span = document.createElement("span");
+        span.style.color = value;
+        document.body.append(span);
+        const color = getComputedStyle(span).color;
+        span.remove();
+        return color;
+      };
+      const style = getComputedStyle(el);
+      return [
+        style.color,
+        style.backgroundColor,
+        probe("var(--color-void)"),
+        probe("var(--color-plasma)"),
+      ];
+    });
+    expect(text).toBe(voidColor);
+    expect(background).toBe(plasma);
+  });
+
+  test("an inverted threshold pair is refused with an inline error", async ({ page }) => {
+    await gotoSettings(page);
+
+    await page.getByRole("button", { name: "Edit Thresholds" }).click();
+    await page.getByLabel("CPU Warning").fill("95");
+    await page.getByRole("button", { name: "Save Thresholds" }).click();
+
+    await expect(
+      page.getByRole("alert").filter({ hasText: "CPU Warning Must Be Below CPU Critical" }),
+    ).toBeVisible();
+    await expect(page.getByLabel("CPU Warning")).toHaveAttribute("aria-invalid", "true");
   });
 });
