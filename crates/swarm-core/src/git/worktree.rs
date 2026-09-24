@@ -1,4 +1,6 @@
-//! `git worktree` add/lock/unlock/remove/list/prune.
+//! `git worktree` add/lock/unlock/remove/prune, plus the safe delete of
+//! a worker's isolation branch. `worker::lifecycle` drives all of it,
+//! one call per `RepoLocks::run_serialized`.
 //!
 //! # The no-`--force` guarantee
 //!
@@ -7,77 +9,51 @@
 //! without `--force`, git itself refuses to remove a worktree with
 //! uncommitted changes or untracked files, which is exactly the
 //! "preserve on dirty" guarantee — SWARM never deletes work, it only
-//! ever asks git, and git says no when it would lose something.
-//! [`tests::test_remove_args_never_contains_force`] pins this down at
-//! the argv level (not just "we don't call it with --force today").
+//! ever asks git, and git says no when it would lose something. The
+//! test `test_remove_args_never_contains_force` pins this at the argv
+//! level (not just "no caller passes --force today").
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use super::cli::{self, CREATE_TIMEOUT, READ_TIMEOUT};
-use super::repo::base_args;
+use super::cli::{self, CREATE_TIMEOUT, READ_TIMEOUT, REMOVE_TIMEOUT};
+use super::repo::args_in;
 use crate::error::AppError;
 
 // ── Argv builders ───────────────────────────────────────────────────
 //
-// Every builder starts from `base_args(repo_root)` (`-C <repo_root> -c
-// core.longpaths=true`), so every invocation is scoped to the target
-// repo without ever touching the calling process's own cwd, and long
-// checkout paths under `~/.swarm/worktrees/**` survive Windows'
-// legacy `MAX_PATH` limit.
+// Every builder starts from `args_in(repo_root, …)` — the shared
+// `-C <repo_root> -c core.longpaths=true` prefix — so every invocation
+// is scoped to the target repo without touching the calling process's
+// own cwd, and long checkout paths under `~/.swarm/worktrees/**`
+// survive Windows' legacy `MAX_PATH` limit.
 
 fn add_args(repo_root: &Path, worktree_path: &Path, branch: &str, base_sha: &str) -> Vec<String> {
-    let mut args = base_args(repo_root);
-    args.push("worktree".to_string());
-    args.push("add".to_string());
-    args.push("-b".to_string());
-    args.push(branch.to_string());
-    args.push(worktree_path.display().to_string());
-    args.push(base_sha.to_string());
-    args
+    let path = worktree_path.display().to_string();
+    args_in(
+        repo_root,
+        &["worktree", "add", "-b", branch, &path, base_sha],
+    )
 }
 
 fn lock_args(repo_root: &Path, worktree_path: &Path, reason: &str) -> Vec<String> {
-    let mut args = base_args(repo_root);
-    args.push("worktree".to_string());
-    args.push("lock".to_string());
-    args.push("--reason".to_string());
-    args.push(reason.to_string());
-    args.push(worktree_path.display().to_string());
-    args
+    let path = worktree_path.display().to_string();
+    args_in(repo_root, &["worktree", "lock", "--reason", reason, &path])
 }
 
 fn unlock_args(repo_root: &Path, worktree_path: &Path) -> Vec<String> {
-    let mut args = base_args(repo_root);
-    args.push("worktree".to_string());
-    args.push("unlock".to_string());
-    args.push(worktree_path.display().to_string());
-    args
+    let path = worktree_path.display().to_string();
+    args_in(repo_root, &["worktree", "unlock", &path])
 }
 
 /// Argv for `git worktree remove <path>` — deliberately incapable of
 /// ever carrying `--force`/`-f`. See the module doc.
 fn remove_args(repo_root: &Path, worktree_path: &Path) -> Vec<String> {
-    let mut args = base_args(repo_root);
-    args.push("worktree".to_string());
-    args.push("remove".to_string());
-    args.push(worktree_path.display().to_string());
-    args
-}
-
-fn list_porcelain_args(repo_root: &Path) -> Vec<String> {
-    let mut args = base_args(repo_root);
-    args.push("worktree".to_string());
-    args.push("list".to_string());
-    args.push("--porcelain".to_string());
-    args
+    let path = worktree_path.display().to_string();
+    args_in(repo_root, &["worktree", "remove", &path])
 }
 
 fn prune_args(repo_root: &Path) -> Vec<String> {
-    let mut args = base_args(repo_root);
-    args.push("worktree".to_string());
-    args.push("prune".to_string());
-    args.push("-v".to_string());
-    args
+    args_in(repo_root, &["worktree", "prune", "--verbose"])
 }
 
 /// Argv for `git branch -d <branch>` — deliberately incapable of ever
@@ -88,89 +64,7 @@ fn prune_args(repo_root: &Path) -> Vec<String> {
 /// even attempting this, so the two checks are redundant defense in
 /// depth, not a substitute for one another.
 fn branch_delete_args(repo_root: &Path, branch: &str) -> Vec<String> {
-    let mut args = base_args(repo_root);
-    args.push("branch".to_string());
-    args.push("-d".to_string());
-    args.push(branch.to_string());
-    args
-}
-
-// ── Porcelain parsing ───────────────────────────────────────────────
-
-/// One record from `git worktree list --porcelain`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorktreeEntry {
-    pub path: PathBuf,
-    pub head: Option<String>,
-    pub branch: Option<String>,
-    pub bare: bool,
-    pub detached: bool,
-    pub locked: bool,
-    pub lock_reason: Option<String>,
-    pub prunable: bool,
-    pub prunable_reason: Option<String>,
-}
-
-/// Parses `git worktree list --porcelain` output into structured
-/// entries. Records are separated by a blank line; each record starts
-/// with a `worktree <path>` line followed by attribute lines (`HEAD
-/// <sha>`, `branch <ref>`, `bare`, `detached`, `locked[ <reason>]`,
-/// `prunable[ <reason>]`).
-fn parse_porcelain(text: &str) -> Vec<WorktreeEntry> {
-    let mut entries = Vec::new();
-    let mut current: Option<WorktreeEntry> = None;
-
-    for line in text.lines() {
-        if line.is_empty() {
-            if let Some(entry) = current.take() {
-                entries.push(entry);
-            }
-            continue;
-        }
-        if let Some(path) = line.strip_prefix("worktree ") {
-            if let Some(entry) = current.take() {
-                entries.push(entry);
-            }
-            current = Some(WorktreeEntry {
-                path: PathBuf::from(path),
-                head: None,
-                branch: None,
-                bare: false,
-                detached: false,
-                locked: false,
-                lock_reason: None,
-                prunable: false,
-                prunable_reason: None,
-            });
-            continue;
-        }
-        let Some(entry) = current.as_mut() else {
-            continue;
-        };
-        if let Some(head) = line.strip_prefix("HEAD ") {
-            entry.head = Some(head.to_string());
-        } else if let Some(branch) = line.strip_prefix("branch ") {
-            entry.branch = Some(branch.to_string());
-        } else if line == "bare" {
-            entry.bare = true;
-        } else if line == "detached" {
-            entry.detached = true;
-        } else if line == "locked" {
-            entry.locked = true;
-        } else if let Some(reason) = line.strip_prefix("locked ") {
-            entry.locked = true;
-            entry.lock_reason = Some(reason.to_string());
-        } else if line == "prunable" {
-            entry.prunable = true;
-        } else if let Some(reason) = line.strip_prefix("prunable ") {
-            entry.prunable = true;
-            entry.prunable_reason = Some(reason.to_string());
-        }
-    }
-    if let Some(entry) = current.take() {
-        entries.push(entry);
-    }
-    entries
+    args_in(repo_root, &["branch", "-d", branch])
 }
 
 // ── Operations ──────────────────────────────────────────────────────
@@ -183,8 +77,9 @@ fn parse_porcelain(text: &str) -> Vec<WorktreeEntry> {
 /// # Errors
 ///
 /// * [`AppError::Git`] — the parent directory could not be created, or
-///   `git worktree add` failed (bad `base_sha`, branch already exists,
-///   timeout, etc).
+///   `git worktree add` failed (bad `base_sha`, branch already exists…).
+/// * [`AppError::GitTimeout`] — the checkout exceeded
+///   [`CREATE_TIMEOUT`].
 pub fn add(
     repo_root: &Path,
     worktree_path: &Path,
@@ -215,12 +110,13 @@ pub fn add(
 
 /// Locks `worktree_path` so `git worktree prune` (and a casual `git
 /// worktree remove`) leaves it alone. `reason` should identify the
-/// owning worker (e.g. `"swarm worker <uuid>"`) so a crash-orphan scan
-/// (Phase 4) can recognize and attribute it.
+/// owning worker (e.g. `"swarm worker <uuid>"`), so anyone running `git
+/// worktree list` can attribute the lock.
 ///
 /// # Errors
 ///
-/// * [`AppError::Git`] — `git worktree lock` failed or timed out.
+/// * [`AppError::Git`] — `git worktree lock` failed.
+/// * [`AppError::GitTimeout`] — it exceeded [`READ_TIMEOUT`].
 pub fn lock(repo_root: &Path, worktree_path: &Path, reason: &str) -> Result<(), AppError> {
     let output = cli::run(&lock_args(repo_root, worktree_path, reason), READ_TIMEOUT)?;
     if !output.success() {
@@ -238,8 +134,9 @@ pub fn lock(repo_root: &Path, worktree_path: &Path, reason: &str) -> Result<(), 
 ///
 /// # Errors
 ///
-/// * [`AppError::Git`] — `git worktree unlock` failed or timed out
-///   (including "not locked", which git itself treats as an error).
+/// * [`AppError::Git`] — `git worktree unlock` failed (including "not
+///   locked", which git itself treats as an error).
+/// * [`AppError::GitTimeout`] — it exceeded [`READ_TIMEOUT`].
 pub fn unlock(repo_root: &Path, worktree_path: &Path) -> Result<(), AppError> {
     let output = cli::run(&unlock_args(repo_root, worktree_path), READ_TIMEOUT)?;
     if !output.success() {
@@ -258,12 +155,15 @@ pub enum RemoveOutcome {
     /// `git worktree remove` succeeded — the directory is gone.
     Removed,
     /// git refused specifically because the worktree has uncommitted
-    /// changes or untracked files. `reason` is git's own stderr,
-    /// trimmed. This IS the preserve-on-dirty guarantee: SWARM never
-    /// overrides this refusal with `--force` (see the module doc). Any
-    /// *other* refusal (still locked, permission error, missing path)
-    /// is an [`AppError::Git`] from [`remove`], not this variant.
-    Preserved { reason: String },
+    /// changes or untracked files. This IS the preserve-on-dirty
+    /// guarantee: SWARM never overrides this refusal with `--force`
+    /// (see the module doc). Any *other* refusal (still locked,
+    /// permission error, missing path) is an [`AppError::Git`] from
+    /// [`remove`], not this variant.
+    Preserved {
+        /// git's own refusal, redacted and trimmed.
+        reason: String,
+    },
 }
 
 /// Removes `worktree_path` from the repo rooted at `repo_root` —
@@ -274,27 +174,33 @@ pub enum RemoveOutcome {
 /// untracked files"`) becomes [`RemoveOutcome::Preserved`] — the one
 /// case that is a *safe, expected* outcome of the no-`--force`
 /// guarantee, not a failure. Every other non-zero exit (a still-locked
-/// worktree, a permission error killed mid-delete, an already-missing
-/// path, or any unrecognized stderr) is an [`AppError::Git`] — it must
-/// never be laundered into "preserved", which would tell a caller
-/// "your work is safe on disk" when the truth might be "half-deleted"
-/// or "still locked and untouched". Callers map this `Err` to
-/// `disposition: "failed"` and surface the stderr excerpt as `reason`.
+/// worktree, a permission error mid-delete, an already-missing path,
+/// or any unrecognized stderr) is an [`AppError::Git`] — it must never
+/// be laundered into "preserved", which would tell a caller "your work
+/// is safe on disk" when the truth might be "half-deleted" or "still
+/// locked and untouched". Callers map this `Err` to `disposition:
+/// "failed"` and surface the message as `reason`.
+///
+/// The budget, [`REMOVE_TIMEOUT`], is sized for a recursive delete of
+/// ignored build output (`node_modules`, `target`) so a slow delete is
+/// never cut off halfway.
 ///
 /// # Errors
 ///
 /// * [`AppError::Git`] — anything other than success or the dirty-tree
 ///   refusal: `"cannot remove a locked working tree"` (unlock did not
-///   actually take), a permission error (see the module doc's note on
-///   surviving grandchild processes), a path that isn't a valid
-///   worktree, `git` could not be spawned, or the operation timed out.
+///   actually take), a permission error (a process that outlived the
+///   worker still has the directory open — see
+///   `worker::lifecycle::do_kill_worker`), a path that isn't a valid
+///   worktree, or `git` could not be spawned.
+/// * [`AppError::GitTimeout`] — the delete exceeded [`REMOVE_TIMEOUT`].
 pub fn remove(repo_root: &Path, worktree_path: &Path) -> Result<RemoveOutcome, AppError> {
-    let output = cli::run(&remove_args(repo_root, worktree_path), READ_TIMEOUT)?;
+    let output = cli::run(&remove_args(repo_root, worktree_path), REMOVE_TIMEOUT)?;
     if output.success() {
         return Ok(RemoveOutcome::Removed);
     }
-    let stderr = output.stderr.trim().to_string();
-    if is_dirty_tree_refusal(&stderr) {
+    let stderr = output.stderr.trim().to_owned();
+    if is_dirty_tree_refusal(output.raw_stderr()) {
         return Ok(RemoveOutcome::Preserved { reason: stderr });
     }
     Err(AppError::Git(format!(
@@ -305,34 +211,14 @@ pub fn remove(repo_root: &Path, worktree_path: &Path) -> Result<RemoveOutcome, A
 
 /// Whether `stderr` from a failed `git worktree remove` is git's
 /// specific refusal for a dirty/untracked working tree — the *only*
-/// refusal [`remove`] classifies as [`RemoveOutcome::Preserved`].
-/// Extracted as its own pure predicate so the classification boundary
-/// is unit-testable against realistic git stderr strings without
-/// needing to reproduce every failure mode (a locked working tree, a
-/// permission error, a half-deleted admin entry) against a live
-/// process.
+/// refusal [`remove`] classifies as [`RemoveOutcome::Preserved`]. A
+/// pure predicate so the classification boundary is unit-testable
+/// against realistic git stderr without reproducing every failure mode
+/// against a live process.
 fn is_dirty_tree_refusal(stderr: &str) -> bool {
     stderr
         .to_lowercase()
         .contains("contains modified or untracked files")
-}
-
-/// Lists all worktrees registered against the repo rooted at
-/// `repo_root`.
-///
-/// # Errors
-///
-/// * [`AppError::Git`] — `git worktree list` failed or timed out.
-pub fn list(repo_root: &Path) -> Result<Vec<WorktreeEntry>, AppError> {
-    let output = cli::run(&list_porcelain_args(repo_root), READ_TIMEOUT)?;
-    if !output.success() {
-        return Err(AppError::Git(format!(
-            "git worktree list failed for {}: {}",
-            repo_root.display(),
-            output.stderr.trim()
-        )));
-    }
-    Ok(parse_porcelain(&output.stdout))
 }
 
 /// Prunes stale worktree administrative files (e.g. ones whose
@@ -342,7 +228,8 @@ pub fn list(repo_root: &Path) -> Result<Vec<WorktreeEntry>, AppError> {
 ///
 /// # Errors
 ///
-/// * [`AppError::Git`] — `git worktree prune` failed or timed out.
+/// * [`AppError::Git`] — `git worktree prune` failed.
+/// * [`AppError::GitTimeout`] — it exceeded [`READ_TIMEOUT`].
 pub fn prune(repo_root: &Path) -> Result<usize, AppError> {
     let output = cli::run(&prune_args(repo_root), READ_TIMEOUT)?;
     if !output.success() {
@@ -352,11 +239,16 @@ pub fn prune(repo_root: &Path) -> Result<usize, AppError> {
             output.stderr.trim()
         )));
     }
-    Ok(output
-        .stdout
+    Ok(count_pruned(output.raw_stderr()))
+}
+
+/// Counts the `Removing worktrees/<name>: <why>` lines `git worktree
+/// prune --verbose` reports — on **stderr**; its stdout is empty.
+fn count_pruned(stderr: &str) -> usize {
+    stderr
         .lines()
-        .filter(|l| !l.trim().is_empty())
-        .count())
+        .filter(|line| line.starts_with("Removing "))
+        .count()
 }
 
 /// Deletes `branch` from the repo rooted at `repo_root` with `git
@@ -369,8 +261,9 @@ pub fn prune(repo_root: &Path) -> Result<usize, AppError> {
 ///
 /// # Errors
 ///
-/// * [`AppError::Git`] — `git branch -d` refused (e.g. not fully
-///   merged, already deleted, checked out elsewhere) or timed out.
+/// * [`AppError::Git`] — `git branch -d` refused (not fully merged,
+///   already deleted, checked out elsewhere…).
+/// * [`AppError::GitTimeout`] — it exceeded [`READ_TIMEOUT`].
 pub fn delete_branch(repo_root: &Path, branch: &str) -> Result<(), AppError> {
     let output = cli::run(&branch_delete_args(repo_root, branch), READ_TIMEOUT)?;
     if !output.success() {
@@ -385,11 +278,13 @@ pub fn delete_branch(repo_root: &Path, branch: &str) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
+    use std::path::PathBuf;
 
     use super::*;
-    use uuid::Uuid;
+    use crate::git::repo::base_args;
+    use crate::git::test_support::{TempRepo, write_file};
 
-    // ── Argv builder unit tests (DIRECTIVE: no-force proof) ─────────
+    // ── Argv builders (DIRECTIVE: no-force proof) ────────────────────
 
     #[test]
     fn test_remove_args_never_contains_force() {
@@ -400,37 +295,24 @@ mod tests {
             !args.iter().any(|a| a == "--force" || a == "-f"),
             "remove_args must never construct a --force/-f token: {args:?}"
         );
-        assert_eq!(
-            args,
-            vec![
-                "-C".to_string(),
-                repo.display().to_string(),
-                "-c".to_string(),
-                "core.longpaths=true".to_string(),
-                "worktree".to_string(),
-                "remove".to_string(),
-                wt.display().to_string(),
-            ]
-        );
+        let wt_arg = wt.display().to_string();
+        assert_eq!(args[..4], base_args(&repo)[..]);
+        assert_eq!(args[4..], ["worktree", "remove", wt_arg.as_str()]);
     }
 
     #[test]
-    fn test_every_builder_carries_dash_c() {
+    fn test_every_builder_carries_the_shared_prefix() {
         let repo = PathBuf::from("/tmp/repo");
         let wt = PathBuf::from("/tmp/repo-wt");
-        let builders: Vec<Vec<String>> = vec![
+        for args in [
             add_args(&repo, &wt, "swarm/x-abcd1234", "deadbeef"),
             lock_args(&repo, &wt, "swarm worker abcd"),
             unlock_args(&repo, &wt),
             remove_args(&repo, &wt),
-            list_porcelain_args(&repo),
             prune_args(&repo),
-        ];
-        for args in builders {
-            assert_eq!(args[0], "-C", "builder output must start with -C: {args:?}");
-            assert_eq!(args[1], repo.display().to_string());
-            assert_eq!(args[2], "-c");
-            assert_eq!(args[3], "core.longpaths=true");
+            branch_delete_args(&repo, "swarm/x-abcd1234"),
+        ] {
+            assert_eq!(args[..4], base_args(&repo)[..], "{args:?}");
         }
     }
 
@@ -440,7 +322,7 @@ mod tests {
         let wt = PathBuf::from("/tmp/repo-wt");
         let args = add_args(&repo, &wt, "swarm/x-abcd1234", "deadbeef");
         assert!(!args.iter().any(|a| a == "--force" || a == "-f"));
-        assert!(args.contains(&"-b".to_string()));
+        assert!(args.iter().any(|a| a == "-b"));
     }
 
     /// DIRECTIVE (B3): -D is not constructible for branch deletion —
@@ -453,76 +335,22 @@ mod tests {
             !args.iter().any(|a| a == "-D" || a == "--delete"),
             "branch_delete_args must never construct -D/--delete: {args:?}"
         );
-        assert_eq!(
-            args,
-            vec![
-                "-C".to_string(),
-                repo.display().to_string(),
-                "-c".to_string(),
-                "core.longpaths=true".to_string(),
-                "branch".to_string(),
-                "-d".to_string(),
-                "swarm/x-abcd1234".to_string(),
-            ]
-        );
+        assert_eq!(args[4..], ["branch", "-d", "swarm/x-abcd1234"]);
     }
 
-    // ── Porcelain parser unit tests ──────────────────────────────────
-
-    #[test]
-    fn test_parse_porcelain_single_entry() {
-        let text = "worktree /repo\nHEAD abc123\nbranch refs/heads/main\n\n";
-        let entries = parse_porcelain(text);
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].path, PathBuf::from("/repo"));
-        assert_eq!(entries[0].head.as_deref(), Some("abc123"));
-        assert_eq!(entries[0].branch.as_deref(), Some("refs/heads/main"));
-        assert!(!entries[0].locked);
-        assert!(!entries[0].detached);
-    }
-
-    #[test]
-    fn test_parse_porcelain_multiple_entries_locked_and_detached() {
-        let text = "worktree /repo\nHEAD abc123\nbranch refs/heads/main\n\n\
-                     worktree /repo-wt\nHEAD def456\ndetached\n\n\
-                     worktree /repo-locked\nHEAD ghi789\nbranch refs/heads/swarm/x-1\nlocked swarm worker abcd\n\n";
-        let entries = parse_porcelain(text);
-        assert_eq!(entries.len(), 3);
-        assert!(entries[1].detached);
-        assert!(entries[1].branch.is_none());
-        assert!(entries[2].locked);
-        assert_eq!(entries[2].lock_reason.as_deref(), Some("swarm worker abcd"));
-    }
-
-    #[test]
-    fn test_parse_porcelain_prunable() {
-        let text = "worktree /repo-gone\nHEAD abc123\nbranch refs/heads/old\nprunable gitdir file points to non-existent location\n\n";
-        let entries = parse_porcelain(text);
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].prunable);
-        assert!(entries[0].prunable_reason.is_some());
-    }
-
-    #[test]
-    fn test_parse_porcelain_empty_input() {
-        assert!(parse_porcelain("").is_empty());
-    }
-
-    // ── remove() classification unit tests (no real git needed) ──────
+    // ── remove() classification (no real git needed) ─────────────────
 
     #[test]
     fn test_remove_outcome_variants_are_distinguishable() {
-        let removed = RemoveOutcome::Removed;
         let preserved = RemoveOutcome::Preserved {
-            reason: "contains modified or untracked files".to_string(),
+            reason: "contains modified or untracked files".to_owned(),
         };
-        assert_ne!(removed, preserved);
+        assert_ne!(RemoveOutcome::Removed, preserved);
         assert_matches!(preserved, RemoveOutcome::Preserved { .. });
     }
 
     /// DIRECTIVE (B2): "preserved_dirty" is reserved strictly for
-    /// git's dirty/untracked-files refusal — this asserts the actual
-    /// git message classifies as a dirty-tree refusal.
+    /// git's dirty/untracked-files refusal.
     #[test]
     fn test_is_dirty_tree_refusal_matches_real_git_message() {
         assert!(is_dirty_tree_refusal(
@@ -530,9 +358,8 @@ mod tests {
         ));
     }
 
-    /// DIRECTIVE (B2): a still-locked worktree must NOT be classified
-    /// as "preserved_dirty" — it is a genuine failure (`remove()`
-    /// returns `Err`, caller reports `disposition: "failed"`).
+    /// DIRECTIVE (B2): a still-locked worktree is a genuine failure,
+    /// never "preserved_dirty".
     #[test]
     fn test_is_dirty_tree_refusal_false_for_locked_working_tree() {
         assert!(!is_dirty_tree_refusal(
@@ -540,12 +367,9 @@ mod tests {
         ));
     }
 
-    /// DIRECTIVE (B2): a permission error mid-delete (the
-    /// surviving-grandchild-process scenario — see the kill-site TODO
-    /// in `worker::lifecycle::do_kill_worker`) must NOT be classified
-    /// as "preserved_dirty" — git may have already half-deleted
-    /// tracked files and the admin entry by this point, so reporting
-    /// "preserved" would be a lie. It must be "failed".
+    /// DIRECTIVE (B2): a permission error mid-delete (a process that
+    /// outlived the worker holds the directory) may already have
+    /// half-deleted the tree, so reporting "preserved" would be a lie.
     #[test]
     fn test_is_dirty_tree_refusal_false_for_permission_denied() {
         assert!(!is_dirty_tree_refusal(
@@ -553,8 +377,8 @@ mod tests {
         ));
     }
 
-    /// DIRECTIVE (B2): any unrecognized stderr defaults to a genuine
-    /// failure, never a silent "preserved" laundering.
+    /// DIRECTIVE (B2): any unrecognized stderr is a genuine failure,
+    /// never a silent "preserved".
     #[test]
     fn test_is_dirty_tree_refusal_false_for_unrecognized_message() {
         assert!(!is_dirty_tree_refusal(
@@ -562,151 +386,89 @@ mod tests {
         ));
     }
 
-    // ── Temp-repo integration test ───────────────────────────────────
+    #[test]
+    fn test_count_pruned_counts_removing_lines() {
+        let stderr = "Removing worktrees/a: gitdir file points to non-existent location\n\
+                      Removing worktrees/b: gitdir file points to non-existent location\n";
+        assert_eq!(count_pruned(stderr), 2);
+        assert_eq!(count_pruned(""), 0);
+    }
 
-    /// End-to-end proof against a real, disposable git repo: init a
-    /// repo, commit a file, `worktree add`, confirm the checkout and
-    /// `worktree list --porcelain` both see it, dirty it with an
-    /// untracked file, confirm `remove` refuses (the preserve-on-dirty
-    /// path), clean it up, then confirm `remove` succeeds.
-    ///
-    /// Requires a real `git` binary on PATH (present in every dev
-    /// environment and both GitHub-hosted CI runner images).
+    // ── Real-git integration ──────────────────────────────────────────
+
+    /// End to end against a real repo: `add` checks the branch out,
+    /// `lock` shows in `git worktree list`, an untracked file makes
+    /// `remove` preserve the tree, and a clean tree is removed.
     #[test]
     fn test_worktree_lifecycle_against_real_git_repo() {
-        let base = std::env::temp_dir().join(format!("swarm-wt-lifecycle-{}", Uuid::new_v4()));
-        let repo_root = base.join("repo");
-        std::fs::create_dir_all(&repo_root).unwrap();
+        let repo = TempRepo::new("wt-lifecycle");
+        let head = crate::git::repo::head_sha(repo.root()).unwrap();
+        let worktree = repo.base().join("wt");
 
-        // init + identity (a bare CI runner has no global user.* set)
-        run_setup(&["init".to_string(), repo_root.display().to_string()]);
-        run_setup_in(
-            &repo_root,
-            &["config", "user.email", "swarm-test@example.com"],
-        );
-        run_setup_in(&repo_root, &["config", "user.name", "Swarm Test"]);
+        add(repo.root(), &worktree, "swarm/lifecycle-test", &head).unwrap();
+        assert!(worktree.join("README.md").exists());
 
-        // one commit so HEAD resolves
-        std::fs::write(repo_root.join("README.md"), "hello").unwrap();
-        run_setup_in(&repo_root, &["add", "-A"]);
-        run_setup_in(&repo_root, &["commit", "-m", "initial"]);
-
-        let head = super::super::repo::head_sha(&repo_root).expect("HEAD should resolve");
-
-        let worktree_path = base.join("wt");
-        add(&repo_root, &worktree_path, "swarm/lifecycle-test", &head)
-            .expect("worktree add should succeed");
-
-        // Checked out and populated from HEAD.
-        assert!(worktree_path.join("README.md").exists());
-
-        // git worktree list --porcelain sees it.
-        let entries = list(&repo_root).expect("worktree list should succeed");
-        let canonical_wt = std::fs::canonicalize(&worktree_path).unwrap();
+        lock(repo.root(), &worktree, "swarm worker test-lifecycle").unwrap();
+        let listing = repo.git(&["worktree", "list", "--porcelain"]);
         assert!(
-            entries.iter().any(|e| {
-                std::fs::canonicalize(&e.path)
-                    .map(|p| p == canonical_wt)
-                    .unwrap_or(false)
-            }),
-            "expected {:?} among worktree list entries: {entries:?}",
-            worktree_path
+            String::from_utf8_lossy(&listing.stdout).contains("locked swarm worker test-lifecycle"),
+            "lock must be visible to `git worktree list`"
         );
+        unlock(repo.root(), &worktree).unwrap();
 
-        lock(&repo_root, &worktree_path, "swarm worker test-lifecycle")
-            .expect("lock should succeed");
-        let locked_entries = list(&repo_root).unwrap();
-        assert!(
-            locked_entries.iter().any(|e| e.locked),
-            "expected a locked entry after lock(): {locked_entries:?}"
+        write_file(&worktree, "scratch.txt", "untracked");
+        let outcome = remove(repo.root(), &worktree).unwrap();
+        assert_matches!(outcome, RemoveOutcome::Preserved { .. });
+        assert!(worktree.exists(), "a preserved worktree stays on disk");
+
+        std::fs::remove_file(worktree.join("scratch.txt")).unwrap();
+        assert_eq!(
+            remove(repo.root(), &worktree).unwrap(),
+            RemoveOutcome::Removed
         );
-
-        unlock(&repo_root, &worktree_path).expect("unlock should succeed");
-
-        // Dirty it with an untracked file — remove must refuse.
-        std::fs::write(worktree_path.join("scratch.txt"), "untracked").unwrap();
-        let outcome =
-            remove(&repo_root, &worktree_path).expect("remove call itself should not error");
-        assert!(
-            matches!(outcome, RemoveOutcome::Preserved { .. }),
-            "expected Preserved for a dirty worktree, got {outcome:?}"
-        );
-        assert!(
-            worktree_path.exists(),
-            "preserved worktree must remain on disk"
-        );
-
-        // Clean it up — remove must now succeed.
-        std::fs::remove_file(worktree_path.join("scratch.txt")).unwrap();
-        let outcome =
-            remove(&repo_root, &worktree_path).expect("remove call itself should not error");
-        assert_eq!(outcome, RemoveOutcome::Removed);
-        assert!(
-            !worktree_path.exists(),
-            "removed worktree must be gone from disk"
-        );
-
-        std::fs::remove_dir_all(&base).ok();
+        assert!(!worktree.exists(), "a removed worktree is gone from disk");
     }
 
-    /// DIRECTIVE (B2), end-to-end against real git (not the fabricated
-    /// stderr in `test_is_dirty_tree_refusal_false_for_locked_working_tree`):
-    /// a still-locked worktree must make `remove()` return `Err`, never
-    /// `Ok(Preserved)`.
+    /// DIRECTIVE (B2), against real git: a still-locked worktree makes
+    /// `remove()` return `Err`, never `Ok(Preserved)`.
     #[test]
     fn test_remove_returns_err_not_preserved_for_still_locked_worktree() {
-        let base = std::env::temp_dir().join(format!("swarm-wt-locked-{}", Uuid::new_v4()));
-        let repo_root = base.join("repo");
-        std::fs::create_dir_all(&repo_root).unwrap();
-        run_setup(&["init".to_string(), repo_root.display().to_string()]);
-        run_setup_in(
-            &repo_root,
-            &["config", "user.email", "swarm-test@example.com"],
-        );
-        run_setup_in(&repo_root, &["config", "user.name", "Swarm Test"]);
-        std::fs::write(repo_root.join("README.md"), "hello").unwrap();
-        run_setup_in(&repo_root, &["add", "-A"]);
-        run_setup_in(&repo_root, &["commit", "-m", "initial"]);
-        let head = super::super::repo::head_sha(&repo_root).unwrap();
+        let repo = TempRepo::new("wt-locked");
+        let worktree = repo.add_worktree("wt", "swarm/locked-test");
+        lock(repo.root(), &worktree, "swarm worker locked-test").unwrap();
 
-        let worktree_path = base.join("wt");
-        add(&repo_root, &worktree_path, "swarm/locked-test", &head).unwrap();
-        lock(&repo_root, &worktree_path, "swarm worker locked-test").unwrap();
+        let result = remove(repo.root(), &worktree);
+        assert!(result.is_err(), "expected Err, got {result:?}");
+        assert!(worktree.exists(), "a locked worktree stays untouched");
 
-        // Deliberately do NOT unlock — remove() while still locked must
-        // be a genuine failure, not a laundered "preserved".
-        let result = remove(&repo_root, &worktree_path);
-        assert!(
-            result.is_err(),
-            "expected Err for a still-locked worktree, got {result:?}"
-        );
-        assert!(
-            worktree_path.exists(),
-            "locked worktree must remain untouched"
-        );
-
-        unlock(&repo_root, &worktree_path).ok();
-        remove(&repo_root, &worktree_path).ok();
-        std::fs::remove_dir_all(&base).ok();
+        unlock(repo.root(), &worktree).unwrap();
     }
 
-    fn run_setup(args: &[String]) {
-        let out = cli::run(args, CREATE_TIMEOUT).expect("git setup command should run");
-        assert!(
-            out.success(),
-            "git setup command failed: {} ({args:?})",
-            out.stderr
-        );
+    /// `git worktree prune --verbose` reports on stderr; the count must
+    /// come from there.
+    #[test]
+    fn test_prune_counts_what_it_removed() {
+        let repo = TempRepo::new("wt-prune");
+        let worktree = repo.add_worktree("gone", "swarm/prune-test");
+        std::fs::remove_dir_all(&worktree).unwrap();
+
+        assert_eq!(prune(repo.root()).unwrap(), 1);
+        assert_eq!(prune(repo.root()).unwrap(), 0);
     }
 
-    fn run_setup_in(dir: &Path, args: &[&str]) {
-        let mut full = base_args(dir);
-        full.extend(args.iter().map(|s| s.to_string()));
-        let out = cli::run(&full, CREATE_TIMEOUT).expect("git setup command should run");
-        assert!(
-            out.success(),
-            "git setup command failed: {} ({full:?})",
-            out.stderr
+    #[test]
+    fn test_delete_branch_refuses_an_unmerged_branch() {
+        let repo = TempRepo::new("wt-branch-d");
+        let worktree = repo.add_worktree("wt", "swarm/unmerged-test");
+        write_file(&worktree, "work.txt", "work");
+        crate::git::test_support::git_in(&worktree, &["add", "work.txt"]);
+        crate::git::test_support::git_in(&worktree, &["commit", "-m", "work"]);
+        assert_eq!(
+            remove(repo.root(), &worktree).unwrap(),
+            RemoveOutcome::Removed
         );
+
+        assert!(delete_branch(repo.root(), "swarm/unmerged-test").is_err());
+        assert!(crate::git::repo::rev_parse(repo.root(), "swarm/unmerged-test").is_ok());
     }
 }

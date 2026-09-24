@@ -1,87 +1,105 @@
-//! Secret redaction + output truncation for anything a git child
-//! process could print — the choke point [`git::cli::run`] applies
-//! this to every captured stdout/stderr before it can reach a log
-//! line, a persisted `SwarmEvent`, or a UI toast.
+//! Secret redaction and size capping for any git-produced text that can
+//! reach a log line, a persisted `SwarmEvent`, or a UI toast.
+//! [`crate::git::cli`] applies [`sanitize`] to every captured stderr
+//! ([`crate::git::cli::GitOutput::stderr`]); stdout is data and stays
+//! raw, so a caller that echoes stdout into a message sanitizes it
+//! itself.
 //!
 //! # Why this exists
 //!
-//! `git`'s own stderr can echo back a remote URL with embedded HTTP
-//! basic-auth credentials (`https://user:pass@host/...`), and a failed
-//! push against a token-authenticated remote can echo the token itself
-//! in a diagnostic message. Neither of those should ever leave the
-//! process boundary un-redacted — not into `tracing`, not onto
-//! `swarm://events`, not into a `ShipError.message` a user reads in a
-//! toast.
+//! `git`'s stderr can echo a remote URL with embedded credentials —
+//! `https://user:pass@host/…`, or a bare token used as the username
+//! (`https://ghp_…@github.com/…`, which GitHub accepts) — and a failed
+//! push against a token-authenticated remote can echo the token itself.
+//! None of that may leave the process boundary: not into `tracing`, not
+//! onto `swarm://events`, not into a `ShipError.message` a user reads.
 //!
 //! # Ordering: redact first, then truncate
 //!
-//! Truncating before redacting risks slicing a secret in half at the
-//! 8KB boundary, leaving a partial token exposed that no longer
-//! matches the redaction patterns. Redacting against the full,
-//! untruncated text first is the only order that can't leak a
-//! fragment.
+//! Truncating first could cut a secret in half at the size boundary,
+//! leaving a fragment that no longer matches any pattern. Redacting the
+//! full text first is the only order that cannot leak a fragment.
 
 use std::sync::LazyLock;
 
-use regex::Regex;
+use regex::{Captures, Regex};
 
-/// Hard cap on any git output string surfaced past this module —
-/// applied in bytes (not chars) since it's a defense against pathological
-/// output size, not a display concern.
+/// Hard cap, in bytes, on any git output string surfaced past this
+/// module — a defense against pathological output size, not a display
+/// concern.
 pub const MAX_OUTPUT_BYTES: usize = 8 * 1024;
 
 const REDACTED: &str = "[REDACTED]";
 
-/// `scheme://user:pass@host` — HTTP basic-auth credentials embedded in
-/// a URL (the classic "the origin remote has a token baked into its
-/// URL" leak).
-static URL_CREDENTIALS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"://[^\s/@]+:[^\s/@]+@").expect("valid regex"));
+/// URL userinfo: `scheme://<userinfo>@`. Every userinfo is redacted —
+/// `user:pass` and a bare token-as-username alike — except the
+/// conventional, secret-free SSH user `git` (`ssh://git@host/…`).
+static URL_USERINFO: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\b([a-z][a-z0-9+.-]*://)([^\s/@]+)@").expect("valid regex"));
 
-/// GitHub personal/OAuth/user-to-server/server-to-server tokens:
-/// `ghp_`, `gho_`, `ghu_`, `ghs_` (and `ghr_` for refresh tokens)
-/// followed by 20+ base62 characters.
-static GITHUB_TOKEN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"gh[pousr]_[A-Za-z0-9]{20,}").expect("valid regex"));
+/// Bare credential tokens, by issuer prefix:
+///
+/// - GitHub classic tokens: `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`
+/// - GitHub fine-grained personal access tokens: `github_pat_`
+/// - GitLab personal access tokens: `glpat-`
+/// - Anthropic API keys: `sk-ant-`
+/// - OpenAI-style secret keys: `sk-`, `sk-proj-`, `sk-svcacct-`
+/// - AWS access key ids: `AKIA` + 16
+///
+/// The distinctive prefixes match anywhere — a token glued to the text
+/// before it is still a token. Only the generic `sk-` form and the AWS
+/// key id need a word boundary, so `task-…` or `risk-…` never match.
+static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"gh[pousr]_[A-Za-z0-9]{20,}",
+        r"|github_pat_[A-Za-z0-9_]{22,}",
+        r"|glpat-[A-Za-z0-9_-]{20,}",
+        r"|sk-ant-[A-Za-z0-9_-]{10,}",
+        r"|\bsk-[A-Za-z0-9_-]{20,}",
+        r"|\bAKIA[0-9A-Z]{16}\b",
+    ))
+    .expect("valid regex")
+});
 
-/// Anthropic API keys (`sk-ant-...`).
-static ANTHROPIC_KEY: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"sk-ant-[A-Za-z0-9_-]{10,}").expect("valid regex"));
-
-/// Redacts every recognized secret pattern in `input`, replacing each
-/// match with `[REDACTED]` (the URL-credentials pattern keeps the
-/// `://` and trailing `@` so the redacted string still reads as a
-/// URL shape, just without the embedded credentials).
+/// Redacts every recognized secret in `input`, replacing it with
+/// `[REDACTED]`. A redacted URL keeps its scheme and the trailing `@`
+/// (`https://[REDACTED]@github.com/…`) so it still reads as a URL.
+#[must_use]
 pub fn redact(input: &str) -> String {
-    let step1 = URL_CREDENTIALS.replace_all(input, "://[REDACTED]@");
-    let step2 = GITHUB_TOKEN.replace_all(&step1, REDACTED);
-    let step3 = ANTHROPIC_KEY.replace_all(&step2, REDACTED);
-    step3.into_owned()
+    let without_userinfo = URL_USERINFO.replace_all(input, |caps: &Captures<'_>| {
+        if caps[2].eq_ignore_ascii_case("git") {
+            caps[0].to_owned()
+        } else {
+            format!("{}{REDACTED}@", &caps[1])
+        }
+    });
+    TOKEN.replace_all(&without_userinfo, REDACTED).into_owned()
 }
 
-/// Truncates `input` to at most `max_bytes`, cutting on a UTF-8 char
-/// boundary (never splitting a multi-byte character) and appending a
-/// marker noting how many bytes were dropped. A no-op when `input` is
-/// already within budget.
+/// Caps `input` at roughly `max_bytes`, keeping its head **and** its
+/// tail — git and its hooks print progress first and the failing line
+/// last, so the tail is usually the part that explains the error. Cuts
+/// only on UTF-8 char boundaries and marks how many bytes were dropped.
+/// A no-op when `input` already fits.
+#[must_use]
 pub fn truncate(input: &str, max_bytes: usize) -> String {
     if input.len() <= max_bytes {
-        return input.to_string();
+        return input.to_owned();
     }
-    let mut end = max_bytes;
-    while end > 0 && !input.is_char_boundary(end) {
-        end -= 1;
-    }
+    let head_end = input.floor_char_boundary(max_bytes / 2);
+    let tail_start = input.ceil_char_boundary(input.len() - (max_bytes - max_bytes / 2));
     format!(
-        "{}\n... [truncated {} bytes]",
-        &input[..end],
-        input.len() - end
+        "{}\n... [truncated {} bytes] ...\n{}",
+        &input[..head_end],
+        tail_start - head_end,
+        &input[tail_start..]
     )
 }
 
-/// The full choke-point transform: redact secrets against the
-/// complete text, then truncate to [`MAX_OUTPUT_BYTES`]. This is the
-/// only ordering that can't leak half a token by cutting it at the
-/// truncation boundary — see the module doc.
+/// The full choke-point transform: redact secrets against the complete
+/// text, then [`truncate`] to [`MAX_OUTPUT_BYTES`]. See the module doc
+/// for why that order.
+#[must_use]
 pub fn sanitize(input: &str) -> String {
     truncate(&redact(input), MAX_OUTPUT_BYTES)
 }
@@ -96,30 +114,62 @@ mod tests {
         let out = redact(input);
         assert!(!out.contains("alice"));
         assert!(!out.contains("hunter2"));
-        assert!(out.contains("://[REDACTED]@github.com"));
+        assert!(out.contains("https://[REDACTED]@github.com"));
     }
 
     #[test]
-    fn test_redacts_github_token_shapes() {
-        for prefix in ["ghp", "gho", "ghu", "ghs"] {
-            let token = format!("{prefix}_{}", "a".repeat(36));
-            let input = format!("remote: Invalid username or password. token={token}");
-            let out = redact(&input);
+    fn test_redacts_a_bare_token_used_as_the_url_username() {
+        let token = format!("github_pat_11ABCDEFG0{}", "x".repeat(40));
+        let input = format!("To https://{token}@github.com/o/r.git");
+        let out = redact(&input);
+        assert!(!out.contains(&token), "{out}");
+        assert!(out.contains("https://[REDACTED]@github.com/o/r.git"));
+
+        // An opaque, prefix-less token as the username is redacted too.
+        let out = redact("https://abc123opaque@git.example.com/o/r.git");
+        assert!(!out.contains("abc123opaque"), "{out}");
+    }
+
+    #[test]
+    fn test_keeps_the_conventional_ssh_git_user() {
+        let input = "ssh://git@github.com/org/repo.git";
+        assert_eq!(redact(input), input);
+        // scp-like syntax has no scheme and no credential shape at all.
+        assert_eq!(
+            redact("git@github.com:org/repo.git"),
+            "git@github.com:org/repo.git"
+        );
+    }
+
+    #[test]
+    fn test_redacts_every_token_shape() {
+        let tokens = [
+            format!("ghp_{}", "a".repeat(36)),
+            format!("gho_{}", "a".repeat(36)),
+            format!("ghu_{}", "a".repeat(36)),
+            format!("ghs_{}", "a".repeat(36)),
+            format!("ghr_{}", "a".repeat(36)),
+            format!("github_pat_{}", "B1_".repeat(25)),
+            format!("glpat-{}", "c".repeat(20)),
+            "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789".to_owned(),
+            format!("sk-proj-{}", "d".repeat(40)),
+            format!("sk-{}", "e".repeat(48)),
+            "AKIAIOSFODNN7EXAMPLE".to_owned(),
+        ];
+        for token in tokens {
+            let out = redact(&format!("remote: invalid credential {token} rejected"));
             assert!(
                 !out.contains(&token),
-                "expected {prefix}_ token to be redacted, got: {out}"
+                "expected {token} to be redacted: {out}"
             );
             assert!(out.contains(REDACTED));
         }
     }
 
     #[test]
-    fn test_redacts_anthropic_key() {
-        let key = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
-        let input = format!("some log line embedding {key} by accident");
-        let out = redact(&input);
-        assert!(!out.contains(key));
-        assert!(out.contains(REDACTED));
+    fn test_sk_prefix_needs_a_word_boundary() {
+        let input = "branch swarm/task-abcdefghijklmnopqrstuvwxyz0123 pushed";
+        assert_eq!(redact(input), input);
     }
 
     #[test]
@@ -135,33 +185,41 @@ mod tests {
     }
 
     #[test]
-    fn test_truncate_cuts_at_budget_and_marks_it() {
-        let input = "x".repeat(MAX_OUTPUT_BYTES + 500);
+    fn test_truncate_keeps_head_and_tail_and_marks_the_cut() {
+        let input = format!(
+            "HEAD-LINE\n{}\nfatal: the line that explains it",
+            "x".repeat(MAX_OUTPUT_BYTES * 2)
+        );
         let out = truncate(&input, MAX_OUTPUT_BYTES);
         assert!(out.len() < input.len());
-        assert!(out.contains("truncated 500 bytes"));
+        assert!(out.starts_with("HEAD-LINE"));
+        assert!(out.ends_with("fatal: the line that explains it"));
+        assert!(out.contains("[truncated "));
+        let dropped = input.len() - MAX_OUTPUT_BYTES;
+        assert!(
+            out.contains(&format!("[truncated {dropped} bytes]")),
+            "{out}"
+        );
     }
 
     #[test]
     fn test_truncate_never_splits_a_multibyte_char() {
-        // Every char is 3 bytes (e.g. "€"); pick a budget that would
-        // land mid-character if truncation were byte-naive.
-        let input = "€".repeat(4000); // 12000 bytes
-        let out = truncate(&input, 10);
-        // Must not panic (String slicing on a non-boundary panics),
-        // and the result must still be valid UTF-8 (guaranteed by type).
-        assert!(out.len() <= 10 + "\n... [truncated 11990 bytes]".len());
+        // Every char is 3 bytes; an odd budget lands mid-character on
+        // both sides of the cut if truncation were byte-naive (which
+        // would panic on the slice).
+        let input = "€".repeat(4000);
+        let out = truncate(&input, 11);
+        assert!(out.starts_with('€'));
+        assert!(out.ends_with('€'));
     }
 
     #[test]
     fn test_sanitize_redacts_before_truncating_so_a_split_token_cant_leak() {
-        // A secret placed exactly at the truncation boundary: if
-        // truncation ran first, the second half of the token would
-        // survive in the (now-unmatchable) truncated text. Redacting
-        // first removes the whole token before truncation ever runs.
+        // A secret straddling the head cut: truncating first would keep
+        // an unmatchable half of it.
         let key = format!("sk-ant-{}", "b".repeat(40));
-        let padding = "x".repeat(MAX_OUTPUT_BYTES - 10);
-        let input = format!("{padding}{key}");
+        let padding = "x".repeat(MAX_OUTPUT_BYTES / 2 - 10);
+        let input = format!("{padding}{key}{}", "y".repeat(MAX_OUTPUT_BYTES));
         let out = sanitize(&input);
         assert!(!out.contains(&key));
         assert!(!out.contains("sk-ant-"));

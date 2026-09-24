@@ -5,11 +5,9 @@
 //!
 //! # Why the `agent_*` canonical family, not `agent_turn_started`
 //!
-//! The ship-chain plan's original Phase 2 draft (`scratchpad/plans/ship-chain.md`)
-//! assumed a turn's root event was `agent_turn_started {workerId, model,
-//! requestId}`. Reading the landed code instead of re-implementing that
-//! draft turned up two independent AI paths with two *different*
-//! correlation id spaces:
+//! The first design for this record assumed a turn's root event was
+//! `agent_turn_started {workerId, model, requestId}`. The landed code has
+//! two independent AI paths with two *different* correlation id spaces:
 //!
 //! - `src/components/ai/AIChat.tsx` (the webview-direct `@anthropic-ai/sdk`
 //!   path, still the shipped default) calls the `agent_turn_started`
@@ -29,8 +27,9 @@
 //! failure mode the honesty rule exists to prevent. [`build_ship_context`]
 //! instead derives turn existence from the `agent_block`/`agent_tool_call`/
 //! `agent_tool_result`/`agent_turn_settled` family directly, grouped by
-//! their own `turnId` — the richer, tool-call-bearing signal, and the one
-//! RECONCILIATION.md §1 designates canonical.
+//! their own `turnId` — the richer, tool-call-bearing signal, and the
+//! canonical agent event family (see `docs/architecture.md`'s causal
+//! record section).
 //!
 //! **Known scope boundary:** `AIChat.tsx`'s tool-driven side effects
 //! (correlated via the envelope `causeSeq`, not a payload `turnId`) are
@@ -52,10 +51,8 @@ use crate::orchestration::log::StoredEvent;
 /// [`ShipContext::turns`] and counted in [`ShipContext::omitted_turn_count`]
 /// instead — a large seq range (a worker that ran for hours before its
 /// first ship) must not turn one `ship_context` call into an unbounded
-/// response. Simpler than the original plan's "oldest-collapsed
-/// summarization" (which would need the AI path to summarize dropped
-/// turns) — an honest count of what's missing, not a fabricated summary
-/// of it.
+/// response. An honest count of what's missing rather than a summary of
+/// it (which would need the AI path to write one).
 const MAX_TURNS: usize = 200;
 
 /// Event types [`build_ship_context`] extracts anything from — the
@@ -122,7 +119,7 @@ pub struct CausalToolCall {
     /// Tool name, verbatim from the provider (e.g. `"Read"`, `"Bash"`).
     pub name: String,
     /// Best-effort target extracted from the call's `input`, via
-    /// [`extract_target`]'s allowlist — `None` when no allowlisted field
+    /// `extract_target`'s allowlist — `None` when no allowlisted field
     /// was present, never a guess.
     pub target: Option<String>,
     /// `true`/`false` once a matching `agent_tool_result` is seen in
@@ -139,6 +136,7 @@ pub struct CausalToolCall {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CausalTurn {
+    /// The provider's turn id shared by the turn's events.
     pub turn_id: String,
     /// `"ok"`/`"error"`, verbatim from a matching `agent_turn_settled` in
     /// range; `None` when no settlement was observed in range (the turn
@@ -153,9 +151,13 @@ pub struct CausalTurn {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CausalCommit {
+    /// The commit.
     pub sha: String,
+    /// The branch it was made on.
     pub branch: String,
+    /// Exclusive start of the seq range its trailer records.
     pub seq_from: u64,
+    /// Inclusive end of that range.
     pub seq_to: u64,
 }
 
@@ -167,18 +169,21 @@ pub struct CausalCommit {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ShipContext {
+    /// The worker the record describes.
     pub worker_id: Uuid,
+    /// Exclusive start of the seq range.
     pub seq_from: u64,
+    /// Inclusive end of the seq range.
     pub seq_to: u64,
-    /// Turns in range, oldest first, capped at [`MAX_TURNS`] (newest kept
-    /// on overflow — see [`Self::omitted_turn_count`]).
+    /// Turns in range, oldest first; at most 200 (`MAX_TURNS`), the newest
+    /// kept on overflow — see [`Self::omitted_turn_count`].
     pub turns: Vec<CausalTurn>,
     /// Commits this worker made in range (`commit_created` rows) —
     /// ordinarily empty at preview time (the commit hasn't happened yet)
     /// and populated on a re-preview after an earlier "Commit Only" step.
     pub commits: Vec<CausalCommit>,
     /// How many of this worker's turns in range were dropped to respect
-    /// [`MAX_TURNS`] — `0` when nothing was dropped. Surfaced so the UI
+    /// `MAX_TURNS` — `0` when nothing was dropped. Surfaced so the UI
     /// can say "and N earlier turns" honestly instead of silently
     /// truncating.
     pub omitted_turn_count: u32,
@@ -195,8 +200,9 @@ pub struct ShipContext {
     /// exhausted.
     pub events_truncated: bool,
     /// `true` when an `agent_turn_started` row for this worker was
-    /// observed in range but produced no `CausalTurn` (see the module
-    /// doc's turn-id-space mismatch note) — the signal that distinguishes
+    /// observed in range. That event never becomes a `CausalTurn` (see the
+    /// module doc's turn-id-space mismatch note); it is the signal that
+    /// distinguishes
     /// "this worker genuinely had no recorded activity in this range"
     /// from "this worker's activity used the webview chat path
     /// (`AIChat.tsx`), which this query structurally cannot see
@@ -207,6 +213,7 @@ pub struct ShipContext {
 impl ShipContext {
     /// The honest empty record for a range with no engine/db path at all
     /// (e.g. an in-memory-only test engine) — never fabricated turns.
+    #[must_use]
     pub fn empty(worker_id: Uuid, seq_from: u64, seq_to: u64) -> Self {
         ShipContext {
             worker_id,
@@ -228,7 +235,7 @@ impl ShipContext {
 fn extract_target(input: &serde_json::Value) -> Option<String> {
     let obj = input.as_object()?;
     for key in TARGET_FIELD_ALLOWLIST {
-        if let Some(raw) = obj.get(*key).and_then(|v| v.as_str()) {
+        if let Some(raw) = obj.get(*key).and_then(serde_json::Value::as_str) {
             let trimmed = raw.trim();
             if trimmed.is_empty() {
                 continue;
@@ -240,27 +247,25 @@ fn extract_target(input: &serde_json::Value) -> Option<String> {
 }
 
 fn payload_worker_id(payload: &serde_json::Value) -> Option<&str> {
-    payload.get("workerId").and_then(|v| v.as_str())
+    payload_str(payload, "workerId")
 }
 
 fn payload_str<'a>(payload: &'a serde_json::Value, field: &str) -> Option<&'a str> {
-    payload.get(field).and_then(|v| v.as_str())
+    payload.get(field).and_then(serde_json::Value::as_str)
 }
 
 /// Builds a [`ShipContext`] from an already-fetched, seq-bounded slice of
 /// the event log (`events`, typically
 /// `EventLog::events_for_worker_between(RELEVANT_EVENT_TYPES, workerId,
 /// seqFrom, seqTo, _)`'s result, in ascending seq order) — pure and
-/// tauri-free, so it's unit-testable without a real `EventLog`. Filters to
-/// `worker_id` (matching `payload.workerId`, never the envelope's
-/// `originWorker` — see the module doc: none of the `agent_*` family
-/// stamps envelope provenance today, `.emit()` not `.emit_with()`, so
-/// payload is the only reliable subject field) and to
-/// [`RELEVANT_EVENT_TYPES`]; everything else in `events` is silently
-/// ignored (a worker's `worker_output`/`system_metrics` rows, another
-/// worker's events, etc.) — harmless if the caller passed an unfiltered
-/// slice (e.g. a test fixture), since this function re-checks both
-/// conditions itself rather than trusting the caller's query shape.
+/// Tauri-free, so it's unit-testable without a real `EventLog`. Keeps only
+/// rows inside `(seq_from, seq_to]`, for `worker_id` (matching
+/// `payload.workerId`, never the envelope's `originWorker`: the agent
+/// adapters emit the `agent_*` family with `.emit()`, not `.emit_with()`,
+/// so the payload is the only reliable subject field), and of the
+/// [`RELEVANT_EVENT_TYPES`]; everything else in `events` is ignored. The
+/// caller's query already applies all three, but this function re-checks
+/// them rather than trusting the query's shape.
 ///
 /// `events_truncated` is threaded straight through onto
 /// [`ShipContext::events_truncated`] — this function has no way to know
@@ -275,157 +280,153 @@ pub fn build_ship_context(
     events_truncated: bool,
 ) -> ShipContext {
     let worker_id_str = worker_id.to_string();
-
-    // Turn id -> (index into `turn_order`, tool_use_id -> index into that
-    // turn's tool_calls) — insertion-ordered by first appearance, since a
-    // plain HashMap doesn't preserve order and turn/tool-call counts here
-    // are small enough that linear structures beat pulling in an
-    // order-preserving-map dependency for it.
-    let mut turn_order: Vec<String> = Vec::new();
-    let mut turns: HashMap<String, CausalTurn> = HashMap::new();
-    let mut tool_use_index: HashMap<String, (String, usize)> = HashMap::new();
-    let mut commits: Vec<CausalCommit> = Vec::new();
+    let mut turns = TurnTable::default();
+    let mut commits = Vec::new();
     let mut has_uncaptured_webview_activity = false;
 
-    let ensure_turn =
-        |turn_order: &mut Vec<String>, turns: &mut HashMap<String, CausalTurn>, turn_id: &str| {
-            if !turns.contains_key(turn_id) {
-                turn_order.push(turn_id.to_string());
-                turns.insert(
-                    turn_id.to_string(),
-                    CausalTurn {
-                        turn_id: turn_id.to_string(),
-                        status: None,
-                        tool_calls: Vec::new(),
-                    },
-                );
-            }
-        };
-
     for event in events {
-        let Some(payload_worker) = payload_worker_id(&event.payload) else {
-            continue;
-        };
-        if payload_worker != worker_id_str {
+        // Defense in depth: the caller's query already bounds the range,
+        // but a row outside `(seq_from, seq_to]` must never be cited.
+        if event.seq <= seq_from || event.seq > seq_to {
             continue;
         }
+        if payload_worker_id(&event.payload) != Some(worker_id_str.as_str()) {
+            continue;
+        }
+        let payload = &event.payload;
 
         match event.event_type.as_str() {
             "agent_block" => {
-                if let Some(turn_id) = payload_str(&event.payload, "turnId") {
-                    ensure_turn(&mut turn_order, &mut turns, turn_id);
+                if let Some(turn_id) = payload_str(payload, "turnId") {
+                    turns.turn(turn_id);
                 }
             }
             "agent_tool_call" => {
-                let Some(turn_id) = payload_str(&event.payload, "turnId") else {
+                let (Some(turn_id), Some(tool_use_id)) = (
+                    payload_str(payload, "turnId"),
+                    payload_str(payload, "toolUseId"),
+                ) else {
                     continue;
                 };
-                let Some(tool_use_id) = payload_str(&event.payload, "toolUseId") else {
-                    continue;
-                };
-                let name = payload_str(&event.payload, "name")
-                    .unwrap_or("unknown")
-                    .to_string();
-                let target = event.payload.get("input").and_then(extract_target);
-                ensure_turn(&mut turn_order, &mut turns, turn_id);
-                let turn = turns.get_mut(turn_id).expect("just ensured");
-                let idx = turn.tool_calls.len();
-                turn.tool_calls.push(CausalToolCall {
-                    seq: event.seq,
-                    name,
-                    target,
-                    ok: None,
-                });
-                tool_use_index.insert(tool_use_id.to_string(), (turn_id.to_string(), idx));
+                turns.push_call(
+                    turn_id,
+                    tool_use_id,
+                    CausalToolCall {
+                        seq: event.seq,
+                        name: payload_str(payload, "name").unwrap_or("unknown").to_owned(),
+                        target: payload.get("input").and_then(extract_target),
+                        ok: None,
+                    },
+                );
             }
             "agent_tool_result" => {
-                let Some(tool_use_id) = payload_str(&event.payload, "toolUseId") else {
-                    continue;
-                };
-                let Some((turn_id, idx)) = tool_use_index.get(tool_use_id) else {
-                    // No matching call observed in this range — dropped,
-                    // not fabricated (see the module doc's honesty rule).
-                    continue;
-                };
-                let is_error = event
-                    .payload
-                    .get("isError")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                if let Some(turn) = turns.get_mut(turn_id)
-                    && let Some(call) = turn.tool_calls.get_mut(*idx)
+                // A result whose call is not in range is dropped, never
+                // attached to a fabricated call.
+                if let Some(tool_use_id) = payload_str(payload, "toolUseId")
+                    && let Some(call) = turns.call_mut(tool_use_id)
                 {
+                    let is_error = payload
+                        .get("isError")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false);
                     call.ok = Some(!is_error);
                 }
             }
             "agent_turn_settled" => {
-                if let Some(turn_id) = payload_str(&event.payload, "turnId") {
-                    ensure_turn(&mut turn_order, &mut turns, turn_id);
-                    if let Some(status) = payload_str(&event.payload, "status")
-                        && let Some(turn) = turns.get_mut(turn_id)
-                    {
-                        turn.status = Some(status.to_string());
+                if let Some(turn_id) = payload_str(payload, "turnId") {
+                    let turn = turns.turn(turn_id);
+                    if let Some(status) = payload_str(payload, "status") {
+                        turn.status = Some(status.to_owned());
                     }
                 }
             }
             "commit_created" => {
-                let sha = payload_str(&event.payload, "sha")
-                    .unwrap_or_default()
-                    .to_string();
-                let branch = payload_str(&event.payload, "branch")
-                    .unwrap_or_default()
-                    .to_string();
-                let commit_seq_from = event
-                    .payload
-                    .get("seqFrom")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                let commit_seq_to = event
-                    .payload
-                    .get("seqTo")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
+                let seq_field = |field| {
+                    payload
+                        .get(field)
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0)
+                };
                 commits.push(CausalCommit {
-                    sha,
-                    branch,
-                    seq_from: commit_seq_from,
-                    seq_to: commit_seq_to,
+                    sha: payload_str(payload, "sha").unwrap_or_default().to_owned(),
+                    branch: payload_str(payload, "branch")
+                        .unwrap_or_default()
+                        .to_owned(),
+                    seq_from: seq_field("seqFrom"),
+                    seq_to: seq_field("seqTo"),
                 });
             }
-            "agent_turn_started" => {
-                // Deliberately NOT `ensure_turn` — this event's
-                // `requestId` is not a `TurnId` (see the module doc).
-                // Its only job here is proving this worker had SOME
-                // activity in range that the turn-level query above
-                // can't see.
-                has_uncaptured_webview_activity = true;
-            }
+            // Deliberately never a turn — this event's `requestId` is not
+            // a `TurnId` (see the module doc). It only proves this worker
+            // had activity in range the turn-level query cannot see.
+            "agent_turn_started" => has_uncaptured_webview_activity = true,
             _ => {}
         }
     }
 
-    let total_turns = turn_order.len();
-    let kept_order: Vec<String> = if total_turns > MAX_TURNS {
-        turn_order[total_turns - MAX_TURNS..].to_vec()
-    } else {
-        turn_order
-    };
-    let omitted_turn_count = (total_turns - kept_order.len()) as u32;
-
-    let ordered_turns: Vec<CausalTurn> = kept_order
-        .into_iter()
-        .filter_map(|id| turns.remove(&id))
-        .collect();
-
+    let (turns, omitted) = turns.into_newest(MAX_TURNS);
     ShipContext {
         worker_id,
         seq_from,
         seq_to,
-        turns: ordered_turns,
+        turns,
         commits,
-        omitted_turn_count,
+        omitted_turn_count: u32::try_from(omitted).unwrap_or(u32::MAX),
         events_truncated,
         has_uncaptured_webview_activity,
+    }
+}
+
+/// Turns keyed by `turnId` in first-appearance order, plus an index from
+/// each tool call's `toolUseId` to its position.
+#[derive(Default)]
+struct TurnTable {
+    turns: Vec<CausalTurn>,
+    by_id: HashMap<String, usize>,
+    calls: HashMap<String, (usize, usize)>,
+}
+
+impl TurnTable {
+    /// The index of turn `turn_id`, created empty on first sight.
+    fn index_of(&mut self, turn_id: &str) -> usize {
+        if let Some(&index) = self.by_id.get(turn_id) {
+            return index;
+        }
+        self.turns.push(CausalTurn {
+            turn_id: turn_id.to_owned(),
+            status: None,
+            tool_calls: Vec::new(),
+        });
+        let index = self.turns.len() - 1;
+        self.by_id.insert(turn_id.to_owned(), index);
+        index
+    }
+
+    /// The turn `turn_id`, created empty on first sight.
+    fn turn(&mut self, turn_id: &str) -> &mut CausalTurn {
+        let index = self.index_of(turn_id);
+        &mut self.turns[index]
+    }
+
+    fn push_call(&mut self, turn_id: &str, tool_use_id: &str, call: CausalToolCall) {
+        let turn_index = self.index_of(turn_id);
+        let calls = &mut self.turns[turn_index].tool_calls;
+        calls.push(call);
+        self.calls
+            .insert(tool_use_id.to_owned(), (turn_index, calls.len() - 1));
+    }
+
+    fn call_mut(&mut self, tool_use_id: &str) -> Option<&mut CausalToolCall> {
+        let &(turn, call) = self.calls.get(tool_use_id)?;
+        self.turns.get_mut(turn)?.tool_calls.get_mut(call)
+    }
+
+    /// At most `max` turns — the newest — and how many older ones were
+    /// dropped.
+    fn into_newest(mut self, max: usize) -> (Vec<CausalTurn>, usize) {
+        let omitted = self.turns.len().saturating_sub(max);
+        self.turns.drain(..omitted);
+        (self.turns, omitted)
     }
 }
 
@@ -578,6 +579,29 @@ mod tests {
         assert_eq!(ctx.omitted_turn_count, 0);
     }
 
+    /// The range is `(seq_from, seq_to]`: a row at `seq_from` or past
+    /// `seq_to` is never cited, whatever the caller's query returned.
+    #[test]
+    fn test_rows_outside_the_seq_range_are_ignored() {
+        let me = Uuid::new_v4();
+        let call = |seq: u64, turn: &str| {
+            ev(
+                seq,
+                "agent_tool_call",
+                serde_json::json!({ "workerId": me, "turnId": turn, "toolUseId": format!("u{seq}"), "name": "Bash", "input": {} }),
+            )
+        };
+        let events = vec![
+            call(5, "t-at-from"),
+            call(6, "t-inside"),
+            call(9, "t-at-to"),
+            call(10, "t-after"),
+        ];
+        let ctx = build_ship_context(events, me, 5, 9, false);
+        let ids: Vec<&str> = ctx.turns.iter().map(|t| t.turn_id.as_str()).collect();
+        assert_eq!(ids, ["t-inside", "t-at-to"]);
+    }
+
     #[test]
     fn test_tool_call_with_no_result_in_range_is_ok_none_not_fabricated() {
         let me = Uuid::new_v4();
@@ -634,12 +658,12 @@ mod tests {
         let mut events = Vec::with_capacity(total);
         for i in 0..total {
             events.push(ev(
-                i as u64,
+                u64::try_from(i).unwrap() + 1,
                 "agent_block",
                 serde_json::json!({ "workerId": me, "turnId": format!("t{i}"), "blockIndex": 0, "kind": "text", "content": {} }),
             ));
         }
-        let ctx = build_ship_context(events, me, 0, total as u64, false);
+        let ctx = build_ship_context(events, me, 0, u64::try_from(total).unwrap() + 1, false);
         assert_eq!(ctx.turns.len(), MAX_TURNS);
         assert_eq!(ctx.omitted_turn_count, 5);
         // The kept turns are the NEWEST ones — t5..t{total-1}, not t0..
