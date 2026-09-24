@@ -19,13 +19,15 @@
         "height": 900,
         "minWidth": 800,
         "minHeight": 500,
+        "visible": false,
         "decorations": true,
         "transparent": false,
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=WebGPU"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' asset: https://asset.localhost; connect-src ipc: http://ipc.localhost https://api.anthropic.com; font-src 'self'; worker-src 'self' blob:"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src ipc: http://ipc.localhost https://api.anthropic.com; font-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'",
+      "dangerousDisableAssetCspModification": ["style-src"]
     }
   },
   "bundle": {
@@ -33,10 +35,10 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "icon": [
+      "icons/icon.png",
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
-      "icons/icon.png",
       "icons/icon.icns",
       "icons/icon.ico"
     ]
