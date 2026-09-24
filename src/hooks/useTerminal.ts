@@ -11,13 +11,18 @@ import { useWorkerStore } from "#store/workers";
 /**
  * OKLCH terminal theme: background, foreground, cursor, selection and the
  * 16-color ANSI palette (standard 0-7, bright 8-15).
+ *
+ * Every value must be opaque. xterm parses anything but hex/rgb() by
+ * painting it on a canvas, rejects the result unless alpha is 255, and
+ * then silently uses its default color — so the selection is the plasma
+ * accent pre-blended at 25% over the background, not a translucent color.
  */
 const TERMINAL_THEME = {
   background: "oklch(0.06 0.02 220)",
   foreground: "oklch(0.82 0.04 220)",
   cursor: "oklch(0.78 0.18 205)",
   cursorAccent: "oklch(0.06 0.02 220)",
-  selectionBackground: "oklch(0.78 0.18 205 / 0.25)",
+  selectionBackground: "oklch(0.25 0.06 208)",
   selectionForeground: "oklch(0.92 0.02 220)",
   black: "oklch(0.15 0.02 220)",
   red: "oklch(0.60 0.20 15)",

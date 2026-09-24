@@ -97,6 +97,16 @@ beforeEach(() => {
 describe("useTerminal (via WorkerTerminal)", () => {
   // Regression: remounting (worker switch, page switch) showed a blank
   // terminal until the next chunk, and never the earlier history.
+  it("uses only opaque theme colors (xterm drops translucent CSS colors)", () => {
+    render(<WorkerTerminal workerId="w1" />);
+
+    const theme = terminals.at(-1)?.options.theme as Record<string, string>;
+    expect(Object.keys(theme)).toContain("selectionBackground");
+    for (const [key, color] of Object.entries(theme)) {
+      expect(color, key).toMatch(/^oklch\([\d.]+ [\d.]+ [\d.]+\)$/);
+    }
+  });
+
   it("replays the buffered history on mount", () => {
     addWorker("w1", "$ npm install\nadded 1 package\n");
     render(<WorkerTerminal workerId="w1" />);
