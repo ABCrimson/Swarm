@@ -1,12 +1,14 @@
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { type ExtractAtomValue, useAtom, useAtomValue, useSetAtom, useStore } from "jotai";
+import { computeFrecencyBonus } from "modern-cmdk";
 import { Command } from "modern-cmdk/react";
-import { useEffect } from "react";
+import { useEffectEvent, useLayoutEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { matchesBinding } from "#lib/keybindings";
 import { createSnapshot } from "#lib/snapshots";
-import type { FrecencyEntry } from "#store/frecency";
-import { frecencyAtom, frecencyScoreAtom } from "#store/frecency";
+import { killWorker } from "#lib/tauri";
+import { spawnWorkerFromSpec } from "#lib/worker-spawn";
+import { type FrecencyEntry, frecencyAtom } from "#store/frecency";
 import { useSessionStore } from "#store/sessions";
 import {
   commandPaletteOpenAtom,
@@ -15,6 +17,7 @@ import {
   keybindingsAtom,
   sidebarCollapsedAtom,
 } from "#store/ui";
+import { useWorkerAgentStore } from "#store/worker-agents";
 import { useWorkerStore } from "#store/workers";
 
 interface CommandDef {
@@ -25,120 +28,146 @@ interface CommandDef {
   readonly action: () => void;
 }
 
+type FrecencyStorage = NonNullable<
+  NonNullable<React.ComponentProps<typeof Command.Dialog>["frecency"]>["storage"]
+>;
+type FrecencyRecords = Awaited<ReturnType<FrecencyStorage["load"]>>["records"];
+/** `modern-cmdk`'s branded item id — the `forceId` each item registers under. */
+type ItemId = FrecencyRecords extends ReadonlyMap<infer K, unknown> ? K : never;
+
+/** A persisted {@link FrecencyEntry} as the engine's record. */
+function toRecord(entry: FrecencyEntry): { frequency: number; lastUsed: number } {
+  return {
+    frequency: entry.uses,
+    lastUsed: Temporal.Instant.from(entry.lastUsed).epochMilliseconds,
+  };
+}
+
+function errorText(err: unknown): string {
+  return Error.isError(err) ? err.message : String(err);
+}
+
 /**
- * Global command palette (Ctrl+K) built on `modern-cmdk`.
+ * Global command palette (the remappable Command Palette binding,
+ * Ctrl+K by default) built on `modern-cmdk`: navigation, worker spawn
+ * and kill (real backend calls), the graph/list view toggle and session
+ * snapshots.
  *
- * Provides navigation, worker management, graph controls, and session
- * operations. Typed queries are filtered and ranked by the machine's
- * own multi-strategy scorer (exact → prefix → substring →
- * word-boundary → fuzzy) against each item's label and keywords; the
- * frecency (frequency + recency) presort below defines the display
- * order when the query is empty.
+ * Ranking uses `modern-cmdk`'s own frecency engine, persisted through
+ * {@link frecencyAtom}: a typed query is scored by the machine's
+ * matcher plus each command's frecency bonus, and an empty query lists
+ * commands by that same bonus. The engine records selections itself and
+ * flushes them to storage when the dialog unmounts on close.
+ *
+ * The open/close shortcut is registered in a layout effect, so it is
+ * live before the first paint — a Ctrl+K pressed the moment the window
+ * appears is never lost. (The graph/list toggle shortcut belongs to the
+ * Workers page, the only place it applies.)
  */
 export function CommandPalette(): React.ReactElement {
+  const store = useStore();
   const [open, setOpen] = useAtom(commandPaletteOpenAtom);
   const setPage = useSetAtom(currentPageAtom);
   const setSidebarCollapsed = useSetAtom(sidebarCollapsedAtom);
-  const [frecency, setFrecency] = useAtom(frecencyAtom);
-  const getScore = useAtomValue(frecencyScoreAtom);
-
+  const frecency = useAtomValue(frecencyAtom);
   const [graphView, setGraphView] = useAtom(graphViewAtom);
+  const keybindings = useAtomValue(keybindingsAtom);
   const workers = useWorkerStore((s) => s.workers);
-  const addWorker = useWorkerStore((s) => s.addWorker);
-  const removeWorker = useWorkerStore((s) => s.removeWorker);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
 
-  // Palette open + graph/list toggle — bindings are remappable in
-  // Settings (see #lib/keybindings).
-  const keybindings = useAtomValue(keybindingsAtom);
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (matchesBinding(e, keybindings.commandPalette)) {
-        e.preventDefault();
-        setOpen((prev) => !prev);
-      }
-      if (matchesBinding(e, keybindings.graphToggle)) {
-        e.preventDefault();
-        setGraphView((prev) => (prev === "graph" ? "list" : "graph"));
-      }
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [setOpen, setGraphView, keybindings]);
+  const onKeyDown = useEffectEvent((e: KeyboardEvent) => {
+    if (!matchesBinding(e, keybindings.commandPalette)) return;
+    e.preventDefault();
+    setOpen((prev) => !prev);
+  });
+  useLayoutEffect(() => {
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
 
-  const recordUsage = (commandId: string) => {
-    setFrecency((prev) => {
-      const next = new Map(prev);
-      const existing = next.get(commandId);
-      const entry: FrecencyEntry = {
-        uses: (existing?.uses ?? 0) + 1,
-        lastUsed: Temporal.Now.instant().toString(),
-      };
-      next.set(commandId, entry);
-      return next;
-    });
+  const frecencyStorage: FrecencyStorage = {
+    load: () => ({
+      records: new Map(
+        store
+          .get(frecencyAtom)
+          .entries()
+          .map(([id, entry]) => [id as ItemId, toRecord(entry)]),
+      ),
+    }),
+    save: (_namespace, data) => {
+      store.set(
+        frecencyAtom,
+        new Map(
+          data.records.entries().map(([id, record]) => [
+            id,
+            {
+              uses: record.frequency,
+              lastUsed: Temporal.Instant.fromEpochMilliseconds(record.lastUsed).toString(),
+            },
+          ]),
+        ),
+      );
+    },
+    [Symbol.dispose]() {},
   };
 
-  const staticCommands: readonly CommandDef[] = [
-    {
-      id: "nav:dashboard",
-      label: "Go To Dashboard",
-      group: "Navigation",
-      keywords: ["navigate", "home"],
-      action: () => setPage("dashboard"),
-    },
-    {
-      id: "nav:workers",
-      label: "Go To Workers",
-      group: "Navigation",
-      keywords: ["navigate", "agents"],
-      action: () => setPage("workers"),
-    },
-    {
-      id: "nav:sessions",
-      label: "Go To Sessions",
-      group: "Navigation",
-      keywords: ["navigate", "history"],
-      action: () => setPage("sessions"),
-    },
-    {
-      id: "nav:metrics",
-      label: "Go To Metrics",
-      group: "Navigation",
-      keywords: ["navigate", "performance", "stats"],
-      action: () => setPage("metrics"),
-    },
-    {
-      id: "nav:settings",
-      label: "Go To Settings",
-      group: "Navigation",
-      keywords: ["navigate", "preferences", "config"],
-      action: () => setPage("settings"),
-    },
-    // Tools/Logs/Workspace have no sidebar entry — the palette is their
-    // only navigation path (they were unreachable before these commands).
-    {
-      id: "nav:tools",
-      label: "Go To Tools",
-      group: "Navigation",
-      keywords: ["navigate", "custom", "builder"],
-      action: () => setPage("tools"),
-    },
-    {
-      id: "nav:logs",
-      label: "Go To Logs",
-      group: "Navigation",
-      keywords: ["navigate", "output", "console"],
-      action: () => setPage("logs"),
-    },
-    {
-      id: "nav:workspace",
-      label: "Go To Workspace",
-      group: "Navigation",
-      keywords: ["navigate", "files", "project"],
-      action: () => setPage("workspace"),
-    },
+  const spawn = async () => {
+    try {
+      const id = await spawnWorkerFromSpec({ name: `Worker ${workers.size + 1}` });
+      if (id === null) toast.error("Spawning Workers Needs The Desktop App");
+    } catch (err) {
+      toast.error(`Spawn Failed: ${errorText(err)}`);
+    }
+  };
+
+  const kill = async (id: string) => {
+    try {
+      await killWorker(id);
+      useWorkerStore.getState().removeWorker(id);
+      useWorkerAgentStore.getState().removeAgentMetadata(id);
+    } catch (err) {
+      toast.error(`Kill Failed: ${errorText(err)}`);
+    }
+  };
+
+  const snapshot = async () => {
+    const session = activeSessionId ? sessions.get(activeSessionId) : undefined;
+    if (!session) {
+      toast.error("No Active Session To Snapshot");
+      return;
+    }
+    try {
+      await createSnapshot(session);
+      toast.success("Snapshot Created");
+    } catch {
+      toast.error("Failed To Create Snapshot");
+    }
+  };
+
+  const navigate = (
+    page: ExtractAtomValue<typeof currentPageAtom>,
+    label: string,
+    keywords: readonly string[],
+  ): CommandDef => ({
+    id: `nav:${page}`,
+    label: `Go To ${label}`,
+    group: "Navigation",
+    keywords: ["navigate", ...keywords],
+    action: () => setPage(page),
+  });
+
+  const commands: readonly CommandDef[] = [
+    navigate("dashboard", "Dashboard", ["home"]),
+    navigate("workers", "Workers", ["agents"]),
+    navigate("sessions", "Sessions", ["history"]),
+    navigate("metrics", "Metrics", ["performance", "stats"]),
+    navigate("settings", "Settings", ["preferences", "config"]),
+    // Tools/Logs/Workspace have no sidebar entry: the palette is their
+    // only navigation path.
+    navigate("tools", "Tools", ["custom", "builder"]),
+    navigate("logs", "Logs", ["output", "console"]),
+    navigate("workspace", "Workspace", ["files", "project"]),
     {
       id: "ui:toggle-sidebar",
       label: "Toggle Sidebar",
@@ -151,35 +180,17 @@ export function CommandPalette(): React.ReactElement {
       label: "Spawn Worker",
       group: "Workers",
       keywords: ["create", "new", "add", "agent"],
-      action: () => {
-        addWorker({
-          id: crypto.randomUUID(),
-          state: "idle",
-          name: `Worker ${workers.size + 1}`,
-          startedAt: new Date().toISOString(),
-        });
-      },
+      action: () => void spawn(),
     },
-    {
-      id: "graph:zoom-fit",
-      label: "Zoom To Fit",
-      group: "Graph",
-      keywords: ["fit", "view", "zoom", "graph"],
-      action: () => {
-        setPage("workers");
-        setGraphView("graph");
-      },
-    },
-    {
-      id: "graph:reset-layout",
-      label: "Reset Layout",
-      group: "Graph",
-      keywords: ["layout", "reset", "elk", "arrange"],
-      action: () => {
-        setPage("workers");
-        setGraphView("graph");
-      },
-    },
+    ...workers.entries().map(
+      ([id, worker]): CommandDef => ({
+        id: `worker:kill:${id}`,
+        label: `Kill ${worker.name ?? id.slice(0, 8)}`,
+        group: "Workers",
+        keywords: ["remove", "stop", "terminate"],
+        action: () => void kill(id),
+      }),
+    ),
     {
       id: "graph:toggle-view",
       label: graphView === "graph" ? "Switch To List View" : "Switch To Graph View",
@@ -192,53 +203,9 @@ export function CommandPalette(): React.ReactElement {
       label: "Snapshot Session",
       group: "Sessions",
       keywords: ["snapshot", "save", "backup", "state"],
-      action: () => {
-        if (!activeSessionId) {
-          toast.error("No Active Session To Snapshot");
-          return;
-        }
-        const session = sessions.get(activeSessionId);
-        if (!session) return;
-        void createSnapshot(session)
-          .then(() => toast.success("Snapshot Created"))
-          .catch(() => toast.error("Failed To Create Snapshot"));
-      },
+      action: () => void snapshot(),
     },
   ];
-
-  const killCommands: readonly CommandDef[] = [...workers.entries()].map(([id, worker]) => ({
-    id: `worker:kill:${id}`,
-    label: `Kill ${worker.name ?? id.slice(0, 8)}`,
-    group: "Workers",
-    keywords: ["remove", "stop", "terminate"],
-    action: () => removeWorker(id),
-  }));
-
-  const allCommands = [...staticCommands, ...killCommands].toSorted(
-    (a, b) => getScore(b.id) - getScore(a.id),
-  );
-
-  const groups = (() => {
-    const map = new Map<string, CommandDef[]>();
-    for (const cmd of allCommands) {
-      const group = map.get(cmd.group);
-      if (group) {
-        group.push(cmd);
-      } else {
-        map.set(cmd.group, [cmd]);
-      }
-    }
-    return map;
-  })();
-
-  const handleSelect = (commandId: string) => {
-    const cmd = allCommands.find((c) => c.id === commandId);
-    if (cmd) {
-      recordUsage(cmd.id);
-      cmd.action();
-    }
-    setOpen(false);
-  };
 
   return (
     <Command.Dialog
@@ -246,31 +213,68 @@ export function CommandPalette(): React.ReactElement {
       // unmounts empty — on reopen the stale query silently filters
       // group children out of registration and the list corrupts.
       // Keying by `open` remounts the dialog (fresh machine, empty
-      // search) each cycle; frecency lives in our own atom, so nothing
-      // user-visible is lost.
+      // search) each cycle, which also flushes the frecency engine.
       key={String(open)}
       open={open}
       onOpenChange={setOpen}
       label="SWARM Command Palette"
+      description="Type A Command Or Search, Then Press Enter To Run It"
+      frecency={{ enabled: true, namespace: "swarm-palette", storage: frecencyStorage }}
       className="swarm-cmdk"
       overlayClassName="swarm-cmdk-overlay"
       contentClassName="swarm-cmdk-content"
     >
+      <PaletteBody commands={commands} frecency={frecency} onRun={() => setOpen(false)} />
+    </Command.Dialog>
+  );
+}
+
+/**
+ * The palette's input and grouped list. Mounted fresh on every open
+ * (the dialog is keyed by `open`), so `openedAt` fixes the moment the
+ * empty-query order is computed for: commands by the engine's own
+ * frecency bonus, highest first — a stable sort keeps definition order
+ * among unused commands.
+ */
+function PaletteBody({
+  commands,
+  frecency,
+  onRun,
+}: {
+  readonly commands: readonly CommandDef[];
+  readonly frecency: ReadonlyMap<string, FrecencyEntry>;
+  readonly onRun: () => void;
+}): React.ReactElement {
+  const [openedAt] = useState(Date.now);
+  const bonus = (id: string) => {
+    const entry = frecency.get(id);
+    return entry ? computeFrecencyBonus(toRecord(entry), openedAt) : 0;
+  };
+  const groups = Map.groupBy(
+    commands.toSorted((a, b) => bonus(b.id) - bonus(a.id)),
+    (cmd) => cmd.group,
+  );
+
+  return (
+    <>
       <Command.Input placeholder="Type A Command Or Search..." />
       <Command.List>
         <Command.Empty>No Commands Found.</Command.Empty>
-        {[...groups.entries()].map(([groupName, cmds]) => (
+        {[...groups].map(([groupName, cmds]) => (
           <Command.Group key={groupName} heading={groupName}>
             {cmds.map((cmd) => (
               <Command.Item
                 key={cmd.id}
-                // The machine scores against `value` + `keywords` — the
-                // visible label is what users type, so it must be the
-                // value (ids like "nav:tools" would make matching
-                // depend on internal naming).
+                // The id the frecency engine records selections under.
+                forceId={cmd.id}
+                // The machine scores `value` + `keywords`: the visible
+                // label is what users type, so it is the value.
                 value={cmd.label}
-                keywords={[...cmd.keywords]}
-                onSelect={() => handleSelect(cmd.id)}
+                keywords={cmd.keywords}
+                onSelect={() => {
+                  cmd.action();
+                  onRun();
+                }}
               >
                 {cmd.label}
                 {frecency.has(cmd.id) && (
@@ -283,6 +287,6 @@ export function CommandPalette(): React.ReactElement {
           </Command.Group>
         ))}
       </Command.List>
-    </Command.Dialog>
+    </>
   );
 }

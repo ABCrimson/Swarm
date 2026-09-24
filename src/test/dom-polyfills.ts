@@ -3,9 +3,10 @@
  * yet — `HTMLDialogElement.showModal()/close()` and the Popover API
  * (`showPopover`/`hidePopover`/`togglePopover`, `popovertarget` buttons,
  * `toggle`/`beforetoggle` events, light dismiss on Escape and outside
- * clicks). Import it from test files that exercise native dialogs or
- * popovers; each shim installs only where jsdom lacks the API, so a
- * future jsdom that ships it takes over automatically.
+ * clicks), plus layout-free `ResizeObserver` and `scrollIntoView`
+ * no-ops. Import it from test files that exercise native dialogs,
+ * popovers or layout-observing widgets; each shim installs only where
+ * jsdom lacks the API, so a future jsdom that ships it takes over.
  */
 
 const proto = HTMLElement.prototype as HTMLElement & Record<string, unknown>;
@@ -139,3 +140,16 @@ if (typeof proto.showPopover !== "function") {
     }
   });
 }
+
+// ── ResizeObserver ───────────────────────────────────
+
+// jsdom does no layout, so an observer that never fires is faithful.
+globalThis.ResizeObserver ??= class {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+};
+
+// ── Element.scrollIntoView ───────────────────────────
+
+Element.prototype.scrollIntoView ??= function scrollIntoView(): void {};

@@ -1,4 +1,3 @@
-import { atom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 
 import { settingsStore } from "#lib/lazy-store";
@@ -13,7 +12,9 @@ export interface FrecencyEntry {
 // ── Tauri plugin-store persistence adapter ───────────
 
 /**
- * Persisted atom storing frecency data for command palette ranking.
+ * Persisted atom storing frecency data for command palette ranking —
+ * the backing store of the palette's `modern-cmdk` frecency engine
+ * (`#components/command/CommandPalette`), which computes the scores.
  *
  * Serialised to Tauri plugin-store as an array of `[commandId, FrecencyEntry]` tuples.
  */
@@ -44,22 +45,3 @@ export const frecencyAtom = atomWithStorage<Map<string, FrecencyEntry>>(
     },
   },
 );
-
-/** Derived atom that computes a frecency score for sorting commands. */
-export const frecencyScoreAtom = atom((get) => {
-  const entries = get(frecencyAtom);
-
-  return (commandId: string): number => {
-    const entry = entries.get(commandId);
-    if (!entry) return 0;
-
-    const elapsed = Temporal.Now.instant()
-      .since(Temporal.Instant.from(entry.lastUsed))
-      .total("milliseconds");
-    const hoursAgo = elapsed / (1000 * 60 * 60);
-
-    // Decay factor: halve the score every 72 hours
-    const decay = 2 ** (-hoursAgo / 72);
-    return entry.uses * decay;
-  };
-});
