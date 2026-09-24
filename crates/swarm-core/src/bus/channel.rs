@@ -1,61 +1,19 @@
-//! Core message bus using `tokio::sync::broadcast` channels.
+//! The registry of bus topic names ("channels") in use.
 //!
-//! The [`MessageBus`] manages named topic channels. Workers subscribe
-//! to topics they care about and receive messages through broadcast
-//! receivers. Each topic is backed by a `broadcast::Sender` with a
-//! configurable buffer capacity (default: 256 messages).
+//! Topics are created implicitly by the first send on them, and callers
+//! choose their names — remote clients included — so the registry is
+//! bounded at [`MAX_TOPICS`].
 
-use dashmap::DashMap;
-use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::sync::Arc;
-use tokio::sync::broadcast;
-use uuid::Uuid;
 
-/// Default capacity for broadcast channels.
-const DEFAULT_CHANNEL_CAPACITY: usize = 256;
+use parking_lot::RwLock;
 
-/// A message transmitted through the inter-agent message bus.
-///
-/// Messages carry a JSON payload from one worker to another (direct)
-/// or to all subscribers of a topic (broadcast). The `to_worker` field
-/// distinguishes between targeted and broadcast messages.
-///
-/// # Fields
-///
-/// * `id` - Unique message identifier (UUID v4)
-/// * `from_worker` - UUID of the sending worker
-/// * `to_worker` - Target worker UUID, or `None` for broadcast
-/// * `topic` - The topic channel this message is published to
-/// * `payload` - Arbitrary JSON payload
-/// * `timestamp` - When the message was created
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BusMessage {
-    /// Unique message identifier.
-    pub id: Uuid,
-    /// UUID of the worker that sent this message.
-    pub from_worker: Uuid,
-    /// Target worker UUID. `None` means broadcast to all subscribers.
-    pub to_worker: Option<Uuid>,
-    /// Topic channel this message belongs to.
-    pub topic: String,
-    /// Arbitrary JSON payload.
-    pub payload: serde_json::Value,
-    /// Timestamp when the message was created (Unix milliseconds).
-    pub timestamp: i64,
-}
+/// How many distinct topics the registry holds before refusing a send
+/// on a new one.
+pub const MAX_TOPICS: usize = 1024;
 
-/// Inter-agent message bus backed by `tokio::sync::broadcast` channels.
-///
-/// Each topic maps to a `broadcast::Sender`. Workers subscribe to topics
-/// to receive a `broadcast::Receiver`. Messages are cloned to all active
-/// subscribers on the topic.
-///
-/// # Concurrency
-///
-/// The channel map uses `DashMap` for lock-free concurrent reads. Creating
-/// and removing channels are the only mutating operations on the map itself;
-/// sending and subscribing use the cloneable `broadcast::Sender`.
+/// The shared topic registry. Cloning is one `Arc` bump.
 ///
 /// # Examples
 ///
@@ -63,146 +21,45 @@ pub struct BusMessage {
 /// use swarm_core::bus::channel::MessageBus;
 ///
 /// let bus = MessageBus::new();
-/// bus.create_channel("logs");
-/// let mut rx = bus.subscribe("logs").unwrap();
+/// bus.register("review").unwrap();
+/// bus.register("logs").unwrap();
+/// bus.register("review").unwrap(); // already known: no-op
+/// assert_eq!(bus.list_channels(), ["logs", "review"]);
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct MessageBus {
-    /// Map of topic name to broadcast sender.
-    channels: Arc<DashMap<String, broadcast::Sender<BusMessage>>>,
+    topics: Arc<RwLock<BTreeSet<String>>>,
 }
 
 impl MessageBus {
-    /// Creates a new empty message bus with no topic channels.
-    ///
-    /// # Returns
-    ///
-    /// A `MessageBus` with zero channels.
+    /// An empty registry.
     pub fn new() -> Self {
-        Self {
-            channels: Arc::new(DashMap::new()),
+        Self::default()
+    }
+
+    /// Records that `topic` is in use. Idempotent.
+    ///
+    /// # Errors
+    ///
+    /// A Title Case message when `topic` is new and the registry already
+    /// holds [`MAX_TOPICS`] topics.
+    pub fn register(&self, topic: &str) -> Result<(), String> {
+        if self.topics.read().contains(topic) {
+            return Ok(());
         }
-    }
-
-    /// Creates a new topic channel with the default buffer capacity.
-    ///
-    /// If the channel already exists, this is a no-op.
-    ///
-    /// # Arguments
-    ///
-    /// * `topic` - The name of the topic channel to create
-    pub fn create_channel(&self, topic: &str) {
-        self.channels.entry(topic.to_string()).or_insert_with(|| {
-            let (tx, _) = broadcast::channel(DEFAULT_CHANNEL_CAPACITY);
-            tracing::info!(topic = topic, "bus channel created");
-            tx
-        });
-    }
-
-    /// Sends a message to a specific topic channel.
-    ///
-    /// The message is broadcast to all active subscribers on the topic.
-    /// If no subscribers are listening, the message is dropped silently.
-    ///
-    /// # Arguments
-    ///
-    /// * `msg` - The [`BusMessage`] to send
-    ///
-    /// # Returns
-    ///
-    /// The number of receivers that received the message, or an error
-    /// string if the topic channel does not exist.
-    pub fn send(&self, msg: BusMessage) -> Result<usize, String> {
-        let topic = msg.topic.clone();
-        let entry = self
-            .channels
-            .get(&topic)
-            .ok_or_else(|| format!("bus channel '{}' does not exist", topic))?;
-
-        match entry.send(msg) {
-            Ok(count) => {
-                tracing::debug!(topic = %topic, receivers = count, "bus message sent");
-                Ok(count)
-            }
-            Err(_) => {
-                // No active receivers — not an error, just means nobody is listening
-                tracing::debug!(topic = %topic, "bus message sent but no active receivers");
-                Ok(0)
-            }
+        let mut topics = self.topics.write();
+        if topics.len() >= MAX_TOPICS && !topics.contains(topic) {
+            return Err(format!("Too Many Bus Topics: The Limit Is {MAX_TOPICS}."));
         }
+        if topics.insert(topic.to_owned()) {
+            tracing::debug!(topic, "bus topic registered");
+        }
+        Ok(())
     }
 
-    /// Broadcasts a message from a worker to all subscribers of a topic.
-    ///
-    /// Convenience method that constructs a [`BusMessage`] with `to_worker: None`
-    /// and sends it to the specified topic. Creates the channel if it does not exist.
-    ///
-    /// # Arguments
-    ///
-    /// * `from_worker` - UUID of the sending worker
-    /// * `topic` - Topic to broadcast on
-    /// * `payload` - JSON payload to include in the message
-    ///
-    /// # Returns
-    ///
-    /// The number of receivers that received the message.
-    pub fn broadcast(
-        &self,
-        from_worker: Uuid,
-        topic: &str,
-        payload: serde_json::Value,
-    ) -> Result<usize, String> {
-        self.create_channel(topic);
-
-        let msg = BusMessage {
-            id: Uuid::new_v4(),
-            from_worker,
-            to_worker: None,
-            topic: topic.to_string(),
-            payload,
-            timestamp: crate::clock::unix_millis(),
-        };
-
-        self.send(msg)
-    }
-
-    /// Subscribes to a topic channel and returns a broadcast receiver.
-    ///
-    /// The receiver will get copies of all messages sent to the topic
-    /// after this subscription is created. Creates the channel if it
-    /// does not exist.
-    ///
-    /// # Arguments
-    ///
-    /// * `topic` - The topic to subscribe to
-    ///
-    /// # Returns
-    ///
-    /// A `broadcast::Receiver<BusMessage>` for receiving messages.
-    pub fn subscribe(&self, topic: &str) -> Result<broadcast::Receiver<BusMessage>, String> {
-        self.create_channel(topic);
-
-        let entry = self
-            .channels
-            .get(topic)
-            .ok_or_else(|| format!("bus channel '{}' does not exist", topic))?;
-
-        Ok(entry.subscribe())
-    }
-
-    /// Lists all active topic channel names.
-    ///
-    /// # Returns
-    ///
-    /// A `Vec<String>` of all topic names currently registered.
+    /// Every topic in use, sorted.
     pub fn list_channels(&self) -> Vec<String> {
-        self.channels.iter().map(|e| e.key().clone()).collect()
-    }
-}
-
-impl Default for MessageBus {
-    fn default() -> Self {
-        Self::new()
+        self.topics.read().iter().cloned().collect()
     }
 }
 
@@ -210,66 +67,32 @@ impl Default for MessageBus {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_create_and_list_channels() {
+    #[test]
+    fn test_register_is_idempotent_and_listing_is_sorted() {
         let bus = MessageBus::new();
-        bus.create_channel("topic-a");
-        bus.create_channel("topic-b");
-
-        let channels = bus.list_channels();
-        assert_eq!(channels.len(), 2);
-        assert!(channels.contains(&"topic-a".to_string()));
-        assert!(channels.contains(&"topic-b".to_string()));
+        for topic in ["b", "a", "b", "c"] {
+            bus.register(topic).unwrap();
+        }
+        assert_eq!(bus.list_channels(), ["a", "b", "c"]);
     }
 
-    #[tokio::test]
-    async fn test_send_and_receive() {
+    /// Topics used to be unbounded, each pinning a 256-slot broadcast
+    /// buffer nothing ever read.
+    #[test]
+    fn test_registry_is_bounded_but_known_topics_still_work() {
         let bus = MessageBus::new();
-        bus.create_channel("test-topic");
-
-        let mut rx = bus.subscribe("test-topic").unwrap();
-        let worker_id = Uuid::new_v4();
-
-        let count = bus
-            .broadcast(worker_id, "test-topic", serde_json::json!({"key": "value"}))
-            .unwrap();
-        assert_eq!(count, 1);
-
-        let msg = rx.recv().await.unwrap();
-        assert_eq!(msg.from_worker, worker_id);
-        assert_eq!(msg.topic, "test-topic");
-        assert_eq!(msg.payload, serde_json::json!({"key": "value"}));
-        assert!(msg.to_worker.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_broadcast_creates_channel() {
-        let bus = MessageBus::new();
-        let worker_id = Uuid::new_v4();
-
-        // Subscribe first (auto-creates channel)
-        let mut rx = bus.subscribe("auto-topic").unwrap();
-
-        bus.broadcast(worker_id, "auto-topic", serde_json::json!("hello"))
-            .unwrap();
-
-        let msg = rx.recv().await.unwrap();
-        assert_eq!(msg.payload, serde_json::json!("hello"));
+        for i in 0..MAX_TOPICS {
+            bus.register(&format!("t{i}")).unwrap();
+        }
+        assert!(bus.register("one-too-many").is_err());
+        assert!(bus.register("t0").is_ok(), "an existing topic is not new");
+        assert_eq!(bus.list_channels().len(), MAX_TOPICS);
     }
 
     #[test]
-    fn test_bus_message_serialization() {
-        let msg = BusMessage {
-            id: Uuid::nil(),
-            from_worker: Uuid::nil(),
-            to_worker: None,
-            topic: "test".to_string(),
-            payload: serde_json::json!(42),
-            timestamp: 0,
-        };
-        let json = serde_json::to_string(&msg).expect("serialize");
-        assert!(json.contains("\"fromWorker\""));
-        assert!(json.contains("\"toWorker\""));
-        assert!(json.contains("\"topic\""));
+    fn test_clones_share_one_registry() {
+        let bus = MessageBus::new();
+        bus.clone().register("shared").unwrap();
+        assert_eq!(bus.list_channels(), ["shared"]);
     }
 }
