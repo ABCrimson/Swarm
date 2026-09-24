@@ -774,6 +774,47 @@ mod tests {
         );
     }
 
+    /// CONFIRMED bug: a hard kill left `index.lock` behind and wedged the
+    /// checkout. A timeout now signals the group with `SIGTERM` first,
+    /// so git's own handler deletes the locks it holds. `commit -a`
+    /// holds `index.lock` for as long as its `pre-commit` hook runs
+    /// (verified: a `SIGKILL` at that point leaves the lock on disk),
+    /// which makes it a deterministic lock holder to time out.
+    #[cfg(unix)]
+    #[test]
+    fn test_timeout_mid_commit_leaves_no_index_lock() {
+        let repo = TempRepo::new("cli-timeout-lock");
+        let hooks = repo.base().join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\nsleep 60\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        repo.write("README.md", "changed\n");
+
+        let hooks_path = format!("core.hooksPath={}", hooks.display());
+        let result = run(
+            &args_in(
+                repo.root(),
+                &["-c", &hooks_path, "commit", "-a", "-m", "never lands"],
+            ),
+            Duration::from_secs(2),
+        );
+
+        assert!(
+            matches!(result, Err(AppError::GitTimeout { .. })),
+            "{result:?}"
+        );
+        let index_lock = repo.root().join(".git").join("index.lock");
+        assert!(
+            !index_lock.exists(),
+            "a terminated commit must not leave {} behind",
+            index_lock.display()
+        );
+    }
+
     /// A descendant that inherits git's pipes and outlives it (an ssh
     /// ControlPersist master, a daemonizing hook) must not hold the
     /// caller hostage: output is collected up to the drain grace.
