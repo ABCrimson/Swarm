@@ -130,7 +130,7 @@ describe("AgentChat", () => {
       2,
     );
 
-    const toggle = screen.getByRole("button", { name: "Tool call: run_command" });
+    const toggle = screen.getByRole("button", { name: "Tool Call: run_command, Complete" });
     expect(toggle).toBeInTheDocument();
 
     await user.click(toggle);
@@ -141,8 +141,7 @@ describe("AgentChat", () => {
     expect(screen.getByText("file.txt")).toBeInTheDocument();
   });
 
-  it("shows an is_error tool result via the error status, not the success one", async () => {
-    const user = userEvent.setup();
+  it("shows an is_error tool result via the error status, not the success one", () => {
     render(<AgentChat workerId={WORKER_ID} />);
 
     fire("agent_tool_call", {
@@ -164,10 +163,11 @@ describe("AgentChat", () => {
       2,
     );
 
-    await user.click(screen.getByRole("button", { name: "Tool call: write_file" }));
-
-    expect(screen.getByLabelText("Error")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Complete")).not.toBeInTheDocument();
+    // The status is part of the toggle's accessible name.
+    expect(
+      screen.getByRole("button", { name: "Tool Call: write_file, Error" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /, Complete$/ })).not.toBeInTheDocument();
   });
 
   it("maps a permission denial's denialSubclass to its Title Case label", () => {

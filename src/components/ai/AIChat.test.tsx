@@ -1,131 +1,144 @@
-// ── AIChat cancel-during-agentTurnStarted-await (provenance review fix) ──
-//
-// agent_turn_started's round-trip (webview → Rust → writer thread → back)
-// happens BEFORE the first streaming round starts, and before any
-// streaming content exists — which means the visible Cancel button
-// (rendered only once streamingContent/liveToolCalls are non-empty) isn't
-// reachable yet. The realistic way a turn gets cancelled during that
-// window is unmount (e.g. the user navigates away): the cleanup effect
-// flips TurnToken.cancelled, and doSend must re-check that flag
-// immediately after the await settles — otherwise a cancelled turn falls
-// through into startStream and burns a full round of tokens for a
-// response nobody will see.
+// AIChat renders a worker's thread from #store/message-history while the
+// turn runs in #lib/ai-chat — so the conversation, and a turn still in
+// flight, survive the component unmounting (a tab switch).
 
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { getDefaultStore } from "jotai";
+import { StrictMode } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AIChat } from "#components/ai/AIChat";
+import { cancelChatTurn, isChatTurnRunning } from "#lib/ai-chat";
+import { type ChatResponse, streamMessage } from "#lib/anthropic";
+import { agentTurnStarted } from "#lib/tauri";
+import { useAiStore } from "#store/ai";
+import { useMessageHistoryStore } from "#store/message-history";
+import { selectedModelAtom } from "#store/ui";
 
-const startStreamMock = vi.fn();
-const cancelStreamMock = vi.fn();
-
-vi.mock("#hooks/useAiStream", () => ({
-  useAiStream: () => ({
-    startStream: (...args: unknown[]) => startStreamMock(...args),
-    cancelStream: (...args: unknown[]) => cancelStreamMock(...args),
-    atLimit: false,
-  }),
+vi.mock("#lib/anthropic", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("#lib/anthropic")>()),
+  streamMessage: vi.fn(),
+}));
+vi.mock("#lib/tauri", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("#lib/tauri")>()),
+  agentTurnStarted: vi.fn(),
 }));
 
-// Partial mock: only override agentTurnStarted, keep every other real
-// export (isTauri, invoke, spawnWorker, ...) so #lib/tools/#lib/worker-spawn
-// — imported transitively by AIChat.tsx — keep working exactly as they do
-// outside a Tauri webview (isTauri() -> false, invoke() -> no-op).
-vi.mock("#lib/tauri", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("#lib/tauri")>();
+const W = "worker-1";
+
+function reply(text: string): ChatResponse {
   return {
-    ...actual,
-    agentTurnStarted: vi.fn(),
-  };
-});
-
-import { agentTurnStarted } from "#lib/tauri";
-
-// jsdom does not implement scrollIntoView — AIChat's auto-scroll effect
-// calls it on every render.
-Element.prototype.scrollIntoView = vi.fn();
-
-function submitMessage(text: string): void {
-  const textarea = screen.getByPlaceholderText(/Type A Message/i);
-  fireEvent.change(textarea, { target: { value: text } });
-  const form = textarea.closest("form");
-  if (!form) throw new Error("chat form not found");
-  fireEvent.submit(form);
+    id: "msg_1",
+    type: "message",
+    role: "assistant",
+    model: "claude-opus-5-5",
+    content: [{ type: "text", text, citations: null }],
+    stop_reason: "end_turn",
+    stop_sequence: null,
+    usage: { input_tokens: 1, output_tokens: 1 },
+  } as ChatResponse;
 }
 
-describe("AIChat — cancel during the agentTurnStarted await", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    startStreamMock.mockReset();
-    cancelStreamMock.mockReset();
-    vi.mocked(agentTurnStarted).mockReset();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("never calls startStream when the component unmounts (cancelling the turn) while agentTurnStarted is still pending", async () => {
-    let resolveAgentTurnStarted: (seq: number) => void = () => {};
-    vi.mocked(agentTurnStarted).mockImplementation(
-      () =>
-        new Promise<number>((resolve) => {
-          resolveAgentTurnStarted = resolve;
-        }),
-    );
-    startStreamMock.mockResolvedValue("");
-
-    const { unmount } = render(<AIChat workerId="worker-1" />);
-
-    await act(async () => {
-      submitMessage("hello");
+/** Streams `text`, then waits for `release` before finishing. */
+function scriptReply(text: string) {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  vi.mocked(streamMessage).mockImplementationOnce(async function* (_params, signal) {
+    yield { type: "text", content: text };
+    await new Promise<void>((res, rej) => {
+      signal?.addEventListener("abort", () => rej(signal.reason));
+      void promise.then(res);
     });
+    return reply(text);
+  });
+  return resolve;
+}
 
-    // agentTurnStarted has been called and its promise is still pending —
-    // doSend is parked at `await agentTurnStarted(...)`.
-    expect(agentTurnStarted).toHaveBeenCalledTimes(1);
-    expect(startStreamMock).not.toHaveBeenCalled();
+async function send(text: string): Promise<void> {
+  const user = userEvent.setup();
+  await user.type(screen.getByRole("textbox", { name: /^Message Claude/ }), text);
+  await user.keyboard("{Enter}");
+}
 
-    // Unmount while the round-trip is in flight — the cleanup effect
-    // flips TurnToken.cancelled = true.
+beforeEach(() => {
+  cancelChatTurn(W);
+  useMessageHistoryStore.setState(useMessageHistoryStore.getInitialState(), true);
+  useAiStore.setState(useAiStore.getInitialState(), true);
+  getDefaultStore().set(selectedModelAtom, "opus");
+  vi.mocked(agentTurnStarted).mockResolvedValue(1);
+  vi.mocked(streamMessage).mockReset();
+});
+
+describe("AIChat", () => {
+  it("keeps the transcript and the running turn across an unmount (tab switch)", async () => {
+    const release = scriptReply("Hello there");
+    const { unmount } = render(<AIChat workerId={W} />);
+
+    await send("hi");
+    const log = screen.getByRole("log", { name: /^AI Chat With Claude/ });
+    await within(log).findByText("Hello there");
+
     unmount();
+    expect(isChatTurnRunning(W)).toBe(true);
+    await act(async () => release());
+    await vi.waitFor(() => expect(isChatTurnRunning(W)).toBe(false));
 
-    // Now let the pending agentTurnStarted promise resolve and flush
-    // every pending microtask.
-    await act(async () => {
-      resolveAgentTurnStarted(42);
-      await vi.advanceTimersByTimeAsync(0);
-    });
-
-    expect(startStreamMock).not.toHaveBeenCalled();
+    render(<AIChat workerId={W} />);
+    const remounted = screen.getByRole("log");
+    expect(within(remounted).getByText("hi")).toBeInTheDocument();
+    expect(within(remounted).getByText("Hello there")).toBeInTheDocument();
   });
 
-  it("DOES call startStream when the turn is NOT cancelled during the agentTurnStarted await (control case)", async () => {
-    let resolveAgentTurnStarted: (seq: number) => void = () => {};
-    vi.mocked(agentTurnStarted).mockImplementation(
-      () =>
-        new Promise<number>((resolve) => {
-          resolveAgentTurnStarted = resolve;
-        }),
+  it("renders exactly one assistant bubble per reply under StrictMode", async () => {
+    const release = scriptReply("Only once");
+    render(
+      <StrictMode>
+        <AIChat workerId={W} />
+      </StrictMode>,
     );
-    startStreamMock.mockResolvedValue("");
 
-    render(<AIChat workerId="worker-1" />);
+    await send("hi");
+    await act(async () => release());
+    await vi.waitFor(() => expect(isChatTurnRunning(W)).toBe(false));
 
-    await act(async () => {
-      submitMessage("hello");
+    expect(screen.getAllByText("Only once")).toHaveLength(1);
+    expect(useMessageHistoryStore.getState().getMessages(W)).toHaveLength(2);
+  });
+
+  it("Stop cancels the running turn and clears the input on send", async () => {
+    scriptReply("Streaming…");
+    render(<AIChat workerId={W} />);
+
+    await send("hi");
+    expect(screen.getByRole("textbox", { name: /Message/ })).toHaveValue("");
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Stop" }));
+    await vi.waitFor(() => expect(isChatTurnRunning(W)).toBe(false));
+
+    expect(await screen.findByText("Cancelled")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("announces a failed request as an alert", async () => {
+    vi.mocked(streamMessage).mockImplementationOnce(async function* () {
+      yield* [];
+      throw new Error("boom");
     });
+    render(<AIChat workerId={W} />);
 
-    expect(agentTurnStarted).toHaveBeenCalledTimes(1);
-    expect(startStreamMock).not.toHaveBeenCalled();
+    await send("hi");
 
-    // No cancellation this time — resolve normally and confirm the loop
-    // proceeds into startStream, proving the guard above is specific to
-    // the cancelled case, not a blanket regression that always skips it.
-    await act(async () => {
-      resolveAgentTurnStarted(42);
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("boom");
+  });
 
-    expect(startStreamMock).toHaveBeenCalledTimes(1);
+  it("New Chat forgets the conversation", async () => {
+    const release = scriptReply("Answer");
+    render(<AIChat workerId={W} />);
+    await send("hi");
+    await act(async () => release());
+    await vi.waitFor(() => expect(isChatTurnRunning(W)).toBe(false));
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "New Chat" }));
+
+    expect(screen.queryByText("Answer")).not.toBeInTheDocument();
+    expect(screen.getByText("Send A Message To Start Chatting")).toBeInTheDocument();
   });
 });

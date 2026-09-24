@@ -41,6 +41,15 @@ export const ProviderIdSchema = z.enum([
 ]);
 export type ProviderId = z.infer<typeof ProviderIdSchema>;
 
+/** Title Case display label per provider — the one list every provider-naming UI uses. */
+export const PROVIDER_LABELS: Readonly<Record<ProviderId, string>> = {
+  claude_code: "Claude Code",
+  codex: "Codex",
+  open_code: "Open Code",
+  gemini: "Gemini",
+  webview_anthropic: "Webview Anthropic",
+};
+
 /** Mirrors Rust's `CancelGranularity`. */
 export const CancelGranularitySchema = z.enum(["kill_only", "graceful"]);
 export type CancelGranularity = z.infer<typeof CancelGranularitySchema>;

@@ -1,18 +1,11 @@
-// ── AIMessageStream ─────────────────────────────────
-// Renders streaming AI response incrementally with markdown-like
-// code block rendering, OKLCH syntax highlighting, and cursor animation.
-// Uses React 19 useDeferredValue for responsive UI during rapid updates.
-
 import type { CSSProperties } from "react";
 import { useDeferredValue } from "react";
 
 interface AIMessageStreamProps {
-  /** The raw streaming text content. */
+  /** The raw (possibly still streaming) text content. */
   readonly content: string;
-  /** Whether the stream is still active. */
+  /** Whether more text is still arriving — shows the cursor and marks the block busy. */
   readonly isStreaming: boolean;
-  /** Cancel handler — shown as a button during streaming. */
-  readonly onCancel?: () => void;
 }
 
 // ── Inline Styles (OKLCH) ───────────────────────────
@@ -29,8 +22,7 @@ const containerStyle: CSSProperties = {
   fontSize: 14,
   lineHeight: 1.7,
   whiteSpace: "pre-wrap",
-  wordBreak: "break-word",
-  overflowWrap: "break-word",
+  overflowWrap: "anywhere",
 };
 
 const codeBlockStyle: CSSProperties = {
@@ -64,21 +56,6 @@ const cursorStyle: CSSProperties = {
   background: "oklch(0.78 0.18 205)",
   marginLeft: 2,
   verticalAlign: "text-bottom",
-  animation: "cursor-blink 1s step-end infinite",
-};
-
-const cancelButtonStyle: CSSProperties = {
-  position: "absolute",
-  top: 8,
-  right: 8,
-  padding: "4px 10px",
-  borderRadius: 6,
-  background: "oklch(0.18 0.04 10 / 0.8)",
-  border: "1px solid oklch(0.35 0.10 10)",
-  color: "oklch(0.82 0.15 10)",
-  fontSize: 12,
-  cursor: "pointer",
-  transition: "background 0.15s ease",
 };
 
 const langLabelStyle: CSSProperties = {
@@ -91,9 +68,17 @@ const langLabelStyle: CSSProperties = {
   fontFamily: "var(--font-body, 'DM Sans Variable', system-ui, sans-serif)",
 };
 
+const TOKEN_COLORS = {
+  string: "oklch(0.82 0.18 140)",
+  comment: "oklch(0.55 0.03 220)",
+  number: "oklch(0.82 0.19 70)",
+  keyword: "oklch(0.72 0.20 290)",
+} as const;
+
 // ── Keyword Highlighting ────────────────────────────
 
 const CODE_KEYWORDS = new Set([
+  // JavaScript / TypeScript
   "const",
   "let",
   "var",
@@ -131,8 +116,8 @@ const CODE_KEYWORDS = new Set([
   "undefined",
   "void",
   "never",
+  // Rust
   "fn",
-  "let",
   "mut",
   "pub",
   "struct",
@@ -140,6 +125,7 @@ const CODE_KEYWORDS = new Set([
   "use",
   "mod",
   "match",
+  // Python
   "def",
   "self",
   "None",
@@ -149,63 +135,68 @@ const CODE_KEYWORDS = new Set([
   "lambda",
 ]);
 
-function highlightCodeLine(line: string): React.ReactNode[] {
+/** Languages whose line comments start with `#`; everywhere else `#` is code (`#[derive]`, `#fff`, `#include`). */
+const HASH_COMMENT_LANGUAGES = new Set([
+  "python",
+  "py",
+  "sh",
+  "bash",
+  "zsh",
+  "shell",
+  "console",
+  "yaml",
+  "yml",
+  "toml",
+  "ruby",
+  "rb",
+  "r",
+  "perl",
+  "dockerfile",
+  "powershell",
+  "ps1",
+  "ini",
+  "conf",
+]);
+
+/**
+ * One code line as highlighted spans. Rust lifetimes (`'a`) are matched
+ * before single-quoted strings so they don't swallow the rest of the line.
+ */
+function highlightCodeLine(line: string, language: string | undefined): React.ReactNode[] {
+  const hashComments = language !== undefined && HASH_COMMENT_LANGUAGES.has(language);
+  // The trailing `.` alternative guarantees every character lands in some
+  // token (an unterminated quote would otherwise be skipped by matchAll).
+  const tokenPattern = hashComments
+    ? /(\/\/.*$|(?:^|(?<=\s))#.*$|"(?:[^"\\]|\\.)*"|'[A-Za-z_]\w*\b(?!')|'(?:[^'\\]|\\.)*'|`[^`]*`|\b\w+\b|\d+\.?\d*|[^\w\s"'`]+|\s+|.)/g
+    : /(\/\/.*$|"(?:[^"\\]|\\.)*"|'[A-Za-z_]\w*\b(?!')|'(?:[^'\\]|\\.)*'|`[^`]*`|\b\w+\b|\d+\.?\d*|[^\w\s"'`]+|\s+|.)/g;
   const tokens: React.ReactNode[] = [];
-  // Simple word-boundary tokenizer for keyword highlighting
-  const regex = /(\b\w+\b|"[^"]*"|'[^']*'|`[^`]*`|\/\/.*$|#.*$|\d+\.?\d*|[^\w\s"'`]+|\s+)/g;
-  let key = 0;
+  let index = 0;
 
-  for (const match of line.matchAll(regex)) {
-    const token = match[0];
-    key++;
-
-    // String literals
-    if (
-      (token.startsWith('"') && token.endsWith('"')) ||
-      (token.startsWith("'") && token.endsWith("'")) ||
-      (token.startsWith("`") && token.endsWith("`"))
-    ) {
-      tokens.push(
-        <span key={key} style={{ color: "oklch(0.82 0.18 140)" }}>
-          {token}
-        </span>,
-      );
-      continue;
+  for (const [token] of line.matchAll(tokenPattern)) {
+    const key = index++;
+    let color: string | undefined;
+    if (token.startsWith("//") || (hashComments && token.startsWith("#"))) {
+      color = TOKEN_COLORS.comment;
+    } else if (/^(["`]|'.*'$)/.test(token) && token.length > 1) {
+      color = TOKEN_COLORS.string;
+    } else if (/^\d+\.?\d*$/.test(token)) {
+      color = TOKEN_COLORS.number;
+    } else if (CODE_KEYWORDS.has(token)) {
+      color = TOKEN_COLORS.keyword;
     }
-
-    // Comments
-    if (token.startsWith("//") || token.startsWith("#")) {
-      tokens.push(
-        <span key={key} style={{ color: "oklch(0.55 0.03 220)", fontStyle: "italic" }}>
-          {token}
-        </span>,
-      );
-      continue;
-    }
-
-    // Numbers
-    if (/^\d+\.?\d*$/.test(token)) {
-      tokens.push(
-        <span key={key} style={{ color: "oklch(0.82 0.19 70)" }}>
-          {token}
-        </span>,
-      );
-      continue;
-    }
-
-    // Keywords
-    if (CODE_KEYWORDS.has(token)) {
-      tokens.push(
-        <span key={key} style={{ color: "oklch(0.72 0.20 290)" }}>
-          {token}
-        </span>,
-      );
-      continue;
-    }
-
-    tokens.push(<span key={key}>{token}</span>);
+    tokens.push(
+      <span
+        key={key}
+        style={
+          color
+            ? { color, fontStyle: color === TOKEN_COLORS.comment ? "italic" : undefined }
+            : undefined
+        }
+      >
+        {token}
+      </span>,
+    );
   }
-
   return tokens;
 }
 
@@ -219,133 +210,116 @@ interface ParsedSegment {
   readonly start: number;
 }
 
-function parseContent(raw: string): ParsedSegment[] {
+/**
+ * A fenced code block: any info string (` ```ts title=x `, ` ```c++ `),
+ * LF or CRLF, and — while a reply is still streaming — an unclosed
+ * trailing fence, which renders as code instead of raw backticks.
+ */
+const CODE_FENCE = /```([^\n`]*)\r?\n([\s\S]*?)(?:```|$)/g;
+const INLINE_CODE = /`([^`\n]+)`/g;
+
+function parseInlineCode(text: string, baseOffset: number): ParsedSegment[] {
   const segments: ParsedSegment[] = [];
-  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
-  let lastIndex = 0;
-
-  for (const blockMatch of raw.matchAll(codeBlockRegex)) {
-    // Text before code block
-    const matchIndex = blockMatch.index ?? 0;
-    if (matchIndex > lastIndex) {
-      const textBefore = raw.slice(lastIndex, matchIndex);
-      parseInlineCode(textBefore, segments, lastIndex);
-    }
-
-    segments.push({
-      type: "code_block",
-      content: blockMatch[2],
-      language: blockMatch[1] || undefined,
-      start: matchIndex,
-    });
-
-    lastIndex = matchIndex + blockMatch[0].length;
-  }
-
-  // Remaining text after last code block
-  if (lastIndex < raw.length) {
-    parseInlineCode(raw.slice(lastIndex), segments, lastIndex);
-  }
-
-  return segments;
-}
-
-function parseInlineCode(text: string, segments: ParsedSegment[], baseOffset: number): void {
-  const inlineRegex = /`([^`]+)`/g;
-  let lastIdx = 0;
-
-  for (const inlineMatch of text.matchAll(inlineRegex)) {
-    const matchIndex = inlineMatch.index ?? 0;
-    if (matchIndex > lastIdx) {
+  let last = 0;
+  for (const match of text.matchAll(INLINE_CODE)) {
+    if (match.index > last) {
       segments.push({
         type: "text",
-        content: text.slice(lastIdx, matchIndex),
-        start: baseOffset + lastIdx,
+        content: text.slice(last, match.index),
+        start: baseOffset + last,
       });
     }
     segments.push({
       type: "inline_code",
-      content: inlineMatch[1],
-      start: baseOffset + matchIndex,
+      content: match[1] ?? "",
+      start: baseOffset + match.index,
     });
-    lastIdx = matchIndex + inlineMatch[0].length;
+    last = match.index + match[0].length;
   }
+  if (last < text.length) {
+    segments.push({ type: "text", content: text.slice(last), start: baseOffset + last });
+  }
+  return segments;
+}
 
-  if (lastIdx < text.length) {
-    segments.push({ type: "text", content: text.slice(lastIdx), start: baseOffset + lastIdx });
+export function parseContent(raw: string): ParsedSegment[] {
+  const segments: ParsedSegment[] = [];
+  let last = 0;
+  for (const match of raw.matchAll(CODE_FENCE)) {
+    if (match.index > last) segments.push(...parseInlineCode(raw.slice(last, match.index), last));
+    segments.push({
+      type: "code_block",
+      content: (match[2] ?? "").replace(/\r?\n$/, ""),
+      language: match[1]?.trim().split(/\s+/)[0]?.toLowerCase() || undefined,
+      start: match.index,
+    });
+    last = match.index + match[0].length;
   }
+  if (last < raw.length) segments.push(...parseInlineCode(raw.slice(last), last));
+  return segments;
+}
+
+function CodeBlock({ segment }: { readonly segment: ParsedSegment }): React.ReactElement {
+  const lines: { readonly key: number; readonly text: string }[] = [];
+  let offset = segment.start;
+  for (const text of segment.content.split(/\r?\n/)) {
+    lines.push({ key: offset, text });
+    offset += text.length + 1;
+  }
+  return (
+    <pre style={codeBlockStyle}>
+      {segment.language && <span style={langLabelStyle}>{segment.language}</span>}
+      <code>
+        {lines.map((line) => (
+          <span key={line.key}>
+            {highlightCodeLine(line.text, segment.language)}
+            {"\n"}
+          </span>
+        ))}
+      </code>
+    </pre>
+  );
 }
 
 // ── Component ───────────────────────────────────────
 
 /**
- * Renders streaming AI content with markdown-like formatting.
- *
- * - Code blocks with OKLCH syntax highlighting
- * - Inline code with monospace styling
- * - Animated cursor at end of streaming text
- * - Cancel button visible during active streams
- * - Uses `useDeferredValue` to keep UI responsive during rapid updates
+ * Renders (streaming) AI text with lightweight markdown: fenced code
+ * blocks with OKLCH keyword highlighting and inline code. While
+ * streaming it shows a blinking cursor (a `motion-safe` class, so it
+ * honours reduced motion) and is `aria-busy`; `useDeferredValue` keeps
+ * input responsive while text arrives quickly.
  */
 export function AIMessageStream({
   content,
   isStreaming,
-  onCancel,
 }: AIMessageStreamProps): React.ReactElement {
-  // Defer the content to prevent jank during rapid streaming
   const deferredContent = useDeferredValue(content);
-
   const segments = parseContent(deferredContent);
 
   return (
-    <div style={containerStyle}>
-      {isStreaming && onCancel && (
-        <button
-          type="button"
-          onClick={onCancel}
-          style={cancelButtonStyle}
-          aria-label="Cancel Streaming"
-        >
-          Cancel
-        </button>
-      )}
-
+    <div style={containerStyle} aria-busy={isStreaming || undefined}>
       {segments.map((segment) => {
         switch (segment.type) {
-          case "code_block": {
-            let lineOffset = segment.start;
-            return (
-              <pre key={`seg-${segment.start}`} style={codeBlockStyle}>
-                {segment.language && <span style={langLabelStyle}>{segment.language}</span>}
-                <code>
-                  {segment.content.split("\n").map((line) => {
-                    const lineKey = lineOffset;
-                    lineOffset += line.length + 1;
-                    return (
-                      <span key={`line-${lineKey}`}>
-                        {highlightCodeLine(line)}
-                        {"\n"}
-                      </span>
-                    );
-                  })}
-                </code>
-              </pre>
-            );
-          }
-
+          case "code_block":
+            return <CodeBlock key={`seg-${segment.start}`} segment={segment} />;
           case "inline_code":
             return (
               <code key={`seg-${segment.start}`} style={inlineCodeStyle}>
                 {segment.content}
               </code>
             );
-
           default:
             return <span key={`seg-${segment.start}`}>{segment.content}</span>;
         }
       })}
-
-      {isStreaming && <span style={cursorStyle} aria-hidden="true" />}
+      {isStreaming && (
+        <span
+          className="motion-safe:animate-[cursor-blink_1s_step-end_infinite]"
+          style={cursorStyle}
+          aria-hidden="true"
+        />
+      )}
     </div>
   );
 }

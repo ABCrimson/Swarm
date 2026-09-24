@@ -97,6 +97,7 @@
     "#lib/*": "./src/lib/*.ts",
     "#hooks/*": "./src/hooks/*.ts",
     "#pages/*": "./src/pages/*.tsx",
-    "#styles/*": "./src/styles/*"
+    "#styles/*": "./src/styles/*",
+    "#test/*": "./src/test/*.ts"
   }
 }

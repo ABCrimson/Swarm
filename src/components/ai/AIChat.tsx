@@ -1,70 +1,20 @@
-// ── AIChat ──────────────────────────────────────────
-// Full chat interface for a worker.
-// Message input at bottom, messages scroll up.
-// User messages right-aligned, AI messages left-aligned.
-// Glass-panel OKLCH backgrounds, Suspense boundary.
-
-import { useAtom } from "jotai";
+import { useAtomValue } from "jotai";
 import type { CSSProperties } from "react";
-import { Suspense, startTransition, useEffect, useRef, useState } from "react";
-import { Spinner } from "#components/ui/Spinner";
-import { useAiStream } from "#hooks/useAiStream";
-import { truncateMessages } from "#lib/ai-error";
-import type { StreamParams } from "#lib/anthropic";
-import { estimateTokens } from "#lib/context-manager";
-import { CLAUDE_MODELS, getModelById } from "#lib/models";
-import { agentTurnStarted } from "#lib/tauri";
-import type { ToolProvenance } from "#lib/tools";
-import { executeTool, getAllAnthropicTools } from "#lib/tools";
-import { useAiStore } from "#store/ai";
-import type { AiMessage } from "#store/types";
+import { useState } from "react";
+import { Button } from "#components/ui/Button";
+import { cancelChatTurn, clearChat, sendChatMessage } from "#lib/ai-chat";
+import { CLAUDE_MODELS } from "#lib/models";
+import {
+  type ChatMessage,
+  type ChatNotice,
+  type ChatToolCall,
+  type LiveTurn,
+  useChatThread,
+} from "#store/message-history";
 import { selectedModelAtom } from "#store/ui";
 import { useWorkerAgentStore } from "#store/worker-agents";
 import { AIMessageStream } from "./AIMessageStream.tsx";
 import { ToolCallDisplay } from "./ToolCallDisplay.tsx";
-
-interface AIChatProps {
-  /** Worker ID this chat is attached to. */
-  readonly workerId: string;
-  /**
-   * An instruction to inject into the conversation, e.g. from
-   * WorkerAIPanel's "Inject Instruction" modal. Give each injection a
-   * fresh `id` (even for repeated identical text) so the effect below
-   * fires exactly once per injection.
-   */
-  readonly injectedInstruction?: { readonly id: string; readonly content: string } | null;
-}
-
-// ── Streaming tool-call tracking ─────────────────────
-
-interface LiveToolCall {
-  readonly id: string;
-  readonly name: string;
-  readonly input: Record<string, unknown>;
-  readonly status: "executing" | "complete" | "error";
-  readonly result?: string;
-}
-
-/**
- * Cancellation token for one agentic turn. The stream's AbortController
- * only exists while a round is streaming — between rounds (during tool
- * execution) cancelStream is a silent no-op, so cancel/unmount flip this
- * flag instead and the loop checks it at every await boundary. A new
- * turn gets a fresh token; a superseded turn keeps its own, so a ghost
- * loop can never outlive its cancellation or stomp the next turn's state.
- */
-interface TurnToken {
-  cancelled: boolean;
-}
-
-/** JSON.stringify that never throws (BigInt, circular refs) — a tool result must not abort the turn. */
-function safeJson(value: unknown): string {
-  try {
-    return JSON.stringify(value) ?? "null";
-  } catch {
-    return String(value);
-  }
-}
 
 // ── Styles (OKLCH) ──────────────────────────────────
 
@@ -76,19 +26,30 @@ const chatContainerStyle: CSSProperties = {
   overflow: "hidden",
 };
 
-const messagesAreaStyle: CSSProperties = {
+/**
+ * `column-reverse` keeps the scroll position pinned to the newest
+ * content natively as the transcript grows — and leaves it alone once
+ * the user scrolls up — with no scroll effect.
+ */
+const scrollerStyle: CSSProperties = {
   flex: 1,
   overflowY: "auto",
-  padding: "16px",
   display: "flex",
-  flexDirection: "column",
-  gap: 12,
+  flexDirection: "column-reverse",
   scrollbarWidth: "thin",
   scrollbarColor: "oklch(0.28 0.05 220) oklch(0 0 0 / 0)",
 };
 
+const messagesStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+  padding: 16,
+};
+
 const inputAreaStyle: CSSProperties = {
   display: "flex",
+  alignItems: "flex-end",
   gap: 8,
   padding: "12px 16px",
   borderTop: "1px solid oklch(0.22 0.04 220)",
@@ -98,32 +59,16 @@ const inputAreaStyle: CSSProperties = {
 
 const textareaStyle: CSSProperties = {
   flex: 1,
+  height: "auto",
   padding: "10px 14px",
-  borderRadius: 8,
-  border: "1px solid oklch(0.28 0.05 220)",
   background: "oklch(0.12 0.03 220)",
   color: "oklch(0.88 0.03 220)",
-  fontFamily: "var(--font-body, 'DM Sans Variable', system-ui, sans-serif)",
   fontSize: 14,
   lineHeight: 1.5,
   resize: "none",
-  outline: "none",
+  fieldSizing: "content",
   minHeight: 42,
   maxHeight: 160,
-  transition: "border-color 0.15s ease",
-};
-
-const sendButtonStyle: CSSProperties = {
-  padding: "10px 20px",
-  borderRadius: 8,
-  border: "none",
-  background: "oklch(0.78 0.18 205)",
-  color: "oklch(0.10 0.03 205)",
-  fontWeight: 600,
-  fontSize: 14,
-  cursor: "pointer",
-  transition: "background 0.15s ease, opacity 0.15s ease",
-  alignSelf: "flex-end",
 };
 
 const userBubbleStyle: CSSProperties = {
@@ -137,7 +82,7 @@ const userBubbleStyle: CSSProperties = {
   fontSize: 14,
   lineHeight: 1.6,
   whiteSpace: "pre-wrap",
-  wordBreak: "break-word",
+  overflowWrap: "anywhere",
 };
 
 const assistantBubbleStyle: CSSProperties = {
@@ -148,10 +93,25 @@ const assistantBubbleStyle: CSSProperties = {
   gap: 4,
 };
 
-const timestampStyle: CSSProperties = {
+const metaStyle: CSSProperties = {
   fontSize: 11,
   color: "oklch(0.55 0.03 220)",
   marginTop: 4,
+};
+
+const thinkingStyle: CSSProperties = {
+  fontSize: 12.5,
+  lineHeight: 1.5,
+  color: "oklch(0.60 0.03 220)",
+  fontStyle: "italic",
+  whiteSpace: "pre-wrap",
+  overflowWrap: "anywhere",
+};
+
+const NOTICE_COLORS: Record<ChatNotice["tone"], string> = {
+  info: "oklch(0.62 0.04 220)",
+  warning: "oklch(0.82 0.16 75)",
+  error: "oklch(0.78 0.16 20)",
 };
 
 const emptyStateStyle: CSSProperties = {
@@ -159,598 +119,195 @@ const emptyStateStyle: CSSProperties = {
   flexDirection: "column",
   alignItems: "center",
   justifyContent: "center",
-  flex: 1,
+  minHeight: 160,
   gap: 8,
   color: "oklch(0.55 0.06 205)",
   fontSize: 14,
 };
 
-const loadingFallbackStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  height: "100%",
-  background: "oklch(0.08 0.02 220)",
+const errorStyle: CSSProperties = {
+  padding: "10px 14px",
+  borderRadius: 8,
+  background: "oklch(0.14 0.06 10 / 0.6)",
+  border: "1px solid oklch(0.35 0.10 10)",
+  color: "oklch(0.82 0.15 10)",
+  fontSize: 13,
 };
 
-// ── Message Bubble ──────────────────────────────────
+/** Bubble timestamps, e.g. "14:05" — one formatter for every message. */
+const TIME_FORMAT = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 
-function MessageBubble({ message }: { message: AiMessage }): React.ReactElement {
-  const time = new Date(message.timestamp).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+function formatTime(timestamp: string): string {
+  return TIME_FORMAT.format(Temporal.Instant.from(timestamp).epochMilliseconds);
+}
+
+// ── Pieces ──────────────────────────────────────────
+
+function toolStatus(call: ChatToolCall): "executing" | "complete" | "error" {
+  if (call.result === undefined) return "executing";
+  return call.isError ? "error" : "complete";
+}
+
+function ToolCalls({ calls }: { readonly calls: readonly ChatToolCall[] }): React.ReactNode {
+  return calls.map((call) => (
+    <ToolCallDisplay
+      key={call.id}
+      name={call.name}
+      input={call.input}
+      result={call.result}
+      status={toolStatus(call)}
+    />
+  ));
+}
+
+function Thinking({
+  text,
+  open,
+}: {
+  readonly text: string;
+  readonly open?: boolean;
+}): React.ReactElement {
+  return (
+    <details open={open}>
+      <summary style={{ ...metaStyle, marginTop: 0, cursor: "pointer" }}>Thinking</summary>
+      <div style={thinkingStyle}>{text}</div>
+    </details>
+  );
+}
+
+function MessageBubble({ message }: { readonly message: ChatMessage }): React.ReactElement {
+  const time = formatTime(message.timestamp);
 
   if (message.role === "user") {
     return (
       <div style={userBubbleStyle}>
         <div>{message.content}</div>
-        <div style={{ ...timestampStyle, textAlign: "right" }}>{time}</div>
+        <div style={{ ...metaStyle, textAlign: "right" }}>{time}</div>
       </div>
     );
   }
 
   return (
     <div style={assistantBubbleStyle}>
+      {message.thinking && <Thinking text={message.thinking} />}
       {message.content && <AIMessageStream content={message.content} isStreaming={false} />}
-      {message.toolCalls?.map((tc) => (
-        <ToolCallDisplay
-          key={tc.id ?? `${message.id}-tool-${tc.name}-${JSON.stringify(tc.input)}`}
-          name={tc.name}
-          input={tc.input}
-          result={tc.result}
-          status={tc.result !== undefined ? "complete" : "executing"}
-        />
-      ))}
-      <div style={timestampStyle}>{time}</div>
+      {message.toolCalls && <ToolCalls calls={message.toolCalls} />}
+      {message.notice && (
+        <div style={{ fontSize: 12, color: NOTICE_COLORS[message.notice.tone] }}>
+          {message.notice.text}
+        </div>
+      )}
+      <div style={metaStyle}>
+        {time}
+        {message.servedBy && ` · Answered By ${message.servedBy} (Refusal Fallback)`}
+      </div>
     </div>
   );
 }
 
-// ── Chat Content ────────────────────────────────────
+function LiveBubble({ live }: { readonly live: LiveTurn }): React.ReactElement {
+  const idle = !live.text && !live.thinking && live.toolCalls.length === 0;
+  return (
+    <div style={assistantBubbleStyle} aria-busy="true">
+      {live.phase === "queued" && <div style={metaStyle}>Waiting For A Free Stream Slot…</div>}
+      {live.thinking && <Thinking text={live.thinking} open={!live.text} />}
+      {live.text && <AIMessageStream content={live.text} isStreaming />}
+      <ToolCalls calls={live.toolCalls} />
+      {live.phase !== "queued" && idle && <div style={metaStyle}>Thinking…</div>}
+    </div>
+  );
+}
 
-function AIChatContent({ workerId, injectedInstruction }: AIChatProps): React.ReactElement {
-  const [selectedModel] = useAtom(selectedModelAtom);
-  const { startStream, cancelStream, atLimit } = useAiStream();
-  const enqueue = useAiStore((s) => s.enqueue);
-  const dequeue = useAiStore((s) => s.dequeue);
+// ── Component ───────────────────────────────────────
 
-  // Agent metadata (role/model/systemPrompt) set at spawn time for a
-  // worker created from a session template (see #lib/worker-spawn) —
-  // never sent to Rust, read here to make the template's config real:
-  // resolved into this worker's effective model below and injected as
-  // the system prompt on every stream request for this worker's chat.
-  const agentMetadata = useWorkerAgentStore((s) => s.metadata.get(workerId));
+interface AIChatProps {
+  /** Worker this chat belongs to. */
+  readonly workerId: string;
+}
 
-  // The effective model for this worker's requests: the template's
-  // pinned model if this worker has one, else the user's global
-  // selection. Resolved fresh at request time rather than written back
-  // into `selectedModelAtom` — that atom is `atomWithStorage`, shared
-  // (and persisted to disk) across every worker's chat and Settings, so
-  // writing it here would revert the user's manual choice — and
-  // silently persist a worker-specific value — every time this
-  // component remounts (e.g. switching Workers.tsx's Detail/AI tab).
-  // #lib/models remains the single source of truth for IDs/context
-  // windows either way.
-  const effectiveModelKey = agentMetadata?.model ?? selectedModel;
-  const modelId = CLAUDE_MODELS[effectiveModelKey].id;
+/**
+ * The webview AI chat for one worker: the transcript (user and assistant
+ * bubbles, summarized thinking, tool calls with their results, notices),
+ * the in-flight turn as it streams, and the message input.
+ *
+ * All conversation state lives in the worker's thread
+ * (`#store/message-history`) and every turn runs in `#lib/ai-chat`, so
+ * unmounting this component — switching tabs — neither loses the
+ * conversation nor cancels a running turn. The transcript is a polite
+ * live region (`role="log"`); the streaming bubble is `aria-busy` until
+ * it commits.
+ */
+export function AIChat({ workerId }: AIChatProps): React.ReactElement {
+  const thread = useChatThread(workerId);
+  const selectedModel = useAtomValue(selectedModelAtom);
+  const pinnedModel = useWorkerAgentStore((s) => s.metadata.get(workerId)?.model);
+  const model = CLAUDE_MODELS[pinnedModel ?? selectedModel];
+  const [draftEmpty, setDraftEmpty] = useState(true);
+  const busy = thread.live !== null;
 
-  const [messages, setMessages] = useState<AiMessage[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [streamingContent, setStreamingContent] = useState("");
-  const [liveToolCalls, setLiveToolCalls] = useState<LiveToolCall[]>([]);
-
-  const [inputValue, setInputValue] = useState("");
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
-  const activeItemIdRef = useRef<string | null>(null);
-  const activeTurnRef = useRef<TurnToken | null>(null);
-  const finishedToolCallsRef = useRef<AiMessage["toolCalls"]>([]);
-  const lastInjectionIdRef = useRef<string | undefined>(undefined);
-
-  // Unmount must stop the agentic loop outright: useAiStream's own
-  // cleanup only aborts a currently-streaming round — without this, a
-  // turn unmounted during tool execution would keep executing tools and
-  // streaming further rounds headless.
-  useEffect(() => {
-    return () => {
-      if (activeTurnRef.current) activeTurnRef.current.cancelled = true;
-    };
-  }, []);
-
-  // Latest-ref pattern: lets the injection effect below call the current
-  // `doSend` without listing it as a dependency (it is a plain function
-  // re-created every render, not memoized — house rules disallow useCallback).
-  const doSendRef = useRef<(content: string) => void>(() => {});
-
-  const doSend = (content: string) => {
-    const trimmed = content.trim();
-    if (!trimmed || isStreaming) return;
-
-    const userMessage: AiMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: trimmed,
-      timestamp: new Date().toISOString(),
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
-    setError(null);
-    setIsStreaming(true);
-    setStreamingContent("");
-    setLiveToolCalls([]);
-    finishedToolCallsRef.current = [];
-
-    const itemId = crypto.randomUUID();
-    activeItemIdRef.current = itemId;
-    const turn: TurnToken = { cancelled: false };
-    activeTurnRef.current = turn;
-    enqueue({
-      id: itemId,
-      priority: "normal",
-      workerId,
-      messages: [],
-      status: "pending",
-    });
-
-    const apiMessages = [...messagesRef.current, userMessage].map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
-    // The system prompt (when this worker has one) occupies part of the
-    // context window too, even though it's passed to the API separately
-    // from `messages` — shrink the truncation budget by its estimated
-    // size so a large template systemPrompt can't push the real request
-    // over the model's context window after truncateMessages "fits" it.
-    const systemPromptTokens = agentMetadata?.systemPrompt
-      ? estimateTokens(agentMetadata.systemPrompt)
-      : 0;
-    const truncated = truncateMessages(
-      apiMessages,
-      (getModelById(modelId)?.contextWindow ?? 200_000) - systemPromptTokens,
-    );
-
-    let buffer = "";
-    let rafId = 0;
-    const flushBuffer = () => {
-      if (buffer) {
-        const chunk = buffer;
-        buffer = "";
-        setStreamingContent((prev) => prev + chunk);
-      }
-      rafId = 0;
-    };
-
-    void (async () => {
-      // Agentic tool loop: stream → execute any tool calls (built-ins via
-      // the registry, custom tools in their sandbox) → report tool_result
-      // blocks back to the model → stream again, until the model answers
-      // without tools or the round cap is hit. The cap bounds runaway
-      // tool chains; the final round's calls still execute and display,
-      // the model just doesn't get to react to them.
-      const MAX_TOOL_ROUNDS = 4;
-
-      try {
-        const tools = getAllAnthropicTools();
-        let convo: StreamParams["messages"] = truncated;
-        let allText = "";
-
-        // One agent_turn_started per turn, before round 0 — the
-        // resulting seq (turnSeq) lives in this closure alongside the
-        // TurnToken and is cited as causeSeq on every tool execution
-        // below. A failure here (e.g. no Tauri IPC bridge) degrades to
-        // an unattributed-by-seq turn rather than aborting the turn —
-        // originWorker (this worker's own id) is still real and useful
-        // on its own.
-        let turnSeq: number | undefined;
-        try {
-          turnSeq = await agentTurnStarted(workerId, modelId, itemId);
-        } catch (err) {
-          console.error(
-            "AIChat: agentTurnStarted failed — this turn's tool calls will carry no causeSeq",
-            err,
-          );
-        }
-        const turnProvenance: ToolProvenance = { originWorker: workerId, causeSeq: turnSeq };
-
-        // Re-check immediately after the agentTurnStarted round-trip: a
-        // Cancel click during that await flips turn.cancelled but has no
-        // live stream to abort yet (cancelStream is a no-op between
-        // rounds — see TurnToken's doc), so without this check a cancel
-        // here would fall straight through into startStream and burn a
-        // full round of tokens on a turn the user already cancelled.
-        // Nothing has streamed yet, so there's no partial content to
-        // commit — the finally block below still runs its normal cleanup.
-        if (turn.cancelled) {
-          return;
-        }
-
-        for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-          const roundCalls: { id: string; name: string; input: Record<string, unknown> }[] = [];
-
-          const roundText = await startStream(
-            itemId,
-            {
-              model: modelId,
-              maxTokens: 4096,
-              messages: convo,
-              tools,
-              system: agentMetadata?.systemPrompt,
-            },
-            (delta) => {
-              if (turn.cancelled) return;
-              if (delta.toolUse) {
-                const toolUse = delta.toolUse;
-                if (!toolUse.complete) {
-                  setLiveToolCalls((prev) =>
-                    prev.some((tc) => tc.id === toolUse.id)
-                      ? prev
-                      : [
-                          ...prev,
-                          {
-                            id: toolUse.id,
-                            name: toolUse.toolName,
-                            input: {},
-                            status: "executing",
-                          },
-                        ],
-                  );
-                  return;
-                }
-
-                let parsedInput: Record<string, unknown> = {};
-                try {
-                  parsedInput = toolUse.partialInput
-                    ? (JSON.parse(toolUse.partialInput) as Record<string, unknown>)
-                    : {};
-                } catch {
-                  // Malformed partial JSON — display an empty input rather than crash.
-                }
-
-                roundCalls.push({ id: toolUse.id, name: toolUse.toolName, input: parsedInput });
-                finishedToolCallsRef.current = [
-                  ...(finishedToolCallsRef.current ?? []),
-                  { id: toolUse.id, name: toolUse.toolName, input: parsedInput },
-                ];
-                setLiveToolCalls((prev) =>
-                  prev.map((tc) => (tc.id === toolUse.id ? { ...tc, input: parsedInput } : tc)),
-                );
-                return;
-              }
-
-              if (delta.content) {
-                buffer += delta.content;
-                if (!rafId) {
-                  rafId = requestAnimationFrame(flushBuffer);
-                }
-              }
-            },
-            { holdCompletion: true },
-          );
-          allText += allText && roundText ? `\n\n${roundText}` : roundText;
-
-          if (roundCalls.length === 0) break;
-
-          // Stop before executing tools when the turn was cancelled
-          // (Cancel button/unmount flip the token; AIQueue's Cancel
-          // dequeues the item, cancelStream marks it error) — executing
-          // side-effectful tools after a cancel is never acceptable.
-          const queueItem = useAiStore.getState().queue.find((q) => q.id === itemId);
-          if (turn.cancelled || !queueItem || queueItem.status === "error") {
-            break;
-          }
-
-          const results: { call: (typeof roundCalls)[number]; ok: boolean; text: string }[] = [];
-          for (const call of roundCalls) {
-            if (turn.cancelled) break;
-            const result = await executeTool(call.name, call.input, turnProvenance);
-            const text = result.success
-              ? safeJson(result.data ?? null)
-              : (result.error ?? "Unknown Error");
-            results.push({ call, ok: result.success, text });
-
-            finishedToolCallsRef.current = (finishedToolCallsRef.current ?? []).map((tc) =>
-              tc.id === call.id ? { ...tc, result: text } : tc,
-            );
-            setLiveToolCalls((prev) =>
-              prev.map((tc) =>
-                tc.id === call.id
-                  ? { ...tc, status: result.success ? "complete" : "error", result: text }
-                  : tc,
-              ),
-            );
-          }
-
-          if (turn.cancelled || round === MAX_TOOL_ROUNDS) break;
-
-          convo = [
-            ...convo,
-            {
-              role: "assistant",
-              content: [
-                ...(roundText ? [{ type: "text" as const, text: roundText }] : []),
-                ...roundCalls.map((c) => ({
-                  type: "tool_use" as const,
-                  id: c.id,
-                  name: c.name,
-                  input: c.input,
-                })),
-              ],
-            },
-            {
-              role: "user",
-              content: results.map((r) => ({
-                type: "tool_result" as const,
-                tool_use_id: r.call.id,
-                content: r.text,
-                is_error: !r.ok,
-              })),
-            },
-          ];
-
-          // Visual separation before the next round's streamed text.
-          if (roundText) buffer += "\n\n";
-        }
-
-        if (rafId) cancelAnimationFrame(rafId);
-        flushBuffer();
-
-        // A cancelled turn already committed its partial in handleCancel
-        // (or unmounted) — committing again would duplicate the bubble.
-        if (!turn.cancelled) {
-          useAiStore.getState().updateItemStatus(itemId, "complete");
-          startTransition(() => {
-            setStreamingContent((finalContent) => {
-              if (finalContent || finishedToolCallsRef.current?.length) {
-                const assistantMessage: AiMessage = {
-                  id: crypto.randomUUID(),
-                  role: "assistant",
-                  content: finalContent || allText,
-                  timestamp: new Date().toISOString(),
-                  toolCalls: finishedToolCallsRef.current?.length
-                    ? finishedToolCallsRef.current
-                    : undefined,
-                };
-                setMessages((prev) => [...prev, assistantMessage]);
-              }
-              return "";
-            });
-            setLiveToolCalls([]);
-          });
-        }
-      } catch (err) {
-        if (rafId) cancelAnimationFrame(rafId);
-        flushBuffer();
-
-        // Commit whatever already streamed in — a failure on round 3
-        // must not discard the rounds the user already watched — then
-        // surface the error under it.
-        if (!turn.cancelled) {
-          startTransition(() => {
-            setStreamingContent((partial) => {
-              if (partial || finishedToolCallsRef.current?.length) {
-                const partialMessage: AiMessage = {
-                  id: crypto.randomUUID(),
-                  role: "assistant",
-                  content: partial,
-                  timestamp: new Date().toISOString(),
-                  toolCalls: finishedToolCallsRef.current?.length
-                    ? finishedToolCallsRef.current
-                    : undefined,
-                };
-                setMessages((prev) => [...prev, partialMessage]);
-              }
-              return "";
-            });
-            setLiveToolCalls([]);
-          });
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      } finally {
-        if (rafId) cancelAnimationFrame(rafId);
-        dequeue(itemId);
-        // A new turn may have started after this one was cancelled —
-        // never stomp its live state.
-        if (activeTurnRef.current === turn) {
-          setIsStreaming(false);
-          activeItemIdRef.current = null;
-          activeTurnRef.current = null;
-        }
-      }
-    })();
-  };
-  doSendRef.current = doSend;
-
-  // Fire an injected instruction exactly once per unique injection id.
-  useEffect(() => {
-    if (!injectedInstruction || injectedInstruction.id === lastInjectionIdRef.current) return;
-    lastInjectionIdRef.current = injectedInstruction.id;
-    doSendRef.current(injectedInstruction.content);
-  }, [injectedInstruction]);
-
-  // Auto-scroll to bottom on new messages or streaming content growth.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: deps are intentionally used only as scroll triggers, not read in the effect body
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, streamingContent, liveToolCalls.length]);
-
-  // Auto-resize textarea
-  const handleTextareaInput = () => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-  };
-
-  const doSubmit = () => {
-    const trimmed = inputValue.trim();
-    if (!trimmed || isStreaming) return;
-
-    startTransition(() => {
-      doSend(trimmed);
-      setInputValue("");
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
-      }
-    });
-  };
-
-  const handleSubmit = (e: React.SubmitEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    doSubmit();
+  const send = (formData: FormData) => {
+    if (sendChatMessage(workerId, String(formData.get("message") ?? ""))) {
+      setDraftEmpty(true);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      doSubmit();
-    }
-  };
-
-  const handleCancel = () => {
-    // Flag first: between rounds there is no live AbortController for
-    // cancelStream to abort, so the token is what actually stops the
-    // loop (tool execution and further rounds).
-    if (activeTurnRef.current) {
-      activeTurnRef.current.cancelled = true;
-    }
-    if (activeItemIdRef.current) {
-      cancelStream(activeItemIdRef.current);
-    }
-    setIsStreaming(false);
-
-    setStreamingContent((partial) => {
-      if (partial) {
-        const partialMessage: AiMessage = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: `${partial}\n\n[Cancelled]`,
-          timestamp: new Date().toISOString(),
-          toolCalls: finishedToolCallsRef.current?.length
-            ? finishedToolCallsRef.current
-            : undefined,
-        };
-        startTransition(() => {
-          setMessages((prev) => [...prev, partialMessage]);
-        });
-      }
-      return "";
-    });
-    setLiveToolCalls([]);
+    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    if (!busy && !draftEmpty) e.currentTarget.form?.requestSubmit();
   };
 
   return (
     <div style={chatContainerStyle}>
-      <div style={messagesAreaStyle}>
-        {messages.length === 0 && !isStreaming && (
-          <div style={emptyStateStyle}>
-            <span style={{ fontSize: 24, opacity: 0.5 }}>AI</span>
-            <span>Send A Message To Start Chatting</span>
-          </div>
-        )}
-
-        {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} />
-        ))}
-
-        {isStreaming && (streamingContent || liveToolCalls.length > 0) && (
-          <div style={assistantBubbleStyle}>
-            {streamingContent && (
-              <AIMessageStream
-                content={streamingContent}
-                isStreaming={true}
-                onCancel={handleCancel}
-              />
-            )}
-            {liveToolCalls.map((tc) => (
-              <ToolCallDisplay
-                key={tc.id}
-                name={tc.name}
-                input={tc.input}
-                result={tc.result}
-                status={tc.status}
-              />
-            ))}
-          </div>
-        )}
-
-        {error && (
-          <div
-            style={{
-              padding: "10px 14px",
-              borderRadius: 8,
-              background: "oklch(0.14 0.06 10 / 0.6)",
-              border: "1px solid oklch(0.35 0.10 10)",
-              color: "oklch(0.82 0.15 10)",
-              fontSize: 13,
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
+      {/* Chromium (WebView2) makes scroll containers keyboard-focusable natively. */}
+      <div role="log" aria-label={`AI Chat With ${model.label}`} style={scrollerStyle}>
+        <div style={messagesStyle}>
+          {thread.messages.length === 0 && !busy && (
+            <div style={emptyStateStyle}>
+              <span style={{ fontSize: 24, opacity: 0.5 }}>AI</span>
+              <span>Send A Message To Start Chatting</span>
+            </div>
+          )}
+          {thread.messages.map((message) => (
+            <MessageBubble key={message.id} message={message} />
+          ))}
+          {thread.live && <LiveBubble live={thread.live} />}
+          {thread.error && (
+            <div role="alert" style={errorStyle}>
+              {thread.error}
+            </div>
+          )}
+        </div>
       </div>
 
-      <form onSubmit={handleSubmit} style={inputAreaStyle}>
+      <form action={send} style={inputAreaStyle}>
         <textarea
-          ref={textareaRef}
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onInput={handleTextareaInput}
-          onKeyDown={handleKeyDown}
-          placeholder={
-            atLimit && !isStreaming
-              ? "Concurrent Stream Limit Reached…"
-              : "Type A Message... (Shift+Enter For Newline)"
-          }
+          name="message"
+          className="swarm-input"
+          aria-label={`Message ${model.label}`}
+          placeholder="Type A Message… (Shift+Enter For A New Line)"
           rows={1}
           style={textareaStyle}
-          disabled={isStreaming}
+          onInput={(e) => setDraftEmpty(!e.currentTarget.value.trim())}
+          onKeyDown={handleKeyDown}
         />
-        <button
-          type="submit"
-          disabled={!inputValue.trim() || isStreaming}
-          style={{
-            ...sendButtonStyle,
-            opacity: !inputValue.trim() || isStreaming ? 0.5 : 1,
-            cursor: !inputValue.trim() || isStreaming ? "not-allowed" : "pointer",
-          }}
-        >
-          {isStreaming ? "Streaming..." : "Send"}
-        </button>
+        {busy ? (
+          <Button variant="danger" onClick={() => cancelChatTurn(workerId)}>
+            Stop
+          </Button>
+        ) : (
+          <>
+            {thread.messages.length > 0 && (
+              <Button variant="ghost" onClick={() => clearChat(workerId)}>
+                New Chat
+              </Button>
+            )}
+            <Button type="submit" variant="primary" disabled={draftEmpty}>
+              Send
+            </Button>
+          </>
+        )}
       </form>
     </div>
-  );
-}
-
-// ── Exported with Suspense ──────────────────────────
-
-/**
- * Full AI chat interface for a worker.
- *
- * - Messages scroll up, input at bottom
- * - User messages right-aligned, AI left-aligned
- * - Glass-panel OKLCH styling
- * - Auto-scroll on new messages and growing streamed content
- * - Suspense boundary for loading states
- * - Streams through `useAiStream`, so queue item status and
- *   `activeStreams` (shown by AIQueue) stay accurate
- * - Renders `tool_use` content blocks via ToolCallDisplay
- */
-export function AIChat({ workerId, injectedInstruction }: AIChatProps): React.ReactElement {
-  return (
-    <Suspense
-      fallback={
-        <div style={loadingFallbackStyle}>
-          <Spinner size="lg" />
-        </div>
-      }
-    >
-      <AIChatContent workerId={workerId} injectedInstruction={injectedInstruction} />
-    </Suspense>
   );
 }

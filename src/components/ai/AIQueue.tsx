@@ -1,8 +1,4 @@
-// ── AIQueue ─────────────────────────────────────────
-// Visual queue display with position indicators, priority badges,
-// estimated wait times, and cancel functionality.
-
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import type { CSSProperties } from "react";
 import type { PillTone } from "#components/ui/Pill";
 import { Pill } from "#components/ui/Pill";
@@ -32,6 +28,7 @@ const headerStyle: CSSProperties = {
 };
 
 const headerTitleStyle: CSSProperties = {
+  margin: 0,
   fontSize: 13,
   fontWeight: 600,
   color: "oklch(0.78 0.04 220)",
@@ -72,12 +69,6 @@ const positionStyle: CSSProperties = {
   flexShrink: 0,
 };
 
-const waitEstimateStyle: CSSProperties = {
-  fontSize: 11,
-  color: "oklch(0.55 0.03 220)",
-  fontFamily: "var(--font-mono, 'JetBrains Mono Variable', 'Fira Code', monospace)",
-};
-
 const emptyStyle: CSSProperties = {
   textAlign: "center",
   padding: "16px 0",
@@ -87,135 +78,132 @@ const emptyStyle: CSSProperties = {
 
 // ── Priority Badge ──────────────────────────────────
 
-const PRIORITY_TONE: Record<string, PillTone> = {
+const PRIORITY_TONE = {
   critical: "danger",
   high: "warning",
   normal: "info",
   low: "neutral",
-};
+} as const satisfies Record<AiQueueItem["priority"], PillTone>;
 
-function PriorityBadge({ priority }: { priority: string }): React.ReactElement {
-  return (
-    <Pill tone={PRIORITY_TONE[priority] ?? "info"} size="sm" style={{ textTransform: "uppercase" }}>
-      {priority}
-    </Pill>
-  );
-}
+const PRIORITY_LABEL = {
+  critical: "Critical",
+  high: "High",
+  normal: "Normal",
+  low: "Low",
+} as const satisfies Record<AiQueueItem["priority"], string>;
 
 // ── Status Label ────────────────────────────────────
 
-function StatusLabel({ status }: { status: AiQueueItem["status"] }): React.ReactElement {
+function StatusLabel({
+  status,
+  waitPosition,
+}: {
+  readonly status: AiQueueItem["status"];
+  /** 1-based place among waiting items, for `pending` ones. */
+  readonly waitPosition: number;
+}): React.ReactElement {
   switch (status) {
     case "streaming":
       return (
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
           <Spinner size="sm" />
-          <span style={{ fontSize: 11, color: "oklch(0.78 0.18 205)" }}>Streaming</span>
+          <span style={{ fontSize: 11, color: "oklch(0.78 0.18 205)" }}>Running</span>
         </span>
       );
     case "pending":
-      return <span style={{ fontSize: 11, color: "oklch(0.55 0.04 220)" }}>Pending</span>;
+      return (
+        <span style={{ fontSize: 11, color: "oklch(0.55 0.04 220)" }}>
+          Waiting · #{waitPosition} In Line
+        </span>
+      );
     case "complete":
-      return <span style={{ fontSize: 11, color: "oklch(0.82 0.18 140)" }}>{"\u2713"} Done</span>;
+      return <span style={{ fontSize: 11, color: "oklch(0.82 0.18 140)" }}>✓ Done</span>;
     case "error":
-      return <span style={{ fontSize: 11, color: "oklch(0.72 0.20 10)" }}>{"\u2717"} Error</span>;
+      return <span style={{ fontSize: 11, color: "oklch(0.72 0.20 10)" }}>✗ Error</span>;
   }
-}
-
-// ── Average Completion Tracker ──────────────────────
-
-/** Rough average seconds per request for wait estimation. */
-const AVG_COMPLETION_SECONDS = 12;
-
-function formatWait(position: number): string {
-  const secs = position * AVG_COMPLETION_SECONDS;
-  if (secs < 60) return `~${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const remainSecs = secs % 60;
-  return remainSecs > 0 ? `~${mins}m ${remainSecs}s` : `~${mins}m`;
 }
 
 // ── Component ───────────────────────────────────────
 
+interface AIQueueProps {
+  /** Shows only this worker's items; omitted, the whole queue. */
+  readonly workerId?: string;
+}
+
 /**
- * Visual AI request queue display.
- *
- * - Position indicators for each queued item
- * - Priority badges with OKLCH color coding
- * - Estimated wait times based on average completion
- * - Cancel individual items
- * - Concurrent stream count display
+ * The webview AI request queue: each chat turn with its priority, state
+ * (waiting for a stream slot, or running) and place in line, plus the
+ * slots in use against the concurrent limit. Cancel aborts the turn
+ * itself — its stream, or its tool calls between rounds — not just the
+ * queue entry.
  */
-export function AIQueue(): React.ReactElement {
-  const queue = useAiStore((s) => s.queue);
+export function AIQueue({ workerId }: AIQueueProps): React.ReactElement {
+  const allItems = useAiStore((s) => s.queue);
   const activeStreams = useAiStore((s) => s.activeStreams);
   const concurrentLimit = useAiStore((s) => s.concurrentLimit);
-  const dequeue = useAiStore((s) => s.dequeue);
+  const cancelItem = useAiStore((s) => s.cancelItem);
 
-  const handleCancel = (id: string) => {
-    dequeue(id);
-  };
+  const queue = workerId === undefined ? allItems : allItems.filter((q) => q.workerId === workerId);
 
-  const pendingCount = queue.filter((q) => q.status === "pending").length;
-
-  // Position of each pending item within the pending sub-queue (1-based),
-  // counting only preceding items that are themselves still pending —
-  // streaming/complete/error items ahead in the array don't add wait time.
-  let pendingSeen = 0;
-  const pendingPositions = queue.map((item) => (item.status === "pending" ? ++pendingSeen : 0));
+  // Place in line among waiting items across the WHOLE queue — other
+  // workers' turns ahead of this one still delay it.
+  const waitPositions = new Map<string, number>();
+  let waiting = 0;
+  for (const item of allItems) {
+    if (item.status === "pending") waitPositions.set(item.id, ++waiting);
+  }
 
   return (
-    <div style={queueContainerStyle}>
+    <section style={queueContainerStyle} aria-label="AI Queue">
       <div style={headerStyle}>
-        <span style={headerTitleStyle}>AI Queue</span>
+        <h3 style={headerTitleStyle}>AI Queue</h3>
         <span style={streamCountStyle}>
           {activeStreams}/{concurrentLimit} Active
-          {pendingCount > 0 && (
-            <span style={{ color: "oklch(0.82 0.19 70)" }}>
-              {" "}
-              {"\u2022"} {pendingCount} Pending
-            </span>
+          {waiting > 0 && (
+            <span style={{ color: "oklch(0.82 0.19 70)" }}> • {waiting} Waiting</span>
           )}
         </span>
       </div>
 
       {queue.length === 0 && <div style={emptyStyle}>No Items In Queue</div>}
 
-      <AnimatePresence initial={false}>
-        {queue.map((item, idx) => (
-          <motion.div
-            key={item.id}
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, x: 20 }}
-            transition={{ duration: 0.15 }}
-            style={itemStyle}
-          >
-            <span style={positionStyle}>{idx + 1}</span>
-            <PriorityBadge priority={item.priority} />
-            <StatusLabel status={item.status} />
-
-            {item.status === "pending" && (
-              <span style={waitEstimateStyle}>
-                {formatWait(Math.max(1, pendingPositions[idx]))}
-              </span>
-            )}
-
-            {(item.status === "pending" || item.status === "streaming") && (
+      <MotionConfig reducedMotion="user">
+        <AnimatePresence initial={false}>
+          {queue.map((item, index) => (
+            <motion.div
+              key={item.id}
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+              transition={{ duration: 0.15 }}
+              style={itemStyle}
+            >
+              <span style={positionStyle}>{index + 1}</span>
               <Pill
-                interactive
-                tone="danger"
+                tone={PRIORITY_TONE[item.priority]}
                 size="sm"
-                onClick={() => handleCancel(item.id)}
-                aria-label={`Cancel Queue Item ${idx + 1}`}
-                style={{ marginLeft: "auto", flexShrink: 0 }}
+                style={{ textTransform: "uppercase" }}
               >
-                Cancel
+                {PRIORITY_LABEL[item.priority]}
               </Pill>
-            )}
-          </motion.div>
-        ))}
-      </AnimatePresence>
-    </div>
+              <StatusLabel status={item.status} waitPosition={waitPositions.get(item.id) ?? 0} />
+
+              {(item.status === "pending" || item.status === "streaming") && (
+                <Pill
+                  interactive
+                  tone="danger"
+                  size="sm"
+                  onClick={() => cancelItem(item.id)}
+                  aria-label={`Cancel Queue Item ${index + 1}`}
+                  style={{ marginLeft: "auto", flexShrink: 0 }}
+                >
+                  Cancel
+                </Pill>
+              )}
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </MotionConfig>
+    </section>
   );
 }
