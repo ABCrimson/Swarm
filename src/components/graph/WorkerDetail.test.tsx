@@ -1,15 +1,9 @@
-// ── WorkerDetail Control Tests ──────────────────────
+// ── WorkerDetail Tests ──────────────────────────────
 //
-// Covers batch-1 feedback finding 1: the flagship Kill/Pause/Resume
-// controls in the Workers → List → Detail panel were migrated from
-// `.swarm-btn` to the shared `Pill` component (see
-// src/components/graph/WorkerDetail.tsx) but had no dedicated test
-// file. These tests assert: (a) Kill renders as a real, interactive
-// button with `data-tone="danger"`; (b) clicking Kill invokes the
-// underlying kill IPC handler; (c) Pause/Resume render with their
-// correct (neutral) tone and their state-dependent `disabled` wiring
-// is correct; (d) accessible names stay Title Case ("Kill", "Pause",
-// "Resume").
+// The detail panel's controls (Pause/Resume/Kill as shared Pills, Title
+// Case names, state-dependent disabling), the IPC each one reaches, the
+// optimistic state holding while that IPC is in flight, the worktree
+// opener (desktop only) and the escape-stripped output preview.
 
 import { openPath } from "@tauri-apps/plugin-opener";
 import { act, render, screen } from "@testing-library/react";
@@ -20,18 +14,20 @@ import { WorkerDetail } from "#components/graph/WorkerDetail";
 import type { Worker } from "#store/types";
 import { useWorkerStore } from "#store/workers";
 
-// Mock the Tauri IPC commands used by useWorker (same pattern as
-// src/hooks/useWorker.test.tsx and src/hooks/useStream.test.tsx —
-// module-scope `mock`-prefixed refs so assertions can use them directly).
-const mockPauseWorker = vi.fn().mockResolvedValue(undefined);
-const mockResumeWorker = vi.fn().mockResolvedValue(undefined);
-const mockKillWorker = vi.fn().mockResolvedValue(undefined);
-vi.mock("#lib/tauri", () => ({
-  pauseWorker: (...args: unknown[]) => mockPauseWorker(...args),
-  resumeWorker: (...args: unknown[]) => mockResumeWorker(...args),
-  killWorker: (...args: unknown[]) => mockKillWorker(...args),
-  spawnWorker: vi.fn().mockResolvedValue("mock-id"),
+// The IPC wrappers useWorker calls, plus the transport check that gates
+// the worktree opener.
+const tauri = vi.hoisted(() => ({
+  pauseWorker: vi.fn(async (_id: string) => {}),
+  resumeWorker: vi.fn(async (_id: string) => {}),
+  killWorker: vi.fn(async (_id: string) => {}),
+  isTauri: vi.fn(() => true),
 }));
+vi.mock(import("#lib/tauri"), () => tauri as never);
+const {
+  pauseWorker: mockPauseWorker,
+  resumeWorker: mockResumeWorker,
+  killWorker: mockKillWorker,
+} = tauri;
 
 function createWorker(overrides?: Partial<Worker>): Worker {
   return {
@@ -176,6 +172,31 @@ describe("WorkerDetail", () => {
     expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
   });
 
+  it("holds the optimistic state while the pause IPC is in flight", async () => {
+    const user = userEvent.setup();
+    const { promise, resolve } = Promise.withResolvers<void>();
+    mockPauseWorker.mockReturnValueOnce(promise);
+    const worker = createWorker({ state: "running" });
+    seedWorker(worker);
+    render(<WorkerDetail worker={worker} />);
+
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+
+    // Still in flight: the badge already reads Paused and Resume is live.
+    expect(screen.getByText("Paused")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Resume" })).toBeEnabled();
+    await act(async () => resolve());
+    expect(useWorkerStore.getState().workers.get(worker.id)?.state).toBe("paused");
+  });
+
+  it("strips terminal escape sequences from the output preview", () => {
+    const worker = createWorker({ output: "\u001b[1;32mok\u001b[0m\r\ndone" });
+    seedWorker(worker);
+    render(<WorkerDetail worker={worker} />);
+
+    expect(screen.getByRole("region", { name: "Output" })).toHaveTextContent(/^Outputok\s*done$/);
+  });
+
   // ── Worktree isolation rows ──────────────────────────────────────
 
   it("shows no Branch or Worktree row for a worker spawned without isolation", () => {
@@ -229,6 +250,17 @@ describe("WorkerDetail", () => {
     await user.click(screen.getByText("/home/user/.swarm/worktrees/repo-abcd1234/w-33334444"));
 
     expect(toast.error).toHaveBeenCalledWith("Could Not Open Worktree: not allowed by scope");
+  });
+
+  it("shows the worktree as plain text outside the desktop app (no opener plugin)", () => {
+    tauri.isTauri.mockReturnValue(false);
+    const worker = createWorker({ worktreePath: "/srv/worktrees/w-1" });
+    seedWorker(worker);
+    render(<WorkerDetail worker={worker} />);
+
+    expect(screen.getByText("/srv/worktrees/w-1").tagName).toBe("SPAN");
+    expect(screen.queryByRole("button", { name: "/srv/worktrees/w-1" })).not.toBeInTheDocument();
+    tauri.isTauri.mockReturnValue(true);
   });
 
   it("refuses a '..' traversal path without calling the opener", async () => {

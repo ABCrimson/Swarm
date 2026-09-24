@@ -1,16 +1,36 @@
+import "./graph.css";
+
 import { openPath } from "@tauri-apps/plugin-opener";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistance } from "date-fns";
 import { useSetAtom } from "jotai";
-import { toast } from "sonner";
+import { startTransition, useEffect, useState } from "react";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Pill } from "#components/ui/Pill";
+import { toast } from "#components/ui/Toast";
 import { useWorker } from "#hooks/useWorker";
+import { stripAnsi } from "#lib/ansi";
+import { isTauri } from "#lib/tauri";
 import { selectMostRecentSeqForWorker, useProvenanceStore } from "#store/provenance";
 import type { Worker } from "#store/types";
 import { causalityInspectorAtom, detailPanelOpenAtom } from "#store/ui";
 
 interface WorkerDetailProps {
   readonly worker: Worker;
+}
+
+/** Characters of (escape-stripped) output shown in the preview. */
+const OUTPUT_PREVIEW_CHARS = 2000;
+/** How often the uptime readout refreshes. */
+const UPTIME_TICK_MS = 15_000;
+
+/** The current time, refreshed every `intervalMs`. */
+function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
 }
 
 function DetailRow({
@@ -22,7 +42,7 @@ function DetailRow({
 }): React.ReactElement {
   return (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-      <span
+      <dt
         style={{
           fontFamily: "var(--font-mono)",
           fontSize: "0.6875rem",
@@ -32,23 +52,26 @@ function DetailRow({
         }}
       >
         {label}
-      </span>
-      <span
+      </dt>
+      <dd
         style={{
+          margin: 0,
           fontFamily: "var(--font-body)",
           fontSize: "0.8125rem",
           color: "oklch(0.82 0.04 220)",
         }}
       >
         {children}
-      </span>
+      </dd>
     </div>
   );
 }
 
 /**
- * Side panel showing detailed worker info: state, ID, PID, uptime,
- * output preview, and action buttons (pause, resume, kill).
+ * Side panel with a worker's details — state, ID, PID, a live uptime,
+ * branch/worktree, an escape-stripped output preview — and Pause, Resume
+ * and Kill, which run `useWorker`'s IPC actions inside a transition so
+ * the optimistic state holds while the backend call is in flight.
  */
 export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement {
   const setDetailOpen = useSetAtom(detailPanelOpenAtom);
@@ -62,27 +85,27 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
     selectMostRecentSeqForWorker(s.edges, worker.id),
   );
   const setCausalityTarget = useSetAtom(causalityInspectorAtom);
+  const now = useNow(UPTIME_TICK_MS);
 
   const currentState = optimisticState ?? worker.state;
   const canPause = currentState === "running";
   const canResume = currentState === "paused";
-  const uptime = formatDistanceToNow(new Date(worker.startedAt), { addSuffix: false });
+  const uptime = formatDistance(now, new Date(worker.startedAt));
+  const outputPreview = worker.output ? stripAnsi(worker.output).slice(-OUTPUT_PREVIEW_CHARS) : "";
 
-  const handleOpenWorktree = async () => {
-    if (!worker.worktreePath) return;
-    // Defense in depth: reject a ".." path-traversal segment before the
-    // path ever reaches the opener plugin. The opener capability's path
-    // scope (src-tauri/capabilities) is the authoritative allowlist;
-    // this check keeps a traversal-shaped worktree path from even
-    // being attempted, on the one path the app ever opens.
-    if (worker.worktreePath.includes("..")) {
+  const handleOpenWorktree = async (path: string): Promise<void> => {
+    // Defense in depth: never hand a path with a ".." segment to the
+    // opener. The capability's `opener:allow-open-path` scope is the
+    // authoritative allowlist for the worktree root; this check keeps a
+    // traversal-shaped path from even being attempted.
+    if (path.includes("..")) {
       toast.error("Refusing To Open A Path Containing '..'.");
       return;
     }
     try {
       // openPath (not revealItemInDir): the worktree folder itself
       // opens in the system file manager, which is what the link says.
-      await openPath(worker.worktreePath);
+      await openPath(path);
     } catch (err) {
       toast.error(`Could Not Open Worktree: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -125,22 +148,9 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
           type="button"
           onClick={() => setDetailOpen(false)}
           aria-label="Close Detail Panel"
-          style={{
-            width: 28,
-            height: 28,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "oklch(0 0 0 / 0)",
-            border: "none",
-            borderRadius: 6,
-            color: "oklch(0.55 0.04 220)",
-            cursor: "pointer",
-            fontSize: "1rem",
-          }}
+          className="graph-icon-button"
         >
-          <svg width={14} height={14} viewBox="0 0 14 14" fill="none">
-            <title>Close</title>
+          <svg width={14} height={14} viewBox="0 0 14 14" fill="none" aria-hidden="true">
             <path
               d="M2 2l10 10M12 2L2 12"
               stroke="currentColor"
@@ -163,24 +173,20 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
         }}
         className="scroll-area"
       >
-        {/* Worker Name */}
-        <div>
-          <span
-            style={{
-              fontFamily: "var(--font-display)",
-              fontSize: "1rem",
-              fontWeight: 600,
-              color: "oklch(0.95 0.02 220)",
-            }}
-          >
-            {worker.name ?? worker.id.slice(0, 8)}
-          </span>
-        </div>
+        <span
+          style={{
+            fontFamily: "var(--font-display)",
+            fontSize: "1rem",
+            fontWeight: 600,
+            color: "oklch(0.95 0.02 220)",
+          }}
+        >
+          {worker.name ?? worker.id.slice(0, 8)}
+        </span>
 
-        {/* Info rows */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <dl style={{ display: "flex", flexDirection: "column", gap: 10, margin: 0 }}>
           <DetailRow label="State">
-            <Badge state={currentState}>{stateLabels[currentState] ?? currentState}</Badge>
+            <Badge state={currentState}>{stateLabels[currentState]}</Badge>
           </DetailRow>
           <DetailRow label="ID">
             <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.6875rem" }}>
@@ -188,36 +194,30 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
             </span>
           </DetailRow>
           {worker.pid != null && <DetailRow label="PID">{worker.pid}</DetailRow>}
-          <DetailRow label="Uptime">{uptime}</DetailRow>
+          <DetailRow label="Uptime">
+            <time dateTime={worker.startedAt}>{uptime}</time>
+          </DetailRow>
           {worker.branch != null && <DetailRow label="Branch">{worker.branch}</DetailRow>}
           {worker.worktreePath != null && (
             <DetailRow label="Worktree">
-              <button
-                type="button"
-                onClick={() => void handleOpenWorktree()}
-                title={worker.worktreePath}
-                style={{
-                  background: "none",
-                  border: "none",
-                  padding: 0,
-                  margin: 0,
-                  cursor: "pointer",
-                  color: "oklch(0.78 0.18 205)",
-                  fontFamily: "var(--font-body)",
-                  fontSize: "0.8125rem",
-                  textDecoration: "underline",
-                  textUnderlineOffset: 2,
-                  maxWidth: 180,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {worker.worktreePath}
-              </button>
+              {isTauri() ? (
+                <button
+                  type="button"
+                  onClick={() => void handleOpenWorktree(worker.worktreePath ?? "")}
+                  title={worker.worktreePath}
+                  className="worker-detail__path"
+                >
+                  {worker.worktreePath}
+                </button>
+              ) : (
+                // Opening a folder needs the desktop app's opener plugin.
+                <span className="worker-detail__path" title={worker.worktreePath}>
+                  {worker.worktreePath}
+                </span>
+              )}
             </DetailRow>
           )}
-        </div>
+        </dl>
 
         {/* Causality — only shown when this worker actually has measured
             causality to walk; a worker with none gets no dead-end button,
@@ -234,10 +234,10 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
           </Pill>
         )}
 
-        {/* Output preview */}
-        {worker.output && (
-          <div>
+        {outputPreview && (
+          <section aria-label="Output">
             <span
+              aria-hidden="true"
               style={{
                 fontFamily: "var(--font-mono)",
                 fontSize: "0.6875rem",
@@ -267,16 +267,15 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
               }}
               className="scroll-area"
             >
-              {worker.output.slice(-2000)}
+              {outputPreview}
             </pre>
-          </div>
+          </section>
         )}
       </div>
 
-      {/* Actions — same-purpose action pills in a uniform-width group
-          (flex: 1 on each) rather than three independently-sized
-          buttons. Kill is a real button (interactive) with danger tone
-          for proper destructive-action affordance. */}
+      {/* Actions — a uniform-width group; Kill is the danger tone. Each
+          runs as a transition, so useWorker's optimistic state holds
+          while the IPC call is in flight. */}
       <div
         style={{
           display: "flex",
@@ -289,7 +288,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
           interactive
           tone="neutral"
           size="md"
-          onClick={pause}
+          onClick={() => startTransition(pause)}
           disabled={!canPause}
           style={{ flex: 1 }}
         >
@@ -299,13 +298,19 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
           interactive
           tone="neutral"
           size="md"
-          onClick={resume}
+          onClick={() => startTransition(resume)}
           disabled={!canResume}
           style={{ flex: 1 }}
         >
           Resume
         </Pill>
-        <Pill interactive tone="danger" size="md" onClick={kill} style={{ flex: 1 }}>
+        <Pill
+          interactive
+          tone="danger"
+          size="md"
+          onClick={() => startTransition(kill)}
+          style={{ flex: 1 }}
+        >
           Kill
         </Pill>
       </div>

@@ -1,26 +1,12 @@
 import { Panel } from "@xyflow/react";
-import type { GraphEdgeKind } from "./ProvenanceEdge.tsx";
+import type { GraphEdgeKind } from "#components/graph/ProvenanceEdge";
+import { KIND_LABEL, KIND_STYLE } from "#components/graph/ProvenanceEdge";
 
-interface LegendRow {
-  readonly kind: GraphEdgeKind;
-  readonly label: string;
-  readonly stroke: string;
-  readonly dash?: string;
-}
-
-/**
- * Fixed row order/style, kept separate from `ProvenanceEdge`'s
- * `KIND_STYLE` so a legend swatch can be a plain solid line (no
- * measured-only dash-flow animation) even for kinds that animate on
- * canvas.
- */
-const LEGEND_ROWS: readonly LegendRow[] = [
-  { kind: "spawn", label: "Spawn", stroke: "oklch(0.78 0.18 205 / 0.8)" },
-  { kind: "kill", label: "Kill", stroke: "oklch(0.72 0.20 10 / 0.8)", dash: "3 3" },
-  { kind: "command", label: "Command", stroke: "oklch(0.75 0.19 145 / 0.8)", dash: "7 3" },
-  { kind: "message", label: "Message", stroke: "oklch(0.80 0.15 85 / 0.8)", dash: "1.5 3" },
-  { kind: "manual", label: "Manual", stroke: "oklch(0.60 0.02 220 / 0.6)", dash: "8 4" },
-];
+/** Measured kinds in legend order; the manual annotation kind is listed separately. */
+const MEASURED_KINDS = ["spawn", "kill", "command", "message"] as const satisfies readonly Exclude<
+  GraphEdgeKind,
+  "manual"
+>[];
 
 interface GraphLegendProps {
   /** The edge kinds actually present on the current canvas. */
@@ -30,49 +16,46 @@ interface GraphLegendProps {
 /** Title Case group header separating measured facts from the user-drawn annotation kind — see the component doc for why this can't just be "one more row" visually. */
 const ANNOTATION_GROUP_LABEL = "Annotation";
 
+/** One swatch row: a static line in the kind's stroke and dash (the canvas pulse is not drawn here). */
+function LegendRow({ kind }: { readonly kind: GraphEdgeKind }): React.ReactElement {
+  const { stroke, dash } = KIND_STYLE[kind];
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <svg width={20} height={8} viewBox="0 0 20 8" aria-hidden="true">
+        <line x1={1} y1={4} x2={19} y2={4} stroke={stroke} strokeWidth={2} strokeDasharray={dash} />
+      </svg>
+      <span>{KIND_LABEL[kind]}</span>
+    </div>
+  );
+}
+
 /**
  * Legend for the Workers topology graph — one row per edge kind
  * ACTUALLY rendered, gated on presence (a row for a kind with zero
  * edges would describe a line style nothing on screen uses). Renders
  * nothing at all when no edges are present, matching the graph's empty
- * state — an empty canvas needs no key.
+ * state — an empty canvas needs no key. Swatches are drawn from
+ * `ProvenanceEdge`'s own `KIND_STYLE`, so the key can never drift from
+ * the canvas.
  *
  * Measured kinds (spawn/kill/command/message) and the manual annotation
  * kind always render in this fixed order so the legend never implies
  * measured facts and user annotations are the same category of thing —
  * a same-list, same-style row for "Manual" right after "Message" would
- * only ASSERT that distinction in prose (the component doc above) while
- * looking, on screen, exactly like one more measured kind. A separator
- * plus an "Annotation" group header makes the never-merge claim visibly
- * true, not just documented.
+ * only ASSERT that distinction in prose while looking, on screen,
+ * exactly like one more measured kind. A separator plus an "Annotation"
+ * group header makes the never-merge claim visibly true.
  */
 export function GraphLegend({ presentKinds }: GraphLegendProps): React.ReactElement | null {
-  const measuredRows = LEGEND_ROWS.filter(
-    (row) => row.kind !== "manual" && presentKinds.has(row.kind),
-  );
-  const manualRow = LEGEND_ROWS.find((row) => row.kind === "manual" && presentKinds.has(row.kind));
-  if (measuredRows.length === 0 && !manualRow) return null;
-
-  const renderRow = (row: LegendRow): React.ReactElement => (
-    <div key={row.kind} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <svg width={20} height={8} viewBox="0 0 20 8" aria-hidden="true">
-        <line
-          x1={1}
-          y1={4}
-          x2={19}
-          y2={4}
-          stroke={row.stroke}
-          strokeWidth={2}
-          strokeDasharray={row.dash}
-        />
-      </svg>
-      <span>{row.label}</span>
-    </div>
-  );
+  const measuredKinds = MEASURED_KINDS.filter((kind) => presentKinds.has(kind));
+  const showManual = presentKinds.has("manual");
+  if (measuredKinds.length === 0 && !showManual) return null;
 
   return (
     <Panel
       position="top-left"
+      role="note"
+      aria-label="Edge Legend"
       style={{
         display: "flex",
         flexDirection: "column",
@@ -88,11 +71,13 @@ export function GraphLegend({ presentKinds }: GraphLegendProps): React.ReactElem
         color: "oklch(0.65 0.04 220)",
       }}
     >
-      {measuredRows.map(renderRow)}
+      {measuredKinds.map((kind) => (
+        <LegendRow key={kind} kind={kind} />
+      ))}
 
-      {manualRow && (
+      {showManual && (
         <>
-          {measuredRows.length > 0 && (
+          {measuredKinds.length > 0 && (
             <hr
               style={{
                 width: "100%",
@@ -114,7 +99,7 @@ export function GraphLegend({ presentKinds }: GraphLegendProps): React.ReactElem
           >
             {ANNOTATION_GROUP_LABEL}
           </span>
-          {renderRow(manualRow)}
+          <LegendRow kind="manual" />
         </>
       )}
     </Panel>

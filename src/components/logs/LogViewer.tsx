@@ -2,12 +2,12 @@ import "./logs.css";
 
 import { useResizeObserver } from "@crimson_dev/use-resize-observer";
 import { useDeferredValue, useLayoutEffect, useRef, useState } from "react";
+import { LogFilter } from "#components/logs/LogFilter";
 import { Button } from "#components/ui/Button";
 import type { PillTone } from "#components/ui/Pill";
 import { Pill } from "#components/ui/Pill";
 import type { LogEntry, LogLevel } from "#lib/log-store";
 import { LOG_LEVEL_LABEL, LOG_LEVELS, useLogStore } from "#lib/log-store";
-import { LogFilter } from "./LogFilter.tsx";
 
 const LEVEL_TONE: Record<LogLevel, PillTone> = {
   debug: "neutral",

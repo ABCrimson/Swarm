@@ -1,23 +1,25 @@
-import { act, render, screen } from "@testing-library/react";
+// The native <dialog> needs jsdom stand-ins (see the shim's header).
+import "./top-layer-shim";
+
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { getDefaultStore } from "jotai";
+import { createStore, Provider } from "jotai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  CausalityPanel,
+  MAX_CAUSALITY_HOPS,
+  walkCausalityChain,
+} from "#components/graph/CausalityPanel";
 import type { DomainEvent } from "#lib/event-bus";
 import { useProvenanceStore } from "#store/provenance";
 import type { Worker } from "#store/types";
 import { detailPanelOpenAtom, selectedWorkerIdAtom } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
 
-const invokeMock = vi.fn();
-vi.mock("#lib/tauri", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+const { invoke } = vi.hoisted(() => ({
+  invoke: vi.fn<(cmd: string, args?: Record<string, unknown>) => Promise<unknown>>(),
 }));
-
-import {
-  CausalityPanel,
-  MAX_CAUSALITY_HOPS,
-  walkCausalityChain,
-} from "#components/graph/CausalityPanel";
+vi.mock(import("#lib/tauri"), () => ({ invoke }) as never);
 
 function ev(
   overrides: Partial<DomainEvent> & Pick<DomainEvent, "seq" | "type" | "payload">,
@@ -51,8 +53,21 @@ function seedRing(...events: DomainEvent[]): void {
   });
 }
 
+/** Renders the panel against a fresh jotai store (no cross-test atom leakage). */
+function renderPanel(startSeq: number, onClose = vi.fn()) {
+  const store = createStore();
+  const view = render(
+    <Provider store={store}>
+      <CausalityPanel startSeq={startSeq} onClose={onClose} />
+    </Provider>,
+  );
+  const dialog = view.container.ownerDocument.querySelector("dialog");
+  if (!dialog) throw new Error("no dialog rendered");
+  return { ...view, store, onClose, dialog };
+}
+
 beforeEach(() => {
-  invokeMock.mockReset();
+  invoke.mockReset();
 });
 
 describe("walkCausalityChain", () => {
@@ -72,7 +87,7 @@ describe("walkCausalityChain", () => {
 
     const result = await walkCausalityChain(418, ring);
 
-    expect(invokeMock).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
     expect(result.truncated).toBe(false);
     expect(result.incomplete).toBe(false);
     expect(result.rows.map((r) => r.seq)).toEqual([412, 418]); // root-first order
@@ -80,7 +95,7 @@ describe("walkCausalityChain", () => {
 
   it("falls back to a single-row events_since backfill on a ring miss", async () => {
     const root = ev({ seq: 100, type: "agent_turn_started", payload: { workerId: "w-a" } });
-    invokeMock.mockResolvedValueOnce([root]);
+    invoke.mockResolvedValueOnce([root]);
 
     const startEvent = ev({
       seq: 105,
@@ -93,7 +108,7 @@ describe("walkCausalityChain", () => {
 
     const result = await walkCausalityChain(105, ring);
 
-    expect(invokeMock).toHaveBeenCalledWith("events_since", { afterSeq: 99, limit: 1 });
+    expect(invoke).toHaveBeenCalledWith("events_since", { afterSeq: 99, limit: 1 });
     expect(result.truncated).toBe(false);
     expect(result.incomplete).toBe(false);
     expect(result.rows.map((r) => r.seq)).toEqual([100, 105]);
@@ -105,7 +120,7 @@ describe("walkCausalityChain", () => {
     // persisted, or a malformed response. The guard must null this out
     // rather than trust the wrong row.
     const wrongSeqRow = ev({ seq: 101, type: "agent_turn_started", payload: { workerId: "w-a" } });
-    invokeMock.mockResolvedValueOnce([wrongSeqRow]);
+    invoke.mockResolvedValueOnce([wrongSeqRow]);
 
     const startEvent = ev({
       seq: 105,
@@ -118,7 +133,7 @@ describe("walkCausalityChain", () => {
 
     const result = await walkCausalityChain(105, ring);
 
-    expect(invokeMock).toHaveBeenCalledWith("events_since", { afterSeq: 99, limit: 1 });
+    expect(invoke).toHaveBeenCalledWith("events_since", { afterSeq: 99, limit: 1 });
     expect(result.incomplete).toBe(true);
     expect(result.truncated).toBe(false);
     // Only the starting event resolved -- the mismatched row was rejected.
@@ -134,7 +149,7 @@ describe("walkCausalityChain", () => {
       payload: { workerId: "w-b" },
     });
     const ring = new Map([[startEvent.seq, startEvent]]);
-    invokeMock.mockResolvedValueOnce([]); // events_since confirms nothing persisted there
+    invoke.mockResolvedValueOnce([]); // events_since confirms nothing persisted there
 
     const result = await walkCausalityChain(50, ring);
 
@@ -149,17 +164,18 @@ describe("walkCausalityChain", () => {
 
     const result = await walkCausalityChain(1, ring);
 
-    expect(invokeMock).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
     expect(result.rows.map((r) => r.seq)).toEqual([1]);
     expect(result.truncated).toBe(false);
     expect(result.incomplete).toBe(false);
   });
 
   it(`stops at ${MAX_CAUSALITY_HOPS} rows and reports truncated (not incomplete) when the chain is deeper than the cap`, async () => {
-    // A synthetic chain of 51 events (seq 1..51), each citing seq-1 as its
-    // cause, with seq 1 the true (never-reached) root.
+    // A synthetic chain one deeper than the cap (seq 1..depth), each
+    // citing seq-1 as its cause, with seq 1 the true (never-reached) root.
+    const depth = MAX_CAUSALITY_HOPS + 1;
     const ring = new Map<number, DomainEvent>();
-    for (let seq = 1; seq <= 51; seq++) {
+    for (let seq = 1; seq <= depth; seq++) {
       ring.set(
         seq,
         ev({
@@ -171,28 +187,48 @@ describe("walkCausalityChain", () => {
       );
     }
 
-    const result = await walkCausalityChain(51, ring);
+    const result = await walkCausalityChain(depth, ring);
 
-    expect(invokeMock).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
     expect(result.truncated).toBe(true);
     expect(result.incomplete).toBe(false);
     expect(result.rows).toHaveLength(MAX_CAUSALITY_HOPS);
     // The true root (seq 1) is excluded -- the cap bit before reaching it.
     expect(result.rows.map((r) => r.seq)).not.toContain(1);
-    expect(result.rows.at(0)?.seq).toBe(2);
-    expect(result.rows.at(-1)?.seq).toBe(51);
+    expect(result.rows.at(0)?.seq).toBe(depth - MAX_CAUSALITY_HOPS + 1);
+    expect(result.rows.at(-1)?.seq).toBe(depth);
+  });
+
+  it("stops issuing lookups once the signal aborts", async () => {
+    const controller = new AbortController();
+    const start = ev({ seq: 9, type: "worker_input", causeSeq: 5, payload: { workerId: "w" } });
+    invoke.mockImplementationOnce(async () => {
+      controller.abort(new Error("closed"));
+      return [ev({ seq: 5, type: "worker_input", causeSeq: 1, payload: { workerId: "w" } })];
+    });
+
+    await expect(
+      walkCausalityChain(9, new Map([[start.seq, start]]), controller.signal),
+    ).rejects.toThrow("closed");
+    expect(invoke).toHaveBeenCalledTimes(1); // seq 1 is never fetched
   });
 });
 
 describe("CausalityPanel (component)", () => {
   afterEach(resetStores);
 
-  it("renders a root-first vertical trace, seq shown per row, entirely from the ring (manual-acceptance parity: an edge click traces back to the agent_turn_started seq and stops)", async () => {
-    const workerA = createWorker({ id: "w-a", name: "Worker Alpha" });
-    const workerB = createWorker({ id: "w-b", name: "Worker Beta" });
+  it("opens as a modal dialog named by its heading", () => {
+    invoke.mockResolvedValue([]);
+    const { dialog } = renderPanel(1);
+
+    expect(dialog.open).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Causality Trace" })).toBe(dialog);
+  });
+
+  it("renders a root-first ordered trace, seq shown per row, entirely from the ring", async () => {
     act(() => {
-      useWorkerStore.getState().addWorker(workerA);
-      useWorkerStore.getState().addWorker(workerB);
+      useWorkerStore.getState().addWorker(createWorker({ id: "w-a", name: "Worker Alpha" }));
+      useWorkerStore.getState().addWorker(createWorker({ id: "w-b", name: "Worker Beta" }));
     });
     seedRing(
       ev({ seq: 412, type: "agent_turn_started", payload: { workerId: "w-a" } }),
@@ -205,20 +241,20 @@ describe("CausalityPanel (component)", () => {
       }),
     );
 
-    render(<CausalityPanel startSeq={418} onClose={vi.fn()} />);
+    renderPanel(418);
 
-    expect(await screen.findByText(/Worker Alpha's Turn/)).toBeInTheDocument();
-    expect(screen.getByText(/Spawned Worker Beta/)).toBeInTheDocument();
-    expect(screen.getByText("@412")).toBeInTheDocument();
-    expect(screen.getByText("@418")).toBeInTheDocument();
-    expect(invokeMock).not.toHaveBeenCalled(); // both hops served from the ring
+    const trace = await screen.findByRole("list", { name: "Causes, Earliest First" });
+    const items = trace.querySelectorAll("li");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent(/Worker Alpha's Turn.*@412/);
+    expect(items[1]).toHaveTextContent(/Spawned Worker Beta.*@418/);
+    expect(invoke).not.toHaveBeenCalled(); // both hops served from the ring
   });
 
-  it("clicking a row for a live worker selects it and opens the detail panel", async () => {
+  it("clicking a row for a live worker selects it, opens the detail panel and closes the inspector", async () => {
     const user = userEvent.setup();
-    const workerB = createWorker({ id: "w-b", name: "Worker Beta" });
     act(() => {
-      useWorkerStore.getState().addWorker(workerB);
+      useWorkerStore.getState().addWorker(createWorker({ id: "w-b", name: "Worker Beta" }));
     });
     seedRing(
       ev({
@@ -228,41 +264,59 @@ describe("CausalityPanel (component)", () => {
       }),
     );
 
-    render(<CausalityPanel startSeq={1} onClose={vi.fn()} />);
-    const row = await screen.findByRole("button", { name: /Spawned Worker Beta/ });
+    const { store, onClose, dialog } = renderPanel(1);
+    await user.click(await screen.findByRole("button", { name: /Spawned Worker Beta/ }));
 
-    await user.click(row);
-
-    const store = getDefaultStore();
     expect(store.get(selectedWorkerIdAtom)).toBe("w-b");
     expect(store.get(detailPanelOpenAtom)).toBe(true);
+    expect(dialog.open).toBe(false);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("disables the row when the named worker is no longer live", async () => {
-    // No workers seeded -- w-ghost has already departed.
+  it("renders a row for a departed worker as plain text, not a disabled button", async () => {
     seedRing(ev({ seq: 7, type: "worker_killed", payload: { workerId: "w-ghost" } }));
 
-    render(<CausalityPanel startSeq={7} onClose={vi.fn()} />);
+    renderPanel(7);
 
-    const row = await screen.findByRole("button", { name: /Killed/ });
-    expect(row).toBeDisabled();
+    expect(await screen.findByText(/Killed w-ghost/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Killed/ })).not.toBeInTheDocument();
   });
 
-  it("calls onClose on Escape", async () => {
+  it("calls onClose when Escape closes the dialog", async () => {
     const user = userEvent.setup();
-    const onClose = vi.fn();
-    invokeMock.mockResolvedValueOnce([]);
+    invoke.mockResolvedValue([]);
+    const { onClose, dialog } = renderPanel(999);
 
-    render(<CausalityPanel startSeq={999} onClose={onClose} />);
     await user.keyboard("{Escape}");
 
-    expect(onClose).toHaveBeenCalled();
+    expect(dialog.open).toBe(false);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the "Cause Event Not Available" terminal row when the walk finds nothing at all (incomplete, zero rows)', async () => {
-    invokeMock.mockResolvedValueOnce([]); // seq 999 is neither cached nor persisted
+  it("closes from the close button", async () => {
+    const user = userEvent.setup();
+    invoke.mockResolvedValue([]);
+    const { onClose } = renderPanel(999);
 
-    render(<CausalityPanel startSeq={999} onClose={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Close Causality Trace" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call onClose when unmounted by its owner", () => {
+    invoke.mockResolvedValue([]);
+    const { onClose, dialog, unmount } = renderPanel(999);
+
+    unmount();
+
+    expect(dialog.open).toBe(false);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('renders the "Cause Event Not Available" row when the walk finds nothing at all (incomplete, zero rows)', async () => {
+    invoke.mockResolvedValueOnce([]); // seq 999 is neither cached nor persisted
+
+    renderPanel(999);
 
     expect(
       await screen.findByText("Cause Event Not Available (Ephemeral Or Pruned)"),
@@ -270,9 +324,8 @@ describe("CausalityPanel (component)", () => {
   });
 
   it('renders the "Cause Event Not Available" row above a partial trace when a mid-walk lookup misses', async () => {
-    const workerB = createWorker({ id: "w-b", name: "Worker Beta" });
     act(() => {
-      useWorkerStore.getState().addWorker(workerB);
+      useWorkerStore.getState().addWorker(createWorker({ id: "w-b", name: "Worker Beta" }));
     });
     seedRing(
       ev({
@@ -283,9 +336,9 @@ describe("CausalityPanel (component)", () => {
         payload: { workerId: "w-b" },
       }),
     );
-    invokeMock.mockResolvedValueOnce([]); // confirms seq 10 isn't persisted
+    invoke.mockResolvedValueOnce([]); // confirms seq 10 isn't persisted
 
-    render(<CausalityPanel startSeq={50} onClose={vi.fn()} />);
+    renderPanel(50);
 
     expect(
       await screen.findByText("Cause Event Not Available (Ephemeral Or Pruned)"),
@@ -295,77 +348,25 @@ describe("CausalityPanel (component)", () => {
     expect(screen.getByText(/Killed Worker Beta/)).toBeInTheDocument();
   });
 
-  // ── Focus management ────────────────────────────────────────────────
-
-  it("focuses the close button on open", async () => {
-    render(<CausalityPanel startSeq={1} onClose={vi.fn()} />);
-
-    await vi.waitFor(() => {
-      expect(screen.getByRole("button", { name: "Close Causality Trace" })).toHaveFocus();
-    });
-  });
-
-  it("restores focus to the previously focused element on close/unmount", async () => {
-    const trigger = document.createElement("button");
-    trigger.textContent = "Open Trace";
-    document.body.appendChild(trigger);
-    trigger.focus();
-    expect(trigger).toHaveFocus();
-
-    const { unmount } = render(<CausalityPanel startSeq={1} onClose={vi.fn()} />);
-    await vi.waitFor(() => {
-      expect(screen.getByRole("button", { name: "Close Causality Trace" })).toHaveFocus();
-    });
-
-    unmount();
-
-    expect(trigger).toHaveFocus();
-    trigger.remove();
-  });
-
-  it("traps Tab within the dialog, wrapping from the last focusable element back to the first", async () => {
-    const user = userEvent.setup();
-    const workerB = createWorker({ id: "w-b", name: "Worker Beta" });
-    act(() => {
-      useWorkerStore.getState().addWorker(workerB);
-    });
-    seedRing(
-      ev({
-        seq: 1,
-        type: "worker_spawned",
-        payload: { workerId: "w-b", name: "Worker Beta", pid: 1 },
-      }),
+  it("aborts a walk still in flight when it closes", async () => {
+    let resolveLookup: (rows: DomainEvent[]) => void = () => {};
+    seedRing(ev({ seq: 30, type: "worker_input", causeSeq: 20, payload: { workerId: "w" } }));
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveLookup = resolve;
+        }),
     );
 
-    render(<CausalityPanel startSeq={1} onClose={vi.fn()} />);
-    const closeButton = await screen.findByRole("button", { name: "Close Causality Trace" });
-    const row = screen.getByRole("button", { name: /Spawned Worker Beta/ });
+    const { unmount } = renderPanel(30);
+    await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+    unmount();
+    await act(async () => {
+      resolveLookup([
+        ev({ seq: 20, type: "worker_input", causeSeq: 10, payload: { workerId: "w" } }),
+      ]);
+    });
 
-    // Close button is the first focusable (and already focused on open);
-    // the row is the last. Shift+Tab from the first wraps to the last.
-    expect(closeButton).toHaveFocus();
-    await user.tab({ shift: true });
-    expect(row).toHaveFocus();
-
-    // Tab from the last wraps back to the first.
-    await user.tab();
-    expect(closeButton).toHaveFocus();
-  });
-
-  it("does not tab focus out to a trigger element behind the modal", async () => {
-    const user = userEvent.setup();
-    const trigger = document.createElement("button");
-    trigger.textContent = "Behind The Modal";
-    document.body.appendChild(trigger);
-
-    render(<CausalityPanel startSeq={1} onClose={vi.fn()} />);
-    await screen.findByRole("button", { name: "Close Causality Trace" });
-
-    await user.tab();
-    await user.tab();
-    await user.tab();
-
-    expect(trigger).not.toHaveFocus();
-    trigger.remove();
+    expect(invoke).toHaveBeenCalledTimes(1); // seq 10 is never fetched after close
   });
 });

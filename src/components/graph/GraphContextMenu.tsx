@@ -1,157 +1,154 @@
-import { useEffect, useRef } from "react";
-
-import type { WorkerState } from "#store/types";
+import type { CSSProperties } from "react";
+import { startTransition, useEffect, useId, useRef } from "react";
+import { useWorker } from "#hooks/useWorker";
 
 interface GraphContextMenuProps {
+  /** Viewport coordinates of the right-click. */
   readonly x: number;
   readonly y: number;
   readonly workerId: string;
-  readonly workerState: WorkerState;
-  readonly onPause: () => void;
-  readonly onResume: () => void;
-  readonly onKill: () => void;
+  /** Opens the worker's detail panel. */
   readonly onInspect: () => void;
+  /** Called once the menu has closed, for any reason (action, Escape, click outside, Tab). */
   readonly onClose: () => void;
 }
 
 interface MenuItemProps {
   readonly label: string;
-  readonly onClick: () => void;
+  readonly onSelect: () => void;
   readonly variant?: "default" | "danger";
   readonly disabled?: boolean;
 }
 
+/**
+ * A `role="menuitem"` button. A disabled item stays focusable (announced
+ * as unavailable) but does nothing, as the ARIA menu pattern recommends.
+ */
 function MenuItem({
   label,
-  onClick,
+  onSelect,
   variant = "default",
   disabled = false,
 }: MenuItemProps): React.ReactElement {
-  const color = variant === "danger" ? "oklch(0.72 0.20 10)" : "oklch(0.82 0.04 220)";
-  const hoverBg =
-    variant === "danger" ? "oklch(0.72 0.20 10 / 0.12)" : "oklch(0.78 0.18 205 / 0.12)";
-
   return (
     <button
       type="button"
       role="menuitem"
-      onClick={onClick}
-      disabled={disabled}
-      style={{
-        display: "block",
-        width: "100%",
-        padding: "8px 12px",
-        background: "oklch(0 0 0 / 0)",
-        border: "none",
-        borderRadius: 6,
-        color,
-        fontFamily: "var(--font-body)",
-        fontSize: "0.8125rem",
-        textAlign: "left",
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.5 : 1,
-        transition: "background 0.1s ease",
-      }}
-      onMouseEnter={(e) => {
-        if (!disabled) e.currentTarget.style.background = hoverBg;
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "oklch(0 0 0 / 0)";
-      }}
+      tabIndex={-1}
+      className="graph-context-menu__item"
+      data-variant={variant}
+      aria-disabled={disabled || undefined}
+      onClick={disabled ? undefined : onSelect}
     >
       {label}
     </button>
   );
 }
 
+/** Moves focus among the menu's items: arrows wrap, Home/End jump. */
+function moveFocus(menu: HTMLElement, key: string): boolean {
+  const items = [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+  const current = items.indexOf(document.activeElement as HTMLElement);
+  const next =
+    key === "ArrowDown"
+      ? (current + 1) % items.length
+      : key === "ArrowUp"
+        ? (current - 1 + items.length) % items.length
+        : key === "Home"
+          ? 0
+          : key === "End"
+            ? items.length - 1
+            : -1;
+  if (next === -1) return false;
+  items[next]?.focus();
+  return true;
+}
+
 /**
- * Context menu for worker nodes in the dependency graph.
+ * Context menu for a worker node in the Workers topology graph (measured
+ * causality): Pause, Resume, Inspect and Kill.
  *
- * Provides pause, resume, inspect, and kill actions. Closes on click-outside,
- * right-click, or Escape key.
+ * Pause/Resume/Kill run through `useWorker` — the same IPC path as the
+ * detail panel — inside a transition, so the backend actually pauses,
+ * resumes or kills the process (and Kill drops the worker and its agent
+ * metadata only once the backend confirms). The menu reflects the
+ * worker's live state while open.
+ *
+ * It is a native `popover="auto"`: the browser provides top-layer
+ * rendering, light dismiss (click outside, Escape) and focus restore.
+ * Placement is CSS anchor positioning against a zero-size anchor at the
+ * cursor, flipping at the viewport edges (`graph.css`). Keyboard: focus
+ * moves to the first item on open; arrows/Home/End move between items;
+ * Tab closes.
  */
 export function GraphContextMenu({
   x,
   y,
   workerId,
-  workerState,
-  onPause,
-  onResume,
-  onKill,
   onInspect,
   onClose,
 }: GraphContextMenuProps): React.ReactElement {
-  const menuRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const { worker, pause, resume, kill } = useWorker(workerId);
+  const state = worker?.state;
 
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        onClose();
-      }
-    };
-
-    document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("contextmenu", handleClickOutside);
+    const popover = popoverRef.current;
+    if (!popover) return undefined;
+    popover.showPopover();
+    popover.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
     return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("contextmenu", handleClickOutside);
+      if (popover.matches(":popover-open")) popover.hidePopover();
     };
-  }, [onClose]);
+  }, []);
 
-  // Close on Escape
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [onClose]);
+  const hide = (): void => popoverRef.current?.hidePopover();
+  /** Closes the menu, then runs a lifecycle IPC action as a transition. */
+  const run = (action: () => Promise<void>): void => {
+    hide();
+    startTransition(action);
+  };
 
-  const canPause = workerState === "running";
-  const canResume = workerState === "paused";
+  const position = { "--menu-x": `${x}px`, "--menu-y": `${y}px` } as CSSProperties;
 
   return (
-    <div
-      ref={menuRef}
-      role="menu"
-      aria-label="Worker Context Menu"
-      style={{
-        position: "fixed",
-        top: y,
-        left: x,
-        zIndex: 50,
-        minWidth: 160,
-        padding: 4,
-        background: "oklch(0.12 0.03 220 / 0.85)",
-        backdropFilter: "blur(16px) saturate(1.5)",
-        border: "1px solid oklch(0.28 0.05 220)",
-        borderRadius: 8,
-        boxShadow: "0 0 0 1px oklch(0.78 0.18 205 / 0.1), 0 12px 32px oklch(0.06 0.02 220 / 0.6)",
-      }}
-    >
+    <>
+      <div className="graph-context-menu__anchor" style={position} />
       <div
-        style={{
-          padding: "4px 12px 6px",
-          fontFamily: "var(--font-mono)",
-          fontSize: "0.6875rem",
-          color: "oklch(0.55 0.04 220)",
-          userSelect: "text",
+        ref={popoverRef}
+        popover="auto"
+        className="graph-context-menu"
+        style={position}
+        onToggle={(event) => {
+          if (event.newState === "closed") onClose();
         }}
       >
-        {workerId.slice(0, 8)}
+        <div id={titleId} className="graph-context-menu__title">
+          {worker?.name ?? workerId.slice(0, 8)}
+        </div>
+        <div
+          role="menu"
+          aria-labelledby={titleId}
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.key === "Tab") hide();
+            else if (moveFocus(event.currentTarget, event.key)) event.preventDefault();
+          }}
+        >
+          <MenuItem label="Pause" onSelect={() => run(pause)} disabled={state !== "running"} />
+          <MenuItem label="Resume" onSelect={() => run(resume)} disabled={state !== "paused"} />
+          <hr />
+          <MenuItem
+            label="Inspect"
+            onSelect={() => {
+              hide();
+              onInspect();
+            }}
+          />
+          <MenuItem label="Kill" onSelect={() => run(kill)} variant="danger" />
+        </div>
       </div>
-      <MenuItem label="Pause" onClick={onPause} disabled={!canPause} />
-      <MenuItem label="Resume" onClick={onResume} disabled={!canResume} />
-      <hr
-        style={{
-          height: 1,
-          margin: "4px 0",
-          background: "oklch(0.22 0.04 220)",
-          border: "none",
-        }}
-      />
-      <MenuItem label="Inspect" onClick={onInspect} />
-      <MenuItem label="Kill" onClick={onKill} variant="danger" />
-    </div>
+    </>
   );
 }

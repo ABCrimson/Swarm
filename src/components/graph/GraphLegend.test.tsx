@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { describe, expect, it } from "vitest";
 import { GraphLegend } from "#components/graph/GraphLegend";
 import type { GraphEdgeKind } from "#components/graph/ProvenanceEdge";
+import { KIND_STYLE } from "#components/graph/ProvenanceEdge";
 
 function renderLegend(presentKinds: ReadonlySet<GraphEdgeKind>) {
   return render(
@@ -12,35 +13,42 @@ function renderLegend(presentKinds: ReadonlySet<GraphEdgeKind>) {
   );
 }
 
+const legend = () => screen.getByRole("note", { name: "Edge Legend" });
+
 describe("GraphLegend — gating", () => {
   it("renders nothing when no edge kinds are present", () => {
-    const { container } = renderLegend(new Set());
-    expect(container.querySelector(".react-flow__panel")).toBeNull();
+    renderLegend(new Set());
+    expect(screen.queryByRole("note", { name: "Edge Legend" })).not.toBeInTheDocument();
   });
 
   it("renders exactly one row per present kind, in fixed order, Title Case", () => {
     renderLegend(new Set(["command", "spawn"]));
 
-    expect(screen.getByText("Spawn")).toBeInTheDocument();
-    expect(screen.getByText("Command")).toBeInTheDocument();
-    expect(screen.queryByText("Kill")).not.toBeInTheDocument();
-    expect(screen.queryByText("Message")).not.toBeInTheDocument();
-    expect(screen.queryByText("Manual")).not.toBeInTheDocument();
+    const rows = within(legend()).getAllByText(/^(Spawn|Kill|Command|Message|Manual)$/);
+    expect(rows.map((row) => row.textContent)).toEqual(["Spawn", "Command"]);
   });
 
   it("gates the manual row separately from measured kinds", () => {
     renderLegend(new Set(["manual"]));
 
-    expect(screen.getByText("Manual")).toBeInTheDocument();
-    expect(screen.queryByText("Spawn")).not.toBeInTheDocument();
+    expect(within(legend()).getByText("Manual")).toBeInTheDocument();
+    expect(within(legend()).queryByText("Spawn")).not.toBeInTheDocument();
   });
 
   it("renders every row when every kind is present", () => {
     renderLegend(new Set(["spawn", "kill", "command", "message", "manual"]));
 
     for (const label of ["Spawn", "Kill", "Command", "Message", "Manual"]) {
-      expect(screen.getByText(label)).toBeInTheDocument();
+      expect(within(legend()).getByText(label)).toBeInTheDocument();
     }
+  });
+
+  it("draws each swatch with the canvas edge's own stroke and dash", () => {
+    renderLegend(new Set(["kill"]));
+
+    const line = legend().querySelector("line");
+    expect(line).toHaveAttribute("stroke", KIND_STYLE.kill.stroke);
+    expect(line).toHaveAttribute("stroke-dasharray", KIND_STYLE.kill.dash);
   });
 
   // ── Visual separation of measured facts from user annotations ──────
@@ -52,26 +60,26 @@ describe("GraphLegend — gating", () => {
   it('shows an "Annotation" group header above the Manual row when manual edges are present', () => {
     renderLegend(new Set(["manual"]));
 
-    expect(screen.getByText("Annotation")).toBeInTheDocument();
+    expect(within(legend()).getByText("Annotation")).toBeInTheDocument();
   });
 
   it("draws a separator between measured rows and the Manual row when both are present", () => {
-    const { container } = renderLegend(new Set(["spawn", "manual"]));
+    renderLegend(new Set(["spawn", "manual"]));
 
-    expect(container.querySelector("hr")).not.toBeNull();
-    expect(screen.getByText("Annotation")).toBeInTheDocument();
+    expect(within(legend()).getByRole("separator")).toBeInTheDocument();
+    expect(within(legend()).getByText("Annotation")).toBeInTheDocument();
   });
 
   it("omits the separator when only measured kinds are present (no Manual row to separate from)", () => {
-    const { container } = renderLegend(new Set(["spawn", "command"]));
+    renderLegend(new Set(["spawn", "command"]));
 
-    expect(container.querySelector("hr")).toBeNull();
-    expect(screen.queryByText("Annotation")).not.toBeInTheDocument();
+    expect(within(legend()).queryByRole("separator")).not.toBeInTheDocument();
+    expect(within(legend()).queryByText("Annotation")).not.toBeInTheDocument();
   });
 
   it("omits the separator when only the Manual row is present (nothing above it to separate from)", () => {
-    const { container } = renderLegend(new Set(["manual"]));
+    renderLegend(new Set(["manual"]));
 
-    expect(container.querySelector("hr")).toBeNull();
+    expect(within(legend()).queryByRole("separator")).not.toBeInTheDocument();
   });
 });

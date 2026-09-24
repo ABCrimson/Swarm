@@ -12,7 +12,7 @@
  * `workerFactory` option, using this file as the single, non-nested Worker.
  *
  * We deliberately do NOT construct an `ELK` instance in here. Doing so
- * requires supplying `workerUrl`/`workerFactory` (elkjs 0.11.1 throws
+ * requires supplying `workerUrl`/`workerFactory` (the constructor throws
  * synchronously otherwise — see `elkjs/lib/elk-api.js`), and elkjs's
  * default worker mechanism would spawn *another*, nested Worker to run the
  * algorithm. That nested `new Worker()` call previously crashed during this

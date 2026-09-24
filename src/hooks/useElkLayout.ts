@@ -1,11 +1,24 @@
-import type { Edge, Node } from "@xyflow/react";
+import type { XYPosition } from "@xyflow/react";
 import type { ElkExtendedEdge, ElkNode } from "elkjs";
 import ELK from "elkjs/lib/elk-api.js";
-import { useEffect, useRef, useState } from "react";
+import type { RefObject } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+
+/** What layout needs of a node: its id (every node is laid out at the same fixed size). */
+export interface LayoutNode {
+  readonly id: string;
+}
+
+/** What layout needs of an edge: its endpoints. */
+export interface LayoutEdge {
+  readonly id: string;
+  readonly source: string;
+  readonly target: string;
+}
 
 interface ElkLayoutReturn {
-  readonly layoutedNodes: Node[];
-  readonly layoutedEdges: Edge[];
+  /** Top-left position per laid-out node id, from the most recent completed layout. */
+  readonly positions: ReadonlyMap<string, XYPosition>;
   readonly isLayouting: boolean;
   /** Set when the layout worker fails to start or errors out; cleared on the next `runLayout()`. */
   readonly error: string | null;
@@ -33,11 +46,13 @@ const LAYOUT_TIMEOUT_ERROR = "Layout Engine Timed Out";
 /** How long to wait for `elk.layout()` to settle before treating it as a hung/failed layout. */
 const LAYOUT_TIMEOUT_MS = 10_000;
 
+const EMPTY_POSITIONS: ReadonlyMap<string, XYPosition> = new Map();
+
 /**
- * Generates a stable fingerprint of the topology for deep comparison.
- * Only re-layouts when the node set or edge connections actually change.
+ * A stable fingerprint of the topology: layout only re-runs when the node
+ * set or the edge connections change, never for data-only updates.
  */
-function topologyFingerprint(nodes: Node[], edges: Edge[]): string {
+function topologyFingerprint(nodes: readonly LayoutNode[], edges: readonly LayoutEdge[]): string {
   const nodeIds = nodes
     .map((n) => n.id)
     .toSorted()
@@ -49,49 +64,53 @@ function topologyFingerprint(nodes: Node[], edges: Edge[]): string {
   return `${nodeIds}|${edgeIds}`;
 }
 
+/** Clears a pending watchdog timer, if any. Idempotent. */
+function clearWatchdog(watchdog: RefObject<ReturnType<typeof setTimeout> | null>): void {
+  if (watchdog.current !== null) {
+    clearTimeout(watchdog.current);
+    watchdog.current = null;
+  }
+}
+
 /**
- * Computes an ELK graph layout via a dedicated Web Worker.
+ * Computes an ELK graph layout in a dedicated Web Worker.
  *
- * Constructs elkjs's own `ELK` class on the main thread with a
+ * Constructs elkjs's own `ELK` driver (the 10 kB `elk-api` entry — the
+ * layout engine itself only ships in the worker bundle) with a
  * `workerFactory` that spawns exactly one dedicated, non-nested Worker
  * (`src/workers/elk.worker.ts`, which itself *is* elkjs's worker script —
- * see that file's header for why). elkjs drives its register/layout
- * protocol over that single worker and resolves/rejects `.layout()`
- * accordingly; a `worker.onerror`/`onmessageerror` failure is surfaced
- * through the `error` return value instead of leaving `isLayouting` stuck.
- * A {@link LAYOUT_TIMEOUT_MS} watchdog covers the remaining failure mode —
- * a worker that neither errors nor ever responds — by racing `.layout()`
- * against a timer and surfacing the same kind of `error` state if it wins;
- * the watchdog timer is always cleared (success, any failure path, or
- * unmount) so it never fires — and never leaks — after the fact.
+ * see that file's header). elkjs drives its register/layout protocol over
+ * that worker and resolves/rejects `.layout()` accordingly; a
+ * `worker.onerror`/`onmessageerror` failure is surfaced through `error`
+ * instead of leaving `isLayouting` stuck. A {@link LAYOUT_TIMEOUT_MS}
+ * watchdog covers the remaining failure mode — a worker that neither
+ * errors nor ever responds — by racing `.layout()` against a timer; the
+ * timer is always cleared (success, any failure path, or unmount).
  * Overlapping layouts are serialized by a run token: only the most recent
- * `runLayout()` invocation may commit state, clear the watchdog, or stamp
- * an error — a superseded run's late settlement is ignored outright.
+ * `runLayout()` may commit state, clear the watchdog, or stamp an error —
+ * a superseded run's late settlement is ignored outright.
  *
- * Automatically re-runs layout when the topology fingerprint changes.
- * Node positions are applied directly (synchronously) in the `.then()`
- * handler as a single batched React state commit. This used to be deferred
- * via `requestAnimationFrame`, but rAF is not guaranteed to fire — Chromium
- * suppresses it for occluded/minimized windows (and under CDP evaluation
- * pressure) — and the layout watchdog is cleared before that deferred
- * callback runs, so a suppressed frame left `isLayouting` stuck `true`
- * forever with no recovery path. A single batched commit doesn't need frame
- * alignment, so the commit must not depend on frame production at all.
+ * Layout re-runs automatically when the topology fingerprint changes: the
+ * effect is keyed on the fingerprint string and fires an Effect Event, so
+ * data-only re-renders never re-layout, and the event always sees the
+ * current nodes and edges. Positions are committed synchronously in the
+ * `.then()` as one batched update — never deferred to
+ * `requestAnimationFrame`, which Chromium suppresses for occluded or
+ * minimized windows (that used to leave `isLayouting` stuck forever).
  *
- * @param nodes - React Flow nodes to position.
- * @param edges - React Flow edges defining connections.
- * @returns Layouted nodes/edges, loading/error state, and manual `runLayout` trigger.
+ * @param nodes - Nodes to position (only their ids are read).
+ * @param edges - Edges defining connections (only their endpoints are read).
+ * @returns Positions by node id, loading/error state, and a manual `runLayout` trigger.
  */
-export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
-  const [layoutedNodes, setLayoutedNodes] = useState<Node[]>(nodes);
-  const [layoutedEdges, setLayoutedEdges] = useState<Edge[]>(edges);
+export function useElkLayout(
+  nodes: readonly LayoutNode[],
+  edges: readonly LayoutEdge[],
+): ElkLayoutReturn {
+  const [positions, setPositions] = useState(EMPTY_POSITIONS);
   const [isLayouting, setIsLayouting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const elkRef = useRef<InstanceType<typeof ELK> | null>(null);
-  const prevFingerprintRef = useRef<string>("");
-  const nodesRef = useRef<Node[]>(nodes);
-  const edgesRef = useRef<Edge[]>(edges);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Monotonic run token: each runLayout() claims a new id, and a settlement
   // whose id is no longer current belongs to a superseded run — it must not
@@ -102,52 +121,20 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
   // independently by per-message id).
   const runIdRef = useRef(0);
 
-  nodesRef.current = nodes;
-  edgesRef.current = edges;
-
-  /** Clears the in-flight layout watchdog, if any. Idempotent. */
-  const clearWatchdog = (): void => {
-    if (watchdogRef.current !== null) {
-      clearTimeout(watchdogRef.current);
-      watchdogRef.current = null;
-    }
-  };
-
   // Construct the ELK driver (and its single, non-nested worker) once on
-  // mount, terminate on unmount.
+  // mount; terminate it on unmount.
   //
-  // StrictMode replay hazard: in dev, StrictMode mounts this effect, runs
-  // its cleanup, then mounts it again (mount -> cleanup -> mount) to flush
-  // out effects that aren't cleanup-safe. If a worker topology already
-  // exists when the Graph view mounts, the auto-layout effect below fires
-  // `runLayout()` on that first mount (fingerprint "" -> topology),
-  // arming the watchdog and starting `elk1.layout()`. This cleanup then
-  // runs, terminating elk1's worker and clearing the watchdog while that
-  // layout is still in flight. On the replay mount a fresh elk2 is
-  // constructed — but `prevFingerprintRef` is a ref, so it SURVIVES the
-  // replay and still holds the topology fingerprint set on the first
-  // mount. The replayed auto-layout effect therefore sees no fingerprint
-  // change and skips `runLayout()` entirely, leaving elk2 idle, the
-  // watchdog dead, and `isLayouting` stuck `true` forever — the
-  // "Computing Layout" spinner never resolves. (A first-ever mount with no
-  // pre-existing topology doesn't hit this: the worker spawns after mount,
-  // so the topology fingerprint only appears/changes later, on the replay,
-  // which then runs `runLayout()` normally.)
-  //
-  // Resetting `prevFingerprintRef` and `isLayouting` here — on every
-  // cleanup, not just a genuine unmount — makes the replay mount behave
-  // like a first mount: the next auto-layout effect run re-triggers
-  // `runLayout()` on the fresh engine, and no stale spinner survives the
-  // replay. On a real unmount these are harmless no-ops (nothing reads the
-  // ref or renders this state again).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: clearWatchdog is a stable-shape helper closing only over the ref; including it would redefine the effect's identity every render for no behavioral change.
+  // StrictMode replays effects (mount -> cleanup -> mount). The cleanup
+  // terminates the first engine mid-layout and invalidates its run, and
+  // resets `isLayouting`; the replayed auto-layout effect below then runs
+  // layout again on the fresh engine (it fires on every mount, not only
+  // on fingerprint changes), so no spinner is left stuck.
   useEffect(() => {
     const handleWorkerFailure = (): void => {
-      // A worker crash/unreadable-message failure makes the in-flight
-      // `.layout()` call moot — without this, the watchdog would still
-      // fire LAYOUT_TIMEOUT_MS later and stomp this (correct) error with
-      // a misleading timeout one.
-      clearWatchdog();
+      // A worker crash/unreadable message makes the in-flight `.layout()`
+      // moot — without this, the watchdog would still fire later and
+      // stomp this (correct) error with a misleading timeout one.
+      clearWatchdog(watchdogRef);
       setError(LAYOUT_ENGINE_ERROR);
       setIsLayouting(false);
     };
@@ -162,22 +149,17 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
         return worker;
       },
     });
-
     elkRef.current = elk;
 
     return () => {
       elk.terminateWorker();
       elkRef.current = null;
-      clearWatchdog();
+      clearWatchdog(watchdogRef);
       // Invalidate any in-flight settlement from the terminated engine: a
-      // response already queued in PromisedWorker's setTimeout(0) deferral
-      // still settles after terminate(), and must not commit into the
-      // replayed mount's (or post-unmount) state.
+      // response already queued in elkjs's PromisedWorker still settles
+      // after terminate(), and must not commit into the replayed mount's
+      // (or post-unmount) state.
       runIdRef.current += 1;
-      // See the StrictMode replay hazard note above: reset so a replayed
-      // (or next real) mount's auto-layout effect re-triggers layout on
-      // the fresh engine, and no stale spinner carries over.
-      prevFingerprintRef.current = "";
       setIsLayouting(false);
     };
   }, []);
@@ -186,85 +168,61 @@ export function useElkLayout(nodes: Node[], edges: Edge[]): ElkLayoutReturn {
     const elk = elkRef.current;
     if (!elk) return;
 
-    const currentNodes = nodesRef.current;
-    const currentEdges = edgesRef.current;
-
     setIsLayouting(true);
     setError(null);
 
     const graph: ElkNode = {
       id: "root",
       layoutOptions: DEFAULT_LAYOUT_OPTIONS,
-      children: currentNodes.map((n) => ({
-        id: n.id,
-        width: NODE_WIDTH,
-        height: NODE_HEIGHT,
-      })),
-      edges: currentEdges.map(
-        (e): ElkExtendedEdge => ({
-          id: e.id,
-          sources: [e.source],
-          targets: [e.target],
-        }),
+      children: nodes.map((n) => ({ id: n.id, width: NODE_WIDTH, height: NODE_HEIGHT })),
+      edges: edges.map(
+        (e): ElkExtendedEdge => ({ id: e.id, sources: [e.source], targets: [e.target] }),
       ),
     };
 
-    // Clear any watchdog left over from a prior in-flight call — a fresh
-    // runLayout() always supersedes it, and only one should ever be live.
-    clearWatchdog();
+    // A fresh runLayout() always supersedes an in-flight one's watchdog.
+    clearWatchdog(watchdogRef);
     const runId = ++runIdRef.current;
 
-    // Race `.layout()` against a watchdog timer: elkjs's worker protocol
-    // has no built-in timeout, so a worker that neither errors nor ever
-    // responds (as opposed to the onerror/onmessageerror cases handled
-    // above) would otherwise leave `isLayouting` stuck forever.
-    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    // elkjs's worker protocol has no timeout of its own.
+    const timeout = new Promise<never>((_resolve, reject) => {
       watchdogRef.current = setTimeout(() => {
         watchdogRef.current = null;
         reject(new Error("elk-layout-watchdog-timeout"));
       }, LAYOUT_TIMEOUT_MS);
     });
 
-    Promise.race([elk.layout(graph), timeoutPromise])
+    Promise.race([elk.layout(graph), timeout])
       .then((result) => {
         if (runId !== runIdRef.current) return;
-        clearWatchdog();
-
-        const positionMap = new Map(
-          (result.children ?? []).map((child) => [child.id, { x: child.x ?? 0, y: child.y ?? 0 }]),
+        clearWatchdog(watchdogRef);
+        setPositions(
+          new Map(
+            (result.children ?? []).map((child) => [
+              child.id,
+              { x: child.x ?? 0, y: child.y ?? 0 },
+            ]),
+          ),
         );
-
-        const updated = nodesRef.current.map((node) => {
-          const pos = positionMap.get(node.id);
-          if (pos) {
-            return { ...node, position: { x: pos.x, y: pos.y } };
-          }
-          return node;
-        });
-
-        setLayoutedNodes(updated);
-        setLayoutedEdges(edgesRef.current);
         setIsLayouting(false);
       })
       .catch((err: unknown) => {
         if (runId !== runIdRef.current) return;
-        clearWatchdog();
+        clearWatchdog(watchdogRef);
         const timedOut = err instanceof Error && err.message === "elk-layout-watchdog-timeout";
         setError(timedOut ? LAYOUT_TIMEOUT_ERROR : LAYOUT_ENGINE_ERROR);
         setIsLayouting(false);
       });
   };
 
-  // Auto-layout when topology changes
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runLayout is recreated every render but only reads refs; adding it would re-run this effect on every render (the fingerprint guard would still block extra layouts, but re-computing the fingerprint on every render is wasted work we intentionally avoid)
-  useEffect(() => {
-    const fingerprint = topologyFingerprint(nodes, edges);
+  // The fingerprint is passed in (and ignored) so the effect's one
+  // dependency is the value it reacts to; the event itself always sees
+  // the current nodes and edges.
+  const onTopologyChange = useEffectEvent((_fingerprint: string) => runLayout());
+  const fingerprint = topologyFingerprint(nodes, edges);
 
-    if (fingerprint !== prevFingerprintRef.current) {
-      prevFingerprintRef.current = fingerprint;
-      runLayout();
-    }
-  }, [nodes, edges]);
+  // Auto-layout on mount and whenever the topology changes.
+  useEffect(() => onTopologyChange(fingerprint), [fingerprint]);
 
-  return { layoutedNodes, layoutedEdges, isLayouting, error, runLayout };
+  return { positions, isLayouting, error, runLayout };
 }

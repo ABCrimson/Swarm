@@ -206,16 +206,15 @@ describe("useElkLayout", () => {
   describe("StrictMode remount (fix/feedback-batch-1 item 1)", () => {
     // StrictMode double-invokes effects on mount in dev (mount -> cleanup
     // -> mount). When a worker topology already exists at mount time, the
-    // auto-layout effect fires runLayout() on the FIRST pass (fingerprint
-    // "" -> topology), arming the watchdog and starting a layout call on
-    // the first engine. The construction effect's cleanup then terminates
-    // that engine's worker and clears the watchdog mid-flight. On the
-    // replay mount a fresh engine is created — but `prevFingerprintRef` is
-    // a ref, so without resetting it in that cleanup, the replayed
-    // auto-layout effect sees no fingerprint change (the ref survived the
-    // replay) and skips runLayout() entirely, leaving the fresh engine
-    // idle, the watchdog dead, and isLayouting stuck true forever. This
-    // exercises that exact sequence via a real React.StrictMode wrapper.
+    // auto-layout effect fires runLayout() on the FIRST pass, arming the
+    // watchdog and starting a layout call on the first engine. The
+    // construction effect's cleanup then terminates that engine's worker
+    // and clears the watchdog mid-flight. The replayed auto-layout effect
+    // must lay out again on the fresh engine; a guard that skipped layout
+    // when the topology looked "unchanged" (an earlier version kept the
+    // last fingerprint in a ref that survived the replay) left the fresh
+    // engine idle and isLayouting stuck true forever. This exercises that
+    // exact sequence via a real React.StrictMode wrapper.
     beforeEach(() => {
       vi.useFakeTimers();
     });
@@ -369,7 +368,7 @@ describe("useElkLayout", () => {
       });
       expect(result.current.error).toBeNull();
       expect(result.current.isLayouting).toBe(false);
-      expect(result.current.layoutedNodes.find((n) => n.id === "c")?.position).toEqual({
+      expect(result.current.positions.get("c")).toEqual({
         x: 300,
         y: 150,
       });
@@ -391,7 +390,7 @@ describe("useElkLayout", () => {
       // under CDP evaluation pressure). Stub it to a no-op that never invokes
       // its callback, simulating that starvation deterministically: if the
       // hook's success handler still depends on rAF to commit state, this
-      // test must fail (isLayouting stuck true, layoutedNodes never update).
+      // test must fail (isLayouting stuck true, positions never update).
       const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
       MockWorker.autoRespondLayout = true;
 
@@ -406,15 +405,14 @@ describe("useElkLayout", () => {
       });
 
       expect(result.current.isLayouting).toBe(false);
-      expect(result.current.layoutedNodes.find((n) => n.id === "a")?.position).toEqual({
+      expect(result.current.positions.get("a")).toEqual({
         x: 100,
         y: 50,
       });
-      expect(result.current.layoutedNodes.find((n) => n.id === "b")?.position).toEqual({
+      expect(result.current.positions.get("b")).toEqual({
         x: 200,
         y: 100,
       });
-      expect(result.current.layoutedEdges).toBe(edges);
       expect(rafSpy).not.toHaveBeenCalled();
     });
   });

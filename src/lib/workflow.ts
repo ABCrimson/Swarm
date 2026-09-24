@@ -1,9 +1,10 @@
 // ── Workflow Import/Export ───────────────────────────
-// Serialise and deserialise visual workflow graphs to/from portable JSON.
+// Serialise the Workers graph's layout and hand-drawn annotation edges to
+// portable JSON, and validate a file on the way back in.
 
-import type { Edge, Node } from "@xyflow/react";
+import * as z from "zod";
 
-/** Serialisable node definition within a workflow. */
+/** Serialisable node: a worker's id, node type, canvas position and display data. */
 export interface WorkflowNode {
   readonly id: string;
   readonly type: string;
@@ -11,7 +12,7 @@ export interface WorkflowNode {
   readonly data: Record<string, unknown>;
 }
 
-/** Serialisable edge definition within a workflow. */
+/** Serialisable annotation edge between two worker nodes. */
 export interface WorkflowEdge {
   readonly id: string;
   readonly source: string;
@@ -19,78 +20,115 @@ export interface WorkflowEdge {
   readonly label?: string;
 }
 
-/** Portable JSON representation of a visual workflow graph. */
+/** Portable JSON representation of a Workers graph. */
 export interface WorkflowDefinition {
   readonly id: string;
   readonly name: string;
-  readonly nodes: WorkflowNode[];
-  readonly edges: WorkflowEdge[];
+  readonly nodes: readonly WorkflowNode[];
+  readonly edges: readonly WorkflowEdge[];
+}
+
+const Id = z.string().min(1);
+
+/**
+ * The file format {@link exportWorkflow} writes. Positions must be finite
+ * numbers and ids non-empty strings; unknown keys are ignored, so files
+ * from older builds (which carried extra node data) still load.
+ */
+export const WorkflowDefinitionSchema = z.object({
+  id: Id,
+  name: z.string(),
+  nodes: z.array(
+    z.object({
+      id: Id,
+      type: z.string(),
+      position: z.object({ x: z.number(), y: z.number() }),
+      data: z.record(z.string(), z.unknown()),
+    }),
+  ),
+  edges: z.array(
+    z.object({
+      id: Id,
+      source: Id,
+      target: Id,
+      label: z.string().optional(),
+    }),
+  ),
+});
+
+/** Shape of the nodes/edges {@link exportWorkflow} reads — a structural subset of xyflow's. */
+interface ExportableNode {
+  readonly id: string;
+  readonly type?: string;
+  readonly position: { readonly x: number; readonly y: number };
+  readonly data: Record<string, unknown>;
+}
+
+interface ExportableEdge {
+  readonly id: string;
+  readonly source: string;
+  readonly target: string;
+  readonly label?: unknown;
 }
 
 /**
- * Exports the current React Flow graph state to a portable JSON definition.
+ * Exports graph nodes and annotation edges to a portable definition.
  *
- * `edges` MUST already be filtered to portable/user-authored ("manual")
- * edges only — this function serializes whatever it's given verbatim,
- * dropping each edge's `data.kind` entirely, and `importWorkflow` below
- * always re-tags every imported edge `kind: "manual"`. Passing a
- * MEASURED causal edge (spawn/kill/command/message, derived from a
- * stamped `swarm://events` envelope — see `#store/provenance`) through
- * this round-trip would silently launder it into a user annotation on
- * re-import, exactly the "measured fact merged with annotation" outcome
- * the provenance store's own doc forbids. `WorkerGraph.tsx` enforces
- * this by only ever passing its `manualEdges` state here, never the
- * combined measured+manual `edges` array.
+ * `edges` MUST be the user's hand-drawn ("manual") annotations only. A
+ * measured causal edge (spawn/kill/command/message, derived from a stamped
+ * `swarm://events` envelope — see `#store/provenance`) is a fact of one
+ * session, not a portable workflow; exporting it and importing it back
+ * would launder it into a user annotation, the "measured fact merged with
+ * annotation" outcome the provenance store forbids. `WorkerGraph` passes
+ * only its manual edges here.
  *
- * @param nodes - Current React Flow nodes with positions and data.
- * @param edges - Current React Flow edges with source/target connections — manual/portable only, see above.
- * @returns A serialisable {@link WorkflowDefinition} with a generated UUID.
+ * @returns A {@link WorkflowDefinition} with a fresh UUID and a timestamped name.
  */
-export function exportWorkflow(nodes: Node[], edges: Edge[]): WorkflowDefinition {
+export function exportWorkflow(
+  nodes: readonly ExportableNode[],
+  edges: readonly ExportableEdge[],
+): WorkflowDefinition {
   return {
     id: crypto.randomUUID(),
-    name: `Workflow ${new Date().toISOString().slice(0, 16)}`,
+    name: `Workflow ${Temporal.Now.plainDateTimeISO().toString({ smallestUnit: "minute" })}`,
     nodes: nodes.map((n) => ({
       id: n.id,
       type: n.type ?? "worker",
       position: { x: n.position.x, y: n.position.y },
-      data: n.data as Record<string, unknown>,
+      data: n.data,
     })),
     edges: edges.map((e) => ({
       id: e.id,
       source: e.source,
       target: e.target,
-      label: typeof e.label === "string" ? e.label : undefined,
+      ...(typeof e.label === "string" && { label: e.label }),
     })),
   };
 }
 
+/** Thrown by {@link parseWorkflow} with a Title Case, user-facing message. */
+export class WorkflowFileError extends Error {
+  override readonly name = "WorkflowFileError";
+}
+
 /**
- * Imports a workflow definition back into React Flow node/edge arrays.
+ * Parses and validates the text of a workflow file.
  *
- * @param def - A previously exported {@link WorkflowDefinition}.
- * @returns An object with `nodes` and `edges` arrays ready for React Flow.
+ * @throws {WorkflowFileError} when the text is not JSON or not a workflow
+ *   definition; the message names the first offending field.
  */
-export function importWorkflow(def: WorkflowDefinition): { nodes: Node[]; edges: Edge[] } {
-  const nodes: Node[] = def.nodes.map((n) => ({
-    id: n.id,
-    type: n.type,
-    position: { x: n.position.x, y: n.position.y },
-    data: n.data,
-  }));
-
-  const edges: Edge[] = def.edges.map((e) => ({
-    id: e.id,
-    source: e.source,
-    target: e.target,
-    // Imported edges are inherently user-authored, not measured facts
-    // derived from a stamped envelope — the "manual" kind keeps them
-    // visually and structurally distinct from provenance edges (see
-    // `ProvenanceEdge.tsx`), same as one hand-drawn via `onConnect`.
-    type: "provenance",
-    data: { kind: "manual" },
-    label: e.label,
-  }));
-
-  return { nodes, edges };
+export function parseWorkflow(text: string): WorkflowDefinition {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw new WorkflowFileError("The File Is Not Valid JSON");
+  }
+  const parsed = WorkflowDefinitionSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const where = issue?.path.length ? ` At ${issue.path.join(".")}` : "";
+    throw new WorkflowFileError(`Not A SWARM Workflow File (Invalid Value${where})`);
+  }
+  return parsed.data;
 }

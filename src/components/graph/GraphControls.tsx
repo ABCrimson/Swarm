@@ -1,21 +1,25 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
-import type { Edge, Node } from "@xyflow/react";
 import { useReactFlow } from "@xyflow/react";
 import { useAtomValue } from "jotai";
-import { useEffect } from "react";
+import { useEffect, useEffectEvent } from "react";
 import { toast } from "#components/ui/Toast";
+import { isTauri } from "#lib/tauri";
 import type { WorkflowDefinition } from "#lib/workflow";
-import { exportWorkflow, importWorkflow } from "#lib/workflow";
+import { parseWorkflow } from "#lib/workflow";
 import { causalityInspectorAtom } from "#store/ui";
 
 interface GraphControlsProps {
   readonly onResetLayout: () => void;
-  readonly onAddNode?: () => void;
+  /** Present while a manual edge is selected. */
   readonly onDeleteEdge?: () => void;
-  readonly nodes?: Node[];
-  readonly edges?: Edge[];
+  /** Snapshot of the graph to write out (layout + manual annotations). */
+  readonly getWorkflow: () => WorkflowDefinition;
+  /** Applies a validated workflow; returns a Title Case summary for the toast. */
+  readonly onImport: (workflow: WorkflowDefinition) => string;
 }
+
+const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 function ControlButton({
   onClick,
@@ -27,152 +31,103 @@ function ControlButton({
   readonly children: React.ReactNode;
 }): React.ReactElement {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      style={{
-        width: 36,
-        height: 36,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "oklch(0.12 0.03 220 / 0.7)",
-        backdropFilter: "blur(12px) saturate(1.5)",
-        border: "1px solid oklch(0.28 0.05 220)",
-        borderRadius: 8,
-        color: "oklch(0.82 0.04 220)",
-        cursor: "pointer",
-        transition: "background 0.15s ease, border-color 0.15s ease",
-        fontSize: "1rem",
-        lineHeight: 1,
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = "oklch(0.17 0.04 220)";
-        e.currentTarget.style.borderColor = "oklch(0.35 0.06 220)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "oklch(0.12 0.03 220 / 0.7)";
-        e.currentTarget.style.borderColor = "oklch(0.28 0.05 220)";
-      }}
-    >
+    <button type="button" className="graph-control" onClick={onClick} aria-label={label}>
       {children}
     </button>
   );
 }
 
+/** True when a key event comes from a text field (shortcuts must not steal typing). */
+function isTypingTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+  );
+}
+
 /**
- * Floating toolbar with zoom, fit-view, reset-layout, add-node, export/import,
- * and edge deletion controls for the visual workflow builder.
+ * Floating toolbar for the Workers topology graph: zoom, fit view, reset
+ * layout, delete the selected annotation edge, and export/import of the
+ * layout and annotations as a workflow file.
  *
- * Keyboard shortcuts: `+`/`=` zoom in, `-` zoom out, `0` fit view.
+ * Keyboard shortcuts: `+`/`=` zoom in, `-` zoom out, `0` fit view — ignored
+ * while typing and while the causality inspector is open. Export/Import
+ * use the Tauri dialog and fs plugins, so they only appear in the desktop
+ * app (not under the remote `swarmd` web transport).
  */
 export function GraphControls({
   onResetLayout,
-  onAddNode,
   onDeleteEdge,
-  nodes,
-  edges,
+  getWorkflow,
+  onImport,
 }: GraphControlsProps): React.ReactElement {
-  const { zoomIn, zoomOut, fitView, setNodes, setEdges } = useReactFlow();
-  // Read-only: the zoom-key shortcuts below must not fire while the
-  // causality inspector is open — see the effect's own comment.
-  const causalityTarget = useAtomValue(causalityInspectorAtom);
+  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  const causalityOpen = useAtomValue(causalityInspectorAtom) !== null;
+  const filesAvailable = isTauri();
 
-  const handleZoomIn = () => {
-    void zoomIn({ duration: 200 });
-  };
+  const handleZoomIn = (): void => void zoomIn({ duration: 200 });
+  const handleZoomOut = (): void => void zoomOut({ duration: 200 });
+  const handleFitView = (): void => void fitView({ duration: 300, padding: 0.2 });
 
-  const handleZoomOut = () => {
-    void zoomOut({ duration: 200 });
-  };
-
-  const handleFitView = () => {
-    void fitView({ duration: 300, padding: 0.2 });
-  };
-
-  // Export workflow to JSON file
-  const handleExport = async () => {
-    if (!nodes || !edges) return;
-
-    const workflow = exportWorkflow(nodes, edges);
-    const json = JSON.stringify(workflow, null, 2);
-
-    const filePath = await save({
-      title: "Export Workflow",
-      defaultPath: `workflow-${Date.now()}.json`,
-      filters: [{ name: "JSON", extensions: ["json"] }],
-    });
-
-    if (!filePath) return;
-
+  const handleExport = async (): Promise<void> => {
     try {
-      await writeTextFile(filePath, json);
+      const filePath = await save({
+        title: "Export Workflow",
+        defaultPath: `workflow-${Date.now()}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!filePath) return;
+      await writeTextFile(filePath, JSON.stringify(getWorkflow(), null, 2));
       toast.success("Workflow Exported", { description: filePath });
     } catch (err) {
-      toast.error("Export Failed", { description: String(err) });
+      toast.error("Export Failed", { description: errorText(err) });
     }
   };
 
-  // Import workflow from JSON file
-  const handleImport = async () => {
-    const filePath = await open({
-      title: "Import Workflow",
-      multiple: false,
-      filters: [{ name: "JSON", extensions: ["json"] }],
-    });
-
-    if (!filePath) return;
-
+  const handleImport = async (): Promise<void> => {
     try {
-      const content = await readTextFile(filePath);
-      const def = JSON.parse(content) as WorkflowDefinition;
-      const { nodes: importedNodes, edges: importedEdges } = importWorkflow(def);
-      // Pre-existing, out of scope here: WorkerGraph.tsx passes `nodes`/
-      // `edges` to `<ReactFlow>` as controlled props, so these instance
-      // calls get stomped by the next render's parent-supplied values —
-      // an import doesn't actually stick today.
-      setNodes(importedNodes);
-      setEdges(importedEdges);
-      toast.success("Workflow Imported", { description: def.name });
+      const filePath = await open({
+        title: "Import Workflow",
+        multiple: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!filePath) return;
+      const workflow = parseWorkflow(await readTextFile(filePath));
+      toast.success("Workflow Imported", { description: onImport(workflow) });
     } catch (err) {
-      toast.error("Import Failed", { description: String(err) });
+      toast.error("Import Failed", { description: errorText(err) });
     }
   };
 
-  // Keyboard shortcuts for graph operations
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      // Only handle when not in an input field
-      const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
-        return;
-      }
-      // The causality inspector owns the keyboard while open — this
-      // listener is document-level and stays live underneath its
-      // overlay, so without this gate typing "0" to do nothing in
-      // particular there would also fit-view the canvas behind it.
-      if (causalityTarget) return;
+  // Registered once; the Effect Event always sees the latest inspector
+  // state and viewport actions. The listener is document-level, so it is
+  // gated on the causality inspector (whose own keys must not zoom the
+  // canvas behind it).
+  const onShortcut = useEffectEvent((e: KeyboardEvent): void => {
+    if (causalityOpen || isTypingTarget(e.target)) return;
+    if (e.key === "+" || e.key === "=") {
+      e.preventDefault();
+      handleZoomIn();
+    } else if (e.key === "-") {
+      e.preventDefault();
+      handleZoomOut();
+    } else if (e.key === "0") {
+      e.preventDefault();
+      handleFitView();
+    }
+  });
 
-      if (e.key === "+" || e.key === "=") {
-        e.preventDefault();
-        void zoomIn({ duration: 200 });
-      } else if (e.key === "-") {
-        e.preventDefault();
-        void zoomOut({ duration: 200 });
-      } else if (e.key === "0") {
-        e.preventDefault();
-        void fitView({ duration: 300, padding: 0.2 });
-      }
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [zoomIn, zoomOut, fitView, causalityTarget]);
+  useEffect(() => {
+    const listener = (e: KeyboardEvent): void => onShortcut(e);
+    document.addEventListener("keydown", listener);
+    return () => document.removeEventListener("keydown", listener);
+  }, []);
 
   return (
     <div
       role="toolbar"
       aria-label="Graph Controls"
+      aria-orientation="vertical"
       style={{
         position: "absolute",
         bottom: 16,
@@ -183,17 +138,6 @@ export function GraphControls({
         zIndex: 10,
       }}
     >
-      {/* Add Worker */}
-      {onAddNode && (
-        <ControlButton onClick={onAddNode} label="Add Worker Node">
-          <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <circle cx={8} cy={8} r={6} stroke="currentColor" strokeWidth={1.5} />
-            <path d="M8 5v6M5 8h6" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" />
-          </svg>
-        </ControlButton>
-      )}
-
-      {/* Delete selected edge */}
       {onDeleteEdge && (
         <ControlButton onClick={onDeleteEdge} label="Delete Selected Edge">
           <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -249,33 +193,33 @@ export function GraphControls({
         </svg>
       </ControlButton>
 
-      {/* Export */}
-      {nodes && edges && (
-        <ControlButton onClick={handleExport} label="Export Workflow">
-          <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path
-              d="M8 2v8M5 7l3 3 3-3M3 12v1a1 1 0 001 1h8a1 1 0 001-1v-1"
-              stroke="currentColor"
-              strokeWidth={1.5}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </ControlButton>
-      )}
+      {filesAvailable && (
+        <>
+          <ControlButton onClick={() => void handleExport()} label="Export Workflow">
+            <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="M8 2v8M5 7l3 3 3-3M3 12v1a1 1 0 001 1h8a1 1 0 001-1v-1"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </ControlButton>
 
-      {/* Import */}
-      <ControlButton onClick={handleImport} label="Import Workflow">
-        <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path
-            d="M8 10V2M5 5l3-3 3 3M3 12v1a1 1 0 001 1h8a1 1 0 001-1v-1"
-            stroke="currentColor"
-            strokeWidth={1.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </ControlButton>
+          <ControlButton onClick={() => void handleImport()} label="Import Workflow">
+            <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="M8 10V2M5 5l3-3 3 3M3 12v1a1 1 0 001 1h8a1 1 0 001-1v-1"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </ControlButton>
+        </>
+      )}
     </div>
   );
 }
