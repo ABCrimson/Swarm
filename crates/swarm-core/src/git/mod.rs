@@ -106,11 +106,12 @@ impl RepoLocks {
     }
 
     /// Runs `op` while holding the per-repo mutex for `repo_root`. If
-    /// `op` fails with what looks like transient index/ref-lock
-    /// contention (see [`is_lock_contention_message`]), retries exactly
-    /// once after [`CONTENTION_RETRY_BACKOFF`] — still under the same
-    /// held lock, so a concurrent SWARM-issued op against the same repo
-    /// cannot interleave with the retry either.
+    /// `op` fails with an [`AppError::Git`] that looks like transient
+    /// index/ref-lock contention (another git process holding
+    /// `index.lock` or a ref's `.lock` file), retries exactly once after
+    /// a 200 ms backoff — still under the same held lock, so a
+    /// concurrent SWARM-issued op against the same repo cannot
+    /// interleave with the retry either.
     ///
     /// Blocks the calling thread (on the mutex and on `op`); async
     /// callers run it inside `tokio::task::spawn_blocking`.
@@ -184,7 +185,7 @@ pub fn short_hash8(input: &str) -> String {
 /// Sanitizes `input` into a filesystem- and git-ref-safe slug:
 /// lowercase ASCII alphanumerics with runs of anything else collapsed
 /// to a single `-`, trimmed of leading/trailing `-`, and capped at
-/// [`MAX_SLUG_LEN`] bytes. Falls back to `"worker"` when nothing
+/// 48 bytes (`MAX_SLUG_LEN`). Falls back to `"worker"` when nothing
 /// survives (an all-emoji or all-punctuation name), so a branch name is
 /// always constructible.
 #[must_use]

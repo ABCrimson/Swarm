@@ -2,7 +2,7 @@
 //! revision → commit sha lookup.
 //!
 //! Every argv here starts with the shared `-C <dir> -c
-//! core.longpaths=true` prefix ([`base_args`]): `-C` scopes the
+//! core.longpaths=true` prefix (`base_args`): `-C` scopes the
 //! invocation to the target directory without ever touching the
 //! calling process's working directory, and `core.longpaths=true` is
 //! set per invocation (never written to the user's global or repo

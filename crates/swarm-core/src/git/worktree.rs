@@ -4,7 +4,7 @@
 //!
 //! # The no-`--force` guarantee
 //!
-//! [`remove_args`] is the only place a `git worktree remove` argv is
+//! `remove_args` is the only place a `git worktree remove` argv is
 //! built, and it never appends `--force`/`-f`. That is load-bearing:
 //! without `--force`, git itself refuses to remove a worktree with
 //! uncommitted changes or untracked files, which is exactly the
@@ -252,7 +252,7 @@ fn count_pruned(stderr: &str) -> usize {
 }
 
 /// Deletes `branch` from the repo rooted at `repo_root` with `git
-/// branch -d` (**never** `-D`) — see [`branch_delete_args`]. Intended
+/// branch -d` (**never** `-D`) — see `branch_delete_args`. Intended
 /// for the one narrow case where it's safe: a `swarm/*` isolation
 /// branch whose tip the caller has already confirmed equals the
 /// commit the worktree was created from (i.e. the agent made no
