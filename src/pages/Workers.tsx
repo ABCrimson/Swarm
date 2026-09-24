@@ -1,6 +1,5 @@
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { useEffect, useState } from "react";
-
+import { useEffect, useEffectEvent, useId, useState } from "react";
 import { WorkerAIPanel } from "#components/ai/WorkerAIPanel";
 import { CausalityPanel } from "#components/graph/CausalityPanel";
 import { WorkerDetail } from "#components/graph/WorkerDetail";
@@ -9,9 +8,10 @@ import { ShipPanel } from "#components/ship/ShipPanel";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Button } from "#components/ui/Button";
 import { Pill } from "#components/ui/Pill";
+import { type TabItem, TabList, TabPanel } from "#components/ui/Tabs";
 import { ProviderBadge } from "#components/worker/ProviderBadge";
 import { SpawnWorkerDialog } from "#components/worker/SpawnWorkerDialog";
-import { matchesBinding } from "#lib/keybindings";
+import { formatBinding, matchesBinding } from "#lib/keybindings";
 import { useAgentSessionStore } from "#store/agent-sessions";
 import {
   causalityInspectorAtom,
@@ -22,131 +22,72 @@ import {
 } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
 
+type ViewMode = "graph" | "list";
 type DetailTab = "detail" | "ai" | "ship";
+
+const VIEW_TABS: ReadonlyArray<TabItem<ViewMode>> = [
+  { id: "graph", label: "Graph" },
+  { id: "list", label: "List" },
+];
+
+/** Detail panel width per tab: the chat and ship views need more room. */
+const DETAIL_WIDTH: Record<DetailTab, string> = {
+  detail: "w-80",
+  ai: "w-120",
+  ship: "w-105",
+};
+
+const VIEW_TAB_CLASS =
+  "cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium text-fg-muted transition-colors hover:text-fg aria-selected:bg-plasma/15 aria-selected:text-plasma";
+
+const DETAIL_TAB_CLASS =
+  "flex-1 cursor-pointer px-3 py-2 text-sm font-medium text-fg-muted transition-colors hover:text-fg aria-selected:bg-plasma/12 aria-selected:text-plasma disabled:cursor-not-allowed disabled:text-fg-dim disabled:hover:text-fg-dim";
 
 function WorkerListView(): React.ReactElement {
   const workers = useWorkerStore((s) => s.workers);
   const agentSessions = useAgentSessionStore((s) => s.sessions);
   const [selectedId, setSelectedId] = useAtom(selectedWorkerIdAtom);
   const setDetailOpen = useSetAtom(detailPanelOpenAtom);
+  const { commandPalette } = useAtomValue(keybindingsAtom);
 
   if (workers.size === 0) {
     return (
-      <div
-        style={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 12,
-        }}
-      >
+      <div className="flex h-full flex-col items-center justify-center gap-3">
         <div
-          style={{
-            width: 48,
-            height: 48,
-            borderRadius: 12,
-            background: "oklch(0.12 0.03 220)",
-            border: "1px solid oklch(0.22 0.04 220)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 20,
-            color: "oklch(0.40 0.04 220)",
-          }}
           aria-hidden="true"
+          className="flex size-12 items-center justify-center rounded-lg border border-border bg-surface-1 text-xl text-fg-dim"
         >
           +
         </div>
-        <span
-          style={{
-            color: "oklch(0.50 0.04 220)",
-            fontFamily: "var(--font-body)",
-            fontSize: "0.8125rem",
-          }}
-        >
-          No Workers Running
-        </span>
-        <span
-          style={{
-            color: "oklch(0.38 0.03 220)",
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.6875rem",
-          }}
-        >
-          Click "Spawn Worker" Or Press Ctrl+K
-        </span>
+        <p className="text-md text-fg-muted">No Workers Running</p>
+        <p className="font-mono text-xs text-fg-dim">
+          Click "Spawn Worker" Or Press {formatBinding(commandPalette)}
+        </p>
       </div>
     );
   }
 
   return (
-    <div style={{ flex: 1, overflowY: "auto", padding: 16 }} className="scroll-area">
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {[...workers.entries()].map(([id, worker]) => {
-          const agentSession = agentSessions.get(id);
-          return (
+    <ul className="scroll-area flex h-full flex-col gap-2 overflow-y-auto p-4">
+      {[...workers].map(([id, worker]) => {
+        const agentSession = agentSessions.get(id);
+        return (
+          <li key={id}>
             <button
-              key={id}
               type="button"
+              aria-current={selectedId === id || undefined}
               onClick={() => {
                 setSelectedId(id);
                 setDetailOpen(true);
               }}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "12px 16px",
-                background:
-                  selectedId === id ? "oklch(0.78 0.18 205 / 0.08)" : "oklch(0.12 0.03 220 / 0.7)",
-                backdropFilter: "blur(12px) saturate(1.5)",
-                border: `1px solid ${selectedId === id ? "oklch(0.78 0.18 205 / 0.3)" : "oklch(0.28 0.05 220)"}`,
-                borderRadius: 8,
-                cursor: "pointer",
-                textAlign: "left",
-                width: "100%",
-                outline: "none",
-                transition:
-                  "background 0.12s cubic-bezier(0, 0, 0.2, 1), border-color 0.12s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0, 0, 0.2, 1)",
-              }}
-              onFocus={(e) => {
-                e.currentTarget.style.boxShadow = "0 0 0 2px oklch(0.78 0.18 205 / 0.4)";
-              }}
-              onBlur={(e) => {
-                e.currentTarget.style.boxShadow = "none";
-              }}
+              className="glass-panel flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border border-border-2 px-4 py-3 text-left transition-colors hover:border-border-3 aria-current:border-plasma/30 aria-current:bg-plasma/8"
             >
-              <span
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  minWidth: 0,
-                }}
-              >
-                <span
-                  style={{
-                    fontFamily: "var(--font-display)",
-                    fontSize: "0.8125rem",
-                    fontWeight: 600,
-                    color: "oklch(0.95 0.02 220)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="truncate font-display text-md font-semibold text-fg-bright">
                   {worker.name ?? id.slice(0, 8)}
                 </span>
                 {worker.branch != null && (
-                  <Pill
-                    tone="info"
-                    size="sm"
-                    maxWidth={160}
-                    title={worker.branch}
-                    style={{ fontFamily: "var(--font-mono)" }}
-                  >
+                  <Pill tone="info" size="sm" maxWidth={160} title={worker.branch}>
                     {worker.branch}
                   </Pill>
                 )}
@@ -156,283 +97,174 @@ function WorkerListView(): React.ReactElement {
               </span>
               <Badge state={worker.state}>{stateLabels[worker.state]}</Badge>
             </button>
-          );
-        })}
-      </div>
-    </div>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
 /**
- * Workers page with graph/list view toggle, worker detail panel,
- * and Ctrl+Shift+G keyboard shortcut for switching views.
+ * Workers page: the worker graph or list (a tab pair; the binding from
+ * Settings, Ctrl+Shift+G by default, switches them), a detail panel
+ * with Detail / AI Chat / Ship tabs for the selected worker, the
+ * causality inspector and the spawn dialog.
+ *
+ * Views and detail tabs are kept mounted once shown (`<Activity>` via
+ * {@link TabPanel}), so switching back restores the graph viewport, the
+ * list scroll position and an in-progress chat.
  */
 export function Workers(): React.ReactElement {
+  const idBase = useId();
   const [viewMode, setViewMode] = useAtom(graphViewAtom);
   const [detailOpen, setDetailOpen] = useAtom(detailPanelOpenAtom);
   const [selectedId, setSelectedWorkerId] = useAtom(selectedWorkerIdAtom);
   const [causalityTarget, setCausalityTarget] = useAtom(causalityInspectorAtom);
+  const { graphToggle } = useAtomValue(keybindingsAtom);
   const workers = useWorkerStore((s) => s.workers);
   const selectedWorker = selectedId ? workers.get(selectedId) : undefined;
   const [detailTab, setDetailTab] = useState<DetailTab>("detail");
+  /** Views and tabs shown at least once; only these stay mounted while hidden. */
+  const [shown, setShown] = useState<ReadonlySet<string>>(() => new Set([viewMode, "detail"]));
   // The spawn dialog is conditionally mounted (not driven by its own
   // `open` prop) so every field/probe/error resets cleanly on each
   // open cycle — see SpawnWorkerDialog's doc.
   const [spawnDialogOpen, setSpawnDialogOpen] = useState(false);
 
-  // Graph/list toggle — binding is remappable in Settings.
-  const keybindings = useAtomValue(keybindingsAtom);
+  const markShown = (id: string): void =>
+    setShown((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+
+  const showView = (mode: ViewMode): void => {
+    markShown(mode);
+    setViewMode(mode);
+  };
+
+  const showDetailTab = (tab: DetailTab): void => {
+    markShown(tab);
+    setDetailTab(tab);
+  };
+
+  const onGlobalKeyDown = useEffectEvent((e: KeyboardEvent): void => {
+    if (!matchesBinding(e, graphToggle)) return;
+    e.preventDefault();
+    showView(viewMode === "graph" ? "list" : "graph");
+  });
+
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (matchesBinding(e, keybindings.graphToggle)) {
-        e.preventDefault();
-        setViewMode((prev) => (prev === "graph" ? "list" : "graph"));
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [setViewMode, keybindings]);
+    const onKeyDown = (e: KeyboardEvent): void => onGlobalKeyDown(e);
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const canShip = selectedWorker?.worktreePath != null;
+  const detailTabs: ReadonlyArray<TabItem<DetailTab>> = [
+    { id: "detail", label: "Detail" },
+    { id: "ai", label: "AI Chat" },
+    {
+      id: "ship",
+      label: "Ship",
+      disabled: !canShip,
+      title: canShip ? undefined : "Shipping Requires An Isolated Worktree",
+    },
+  ];
+  // A worker without a worktree cannot show the Ship tab.
+  const activeDetailTab = detailTab === "ship" && !canShip ? "detail" : detailTab;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "16px 24px",
-          borderBottom: "1px solid oklch(0.22 0.04 220)",
-          flexShrink: 0,
-        }}
-      >
+    <div className="flex h-full flex-col overflow-hidden">
+      <header className="flex shrink-0 items-center justify-between border-b border-border px-6 py-4">
         <div>
-          <h1
-            style={{
-              fontFamily: "var(--font-display)",
-              fontSize: "1.25rem",
-              fontWeight: 700,
-              color: "oklch(0.95 0.02 220)",
-              margin: 0,
-              letterSpacing: "-0.01em",
-            }}
-          >
-            Workers
-          </h1>
-          <p
-            style={{
-              fontFamily: "var(--font-body)",
-              fontSize: "0.75rem",
-              color: "oklch(0.55 0.04 220)",
-              margin: "4px 0 0",
-            }}
-          >
-            Manage And Monitor Worker Processes.
-          </p>
+          <h1 className="font-display text-xl font-bold tracking-tight text-fg-bright">Workers</h1>
+          <p className="mt-1 text-sm text-fg-muted">Manage And Monitor Worker Processes.</p>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          {/* Opens the designed spawn dialog (provider, Claude Code
-              model/trust-tier, working directory) — replaces the old
-              inline header picker. */}
+        <div className="flex items-center gap-3">
           <Button variant="primary" size="sm" onClick={() => setSpawnDialogOpen(true)}>
             Spawn Worker
           </Button>
+          <TabList
+            label="Worker View"
+            idBase={`${idBase}-view`}
+            items={VIEW_TABS}
+            value={viewMode}
+            onChange={showView}
+            className="flex rounded-lg border border-border bg-surface-0 p-0.5"
+            tabClassName={VIEW_TAB_CLASS}
+          />
+        </div>
+      </header>
 
-          {/* View toggle */}
-          <div
-            style={{
-              display: "flex",
-              background: "oklch(0.08 0.02 220)",
-              border: "1px solid oklch(0.22 0.04 220)",
-              borderRadius: 8,
-              padding: 2,
-            }}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <TabPanel
+            idBase={`${idBase}-view`}
+            id="graph"
+            selected={viewMode === "graph"}
+            mounted={shown.has("graph")}
+            className="h-full"
           >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={viewMode === "graph"}
-              onClick={() => setViewMode("graph")}
-              style={{
-                padding: "6px 12px",
-                background: viewMode === "graph" ? "oklch(0.78 0.18 205 / 0.15)" : "transparent",
-                border: "none",
-                borderRadius: 6,
-                color: viewMode === "graph" ? "oklch(0.78 0.18 205)" : "oklch(0.55 0.04 220)",
-                fontFamily: "var(--font-body)",
-                fontSize: "0.75rem",
-                fontWeight: 500,
-                cursor: "pointer",
-                outline: "none",
-                transition:
-                  "background 0.12s cubic-bezier(0, 0, 0.2, 1), color 0.12s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0, 0, 0.2, 1)",
-              }}
-              onFocus={(e) => {
-                e.currentTarget.style.boxShadow = "0 0 0 2px oklch(0.78 0.18 205 / 0.4)";
-              }}
-              onBlur={(e) => {
-                e.currentTarget.style.boxShadow = "none";
-              }}
-            >
-              Graph
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={viewMode === "list"}
-              onClick={() => setViewMode("list")}
-              style={{
-                padding: "6px 12px",
-                background: viewMode === "list" ? "oklch(0.78 0.18 205 / 0.15)" : "transparent",
-                border: "none",
-                borderRadius: 6,
-                color: viewMode === "list" ? "oklch(0.78 0.18 205)" : "oklch(0.55 0.04 220)",
-                fontFamily: "var(--font-body)",
-                fontSize: "0.75rem",
-                fontWeight: 500,
-                cursor: "pointer",
-                outline: "none",
-                transition:
-                  "background 0.12s cubic-bezier(0, 0, 0.2, 1), color 0.12s cubic-bezier(0, 0, 0.2, 1), box-shadow 0.12s cubic-bezier(0, 0, 0.2, 1)",
-              }}
-              onFocus={(e) => {
-                e.currentTarget.style.boxShadow = "0 0 0 2px oklch(0.78 0.18 205 / 0.4)";
-              }}
-              onBlur={(e) => {
-                e.currentTarget.style.boxShadow = "none";
-              }}
-            >
-              List
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Main content area */}
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          {viewMode === "graph" ? <WorkerGraph /> : <WorkerListView />}
+            <WorkerGraph />
+          </TabPanel>
+          <TabPanel
+            idBase={`${idBase}-view`}
+            id="list"
+            selected={viewMode === "list"}
+            mounted={shown.has("list")}
+            className="h-full"
+          >
+            <WorkerListView />
+          </TabPanel>
         </div>
 
-        {/* Detail / AI chat panel */}
         {detailOpen && selectedWorker && (
-          <div
-            style={{
-              width: detailTab === "ai" ? 480 : detailTab === "ship" ? 420 : 320,
-              height: "100%",
-              display: "flex",
-              flexDirection: "column",
-              overflow: "hidden",
-              flexShrink: 0,
-            }}
+          <aside
+            aria-label="Worker Details"
+            className={`flex h-full shrink-0 flex-col overflow-hidden ${DETAIL_WIDTH[activeDetailTab]}`}
           >
-            <div
-              style={{
-                display: "flex",
-                borderBottom: "1px solid oklch(0.22 0.04 220)",
-                background: "oklch(0.10 0.03 220)",
-                flexShrink: 0,
-              }}
-              role="tablist"
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={detailTab === "detail"}
-                onClick={() => setDetailTab("detail")}
-                style={{
-                  flex: 1,
-                  padding: "8px 12px",
-                  background:
-                    detailTab === "detail" ? "oklch(0.78 0.18 205 / 0.12)" : "transparent",
-                  border: "none",
-                  color: detailTab === "detail" ? "oklch(0.78 0.18 205)" : "oklch(0.55 0.04 220)",
-                  fontFamily: "var(--font-body)",
-                  fontSize: "0.75rem",
-                  fontWeight: 500,
-                  cursor: "pointer",
-                }}
+            <TabList
+              label="Worker Panels"
+              idBase={`${idBase}-detail`}
+              items={detailTabs}
+              value={activeDetailTab}
+              onChange={showDetailTab}
+              className="flex shrink-0 border-b border-border bg-surface-1"
+              tabClassName={DETAIL_TAB_CLASS}
+            />
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <TabPanel
+                idBase={`${idBase}-detail`}
+                id="detail"
+                selected={activeDetailTab === "detail"}
+                className="h-full"
               >
-                Detail
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={detailTab === "ai"}
-                onClick={() => setDetailTab("ai")}
-                style={{
-                  flex: 1,
-                  padding: "8px 12px",
-                  background: detailTab === "ai" ? "oklch(0.78 0.18 205 / 0.12)" : "transparent",
-                  border: "none",
-                  color: detailTab === "ai" ? "oklch(0.78 0.18 205)" : "oklch(0.55 0.04 220)",
-                  fontFamily: "var(--font-body)",
-                  fontSize: "0.75rem",
-                  fontWeight: 500,
-                  cursor: "pointer",
-                }}
+                <WorkerDetail worker={selectedWorker} />
+              </TabPanel>
+              <TabPanel
+                idBase={`${idBase}-detail`}
+                id="ai"
+                selected={activeDetailTab === "ai"}
+                mounted={shown.has("ai")}
+                className="h-full"
               >
-                AI Chat
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={detailTab === "ship"}
-                disabled={selectedWorker.worktreePath == null}
-                onClick={() => setDetailTab("ship")}
-                title={
-                  selectedWorker.worktreePath == null
-                    ? "Shipping Requires An Isolated Worktree"
-                    : undefined
-                }
-                style={{
-                  flex: 1,
-                  padding: "8px 12px",
-                  background: detailTab === "ship" ? "oklch(0.78 0.18 205 / 0.12)" : "transparent",
-                  border: "none",
-                  color:
-                    selectedWorker.worktreePath == null
-                      ? "oklch(0.38 0.03 220)"
-                      : detailTab === "ship"
-                        ? "oklch(0.78 0.18 205)"
-                        : "oklch(0.55 0.04 220)",
-                  fontFamily: "var(--font-body)",
-                  fontSize: "0.75rem",
-                  fontWeight: 500,
-                  cursor: selectedWorker.worktreePath == null ? "not-allowed" : "pointer",
-                }}
-              >
-                Ship
-              </button>
-            </div>
-            <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-              {detailTab === "detail" && <WorkerDetail worker={selectedWorker} />}
-              {detailTab === "ai" && (
                 <WorkerAIPanel
                   workerId={selectedWorker.id}
-                  canShip={selectedWorker.worktreePath != null}
-                  onRequestShipTab={() => setDetailTab("ship")}
+                  canShip={canShip}
+                  onRequestShipTab={() => showDetailTab("ship")}
                 />
-              )}
-              {detailTab === "ship" &&
-                (selectedWorker.worktreePath != null ? (
+              </TabPanel>
+              {canShip && (
+                <TabPanel
+                  idBase={`${idBase}-detail`}
+                  id="ship"
+                  selected={activeDetailTab === "ship"}
+                  mounted={shown.has("ship")}
+                  className="h-full"
+                >
                   <ShipPanel workerId={selectedWorker.id} />
-                ) : (
-                  <div
-                    style={{
-                      padding: 24,
-                      fontFamily: "var(--font-body)",
-                      fontSize: "0.8125rem",
-                      color: "oklch(0.55 0.04 220)",
-                      textAlign: "center",
-                    }}
-                  >
-                    Shipping Requires An Isolated Worktree
-                  </div>
-                ))}
+                </TabPanel>
+              )}
             </div>
-          </div>
+          </aside>
         )}
       </div>
 

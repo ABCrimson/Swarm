@@ -152,7 +152,7 @@ test.describe("Navigation", () => {
       .click();
     await page.getByRole("tab", { name: "List" }).click();
 
-    await expect(page.getByText("No Workers Running")).toBeVisible();
+    await expect(page.getByText("No Workers Running", { exact: true })).toBeVisible();
     await expect(page.getByText('Click "Spawn Worker" Or Press Ctrl+K')).toBeVisible();
   });
 
