@@ -1,7 +1,6 @@
-//! Wire protocol for the `swarmd` WebSocket transport (headless-daemon
-//! plan, Phase 2/3). Serde-only — no networking code lives here;
-//! `swarmd`'s `ws` module owns the actual axum WebSocket handler, and
-//! `src/lib/transport.ts`'s `wsTransport` (Phase 3) is the client.
+//! Wire protocol for the `swarmd` WebSocket transport. Serde only: the
+//! socket handler is `swarmd`'s `ws` module and the client is
+//! `WsTransport` in `src/lib/transport.ts`.
 //!
 //! ## Framing
 //!
@@ -9,7 +8,7 @@
 //! wrapped in a `{"frame": "<kind>", ...}` envelope and one deliberately
 //! bare:
 //!
-//! | Frame        | Direction         | Wrapped?                    |
+//! | Frame        | Direction          | Wrapped?                    |
 //! |--------------|--------------------|-----------------------------|
 //! | `hello`      | client -> server   | `{"frame":"hello", ...}`    |
 //! | `ready`      | server -> client   | `{"frame":"ready", ...}`    |
@@ -18,43 +17,42 @@
 //! | `rpc`        | client -> server   | `{"frame":"rpc", ...}`      |
 //! | `rpcResult`  | server -> client   | `{"frame":"rpcResult", ...}`|
 //!
-//! `event` frames are UNWRAPPED on purpose: they must be byte-identical
-//! to what the desktop shell's `app.emit(EVENT_CHANNEL, &envelope)`
-//! already sends over Tauri IPC (see
-//! [`crate::orchestration::DomainEvent`]), so the frontend's existing
-//! `DomainEventSchema` (`src/lib/event-bus.ts`) parses them with zero
-//! changes. A receiver distinguishes an `event` frame from every other
-//! frame by the ABSENCE of a `"frame"` key — every control frame below
-//! has one; a `DomainEvent` never does.
+//! `event` frames are unwrapped on purpose: they are byte-identical to
+//! what the desktop shell emits over Tauri IPC (see
+//! [`crate::orchestration::DomainEvent`]), so the frontend's
+//! `DomainEventSchema` (`src/lib/event-bus.ts`) parses both unchanged. A
+//! receiver tells an `event` frame from every other frame by the
+//! absence of a `"frame"` key: every control frame has one, a
+//! `DomainEvent` never does.
 
 use serde::{Deserialize, Serialize};
 
 /// Client -> server frames.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Debug` is written by hand so a logged frame never shows the daemon
+/// token or a command's arguments (a `write_config` value, say).
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "frame", rename_all = "camelCase")]
 pub enum ClientFrame {
     /// Sent once immediately after the socket opens, and again on every
-    /// reconnect. `lastSeq: None` means a cold attach: the server sends
-    /// no replay (just `ready` then `replayEnd` at the current head),
-    /// and the client hydrates via the existing snapshot `list_*`
-    /// commands instead of replaying the whole log from seq 1 — see the
-    /// plan's "Cold attach: null lastSeq = snapshot hydration" decision.
+    /// reconnect.
     Hello {
+        /// The last `seq` the client has seen: the server replays every
+        /// persisted event after it. `None` is a cold attach: no replay
+        /// (`ready`, then `replayEnd` at the current head) and the
+        /// client hydrates from the snapshot `list_*` commands instead
+        /// of replaying the whole log.
         #[serde(rename = "lastSeq")]
         last_seq: Option<u64>,
         /// The daemon token. Required within the handshake deadline
-        /// unless the connection already authenticated via an
-        /// `Authorization: Bearer` header at HTTP-upgrade time (see
-        /// `swarmd::auth`) — either path is accepted, `hello` is not the
-        /// only way in.
+        /// unless the connection already authenticated with an
+        /// `Authorization: Bearer` header at HTTP-upgrade time.
         #[serde(default)]
         token: Option<String>,
     },
-    /// A command invocation, routed through
-    /// [`crate::commands::Registry`] — the same dispatch table the
-    /// Tauri IPC wrappers call, so a command that works locally cannot
-    /// silently be missing remotely (see the registry's own doc for the
-    /// drift-proof contract test).
+    /// A command invocation, dispatched through
+    /// [`crate::commands::Registry::dispatch_remote`]: the same table
+    /// the Tauri IPC wrappers call, plus each command's remote policy.
     Rpc {
         /// Client-generated correlation id, echoed back on
         /// [`ServerFrame::RpcResult`].
@@ -62,9 +60,28 @@ pub enum ClientFrame {
         /// Command name — identical to the Tauri IPC command name
         /// (`"spawn_worker"`, `"events_since"`, ...).
         cmd: String,
+        /// The command's arguments: a JSON object, or omitted/`null`
+        /// for none.
         #[serde(default)]
         args: serde_json::Value,
     },
+}
+
+impl std::fmt::Debug for ClientFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Hello { last_seq, token } => f
+                .debug_struct("Hello")
+                .field("last_seq", last_seq)
+                .field("token", &token.as_ref().map(|_| "<redacted>"))
+                .finish(),
+            Self::Rpc { id, cmd, .. } => f
+                .debug_struct("Rpc")
+                .field("id", id)
+                .field("cmd", cmd)
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 /// Server -> client control frames (everything except `event`, which is
@@ -72,29 +89,37 @@ pub enum ClientFrame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "frame", rename_all = "camelCase")]
 pub enum ServerFrame {
-    /// Handshake ack: the server's current head `seq` (the client
-    /// hydrates from here on a cold `hello`), the protocol version, and
-    /// advertised caps.
+    /// Handshake ack.
     Ready {
+        /// The server's head `seq` when the client attached (a cold
+        /// client hydrates from here).
         #[serde(rename = "serverSeq")]
         server_seq: u64,
+        /// [`PROTOCOL_VERSION`].
         version: u32,
+        /// The server's advertised limits.
         caps: ServerCaps,
     },
-    /// Marks the end of one replay burst — whether that burst was empty
-    /// (the client was already caught up) or paged through history. The
-    /// client is only authoritative that it is "live" after seeing this
-    /// for the CURRENT `hello`'s replay, not merely after receiving
+    /// Marks the end of one replay burst, empty (the client was caught
+    /// up) or paged through history. A client is live only after the
+    /// `replayEnd` of its CURRENT `hello`, not merely after receiving
     /// some events.
-    ReplayEnd { seq: u64 },
+    ReplayEnd {
+        /// The last `seq` the replay covered; live events follow it.
+        seq: u64,
+    },
     /// Response to a client [`ClientFrame::Rpc`], correlated by `id`.
     /// Exactly one of `result`/`error` is present, mirroring
     /// `Result<Value, Value>` on the wire (never both, never neither).
     RpcResult {
+        /// The [`ClientFrame::Rpc`]'s `id`.
         id: String,
+        /// Whether the command succeeded (`result`) or failed (`error`).
         ok: bool,
+        /// The command's result, when `ok`.
         #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<serde_json::Value>,
+        /// The command's error (a string today), when not `ok`.
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<serde_json::Value>,
     },
@@ -103,8 +128,8 @@ pub enum ServerFrame {
 /// Wire protocol version — bump on any breaking frame-shape change.
 pub const PROTOCOL_VERSION: u32 = 1;
 
-/// Server-advertised capability/limit caps, echoed in `ready` so the
-/// client never has to hardcode them.
+/// The server's limits, sent in `ready` so the client never hardcodes
+/// them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerCaps {
@@ -118,6 +143,8 @@ pub struct ServerCaps {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
 
     #[test]
@@ -130,23 +157,37 @@ mod tests {
         assert_eq!(json["frame"], "hello");
         assert_eq!(json["lastSeq"], 42);
         let back: ClientFrame = serde_json::from_value(json).unwrap();
-        matches!(
+        assert_matches!(
             back,
             ClientFrame::Hello {
                 last_seq: Some(42),
-                ..
-            }
+                token: Some(ref t),
+            } if t == "abc"
         );
+    }
+
+    #[test]
+    fn test_client_frame_debug_never_shows_the_token_or_args() {
+        let hello = ClientFrame::Hello {
+            last_seq: None,
+            token: Some("s3cret-token".to_owned()),
+        };
+        let rpc = ClientFrame::Rpc {
+            id: "r1".to_owned(),
+            cmd: "write_config".to_owned(),
+            args: serde_json::json!({"key": "k", "value": "s3cret-value"}),
+        };
+        for printed in [format!("{hello:?}"), format!("{rpc:?}")] {
+            assert!(!printed.contains("s3cret"), "{printed}");
+        }
+        assert!(format!("{rpc:?}").contains("write_config"));
     }
 
     #[test]
     fn test_hello_last_seq_null_means_cold_attach() {
         let json = serde_json::json!({"frame": "hello", "lastSeq": null, "token": "t"});
         let frame: ClientFrame = serde_json::from_value(json).unwrap();
-        match frame {
-            ClientFrame::Hello { last_seq, .. } => assert_eq!(last_seq, None),
-            _ => panic!("expected Hello"),
-        }
+        assert_matches!(frame, ClientFrame::Hello { last_seq: None, .. });
     }
 
     #[test]
@@ -201,11 +242,8 @@ mod tests {
         assert_eq!(json["error"], "Worker Not Found");
     }
 
-    /// DIRECTIVE: a `DomainEvent`'s own JSON shape must never carry a
-    /// `"frame"` key — this is the entire disambiguation mechanism the
-    /// module doc describes, so a regression here (e.g. `DomainEvent`
-    /// someday adding a field literally named `frame`) would silently
-    /// break every client's frame demux.
+    /// A `DomainEvent` must never carry a `"frame"` key: its absence is
+    /// how every client tells an `event` frame from a control frame.
     #[test]
     fn test_domain_event_shape_has_no_frame_key() {
         use crate::events::{Provenance, SwarmEvent, WorkerSpawnedPayload};
