@@ -1,58 +1,101 @@
 name: Dependency Audit
 
+# Known advisories against the npm and Rust lockfiles. A new advisory lands
+# against an unchanged lockfile, so this runs weekly as well as on PRs that
+# change a dependency manifest. A scheduled or manual run that fails opens
+# (or comments on) one tracking issue; the next green run closes it.
 on:
   schedule:
     - cron: "0 6 * * 1"
+  pull_request:
+    branches: [main]
+    paths:
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+      - "deny.toml"
+      - ".github/workflows/deps.yml"
   workflow_dispatch:
 
-env:
-  NODE_VERSION: "27.0.0-nightly202609233d85c94cfa"
-  # Keep in sync with rust-toolchain.toml
-  RUST_TOOLCHAIN: "nightly-2026-09-23"
+permissions: {}
+
+concurrency:
+  group: deps-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  audit-pnpm:
+  pnpm:
     name: pnpm Audit
-    runs-on: ubuntu-latest
-    # The app lives one level below the repo root.
-    defaults:
-      run:
-        working-directory: .
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          package_json_file: package.json
+          persist-credentials: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
+      # The audit reads only the lockfile: pnpm, no install.
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          install: false
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
+      # Every severity fails, like cargo-deny below.
       - name: pnpm audit
-        run: pnpm audit --audit-level high
+        run: pnpm audit
 
-  audit-cargo:
-    name: Cargo Audit
-    runs-on: ubuntu-latest
+  cargo:
+    name: Cargo Advisories
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Keep in sync with rust-toolchain.toml
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          persist-credentials: false
 
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@cargo-audit
+      # RustSec advisories (vulnerable, unmaintained, yanked) per the root
+      # deny.toml. ci.yml runs the full cargo-deny check on every change.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+          command-arguments: --hide-inclusion-graph
 
-      - name: Cargo audit
-        run: cargo audit
+  # Nobody watches a scheduled run: turn its result into an issue.
+  report:
+    name: Report
+    needs: [pnpm, cargo]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open, update or close the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Dependency Audit is failing"
+          issue=$(gh issue list --state open --search "in:title \"$title\"" \
+            --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)
+          failed=false
+          for result in $RESULTS; do
+            [[ $result == success ]] || failed=true
+          done
+          if $failed; then
+            body="The weekly dependency audit failed (job results: $RESULTS): $RUN_URL"
+            if [[ -n $issue ]]; then
+              gh issue comment "$issue" --body "$body"
+            else
+              gh issue create --title "$title" --body "$body"
+            fi
+            exit 1
+          elif [[ -n $issue ]]; then
+            gh issue close "$issue" --comment "The dependency audit is green again: $RUN_URL"
+          fi
