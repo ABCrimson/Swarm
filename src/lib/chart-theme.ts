@@ -19,6 +19,21 @@ import type { RechartsTheme } from "recharts";
 const SERIES_DEFAULT = "oklch(0.78 0.18 205)";
 
 /**
+ * One colour per system/AI metric, the same on every chart it appears
+ * in, with hues far enough apart (205 / 290 / 140 / 70) to tell the
+ * lines of a shared chart apart.
+ */
+export const METRIC_COLOR = {
+  cpu: SERIES_DEFAULT,
+  memory: "oklch(0.72 0.2 290)",
+  workers: "oklch(0.82 0.18 140)",
+  queueDepth: "oklch(0.82 0.19 70)",
+  activeStreams: SERIES_DEFAULT,
+  tokensPerMin: "oklch(0.72 0.2 290)",
+  reqPerMin: "oklch(0.82 0.18 140)",
+} as const;
+
+/**
  * Theme for every metrics chart. Recharts marks the theme API experimental;
  * it is pinned with the rest of the stack and covered by the chart tests.
  */

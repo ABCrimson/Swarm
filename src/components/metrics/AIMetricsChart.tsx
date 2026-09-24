@@ -6,10 +6,9 @@
 import { useEffect, useId, useState } from "react";
 import { Area, AreaChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from "recharts";
 import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
-import { formatTime } from "#lib/chart-theme";
+import { formatTime, METRIC_COLOR } from "#lib/chart-theme";
 import { lastN, MAX_CHART_POINTS } from "#lib/chart-window";
 import { tokensPerSecond } from "#lib/metrics-aggregation";
-import { workerColor } from "#lib/theme";
 import { useAiStore } from "#store/ai";
 import type { AiQueueItem, TokenUsageRecord } from "#store/types";
 
@@ -52,10 +51,15 @@ export function sampleAiMetrics(
 
 /** Series drawn, in legend order: data key, label, axis and colour index. */
 const SERIES = [
-  { key: "queueDepth", label: "Queue Depth", axis: "count", color: workerColor(0) },
-  { key: "activeStreams", label: "Active Streams", axis: "count", color: workerColor(1) },
-  { key: "tokensPerMin", label: "Tokens/Min", axis: "tokens", color: workerColor(2) },
-  { key: "reqPerMin", label: "Req/Min", axis: "count", color: workerColor(3) },
+  { key: "queueDepth", label: "Queue Depth", axis: "count", color: METRIC_COLOR.queueDepth },
+  {
+    key: "activeStreams",
+    label: "Active Streams",
+    axis: "count",
+    color: METRIC_COLOR.activeStreams,
+  },
+  { key: "tokensPerMin", label: "Tokens/Min", axis: "tokens", color: METRIC_COLOR.tokensPerMin },
+  { key: "reqPerMin", label: "Req/Min", axis: "count", color: METRIC_COLOR.reqPerMin },
 ] as const;
 
 /**

@@ -4,7 +4,7 @@
 
 import { CartesianGrid, Legend, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
 import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
-import { formatTime } from "#lib/chart-theme";
+import { formatTime, METRIC_COLOR } from "#lib/chart-theme";
 import { lastN } from "#lib/chart-window";
 import { useSystemStore } from "#store/system";
 
@@ -34,7 +34,7 @@ export function CPUChart(): React.ReactElement {
           type="monotone"
           dataKey="cpu"
           name="CPU"
-          stroke="oklch(0.78 0.18 205)"
+          stroke={METRIC_COLOR.cpu}
           strokeWidth={1.5}
           dot={false}
           isAnimationActive={false}

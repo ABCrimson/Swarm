@@ -6,13 +6,13 @@
 import { useId } from "react";
 import { Area, AreaChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from "recharts";
 import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
-import { formatMb, formatTime } from "#lib/chart-theme";
+import { formatMb, formatTime, METRIC_COLOR } from "#lib/chart-theme";
 import { lastN } from "#lib/chart-window";
 import { memoryFreeMb } from "#lib/memory";
 import { useSystemStore } from "#store/system";
 import type { MetricPoint } from "#store/types";
 
-const COLOR_USED = "oklch(0.72 0.18 205)";
+const COLOR_USED = METRIC_COLOR.memory;
 const COLOR_FREE = "oklch(0.45 0.04 220)";
 
 /** One chart row: used and free memory in MB at `time`. */

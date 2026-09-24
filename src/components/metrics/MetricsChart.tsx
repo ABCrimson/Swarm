@@ -5,10 +5,9 @@
 
 import { CartesianGrid, Legend, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
 import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
-import { formatTime } from "#lib/chart-theme";
+import { formatTime, METRIC_COLOR } from "#lib/chart-theme";
 import { lastN } from "#lib/chart-window";
 import { memPercent } from "#lib/memory";
-import { workerColor } from "#lib/theme";
 import { useSystemStore } from "#store/system";
 import type { MetricPoint } from "#store/types";
 
@@ -37,8 +36,8 @@ const formatPercentTick = (v: number): string => `${v}%`;
 
 /**
  * Real-time CPU %, memory % and worker count over the trailing sample
- * window, with animation off for smooth updates. Series colours come from
- * `workerColor()`.
+ * window, with animation off for smooth updates. Series colours are the
+ * shared per-metric `METRIC_COLOR`s.
  */
 export function MetricsChart(): React.ReactElement {
   const history = useSystemStore((s) => s.metrics.history);
@@ -65,7 +64,7 @@ export function MetricsChart(): React.ReactElement {
           type="monotone"
           dataKey="cpu"
           name="CPU %"
-          stroke={workerColor(0)}
+          stroke={METRIC_COLOR.cpu}
           strokeWidth={2}
           dot={false}
           isAnimationActive={false}
@@ -75,7 +74,7 @@ export function MetricsChart(): React.ReactElement {
           type="monotone"
           dataKey="memoryPercent"
           name="Memory %"
-          stroke={workerColor(1)}
+          stroke={METRIC_COLOR.memory}
           strokeWidth={2}
           dot={false}
           isAnimationActive={false}
@@ -85,7 +84,7 @@ export function MetricsChart(): React.ReactElement {
           type="stepAfter"
           dataKey="workerCount"
           name="Workers"
-          stroke={workerColor(2)}
+          stroke={METRIC_COLOR.workers}
           strokeWidth={2}
           dot={false}
           isAnimationActive={false}
