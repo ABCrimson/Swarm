@@ -29,8 +29,9 @@ use tokio_util::sync::DropGuard;
 
 use swarm_core::Paths;
 use swarm_core::events::{SwarmEvent, SystemLogPayload, WorkerKilledPayload};
+use swarm_core::lock::LockError;
 use swarm_core::protocol::{ClientFrame, PROTOCOL_VERSION, ServerFrame};
-use swarm_core::runtime::{Runtime, RuntimeConfig};
+use swarm_core::runtime::{Runtime, RuntimeConfig, RuntimeStartError};
 use swarmd::auth::{AllowedHost, DaemonToken, HostPolicy};
 use swarmd::{AppState, Limits};
 
@@ -76,17 +77,7 @@ impl TestServer {
         let token = DaemonToken::load_or_create(&data_dir).unwrap().token;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let runtime = Runtime::start(
-            RuntimeConfig {
-                paths: Paths {
-                    data_dir: data_dir.clone(),
-                },
-                shell_name: "swarmd",
-                bind: Some(addr.to_string()),
-            },
-            |_| {},
-        )
-        .expect("runtime should start on a free data dir");
+        let runtime = start_runtime(&data_dir, addr).await;
         let hosts = HostPolicy::new(
             options
                 .allow_hosts
@@ -128,6 +119,42 @@ impl TestServer {
         runtime.metrics_cancel.cancel();
         drop(runtime);
         temp_dir.take()
+    }
+}
+
+/// How long [`start_runtime`] keeps retrying a lock that is still held.
+const LOCK_RETRY_DEADLINE: Duration = Duration::from_secs(5);
+
+/// Starts the runtime on `data_dir`, retrying while the single-instance lock
+/// is still held.
+///
+/// A restart ([`TestServer::stop`], then [`TestServer::start_in`] on the same
+/// directory) can find the previous runtime's `daemon.lock` still locked
+/// even though that runtime is dropped: the lock belongs to the open file
+/// description, and a process that another test in this binary is spawning
+/// at that moment holds a copy of the descriptor from fork until exec closes
+/// it (it is close-on-exec). That window is short, so a bounded retry makes
+/// the restart deterministic without hiding a real leak: a lock held for
+/// the whole deadline still fails the test.
+async fn start_runtime(data_dir: &Path, addr: SocketAddr) -> Runtime {
+    let deadline = Instant::now() + LOCK_RETRY_DEADLINE;
+    loop {
+        let config = RuntimeConfig {
+            paths: Paths {
+                data_dir: data_dir.to_path_buf(),
+            },
+            shell_name: "swarmd",
+            bind: Some(addr.to_string()),
+        };
+        match Runtime::start(config, |_| {}) {
+            Ok(runtime) => return runtime,
+            Err(RuntimeStartError::Lock(LockError::AlreadyRunning(_)))
+                if Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(error) => panic!("runtime should start on a free data dir: {error}"),
+        }
     }
 }
 
