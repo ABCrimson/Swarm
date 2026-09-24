@@ -20,7 +20,7 @@
 //! its snapshot of the manager INSIDE it, so two overlapping saves can
 //! never land out of order (an older snapshot overwriting a newer one).
 //! Each write replaces the file atomically and durably (see
-//! [`crate::state_file::write_atomic`]).
+//! `state_file::write_atomic`).
 
 use std::path::{Path, PathBuf};
 

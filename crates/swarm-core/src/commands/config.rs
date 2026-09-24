@@ -51,8 +51,8 @@ const SECRET_ANY_WORDS: &[&str] = &[
 /// spaces and camelCase boundaries — so `ANTHROPIC_API_KEY`,
 /// `settings:githubToken` and `api-key` are judged like
 /// `anthropic_api_key`, `settings_github_token` and `api_key`. It is
-/// secret-shaped when its LAST word is one of [`SECRET_LAST_WORDS`], or
-/// ANY word is one of [`SECRET_ANY_WORDS`]. Ordinary settings such as
+/// secret-shaped when its LAST word is one of `SECRET_LAST_WORDS`, or
+/// ANY word is one of `SECRET_ANY_WORDS`. Ordinary settings such as
 /// `max_workers`, `max_tokens` or `default_repo_root` are not.
 pub fn is_secret_key(key: &str) -> bool {
     let words = key_words(key);

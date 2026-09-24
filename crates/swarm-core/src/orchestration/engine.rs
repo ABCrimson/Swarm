@@ -12,7 +12,7 @@
 //!
 //! Seqs are unique and strictly increasing for the lifetime of the data
 //! directory, across restarts and crashes: the writer reserves seqs in
-//! the log in blocks of [`SEQ_RESERVATION_BLOCK`] BEFORE issuing them,
+//! the log in blocks of `SEQ_RESERVATION_BLOCK` (1024) BEFORE issuing them,
 //! and a restarted engine resumes after the highest seq any earlier run
 //! could have issued ([`EventLog::resume_seq`]). A crash therefore costs
 //! at most one unused block of seqs, never a reused one; a clean

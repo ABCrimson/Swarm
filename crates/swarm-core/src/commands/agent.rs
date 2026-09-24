@@ -2,7 +2,7 @@
 //! `agent_send_turn`, `agent_cancel`, `agent_shutdown`, `agent_probe`,
 //! `agent_permission_respond` and `set_agent_concurrency`.
 //!
-//! Only [`with_adapter!`] knows which Rust adapter serves which
+//! Only `with_adapter!` knows which Rust adapter serves which
 //! [`ProviderId`]. Every command after `agent_spawn` reaches the live
 //! session through `ctx.agent_session_registry`, keyed by worker id,
 //! never by provider.
@@ -47,7 +47,7 @@ macro_rules! with_adapter {
     };
 }
 
-/// The Title Case refusal for a provider [`with_adapter!`] has no
+/// The Title Case refusal for a provider `with_adapter!` has no
 /// adapter for.
 fn no_adapter(provider: ProviderId) -> String {
     let name = serde_json::to_value(provider)

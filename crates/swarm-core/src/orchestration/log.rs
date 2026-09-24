@@ -260,7 +260,7 @@ impl EventLog {
     /// The seq a new writer must continue after: the highest seq any
     /// previous writer on this file may have issued. That is the larger
     /// of the highest persisted seq and the writer's last reservation
-    /// ([`Self::reserve_seqs`]), because ephemeral events consume seqs
+    /// (`reserve_seqs`), because ephemeral events consume seqs
     /// without leaving a row — resuming from [`Self::max_seq`] alone
     /// would hand out seqs that clients already saw before a restart.
     ///

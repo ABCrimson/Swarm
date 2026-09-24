@@ -25,7 +25,7 @@
 //!
 //! A process-wide lock serializes every read-modify-write cycle, and each
 //! write replaces the file atomically and durably (see
-//! [`crate::state_file::write_atomic`]).
+//! `state_file::write_atomic`).
 
 use std::path::PathBuf;
 
