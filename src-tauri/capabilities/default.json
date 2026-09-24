@@ -1,43 +1,38 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for SWARM Orchestrator",
+  "description": "What the SWARM Orchestrator webview may do. File access carries no static path scope: the fs commands reach only what the user picks in an open or save dialog, which grants that path (a directory with its contents when opened recursively) for the rest of the session.",
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "fs:allow-read-text-file",
+    "fs:allow-read-dir",
+    "fs:allow-exists",
+    "fs:allow-write-text-file",
+    "fs:allow-remove",
+    "fs:allow-rename",
     {
-      "identifier": "fs:allow-read-text-file",
-      "allow": [{ "path": "$APPDATA/**" }, { "path": "$HOME/**" }]
-    },
-    {
-      "identifier": "fs:allow-read-dir",
-      "allow": [{ "path": "$APPDATA/**" }, { "path": "$HOME/**" }]
-    },
-    {
-      "identifier": "fs:allow-exists",
-      "allow": [{ "path": "$APPDATA/**" }, { "path": "$HOME/**" }]
-    },
-    {
-      "identifier": "fs:allow-write-text-file",
-      "allow": [{ "path": "$APPDATA/**" }, { "path": "$HOME/.swarm/**" }]
-    },
-    {
-      "identifier": "fs:allow-mkdir",
-      "allow": [{ "path": "$APPDATA/**" }, { "path": "$HOME/.swarm/**" }]
-    },
-    {
-      "identifier": "fs:allow-remove",
-      "allow": [{ "path": "$APPDATA/**" }, { "path": "$HOME/.swarm/**" }]
-    },
-    {
-      "identifier": "fs:allow-rename",
-      "allow": [{ "path": "$APPDATA/**" }, { "path": "$HOME/.swarm/**" }]
+      "identifier": "fs:scope",
+      "deny": [
+        { "path": "$APPDATA/**" },
+        { "path": "$HOME/.ssh/**" },
+        { "path": "$HOME/.gnupg/**" },
+        { "path": "$HOME/.aws/**" },
+        { "path": "$HOME/.azure/**" },
+        { "path": "$HOME/.kube/**" },
+        { "path": "$HOME/.docker/**" },
+        { "path": "$HOME/.config/gh/**" },
+        { "path": "$HOME/.claude/**" },
+        { "path": "$HOME/.codex/**" },
+        { "path": "$HOME/.git-credentials" },
+        { "path": "$HOME/.netrc" }
+      ]
     },
     "fs:deny-default",
     "dialog:default",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://github.com/*/*/compare/*" }]
+      "allow": [{ "url": "https://*/*/*/compare/*" }]
     },
     {
       "identifier": "opener:allow-open-path",
