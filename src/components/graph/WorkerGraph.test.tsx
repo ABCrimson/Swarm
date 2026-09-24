@@ -26,6 +26,7 @@ import { Profiler } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { reduceNodeUi, toFlowEdges, WorkerGraph } from "#components/graph/WorkerGraph";
+import { MockElkWorker as MockWorker } from "#hooks/elk-worker-fake";
 import type { DomainEvent } from "#lib/event-bus";
 import { useProvenanceStore } from "#store/provenance";
 import type { Worker } from "#store/types";
@@ -39,37 +40,6 @@ const ipc = vi.hoisted(() => ({
   killWorker: vi.fn(async (_id: string) => {}),
 }));
 vi.mock(import("#lib/tauri"), async (importOriginal) => ({ ...(await importOriginal()), ...ipc }));
-
-/**
- * Minimal mock of the DOM `Worker` API — same shape as
- * `useElkLayout.test.tsx`'s `MockWorker` (jsdom has no real Worker/module
- * worker support). `autoRespondLayout` speaks enough of elkjs's own
- * `{cmd, id}` protocol to resolve `elk.layout()` so `isLayouting` settles
- * to `false` and this file can assert on the settled DOM.
- */
-class MockWorker {
-  static instances: MockWorker[] = [];
-
-  onmessage: ((ev: MessageEvent) => void) | null = null;
-  onerror: ((ev: ErrorEvent) => void) | null = null;
-  onmessageerror: ((ev: MessageEvent) => void) | null = null;
-  postMessage = vi.fn(
-    (msg: { id: number; cmd?: string; graph?: { children?: { id: string }[] } }) => {
-      if (msg.cmd !== "layout") return;
-      const children = (msg.graph?.children ?? []).map((child, i) => ({
-        id: child.id,
-        x: (i + 1) * 100,
-        y: (i + 1) * 50,
-      }));
-      this.onmessage?.({ data: { id: msg.id, data: { id: "root", children } } } as MessageEvent);
-    },
-  );
-  terminate = vi.fn();
-
-  constructor() {
-    MockWorker.instances.push(this);
-  }
-}
 
 /**
  * jsdom has no layout engine, so a real `ResizeObserver` never fires and
@@ -126,7 +96,7 @@ async function waitForLayoutSettled(): Promise<void> {
 
 describe("WorkerGraph — measured edges", () => {
   beforeEach(() => {
-    MockWorker.instances = [];
+    MockWorker.reset(true);
     vi.stubGlobal("Worker", MockWorker);
     vi.stubGlobal("ResizeObserver", MockResizeObserver);
   });
@@ -279,7 +249,7 @@ function nodeFor(id: string): HTMLElement {
 
 describe("WorkerGraph — interactions", () => {
   beforeEach(() => {
-    MockWorker.instances = [];
+    MockWorker.reset(true);
     vi.stubGlobal("Worker", MockWorker);
     vi.stubGlobal("ResizeObserver", MockResizeObserver);
   });

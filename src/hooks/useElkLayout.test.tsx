@@ -2,48 +2,8 @@ import { act, renderHook } from "@testing-library/react";
 import type { Edge, Node } from "@xyflow/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MockElkWorker as MockWorker } from "#hooks/elk-worker-fake";
 import { useElkLayout } from "#hooks/useElkLayout";
-
-/**
- * Minimal mock of the DOM `Worker` API. A real end-to-end elkjs worker test
- * is impractical under jsdom (jsdom has no Worker implementation and can't
- * evaluate a module worker script), so this mostly exercises the hook's
- * failure-handling contract: when the worker the hook constructs fires
- * `onerror`/`onmessageerror`, the hook must surface an error and clear
- * `isLayouting` instead of hanging forever (the Task 4 regression).
- *
- * When `MockWorker.autoRespondLayout` is set, `postMessage` also speaks just
- * enough of elkjs's own `{cmd, id}` request/response protocol (see
- * elkjs's `PromisedWorker`) to resolve a real `elk.layout()` call — needed
- * to exercise the success path (fix/feedback-batch-1 item: synchronous
- * layout commit) without a real worker.
- */
-class MockWorker {
-  static instances: MockWorker[] = [];
-  static autoRespondLayout = false;
-
-  onmessage: ((ev: MessageEvent) => void) | null = null;
-  onerror: ((ev: ErrorEvent) => void) | null = null;
-  onmessageerror: ((ev: MessageEvent) => void) | null = null;
-  postMessage = vi.fn(
-    (msg: { id: number; cmd?: string; graph?: { children?: { id: string }[] } }) => {
-      if (!MockWorker.autoRespondLayout || msg.cmd !== "layout") return;
-      const children = (msg.graph?.children ?? []).map((child, i) => ({
-        id: child.id,
-        x: (i + 1) * 100,
-        y: (i + 1) * 50,
-      }));
-      this.onmessage?.({
-        data: { id: msg.id, data: { id: "root", children } },
-      } as MessageEvent);
-    },
-  );
-  terminate = vi.fn();
-
-  constructor() {
-    MockWorker.instances.push(this);
-  }
-}
 
 const nodes: Node[] = [
   { id: "a", position: { x: 0, y: 0 }, data: {} },
@@ -53,8 +13,7 @@ const edges: Edge[] = [{ id: "e-a-b", source: "a", target: "b" }];
 
 describe("useElkLayout", () => {
   beforeEach(() => {
-    MockWorker.instances = [];
-    MockWorker.autoRespondLayout = false;
+    MockWorker.reset();
     vi.stubGlobal("Worker", MockWorker);
   });
 
