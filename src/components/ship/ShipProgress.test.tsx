@@ -32,6 +32,15 @@ describe("ShipProgress", () => {
     expect(list).toHaveTextContent("Push — In Progress");
   });
 
+  it("labels the compare step as building the link — the page opens only after the ship settles", () => {
+    render(
+      <ShipProgress
+        rows={[{ step: "compare", status: "ok", detail: "https://github.com/o/r/compare/a...b" }]}
+      />,
+    );
+    expect(screen.getByRole("listitem")).toHaveTextContent("Compare Page Link — Done");
+  });
+
   it("falls back to the raw step name for a step it has no label for", () => {
     render(<ShipProgress rows={[{ step: "verify", status: "ok", detail: null }]} />);
     expect(screen.getByRole("listitem")).toHaveTextContent("verify — Done");

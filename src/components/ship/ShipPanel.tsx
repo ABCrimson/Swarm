@@ -131,7 +131,7 @@ async function openComparePage(url: string): Promise<void> {
     await openUrl(url);
   } catch (err) {
     toast.error(
-      `Could Not Open The Compare Page: ${err instanceof Error ? err.message : String(err)}`,
+      `Could Not Open The Compare Page: ${Error.isError(err) ? err.message : String(err)}`,
     );
   }
 }

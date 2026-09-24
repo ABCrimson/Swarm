@@ -6,12 +6,17 @@ interface ShipProgressProps {
   readonly rows: readonly ShipProgressRow[];
 }
 
-/** Title Case labels for the steps the backend reports; an unknown step shows its raw name. */
+/**
+ * Title Case labels for the steps the backend reports; an unknown step
+ * shows its raw name. `compare` is `ship_compare_url` building the link —
+ * the browser opens it only after the ship has settled (`useShip`), so the
+ * row must not claim the page was opened.
+ */
 const STEP_LABELS = new Map([
   ["staging", "Staging"],
   ["commit", "Commit"],
   ["push", "Push"],
-  ["compare", "Open Compare Page"],
+  ["compare", "Compare Page Link"],
 ]);
 
 /** Screen-reader wording for a step's status (the icons are decorative). */

@@ -5,7 +5,7 @@ import { toast } from "#components/ui/Toast";
 import { createAndActivateSession, importSessionFromFile } from "#lib/session-lifecycle";
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return Error.isError(err) ? err.message : String(err);
 }
 
 /** What the create-session form action leaves behind for the next render. */

@@ -31,7 +31,7 @@ function focusOnMount(element: HTMLInputElement | null): void {
 }
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return Error.isError(err) ? err.message : String(err);
 }
 
 // ── Actions (module level: each one owns its try/catch and its toast) ──

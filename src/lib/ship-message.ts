@@ -3,17 +3,16 @@
  * zero-AI-dependency default. Type is inferred from the changed file
  * paths (all under `docs/` or Markdown → `docs`, all known config/
  * lockfile shapes → `chore`, anything else → `feat`), and the summary is
- * built from the file
- * list + diff stat. The result seeds an editable textarea; it is not
- * meant to be the final word. No AI commit-message generator exists: the
- * only AI-written ship text is the optional PR-body prose from
- * `#lib/ship-causal`'s `generateCausalProse`.
+ * built from the file list + diff stat. The result seeds an editable
+ * textarea; it is not meant to be the final word. No AI commit-message
+ * generator exists: the only AI-written ship text is the optional PR-body
+ * prose from `#lib/ship-causal`'s `generateCausalProse`.
  *
- * Unlike the rest of this app's UI copy, the generated message body
- * follows Conventional Commits' own convention (lowercase `type:`
- * prefix, sentence-case summary) rather than Title Case — Title Case
- * is a house rule for UI labels, not for git commit content a
- * reviewer will read in `git log`.
+ * Unlike the rest of this app's UI copy, the generated message follows
+ * the usual Conventional Commits style (lowercase `type:` prefix and
+ * lowercase imperative summary, e.g. `feat: update 3 files`) rather than
+ * Title Case — Title Case is a house rule for UI labels, not for git
+ * commit content a reviewer will read in `git log`.
  *
  * @module ship-message
  */

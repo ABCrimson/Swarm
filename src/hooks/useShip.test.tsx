@@ -69,6 +69,14 @@ vi.mock(import("#lib/tauri"), async (importOriginal) => ({
   shipContext: (...args) => mockShipContext(...args),
 }));
 
+const mockGenerateCausalProse =
+  vi.fn<(input: unknown, model: string, signal?: AbortSignal) => Promise<string>>();
+
+vi.mock(import("#lib/ship-causal"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  generateCausalProse: (...args) => mockGenerateCausalProse(...args),
+}));
+
 // ── Fixtures ──────────────────────────────────────────
 
 const WORKER_ID = "11111111-2222-4333-8444-555555555555";
@@ -590,6 +598,40 @@ describe("useShip", () => {
     expect(result.current.state).toBe("failed");
     expect(result.current.error?.kind).toBe("nothingToCommit");
     expect(mockGitPush).not.toHaveBeenCalled();
+  });
+
+  // ── AI prose ──
+
+  it("regenerateProse stores the generated prose and folds it into the composed body", async () => {
+    mockGitShipPreflight.mockResolvedValue(makePreflight());
+    mockGenerateCausalProse.mockResolvedValue("Tightened the preflight.");
+
+    const { result } = await renderPreviewing();
+    await act(async () => {
+      await result.current.regenerateProse();
+    });
+
+    expect(result.current.aiProseState).toBe("ready");
+    expect(result.current.aiProse).toBe("Tightened the preflight.");
+    expect(result.current.composedBody).toContain("Tightened the preflight.");
+  });
+
+  it("aborts an in-flight prose stream when the flow unmounts (a worker switch)", async () => {
+    mockGitShipPreflight.mockResolvedValue(makePreflight());
+    const pending = Promise.withResolvers<string>();
+    mockGenerateCausalProse.mockReturnValue(pending.promise);
+
+    const { result, unmount } = await renderPreviewing();
+    act(() => {
+      void result.current.regenerateProse();
+    });
+    const signal = mockGenerateCausalProse.mock.lastCall?.[2];
+    expect(signal?.aborted).toBe(false);
+
+    unmount();
+
+    expect(signal?.aborted).toBe(true);
+    pending.resolve("");
   });
 
   // ── B3: mode toggle refetches preflight for the new mode ─────────

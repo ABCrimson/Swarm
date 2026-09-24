@@ -7,15 +7,17 @@
  * machine) and holds no `try` blocks: every async step lives in a
  * module-level helper that reports back through `dispatch`, which keeps
  * the hook compilable by the React Compiler and every transition
- * unit-testable on its own. See `docs/architecture.md`'s Ship Chain
- * section for the B1/B2/B3 rules referenced below.
+ * unit-testable on its own. The rule tags below: B1 (the receipt
+ * timeout) is defined at `SHIP_SETTLED_TIMEOUT_MS`; B2 (nothing-to-commit
+ * recovery) and B3 (mode-aware preflight) are the backend rules of the
+ * same name in `docs/architecture.md`'s Ship Chain section.
  *
  * @module useShip
  */
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAtomValue } from "jotai";
-import { useReducer } from "react";
+import { useEffect, useReducer, useRef } from "react";
 import { toast } from "sonner";
 import * as z from "zod";
 import { onEvent, waitFor } from "#lib/event-bus";
@@ -197,7 +199,7 @@ export interface UseShipReturn extends ShipSnapshot {
   readonly runPreflight: () => Promise<void>;
   /** Refetches the causal record after a failed load. */
   readonly retryContext: () => Promise<void>;
-  /** Calls `generateCausalProse` against the current `context`/`preflight`, using the app's selected chat model. A no-op while either isn't loaded. */
+  /** Calls `generateCausalProse` against the current `context`/`preflight`, using the app's selected chat model. A no-op while either isn't loaded; the stream is aborted if the flow unmounts first. */
   readonly regenerateProse: () => Promise<void>;
   readonly commitOnly: () => Promise<void>;
   readonly commitAndPush: () => Promise<void>;
@@ -218,6 +220,17 @@ export function useShip(workerId: string): UseShipReturn {
   const [snapshot, dispatch] = useReducer(shipReducer, INITIAL_SHIP_SNAPSHOT);
   const selectedModel = useAtomValue(selectedModelAtom);
   const { state, preflight, message, mode, context, aiProse } = snapshot;
+
+  // One abort signal per mounted flow: a worker switch remounts the flow,
+  // and a prose stream still running for the old worker could only land
+  // in a discarded reducer while it keeps spending tokens. Created in the
+  // effect (not at render) so a Strict Mode re-mount gets a live signal.
+  const flowSignal = useRef<AbortSignal | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    flowSignal.current = controller.signal;
+    return () => controller.abort();
+  }, []);
 
   const composedBody =
     context != null && preflight != null
@@ -249,6 +262,7 @@ export function useShip(workerId: string): UseShipReturn {
             },
             CLAUDE_MODELS[selectedModel].id,
             dispatch,
+            flowSignal.current ?? undefined,
           )
         : Promise.resolve(),
     commitOnly: () => runAction(workerId, draft, dispatch, commitOnlySteps),
@@ -362,16 +376,18 @@ async function fetchContext(
  * Generates the AI prose. Failure (no API key, network, refusal) sets
  * `aiProseState: "failed"` and leaves `aiProse` as it was — the body
  * then falls back to the deterministic Causal Record alone, never a
- * synthesized placeholder.
+ * synthesized placeholder. `signal` aborts the stream when the flow
+ * unmounts (see `useShip`).
  */
 async function generateProse(
   input: Parameters<typeof generateCausalProse>[0],
   model: string,
   dispatch: ShipDispatch,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
   dispatch({ type: "proseStarted" });
   try {
-    dispatch({ type: "proseReady", prose: await generateCausalProse(input, model) });
+    dispatch({ type: "proseReady", prose: await generateCausalProse(input, model, signal) });
   } catch {
     dispatch({ type: "proseFailed" });
   }
@@ -555,5 +571,5 @@ function toShipError(err: unknown): ShipError {
 }
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return Error.isError(err) ? err.message : String(err);
 }
