@@ -360,12 +360,38 @@ pub(super) struct CanUseTool {
     #[serde(default)]
     pub input: Value,
     pub tool_use_id: String,
-    /// Consent text for the host's dialog. May carry ANSI escapes.
+    /// Why the ask escalated, for the dialog's consent line. May carry
+    /// ANSI escapes. Absent on a plain default-mode ask (2.1.280's Write
+    /// ask carries only `description`).
     #[serde(default)]
     pub decision_reason: Option<String>,
+    /// The prompt line the CLI's own dialog would show.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// A short description of the call (the target file name for Write).
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The tool's approval card is itself the input surface (the user
+    /// answers ON it, e.g. `AskUserQuestion`), or its disclosure only
+    /// renders locally: a one-tap Allow/Deny must not be offered.
+    #[serde(default)]
+    pub requires_user_interaction: bool,
     /// Set when the call comes from a subagent.
     #[serde(default)]
     pub agent_id: Option<String>,
+}
+
+impl CanUseTool {
+    /// The text a host dialog shows: the escalation reason, else the
+    /// title, else the description; ANSI styling stripped, blanks
+    /// skipped.
+    pub fn message(&self) -> Option<String> {
+        [&self.decision_reason, &self.title, &self.description]
+            .into_iter()
+            .flatten()
+            .map(|text| super::strip_ansi(text))
+            .find(|text| !text.trim().is_empty())
+    }
 }
 
 /// `type: "control_response"`: the CLI's answer to a host request.
@@ -413,10 +439,15 @@ pub(super) struct CommandLifecycleLine {
     pub state: String,
 }
 
-/// Success payload of the `initialize` control request.
+/// Success payload of the `initialize` control request. The model list
+/// is read entry by entry (one odd entry drops only itself), so what
+/// fails the whole payload is a wrong type on a field the adapter acts
+/// on (`account`, `pid`, `current_permission_mode`): the handshake
+/// rejects such an answer instead of spawning on guessed values.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(super) struct InitializeResponse {
+    #[serde(deserialize_with = "readable_entries")]
     pub models: Vec<ModelInfo>,
     pub account: Option<AccountInfo>,
     pub pid: Option<u32>,
@@ -433,6 +464,22 @@ impl InitializeResponse {
             .and_then(|model| model.resolved_model.clone())
             .unwrap_or_else(|| requested.to_owned())
     }
+}
+
+/// The entries of a JSON list that deserialize as `T`; anything that is
+/// not a list reads as empty.
+fn readable_entries<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let Value::Array(entries) = Value::deserialize(deserializer)? else {
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .collect())
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,10 +1,12 @@
 // The `can_use_tool` round trip, from the 2.1.280 capture of a default-
 // mode session with `--permission-prompt-tool stdio`: the Write call
-// blocks on the host's answer. Every turn asks once. An allowed call's
-// tool result echoes the host's whole answer (synthetic) so the test can
-// check what the adapter sent; a denied call's result carries the deny
-// message and the refusal lands in `result.permission_denials`, as the
-// real CLI does. The ANSI-styled `decision_reason` is synthetic too.
+// blocks on the host's answer, and the ask carries the capture's fields
+// (`display_name`, `description` = the file name, `permission_suggestions`;
+// no `decision_reason`, no `title`). Every turn asks once. An allowed
+// call's tool result echoes the host's whole answer (synthetic) so the
+// test can check what the adapter sent; a denied call's result carries
+// the deny message and the refusal lands in `result.permission_denials`,
+// as the real CLI does.
 import { randomUUID } from "node:crypto";
 
 export default async function interactivePermission(cli) {
@@ -28,7 +30,7 @@ export default async function interactivePermission(cli) {
         toolName: "Write",
         input: write.input,
         toolUseId: write.id,
-        decisionReason: "\u001b[1mClaude wants to create\u001b[0m a file",
+        description: `probe${round}.txt`,
       }),
       f.messageDelta("tool_use"),
       f.messageStop(),

@@ -22,6 +22,10 @@
  * adapter reads plus representative neighbours. Each scenario's header
  * says which capture its text, tool inputs and costs come from, and
  * which parts are synthetic.
+ *
+ * Needs Node 22 or newer (`Promise.withResolvers`); the repo pins its
+ * Node through pnpm, and every job that runs the Rust tests must put
+ * that Node on PATH.
  */
 import { randomUUID } from "node:crypto";
 import { writeFileSync, writeSync } from "node:fs";
@@ -42,7 +46,11 @@ const DEFAULTS = {
   },
   /** `system/init.capabilities`; `null` omits the field (a pre-capability CLI). */
   capabilities: ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"],
-  /** `"answer"`, `"never"` (no response at all) or `"error"`. */
+  /**
+   * `"answer"`, `"never"` (no response at all), `"error"`, or
+   * `"unreadable"` (a success whose `current_permission_mode` is not a
+   * string).
+   */
   initialize: "answer",
   /** Overrides the permission mode `initialize` reports (default: from `--permission-mode`). */
   permissionMode: undefined,
@@ -59,7 +67,9 @@ const flag = (name) => {
   return at === -1 ? undefined : argv[at + 1];
 };
 const sessionId = flag("--session-id") ?? flag("--resume") ?? randomUUID();
-const permissionMode = flag("--permission-mode") ?? "default";
+// The CLI still reports its renamed default mode as `default` when
+// started with `--permission-mode manual` (2.1.281).
+const permissionMode = (flag("--permission-mode") ?? "default").replace(/^manual$/, "default");
 const lifecycleSupported = config.capabilities?.includes("msg_lifecycle_v1") ?? false;
 
 if (config.writePid) {
@@ -270,7 +280,20 @@ const frames = {
     uuid: randomUUID(),
     session_id: sessionId,
   }),
-  canUseTool: (requestId, { toolName, input, toolUseId, decisionReason, agentId }) => ({
+  /** Only the fields a scenario passes are set, as on the live asks. */
+  canUseTool: (
+    requestId,
+    {
+      toolName,
+      input,
+      toolUseId,
+      decisionReason,
+      title,
+      description,
+      requiresUserInteraction,
+      agentId,
+    },
+  ) => ({
     type: "control_request",
     request_id: requestId,
     request: {
@@ -281,6 +304,9 @@ const frames = {
       permission_suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }],
       tool_use_id: toolUseId,
       ...(decisionReason ? { decision_reason: decisionReason } : {}),
+      ...(title ? { title } : {}),
+      ...(description ? { description } : {}),
+      ...(requiresUserInteraction ? { requires_user_interaction: true } : {}),
       ...(agentId ? { agent_id: agentId } : {}),
     },
   }),
@@ -373,6 +399,9 @@ const handleControlRequest = ({ request_id: requestId, request }) => {
     case "initialize":
       if (config.initialize === "never") return;
       if (config.initialize === "error") return controlError(requestId, "initialize refused");
+      if (config.initialize === "unreadable") {
+        return controlSuccess(requestId, { models: [], current_permission_mode: 7 });
+      }
       return controlSuccess(requestId, {
         commands: [{ name: "compact", description: "Compact the conversation", argumentHint: "" }],
         agents: [{ name: "general-purpose", description: "General-purpose agent" }],

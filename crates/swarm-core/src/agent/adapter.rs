@@ -334,10 +334,10 @@ pub trait AgentAdapter: Send + Sync {
 /// Session state has three owners and no mirroring: an `AgentSession`
 /// impl stores only what it needs to keep the child process and the
 /// protocol state alive (stdin writer, pending permissions, current
-/// turn) — it never mirrors the conversation transcript. The transcript lives in the provider CLI's
-/// own memory (recoverable via [`Self::session_key`] + `resume`) and,
-/// normalized, in the ordered event log (`agent_block` rows) — never a
-/// third copy in this struct.
+/// turn) — it never mirrors the conversation transcript. The
+/// transcript lives in the provider CLI's own memory (recoverable via
+/// [`Self::session_key`] + `resume`) and, normalized, in the ordered
+/// event log (`agent_block` rows) — never a third copy in this struct.
 ///
 /// # Concurrency contract (BINDING — every implementation must honor this)
 ///
@@ -570,7 +570,7 @@ mod tests {
         /// flight" under its own control (e.g. to call `shutdown`
         /// concurrently) rather than racing real timing. `None` in
         /// every non-gated test — `send_turn` then runs straight
-        /// through, exactly like the pre-review mock.
+        /// through.
         turn_gate: Option<Arc<tokio::sync::Notify>>,
     }
 
@@ -750,7 +750,7 @@ mod tests {
         }
     }
 
-    /// DIRECTIVE: proves both the trait contract compiles as a real
+    /// Proves both that the trait contract compiles as a real
     /// `Box<dyn AgentSession>` object (`spawn`'s return type) AND that
     /// a full session lifecycle drives the `agent_*` family through a
     /// live engine with the correct persistence class for each variant
@@ -814,9 +814,9 @@ mod tests {
         std::fs::remove_file(format!("{}-shm", db_path.display())).ok();
     }
 
-    // ── FIX-4(c): the new concurrency contract ───────────────────────
+    // ── The concurrency contract ─────────────────────────────────────
 
-    /// DIRECTIVE (review FIX-4c, part 1): `shutdown` racing a
+    /// `shutdown` racing a
     /// still-in-flight `send_turn` yields EXACTLY ONE
     /// `agent_turn_settled` for that turn — never zero (Condition B)
     /// and never two (the ownership handshake in both methods' bodies).
@@ -890,7 +890,7 @@ mod tests {
         std::fs::remove_file(format!("{}-shm", db_path.display())).ok();
     }
 
-    /// DIRECTIVE (review FIX-4c, part 2): a second `shutdown` call is
+    /// A second `shutdown` call is
     /// idempotent — same summary, no re-emitted `agent_session_exited`.
     #[tokio::test]
     async fn test_double_shutdown_is_idempotent() {
@@ -935,7 +935,7 @@ mod tests {
         std::fs::remove_file(format!("{}-shm", db_path.display())).ok();
     }
 
-    /// DIRECTIVE (review FIX-4c, part 3): `send_turn` while a turn is
+    /// `send_turn` while a turn is
     /// already in flight returns [`AppError::AgentSessionBusy`] — a
     /// session never queues internally. An in-memory (not file-backed)
     /// engine is enough here since only the returned `Result`s matter,
@@ -978,9 +978,9 @@ mod tests {
         );
     }
 
-    // ── nit G: ProviderId wire-value pin ─────────────────────────────
+    // ── ProviderId wire values ───────────────────────────────────────
 
-    /// DIRECTIVE (review nit G): pins ALL FIVE `ProviderId` wire
+    /// Pins ALL FIVE `ProviderId` wire
     /// values. `src/lib/agent-events.ts`'s `ProviderIdSchema` hardcodes
     /// this same list on the TypeScript side with no automated
     /// cross-language check; this test is the Rust-side half of that

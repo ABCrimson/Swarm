@@ -63,6 +63,10 @@
 //! each one as a pending `agent_permission_request` (no suggested
 //! decision) and answers it from [`AgentSession::respond_permission`];
 //! an ask nobody answers is denied after `PERMISSION_DECISION_TIMEOUT`.
+//! An ask flagged `requires_user_interaction` (the tool's approval card
+//! is where the user answers, e.g. `AskUserQuestion`) is denied at once
+//! and reported as a denial: a one-tap Allow would pass it through
+//! unanswered.
 //! Denials the CLI decides on its own (the deny list, `dontAsk`, the
 //! redirection guard) are reported with `suggested_decision: Deny` from
 //! `system/permission_denied`, reconciled against the authoritative
@@ -202,7 +206,8 @@ const PERMISSION_TIMED_OUT: &str = "No Decision Arrived In Time; Denied Automati
 const NO_SWARM_TURN: &str = "No SWARM Turn Is Waiting On This Session; Denied Automatically";
 
 /// Error answer to control requests this host does not implement
-/// (`request_user_dialog`, `elicitation`, ...).
+/// (`request_user_dialog`, `elicitation`, ...), and the deny message for
+/// a `can_use_tool` ask that only the CLI's own dialog can answer.
 const UNSUPPORTED_REQUEST: &str = "Not Supported By The SWARM Host";
 
 /// Error text for `send_turn` on a session that is shutting down.
@@ -228,7 +233,8 @@ pub enum ClaudeCodeTrustTier {
     /// `--permission-mode dontAsk` (anything not pre-approved is denied
     /// without asking), and a deny list for the writing tools.
     Restricted,
-    /// The CLI's default mode: reads run, anything that needs approval
+    /// `--permission-mode manual`, the CLI's default mode pinned against
+    /// project settings: reads run, anything that needs approval
     /// (commands with side effects, file edits) is asked of the human,
     /// and the destructive Bash patterns in `deny_list` are always
     /// denied.
@@ -249,26 +255,30 @@ fn parse_trust_tier(raw: Option<&str>) -> Result<ClaudeCodeTrustTier, AppError> 
         Some("restricted") => Ok(ClaudeCodeTrustTier::Restricted),
         Some("write_enabled") => Ok(ClaudeCodeTrustTier::WriteEnabled),
         Some(other) => Err(AppError::PermissionDenied(format!(
-            "unrecognized claude code trust tier {other:?} — refusing to spawn rather than \
-             guess a permission mode (never bypassPermissions)"
+            "Unrecognized Claude Code Trust Tier {other:?}; Refusing To Spawn Rather Than \
+             Guess A Permission Mode (Never bypassPermissions)"
         ))),
     }
 }
 
-/// The `--permission-mode` value for `tier`, or `None` for the CLI's
-/// default mode (no flag).
-fn permission_mode_flag(tier: ClaudeCodeTrustTier) -> Option<&'static str> {
+/// The `--permission-mode` value for `tier`. Every tier passes one, the
+/// Standard tier included: without the flag a project's
+/// `.claude/settings.json` `defaultMode` picks the mode (measured on
+/// 2.1.281: `"defaultMode": "acceptEdits"` made `initialize` report
+/// `acceptEdits`), while `--permission-mode manual` (the name the CLI
+/// has accepted for its default mode since 2.1.200) overrides it.
+fn permission_mode_flag(tier: ClaudeCodeTrustTier) -> &'static str {
     match tier {
-        ClaudeCodeTrustTier::Restricted => Some("dontAsk"),
-        ClaudeCodeTrustTier::Standard => None,
-        ClaudeCodeTrustTier::WriteEnabled => Some("acceptEdits"),
+        ClaudeCodeTrustTier::Restricted => "dontAsk",
+        ClaudeCodeTrustTier::Standard => "manual",
+        ClaudeCodeTrustTier::WriteEnabled => "acceptEdits",
     }
 }
 
 /// The permission modes the `initialize` handshake may report for
 /// `tier`. The CLI renamed `default` to "Manual" but still reports
-/// `default` (2.1.281); both are accepted. Any other answer fails the
-/// spawn closed.
+/// `default` for `--permission-mode manual` (2.1.281); both are
+/// accepted. Any other answer fails the spawn closed.
 fn accepted_permission_modes(tier: ClaudeCodeTrustTier) -> &'static [&'static str] {
     match tier {
         ClaudeCodeTrustTier::Restricted => &["dontAsk"],
@@ -370,9 +380,7 @@ fn build_claude_flags(
     .map(String::from)
     .into();
     argv.extend(["--settings".to_owned(), inline_settings_json(tier)]);
-    if let Some(mode) = permission_mode_flag(tier) {
-        argv.extend(["--permission-mode", mode].map(String::from));
-    }
+    argv.extend(["--permission-mode", permission_mode_flag(tier)].map(String::from));
     if tier == ClaudeCodeTrustTier::Restricted {
         argv.push("--restricted".to_owned());
     }
@@ -433,7 +441,7 @@ fn classify_denial(decision_reason_type: Option<&str>, message: &str) -> Option<
 }
 
 /// Removes ANSI escape sequences, which the CLI may put in a
-/// `can_use_tool` request's `decision_reason`.
+/// `can_use_tool` request's text fields.
 fn strip_ansi(text: &str) -> String {
     static ANSI: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
@@ -636,11 +644,11 @@ impl StdinWriter {
             line,
             ack: Some(ack),
         }) {
-            return Err("stdin is closed".to_owned());
+            return Err("Stdin Is Closed".to_owned());
         }
         written
             .await
-            .unwrap_or_else(|_| Err("the stdin writer stopped".to_owned()))
+            .unwrap_or_else(|_| Err("The Stdin Writer Stopped".to_owned()))
     }
 
     /// Closes stdin once every queued line has been written.
@@ -732,15 +740,16 @@ async fn stderr_snippet(tail: &parking_lot::Mutex<VecDeque<u8>>) -> String {
     let mut tail = tail.lock();
     let text = String::from_utf8_lossy(tail.make_contiguous());
     match text.trim() {
-        "" => "no stderr output".to_owned(),
-        text => format!("stderr: {text}"),
+        "" => "No Stderr Output".to_owned(),
+        text => format!("Stderr: {text}"),
     }
 }
 
 /// Why the `initialize` handshake failed.
 #[derive(Debug)]
 enum HandshakeError {
-    /// The CLI answered `initialize` with an error response.
+    /// The CLI answered `initialize` with an error response, or with a
+    /// success payload the adapter cannot read.
     Rejected(String),
     /// The CLI wrote a `result` instead (e.g. `--resume` of an unknown
     /// session: "No conversation found with session ID: ...").
@@ -774,12 +783,16 @@ async fn handshake(
         match serde_json::from_str::<Inbound>(&line) {
             Ok(Inbound::ControlResponse(frame)) if frame.response.request_id() == init_id => {
                 match frame.response {
+                    // An answer the adapter cannot read is no answer: a
+                    // default would skip the spawn's permission-mode check
+                    // and report the probe as signed out.
                     ControlResponse::Success { response, .. } => {
-                        init = Some(
-                            response
-                                .and_then(|value| serde_json::from_value(value).ok())
-                                .unwrap_or_default(),
-                        );
+                        let payload = response.unwrap_or(Value::Null);
+                        init = Some(serde_json::from_value(payload).map_err(|error| {
+                            HandshakeError::Rejected(format!(
+                                "Unreadable Initialize Response ({error})"
+                            ))
+                        })?);
                     }
                     ControlResponse::Error { error, .. } => {
                         return Err(HandshakeError::Rejected(error));
@@ -802,7 +815,7 @@ async fn handshake(
                 return Err(HandshakeError::StartupFailure(
                     result
                         .failure_text()
-                        .unwrap_or_else(|| format!("claude code: {}", result.subtype)),
+                        .unwrap_or_else(|| format!("Ended With {}", result.subtype)),
                 ));
             }
             _ => {}
@@ -1374,6 +1387,12 @@ fn handle_control_request(shared: &Arc<Shared>, request: ControlRequestLine) {
     }
 }
 
+/// Surfaces a `can_use_tool` ask as a pending `agent_permission_request`
+/// for [`AgentSession::respond_permission`] to answer. Two kinds are
+/// denied at once instead: an ask raised outside a running SWARM turn,
+/// and a `requires_user_interaction` ask (the tool's approval card is
+/// where the user answers it, so a one-tap Allow would pass its input
+/// through unanswered); the latter is still reported, as a denial.
 fn handle_can_use_tool(shared: &Arc<Shared>, request_id: PermissionId, ask: CanUseTool) {
     let turn_id = {
         let mut guard = shared.state.lock();
@@ -1381,14 +1400,16 @@ fn handle_can_use_tool(shared: &Arc<Shared>, request_id: PermissionId, ask: CanU
         match inner.turn.as_mut().filter(|turn| turn.running) {
             Some(turn) => {
                 turn.surfaced.insert(ask.tool_use_id.clone());
-                inner.asks.insert(
-                    request_id.clone(),
-                    PendingAsk {
-                        turn_id: turn.id.clone(),
-                        tool_use_id: ask.tool_use_id.clone(),
-                        input: ask.input.clone(),
-                    },
-                );
+                if !ask.requires_user_interaction {
+                    inner.asks.insert(
+                        request_id.clone(),
+                        PendingAsk {
+                            turn_id: turn.id.clone(),
+                            tool_use_id: ask.tool_use_id.clone(),
+                            input: ask.input.clone(),
+                        },
+                    );
+                }
                 Some(turn.id.clone())
             }
             None => None,
@@ -1407,21 +1428,41 @@ fn handle_can_use_tool(shared: &Arc<Shared>, request_id: PermissionId, ask: CanU
     if let Some(agent_id) = &ask.agent_id {
         tracing::debug!(worker_id = %shared.worker_id, %agent_id, tool = %ask.tool_name, "claude code: subagent permission ask");
     }
+    if ask.requires_user_interaction {
+        tracing::info!(worker_id = %shared.worker_id, tool = %ask.tool_name, "claude code: denying an ask that needs the CLI's own dialog");
+        shared.stdin.send(wire::permission_deny(
+            &request_id,
+            &ask.tool_use_id,
+            UNSUPPORTED_REQUEST,
+            false,
+        ));
+        // A report, keyed like every report by its tool-use id: nothing
+        // is left for `respond_permission` to answer.
+        shared.sink.emit(SwarmEvent::AgentPermissionRequest(
+            AgentPermissionRequestPayload {
+                worker_id: shared.worker_id,
+                turn_id,
+                request_id: ask.tool_use_id,
+                tool: ask.tool_name,
+                input: ask.input,
+                suggested_decision: Some(PermissionDecision::Deny),
+                denial_subclass: None,
+                message: Some(UNSUPPORTED_REQUEST.to_owned()),
+            },
+        ));
+        return;
+    }
     shared.sink.emit(SwarmEvent::AgentPermissionRequest(
         AgentPermissionRequestPayload {
             worker_id: shared.worker_id,
             turn_id,
             request_id: request_id.clone(),
+            message: ask.message(),
             tool: ask.tool_name,
             input: ask.input,
             // Pending: the human decides.
             suggested_decision: None,
             denial_subclass: None,
-            message: ask
-                .decision_reason
-                .as_deref()
-                .map(strip_ansi)
-                .filter(|reason| !reason.trim().is_empty()),
         },
     ));
     expire_ask(shared, request_id);
@@ -1669,7 +1710,7 @@ impl ClaudeCodeAdapter {
         }
     }
 
-    async fn spawn_session(&self, spec: AgentSpawnSpec) -> Result<Box<dyn AgentSession>, AppError> {
+    async fn spawn_session(&self, spec: AgentSpawnSpec) -> Result<ClaudeCodeSession, AppError> {
         let tier = parse_trust_tier(spec.permission_mode.as_deref())?;
         let requested_model = spec
             .model
@@ -1711,13 +1752,17 @@ impl ClaudeCodeAdapter {
             }
         };
 
+        // A second fence behind the pinned `--permission-mode`, for
+        // anything that overrides the flag. The field is not in
+        // the SDK's public types, so a CLI that stops reporting it runs
+        // on the pinned flag alone.
         if let Some(mode) = init.current_permission_mode.as_deref()
             && !accepted_permission_modes(tier).contains(&mode)
         {
             process.finish(false).await;
             return Err(AppError::PermissionDenied(format!(
-                "claude code reports permission mode {mode:?} for the {tier:?} trust tier; \
-                 refusing to run it"
+                "Claude Code Reports Permission Mode {mode:?} For The {tier:?} Trust Tier; \
+                 Refusing To Run It"
             )));
         }
         if let Some(pid) = init.pid {
@@ -1773,7 +1818,7 @@ impl ClaudeCodeAdapter {
             },
         ));
 
-        Ok(Box::new(ClaudeCodeSession { shared }))
+        Ok(ClaudeCodeSession { shared })
     }
 }
 
@@ -1799,7 +1844,10 @@ impl AgentAdapter for ClaudeCodeAdapter {
         &self,
         spec: AgentSpawnSpec,
     ) -> BoxFuture<'_, Result<Box<dyn AgentSession>, AppError>> {
-        Box::pin(self.spawn_session(spec))
+        Box::pin(async move {
+            let session: Box<dyn AgentSession> = Box::new(self.spawn_session(spec).await?);
+            Ok(session)
+        })
     }
 }
 

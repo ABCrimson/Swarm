@@ -578,8 +578,8 @@ async fn interactive_permission_allow_round_trips_to_the_cli() {
     assert_eq!(ask["turnId"], turn);
     assert_eq!(ask["tool"], "Write");
     assert_eq!(
-        ask["message"], "Claude wants to create a file",
-        "ANSI styling is stripped"
+        ask["message"], "probe1.txt",
+        "the live Write ask has no decision_reason or title: its description is the message"
     );
 
     let request_id = ask["requestId"].as_str().expect("request id").to_owned();
@@ -651,6 +651,52 @@ async fn an_unanswered_ask_is_denied_after_the_decision_timeout() {
         PERMISSION_TIMED_OUT
     );
     assert_eq!(settled_for(&harness.recorder, &turn)[0]["status"], "ok");
+}
+
+/// An ask whose approval card is the input surface is denied at once
+/// and reported as a denial, never offered as a one-tap Allow.
+#[tokio::test]
+async fn an_ask_that_needs_the_cli_dialog_is_denied_and_reported() {
+    let harness = Harness::new();
+    let session = harness.spawn("user_interaction_ask.mjs").await;
+    let turn = send(session.as_ref(), "Set up a test suite.").await;
+    harness.recorder.wait_for("agent_turn_settled", 1).await;
+
+    let reports = harness.recorder.payloads("agent_permission_request");
+    assert_eq!(reports.len(), 1, "reported once, not again from the result");
+    let report = &reports[0];
+    assert_eq!(report["turnId"], turn);
+    assert_eq!(report["tool"], "AskUserQuestion");
+    assert_eq!(report["requestId"], "toolu_01AskUserQuestionCard");
+    assert_eq!(report["suggestedDecision"], "deny");
+    assert_eq!(report["message"], UNSUPPORTED_REQUEST);
+    assert_eq!(
+        report["input"]["questions"][0]["header"], "Runner",
+        "the report shows what was asked"
+    );
+
+    let result = harness
+        .recorder
+        .payloads("agent_tool_result")
+        .into_iter()
+        .find(|result| result["toolUseId"] == "toolu_01AskUserQuestionCard")
+        .expect("the AskUserQuestion tool result");
+    assert_eq!(result["isError"], true);
+    assert_eq!(
+        result["content"], UNSUPPORTED_REQUEST,
+        "the CLI got the deny"
+    );
+    assert_eq!(settled_for(&harness.recorder, &turn)[0]["status"], "ok");
+
+    // Nothing is left pending: an Allow for the report is a no-op.
+    session
+        .respond_permission(
+            "toolu_01AskUserQuestionCard".to_owned(),
+            PermissionDecision::Allow,
+        )
+        .await
+        .expect("no-op");
+    session.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
@@ -826,19 +872,91 @@ async fn send_turn_racing_shutdown_never_loses_a_settlement() {
         match sent {
             Ok(turn) => assert_eq!(settled_for(&harness.recorder, &turn).len(), 1),
             Err(error) => {
-                assert!(matches!(error, AppError::Ipc(_)), "{error:?}");
+                assert_session_closed(&Err(error));
                 assert_eq!(harness.recorder.count("agent_turn_settled"), 0);
             }
         }
-        assert!(matches!(
-            session
+        assert_session_closed(
+            &session
                 .send_turn(TurnInput {
-                    prompt: "late".to_owned()
+                    prompt: "late".to_owned(),
                 })
                 .await,
-            Err(AppError::Ipc(_))
-        ));
+        );
     }
+}
+
+/// `send_turn` was refused because teardown had claimed the session —
+/// the `closing` flag, not a write that failed on a closed stdin (which
+/// fails with a different message).
+fn assert_session_closed(sent: &Result<TurnId, AppError>) {
+    assert!(
+        matches!(sent, Err(AppError::Ipc(message)) if message == SESSION_CLOSED),
+        "{sent:?}"
+    );
+}
+
+/// CONFIRMED regression, the exact window: teardown has claimed the turn
+/// slot and the child but not yet closed stdin. A `send_turn` there must
+/// be refused; without the `closing` flag its write would still succeed
+/// and the turn would be accepted with nothing left to settle it.
+#[tokio::test]
+async fn send_turn_is_refused_once_teardown_has_claimed_the_session() {
+    let harness = Harness::new();
+    let session = harness
+        .adapter("hang_mid_turn.mjs")
+        .spawn_session(harness.spec())
+        .await
+        .expect("spawn");
+    // Teardown's claim, frozen before its `stdin.close()`.
+    session.shared.state.lock().closing = true;
+    assert_session_closed(
+        &session
+            .send_turn(TurnInput {
+                prompt: "late".to_owned(),
+            })
+            .await,
+    );
+    assert!(
+        session.shared.state.lock().turn.is_none(),
+        "nothing was claimed"
+    );
+    session.shutdown().await.expect("shutdown");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(harness.recorder.count("agent_turn_settled"), 0);
+}
+
+/// CONFIRMED regression, through the real teardown: a `send_turn` that
+/// runs while `shutdown` is under way is refused as closed, and nothing
+/// settles.
+#[tokio::test]
+async fn send_turn_during_shutdown_is_refused_as_closed() {
+    let harness = Harness::new();
+    let session = harness
+        .adapter("hang_mid_turn.mjs")
+        .spawn_session(harness.spec())
+        .await
+        .expect("spawn");
+    let (exit, sent) = tokio::time::timeout(WAIT, async {
+        tokio::join!(session.shutdown(), async {
+            // `shutdown` is polled first and starts the teardown task;
+            // wait until that task has claimed the session.
+            while !session.shared.state.lock().closing {
+                tokio::task::yield_now().await;
+            }
+            session
+                .send_turn(TurnInput {
+                    prompt: "mid-teardown".to_owned(),
+                })
+                .await
+        })
+    })
+    .await
+    .expect("shutdown and send_turn both return");
+    exit.expect("shutdown");
+    assert_session_closed(&sent);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(harness.recorder.count("agent_turn_settled"), 0);
 }
 
 #[tokio::test]
@@ -913,6 +1031,35 @@ async fn a_rejected_handshake_fails_the_spawn() {
         .err()
         .expect("spawn fails");
     assert!(error.to_string().contains("initialize refused"), "{error}");
+}
+
+/// An `initialize` success the adapter cannot read fails the spawn (and
+/// the probe) instead of defaulting past the permission-mode check.
+#[tokio::test]
+async fn an_unreadable_handshake_answer_fails_the_spawn_and_the_probe() {
+    let harness = Harness::new();
+    let error = harness
+        .try_spawn("handshake_unreadable.mjs", harness.spec())
+        .await
+        .err()
+        .expect("spawn fails");
+    assert!(
+        error
+            .to_string()
+            .contains("Claude Code Rejected The Session Handshake: Unreadable Initialize Response"),
+        "{error}"
+    );
+    assert_eq!(harness.recorder.count("agent_session_started"), 0);
+
+    let report = probe("handshake_unreadable.mjs").await;
+    assert!(!report.available);
+    assert!(
+        report
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.starts_with("Claude Code CLI Rejected The Probe")),
+        "{report:?}"
+    );
 }
 
 #[tokio::test]
@@ -1061,9 +1208,8 @@ fn bypass_permissions_is_unconstructible() {
         for resume in [None, Some("some-session-key")] {
             let argv = build_claude_flags(Uuid::new_v4(), "sonnet", tier, resume);
             assert!(
-                !argv
-                    .iter()
-                    .any(|arg| arg.contains("bypassPermissions") || arg == "manual"),
+                !argv.iter().any(|arg| arg.contains("bypassPermissions")
+                    || arg.contains("dangerously-skip-permissions")),
                 "{tier:?}: {argv:?}"
             );
         }
@@ -1103,7 +1249,8 @@ fn argv_routes_prompts_to_the_host_and_restricts_only_the_restricted_tier() {
         );
         assert_eq!(
             value_of(&argv, "--permission-mode"),
-            permission_mode_flag(tier)
+            Some(permission_mode_flag(tier)),
+            "every tier pins its mode, so project settings cannot pick one"
         );
         assert_eq!(
             value_of(&argv, "--session-id"),
@@ -1363,6 +1510,63 @@ fn model_aliases_resolve_through_the_initialize_answer() {
     assert_eq!(init.resolve_model("sonnet"), "claude-sonnet-5");
     assert_eq!(init.resolve_model("custom"), "custom");
     assert_eq!(init.resolve_model("claude-opus-5-5"), "claude-opus-5-5");
+}
+
+#[test]
+fn an_odd_model_entry_drops_only_itself_but_a_mistyped_field_the_adapter_acts_on_fails() {
+    let init: InitializeResponse = serde_json::from_value(json!({
+        "models": [{ "displayName": "No Value" }, { "value": "sonnet", "resolvedModel": "claude-sonnet-5" }],
+        "current_permission_mode": "default",
+    }))
+    .expect("initialize answer");
+    assert_eq!(init.models.len(), 1);
+    assert_eq!(init.resolve_model("sonnet"), "claude-sonnet-5");
+    assert_eq!(init.current_permission_mode.as_deref(), Some("default"));
+
+    for unreadable in [
+        json!({ "current_permission_mode": 7 }),
+        json!({ "account": "signed in" }),
+        json!({ "pid": -1 }),
+        Value::Null,
+    ] {
+        assert!(
+            serde_json::from_value::<InitializeResponse>(unreadable.clone()).is_err(),
+            "{unreadable}"
+        );
+    }
+}
+
+#[test]
+fn an_ask_shows_its_reason_else_its_title_else_its_description() {
+    let ask = |fields: Value| -> wire::CanUseTool {
+        let mut request = json!({ "tool_name": "Write", "tool_use_id": "toolu_1", "input": {} });
+        request
+            .as_object_mut()
+            .expect("an object")
+            .extend(fields.as_object().expect("an object").clone());
+        serde_json::from_value(request).expect("a can_use_tool request")
+    };
+    let all = json!({
+        "decision_reason": "\u{1b}[1mSafety check\u{1b}[0m",
+        "title": "Claude wants to write probe.txt",
+        "description": "probe.txt",
+    });
+    assert_eq!(ask(all).message().as_deref(), Some("Safety check"));
+    assert_eq!(
+        ask(json!({ "decision_reason": " ", "title": "Claude wants to write probe.txt", "description": "probe.txt" }))
+            .message()
+            .as_deref(),
+        Some("Claude wants to write probe.txt")
+    );
+    assert_eq!(
+        ask(json!({ "description": "probe.txt" }))
+            .message()
+            .as_deref(),
+        Some("probe.txt")
+    );
+    assert_eq!(ask(json!({})).message(), None);
+    assert!(!ask(json!({})).requires_user_interaction);
+    assert!(ask(json!({ "requires_user_interaction": true })).requires_user_interaction);
 }
 
 #[test]
