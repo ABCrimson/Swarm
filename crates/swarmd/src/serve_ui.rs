@@ -38,9 +38,15 @@ use crate::AppState;
 
 /// The Content Security Policy of every served response.
 ///
-/// - Scripts, styles, fonts and workers load only from this origin
-///   (`blob:` workers too, as the desktop policy allows); images may also be
-///   `data:` URIs.
+/// - Scripts load only from this origin: no inline script and no `eval`
+///   (zod probes for `Function` and falls back when it is refused).
+///   Workers may also be `blob:` URLs, as in the desktop policy.
+/// - Stylesheets load from this origin. `<style>` elements may be inline
+///   (`style-src-elem`), because libraries inject them at runtime: sonner
+///   its toast styles, motion its `popLayout` positioning rules. Style
+///   attributes stay restricted. Without this, toasts render unstyled.
+/// - Images and fonts may also be `data:` URIs (Vite inlines small assets,
+///   a font among them).
 /// - `connect-src 'self'` covers the page's own `ws:`/`wss:` connection back
 ///   to this daemon, and nothing else: no other host, and no
 ///   `api.anthropic.com` (the browser build has no webview-direct AI chat;
@@ -49,7 +55,8 @@ use crate::AppState;
 ///   another page (clickjacking).
 /// - `object-src`, `base-uri` and `form-action` are locked down as well.
 pub const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
-img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self' blob:; \
+style-src-elem 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; \
+connect-src 'self'; worker-src 'self' blob:; \
 object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 /// Security headers on every served response, [`CSP`] included.

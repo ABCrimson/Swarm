@@ -1015,7 +1015,14 @@ async fn test_serve_ui_security_headers_caching_and_fallbacks() {
         csp.contains("connect-src 'self';"),
         "no ws:/wss: wildcard: {csp}"
     );
-    assert!(!csp.contains("unsafe-inline"));
+    assert!(
+        csp.contains("script-src 'self';") && !csp.contains("unsafe-eval"),
+        "scripts stay strict: {csp}"
+    );
+    assert!(
+        csp.contains("style-src 'self';"),
+        "only <style> elements may be inline, not style attributes: {csp}"
+    );
     for (name, value) in swarmd::serve_ui::SECURITY_HEADERS {
         assert_eq!(header(&headers, name.as_str()), Some(value), "{name}");
     }
