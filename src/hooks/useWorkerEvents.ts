@@ -30,19 +30,27 @@ export function useWorkerEvents(): void {
   const setSelectedWorkerId = useSetAtom(selectedWorkerIdAtom);
 
   useEffect(() => {
-    const { addWorker, appendOutput, updateState, removeWorker, setWorktreeInfo, hydrateWorkers } =
-      useWorkerStore.getState();
+    const {
+      addWorker,
+      appendOutput,
+      updateState,
+      removeWorker,
+      setWorktreeInfo,
+      addMissingWorkers,
+    } = useWorkerStore.getState();
     let hydrating = true;
     const killedWhileHydrating = new Set<string>();
 
     const offs = [
-      onEvent("worker_spawned", ({ payload }) => {
+      onEvent("worker_spawned", ({ ts, payload }) => {
         addWorker({
           id: payload.workerId,
           name: payload.name,
           ...(payload.pid == null ? {} : { pid: payload.pid }),
           state: "running",
-          startedAt: new Date().toISOString(),
+          // The spawn time, not the delivery time: a replayed or
+          // backfilled event can arrive long after the spawn.
+          startedAt: new Date(ts).toISOString(),
         });
       }),
       onEvent("worker_output", ({ payload }) => appendOutput(payload.workerId, payload.data)),
@@ -70,7 +78,7 @@ export function useWorkerEvents(): void {
     let unmounted = false;
     listWorkers()
       .then((workers) => {
-        if (!unmounted) hydrateWorkers(workers.filter((w) => !killedWhileHydrating.has(w.id)));
+        if (!unmounted) addMissingWorkers(workers.filter((w) => !killedWhileHydrating.has(w.id)));
       })
       .catch((err: unknown) => console.error("useWorkerEvents: could not load workers", err))
       .finally(() => {

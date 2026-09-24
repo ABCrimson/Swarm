@@ -52,12 +52,12 @@ describe("WorkerStore", () => {
     });
   });
 
-  describe("hydrateWorkers", () => {
+  describe("addMissingWorkers", () => {
     it("adds listed workers the store does not know", () => {
       const w1 = createWorker({ name: "w1" });
       const w2 = createWorker({ name: "w2" });
 
-      useWorkerStore.getState().hydrateWorkers([w1, w2]);
+      useWorkerStore.getState().addMissingWorkers([w1, w2]);
 
       expect([...useWorkerStore.getState().workers.values()]).toStrictEqual([w1, w2]);
     });
@@ -66,7 +66,9 @@ describe("WorkerStore", () => {
       const live = createWorker({ state: "paused", output: "hello" });
       useWorkerStore.getState().addWorker(live);
 
-      useWorkerStore.getState().hydrateWorkers([{ ...live, state: "running", output: undefined }]);
+      useWorkerStore
+        .getState()
+        .addMissingWorkers([{ ...live, state: "running", output: undefined }]);
 
       expect(useWorkerStore.getState().workers.get(live.id)).toStrictEqual(live);
     });

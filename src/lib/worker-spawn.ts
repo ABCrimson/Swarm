@@ -26,9 +26,12 @@ import { useWorkerStore } from "#store/workers";
  *   `AIChat` reads it from there to resolve this worker's effective
  *   model and inject its system prompt, which is what makes a
  *   template's agent config real instead of decorative.
- * - Adds an optimistic placeholder to `useWorkerStore` immediately; the
- *   authoritative record arrives via the `worker_spawned` event on
- *   `swarm://events` (see `useWorkerEvents`) and overwrites it.
+ * - Adds a placeholder to `useWorkerStore` once `spawnWorker`
+ *   resolves, unless the store already holds the worker: the
+ *   `worker_spawned` event (see `useWorkerEvents`) can arrive before
+ *   the command's response, possibly followed by `worktree_created`,
+ *   and that record must not be replaced. When the event arrives later
+ *   it overwrites the placeholder.
  * - When `sessionId` is given, registers the worker against that
  *   session via `session_add_worker` and mirrors the result into
  *   `useSessionStore` (the backend does not emit an event for this
@@ -62,12 +65,14 @@ export async function spawnWorkerFromSpec(
     : await spawnWorker(processOptions);
   if (workerId === null) return null;
 
-  useWorkerStore.getState().addWorker({
-    id: workerId,
-    state: "running",
-    name: processOptions.name,
-    startedAt: new Date().toISOString(),
-  });
+  useWorkerStore.getState().addMissingWorkers([
+    {
+      id: workerId,
+      state: "running",
+      name: processOptions.name,
+      startedAt: new Date().toISOString(),
+    },
+  ]);
 
   if (role !== undefined || model !== undefined || systemPrompt !== undefined) {
     useWorkerAgentStore.getState().setAgentMetadata(workerId, { role, model, systemPrompt });

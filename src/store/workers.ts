@@ -19,20 +19,22 @@ interface WorkerStoreState {
 interface WorkerStoreActions {
   readonly addWorker: (worker: Worker) => void;
   /**
-   * Adds every backend-listed worker the store does not know yet (the
-   * `list_workers` snapshot taken at startup). Workers already in the
-   * store came from live events, which are newer, so they are kept.
+   * Adds each worker the store does not hold yet and leaves the others
+   * untouched. For records older than the live events: the
+   * `list_workers` snapshot taken at startup, and the placeholder
+   * `spawnWorkerFromSpec` adds once `spawn_worker` returns (by then
+   * `worker_spawned`/`worktree_created` may already have stored the
+   * real record).
    */
-  readonly hydrateWorkers: (workers: readonly Worker[]) => void;
+  readonly addMissingWorkers: (workers: readonly Worker[]) => void;
   readonly updateState: (id: string, state: WorkerState) => void;
   readonly removeWorker: (id: string) => void;
   readonly appendOutput: (id: string, data: string) => void;
   /**
    * Mirrors a worker's `worktreePath`/`branch` from the backend
    * `worktree_created` event (see `#hooks/useWorkerEvents`). A no-op
-   * if the worker isn't (yet) in the store — the optimistic
-   * `addWorker` placeholder from `spawnWorkerFromSpec` normally lands
-   * first, but this guards the ordering either way.
+   * if the worker isn't (yet) in the store; `worker_spawned` is
+   * emitted before `worktree_created`, so it normally is.
    */
   readonly setWorktreeInfo: (id: string, worktreePath: string, branch: string) => void;
 }
@@ -56,7 +58,7 @@ export const useWorkerStore = create<WorkerStoreState & WorkerStoreActions>()(
         });
       },
 
-      hydrateWorkers(workers) {
+      addMissingWorkers(workers) {
         set((s) => {
           for (const worker of workers) {
             if (!s.workers.has(worker.id)) s.workers.set(worker.id, worker);

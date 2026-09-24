@@ -126,6 +126,19 @@ describe("useWorkerEvents", () => {
     });
   });
 
+  it("dates a spawned worker from the event's ts, not from its delivery", () => {
+    renderHook(() => useWorkerEvents());
+
+    listeners.get("swarm://events")?.({
+      seq: 1,
+      ts: Date.UTC(2026, 8, 23, 12, 30, 15, 250),
+      type: "worker_spawned",
+      payload: { workerId: W1, name: "Replayed", pid: 9, isolation: "none" },
+    });
+
+    expect(useWorkerStore.getState().workers.get(W1)?.startedAt).toBe("2026-09-23T12:30:15.250Z");
+  });
+
   it("adds a spawned worker, omitting a null pid", () => {
     renderHook(() => useWorkerEvents());
 
