@@ -90,8 +90,12 @@ export function TabList<T extends string>({
  * The panel of one tab. Rendered inside an `<Activity>`: an unselected
  * panel is hidden (`display: none`, effects unmounted) but keeps its
  * state — scroll position, drafts, a graph viewport — for when its tab
- * is selected again. Pass `mounted={false}` to skip rendering a panel
- * that has never been shown.
+ * is selected again.
+ *
+ * Pass `mounted={false}` to skip rendering the children of a panel that
+ * has never been shown. An empty, `hidden` tabpanel element is rendered
+ * in its place, so the tab's `aria-controls` always names an element
+ * that exists.
  */
 export function TabPanel({
   idBase,
@@ -107,8 +111,12 @@ export function TabPanel({
   readonly mounted?: boolean;
   readonly className?: string;
   readonly children: React.ReactNode;
-}): React.ReactElement | null {
-  if (!selected && !mounted) return null;
+}): React.ReactElement {
+  if (!selected && !mounted) {
+    return (
+      <div role="tabpanel" id={panelId(idBase, id)} aria-labelledby={tabId(idBase, id)} hidden />
+    );
+  }
   return (
     <Activity mode={selected ? "visible" : "hidden"}>
       <div

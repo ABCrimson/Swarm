@@ -82,6 +82,22 @@ describe("Tabs", () => {
     expect(screen.getByRole("tab", { name: "Three" })).toHaveFocus();
   });
 
+  it("points every tab's aria-controls at an existing panel, even a never-shown one", () => {
+    const { container } = render(<Harness />);
+
+    for (const tab of screen.getAllByRole("tab")) {
+      const controls = tab.getAttribute("aria-controls");
+      expect(controls, tab.textContent ?? "").toBeTruthy();
+      expect(container.ownerDocument.getElementById(controls ?? "")).not.toBeNull();
+    }
+    const three = screen.getByRole("tab", { name: "Three" });
+    const shell = container.ownerDocument.getElementById(three.getAttribute("aria-controls") ?? "");
+    expect(shell).toHaveAttribute("role", "tabpanel");
+    expect(shell).toHaveAttribute("aria-labelledby", three.id);
+    expect(shell).not.toBeVisible();
+    expect(shell).toBeEmptyDOMElement();
+  });
+
   it("keeps a hidden panel's state and skips never-shown panels", async () => {
     const user = userEvent.setup();
     render(<Harness />);
