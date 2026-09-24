@@ -1,47 +1,40 @@
-//! # SWARM Orchestrator Core
+//! # SWARM Orchestrator core
 //!
-//! Tauri-free domain library for the SWARM Orchestrator backend:
-//! multi-agent worker management, AI streaming integration, session
-//! domain types, an ordered event log, real-time metrics support, and
-//! an inter-agent message bus.
+//! The Tauri-free domain library both shells embed: the desktop app
+//! (`swarm-desktop`) and the headless daemon (`swarmd`). It owns the
+//! PTY workers and provider agents (Claude Code, Codex), sessions, git
+//! worktrees and shipping, the ordered event log, metrics, the
+//! inter-agent bus, and the command registry every IPC call and remote
+//! `rpc` frame is dispatched through.
 //!
-//! `swarm-core` has no dependency on `tauri` or any `tauri-plugin-*`
-//! crate (enforced in CI via `cargo tree -p swarm-core -e normal`). Every
-//! seam that would otherwise require a Tauri type is expressed as a
-//! plain Rust abstraction instead:
+//! `swarm-core` depends on no `tauri` or `tauri-plugin-*` crate (CI
+//! checks `cargo tree -p swarm-core -e normal`). Every seam a shell
+//! would otherwise fill with a Tauri type is a plain Rust value instead:
 //!
-//! - **Event emission** — [`events::EventSink`], a cloneable handle
-//!   obtained from [`orchestration::OrchestrationEngine::sink`]. Callers
-//!   record events without knowing (or caring) how — or whether — a
-//!   shell forwards them onward.
-//! - **Live fanout** — [`orchestration::OrchestrationEngine::subscribe`]
-//!   hands out `broadcast::Receiver<Arc<DomainEvent>>` handles; any
-//!   number of shells/clients can forward the ordered stream.
-//! - **Filesystem roots** — [`Paths`], constructed by the shell (e.g.
-//!   from Tauri's `app.path().app_data_dir()`) and passed in, never
-//!   resolved by swarm-core itself.
-//! - **Session persistence** — [`session::SessionStore`], a `load`/`save`
-//!   port; the shell supplies the concrete backend (`tauri-plugin-store`
-//!   today).
+//! - **Recording events**: [`events::EventSink`], from
+//!   [`orchestration::OrchestrationEngine::sink`].
+//! - **Delivering events**: the `emit` callback a shell passes to
+//!   [`runtime::Runtime::start`], plus any number of
+//!   [`orchestration::OrchestrationEngine::subscribe`] receivers.
+//! - **Filesystem roots**: [`Paths`], resolved by the shell (Tauri's
+//!   app data directory, or `swarmd`'s `--data-dir`) and passed in.
 //!
-//! ## Module Layout
+//! ## Modules
 //!
-//! - [`worker`] — PTY-backed worker process registry and lifecycle management
-//! - [`agent`] — Multi-provider agent execution: the `AgentAdapter`/
-//!   `AgentSession` trait pair, capabilities, and the turn scheduler
-//!   (absorbed the former `ai` module's queue; see `agent`'s module doc)
-//! - [`session`] — Session domain types, CRUD, and the `SessionStore` port
-//! - [`events`] — Typed domain events and the `EventSink` emission seam
-//! - [`orchestration`] — Ordered event log + single-writer engine
-//! - [`bus`] — Inter-agent message bus with broadcast channels and pipelines
-//! - [`config`] — Atomic key-value JSON config persistence
-//! - [`git`] — Worktree-per-worker isolation: binary discovery, repo
-//!   discovery, and worktree add/lock/unlock/remove/list/prune, all
-//!   shelling out to the system `git` binary via arg-vector `Command`
-//!   invocations (never a shell string)
-//! - [`error`] — Shared application error type
-//! - `clock` (crate-private) — the one wall-clock-to-epoch conversion
-//!   every timestamp goes through
+//! - [`runtime`] — builds and tears down everything below, once per
+//!   shell, behind the [`lock`] single-instance lock.
+//! - [`commands`] — the command registry and its remote policy.
+//! - [`protocol`] — `swarmd`'s WebSocket frames.
+//! - [`events`] and [`orchestration`] — typed events, the single-writer
+//!   engine and its SQLite log.
+//! - [`worker`], [`agent`] — PTY workers and provider-agent sessions with
+//!   the turn scheduler.
+//! - [`session`] — sessions and `sessions.json`.
+//! - [`git`] — worktree-per-worker isolation and the ship chain.
+//! - [`bus`] — worker-to-worker messages, recorded as events.
+//! - [`config`] — `swarm-config.json`.
+//! - [`metrics`] — system and per-worker resource sampling.
+//! - [`error`] — [`error::AppError`], the shared error type.
 
 pub mod agent;
 pub mod bus;

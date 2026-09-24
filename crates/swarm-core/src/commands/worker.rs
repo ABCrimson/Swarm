@@ -1,7 +1,5 @@
-//! Worker lifecycle registry handlers. Ported from `swarm-desktop`'s
-//! former `commands::worker` — the body of each handler here IS what
-//! that Tauri command's body used to be; the thin Tauri wrapper now
-//! just marshals args to/from JSON and calls [`super::Registry::dispatch`].
+//! PTY worker commands: spawn, pause, resume, kill, list, input, and the
+//! worker cap. The blocking PTY work runs on Tokio's blocking pool.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -22,10 +20,11 @@ struct SpawnArgs {
     cause_seq: Option<u64>,
 }
 
-/// Credential-leak fix (multi-provider plan Phase 2 step 4) preserved:
-/// only `config.name`/`config.env.len()` are ever logged, never `config`
-/// itself (which carries `env: HashMap<String,String>`, the leak
-/// vector).
+/// Spawns a PTY worker and resolves to its id.
+///
+/// Logs only the worker's name and how many environment variables it
+/// gets, never `config` itself: its `env` carries secrets such as API
+/// keys.
 pub async fn spawn_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let SpawnArgs {
         config,
@@ -56,6 +55,7 @@ struct WorkerIdArgs {
     cause_seq: Option<u64>,
 }
 
+/// Pauses a worker's process.
 pub async fn pause_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let WorkerIdArgs {
         id,
@@ -75,6 +75,7 @@ pub async fn pause_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     ok_value(&())
 }
 
+/// Resumes a paused worker's process.
 pub async fn resume_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let WorkerIdArgs {
         id,
@@ -94,6 +95,8 @@ pub async fn resume_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     ok_value(&())
 }
 
+/// Kills a worker, removes it (and its worktree, per its isolation
+/// policy), then shuts down its agent session if it has one.
 pub async fn kill_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let WorkerIdArgs {
         id,
@@ -111,19 +114,19 @@ pub async fn kill_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     .await
     .map_err(|e| Value::String(e.to_string()))?;
 
-    // Best-effort agent-session teardown, same as the pre-Phase-2 Tauri
-    // command — a failure here is logged, never blocks the PTY worker's
-    // own kill result.
+    // Best-effort: a failed agent-session shutdown is logged and never
+    // changes the kill's own result.
     if let Some(session) = ctx.agent_session_registry.remove(&uuid)
         && let Err(e) = session.shutdown().await
     {
-        tracing::warn!(worker_id = %uuid, error = %e, "agent session shutdown failed during kill_worker (best-effort)");
+        tracing::warn!(worker_id = %uuid, error = %e, "agent session shutdown failed during kill_worker");
     }
 
     kill_result.map_err(|e| err_value(&e))?;
     ok_value(&())
 }
 
+/// Every live worker.
 pub async fn list_workers(ctx: Ctx, _args: Value) -> Result<Value, Value> {
     ok_value(&ctx.registry.list_workers())
 }
@@ -140,6 +143,7 @@ struct WorkerInputArgs {
     cause_seq: Option<u64>,
 }
 
+/// Writes `data` to a worker's terminal, recording who typed it.
 pub async fn worker_input(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let WorkerInputArgs {
         id,
@@ -166,13 +170,16 @@ struct MaxWorkersArgs {
     max: usize,
 }
 
+/// Sets how many workers may run at once: persisted to
+/// `swarm-config.json` (`max_workers`, re-applied by
+/// [`crate::runtime::Runtime::start`]), then applied live.
 pub async fn set_max_workers(ctx: Ctx, args: Value) -> Result<Value, Value> {
     use crate::worker::registry::{MAX_MAX_WORKERS, MIN_MAX_WORKERS};
 
     let MaxWorkersArgs { max } = parse_args(args)?;
     if !(MIN_MAX_WORKERS..=MAX_MAX_WORKERS).contains(&max) {
         return Err(Value::String(format!(
-            "max_workers must be between {MIN_MAX_WORKERS} and {MAX_MAX_WORKERS}, got {max}"
+            "Max Workers Must Be Between {MIN_MAX_WORKERS} And {MAX_MAX_WORKERS}, Got {max}."
         )));
     }
 
@@ -192,21 +199,18 @@ pub async fn set_max_workers(ctx: Ctx, args: Value) -> Result<Value, Value> {
 
 #[cfg(test)]
 mod tests {
-    /// DIRECTIVE (credential-leak regression guard, relocated with this
-    /// handler from `swarm-desktop::commands::worker::spawn_worker`'s
-    /// own `#[tracing::instrument]`): the FIRST boundary `config`
-    /// (carrying `env: HashMap<String, String>`) crosses on the
-    /// registry path is this handler's own `tracing::info!` call — it
-    /// must log only `name`/`env_key_count`, never `config` itself.
-    /// `swarm_core::worker::lifecycle`'s own test covers the SECOND
-    /// boundary (`do_spawn_worker`); this one is the first, and the
-    /// shell's thin wrapper (`#[tracing::instrument(skip(..., config))]`)
-    /// now skips `config` unconditionally, so this handler is the only
-    /// remaining place a leak could reappear.
-    #[derive(Clone, Default)]
-    struct TracingCaptureBuf(std::sync::Arc<parking_lot::Mutex<Vec<u8>>>);
+    use std::sync::Arc;
 
-    impl std::io::Write for TracingCaptureBuf {
+    use serde_json::json;
+
+    use super::*;
+    use crate::commands::test_support::test_ctx;
+
+    /// Collects formatted tracing output in memory.
+    #[derive(Clone, Default)]
+    struct Capture(Arc<parking_lot::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Capture {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             self.0.lock().extend_from_slice(buf);
             Ok(buf.len())
@@ -216,52 +220,65 @@ mod tests {
         }
     }
 
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TracingCaptureBuf {
-        type Writer = TracingCaptureBuf;
-        fn make_writer(&'a self) -> Self::Writer {
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+        type Writer = Self;
+        fn make_writer(&'a self) -> Self {
             self.clone()
         }
     }
 
-    #[test]
-    fn test_spawn_worker_registry_handler_never_leaks_env_secret_into_tracing_output() {
-        let capture = TracingCaptureBuf::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(capture.clone())
-            .with_max_level(tracing::Level::DEBUG)
-            .with_ansi(false)
-            .finish();
-
+    /// `spawn_worker` is the first place a worker's `config` (and its
+    /// secret-bearing `env`) is logged on the command path. Drives the
+    /// real handler; an invalid `originWorker` makes it fail right after
+    /// its log line, so no process is spawned.
+    #[tokio::test]
+    async fn test_spawn_worker_never_logs_an_env_secret() {
         const SECRET: &str = "sk-ant-registry-handler-secret-should-never-be-logged";
-        let mut env = std::collections::HashMap::new();
-        env.insert("ANTHROPIC_API_KEY".to_string(), SECRET.to_string());
-        let config = crate::worker::handle::WorkerConfig {
-            name: "Registry Handler Secret Bearer".to_string(),
-            env,
-            ..crate::worker::handle::WorkerConfig::default()
-        };
-
-        tracing::subscriber::with_default(subscriber, || {
-            // Mirrors this file's `spawn_worker`'s own
-            // `tracing::info!(name = %config.name, env_key_count =
-            // config.env.len(), ...)` call exactly — same fields, no
-            // `config` reference.
-            tracing::info!(
-                name = %config.name,
-                env_key_count = config.env.len(),
-                "spawn_worker called"
-            );
-        });
-
-        let captured = String::from_utf8_lossy(&capture.0.lock()).into_owned();
-        assert!(
-            !captured.contains(SECRET),
-            "captured tracing output leaked an env secret value at the registry handler layer: {captured}"
+        let capture = Capture::default();
+        let _subscriber = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_writer(capture.clone())
+                .with_max_level(tracing::Level::TRACE)
+                .with_ansi(false)
+                .finish(),
         );
+        let (ctx, _dir, _events) = test_ctx();
+
+        let result = spawn_worker(
+            ctx.clone(),
+            json!({
+                "config": {
+                    "name": "Registry Handler Secret Bearer",
+                    "env": {"ANTHROPIC_API_KEY": SECRET},
+                },
+                "originWorker": "not-a-uuid",
+            }),
+        )
+        .await;
+
         assert!(
-            captured.contains("Registry Handler Secret Bearer"),
-            "expected the redacted summary's name field to appear (proves the \
-             subscriber actually captured this call, not a vacuous pass), got: {captured}"
+            result.is_err(),
+            "the bogus originWorker must stop the spawn"
+        );
+        assert!(ctx.registry.list_workers().is_empty());
+        let captured = String::from_utf8_lossy(&capture.0.lock()).into_owned();
+        assert!(!captured.contains(SECRET), "leaked: {captured}");
+        assert!(
+            captured.contains("Registry Handler Secret Bearer")
+                && captured.contains("env_key_count=1"),
+            "the handler's own log line must have been captured: {captured}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_max_workers_rejects_out_of_range_in_title_case() {
+        let (ctx, _dir, _events) = test_ctx();
+        let err = set_max_workers(ctx, json!({"max": 0})).await.unwrap_err();
+        assert!(
+            err.as_str()
+                .unwrap()
+                .starts_with("Max Workers Must Be Between "),
+            "{err}"
         );
     }
 }
