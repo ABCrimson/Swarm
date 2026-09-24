@@ -9,19 +9,22 @@ import "#styles/global.css";
 import { type ReactNode, StrictMode, Suspense, use } from "react";
 import { createRoot } from "react-dom/client";
 import { type LogLevel, useLogStore } from "#lib/log-store";
+import { isTauri } from "#lib/tauri";
 import { preloadSettings } from "#store/persisted";
 import { App } from "./App.tsx";
 
 /**
  * Persisted settings, read once before anything renders (see
  * `#store/persisted`): every settings atom's first read then already
- * sees the user's value. `preloadSettings` never rejects.
+ * sees the user's value. `preloadSettings` never rejects. `null`
+ * outside the desktop shell, where there is no settings file to wait
+ * for, so the app renders without a loading pass.
  */
-const settingsLoaded = preloadSettings();
+const settingsLoaded = isTauri() ? preloadSettings() : null;
 
 /** Suspends until {@link settingsLoaded} settles. */
 function SettingsGate({ children }: { readonly children: ReactNode }): ReactNode {
-  use(settingsLoaded);
+  if (settingsLoaded) use(settingsLoaded);
   return children;
 }
 
