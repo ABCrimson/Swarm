@@ -34,8 +34,8 @@ const MODIFIER_KEYS = new Set(["control", "shift", "alt", "meta", "altgraph"]);
 function terminalKey(e: KeyboardEvent): string {
   const key = e.key.toLowerCase();
   if (key.length !== 1 || /^[a-z0-9]$/.test(key)) return key;
-  const physical = /^(?:Key([A-Z])|Digit(\d))$/.exec(e.code);
-  return physical ? (physical[1] ?? physical[2] ?? key).toLowerCase() : key;
+  const physical = /^(?:Key(?<letter>[A-Z])|Digit(?<digit>\d))$/.exec(e.code)?.groups;
+  return (physical?.letter ?? physical?.digit ?? key).toLowerCase();
 }
 
 /**
