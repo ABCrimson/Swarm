@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _resetParticlesUnavailableWarningForTests,
+  MIN_PARTICLE_COUNT,
   PARTICLE_CAPACITY,
   ParticleBackground,
   SIM_TIME_OFFSET,
@@ -37,7 +38,7 @@ import {
   renderPostProcess,
 } from "#lib/postprocess";
 import { getWebGPUUnavailableReason } from "#lib/webgpu";
-import { reducedMotionAtom } from "#store/ui";
+import { gpuFrameTimeAtom, particleCountAtom, reducedMotionAtom } from "#store/ui";
 
 vi.mock("#hooks/useWebGPU", () => ({ useWebGPU: vi.fn() }));
 vi.mock("#hooks/useParticleSync", () => ({ useParticleSync: vi.fn() }));
@@ -347,5 +348,47 @@ describe("ParticleBackground canvas", () => {
 
     expect(frames.size).toBe(1);
     expect(vi.mocked(renderParticles).mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("measures GPU latency from submit to onSubmittedWorkDone and adapts the count", async () => {
+    const store = getDefaultStore();
+    store.set(gpuFrameTimeAtom, 0);
+    store.set(particleCountAtom, PARTICLE_CAPACITY);
+    vi.mocked(createParticleSystem).mockResolvedValue(system);
+    /** Ms the scripted clock has advanced since the current frame began. */
+    let gpuElapsed = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock + gpuElapsed);
+    const outstanding: Array<() => void> = [];
+    vi.mocked(device.queue.onSubmittedWorkDone).mockImplementation(() => {
+      const done = Promise.withResolvers<undefined>();
+      outstanding.push(() => done.resolve(undefined));
+      return done.promise;
+    });
+    render(<ParticleBackground />);
+    await act(async () => {});
+
+    // 30 frames whose GPU work finishes 10 ms after submit (a CPU-side
+    // timer around encoding would read 0 on this clock).
+    for (let sample = 0; sample < 30; sample++) {
+      gpuElapsed = 0;
+      tick(1);
+      expect(outstanding).toHaveLength(1);
+      gpuElapsed = 10;
+      await act(async () => outstanding.shift()?.());
+    }
+    gpuElapsed = 0;
+
+    expect(store.get(gpuFrameTimeAtom)).toBeCloseTo(10, 5);
+    const reduced = Math.floor(PARTICLE_CAPACITY * 0.8);
+    expect(reduced).toBeGreaterThanOrEqual(MIN_PARTICLE_COUNT);
+    expect(store.get(particleCountAtom)).toBe(reduced);
+    tick(1);
+    expect(vi.mocked(renderParticles).mock.lastCall?.[3]).toBe(reduced);
+
+    // Single flight: frames rendered while a measurement is pending start none.
+    const started = vi.mocked(device.queue.onSubmittedWorkDone).mock.calls.length;
+    tick(3);
+    expect(vi.mocked(device.queue.onSubmittedWorkDone).mock.calls.length).toBe(started);
+    expect(outstanding).toHaveLength(1);
   });
 });
