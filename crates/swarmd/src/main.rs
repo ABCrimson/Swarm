@@ -81,6 +81,9 @@ fn main() -> ExitCode {
         }
         Command::ConnectUrl(args) => print_connect_url(&args),
         Command::Serve(args) => {
+            // Under a service manager stderr may go nowhere (the Windows
+            // task has no visible console), so a fatal error is logged too.
+            let log_to_file = args.log_file.is_some();
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -94,6 +97,9 @@ fn main() -> ExitCode {
             match runtime.block_on(serve(args)) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(fatal) => {
+                    if log_to_file {
+                        tracing::error!(status = fatal.status, "{}", fatal.message);
+                    }
                     eprintln!("{}", fatal.message);
                     ExitCode::from(fatal.status)
                 }
@@ -303,7 +309,15 @@ fn init_tracing(log_file: Option<&Path>) -> io::Result<()> {
     Ok(())
 }
 
+/// Opens `path` for appending, creating it (private to the owner on Unix)
+/// and its parent directories.
 fn open_log_file(path: &Path) -> io::Result<File> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)?;
+    }
     let mut options = OpenOptions::new();
     options.create(true).append(true);
     #[cfg(unix)]

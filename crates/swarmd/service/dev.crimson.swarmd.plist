@@ -1,20 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  SWARM Orchestrator headless daemon — launchd LaunchAgent (macOS).
+  SWARM Orchestrator headless daemon: launchd LaunchAgent (macOS).
 
-  A LaunchAgent (per-user, ~/Library/LaunchAgents), NOT a LaunchDaemon:
-  swarmd runs as you and touches your home, app-data, and repos. launchd
-  does not expand `~` or environment variables inside ProgramArguments or
-  the log paths, so the @PLACEHOLDER@ tokens below are filled in with
-  absolute paths by service/install.sh at install time. If you install by
-  hand, replace them yourself.
+  A LaunchAgent (per user, ~/Library/LaunchAgents), not a LaunchDaemon:
+  swarmd runs as you and touches your home, app data and repositories.
+  launchd expands neither `~` nor environment variables, so service/install.sh
+  fills in the three placeholders below with absolute, XML-escaped values:
+  SWARMD_BIN (the installed binary), LOG_DIR (~/Library/Logs/swarmd, created
+  with mode 0700) and PATH (your shell's PATH, so agent CLIs such as
+  `claude` and `codex` are found; launchd's own PATH is only
+  /usr/bin:/bin:/usr/sbin:/sbin). Fill them in yourself for a manual install.
 
-  Install:   service/install.sh   (substitutes paths, copies to
-             ~/Library/LaunchAgents, and `launchctl bootstrap`s it)
-  Token:     grep 'Listening On' @LOG_DIR@/swarmd.log
-  Logs are written under your ~/Library/Logs (mode 0700), never /tmp —
-  the connect URL carries the daemon token, so the log must not be
-  world-readable.
+  Connect URL: swarmd connect-url   (the token never reaches the log)
+  Logs:        ~/Library/Logs/swarmd/swarmd.log
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -25,18 +23,32 @@
     <array>
         <string>@SWARMD_BIN@</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>@PATH@</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
+    <!-- Restart after a crash, never after a clean exit. Exit status 75
+         (another instance holds the data directory) is a failure too, so
+         ThrottleInterval spaces those retries a minute apart. -->
     <key>KeepAlive</key>
     <dict>
         <key>SuccessfulExit</key>
         <false/>
     </dict>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+    <!-- Adaptive, not Background: workers inherit the daemon's resource
+         policy, and Background would throttle every agent turn and build. -->
     <key>ProcessType</key>
-    <string>Background</string>
+    <string>Adaptive</string>
+    <!-- No Umask: workers would inherit it and create repository files
+         private to you. The log directory itself is mode 0700. -->
     <key>StandardOutPath</key>
     <string>@LOG_DIR@/swarmd.log</string>
     <key>StandardErrorPath</key>
-    <string>@LOG_DIR@/swarmd.err.log</string>
+    <string>@LOG_DIR@/swarmd.log</string>
 </dict>
 </plist>

@@ -1247,6 +1247,35 @@ fn test_second_daemon_on_the_same_data_dir_exits_75() {
     );
 }
 
+/// `--log-file` (what the Windows task uses) creates missing parent
+/// directories and receives both the ordinary log and a fatal startup error,
+/// without terminal color codes.
+#[test]
+fn test_log_file_receives_logs_and_fatal_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("logs").join("swarmd.log");
+    let args = [
+        "--bind",
+        "127.0.0.1:0",
+        "--data-dir",
+        path_str(dir.path()),
+        "--log-file",
+        path_str(&log),
+    ];
+    let mut first = Daemon::spawn(&args);
+    first.listening_line();
+
+    let (code, _, stderr) = run(&args);
+    assert_eq!(code, Some(75), "{stderr}");
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(text.contains("swarmd started"), "{text}");
+    assert!(text.contains("SWARM Is Already Running"), "{text}");
+    assert!(
+        !text.contains('\u{1b}'),
+        "no ANSI escapes in a log file: {text}"
+    );
+}
+
 #[test]
 fn test_help_version_and_usage_errors() {
     let (code, stdout, _) = run(&["--help"]);
