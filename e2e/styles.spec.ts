@@ -48,4 +48,16 @@ test.describe("Stylesheet cascade", () => {
       "10px",
     );
   });
+
+  test("reduced motion zeroes the delays of the staggered entrance", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/");
+    const main = page.locator("#main-content");
+
+    // AppShell staggers <main> with `delay-250`; under reduced motion it
+    // must not sit invisible for that delay before snapping in.
+    await expect(main).toHaveCSS("transition-delay", "0s");
+    await expect(main).toHaveCSS("transition-duration", "1e-05s");
+    await expect(main).toHaveCSS("opacity", "1");
+  });
 });

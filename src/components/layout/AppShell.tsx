@@ -21,7 +21,8 @@ interface AppShellProps {
  * `@starting-style`, so each region transitions from its starting style
  * the first time it renders. No JS runs for it, it never flashes the
  * final state first, and the global reduced-motion override in
- * animations.css collapses it to an instant change.
+ * animations.css zeroes its durations and delays, so it becomes an
+ * instant change.
  */
 export function AppShell({ children }: AppShellProps): React.ReactElement {
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);

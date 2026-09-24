@@ -101,7 +101,9 @@
  * normal stylesheet rule regardless of layer or specificity. Only an
  * important declaration outranks it. Animations collapse to their end
  * state in one frame instead of being removed, so anything that listens
- * for `animationend`/`transitionend` still gets its event.
+ * for `animationend`/`transitionend` still gets its event. Delays are
+ * zeroed as well, so a staggered entrance (AppShell) is not left
+ * invisible for its delay before snapping in.
  */
 /* biome-ignore-start lint/complexity/noImportantStyles: only !important outranks inline animation styles (see above) */
 @media (prefers-reduced-motion: reduce) {
@@ -109,8 +111,10 @@
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
     scroll-behavior: auto !important;
   }
 
