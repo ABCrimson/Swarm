@@ -1,18 +1,15 @@
-// ── Particle Background ──────────────────────────────
-// Milestone 0.6.6 + 0.6.7: Full-viewport WebGPU particle canvas
-// with adaptive particle count, post-processing, and graceful fallback.
-
 import { useAtomValue, useSetAtom } from "jotai";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-
 import { useParticleSync } from "#hooks/useParticleSync";
 import { useWebGPU } from "#hooks/useWebGPU";
 import type { ParticleSystem } from "#lib/particles";
 import {
   createParticleSystem,
+  DEFAULT_SIM_PARAMS,
   destroyParticleSystem,
   dispatchCompute,
+  PARTICLE_COMPUTE_WGSL,
   renderParticles,
   writeRenderParams,
   writeSimParams,
@@ -30,17 +27,11 @@ import { gpuFrameTimeAtom, particleCountAtom, reducedMotionAtom, themeAtom } fro
 // ── One-time-per-reason "pipeline can't start" diagnostics ──
 //
 // Module-level (not component state) so the warning/toast fires at most
-// once per *distinct reason* per app session, no matter how many times
-// ParticleBackground or ParticleCanvas re-render, remount (StrictMode), or
-// retry after a device-loss recovery. Keyed on the reason value (not a
-// plain boolean) because retrying — e.g. toggling `particlesEnabled` in
-// Settings, which re-runs useWebGPU's init effect — can legitimately
-// surface a different `failureReason` than the first attempt (e.g. "No
-// Compatible GPU Adapter Found" first, then "GPU Device Request Failed" on
-// retry). A single session-wide boolean would silently drop that new,
-// more-current reason; tracking the last-warned reason lets a genuinely
-// different one still fire once, while repeats of the same reason stay
-// suppressed.
+// once per *distinct reason* per app session, however often the
+// component re-renders, remounts (StrictMode) or retries after a device
+// loss. Keyed on the reason, not a boolean: a retry (e.g. toggling
+// particles in Settings) can surface a different, more current reason,
+// which should still be reported once.
 
 let lastWarnedParticlesUnavailableReason: WebGPUUnavailableReason | null = null;
 
@@ -54,68 +45,63 @@ function warnParticlesUnavailable(reason: WebGPUUnavailableReason): void {
   lastWarnedParticlesUnavailableReason = reason;
 
   console.warn(`[particles] Particle Background Unavailable: ${reason}`);
-  toast.warning("Particle Background Unavailable", {
-    description: reason,
-  });
+  toast.warning("Particle Background Unavailable", { description: reason });
 }
 
-// ── Adaptive particle count constants ────────────────
+// ── Simulation constants ─────────────────────────────
 
-const INITIAL_PARTICLE_COUNT = 10_000;
-const MIN_PARTICLE_COUNT = 2_000;
-const MAX_PARTICLE_COUNT = 50_000;
-/** Frame time threshold (ms) above which particles are reduced. */
+/** Particles the GPU buffer holds; the compute pass simulates all of them every step. */
+export const PARTICLE_CAPACITY = 10_000;
+/** Fewest particles the adaptive count will draw. */
+export const MIN_PARTICLE_COUNT = 2_000;
+/** GPU frame latency (ms) above which fewer particles are drawn. */
 const TARGET_HIGH_MS = 8;
-/** Frame time threshold (ms) below which particles can increase. */
+/** GPU frame latency (ms) below which more particles are drawn. */
 const TARGET_LOW_MS = 2;
-/** Number of frame samples before adjusting particle count. */
+/** Latency samples averaged before each adjustment. */
 const SAMPLE_WINDOW = 30;
+/**
+ * Fixed simulation step, in ms: the `dt` the parameter sync writes
+ * (`DEFAULT_SIM_PARAMS.dt`, scaled down when every worker is paused).
+ * Stepping on a fixed clock keeps the motion speed independent of the
+ * display's refresh rate without the render loop ever writing `dt`.
+ */
+const STEP_MS = DEFAULT_SIM_PARAMS.dt * 1000;
+/** At most this many simulation steps per frame (after a stall, time is dropped). */
+const MAX_STEPS_PER_FRAME = 3;
 
-// ── Fallback background (OKLCH void) ─────────────────
-
-// zIndex: -1 (not 0) is load-bearing. AppShell's root grid wrapper
-// (AppShell.tsx) is a plain, non-positioned `<div>` — an in-flow,
-// non-positioned box paints *before* (below) any sibling with an
-// explicit `z-index: 0`, positioned or not, per CSS2.1 painting order
-// (Appendix E, categories 3 vs 6). A `zIndex: 0` here therefore stacks
-// this fixed, opaque, full-viewport layer *above* the entire app,
-// hiding it. `zIndex: -1` places it in the negative-stack-level
-// category, which paints *before* (below) the app's non-positioned
-// root, so it sits above the page background but below all content.
-const FALLBACK_STYLE: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  zIndex: -1,
-  pointerEvents: "none",
-  background: "oklch(0.06 0.02 220)",
-};
-
-const CANVAS_STYLE: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  width: "100vw",
-  height: "100vh",
-  zIndex: -1,
-  pointerEvents: "none",
-  background: "oklch(0.06 0.02 220)",
-};
+/**
+ * Byte offset of `time` in the WGSL `SimParams` uniform, read from the
+ * shader source itself so a reordered struct cannot silently break the
+ * per-frame write. Every field before it must be a 4-byte scalar;
+ * otherwise this is `null` and the clock is left to the parameter sync.
+ */
+export const SIM_TIME_OFFSET: number | null = (() => {
+  const body = /struct\s+SimParams\s*\{([^}]*)\}/.exec(PARTICLE_COMPUTE_WGSL)?.[1];
+  if (!body) return null;
+  const fields = body
+    .split(",")
+    .map((field) => field.trim())
+    .filter(Boolean)
+    .map((field) => field.split(":").map((part) => part.trim()));
+  const index = fields.findIndex(([name]) => name === "time");
+  if (index === -1) return null;
+  const scalar = fields.slice(0, index).every(([, type]) => type === "f32" || type === "u32");
+  return scalar ? index * 4 : null;
+})();
 
 /**
  * Full-viewport WebGPU particle background.
  *
- * Renders a fixed canvas behind all content (z-index: -1, pointer-events: none)
- * with compute-shader particles, bloom, chromatic aberration, and vignette.
+ * A fixed canvas behind all content (`-z-1`, pointer-events none) with
+ * compute-shader particles, bloom, chromatic aberration and vignette.
+ * When WebGPU is unsupported, particles are off in Settings, or the OS
+ * asks for reduced motion, it renders the plain background color.
  *
- * Graceful degradation:
- * - WebGPU unsupported: solid OKLCH background div
- * - `prefers-reduced-motion`: solid OKLCH background div
- * - `particlesEnabled` off: solid OKLCH background div
- *
- * Adaptive performance:
- * - Monitors CPU-side frame time over a rolling 30-sample window
- * - Reduces particle count by 20% when avg frame time > 8ms
- * - Increases particle count by 10% when avg frame time < 2ms
- * - Clamps to [2,000 .. 50,000] range
+ * z-index -1 (not 0) is load-bearing: the app's root grid is an in-flow,
+ * non-positioned box, and per the CSS 2.1 painting order a sibling with
+ * `z-index: 0` paints above it — this full-viewport layer would then
+ * cover the whole app. A negative z-index paints below it.
  */
 export function ParticleBackground(): React.ReactElement {
   const theme = useAtomValue(themeAtom);
@@ -124,11 +110,9 @@ export function ParticleBackground(): React.ReactElement {
   const supported = isWebGPUSupported();
   const shouldRender = supported && theme.particlesEnabled && !reducedMotion;
 
-  // Diagnose the "enabled in Settings but can't start" gap: only when the
-  // user actually wants particles (enabled, motion not reduced) but the
-  // very first gate — WebGPU exposure — already fails. Gates further down
-  // the pipeline (no adapter, no canvas context) are diagnosed inside
-  // ParticleCanvas, since they can only be detected once it mounts.
+  // Diagnose "enabled in Settings but can't start" at the first gate
+  // (WebGPU not exposed). Later gates (no adapter, no context) are
+  // diagnosed in ParticleCanvas, where they are detected.
   useEffect(() => {
     if (supported || !theme.particlesEnabled || reducedMotion) return;
     const reason = getWebGPUUnavailableReason();
@@ -136,209 +120,214 @@ export function ParticleBackground(): React.ReactElement {
   }, [supported, theme.particlesEnabled, reducedMotion]);
 
   if (!shouldRender) {
-    return <div aria-hidden="true" style={FALLBACK_STYLE} />;
+    return <div aria-hidden="true" className="pointer-events-none fixed inset-0 -z-1 bg-void" />;
   }
-
   return <ParticleCanvas />;
 }
 
-// ── Internal canvas component (only mounted when WebGPU is active) ──
+/** Size-dependent post-processing resources, replaced together on resize. */
+interface PostProcessTargets {
+  /** The device these resources belong to; stale after a device loss. */
+  readonly device: GPUDevice;
+  readonly pipeline: PostProcessPipeline;
+  /** Particles render here first; post-processing reads it. */
+  readonly intermediate: GPUTexture;
+}
 
+/**
+ * The canvas and its GPU resources (mounted only while WebGPU is active).
+ *
+ * - The particle system (buffers, pipelines, particle state) is created
+ *   once per device and format and held in state, so `useParticleSync`
+ *   receives it and pushes worker/AI/system state into the simulation
+ *   parameters. A resize never rebuilds it.
+ * - Post-processing is created per canvas size; the previous set is only
+ *   destroyed once its replacement is committed, so a resize never drops
+ *   a frame to the unprocessed path.
+ * - The render loop starts only once the system exists, and schedules the
+ *   next frame before doing any work, so a slow pipeline compile or a
+ *   throwing frame can never stop it.
+ * - Per frame the loop writes only the simulation clock (`time`) and runs
+ *   fixed-size steps; everything else in the uniform belongs to the sync.
+ * - The adaptive count and the status bar's "GPU" readout use the real
+ *   GPU latency: submit → `queue.onSubmittedWorkDone()`.
+ */
 function ParticleCanvas(): React.ReactElement {
-  const { canvasRef, device, context, format, isReady, canvasWidth, canvasHeight, failureReason } =
+  const { canvasRef, device, context, format, canvasWidth, canvasHeight, failureReason } =
     useWebGPU();
+  const [system, setSystem] = useState<ParticleSystem | null>(null);
+  const [targets, setTargets] = useState<PostProcessTargets | null>(null);
+  /** Particles drawn per frame, adjusted from GPU latency. Loop-owned. */
+  const drawCountRef = useRef(PARTICLE_CAPACITY);
+  const setGpuFrameTime = useSetAtom(gpuFrameTimeAtom);
+  const setParticleCount = useSetAtom(particleCountAtom);
 
-  // Diagnose init failures that only manifest once this component has
-  // mounted (WebGPU was exposed, so ParticleBackground's own gate passed,
-  // but requestAdapter/getContext/requestDevice failed inside useWebGPU).
   useEffect(() => {
     if (failureReason) warnParticlesUnavailable(failureReason);
   }, [failureReason]);
 
-  const systemRef = useRef<ParticleSystem | null>(null);
-  const postProcessRef = useRef<PostProcessPipeline | null>(null);
-  const intermediateTextureRef = useRef<GPUTexture | null>(null);
-  const rafRef = useRef<number>(0);
-  const particleCountRef = useRef(INITIAL_PARTICLE_COUNT);
-  const lastTimeRef = useRef(0);
-  const frameTimesRef = useRef<number[]>([]);
+  useParticleSync({ device, system, canvasWidth, canvasHeight });
 
-  const setGpuFrameTime = useSetAtom(gpuFrameTimeAtom);
-  const setParticleCount = useSetAtom(particleCountAtom);
-
-  // Sync worker/AI/system state to particle sim params
-  useParticleSync({
-    device,
-    system: systemRef.current,
-    canvasWidth,
-    canvasHeight,
-  });
-
-  // ── Initialize particle system + post-process pipeline ──
+  // ── Particle system: once per device/format ──
   useEffect(() => {
-    if (!device || !format || !isReady || canvasWidth === 0 || canvasHeight === 0) return;
-
-    const controller = new AbortController();
-
-    const init = async (): Promise<void> => {
-      try {
-        const system = await createParticleSystem(device, format, particleCountRef.current);
-        if (controller.signal.aborted) {
-          destroyParticleSystem(system);
+    if (!device || !format) return;
+    let cancelled = false;
+    let created: ParticleSystem | null = null;
+    createParticleSystem(device, format, PARTICLE_CAPACITY).then(
+      (next) => {
+        if (cancelled) {
+          destroyParticleSystem(next);
           return;
         }
-        systemRef.current = system;
+        created = next;
+        // Sane parameters until the sync's first write.
+        writeSimParams(device, next, DEFAULT_SIM_PARAMS);
+        setSystem(next);
+      },
+      (err: unknown) => console.error("[particles] Failed to create particle system:", err),
+    );
+    return () => {
+      cancelled = true;
+      if (created) destroyParticleSystem(created);
+      setSystem(null);
+    };
+  }, [device, format]);
 
-        const postProcess = await createPostProcessPipeline(
-          device,
-          format,
-          canvasWidth,
-          canvasHeight,
-        );
-        if (controller.signal.aborted) {
-          destroyPostProcessPipeline(postProcess);
+  // ── Post-processing: per canvas size ──
+  useEffect(() => {
+    if (!device || !format || !system || canvasWidth === 0 || canvasHeight === 0) return;
+    writeRenderParams(device, system, canvasWidth, canvasHeight);
+    let cancelled = false;
+    createPostProcessPipeline(device, format, canvasWidth, canvasHeight).then(
+      (pipeline) => {
+        if (cancelled) {
+          destroyPostProcessPipeline(pipeline);
           return;
         }
-        postProcessRef.current = postProcess;
-
-        // Allocate the post-process intermediate texture once here — it is
-        // only recreated when this effect re-runs (device/format/canvas
-        // size change), never per-frame.
-        intermediateTextureRef.current = device.createTexture({
+        const intermediate = device.createTexture({
           size: { width: canvasWidth, height: canvasHeight },
           format,
           usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
-
-        writeRenderParams(device, system, canvasWidth, canvasHeight);
-      } catch (err) {
-        console.error("Failed to create particle system:", err);
-      }
-    };
-
-    void init();
-
+        setTargets({ device, pipeline, intermediate });
+      },
+      (err: unknown) => console.error("[particles] Failed to create post-processing:", err),
+    );
     return () => {
-      controller.abort();
-      if (systemRef.current) {
-        destroyParticleSystem(systemRef.current);
-        systemRef.current = null;
-      }
-      if (postProcessRef.current) {
-        destroyPostProcessPipeline(postProcessRef.current);
-        postProcessRef.current = null;
-      }
-      if (intermediateTextureRef.current) {
-        intermediateTextureRef.current.destroy();
-        intermediateTextureRef.current = null;
-      }
+      cancelled = true;
     };
-  }, [device, format, isReady, canvasWidth, canvasHeight]);
+  }, [device, format, system, canvasWidth, canvasHeight]);
+
+  // Destroys a post-processing set once a newer one (or unmount) replaces it.
+  useEffect(() => {
+    if (!targets) return;
+    return () => {
+      destroyPostProcessPipeline(targets.pipeline);
+      targets.intermediate.destroy();
+    };
+  }, [targets]);
 
   // ── Render loop ──
   useEffect(() => {
-    if (!device || !context || !isReady) return;
+    if (!device || !context || !system) return;
+    let raf = 0;
+    let lastFrame: number | null = null;
+    let backlogMs = 0;
+    let measuring = false;
+    let samples: number[] = [];
 
-    // ── Adaptive particle count (Milestone 0.6.5) ──
-    const adjustParticleCount = (frameTimeMs: number): void => {
-      frameTimesRef.current.push(frameTimeMs);
-      if (frameTimesRef.current.length < SAMPLE_WINDOW) return;
-
-      const avg = frameTimesRef.current.reduce((a, b) => a + b, 0) / frameTimesRef.current.length;
-      frameTimesRef.current = [];
-
-      // Never exceed the buffer capacity allocated at pipeline creation
-      // (maxParticles), regardless of MAX_PARTICLE_COUNT's headroom.
-      const ceiling = Math.min(
-        MAX_PARTICLE_COUNT,
-        systemRef.current?.maxParticles ?? MAX_PARTICLE_COUNT,
-      );
-      let count = particleCountRef.current;
-
-      if (avg > TARGET_HIGH_MS) {
-        // Reduce by 20% to recover performance
-        count = Math.max(MIN_PARTICLE_COUNT, Math.floor(count * 0.8));
-      } else if (avg < TARGET_LOW_MS) {
-        // Increase by 10% to improve visual density
-        count = Math.min(ceiling, Math.floor(count * 1.1));
-      }
-
-      if (count !== particleCountRef.current) {
-        particleCountRef.current = count;
-        setParticleCount(count);
-      }
-
+    const recordLatency = (ms: number): void => {
+      samples.push(ms);
+      if (samples.length < SAMPLE_WINDOW) return;
+      const avg = samples.reduce((sum, ms) => sum + ms, 0) / samples.length;
+      samples = [];
       setGpuFrameTime(avg);
+
+      const current = drawCountRef.current;
+      const next =
+        avg > TARGET_HIGH_MS
+          ? Math.max(MIN_PARTICLE_COUNT, Math.floor(current * 0.8))
+          : avg < TARGET_LOW_MS
+            ? Math.min(PARTICLE_CAPACITY, Math.floor(current * 1.1))
+            : current;
+      if (next !== current) {
+        drawCountRef.current = next;
+        setParticleCount(next);
+      }
     };
 
-    const render = (time: number): void => {
-      const system = systemRef.current;
-      const postProcess = postProcessRef.current;
-      if (!system || !context) return;
+    const frame = (now: number): void => {
+      // Scheduled first: nothing below can stop the loop.
+      raf = requestAnimationFrame(frame);
 
-      const dt = lastTimeRef.current ? (time - lastTimeRef.current) / 1000 : 0.016;
-      lastTimeRef.current = time;
-
-      const cpuStart = performance.now();
+      backlogMs += lastFrame === null ? STEP_MS : now - lastFrame;
+      lastFrame = now;
+      let steps = Math.floor(backlogMs / STEP_MS);
+      if (steps > MAX_STEPS_PER_FRAME) {
+        steps = MAX_STEPS_PER_FRAME;
+        backlogMs = 0;
+      } else {
+        backlogMs -= steps * STEP_MS;
+      }
 
       try {
-        // Update sim params with current frame time
-        writeSimParams(device, system, {
-          dt: Math.min(dt, 0.05), // cap dt to avoid spiral-of-death
-          workerCount: 0,
-          time: time / 1000,
-          deltaHue: 205,
-          canvasWidth,
-          canvasHeight,
-          speedMultiplier: 1.0,
-          chromaMultiplier: 1.0,
-        });
-
-        const encoder = device.createCommandEncoder({ label: "particles" });
-
-        // Compute pass: simulate particles
-        dispatchCompute(encoder, system);
-
-        // Defense-in-depth: never instance-draw more particles than the
-        // GPU buffer allocated at createParticleSystem() time holds.
-        const drawCount = Math.min(particleCountRef.current, system.maxParticles);
-
-        const intermediateTexture = intermediateTextureRef.current;
-
-        if (postProcess && intermediateTexture && canvasWidth > 0 && canvasHeight > 0) {
-          // Render particles to the pre-allocated intermediate texture
-          renderParticles(encoder, system, intermediateTexture.createView(), drawCount);
-
-          device.queue.submit([encoder.finish()]);
-
-          // Post-process: bloom + chromatic aberration + vignette
-          const outputView = context.getCurrentTexture().createView();
-          renderPostProcess(device, postProcess, intermediateTexture, outputView);
-        } else {
-          // No post-processing -- render directly to swap chain
-          const textureView = context.getCurrentTexture().createView();
-          renderParticles(encoder, system, textureView, drawCount);
+        const submitted = performance.now();
+        for (let step = 0; step < steps; step++) {
+          if (SIM_TIME_OFFSET !== null) {
+            const time = (now - (steps - 1 - step) * STEP_MS) / 1000;
+            device.queue.writeBuffer(
+              system.simUniformBuffer,
+              SIM_TIME_OFFSET,
+              Float32Array.of(time),
+            );
+          }
+          const encoder = device.createCommandEncoder({ label: "particles-simulate" });
+          dispatchCompute(encoder, system);
           device.queue.submit([encoder.finish()]);
         }
 
-        const cpuEnd = performance.now();
-        adjustParticleCount(cpuEnd - cpuStart);
-      } catch {
-        // Swallow errors from context loss / destroyed device
-      }
+        const drawCount = Math.min(drawCountRef.current, system.maxParticles);
+        const encoder = device.createCommandEncoder({ label: "particles-draw" });
+        const output = context.getCurrentTexture().createView();
+        // Until the post-processing for a new device is ready, draw unprocessed.
+        const post = targets?.device === device ? targets : null;
+        if (post) {
+          renderParticles(encoder, system, post.intermediate.createView(), drawCount);
+          device.queue.submit([encoder.finish()]);
+          renderPostProcess(device, post.pipeline, post.intermediate, output);
+        } else {
+          renderParticles(encoder, system, output, drawCount);
+          device.queue.submit([encoder.finish()]);
+        }
 
-      rafRef.current = requestAnimationFrame(render);
+        if (!measuring) {
+          measuring = true;
+          device.queue.onSubmittedWorkDone().then(
+            () => {
+              measuring = false;
+              recordLatency(performance.now() - submitted);
+            },
+            () => {
+              measuring = false;
+            },
+          );
+        }
+      } catch (err) {
+        // A lost or destroyed device throws here; useWebGPU recovers it.
+        console.debug("[particles] Frame skipped:", err);
+      }
     };
 
-    rafRef.current = requestAnimationFrame(render);
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [device, context, system, targets, setGpuFrameTime, setParticleCount]);
 
-    return () => {
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = 0;
-      }
-    };
-  }, [device, context, isReady, canvasWidth, canvasHeight, setParticleCount, setGpuFrameTime]);
-
-  return <canvas ref={canvasRef} aria-hidden="true" tabIndex={-1} style={CANVAS_STYLE} />;
+  return (
+    <canvas
+      ref={canvasRef}
+      aria-hidden="true"
+      tabIndex={-1}
+      className="pointer-events-none fixed inset-0 -z-1 size-full bg-void"
+    />
+  );
 }

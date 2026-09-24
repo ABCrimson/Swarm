@@ -6,24 +6,55 @@
 // one-time, Title-Cased console.warn + Sonner toast so the failure is
 // diagnosable instead of silent.
 //
-// Only the outer `isWebGPUSupported()` gate is exercised here — once
-// that gate passes, ParticleBackground mounts the real `<canvas>` path
-// (ParticleCanvas → useWebGPU), which depends on ResizeObserver (not
-// implemented by jsdom) and a full WebGPU adapter/device/context object
-// graph. That deeper path's reason-propagation is covered at the
-// `initWebGPU()` unit level in `src/lib/webgpu.test.ts`; mounting
-// it end-to-end is not practical under jsdom (see Task 5 report).
+// The canvas path (ParticleCanvas) runs against a scripted fake device:
+// useWebGPU, useParticleSync and the GPU-side helpers of #lib/particles
+// and #lib/postprocess are mocked and requestAnimationFrame is a manual
+// queue, so the render loop, the parameter-sync hand-off and the resize
+// behavior are exercised frame by frame.
 
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { getDefaultStore } from "jotai";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _resetParticlesUnavailableWarningForTests,
+  PARTICLE_CAPACITY,
   ParticleBackground,
+  SIM_TIME_OFFSET,
 } from "#components/layout/ParticleBackground";
+import { useParticleSync } from "#hooks/useParticleSync";
+import { type UseWebGPUResult, useWebGPU } from "#hooks/useWebGPU";
+import {
+  createParticleSystem,
+  dispatchCompute,
+  type ParticleSystem,
+  renderParticles,
+  writeSimParams,
+} from "#lib/particles";
+import {
+  createPostProcessPipeline,
+  type PostProcessPipeline,
+  renderPostProcess,
+} from "#lib/postprocess";
 import { getWebGPUUnavailableReason } from "#lib/webgpu";
 import { reducedMotionAtom } from "#store/ui";
+
+vi.mock("#hooks/useWebGPU", () => ({ useWebGPU: vi.fn() }));
+vi.mock("#hooks/useParticleSync", () => ({ useParticleSync: vi.fn() }));
+vi.mock("#lib/particles", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("#lib/particles")>()),
+  createParticleSystem: vi.fn(),
+  destroyParticleSystem: vi.fn(),
+  dispatchCompute: vi.fn(),
+  renderParticles: vi.fn(),
+  writeRenderParams: vi.fn(),
+  writeSimParams: vi.fn(),
+}));
+vi.mock("#lib/postprocess", () => ({
+  createPostProcessPipeline: vi.fn(),
+  destroyPostProcessPipeline: vi.fn(),
+  renderPostProcess: vi.fn(),
+}));
 
 // The latch under test is keyed on the *reason value*, not "has ever
 // warned" — so retrying (toggling particlesEnabled, which re-runs
@@ -178,5 +209,143 @@ describe("ParticleBackground diagnostics", () => {
       2,
       expect.stringContaining("Particle Background Unavailable: No Compatible GPU Adapter Found"),
     );
+  });
+});
+
+describe("ParticleBackground canvas", () => {
+  /** Pending requestAnimationFrame callbacks (a manual frame clock). */
+  let frames: Map<number, FrameRequestCallback>;
+  let nextFrameId: number;
+  let clock: number;
+  let device: GPUDevice;
+  let writeBuffer: ReturnType<typeof vi.fn>;
+  let gpu: UseWebGPUResult;
+  const system = { maxParticles: PARTICLE_CAPACITY, simUniformBuffer: {} } as ParticleSystem;
+
+  /** Runs every pending frame once per tick, 16 ms apart. */
+  function tick(count = 1): void {
+    for (let i = 0; i < count; i++) {
+      clock += 16;
+      const pending = [...frames.values()];
+      frames.clear();
+      for (const callback of pending) callback(clock);
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setNavigatorGpu({});
+    frames = new Map();
+    nextFrameId = 0;
+    clock = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      nextFrameId += 1;
+      frames.set(nextFrameId, callback);
+      return nextFrameId;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    vi.stubGlobal("GPUTextureUsage", { RENDER_ATTACHMENT: 16, TEXTURE_BINDING: 4 });
+    writeBuffer = vi.fn();
+    const view = {} as GPUTextureView;
+    device = {
+      queue: {
+        writeBuffer,
+        submit: vi.fn(),
+        onSubmittedWorkDone: vi.fn(() => Promise.resolve()),
+      },
+      createCommandEncoder: () => ({ finish: () => ({}) }),
+      createTexture: () => ({ createView: () => view, destroy: vi.fn() }),
+    } as unknown as GPUDevice;
+    gpu = {
+      canvasRef: () => {},
+      device,
+      context: {
+        getCurrentTexture: () => ({ createView: () => view }),
+      } as unknown as GPUCanvasContext,
+      format: "bgra8unorm",
+      isSupported: true,
+      isReady: true,
+      canvasWidth: 800,
+      canvasHeight: 600,
+      failureReason: null,
+    };
+    vi.mocked(useWebGPU).mockImplementation(() => gpu);
+    vi.mocked(createPostProcessPipeline).mockResolvedValue({} as PostProcessPipeline);
+  });
+
+  afterEach(() => {
+    cleanup();
+    setNavigatorGpu(undefined);
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("starts rendering once a slow particle system arrives, and keeps rendering", async () => {
+    const pending = Promise.withResolvers<ParticleSystem>();
+    vi.mocked(createParticleSystem).mockReturnValue(pending.promise);
+    const { container } = render(<ParticleBackground />);
+    expect(container.querySelector("canvas")).not.toBeNull();
+
+    // Frames before the system exists must not end the loop for good.
+    tick(3);
+    await act(async () => pending.resolve(system));
+    tick(10);
+
+    expect(dispatchCompute).toHaveBeenCalled();
+    expect(renderParticles).toHaveBeenCalled();
+    expect(frames.size).toBe(1);
+  });
+
+  it("hands the live system to the parameter sync and never overwrites its parameters", async () => {
+    vi.mocked(createParticleSystem).mockResolvedValue(system);
+    render(<ParticleBackground />);
+    await act(async () => {});
+
+    expect(useParticleSync).toHaveBeenLastCalledWith(
+      expect.objectContaining({ device, system, canvasWidth: 800, canvasHeight: 600 }),
+    );
+
+    tick(20);
+    // One seed write before the sync's first; the loop writes only the clock.
+    expect(writeSimParams).toHaveBeenCalledTimes(1);
+    expect(SIM_TIME_OFFSET).toBe(8);
+    expect(writeBuffer).toHaveBeenCalled();
+    for (const [buffer, offset, data] of writeBuffer.mock.calls) {
+      expect(buffer).toBe(system.simUniformBuffer);
+      expect(offset).toBe(SIM_TIME_OFFSET);
+      expect(data).toBeInstanceOf(Float32Array);
+      expect((data as Float32Array).length).toBe(1);
+    }
+  });
+
+  it("keeps the particle system across a resize and only rebuilds post-processing", async () => {
+    vi.mocked(createParticleSystem).mockResolvedValue(system);
+    const { rerender } = render(<ParticleBackground />);
+    await act(async () => {});
+
+    gpu = { ...gpu, canvasWidth: 1024, canvasHeight: 768 };
+    rerender(<ParticleBackground />);
+    await act(async () => {});
+    tick(2);
+
+    expect(createParticleSystem).toHaveBeenCalledTimes(1);
+    expect(createPostProcessPipeline).toHaveBeenCalledTimes(2);
+    expect(createPostProcessPipeline).toHaveBeenLastCalledWith(device, "bgra8unorm", 1024, 768);
+    expect(renderPostProcess).toHaveBeenCalled();
+  });
+
+  it("survives a frame that throws", async () => {
+    vi.mocked(createParticleSystem).mockResolvedValue(system);
+    vi.spyOn(console, "debug").mockImplementation(() => {});
+    render(<ParticleBackground />);
+    await act(async () => {});
+
+    vi.mocked(renderParticles).mockImplementationOnce(() => {
+      throw new Error("device lost");
+    });
+    tick(5);
+
+    expect(frames.size).toBe(1);
+    expect(vi.mocked(renderParticles).mock.calls.length).toBeGreaterThan(1);
   });
 });
