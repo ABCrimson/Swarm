@@ -288,8 +288,12 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
       className="causality-panel"
       aria-labelledby={titleId}
       closedby="any"
-      onClose={() => {
-        if (!unmountingRef.current) onClose();
+      onClose={(event) => {
+        // `close` is delivered as a queued task. Ignore it when this panel
+        // is unmounting, and when the dialog is open again by then —
+        // StrictMode's effect replay closes and re-opens it on mount, and
+        // that stale event must not report a close.
+        if (!unmountingRef.current && !event.currentTarget.open) onClose();
       }}
     >
       <div

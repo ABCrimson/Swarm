@@ -18,7 +18,7 @@
  * algorithm. That nested `new Worker()` call previously crashed during this
  * module's evaluation, before `self.onmessage` was ever assigned — so
  * layout requests were silently dropped and the caller's "Computing
- * Layout" state never resolved (feedback-batch-1 Task 4 finding).
+ * Layout" state never resolved.
  *
  * Letting this worker directly *be* elkjs's worker script avoids
  * constructing any Worker at all in here, while still running the layout

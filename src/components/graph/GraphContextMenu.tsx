@@ -7,6 +7,13 @@ interface GraphContextMenuProps {
   readonly x: number;
   readonly y: number;
   readonly workerId: string;
+  /**
+   * The contextmenu event arrived while a button was still pressed
+   * (macOS and Linux fire it on press, Windows on release). The menu then
+   * opens once the button is released — opened earlier, the release
+   * itself would light-dismiss it.
+   */
+  readonly openOnRelease?: boolean;
   /** Opens the worker's detail panel. */
   readonly onInspect: () => void;
   /** Called once the menu has closed, for any reason (action, Escape, click outside, Tab). */
@@ -85,6 +92,7 @@ export function GraphContextMenu({
   x,
   y,
   workerId,
+  openOnRelease = false,
   onInspect,
   onClose,
 }: GraphContextMenuProps): React.ReactElement {
@@ -96,12 +104,23 @@ export function GraphContextMenu({
   useEffect(() => {
     const popover = popoverRef.current;
     if (!popover) return undefined;
-    popover.showPopover();
-    popover.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    const open = (): void => {
+      popover.showPopover();
+      popover.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    };
+    // After the release's own light-dismiss pass has run.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const openAfterRelease = (): void => {
+      timer = setTimeout(open);
+    };
+    if (openOnRelease) window.addEventListener("pointerup", openAfterRelease, { once: true });
+    else open();
     return () => {
+      window.removeEventListener("pointerup", openAfterRelease);
+      clearTimeout(timer);
       if (popover.matches(":popover-open")) popover.hidePopover();
     };
-  }, []);
+  }, [openOnRelease]);
 
   const hide = (): void => popoverRef.current?.hidePopover();
   /** Closes the menu, then runs a lifecycle IPC action as a transition. */

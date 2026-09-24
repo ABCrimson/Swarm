@@ -4,6 +4,7 @@ import "./top-layer-shim";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createStore, Provider } from "jotai";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CausalityPanel,
@@ -301,6 +302,23 @@ describe("CausalityPanel (component)", () => {
     await user.click(screen.getByRole("button", { name: "Close Causality Trace" }));
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays open under StrictMode's effect replay (its queued close event is stale)", async () => {
+    invoke.mockResolvedValue([]);
+    const onClose = vi.fn();
+    render(
+      <StrictMode>
+        <Provider store={createStore()}>
+          <CausalityPanel startSeq={999} onClose={onClose} />
+        </Provider>
+      </StrictMode>,
+    );
+
+    await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Causality Trace" })).toHaveAttribute("open");
   });
 
   it("does not call onClose when unmounted by its owner", () => {

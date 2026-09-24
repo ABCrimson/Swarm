@@ -55,6 +55,8 @@ interface ContextMenuState {
   readonly x: number;
   readonly y: number;
   readonly workerId: string;
+  /** A button was still down when the menu was requested (see GraphContextMenu). */
+  readonly openOnRelease: boolean;
 }
 
 /**
@@ -306,7 +308,12 @@ function WorkerGraphInner(): React.ReactElement {
 
   const handleNodeContextMenu: NodeMouseHandler<WorkerFlowNode> = (event, node) => {
     event.preventDefault();
-    setContextMenu({ x: event.clientX, y: event.clientY, workerId: node.id });
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      workerId: node.id,
+      openOnRelease: event.buttons !== 0,
+    });
   };
 
   // Keyboard activation for the focusable node and edge wrappers xyflow
@@ -539,6 +546,7 @@ function WorkerGraphInner(): React.ReactElement {
           x={contextMenu.x}
           y={contextMenu.y}
           workerId={contextMenu.workerId}
+          openOnRelease={contextMenu.openOnRelease}
           onInspect={() => openDetail(contextMenu.workerId)}
           onClose={() => setContextMenu((current) => (current === contextMenu ? null : current))}
         />

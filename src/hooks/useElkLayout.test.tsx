@@ -81,7 +81,7 @@ describe("useElkLayout", () => {
     expect(worker?.terminate).toHaveBeenCalled();
   });
 
-  describe("layout watchdog (Task 8 item 5)", () => {
+  describe("layout watchdog", () => {
     // MockWorker.postMessage is a no-op that never calls back into
     // elkjs's own onmessage handler, so `elk.layout()` hangs forever here
     // by construction — exactly the "worker neither errors nor ever
@@ -162,7 +162,7 @@ describe("useElkLayout", () => {
     });
   });
 
-  describe("StrictMode remount (fix/feedback-batch-1 item 1)", () => {
+  describe("StrictMode remount", () => {
     // StrictMode double-invokes effects on mount in dev (mount -> cleanup
     // -> mount). When a worker topology already exists at mount time, the
     // auto-layout effect fires runLayout() on the FIRST pass, arming the
@@ -334,7 +334,7 @@ describe("useElkLayout", () => {
     });
   });
 
-  describe("layout success commit (fix/feedback-batch-1: rAF deferral starves under occlusion/CDP)", () => {
+  describe("layout success commit (never deferred to rAF, which starves under occlusion)", () => {
     beforeEach(() => {
       vi.useFakeTimers();
     });

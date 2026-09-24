@@ -3,7 +3,9 @@
  * `HTMLDialogElement.showModal()/close()` (Escape fires `cancel`, then
  * closes) and the Popover API (`showPopover`/`hidePopover`,
  * `:popover-open`, `toggle` events with `newState`, and light dismiss of
- * `popover="auto"` on Escape or an outside pointer press). Import it from
+ * `popover="auto"` on Escape or an outside pointer press). As in
+ * browsers, `close` and `toggle` arrive as queued tasks, not
+ * synchronously, and pending toggles coalesce. Import it from
  * a test file that renders a native dialog or popover. Each shim installs
  * only where jsdom lacks the API, so a jsdom that ships it takes over.
  */
@@ -29,7 +31,8 @@ if (typeof HTMLDialogElement.prototype.showModal !== "function") {
       this.open = false;
       const handler = onEscape.get(this);
       if (handler) document.removeEventListener("keydown", handler, true);
-      this.dispatchEvent(new Event("close"));
+      // Browsers queue the close event as a task; so does the shim.
+      setTimeout(() => this.dispatchEvent(new Event("close")));
     },
   });
 }
@@ -37,8 +40,21 @@ if (typeof HTMLDialogElement.prototype.showModal !== "function") {
 if (typeof (HTMLElement.prototype as Partial<Popover>).showPopover !== "function") {
   const open = new Set<HTMLElement>();
 
+  // Like browsers, `toggle` is a queued task, and a toggle queued while
+  // another is pending replaces it (keeping the first oldState).
+  const pending = new Map<
+    HTMLElement,
+    { oldState: string; timer: ReturnType<typeof setTimeout> }
+  >();
   const toggle = (element: HTMLElement, oldState: string, newState: string): void => {
-    element.dispatchEvent(Object.assign(new Event("toggle"), { oldState, newState }));
+    const queued = pending.get(element);
+    if (queued) clearTimeout(queued.timer);
+    const first = queued?.oldState ?? oldState;
+    const timer = setTimeout(() => {
+      pending.delete(element);
+      element.dispatchEvent(Object.assign(new Event("toggle"), { oldState: first, newState }));
+    });
+    pending.set(element, { oldState: first, timer });
   };
 
   // jsdom's UA sheet hides `[popover]:not(:popover-open)`, and its

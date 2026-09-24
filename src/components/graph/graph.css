@@ -3,11 +3,17 @@
  * edges, the floating controls, the node context menu, the causality
  * inspector dialog and the worker detail panel.
  *
- * In `@layer components` like the other component sheets. Every infinite
- * or decorative animation is declared only under
- * `prefers-reduced-motion: no-preference`, so a reduced-motion user never
- * gets it (inline animation styles would beat the global override).
+ * In `@layer components` like the other component sheets. xyflow's own
+ * base stylesheet (panel/handle/minimap positioning, its --xy-* theme) is
+ * imported as the nested `components.xyflow` layer, which ranks below
+ * the rules written directly in `components` — so the overrides here win
+ * without specificity games. Every infinite or decorative animation is
+ * declared only under `prefers-reduced-motion: no-preference`, so a
+ * reduced-motion user never gets it (inline animation styles would beat
+ * the global override).
  */
+@import "@xyflow/react/dist/style.css" layer(components.xyflow);
+
 @layer components {
   /* ── xyflow theme (ReactFlow colorMode="dark") ───────────────────── */
   .worker-graph .react-flow {
@@ -265,7 +271,11 @@
   }
 
   /* ── Causality inspector (modal <dialog>) ──────────────────────── */
+  /* Centred by position, not the UA's `margin: auto`, which any author
+     margin reset overrides. */
   .causality-panel {
+    inset: 50% auto auto 50%;
+    translate: -50% -50%;
     width: min(420px, calc(100vw - 32px));
     max-height: 70vh;
     padding: 0;
