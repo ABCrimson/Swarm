@@ -1,8 +1,10 @@
 //! The adapter contract: one Rust trait pair every provider CLI
-//! implements, so Claude Code, Codex, OpenCode, Gemini, and the
-//! surviving webview path all land normalized `agent_*` events on the
-//! same ordered spine (see `crate::events::emitter` for the event
-//! family and `crate::orchestration` for the spine itself).
+//! implements, so Claude Code, Codex, and any later provider land
+//! normalized `agent_*` events on the same ordered spine (see
+//! `crate::events::emitter` for the event family and
+//! `crate::orchestration` for the spine itself). The webview chat path
+//! (`src/lib/anthropic.ts`) lives in TypeScript and does not implement
+//! these traits.
 //!
 //! ## Two traits: launch vs. live conversation
 //!
@@ -13,45 +15,45 @@
 //! per-worker, stateful handle to one live conversation — send a turn,
 //! cancel it, answer a permission prompt, shut the process down.
 //!
-//! ## Why `Pin<Box<dyn Future<...> + Send>>`, not `impl Future`
+//! ## Why [`BoxFuture`], not `async fn`
 //!
-//! The plan's pseudocode writes trait methods as `-> impl Future<Output = ...>`
-//! (return-position `impl Trait` in traits, RPITIT). That reads cleanly
-//! but is not what ships: RPITIT methods make a trait **not
-//! dyn-compatible** on stable Rust, and `AgentAdapter::spawn` must
-//! return `Box<dyn AgentSession>` — a trait object — per the plan's own
-//! signature. Every method on both traits here instead returns
-//! [`BoxFuture`], a `Pin<Box<dyn Future<Output = T> + Send>>` alias —
-//! exactly what the `async-trait` crate desugars an `async fn` in a
-//! trait into, written by hand so this crate takes on no new
-//! dependency. This preserves the plan's design intent (one trait pair,
-//! object-safe, `Box<dyn AgentSession>` held in the worker registry)
-//! while actually compiling.
+//! [`AgentSession`] must stay dyn-compatible: the registry holds every
+//! live session as `Arc<dyn AgentSession>`, and an `async fn` or a
+//! return-position `impl Future` makes a trait non-dyn-compatible (the
+//! nightly `async_fn_in_dyn_trait` feature is still incomplete). Its
+//! methods therefore return [`BoxFuture`], the same
+//! `Pin<Box<dyn Future + Send>>` `#[async_trait]` would generate,
+//! written by hand so the crate needs no macro dependency.
+//! [`AgentAdapter`] is only ever used through concrete types and could
+//! take native `async fn`; it keeps [`BoxFuture`] so both traits share
+//! one shape and every implementation in the workspace (test mocks
+//! included) stays source-compatible.
 //!
 //! ## Capabilities honesty doctrine
 //!
 //! [`Capabilities`] exists so the UI can disable an affordance instead
 //! of silently no-op'ing it when a provider structurally cannot do
-//! something (OpenCode's HTTP/SSE transport has no stdin to interrupt;
-//! `codex exec --json` has no mid-turn steering). Every field below is
-//! backed by an empirical finding from the Phase 1 spike (claude CLI
-//! 2.1.232, stream-json over piped stdio) — not an aspiration. A future
-//! adapter that cannot honestly claim a capability MUST report `false`/
-//! the honest variant rather than degrade the affordance silently
-//! client-side.
+//! something. Every field an adapter reports must be backed by the
+//! provider's verified behavior, not an aspiration: an adapter that
+//! cannot honestly claim a capability reports `false` (or the honest
+//! variant) rather than letting the affordance degrade silently in the
+//! client.
 //!
-//! ## The three spike conditions this module exists to satisfy
+//! ## The three conditions every adapter satisfies
 //!
-//! - **Condition A** (controlled config environment): out of scope for
-//!   the trait shape itself, binding on `AgentSpawnSpec`'s eventual
-//!   Phase 3 fields (per-profile config home / `--setting-sources`) —
-//!   noted here so the spawn spec's Phase 3 extension doesn't forget it.
+//! Measured against `claude` 2.1.232 when the adapter layer was
+//! designed, and binding on every provider since:
+//!
+//! - **Condition A** (controlled config environment): a worker's
+//!   provider CLI runs with a configuration SWARM controls, never the
+//!   operator's personal plugins, hooks or MCP servers. Each adapter
+//!   enforces it at spawn (Claude Code: `--setting-sources project`,
+//!   `--strict-mcp-config` and inline `--settings`).
 //! - **Condition B** (synthesize the terminal receipt on ungraceful
 //!   exit): see [`AgentSession::shutdown`]'s doc.
 //! - **Condition C** (never gate permissions on `allowedTools`): see
 //!   [`PermissionDecision`]'s doc.
 
-use std::future::Future;
 use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
@@ -60,18 +62,17 @@ use uuid::Uuid;
 use crate::error::AppError;
 
 /// A future boxed for storage behind a trait object — the hand-written
-/// equivalent of what `#[async_trait]` generates, used throughout this
-/// module so [`AgentAdapter`] and [`AgentSession`] stay dyn-compatible.
-/// See the module doc's "Why `Pin<Box<dyn Future<...> + Send>>`" section.
+/// equivalent of what `#[async_trait]` generates. See the module doc's
+/// "Why [`BoxFuture`], not `async fn`" section.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Provider-native session identifier — a Claude Code `session_id`
 /// (UUID-shaped, but provider-owned, never SWARM-generated), a Codex
 /// thread id, or whatever opaque handle the provider's own `--resume`
 /// equivalent expects back. Never parsed or validated by SWARM; stored
-/// and returned verbatim (see [`AgentSession::session_key`]'s doc and
-/// the "Session state" table in the multi-provider plan: the provider
-/// CLI owns the conversation, SWARM stores only this opaque key + cwd).
+/// and returned verbatim (see [`AgentSession::session_key`]'s doc): the
+/// provider CLI owns the conversation, SWARM stores only this opaque key
+/// and the cwd.
 pub type SessionKey = String;
 
 /// Correlation id for one turn within a session. Provider-scoped and
@@ -95,136 +96,109 @@ pub type PermissionId = String;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderId {
-    /// `claude` CLI, `stream-json` over piped stdio (the Phase 1 spike
-    /// target; Phase 3's first real adapter).
+    /// `claude` CLI, `stream-json` over piped stdio
+    /// (`crate::agent::claude_code`).
     ClaudeCode,
-    /// `codex app-server` (JSON-RPC/stdio) or `codex exec --json`
-    /// fallback (Phase 4).
+    /// `codex app-server`, JSON-RPC 2.0 over piped stdio
+    /// (`crate::agent::codex`).
     Codex,
-    /// `opencode serve` over HTTP + SSE (Phase 4 stretch).
+    /// `opencode serve` over HTTP + SSE. Reserved: no adapter yet.
     OpenCode,
-    /// Gemini CLI over native ACP — the honest place to prove ACP as a
-    /// transport, since ACP reaches Claude Code only through a
-    /// third-party Node adapter (Phase 4).
+    /// Gemini CLI over ACP. Reserved: no adapter yet.
     Gemini,
-    /// "Provider #0" — the existing webview-direct `@anthropic-ai/sdk`
-    /// chat path (`src/lib/anthropic.ts`). Cannot implement
-    /// [`AgentSession`] (it lives in TypeScript, not Rust); joins the
-    /// same event family via a narrow ingest command instead (Phase 5).
+    /// The webview-direct `@anthropic-ai/sdk` chat path
+    /// (`src/lib/anthropic.ts`). It lives in TypeScript, so it cannot
+    /// implement [`AgentSession`]. Reserved for tagging that path.
     WebviewAnthropic,
 }
 
 /// How precisely an adapter can target a cancel at one in-flight turn.
 ///
-/// **Empirical finding (Phase 1 spike, Gate 3):** cancel latency was
-/// 43ms via `kill()` — well inside the ≤500ms gate — but **stdin-close
-/// is NOT a cancel** (the child runs the turn to completion regardless),
-/// and on Windows, `kill()` is `TerminateProcess` with no graceful
-/// signal path at all (no `SIGTERM` equivalent for a piped child).
-/// `KillOnly` is therefore the honest default capability for every
-/// piped-stdio provider until a provider ships a real mid-turn cancel
-/// protocol message.
+/// Closing a provider's stdin is not a cancel (the child finishes the
+/// turn regardless), and on Windows `kill()` is `TerminateProcess`,
+/// with no graceful signal for a piped child. A provider without an
+/// in-band cancel message is therefore `KillOnly` (a kill took 43ms on
+/// `claude` 2.1.232). Claude Code's `interrupt` control request makes
+/// it `Graceful`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CancelGranularity {
     /// The only lever available is killing the whole child process —
-    /// coarse, but fast (43ms measured) and reliable.
+    /// coarse, but fast and reliable; the live session is gone after.
     KillOnly,
     /// The provider's own protocol has a real in-band cancel message
-    /// (e.g. a JSON-RPC cancel notification) that stops the turn
-    /// without tearing down the session/process.
+    /// (Claude Code's `interrupt` control request, say) that stops the
+    /// turn without tearing down the session or the process.
     Graceful,
 }
 
 /// What a provider adapter can honestly promise. See the module doc's
-/// "Capabilities honesty doctrine" — every field traces to a spike
-/// finding, not an aspiration.
+/// "Capabilities honesty doctrine".
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
     /// Streams sub-message deltas at all (as opposed to only ever
-    /// handing back one whole-message terminal block). **Empirical
-    /// finding (Gate 2): PASS, but sentence-clause granularity** — 4-6
-    /// deltas per response, ~100-230 chars each, on
-    /// `--include-partial-messages`. Chunkier than the webview SDK's
-    /// token-level streaming; disclosed, not hidden, in the UI when
-    /// `true`.
+    /// handing back one whole-message terminal block). Delta size is the
+    /// provider's: Claude Code's `--include-partial-messages` streamed
+    /// sentence-clause chunks (4-6 per response) on 2.1.232, coarser
+    /// than the webview SDK's token-level stream.
     pub partial_deltas: bool,
     /// The provider can resume a prior conversation by session key
-    /// (Claude Code's `--resume`/`--session-id`/`--fork-session`).
-    /// **Empirical finding: PASS** — context, including tool results
-    /// from an error-terminated turn, carried across invocations by
-    /// session id.
+    /// ([`AgentSpawnSpec::resume`]; Claude Code's `--resume`), context
+    /// and tool results of error-terminated turns included.
     pub resume: bool,
     /// The provider's own terminal receipt carries a real
-    /// dollar-denominated cost (`total_cost_usd`), not a client-side
-    /// token-count estimate. **Empirical finding (Gate 6): PASS** on
-    /// every clean exit — `total_cost_usd` always present, `modelUsage`
-    /// breakdown included. **Killed turns lose cost data** (no `result`
-    /// line on an ungraceful exit) — see [`AgentSession::shutdown`]'s
+    /// dollar-denominated cost (Claude Code's `total_cost_usd`), not a
+    /// client-side token-count estimate. Killed turns lose cost data (no
+    /// receipt on an ungraceful exit) — see [`AgentSession::shutdown`]'s
     /// Condition B doc.
     pub native_cost: bool,
-    /// Named permission modes this provider's `AgentSpawnSpec` accepts
-    /// (Claude Code: `default`/`acceptEdits`/`plan`/`auto`/`dontAsk`/
-    /// `bypassPermissions`/`manual`). Free-form strings, not a shared
-    /// closed enum, because providers do not agree on names. **Flag
-    /// drift note:** `"default"` is not itself a selectable
-    /// `--permission-mode` value — it is the implicit state when the
-    /// flag is omitted.
+    /// Every value [`AgentSpawnSpec::permission_mode`] accepts for this
+    /// provider: SWARM's trust-tier tokens (`"restricted"`,
+    /// `"standard"`, `"write_enabled"` for both Claude Code and Codex),
+    /// never a provider's raw mode names. Free-form strings rather than
+    /// a shared enum, because providers need not offer the same tiers.
     pub permission_modes: Vec<String>,
     /// How precisely this adapter can target a cancel — see
     /// [`CancelGranularity`].
     pub cancel_granularity: CancelGranularity,
     /// Whether a turn can be steered mid-flight (a follow-up message
     /// injected while the provider is still working), as opposed to
-    /// only ever being queued for the *next* turn. Drives the frontend
-    /// label choice per the plan: "Inject Instruction" when `true`,
-    /// "Queue Next Turn" when `false` — the label follows the
-    /// capability flag rather than every provider getting the same
-    /// affordance regardless of whether it can actually honor it.
+    /// only ever being queued for the *next* turn. The chat's busy-state
+    /// button follows it: "Interrupt" when `true`, "Queue Next Turn"
+    /// when `false`.
     pub interrupt_midturn: bool,
-    /// The adapter can be pointed at an arbitrary worktree `cwd`
-    /// (`--add-dir` or equivalent) rather than requiring the CLI's own
-    /// ambient working directory.
+    /// The adapter runs the provider in an arbitrary worktree
+    /// ([`AgentSpawnSpec::cwd`] becomes the child's working directory)
+    /// rather than requiring the CLI's own ambient one.
     pub worktree_aware: bool,
-    /// The provider's own protocol supports a REAL `agent_permission_request`
-    /// -> `respond_permission` round-trip — [`AgentSession::respond_permission`]
-    /// actually replies to a pending question on the wire, as opposed to
-    /// [`crate::events::emitter::AgentPermissionRequestPayload`] being a
-    /// report-only notice of an already-decided denial (see that type's
-    /// "semantics shift" doc for `ClaudeCodeAdapter`, where this is
-    /// `false`: `--permission-mode manual` is a silent no-op, so there is
-    /// nothing on the other end to answer). Added in Phase 4 alongside
-    /// `CodexAdapter` — a Capabilities-flag addition, not a trait-signature
-    /// change (see the module doc's "zero trait-signature changes" bar):
-    /// Codex's JSON-RPC app-server protocol issues a genuine server -> client
-    /// request (an `id`-bearing approval message) that blocks the provider
-    /// until answered, so `true` there is an honest, wire-verified-by-fixture
-    /// claim, not an aspiration. UI affordances (e.g. rendering Allow/Deny
-    /// buttons instead of a read-only denial report) MUST branch on this
-    /// flag rather than assuming every provider behaves like Claude Code.
+    /// The provider's protocol supports a real `agent_permission_request`
+    /// -> [`AgentSession::respond_permission`] round trip: the provider
+    /// blocks on a pending question until the session answers it on the
+    /// wire (Claude Code's `can_use_tool` control request, Codex's
+    /// JSON-RPC approval request). A request whose `suggestedDecision`
+    /// is set reports a decision already made and needs no answer. UI
+    /// affordances (Allow/Deny buttons instead of a read-only notice)
+    /// MUST branch on this flag and on `suggestedDecision`.
     pub interactive_permissions: bool,
 }
 
 /// Result of [`AgentAdapter::probe`] — "is this provider usable right
 /// now," checked before a spawn is attempted rather than discovered as
-/// a spawn failure. Auth is never SWARM's to store (see the plan's Auth
-/// table): a probe reports what it observed, never a credential.
+/// a spawn failure. Auth is never SWARM's to store: a probe reports what
+/// it observed, never a credential.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProbeReport {
-    /// The provider CLI was found and responded (e.g. `--version`
-    /// succeeded). `false` covers "binary not on PATH" and "binary
-    /// present but not authenticated" alike — [`Self::detail`] carries
-    /// the distinction for display.
+    /// The provider CLI was found, responded, and can authenticate.
+    /// `false` covers "not on PATH", "too old" and "not signed in"
+    /// alike — [`Self::detail`] carries the distinction for display.
     pub available: bool,
-    /// Provider CLI version string, when determinable. Exact-pin
-    /// discipline (per the plan's protocol-churn hedge) starts with
-    /// knowing what's actually installed.
+    /// Provider CLI version string, when determinable.
     pub version: Option<String>,
-    /// Human-readable detail for the "Not Signed In" / "Not Installed"
-    /// worker-state surface (Phase 3 UI) — never a secret, never a raw
-    /// credential-adjacent error string.
+    /// Human-readable, Title Case detail for the worker-state surface
+    /// ("Claude Code CLI Not Signed In", "Signed In (Claude Max)") —
+    /// never a secret or an account identifier.
     pub detail: Option<String>,
 }
 
@@ -232,8 +206,8 @@ pub struct ProbeReport {
 ///
 /// `resume` is `Some` to rehydrate an existing conversation
 /// (`--resume`/equivalent) and `None` to start fresh, in which case the
-/// adapter mints its own new [`SessionKey`] (for Claude Code, SWARM's
-/// worker UUID itself becomes the `--session-id`, per the plan).
+/// adapter mints its own new [`SessionKey`] (for Claude Code, the
+/// worker's UUID itself becomes the `--session-id`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSpawnSpec {
@@ -252,18 +226,16 @@ pub struct AgentSpawnSpec {
     /// of starting a fresh conversation.
     #[serde(default)]
     pub resume: Option<SessionKey>,
-    /// Named permission mode to request, when the provider supports
-    /// one (see [`Capabilities::permission_modes`]). `None` defers to
-    /// the provider's implicit default.
+    /// Trust tier to run under, one of [`Capabilities::permission_modes`].
+    /// `None` selects the adapter's default tier; any value outside that
+    /// list fails the spawn closed.
     #[serde(default)]
     pub permission_mode: Option<String>,
 }
 
-/// One turn's input. Deliberately minimal in Phase 2 — Phase 3's
-/// `ClaudeCodeAdapter` extends this with attachments/tool config as the
-/// concrete protocol demands; the scheduler and trait boundary need
-/// only a stable, provider-agnostic shape to compile and be tested
-/// against today.
+/// One turn's input: the provider-agnostic shape the scheduler and every
+/// adapter share. Tool configuration is fixed per session at spawn, not
+/// per turn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnInput {
@@ -275,19 +247,16 @@ pub struct TurnInput {
 ///
 /// # Condition C (BINDING): never gate on `allowedTools`
 ///
-/// **Empirical finding (Phase 1 spike, Gate 5 side finding):**
-/// `--allowedTools Read` did **not** prevent a `Bash` tool from
-/// executing in `-p` mode. `allowedTools` is an **auto-approve list**,
-/// not a restriction — passing it widens what runs without a prompt, it
-/// does not narrow what is permitted to run. Any adapter's permission
-/// gating MUST rest on `--permission-mode`/`disallowedTools`/hooks (or
-/// the provider's real equivalent), NEVER on an "allowed" list read as
-/// if it were a denylist's complement. A `PermissionDecision::Deny`
-/// only means something if the adapter's spawn configuration already
-/// routes the tool through a real gate — this type cannot enforce that
-/// on its own, and Phase 3's `ClaudeCodeAdapter` entry criterion is an
-/// empirical test proving its chosen gate actually blocks a denied
-/// tool, not just documents the intent.
+/// Measured on `claude` 2.1.232: `--allowedTools Read` did **not**
+/// prevent a `Bash` call in `-p` mode. `allowedTools` is an
+/// **auto-approve list**, not a restriction — it widens what runs
+/// without a prompt, it does not narrow what may run. Any adapter's
+/// permission gating MUST rest on the permission mode, a deny list,
+/// hooks or the provider's host-answered permission requests, NEVER on
+/// an "allowed" list read as a denylist's complement. A
+/// `PermissionDecision::Deny` only means something if the adapter's
+/// spawn configuration routes the tool through such a gate; this type
+/// cannot enforce that on its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionDecision {
@@ -306,22 +275,14 @@ pub enum PermissionDecision {
 pub struct ExitSummary {
     /// Process exit code, when the OS reports one.
     pub exit_code: Option<i32>,
-    /// Signal name that terminated the process, when applicable
-    /// (never populated on Windows — see
-    /// [`CancelGranularity::KillOnly`]'s doc on `TerminateProcess`
-    /// having no signal concept).
+    /// Signal that terminated the process (`"SIGKILL"`, ...), on Unix.
+    /// Never populated on Windows, where `TerminateProcess` sets an exit
+    /// code instead.
     pub signal: Option<String>,
 }
 
-/// Closed, typed terminal status for a settled agent turn — matches
-/// the [`ProviderId`]/[`PermissionDecision`] precedent set elsewhere in
-/// this module (see their docs) rather than the bare `status: String`
-/// the plan's payload table originally sketched. Wire form is
-/// `snake_case` (`"ok"`, `"error"`), matching the informal string
-/// convention every OTHER `*_settled` receipt in this codebase already
-/// uses (`ai_stream_settled`, `ship_settled`) — this type just makes
-/// the agent family's version of that convention unrepresentable-wrong
-/// instead of merely documented-right.
+/// Closed, typed terminal status for a settled agent turn. Wire form is
+/// `snake_case` (`"ok"`, `"error"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentTurnStatus {
@@ -338,8 +299,7 @@ pub enum AgentTurnStatus {
 /// contrast with [`AgentSession`], one instance per live worker
 /// conversation.
 ///
-/// See the module doc for why every method returns [`BoxFuture`]
-/// instead of the plan pseudocode's `impl Future`.
+/// See the module doc for why every method returns [`BoxFuture`].
 pub trait AgentAdapter: Send + Sync {
     /// Which provider this adapter drives.
     fn provider(&self) -> ProviderId;
@@ -354,9 +314,8 @@ pub trait AgentAdapter: Send + Sync {
     fn capabilities(&self) -> Capabilities;
 
     /// Checks whether the provider CLI is installed, on `PATH`, and
-    /// authenticated enough to be worth spawning. Never stores or
-    /// returns a credential (see the plan's Auth table: "Detect and
-    /// report, never store").
+    /// authenticated enough to be worth spawning. Detects and reports;
+    /// never stores or returns a credential.
     fn probe(&self) -> BoxFuture<'_, Result<ProbeReport, AppError>>;
 
     /// Starts a new live session (or resumes one, per
@@ -368,14 +327,14 @@ pub trait AgentAdapter: Send + Sync {
 }
 
 /// Per-worker, stateful handle to one live provider conversation.
-/// Returned by [`AgentAdapter::spawn`], held by the worker registry
-/// (Phase 3) for the session's lifetime.
+/// Returned by [`AgentAdapter::spawn`], held by
+/// [`crate::agent::registry::AgentSessionRegistry`] for the session's
+/// lifetime.
 ///
-/// See the "Session state — three owners, no mirroring" table in the
-/// multi-provider plan: an `AgentSession` impl stores only what it
-/// needs to keep the child process and protocol state alive (stdin
-/// writer, pending permissions, current turn) — it never mirrors the
-/// conversation transcript. The transcript lives in the provider CLI's
+/// Session state has three owners and no mirroring: an `AgentSession`
+/// impl stores only what it needs to keep the child process and the
+/// protocol state alive (stdin writer, pending permissions, current
+/// turn) — it never mirrors the conversation transcript. The transcript lives in the provider CLI's
 /// own memory (recoverable via [`Self::session_key`] + `resume`) and,
 /// normalized, in the ordered event log (`agent_block` rows) — never a
 /// third copy in this struct.
@@ -412,11 +371,10 @@ pub trait AgentAdapter: Send + Sync {
 ///   still produce **exactly one** `agent_turn_settled` for that turn —
 ///   synthesized by the session itself when the provider never sent
 ///   its own terminal receipt. Never zero (nothing may wait forever for
-///   a receipt that never arrives — the plan's Condition B
-///   kill-criterion) and never two (a provider's own late-arriving
-///   settlement racing the synthesized one is exactly the double-settle
-///   the plan's verification #2 rules out) — see [`Self::shutdown`]'s
-///   doc for the mechanics.
+///   a receipt that never arrives) and never two (a provider's own
+///   late-arriving receipt must not race the synthesized one into a
+///   double settlement) — see [`Self::shutdown`]'s doc for the
+///   mechanics.
 pub trait AgentSession: Send + Sync {
     /// This session's provider-native identifier (see [`SessionKey`]'s
     /// doc). Stable for the session's lifetime.
@@ -435,13 +393,10 @@ pub trait AgentSession: Send + Sync {
     /// Resolves once `turn` reaches a terminal settlement — the SAME
     /// settlement `agent_turn_settled` reports, whether the provider
     /// produced it naturally or it was synthesized on ungraceful exit
-    /// (Condition B, [`Self::shutdown`]'s doc). Added by review (B2):
-    /// the scheduler that gates concurrent agent turns needs a real
-    /// "this turn's process is done executing" signal to hold its
-    /// concurrency permit against — `send_turn` resolving only proves
-    /// the provider ACCEPTED the turn (see its own doc), not that
-    /// executing it is finished, so a scheduler that released its
-    /// permit at `send_turn`'s return would bound nothing.
+    /// (Condition B, [`Self::shutdown`]'s doc). The scheduler holds a
+    /// turn's concurrency permit until this resolves: `send_turn`
+    /// resolving only proves the provider ACCEPTED the turn, not that
+    /// executing it is finished.
     ///
     /// **MUST NOT hang past this session's own death.** If the session
     /// is torn down (via [`Self::shutdown`]) before `turn` ever
@@ -459,7 +414,8 @@ pub trait AgentSession: Send + Sync {
     /// [`Capabilities::cancel_granularity`] — `KillOnly` adapters tear
     /// down the whole process (see [`Self::shutdown`]'s Condition B
     /// note on what that means for the terminal receipt); `Graceful`
-    /// adapters send the provider's real in-band cancel instead. May
+    /// adapters send the provider's real in-band cancel instead, and may
+    /// still fall back to a kill when the provider does not honor it. May
     /// race [`Self::send_turn`]/[`Self::shutdown`] safely — see the
     /// trait's concurrency contract above.
     fn cancel(&self, turn: TurnId) -> BoxFuture<'_, Result<(), AppError>>;
@@ -481,8 +437,7 @@ pub trait AgentSession: Send + Sync {
     /// returns the SAME [`ExitSummary`] the first call produced (an
     /// implementation typically caches it behind interior mutability
     /// the first time through). This, together with taking `&self`
-    /// rather than `self: Box<Self>` (the plan pseudocode's original
-    /// shape — changed after review), is what lets a session live
+    /// rather than `self: Box<Self>`, is what lets a session live
     /// behind `Arc<dyn AgentSession>`: multiple call sites (a cancel
     /// handler, an app-shutdown hook, a health check) can each hold a
     /// reference, and any of them may be the one that actually
@@ -492,24 +447,22 @@ pub trait AgentSession: Send + Sync {
     /// # Condition B (BINDING): synthesize the terminal receipt on
     /// ungraceful exit
     ///
-    /// **Empirical finding (Phase 1 spike, Gate 4):** exactly one
-    /// terminal event on every clean exit, including `max-turns`
-    /// errors — but **ZERO terminal events on process kill**. A caller
-    /// mid-turn when the child is killed (crash, `kill -9`, an app
-    /// shutdown racing a live turn) would otherwise wait forever for an
+    /// Measured on `claude` 2.1.232: exactly one terminal event on every
+    /// clean exit, including `max-turns` errors — but **ZERO terminal
+    /// events on process kill**. A caller mid-turn when the child is
+    /// killed (crash, `kill -9`, an app shutdown racing a live turn)
+    /// would otherwise wait forever for an
     /// `agent_turn_settled` that never arrives. Every implementation of
     /// this method MUST itself emit a synthesized `agent_turn_settled`
     /// (`status: `[`AgentTurnStatus::Error`]`) for any turn still in
-    /// flight at the moment `shutdown` runs — the same pattern
-    /// `ai_stream_settled` already established for the webview path's
-    /// error branch (`AiClient::stream_message`'s doc, since deleted
-    /// with the rest of `ai/client.rs`). **Killed turns lose cost
+    /// flight at the moment `shutdown` runs. **Killed turns lose cost
     /// data** (no `result` line to read `total_cost_usd` from) — the
     /// synthesized settlement's `costUsd`/`usage` are `None`, honestly,
     /// not a fabricated estimate. See the trait's concurrency contract
     /// above for the "never zero, never two" half of this invariant.
     fn shutdown(&self) -> BoxFuture<'_, Result<ExitSummary, AppError>>;
 }
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
