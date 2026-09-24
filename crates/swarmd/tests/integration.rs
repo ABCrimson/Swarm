@@ -1,93 +1,145 @@
-//! Integration test: drives a REAL `swarmd` axum server (in-process, on
-//! an ephemeral loopback port) through a REAL `tokio-tungstenite` WS
-//! client — hello -> ready -> replay -> replayEnd -> live -> rpc ->
-//! rpcResult. Headless-daemon plan verification #2 ("Replay exact") and
-//! #4 ("Auth matrix"), and the plan's explicit Phase 3 ask: "Rust:
-//! integration test driving a real swarmd instance on an ephemeral port
-//! through hello/replay/rpc round-trip."
+//! Integration tests: a real `swarmd` server driven by real clients.
 //!
-//! Uses the `swarmd` LIBRARY target (`src/lib.rs`) directly — no
-//! subprocess spawn, so this runs at unit-test speed under `cargo test
-//! -p swarmd` / CI.
+//! The first group runs the `swarmd` library in-process ([`swarmd::serve`]
+//! on an ephemeral loopback port, exactly as `main` runs it) against
+//! `tokio-tungstenite` WebSocket clients and a minimal HTTP/1.1 client. The
+//! second group spawns the compiled binary, for what only `main` does:
+//! argument handling, the non-loopback gate, the bound address, the lock's
+//! exit status and signal-driven shutdown.
 
+use std::io::{BufRead, BufReader, Read};
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc as std_mpsc;
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
-use serde_json::json;
-use tokio::net::TcpListener;
+use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::task::JoinHandle;
 use tokio_tungstenite::MaybeTlsStream;
-use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::handshake::client::Request;
+use tokio_tungstenite::tungstenite::protocol::frame::Frame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::{Data, OpCode};
+use tokio_tungstenite::tungstenite::{self, Message as WsMessage};
+use tokio_util::sync::DropGuard;
 
 use swarm_core::Paths;
-use swarm_core::protocol::{ClientFrame, ServerFrame};
+use swarm_core::events::{SwarmEvent, SystemLogPayload, WorkerKilledPayload};
+use swarm_core::protocol::{ClientFrame, PROTOCOL_VERSION, ServerFrame};
 use swarm_core::runtime::{Runtime, RuntimeConfig};
-use swarmd::auth;
+use swarmd::auth::{AllowedHost, DaemonToken, HostPolicy};
+use swarmd::{AppState, Limits};
 
-type WsStream = tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+type WsStream = tokio_tungstenite::WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+const WAIT: Duration = Duration::from_secs(10);
+
+// ── In-process server ───────────────────────────────────────────────────
+
+/// A server over its own data directory. Dropping it cancels the server;
+/// [`TestServer::stop`] shuts it down completely and releases the lock.
 struct TestServer {
     addr: SocketAddr,
     token: String,
-    data_dir_str: String,
-    // Held for the test's duration — dropping releases the
-    // single-instance lock and stops the runtime's background tasks
-    // from mattering further. Some tests (the FIX-3 ordering test)
-    // reach through this to emit engine events directly, bypassing the
-    // `rpc`/registry path (and its concurrency cap) entirely.
+    state: AppState,
     runtime: Runtime,
+    server: JoinHandle<std::io::Result<()>>,
+    data_dir: PathBuf,
+    _cancel_on_drop: DropGuard,
+    /// Declared last so it is removed after the runtime closes its files.
+    temp_dir: Option<tempfile::TempDir>,
 }
 
-async fn start_test_server() -> TestServer {
-    let data_dir = std::env::temp_dir().join(format!("swarmd-it-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&data_dir).unwrap();
-    let data_dir_str = data_dir.to_string_lossy().into_owned();
+#[derive(Default)]
+struct Options {
+    limits: Limits,
+    allow_hosts: Vec<&'static str>,
+    serve_ui: Option<PathBuf>,
+}
 
-    let (token, _, _) = auth::DaemonToken::load_or_create(&data_dir).unwrap();
+impl TestServer {
+    async fn start() -> Self {
+        Self::start_with(Options::default()).await
+    }
 
-    let runtime = Runtime::start(
-        RuntimeConfig {
-            paths: Paths { data_dir },
-            shell_name: "swarmd",
-            bind: Some("127.0.0.1:0".to_string()),
-        },
-        |_| {},
-    )
-    .expect("runtime should start on a fresh temp data dir");
+    async fn start_with(options: Options) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_path_buf();
+        Self::start_in(data_dir, Some(dir), options).await
+    }
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    async fn start_in(data_dir: PathBuf, dir: Option<tempfile::TempDir>, options: Options) -> Self {
+        let token = DaemonToken::load_or_create(&data_dir).unwrap().token;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let runtime = Runtime::start(
+            RuntimeConfig {
+                paths: Paths {
+                    data_dir: data_dir.clone(),
+                },
+                shell_name: "swarmd",
+                bind: Some(addr.to_string()),
+            },
+            |_| {},
+        )
+        .expect("runtime should start on a free data dir");
+        let hosts = HostPolicy::new(
+            options
+                .allow_hosts
+                .iter()
+                .map(|host| host.parse::<AllowedHost>().unwrap()),
+        );
+        let state = AppState::new(&runtime, token.clone(), hosts, options.limits);
+        let server = tokio::spawn({
+            let state = state.clone();
+            async move { swarmd::serve(listener, state, options.serve_ui.as_deref()).await }
+        });
+        Self {
+            addr,
+            token: token.as_str().to_owned(),
+            _cancel_on_drop: state.shutdown_token().drop_guard(),
+            state,
+            runtime,
+            server,
+            data_dir,
+            temp_dir: dir,
+        }
+    }
 
-    let state = swarmd::build_state(
-        &runtime,
-        addr.to_string(),
-        token.clone(),
-        swarmd::default_caps(),
-    );
-    let app = swarmd::build_router(state, None).into_make_service_with_connect_info::<SocketAddr>();
+    fn ws_url(&self) -> String {
+        format!("ws://{}/ws", self.addr)
+    }
 
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-
-    // Give the accept loop a beat to be ready (bind already succeeded
-    // above, so this is generous, not load-bearing).
-    tokio::time::sleep(Duration::from_millis(20)).await;
-
-    TestServer {
-        addr,
-        token: token.as_str().to_string(),
-        data_dir_str,
-        runtime,
+    /// Shuts the server down the way `main` does and releases the lock.
+    async fn stop(self) -> Option<tempfile::TempDir> {
+        let Self {
+            state,
+            runtime,
+            server,
+            mut temp_dir,
+            ..
+        } = self;
+        state.shutdown_token().cancel();
+        server.await.unwrap().unwrap();
+        runtime.metrics_cancel.cancel();
+        drop(runtime);
+        temp_dir.take()
     }
 }
 
 async fn connect(server: &TestServer) -> WsStream {
-    let url = format!("ws://{}/ws", server.addr);
-    let (stream, _resp) = tokio_tungstenite::connect_async(url)
+    connect_request(server.ws_url().into_client_request().unwrap()).await
+}
+
+async fn connect_request(request: Request) -> WsStream {
+    tokio_tungstenite::connect_async(request)
         .await
-        .expect("WS connect should succeed");
-    stream
+        .expect("WS connect should succeed")
+        .0
 }
 
 async fn send_frame(ws: &mut WsStream, frame: &ClientFrame) {
@@ -98,836 +150,1164 @@ async fn send_frame(ws: &mut WsStream, frame: &ClientFrame) {
     .unwrap();
 }
 
-/// Reads the next text message and returns it, retrying past
-/// ping/pong control frames a real WS stack may interleave.
+async fn hello(ws: &mut WsStream, last_seq: Option<u64>, token: Option<&str>) {
+    send_frame(
+        ws,
+        &ClientFrame::Hello {
+            last_seq,
+            token: token.map(str::to_owned),
+        },
+    )
+    .await;
+}
+
+/// Connects, authenticates cold, and consumes `ready` and `replayEnd`.
+async fn attach(server: &TestServer) -> WsStream {
+    let mut ws = connect(server).await;
+    hello(&mut ws, None, Some(&server.token)).await;
+    assert!(matches!(
+        next_frame(&mut ws).await,
+        Inbound::Control(ServerFrame::Ready { .. })
+    ));
+    assert!(matches!(
+        next_frame(&mut ws).await,
+        Inbound::Control(ServerFrame::ReplayEnd { .. })
+    ));
+    ws
+}
+
+/// The next text message, skipping ping/pong.
 async fn recv_text(ws: &mut WsStream) -> String {
     loop {
-        match tokio::time::timeout(Duration::from_secs(5), ws.next())
+        match tokio::time::timeout(WAIT, ws.next())
             .await
             .expect("timed out waiting for a WS message")
             .expect("stream ended unexpectedly")
             .expect("WS transport error")
         {
-            WsMessage::Text(t) => return t.to_string(),
-            WsMessage::Ping(_) | WsMessage::Pong(_) => continue,
+            WsMessage::Text(text) => return text.to_string(),
+            WsMessage::Ping(_) | WsMessage::Pong(_) => {}
             other => panic!("unexpected non-text message: {other:?}"),
         }
     }
 }
 
-/// `event` frames are bare `DomainEvent` JSON (no `"frame"` key —
-/// see `swarm_core::protocol`'s doc); control frames always have one.
-/// This is exactly the demux `src/lib/transport.ts`'s `wsTransport`
-/// performs client-side.
-enum Frame {
-    Control(ServerFrame),
-    Event(serde_json::Value),
-}
-
-fn classify(raw: &str) -> Frame {
-    let value: serde_json::Value = serde_json::from_str(raw).unwrap();
-    if value.get("frame").is_some() {
-        Frame::Control(serde_json::from_str(raw).unwrap())
-    } else {
-        Frame::Event(value)
-    }
-}
-
-/// DIRECTIVE: full hello -> ready -> replayEnd -> live handshake against
-/// a REAL server, cold attach (`lastSeq: null`).
-#[tokio::test]
-async fn test_cold_attach_handshake_yields_ready_then_replay_end_with_no_events() {
-    let server = start_test_server().await;
-    let mut ws = connect(&server).await;
-
-    send_frame(
-        &mut ws,
-        &ClientFrame::Hello {
-            last_seq: None,
-            token: Some(server.token.clone()),
-        },
-    )
-    .await;
-
-    match classify(&recv_text(&mut ws).await) {
-        Frame::Control(ServerFrame::Ready {
-            server_seq,
-            version,
-            ..
-        }) => {
-            assert_eq!(server_seq, 0, "fresh data dir has no events yet");
-            assert_eq!(version, swarm_core::protocol::PROTOCOL_VERSION);
-        }
-        _ => panic!("expected Ready first"),
-    }
-    match classify(&recv_text(&mut ws).await) {
-        Frame::Control(ServerFrame::ReplayEnd { seq }) => assert_eq!(seq, 0),
-        _ => panic!("expected ReplayEnd second (cold attach: no events in between)"),
-    }
-}
-
-/// DIRECTIVE: wrong/missing token is refused — the server closes the
-/// socket rather than proceeding to `ready`.
-#[tokio::test]
-async fn test_wrong_token_closes_the_connection_without_a_ready_frame() {
-    let server = start_test_server().await;
-    let mut ws = connect(&server).await;
-
-    send_frame(
-        &mut ws,
-        &ClientFrame::Hello {
-            last_seq: None,
-            token: Some("definitely-not-the-real-token".to_string()),
-        },
-    )
-    .await;
-
-    let next = tokio::time::timeout(Duration::from_secs(5), ws.next())
-        .await
-        .expect("server should respond (with a close) promptly");
-    match next {
-        Some(Ok(WsMessage::Close(_))) | None => {} // expected
-        Some(Ok(other)) => panic!("expected a close frame, got: {other:?}"),
-        Some(Err(_)) => {} // an abrupt close surfacing as a transport error is also acceptable
-    }
-}
-
-/// DIRECTIVE: replay exact. Produce N real persisted events via `rpc`
-/// (`create_session`), disconnect, reconnect with `lastSeq` set to a
-/// midpoint, and assert the replayed tail plus the events already seen
-/// pre-disconnect reconstructs the exact same seq sequence a
-/// continuously-connected client would see — no dupes, no gaps.
-///
-/// CI-flake root cause (2026-08-15, reproduced locally by shrinking
-/// `start_metrics_loop`'s tick to 5ms): the background metrics loop
-/// (`crates/swarm-core/src/metrics.rs`, 500ms interval, EPHEMERAL —
-/// `is_persistent(SystemMetrics) == false`) runs unconditionally for
-/// the lifetime of every `Runtime`, this test's included. The 30
-/// paced `create_session` round-trips below take ~0.5s wall-clock
-/// locally — right at the tick boundary — so whether a `system_metrics`
-/// tick fires DURING that window (and gets counted) is a function of
-/// CI-runner speed, not of anything this test controls; a slower
-/// Linux runner crosses the boundary where a fast Windows one doesn't.
-/// The original collection loops below counted ANY live `event` frame
-/// toward their 30/15 targets, so an interleaved ephemeral tick could
-/// consume one of those slots on client A but not client B (or vice
-/// versa) — client B's "first 30 frames" and client A's "first 15
-/// frames + persisted-only replay tail" are then no longer the same
-/// multiset, purely because of a race with a background timer neither
-/// client's side of the comparison was ever supposed to depend on.
-///
-/// Fix: both collection loops below filter to `type == "session_created"`
-/// — the one event type this test actually produces and cares about.
-/// This makes the property hold BY CONSTRUCTION, independent of
-/// wall-clock timing on any runner: exactly 30 `session_created`
-/// events exist (one per paced, awaited RPC), every connected client
-/// receives all of them in seq order on the single ordered lane
-/// (FIX-3), and replay only ever returns persisted rows — so counting
-/// only that one type can never be perturbed by however many
-/// `system_metrics` (or any other future ephemeral type) ticks happen
-/// to interleave. No sleeps, no timing assumptions, and the reproduction
-/// above is a positive control: this exact test WOULD have failed with
-/// the pre-fix loops the moment metrics ticks became frequent enough,
-/// on any platform.
-#[tokio::test]
-async fn test_reconnect_with_last_seq_replays_exactly_the_missed_events() {
-    let server = start_test_server().await;
-
-    // Client B: connects once, stays live for the whole test, is the
-    // "ground truth" — collects every seq it sees, live, start to
-    // finish.
-    let mut client_b = connect(&server).await;
-    send_frame(
-        &mut client_b,
-        &ClientFrame::Hello {
-            last_seq: None,
-            token: Some(server.token.clone()),
-        },
-    )
-    .await;
-    let _ready = recv_text(&mut client_b).await;
-    let _replay_end = recv_text(&mut client_b).await;
-
-    // Client A: connects, gets the first batch live, then disconnects.
-    let mut client_a = connect(&server).await;
-    send_frame(
-        &mut client_a,
-        &ClientFrame::Hello {
-            last_seq: None,
-            token: Some(server.token.clone()),
-        },
-    )
-    .await;
-    let _ready = recv_text(&mut client_a).await;
-    let _replay_end = recv_text(&mut client_a).await;
-
-    // Produce 30 persisted events via a THIRD connection's rpc calls
-    // (any connection can drive rpc — using a dedicated one keeps the
-    // event-producing traffic separate from the two observers' own
-    // frames).
-    let mut driver = connect(&server).await;
-    send_frame(
-        &mut driver,
-        &ClientFrame::Hello {
-            last_seq: None,
-            token: Some(server.token.clone()),
-        },
-    )
-    .await;
-    let _ = recv_text(&mut driver).await; // ready
-    let _ = recv_text(&mut driver).await; // replayEnd
-
-    // Paced, not fire-and-forget: awaits each create_session's matching
-    // rpcResult before sending the next. Required now that the server
-    // caps concurrent in-flight RPCs per connection
-    // (`MAX_CONCURRENT_RPC_PER_CONNECTION`, security-review FIX-4) — 30
-    // rapid-fire sends with no backpressure awareness would blow past
-    // that cap and get most of them busy-rejected (producing FAR fewer
-    // than 30 persisted events, which is exactly the failure this test
-    // exists to rule out, not exercise). One in flight at a time stays
-    // far under the cap and keeps this test deterministic: all 30
-    // succeed.
-    for i in 0..30 {
-        let id = format!("r{i}");
-        send_frame(
-            &mut driver,
-            &ClientFrame::Rpc {
-                id: id.clone(),
-                cmd: "create_session".to_string(),
-                args: json!({"name": format!("s{i}"), "config": {}}),
-            },
-        )
-        .await;
-        loop {
-            match classify(&recv_text(&mut driver).await) {
-                Frame::Control(ServerFrame::RpcResult {
-                    id: rid, ok, error, ..
-                }) if rid == id => {
-                    assert!(ok, "create_session RPC #{i} unexpectedly failed: {error:?}");
-                    break;
-                }
-                _ => {} // a live event frame (or an unrelated control frame) — keep reading
-            }
-        }
-    }
-
-    // Only `create_session` produces a `session_created` event in this
-    // test — filtering to it (rather than counting ANY live `event`
-    // frame) is what makes the 30/15 targets below deterministic
-    // regardless of how many ephemeral `system_metrics` ticks (500ms
-    // background loop, unconditionally running for the whole test) or
-    // any other incidental event happen to interleave on a given
-    // platform/runner. See this test's own doc comment above for the
-    // reproduced CI-flake this filter fixes.
-    fn is_session_created(e: &serde_json::Value) -> bool {
-        e["type"].as_str() == Some("session_created")
-    }
-
-    // Client B collects every live `session_created` seq (30 events).
-    let mut b_seqs = Vec::new();
-    while b_seqs.len() < 30 {
-        if let Frame::Event(e) = classify(&recv_text(&mut client_b).await)
-            && is_session_created(&e)
-        {
-            b_seqs.push(e["seq"].as_u64().unwrap());
-        }
-    }
-
-    // Client A collects the first 15 live `session_created` events, then disconnects.
-    let mut a_seqs = Vec::new();
-    while a_seqs.len() < 15 {
-        if let Frame::Event(e) = classify(&recv_text(&mut client_a).await)
-            && is_session_created(&e)
-        {
-            a_seqs.push(e["seq"].as_u64().unwrap());
-        }
-    }
-    let last_seen = *a_seqs.last().unwrap();
-    drop(client_a); // disconnect mid-stream
-
-    // Reconnect with lastSeq = the last one actually seen — replay must
-    // deliver exactly the remaining 15, then go live with nothing left
-    // to produce.
-    let mut client_a2 = connect(&server).await;
-    send_frame(
-        &mut client_a2,
-        &ClientFrame::Hello {
-            last_seq: Some(last_seen),
-            token: Some(server.token.clone()),
-        },
-    )
-    .await;
-    let _ready = recv_text(&mut client_a2).await;
-
-    // Replay only ever returns persisted rows (ephemeral types like
-    // `system_metrics` are never written to the log), so this filter is
-    // redundant given today's set of persisted event types — kept for
-    // symmetry with the two loops above and so this test stays correct
-    // by construction if a future change ever persists another event
-    // type that could fire in this window.
-    let mut replayed = Vec::new();
+/// The close code the server ends the connection with, skipping any text
+/// frames before it. `None` if the connection ended without a close frame.
+async fn close_code(ws: &mut WsStream) -> Option<u16> {
     loop {
-        match classify(&recv_text(&mut client_a2).await) {
-            Frame::Event(e) if is_session_created(&e) => {
-                replayed.push(e["seq"].as_u64().unwrap());
-            }
-            Frame::Event(_) => {}
-            Frame::Control(ServerFrame::ReplayEnd { .. }) => break,
-            Frame::Control(_) => {}
+        match tokio::time::timeout(WAIT, ws.next())
+            .await
+            .expect("timed out waiting for the server to close")
+        {
+            Some(Ok(WsMessage::Close(frame))) => return frame.map(|frame| u16::from(frame.code)),
+            Some(Ok(_)) => {}
+            Some(Err(_)) | None => return None,
         }
     }
-
-    let mut reconstructed = a_seqs.clone();
-    reconstructed.extend(replayed);
-
-    assert_eq!(
-        reconstructed, b_seqs,
-        "client A's reconstructed sequence (live prefix + replayed tail) must exactly match \
-         client B's always-connected sequence — no dupes, no gaps"
-    );
 }
 
-/// DIRECTIVE: rpc round-trip against the real registry — `list_workers`
-/// on a fresh runtime returns an empty array via a real `rpc`/`rpcResult`
-/// exchange.
-#[tokio::test]
-async fn test_rpc_round_trip_list_workers() {
-    let server = start_test_server().await;
-    let mut ws = connect(&server).await;
-    send_frame(
-        &mut ws,
-        &ClientFrame::Hello {
-            last_seq: None,
-            token: Some(server.token.clone()),
-        },
-    )
-    .await;
-    let _ready = recv_text(&mut ws).await;
-    let _replay_end = recv_text(&mut ws).await;
+/// A server frame: control frames carry a `"frame"` tag; `event` frames are
+/// the bare `DomainEvent` JSON (the same demux `wsTransport` performs).
+enum Inbound {
+    Control(ServerFrame),
+    Event(Value),
+}
 
+fn classify(raw: &str) -> Inbound {
+    let value: Value = serde_json::from_str(raw).unwrap();
+    if value.get("frame").is_some() {
+        Inbound::Control(serde_json::from_value(value).unwrap())
+    } else {
+        Inbound::Event(value)
+    }
+}
+
+async fn next_frame(ws: &mut WsStream) -> Inbound {
+    classify(&recv_text(ws).await)
+}
+
+/// Sends one `rpc` and returns its `(ok, result, error)`, skipping events.
+async fn rpc(
+    ws: &mut WsStream,
+    id: &str,
+    cmd: &str,
+    args: Value,
+) -> (bool, Option<Value>, Option<Value>) {
     send_frame(
-        &mut ws,
+        ws,
         &ClientFrame::Rpc {
-            id: "abc".to_string(),
-            cmd: "list_workers".to_string(),
-            args: json!({}),
+            id: id.to_owned(),
+            cmd: cmd.to_owned(),
+            args,
         },
     )
     .await;
+    rpc_reply(ws, id).await
+}
 
-    let frame = loop {
-        if let Frame::Control(ServerFrame::RpcResult {
-            id,
+async fn rpc_reply(ws: &mut WsStream, id: &str) -> (bool, Option<Value>, Option<Value>) {
+    loop {
+        if let Inbound::Control(ServerFrame::RpcResult {
+            id: reply,
             ok,
             result,
             error,
-        }) = classify(&recv_text(&mut ws).await)
+        }) = next_frame(ws).await
+            && reply == id
         {
-            break (id, ok, result, error);
+            return (ok, result, error);
         }
-    };
-    let (id, ok, result, error) = frame;
-    assert_eq!(id, "abc");
-    assert!(
-        ok,
-        "list_workers must succeed on a fresh runtime, error: {error:?}"
+    }
+}
+
+fn event_type(event: &Value) -> Option<&str> {
+    event["type"].as_str()
+}
+
+/// Minimal HTTP/1.1 GET: `(status, lowercase headers, body)`.
+async fn http_get(
+    addr: SocketAddr,
+    path: &str,
+    host: &str,
+) -> (u16, Vec<(String, String)>, String) {
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut raw = Vec::new();
+    tokio::time::timeout(WAIT, stream.read_to_end(&mut raw))
+        .await
+        .unwrap()
+        .unwrap();
+    let raw = String::from_utf8_lossy(&raw).into_owned();
+    let (head, body) = raw.split_once("\r\n\r\n").unwrap();
+    let mut lines = head.lines();
+    let status = lines
+        .next()
+        .unwrap()
+        .split(' ')
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap();
+    let headers = lines
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
+        .collect();
+    (status, headers, body.to_owned())
+}
+
+fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.as_str())
+}
+
+// ── Handshake and authentication ───────────────────────────────────────
+
+/// Cold attach: `ready` at the log head, then `replayEnd` with no events
+/// between them.
+#[tokio::test]
+async fn test_cold_attach_yields_ready_then_replay_end() {
+    let server = TestServer::start().await;
+    let mut ws = connect(&server).await;
+    hello(&mut ws, None, Some(&server.token)).await;
+
+    match next_frame(&mut ws).await {
+        Inbound::Control(ServerFrame::Ready {
+            server_seq,
+            version,
+            caps,
+        }) => {
+            assert_eq!(server_seq, 0, "a fresh data dir has no persisted events");
+            assert_eq!(version, PROTOCOL_VERSION);
+            assert_eq!(caps.max_frame_bytes, Limits::default().max_message_bytes);
+            assert_eq!(caps.max_connections, Limits::default().max_connections);
+        }
+        _ => panic!("expected ready first"),
+    }
+    match next_frame(&mut ws).await {
+        Inbound::Control(ServerFrame::ReplayEnd { seq }) => assert_eq!(seq, 0),
+        _ => panic!("expected replayEnd second"),
+    }
+}
+
+/// A valid `Authorization: Bearer` header authenticates the connection;
+/// `hello` then needs no token.
+#[tokio::test]
+async fn test_bearer_header_authenticates_without_a_hello_token() {
+    let server = TestServer::start().await;
+    let mut request = server.ws_url().into_client_request().unwrap();
+    request.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {}", server.token).parse().unwrap(),
     );
-    assert_eq!(result, Some(json!([])));
+    let mut ws = connect_request(request).await;
+    hello(&mut ws, None, None).await;
+    assert!(matches!(
+        next_frame(&mut ws).await,
+        Inbound::Control(ServerFrame::Ready { .. })
+    ));
 }
 
-/// DIRECTIVE: `read_config("anthropic_api_key")` is denied over the WS
-/// `rpc` path WITHOUT ever reaching the registry (the denial short-circuits
-/// in `ws.rs` before `Registry::dispatch`) — verifies the actual network
-/// boundary, not just the pure predicate (that's `src/auth.rs`'s and
-/// `src/commands/config.rs`'s own unit tests).
+/// A wrong token is refused with close code 4401 and no `ready`.
 #[tokio::test]
-async fn test_read_config_secret_key_denied_over_ws() {
-    let server = start_test_server().await;
+async fn test_wrong_token_is_closed_with_4401() {
+    let server = TestServer::start().await;
     let mut ws = connect(&server).await;
-    send_frame(
-        &mut ws,
-        &ClientFrame::Hello {
-            last_seq: None,
-            token: Some(server.token.clone()),
-        },
-    )
-    .await;
-    let _ready = recv_text(&mut ws).await;
-    let _replay_end = recv_text(&mut ws).await;
+    hello(&mut ws, None, Some("definitely-not-the-real-token")).await;
+    assert_eq!(
+        close_code(&mut ws).await,
+        Some(swarmd::ws::CLOSE_UNAUTHORIZED)
+    );
 
-    send_frame(
-        &mut ws,
-        &ClientFrame::Rpc {
-            id: "r1".to_string(),
-            cmd: "read_config".to_string(),
-            args: json!({"key": "anthropic_api_key"}),
-        },
-    )
-    .await;
-
-    let (ok, error) = loop {
-        if let Frame::Control(ServerFrame::RpcResult { ok, error, .. }) =
-            classify(&recv_text(&mut ws).await)
-        {
-            break (ok, error);
-        }
-    };
-    assert!(!ok, "anthropic_api_key must be denied over WS");
-    assert!(error.is_some());
+    // A wrong Bearer header is no better.
+    let mut request = server.ws_url().into_client_request().unwrap();
+    request
+        .headers_mut()
+        .insert("Authorization", "Bearer wrong".parse().unwrap());
+    let mut ws = connect_request(request).await;
+    hello(&mut ws, None, None).await;
+    assert_eq!(
+        close_code(&mut ws).await,
+        Some(swarmd::ws::CLOSE_UNAUTHORIZED)
+    );
 }
 
-/// DIRECTIVE: an ordinary (non-secret) config key still round-trips
-/// successfully over WS — the denial gate is narrow, not a blanket
-/// `read_config` ban.
+/// A connection that never sends `hello` is closed with 1008 once the
+/// handshake deadline passes, Bearer-authenticated or not.
 #[tokio::test]
-async fn test_read_config_ordinary_key_allowed_over_ws() {
-    let server = start_test_server().await;
+async fn test_missing_hello_is_closed_with_1008() {
+    let server = TestServer::start_with(Options {
+        limits: Limits {
+            handshake_deadline: Duration::from_millis(200),
+            ..Limits::default()
+        },
+        ..Options::default()
+    })
+    .await;
     let mut ws = connect(&server).await;
-    send_frame(
-        &mut ws,
-        &ClientFrame::Hello {
-            last_seq: None,
-            token: Some(server.token.clone()),
-        },
-    )
-    .await;
-    let _ready = recv_text(&mut ws).await;
-    let _replay_end = recv_text(&mut ws).await;
+    assert_eq!(close_code(&mut ws).await, Some(1008));
 
-    send_frame(
-        &mut ws,
-        &ClientFrame::Rpc {
-            id: "r1".to_string(),
-            cmd: "read_config".to_string(),
-            args: json!({"key": "max_workers"}),
-        },
-    )
-    .await;
-
-    let ok = loop {
-        if let Frame::Control(ServerFrame::RpcResult { ok, .. }) =
-            classify(&recv_text(&mut ws).await)
-        {
-            break ok;
-        }
-    };
-    assert!(ok, "an ordinary config key must not be denied");
+    let mut request = server.ws_url().into_client_request().unwrap();
+    request.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {}", server.token).parse().unwrap(),
+    );
+    let mut ws = connect_request(request).await;
+    assert_eq!(close_code(&mut ws).await, Some(1008));
 }
 
-/// DIRECTIVE (security-review BLOCK-1, exfiltration vector #1 closed):
-/// `read_file` over WS — reproduced live against a running daemon as
-/// reading `<data_dir>/daemon-token` verbatim — now returns a typed
-/// denial via `Registry::dispatch_remote`'s `RemotePolicy::Denied`,
-/// unconditionally, before the handler (and therefore the path
-/// argument) is ever touched.
-#[tokio::test]
-async fn test_read_file_denied_over_ws() {
-    let server = start_test_server().await;
-    let mut ws = connect(&server).await;
-    send_frame(
-        &mut ws,
-        &ClientFrame::Hello {
-            last_seq: None,
-            token: Some(server.token.clone()),
-        },
-    )
-    .await;
-    let _ready = recv_text(&mut ws).await;
-    let _replay_end = recv_text(&mut ws).await;
+// ── Host / Origin ───────────────────────────────────────────────────────
 
-    // The exact reproduced exfiltration target.
-    let token_path = format!("{}/daemon-token", server.data_dir_str);
-    send_frame(
-        &mut ws,
-        &ClientFrame::Rpc {
-            id: "r1".to_string(),
-            cmd: "read_file".to_string(),
-            args: json!({"path": token_path}),
-        },
-    )
-    .await;
-
-    let (ok, error) = loop {
-        if let Frame::Control(ServerFrame::RpcResult { ok, error, .. }) =
-            classify(&recv_text(&mut ws).await)
-        {
-            break (ok, error);
-        }
-    };
-    assert!(!ok, "read_file must be denied over WS regardless of path");
-    assert!(error.is_some());
-}
-
-/// DIRECTIVE (security-review BLOCK-1): `write_file` over WS is denied
-/// the same way — the poisoning-shaped half of the same vector.
-#[tokio::test]
-async fn test_write_file_denied_over_ws() {
-    let server = start_test_server().await;
-    let mut ws = connect(&server).await;
-    send_frame(
-        &mut ws,
-        &ClientFrame::Hello {
-            last_seq: None,
-            token: Some(server.token.clone()),
-        },
-    )
-    .await;
-    let _ready = recv_text(&mut ws).await;
-    let _replay_end = recv_text(&mut ws).await;
-
-    send_frame(
-        &mut ws,
-        &ClientFrame::Rpc {
-            id: "r1".to_string(),
-            cmd: "write_file".to_string(),
-            args: json!({"path": format!("{}/whatever.txt", server.data_dir_str), "content": "x"}),
-        },
-    )
-    .await;
-
-    let (ok, error) = loop {
-        if let Frame::Control(ServerFrame::RpcResult { ok, error, .. }) =
-            classify(&recv_text(&mut ws).await)
-        {
-            break (ok, error);
-        }
-    };
-    assert!(!ok, "write_file must be denied over WS regardless of path");
-    assert!(error.is_some());
-}
-
-/// DIRECTIVE (security-review FIX-3, closed): a client under a mix of
-/// persistent and ephemeral traffic never observes the event lane
-/// deliver seq numbers out of order. Reproduced (pre-fix) by a
-/// three-channel `select!`-merged design where `replayEnd`/live events
-/// on separate lanes could race; the fix collapses them onto one FIFO
-/// lane. This test emits persistent (`worker_killed`) and ephemeral
-/// (`system_log`) events interleaved directly through the engine (not
-/// via `rpc`, so it isn't bounded by the RPC concurrency cap) and
-/// asserts: every persistent seq is delivered (never dropped), and the
-/// full received seq sequence — whichever ephemeral frames also made it
-/// — is strictly increasing.
-#[tokio::test]
-async fn test_interleaved_persistent_and_ephemeral_events_arrive_in_seq_order() {
-    use swarm_core::events::{SwarmEvent, SystemLogPayload, WorkerKilledPayload};
-
-    let server = start_test_server().await;
-    let mut ws = connect(&server).await;
-    send_frame(
-        &mut ws,
-        &ClientFrame::Hello {
-            last_seq: None,
-            token: Some(server.token.clone()),
-        },
-    )
-    .await;
-    let _ready = recv_text(&mut ws).await;
-    let _replay_end = recv_text(&mut ws).await;
-
-    const N: usize = 200;
-    for i in 0..N {
-        if i % 2 == 0 {
-            server
-                .runtime
-                .sink
-                .emit(SwarmEvent::SystemLog(SystemLogPayload {
-                    level: "info".to_string(),
-                    message: format!("tick {i}"),
-                    target: "test".to_string(),
-                    timestamp: 0,
-                }));
-        } else {
-            server
-                .runtime
-                .sink
-                .emit(SwarmEvent::WorkerKilled(WorkerKilledPayload {
-                    worker_id: uuid::Uuid::new_v4(),
-                }));
-        }
+fn upgrade_status(result: Result<impl std::fmt::Debug, tungstenite::Error>) -> u16 {
+    match result {
+        Err(tungstenite::Error::Http(response)) => response.status().as_u16(),
+        other => panic!("expected an HTTP rejection, got: {other:?}"),
     }
+}
 
-    let expected_persistent_count = N / 2; // the odd-i WorkerKilled emissions — never dropped
-    let mut persistent_seen = 0usize;
-    let mut received_seqs = Vec::new();
-    while persistent_seen < expected_persistent_count {
-        if let Frame::Event(e) = classify(&recv_text(&mut ws).await) {
-            received_seqs.push(e["seq"].as_u64().unwrap());
-            if e["type"] == "worker_killed" {
-                persistent_seen += 1;
-            }
+/// A cross-origin browser page is refused before the upgrade.
+#[tokio::test]
+async fn test_cross_origin_upgrade_is_refused_with_403() {
+    let server = TestServer::start().await;
+    let mut request = server.ws_url().into_client_request().unwrap();
+    request
+        .headers_mut()
+        .insert("Origin", "https://attacker.example.com".parse().unwrap());
+    assert_eq!(
+        upgrade_status(tokio_tungstenite::connect_async(request).await),
+        403
+    );
+}
+
+/// DNS rebinding: a foreign `Host` is refused even on a loopback socket.
+#[tokio::test]
+async fn test_foreign_host_header_is_refused_with_403() {
+    let server = TestServer::start().await;
+    let mut request = server.ws_url().into_client_request().unwrap();
+    request.headers_mut().insert(
+        "Host",
+        format!("evil.example.com:{}", server.addr.port())
+            .parse()
+            .unwrap(),
+    );
+    assert_eq!(
+        upgrade_status(tokio_tungstenite::connect_async(request).await),
+        403
+    );
+}
+
+/// Loopback aliases of the bound address and `--allow-host` names (a
+/// reverse proxy's public origin) are accepted.
+#[tokio::test]
+async fn test_loopback_aliases_and_allowed_hosts_are_accepted() {
+    let server = TestServer::start_with(Options {
+        allow_hosts: vec!["swarm.example.com"],
+        ..Options::default()
+    })
+    .await;
+    for (host, origin) in [
+        (format!("localhost:{}", server.addr.port()), None),
+        (
+            server.addr.to_string(),
+            Some(format!("http://localhost:{}", server.addr.port())),
+        ),
+        (
+            "swarm.example.com".to_owned(),
+            Some("https://swarm.example.com".to_owned()),
+        ),
+    ] {
+        let mut request = server.ws_url().into_client_request().unwrap();
+        request.headers_mut().insert("Host", host.parse().unwrap());
+        if let Some(origin) = &origin {
+            request
+                .headers_mut()
+                .insert("Origin", origin.parse().unwrap());
         }
-    }
-
-    for pair in received_seqs.windows(2) {
+        let mut ws = connect_request(request).await;
+        hello(&mut ws, None, Some(&server.token)).await;
         assert!(
-            pair[0] < pair[1],
-            "received out-of-order seqs {pair:?} in {received_seqs:?} — wire order diverged from seq order"
+            matches!(
+                next_frame(&mut ws).await,
+                Inbound::Control(ServerFrame::Ready { .. })
+            ),
+            "{host} / {origin:?}"
         );
     }
 }
 
-/// DIRECTIVE (security-review FIX-4): firing more `rpc` frames than
-/// `MAX_CONCURRENT_RPC_PER_CONNECTION` allows, back-to-back with no
-/// pacing, must produce at least one typed busy `rpcResult` rather than
-/// spawning an unbounded number of concurrent handler tasks.
+// ── Limits ──────────────────────────────────────────────────────────────
+
+/// Authenticated connections beyond the cap get 503; sockets that never
+/// authenticate do not use up a slot.
 #[tokio::test]
-async fn test_concurrent_rpc_cap_returns_a_typed_busy_result_above_the_limit() {
-    let server = start_test_server().await;
-    let mut ws = connect(&server).await;
-    send_frame(
-        &mut ws,
-        &ClientFrame::Hello {
-            last_seq: None,
-            token: Some(server.token.clone()),
+async fn test_connection_limit_counts_only_authenticated_clients() {
+    let server = TestServer::start_with(Options {
+        limits: Limits {
+            max_connections: 1,
+            ..Limits::default()
         },
+        ..Options::default()
+    })
+    .await;
+
+    // Unauthenticated sockets idling in their handshake.
+    let mut idle = Vec::new();
+    for _ in 0..3 {
+        idle.push(connect(&server).await);
+    }
+    let _first = attach(&server).await;
+
+    let refused = tokio_tungstenite::connect_async(server.ws_url()).await;
+    assert_eq!(upgrade_status(refused), 503);
+}
+
+/// Pending handshakes have their own, smaller pool.
+#[tokio::test]
+async fn test_pending_handshakes_are_capped() {
+    let server = TestServer::start_with(Options {
+        limits: Limits {
+            max_pending_handshakes: 2,
+            ..Limits::default()
+        },
+        ..Options::default()
+    })
+    .await;
+    let _a = connect(&server).await;
+    let _b = connect(&server).await;
+    let refused = tokio_tungstenite::connect_async(server.ws_url()).await;
+    assert_eq!(upgrade_status(refused), 503);
+}
+
+/// Asserts the server ends the connection without sending any frame (no
+/// `ready`).
+async fn assert_closed_without_ready(ws: &mut WsStream) {
+    loop {
+        match tokio::time::timeout(WAIT, ws.next())
+            .await
+            .expect("timed out waiting for the server to close")
+        {
+            Some(Ok(WsMessage::Text(text))) => panic!("expected no frame, got {text}"),
+            Some(Ok(WsMessage::Close(_)) | Err(_)) | None => return,
+            Some(Ok(_)) => {}
+        }
+    }
+}
+
+/// A message over the cap is refused before authentication, whether it
+/// arrives as one frame or fragmented into frames that are each under the
+/// cap. The payload is a VALID `hello` padded past the cap: accepting it
+/// would authenticate the connection and answer `ready`.
+#[tokio::test]
+async fn test_oversized_messages_are_refused_before_authentication() {
+    let server = TestServer::start_with(Options {
+        limits: Limits {
+            max_message_bytes: 64 * 1024,
+            ..Limits::default()
+        },
+        ..Options::default()
+    })
+    .await;
+    let padded_hello = json!({
+        "frame": "hello",
+        "lastSeq": null,
+        "token": server.token,
+        "padding": "x".repeat(80 * 1024),
+    })
+    .to_string();
+
+    let mut ws = connect(&server).await;
+    let _ = ws.send(WsMessage::Text(padded_hello.clone().into())).await;
+    assert_closed_without_ready(&mut ws).await;
+
+    let (head, tail) = padded_hello.split_at(padded_hello.len() / 2);
+    let mut ws = connect(&server).await;
+    for (part, opcode, last) in [(head, Data::Text, false), (tail, Data::Continue, true)] {
+        let frame = Frame::message(part.as_bytes().to_vec(), OpCode::Data(opcode), last);
+        let _ = ws.send(WsMessage::Frame(frame)).await;
+    }
+    assert_closed_without_ready(&mut ws).await;
+}
+
+// ── Replay and ordering ─────────────────────────────────────────────────
+
+/// Replay exact: a client that disconnects mid-stream and reconnects with
+/// `lastSeq` ends up with exactly the sequence an always-connected client
+/// saw, no duplicates and no gaps.
+///
+/// Both collectors count only `session_created`, the one event type this
+/// test produces: the metrics loop's ephemeral `system_metrics` ticks
+/// interleave at timing-dependent points and are never replayed, so
+/// counting every event would make the comparison depend on the runner's
+/// speed.
+#[tokio::test]
+async fn test_reconnect_with_last_seq_replays_exactly_the_missed_events() {
+    let server = TestServer::start().await;
+    let mut client_b = attach(&server).await;
+    let mut client_a = attach(&server).await;
+    let mut driver = attach(&server).await;
+
+    // One at a time: the per-connection RPC cap would reject a burst.
+    for i in 0..30 {
+        let (ok, _, error) = rpc(
+            &mut driver,
+            &format!("r{i}"),
+            "create_session",
+            json!({"name": format!("s{i}"), "config": {}}),
+        )
+        .await;
+        assert!(ok, "create_session #{i} failed: {error:?}");
+    }
+
+    let mut b_seqs = Vec::new();
+    while b_seqs.len() < 30 {
+        if let Inbound::Event(event) = next_frame(&mut client_b).await
+            && event_type(&event) == Some("session_created")
+        {
+            b_seqs.push(event["seq"].as_u64().unwrap());
+        }
+    }
+    let mut a_seqs = Vec::new();
+    while a_seqs.len() < 15 {
+        if let Inbound::Event(event) = next_frame(&mut client_a).await
+            && event_type(&event) == Some("session_created")
+        {
+            a_seqs.push(event["seq"].as_u64().unwrap());
+        }
+    }
+    let last_seen = *a_seqs.last().unwrap();
+    drop(client_a);
+
+    let mut client_a = connect(&server).await;
+    hello(&mut client_a, Some(last_seen), Some(&server.token)).await;
+    assert!(matches!(
+        next_frame(&mut client_a).await,
+        Inbound::Control(ServerFrame::Ready { .. })
+    ));
+    loop {
+        match next_frame(&mut client_a).await {
+            Inbound::Event(event) if event_type(&event) == Some("session_created") => {
+                a_seqs.push(event["seq"].as_u64().unwrap());
+            }
+            Inbound::Control(ServerFrame::ReplayEnd { .. }) => break,
+            _ => {}
+        }
+    }
+    assert_eq!(
+        a_seqs, b_seqs,
+        "live prefix + replayed tail must equal the always-connected sequence"
+    );
+}
+
+/// Persistent and ephemeral events emitted interleaved arrive in strictly
+/// increasing seq order, and no persistent event is dropped.
+#[tokio::test]
+async fn test_interleaved_persistent_and_ephemeral_events_arrive_in_seq_order() {
+    let server = TestServer::start().await;
+    let mut ws = attach(&server).await;
+
+    const N: usize = 200;
+    for i in 0..N {
+        let event = if i % 2 == 0 {
+            SwarmEvent::SystemLog(SystemLogPayload {
+                level: "info".to_owned(),
+                message: format!("tick {i}"),
+                target: "test".to_owned(),
+                timestamp: 0,
+            })
+        } else {
+            SwarmEvent::WorkerKilled(WorkerKilledPayload {
+                worker_id: uuid::Uuid::new_v4(),
+            })
+        };
+        server.runtime.sink.emit(event);
+    }
+
+    let mut persistent = 0;
+    let mut seqs = Vec::new();
+    while persistent < N / 2 {
+        if let Inbound::Event(event) = next_frame(&mut ws).await {
+            seqs.push(event["seq"].as_u64().unwrap());
+            if event_type(&event) == Some("worker_killed") {
+                persistent += 1;
+            }
+        }
+    }
+    assert!(
+        seqs.is_sorted_by(|a, b| a < b),
+        "out-of-order seqs: {seqs:?}"
+    );
+}
+
+/// Persisted history survives a daemon restart: a client reattaching to the
+/// restarted daemon with its `lastSeq` receives exactly the events recorded
+/// after it, even though they were recorded by another process lifetime.
+#[tokio::test]
+async fn test_reattach_after_restart_replays_events_recorded_by_the_new_daemon() {
+    let first = TestServer::start().await;
+    let data_dir = first.data_dir.clone();
+    let token = first.token.clone();
+    let mut client = attach(&first).await;
+    let mut driver = attach(&first).await;
+    for i in 0..3 {
+        let (ok, _, error) = rpc(
+            &mut driver,
+            &format!("a{i}"),
+            "create_session",
+            json!({"name": format!("a{i}"), "config": {}}),
+        )
+        .await;
+        assert!(ok, "{error:?}");
+    }
+    let mut seen = Vec::new();
+    while seen.len() < 3 {
+        if let Inbound::Event(event) = next_frame(&mut client).await
+            && event_type(&event) == Some("session_created")
+        {
+            seen.push(event["seq"].as_u64().unwrap());
+        }
+    }
+    let last_seen = *seen.last().unwrap();
+    drop((driver, client));
+    let dir = first.stop().await;
+
+    let second = TestServer::start_in(data_dir, dir, Options::default()).await;
+    assert_eq!(second.token, token, "the token survives the restart");
+    let mut driver = attach(&second).await;
+    for i in 0..2 {
+        let (ok, _, error) = rpc(
+            &mut driver,
+            &format!("b{i}"),
+            "create_session",
+            json!({"name": format!("b{i}"), "config": {}}),
+        )
+        .await;
+        assert!(ok, "{error:?}");
+    }
+
+    let mut ws = connect(&second).await;
+    hello(&mut ws, Some(last_seen), Some(&token)).await;
+    assert!(matches!(
+        next_frame(&mut ws).await,
+        Inbound::Control(ServerFrame::Ready { .. })
+    ));
+    let mut names = Vec::new();
+    loop {
+        match next_frame(&mut ws).await {
+            Inbound::Event(event) => {
+                assert!(
+                    event["seq"].as_u64().unwrap() > last_seen,
+                    "replayed an old event: {event}"
+                );
+                if event_type(&event) == Some("session_created") {
+                    names.push(event["payload"]["name"].as_str().unwrap().to_owned());
+                }
+            }
+            Inbound::Control(ServerFrame::ReplayEnd { .. }) => break,
+            Inbound::Control(_) => {}
+        }
+    }
+    assert_eq!(names, ["b0", "b1"]);
+}
+
+/// The browser client's `lastSeq` also counts ephemeral events, which
+/// consume seqs but are never persisted. After a restart, events the new
+/// daemon records must still sort after everything the client saw.
+#[tokio::test]
+#[ignore = "needs swarm-core's restart-monotonic seqs (engine reserves seqs in the log); un-ignore when that lands"]
+async fn test_reattach_after_restart_with_an_ephemeral_tail_keeps_new_events() {
+    let first = TestServer::start().await;
+    let data_dir = first.data_dir.clone();
+    let token = first.token.clone();
+    let mut ws = attach(&first).await;
+    let (ok, _, _) = rpc(
+        &mut ws,
+        "a",
+        "create_session",
+        json!({"name": "a", "config": {}}),
     )
     .await;
-    let _ready = recv_text(&mut ws).await;
-    let _replay_end = recv_text(&mut ws).await;
+    assert!(ok);
+    for i in 0..5 {
+        first
+            .runtime
+            .sink
+            .emit(SwarmEvent::SystemLog(SystemLogPayload {
+                level: "info".to_owned(),
+                message: format!("tail {i}"),
+                target: "test".to_owned(),
+                timestamp: 0,
+            }));
+    }
+    let mut last_seen = 0;
+    let mut tail = 0;
+    while tail < 5 {
+        if let Inbound::Event(event) = next_frame(&mut ws).await {
+            last_seen = last_seen.max(event["seq"].as_u64().unwrap());
+            if event_type(&event) == Some("system_log") && event["payload"]["target"] == "test" {
+                tail += 1;
+            }
+        }
+    }
+    drop(ws);
+    let dir = first.stop().await;
 
-    const N: usize = 20; // comfortably above the 8-per-connection cap
+    let second = TestServer::start_in(data_dir, dir, Options::default()).await;
+    let mut driver = attach(&second).await;
+    let (ok, _, _) = rpc(
+        &mut driver,
+        "b",
+        "create_session",
+        json!({"name": "b", "config": {}}),
+    )
+    .await;
+    assert!(ok);
+
+    let mut ws = connect(&second).await;
+    hello(&mut ws, Some(last_seen), Some(&token)).await;
+    let mut names = Vec::new();
+    loop {
+        match next_frame(&mut ws).await {
+            Inbound::Event(event) if event_type(&event) == Some("session_created") => {
+                names.push(event["payload"]["name"].as_str().unwrap().to_owned());
+            }
+            Inbound::Control(ServerFrame::ReplayEnd { .. }) => break,
+            _ => {}
+        }
+    }
+    assert_eq!(
+        names,
+        ["b"],
+        "the event recorded after the restart must be replayed"
+    );
+}
+
+// ── RPC ─────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_rpc_round_trip_list_workers() {
+    let server = TestServer::start().await;
+    let mut ws = attach(&server).await;
+    let (ok, result, error) = rpc(&mut ws, "abc", "list_workers", json!({})).await;
+    assert!(ok, "list_workers failed: {error:?}");
+    assert_eq!(result, Some(json!([])));
+}
+
+/// The remote policy is enforced at the network boundary: secret config
+/// keys are denied by `Registry::dispatch_remote`'s `SecretFiltered` gate
+/// (the predicate is `swarm_core::commands::config::is_secret_key`) before
+/// the handler runs, for reads and writes alike.
+#[tokio::test]
+async fn test_secret_config_keys_are_denied_over_ws() {
+    let server = TestServer::start().await;
+    let mut ws = attach(&server).await;
+    let (ok, _, error) = rpc(
+        &mut ws,
+        "r",
+        "read_config",
+        json!({"key": "anthropic_api_key"}),
+    )
+    .await;
+    assert!(
+        !ok && error.is_some(),
+        "reading anthropic_api_key must be denied"
+    );
+    let (ok, _, error) = rpc(
+        &mut ws,
+        "w",
+        "write_config",
+        json!({"key": "anthropic_api_key", "value": "sk-ant-planted"}),
+    )
+    .await;
+    assert!(
+        !ok && error.is_some(),
+        "writing anthropic_api_key must be denied"
+    );
+    let config =
+        std::fs::read_to_string(server.data_dir.join("swarm-config.json")).unwrap_or_default();
+    assert!(
+        !config.contains("sk-ant-planted"),
+        "the denied write must not persist"
+    );
+}
+
+/// The gate is narrow: an ordinary key still round-trips.
+#[tokio::test]
+async fn test_ordinary_config_key_is_allowed_over_ws() {
+    let server = TestServer::start().await;
+    let mut ws = attach(&server).await;
+    let (ok, _, error) = rpc(&mut ws, "r", "read_config", json!({"key": "max_workers"})).await;
+    assert!(ok, "an ordinary key must not be denied: {error:?}");
+}
+
+/// `read_file`/`write_file` are denied outright over WS (`RemotePolicy::Denied`),
+/// whatever the path: the daemon token itself was the reproduced target.
+#[tokio::test]
+async fn test_file_commands_are_denied_over_ws() {
+    let server = TestServer::start().await;
+    let mut ws = attach(&server).await;
+    let token_path = server.data_dir.join("daemon-token");
+    let (ok, _, error) = rpc(&mut ws, "r", "read_file", json!({"path": token_path})).await;
+    assert!(!ok && error.is_some(), "read_file must be denied");
+    let (ok, _, error) = rpc(
+        &mut ws,
+        "w",
+        "write_file",
+        json!({"path": server.data_dir.join("x.txt"), "content": "x"}),
+    )
+    .await;
+    assert!(!ok && error.is_some(), "write_file must be denied");
+}
+
+/// Past the per-connection cap, an `rpc` is answered at once with a busy
+/// error instead of spawning more handler tasks.
+#[tokio::test]
+async fn test_concurrent_rpc_cap_returns_a_busy_result() {
+    let server = TestServer::start().await;
+    let mut ws = attach(&server).await;
+    const N: usize = 20;
     for i in 0..N {
         send_frame(
             &mut ws,
             &ClientFrame::Rpc {
                 id: format!("c{i}"),
-                cmd: "list_workers".to_string(),
+                cmd: "list_workers".to_owned(),
                 args: json!({}),
             },
         )
         .await;
     }
-
-    let mut saw_busy = false;
-    let mut results = 0usize;
-    while results < N {
-        if let Frame::Control(ServerFrame::RpcResult { ok, error, .. }) =
-            classify(&recv_text(&mut ws).await)
-        {
-            results += 1;
-            if !ok
-                && error
-                    .as_ref()
-                    .and_then(|e| e.as_str())
-                    .is_some_and(|s| s.contains("Too Many Concurrent"))
+    let mut busy = false;
+    for _ in 0..N {
+        loop {
+            if let Inbound::Control(ServerFrame::RpcResult { ok, error, .. }) =
+                next_frame(&mut ws).await
             {
-                saw_busy = true;
+                busy |= !ok
+                    && error
+                        .as_ref()
+                        .and_then(Value::as_str)
+                        .is_some_and(|e| e.contains("Too Many Concurrent"));
+                break;
             }
         }
     }
+    assert!(busy, "expected a busy rpcResult for {N} unpaced RPCs");
+}
+
+/// An `rpc` frame that does not parse is still answered when its `id` is
+/// readable, instead of leaving the client to time out.
+#[tokio::test]
+async fn test_malformed_rpc_frame_is_answered() {
+    let server = TestServer::start().await;
+    let mut ws = attach(&server).await;
+    ws.send(WsMessage::Text(
+        r#"{"frame":"rpc","id":"bad","cmd":42}"#.into(),
+    ))
+    .await
+    .unwrap();
+    let (ok, _, error) = rpc_reply(&mut ws, "bad").await;
+    assert!(!ok);
     assert!(
-        saw_busy,
-        "expected at least one busy-rejected rpcResult firing {N} RPCs against an \
-         8-concurrent-per-connection cap with no pacing"
+        error
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .starts_with("Malformed RPC Frame")
     );
 }
 
-/// DIRECTIVE (Origin/Host — network-layer half of the auth matrix): a
-/// cross-origin browser-style upgrade is refused with HTTP 403 before
-/// the WS handshake even begins.
+// ── Shutdown ────────────────────────────────────────────────────────────
+
+/// Cancelling the shutdown token closes every client with 1001 and lets
+/// `serve` return.
 #[tokio::test]
-async fn test_cross_origin_upgrade_is_refused_with_403() {
-    let server = start_test_server().await;
-
-    let mut request = format!("ws://{}/ws", server.addr)
-        .into_client_request()
+async fn test_shutdown_closes_clients_with_1001() {
+    let server = TestServer::start().await;
+    let mut ws = attach(&server).await;
+    server.state.shutdown_token().cancel();
+    assert_eq!(close_code(&mut ws).await, Some(1001));
+    let TestServer { server, .. } = server;
+    tokio::time::timeout(WAIT, server)
+        .await
+        .unwrap()
+        .unwrap()
         .unwrap();
-    request
-        .headers_mut()
-        .insert("Origin", "https://attacker.example.com".parse().unwrap());
-
-    let result = tokio_tungstenite::connect_async(request).await;
-    match result {
-        Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
-            assert_eq!(resp.status(), 403);
-        }
-        other => panic!("expected an HTTP 403 rejection, got: {other:?}"),
-    }
 }
 
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+// ── --serve-ui ──────────────────────────────────────────────────────────
 
-// ── Process-spawning tests: drive the REAL `swarmd` binary ──────────
-//
-// Everything above uses the `swarmd` LIBRARY target in-process. These
-// two tests spawn the actual compiled `[[bin]] swarmd` via
-// `std::process::Command` (`CARGO_BIN_EXE_swarmd`, set by cargo for
-// integration tests in a package with a matching bin target) — the
-// bugs they guard against (BLOCK-2's mint-before-gate ordering,
-// cross-process single-instance lock collision) are only reproducible
-// through `main()`'s actual argv/exit-code/stderr surface, not the
-// library functions it calls.
+fn web_bundle() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("index.html"),
+        "<!doctype html><title>SWARM</title>",
+    )
+    .unwrap();
+    std::fs::create_dir(dir.path().join("assets")).unwrap();
+    std::fs::write(dir.path().join("assets").join("app-1234.js"), "export {};").unwrap();
+    std::fs::write(dir.path().join(".env"), "SECRET=1").unwrap();
+    dir
+}
 
-mod bin {
-    use std::io::{BufRead, BufReader};
-    use std::path::PathBuf;
-    use std::process::{Child, Command, Stdio};
-    use std::time::{Duration, Instant};
+#[tokio::test]
+async fn test_serve_ui_security_headers_caching_and_fallbacks() {
+    let bundle = web_bundle();
+    let server = TestServer::start_with(Options {
+        serve_ui: Some(bundle.path().to_path_buf()),
+        ..Options::default()
+    })
+    .await;
+    let host = server.addr.to_string();
 
-    pub fn swarmd_path() -> PathBuf {
-        PathBuf::from(env!("CARGO_BIN_EXE_swarmd"))
+    let (status, headers, body) = http_get(server.addr, "/", &host).await;
+    assert_eq!(status, 200);
+    assert!(body.contains("<title>SWARM</title>"));
+    assert_eq!(
+        header(&headers, "content-security-policy"),
+        Some(swarmd::serve_ui::CSP)
+    );
+    let csp = swarmd::serve_ui::CSP;
+    assert!(csp.contains("frame-ancestors 'none'"));
+    assert!(
+        csp.contains("connect-src 'self';"),
+        "no ws:/wss: wildcard: {csp}"
+    );
+    assert!(!csp.contains("unsafe-inline"));
+    for (name, value) in swarmd::serve_ui::SECURITY_HEADERS {
+        assert_eq!(header(&headers, name.as_str()), Some(value), "{name}");
+    }
+    assert_eq!(header(&headers, "cache-control"), Some("no-cache"));
+
+    // Client-side routes fall back to index.html.
+    let (status, _, body) = http_get(server.addr, "/workers/abc", &host).await;
+    assert_eq!(status, 200);
+    assert!(body.contains("<title>SWARM</title>"));
+
+    // Hashed assets are immutable; a missing one is a real 404.
+    let (status, headers, _) = http_get(server.addr, "/assets/app-1234.js", &host).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        header(&headers, "cache-control"),
+        Some("public, max-age=31536000, immutable")
+    );
+    let (status, _, _) = http_get(server.addr, "/assets/missing.js", &host).await;
+    assert_eq!(status, 404);
+
+    // Hidden files are never served.
+    for path in ["/.env", "/%2eenv", "/assets/.hidden"] {
+        let (status, _, _) = http_get(server.addr, path, &host).await;
+        assert_eq!(status, 404, "{path}");
     }
 
-    pub fn fresh_data_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("swarmd-bin-it-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    // The static routes sit behind the same Host allow-list as /ws.
+    let (status, _, _) = http_get(server.addr, "/", "evil.example.com").await;
+    assert_eq!(status, 403);
+}
 
-    /// Runs `swarmd` to completion (it must exit on its own — used for
-    /// the refused/gate-rejected paths, which exit immediately without
-    /// ever binding) and returns `(exit_success, stderr)`.
-    pub fn run_to_completion(args: &[&str]) -> (bool, String) {
-        let output = Command::new(swarmd_path())
+// ── The compiled binary ─────────────────────────────────────────────────
+
+fn swarmd_bin() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_swarmd"))
+}
+
+/// Runs `swarmd` to completion: `(exit code, stdout, stderr)`.
+fn run(args: &[&str]) -> (Option<i32>, String, String) {
+    let output = swarmd_bin()
+        .args(args)
+        .output()
+        .expect("failed to run swarmd");
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// A background `swarmd` process. Its stdout and stderr are drained on
+/// threads (so the child never blocks on a full pipe) and stdout lines are
+/// forwarded to a channel. Killed on drop.
+struct Daemon {
+    child: Child,
+    lines: std_mpsc::Receiver<String>,
+    stderr: Option<std::thread::JoinHandle<String>>,
+}
+
+impl Daemon {
+    fn spawn(args: &[&str]) -> Self {
+        let mut child = swarmd_bin()
             .args(args)
-            .output()
-            .expect("failed to spawn the swarmd binary");
-        (
-            output.status.success(),
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        )
-    }
-
-    /// Spawns `swarmd` in the background and blocks (up to 5s) until it
-    /// prints its "Listening" line, proving it acquired the
-    /// single-instance lock and successfully bound. Kills the child on
-    /// `Drop` so a panicking assertion never leaks a background daemon.
-    pub struct BackgroundDaemon {
-        child: Child,
-    }
-
-    impl BackgroundDaemon {
-        pub fn spawn_and_wait_until_listening(args: &[&str]) -> Self {
-            let mut child = Command::new(swarmd_path())
-                .args(args)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .expect("failed to spawn the swarmd binary");
-
-            let stdout = child.stdout.take().expect("child stdout was not piped");
-            let mut reader = BufReader::new(stdout);
-            let deadline = Instant::now() + Duration::from_secs(5);
-            let mut line = String::new();
-            loop {
-                line.clear();
-                if Instant::now() > deadline {
-                    let _ = child.kill();
-                    panic!("swarmd did not print its Listening line within 5s");
-                }
-                match reader.read_line(&mut line) {
-                    Ok(0) => {
-                        let _ = child.kill();
-                        panic!("swarmd exited before printing its Listening line");
-                    }
-                    Ok(_) => {
-                        if line.contains("Listening") {
-                            break;
-                        }
-                    }
-                    Err(_) => continue,
-                }
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn swarmd");
+        let stdout = child.stdout.take().unwrap();
+        let (tx, lines) = std_mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                let _ = tx.send(line);
             }
-            Self { child }
+        });
+        let mut stderr = child.stderr.take().unwrap();
+        let stderr = std::thread::spawn(move || {
+            let mut text = String::new();
+            let _ = stderr.read_to_string(&mut text);
+            text
+        });
+        Self {
+            child,
+            lines,
+            stderr: Some(stderr),
         }
     }
 
-    impl Drop for BackgroundDaemon {
-        fn drop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+    /// Waits for the "Listening On" line and returns it.
+    fn listening_line(&mut self) -> String {
+        let deadline = Instant::now() + WAIT;
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            match self.lines.recv_timeout(left) {
+                Ok(line) if line.contains("Listening On") => return line,
+                Ok(_) => {}
+                Err(_) => break,
+            }
         }
+        let _ = self.child.kill();
+        panic!("swarmd did not print its Listening line: {}", self.stderr());
+    }
+
+    /// Waits for the process to exit and returns its exit code.
+    fn wait(&mut self) -> Option<i32> {
+        let deadline = Instant::now() + WAIT;
+        while Instant::now() < deadline {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status.code();
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("swarmd did not exit in time");
+    }
+
+    /// Everything the process wrote to stderr (waits for it to exit).
+    fn stderr(&mut self) -> String {
+        let _ = self.child.kill();
+        self.stderr
+            .take()
+            .map(|handle| handle.join().unwrap())
+            .unwrap_or_default()
     }
 }
 
-/// DIRECTIVE (security-review BLOCK-2, closed): a fresh data directory
-/// combined with a non-loopback `--bind` is refused — AND, critically,
-/// refused AGAIN on a second identical invocation. Before the fix, the
-/// first (refused) run still minted `daemon-token` as a side effect of
-/// the old mint-before-gate ordering, so the second run found a
-/// "pre-existing" token and slipped through the gate it had just
-/// failed.
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn path_str(path: &Path) -> &str {
+    path.to_str().unwrap()
+}
+
+/// The non-loopback gate refuses a fresh data directory, and keeps refusing:
+/// a refused run must not mint the token that would let a second identical
+/// run through.
 #[test]
 fn test_fresh_dir_non_loopback_bind_is_refused_twice_in_a_row() {
-    let data_dir = bin::fresh_data_dir();
-    let data_dir_str = data_dir.to_string_lossy().into_owned();
-
-    let (ok1, stderr1) =
-        bin::run_to_completion(&["--bind", "0.0.0.0:0", "--data-dir", &data_dir_str]);
-    assert!(!ok1, "first run against a fresh dir must be refused");
-    assert!(
-        stderr1.contains("Refusing To Bind A Non-Loopback Address"),
-        "unexpected stderr: {stderr1}"
-    );
-    assert!(
-        !data_dir.join("daemon-token").exists(),
-        "a refused run must NOT mint a token file — BLOCK-2 regression"
-    );
-
-    // The second, identical invocation — the actual bypass this test
-    // guards against.
-    let (ok2, stderr2) =
-        bin::run_to_completion(&["--bind", "0.0.0.0:0", "--data-dir", &data_dir_str]);
-    assert!(
-        !ok2,
-        "second run against the SAME fresh dir must ALSO be refused"
-    );
-    assert!(
-        stderr2.contains("Refusing To Bind A Non-Loopback Address"),
-        "unexpected stderr on the second run: {stderr2}"
-    );
-
-    let _ = std::fs::remove_dir_all(&data_dir);
+    let dir = tempfile::tempdir().unwrap();
+    for attempt in 1..=2 {
+        let (code, _, stderr) = run(&["--bind", "0.0.0.0:0", "--data-dir", path_str(dir.path())]);
+        assert_eq!(code, Some(1), "attempt {attempt}: {stderr}");
+        assert!(
+            stderr.contains("Refusing To Bind A Non-Loopback Address"),
+            "{stderr}"
+        );
+        assert!(
+            !dir.path().join("daemon-token").exists(),
+            "attempt {attempt} minted a token"
+        );
+    }
 }
 
-/// A loopback bind on a fresh dir is never subject to the non-loopback
-/// gate — sanity check alongside the refusal test above so the two
-/// don't silently drift into both-refused.
+/// A malformed token file does not satisfy the gate and is never
+/// overwritten, not even by a loopback run.
 #[test]
-fn test_fresh_dir_loopback_bind_mints_a_token_and_is_not_refused() {
-    let data_dir = bin::fresh_data_dir();
-    let daemon = bin::BackgroundDaemon::spawn_and_wait_until_listening(&[
-        "--bind",
-        "127.0.0.1:0",
-        "--data-dir",
-        &data_dir.to_string_lossy(),
-    ]);
-    assert!(data_dir.join("daemon-token").exists());
-    drop(daemon);
-    let _ = std::fs::remove_dir_all(&data_dir);
+fn test_malformed_token_file_is_refused_and_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let token_file = dir.path().join("daemon-token");
+    std::fs::write(&token_file, "x").unwrap();
+    let (code, _, stderr) = run(&["--bind", "0.0.0.0:0", "--data-dir", path_str(dir.path())]);
+    assert_eq!(code, Some(1));
+    assert!(
+        stderr.contains("Refusing To Bind A Non-Loopback Address"),
+        "{stderr}"
+    );
+    let (code, _, stderr) = run(&["--bind", "127.0.0.1:0", "--data-dir", path_str(dir.path())]);
+    assert_eq!(code, Some(1));
+    assert!(
+        stderr.contains("Failed To Establish The Daemon Token"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read_to_string(&token_file).unwrap(), "x");
 }
 
-/// DIRECTIVE (security-review FIX-5): the single-instance lock's
-/// cross-process collision, driven for real — two ACTUAL `swarmd`
-/// processes against the same data directory, not a same-process
-/// `Runtime::start` double-call (which only proves the in-process lock
-/// primitive works, not that the OS-level advisory lock actually
-/// survives being held by a genuinely different process).
+/// `--bind 127.0.0.1:0` serves on the address it prints, and the printed
+/// line carries no token when stdout is not a terminal.
+#[tokio::test]
+async fn test_port_zero_bind_serves_the_printed_address() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::spawn(&["--bind", "127.0.0.1:0", "--data-dir", path_str(dir.path())]);
+    let line = daemon.listening_line();
+    assert!(
+        !line.contains("#t="),
+        "the token must not reach a non-terminal log: {line}"
+    );
+    assert!(
+        line.contains("swarmd connect-url --bind 127.0.0.1:"),
+        "{line}"
+    );
+
+    let url = line
+        .split_whitespace()
+        .find(|word| word.starts_with("http://"))
+        .unwrap();
+    let addr = url
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_owned();
+    assert_ne!(addr, "127.0.0.1:0");
+    let token = DaemonToken::load(dir.path()).unwrap().unwrap();
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
+        .await
+        .expect("the printed address accepts WebSocket upgrades");
+    hello(&mut ws, None, Some(token.as_str())).await;
+    assert!(matches!(
+        next_frame(&mut ws).await,
+        Inbound::Control(ServerFrame::Ready { .. })
+    ));
+}
+
+/// A second daemon on the same data directory exits with status 75 and a
+/// message naming the holder. Two real processes, so the OS-level lock is
+/// what is tested.
 #[test]
-fn test_second_daemon_on_the_same_data_dir_is_refused_by_the_single_instance_lock() {
-    let data_dir = bin::fresh_data_dir();
-    let data_dir_str = data_dir.to_string_lossy().into_owned();
+fn test_second_daemon_on_the_same_data_dir_exits_75() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut first = Daemon::spawn(&["--bind", "127.0.0.1:0", "--data-dir", path_str(dir.path())]);
+    first.listening_line();
 
-    let first = bin::BackgroundDaemon::spawn_and_wait_until_listening(&[
-        "--bind",
-        "127.0.0.1:0",
+    let (code, _, stderr) = run(&["--bind", "127.0.0.1:0", "--data-dir", path_str(dir.path())]);
+    assert_eq!(code, Some(75), "{stderr}");
+    assert!(stderr.contains("SWARM Is Already Running"), "{stderr}");
+    assert!(
+        stderr.contains("swarmd"),
+        "the message names the holding shell: {stderr}"
+    );
+}
+
+#[test]
+fn test_help_version_and_usage_errors() {
+    let (code, stdout, _) = run(&["--help"]);
+    assert_eq!(code, Some(0));
+    assert!(stdout.contains("Usage: swarmd"));
+    let (code, stdout, _) = run(&["--version"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        stdout.trim(),
+        format!("swarmd {}", env!("CARGO_PKG_VERSION"))
+    );
+    for args in [&["--bind"][..], &["--nope"], &["--bind", "not-an-address"]] {
+        let (code, _, stderr) = run(args);
+        assert_eq!(code, Some(2), "{args:?}: {stderr}");
+    }
+}
+
+/// `swarmd connect-url` prints the tokenized URL without ever minting.
+#[test]
+fn test_connect_url_prints_the_token_url() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, _, stderr) = run(&["connect-url", "--data-dir", path_str(dir.path())]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(
+        !dir.path().join("daemon-token").exists(),
+        "connect-url must never mint"
+    );
+
+    let token = DaemonToken::load_or_create(dir.path()).unwrap().token;
+    let (code, stdout, _) = run(&[
+        "connect-url",
         "--data-dir",
-        &data_dir_str,
+        path_str(dir.path()),
+        "--bind",
+        "0.0.0.0:9000",
     ]);
-
-    let (ok2, stderr2) =
-        bin::run_to_completion(&["--bind", "127.0.0.1:0", "--data-dir", &data_dir_str]);
-    assert!(!ok2, "a second daemon on the same data dir must be refused");
-    assert!(
-        stderr2.contains("SWARM Is Already Running"),
-        "expected the lock-collision message, got: {stderr2}"
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        stdout.trim(),
+        format!("http://127.0.0.1:9000/#t={}", token.as_str())
     );
-    // FIX-7's companion: the message names which shell holds the lock.
-    assert!(
-        stderr2.contains("swarmd"),
-        "expected the lock message to name the holding shell, got: {stderr2}"
-    );
+}
 
-    drop(first);
-    let _ = std::fs::remove_dir_all(&data_dir);
+/// SIGTERM (what systemd and launchd send) shuts down gracefully: exit 0,
+/// and the lock is released for the next daemon.
+#[cfg(unix)]
+#[test]
+fn test_sigterm_shuts_down_gracefully_and_releases_the_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let args = ["--bind", "127.0.0.1:0", "--data-dir", path_str(dir.path())];
+    let mut daemon = Daemon::spawn(&args);
+    daemon.listening_line();
+    let status = Command::new("kill")
+        .args(["-TERM", &daemon.child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert_eq!(daemon.wait(), Some(0));
+    let stderr = daemon.stderr();
+    assert!(stderr.contains("swarmd stopped"), "{stderr}");
+
+    let mut next = Daemon::spawn(&args);
+    next.listening_line();
 }

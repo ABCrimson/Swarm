@@ -1,124 +1,146 @@
-//! Authentication: the daemon token, and Origin/Host validation for the
-//! WS upgrade. Headless-daemon plan Phase 2 item 8: "never
-//! unauthenticated, no flag to make it so."
+//! Who may talk to the daemon: the bearer token, and the `Host`/`Origin`
+//! allow-list every request passes before it reaches a route. There is no
+//! unauthenticated mode and no flag that enables one.
 //!
-//! - **Token**: 256 bits from `getrandom`, hex-encoded, persisted at
-//!   `<data_dir>/daemon-token` so it survives restarts (a client's
-//!   saved fragment URL keeps working) — 0600 on Unix, a current-user-only
-//!   DACL via `icacls` on Windows (simplest correct, per the plan's own
-//!   note; the `windows` crate is the documented alternative if `icacls`
-//!   ever proves insufficient). Restrictive permissions are re-applied
-//!   on every load, not just at mint time, in case they were loosened
-//!   out-of-band; an `icacls` failure escalates to a hard startup error
-//!   when binding non-loopback (see [`DaemonToken::load_or_create`]'s
-//!   doc) rather than a silent warning.
-//! - **Non-loopback gate**: `--bind` to a non-loopback address is
-//!   refused unless a token file ALREADY existed BEFORE this run — the
-//!   operator must have completed at least one loopback-bound run
-//!   first (where the token is minted and the connect URL is printed),
-//!   so a fresh install can never be pointed at `0.0.0.0` blind.
-//!   **security-review BLOCK-2**: the existence check
-//!   ([`DaemonToken::exists`]) must run, and the gate must be evaluated,
-//!   BEFORE [`DaemonToken::load_or_create`] is ever called — the two
-//!   are deliberately separate functions so a refused run cannot mint
-//!   the very token file that would let a SECOND identical invocation
-//!   slip through the gate it just failed. `swarmd::main` is the
-//!   caller that orders these correctly; this module only supplies the
-//!   two operations.
-//! - **Compare**: constant-time (`subtle`), so response timing cannot
-//!   leak how many leading bytes of a guessed token matched.
-//! - **Origin/Host**: WebSocket upgrades are exempt from CORS — without
-//!   this check, any web page the user's browser visits could open a
-//!   WS connection to a localhost daemon (and DNS rebinding could reach
-//!   it from off-box). `Host` must match the daemon's own bind
-//!   host:port; `Origin`, when present, must match `Host`'s host:port
-//!   too. Host/port splitting is bracket-aware (`[::1]:8787`) and
-//!   handles bare (portless) IPv6 addresses — see [`split_host_port`]
-//!   (security-review FIX-6; a naive `str::split(':')` mangles every
-//!   IPv6 form, silently treating `::1` as never-loopback).
+//! # The daemon token
+//!
+//! 256 bits from `getrandom`, hex-encoded (64 characters), persisted at
+//! `<data_dir>/daemon-token` so a client's saved connect URL keeps working
+//! across restarts.
+//!
+//! - **Created atomically, already private.** A fresh token is written to a
+//!   temporary file (mode `0600` on Unix; on Windows its DACL is reduced to
+//!   the current user's SID before it gets its real name), synced, and then
+//!   linked into place with a no-clobber rename. No reader can ever observe
+//!   a partial token or a world-readable one, and two racing first runs
+//!   converge on whichever file landed first.
+//! - **Validated on load.** Only exactly 64 hex characters are accepted. A
+//!   malformed file is an error, never silently replaced: the operator
+//!   deletes it to mint a new one.
+//! - **Permissions re-applied on every load**, in case they were loosened
+//!   out of band. The outcome is reported in [`LoadedToken::permissions`];
+//!   `main` treats a failure as fatal when binding a non-loopback address
+//!   and as a warning on loopback.
+//! - **Non-loopback gate.** `--bind` to a non-loopback address is refused
+//!   unless a valid token file ALREADY exists, so a fresh install can never
+//!   be pointed at `0.0.0.0` blind: the operator first completes one
+//!   loopback run, which mints the token and prints the connect URL.
+//!   [`DaemonToken::exists`] is a pure check and must be evaluated BEFORE
+//!   [`DaemonToken::load_or_create`]; minting first would let a refused run
+//!   create the very file that lets an identical second run through.
+//! - **Constant-time comparison** (`subtle`), so response timing does not
+//!   reveal how many leading bytes of a guess matched.
+//!
+//! # The `Host`/`Origin` allow-list
+//!
+//! WebSocket upgrades are exempt from CORS, and a DNS-rebinding page can
+//! make a browser send requests to a loopback daemon under an attacker's
+//! host name. [`HostPolicy::check`] therefore runs on EVERY request (the
+//! static `--serve-ui` routes as well as `/ws`). A `Host` header (and an
+//! `Origin`, when the client sends one) is accepted when it names:
+//!
+//! - the concrete local address the TCP connection arrived on, as an IP
+//!   literal with the same port (this is what makes `--bind 0.0.0.0` usable:
+//!   a LAN client's `Host: 192.168.1.5:8787` names the interface it reached);
+//! - any loopback spelling (`localhost`, `127.0.0.0/8`, `::1`, IPv4-mapped
+//!   forms) with the same port, when the connection arrived on loopback;
+//! - an operator-supplied `--allow-host NAME[:PORT]` entry, for reverse
+//!   proxies and MagicDNS names. An entry without a port matches any port.
+//!
+//! Anything else, including every DNS name that is not explicitly allowed,
+//! is rejected with 403. Parsing goes through `http`'s own `Authority`/`Uri`
+//! parsers (bracketed IPv6, default ports by scheme, case-insensitive
+//! names), not hand-rolled string splitting.
 
+use std::fmt;
+use std::io::{self, Write};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
+use axum::http::Uri;
+use axum::http::uri::Authority;
 use subtle::ConstantTimeEq;
 
 const TOKEN_FILE: &str = "daemon-token";
 
-/// The 256-bit daemon token, hex-encoded (64 chars).
+/// Length of the hex-encoded token: 32 random bytes, two characters each.
+pub const TOKEN_HEX_LEN: usize = 64;
+
+/// The 256-bit daemon token, hex-encoded.
+///
+/// `Debug` is redacted: the token is equivalent to shell access as the user
+/// running `swarmd` and must never reach a log line.
 #[derive(Clone)]
-pub struct DaemonToken(String);
+pub struct DaemonToken(Box<str>);
+
+impl fmt::Debug for DaemonToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("DaemonToken(<redacted>)")
+    }
+}
+
+/// Result of [`DaemonToken::load_or_create`].
+#[derive(Debug)]
+pub struct LoadedToken {
+    pub token: DaemonToken,
+    /// `true` when this call created the token file.
+    pub minted: bool,
+    /// Outcome of restricting the token file to the current user (`0600` on
+    /// Unix, a current-user-SID-only DACL on Windows). The caller decides
+    /// how severe a failure is; the error explains what went wrong.
+    pub permissions: io::Result<()>,
+}
 
 impl DaemonToken {
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// Constant-time equality — never short-circuits on the first
-    /// mismatched byte.
+    /// Constant-time equality: never short-circuits on the first mismatched
+    /// byte. The length check up front leaks nothing useful, because the
+    /// token length is fixed and public.
     pub fn matches(&self, candidate: &str) -> bool {
-        // Constant-time comparators require equal-length inputs; a
-        // length mismatch is itself not a useful timing oracle (token
-        // length is fixed/public — 64 hex chars), so comparing lengths
-        // up front and returning false is fine.
         self.0.len() == candidate.len() && bool::from(self.0.as_bytes().ct_eq(candidate.as_bytes()))
     }
 
-    /// `true` if a token file already exists at `<data_dir>/daemon-token`
-    /// — a PURE existence check with no side effects (does not create,
-    /// read, or touch the file). This is the non-loopback gate's ONLY
-    /// legitimate input; calling [`Self::load_or_create`] first and
-    /// inspecting its `pre_existing` flag is the exact bug
-    /// security-review BLOCK-2 closed (that flag is `true` on a SECOND
-    /// call precisely because the first call minted the file, even when
-    /// the first call's caller went on to refuse and exit).
+    /// `true` if `<data_dir>/daemon-token` holds a valid token. A pure check:
+    /// it never creates, rewrites or re-permissions anything, which is what
+    /// the non-loopback bind gate relies on (see the module doc).
     pub fn exists(data_dir: &Path) -> bool {
-        token_path(data_dir).is_file()
+        matches!(Self::load(data_dir), Ok(Some(_)))
     }
 
-    /// Loads the existing token at `<data_dir>/daemon-token`, or mints
-    /// and persists a fresh one. Returns `(token, pre_existing,
-    /// perms_restricted)`:
+    /// Reads the token at `<data_dir>/daemon-token` without ever creating
+    /// or modifying it. `Ok(None)` means no token file exists yet.
     ///
-    /// - `pre_existing` — `false` only when this call minted a brand
-    ///   new token. Informational only; the non-loopback bind gate must
-    ///   use [`Self::exists`] BEFORE calling this, never this flag (see
-    ///   the module doc's BLOCK-2 note) — this method mints
-    ///   unconditionally on a missing/empty file regardless of caller
-    ///   intent, so by the time it returns, the gate decision must
-    ///   already have been made.
-    /// - `perms_restricted` — `true` if the restrictive-permissions
-    ///   step (0600 on Unix, an `icacls` current-user-only DACL on
-    ///   Windows) succeeded, re-applied on EVERY load (not just at mint
-    ///   time, in case permissions were loosened out-of-band). `false`
-    ///   is not itself fatal here — the caller (`swarmd::main`) escalates
-    ///   it to a hard startup error specifically when binding
-    ///   non-loopback, where an unrestricted token file is a real
-    ///   credential-exposure risk to other local accounts.
-    pub fn load_or_create(data_dir: &Path) -> std::io::Result<(Self, bool, bool)> {
-        let path = token_path(data_dir);
-        if let Ok(existing) = std::fs::read_to_string(&path) {
-            let trimmed = existing.trim();
-            if !trimmed.is_empty() {
-                let perms_restricted = restrict_permissions(&path).is_ok();
-                if !perms_restricted {
-                    tracing::warn!(
-                        path = %path.display(),
-                        "failed to re-apply restrictive permissions to the existing daemon-token file"
-                    );
-                }
-                return Ok((Self(trimmed.to_string()), true, perms_restricted));
-            }
-        }
+    /// # Errors
+    ///
+    /// Any I/O error other than "not found", or a file that does not hold a
+    /// valid token.
+    pub fn load(data_dir: &Path) -> io::Result<Option<Self>> {
+        read_token(&token_path(data_dir))
+    }
 
-        let token = generate_token()?;
-        std::fs::write(&path, &token)?;
-        let perms_restricted = restrict_permissions(&path).is_ok();
-        if !perms_restricted {
-            tracing::warn!(
-                path = %path.display(),
-                "failed to restrict permissions on the newly minted daemon-token file"
-            );
+    /// Loads the token at `<data_dir>/daemon-token`, or mints and persists a
+    /// fresh one when no file exists.
+    ///
+    /// # Errors
+    ///
+    /// Any I/O error other than "not found" while reading, an existing file
+    /// that does not hold a valid token (it is never overwritten), or a
+    /// failure to create the file. A permissions failure is NOT an error
+    /// here; it is reported in [`LoadedToken::permissions`].
+    pub fn load_or_create(data_dir: &Path) -> io::Result<LoadedToken> {
+        let path = token_path(data_dir);
+        if let Some(token) = read_token(&path)? {
+            return Ok(LoadedToken {
+                token,
+                minted: false,
+                permissions: restrict_permissions(&path),
+            });
         }
-        Ok((Self(token), false, perms_restricted))
+        mint(&path)
     }
 }
 
@@ -126,313 +148,617 @@ fn token_path(data_dir: &Path) -> PathBuf {
     data_dir.join(TOKEN_FILE)
 }
 
-fn generate_token() -> std::io::Result<String> {
-    let mut buf = [0u8; 32]; // 256 bits
-    getrandom::fill(&mut buf).map_err(|e| std::io::Error::other(e.to_string()))?;
-    Ok(hex_encode(&buf))
+/// Reads and validates the token file. `Ok(None)` means the file does not
+/// exist; a file that exists but does not hold exactly 64 hex characters
+/// (surrounding whitespace ignored) is an `InvalidData` error.
+fn read_token(path: &Path) -> io::Result<Option<DaemonToken>> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    match std::str::from_utf8(bytes.trim_ascii()) {
+        Ok(token)
+            if token.len() == TOKEN_HEX_LEN && token.bytes().all(|b| b.is_ascii_hexdigit()) =>
+        {
+            Ok(Some(DaemonToken(token.into())))
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{} Does Not Hold A Valid Daemon Token (Expected {TOKEN_HEX_LEN} Hex Characters). \
+                 Delete It To Mint A New Token.",
+                path.display()
+            ),
+        )),
+    }
+}
+
+/// Mints a token into a private temporary file beside `path`, then links it
+/// into place without clobbering. If another process won the race, its
+/// token is loaded instead.
+fn mint(path: &Path) -> io::Result<LoadedToken> {
+    let mut bytes = [0u8; TOKEN_HEX_LEN / 2];
+    getrandom::fill(&mut bytes).map_err(io::Error::other)?;
+    let token = hex_encode(&bytes);
+
+    let dir = path.parent().unwrap_or(Path::new("."));
+    // `tempfile` creates the file with mode 0600 on Unix.
+    let mut file = tempfile::Builder::new()
+        .prefix(".daemon-token.")
+        .tempfile_in(dir)?;
+    file.write_all(token.as_bytes())?;
+    file.as_file().sync_all()?;
+    // Close the handle before touching the DACL on Windows, and before the rename.
+    let temp_path = file.into_temp_path();
+    let permissions = restrict_permissions(&temp_path);
+
+    match temp_path.persist_noclobber(path) {
+        Ok(()) => Ok(LoadedToken {
+            token: DaemonToken(token.into()),
+            minted: true,
+            permissions,
+        }),
+        Err(e) if e.error.kind() == io::ErrorKind::AlreadyExists => {
+            let token = read_token(path)?.ok_or(e.error)?;
+            Ok(LoadedToken {
+                token,
+                minted: false,
+                permissions: restrict_permissions(path),
+            })
+        }
+        Err(e) => Err(e.error),
+    }
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(s, "{b:02x}");
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(char::from(DIGITS[usize::from(b >> 4)]));
+        out.push(char::from(DIGITS[usize::from(b & 0x0f)]));
     }
-    s
+    out
 }
 
 #[cfg(unix)]
-fn restrict_permissions(path: &Path) -> std::io::Result<()> {
+fn restrict_permissions(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
 }
 
 #[cfg(windows)]
-fn restrict_permissions(path: &Path) -> std::io::Result<()> {
-    // Simplest-correct per the plan's own note: shell out to `icacls`
-    // rather than hand-rolling Win32 ACL construction. A genuine
-    // `Err` now propagates (security-review NIT — this used to always
-    // return `Ok(())` even when `icacls` itself failed, silently
-    // leaving the token file at whatever default ACL the filesystem
-    // gave it); the caller decides severity — `swarmd::main` escalates
-    // to a hard startup error only when binding non-loopback.
-    let user = std::env::var("USERNAME")
-        .map_err(|_| std::io::Error::other("USERNAME environment variable is not set"))?;
-    let path_str = path.to_string_lossy().to_string();
-    let output = std::process::Command::new("icacls")
-        .arg(&path_str)
-        .args(["/inheritance:r", "/grant:r", &format!("{user}:F")])
-        .output()?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(std::io::Error::other(format!(
-            "icacls exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        )))
+fn restrict_permissions(path: &Path) -> io::Result<()> {
+    windows_acl::restrict_to_current_user(path)
+}
+
+/// Reduces a file's DACL to a single full-control ACE for the current
+/// user's SID. The workspace denies `unsafe`, so this drives the system's
+/// own `whoami.exe` and `icacls.exe`, both resolved from `%SystemRoot%`
+/// rather than a `PATH` search.
+#[cfg(windows)]
+mod windows_acl {
+    use std::io;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    pub(super) fn restrict_to_current_user(path: &Path) -> io::Result<()> {
+        let system32 = system32()?;
+        let sid = current_user_sid(&system32)?;
+        let icacls = system32.join("icacls.exe");
+        // `/reset` drops explicit ACEs a previous owner may have added (for
+        // example `Everyone:(R)`); `/inheritance:r` then drops the inherited
+        // ones, and `/grant:r` leaves exactly one ACE: this user, full control.
+        run(Command::new(&icacls).arg(path).arg("/reset"))?;
+        run(Command::new(&icacls)
+            .arg(path)
+            .args(["/inheritance:r", "/grant:r"])
+            .arg(format!("*{sid}:F")))
+    }
+
+    fn system32() -> io::Result<PathBuf> {
+        std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .filter(|root| root.is_absolute())
+            .map(|root| root.join("System32"))
+            .ok_or_else(|| io::Error::other("%SystemRoot% is not set to an absolute path"))
+    }
+
+    /// The current user's SID, from `whoami /user /fo csv /nh`, which prints
+    /// one line: `"DOMAIN\user","S-1-5-21-..."`. A SID never contains a comma.
+    fn current_user_sid(system32: &Path) -> io::Result<String> {
+        let output = Command::new(system32.join("whoami.exe"))
+            .args(["/user", "/fo", "csv", "/nh"])
+            .output()?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "whoami exited with {}",
+                output.status
+            )));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        stdout
+            .trim()
+            .rsplit(',')
+            .next()
+            .map(|field| field.trim_matches('"'))
+            .filter(|sid| {
+                sid.starts_with("S-1-") && sid.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+            })
+            .map(str::to_owned)
+            .ok_or_else(|| io::Error::other(format!("unexpected whoami output: {stdout}")))
+    }
+
+    fn run(command: &mut Command) -> io::Result<()> {
+        let output = command.output()?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "icacls exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )))
+        }
     }
 }
 
-/// `true` if `host` (bare, or `host:port`/`[ipv6]:port`-shaped) names a
-/// loopback address (`127.0.0.1`, `::1`, or `localhost`).
-pub fn is_loopback_host(host: &str) -> bool {
-    let (host_only, _) = split_host_port(host);
-    host_only == "127.0.0.1" || host_only == "localhost" || host_only == "::1"
+/// A host as it appears in a `Host` header, an `Origin`, or an
+/// `--allow-host` entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum HostName {
+    Ip(IpAddr),
+    /// A DNS name, lowercased, without a trailing dot.
+    Domain(Box<str>),
 }
 
-/// Strips a `scheme://` prefix and any trailing path, leaving just
-/// `host:port` (or `host`), for comparing an `Origin` header (which
-/// carries a scheme) against a `Host` header (which does not).
-fn strip_scheme_and_path(value: &str) -> &str {
-    let without_scheme = match value.find("://") {
-        Some(idx) => &value[idx + 3..],
-        None => value,
+impl HostName {
+    /// Parses the host part of an authority (`example.com`, `127.0.0.1`,
+    /// `[::1]`). A bare, unbracketed IPv6 address is not a valid authority
+    /// host and is rejected.
+    fn parse(raw: &str) -> Option<Self> {
+        if let Some(v6) = raw
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            return v6
+                .parse::<Ipv6Addr>()
+                .ok()
+                .map(|ip| Self::Ip(IpAddr::V6(ip)));
+        }
+        if let Ok(v4) = raw.parse::<Ipv4Addr>() {
+            return Some(Self::Ip(IpAddr::V4(v4)));
+        }
+        let name = raw.trim_suffix('.').to_ascii_lowercase();
+        (!name.is_empty() && !name.contains(':')).then(|| Self::Domain(name.into()))
+    }
+
+    fn is_loopback(&self) -> bool {
+        match self {
+            Self::Ip(ip) => ip.to_canonical().is_loopback(),
+            Self::Domain(name) => &**name == "localhost",
+        }
+    }
+}
+
+/// Splits a `Host`-header-shaped authority into its host and optional port.
+/// Userinfo (`user@host`) is never valid here.
+fn parse_authority(raw: &str) -> Option<(HostName, Option<u16>)> {
+    if raw.contains('@') {
+        return None;
+    }
+    let authority = raw.parse::<Authority>().ok()?;
+    Some((HostName::parse(authority.host())?, authority.port_u16()))
+}
+
+/// Parses an `Origin` header into its host and effective port (the scheme's
+/// default when none is given). Only `http`/`https` origins can belong to a
+/// page the daemon served; `null` and every other scheme are rejected.
+fn parse_origin(raw: &str) -> Option<(HostName, u16)> {
+    let uri = raw.parse::<Uri>().ok()?;
+    let default_port = match uri.scheme_str()? {
+        "http" => 80,
+        "https" => 443,
+        _ => return None,
     };
-    without_scheme.split('/').next().unwrap_or(without_scheme)
+    let authority = uri.authority()?;
+    if authority.as_str().contains('@') {
+        return None;
+    }
+    Some((
+        HostName::parse(authority.host())?,
+        authority.port_u16().unwrap_or(default_port),
+    ))
 }
 
-/// Splits a `host:port`-shaped string into `(host, port)` —
-/// bracket-aware for IPv6 (`[::1]:8787` -> `("::1", "8787")`,
-/// `[::1]` -> `("::1", "")`) and correct for a BARE (portless) IPv6
-/// address (`::1` -> `("::1", "")`, not the `("", "")`-shaped garbage a
-/// naive `split(':').next()` or a plain `rsplit_once(':')` produces —
-/// security-review FIX-6). IPv4/hostname forms with at most one colon
-/// still split on the last colon as before.
-fn split_host_port(input: &str) -> (&str, &str) {
-    if let Some(rest) = input.strip_prefix('[') {
-        // Bracketed IPv6, optionally with a port: [::1] or [::1]:8787
-        return match rest.find(']') {
-            Some(end) => {
-                let host = &rest[..end];
-                let after = &rest[end + 1..];
-                let port = after.strip_prefix(':').unwrap_or("");
-                (host, port)
-            }
-            None => (input, ""), // malformed (unterminated bracket) — treat as opaque host
-        };
-    }
-    // 2+ colons with no brackets is unambiguously a bare IPv6 address —
-    // `SocketAddr::to_string()` always brackets IPv6 when a port is
-    // present, so an unbracketed multi-colon string can only be a raw
-    // address a caller passed directly (e.g. `is_loopback_host("::1")`).
-    if input.matches(':').count() >= 2 {
-        return (input, "");
-    }
-    // IPv4 or hostname, optionally with a single :port.
-    match input.rsplit_once(':') {
-        Some((h, p)) => (h, p),
-        None => (input, ""),
+/// One `--allow-host NAME[:PORT]` entry: a DNS name or IP address clients
+/// may use to reach the daemon (for example a reverse proxy's public name).
+/// Without a port it matches any port.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AllowedHost {
+    host: HostName,
+    port: Option<u16>,
+}
+
+/// Error for a malformed [`AllowedHost`].
+#[derive(Debug, thiserror::Error)]
+#[error("Invalid Host \"{0}\": Expected NAME, NAME:PORT, IP, Or [IPv6]:PORT")]
+pub struct InvalidAllowedHost(String);
+
+impl FromStr for AllowedHost {
+    type Err = InvalidAllowedHost;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        parse_authority(raw.trim())
+            .map(|(host, port)| Self { host, port })
+            .ok_or_else(|| InvalidAllowedHost(raw.to_owned()))
     }
 }
 
-/// Validates the `Host` and (if present) `Origin` headers of a WS
-/// upgrade request against the daemon's own `bind_host_port`
-/// (`"127.0.0.1:8787"`-shaped, no scheme).
-///
-/// # Errors
-///
-/// A human-readable, Title Case refusal reason.
-pub fn validate_upgrade_headers(
-    host_header: Option<&str>,
-    origin_header: Option<&str>,
-    bind_host_port: &str,
-) -> Result<(), &'static str> {
-    let host = host_header.ok_or("Missing Host Header.")?;
-    let host = strip_scheme_and_path(host);
-    if !hosts_equivalent(host, bind_host_port) {
-        return Err("Host Header Does Not Match The Daemon's Bind Address.");
-    }
+/// Why [`HostPolicy::check`] refused a request. `Display` is the Title Case
+/// message sent back in the 403 body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Rejection {
+    #[error("Missing Host Header.")]
+    MissingHost,
+    #[error("Malformed Host Header.")]
+    MalformedHost,
+    #[error("Host Header Does Not Name This Daemon.")]
+    HostNotAllowed,
+    #[error("Origin Not Allowed.")]
+    OriginNotAllowed,
+}
 
-    if let Some(origin) = origin_header {
-        let origin_host = strip_scheme_and_path(origin);
-        if !hosts_equivalent(origin_host, bind_host_port) {
-            return Err("Origin Not Allowed.");
+/// The `Host`/`Origin` allow-list (see the module doc).
+#[derive(Clone, Debug, Default)]
+pub struct HostPolicy {
+    extra: Vec<AllowedHost>,
+}
+
+impl HostPolicy {
+    /// A policy that accepts the connection's own local address (plus its
+    /// loopback aliases) and every `extra` entry.
+    pub fn new(extra: impl IntoIterator<Item = AllowedHost>) -> Self {
+        Self {
+            extra: extra.into_iter().collect(),
         }
     }
 
-    Ok(())
-}
-
-/// Compares two `host:port` strings, treating `127.0.0.1`/`localhost`/
-/// `::1` as interchangeable (all name a loopback listener) — a browser
-/// client attaching to a `swarmd --serve-ui` page served from
-/// `http://localhost:8787` must be able to open `ws://127.0.0.1:8787/ws`
-/// (or vice versa) without tripping the Host/Origin guard.
-fn hosts_equivalent(a: &str, b: &str) -> bool {
-    if a == b {
-        return true;
+    /// Checks one request. `local` is the local address the TCP connection
+    /// arrived on (`None` if the OS could not report it, in which case only
+    /// explicit `--allow-host` entries can match). `host` defaults to port
+    /// 80 when it has none, because the daemon itself only speaks plain
+    /// HTTP; `origin` uses its scheme's default port.
+    ///
+    /// # Errors
+    ///
+    /// The [`Rejection`] naming the first header that failed.
+    pub fn check(
+        &self,
+        local: Option<SocketAddr>,
+        host: Option<&str>,
+        origin: Option<&str>,
+    ) -> Result<(), Rejection> {
+        let (name, port) =
+            parse_authority(host.ok_or(Rejection::MissingHost)?).ok_or(Rejection::MalformedHost)?;
+        if !self.allows(&name, port.unwrap_or(80), local) {
+            return Err(Rejection::HostNotAllowed);
+        }
+        if let Some(origin) = origin {
+            let (name, port) = parse_origin(origin).ok_or(Rejection::OriginNotAllowed)?;
+            if !self.allows(&name, port, local) {
+                return Err(Rejection::OriginNotAllowed);
+            }
+        }
+        Ok(())
     }
-    let (a_host, a_port) = split_host_port(a);
-    let (b_host, b_port) = split_host_port(b);
-    a_port == b_port && is_loopback_host(a_host) && is_loopback_host(b_host)
+
+    fn allows(&self, host: &HostName, port: u16, local: Option<SocketAddr>) -> bool {
+        let names_this_connection = local.is_some_and(|local| {
+            let own_ip = local.ip().to_canonical();
+            port == local.port()
+                && match host {
+                    HostName::Ip(ip) => {
+                        let ip = ip.to_canonical();
+                        ip == own_ip || (ip.is_loopback() && own_ip.is_loopback())
+                    }
+                    HostName::Domain(_) => host.is_loopback() && own_ip.is_loopback(),
+                }
+        });
+        names_this_connection
+            || self
+                .extra
+                .iter()
+                .any(|allowed| allowed.host == *host && allowed.port.is_none_or(|p| p == port))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_token_roundtrip_and_matches() {
-        let dir = std::env::temp_dir().join(format!("swarmd-auth-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        assert!(
-            !DaemonToken::exists(&dir),
-            "fresh dir must report no token file yet"
-        );
-
-        let (token, pre_existing, perms_ok) = DaemonToken::load_or_create(&dir).unwrap();
-        assert!(!pre_existing, "first run must report no pre-existing token");
-        assert!(
-            perms_ok,
-            "restricting permissions on a freshly minted token should succeed"
-        );
-        assert_eq!(token.as_str().len(), 64, "256 bits hex-encoded is 64 chars");
-        assert!(token.matches(token.as_str()));
-        assert!(!token.matches("wrong"));
-        assert!(DaemonToken::exists(&dir), "token file must now exist");
-
-        let (token2, pre_existing2, perms_ok2) = DaemonToken::load_or_create(&dir).unwrap();
-        assert!(pre_existing2, "second call must find the persisted token");
-        assert!(
-            perms_ok2,
-            "re-restricting permissions on load should also succeed"
-        );
-        assert_eq!(
-            token.as_str(),
-            token2.as_str(),
-            "token must be stable across restarts"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
+    fn temp_dir() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
-    /// DIRECTIVE (security-review BLOCK-2): `exists()` never mints.
-    /// Calling it any number of times against a directory with no token
-    /// file must never create one — this is the whole property the
-    /// non-loopback gate depends on.
+    fn loopback(port: u16) -> Option<SocketAddr> {
+        Some(SocketAddr::from(([127, 0, 0, 1], port)))
+    }
+
+    fn policy(extra: &[&str]) -> HostPolicy {
+        HostPolicy::new(extra.iter().map(|e| e.parse::<AllowedHost>().unwrap()))
+    }
+
+    #[test]
+    fn test_token_is_minted_once_and_stable_across_loads() {
+        let dir = temp_dir();
+        assert!(!DaemonToken::exists(dir.path()), "fresh dir has no token");
+
+        let first = DaemonToken::load_or_create(dir.path()).unwrap();
+        assert!(first.minted);
+        first.permissions.unwrap();
+        assert_eq!(first.token.as_str().len(), TOKEN_HEX_LEN);
+        assert!(first.token.matches(first.token.as_str()));
+        assert!(DaemonToken::exists(dir.path()));
+
+        let second = DaemonToken::load_or_create(dir.path()).unwrap();
+        assert!(!second.minted, "second load finds the persisted token");
+        second.permissions.unwrap();
+        assert_eq!(first.token.as_str(), second.token.as_str());
+
+        // No temporary file is left behind.
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, [TOKEN_FILE]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_minted_token_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir();
+        DaemonToken::load_or_create(dir.path()).unwrap();
+        let mode = std::fs::metadata(token_path(dir.path()))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_loosened_permissions_are_restored_on_load() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir();
+        DaemonToken::load_or_create(dir.path()).unwrap();
+        let path = token_path(dir.path());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        DaemonToken::load_or_create(dir.path())
+            .unwrap()
+            .permissions
+            .unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// `exists()` is the non-loopback gate's only input and must never mint.
     #[test]
     fn test_exists_never_creates_a_token_file() {
-        let dir = std::env::temp_dir().join(format!("swarmd-auth-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        assert!(!DaemonToken::exists(&dir));
-        assert!(!DaemonToken::exists(&dir));
-        assert!(!DaemonToken::exists(&dir));
-        assert!(
-            !token_path(&dir).exists(),
-            "repeated exists() calls must never create the token file"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = temp_dir();
+        for _ in 0..3 {
+            assert!(!DaemonToken::exists(dir.path()));
+        }
+        assert!(!token_path(dir.path()).exists());
+    }
+
+    /// A malformed token file is neither accepted as a credential nor
+    /// silently replaced, and it does not satisfy the non-loopback gate.
+    #[test]
+    fn test_invalid_token_file_is_rejected_and_left_in_place() {
+        for contents in ["", "   \n", "short", &"g".repeat(TOKEN_HEX_LEN)] {
+            let dir = temp_dir();
+            let path = token_path(dir.path());
+            std::fs::write(&path, contents).unwrap();
+            assert!(
+                !DaemonToken::exists(dir.path()),
+                "{contents:?} is not a token"
+            );
+            let err = DaemonToken::load_or_create(dir.path()).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{contents:?}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
+        }
+    }
+
+    #[test]
+    fn test_token_file_whitespace_is_tolerated() {
+        let dir = temp_dir();
+        let hex = "ab".repeat(TOKEN_HEX_LEN / 2);
+        std::fs::write(token_path(dir.path()), format!("{hex}\n")).unwrap();
+        let loaded = DaemonToken::load_or_create(dir.path()).unwrap();
+        assert!(!loaded.minted);
+        assert_eq!(loaded.token.as_str(), hex);
     }
 
     #[test]
     fn test_matches_rejects_wrong_length_without_panicking() {
-        let dir = std::env::temp_dir().join(format!("swarmd-auth-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let (token, _, _) = DaemonToken::load_or_create(&dir).unwrap();
+        let dir = temp_dir();
+        let token = DaemonToken::load_or_create(dir.path()).unwrap().token;
         assert!(!token.matches(""));
+        assert!(!token.matches("wrong"));
         assert!(!token.matches(&format!("{}extra", token.as_str())));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn test_is_loopback_host() {
-        assert!(is_loopback_host("127.0.0.1:8787"));
-        assert!(is_loopback_host("localhost:8787"));
-        assert!(is_loopback_host("127.0.0.1"));
-        assert!(!is_loopback_host("0.0.0.0:8787"));
-        assert!(!is_loopback_host("evil.example.com:8787"));
+    fn test_debug_never_prints_the_token() {
+        let dir = temp_dir();
+        let token = DaemonToken::load_or_create(dir.path()).unwrap().token;
+        assert!(!format!("{token:?}").contains(token.as_str()));
     }
 
-    /// DIRECTIVE (security-review FIX-6): every IPv6 loopback SHAPE a
-    /// caller could plausibly pass — bare, bracketed with a port,
-    /// bracketed without one.
     #[test]
-    fn test_is_loopback_host_ipv6_forms() {
-        assert!(is_loopback_host("::1"), "bare IPv6 loopback");
-        assert!(is_loopback_host("[::1]:8787"), "bracketed IPv6 with a port");
-        assert!(is_loopback_host("[::1]"), "bracketed IPv6, no port");
-        assert!(
-            !is_loopback_host("::2"),
-            "a non-loopback IPv6 address must not match"
+    fn test_hex_encode() {
+        assert_eq!(hex_encode(&[0x00, 0x0f, 0xa5, 0xff]), "000fa5ff");
+    }
+
+    #[test]
+    fn test_allowed_host_parsing() {
+        for ok in [
+            "example.com",
+            "Example.COM.",
+            "example.com:8443",
+            "100.64.0.7",
+            "[::1]",
+            "[fd7a::1]:8787",
+        ] {
+            assert!(ok.parse::<AllowedHost>().is_ok(), "{ok}");
+        }
+        for bad in ["", "::1", "user@example.com", "http://example.com", "a:b:c"] {
+            assert!(bad.parse::<AllowedHost>().is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn test_missing_or_malformed_host_is_rejected() {
+        let p = HostPolicy::default();
+        assert_eq!(
+            p.check(loopback(8787), None, None),
+            Err(Rejection::MissingHost)
         );
-        assert!(
-            !is_loopback_host("[2001:db8::1]:8787"),
-            "a non-loopback bracketed IPv6 address must not match"
+        assert_eq!(
+            p.check(loopback(8787), Some("::1"), None),
+            Err(Rejection::MalformedHost)
         );
     }
 
     #[test]
-    fn test_validate_upgrade_headers_rejects_missing_host() {
-        let result = validate_upgrade_headers(None, None, "127.0.0.1:8787");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_upgrade_headers_rejects_dns_rebinding_style_host() {
-        // A browser page served from evil.com whose DNS resolves to
-        // 127.0.0.1 still sends Host: evil.com:8787 — this must be
-        // rejected even though the TCP connection is genuinely local.
-        let result = validate_upgrade_headers(Some("evil.com:8787"), None, "127.0.0.1:8787");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_upgrade_headers_accepts_matching_host_no_origin() {
-        // A native client (wscat, tokio-tungstenite) sends no Origin at all.
-        let result = validate_upgrade_headers(Some("127.0.0.1:8787"), None, "127.0.0.1:8787");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_upgrade_headers_accepts_localhost_alias_for_127_0_0_1() {
-        let result = validate_upgrade_headers(
-            Some("localhost:8787"),
-            Some("http://localhost:8787"),
+    fn test_loopback_spellings_are_interchangeable_on_a_loopback_connection() {
+        let p = HostPolicy::default();
+        for host in [
             "127.0.0.1:8787",
+            "localhost:8787",
+            "LOCALHOST.:8787",
+            "127.1.2.3:8787",
+            "[::1]:8787",
+            "[::ffff:127.0.0.1]:8787",
+        ] {
+            assert_eq!(p.check(loopback(8787), Some(host), None), Ok(()), "{host}");
+        }
+        let v6 = Some(SocketAddr::from((Ipv6Addr::LOCALHOST, 8787)));
+        assert_eq!(p.check(v6, Some("127.0.0.1:8787"), None), Ok(()));
+    }
+
+    #[test]
+    fn test_host_port_must_match_the_connection() {
+        let p = HostPolicy::default();
+        assert_eq!(
+            p.check(loopback(8787), Some("127.0.0.1:9999"), None),
+            Err(Rejection::HostNotAllowed)
         );
-        assert!(result.is_ok());
-    }
-
-    /// DIRECTIVE (security-review FIX-6): an IPv6-loopback-bound daemon
-    /// (`bind_host_port` itself bracketed) must accept a matching
-    /// bracketed Host/Origin pair.
-    #[test]
-    fn test_validate_upgrade_headers_accepts_bracketed_ipv6_loopback() {
-        let result =
-            validate_upgrade_headers(Some("[::1]:8787"), Some("http://[::1]:8787"), "[::1]:8787");
-        assert!(result.is_ok());
-    }
-
-    /// A browser resolving `localhost` to `::1` must still pass against
-    /// a daemon whose `bind_host_port` is the IPv4 form (or vice versa)
-    /// — both name the same loopback listener.
-    #[test]
-    fn test_validate_upgrade_headers_ipv6_and_ipv4_loopback_are_equivalent() {
-        let result = validate_upgrade_headers(Some("[::1]:8787"), None, "127.0.0.1:8787");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_upgrade_headers_rejects_cross_origin_browser_page() {
-        // Origin present but naming a different host:port than our own
-        // bind address — a random web page's script trying to reach
-        // this localhost daemon.
-        let result = validate_upgrade_headers(
-            Some("127.0.0.1:8787"),
-            Some("https://attacker.example.com"),
-            "127.0.0.1:8787",
+        // A portless Host means port 80, the daemon's scheme default.
+        assert_eq!(p.check(loopback(80), Some("127.0.0.1"), None), Ok(()));
+        assert_eq!(
+            p.check(loopback(8787), Some("127.0.0.1"), None),
+            Err(Rejection::HostNotAllowed)
         );
-        assert!(result.is_err());
+    }
+
+    /// DNS rebinding: a page on evil.com whose name resolves to the daemon's
+    /// address still sends `Host: evil.com`, which must be refused.
+    #[test]
+    fn test_unlisted_dns_names_are_rejected() {
+        let p = HostPolicy::default();
+        assert_eq!(
+            p.check(loopback(8787), Some("evil.com:8787"), None),
+            Err(Rejection::HostNotAllowed)
+        );
+        let lan = Some(SocketAddr::from(([192, 168, 1, 5], 8787)));
+        assert_eq!(
+            p.check(lan, Some("localhost:8787"), None),
+            Err(Rejection::HostNotAllowed),
+            "localhost is only an alias on a loopback connection"
+        );
+    }
+
+    /// A wildcard bind accepts the concrete interface address each
+    /// connection arrived on, which is what a LAN or Tailscale client sends.
+    #[test]
+    fn test_wildcard_bind_accepts_the_interface_address_the_client_used() {
+        let p = HostPolicy::default();
+        let lan = Some(SocketAddr::from(([192, 168, 1, 5], 8787)));
+        assert_eq!(p.check(lan, Some("192.168.1.5:8787"), None), Ok(()));
+        assert_eq!(
+            p.check(
+                lan,
+                Some("192.168.1.5:8787"),
+                Some("http://192.168.1.5:8787")
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            p.check(lan, Some("192.168.1.6:8787"), None),
+            Err(Rejection::HostNotAllowed)
+        );
+        // Dual-stack `[::]` bind: IPv4 clients arrive on a mapped address.
+        let mapped = Some(SocketAddr::from((
+            Ipv4Addr::new(192, 168, 1, 5).to_ipv6_mapped(),
+            8787,
+        )));
+        assert_eq!(p.check(mapped, Some("192.168.1.5:8787"), None), Ok(()));
     }
 
     #[test]
-    fn test_validate_upgrade_headers_accepts_matching_same_origin_page() {
-        let result = validate_upgrade_headers(
-            Some("127.0.0.1:8787"),
-            Some("http://127.0.0.1:8787"),
-            "127.0.0.1:8787",
+    fn test_origin_must_name_an_allowed_authority() {
+        let p = HostPolicy::default();
+        let ok = |origin| p.check(loopback(8787), Some("127.0.0.1:8787"), Some(origin));
+        assert_eq!(ok("http://127.0.0.1:8787"), Ok(()));
+        assert_eq!(ok("http://localhost:8787"), Ok(()));
+        assert_eq!(ok("http://[::1]:8787"), Ok(()));
+        for bad in [
+            "https://attacker.example.com",
+            "http://127.0.0.1:9999",
+            "http://127.0.0.1",
+            "null",
+            "file://",
+            "tauri://localhost",
+        ] {
+            assert_eq!(ok(bad), Err(Rejection::OriginNotAllowed), "{bad}");
+        }
+    }
+
+    /// The documented reverse-proxy setup: TLS terminates at a proxy that
+    /// forwards to the loopback daemon, either rewriting `Host` to the
+    /// upstream address (nginx) or preserving the public name (Caddy).
+    #[test]
+    fn test_allow_host_admits_a_reverse_proxy_name() {
+        let p = policy(&["swarm.example.com"]);
+        let origin = Some("https://swarm.example.com");
+        assert_eq!(
+            p.check(loopback(8787), Some("127.0.0.1:8787"), origin),
+            Ok(())
         );
-        assert!(result.is_ok());
+        assert_eq!(
+            p.check(loopback(8787), Some("swarm.example.com"), origin),
+            Ok(())
+        );
+        assert_eq!(
+            p.check(loopback(8787), Some("Swarm.Example.Com"), origin),
+            Ok(())
+        );
+        assert_eq!(
+            HostPolicy::default().check(loopback(8787), Some("127.0.0.1:8787"), origin),
+            Err(Rejection::OriginNotAllowed)
+        );
+
+        let pinned = policy(&["box.tailnet.ts.net:8787"]);
+        assert_eq!(
+            pinned.check(None, Some("box.tailnet.ts.net:8787"), None),
+            Ok(())
+        );
+        assert_eq!(
+            pinned.check(None, Some("box.tailnet.ts.net:8788"), None),
+            Err(Rejection::HostNotAllowed)
+        );
     }
 }

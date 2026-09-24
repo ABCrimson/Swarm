@@ -4166,9 +4166,11 @@ dependencies = [
  "serde_json",
  "subtle",
  "swarm-core",
+ "tempfile",
+ "thiserror 2.0.20",
  "tokio",
  "tokio-tungstenite 0.30.0",
- "tower",
+ "tokio-util",
  "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
@@ -5068,7 +5070,6 @@ dependencies = [
  "tokio-util",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]
