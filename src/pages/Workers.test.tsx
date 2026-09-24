@@ -36,6 +36,7 @@ vi.mock("#components/worker/SpawnWorkerDialog", () => ({ SpawnWorkerDialog: () =
 
 const store = getDefaultStore();
 const ID = "0f5b8f5e-7a41-4a8e-9a53-1c1f7e0d9a11";
+const OTHER_ID = "5d0c2a7e-3b1f-4c9d-8e2a-6f4b1a9c0d22";
 
 function addWorker(patch: Partial<Worker> = {}): Worker {
   const worker: Worker = {
@@ -120,7 +121,9 @@ describe("Workers — list and detail panel", () => {
     render(<Workers />);
 
     const panels = screen.getByRole("tablist", { name: "Worker Panels" });
-    expect(within(panels).getByRole("tab", { name: "Ship" })).toBeDisabled();
+    const ship = within(panels).getByRole("tab", { name: "Ship" });
+    expect(ship).toBeDisabled();
+    expect(document.getElementById(ship.getAttribute("aria-controls") ?? "")).not.toBeNull();
 
     await user.click(within(panels).getByRole("tab", { name: "AI Chat" }));
     await user.type(screen.getByLabelText("Chat Draft"), "half a thought");
@@ -128,6 +131,30 @@ describe("Workers — list and detail panel", () => {
     await user.click(within(panels).getByRole("tab", { name: "AI Chat" }));
 
     expect(screen.getByLabelText("Chat Draft")).toHaveValue("half a thought");
+  });
+
+  it("does not carry one worker's chat draft over to another worker", async () => {
+    const user = userEvent.setup();
+    addWorker();
+    useWorkerStore.setState(({ workers }) => ({
+      workers: new Map(workers).set(OTHER_ID, {
+        id: OTHER_ID,
+        state: "idle",
+        name: "Reviewer",
+        startedAt: "2026-09-23T00:00:00Z",
+      }),
+    }));
+    store.set(graphViewAtom, "list");
+    render(<Workers />);
+
+    await user.click(screen.getByRole("button", { name: /Builder/ }));
+    await user.click(screen.getByRole("tab", { name: "AI Chat" }));
+    await user.type(screen.getByLabelText("Chat Draft"), "for builder only");
+    await user.click(screen.getByRole("tab", { name: "Detail" }));
+    await user.click(screen.getByRole("button", { name: /Reviewer/ }));
+    await user.click(screen.getByRole("tab", { name: "AI Chat" }));
+
+    expect(screen.getByLabelText("Chat Draft")).toHaveValue("");
   });
 
   it("offers Ship for a worker with a worktree", async () => {

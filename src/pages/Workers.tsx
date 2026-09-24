@@ -112,7 +112,8 @@ function WorkerListView(): React.ReactElement {
  *
  * Views and detail tabs are kept mounted once shown (`<Activity>` via
  * {@link TabPanel}), so switching back restores the graph viewport, the
- * list scroll position and an in-progress chat.
+ * list scroll position and an in-progress chat. The detail panel is
+ * keyed by worker, so selecting another worker starts its tabs fresh.
  */
 export function Workers(): React.ReactElement {
   const idBase = useId();
@@ -217,7 +218,10 @@ export function Workers(): React.ReactElement {
         </div>
 
         {detailOpen && selectedWorker && (
+          // Keyed by worker: panels kept alive across tab switches must not
+          // carry one worker's chat or ship state over to the next worker.
           <aside
+            key={selectedWorker.id}
             aria-label="Worker Details"
             className={`flex h-full shrink-0 flex-col overflow-hidden ${DETAIL_WIDTH[activeDetailTab]}`}
           >
@@ -252,17 +256,15 @@ export function Workers(): React.ReactElement {
                   onRequestShipTab={() => showDetailTab("ship")}
                 />
               </TabPanel>
-              {canShip && (
-                <TabPanel
-                  idBase={`${idBase}-detail`}
-                  id="ship"
-                  selected={activeDetailTab === "ship"}
-                  mounted={shown.has("ship")}
-                  className="h-full"
-                >
-                  <ShipPanel workerId={selectedWorker.id} />
-                </TabPanel>
-              )}
+              <TabPanel
+                idBase={`${idBase}-detail`}
+                id="ship"
+                selected={activeDetailTab === "ship"}
+                mounted={canShip && shown.has("ship")}
+                className="h-full"
+              >
+                <ShipPanel workerId={selectedWorker.id} />
+              </TabPanel>
             </div>
           </aside>
         )}
