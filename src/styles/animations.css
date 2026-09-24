@@ -56,7 +56,7 @@
   }
 }
 
-/* ── Page transitions (React <ViewTransition>, see AppShell) ── */
+/* ── Page transitions (React <ViewTransition>, see PageHost) ── */
 
 /*
  * The document root is not captured, so everything outside the page

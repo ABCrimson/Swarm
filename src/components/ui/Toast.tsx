@@ -7,25 +7,26 @@ export { toast };
  * Sonner's color variables, set to the house OKLCH palette. Sonner reads
  * `--normal-*` for plain toasts and — because `richColors` is on —
  * `--success-*`, `--error-*`, `--warning-*` and `--info-*` for typed
- * ones. They sit inline on the toaster element, so they beat the
- * defaults Sonner's own injected stylesheet sets there.
+ * ones. Typed toasts are dark tints of their accent token (same hue,
+ * via relative color syntax). They sit inline on the toaster element, so
+ * they beat the defaults Sonner's own injected stylesheet sets there.
  */
 const TOASTER_STYLE = {
   fontFamily: "var(--font-sans)",
   "--normal-bg": "oklch(from var(--color-surface-2) l c h / 0.9)",
   "--normal-border": "var(--color-border-2)",
   "--normal-text": "var(--color-fg)",
-  "--success-bg": "oklch(0.14 0.06 140 / 0.9)",
-  "--success-border": "oklch(0.55 0.12 140)",
+  "--success-bg": "oklch(from var(--color-lime) 0.14 0.06 h / 0.9)",
+  "--success-border": "oklch(from var(--color-lime) 0.55 0.12 h)",
   "--success-text": "var(--color-lime)",
-  "--error-bg": "oklch(0.14 0.06 10 / 0.9)",
-  "--error-border": "oklch(0.5 0.14 10)",
+  "--error-bg": "oklch(from var(--color-rose) 0.14 0.06 h / 0.9)",
+  "--error-border": "oklch(from var(--color-rose) 0.5 0.14 h)",
   "--error-text": "var(--color-rose)",
-  "--warning-bg": "oklch(0.14 0.06 70 / 0.9)",
-  "--warning-border": "oklch(0.55 0.12 70)",
+  "--warning-bg": "oklch(from var(--color-amber) 0.14 0.06 h / 0.9)",
+  "--warning-border": "oklch(from var(--color-amber) 0.55 0.12 h)",
   "--warning-text": "var(--color-amber)",
-  "--info-bg": "oklch(0.14 0.06 205 / 0.9)",
-  "--info-border": "oklch(0.55 0.12 205)",
+  "--info-bg": "oklch(from var(--color-plasma) 0.14 0.06 h / 0.9)",
+  "--info-border": "oklch(from var(--color-plasma) 0.55 0.12 h)",
   "--info-text": "var(--color-plasma)",
 } as React.CSSProperties;
 

@@ -36,8 +36,8 @@ export function AppShell({ children }: AppShellProps): React.ReactElement {
       </a>
       <ParticleBackground />
       <div
-        className="grid h-screen w-screen grid-rows-1 overflow-hidden text-fg transition-[grid-template-columns] duration-250 ease-in-out"
-        style={{ gridTemplateColumns: sidebarCollapsed ? "56px 1fr" : "220px 1fr" }}
+        data-sidebar-collapsed={sidebarCollapsed || undefined}
+        className="grid h-screen w-screen grid-cols-[220px_1fr] grid-rows-1 overflow-hidden text-fg transition-[grid-template-columns] duration-250 ease-in-out data-sidebar-collapsed:grid-cols-[56px_1fr]"
       >
         <div className="row-span-full transition-[opacity,translate] duration-400 ease-out-cubic starting:-translate-x-5 starting:opacity-0">
           <Sidebar />

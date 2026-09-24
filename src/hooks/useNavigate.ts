@@ -18,7 +18,7 @@ export const NAVIGATE_TRANSITION = "navigate";
  * The page on screen stays visible and interactive while a page chunk
  * that has not loaded yet streams in (no flash of the loading fallback),
  * and the swap plays the page view transition (see `PageHost` in
- * `#components/layout/AppShell`).
+ * `#components/layout/PageHost`).
  */
 export function useNavigate(): (page: PageId) => void {
   const setPage = useSetAtom(currentPageAtom);

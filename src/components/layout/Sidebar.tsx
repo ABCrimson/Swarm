@@ -167,8 +167,7 @@ export function Sidebar(): React.ReactElement {
       <div className="flex h-14 items-center border-border border-b px-5">
         <span
           aria-hidden="true"
-          className="font-display font-extrabold text-plasma tracking-[0.08em] [text-shadow:0_0_20px_oklch(from_var(--color-plasma)_l_c_h/0.3)]"
-          style={{ fontSize: collapsed ? "1rem" : "1.15rem" }}
+          className={`font-display font-extrabold text-plasma tracking-[0.08em] [text-shadow:0_0_20px_oklch(from_var(--color-plasma)_l_c_h/0.3)] ${collapsed ? "text-base" : "text-[1.15rem]"}`}
         >
           {collapsed ? "S" : "SWARM"}
         </span>
