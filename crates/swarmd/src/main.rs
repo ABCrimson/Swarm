@@ -167,6 +167,10 @@ async fn serve(args: ServeArgs) -> Result<(), Fatal> {
             args.log_file.as_deref().unwrap_or(Path::new("")).display()
         ))
     })?;
+    // Installed first: a SIGTERM that arrives during startup, or right after
+    // the "Listening On" line, is then held for the shutdown task below
+    // instead of killing the process with the signal's default action.
+    let signals = shutdown_signal();
 
     let data_dir = resolve_data_dir(args.data_dir.clone())?;
     let loopback = args.bind.ip().to_canonical().is_loopback();
@@ -268,19 +272,19 @@ async fn serve(args: ServeArgs) -> Result<(), Fatal> {
     announce(local_addr, &loaded.token, args.data_dir.as_deref());
     tracing::info!(bind = %local_addr, data_dir = %data_dir.display(), "swarmd started");
 
-    let shutdown = state.shutdown_token();
-    tokio::spawn(async move {
-        match shutdown_signal().await {
-            Ok(signal) => tracing::info!(signal, "shutting down"),
-            Err(error) => {
-                // Without signal handling the daemon still runs; a service
-                // manager's stop then kills it without a graceful shutdown.
-                tracing::error!(%error, "cannot listen for shutdown signals");
-                std::future::pending::<()>().await;
-            }
+    match signals {
+        Ok(signal) => {
+            let shutdown = state.shutdown_token();
+            tokio::spawn(async move {
+                let signal = signal.await;
+                tracing::info!(signal, "shutting down");
+                shutdown.cancel();
+            });
         }
-        shutdown.cancel();
-    });
+        // Without signal handling the daemon still runs; a service
+        // manager's stop then kills it without a graceful shutdown.
+        Err(error) => tracing::error!(%error, "cannot listen for shutdown signals"),
+    }
 
     let served = swarmd::serve(listener, state.clone(), args.serve_ui.as_deref()).await;
     stop_runtime(&state, runtime).await;
@@ -389,16 +393,20 @@ fn announce(local_addr: SocketAddr, token: &DaemonToken, data_dir: Option<&Path>
     }
 }
 
-/// Resolves on the first shutdown request and names it.
-async fn shutdown_signal() -> io::Result<&'static str> {
+/// Installs the shutdown signal handlers. The returned future resolves on
+/// the first shutdown request, including one delivered between installation
+/// and the first poll, and names it.
+fn shutdown_signal() -> io::Result<impl Future<Output = &'static str>> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
         let mut terminate = signal(SignalKind::terminate())?;
         let mut interrupt = signal(SignalKind::interrupt())?;
-        Ok(tokio::select! {
-            _ = terminate.recv() => "SIGTERM",
-            _ = interrupt.recv() => "SIGINT",
+        Ok(async move {
+            tokio::select! {
+                _ = terminate.recv() => "SIGTERM",
+                _ = interrupt.recv() => "SIGINT",
+            }
         })
     }
     #[cfg(windows)]
@@ -408,11 +416,13 @@ async fn shutdown_signal() -> io::Result<&'static str> {
         let mut close = windows::ctrl_close()?;
         let mut logoff = windows::ctrl_logoff()?;
         let mut shutdown = windows::ctrl_shutdown()?;
-        Ok(tokio::select! {
-            _ = ctrl_c.recv() => "CTRL_C",
-            _ = close.recv() => "CTRL_CLOSE",
-            _ = logoff.recv() => "CTRL_LOGOFF",
-            _ = shutdown.recv() => "CTRL_SHUTDOWN",
+        Ok(async move {
+            tokio::select! {
+                _ = ctrl_c.recv() => "CTRL_C",
+                _ = close.recv() => "CTRL_CLOSE",
+                _ = logoff.recv() => "CTRL_LOGOFF",
+                _ = shutdown.recv() => "CTRL_SHUTDOWN",
+            }
         })
     }
 }
