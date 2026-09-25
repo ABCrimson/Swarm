@@ -3,7 +3,7 @@ import * as z from "zod";
 import { onEvent } from "#lib/event-bus";
 import { listSessions } from "#lib/tauri";
 import { useSessionStore } from "#store/sessions";
-import { SessionWorkerRemovedPayloadSchema } from "#store/types";
+import { SessionWorkerAddedPayloadSchema, SessionWorkerRemovedPayloadSchema } from "#store/types";
 
 /** `session_created` payload (Rust `SessionCreatedPayload`) — it never carries more than this. */
 const SessionCreatedPayloadSchema = z.object({ sessionId: z.uuid(), name: z.string() });
@@ -21,6 +21,7 @@ const SessionDeletedPayloadSchema = z.object({ sessionId: z.uuid() });
  *
  * - `session_created`        -> store.addSession() (merged, see below)
  * - `session_deleted`        -> store.removeSession()
+ * - `session_worker_added`   -> store.addWorkerToSession() (idempotent)
  * - `session_worker_removed` -> store.removeWorkerFromSession()
  *
  * Every payload is `safeParse`d; an unexpected shape is logged and
@@ -28,8 +29,13 @@ const SessionDeletedPayloadSchema = z.object({ sessionId: z.uuid() });
  */
 export function useSessionEvents(): void {
   useEffect(() => {
-    const { addSession, hydrateSessions, removeSession, removeWorkerFromSession } =
-      useSessionStore.getState();
+    const {
+      addSession,
+      addWorkerToSession,
+      hydrateSessions,
+      removeSession,
+      removeWorkerFromSession,
+    } = useSessionStore.getState();
 
     void listSessions().then(hydrateSessions, (err: unknown) => {
       console.error("useSessionEvents: could not restore persisted sessions", err);
@@ -74,6 +80,14 @@ export function useSessionEvents(): void {
           return;
         }
         removeSession(parsed.data.sessionId);
+      }),
+      onEvent("session_worker_added", (e) => {
+        const parsed = SessionWorkerAddedPayloadSchema.safeParse(e.payload);
+        if (!parsed.success) {
+          console.error("useSessionEvents: invalid session_worker_added payload", parsed.error);
+          return;
+        }
+        addWorkerToSession(parsed.data.sessionId, parsed.data.workerId);
       }),
       onEvent("session_worker_removed", (e) => {
         const parsed = SessionWorkerRemovedPayloadSchema.safeParse(e.payload);

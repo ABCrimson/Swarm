@@ -152,6 +152,21 @@ describe("useSessionEvents", () => {
     expect(consoleError).toHaveBeenCalledOnce();
   });
 
+  // ── session_worker_added ──
+
+  it("adds the named worker to session.workerIds exactly once", () => {
+    useSessionStore.getState().addSession(makeSession({ id: SESSION_ID, workerIds: [WORKER_ID] }));
+
+    renderHook(() => useSessionEvents());
+    deliver("session_worker_added", { sessionId: SESSION_ID, workerId: OTHER_WORKER_ID });
+    deliver("session_worker_added", { sessionId: SESSION_ID, workerId: OTHER_WORKER_ID });
+
+    expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([
+      WORKER_ID,
+      OTHER_WORKER_ID,
+    ]);
+  });
+
   // ── session_worker_removed ──
 
   it("removes exactly the named worker from session.workerIds", () => {
@@ -202,6 +217,7 @@ describe("useSessionEvents", () => {
     expect([...registered.keys()].sort()).toEqual([
       "session_created",
       "session_deleted",
+      "session_worker_added",
       "session_worker_removed",
     ]);
 

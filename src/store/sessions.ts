@@ -25,6 +25,12 @@ interface SessionStoreActions {
    */
   readonly hydrateSessions: (sessions: readonly Session[]) => void;
   readonly removeSession: (id: string) => void;
+  /**
+   * Appends `workerId` to a session's `workerIds` unless it is already
+   * there: the `session_add_worker` result and its `session_worker_added`
+   * event both land here, in either order.
+   */
+  readonly addWorkerToSession: (sessionId: string, workerId: string) => void;
   readonly removeWorkerFromSession: (sessionId: string, workerId: string) => void;
   readonly setActiveSession: (id: string | null) => void;
   readonly updateSession: (id: string, updates: Partial<Session>) => void;
@@ -60,6 +66,13 @@ export const useSessionStore = create<SessionStoreState & SessionStoreActions>()
         set((s) => {
           s.sessions.delete(id);
           if (s.activeSessionId === id) s.activeSessionId = null;
+        });
+      },
+
+      addWorkerToSession(sessionId, workerId) {
+        set((s) => {
+          const session = s.sessions.get(sessionId);
+          if (session && !session.workerIds.includes(workerId)) session.workerIds.push(workerId);
         });
       },
 

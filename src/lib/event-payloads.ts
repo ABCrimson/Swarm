@@ -23,6 +23,7 @@ import {
   AgentTurnSettledPayloadSchema,
 } from "#lib/agent-events";
 import {
+  SessionWorkerAddedPayloadSchema,
   SessionWorkerRemovedPayloadSchema,
   ShipErrorSchema,
   WorkerStateSchema,
@@ -52,6 +53,7 @@ export const EVENT_PAYLOAD_SCHEMAS = {
 
   session_created: z.looseObject({ sessionId: z.uuid(), name: z.string() }),
   session_deleted: z.looseObject({ sessionId: z.uuid() }),
+  session_worker_added: SessionWorkerAddedPayloadSchema.loose(),
   session_worker_removed: SessionWorkerRemovedPayloadSchema.loose(),
 
   system_metrics: z.looseObject({
@@ -67,13 +69,6 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     message: z.string(),
     target: z.string(),
     timestamp: z.int(),
-  }),
-
-  ai_stream_delta: z.looseObject({ requestId: z.string(), delta: z.string(), done: z.boolean() }),
-  ai_stream_settled: z.looseObject({
-    requestId: z.string(),
-    status: z.string(),
-    error: z.string().nullish(),
   }),
 
   bus_message: z.looseObject({

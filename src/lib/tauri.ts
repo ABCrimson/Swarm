@@ -490,9 +490,12 @@ export async function getSession(id: string): Promise<Session> {
 }
 
 /**
- * Adds a worker to a session's `workerIds` (`session_add_worker`). No
- * event is emitted: callers mirror the result into `useSessionStore`
- * themselves (see `spawnWorkerFromSpec` in `#lib/worker-spawn`).
+ * Adds a worker to a session's `workerIds` (`session_add_worker`).
+ * When the membership actually changes the backend emits
+ * `session_worker_added`, which `useSessionEvents` mirrors into
+ * `useSessionStore`; `spawnWorkerFromSpec` (`#lib/worker-spawn`) also
+ * mirrors the result itself, through the idempotent
+ * `addWorkerToSession`, so either may land first.
  */
 export async function sessionAddWorker(sessionId: string, workerId: string): Promise<void> {
   return invoke<void>("session_add_worker", { sessionId, workerId });
@@ -500,9 +503,9 @@ export async function sessionAddWorker(sessionId: string, workerId: string): Pro
 
 /**
  * Removes a worker from a session's `workerIds`
- * (`session_remove_worker`). Unlike {@link sessionAddWorker} this emits
- * `session_worker_removed`, which `useSessionEvents` mirrors into
- * `useSessionStore`; callers do not update the store themselves.
+ * (`session_remove_worker`). The backend emits `session_worker_removed`,
+ * which `useSessionEvents` mirrors into `useSessionStore`; callers do not
+ * update the store themselves.
  */
 export async function sessionRemoveWorker(sessionId: string, workerId: string): Promise<void> {
   return invoke<void>("session_remove_worker", { sessionId, workerId });

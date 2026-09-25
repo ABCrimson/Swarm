@@ -34,8 +34,9 @@ import { useWorkerStore } from "#store/workers";
  *   it overwrites the placeholder.
  * - When `sessionId` is given, registers the worker against that
  *   session via `session_add_worker` and mirrors the result into
- *   `useSessionStore` (the backend does not emit an event for this
- *   mutation, so the frontend must update its own copy).
+ *   `useSessionStore`. The backend's `session_worker_added` event (see
+ *   `useSessionEvents`) may land first; both go through the idempotent
+ *   `addWorkerToSession`.
  * - When `spec` doesn't specify its own `repoRoot`, falls back to the
  *   persisted `default_repo_root` (the Project Root picker in the Spawn
  *   Worker dialog), so template and tool-driven spawns get worktree
@@ -81,20 +82,10 @@ export async function spawnWorkerFromSpec(
   if (sessionId) {
     try {
       await sessionAddWorker(sessionId, workerId);
-      // Hazard: the read of `session.workerIds` and the `updateSession()`
-      // write below must stay synchronous with each other (no `await`
-      // between them). They run as one uninterrupted microtask once
-      // `sessionAddWorker` resolves, which is what makes concurrent
-      // spawns into the same session safe without a lock — each call's
-      // get-then-set pair always reads the latest state. Inserting an
-      // `await` here would reopen a lost-update race between concurrent
-      // callers targeting the same `sessionId`.
-      const session = useSessionStore.getState().sessions.get(sessionId);
-      if (session) {
-        useSessionStore
-          .getState()
-          .updateSession(sessionId, { workerIds: [...session.workerIds, workerId] });
-      }
+      // Idempotent: the `session_worker_added` event (`useSessionEvents`)
+      // may already have added it, and each add is one atomic store
+      // update, so concurrent spawns into one session lose nothing.
+      useSessionStore.getState().addWorkerToSession(sessionId, workerId);
     } catch (err) {
       console.error(
         `spawnWorkerFromSpec: failed to register worker with session "${sessionId}"`,

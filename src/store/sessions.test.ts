@@ -139,6 +139,27 @@ describe("SessionStore", () => {
     });
   });
 
+  describe("addWorkerToSession", () => {
+    it("appends the worker once, however often it is added", () => {
+      const [first, added] = [crypto.randomUUID(), crypto.randomUUID()];
+      const session = createSession({ workerIds: [first] });
+      useSessionStore.getState().addSession(session);
+
+      useSessionStore.getState().addWorkerToSession(session.id, added);
+      useSessionStore.getState().addWorkerToSession(session.id, added);
+
+      expect(useSessionStore.getState().sessions.get(session.id)?.workerIds).toEqual([
+        first,
+        added,
+      ]);
+    });
+
+    it("is a no-op for an unknown session", () => {
+      useSessionStore.getState().addWorkerToSession(crypto.randomUUID(), crypto.randomUUID());
+      expect(useSessionStore.getState().sessions.size).toBe(0);
+    });
+  });
+
   describe("removeWorkerFromSession", () => {
     it("removes exactly that worker from the session", () => {
       const [keep, drop] = [crypto.randomUUID(), crypto.randomUUID()];

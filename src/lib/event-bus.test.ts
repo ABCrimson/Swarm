@@ -194,32 +194,32 @@ describe("event-bus", () => {
   describe("waitFor", () => {
     it("resolves on a matching receipt", async () => {
       await connectEventBus();
-      const settled = waitFor((e) => e.type === "ai_stream_settled");
+      const settled = waitFor((e) => e.type === "ship_settled");
       push({
         seq: 1,
         ts: 1,
-        type: "ai_stream_settled",
-        payload: { requestId: "r1", status: "ok" },
+        type: "ship_settled",
+        payload: { shipId: uuid(101), workerId: uuid(1), status: "ok" },
       });
-      await expect(settled).resolves.toMatchObject({ type: "ai_stream_settled" });
+      await expect(settled).resolves.toMatchObject({ type: "ship_settled" });
     });
 
     it("by type, resolves with the parsed payload of the first match", async () => {
       await connectEventBus();
-      const settled = waitFor("ai_stream_settled", (e) => e.payload.requestId === "r2");
+      const settled = waitFor("ship_settled", (e) => e.payload.shipId === uuid(102));
       push({
         seq: 1,
         ts: 1,
-        type: "ai_stream_settled",
-        payload: { requestId: "r1", status: "ok" },
+        type: "ship_settled",
+        payload: { shipId: uuid(101), workerId: uuid(1), status: "ok" },
       });
       push({
         seq: 2,
         ts: 2,
-        type: "ai_stream_settled",
-        payload: { requestId: "r2", status: "error", error: "Boom" },
+        type: "ship_settled",
+        payload: { shipId: uuid(102), workerId: uuid(1), status: "error" },
       });
-      await expect(settled).resolves.toMatchObject({ seq: 2, payload: { error: "Boom" } });
+      await expect(settled).resolves.toMatchObject({ seq: 2, payload: { status: "error" } });
     });
 
     it("rejects on timeout", async () => {
