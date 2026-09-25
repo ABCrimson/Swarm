@@ -1,0 +1,22 @@
+# Keeps the SHA-pinned actions current: Dependabot bumps the commit SHA and
+# its `# vX.Y.Z` comment together. Only github-actions: Dependabot reads the
+# pnpm 12 two-document lockfile as an empty graph (dependabot-core#15904),
+# and npm/Cargo pins deliberately track pre-release channels by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # A freshly published action release is not adopted for seven days,
+    # so a compromised release has time to be caught and yanked. Seven is
+    # the minimum zizmor's dependabot-cooldown audit accepts, and the CI
+    # Workflow Lint job audits this file.
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci

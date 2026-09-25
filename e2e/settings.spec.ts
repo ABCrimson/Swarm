@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.ts";
 
 // ── Settings ──────────────────────────────────────────
 //
@@ -10,19 +10,12 @@ import { expect, test } from "@playwright/test";
 // what IS fully client-side: section rendering, model selection,
 // keybinding capture, and number-field clamping.
 
-async function gotoSettings(page: import("@playwright/test").Page): Promise<void> {
-  await page.goto("/");
-  await page
-    .getByRole("navigation", { name: "Page Navigation" })
-    .getByRole("button", { name: "Settings" })
-    .click();
-  await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
-}
+test.beforeEach(async ({ app }) => {
+  await app.goTo("Settings");
+});
 
 test.describe("Settings", () => {
-  test("renders every configuration section", async ({ page }) => {
-    await gotoSettings(page);
-
+  test("renders every configuration section", async ({ app }) => {
     for (const heading of [
       "AI Connectivity",
       "AI Model",
@@ -33,13 +26,11 @@ test.describe("Settings", () => {
       "Alert Thresholds",
       "About",
     ]) {
-      await expect(page.getByRole("heading", { level: 2, name: heading })).toBeVisible();
+      await expect(app.main.getByRole("heading", { level: 2, name: heading })).toBeVisible();
     }
   });
 
   test("the AI model catalog lets you switch the selected model", async ({ page }) => {
-    await gotoSettings(page);
-
     const sonnetCard = page.getByRole("button", { name: /Claude Sonnet 5/ });
     const haikuCard = page.getByRole("button", { name: /Claude Haiku 4\.5/ });
 
@@ -57,8 +48,6 @@ test.describe("Settings", () => {
   test("selecting the gated model shows a Project Glasswing warning instead of the plain switch toast", async ({
     page,
   }) => {
-    await gotoSettings(page);
-
     await page.getByRole("button", { name: /Claude Mythos 5/ }).click();
 
     await expect(page.getByText("Claude Mythos 5 Requires Project Glasswing Access")).toBeVisible();
@@ -66,8 +55,6 @@ test.describe("Settings", () => {
   });
 
   test("keybinding capture accepts a new binding", async ({ page }) => {
-    await gotoSettings(page);
-
     const captureButton = page.getByRole("button", { name: "Change Shortcut For Command Palette" });
     await expect(captureButton).toHaveText("Ctrl+K");
 
@@ -81,8 +68,6 @@ test.describe("Settings", () => {
   });
 
   test("keybinding capture rejects a binding already assigned elsewhere", async ({ page }) => {
-    await gotoSettings(page);
-
     const graphToggleButton = page.getByRole("button", {
       name: "Change Shortcut For Graph / List Toggle",
     });
@@ -97,8 +82,6 @@ test.describe("Settings", () => {
   });
 
   test("number fields clamp out-of-range input to the field's max on commit", async ({ page }) => {
-    await gotoSettings(page);
-
     const streamLimit = page.getByLabel("AI Concurrent Stream Limit");
     await expect(streamLimit).toHaveValue("3"); // aiConcurrentLimit default (DEFAULT_APP_SETTINGS)
 
@@ -110,8 +93,6 @@ test.describe("Settings", () => {
   });
 
   test("number fields clamp out-of-range input to the field's min on commit", async ({ page }) => {
-    await gotoSettings(page);
-
     const streamLimit = page.getByLabel("AI Concurrent Stream Limit");
     await streamLimit.fill("0");
     await streamLimit.blur();

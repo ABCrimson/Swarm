@@ -1,153 +1,241 @@
 name: CI
 
+# Every gate from AGENTS.md, on every push and PR to main. release.yml runs
+# this same workflow (workflow_call) and builds nothing until it is green.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:
 
-env:
-  CARGO_TERM_COLOR: always
-  NODE_VERSION: "27.0.0-nightly202609233d85c94cfa"
-  # Keep in sync with rust-toolchain.toml
-  RUST_TOOLCHAIN: "nightly-2026-09-23"
+permissions: {}
+
+# One run per PR (a new push cancels the stale one) and one per pushed ref.
+# `event_name` keeps a release's nested CI run (event `push` on a tag, or
+# `workflow_dispatch`) out of the main-branch queue, so a main push can
+# never cancel it.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  lint-frontend:
-    name: Frontend Lint & Type Check
-    runs-on: ubuntu-latest
-    # The app lives one level below the repo root.
-    defaults:
-      run:
-        working-directory: .
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          package_json_file: package.json
+          persist-credentials: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
+      # pnpm (packageManager), the pinned Node (devEngines.runtime) and a
+      # frozen-lockfile install in one step.
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          cache: true
+          require-lockfile: true
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Biome check
-        run: pnpm exec biome ci .
-
-      - name: TypeScript type check
+      - name: Type check
         run: pnpm typecheck
 
-      - name: Run frontend tests
-        run: pnpm test
+      - name: Biome
+        run: pnpm exec biome ci .
+
+      # Unit tests plus the coverage floor in vitest.config.ts.
+      - name: Unit tests + coverage
+        run: pnpm test:coverage
+
+      - name: Build (desktop bundle)
+        run: pnpm build
+
+      - name: Build (browser UI for swarmd --serve-ui)
+        run: pnpm build:web
+
+      - name: React Compiler coverage
+        run: pnpm check:compiler
+
+      - name: Docs site
+        run: pnpm build:site
 
   e2e:
-    name: End-to-End Tests (Playwright)
-    runs-on: ubuntu-latest
-    # Bounds a wedged Vite dev-server or browser hang to 15 min instead of
-    # the 6h default. webServer.timeout (30s) already fails a boot-hang fast;
-    # this is the backstop for anything downstream.
-    timeout-minutes: 15
-    env:
-      CI: "true"
-    # The app lives one level below the repo root.
-    defaults:
-      run:
-        working-directory: .
+    name: End-to-End (Playwright)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          package_json_file: package.json
+          persist-credentials: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          cache: true
+          require-lockfile: true
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      # Headless shell only: every project in playwright.config.ts runs
+      # headless, so the full headed Chromium would be dead weight.
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps --only-shell chromium
 
-      # Chromium only (matches playwright.config.ts's single `chromium`
-      # project) — Firefox/WebKit aren't configured, so installing them
-      # here would just burn CI minutes for no coverage gain.
-      - name: Install Playwright's Chromium browser
-        run: pnpm exec playwright install --with-deps chromium
-
-      - name: Run Playwright e2e suite
+      # With CI set, playwright.config.ts builds the production bundle and
+      # serves it with `vite preview` (not the dev server).
+      - name: Playwright
         run: pnpm test:e2e
 
       - name: Upload Playwright report
-        if: failure()
-        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-report
           path: playwright-report/
           retention-days: 14
 
-  lint-backend:
-    name: Rust Lint & Test
-    runs-on: ubuntu-latest
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Explicit images: the *-latest labels move to new OS releases on
+        # GitHub's schedule, not ours. Every cfg(windows) / cfg(target_os =
+        # "macos") path is linted and tested before it reaches a release.
+        os: [ubuntu-26.04, windows-2025, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Install system dependencies
+      # WebKitGTK and its GTK/libsoup/JavaScriptCore stack are the only
+      # system libraries the workspace links on Linux (rustls: no OpenSSL;
+      # no tray, so no appindicator).
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
+      # The agent-adapter tests drive fake CLIs written as Node scripts.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # Keep in sync with rust-toolchain.toml
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: clippy, rustfmt
+          node-version-file: package.json
+          package-manager-cache: false
 
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+      # No `toolchain` input: rust-toolchain.toml is the single source of
+      # the pinned nightly. Rustc warnings are denied (build-warnings
+      # default), and only main writes the cache so PRs cannot evict it.
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
-          workspaces: ". -> target"
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: Rust tests
-        run: cargo test --workspace
+      - name: Tests
+        run: cargo test --workspace --locked
 
-      - name: Rust format check
-        run: cargo fmt --all -- --check
+  rust-policy:
+    name: Rust Policy
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Verify swarm-core has no Tauri dependency
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache: false
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      # `--prefix none --format "{p}"` prints one bare "name version" per
+      # line, so an anchored ^tauri match cannot hit a path that merely
+      # contains "src-tauri". swarmd is checked on its own: a tauri crate
+      # added straight to its manifest would not show up under swarm-core.
+      # The tree is captured before grepping so a failing `cargo tree`
+      # fails the step instead of reading as "no tauri found".
+      - name: swarm-core and swarmd stay Tauri-free
         run: |
-          # --prefix none --format "{p}" prints one bare "name version"
-          # per line (no tree-drawing indentation, no path). Anchored
-          # ^tauri match is immune to the checkout path containing
-          # "src-tauri" and to any future workspace path-dependency
-          # whose path happens to contain "tauri".
-          if cargo tree -p swarm-core -e normal --prefix none --format "{p}" | grep -qE "^tauri"; then
-            echo "::error::swarm-core must not depend on tauri (directly or transitively)"
-            cargo tree -p swarm-core -e normal --prefix none --format "{p}" | grep -E "^tauri"
-            exit 1
-          fi
+          status=0
+          for crate in swarm-core swarmd; do
+            deps=$(cargo tree --locked -p "$crate" -e normal --prefix none --format "{p}")
+            if grep -E "^tauri" <<<"$deps"; then
+              echo "::error::$crate must not depend on tauri (directly or transitively)"
+              status=1
+            fi
+          done
+          exit "$status"
 
-      - name: Verify swarmd has no Tauri dependency
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Advisories, licenses, bans and sources, per the root deny.toml.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          command-arguments: --hide-inclusion-graph
+
+  workflows:
+    name: Workflow Lint
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2.87.19
+        with:
+          tool: actionlint@1.7.12
+
+      - name: actionlint
+        run: actionlint
+
+      # Annotations instead of a SARIF upload: no security-events grant, and
+      # findings still fail the job. Online audits check every pinned SHA
+      # against its `# vX.Y.Z` comment and known-vulnerable action versions.
+      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          version: 1.30.1
+          advanced-security: false
+          annotations: true
+
+  # The single status to require in branch rules: green only when every
+  # gate above passed.
+  ci-ok:
+    name: CI OK
+    if: ${{ always() }}
+    needs: [frontend, e2e, rust, rust-policy, cargo-deny, workflows]
+    # A shell loop needs no full VM.
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: All gates passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          # swarmd depends on swarm-core but must never itself grow a
-          # tauri/tauri-plugin-* dependency (the swarm-core-only gate
-          # above would never catch one added directly to
-          # crates/swarmd/Cargo.toml) — security-review FIX-5.
-          if cargo tree -p swarmd -e normal --prefix none --format "{p}" | grep -qE "^tauri"; then
-            echo "::error::swarmd must not depend on tauri (directly or transitively)"
-            cargo tree -p swarmd -e normal --prefix none --format "{p}" | grep -E "^tauri"
-            exit 1
-          fi
+          echo "Gate results: $RESULTS"
+          for result in $RESULTS; do
+            [ "$result" = "success" ] || exit 1
+          done

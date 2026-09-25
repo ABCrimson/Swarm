@@ -16,33 +16,35 @@
 
 ## Current Suite
 
-Playwright drives the real Vite build (`pnpm dev`, port 1420) headless in Chromium — no mocking, no component harness. 29 tests across four files:
+Playwright drives the real app headless in Chromium — no mocking, no component harness. CI runs it against the production bundle (`vite build` + `vite preview`), local runs against the dev server. 29 tests across four spec files, all built on the shared fixture in `e2e/fixtures.ts`:
 
 | File                    | Covers                                                                 |
 |--------------------------|------------------------------------------------------------------------|
-| `e2e/navigation.spec.ts` | Dashboard load, the sidebar nav landmark, click-through to all 5 sidebar pages, arrow/Home/End keyboard nav, palette-only routing to Tools/Logs/Workspace (no sidebar entry for these three), the Workers empty state (graph + list view), the Sessions empty state |
-| `e2e/palette.spec.ts`    | Ctrl+K open, Escape close, query filtering (a matching query narrows the list; a non-matching one hits `Command.Empty`), selecting a nav command routes and closes the palette, frecency (a used command shows a usage-count badge on next open) |
+| `e2e/fixtures.ts`       | The `app` fixture every spec uses: opens the app and waits for the app-ready signal (below), plus landmark locators, sidebar navigation and the palette shortcut |
+| `e2e/navigation.spec.ts` | Dashboard load inside the shell's landmarks (title, banner, `Main Navigation`), the sidebar nav landmark, click-through to all 5 sidebar pages, arrow/Home/End keyboard nav, palette-only routing to Tools/Logs/Workspace (no sidebar entry for these three), the Workers empty state (graph + list view), the Sessions empty state |
+| `e2e/palette.spec.ts`    | Ctrl+K open, Escape close, query filtering (a matching query narrows the list; a non-matching one hits `Command.Empty`), selecting a nav command routes and closes the palette, frecency (a used command's badge reads exactly `1` on next open) |
 | `e2e/settings.spec.ts`   | Every settings section renders, the AI model catalog (switching selection, the gated-model warning toast), keybinding capture (accepting a new binding, rejecting a binding already in use), number-field min/max clamping on blur |
 | `e2e/dialogs.spec.ts`    | The Spawn Worker dialog: opens from the Workers toolbar, provider radios render, Claude Code is deterministically disabled with the real `agentProbe()`-sourced reason, Escape/click-outside close it and restore focus |
 
-This replaces the previous 3-assertion smoke suite (`e2e/app.spec.ts` — SWARM branding, sidebar presence, Ctrl+K open) with grouped, role/text-selector assertions on every headless-reachable surface. All 29 pass locally against `pnpm test:e2e` (`workers: 1`, matching CI — see [Running It](#running-it) for why worker count matters).
+**The app-ready signal.** The global shortcuts (Ctrl+K, the graph/list toggle) attach their `keydown` listeners in effects of the shell's first commit; a key pressed before then is silently lost, which is what made the palette specs flaky. The fixture therefore waits for the current page's `<h1>` inside `<main>` — pages are lazy chunks that commit after the shell, and React flushes the shell's pending effects before rendering anything else — followed by one macrotask yield. No spec sleeps on the clock.
 
 ## Running It
 
 ```bash
-pnpm exec playwright install --with-deps chromium   # once per machine
-pnpm test:e2e
+pnpm exec playwright install --with-deps --only-shell chromium   # once per machine
+pnpm test:e2e            # dev server on :1420, reused if already running
+CI=1 pnpm test:e2e       # exactly what CI runs: production build + vite preview on :4173
 ```
 
-`playwright.config.ts`'s `webServer` block starts `pnpm dev` itself and waits for `http://localhost:1420` — no manual server step needed. `workers: process.env.CI ? 1 : undefined` means a bare local run auto-parallelizes across CPU cores; on a many-core machine this can start to contend for CPU with the Chromium instances themselves (GSAP/WebGPU-particle/recharts/elkjs rendering work) and produce timeouts that aren't real bugs — the app never touches a shared server-side data store, so nothing about the SUITE requires parallel isolation, it's purely a local speed/stability trade-off. To reproduce CI's exact behavior locally (serial, 2 retries, `forbidOnly`), run `CI=true pnpm test:e2e`.
+`playwright.config.ts`'s `webServer` block starts the server itself — no manual step. Locally it runs `pnpm dev` (Tauri's `devUrl` port) and reuses a server that is already up; with `CI` set it runs `vite build && vite preview --port 4173 --strictPort`, so the suite exercises the same Rolldown and React Compiler output the desktop bundle ships. Both run Playwright's default worker count (half the logical cores). With `CI` set, a test only counts as passed on its first attempt: `retries: 2` classifies a failure, and `failOnFlakyTests` fails the run when a retry was needed, keeping that retry's trace for diagnosis.
 
 ## CI
 
-`.github/workflows/ci.yml`'s `e2e` job runs on every push/PR to `main`: `pnpm install --frozen-lockfile` → `pnpm exec playwright install --with-deps chromium` → `pnpm test:e2e`. Chromium only, matching `playwright.config.ts`'s single `chromium` project — Firefox/WebKit aren't configured, so installing them would burn CI minutes for zero coverage gain. The HTML report (`playwright-report/`) uploads as a build artifact on failure only, kept 14 days.
+`.github/workflows/ci.yml`'s `e2e` job (Ubuntu 26.04) runs on every push and PR to `main`, and inside every release: `pnpm/setup` (pnpm, the pinned Node and a frozen install) → `pnpm exec playwright install --with-deps --only-shell chromium` → `pnpm test:e2e` with `CI` set, i.e. against the production preview build. The `github` reporter annotates failures inline; the HTML report (`playwright-report/`) uploads as an artifact whenever the run was not cancelled (traces from retried tests included), kept 14 days.
 
 ## The Hard Boundary: No Tauri Backend
 
-Playwright runs the Vite dev build directly in a browser — there is no `tauri dev`, no WebView2/WebKitGTK host, no Rust process. `src/lib/tauri.ts`'s `isTauri()` checks for `"__TAURI_INTERNALS__" in window`, which is only ever true inside an actual Tauri-hosted webview; under Playwright it's permanently `false`, and `#lib/transport`'s `wsTransport` is never selected either (that requires the `pnpm build:web` + `swarmd --serve-ui` combination, a different build entirely). So every `invoke()` call in this suite runs through `tauriTransport`'s no-bridge branch and resolves `undefined` rather than rejecting — see that file's doc comment. Most command wrappers in `#lib/tauri` are written to degrade gracefully from there (`agentProbe()` returns `{ available: false, detail: "No Backend Transport Available." }`, `spawnWorker`/`agentSpawn` resolve `null`, `readConfig` resolves `null`), which is exactly what lets `dialogs.spec.ts` assert the Spawn Worker dialog's Claude Code-disabled state deterministically instead of skipping it.
+Playwright runs the web build directly in a browser (the dev server locally, `vite preview` in CI) — there is no `tauri dev`, no WebView2/WebKitGTK host, no Rust process. `src/lib/tauri.ts`'s `isTauri()` checks for `"__TAURI_INTERNALS__" in window`, which is only ever true inside an actual Tauri-hosted webview; under Playwright it's permanently `false`, and `#lib/transport`'s `wsTransport` is never selected either (that requires the `pnpm build:web` + `swarmd --serve-ui` combination, a different build entirely). So every `invoke()` call in this suite runs through `tauriTransport`'s no-bridge branch and resolves `undefined` rather than rejecting — see that file's doc comment. Most command wrappers in `#lib/tauri` are written to degrade gracefully from there (`agentProbe()` returns `{ available: false, detail: "No Backend Transport Available." }`, `spawnWorker`/`agentSpawn` resolve `null`, `readConfig` resolves `null`), which is exactly what lets `dialogs.spec.ts` assert the Spawn Worker dialog's Claude Code-disabled state deterministically instead of skipping it.
 
 **What this means concretely:**
 
@@ -55,7 +57,7 @@ No test in this suite spawns a worker and asserts on the result. Where a command
 
 The event log (`orchestration::log`, `<app-data>/swarm-events.db`) is SWARM's actual source of truth: one writer thread, monotonically increasing `seq`, resumed from `EventLog::max_seq()` across restarts (see `docs/architecture.md`'s [Ordered Event Core](architecture.md#ordered-event-core)). Everything this frontend suite touches is upstream of that log — a real regression in `seq` assignment, persistence-policy classification (`is_persistent()`), or `events_since` paging under concurrent worker load would be invisible here no matter how much UI surface gets covered, because none of it happens without a live `swarm-core::runtime::Runtime` behind real IPC.
 
-Closing that gap needs a real Tauri backend under WebDriver, i.e. [`tauri-driver`](https://github.com/tauri-apps/tauri-driver) (`tauri build`/`tauri dev`'s WebDriver-compatible harness) driven by a `webdriverio`- or Playwright-over-CDP-style client, in place of (or alongside) the current Vite-only `webServer`. This is a substantial separate lift — a new CI job with a built desktop binary, a display server (`xvfb-run` on `ubuntu-latest`, since WebKitGTK still needs one headed even "headless"), and a WebDriver client library not currently a project dependency — and is deliberately **not built as part of this work**. What follows is the documented design for when that lift happens, not a stub test that pretends to exercise it today.
+Closing that gap needs a real Tauri backend under WebDriver, i.e. [`tauri-driver`](https://github.com/tauri-apps/tauri/tree/dev/crates/tauri-driver) (`tauri build`/`tauri dev`'s WebDriver-compatible harness) driven by a `webdriverio`- or Playwright-over-CDP-style client, in place of (or alongside) the current Vite-only `webServer`. This is a substantial separate lift — a new CI job with a built desktop binary, a display server (`xvfb-run` on the Linux runner, since WebKitGTK still needs one headed even "headless"), and a WebDriver client library not currently a project dependency — and is deliberately **not built as part of this work**. What follows is the documented design for when that lift happens, not a stub test that pretends to exercise it today.
 
 **The design — an "event-log-as-oracle" e2e test:**
 
