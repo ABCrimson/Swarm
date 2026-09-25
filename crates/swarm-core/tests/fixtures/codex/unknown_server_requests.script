@@ -1,0 +1,17 @@
+# Server requests SWARM does not implement must each get a JSON-RPC error
+# answer. The fake blocks on each answer, so the turn only completes when
+# every request was answered.
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_THREAD_START 019a7c00-0000-7000-8000-000000000001
+#DIRECTIVE EXPECT_REQUEST turn/start
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000f1
+{"id":42,"method":"item/tool/requestUserInput","params":{"threadId":"@THREAD","turnId":"@TURN","itemId":"ask-1","questions":[],"isBlocking":true,"autoResolutionMs":null}}
+#DIRECTIVE EXPECT_RESPONSE 42
+{"id":"elicit-1","method":"mcpServer/elicitation/request","params":{}}
+#DIRECTIVE EXPECT_RESPONSE "elicit-1"
+{"id":43,"method":"some/futureRequest","params":{"anything":true}}
+#DIRECTIVE EXPECT_RESPONSE 43
+{"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"completed","error":null,"startedAt":1790201250,"completedAt":1790201252,"durationMs":20}}}

@@ -1,0 +1,15 @@
+# turn/interrupt stops the running turn (it completes as interrupted) and
+# the thread takes another turn afterwards.
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_THREAD_START 019a7c00-0000-7000-8000-000000000001
+#DIRECTIVE EXPECT_REQUEST turn/start
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000d1
+#DIRECTIVE EXPECT_REQUEST turn/interrupt
+#DIRECTIVE RESPOND {}
+{"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"interrupted","error":null,"startedAt":1790201250,"completedAt":1790201252,"durationMs":50}}}
+#DIRECTIVE EXPECT_REQUEST turn/start
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000d2
+{"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"completed","error":null,"startedAt":1790201250,"completedAt":1790201252,"durationMs":10}}}

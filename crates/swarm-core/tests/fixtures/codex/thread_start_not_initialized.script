@@ -1,0 +1,7 @@
+# The server rejects thread/start the way 0.156.1 rejects any request that
+# arrives before `initialize` completed.
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_ERROR -32600 Not initialized

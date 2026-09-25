@@ -1,0 +1,5 @@
+# Reads `initialize`, never answers, and survives stdin EOF: only a kill
+# ends it.
+#DIRECTIVE IGNORE_STDIN_EOF
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE HANG

@@ -1,112 +1,86 @@
-//! Agent turn scheduler.
+//! Agent turn scheduler: gates how many agent turns run at once and
+//! decides which queued turn runs next.
 //!
-//! Absorbed from the deleted `ai/queue.rs` (see `docs/architecture.md`'s
-//! adapter-layer section and the multi-provider plan's dead-code
-//! disposition table) — the BinaryHeap-priority + Semaphore-gated +
-//! JoinSet-tracked + bounded-mpsc(256) machinery transfers essentially
-//! unmodified, retyped from `AiRequest`/`AiPriority` to
-//! [`AgentTurnRequest`]/[`TurnPriority`]. What changed structurally: the
-//! old queue owned a concrete `AiClient` and called
-//! `client.stream_message(..)` directly, emitting `ai_stream_settled`
-//! itself; this scheduler is provider-agnostic (Phase 3 adapters land
-//! after this module), so it is generic over an injected `executor`
-//! closure instead. The executor owns everything provider-specific —
-//! driving the [`crate::agent::adapter::AgentSession`], emitting the
-//! `agent_*` event family (including the terminal `agent_turn_settled`,
-//! Condition B's synthesized-on-kill guarantee included) — while this
-//! module's only job stays "concurrent agent turns are the scarce
-//! resource; gate and order them."
+//! Concurrent agent turns are the scarce resource — you do not want 20
+//! provider processes running tools against one repo at once — so every
+//! `agent_send_turn` goes through one app-wide [`AgentScheduler`]
+//! ([`crate::runtime::Runtime::start`] builds it for both shells). The
+//! scheduler is provider-agnostic: it is generic over an injected
+//! `executor` closure that owns everything provider-specific (looking up
+//! the [`crate::agent::adapter::AgentSession`], `send_turn`, awaiting the
+//! turn's settlement, emitting the `agent_*` family). This module only
+//! answers "may this turn start now, and which one goes first?".
 //!
-//! Concurrent agent turns are the new scarce resource for exactly the
-//! reason the plan gives: you do not want 20 Claude Code processes
-//! running tools against one repo at once.
+//! ## Admission rules
 //!
-//! Constructed lazily — Phase 2 ships this fully tested but unwired;
-//! the shell (`swarm-desktop`) does not `app.manage()` an
-//! [`AgentScheduler`] until Phase 3's adapters exist to give the
-//! `executor` closure something real to call.
+//! A queued request is **admissible** when no other turn for the same
+//! worker is currently running. Among admissible requests, the highest
+//! [`TurnPriority`] wins, then the oldest (FIFO within a priority). A
+//! request is dispatched only when a concurrency permit is free AND it is
+//! admissible, so:
 //!
-//! ## Known limitation: priority inversion (inherited from `ai/queue.rs`, unchanged)
+//! - **One turn per worker at a time.** Follow-ups queued for a busy
+//!   worker wait in the queue *without* holding a permit, so they never
+//!   starve other workers' turns.
+//! - **Priority is decided at dispatch time.** The dispatch loop drains
+//!   the intake channel before it hands out a permit, so a `Critical`
+//!   request that arrives while `Low` requests wait is considered for the
+//!   very next free permit.
+//! - **No preemption.** A running turn is never cancelled to make room;
+//!   a `Critical` request still waits for a permit to free naturally.
 //!
-//! This scheduler's priority ordering governs only WHICH pending
-//! request is picked next when a concurrency permit frees up — it does
-//! not preempt work already running:
-//!
-//! - **A `Critical` request cannot jump a permit already held by a
-//!   `Low`-priority task.** If `concurrent_limit` permits are all
-//!   currently out to lower-priority turns, a newly-arrived `Critical`
-//!   request waits for one to free naturally, same as anyone else. True
-//!   preemption would mean cancelling in-flight work to make room,
-//!   which this scheduler (like the `ai/queue.rs` it absorbed) does
-//!   not do.
-//! - **`QueueFull` can trigger with an "idle" heap.** Backpressure
-//!   ([`AgentScheduler::enqueue`]'s `AppError::QueueFull`) is on the
-//!   bounded mpsc channel feeding the heap, not on the heap's own
-//!   depth — a burst that saturates the channel returns `QueueFull`
-//!   even at a moment when every already-admitted request has already
-//!   moved into the heap (which has no capacity limit of its own).
-//!
-//! Both behaviors transferred verbatim from `ai/queue.rs` — pre-existing
-//! semantics, not something this module changed. Documented here rather
-//! than redesigned; a real preemption/priority-jump scheme is future
-//! work if a provider workload ever needs it.
+//! Backpressure is on the number of requests waiting to be dispatched:
+//! [`AgentScheduler::enqueue`] returns [`AppError::QueueFull`] once
+//! [`AGENT_TURN_QUEUE_CAPACITY`] requests are queued.
 
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::cmp::{Ordering, Reverse};
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use super::adapter::TurnInput;
+use crate::error::AppError;
 
-/// Bounded channel capacity for the agent-turn scheduler — unchanged
-/// from `ai/queue.rs`'s `AI_QUEUE_CAPACITY`.
-const AGENT_TURN_QUEUE_CAPACITY: usize = 256;
+/// Maximum number of turns that may wait for dispatch at once.
+pub const AGENT_TURN_QUEUE_CAPACITY: usize = 256;
 
 /// Lowest accepted live agent-turn concurrency limit
 /// ([`AgentScheduler::set_concurrency`] / the `set_agent_concurrency`
-/// shell command).
+/// command). Smaller values are clamped up to it.
 pub const MIN_AGENT_CONCURRENCY: u32 = 1;
 /// Highest accepted live agent-turn concurrency limit — beyond this,
-/// running more concurrent Claude Code processes against one repo is
-/// almost certainly a misconfiguration (mirrors
+/// running more concurrent provider processes against one repo is almost
+/// certainly a misconfiguration (mirrors
 /// `worker::registry::MAX_MAX_WORKERS`'s reasoning for a different
-/// resource).
+/// resource). Larger values are clamped down to it.
 pub const MAX_AGENT_CONCURRENCY: u32 = 16;
 
-/// Priority levels for scheduled agent turns.
+/// Priority levels for scheduled agent turns, lowest to highest.
 ///
-/// Replaces `AiPriority` (retired per the plan's dead-code disposition
-/// table) — identical ordering semantics (`Low (0) < Normal (1) <
-/// High (2) < Critical (3)`), renamed to describe what is actually
-/// being prioritized now: agent turns, not raw AI API requests.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+/// Wire form is camelCase (`"low"`, `"normal"`, `"high"`, `"critical"`).
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(rename_all = "camelCase")]
 pub enum TurnPriority {
-    /// Lowest priority, processed last.
-    Low = 0,
+    /// Lowest priority, dispatched last.
+    Low,
     /// Default priority level.
     #[default]
-    Normal = 1,
-    /// Elevated priority, processed before Normal and Low.
-    High = 2,
-    /// Highest priority, processed before all others.
-    Critical = 3,
+    Normal,
+    /// Elevated priority, dispatched before Normal and Low.
+    High,
+    /// Highest priority, dispatched before all others.
+    Critical,
 }
 
-/// One agent turn awaiting a concurrency slot.
-///
-/// Replaces `AiRequest` — carries a [`TurnInput`] bound to a specific
-/// worker rather than raw Messages-API `messages`/`system` fields,
-/// since turn content is now provider-owned (see
-/// `crate::agent::adapter::AgentSession::send_turn`) rather than
-/// something this crate constructs an API request body from.
+/// One agent turn awaiting dispatch.
 #[derive(Debug, Clone)]
 pub struct AgentTurnRequest {
     /// UUID of the worker whose session this turn is sent to.
@@ -115,44 +89,6 @@ pub struct AgentTurnRequest {
     pub turn: TurnInput,
     /// Queue priority level.
     pub priority: TurnPriority,
-}
-
-/// A priority-wrapped turn request for the internal heap.
-///
-/// Requests are ordered by priority (descending) and then by insertion
-/// sequence (ascending / FIFO) for stable ordering within the same
-/// priority level.
-#[derive(Debug)]
-struct PrioritizedRequest {
-    /// The original turn request.
-    request: AgentTurnRequest,
-    /// Numeric priority (higher = processed first).
-    priority: i32,
-    /// Insertion order for stable ordering within same priority.
-    sequence: u64,
-}
-
-impl PartialEq for PrioritizedRequest {
-    fn eq(&self, other: &Self) -> bool {
-        self.priority == other.priority && self.sequence == other.sequence
-    }
-}
-
-impl Eq for PrioritizedRequest {}
-
-impl PartialOrd for PrioritizedRequest {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for PrioritizedRequest {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Higher priority first, then lower sequence (FIFO within priority)
-        self.priority
-            .cmp(&other.priority)
-            .then_with(|| other.sequence.cmp(&self.sequence))
-    }
 }
 
 /// Configuration for the agent-turn scheduler.
@@ -164,7 +100,8 @@ impl Ord for PrioritizedRequest {
 /// | `concurrent_limit` | 3       |
 #[derive(Debug, Clone)]
 pub struct AgentSchedulerConfig {
-    /// Maximum number of concurrent in-flight agent turns.
+    /// Maximum number of concurrently running agent turns, clamped to
+    /// [`MIN_AGENT_CONCURRENCY`]`..=`[`MAX_AGENT_CONCURRENCY`].
     pub concurrent_limit: usize,
 }
 
@@ -176,145 +113,129 @@ impl Default for AgentSchedulerConfig {
     }
 }
 
-/// Priority queue for agent turns with concurrency limiting.
-///
-/// Accepts requests via a bounded mpsc channel (capacity
-/// [`AGENT_TURN_QUEUE_CAPACITY`]), orders them by priority in a
-/// `BinaryHeap`, and processes them through a Tokio `Semaphore` gate
-/// that limits concurrency. Spawned tasks are tracked via a `JoinSet`
-/// for clean shutdown.
-///
-/// # Architecture
+/// Clamps a requested concurrency limit into the accepted range — a
+/// limit of `0` would stall every queued turn forever.
+fn clamp_limit(limit: usize) -> usize {
+    limit.clamp(
+        MIN_AGENT_CONCURRENCY as usize,
+        MAX_AGENT_CONCURRENCY as usize,
+    )
+}
+
+/// Priority queue + concurrency gate for agent turns.
 ///
 /// ```text
-/// enqueue() ──mpsc(256)──> process_loop()
-///                              │
-///                         BinaryHeap (priority sort)
-///                              │
-///                         Semaphore::acquire()
-///                              │
-///                         JoinSet::spawn(executor(request))
+/// enqueue() ──intake channel──> dispatch loop ──> JoinSet::spawn(executor(request))
+///                                 │  pending queue (priority, FIFO)
+///                                 │  busy workers (one turn each)
+///                                 └  Semaphore permits (concurrency)
 /// ```
 pub struct AgentScheduler {
-    /// Channel sender for submitting new requests.
-    sender: mpsc::Sender<AgentTurnRequest>,
-    /// The live concurrency gate — shared with [`Self::process_loop`] so
-    /// [`Self::set_concurrency`] can resize it from outside the
-    /// background task. `tokio::sync::Semaphore` has no direct
-    /// "set capacity" method; see [`Self::set_concurrency`]'s doc for
-    /// how increases/decreases are realized on top of `add_permits`/
+    /// Intake for new requests. Unbounded: the bound is `queued`.
+    sender: mpsc::UnboundedSender<AgentTurnRequest>,
+    /// Requests accepted by [`Self::enqueue`] and not yet dispatched —
+    /// the backpressure counter behind [`AppError::QueueFull`].
+    queued: Arc<AtomicUsize>,
+    /// The live concurrency gate, shared with the dispatch loop so
+    /// [`Self::set_concurrency`] can resize it. See that method's doc
+    /// for how resizing is realized on top of `add_permits`/
     /// `forget_permits`.
     semaphore: Arc<Semaphore>,
     /// Permits still owed to be permanently forgotten (rather than
-    /// returned to `semaphore`) the next time an in-flight turn's
-    /// permit is released — see [`Self::set_concurrency`].
+    /// returned to `semaphore`) the next time a running turn releases
+    /// one — see [`Self::set_concurrency`].
     pending_forgets: Arc<AtomicUsize>,
     /// The current target concurrency limit, tracked independently of
-    /// `semaphore.available_permits()` (which fluctuates with in-flight
+    /// `semaphore.available_permits()` (which fluctuates with running
     /// turns and can't alone tell `set_concurrency` how big a delta to
     /// apply).
-    concurrency_limit: Arc<AtomicUsize>,
+    concurrency_limit: AtomicUsize,
 }
 
 impl AgentScheduler {
-    /// Creates a new scheduler and starts the background processing
-    /// loop, which drives each admitted [`AgentTurnRequest`] through
-    /// `executor`.
+    /// Creates a scheduler and starts its dispatch loop, which runs each
+    /// admitted [`AgentTurnRequest`] through `executor`.
     ///
-    /// `executor` is responsible for everything provider-specific:
-    /// looking up the target [`crate::agent::adapter::AgentSession`],
-    /// calling `send_turn`, and emitting the resulting `agent_*` events
-    /// (including the terminal `agent_turn_settled`) — this scheduler
-    /// only gates concurrency and priority order around that call.
+    /// # Executor contract
     ///
-    /// # Arguments
+    /// `executor` owns everything provider-specific: looking up the
+    /// target [`crate::agent::adapter::AgentSession`], calling
+    /// `send_turn`, and emitting the resulting `agent_*` events
+    /// (including a terminal `agent_turn_settled` when dispatch itself
+    /// fails). Its future **must not resolve before the turn has
+    /// settled** — i.e. it must await
+    /// [`crate::agent::adapter::AgentSession::await_turn_completion`].
+    /// The concurrency permit (and the worker's one-turn slot) is held
+    /// exactly as long as that future runs; a future that resolved at
+    /// `send_turn`'s return would bound nothing, since `send_turn` only
+    /// proves the provider *accepted* the turn.
     ///
-    /// * `config` - Queue configuration (concurrency limit)
-    /// * `executor` - Async closure invoked once per admitted turn
+    /// The scheduler never runs two executor futures for the same
+    /// `worker_id` at once, so an executor needs no locking of its own
+    /// to keep one worker's turns from racing into `AgentSessionBusy`.
+    ///
+    /// Must be called from within a Tokio runtime (it spawns the
+    /// dispatch loop).
     pub fn new<F, Fut>(config: AgentSchedulerConfig, executor: F) -> Self
     where
         F: Fn(AgentTurnRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let (sender, receiver) = mpsc::channel::<AgentTurnRequest>(AGENT_TURN_QUEUE_CAPACITY);
-        let semaphore = Arc::new(Semaphore::new(config.concurrent_limit));
+        let limit = clamp_limit(config.concurrent_limit);
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let queued = Arc::new(AtomicUsize::new(0));
+        let semaphore = Arc::new(Semaphore::new(limit));
         let pending_forgets = Arc::new(AtomicUsize::new(0));
-        let concurrency_limit = Arc::new(AtomicUsize::new(config.concurrent_limit));
 
-        tokio::spawn(Self::process_loop(
+        tokio::spawn(dispatch_loop(
             receiver,
+            queued.clone(),
             semaphore.clone(),
             pending_forgets.clone(),
-            Arc::new(executor),
+            executor,
         ));
 
         Self {
             sender,
+            queued,
             semaphore,
             pending_forgets,
-            concurrency_limit,
+            concurrency_limit: AtomicUsize::new(limit),
         }
     }
 
-    /// Adjusts the scheduler's live concurrency cap.
+    /// Adjusts the live concurrency cap, clamped to
+    /// [`MIN_AGENT_CONCURRENCY`]`..=`[`MAX_AGENT_CONCURRENCY`].
     ///
-    /// `tokio::sync::Semaphore` has no built-in "resize" operation, so
-    /// this composes its two primitives that come closest:
+    /// `tokio::sync::Semaphore` has no resize operation, so this composes
+    /// the two primitives that come closest:
     ///
-    /// * **Decrease:** `Semaphore::forget_permits` first reclaims as
-    ///   many currently-**idle** permits as it can (permanently — a
-    ///   forgotten permit never returns to the pool). If every permit
-    ///   happens to be checked out by in-flight turns at the moment of
-    ///   the call, `forget_permits` can reclaim nothing (it only acts on
-    ///   *available* permits); the shortfall is recorded in
-    ///   `pending_forgets` and paid off lazily — the next in-flight
-    ///   turns to finish call [`OwnedSemaphorePermit::forget`] on their
-    ///   own permit instead of dropping it normally, until the debt
-    ///   reaches zero. This guarantees the cap is honored going forward
-    ///   without forcibly cancelling any turn already running.
-    /// * **Increase:** retires any outstanding `pending_forgets` debt
-    ///   FIRST (a CAS loop that only ever decreases the debt counter —
-    ///   no semaphore call), then calls `Semaphore::add_permits` for
-    ///   whatever increase is left over. **Binding invariant, proven
-    ///   necessary by a real regression** (a reviewer harness measured
-    ///   13 concurrent turns at a configured limit of 4 after three
-    ///   down/up cycles): `pending_forgets` is capacity still checked
-    ///   out by RUNNING turns, not capacity already returned to the
-    ///   pool. Calling `add_permits` for the full delta while debt is
-    ///   outstanding creates brand-new permits on top of capacity
-    ///   that's still logically live, making real concurrency
-    ///   `new_limit + debt` — and repeated down/up cycles compound it,
-    ///   since each cycle can leave its own unpaid remainder. Cancelling
-    ///   debt first means the turns already holding those permits
-    ///   simply return them normally instead of forgetting them on
-    ///   release — exactly the capacity being asked for back — so total
-    ///   capacity never exceeds `new_limit` at any point in the
-    ///   transition.
+    /// * **Decrease:** `Semaphore::forget_permits` reclaims as many
+    ///   currently **idle** permits as it can (permanently). If running
+    ///   turns hold the rest, the shortfall is recorded in
+    ///   `pending_forgets` and paid off lazily: the next turns to finish
+    ///   [`OwnedSemaphorePermit::forget`] their permit instead of
+    ///   returning it, until the debt reaches zero. The new cap is
+    ///   honored going forward without cancelling any running turn.
+    /// * **Increase:** retires outstanding `pending_forgets` debt FIRST
+    ///   (a CAS loop that only ever decreases the counter), then calls
+    ///   `Semaphore::add_permits` for whatever increase is left over.
+    ///   **Binding invariant:** debt is capacity still checked out by
+    ///   RUNNING turns. Adding permits for the full delta while debt is
+    ///   outstanding makes real concurrency `new_limit + debt`, and
+    ///   repeated cycles compound it. Cancelling debt first means those
+    ///   turns simply return their permits normally — exactly the
+    ///   capacity being asked for back — so total capacity never exceeds
+    ///   `new_limit` at any point in the transition.
     ///
-    /// Idempotent for `new_limit == ` the current limit (no-op).
+    /// A no-op when the (clamped) limit equals the current one.
     pub fn set_concurrency(&self, new_limit: usize) {
+        let new_limit = clamp_limit(new_limit);
         let old_limit = self
             .concurrency_limit
             .swap(new_limit, AtomicOrdering::SeqCst);
         match new_limit.cmp(&old_limit) {
             Ordering::Greater => {
-                // BLOCK-1 fix (review): `pending_forgets` is capacity
-                // still checked out by RUNNING turns, not capacity
-                // already returned to the semaphore — a prior decrease
-                // that couldn't reclaim anything synchronously left
-                // that many permits "owed" to be forgotten on release.
-                // Calling `add_permits` for the full delta here, before
-                // retiring that debt, creates BRAND NEW permits on top
-                // of capacity that's still logically outstanding: real
-                // concurrency becomes `limit + debt`, and repeated
-                // down/up cycles compound it further (each cycle can
-                // leave its own unpaid remainder). Cancelling debt
-                // first — which just means the in-flight turns holding
-                // those permits will return them normally instead of
-                // forgetting them, exactly the capacity we now want
-                // back — and only calling `add_permits` for whatever
-                // increase debt-cancellation didn't cover keeps total
-                // capacity pinned to `new_limit`, never higher.
                 let mut remaining = new_limit - old_limit;
                 while remaining > 0 {
                     let debt = self.pending_forgets.load(AtomicOrdering::SeqCst);
@@ -322,6 +243,8 @@ impl AgentScheduler {
                         break;
                     }
                     let pay = debt.min(remaining);
+                    // A lost CAS means a concurrent release just paid some
+                    // debt — reload and retry.
                     if self
                         .pending_forgets
                         .compare_exchange(
@@ -334,8 +257,6 @@ impl AgentScheduler {
                     {
                         remaining -= pay;
                     }
-                    // CAS lost the race (a concurrent release just paid
-                    // some debt) — reload and retry.
                 }
                 if remaining > 0 {
                     self.semaphore.add_permits(remaining);
@@ -353,147 +274,163 @@ impl AgentScheduler {
         }
     }
 
-    /// The current live concurrency cap (reflects the target set by the
-    /// most recent [`Self::set_concurrency`] call, or the constructor's
-    /// [`AgentSchedulerConfig::concurrent_limit`] if none has been
-    /// made).
+    /// The current live concurrency cap (the target set by the most
+    /// recent [`Self::set_concurrency`] call, or the constructor's
+    /// clamped [`AgentSchedulerConfig::concurrent_limit`]).
     pub fn concurrency_limit(&self) -> usize {
         self.concurrency_limit.load(AtomicOrdering::SeqCst)
     }
 
-    /// Enqueues an agent turn for processing.
-    ///
-    /// The request is sent to the background processing loop via a
-    /// bounded mpsc channel. If the channel is full, returns
-    /// [`AppError::QueueFull`](crate::error::AppError::QueueFull)
-    /// immediately (non-blocking backpressure).
+    /// Queues an agent turn for dispatch. Non-blocking.
     ///
     /// # Errors
     ///
-    /// * [`AppError::QueueFull`](crate::error::AppError::QueueFull) -
-    ///   The bounded channel is at capacity
-    /// * [`AppError::ChannelClosed`](crate::error::AppError::ChannelClosed) -
-    ///   The processing loop has shut down and the channel is closed
-    pub fn enqueue(&self, request: AgentTurnRequest) -> Result<(), crate::error::AppError> {
-        self.sender.try_send(request).map_err(|e| match e {
-            mpsc::error::TrySendError::Full(_) => crate::error::AppError::QueueFull {
+    /// * [`AppError::QueueFull`] — [`AGENT_TURN_QUEUE_CAPACITY`]
+    ///   requests are already waiting for dispatch.
+    /// * [`AppError::ChannelClosed`] — the dispatch loop is gone (its
+    ///   runtime shut down).
+    pub fn enqueue(&self, request: AgentTurnRequest) -> Result<(), AppError> {
+        self.queued
+            .try_update(AtomicOrdering::SeqCst, AtomicOrdering::SeqCst, |n| {
+                (n < AGENT_TURN_QUEUE_CAPACITY).then_some(n + 1)
+            })
+            .map_err(|_| AppError::QueueFull {
                 capacity: AGENT_TURN_QUEUE_CAPACITY,
-            },
-            mpsc::error::TrySendError::Closed(_) => {
-                crate::error::AppError::ChannelClosed("agent turn queue channel closed".to_string())
-            }
+            })?;
+        self.sender.send(request).map_err(|_| {
+            self.queued.fetch_sub(1, AtomicOrdering::SeqCst);
+            AppError::ChannelClosed("agent turn queue channel closed".to_string())
         })
-    }
-
-    /// Main processing loop that drains requests in priority order.
-    ///
-    /// Runs as a long-lived Tokio task. On each iteration:
-    /// 1. Waits for a request to arrive on the mpsc channel
-    /// 2. Drains any additional pending requests into the heap
-    /// 3. Pops requests from the heap in priority order
-    /// 4. Acquires a semaphore permit for concurrency control
-    /// 5. Spawns a task in a `JoinSet` that runs `executor(request)`
-    ///
-    /// When the channel closes, drains the `JoinSet` to wait for all
-    /// in-flight tasks to complete before exiting.
-    ///
-    /// `semaphore` and `pending_forgets` are owned jointly with the
-    /// [`AgentScheduler`] handle this loop was spawned from — this is
-    /// what lets [`AgentScheduler::set_concurrency`] resize live
-    /// capacity from outside this task.
-    #[tracing::instrument(skip(receiver, semaphore, pending_forgets, executor), fields(initial_permits = semaphore.available_permits()))]
-    async fn process_loop<F, Fut>(
-        mut receiver: mpsc::Receiver<AgentTurnRequest>,
-        semaphore: Arc<Semaphore>,
-        pending_forgets: Arc<AtomicUsize>,
-        executor: Arc<F>,
-    ) where
-        F: Fn(AgentTurnRequest) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let heap = Arc::new(Mutex::new(BinaryHeap::<PrioritizedRequest>::new()));
-        let sequence = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let mut join_set = JoinSet::new();
-
-        tracing::info!(
-            initial_permits = semaphore.available_permits(),
-            channel_capacity = AGENT_TURN_QUEUE_CAPACITY,
-            "agent turn scheduler processing loop started"
-        );
-
-        loop {
-            // Wait for a request to arrive
-            let Some(request) = receiver.recv().await else {
-                tracing::info!("agent turn queue channel closed, stopping processing loop");
-                break;
-            };
-
-            let priority = request.priority as i32;
-            let seq = sequence.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-            heap.lock().push(PrioritizedRequest {
-                request,
-                priority,
-                sequence: seq,
-            });
-
-            // Drain any additional pending requests into the heap
-            while let Ok(extra) = receiver.try_recv() {
-                let p = extra.priority as i32;
-                let s = sequence.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                heap.lock().push(PrioritizedRequest {
-                    request: extra,
-                    priority: p,
-                    sequence: s,
-                });
-            }
-
-            // Process from the priority heap — pop without holding guard across await
-            loop {
-                let Some(prioritized) = heap.lock().pop() else {
-                    break;
-                };
-
-                let permit = match semaphore.clone().acquire_owned().await {
-                    Ok(p) => p,
-                    Err(e) => {
-                        tracing::error!(error = %e, "agent turn scheduler semaphore closed unexpectedly");
-                        return;
-                    }
-                };
-
-                let executor = executor.clone();
-                let pending_forgets = pending_forgets.clone();
-                join_set.spawn(async move {
-                    executor(prioritized.request).await;
-                    release_or_forget_permit(permit, &pending_forgets);
-                });
-            }
-        }
-
-        // Drain the join set — wait for all in-flight tasks to complete
-        tracing::info!("draining agent turn scheduler join set");
-        while let Some(result) = join_set.join_next().await {
-            if let Err(e) = result {
-                tracing::error!(error = %e, "agent turn task panicked");
-            }
-        }
-        tracing::info!("agent turn scheduler processing loop stopped");
     }
 }
 
-/// Releases `permit` back to `semaphore`'s pool, unless a
-/// `set_concurrency` decrease is still owed a forgotten permit — in
-/// that case `permit` is [`OwnedSemaphorePermit::forget`]ten instead of
-/// dropped, permanently reducing capacity by one and realizing (or
-/// partially realizing) the deferred shrink. See
-/// [`AgentScheduler::set_concurrency`]'s doc for why the debt can't
-/// always be paid off synchronously at the moment `set_concurrency` is
-/// called.
+/// A queued request plus its arrival order.
+#[derive(Debug)]
+struct Pending {
+    request: AgentTurnRequest,
+    sequence: u64,
+}
+
+impl Pending {
+    /// Dispatch rank: higher priority first, then lower sequence (FIFO).
+    fn rank(&self) -> (TurnPriority, Reverse<u64>) {
+        (self.request.priority, Reverse(self.sequence))
+    }
+}
+
+/// Index of the best admissible request in `pending` — the highest
+/// rank whose worker has no running turn — or `None` if every queued
+/// request belongs to a busy worker. A linear scan: the queue is bounded
+/// by [`AGENT_TURN_QUEUE_CAPACITY`].
+fn next_admissible(pending: &[Pending], busy: &HashSet<Uuid>) -> Option<usize> {
+    pending
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| !busy.contains(&p.request.worker_id))
+        .max_by_key(|(_, p)| p.rank())
+        .map(|(index, _)| index)
+}
+
+/// The scheduler's single dispatch task: drains the intake channel into
+/// the pending queue, dispatches admissible requests whenever a permit is
+/// free, and reaps finished turns (releasing their permit and their
+/// worker's slot — also when an executor panicked). Exits once the
+/// intake channel has closed and every queued and running turn is done.
+#[tracing::instrument(skip_all, fields(initial_permits = semaphore.available_permits()))]
+async fn dispatch_loop<F, Fut>(
+    mut receiver: mpsc::UnboundedReceiver<AgentTurnRequest>,
+    queued: Arc<AtomicUsize>,
+    semaphore: Arc<Semaphore>,
+    pending_forgets: Arc<AtomicUsize>,
+    executor: F,
+) where
+    F: Fn(AgentTurnRequest) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let mut pending: Vec<Pending> = Vec::new();
+    let mut next_sequence: u64 = 0;
+    let mut busy: HashSet<Uuid> = HashSet::new();
+    let mut running: JoinSet<()> = JoinSet::new();
+    let mut running_slots: HashMap<tokio::task::Id, (Uuid, OwnedSemaphorePermit)> = HashMap::new();
+    let mut intake_open = true;
+
+    tracing::info!(
+        capacity = AGENT_TURN_QUEUE_CAPACITY,
+        "agent turn scheduler dispatch loop started"
+    );
+
+    loop {
+        if !intake_open && pending.is_empty() && running.is_empty() {
+            break;
+        }
+        let admissible = next_admissible(&pending, &busy).is_some();
+
+        // `biased`: every request already in the intake channel is queued,
+        // and every finished turn reaped, before a permit is handed out —
+        // that is what makes dispatch order follow priority rather than
+        // arrival order. The intake cannot starve dispatch: `enqueue`
+        // stops accepting at `AGENT_TURN_QUEUE_CAPACITY`.
+        tokio::select! {
+            biased;
+            request = receiver.recv(), if intake_open => match request {
+                Some(request) => {
+                    pending.push(Pending { request, sequence: next_sequence });
+                    next_sequence += 1;
+                }
+                None => {
+                    tracing::info!("agent turn queue channel closed; draining queued and running turns");
+                    intake_open = false;
+                }
+            },
+            Some(joined) = running.join_next_with_id(), if !running.is_empty() => {
+                let id = match joined {
+                    Ok((id, ())) => id,
+                    Err(e) => {
+                        tracing::error!(error = %e, "agent turn executor panicked or was cancelled");
+                        e.id()
+                    }
+                };
+                if let Some((worker_id, permit)) = running_slots.remove(&id) {
+                    busy.remove(&worker_id);
+                    release_or_forget_permit(permit, &pending_forgets);
+                }
+            },
+            permit = semaphore.clone().acquire_owned(), if admissible => {
+                let Ok(permit) = permit else {
+                    tracing::error!("agent turn scheduler semaphore closed unexpectedly");
+                    return;
+                };
+                // The admissible set only shrinks when this loop dispatches,
+                // so the request seen before the await is still there.
+                let Some(index) = next_admissible(&pending, &busy) else {
+                    drop(permit);
+                    continue;
+                };
+                let Pending { request, .. } = pending.swap_remove(index);
+                queued.fetch_sub(1, AtomicOrdering::SeqCst);
+                let worker_id = request.worker_id;
+                busy.insert(worker_id);
+                let handle = running.spawn(executor(request));
+                running_slots.insert(handle.id(), (worker_id, permit));
+            },
+            // Unreachable: with the intake closed and nothing running,
+            // every queued request is admissible (or the loop already
+            // exited above) — kept so `select!` can never panic.
+            else => break,
+        }
+    }
+    tracing::info!("agent turn scheduler dispatch loop stopped");
+}
+
+/// Releases `permit` back to its semaphore, unless a `set_concurrency`
+/// decrease is still owed a forgotten permit — then `permit` is
+/// [`OwnedSemaphorePermit::forget`]ten instead, permanently reducing
+/// capacity by one. See [`AgentScheduler::set_concurrency`] for why the
+/// debt can't always be paid synchronously.
 ///
 /// The compare-exchange loop (rather than a plain `fetch_sub`) avoids
-/// underflowing `pending_forgets` if it reaches `0` between the initial
-/// load and the decrement — e.g. two turns finishing back-to-back.
+/// underflowing `pending_forgets` if it reaches `0` between the load and
+/// the decrement.
 fn release_or_forget_permit(permit: OwnedSemaphorePermit, pending_forgets: &AtomicUsize) {
     loop {
         let current = pending_forgets.load(AtomicOrdering::SeqCst);
@@ -513,561 +450,476 @@ fn release_or_forget_permit(permit: OwnedSemaphorePermit, pending_forgets: &Atom
             permit.forget();
             return;
         }
-        // Lost the race against a concurrent release — reload and retry.
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use tokio::sync::Notify;
+
     use super::*;
 
-    /// Helper to build a minimal AgentTurnRequest for testing.
     fn make_request(worker_id: Uuid, priority: TurnPriority) -> AgentTurnRequest {
+        make_labeled(worker_id, priority, "test")
+    }
+
+    fn make_labeled(worker_id: Uuid, priority: TurnPriority, label: &str) -> AgentTurnRequest {
         AgentTurnRequest {
             worker_id,
             turn: TurnInput {
-                prompt: "test".to_string(),
+                prompt: label.to_string(),
             },
             priority,
         }
     }
 
-    #[test]
-    fn test_queue_full_returns_error() {
-        // Create a very small bounded channel to simulate backpressure
-        let (sender, _receiver) = mpsc::channel::<AgentTurnRequest>(2);
-
-        // Fill the channel to capacity using try_send
-        sender
-            .try_send(make_request(Uuid::nil(), TurnPriority::Normal))
-            .expect("first send should succeed");
-        sender
-            .try_send(make_request(Uuid::nil(), TurnPriority::Normal))
-            .expect("second send should succeed");
-
-        // Third send should fail with Full
-        let result = sender.try_send(make_request(Uuid::nil(), TurnPriority::Normal));
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            mpsc::error::TrySendError::Full(_) => {} // expected
-            other => panic!("expected TrySendError::Full, got: {:?}", other),
+    /// Polls `condition` every 5ms until it holds, panicking with `what`
+    /// after 5 seconds.
+    async fn eventually(what: &str, condition: impl Fn() -> bool) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !condition() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for: {what}"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
     }
 
-    #[test]
-    fn test_queue_full_maps_to_app_error() {
-        // Simulate the AgentScheduler::enqueue error mapping path
-        let (sender, _receiver) = mpsc::channel::<AgentTurnRequest>(1);
-
-        sender
-            .try_send(make_request(Uuid::nil(), TurnPriority::Normal))
-            .unwrap();
-
-        // Map the error exactly as AgentScheduler::enqueue does
-        let result = sender
-            .try_send(make_request(Uuid::nil(), TurnPriority::Normal))
-            .map_err(|e| match e {
-                mpsc::error::TrySendError::Full(_) => {
-                    crate::error::AppError::QueueFull { capacity: 1 }
-                }
-                mpsc::error::TrySendError::Closed(_) => crate::error::AppError::ChannelClosed(
-                    "agent turn queue channel closed".to_string(),
-                ),
-            });
-
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("queue full")
-                || err_msg.contains("Queue full")
-                || err_msg.contains("1"),
-            "expected queue full error with capacity, got: {err_msg}"
-        );
+    /// An executor whose turns log `"<prompt>:start"`, then block until
+    /// the test releases them (`Notify::notify_waiters` wakes every
+    /// currently-blocked turn), then log `"<prompt>:end"`.
+    struct Gated {
+        scheduler: AgentScheduler,
+        in_flight: Arc<AtomicUsize>,
+        release: Arc<Notify>,
+        log: Arc<parking_lot::Mutex<Vec<String>>>,
     }
 
-    #[test]
-    fn test_priority_ordering() {
-        let mut heap = BinaryHeap::<PrioritizedRequest>::new();
-
-        // Insert requests with different priorities and sequences
-        heap.push(PrioritizedRequest {
-            request: make_request(Uuid::nil(), TurnPriority::Low),
-            priority: TurnPriority::Low as i32,
-            sequence: 0,
-        });
-        heap.push(PrioritizedRequest {
-            request: make_request(Uuid::nil(), TurnPriority::Critical),
-            priority: TurnPriority::Critical as i32,
-            sequence: 1,
-        });
-        heap.push(PrioritizedRequest {
-            request: make_request(Uuid::nil(), TurnPriority::Normal),
-            priority: TurnPriority::Normal as i32,
-            sequence: 2,
-        });
-        heap.push(PrioritizedRequest {
-            request: make_request(Uuid::nil(), TurnPriority::High),
-            priority: TurnPriority::High as i32,
-            sequence: 3,
-        });
-
-        // Pop order should be: Critical > High > Normal > Low
-        assert_eq!(heap.pop().unwrap().request.priority, TurnPriority::Critical);
-        assert_eq!(heap.pop().unwrap().request.priority, TurnPriority::High);
-        assert_eq!(heap.pop().unwrap().request.priority, TurnPriority::Normal);
-        assert_eq!(heap.pop().unwrap().request.priority, TurnPriority::Low);
-    }
-
-    #[test]
-    fn test_fifo_within_same_priority() {
-        let mut heap = BinaryHeap::<PrioritizedRequest>::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        let c = Uuid::new_v4();
-
-        // All same priority — FIFO by sequence (lower sequence = earlier)
-        heap.push(PrioritizedRequest {
-            request: make_request(a, TurnPriority::Normal),
-            priority: TurnPriority::Normal as i32,
-            sequence: 0,
-        });
-        heap.push(PrioritizedRequest {
-            request: make_request(b, TurnPriority::Normal),
-            priority: TurnPriority::Normal as i32,
-            sequence: 1,
-        });
-        heap.push(PrioritizedRequest {
-            request: make_request(c, TurnPriority::Normal),
-            priority: TurnPriority::Normal as i32,
-            sequence: 2,
-        });
-
-        // Within same priority, lower sequence pops first (FIFO)
-        assert_eq!(heap.pop().unwrap().request.worker_id, a);
-        assert_eq!(heap.pop().unwrap().request.worker_id, b);
-        assert_eq!(heap.pop().unwrap().request.worker_id, c);
-    }
-
-    #[tokio::test]
-    async fn test_enqueue_and_receive() {
-        let (sender, mut receiver) = mpsc::channel::<AgentTurnRequest>(AGENT_TURN_QUEUE_CAPACITY);
-
-        let worker_id = Uuid::new_v4();
-        let request = make_request(worker_id, TurnPriority::High);
-        sender.try_send(request).expect("enqueue should succeed");
-
-        // Verify the request arrives on the receiver
-        let received = receiver.recv().await.expect("should receive a request");
-        assert_eq!(received.worker_id, worker_id);
-        assert_eq!(received.priority, TurnPriority::High);
-    }
-
-    #[tokio::test]
-    async fn test_channel_closed_returns_error() {
-        let (sender, receiver) = mpsc::channel::<AgentTurnRequest>(4);
-
-        // Drop the receiver to close the channel
-        drop(receiver);
-
-        let result = sender
-            .try_send(make_request(Uuid::nil(), TurnPriority::Normal))
-            .map_err(|e| match e {
-                mpsc::error::TrySendError::Full(_) => {
-                    crate::error::AppError::QueueFull { capacity: 4 }
-                }
-                mpsc::error::TrySendError::Closed(_) => crate::error::AppError::ChannelClosed(
-                    "agent turn queue channel closed".to_string(),
-                ),
-            });
-
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("Channel closed"),
-            "expected channel closed error, got: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn test_prioritized_request_equality() {
-        let a = PrioritizedRequest {
-            request: make_request(Uuid::nil(), TurnPriority::Normal),
-            priority: TurnPriority::Normal as i32,
-            sequence: 5,
-        };
-        let b = PrioritizedRequest {
-            request: make_request(Uuid::nil(), TurnPriority::Normal),
-            priority: TurnPriority::Normal as i32,
-            sequence: 5,
-        };
-        let c = PrioritizedRequest {
-            request: make_request(Uuid::nil(), TurnPriority::High),
-            priority: TurnPriority::High as i32,
-            sequence: 5,
-        };
-
-        // Same priority and sequence => equal
-        assert_eq!(a, b);
-        // Different priority => not equal
-        assert_ne!(a, c);
-    }
-
-    // ── AgentTurnRequest (new type) ──────────────────────────────────
-
-    /// DIRECTIVE: the retyped request carries a worker id + a
-    /// provider-agnostic [`TurnInput`] rather than `AiRequest`'s
-    /// `messages`/`system` fields — this is the shape check for the
-    /// new type itself, not just its ordering behavior (covered above).
-    #[test]
-    fn test_agent_turn_request_carries_worker_id_and_turn_input() {
-        let worker_id = Uuid::new_v4();
-        let request = AgentTurnRequest {
-            worker_id,
-            turn: TurnInput {
-                prompt: "hello".to_string(),
-            },
-            priority: TurnPriority::Critical,
-        };
-        assert_eq!(request.worker_id, worker_id);
-        assert_eq!(request.turn.prompt, "hello");
-        assert_eq!(request.priority, TurnPriority::Critical);
-        assert_eq!(TurnPriority::default(), TurnPriority::Normal);
-    }
-
-    // ── AgentScheduler end-to-end (executor closure) ─────────────────
-
-    /// DIRECTIVE: the scheduler drives admitted requests through the
-    /// injected `executor`, honoring the concurrency limit — proving
-    /// the generic-executor redesign preserves the "at most
-    /// concurrent_limit in flight" guarantee the plan's verification
-    /// #11 requires, without a concrete `AiClient` to test against.
-    #[tokio::test]
-    async fn test_scheduler_respects_concurrency_limit_and_calls_executor_for_every_request() {
-        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-        use tokio::sync::Barrier;
-
-        let concurrent_limit = 2;
-        let total_requests = 5;
-        let in_flight = Arc::new(AtomicUsize::new(0));
-        let max_observed = Arc::new(AtomicUsize::new(0));
-        let completed = Arc::new(AtomicUsize::new(0));
-        // Forces every spawned executor invocation to actually overlap
-        // in time before releasing, rather than racing at closure-call
-        // speed and reporting a max_observed of 1 by accident.
-        let barrier = Arc::new(Barrier::new(concurrent_limit));
-
-        let scheduler = AgentScheduler::new(AgentSchedulerConfig { concurrent_limit }, {
-            let in_flight = in_flight.clone();
-            let max_observed = max_observed.clone();
-            let completed = completed.clone();
-            let barrier = barrier.clone();
-            move |_req: AgentTurnRequest| {
-                let in_flight = in_flight.clone();
-                let max_observed = max_observed.clone();
-                let completed = completed.clone();
-                let barrier = barrier.clone();
-                async move {
-                    let now = in_flight.fetch_add(1, AtomicOrdering::SeqCst) + 1;
-                    max_observed.fetch_max(now, AtomicOrdering::SeqCst);
-                    // Only the first `concurrent_limit` tasks reach
-                    // the barrier concurrently by construction; wait
-                    // briefly instead of a full barrier so this
-                    // never deadlocks if the limit is ever violated
-                    // downward.
-                    let _ =
-                        tokio::time::timeout(std::time::Duration::from_millis(200), barrier.wait())
-                            .await;
-                    in_flight.fetch_sub(1, AtomicOrdering::SeqCst);
-                    completed.fetch_add(1, AtomicOrdering::SeqCst);
-                }
-            }
-        });
-
-        for _ in 0..total_requests {
-            scheduler
-                .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
-                .expect("enqueue should succeed");
-        }
-
-        // Wait for all requests to complete.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while completed.load(AtomicOrdering::SeqCst) < total_requests {
-            if std::time::Instant::now() > deadline {
-                panic!("scheduler did not complete all requests in time");
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-
-        assert_eq!(completed.load(AtomicOrdering::SeqCst), total_requests);
-        // DIRECTIVE (review nit D): strictly stronger than `<=` —
-        // proves the scheduler actually ACHIEVES full concurrency up to
-        // the limit (5 requests queued against a limit of 2, with the
-        // barrier forcing genuine overlap), not merely that it never
-        // exceeds it. A scheduler that accidentally serialized
-        // everything would satisfy `<=` but fail this.
-        assert_eq!(
-            max_observed.load(AtomicOrdering::SeqCst),
-            concurrent_limit,
-            "expected exactly concurrent_limit executors in flight at peak"
-        );
-    }
-
-    // ── set_agent_concurrency: live semaphore resize ─────────────────
-
-    /// Builds an executor + `AgentScheduler` pair where each admitted
-    /// turn increments `in_flight` on entry and blocks on `release`
-    /// until the test explicitly wakes it — giving tests precise
-    /// control over exactly which turns are in flight at the moment
-    /// `set_concurrency` is called.
-    fn gated_scheduler(
-        concurrent_limit: usize,
-    ) -> (AgentScheduler, Arc<AtomicUsize>, Arc<tokio::sync::Notify>) {
-        use tokio::sync::Notify;
-
+    fn gated_scheduler(concurrent_limit: usize) -> Gated {
         let in_flight = Arc::new(AtomicUsize::new(0));
         let release = Arc::new(Notify::new());
-
+        let log = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let scheduler = AgentScheduler::new(AgentSchedulerConfig { concurrent_limit }, {
             let in_flight = in_flight.clone();
             let release = release.clone();
-            move |_req: AgentTurnRequest| {
+            let log = log.clone();
+            move |request: AgentTurnRequest| {
                 let in_flight = in_flight.clone();
                 let release = release.clone();
+                let log = log.clone();
                 async move {
+                    // Register as a waiter BEFORE announcing the start, so
+                    // a release fired right after a test observes the start
+                    // is never lost.
+                    let mut released = std::pin::pin!(release.notified());
+                    released.as_mut().enable();
+                    log.lock().push(format!("{}:start", request.turn.prompt));
                     in_flight.fetch_add(1, AtomicOrdering::SeqCst);
-                    release.notified().await;
+                    released.await;
                     in_flight.fetch_sub(1, AtomicOrdering::SeqCst);
+                    log.lock().push(format!("{}:end", request.turn.prompt));
                 }
             }
         });
-
-        (scheduler, in_flight, release)
-    }
-
-    /// Drains every turn currently in flight (and any queued behind it)
-    /// through `release`, waiting until `in_flight` reaches `0`.
-    ///
-    /// `Notify::notify_waiters` only wakes tasks that are *already*
-    /// waiting on `.notified()` at the moment it's called — at
-    /// `concurrent_limit == 1`, turns run strictly sequentially, so a
-    /// single `notify_waiters()` call only ever wakes the current one;
-    /// the next turn doesn't start (and doesn't register as a waiter)
-    /// until after the first has already returned. This loop re-fires
-    /// `notify_waiters()` every poll so no sequential admission is ever
-    /// left permanently blocked on a notification that fired before it
-    /// existed.
-    async fn drain_all(in_flight: &std::sync::atomic::AtomicUsize, release: &tokio::sync::Notify) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while in_flight.load(AtomicOrdering::SeqCst) > 0 {
-            assert!(std::time::Instant::now() < deadline, "turns never drained");
-            release.notify_waiters();
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        Gated {
+            scheduler,
+            in_flight,
+            release,
+            log,
         }
     }
 
-    /// DIRECTIVE: raising the live limit admits an already-queued turn
-    /// immediately via `Semaphore::add_permits`, without waiting for any
-    /// in-flight turn to finish first.
-    #[tokio::test]
-    async fn test_set_concurrency_increase_admits_a_queued_turn_immediately() {
-        let (scheduler, in_flight, release) = gated_scheduler(1);
+    impl Gated {
+        fn in_flight(&self) -> usize {
+            self.in_flight.load(AtomicOrdering::SeqCst)
+        }
 
-        scheduler
-            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
-            .unwrap();
-        scheduler
-            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
-            .unwrap();
+        fn started(&self) -> Vec<String> {
+            self.log
+                .lock()
+                .iter()
+                .filter_map(|entry| entry.strip_suffix(":start").map(str::to_string))
+                .collect()
+        }
 
-        // Give the first turn a moment to actually start; at
-        // concurrent_limit=1 the second must still be queued.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert_eq!(in_flight.load(AtomicOrdering::SeqCst), 1);
-        assert_eq!(scheduler.concurrency_limit(), 1);
-
-        scheduler.set_concurrency(2);
-        assert_eq!(scheduler.concurrency_limit(), 2);
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert_eq!(
-            in_flight.load(AtomicOrdering::SeqCst),
-            2,
-            "raising the limit should admit the second queued turn without waiting on the first"
-        );
-
-        drain_all(&in_flight, &release).await;
+        /// Releases turns until none is running and the queue is empty.
+        async fn drain(&self) {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            while self.in_flight() > 0 || self.scheduler.queued.load(AtomicOrdering::SeqCst) > 0 {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "turns never drained"
+                );
+                self.release.notify_waiters();
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
     }
 
-    /// DIRECTIVE: shrinking the limit while every permit is checked out
-    /// by in-flight turns can't reclaim anything synchronously
-    /// (`Semaphore::forget_permits` only acts on idle permits) — the
-    /// shortfall must be deferred and realized the next time those
-    /// turns release their permits, so the NEW, smaller cap is actually
-    /// enforced for the turns admitted afterward.
-    #[tokio::test]
-    async fn test_set_concurrency_decrease_under_full_load_is_realized_on_release() {
-        let (scheduler, in_flight, release) = gated_scheduler(2);
+    // ── Admission: priority, FIFO, per-worker exclusivity ─────────────
 
-        scheduler
-            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
-            .unwrap();
-        scheduler
-            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
-            .unwrap();
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    #[test]
+    fn test_next_admissible_prefers_priority_then_fifo_and_skips_busy_workers() {
+        let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let pending = vec![
+            Pending {
+                request: make_request(a, TurnPriority::Normal),
+                sequence: 0,
+            },
+            Pending {
+                request: make_request(b, TurnPriority::High),
+                sequence: 1,
+            },
+            Pending {
+                request: make_request(c, TurnPriority::High),
+                sequence: 2,
+            },
+        ];
+        let mut busy = HashSet::new();
         assert_eq!(
-            in_flight.load(AtomicOrdering::SeqCst),
-            2,
-            "both permits should be checked out before the shrink"
+            next_admissible(&pending, &busy),
+            Some(1),
+            "highest priority, oldest first"
+        );
+        busy.insert(b);
+        assert_eq!(next_admissible(&pending, &busy), Some(2));
+        busy.insert(c);
+        assert_eq!(next_admissible(&pending, &busy), Some(0));
+        busy.insert(a);
+        assert_eq!(next_admissible(&pending, &busy), None);
+    }
+
+    /// Requests queued behind a running turn dispatch by priority, then
+    /// FIFO — decided when the permit frees, not when they arrived. The
+    /// release below races the requests still sitting in the intake
+    /// channel; the biased dispatch loop must queue them all first.
+    #[tokio::test]
+    async fn test_live_scheduler_dispatches_by_priority_then_fifo() {
+        let gated = gated_scheduler(1);
+        gated
+            .scheduler
+            .enqueue(make_labeled(Uuid::new_v4(), TurnPriority::Low, "first"))
+            .unwrap();
+        eventually("first turn running", || gated.in_flight() == 1).await;
+
+        for (priority, label) in [
+            (TurnPriority::Low, "low"),
+            (TurnPriority::Critical, "critical"),
+            (TurnPriority::Normal, "normal-1"),
+            (TurnPriority::High, "high"),
+            (TurnPriority::Normal, "normal-2"),
+        ] {
+            gated
+                .scheduler
+                .enqueue(make_labeled(Uuid::new_v4(), priority, label))
+                .unwrap();
+        }
+
+        gated.drain().await;
+        assert_eq!(
+            gated.started(),
+            ["first", "critical", "high", "normal-1", "normal-2", "low"]
+        );
+    }
+
+    /// Follow-ups queued for a busy worker must not hold permits, so
+    /// another worker's turn starts while they wait (head-of-line
+    /// blocking regression).
+    #[tokio::test]
+    async fn test_queued_follow_ups_for_one_worker_do_not_starve_other_workers() {
+        let gated = gated_scheduler(2);
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        for label in ["a1", "a2", "a3"] {
+            gated
+                .scheduler
+                .enqueue(make_labeled(a, TurnPriority::Normal, label))
+                .unwrap();
+        }
+        gated
+            .scheduler
+            .enqueue(make_labeled(b, TurnPriority::Normal, "b1"))
+            .unwrap();
+
+        eventually("a1 and b1 running together", || gated.in_flight() == 2).await;
+        assert_eq!(
+            gated.started(),
+            ["a1", "b1"],
+            "worker A's follow-ups must wait without a permit; B runs beside A1"
         );
 
-        // Every permit is in use — forget_permits can reclaim nothing
-        // right now; the debt must be deferred.
-        scheduler.set_concurrency(1);
-        assert_eq!(scheduler.concurrency_limit(), 1);
+        gated.drain().await;
+        let log = gated.log.lock().clone();
+        let position = |entry: &str| log.iter().position(|e| e == entry).unwrap();
+        assert!(position("a1:end") < position("a2:start"));
+        assert!(position("a2:end") < position("a3:start"));
+    }
 
-        // Release both in-flight turns. The debt-aware release path
-        // forgets one of the two permits instead of returning it.
-        drain_all(&in_flight, &release).await;
+    // ── Backpressure ──────────────────────────────────────────────────
 
-        // Two fresh turns: only ONE should be admitted concurrently now
-        // that the deferred forget has been realized.
-        scheduler
-            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+    #[tokio::test]
+    async fn test_enqueue_returns_queue_full_once_capacity_requests_are_waiting() {
+        let gated = gated_scheduler(1);
+        let worker = Uuid::new_v4();
+        gated
+            .scheduler
+            .enqueue(make_request(worker, TurnPriority::Normal))
             .unwrap();
-        scheduler
-            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
-            .unwrap();
+        eventually("first turn running", || gated.in_flight() == 1).await;
 
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        for _ in 0..AGENT_TURN_QUEUE_CAPACITY {
+            gated
+                .scheduler
+                .enqueue(make_request(worker, TurnPriority::Normal))
+                .expect("capacity not reached yet");
+        }
+        let overflow = gated
+            .scheduler
+            .enqueue(make_request(worker, TurnPriority::Normal));
+        assert!(
+            matches!(
+                overflow,
+                Err(AppError::QueueFull {
+                    capacity: AGENT_TURN_QUEUE_CAPACITY
+                })
+            ),
+            "got {overflow:?}"
+        );
+
+        gated.drain().await;
+        gated
+            .scheduler
+            .enqueue(make_request(worker, TurnPriority::Normal))
+            .expect("capacity is available again once the queue drains");
+        gated.drain().await;
+    }
+
+    #[test]
+    fn test_enqueue_after_the_runtime_is_gone_returns_channel_closed() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let scheduler = runtime.block_on(async {
+            AgentScheduler::new(AgentSchedulerConfig::default(), |_req| async {})
+        });
+        drop(runtime);
+
+        let result = scheduler.enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal));
+        assert!(
+            matches!(result, Err(AppError::ChannelClosed(_))),
+            "got {result:?}"
+        );
         assert_eq!(
-            in_flight.load(AtomicOrdering::SeqCst),
+            scheduler.queued.load(AtomicOrdering::SeqCst),
+            0,
+            "a rejected request must not leak queue capacity"
+        );
+    }
+
+    // ── Executor failure ──────────────────────────────────────────────
+
+    /// A panicking executor still releases its permit and its worker's
+    /// slot — otherwise a limit-1 scheduler would stall forever.
+    #[tokio::test]
+    async fn test_panicking_executor_releases_its_permit_and_worker_slot() {
+        let completed = Arc::new(AtomicUsize::new(0));
+        let scheduler = AgentScheduler::new(
+            AgentSchedulerConfig {
+                concurrent_limit: 1,
+            },
+            {
+                let completed = completed.clone();
+                move |request: AgentTurnRequest| {
+                    let completed = completed.clone();
+                    async move {
+                        assert_ne!(request.turn.prompt, "boom", "deliberate executor panic");
+                        completed.fetch_add(1, AtomicOrdering::SeqCst);
+                    }
+                }
+            },
+        );
+        let worker = Uuid::new_v4();
+        scheduler
+            .enqueue(make_labeled(worker, TurnPriority::Normal, "boom"))
+            .unwrap();
+        scheduler
+            .enqueue(make_labeled(worker, TurnPriority::Normal, "after"))
+            .unwrap();
+        eventually("the turn after the panic ran", || {
+            completed.load(AtomicOrdering::SeqCst) == 1
+        })
+        .await;
+    }
+
+    // ── Concurrency limit ─────────────────────────────────────────────
+
+    /// The scheduler reaches, and never exceeds, the concurrency limit.
+    #[tokio::test]
+    async fn test_scheduler_reaches_but_never_exceeds_the_concurrency_limit() {
+        let gated = gated_scheduler(2);
+        for _ in 0..5 {
+            gated
+                .scheduler
+                .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+                .unwrap();
+        }
+        eventually("two turns running", || gated.in_flight() == 2).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(gated.in_flight(), 2, "must not exceed the limit");
+        gated.drain().await;
+        assert_eq!(gated.started().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_zero_limits_are_clamped_instead_of_stalling_forever() {
+        let gated = gated_scheduler(0);
+        assert_eq!(gated.scheduler.concurrency_limit(), 1);
+        gated
+            .scheduler
+            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+            .unwrap();
+        eventually("a turn runs at a clamped limit", || gated.in_flight() == 1).await;
+        gated.drain().await;
+
+        gated.scheduler.set_concurrency(0);
+        assert_eq!(gated.scheduler.concurrency_limit(), 1);
+        gated.scheduler.set_concurrency(usize::MAX);
+        assert_eq!(
+            gated.scheduler.concurrency_limit(),
+            MAX_AGENT_CONCURRENCY as usize
+        );
+    }
+
+    /// Raising the live limit admits an already-queued turn immediately
+    /// via `Semaphore::add_permits`.
+    #[tokio::test]
+    async fn test_set_concurrency_increase_admits_a_queued_turn_immediately() {
+        let gated = gated_scheduler(1);
+        for _ in 0..2 {
+            gated
+                .scheduler
+                .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+                .unwrap();
+        }
+        eventually("first turn running", || gated.in_flight() == 1).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(gated.in_flight(), 1, "the second turn must still be queued");
+
+        gated.scheduler.set_concurrency(2);
+        assert_eq!(gated.scheduler.concurrency_limit(), 2);
+        eventually("second turn admitted", || gated.in_flight() == 2).await;
+        gated.drain().await;
+    }
+
+    /// Shrinking the limit while every permit is checked out defers the
+    /// shortfall and realizes it as the running turns release.
+    #[tokio::test]
+    async fn test_set_concurrency_decrease_under_full_load_is_realized_on_release() {
+        let gated = gated_scheduler(2);
+        for _ in 0..2 {
+            gated
+                .scheduler
+                .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+                .unwrap();
+        }
+        eventually("both permits checked out", || gated.in_flight() == 2).await;
+
+        gated.scheduler.set_concurrency(1);
+        assert_eq!(gated.scheduler.concurrency_limit(), 1);
+        gated.drain().await;
+
+        for _ in 0..2 {
+            gated
+                .scheduler
+                .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+                .unwrap();
+        }
+        eventually("one turn running", || gated.in_flight() == 1).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(
+            gated.in_flight(),
             1,
             "capacity should now be 1 — the deferred forget must have been paid off"
         );
-
-        drain_all(&in_flight, &release).await;
+        gated.drain().await;
     }
 
-    /// DIRECTIVE: a decrease applied while permits ARE idle reclaims
-    /// synchronously — no deferred debt needed, proving the "happy
-    /// path" doesn't rely on the lazy-forget machinery at all.
+    /// A decrease applied while permits are idle reclaims synchronously.
     #[tokio::test]
     async fn test_set_concurrency_decrease_while_idle_applies_synchronously() {
-        let (scheduler, in_flight, release) = gated_scheduler(3);
-
-        scheduler.set_concurrency(1);
-        assert_eq!(scheduler.concurrency_limit(), 1);
+        let gated = gated_scheduler(3);
+        gated.scheduler.set_concurrency(1);
         assert_eq!(
-            scheduler.pending_forgets.load(AtomicOrdering::SeqCst),
+            gated.scheduler.pending_forgets.load(AtomicOrdering::SeqCst),
             0,
             "shrinking fully-idle capacity should not need to defer anything"
         );
-
-        scheduler
-            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
-            .unwrap();
-        scheduler
-            .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
-            .unwrap();
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert_eq!(
-            in_flight.load(AtomicOrdering::SeqCst),
-            1,
-            "the new limit of 1 should already be in effect"
-        );
-
-        drain_all(&in_flight, &release).await;
-    }
-
-    /// DIRECTIVE (BLOCK-1 regression, binding): reproduces the
-    /// reviewer's exact repro shape — three down/up cycles while the
-    /// original long-running turns never release their permits (mirrors
-    /// a user stepping the Settings NumberField 4 -> 1 -> 4 -> 1 -> 4 ->
-    /// 1 -> 4 mid-turn, since the bridge fires on every step) — and
-    /// asserts peak concurrency NEVER exceeds the configured limit at
-    /// any point during the transition, not just that capacity
-    /// eventually converges. This is the test whose absence let the bug
-    /// ship: every other test here (including
-    /// `test_set_concurrency_decrease_under_full_load_is_realized_on_release`
-    /// above) only asserts FINAL capacity after the in-flight turns
-    /// drain — none of them covered an INCREASE while debt from an
-    /// earlier decrease was still outstanding, which is exactly the gap
-    /// the buggy `add_permits`-before-retiring-debt Greater arm hid in.
-    ///
-    /// With the bug: each "up" call to `add_permits` ignores
-    /// `pending_forgets` entirely, minting brand-new permits on top of
-    /// capacity the still-running original turns already hold — so a
-    /// newly enqueued turn at each cycle gets admitted immediately
-    /// instead of queueing, driving `in_flight` past `concurrent_limit`
-    /// and compounding further each cycle (the reviewer's harness
-    /// measured 13 concurrent turns at a configured limit of 4 after
-    /// three such cycles). With the fix, cancelling debt before adding
-    /// any permits means every enqueued-during-a-cycle turn stays
-    /// queued until the fixed pool of originals actually finishes.
-    #[tokio::test]
-    async fn test_set_concurrency_down_up_cycles_under_full_load_never_exceed_the_configured_peak()
-    {
-        let concurrent_limit = 4;
-        let (scheduler, in_flight, release) = gated_scheduler(concurrent_limit);
-        let peak = AtomicUsize::new(0);
-        let sample = |peak: &AtomicUsize| {
-            peak.fetch_max(
-                in_flight.load(AtomicOrdering::SeqCst),
-                AtomicOrdering::SeqCst,
-            );
-        };
-
-        // Fill every permit with a long-running turn that won't release
-        // until this test explicitly notifies it.
-        for _ in 0..concurrent_limit {
-            scheduler
+        for _ in 0..2 {
+            gated
+                .scheduler
                 .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
                 .unwrap();
         }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert_eq!(in_flight.load(AtomicOrdering::SeqCst), concurrent_limit);
-        sample(&peak);
+        eventually("one turn running", || gated.in_flight() == 1).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(
+            gated.in_flight(),
+            1,
+            "the new limit of 1 is already in effect"
+        );
+        gated.drain().await;
+    }
 
-        // Three down/up cycles. The original `concurrent_limit` turns
-        // are STILL in flight (never released) throughout every one of
-        // them, so every decrease's `forget_permits` finds nothing idle
-        // to reclaim — every decrease is a pure-debt cycle, exactly the
-        // scenario `set_concurrency`'s Greater arm must not mishandle.
-        for _ in 0..3 {
-            scheduler.set_concurrency(1);
-            sample(&peak);
-            scheduler.set_concurrency(concurrent_limit);
-            sample(&peak);
+    /// Three down/up cycles while the original turns never release their
+    /// permits — peak concurrency must never exceed the configured limit
+    /// at any point in the transition (see `set_concurrency`'s binding
+    /// invariant; without it this measured 13 concurrent turns at 4).
+    #[tokio::test]
+    async fn test_set_concurrency_down_up_cycles_under_full_load_never_exceed_the_configured_peak()
+    {
+        let limit = 4;
+        let gated = gated_scheduler(limit);
+        let peak = AtomicUsize::new(0);
+        let sample = |peak: &AtomicUsize| {
+            peak.fetch_max(gated.in_flight(), AtomicOrdering::SeqCst);
+        };
 
-            // Try to admit one MORE turn at each "up". If the bug is
-            // present, extra permits minted from the unpaid debt let
-            // this run concurrently with the still-in-flight originals,
-            // driving in_flight (and therefore peak) past
-            // concurrent_limit. If fixed, it just queues.
-            scheduler
+        for _ in 0..limit {
+            gated
+                .scheduler
                 .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
                 .unwrap();
-            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+        eventually("every permit in use", || gated.in_flight() == limit).await;
+        sample(&peak);
+
+        for _ in 0..3 {
+            gated.scheduler.set_concurrency(1);
+            sample(&peak);
+            gated.scheduler.set_concurrency(limit);
+            sample(&peak);
+            gated
+                .scheduler
+                .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(30)).await;
             sample(&peak);
         }
 
         assert!(
-            peak.load(AtomicOrdering::SeqCst) <= concurrent_limit,
-            "peak concurrency {} exceeded the configured limit {} across down/up cycles under full load",
-            peak.load(AtomicOrdering::SeqCst),
-            concurrent_limit
+            peak.load(AtomicOrdering::SeqCst) <= limit,
+            "peak concurrency {} exceeded the configured limit {limit}",
+            peak.load(AtomicOrdering::SeqCst)
         );
-
-        // Drain everything — the original `concurrent_limit` turns plus
-        // the 3 enqueued during the cycles (none of which should have
-        // been admitted early; they were still queued behind the
-        // originals the whole time).
-        drain_all(&in_flight, &release).await;
-        assert_eq!(scheduler.concurrency_limit(), concurrent_limit);
-        assert_eq!(scheduler.pending_forgets.load(AtomicOrdering::SeqCst), 0);
+        gated.drain().await;
+        assert_eq!(gated.scheduler.concurrency_limit(), limit);
+        assert_eq!(
+            gated.scheduler.pending_forgets.load(AtomicOrdering::SeqCst),
+            0
+        );
     }
 
     #[tokio::test]
@@ -1083,9 +935,17 @@ mod tests {
         assert_eq!(scheduler.pending_forgets.load(AtomicOrdering::SeqCst), 0);
     }
 
+    // ── Wire shape ────────────────────────────────────────────────────
+
     #[test]
-    fn test_min_max_agent_concurrency_bounds() {
-        assert_eq!(MIN_AGENT_CONCURRENCY, 1);
-        assert_eq!(MAX_AGENT_CONCURRENCY, 16);
+    fn test_turn_priority_orders_low_to_critical_defaults_to_normal_and_is_camel_case() {
+        assert!(TurnPriority::Low < TurnPriority::Normal);
+        assert!(TurnPriority::Normal < TurnPriority::High);
+        assert!(TurnPriority::High < TurnPriority::Critical);
+        assert_eq!(TurnPriority::default(), TurnPriority::Normal);
+        assert_eq!(
+            serde_json::to_string(&TurnPriority::Critical).unwrap(),
+            "\"critical\""
+        );
     }
 }

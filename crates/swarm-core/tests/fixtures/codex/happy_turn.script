@@ -1,0 +1,25 @@
+# One turn: a reasoning summary in two parts, a streamed agent message,
+# token usage, then turn/completed. An item from another thread and an
+# unmapped notification must be ignored.
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_THREAD_START 019a7c00-0000-7000-8000-000000000001
+#DIRECTIVE EXPECT_REQUEST turn/start
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000a1
+{"method":"turn/started","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":1790201250,"completedAt":null,"durationMs":null}}}
+{"method":"item/started","params":{"item":{"type":"userMessage","id":"item-0","clientId":null,"content":[{"type":"text","text":"hello","text_elements":[]}]},"threadId":"@THREAD","turnId":"@TURN","startedAtMs":1790201250000}}
+{"method":"item/completed","params":{"item":{"type":"userMessage","id":"item-0","clientId":null,"content":[{"type":"text","text":"hello","text_elements":[]}]},"threadId":"@THREAD","turnId":"@TURN","completedAtMs":1790201250001}}
+{"method":"item/started","params":{"item":{"type":"reasoning","id":"item-1","summary":[],"content":[]},"threadId":"@THREAD","turnId":"@TURN","startedAtMs":1790201250002}}
+{"method":"item/reasoning/summaryTextDelta","params":{"threadId":"@THREAD","turnId":"@TURN","itemId":"item-1","delta":"Read the task.","summaryIndex":0}}
+{"method":"item/reasoning/summaryTextDelta","params":{"threadId":"@THREAD","turnId":"@TURN","itemId":"item-1","delta":"Answer briefly.","summaryIndex":1}}
+{"method":"item/completed","params":{"item":{"type":"reasoning","id":"item-1","summary":["Read the task.","Answer briefly."],"content":[]},"threadId":"@THREAD","turnId":"@TURN","completedAtMs":1790201250500}}
+{"method":"item/started","params":{"item":{"type":"agentMessage","id":"item-2","text":"","phase":null,"memoryCitation":null,"delivery":null,"questions":null},"threadId":"@THREAD","turnId":"@TURN","startedAtMs":1790201250600}}
+{"method":"item/agentMessage/delta","params":{"threadId":"@THREAD","turnId":"@TURN","itemId":"item-2","delta":"Hello"}}
+{"method":"item/agentMessage/delta","params":{"threadId":"@THREAD","turnId":"@TURN","itemId":"item-2","delta":" from Codex."}}
+{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"item-other","text":"sub-agent text","phase":null,"memoryCitation":null,"delivery":null,"questions":null},"threadId":"019a7c00-0000-7000-8000-00000000ffff","turnId":"other-turn","completedAtMs":1790201250700}}
+{"method":"thread/status/changed","params":{"threadId":"@THREAD","status":{"type":"active","activeFlags":[]}}}
+{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"item-2","text":"Hello from Codex.","phase":null,"memoryCitation":null,"delivery":null,"questions":null},"threadId":"@THREAD","turnId":"@TURN","completedAtMs":1790201251000}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"@THREAD","turnId":"@TURN","tokenUsage":{"total":{"totalTokens":1200,"inputTokens":1000,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":200,"reasoningOutputTokens":64},"last":{"totalTokens":1200,"inputTokens":1000,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":200,"reasoningOutputTokens":64},"modelContextWindow":400000}}}
+{"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"completed","error":null,"startedAt":1790201250,"completedAt":1790201252,"durationMs":1834}}}

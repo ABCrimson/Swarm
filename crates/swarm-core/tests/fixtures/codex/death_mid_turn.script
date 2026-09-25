@@ -1,0 +1,11 @@
+# The server dies after acknowledging a turn: teardown must synthesize the
+# turn's settlement, then report the exit.
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_THREAD_START 019a7c00-0000-7000-8000-000000000001
+#DIRECTIVE EXPECT_REQUEST turn/start
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000b9
+{"method":"item/agentMessage/delta","params":{"threadId":"@THREAD","turnId":"@TURN","itemId":"item-1","delta":"partial"}}
+#DIRECTIVE EXIT 1

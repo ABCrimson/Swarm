@@ -1,0 +1,7 @@
+# Handshake only: initialize -> initialized -> thread/start, then serve
+# until stdin closes. Tests assert the recorded wire traffic.
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_THREAD_START 019a7c00-0000-7000-8000-000000000001

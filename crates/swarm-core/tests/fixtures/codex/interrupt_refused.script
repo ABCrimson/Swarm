@@ -1,0 +1,13 @@
+# turn/interrupt races the turn finishing on its own: the server refuses
+# the interrupt exactly as 0.156.1 does when no turn is active, then the
+# turn completes normally. The session must stay open.
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_THREAD_START 019a7c00-0000-7000-8000-000000000001
+#DIRECTIVE EXPECT_REQUEST turn/start
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000d9
+#DIRECTIVE EXPECT_REQUEST turn/interrupt
+#DIRECTIVE RESPOND_ERROR -32600 no active turn to interrupt
+{"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"completed","error":null,"startedAt":1790201250,"completedAt":1790201252,"durationMs":30}}}
