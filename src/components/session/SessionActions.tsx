@@ -74,7 +74,8 @@ export function SessionActions(): React.ReactElement {
 
 /**
  * The inline create form. Submission is a form action: while it is
- * pending the submit button is disabled, so neither a second click nor a
+ * pending the submit button is `loading`, which swallows its clicks
+ * (implicit submission clicks it too), so neither a second click nor a
  * held Enter can start a second `create_session`. Escape cancels.
  */
 function NewSessionForm({ onClose }: { readonly onClose: () => void }): React.ReactElement {

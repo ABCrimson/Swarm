@@ -1,229 +1,139 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useId, useRef, useState, useTransition } from "react";
+import { Button } from "#components/ui/Button";
+import { Spinner } from "#components/ui/Spinner";
+import { loadFilePreview } from "#lib/file-preview";
 import { FileTree } from "./FileTree.tsx";
-import { FileViewer } from "./FileViewer.tsx";
+import { type FileSelection, FileViewer } from "./FileViewer.tsx";
 
-/** Default split ratio for the file tree sidebar (percentage). */
+/** Default width of the file-tree sidebar, in CSS pixels. */
 const DEFAULT_SIDEBAR_WIDTH = 260;
 const MIN_SIDEBAR_WIDTH = 180;
 const MAX_SIDEBAR_WIDTH = 480;
-/** Pixels adjusted per arrow-key press on the resize separator. */
+/** Pixels one Arrow key press moves the resize handle. */
 const KEYBOARD_RESIZE_STEP = 16;
 
+const clampWidth = (px: number): number =>
+  Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, px));
+
 /**
- * Workspace panel with a file tree sidebar and file viewer main area.
+ * Workspace panel: a resizable file-tree sidebar and a read-only file
+ * viewer for a user-chosen project directory.
  *
- * Uses a draggable divider for resizable split layout.
- * The file tree reads from a user-selected project directory.
+ * The directory is opened with `recursive: true`, which grants the
+ * app's fs scope the whole subtree, so folders outside `$HOME` (e.g.
+ * `D:\code`) can be expanded and their files read. The chosen folder
+ * survives page switches because the page host keeps visited pages
+ * mounted.
+ *
+ * Opening a file starts its read in a transition: the current file stays
+ * on screen (dimmed) until the next one is ready.
  */
 export function WorkspacePanel(): React.ReactElement {
   const [rootPath, setRootPath] = useState<string | null>(null);
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [selection, setSelection] = useState<FileSelection | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
-  const [isDragging, setIsDragging] = useState(false);
-  const cleanupRef = useRef<(() => void) | null>(null);
+  const [loadingFile, startFileTransition] = useTransition();
+  /** Pointer x and sidebar width when a drag started; `null` when not dragging. */
+  const dragStartRef = useRef<{ readonly x: number; readonly width: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const treePaneId = useId();
 
-  useEffect(() => {
-    return () => {
-      cleanupRef.current?.();
-    };
-  }, []);
-
-  // Open directory picker
-  const handleOpenProject = async () => {
+  const handleOpenProject = async (): Promise<void> => {
     const selected = await open({
       title: "Open Project Directory",
       directory: true,
       multiple: false,
+      recursive: true,
     });
-
     if (selected) {
       setRootPath(selected);
-      setSelectedFile(null);
+      setSelection(null);
     }
   };
 
-  // Resize handler
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const handleSelectFile = (path: string): void => {
+    startFileTransition(() => setSelection({ path, preview: loadFilePreview(path) }));
+  };
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLHRElement>): void => {
+    if (e.button !== 0) return;
     e.preventDefault();
-    setIsDragging(true);
-
-    const startX = e.clientX;
-    const startWidth = sidebarWidth;
-
-    const handleMouseMove = (moveEvent: MouseEvent) => {
-      const delta = moveEvent.clientX - startX;
-      const newWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, startWidth + delta));
-      setSidebarWidth(newWidth);
-    };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-      cleanupRef.current = null;
-    };
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-    cleanupRef.current = () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStartRef.current = { x: e.clientX, width: sidebarWidth };
+    setDragging(true);
   };
 
-  // Keyboard resize handler (WAI-ARIA separator pattern: ArrowLeft/ArrowRight)
-  const handleSeparatorKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowLeft") {
-      e.preventDefault();
-      setSidebarWidth((w) => Math.max(MIN_SIDEBAR_WIDTH, w - KEYBOARD_RESIZE_STEP));
-    } else if (e.key === "ArrowRight") {
-      e.preventDefault();
-      setSidebarWidth((w) => Math.min(MAX_SIDEBAR_WIDTH, w + KEYBOARD_RESIZE_STEP));
-    } else if (e.key === "Home") {
-      e.preventDefault();
-      setSidebarWidth(MIN_SIDEBAR_WIDTH);
-    } else if (e.key === "End") {
-      e.preventDefault();
-      setSidebarWidth(MAX_SIDEBAR_WIDTH);
-    }
+  const handlePointerMove = (e: React.PointerEvent<HTMLHRElement>): void => {
+    const start = dragStartRef.current;
+    if (start) setSidebarWidth(clampWidth(start.width + e.clientX - start.x));
   };
 
-  // No project open state
+  // After pointerup (implicit release) and on pointercancel alike.
+  const handleLostPointerCapture = (): void => {
+    dragStartRef.current = null;
+    setDragging(false);
+  };
+
+  const handleSeparatorKeyDown = (e: React.KeyboardEvent<HTMLHRElement>): void => {
+    const targets: Partial<Record<string, number>> = {
+      ArrowLeft: sidebarWidth - KEYBOARD_RESIZE_STEP,
+      ArrowRight: sidebarWidth + KEYBOARD_RESIZE_STEP,
+      Home: MIN_SIDEBAR_WIDTH,
+      End: MAX_SIDEBAR_WIDTH,
+    };
+    const target = targets[e.key];
+    if (target === undefined) return;
+    e.preventDefault();
+    setSidebarWidth(clampWidth(target));
+  };
+
   if (!rootPath) {
     return (
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "100%",
-          gap: 16,
-        }}
-      >
-        <svg width={56} height={56} viewBox="0 0 56 56" fill="none">
-          <title>Open Project</title>
+      <div className="flex h-full flex-col items-center justify-center gap-4">
+        <svg width={56} height={56} viewBox="0 0 56 56" fill="none" aria-hidden="true">
           <rect
             x={8}
             y={14}
             width={40}
             height={30}
             rx={3}
-            stroke="oklch(0.28 0.05 220)"
             strokeWidth={2}
+            className="stroke-border-2"
           />
           <path
             d="M8 20h16l4-6h12"
-            stroke="oklch(0.55 0.04 220)"
             strokeWidth={2}
             strokeLinecap="round"
             strokeLinejoin="round"
+            className="stroke-fg-dim"
           />
         </svg>
-        <span
-          style={{
-            fontFamily: "var(--font-body)",
-            fontSize: "0.9375rem",
-            color: "oklch(0.55 0.04 220)",
-          }}
-        >
-          No Project Directory Open
-        </span>
-        <button
-          type="button"
-          onClick={() => void handleOpenProject()}
-          style={{
-            padding: "8px 20px",
-            background: "oklch(0.78 0.18 205 / 0.15)",
-            border: "1px solid oklch(0.78 0.18 205 / 0.4)",
-            borderRadius: 8,
-            color: "oklch(0.78 0.18 205)",
-            fontFamily: "var(--font-body)",
-            fontSize: "0.8125rem",
-            fontWeight: 600,
-            cursor: "pointer",
-            transition: "background 0.15s ease",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "oklch(0.78 0.18 205 / 0.25)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "oklch(0.78 0.18 205 / 0.15)";
-          }}
-        >
+        <p className="text-fg-muted text-lg">No Project Directory Open</p>
+        <Button variant="secondary" size="sm" onClick={() => void handleOpenProject()}>
           Open Project
-        </button>
+        </Button>
       </div>
     );
   }
 
   return (
-    <div
-      style={{
-        display: "flex",
-        height: "100%",
-        overflow: "hidden",
-      }}
-    >
-      {/* File tree sidebar */}
+    <div className="flex h-full overflow-hidden">
       <div
-        style={{
-          width: sidebarWidth,
-          minWidth: MIN_SIDEBAR_WIDTH,
-          maxWidth: MAX_SIDEBAR_WIDTH,
-          display: "flex",
-          flexDirection: "column",
-          borderRight: "1px solid oklch(0.22 0.04 220)",
-          background: "oklch(0.09 0.02 220 / 0.6)",
-          backdropFilter: "blur(12px) saturate(1.5)",
-        }}
+        id={treePaneId}
+        className="flex shrink-0 flex-col border-border border-r bg-surface-0/60 backdrop-blur-md"
+        style={{ width: sidebarWidth }}
       >
-        {/* Sidebar header */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "10px 12px",
-            borderBottom: "1px solid oklch(0.22 0.04 220)",
-          }}
-        >
-          <span
-            style={{
-              fontFamily: "var(--font-display)",
-              fontSize: "0.75rem",
-              fontWeight: 700,
-              letterSpacing: "0.04em",
-              color: "oklch(0.65 0.04 220)",
-              textTransform: "uppercase",
-            }}
-          >
+        <div className="flex items-center justify-between border-border border-b px-3 py-2.5">
+          <h2 className="font-bold font-display text-fg-muted text-sm uppercase tracking-[0.04em]">
             Explorer
-          </span>
+          </h2>
           <button
             type="button"
             onClick={() => void handleOpenProject()}
             aria-label="Change Project Directory"
-            style={{
-              width: 24,
-              height: 24,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "oklch(0 0 0 / 0)",
-              border: "none",
-              borderRadius: 4,
-              color: "oklch(0.55 0.04 220)",
-              cursor: "pointer",
-              fontSize: "0.75rem",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "oklch(0.14 0.03 220)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "oklch(0 0 0 / 0)";
-            }}
+            title="Change Project Directory"
+            className="flex size-6 cursor-pointer items-center justify-center rounded text-fg-muted hover:bg-surface-2 hover:text-fg"
           >
             <svg width={14} height={14} viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <path
@@ -235,47 +145,48 @@ export function WorkspacePanel(): React.ReactElement {
             </svg>
           </button>
         </div>
-
-        {/* File tree */}
-        <div style={{ flex: 1, overflow: "auto" }}>
+        <div className="min-h-0 flex-1">
           <FileTree
+            key={rootPath}
             rootPath={rootPath}
-            onSelectFile={setSelectedFile}
-            selectedPath={selectedFile ?? undefined}
+            onSelectFile={handleSelectFile}
+            selectedPath={selection?.path}
           />
         </div>
       </div>
 
-      {/* Resize handle — div is needed for interactive separator, not <hr> */}
-      {/* biome-ignore lint/a11y/useSemanticElements: interactive resize handle needs div */}
-      <div
-        role="separator"
+      <hr
         tabIndex={0}
         aria-orientation="vertical"
+        aria-controls={treePaneId}
         aria-valuenow={sidebarWidth}
         aria-valuemin={MIN_SIDEBAR_WIDTH}
         aria-valuemax={MAX_SIDEBAR_WIDTH}
         aria-label="Resize File Tree"
-        onMouseDown={handleMouseDown}
+        data-dragging={dragging || undefined}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onLostPointerCapture={handleLostPointerCapture}
         onKeyDown={handleSeparatorKeyDown}
-        style={{
-          width: 4,
-          cursor: "col-resize",
-          background: isDragging ? "oklch(0.78 0.18 205 / 0.4)" : "oklch(0 0 0 / 0)",
-          transition: isDragging ? "none" : "background 0.15s ease",
-          flexShrink: 0,
-        }}
-        onMouseEnter={(e) => {
-          if (!isDragging) e.currentTarget.style.background = "oklch(0.78 0.18 205 / 0.2)";
-        }}
-        onMouseLeave={(e) => {
-          if (!isDragging) e.currentTarget.style.background = "oklch(0 0 0 / 0)";
-        }}
+        className="m-0 h-auto w-1 shrink-0 cursor-col-resize touch-none select-none border-0 bg-transparent transition-colors duration-150 hover:bg-plasma/20 data-dragging:bg-plasma/40"
       />
 
-      {/* File viewer */}
-      <div style={{ flex: 1, overflow: "hidden" }}>
-        <FileViewer filePath={selectedFile} />
+      <div className="min-w-0 flex-1 overflow-hidden">
+        {selection ? (
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center">
+                <Spinner size="md" />
+              </div>
+            }
+          >
+            <FileViewer selection={selection} pending={loadingFile} />
+          </Suspense>
+        ) : (
+          <p className="flex h-full items-center justify-center text-fg-dim text-lg">
+            Select A File To View
+          </p>
+        )}
       </div>
     </div>
   );

@@ -1,7 +1,15 @@
 import { test as base, expect, type Locator, type Page } from "@playwright/test";
 
 /** Pages with an entry in the sidebar's "Page Navigation" landmark. */
-export type SidebarPage = "Dashboard" | "Workers" | "Sessions" | "Metrics" | "Settings";
+export type SidebarPage =
+  | "Dashboard"
+  | "Workers"
+  | "Sessions"
+  | "Metrics"
+  | "Logs"
+  | "Tools"
+  | "Workspace"
+  | "Settings";
 
 /**
  * The frontend shell as the specs drive it: landmarks, navigation and the
@@ -20,7 +28,7 @@ export class SwarmApp {
     this.palette = page.getByRole("dialog", { name: "SWARM Command Palette" });
   }
 
-  /** The current page's own `<h1>` (the top bar's "SWARM" `<h1>` is outside `<main>`). */
+  /** The current page's own `<h1>`, inside `<main>` (the page area). */
   heading(name?: string): Locator {
     return this.main.getByRole("heading", { level: 1, ...(name ? { name } : {}) });
   }

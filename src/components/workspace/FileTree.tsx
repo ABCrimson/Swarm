@@ -1,34 +1,52 @@
 import { useResizeObserver } from "@crimson_dev/use-resize-observer";
-import type { DirEntry } from "@tauri-apps/plugin-fs";
-import { readDir } from "@tauri-apps/plugin-fs";
-import { useEffect, useState } from "react";
+import { type DirEntry, readDir } from "@tauri-apps/plugin-fs";
+import { useEffect, useId, useRef, useState } from "react";
+import { childPath } from "#lib/file-preview";
+import { errorMessage } from "#lib/is-error";
 
-const ROW_HEIGHT = 28;
+/** Row height in CSS pixels; rows are absolutely positioned at index × this. */
+export const ROW_HEIGHT = 28;
+/** Extra rows rendered above and below the visible window. */
 const OVERSCAN = 10;
 
-/** Props for the recursive file tree component. */
 interface FileTreeProps {
   /** Absolute path to the root directory. */
   readonly rootPath: string;
-  /** Callback when a file is selected. */
+  /** Called when a file is opened. */
   readonly onSelectFile: (path: string) => void;
-  /** Currently selected file path. */
+  /** Currently open file path. */
   readonly selectedPath?: string;
 }
 
-/** Internal tree node representing a file or directory. */
+/**
+ * A file-system entry. `kind: "link"` is a symlink whose target type is
+ * not known until it is opened (the desktop capability grants `read_dir`
+ * but not `stat`, so the target is probed by trying to list it).
+ */
 interface TreeNode {
   readonly name: string;
   readonly path: string;
-  readonly isDir: boolean;
-  children?: TreeNode[];
-  expanded?: boolean;
+  readonly kind: "dir" | "file" | "link";
+  readonly expanded: boolean;
+  /** Loaded children; `undefined` until the directory was listed. */
+  readonly children?: readonly TreeNode[];
+  /** Why listing this directory failed, if it did. */
+  readonly error?: string;
 }
 
-/** Returns an icon character based on file extension. */
-function fileIcon(name: string, isDir: boolean): string {
-  if (isDir) return "\u{1F4C1}";
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+interface FlatRow {
+  readonly node: TreeNode;
+  readonly depth: number;
+  readonly parentPath: string | null;
+  readonly setSize: number;
+  readonly posInSet: number;
+}
+
+/** Emoji icon for an entry (decorative: hidden from assistive technology). */
+function fileIcon(node: TreeNode): string {
+  if (node.kind === "dir") return "\u{1F4C1}";
+  if (node.kind === "link") return "\u{1F517}";
+  const ext = node.name.split(".").pop()?.toLowerCase() ?? "";
   const icons: Record<string, string> = {
     ts: "\u{1F535}",
     tsx: "\u{1F535}",
@@ -39,284 +57,307 @@ function fileIcon(name: string, isDir: boolean): string {
     css: "\u{1F7E3}",
     html: "\u{1F7E0}",
     rs: "\u{1F9E1}",
-    toml: "\u{26D3}\uFE0F",
+    toml: "\u{1F527}",
   };
   return icons[ext] ?? "\u{1F4C4}";
 }
 
-/** Sorts entries: directories first, then alphabetically. */
-function sortEntries(entries: DirEntry[]): DirEntry[] {
-  return [...entries].sort((a, b) => {
-    if (a.isDirectory && !b.isDirectory) return -1;
-    if (!a.isDirectory && b.isDirectory) return 1;
-    return a.name.localeCompare(b.name);
+/** Directory entries as nodes: directories first, then by name. */
+function toNodes(dirPath: string, entries: readonly DirEntry[]): TreeNode[] {
+  return entries
+    .map(
+      (entry): TreeNode => ({
+        name: entry.name,
+        path: childPath(dirPath, entry.name),
+        kind: entry.isDirectory ? "dir" : entry.isSymlink ? "link" : "file",
+        expanded: false,
+      }),
+    )
+    .toSorted((a, b) => {
+      if ((a.kind === "dir") !== (b.kind === "dir")) return a.kind === "dir" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+}
+
+function flatten(
+  nodes: readonly TreeNode[],
+  depth = 0,
+  parentPath: string | null = null,
+  out: FlatRow[] = [],
+): FlatRow[] {
+  for (const [i, node] of nodes.entries()) {
+    out.push({ node, depth, parentPath, setSize: nodes.length, posInSet: i + 1 });
+    if (node.expanded && node.children) flatten(node.children, depth + 1, node.path, out);
+  }
+  return out;
+}
+
+/** Returns `nodes` with the node at `path` replaced by `update(node)`. */
+function updateNode(
+  nodes: readonly TreeNode[],
+  path: string,
+  update: (node: TreeNode) => TreeNode,
+): readonly TreeNode[] {
+  return nodes.map((node) => {
+    if (node.path === path) return update(node);
+    if (node.children && path.startsWith(node.path)) {
+      return { ...node, children: updateNode(node.children, path, update) };
+    }
+    return node;
   });
 }
 
-interface FlatNode {
-  readonly node: TreeNode;
-  readonly depth: number;
-}
-
-function flattenTree(nodes: TreeNode[], depth = 0): FlatNode[] {
-  const result: FlatNode[] = [];
-  for (const node of nodes) {
-    result.push({ node, depth });
-    if (node.isDir && node.expanded && node.children) {
-      result.push(...flattenTree(node.children, depth + 1));
-    }
-  }
-  return result;
-}
-
-function TreeItem({
-  node,
-  depth,
-  selectedPath,
-  onSelect,
-  onToggle,
-}: {
-  readonly node: TreeNode;
-  readonly depth: number;
-  readonly selectedPath?: string;
-  readonly onSelect: (path: string) => void;
-  readonly onToggle: (path: string) => void;
-}): React.ReactElement {
-  const isSelected = node.path === selectedPath;
-  const paddingLeft = 12 + depth * 16;
-
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        if (node.isDir) {
-          void onToggle(node.path);
-        } else {
-          onSelect(node.path);
-        }
-      }}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        width: "100%",
-        padding: `4px 8px 4px ${paddingLeft}px`,
-        background: isSelected ? "oklch(0.18 0.04 205 / 0.4)" : "oklch(0 0 0 / 0)",
-        border: "none",
-        borderRadius: 4,
-        color: isSelected ? "oklch(0.92 0.02 220)" : "oklch(0.72 0.04 220)",
-        fontFamily: "var(--font-body)",
-        fontSize: "0.8125rem",
-        textAlign: "left",
-        cursor: "pointer",
-        transition: "background 0.1s ease",
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-      }}
-      onMouseEnter={(e) => {
-        if (!isSelected) e.currentTarget.style.background = "oklch(0.14 0.03 220 / 0.5)";
-      }}
-      onMouseLeave={(e) => {
-        if (!isSelected) e.currentTarget.style.background = "oklch(0 0 0 / 0)";
-      }}
-    >
-      {node.isDir && (
-        <span
-          aria-hidden="true"
-          style={{
-            display: "inline-block",
-            width: 12,
-            fontSize: "0.625rem",
-            color: "oklch(0.55 0.04 220)",
-            transform: node.expanded ? "rotate(90deg)" : "rotate(0deg)",
-            transition: "transform 0.15s ease",
-          }}
-        >
-          {"\u25B6"}
-        </span>
-      )}
-      {!node.isDir && <span style={{ width: 12 }} />}
-      <span style={{ fontSize: "0.75rem" }}>{fileIcon(node.name, node.isDir)}</span>
-      <span>{node.name}</span>
-    </button>
-  );
-}
+type RootState =
+  | { readonly status: "loading" }
+  | { readonly status: "ready"; readonly nodes: readonly TreeNode[] }
+  | { readonly status: "error"; readonly message: string };
 
 /**
- * Recursive file tree component for browsing project directories.
+ * Virtualized file tree for browsing a project directory, following the
+ * WAI-ARIA tree pattern: the tree is one Tab stop and tracks the active
+ * row with `aria-activedescendant`; Up/Down move, Right expands (or
+ * steps into) a folder, Left collapses (or steps out), Home/End jump,
+ * Enter/Space opens. Rows carry level, set size, position, expanded and
+ * selected state.
  *
- * Uses Tauri `readDir()` for directory listing. Supports expand/collapse,
- * file icons by extension, and click-to-open. OKLCH glass-panel styling.
+ * Only the rows in view (plus {@link OVERSCAN}) are in the DOM. The
+ * scroll container renders from the first commit — also while the root
+ * is loading — so its height is measured before any rows are laid out.
+ * Directory listings load lazily on first expand; a failed listing is
+ * shown under its folder (or instead of the tree for the root), never
+ * swallowed. Key it by `rootPath` so a new root starts fresh.
  */
 export function FileTree({
   rootPath,
   onSelectFile,
   selectedPath,
 }: FileTreeProps): React.ReactElement {
-  const [nodes, setNodes] = useState<TreeNode[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [root, setRoot] = useState<RootState>({ status: "loading" });
   const [scrollTop, setScrollTop] = useState(0);
+  const [activePath, setActivePath] = useState<string | null>(null);
+  /** Directories with a listing in flight, so a double click never lists twice. */
+  const inFlightRef = useRef(new Set<string>());
+  const idPrefix = useId();
+  const { ref: containerRef, height: viewportHeight = 0 } = useResizeObserver<HTMLDivElement>();
 
-  const { ref: containerRef, height: containerHeight = 0 } = useResizeObserver<HTMLDivElement>();
-
-  // Load root directory entries
+  // Mount-time listing. The parent keys this component by `rootPath`, so
+  // a new root starts from a fresh "loading" state instead of resetting
+  // state inside the effect.
   useEffect(() => {
-    const controller = new AbortController();
-
-    async function loadRoot(): Promise<void> {
-      setLoading(true);
-      try {
-        const entries = await readDir(rootPath);
-        if (controller.signal.aborted) return;
-        const sorted = sortEntries(entries);
-        const treeNodes: TreeNode[] = sorted.map((entry) => ({
-          name: entry.name,
-          path: `${rootPath}/${entry.name}`,
-          isDir: entry.isDirectory ?? false,
-          expanded: false,
-          children: undefined,
-        }));
-        setNodes(treeNodes);
-      } catch {
-        if (!controller.signal.aborted) setNodes([]);
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    }
-
-    void loadRoot();
-    return () => controller.abort();
+    let cancelled = false;
+    readDir(rootPath).then(
+      (entries) => {
+        if (!cancelled) setRoot({ status: "ready", nodes: toNodes(rootPath, entries) });
+      },
+      (err: unknown) => {
+        if (!cancelled) setRoot({ status: "error", message: errorMessage(err) });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
   }, [rootPath]);
 
-  // Toggle directory expansion
-  const handleToggle = async (dirPath: string) => {
-    setNodes((prev) => toggleNode(prev, dirPath));
+  const nodes = root.status === "ready" ? root.nodes : [];
+  const rows = flatten(nodes);
+  const activeIndex = Math.max(
+    0,
+    rows.findIndex((row) => row.node.path === activePath),
+  );
 
-    // Load children if not yet loaded
-    const node = findNode(nodes, dirPath);
-    if (node?.isDir && !node.children) {
-      try {
-        const entries = await readDir(dirPath);
-        const sorted = sortEntries(entries);
-        const children: TreeNode[] = sorted.map((entry) => ({
-          name: entry.name,
-          path: `${dirPath}/${entry.name}`,
-          isDir: entry.isDirectory ?? false,
-          expanded: false,
-          children: undefined,
-        }));
-        setNodes((prev) => setNodeChildren(prev, dirPath, children));
-      } catch {
-        // Silently handle unreadable directories
-      }
-    }
+  const patch = (path: string, update: (node: TreeNode) => TreeNode): void =>
+    setRoot((prev) =>
+      prev.status === "ready" ? { ...prev, nodes: updateNode(prev.nodes, path, update) } : prev,
+    );
+
+  /** Lists a directory once; the result keeps whatever expanded state the user has set since. */
+  const loadChildren = (path: string): void => {
+    if (inFlightRef.current.has(path)) return;
+    inFlightRef.current.add(path);
+    readDir(path)
+      .then(
+        (entries) =>
+          patch(path, (node) => ({
+            ...node,
+            kind: "dir",
+            children: toNodes(path, entries),
+            error: undefined,
+          })),
+        (err: unknown) => patch(path, (node) => ({ ...node, error: errorMessage(err) })),
+      )
+      .finally(() => inFlightRef.current.delete(path));
   };
 
-  if (loading) {
-    return (
-      <div
-        style={{
-          padding: 16,
-          fontFamily: "var(--font-body)",
-          fontSize: "0.8125rem",
-          color: "oklch(0.55 0.04 220)",
-        }}
-      >
-        Loading...
-      </div>
-    );
-  }
+  const setExpanded = (node: TreeNode, expanded: boolean): void => {
+    patch(node.path, (n) => ({ ...n, expanded }));
+    if (expanded && !node.children) loadChildren(node.path);
+  };
 
-  const flatNodes = flattenTree(nodes);
-  const totalHeight = flatNodes.length * ROW_HEIGHT;
+  /** Opens a file; a symlink is probed by listing it, and opened as a file if that fails. */
+  const open = (node: TreeNode): void => {
+    if (node.kind === "dir") {
+      setExpanded(node, !node.expanded);
+      return;
+    }
+    if (node.kind === "file") {
+      onSelectFile(node.path);
+      return;
+    }
+    readDir(node.path).then(
+      (entries) =>
+        patch(node.path, (n) => ({
+          ...n,
+          kind: "dir",
+          expanded: true,
+          children: toNodes(node.path, entries),
+        })),
+      () => {
+        patch(node.path, (n) => ({ ...n, kind: "file" }));
+        onSelectFile(node.path);
+      },
+    );
+  };
+
+  /** Makes `index` the active row and scrolls it into the rendered window. */
+  const activate = (index: number): void => {
+    const row = rows[index];
+    const container = containerRef.current;
+    if (!row || !container) return;
+    setActivePath(row.node.path);
+    const top = index * ROW_HEIGHT;
+    if (top < container.scrollTop) container.scrollTop = top;
+    else if (top + ROW_HEIGHT > container.scrollTop + container.clientHeight) {
+      container.scrollTop = top + ROW_HEIGHT - container.clientHeight;
+    }
+    setScrollTop(container.scrollTop);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    const row = rows[activeIndex];
+    if (!row) return;
+    const { node } = row;
+    switch (e.key) {
+      case "ArrowDown":
+        activate(Math.min(rows.length - 1, activeIndex + 1));
+        break;
+      case "ArrowUp":
+        activate(Math.max(0, activeIndex - 1));
+        break;
+      case "Home":
+        activate(0);
+        break;
+      case "End":
+        activate(rows.length - 1);
+        break;
+      case "ArrowRight":
+        if (node.kind === "dir" && !node.expanded) setExpanded(node, true);
+        else if (node.kind === "dir" && node.children?.length) activate(activeIndex + 1);
+        break;
+      case "ArrowLeft":
+        if (node.kind === "dir" && node.expanded) setExpanded(node, false);
+        else if (row.parentPath !== null) {
+          activate(rows.findIndex((r) => r.node.path === row.parentPath));
+        }
+        break;
+      case "Enter":
+      case " ":
+        open(node);
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+  };
+
   const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
   const endIndex = Math.min(
-    flatNodes.length,
-    Math.ceil((scrollTop + containerHeight) / ROW_HEIGHT) + OVERSCAN,
+    rows.length,
+    Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN,
   );
-  const visibleNodes = flatNodes.slice(startIndex, endIndex);
+  const rowId = (index: number): string => `${idPrefix}-row-${index}`;
+  // The window, plus the active row wherever it is: aria-activedescendant
+  // must always point at an element in the DOM.
+  const rendered = Array.from({ length: endIndex - startIndex }, (_, i) => startIndex + i);
+  if (rows.length > 0 && (activeIndex < startIndex || activeIndex >= endIndex)) {
+    rendered.push(activeIndex);
+  }
 
   return (
     <div
       ref={containerRef}
-      style={{
-        height: "100%",
-        overflowY: "auto",
-        padding: "8px 4px",
-      }}
+      className="scroll-area h-full overflow-y-auto px-1 py-2"
       onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
     >
-      <div style={{ height: totalHeight, position: "relative" }}>
-        {visibleNodes.map((flat, i) => (
-          <div
-            key={flat.node.path}
-            style={{
-              position: "absolute",
-              top: (startIndex + i) * ROW_HEIGHT,
-              height: ROW_HEIGHT,
-              width: "100%",
-            }}
-          >
-            <TreeItem
-              node={flat.node}
-              depth={flat.depth}
-              selectedPath={selectedPath}
-              onSelect={onSelectFile}
-              onToggle={handleToggle}
-            />
-          </div>
-        ))}
-      </div>
-      {nodes.length === 0 && (
+      {root.status === "loading" && <p className="p-4 text-fg-muted text-md">Loading…</p>}
+      {root.status === "error" && (
+        <p role="alert" className="p-4 text-md text-rose">
+          Could Not Read This Folder: {root.message}
+        </p>
+      )}
+      {root.status === "ready" && rows.length === 0 && (
+        <p className="p-4 text-fg-dim text-md">Empty Directory</p>
+      )}
+      {rows.length > 0 && (
         <div
-          style={{
-            padding: 16,
-            fontFamily: "var(--font-body)",
-            fontSize: "0.8125rem",
-            color: "oklch(0.45 0.04 220)",
-          }}
+          role="tree"
+          aria-label="Project Files"
+          tabIndex={0}
+          aria-activedescendant={rowId(activeIndex)}
+          onKeyDown={handleKeyDown}
+          className="group relative outline-hidden"
+          style={{ height: rows.length * ROW_HEIGHT }}
         >
-          Empty Directory
+          {rendered.map((index) => {
+            const row = rows[index];
+            if (!row) return null;
+            const { node, depth } = row;
+            return (
+              // biome-ignore lint/a11y/useKeyWithClickEvents: keyboard is handled on the tree (aria-activedescendant pattern)
+              <div
+                key={node.path}
+                id={rowId(index)}
+                role="treeitem"
+                aria-level={depth + 1}
+                aria-setsize={row.setSize}
+                aria-posinset={row.posInSet}
+                aria-expanded={node.kind === "dir" ? node.expanded : undefined}
+                aria-selected={node.path === selectedPath}
+                data-active={index === activeIndex || undefined}
+                // Focusable only programmatically; a click hands focus back to
+                // the tree, which owns keyboard handling and the active row.
+                tabIndex={-1}
+                onClick={(e) => {
+                  e.currentTarget.closest<HTMLElement>("[role=tree]")?.focus();
+                  setActivePath(node.path);
+                  open(node);
+                }}
+                className="absolute inset-x-0 flex cursor-pointer items-center gap-1.5 truncate rounded pr-2 text-fg-muted text-md hover:bg-surface-2/50 aria-selected:bg-plasma/15 aria-selected:text-fg-bright group-focus-visible:data-active:outline-2 group-focus-visible:data-active:outline-plasma group-focus-visible:data-active:-outline-offset-2"
+                style={{
+                  top: index * ROW_HEIGHT,
+                  height: ROW_HEIGHT,
+                  paddingLeft: 12 + depth * 16,
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  className={`inline-block w-3 text-2xs text-fg-dim transition-transform duration-150 ${node.expanded ? "rotate-90" : ""}`}
+                >
+                  {node.kind === "dir" ? "▶" : ""}
+                </span>
+                <span aria-hidden="true" className="text-sm">
+                  {fileIcon(node)}
+                </span>
+                <span className="truncate">{node.name}</span>
+                {node.error && (
+                  <span className="truncate text-rose text-sm" title={node.error}>
+                    — Could Not Read Folder
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
   );
-}
-
-// ── Tree manipulation helpers ──────────────────────────
-
-function findNode(nodes: TreeNode[], path: string): TreeNode | undefined {
-  for (const node of nodes) {
-    if (node.path === path) return node;
-    if (node.children) {
-      const found = findNode(node.children, path);
-      if (found) return found;
-    }
-  }
-  return undefined;
-}
-
-function toggleNode(nodes: TreeNode[], path: string): TreeNode[] {
-  return nodes.map((node) => {
-    if (node.path === path) {
-      return { ...node, expanded: !node.expanded };
-    }
-    if (node.children) {
-      return { ...node, children: toggleNode(node.children, path) };
-    }
-    return node;
-  });
-}
-
-function setNodeChildren(nodes: TreeNode[], path: string, children: TreeNode[]): TreeNode[] {
-  return nodes.map((node) => {
-    if (node.path === path) {
-      return { ...node, children, expanded: true };
-    }
-    if (node.children) {
-      return { ...node, children: setNodeChildren(node.children, path, children) };
-    }
-    return node;
-  });
 }

@@ -96,11 +96,28 @@ describe("Pill", () => {
     expect(pill).toHaveAttribute("data-size", "sm");
   });
 
-  it("applies each semantic tone", () => {
-    for (const tone of ["neutral", "info", "success", "warning", "danger"] as const) {
+  it.for(["neutral", "info", "success", "warning", "danger"] as const)(
+    "applies the %s tone",
+    (tone) => {
       const { container } = render(<Pill tone={tone}>{tone}</Pill>);
       expect(container.firstElementChild).toHaveAttribute("data-tone", tone);
-    }
+    },
+  );
+
+  it("forwards a ref to the rendered element for both kinds (React 19 ref-as-prop)", () => {
+    const spanRef = { current: null as HTMLSpanElement | null };
+    const buttonRef = { current: null as HTMLButtonElement | null };
+    render(
+      <>
+        <Pill ref={spanRef}>Label</Pill>
+        <Pill interactive ref={buttonRef}>
+          Act
+        </Pill>
+      </>,
+    );
+
+    expect(spanRef.current?.tagName).toBe("SPAN");
+    expect(buttonRef.current).toBe(screen.getByRole("button", { name: "Act" }));
   });
 
   it("applies the md size", () => {

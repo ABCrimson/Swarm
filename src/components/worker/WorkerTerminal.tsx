@@ -8,26 +8,19 @@ interface WorkerTerminalProps {
 }
 
 /**
- * Terminal component for a worker process.
- *
- * Renders a full-height/width container and mounts an xterm.js terminal
- * connected to the specified worker via the `useTerminal` hook.
+ * A worker's interactive terminal: a full-size, labelled region that
+ * `useTerminal` mounts an xterm.js instance into.
  */
 export function WorkerTerminal({ workerId }: WorkerTerminalProps): React.ReactElement {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLElement>(null);
 
   useTerminal({ workerId, containerRef });
 
   return (
-    <div
+    <section
       ref={containerRef}
-      style={{
-        width: "100%",
-        height: "100%",
-        minHeight: 0,
-        overflow: "hidden",
-        background: "oklch(0.06 0.02 220)",
-      }}
+      aria-label={`Worker ${workerId.slice(0, 8)} Terminal`}
+      className="size-full min-h-0 overflow-hidden bg-void"
     />
   );
 }

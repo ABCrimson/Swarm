@@ -1,279 +1,128 @@
-import { readTextFile } from "@tauri-apps/plugin-fs";
-import { useEffect, useState } from "react";
-import type { HighlightToken } from "#lib/syntax-highlight";
+import { use } from "react";
+import { basename, type FilePreview, formatBytes, MAX_PREVIEW_BYTES } from "#lib/file-preview";
 import { tokenizeJson } from "#lib/syntax-highlight";
 
-/** Props for the read-only file viewer. */
+/** JSON above this size renders as plain text: one span per token gets expensive. */
+const MAX_HIGHLIGHT_CHARS = 256 * 1024;
+
+/** A file chosen in the tree, with the (possibly still pending) read of its contents. */
+export interface FileSelection {
+  readonly path: string;
+  readonly preview: Promise<FilePreview>;
+}
+
 interface FileViewerProps {
-  /** Absolute path of the file to display. */
-  readonly filePath: string | null;
-}
-
-/** Determines if a file should use JSON syntax highlighting. */
-function isJsonFile(path: string): boolean {
-  return path.endsWith(".json") || path.endsWith(".jsonc");
-}
-
-/** Extracts the filename from a full path. */
-function basename(path: string): string {
-  const parts = path.replace(/\\/g, "/").split("/");
-  return parts[parts.length - 1] ?? path;
+  readonly selection: FileSelection;
+  /** A newer selection is loading; the current file stays visible, dimmed. */
+  readonly pending?: boolean;
 }
 
 /**
- * Read-only file content viewer with syntax highlighting for JSON files.
+ * Read-only file viewer: a header with the file name, then the contents
+ * with line numbers. JSON files are syntax-highlighted, but only when the
+ * tokens reproduce the file exactly — JSONC comments, or anything else
+ * the JSON tokenizer does not understand, fall back to plain text rather
+ * than showing content that is not in the file.
  *
- * Uses Tauri `readTextFile()` to load file contents. Renders with line
- * numbers and monospace OKLCH styling. JSON files get token-level
- * colour highlighting via `tokenizeJson()`.
+ * Suspends on `selection.preview` via `use()`; render it inside a
+ * `<Suspense>`. The header and body always come from the same
+ * selection, so the old file never shows under the new name.
+ *
+ * The body is one text node for the gutter and one for the text (or
+ * one span per JSON token), not a DOM row per line, so a large file
+ * cannot flood the webview with nodes.
  */
-export function FileViewer({ filePath }: FileViewerProps): React.ReactElement {
-  const [content, setContent] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!filePath) {
-      setContent(null);
-      setError(null);
-      return;
-    }
-
-    const currentPath = filePath;
-    const controller = new AbortController();
-
-    async function loadFile(): Promise<void> {
-      setLoading(true);
-      setError(null);
-      try {
-        const text = await readTextFile(currentPath);
-        if (controller.signal.aborted) return;
-        setContent(text);
-      } catch (err) {
-        if (!controller.signal.aborted) {
-          setError(String(err));
-          setContent(null);
-        }
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    }
-
-    void loadFile();
-    return () => controller.abort();
-  }, [filePath]);
-
-  // Empty state
-  if (!filePath) {
-    return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "100%",
-          fontFamily: "var(--font-body)",
-          fontSize: "0.875rem",
-          color: "oklch(0.45 0.04 220)",
-        }}
-      >
-        Select A File To View
-      </div>
-    );
-  }
-
-  // Loading
-  if (loading) {
-    return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "100%",
-          fontFamily: "var(--font-body)",
-          fontSize: "0.8125rem",
-          color: "oklch(0.55 0.04 220)",
-        }}
-      >
-        Loading...
-      </div>
-    );
-  }
-
-  // Error
-  if (error) {
-    return (
-      <div
-        style={{
-          padding: 16,
-          fontFamily: "var(--font-body)",
-          fontSize: "0.8125rem",
-          color: "oklch(0.72 0.20 10)",
-        }}
-      >
-        Error: {error}
-      </div>
-    );
-  }
-
-  const lines = (content ?? "").split("\n");
-  const isJson = isJsonFile(filePath);
-  const jsonTokens = isJson && content ? tokenizeJson(content) : null;
+export function FileViewer({ selection, pending = false }: FileViewerProps): React.ReactElement {
+  const preview = use(selection.preview);
 
   return (
     <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        background: "oklch(0.08 0.02 220)",
-      }}
+      className="flex h-full flex-col bg-surface-0 transition-opacity data-pending:opacity-60"
+      data-pending={pending || undefined}
+      aria-busy={pending || undefined}
     >
-      {/* File header */}
-      <div
-        style={{
-          padding: "8px 16px",
-          borderBottom: "1px solid oklch(0.22 0.04 220)",
-          fontFamily: "var(--font-mono)",
-          fontSize: "0.75rem",
-          color: "oklch(0.65 0.04 220)",
-          background: "oklch(0.10 0.03 220 / 0.6)",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-        }}
+      <p
+        className="truncate border-border border-b bg-surface-1/60 px-4 py-2 font-mono text-fg-muted text-sm"
+        title={selection.path}
       >
-        {basename(filePath)}
-      </div>
-
-      {/* Content area */}
-      <div
-        style={{
-          flex: 1,
-          overflow: "auto",
-          padding: "12px 0",
-        }}
-      >
-        {isJson && jsonTokens ? (
-          <JsonHighlightedView tokens={jsonTokens} />
-        ) : (
-          <PlainTextView lines={lines} />
-        )}
-      </div>
+        {basename(selection.path)}
+      </p>
+      <PreviewBody path={selection.path} preview={preview} />
     </div>
   );
 }
 
-function PlainTextView({ lines }: { readonly lines: string[] }): React.ReactElement {
-  const gutterWidth = String(lines.length).length;
+function PreviewBody({
+  path,
+  preview,
+}: {
+  readonly path: string;
+  readonly preview: FilePreview;
+}): React.ReactElement {
+  switch (preview.kind) {
+    case "error":
+      return <Notice tone="error">Could Not Read This File: {preview.message}</Notice>;
+    case "binary":
+      return <Notice>Binary File — Not Shown</Notice>;
+    case "too-large":
+      return (
+        <Notice>
+          File Too Large To Preview ({formatBytes(preview.bytes)}; The Limit Is{" "}
+          {formatBytes(MAX_PREVIEW_BYTES)})
+        </Notice>
+      );
+    case "text":
+      return <TextView text={preview.text} highlight={isJsonPath(path)} />;
+  }
+}
 
+function Notice({
+  children,
+  tone = "info",
+}: {
+  readonly children: React.ReactNode;
+  readonly tone?: "info" | "error";
+}): React.ReactElement {
   return (
-    <pre
-      style={{
-        margin: 0,
-        fontFamily: "var(--font-mono)",
-        fontSize: "0.8125rem",
-        lineHeight: 1.6,
-      }}
-    >
-      {lines.map((line, i) => (
-        <div
-          key={`ln-${String(i)}`}
-          style={{
-            display: "flex",
-            padding: "0 16px",
-          }}
-        >
-          <span
-            style={{
-              display: "inline-block",
-              width: `${gutterWidth + 1}ch`,
-              textAlign: "right",
-              paddingRight: "16px",
-              color: "oklch(0.35 0.03 220)",
-              userSelect: "none",
-              flexShrink: 0,
-            }}
-          >
-            {i + 1}
-          </span>
-          <span style={{ color: "oklch(0.82 0.04 220)" }}>{line}</span>
-        </div>
-      ))}
-    </pre>
+    <p className={`p-4 text-md ${tone === "error" ? "text-rose" : "text-fg-muted"}`}>{children}</p>
   );
 }
 
-function JsonHighlightedView({
-  tokens,
-}: {
-  readonly tokens: HighlightToken[];
-}): React.ReactElement {
-  // Reconstruct the JSON with tokens and add line numbers
-  const fullText = tokens.map((t) => t.value).join("");
-  const lines = fullText.split("\n");
-  const gutterWidth = String(lines.length).length;
+function isJsonPath(path: string): boolean {
+  return /\.jsonc?$/i.test(path);
+}
 
-  // Build per-line token arrays
-  const lineTokens: HighlightToken[][] = [[]];
-  let currentLine = 0;
-  for (const token of tokens) {
-    const parts = token.value.split("\n");
-    for (let p = 0; p < parts.length; p++) {
-      if (p > 0) {
-        currentLine++;
-        lineTokens[currentLine] = [];
-      }
-      if (parts[p].length > 0) {
-        lineTokens[currentLine].push({
-          type: token.type,
-          value: parts[p],
-          color: token.color,
-        });
-      }
-    }
-  }
+function TextView({
+  text,
+  highlight,
+}: {
+  readonly text: string;
+  readonly highlight: boolean;
+}): React.ReactElement {
+  const lineCount = text.split("\n").length;
+  const gutter = Array.from({ length: lineCount }, (_, i) => i + 1).join("\n");
+  const tokens = highlight && text.length <= MAX_HIGHLIGHT_CHARS ? tokenizeJson(text) : null;
+  const faithful = tokens !== null && tokens.map((t) => t.value).join("") === text;
 
   return (
-    <pre
-      style={{
-        margin: 0,
-        fontFamily: "var(--font-mono)",
-        fontSize: "0.8125rem",
-        lineHeight: 1.6,
-      }}
-    >
-      {lineTokens.map((tokens, i) => (
-        <div
-          key={`jln-${String(i)}`}
-          style={{
-            display: "flex",
-            padding: "0 16px",
-          }}
-        >
-          <span
-            style={{
-              display: "inline-block",
-              width: `${gutterWidth + 1}ch`,
-              textAlign: "right",
-              paddingRight: "16px",
-              color: "oklch(0.35 0.03 220)",
-              userSelect: "none",
-              flexShrink: 0,
-            }}
-          >
-            {i + 1}
-          </span>
-          <span>
-            {tokens.map((token, j) => (
-              <span key={`tk-${String(j)}`} style={{ color: token.color }}>
+    <div className="scroll-area flex flex-1 overflow-auto py-3 font-mono text-md leading-relaxed">
+      <pre
+        aria-hidden="true"
+        className="sticky left-0 shrink-0 select-none bg-surface-0 pr-4 pl-4 text-right text-fg-dim"
+        style={{ minWidth: `${String(lineCount).length + 2}ch` }}
+      >
+        {gutter}
+      </pre>
+      <pre className="pr-4 text-fg">
+        {faithful
+          ? tokens.map((token, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reorder
+              <span key={i} style={{ color: token.color }}>
                 {token.value}
               </span>
-            ))}
-          </span>
-        </div>
-      ))}
-    </pre>
+            ))
+          : text}
+      </pre>
+    </div>
   );
 }

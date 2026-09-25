@@ -1,116 +1,60 @@
 import { useAtomValue } from "jotai";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ReactNode } from "react";
-import { reducedMotionAtom, sidebarCollapsedAtom } from "#store/ui";
+import { sidebarCollapsedAtom } from "#store/ui";
 import { ParticleBackground } from "./ParticleBackground.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 import { StatusBar } from "./StatusBar.tsx";
-import { Topbar } from "./TopBar.tsx";
+import { TopBar } from "./TopBar.tsx";
 
 interface AppShellProps {
+  /** The page area — normally `<PageHost />`. */
   readonly children: ReactNode;
-  /** Key for AnimatePresence page transitions */
-  readonly pageKey: string;
 }
 
-/** GSAP's `power3.out` / `power2.out` as cubic-bezier curves. */
-const POWER3_OUT = [0.215, 0.61, 0.355, 1] as const;
-const POWER2_OUT = [0.25, 0.46, 0.45, 0.94] as const;
-
 /**
- * Root layout shell with CSS Grid: sidebar (220px) + main (1fr).
+ * Root layout: a CSS grid of the sidebar (220px, or 56px collapsed) and
+ * the main column (top bar, page area, status bar), over the particle
+ * background.
  *
- * Startup sequence (plays once, on mount):
- *  1. Sidebar slides in from left (x: -20, 0.4s, power3.out)
- *  2. Topbar fades in from top (y: -12, 0.3s, starts 0.1s later)
- *  3. Main content fades in (0.4s, power2.out, starts 0.25s in)
- *
- * `<AnimatePresence mode="popLayout">` wraps page content.
+ * The one-time entrance (sidebar slides in, top bar drops in, page area
+ * fades in) is pure CSS: Tailwind's `starting:` variant compiles to
+ * `@starting-style`, so each region transitions from its starting style
+ * the first time it renders. No JS runs for it, it never flashes the
+ * final state first, and the global reduced-motion override in
+ * animations.css zeroes its durations and delays, so it becomes an
+ * instant change.
  */
-export function AppShell({ children, pageKey }: AppShellProps): React.ReactElement {
-  const reducedMotion = useAtomValue(reducedMotionAtom);
+export function AppShell({ children }: AppShellProps): React.ReactElement {
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
-  // The intro is decided on the first render, before App's useTheme effect
-  // syncs `reducedMotionAtom` from the media query — so read the preference
-  // synchronously here instead of from the (still-default) atom.
-  const skipIntro = useReducedMotion() === true;
 
   return (
     <>
-      {/* Skip to main content link */}
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only"
-        style={{
-          position: "fixed",
-          top: 4,
-          left: 4,
-          zIndex: 9999,
-          padding: "8px 16px",
-          borderRadius: 8,
-          background: "oklch(0.78 0.18 205)",
-          color: "oklch(0.06 0.02 220)",
-          fontFamily: "var(--font-body)",
-          fontWeight: 600,
-          fontSize: 14,
-          textDecoration: "none",
-          outline: "2px solid oklch(0.78 0.18 205)",
-          outlineOffset: 2,
-        }}
+        className="fixed top-1 left-1 z-50 rounded-lg bg-plasma px-4 py-2 font-semibold text-md text-void no-underline not-focus:sr-only"
       >
-        Skip to main content
+        Skip To Main Content
       </a>
       <ParticleBackground />
       <div
-        className="grid h-screen w-screen overflow-hidden"
-        style={{
-          gridTemplateColumns: sidebarCollapsed ? "56px 1fr" : "220px 1fr",
-          gridTemplateRows: "1fr",
-          background: "oklch(0.06 0.02 220)",
-          color: "oklch(0.82 0.04 220)",
-          transition: "grid-template-columns 0.25s cubic-bezier(0.4, 0.0, 0.2, 1.0)",
-        }}
+        data-sidebar-collapsed={sidebarCollapsed || undefined}
+        className="grid h-screen w-screen grid-cols-[220px_1fr] grid-rows-1 overflow-hidden text-fg transition-[grid-template-columns] duration-250 ease-in-out data-sidebar-collapsed:grid-cols-[56px_1fr]"
       >
-        {/* Sidebar */}
-        <motion.div
-          className="row-span-full"
-          initial={skipIntro ? false : { opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ duration: 0.4, ease: POWER3_OUT }}
-        >
+        <div className="row-span-full transition-[opacity,translate] duration-400 ease-out-cubic starting:-translate-x-5 starting:opacity-0">
           <Sidebar />
-        </motion.div>
+        </div>
 
-        {/* Main area: topbar + content */}
-        <div className="grid" style={{ gridTemplateRows: "auto 1fr auto" }}>
-          <motion.div
-            initial={skipIntro ? false : { opacity: 0, y: -12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3, delay: 0.1, ease: POWER3_OUT }}
-          >
-            <Topbar />
-          </motion.div>
+        <div className="grid min-w-0 grid-rows-[auto_1fr_auto]">
+          <div className="transition-[opacity,translate] delay-100 duration-300 ease-out-cubic starting:-translate-y-3 starting:opacity-0">
+            <TopBar />
+          </div>
 
-          <motion.main
+          <main
             id="main-content"
-            className="overflow-hidden relative"
-            initial={skipIntro ? false : { opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.4, delay: 0.25, ease: POWER2_OUT }}
+            className="relative overflow-hidden transition-opacity delay-250 duration-400 ease-out starting:opacity-0"
           >
-            <AnimatePresence mode="popLayout">
-              <motion.div
-                key={pageKey}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: reducedMotion ? 0 : 0.25, ease: "easeOut" }}
-                className="absolute inset-0 overflow-auto"
-              >
-                {children}
-              </motion.div>
-            </AnimatePresence>
-          </motion.main>
+            {children}
+          </main>
 
           <StatusBar />
         </div>

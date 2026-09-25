@@ -3,56 +3,52 @@ import { Spinner } from "./Spinner.tsx";
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 type ButtonSize = "sm" | "md" | "lg";
 
-type ButtonOwnProps = {
-  readonly as?: React.ElementType;
+interface ButtonProps extends React.ComponentPropsWithRef<"button"> {
   readonly variant?: ButtonVariant;
   readonly size?: ButtonSize;
+  /** Shows a spinner and ignores clicks, without disabling the element. */
   readonly loading?: boolean;
-};
-
-type ButtonProps = ButtonOwnProps &
-  Omit<React.ComponentPropsWithRef<"button">, keyof ButtonOwnProps>;
+}
 
 /**
- * Polymorphic button with variant, size, and loading state support.
+ * The shared button: `.swarm-btn` (components.css) styled per `variant`
+ * and `size` through data attributes.
  *
- * Renders a spinner and disables interaction when `loading` is `true`.
- * Supports `as` prop for rendering as a different element (e.g. `<a>`).
+ * `loading` marks the button busy (`aria-busy`, `aria-disabled`, a
+ * spinner) and swallows clicks, but deliberately does not set the
+ * `disabled` attribute: disabling the focused element would drop
+ * keyboard focus to `<body>` mid-action (e.g. after pressing Enter on
+ * a Save button). `disabled` itself still disables for real.
  */
 export function Button({
-  as,
   variant = "primary",
   size = "md",
   loading = false,
   children,
-  disabled,
   className,
   type = "button",
-  ref,
+  onClick,
   ...props
 }: ButtonProps): React.ReactElement {
-  const Component = as ?? "button";
-
   return (
-    <Component
-      ref={ref}
-      type={Component === "button" ? type : undefined}
+    <button
+      type={type}
       className={`swarm-btn ${className ?? ""}`}
       data-variant={variant}
       data-size={size}
-      data-loading={loading || undefined}
-      disabled={disabled || loading}
       aria-busy={loading || undefined}
+      aria-disabled={loading || undefined}
+      onClick={(e) => {
+        if (loading) {
+          e.preventDefault();
+          return;
+        }
+        onClick?.(e);
+      }}
       {...props}
     >
-      {loading ? (
-        <>
-          <Spinner size={size === "lg" ? "md" : "sm"} />
-          <span>{children}</span>
-        </>
-      ) : (
-        children
-      )}
-    </Component>
+      {loading && <Spinner size={size === "lg" ? "md" : "sm"} decorative />}
+      {children}
+    </button>
   );
 }

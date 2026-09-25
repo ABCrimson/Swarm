@@ -9,19 +9,21 @@ import { expect, type SidebarPage, test } from "./fixtures.ts";
 // spawn/PTY/real IPC — see `docs/e2e.md` for the documented boundary and
 // the tauri-driver roadmap for closing it.
 
+// Every page, in sidebar order (see NAV_ITEMS in Sidebar.tsx).
 const SIDEBAR_PAGES = [
   "Dashboard",
   "Workers",
   "Sessions",
   "Metrics",
+  "Logs",
+  "Tools",
+  "Workspace",
   "Settings",
 ] as const satisfies readonly SidebarPage[];
 
-// Tools/Logs/Workspace have no sidebar entry — the command palette is
-// their only navigation path (see CommandPalette.tsx's nav command
-// comments). Covered here (not palette.spec.ts) because the assertion
-// under test is "the page is reachable," not palette behavior itself.
-const PALETTE_ONLY_PAGES = [
+// Pages the command palette also navigates to (a sync, untransitioned
+// page change — the path that used to leave <main> empty).
+const PALETTE_PAGES = [
   { command: "Go To Tools", heading: "Tools" },
   { command: "Go To Logs", heading: "Logs" },
   { command: "Go To Workspace", heading: "Workspace" },
@@ -30,8 +32,12 @@ const PALETTE_ONLY_PAGES = [
 test.describe("Navigation", () => {
   test("loads the dashboard inside the app shell's landmarks", async ({ app, page }) => {
     await expect(page).toHaveTitle("SWARM Orchestrator");
-    await expect(page.getByRole("banner").getByRole("heading", { name: "SWARM" })).toBeVisible();
-    await expect(page.getByRole("complementary", { name: "Main Navigation" })).toBeVisible();
+    const banner = page.getByRole("banner");
+    await expect(banner).toContainText("SWARM");
+    // The app name is not a heading: every page renders its own <h1>.
+    await expect(banner.getByRole("heading")).toHaveCount(0);
+    await expect(app.nav).toBeVisible();
+    await expect(page.getByRole("contentinfo")).toBeVisible();
     await expect(app.heading("Dashboard")).toBeVisible();
   });
 
@@ -68,19 +74,38 @@ test.describe("Navigation", () => {
     await expect(buttons.last()).toBeFocused();
   });
 
-  for (const { command, heading } of PALETTE_ONLY_PAGES) {
-    test(`"${heading}" has no sidebar entry and is reachable only via the command palette`, async ({
-      app,
-    }) => {
-      await expect(app.nav.getByRole("button", { name: heading })).toHaveCount(0);
-
+  for (const { command, heading } of PALETTE_PAGES) {
+    test(`the command palette navigates to "${heading}"`, async ({ app }) => {
       const palette = await app.openPalette();
       await palette.getByRole("option", { name: command }).click();
 
       await expect(palette).toBeHidden();
       await expect(app.heading(heading)).toBeVisible();
+      await expect(app.nav.getByRole("button", { name: heading })).toHaveAttribute(
+        "aria-current",
+        "page",
+      );
     });
   }
+
+  test("a visited page keeps its state when you navigate away and back", async ({ app, page }) => {
+    await app.goTo("Workers");
+    await page.getByRole("tab", { name: "List" }).click();
+    await expect(page.getByRole("tab", { name: "List" })).toHaveAttribute("aria-selected", "true");
+
+    await app.goTo("Metrics");
+    await app.goTo("Workers");
+
+    await expect(page.getByText("No Workers Running", { exact: true })).toBeVisible();
+  });
+
+  test("Tab reaches the sidebar from any page", async ({ app }) => {
+    await app.goTo("Logs");
+
+    const tabStops = app.nav.locator('button[tabindex="0"]');
+    await expect(tabStops).toHaveCount(1);
+    await expect(tabStops).toHaveAccessibleName("Logs");
+  });
 
   test("Workers page shows the empty state (graph view) when no workers exist", async ({
     app,
@@ -102,7 +127,7 @@ test.describe("Navigation", () => {
     await app.goTo("Workers");
     await page.getByRole("tab", { name: "List" }).click();
 
-    await expect(page.getByText("No Workers Running")).toBeVisible();
+    await expect(page.getByText("No Workers Running", { exact: true })).toBeVisible();
     await expect(page.getByText('Click "Spawn Worker" Or Press Ctrl+K')).toBeVisible();
   });
 

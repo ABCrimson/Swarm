@@ -1,7 +1,7 @@
-import { useAtomValue } from "jotai";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { CommandPalette } from "#components/command/CommandPalette";
 import { AppShell } from "#components/layout/AppShell";
+import { PageHost } from "#components/layout/PageHost";
 import { PerformanceOverlay } from "#components/metrics/PerformanceOverlay";
 import { ErrorBoundary } from "#components/ui/ErrorBoundary";
 import { SwarmToaster } from "#components/ui/Toast";
@@ -16,79 +16,28 @@ import { useSystemLogEvents } from "#hooks/useSystemLogEvents";
 import { useTheme } from "#hooks/useTheme";
 import { useWorkerEvents } from "#hooks/useWorkerEvents";
 import { connectEventBus } from "#lib/event-bus";
+import { onIdle } from "#lib/idle";
 import { validateStoreData } from "#lib/store-integrity";
-import { currentPageAtom } from "#store/ui";
 
-// ── Lazy-loaded pages (code-split into separate chunks) ─────────
-const Dashboard = lazy(() => import("#pages/Dashboard").then((m) => ({ default: m.Dashboard })));
-const Workers = lazy(() => import("#pages/Workers").then((m) => ({ default: m.Workers })));
-const Sessions = lazy(() => import("#pages/Sessions").then((m) => ({ default: m.Sessions })));
-const Metrics = lazy(() => import("#pages/Metrics").then((m) => ({ default: m.Metrics })));
-const Settings = lazy(() => import("#pages/Settings").then((m) => ({ default: m.Settings })));
-const Logs = lazy(() => import("#pages/Logs").then((m) => ({ default: m.Logs })));
-const Tools = lazy(() => import("#pages/Tools").then((m) => ({ default: m.Tools })));
-const Workspace = lazy(() => import("#pages/Workspace").then((m) => ({ default: m.Workspace })));
-
-type PageId =
-  | "dashboard"
-  | "workers"
-  | "sessions"
-  | "metrics"
-  | "settings"
-  | "logs"
-  | "tools"
-  | "workspace";
-
-const PAGE_MAP: Record<PageId, React.LazyExoticComponent<() => React.ReactElement>> = {
-  dashboard: Dashboard,
-  workers: Workers,
-  sessions: Sessions,
-  metrics: Metrics,
-  settings: Settings,
-  logs: Logs,
-  tools: Tools,
-  workspace: Workspace,
-};
-
-/** Minimal inline loading spinner — OKLCH colors only. */
-function PageFallback(): React.ReactElement {
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        width: "100%",
-        height: "100%",
-      }}
-    >
-      <div
-        style={{
-          width: 24,
-          height: 24,
-          border: "2px solid oklch(0.3 0.02 220)",
-          borderTop: "2px solid oklch(0.78 0.18 205)",
-          borderRadius: "50%",
-          animation: "spinner-rotate 0.8s linear infinite",
-        }}
-      />
-    </div>
-  );
-}
-
-/** Deferred auto-snapshot — activates after browser idle to avoid blocking startup. */
+/** Runs the auto-snapshot loop; mounted only once startup has gone idle. */
 function DeferredAutoSnapshot(): null {
   useAutoSnapshot();
   return null;
 }
 
 /**
- * Root application component orchestrating global subscriptions,
- * page routing via Jotai atom, lazy-loaded pages, and deferred startup tasks.
+ * Root component: connects the event bus, starts the app-wide
+ * subscriptions (theme, worker/session/provenance/log events, metrics,
+ * alerts, settings), and renders the shell around the page host.
+ *
+ * Deferred until the first idle period: the auto-snapshot loop and the
+ * persisted-store integrity check, so neither competes with startup.
+ *
+ * The toaster sits outside the root error boundary, so the toast a
+ * root-level failure raises (and its "Retrying" follow-up) still shows
+ * while the boundary's fallback replaces everything else.
  */
 export function App(): React.ReactElement {
-  const currentPage = useAtomValue(currentPageAtom);
-
   // Connect the single ordered event bus once at mount.
   useEffect(() => {
     let dispose: (() => void) | undefined;
@@ -103,7 +52,6 @@ export function App(): React.ReactElement {
     };
   }, []);
 
-  // Initialize global subscriptions (theme, events, metrics, alerts)
   useTheme();
   useWorkerEvents();
   useAgentSessionEvents();
@@ -114,40 +62,29 @@ export function App(): React.ReactElement {
   useAlerts();
   useSettingsBridge();
 
-  // Defer auto-snapshot until after initial render is complete
-  const [snapshotReady, setSnapshotReady] = useState(false);
-  useEffect(() => {
-    const id = requestIdleCallback(() => setSnapshotReady(true));
-    return () => cancelIdleCallback(id);
-  }, []);
-
-  // Validate store integrity after startup (non-blocking)
-  useEffect(() => {
-    const id = requestIdleCallback(() => {
-      validateStoreData().catch((err: unknown) => {
-        console.warn("[App] Store integrity validation failed:", err);
-      });
-    });
-    return () => cancelIdleCallback(id);
-  }, []);
-
-  const PageComponent = PAGE_MAP[currentPage];
+  const [startupIdle, setStartupIdle] = useState(false);
+  useEffect(
+    () =>
+      onIdle(() => {
+        setStartupIdle(true);
+        validateStoreData().catch((err: unknown) => {
+          console.warn("[App] Store integrity validation failed:", err);
+        });
+      }),
+    [],
+  );
 
   return (
-    <ErrorBoundary>
-      <Suspense fallback={<PageFallback />}>
-        <AppShell pageKey={currentPage}>
-          <ErrorBoundary>
-            <Suspense fallback={<PageFallback />}>
-              <PageComponent />
-            </Suspense>
-          </ErrorBoundary>
+    <>
+      <ErrorBoundary>
+        <AppShell>
+          <PageHost />
         </AppShell>
-      </Suspense>
-      <PerformanceOverlay />
-      <CommandPalette />
+        <PerformanceOverlay />
+        <CommandPalette />
+        {startupIdle && <DeferredAutoSnapshot />}
+      </ErrorBoundary>
       <SwarmToaster />
-      {snapshotReady && <DeferredAutoSnapshot />}
-    </ErrorBoundary>
+    </>
   );
 }

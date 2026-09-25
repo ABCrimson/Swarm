@@ -68,7 +68,9 @@ describe("SessionActions — new session", () => {
     await user.click(screen.getByRole("button", { name: /Create/ }));
 
     expect(mockCreateAndActivate).toHaveBeenCalledOnce();
-    expect(screen.getByRole("button", { name: /Create/ })).toBeDisabled();
+    // A loading Button stays focusable: busy and aria-disabled, and it
+    // swallows the clicks (implicit submission included) instead.
+    expect(screen.getByRole("button", { name: /Create/ })).toHaveAttribute("aria-disabled", "true");
 
     await act(async () => {
       pending.resolve(makeSession("Beta"));

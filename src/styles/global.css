@@ -1,5 +1,11 @@
+/*
+ * Stylesheet entry point. Tailwind declares its cascade layers first
+ * (`theme, base, components, utilities`), so utilities always beat the
+ * component classes in components.css. Do not declare new layer names
+ * here: a layer first named after that import is appended AFTER
+ * `utilities` and would override every utility class.
+ */
 @import "tailwindcss";
-@import "./layers.css";
 @import "./tokens.css";
 @import "./animations.css";
 @import "./components.css";

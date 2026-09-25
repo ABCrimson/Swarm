@@ -1,125 +1,73 @@
-// ── StatusBar ───────────────────────────────────────
-// Fixed bottom bar: 24h AI cost estimate, worker count, system status.
-// 28px height, OKLCH text, glass-panel background.
-// GPU frame time from gpuFrameTimeAtom — toggleable.
-
 import { useAtom, useAtomValue } from "jotai";
-import type { CSSProperties } from "react";
 import { pluralizeWorkers } from "#lib/format";
+import { useAiStore } from "#store/ai";
 import { useSystemStore } from "#store/system";
 import { gpuFrameTimeAtom, themeAtom } from "#store/ui";
 
-const barStyle: CSSProperties = {
-  height: 28,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  padding: "0 16px",
-  background: "oklch(0.08 0.02 220 / 0.85)",
-  backdropFilter: "blur(12px) saturate(1.5)",
-  borderTop: "1px solid oklch(0.22 0.04 220)",
-  fontFamily: "var(--font-mono)",
-  fontSize: 11,
-  color: "oklch(0.55 0.04 220)",
-  flexShrink: 0,
-};
+const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
-const dotStyle: CSSProperties = {
-  display: "inline-block",
-  width: 6,
-  height: 6,
-  borderRadius: "50%",
-  marginRight: 6,
-};
-
-const sectionStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 16,
-};
+/** Health label and dot color for a CPU load percentage. */
+function health(cpuPercent: number): { readonly label: string; readonly dot: string } {
+  if (cpuPercent > 80) return { label: "High Load", dot: "bg-rose" };
+  if (cpuPercent > 50) return { label: "Moderate", dot: "bg-amber" };
+  return { label: "Nominal", dot: "bg-lime" };
+}
 
 /**
- * Fixed bottom status bar showing system health, worker count,
- * 24h cost estimate, and toggleable GPU frame time.
+ * Status bar, the last row of the main column: system health, worker
+ * count, AI spend so far this session, and (toggleable) the particle
+ * background's GPU frame time.
  *
- * Height: 28px. Uses `aria-live="polite"` for screen reader updates.
+ * Only the health label is a live region (`role="status"`): it changes
+ * rarely and is worth announcing. The fast-changing numbers and the
+ * toggle stay out of it so screen readers are not flooded.
  */
 export function StatusBar(): React.ReactElement {
   const workerCount = useSystemStore((s) => s.metrics.workerCount) ?? 0;
-  const tokensPerSec = useSystemStore((s) => s.metrics.tokensPerSec) ?? 0;
   const cpuPercent = useSystemStore((s) => s.metrics.cpuPercent) ?? 0;
-  const gpuFrameTime = useAtomValue(gpuFrameTimeAtom) ?? 0;
-  // Shared with Settings' "GPU Frame Time Overlay" toggle — one persisted
-  // source of truth instead of the local state this used to be.
+  const spentUsd = useAiStore((s) => s.cumulativeUsage.totalCostUsd);
+  const gpuFrameTime = useAtomValue(gpuFrameTimeAtom);
+  // Shared with Settings' "GPU Frame Time Overlay" toggle: one persisted setting.
   const [theme, setTheme] = useAtom(themeAtom);
   const showGpu = theme.gpuOverlay;
-
-  // Rough 24h cost estimate: tokens/sec * 86400 * $0.000015 (sonnet pricing avg)
-  const dailyCost = (tokensPerSec * 86_400 * 0.000015).toFixed(2);
-
-  const statusColor =
-    cpuPercent > 80
-      ? "oklch(0.68 0.22 15)"
-      : cpuPercent > 50
-        ? "oklch(0.78 0.18 70)"
-        : "oklch(0.78 0.18 140)";
+  const { label, dot } = health(cpuPercent);
 
   return (
-    <output style={barStyle} aria-live="polite" aria-label="System Status Bar">
-      <div style={sectionStyle}>
-        <span className="flex items-center">
-          <span style={{ ...dotStyle, background: statusColor }} aria-hidden="true" />
-          {cpuPercent > 80 ? "High Load" : cpuPercent > 50 ? "Moderate" : "Nominal"}
+    <footer className="glass-panel flex h-7 shrink-0 items-center justify-between border-border border-t px-4 font-mono text-fg-muted text-xs">
+      <div className="flex items-center gap-4">
+        <span role="status" className="flex items-center gap-1.5">
+          <span aria-hidden="true" className={`size-1.5 rounded-full ${dot}`} />
+          {label}
         </span>
-        <span style={{ color: "oklch(0.5 0.04 220)" }} aria-hidden="true">
+        <span aria-hidden="true" className="text-fg-dim">
           |
         </span>
         <span>{pluralizeWorkers(workerCount)}</span>
       </div>
 
-      <div style={sectionStyle}>
-        <span style={{ color: "oklch(0.6 0.05 220)" }}>Est. ~${dailyCost}/24h</span>
+      <div className="flex items-center gap-4">
+        <span title="Anthropic API Spend Recorded Since The App Started">
+          AI Spend {usd.format(spentUsd)}
+        </span>
         {showGpu && (
           <>
-            <span style={{ color: "oklch(0.5 0.04 220)" }} aria-hidden="true">
+            <span aria-hidden="true" className="text-fg-dim">
               |
             </span>
-            <span>GPU {gpuFrameTime.toFixed(1)}ms</span>
+            <span title="Time The GPU Took To Finish The Last Particle Frames">
+              GPU {gpuFrameTime.toFixed(1)}ms
+            </span>
           </>
         )}
         <button
           type="button"
-          onClick={() => setTheme({ ...theme, gpuOverlay: !theme.gpuOverlay })}
+          onClick={() => setTheme((prev) => ({ ...prev, gpuOverlay: !prev.gpuOverlay }))}
           aria-label={showGpu ? "Hide GPU Frame Time" : "Show GPU Frame Time"}
-          style={{
-            background: "none",
-            border: "none",
-            color: "oklch(0.55 0.04 220)",
-            cursor: "pointer",
-            fontFamily: "var(--font-mono)",
-            fontSize: 10,
-            padding: "2px 6px",
-            borderRadius: 4,
-            outline: "none",
-            transition:
-              "background 0.12s cubic-bezier(0, 0, 0.2, 1), color 0.12s cubic-bezier(0, 0, 0.2, 1)",
-          }}
-          onFocus={(e) => {
-            e.currentTarget.style.boxShadow = "0 0 0 1px oklch(0.78 0.18 205 / 0.5)";
-          }}
-          onBlur={(e) => {
-            e.currentTarget.style.boxShadow = "none";
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = "oklch(0.78 0.18 205)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = "oklch(0.55 0.04 220)";
-          }}
+          className="cursor-pointer rounded px-1.5 py-0.5 text-2xs transition-colors duration-150 hover:bg-surface-2 hover:text-plasma"
         >
           {showGpu ? "Hide GPU" : "Show GPU"}
         </button>
       </div>
-    </output>
+    </footer>
   );
 }
