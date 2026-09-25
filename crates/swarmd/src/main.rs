@@ -33,6 +33,7 @@
 //! is stopped as `kill_worker` would stop it, the event writer drains, and
 //! the lock is released.
 
+use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io::{self, IsTerminal};
 use std::net::SocketAddr;
@@ -401,11 +402,12 @@ fn announce(local_addr: SocketAddr, token: &DaemonToken, data_dir: Option<&Path>
         );
     } else {
         let mut command = String::from("swarmd connect-url");
+        // Writing to a String cannot fail.
         if local_addr != cli::DEFAULT_BIND {
-            command.push_str(&format!(" --bind {local_addr}"));
+            let _ = write!(command, " --bind {local_addr}");
         }
         if let Some(dir) = data_dir {
-            command.push_str(&format!(" --data-dir \"{}\"", dir.display()));
+            let _ = write!(command, " --data-dir \"{}\"", dir.display());
         }
         println!(
             "SWARM Daemon Listening On {} (Run `{command}` For The Connect URL)",

@@ -27,10 +27,10 @@ Runs the headless SWARM Orchestrator daemon: the desktop app's runtime,
 served over an authenticated WebSocket.
 
 Options:
-  --bind ADDR               Listen Address [default: 127.0.0.1:8787]. A
+  --bind ADDR               Listen Address [Default: 127.0.0.1:8787]. A
                             Non-Loopback Address Needs A Token Minted By An
                             Earlier Loopback Run.
-  --data-dir PATH           Data Directory [default: the desktop app's]
+  --data-dir PATH           Data Directory [Default: The Desktop App's]
   --serve-ui DIR            Serve The `pnpm build:web` Bundle In DIR At /
   --allow-host NAME[:PORT]  Also Accept This Host In Host/Origin Headers
                             (Reverse Proxy, MagicDNS Name). Repeatable.
