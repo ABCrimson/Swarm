@@ -1,0 +1,16 @@
+# turn/completed (failed) arrives before both turn/started and the
+# turn/start response, while the slot is still Starting — then a duplicate
+# completion. The session must settle the turn exactly once, as an Error
+# carrying the server's message, and free the slot for the next turn.
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_THREAD_START 019a7c00-0000-7000-8000-000000000001
+#DIRECTIVE EXPECT_REQUEST turn/start
+{"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"019a7c00-0000-7000-8000-0000000000d1","items":[],"itemsView":"notLoaded","status":"failed","error":{"message":"Model overloaded","codexErrorInfo":null,"additionalDetails":null,"misalignment":null},"startedAt":1790201250,"completedAt":1790201250,"durationMs":3}}}
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000d1
+{"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"019a7c00-0000-7000-8000-0000000000d1","items":[],"itemsView":"notLoaded","status":"completed","error":null,"startedAt":1790201250,"completedAt":1790201250,"durationMs":3}}}
+#DIRECTIVE EXPECT_REQUEST turn/start
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000d2
+{"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"completed","error":null,"startedAt":1790201250,"completedAt":1790201252,"durationMs":5}}}
