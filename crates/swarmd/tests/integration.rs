@@ -428,6 +428,30 @@ async fn test_missing_hello_is_closed_with_1008() {
     assert_eq!(close_code(&mut ws).await, Some(1008));
 }
 
+/// A first message that is not a valid `hello` is closed with 1008 at once,
+/// without waiting for the handshake deadline.
+#[tokio::test]
+async fn test_invalid_first_message_is_closed_with_1008() {
+    let server = TestServer::start_with(Options {
+        limits: Limits {
+            handshake_deadline: Duration::from_mins(1),
+            ..Limits::default()
+        },
+        ..Options::default()
+    })
+    .await;
+    let first_messages = [
+        WsMessage::Text("not json".into()),
+        WsMessage::Text(r#"{"frame":"rpc","id":"1","cmd":"list_workers","args":{}}"#.into()),
+        WsMessage::Binary(vec![1, 2, 3].into()),
+    ];
+    for message in first_messages {
+        let mut ws = connect(&server).await;
+        ws.send(message.clone()).await.unwrap();
+        assert_eq!(close_code(&mut ws).await, Some(1008), "{message:?}");
+    }
+}
+
 // ── Host / Origin ───────────────────────────────────────────────────────
 
 fn upgrade_status(result: Result<impl std::fmt::Debug, tungstenite::Error>) -> u16 {
@@ -561,42 +585,37 @@ fn refusal(result: Result<impl std::fmt::Debug, tungstenite::Error>) -> (u16, St
     }
 }
 
-/// One address cannot hold the whole handshake pool with idle sockets:
-/// past its share it is refused while other addresses still get in.
+/// Loopback clients (every client of a local TLS proxy or `ssh -L` tunnel)
+/// are bounded by the handshake pool only, never by the per-address share,
+/// which would otherwise lump all of them into one small bucket. The
+/// per-address share for remote peers is unit-tested in `ws.rs`.
 #[tokio::test]
-async fn test_pending_handshakes_are_capped_per_address() {
+async fn test_loopback_handshakes_are_not_capped_per_address() {
     let server = TestServer::start_with(Options {
         limits: Limits {
-            max_pending_handshakes: 16,
-            max_pending_handshakes_per_peer: 2,
+            max_pending_handshakes: 4,
+            max_pending_handshakes_per_peer: 1,
             ..Limits::default()
         },
         ..Options::default()
     })
     .await;
-    let _a = connect(&server).await;
-    let _b = connect(&server).await;
+    let mut idle = Vec::new();
+    for _ in 0..3 {
+        idle.push(connect(&server).await);
+    }
+    let mut ws = connect(&server).await;
+    hello(&mut ws, None, Some(&server.token)).await;
+    assert!(matches!(
+        next_frame(&mut ws).await,
+        Inbound::Control(ServerFrame::Ready { .. })
+    ));
+
+    // The pool still applies.
+    idle.push(connect(&server).await);
     let (status, body) = refusal(tokio_tungstenite::connect_async(server.ws_url()).await);
     assert_eq!(status, 503);
-    assert_eq!(body, "Too Many Pending Connections From This Address.");
-
-    // The whole of 127.0.0.0/8 is loopback on Linux, so a second client
-    // address needs no network setup there.
-    #[cfg(target_os = "linux")]
-    {
-        let socket = tokio::net::TcpSocket::new_v4().unwrap();
-        socket.bind("127.0.0.2:0".parse().unwrap()).unwrap();
-        let tcp = socket.connect(server.addr).await.unwrap();
-        let (mut ws, _) =
-            tokio_tungstenite::client_async(server.ws_url(), MaybeTlsStream::Plain(tcp))
-                .await
-                .expect("another address still gets a handshake");
-        hello(&mut ws, None, Some(&server.token)).await;
-        assert!(matches!(
-            next_frame(&mut ws).await,
-            Inbound::Control(ServerFrame::Ready { .. })
-        ));
-    }
+    assert_eq!(body, "Too Many Pending Connections.");
 }
 
 /// A valid Bearer header needs no handshake permit, so idle unauthenticated
@@ -1083,6 +1102,39 @@ async fn test_shutdown_closes_clients_with_1001() {
         .unwrap()
         .unwrap()
         .unwrap();
+}
+
+/// A socket still in its handshake is closed with 1001 as soon as shutdown
+/// starts, not when its handshake deadline passes: an idle unauthenticated
+/// socket used to hold `serve`'s WebSocket drain for the whole deadline.
+#[tokio::test]
+async fn test_shutdown_closes_pending_handshakes_promptly() {
+    let server = TestServer::start_with(Options {
+        limits: Limits {
+            handshake_deadline: Duration::from_mins(1),
+            ..Limits::default()
+        },
+        ..Options::default()
+    })
+    .await;
+    let mut idle = connect(&server).await;
+    // The upgrade response arrives before the server-side task starts; give
+    // it a moment to reach the handshake.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let started = Instant::now();
+    server.state.shutdown_token().cancel();
+    assert_eq!(close_code(&mut idle).await, Some(1001));
+    let TestServer { server, .. } = server;
+    tokio::time::timeout(WAIT, server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "shutdown took {:?}",
+        started.elapsed()
+    );
 }
 
 // ── --serve-ui ──────────────────────────────────────────────────────────

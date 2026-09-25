@@ -11,17 +11,29 @@
 //! itself. Any other upgrade takes a handshake permit instead: from a
 //! separate, smaller pool, so sockets that never authenticate cannot occupy
 //! a client's slot, and at most [`Limits::max_pending_handshakes_per_peer`]
-//! per client IP address, so one address cannot hold the whole pool. Every
-//! refusal is a 503 before upgrading. A client that authenticates through
-//! `hello` takes its slot after the token is checked, or is closed with
-//! `1013 Try Again Later` if the daemon filled up in the meantime.
+//! per remote client address (an IPv6 client by its `/64`, the block one
+//! host usually holds), so one remote host cannot hold the whole pool.
+//! Every refusal is a 503 before upgrading. A client that authenticates
+//! through `hello` takes its slot after the token is checked, or is closed
+//! with `1013 Try Again Later` if the daemon filled up in the meantime.
+//!
+//! Loopback peers have no per-address share, only the pool: on the default
+//! loopback bind, over an `ssh -L` tunnel and behind a local TLS reverse
+//! proxy EVERY client arrives from loopback, so a per-address cap would
+//! shrink the pool to that cap for all of them at once. The limitation this
+//! leaves: any local process (or, through such a proxy, any remote client
+//! that has not authenticated) can keep the handshake pool full of idle
+//! sockets, re-opening each one as its deadline closes it, and so hold off
+//! browser clients, which authenticate through `hello`. Clients that can
+//! send an `Authorization: Bearer` header are never affected.
 //! Messages (and single frames) are capped at [`Limits::max_message_bytes`]
 //! from the first byte, authenticated or not.
 //!
 //! # Handshake
 //!
 //! The client must send `hello` within [`Limits::handshake_deadline`], or it
-//! is closed with `1008 Policy Violation`; a wrong token is closed with
+//! is closed with `1008 Policy Violation`, as it is when its first message is
+//! anything but a valid `hello`; a wrong token is closed with
 //! [`CLOSE_UNAUTHORIZED`] (`4401`).
 //!
 //! # Event stream
@@ -72,7 +84,8 @@
 //! # Shutdown
 //!
 //! When the daemon's shutdown token fires, every connection sends
-//! `1001 Going Away` and ends. Its writer and feeder are aborted when it
+//! `1001 Going Away` and ends, including one still waiting for its `hello`.
+//! Its writer and feeder are aborted when it
 //! ends; in-flight RPCs finish on the daemon's task tracker, which
 //! [`crate::serve`] drains.
 
@@ -159,7 +172,7 @@ pub(crate) async fn upgrade(
         // reservation happens once `hello` authenticates.
         return refuse(peer, "Too Many Connections.");
     } else {
-        let Some(from_peer) = state.peer_handshakes.try_acquire(peer.ip()) else {
+        let Ok(from_peer) = state.peer_handshakes.try_acquire(peer.ip()) else {
             return refuse(peer, "Too Many Pending Connections From This Address.");
         };
         let Ok(pooled) = Arc::clone(&state.handshakes).try_acquire_owned() else {
@@ -202,17 +215,30 @@ enum Admission {
     /// A valid Bearer header: the connection slot itself.
     Authenticated(OwnedSemaphorePermit),
     /// Not yet authenticated: a permit from the daemon-wide handshake pool
-    /// and one from the client address's share, both released once the
-    /// handshake ends, successfully or not.
-    Pending(OwnedSemaphorePermit, PeerPermit),
+    /// and, for a remote peer, one from its address's share, both released
+    /// once the handshake ends, successfully or not.
+    Pending(OwnedSemaphorePermit, Option<PeerPermit>),
 }
 
-/// Handshakes in flight per client IP address, capped at
-/// [`Limits::max_pending_handshakes_per_peer`] so one address cannot take
-/// the whole handshake pool.
+/// Handshakes in flight per remote client address, capped at
+/// [`Limits::max_pending_handshakes_per_peer`] so one remote host cannot take
+/// the whole handshake pool (see the module doc for why loopback is exempt).
 pub(crate) struct PeerHandshakes {
     limit: usize,
     counts: Mutex<HashMap<IpAddr, usize>>,
+}
+
+/// The address a peer's handshakes are counted under, or `None` for a
+/// loopback peer, which has no per-address share. An IPv4 client of a
+/// dual-stack listener shows up v4-mapped and counts as its IPv4 address;
+/// an IPv6 client counts as its `/64`, since one host usually holds the
+/// whole block and could otherwise pick a fresh address per socket.
+fn peer_key(ip: IpAddr) -> Option<IpAddr> {
+    match ip.to_canonical() {
+        ip if ip.is_loopback() => None,
+        IpAddr::V6(v6) => Some(IpAddr::V6((v6.to_bits() & !u128::from(u64::MAX)).into())),
+        v4 @ IpAddr::V4(_) => Some(v4),
+    }
 }
 
 impl PeerHandshakes {
@@ -223,24 +249,30 @@ impl PeerHandshakes {
         })
     }
 
-    /// Takes one of `ip`'s handshake permits, if it has one left.
-    fn try_acquire(self: &Arc<Self>, ip: IpAddr) -> Option<PeerPermit> {
-        // An IPv4 client of a dual-stack listener shows up v4-mapped.
-        let ip = ip.to_canonical();
+    /// Takes one of `ip`'s handshake permits: `Ok(None)` for a loopback
+    /// peer, which needs none, and `Err(ShareUsedUp)` when its share is gone.
+    fn try_acquire(self: &Arc<Self>, ip: IpAddr) -> Result<Option<PeerPermit>, ShareUsedUp> {
+        let Some(ip) = peer_key(ip) else {
+            return Ok(None);
+        };
         let mut counts = self.counts.lock();
         let count = counts.entry(ip).or_default();
         if *count >= self.limit {
-            return None;
+            return Err(ShareUsedUp);
         }
         *count += 1;
-        Some(PeerPermit {
+        Ok(Some(PeerPermit {
             peers: Arc::clone(self),
             ip,
-        })
+        }))
     }
 }
 
-/// One of a client address's handshake permits; returned on drop.
+/// A remote address already holds its whole share of handshake permits.
+#[derive(Debug)]
+struct ShareUsedUp;
+
+/// One of a remote address's handshake permits; returned on drop.
 struct PeerPermit {
     peers: Arc<PeerHandshakes>,
     ip: IpAddr,
@@ -279,17 +311,35 @@ enum FeedEnd {
 async fn connection(socket: WebSocket, state: AppState, peer: SocketAddr, admission: Admission) {
     let (mut sink, mut stream) = socket.split();
 
-    let hello =
-        tokio::time::timeout(state.limits.handshake_deadline, read_hello(&mut stream)).await;
-    let Ok(Some((last_seq, token))) = hello else {
-        tracing::warn!(%peer, "WebSocket closed: no `hello` within the handshake deadline");
-        close_now(
-            &mut sink,
-            close_code::POLICY,
-            "Expected `hello` Within The Handshake Deadline.",
-        )
-        .await;
-        return;
+    let deadline = state.limits.handshake_deadline;
+    let hello = tokio::select! {
+        () = state.shutdown.cancelled() => {
+            close_now(&mut sink, close_code::AWAY, "Daemon Shutting Down.").await;
+            return;
+        }
+        hello = tokio::time::timeout(deadline, read_hello(&mut stream)) => hello,
+    };
+    let (last_seq, token) = match hello {
+        Ok(Ok(hello)) => hello,
+        Ok(Err(HelloError::Invalid(what))) => {
+            tracing::warn!(%peer, what, "WebSocket closed: the first message was not a valid `hello`");
+            close_now(&mut sink, close_code::POLICY, "Expected A `hello` Frame.").await;
+            return;
+        }
+        Ok(Err(HelloError::Gone)) => {
+            tracing::debug!(%peer, "WebSocket client left before sending `hello`");
+            return;
+        }
+        Err(_elapsed) => {
+            tracing::warn!(%peer, "WebSocket closed: no `hello` within the handshake deadline");
+            close_now(
+                &mut sink,
+                close_code::POLICY,
+                "Expected `hello` Within The Handshake Deadline.",
+            )
+            .await;
+            return;
+        }
     };
 
     let slot = match admission {
@@ -417,19 +467,31 @@ async fn connection(socket: WebSocket, state: AppState, peer: SocketAddr, admiss
     // Dropping `tasks` aborts the writer and feeder if they are still running.
 }
 
-/// Reads frames until the first text frame, which must be `hello`. Pings and
-/// pongs are skipped; anything else ends the handshake.
-async fn read_hello(stream: &mut SplitStream<WebSocket>) -> Option<(Option<u64>, Option<String>)> {
+/// Why a handshake produced no `hello`.
+enum HelloError {
+    /// The first data message was something else; names what.
+    Invalid(&'static str),
+    /// The client closed the connection, or it failed.
+    Gone,
+}
+
+/// Reads messages until the first data message, which must be `hello`, and
+/// returns its (`lastSeq`, `token`). Pings and pongs are skipped.
+async fn read_hello(
+    stream: &mut SplitStream<WebSocket>,
+) -> Result<(Option<u64>, Option<String>), HelloError> {
     loop {
-        match stream.next().await? {
-            Ok(Message::Text(text)) => {
+        match stream.next().await {
+            Some(Ok(Message::Text(text))) => {
                 return match serde_json::from_str(&text) {
-                    Ok(ClientFrame::Hello { last_seq, token }) => Some((last_seq, token)),
-                    _ => None,
+                    Ok(ClientFrame::Hello { last_seq, token }) => Ok((last_seq, token)),
+                    Ok(_) => Err(HelloError::Invalid("a frame other than `hello`")),
+                    Err(_) => Err(HelloError::Invalid("a malformed frame")),
                 };
             }
-            Ok(Message::Ping(_) | Message::Pong(_)) => {}
-            Ok(Message::Binary(_) | Message::Close(_)) | Err(_) => return None,
+            Some(Ok(Message::Binary(_))) => return Err(HelloError::Invalid("a binary message")),
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+            Some(Ok(Message::Close(_)) | Err(_)) | None => return Err(HelloError::Gone),
         }
     }
 }
@@ -845,32 +907,63 @@ mod tests {
         assert_eq!(texts(&written), ["<close>"]);
     }
 
-    /// Each address gets its own share of handshake permits, v4-mapped
-    /// spellings count as the IPv4 address, and dropped permits come back
-    /// without leaving empty entries behind.
+    fn ip(text: &str) -> IpAddr {
+        text.parse().unwrap()
+    }
+
+    /// Each remote address gets its own share of handshake permits,
+    /// v4-mapped spellings count as the IPv4 address, and dropped permits
+    /// come back without leaving empty entries behind.
     #[test]
     fn test_peer_handshake_permits_are_capped_per_address() {
         let peers = PeerHandshakes::new(2);
-        let a: IpAddr = "192.0.2.1".parse().unwrap();
+        let a = ip("192.0.2.1");
         let first = peers.try_acquire(a).unwrap();
         let second = peers.try_acquire(a).unwrap();
         assert!(
-            peers.try_acquire(a).is_none(),
+            peers.try_acquire(a).is_err(),
             "the address's share is used up"
         );
         assert!(
-            peers
-                .try_acquire("::ffff:192.0.2.1".parse().unwrap())
-                .is_none(),
+            peers.try_acquire(ip("::ffff:192.0.2.1")).is_err(),
             "a v4-mapped spelling shares the IPv4 address's share"
         );
         assert!(
-            peers.try_acquire("192.0.2.2".parse().unwrap()).is_some(),
+            peers.try_acquire(ip("192.0.2.2")).unwrap().is_some(),
             "other addresses are unaffected"
         );
         drop(first);
         let third = peers.try_acquire(a).expect("a dropped permit is returned");
         drop((second, third));
+        assert!(peers.counts.lock().is_empty());
+    }
+
+    /// All addresses in an IPv6 `/64` share one share: a host cannot
+    /// sidestep the cap by picking a fresh address per socket.
+    #[test]
+    fn test_ipv6_peers_are_counted_by_their_64() {
+        let peers = PeerHandshakes::new(2);
+        let _a = peers.try_acquire(ip("2001:db8:1:2::1")).unwrap();
+        let _b = peers.try_acquire(ip("2001:db8:1:2:ffff::9")).unwrap();
+        assert!(peers.try_acquire(ip("2001:db8:1:2:abcd::1")).is_err());
+        assert!(
+            peers.try_acquire(ip("2001:db8:1:3::1")).unwrap().is_some(),
+            "the next /64 is another host"
+        );
+    }
+
+    /// Loopback peers (every client of a local reverse proxy or `ssh -L`
+    /// tunnel) take no per-address permit; only the pool bounds them. The
+    /// cap used to put all of them in one bucket of
+    /// `max_pending_handshakes_per_peer`.
+    #[test]
+    fn test_loopback_peers_have_no_per_address_share() {
+        let peers = PeerHandshakes::new(1);
+        for text in ["127.0.0.1", "127.0.0.2", "::1", "::ffff:127.0.0.1"] {
+            for _ in 0..3 {
+                assert!(peers.try_acquire(ip(text)).unwrap().is_none(), "{text}");
+            }
+        }
         assert!(peers.counts.lock().is_empty());
     }
 
