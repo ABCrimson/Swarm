@@ -6,8 +6,8 @@
   <img alt="Version 0.13.1" src="https://img.shields.io/badge/version-0.13.1-ebb84a?style=flat-square&labelColor=0a0e1a" />
   <a href="https://github.com/ABCrimson/Swarm/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/ABCrimson/Swarm/ci.yml?branch=main&style=flat-square&labelColor=0a0e1a&color=ebb84a&label=CI" /></a>
   <img alt="Platforms: Windows, macOS, Linux" src="https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-ebb84a?style=flat-square&labelColor=0a0e1a" />
-  <img alt="Tauri 2.11" src="https://img.shields.io/badge/Tauri-2.11-ebb84a?style=flat-square&labelColor=0a0e1a&logo=tauri&logoColor=ebb84a" />
-  <img alt="Rust nightly" src="https://img.shields.io/badge/Rust-nightly--2026--08--27-ebb84a?style=flat-square&labelColor=0a0e1a&logo=rust&logoColor=ebb84a" />
+  <img alt="Tauri 3.0 alpha" src="https://img.shields.io/badge/Tauri-3.0%20alpha-ebb84a?style=flat-square&labelColor=0a0e1a&logo=tauri&logoColor=ebb84a" />
+  <img alt="Rust nightly" src="https://img.shields.io/badge/Rust-nightly--2026--09--25-ebb84a?style=flat-square&labelColor=0a0e1a&logo=rust&logoColor=ebb84a" />
   <img alt="React 19.3" src="https://img.shields.io/badge/React-19.3%20canary-ebb84a?style=flat-square&labelColor=0a0e1a&logo=react&logoColor=ebb84a" />
   <img alt="TypeScript 7.1" src="https://img.shields.io/badge/TypeScript-7.1-ebb84a?style=flat-square&labelColor=0a0e1a&logo=typescript&logoColor=ebb84a" />
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-ebb84a?style=flat-square&labelColor=0a0e1a" /></a>
@@ -111,9 +111,9 @@ The Rust side is a **three-crate workspace**: `swarm-core` (tauri-free domain lo
 
 | Tool | Version | Notes |
 |---|---|---|
-| Node.js | 26.8.1 | pinned via `engines` |
-| pnpm | 12.0.0 | `corepack enable` (pinned via `packageManager`) |
-| Rust | nightly-2026-08-27 | auto-configured by `rust-toolchain.toml` |
+| Node.js | 27.0.0-nightly20260925a3bb551ea7 | pinned via `devEngines.runtime`; pnpm downloads it for the project |
+| pnpm | 12.7.0 | pinned via `packageManager`; pnpm switches itself to it |
+| Rust | nightly-2026-09-25 | auto-configured by `rust-toolchain.toml` |
 
 ### Desktop
 
@@ -162,18 +162,18 @@ Full operator guide: [`docs/daemon.md`](docs/daemon.md).
 
 | Layer | Technology | Version |
 |---|---|---|
-| Desktop shell | Tauri | 2.11.5 |
-| UI | React | 19.3.0-canary-a1124489-20260826 |
-| Language | TypeScript | 7.1.0-dev (native compiler) |
-| Build | Vite (Rolldown) | 8.2.2 (oxc minify) |
-| Compiler | React Compiler (`babel-plugin-react-compiler`) | 1.0.0 |
-| Styling | Tailwind CSS | 4.3.3 |
-| State | Zustand / Jotai / Immer | 5.0.15 / 2.20.3 / 11.1.18 |
-| Validation | Zod | 4.5.0-canary |
-| Graph | @xyflow/react + elkjs | 12.11.5 / 0.12.0 |
-| Terminal | @xterm/xterm | 6.1.0-beta.303 |
-| Charts / Motion | Recharts / motion | 3.11.0-canary.0 / 13.1.1 |
-| Lint · Test · E2E | Biome / Vitest / Playwright | 2.5.10 / 5.0.0-rc.2 / 1.63.0-alpha |
+| Desktop shell | Tauri (CLI · JS API) | 3.0.0-alpha.2 · 3.0.0-alpha.1 |
+| UI | React | 19.3.0-canary-d083ec1d-20260922 |
+| Language | TypeScript | 7.1.0-dev.20260925.1 (native compiler) |
+| Build | Vite (Rolldown) | 8.3.1 (oxc minify) |
+| Compiler | React Compiler: Oxc (`oxc-transform-react`), Babel fallback (`babel-plugin-react-compiler` on `@babel/core` 7) | 0.151.0 · 0.0.0-experimental-a1856f3-20260507 |
+| Styling | Tailwind CSS (v4 insiders) | 0.0.0-insiders.fa81d69 |
+| State | Zustand / Jotai / Immer | 5.0.15 / 3.0.0 / 11.1.18 |
+| Validation | Zod | 4.6.5 |
+| Graph | @xyflow/react + elkjs | 12.12.0 / 0.12.0 |
+| Terminal | @xterm/xterm | 6.1.0-beta.304 |
+| Charts / Motion | Recharts / motion | 3.11.0-canary.4 / 13.4.4 |
+| Lint · Test · E2E | Biome / Vitest / Playwright | 2.5.14 / 5.0.2 / 1.64.0-alpha-2026-09-25 |
 
 </details>
 
@@ -182,14 +182,14 @@ Full operator guide: [`docs/daemon.md`](docs/daemon.md).
 
 | Layer | Technology | Version |
 |---|---|---|
-| Language | Rust | nightly-2026-08-27 (rustc 1.100.0-nightly) |
+| Language | Rust | nightly-2026-09-25 (rustc 1.100.0-nightly) |
 | Async runtime | Tokio | 1.53.1 |
 | Daemon transport | axum (WebSocket) | 0.8.9 |
 | Event log | rusqlite (bundled, WAL) | 0.40.2 |
-| Concurrency | DashMap / parking_lot | 6.2.1 / 0.12.5 |
-| HTTP | reqwest (rustls) | 0.13.4 |
+| Concurrency | DashMap / parking_lot | 7.0.0-rc2 / 0.12.5 |
+| Static UI serving (swarmd) | tower-http | 0.7.1 |
 | PTY | portable-pty | 0.9.0 |
-| Errors / Tracing | thiserror + anyhow / tracing | 2.0.20 + 1.0.104 / 0.1.44 |
+| Errors / Tracing | thiserror + anyhow / tracing | 2.0.21 + 1.0.104 / 0.1.44 |
 | Sysinfo | sysinfo | 0.39.6 |
 
 </details>
