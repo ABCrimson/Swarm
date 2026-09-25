@@ -4,9 +4,10 @@
 //! the daemon that served it over `/ws` instead of Tauri IPC.
 //!
 //! - `/assets/*` holds Vite's content-hashed files. They are cached for a
-//!   year (`immutable`), and a missing one is a plain 404, never
-//!   `index.html` (which a browser would reject as a script with the wrong
-//!   MIME type).
+//!   year (`immutable`). A missing one is a plain 404 with
+//!   `Cache-Control: no-store` (the file may be about to land, mid
+//!   `pnpm build:web`), never `index.html` (which a browser would reject as
+//!   a script with the wrong MIME type).
 //! - Any other path serves the file under `DIR`, falling back to
 //!   `index.html` for client-side routes, with `Cache-Control: no-cache` so
 //!   an upgraded bundle is picked up on the next load.
@@ -76,6 +77,7 @@ pub const SECURITY_HEADERS: [(HeaderName, &str); 5] = [
 
 const IMMUTABLE: HeaderValue = HeaderValue::from_static("public, max-age=31536000, immutable");
 const NO_CACHE: HeaderValue = HeaderValue::from_static("no-cache");
+const NO_STORE: HeaderValue = HeaderValue::from_static("no-store");
 
 /// Checks that `dir` holds a web bundle (an `index.html`), so a mistyped
 /// path fails at startup instead of serving 404s, or serving the wrong
@@ -101,7 +103,7 @@ pub fn router(dir: &Path) -> Router<AppState> {
     let assets = SetResponseHeader::overriding(
         ServeDir::new(dir.join("assets")),
         header::CACHE_CONTROL,
-        IMMUTABLE,
+        asset_cache_control,
     );
     let pages = SetResponseHeader::overriding(
         ServeDir::new(dir).fallback(ServeFile::new(dir.join("index.html"))),
@@ -118,6 +120,19 @@ pub fn router(dir: &Path) -> Router<AppState> {
         .fallback_service(pages)
         .layer(middleware::from_fn(deny_hidden))
         .layer(SetMultipleResponseHeadersLayer::<Response<Body>>::overriding(headers))
+}
+
+/// `immutable` for a served asset (or a `304` revalidating one), and
+/// `no-store` for an error, so a 404 is never cached for a year.
+fn asset_cache_control<B>(response: &Response<B>) -> Option<HeaderValue> {
+    let status = response.status();
+    Some(
+        if status.is_success() || status == StatusCode::NOT_MODIFIED {
+            IMMUTABLE
+        } else {
+            NO_STORE
+        },
+    )
 }
 
 /// 404s any path with a hidden segment, percent-encoded or not.

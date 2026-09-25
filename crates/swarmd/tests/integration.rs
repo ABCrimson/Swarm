@@ -1200,8 +1200,11 @@ async fn test_serve_ui_security_headers_caching_and_fallbacks() {
         header(&headers, "cache-control"),
         Some("public, max-age=31536000, immutable")
     );
-    let (status, _, _) = http_get(server.addr, "/assets/missing.js", &host).await;
+    // A missing asset (say, requested while `pnpm build:web` rewrites the
+    // bundle) must not be cached for a year.
+    let (status, headers, _) = http_get(server.addr, "/assets/missing.js", &host).await;
     assert_eq!(status, 404);
+    assert_eq!(header(&headers, "cache-control"), Some("no-store"));
 
     // Hidden files are never served.
     for path in ["/.env", "/%2eenv", "/assets/.hidden"] {
