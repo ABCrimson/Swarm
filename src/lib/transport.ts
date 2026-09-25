@@ -1,21 +1,19 @@
-import { invoke as tauriInvokeRaw } from "@tauri-apps/api/core";
-import type { UnlistenFn } from "@tauri-apps/api/event";
-import { listen as tauriListenRaw } from "@tauri-apps/api/event";
+import { isTauri, invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getLastSeq } from "#lib/event-bus";
 
 export type { UnlistenFn };
 
 /**
- * What a transport can honestly promise. Consumed by feature-gated call
- * sites (fs/dialog/shell-backed file browsing, OS notifications, the
- * auto-updater, the webview-direct AI chat path) to render a real Title
- * Case empty-state instead of a silent no-op when the active transport
- * cannot support them — see the headless-daemon plan's "MVP remote
- * surface = Dashboard/Workers/Terminals/Metrics/Agent chat" scope.
+ * What a transport can honestly promise. Feature-gated call sites
+ * (fs/dialog-backed file browsing, OS notifications, the auto-updater,
+ * the webview-direct AI chat path) read it to render a Title Case
+ * empty state instead of a silent no-op when the active transport
+ * cannot support them.
  */
 export interface TransportCapabilities {
   readonly kind: "tauri" | "ws";
-  /** Local filesystem browsing (FileTree/FileViewer/export/workspace watcher) — plugin-fs/plugin-dialog-backed, Tauri-only. */
+  /** Local filesystem browsing (FileTree/FileViewer/export) — plugin-fs/plugin-dialog-backed, Tauri-only. */
   readonly workspaceBrowsing: boolean;
   /** Native OS notifications (`tauri-plugin-notification`). */
   readonly nativeNotifications: boolean;
@@ -27,7 +25,14 @@ export interface TransportCapabilities {
 
 /** The seam every backend call and event subscription crosses. */
 export interface Transport {
-  invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>;
+  /**
+   * Runs one backend command. Rejects with the command's own error
+   * value (a string, or a structured object such as a ship error) on
+   * failure, exactly as Tauri IPC does, and with an `Error` for a
+   * transport failure.
+   */
+  invoke<T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T>;
+  /** Subscribes to a backend event channel. Never rejects for a transport that reconnects on its own. */
   listen<T>(event: string, handler: (payload: T) => void): Promise<UnlistenFn>;
   /** Idempotent. Establishes (or confirms) connectivity; a no-op for `tauriTransport`. */
   connect(): Promise<void>;
@@ -36,20 +41,21 @@ export interface Transport {
 
 const noopUnlisten: UnlistenFn = () => {};
 
-function isTauriRuntime(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+// ── tauriTransport ───────────────────────────────────────────────────
 
-// ── tauriTransport — today's `#lib/tauri` invoke/listen, moved intact ──
-
+/**
+ * Tauri IPC. Outside the desktop shell (a plain `pnpm dev` browser
+ * preview) every command resolves `undefined` and every subscription is
+ * a no-op, so the UI renders its empty states instead of crashing.
+ */
 export const tauriTransport: Transport = {
   async invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-    if (!isTauriRuntime()) return undefined as T;
-    return tauriInvokeRaw<T>(cmd, args);
+    if (!isTauri()) return undefined as T;
+    return tauriInvoke<T>(cmd, args);
   },
   async listen<T>(event: string, handler: (payload: T) => void): Promise<UnlistenFn> {
-    if (!isTauriRuntime()) return noopUnlisten;
-    return tauriListenRaw<T>(event, (e) => handler(e.payload));
+    if (!isTauri()) return noopUnlisten;
+    return tauriListen<T>(event, (e) => handler(e.payload));
   },
   async connect(): Promise<void> {
     // Tauri IPC has no connection lifecycle to establish.
@@ -77,23 +83,37 @@ const BASE_RECONNECT_DELAY_MS = 500;
 const MAX_RECONNECT_DELAY_MS = 15_000;
 const JITTER_FRACTION = 0.3;
 /**
- * security-review FIX-8: without a bound, a `swarmd` connection that
- * never resolves an `rpc` call (server hung, response lost, the
- * daemon killed mid-request) left `invoke()`'s promise pending
- * forever — which is also what made `hasTransport()`'s optimistic
- * "ws is configured, assume reachable" pre-check (`#lib/tauri`) a real
- * footgun: a caller had no way to distinguish "still working" from
- * "will never resolve." Every `wsTransport.invoke()` call now rejects
- * with a typed timeout error after this many milliseconds if no
- * matching `rpcResult` arrives.
+ * Bound on every wait for the daemon: the `hello` → `ready` handshake
+ * and each `rpc` → `rpcResult` round trip (security-review FIX-8). A
+ * hung daemon, a lost response or a proxy that holds the upgrade open
+ * rejects the caller instead of leaving it pending forever.
  */
 const RPC_TIMEOUT_MS = 30_000;
+/** Close code `swarmd` sends when the `hello` token is missing or wrong (`crates/swarmd/src/ws.rs`). */
+const UNAUTHORIZED_CLOSE_CODE = 4401;
 
-/** Thrown by {@link WsTransport.invoke} when no `rpcResult` arrives within {@link RPC_TIMEOUT_MS}. */
+/**
+ * Thrown by {@link WsTransport.invoke} when no `rpcResult` arrives within
+ * {@link RPC_TIMEOUT_MS}. When nothing at all arrived on the socket in
+ * that window, the socket is also closed so the reconnect loop replaces it.
+ */
 export class RpcTimeoutError extends Error {
   constructor(cmd: string) {
     super(`RPC "${cmd}" Timed Out After ${RPC_TIMEOUT_MS}ms.`);
     this.name = "RpcTimeoutError";
+  }
+}
+
+/**
+ * Thrown when `swarmd` refuses the access token (close code 4401).
+ * Automatic reconnects stop: retrying the same token cannot succeed. The
+ * next `invoke`/`connect` tries once more, e.g. after the page is
+ * reopened with a fresh `#t=` link.
+ */
+export class DaemonAuthError extends Error {
+  constructor() {
+    super("The SWARM Daemon Rejected The Access Token. Reopen The Link Printed By swarmd.");
+    this.name = "DaemonAuthError";
   }
 }
 
@@ -102,46 +122,42 @@ let inMemoryToken: string | null = null;
 
 /**
  * Reads a token out of `location.hash`, if present, persists it to
- * `sessionStorage`, and IMMEDIATELY scrubs the fragment — never left in
- * browser history, a shared screenshot, or a `Referer`-leaking outbound
- * request (headless-daemon plan: "Token: URL fragment ...
- * never transmitted/logged" — the same must hold once it lands in the
- * browser).
+ * `sessionStorage`, and immediately scrubs the fragment, so it never
+ * lingers in browser history, a shared screenshot, or a
+ * `Referer`-leaking outbound request.
  *
- * Called once at MODULE INIT (bottom of this file), not lazily from
- * inside the WS `open` handler (security-review FIX-8): the earlier
- * lazy-on-first-connect version left the raw token sitting in the
- * visible URL for the ENTIRE first-connect-attempt window — a slow
- * network, or a connection that fails and retries, stretched that
- * window well past "a single synchronous tick." Scrubbing at import
- * time (synchronous, before any network I/O) minimizes it to
- * effectively zero. Exported (not `#`-private) so tests can re-invoke
- * it after mutating `location.hash` to simulate a fresh page load,
- * since the module itself only runs it the one time it's first
- * imported.
+ * Called once at module init (bottom of this file), before any network
+ * I/O (security-review FIX-8): a lazy first-connect read left the token
+ * in the visible URL for the whole first connect attempt. The fragment
+ * is scrubbed even when it cannot be decoded, and a malformed one never
+ * throws: this runs at import time, where an exception would stop the
+ * app from booting. Exported so tests can re-run it after changing
+ * `location.hash`.
  */
 export function initTokenFromLocationHash(): void {
   if (typeof window === "undefined") return;
   const hash = window.location.hash;
   if (!hash.startsWith("#t=")) return;
 
-  const token = decodeURIComponent(hash.slice(3));
-  inMemoryToken = token;
   try {
-    window.sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+    const token = decodeURIComponent(hash.slice(3));
+    inMemoryToken = token;
+    try {
+      window.sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+    } catch {
+      // sessionStorage unavailable — `inMemoryToken` still covers this tab.
+    }
   } catch {
-    // sessionStorage unavailable — `inMemoryToken` still covers this tab.
+    console.warn("[transport] Ignoring an undecodable #t= token fragment.");
+  } finally {
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
   }
-  const scrubbed = window.location.pathname + window.location.search;
-  window.history.replaceState(null, "", scrubbed);
 }
 
 /**
- * Reads the daemon token for a `hello`/reconnect: from `sessionStorage`
- * (the authoritative, freshest persisted value — populated by
- * {@link initTokenFromLocationHash}), falling back to `inMemoryToken`
- * only when `sessionStorage` itself throws. Never touches
- * `location.hash` — that happens exactly once, at module init.
+ * The daemon token for a `hello`: `sessionStorage` first (populated by
+ * {@link initTokenFromLocationHash}), then `inMemoryToken` when
+ * `sessionStorage` has none or throws.
  */
 function readToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -155,8 +171,17 @@ function readToken(): string | null {
 }
 
 interface PendingRpc {
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
+  readonly resolve: (value: unknown) => void;
+  /** A command error value (as the daemon sent it) or a transport `Error`. */
+  readonly reject: (error: unknown) => void;
+}
+
+/** One socket and the RPCs sent on it — a stale socket's close only fails its own calls. */
+interface Connection {
+  readonly ws: WebSocket;
+  readonly pending: Map<string, PendingRpc>;
+  /** Frames received so far; an RPC timeout with no change since its send means the link is dead. */
+  framesReceived: number;
 }
 
 interface ReadyFrame {
@@ -182,37 +207,26 @@ function isControlFrame(raw: unknown): raw is ServerControlFrame {
   return typeof raw === "object" && raw !== null && "frame" in raw;
 }
 
-function errorMessage(raw: unknown): string {
-  if (typeof raw === "string") return raw;
-  try {
-    return JSON.stringify(raw);
-  } catch {
-    return "Unknown Error.";
-  }
-}
-
 /**
- * Backs `#lib/tauri`'s `invoke`/`listen` when the active transport is
- * WebSocket-based (`__SWARM_TRANSPORT__ === "ws"`, the `pnpm build:web`
- * build served by `swarmd --serve-ui`).
+ * Backs `#lib/tauri`'s `invoke`/`listen` in the `pnpm build:web` build
+ * that `swarmd --serve-ui` serves (`__SWARM_TRANSPORT__ === "ws"`).
  *
  * One shared socket for the whole tab: `rpc` calls and the live
- * `swarm://events` subscription share it, matching the plan's "one
- * WebSocket, both directions" decision (PTY input is a command per
- * keystroke — separate HTTP requests per keystroke would both flood
- * the connection count and lose cross-request ordering).
- */
-/**
- * Exported (not just the singleton instance below) so
- * `src/lib/transport.test.ts` can construct isolated instances
- * against a fake `WebSocket` rather than sharing/resetting one global.
+ * `swarm://events` subscription share it (PTY input is a command per
+ * keystroke; an HTTP request per keystroke would flood the connection
+ * count and lose cross-request ordering). Reconnects with capped,
+ * jittered exponential backoff; every reconnect's `hello` carries the
+ * event bus's `lastSeq`, so the daemon replays only what this tab
+ * missed. Exported (besides the {@link wsTransport} singleton) so tests
+ * can construct isolated instances against a fake `WebSocket`.
  */
 export class WsTransport implements Transport {
-  private socket: WebSocket | null = null;
+  private connection: Connection | null = null;
   private connectPromise: Promise<void> | null = null;
-  private readonly pending = new Map<string, PendingRpc>();
   private readonly listeners = new Set<(payload: unknown) => void>();
   private reconnectAttempt = 0;
+  /** Correlates `rpc` with `rpcResult`; unique for the life of the tab (an opaque string to the daemon). */
+  private lastRpcId = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
 
@@ -230,90 +244,110 @@ export class WsTransport implements Transport {
   }
 
   async connect(): Promise<void> {
-    if (this.socket?.readyState === WebSocket.OPEN) return;
-    if (this.connectPromise) return this.connectPromise;
-    this.connectPromise = this.openOnce().finally(() => {
+    if (this.connection?.ws.readyState === WebSocket.OPEN) return;
+    this.connectPromise ??= this.openOnce().finally(() => {
       this.connectPromise = null;
     });
     return this.connectPromise;
   }
 
   private openOnce(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const settle = (fn: () => void) => {
-        if (!settled) {
-          settled = true;
-          fn();
-        }
-      };
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
+    let settled = false;
+    const settle = (outcome: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(handshakeTimer);
+      outcome();
+    };
 
-      let ws: WebSocket;
+    // A socket from an earlier attempt that is still closing must not
+    // deliver events or clobber this one when its `close` finally fires.
+    const previous = this.connection;
+    this.connection = null;
+    previous?.ws.close();
+
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(this.wsUrl());
+    } catch (err) {
+      this.armReconnect();
+      return Promise.reject(Error.isError(err) ? err : new Error(String(err)));
+    }
+    const conn: Connection = { ws, pending: new Map(), framesReceived: 0 };
+    this.connection = conn;
+
+    const handshakeTimer = setTimeout(() => {
+      settle(() => reject(new Error("The SWARM Daemon Did Not Complete The Handshake In Time.")));
+      ws.close();
+    }, RPC_TIMEOUT_MS);
+
+    ws.addEventListener("open", () => {
+      const lastSeq = getLastSeq();
+      ws.send(
+        JSON.stringify({
+          frame: "hello",
+          lastSeq: lastSeq > 0 ? lastSeq : null,
+          token: readToken(),
+        }),
+      );
+    });
+
+    ws.addEventListener("message", (ev) => {
+      if (this.connection !== conn) return;
+      conn.framesReceived++;
+      let raw: unknown;
       try {
-        ws = new WebSocket(this.wsUrl());
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
-        this.armReconnect();
+        raw = JSON.parse(String(ev.data));
+      } catch {
+        return; // malformed frame — ignore, never crash the socket loop
+      }
+
+      if (isControlFrame(raw)) {
+        if (raw.frame === "ready") {
+          this.reconnectAttempt = 0;
+          settle(resolve);
+        } else if (raw.frame === "rpcResult") {
+          const pending = conn.pending.get(raw.id);
+          if (pending) {
+            conn.pending.delete(raw.id);
+            if (raw.ok) pending.resolve(raw.result);
+            else pending.reject(raw.error);
+          }
+        }
+        // `replayEnd` needs no bookkeeping here — the `event` frames
+        // it concludes were already delivered to listeners as they
+        // arrived, in order, on the SAME lane (see the protocol doc).
         return;
       }
-      this.socket = ws;
 
-      ws.addEventListener("open", () => {
-        const token = readToken();
-        const lastSeq = getLastSeq();
-        ws.send(
-          JSON.stringify({
-            frame: "hello",
-            lastSeq: lastSeq > 0 ? lastSeq : null,
-            token,
-          }),
-        );
-      });
-
-      ws.addEventListener("message", (ev) => {
-        let raw: unknown;
-        try {
-          raw = JSON.parse(String(ev.data));
-        } catch {
-          return; // malformed frame — ignore, never crash the socket loop
-        }
-
-        if (isControlFrame(raw)) {
-          if (raw.frame === "ready") {
-            this.reconnectAttempt = 0;
-            settle(resolve);
-          } else if (raw.frame === "rpcResult") {
-            const pending = this.pending.get(raw.id);
-            if (pending) {
-              this.pending.delete(raw.id);
-              if (raw.ok) pending.resolve(raw.result);
-              else pending.reject(new Error(errorMessage(raw.error)));
-            }
-          }
-          // `replayEnd` needs no bookkeeping here — the `event` frames
-          // it concludes were already delivered to listeners as they
-          // arrived, in order, on the SAME lane (see the protocol doc).
-          return;
-        }
-
-        // Bare `DomainEvent` — deliver to every `swarm://events` listener.
-        for (const listener of this.listeners) listener(raw);
-      });
-
-      ws.addEventListener("close", () => {
-        this.socket = null;
-        for (const pending of this.pending.values()) {
-          pending.reject(new Error("WebSocket Connection Closed."));
-        }
-        this.pending.clear();
-        settle(() => reject(new Error("WebSocket Closed Before The Handshake Completed.")));
-        if (!this.disposed) this.armReconnect();
-      });
-
-      ws.addEventListener("error", () => {
-        settle(() => reject(new Error("WebSocket Connection Failed.")));
-      });
+      // Bare `DomainEvent` — deliver to every `swarm://events` listener.
+      for (const listener of this.listeners) listener(raw);
     });
+
+    ws.addEventListener("close", (ev) => {
+      for (const pending of conn.pending.values()) {
+        pending.reject(new Error("WebSocket Connection Closed."));
+      }
+      conn.pending.clear();
+      const unauthorized = !settled && ev.code === UNAUTHORIZED_CLOSE_CODE;
+      settle(() =>
+        reject(
+          unauthorized
+            ? new DaemonAuthError()
+            : new Error("WebSocket Closed Before The Handshake Completed."),
+        ),
+      );
+      if (this.connection !== conn) return;
+      this.connection = null;
+      if (!this.disposed && !unauthorized) this.armReconnect();
+    });
+
+    ws.addEventListener("error", () => {
+      settle(() => reject(new Error("WebSocket Connection Failed.")));
+    });
+
+    return promise;
   }
 
   private armReconnect(): void {
@@ -329,43 +363,53 @@ export class WsTransport implements Transport {
     }, backoff + jitter);
   }
 
-  async invoke<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
+  async invoke<T = unknown>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
     await this.connect();
-    const socket = this.socket;
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
+    const conn = this.connection;
+    if (conn?.ws.readyState !== WebSocket.OPEN) {
       throw new Error("Not Connected To The SWARM Daemon.");
     }
-    const id =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    return new Promise<T>((resolve, reject) => {
-      // security-review FIX-8: bounded — see RPC_TIMEOUT_MS's doc.
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new RpcTimeoutError(cmd));
-      }, RPC_TIMEOUT_MS);
-      this.pending.set(id, {
-        resolve: (v) => {
-          clearTimeout(timer);
-          (resolve as (v: unknown) => void)(v);
-        },
-        reject: (e) => {
-          clearTimeout(timer);
-          reject(e);
-        },
-      });
-      socket.send(JSON.stringify({ frame: "rpc", id, cmd, args }));
+    const id = `r${++this.lastRpcId}`;
+    const { promise, resolve, reject } = Promise.withResolvers<T>();
+    const framesAtSend = conn.framesReceived;
+    // security-review FIX-8: bounded — see RPC_TIMEOUT_MS's doc.
+    const timer = setTimeout(() => {
+      conn.pending.delete(id);
+      reject(new RpcTimeoutError(cmd));
+      // Not one frame (no result, no event) in the whole window: the
+      // socket is half-open (laptop sleep, a NAT timeout) even though
+      // `readyState` still says OPEN. Closing it starts a reconnect now
+      // instead of whenever the browser notices the dead TCP link.
+      if (conn.framesReceived === framesAtSend && this.connection === conn) conn.ws.close();
+    }, RPC_TIMEOUT_MS);
+    conn.pending.set(id, {
+      resolve: (value) => {
+        clearTimeout(timer);
+        resolve(value as T);
+      },
+      reject: (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
     });
+    conn.ws.send(JSON.stringify({ frame: "rpc", id, cmd, args }));
+    return promise;
   }
 
+  /**
+   * Subscribes to `swarm://events` at once, whether or not the socket is
+   * up yet: a failed first handshake only delays delivery until the
+   * reconnect loop gets through. Any other channel is a no-op.
+   */
   async listen<T>(event: string, handler: (payload: T) => void): Promise<UnlistenFn> {
     if (event !== EVENT_CHANNEL_NAME) return noopUnlisten;
-    await this.connect();
-    const wrapped = (payload: unknown) => handler(payload as T);
-    this.listeners.add(wrapped);
+    const listener = (payload: unknown): void => handler(payload as T);
+    this.listeners.add(listener);
+    this.connect().catch(() => {
+      // Reported by `invoke`; a non-auth failure is retried by the reconnect loop.
+    });
     return () => {
-      this.listeners.delete(wrapped);
+      this.listeners.delete(listener);
     };
   }
 
@@ -373,9 +417,11 @@ export class WsTransport implements Transport {
   dispose(): void {
     this.disposed = true;
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
-    this.socket?.close();
+    const conn = this.connection;
+    this.connection = null;
+    conn?.pending.clear();
+    conn?.ws.close();
     this.listeners.clear();
-    this.pending.clear();
   }
 }
 
@@ -389,21 +435,17 @@ export const wsTransport: Transport = new WsTransport();
 // ── Selection ────────────────────────────────────────────────────────
 
 /**
- * Vite `define` (see `vite.config.ts`), set to `"ws"` only by `pnpm
- * build:web`; undefined for every other build (`pnpm dev`, `tauri
- * dev`/`tauri build`) — those keep
- * `tauriTransport` unconditionally, preserving today's exact behavior
- * (including the graceful no-op when previewing in a plain browser with
- * no Tauri bridge, e.g. `pnpm dev`). `wsTransport` is chosen ONLY when
- * explicitly built for it — never auto-detected at runtime — so a
- * `pnpm dev` browser preview never attempts a doomed `ws://localhost:1420/ws`
- * connection against the Vite dev server itself.
+ * `wsTransport` only in the `pnpm build:web` build (`vite --mode web`
+ * defines `__SWARM_TRANSPORT__` as `"ws"`); `tauriTransport` for every
+ * other build and under Vitest, which does not define it. Never
+ * auto-detected at runtime, so a `pnpm dev` browser preview never
+ * attempts a doomed `ws://localhost:1420/ws` connection against the
+ * Vite dev server itself.
  */
-declare const __SWARM_TRANSPORT__: string | undefined;
-
 function selectTransport(): Transport {
-  const declared = typeof __SWARM_TRANSPORT__ !== "undefined" ? __SWARM_TRANSPORT__ : undefined;
-  return declared === "ws" ? wsTransport : tauriTransport;
+  return typeof __SWARM_TRANSPORT__ !== "undefined" && __SWARM_TRANSPORT__ === "ws"
+    ? wsTransport
+    : tauriTransport;
 }
 
 export const transport: Transport = selectTransport();

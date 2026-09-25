@@ -49,7 +49,6 @@ function resetStore(): void {
     for (const [id] of state.workers) {
       state.removeWorker(id);
     }
-    state.selectWorker(null);
   });
 }
 

@@ -6,13 +6,29 @@ import "@fontsource-variable/dm-sans/wght-italic.css";
 // must load before our OKLCH theming overrides in global.css.
 import "modern-cmdk/styles.css";
 import "#styles/global.css";
-import { StrictMode, Suspense } from "react";
+import { type ReactNode, StrictMode, Suspense, use } from "react";
 import { createRoot } from "react-dom/client";
+import { type LogLevel, useLogStore } from "#lib/log-store";
+import { isTauri } from "#lib/tauri";
+import { preloadSettings } from "#store/persisted";
 import { App } from "./App.tsx";
 
-performance.mark("app-init-start");
+/**
+ * Persisted settings, read once before anything renders (see
+ * `#store/persisted`): every settings atom's first read then already
+ * sees the user's value. `preloadSettings` never rejects. `null`
+ * outside the desktop shell, where there is no settings file to wait
+ * for, so the app renders without a loading pass.
+ */
+const settingsLoaded = isTauri() ? preloadSettings() : null;
 
-/** Full-screen loading indicator shown while the main App chunk is fetched. */
+/** Suspends until {@link settingsLoaded} settles. */
+function SettingsGate({ children }: { readonly children: ReactNode }): ReactNode {
+  if (settingsLoaded) use(settingsLoaded);
+  return children;
+}
+
+/** Full-screen loading indicator shown while persisted settings load. */
 function AppLoader(): React.ReactElement {
   return (
     <div
@@ -33,16 +49,37 @@ function AppLoader(): React.ReactElement {
   );
 }
 
+/**
+ * Builds a root error callback that keeps React's console report and
+ * also records the error on the in-app Logs page (source `react`), so
+ * a render error an error boundary swallowed is still visible there.
+ */
+function reportRenderError(what: string, level: LogLevel) {
+  return (error: unknown, info: { readonly componentStack?: string | undefined }): void => {
+    console.error(`[react] ${what}:`, error);
+    useLogStore.getState().addEntry({
+      timestamp: Date.now(),
+      level,
+      source: "react",
+      message: `${what}: ${Error.isError(error) ? error.message : String(error)}`,
+      metadata: info.componentStack ? { componentStack: info.componentStack } : undefined,
+    });
+  };
+}
+
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing #root element");
 
-createRoot(root).render(
+createRoot(root, {
+  onCaughtError: reportRenderError("Render Error Caught By An Error Boundary", "error"),
+  onUncaughtError: reportRenderError("Uncaught Render Error", "error"),
+  onRecoverableError: reportRenderError("Recovered Render Error", "warn"),
+}).render(
   <StrictMode>
     <Suspense fallback={<AppLoader />}>
-      <App />
+      <SettingsGate>
+        <App />
+      </SettingsGate>
     </Suspense>
   </StrictMode>,
 );
-
-performance.mark("app-init-end");
-performance.measure("app-init", "app-init-start", "app-init-end");

@@ -1,49 +1,55 @@
 import { atom } from "jotai";
-import { atomWithStorage } from "jotai/utils";
-
-import { settingsStore } from "#lib/lazy-store";
-import { isTauri } from "#lib/tauri";
+import * as z from "zod";
+import { atomWithSettings } from "#store/persisted";
 
 /** A single frecency record tracking usage count and recency. */
 export interface FrecencyEntry {
   readonly uses: number;
+  /** `Temporal.Instant` string of the last use. */
   readonly lastUsed: string;
 }
 
-// ── Tauri plugin-store persistence adapter ───────────
+const FrecencyEntrySchema = z.tuple([
+  z.string(),
+  z.object({
+    uses: z.int().nonnegative(),
+    lastUsed: z.string().refine((s) => {
+      try {
+        Temporal.Instant.from(s);
+        return true;
+      } catch {
+        return false;
+      }
+    }, "Not A Temporal.Instant String"),
+  }),
+]);
 
 /**
- * Persisted atom storing frecency data for command palette ranking.
- *
- * Serialised to Tauri plugin-store as an array of `[commandId, FrecencyEntry]` tuples.
+ * Persisted command-palette usage, keyed by command id. Stored as an
+ * array of `[commandId, FrecencyEntry]` tuples; a malformed tuple is
+ * dropped on load without discarding the others, so a bad `lastUsed`
+ * can never reach `Temporal.Instant.from` in {@link frecencyScoreAtom}.
  */
-export const frecencyAtom = atomWithStorage<Map<string, FrecencyEntry>>(
+export const frecencyAtom = atomWithSettings<Map<string, FrecencyEntry>>(
   "swarm:frecency",
   new Map(),
   {
-    getItem(_key, initialValue) {
-      return initialValue;
-    },
-    setItem(key, value) {
-      if (!isTauri()) return;
-      void settingsStore.set(key, [...value.entries()]).then(() => settingsStore.save());
-    },
-    removeItem(key) {
-      if (!isTauri()) return;
-      void settingsStore.delete(key).then(() => settingsStore.save());
-    },
-    subscribe(key, callback, _initialValue) {
-      if (!isTauri()) return () => {};
-      void settingsStore
-        .get<Array<[string, FrecencyEntry]>>(key)
-        .then((raw) => {
-          if (raw) callback(new Map(raw));
-        })
-        .catch(() => {});
-      return () => {};
-    },
+    label: "Command Palette History",
+    schema: z.array(z.unknown()).transform(
+      (tuples) =>
+        new Map(
+          tuples.flatMap((tuple) => {
+            const parsed = FrecencyEntrySchema.safeParse(tuple);
+            return parsed.success ? [parsed.data] : [];
+          }),
+        ),
+    ),
+    serialize: (entries) => [...entries],
   },
 );
+
+/** Hours for a command's frecency weight to halve. */
+const HALF_LIFE_HOURS = 72;
 
 /** Derived atom that computes a frecency score for sorting commands. */
 export const frecencyScoreAtom = atom((get) => {
@@ -52,14 +58,9 @@ export const frecencyScoreAtom = atom((get) => {
   return (commandId: string): number => {
     const entry = entries.get(commandId);
     if (!entry) return 0;
-
-    const elapsed = Temporal.Now.instant()
+    const hoursAgo = Temporal.Now.instant()
       .since(Temporal.Instant.from(entry.lastUsed))
-      .total("milliseconds");
-    const hoursAgo = elapsed / (1000 * 60 * 60);
-
-    // Decay factor: halve the score every 72 hours
-    const decay = 2 ** (-hoursAgo / 72);
-    return entry.uses * decay;
+      .total("hours");
+    return entry.uses * 2 ** (-hoursAgo / HALF_LIFE_HOURS);
   };
 });

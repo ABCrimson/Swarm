@@ -1,15 +1,21 @@
 import "@testing-library/jest-dom/vitest";
-import { enableMapSet } from "immer";
-import { vi } from "vitest";
+import { cleanup } from "@testing-library/react";
+import { afterEach, vi } from "vitest";
 
-// Enable Immer's MapSet plugin — required by Zustand stores that use Map/Set.
-enableMapSet();
+// Explicit, so unmounting does not depend on Testing Library detecting
+// a global `afterEach` (vitest.config.ts `globals`).
+afterEach(cleanup);
 
-// ── Mock Tauri APIs ──────────────────────────────────
-// These modules are not available in jsdom; stub them globally.
+// ── Tauri APIs ──────────────────────────────────────
+// jsdom has no Tauri bridge; every module the source imports is stubbed
+// here with the members the source actually uses. A test that needs a
+// different behavior re-mocks the module (or the #lib wrapper) itself.
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockRejectedValue(new Error("invoke not mocked")),
+  // Same probe as the real `isTauri()`: the desktop shell defines
+  // `globalThis.isTauri`. A test opts in with `vi.stubGlobal("isTauri", true)`.
+  isTauri: () => Boolean(Reflect.get(globalThis, "isTauri")),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -17,17 +23,19 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-  save: vi.fn().mockResolvedValue(null),
+  ask: vi.fn().mockResolvedValue(false),
   open: vi.fn().mockResolvedValue(null),
+  save: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@tauri-apps/plugin-fs", () => ({
-  writeTextFile: vi.fn().mockResolvedValue(undefined),
-  readTextFile: vi.fn().mockResolvedValue(""),
+  BaseDirectory: { AppData: 14 },
   exists: vi.fn().mockResolvedValue(false),
+  readDir: vi.fn().mockResolvedValue([]),
+  readTextFile: vi.fn().mockResolvedValue(""),
   remove: vi.fn().mockResolvedValue(undefined),
   rename: vi.fn().mockResolvedValue(undefined),
-  BaseDirectory: { AppData: 0 },
+  writeTextFile: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
@@ -39,22 +47,21 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 vi.mock("@tauri-apps/plugin-store", () => {
   function MockStore() {
     return {
-      load: vi.fn().mockResolvedValue(undefined),
-      get: vi.fn().mockResolvedValue(null),
+      get: vi.fn().mockResolvedValue(undefined),
       set: vi.fn().mockResolvedValue(undefined),
-      save: vi.fn().mockResolvedValue(undefined),
-      delete: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue(true),
       entries: vi.fn().mockResolvedValue([]),
+      save: vi.fn().mockResolvedValue(undefined),
     };
   }
   return {
-    Store: vi.fn(MockStore),
     LazyStore: vi.fn(MockStore),
+    load: vi.fn(async () => MockStore()),
   };
 });
 
-// ── Mock sonner toast ────────────────────────────────
-// ErrorBoundary imports toast from #components/ui/Toast which re-exports sonner.
+// ── sonner ──────────────────────────────────────────
+// Components toast through #components/ui/Toast, which re-exports sonner.
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), {
     error: vi.fn(),

@@ -14,8 +14,8 @@ export const WorkerSchema = z.object({
   id: z.uuid(),
   state: WorkerStateSchema,
   name: z.string().optional(),
-  pid: z.number().int().optional(),
-  startedAt: z.string().datetime(),
+  pid: z.int().optional(),
+  startedAt: z.iso.datetime(),
   output: z.string().optional(),
   /**
    * Absolute path of this worker's git worktree, mirrored from the
@@ -47,8 +47,8 @@ export const SessionSchema = z.object({
   id: z.uuid(),
   name: z.string(),
   workerIds: z.array(z.uuid()),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
   config: z.record(z.string(), z.unknown()).optional(),
   metadata: SessionMetadataSchema.optional(),
   snapshotIds: z.array(z.uuid()).optional(),
@@ -60,10 +60,8 @@ export type Session = z.infer<typeof SessionSchema>;
 /**
  * Zod schema for the `session_worker_removed` event payload (mirrors
  * Rust's `SessionWorkerRemovedPayload`,
- * `crates/swarm-core/src/events/emitter.rs`) — validated via
- * `safeParse` at the event-bus seam in `#hooks/useSessionEvents`, same
- * discipline `#lib/agent-events.ts`'s schemas apply for the `agent_*`
- * family.
+ * `crates/swarm-core/src/events/emitter.rs`). The event bus validates
+ * payloads with it (`#lib/event-payloads`).
  */
 export const SessionWorkerRemovedPayloadSchema = z.object({
   sessionId: z.uuid(),
@@ -79,7 +77,7 @@ export type SessionWorkerRemovedPayload = z.infer<typeof SessionWorkerRemovedPay
 export const SnapshotSchema = z.object({
   id: z.uuid(),
   sessionId: z.uuid(),
-  timestamp: z.string().datetime(),
+  timestamp: z.iso.datetime(),
   data: z.record(z.string(), z.unknown()),
 });
 
@@ -97,7 +95,7 @@ export type WorkerIsolation = z.infer<typeof WorkerIsolationSchema>;
 /**
  * Zod schema for the process options half of a worker spawn spec —
  * fields that map 1:1 onto Rust's `WorkerConfig`
- * (`src-tauri/crates/swarm-core/src/worker/handle.rs`) and are sent
+ * (`crates/swarm-core/src/worker/handle.rs`) and are sent
  * over IPC to `spawn_worker`. Deliberately excludes `rows`/`cols` (PTY
  * dimensions, Rust-defaulted and not template-configurable today).
  *
@@ -155,7 +153,7 @@ export const SessionTemplateSchema = z.object({
   description: z.string(),
   workerConfigs: z.array(WorkerSpawnSpecSchema),
   builtIn: z.boolean().optional(),
-  createdAt: z.string().datetime().optional(),
+  createdAt: z.iso.datetime().optional(),
 });
 
 /** Reusable session template defining a preset worker configuration. */
@@ -168,7 +166,7 @@ export const MetricPointSchema = z.object({
   time: z.number(),
   cpu: z.number(),
   memory: z.number(),
-  workerCount: z.number().int(),
+  workerCount: z.int(),
 });
 
 /** A single time-series data point for system metrics. */
@@ -179,7 +177,7 @@ export const SystemMetricsSchema = z.object({
   cpuPercent: z.number(),
   memoryMb: z.number(),
   memoryTotalMb: z.number(),
-  workerCount: z.number().int(),
+  workerCount: z.int(),
   aiReqPerSec: z.number(),
   tokensPerSec: z.number(),
   history: z.array(MetricPointSchema),
@@ -195,7 +193,7 @@ export const AiMessageSchema = z.object({
   id: z.uuid(),
   role: z.enum(["user", "assistant"]),
   content: z.string(),
-  timestamp: z.string().datetime(),
+  timestamp: z.iso.datetime(),
   toolCalls: z
     .array(
       z.object({
@@ -261,7 +259,7 @@ export type CumulativeUsage = z.infer<typeof CumulativeUsageSchema>;
 // ── Ship schemas ─────────────────────────────────────
 //
 // Mirror Rust's `swarm_core::git::ship` types
-// (`src-tauri/crates/swarm-core/src/git/ship.rs`) exactly: `ShipError`
+// (`crates/swarm-core/src/git/ship.rs`) exactly: `ShipError`
 // is a documented divergence from the rest of the IPC surface's
 // `Result<T, String>` convention — it serializes as a structured
 // `{ kind, message, remedy }` object so the UI can branch on `kind`.
@@ -320,9 +318,9 @@ export type SkippedFile = z.infer<typeof SkippedFileSchema>;
 
 /** Zod schema for a diff stat summary. */
 export const DiffStatSchema = z.object({
-  filesChanged: z.number().int(),
-  insertions: z.number().int(),
-  deletions: z.number().int(),
+  filesChanged: z.int(),
+  insertions: z.int(),
+  deletions: z.int(),
 });
 
 /** File/insertion/deletion counts for a diff or commit. */
@@ -338,8 +336,8 @@ export const ShipPreflightSchema = z.object({
   /** Whether `host` looks like GitHub/GHES — the "Open Compare Page" action is the only one gated on this. */
   hostSupportsCompare: z.boolean(),
   upstream: z.string().nullable(),
-  ahead: z.number().int(),
-  behind: z.number().int(),
+  ahead: z.int(),
+  behind: z.int(),
   staged: z.array(z.string()),
   unstaged: z.array(z.string()),
   untracked: z.array(z.string()),
@@ -361,11 +359,11 @@ export type StagingMode = z.infer<typeof StagingModeSchema>;
 /** Zod schema for the `git_stage_commit` response. */
 export const CommitOutcomeSchema = z.object({
   sha: z.string(),
-  filesChanged: z.number().int(),
-  insertions: z.number().int(),
-  deletions: z.number().int(),
-  seqFrom: z.number().int(),
-  seqTo: z.number().int(),
+  filesChanged: z.int(),
+  insertions: z.int(),
+  deletions: z.int(),
+  seqFrom: z.int(),
+  seqTo: z.int(),
   skipped: z.array(SkippedFileSchema),
 });
 
@@ -391,7 +389,7 @@ export type PushOutcome = z.infer<typeof PushOutcomeSchema>;
  * tool input, which can legitimately contain file contents.
  */
 export const CausalToolCallSchema = z.object({
-  seq: z.number().int(),
+  seq: z.int(),
   name: z.string(),
   target: z.string().nullable(),
   ok: z.boolean().nullable(),
@@ -418,8 +416,8 @@ export type CausalTurn = z.infer<typeof CausalTurnSchema>;
 export const CausalCommitSchema = z.object({
   sha: z.string(),
   branch: z.string(),
-  seqFrom: z.number().int(),
-  seqTo: z.number().int(),
+  seqFrom: z.int(),
+  seqTo: z.int(),
 });
 
 /** A commit made within a `ship_context` range. */
@@ -433,11 +431,11 @@ export type CausalCommit = z.infer<typeof CausalCommitSchema>;
  */
 export const ShipContextSchema = z.object({
   workerId: z.uuid(),
-  seqFrom: z.number().int(),
-  seqTo: z.number().int(),
+  seqFrom: z.int(),
+  seqTo: z.int(),
   turns: z.array(CausalTurnSchema),
   commits: z.array(CausalCommitSchema),
-  omittedTurnCount: z.number().int(),
+  omittedTurnCount: z.int(),
   /** `true` when the backend's row fetch for this range hit its own cap — older turns than `omittedTurnCount` alone can account for may exist (review FIX-1). Folded into the same honest disclosure `omittedTurnCount` renders. */
   eventsTruncated: z.boolean(),
   /** `true` when this worker had `agent_turn_started` (webview chat) activity in range that produced no `CausalTurn` — distinguishes "genuinely no activity" from "activity the causal record structurally can't see" (review NIT-4). */

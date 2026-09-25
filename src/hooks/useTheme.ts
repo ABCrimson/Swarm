@@ -1,32 +1,12 @@
-import { useAtom } from "jotai";
-import { useEffect } from "react";
+import { useAtomValue } from "jotai";
 import { reducedMotionAtom } from "#store/ui";
 
-const MEDIA_QUERY = "(prefers-reduced-motion: reduce)";
-
 /**
- * Detects the user's `prefers-reduced-motion` preference and keeps
- * the `reducedMotionAtom` in sync. Cleans up the media query listener
- * on unmount.
+ * Subscribes to the OS `prefers-reduced-motion` preference. The atom
+ * itself reads the media query and listens for changes while mounted
+ * (see `reducedMotionAtom`); calling this at the app root keeps that
+ * listener mounted for the app's lifetime.
  */
 export function useTheme(): { reducedMotion: boolean } {
-  const [reducedMotion, setReducedMotion] = useAtom(reducedMotionAtom);
-
-  useEffect(() => {
-    const mql = globalThis.matchMedia(MEDIA_QUERY);
-
-    // Set initial value
-    setReducedMotion(mql.matches);
-
-    const onChange = (e: MediaQueryListEvent): void => {
-      setReducedMotion(e.matches);
-    };
-
-    mql.addEventListener("change", onChange);
-    return () => {
-      mql.removeEventListener("change", onChange);
-    };
-  }, [setReducedMotion]);
-
-  return { reducedMotion };
+  return { reducedMotion: useAtomValue(reducedMotionAtom) };
 }

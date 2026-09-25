@@ -1,49 +1,8 @@
 import { atom } from "jotai";
-import { atomWithStorage } from "jotai/utils";
-
-import { commandHistory } from "#lib/command-history";
+import * as z from "zod";
 import { DEFAULT_KEYBINDINGS, type Keybindings } from "#lib/keybindings";
-import { settingsStore } from "#lib/lazy-store";
-import type { ModelKey } from "#lib/models";
-import { isTauri } from "#lib/tauri";
-
-// ── Tauri plugin-store persistence adapter ───────────
-
-const tauriStore = settingsStore;
-
-function createTauriStorage<T>(): {
-  getItem: (key: string, initialValue: T) => T;
-  setItem: (key: string, value: T) => void;
-  removeItem: (key: string) => void;
-  subscribe?: (key: string, callback: (value: T) => void, initialValue: T) => () => void;
-} {
-  return {
-    getItem(_key, initialValue) {
-      // Always return synchronously to prevent Jotai Suspense.
-      // Persisted values are hydrated via subscribe on mount.
-      return initialValue;
-    },
-    setItem(key, value) {
-      if (!isTauri()) return;
-      void tauriStore.set(key, value).then(() => tauriStore.save());
-    },
-    removeItem(key) {
-      if (!isTauri()) return;
-      void tauriStore.delete(key).then(() => tauriStore.save());
-    },
-    subscribe(key, callback, _initialValue) {
-      if (!isTauri()) return () => {};
-      // Hydrate from store after mount
-      void tauriStore
-        .get<T>(key)
-        .then((v) => {
-          if (v != null) callback(v);
-        })
-        .catch(() => {});
-      return () => {};
-    },
-  };
-}
+import { MODEL_KEYS, type ModelKey } from "#lib/models";
+import { atomWithSettings } from "#store/persisted";
 
 // ── Panel state (ephemeral) ─────────────────────────
 
@@ -61,8 +20,21 @@ export const currentPageAtom = atom<
   "dashboard" | "workers" | "sessions" | "metrics" | "settings" | "logs" | "tools" | "workspace"
 >("dashboard");
 
-/** Whether the user prefers reduced motion (mirrors OS setting). */
-export const reducedMotionAtom = atom(false);
+const reducedMotionQuery = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
+
+/**
+ * Whether the user prefers reduced motion. Starts from the OS setting at
+ * module load, so the very first frame already honors it, and follows
+ * OS changes for as long as any component reads it.
+ */
+export const reducedMotionAtom = atom(reducedMotionQuery?.matches ?? false);
+reducedMotionAtom.onMount = (set) => {
+  if (!reducedMotionQuery) return;
+  set(reducedMotionQuery.matches);
+  const onChange = (e: MediaQueryListEvent): void => set(e.matches);
+  reducedMotionQuery.addEventListener("change", onChange);
+  return () => reducedMotionQuery.removeEventListener("change", onChange);
+};
 
 /** Whether the worker detail panel is expanded. */
 export const detailPanelOpenAtom = atom(false);
@@ -82,13 +54,15 @@ export const graphViewAtom = atom<"graph" | "list">("graph");
  */
 export const causalityInspectorAtom = atom<{ readonly startSeq: number } | null>(null);
 
-// ── Persisted via plugin-store integration ───────────
+// ── Persisted (swarm-settings.json, see #store/persisted) ──
 
-/** Persisted split-pane sizes for the main/detail layout. */
-export const paneSizesAtom = atomWithStorage<{ main: number; detail: number }>(
+const Percent = z.number().min(0).max(100);
+
+/** Persisted split-pane sizes (percentages) for the main/detail layout. */
+export const paneSizesAtom = atomWithSettings(
   "swarm:ui:paneSizes",
   { main: 60, detail: 40 },
-  createTauriStorage<{ main: number; detail: number }>(),
+  { label: "Pane Sizes", schema: z.object({ main: Percent, detail: Percent }) },
 );
 
 interface ThemePrefs {
@@ -97,59 +71,42 @@ interface ThemePrefs {
 }
 
 /**
- * Storage for {@link themeAtom} under a v2 key, with one-time migration:
- * before this key existed, `gpuOverlay` was a dead setting (nothing
- * consumed it) persisting `false` for every install — so hydrating a
- * legacy value must carry over only `particlesEnabled` and take the new
- * `gpuOverlay: true` default, or the status bar's long-standing GPU
- * readout would silently vanish on upgrade.
- */
-function createThemeStorage(): ReturnType<typeof createTauriStorage<ThemePrefs>> {
-  const base = createTauriStorage<ThemePrefs>();
-  return {
-    ...base,
-    subscribe(key, callback, initialValue) {
-      if (!isTauri()) return () => {};
-      void tauriStore
-        .get<ThemePrefs>(key)
-        .then(async (v) => {
-          if (v != null) {
-            callback(v);
-            return;
-          }
-          const legacy = await tauriStore.get<Partial<ThemePrefs>>("swarm:ui:theme");
-          if (legacy != null) {
-            callback({ ...initialValue, particlesEnabled: legacy.particlesEnabled ?? true });
-          }
-        })
-        .catch(() => {});
-      return () => {};
-    },
-  };
-}
-
-/**
- * Persisted theme preferences (particle background toggle, GPU overlay).
+ * Persisted theme preferences (particle background toggle, GPU overlay),
+ * stored under a v2 key.
  *
  * `gpuOverlay` defaults `true` to match the status bar's long-standing
  * visible-by-default GPU readout — the Settings toggle and the status
- * bar's Hide/Show GPU button both read/write this same field (the
- * toggle used to be dead: nothing consumed it).
+ * bar's Hide/Show GPU button both read/write this same field. Before
+ * the v2 key existed `gpuOverlay` was a dead setting persisting `false`
+ * for every install, so an install that only has the legacy
+ * `swarm:ui:theme` key carries over `particlesEnabled` alone and takes
+ * the new `gpuOverlay: true` default.
  */
-export const themeAtom = atomWithStorage<ThemePrefs>(
+export const themeAtom = atomWithSettings<ThemePrefs>(
   "swarm:ui:theme2",
   { particlesEnabled: true, gpuOverlay: true },
-  createThemeStorage(),
+  {
+    label: "Theme",
+    schema: z.object({
+      particlesEnabled: z.boolean().catch(true),
+      gpuOverlay: z.boolean().catch(true),
+    }),
+    migrate(initial, readRaw) {
+      const legacy = z
+        .object({ particlesEnabled: z.boolean() })
+        .safeParse(readRaw("swarm:ui:theme"));
+      return legacy.success ? { ...initial, ...legacy.data } : undefined;
+    },
+  },
 );
 
 // ── App settings (persisted) ────────────────────────
 
 /**
- * Tunable app behavior promoted from hardcoded constants (feedback
- * follow-up). Every field is consumed live — see useAlerts (cooldown),
- * useAutoSnapshot (interval), log-store (retention), ai store
- * (concurrent limit), message-history (LRU cap), and the
- * update-on-launch check in useSettingsBridge.
+ * Tunable app behavior promoted from hardcoded constants. Every field is
+ * consumed live — see useAlerts (cooldown), useAutoSnapshot (interval),
+ * log-store (retention), ai store (concurrent limit), message-history
+ * (LRU cap), and the update-on-launch check in useSettingsBridge.
  */
 export interface AppSettings {
   /** Seconds between repeat alerts for the same metric. */
@@ -178,60 +135,63 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   nativeAlertNotifications: false,
 };
 
-/**
- * Storage for {@link appSettingsAtom} that spreads hydrated values over
- * the defaults: a settings object persisted by an older version simply
- * lacks newer keys, and replacing the whole object would hydrate those
- * as `undefined` (breaking number fields and making booleans read as
- * off regardless of default).
- */
-function createAppSettingsStorage(): ReturnType<typeof createTauriStorage<AppSettings>> {
-  const base = createTauriStorage<AppSettings>();
-  return {
-    ...base,
-    subscribe(key, callback, initialValue) {
-      if (!isTauri()) return () => {};
-      void tauriStore
-        .get<Partial<AppSettings>>(key)
-        .then((v) => {
-          if (v != null) callback({ ...initialValue, ...v });
-        })
-        .catch(() => {});
-      return () => {};
-    },
-  };
+/** A whole number clamped to the Settings page's `[min, max]`; anything that is not a finite number becomes `fallback`. */
+function boundedInt(min: number, max: number, fallback: number) {
+  return z
+    .number()
+    .transform((n) => Math.round(Math.min(max, Math.max(min, n))))
+    .catch(fallback);
 }
 
-export const appSettingsAtom = atomWithStorage<AppSettings>(
+/**
+ * Field by field, so one corrupt or missing field (a settings object
+ * written by an older version lacks newer keys) falls back to its own
+ * default without discarding the rest. Bounds match the Settings page
+ * inputs.
+ */
+const AppSettingsSchema = z.object({
+  alertCooldownSec: boundedInt(5, 600, DEFAULT_APP_SETTINGS.alertCooldownSec),
+  snapshotIntervalMin: boundedInt(1, 120, DEFAULT_APP_SETTINGS.snapshotIntervalMin),
+  logMaxEntries: boundedInt(100, 100_000, DEFAULT_APP_SETTINGS.logMaxEntries),
+  aiConcurrentLimit: boundedInt(1, 10, DEFAULT_APP_SETTINGS.aiConcurrentLimit),
+  historyMaxWorkers: boundedInt(5, 200, DEFAULT_APP_SETTINGS.historyMaxWorkers),
+  updateCheckOnLaunch: z.boolean().catch(DEFAULT_APP_SETTINGS.updateCheckOnLaunch),
+  nativeAlertNotifications: z.boolean().catch(DEFAULT_APP_SETTINGS.nativeAlertNotifications),
+});
+
+export const appSettingsAtom = atomWithSettings<AppSettings>(
   "swarm:settings:app",
   DEFAULT_APP_SETTINGS,
-  createAppSettingsStorage(),
+  { label: "App Settings", schema: AppSettingsSchema },
 );
 
 /** Persisted remappable keyboard shortcuts (see #lib/keybindings). */
-export const keybindingsAtom = atomWithStorage<Keybindings>(
+export const keybindingsAtom = atomWithSettings<Keybindings>(
   "swarm:settings:keybindings",
   DEFAULT_KEYBINDINGS,
-  createTauriStorage<Keybindings>(),
+  {
+    label: "Keybindings",
+    schema: z.object({
+      commandPalette: z.string().min(1).catch(DEFAULT_KEYBINDINGS.commandPalette),
+      graphToggle: z.string().min(1).catch(DEFAULT_KEYBINDINGS.graphToggle),
+      perfOverlay: z.string().min(1).catch(DEFAULT_KEYBINDINGS.perfOverlay),
+    }),
+  },
 );
 
 // ── AI model selection ──────────────────────────────
 
 /**
- * Persisted Anthropic model selection for AI streaming.
- *
- * Widened to the full `ModelKey` union from `#lib/models` (the shared
- * catalog) so Fable/Mythos are selectable — old persisted "opus" /
- * "sonnet" / "haiku" values remain valid members of the wider union,
- * so no migration is needed for existing installs.
+ * Persisted Anthropic model selection for AI streaming. A persisted key
+ * that is no longer in the `#lib/models` catalog falls back to the
+ * default instead of reaching the request path.
  */
-export const selectedModelAtom = atomWithStorage<ModelKey>(
-  "swarm:ai:model",
-  "sonnet",
-  createTauriStorage<ModelKey>(),
-);
+export const selectedModelAtom = atomWithSettings<ModelKey>("swarm:ai:model", "sonnet", {
+  label: "AI Model",
+  schema: z.enum(MODEL_KEYS).catch("sonnet"),
+});
 
-// ── WebGPU performance atoms (Milestone 0.6.5) ──────
+// ── WebGPU performance ──────────────────────────────
 
 /** Current GPU frame time in milliseconds for the particle system. */
 export const gpuFrameTimeAtom = atom(0);
@@ -239,57 +199,7 @@ export const gpuFrameTimeAtom = atom(0);
 /** Target particle count for the WebGPU compute pipeline. */
 export const particleCountAtom = atom(10_000);
 
-// ── Performance overlay (Milestone 0.8.4) ───────────
+// ── Performance overlay ─────────────────────────────
 
 /** Whether the developer performance overlay is visible. */
 export const perfOverlayOpenAtom = atom(false);
-
-// ── Color scheme (dark-only mandate) ─────────────────
-
-/** Color scheme is locked to dark per spec. */
-export const colorSchemeAtom = atom<"dark">("dark");
-
-// ── Undo / Redo (Feature 14) ────────────────────────
-
-/** Trigger atom that increments whenever command history changes. */
-const undoRedoVersionAtom = atom(0);
-
-let _notifyHistoryChange: () => void = () => {};
-
-// Subscribe the version atom to CommandHistory changes at module load.
-commandHistory.subscribe(() => {
-  _notifyHistoryChange();
-});
-
-/**
- * Mount atom that wires CommandHistory subscriber notifications
- * into the Jotai dependency graph. Must be used in a component
- * via `useAtom(undoRedoMountAtom)` to activate.
- */
-export const undoRedoMountAtom = atom(null, (_get, set) => {
-  _notifyHistoryChange = () => {
-    set(undoRedoVersionAtom, (v) => v + 1);
-  };
-});
-undoRedoMountAtom.onMount = (setSelf) => {
-  setSelf();
-};
-
-/** Whether the command history has commands available to undo. */
-export const undoAvailableAtom = atom((get) => {
-  get(undoRedoVersionAtom);
-  return commandHistory.canUndo();
-});
-
-/** Whether the command history has commands available to redo. */
-export const redoAvailableAtom = atom((get) => {
-  get(undoRedoVersionAtom);
-  return commandHistory.canRedo();
-});
-
-// ── Derived atoms ────────────────────────────────────
-
-/** Derived atom resolving the currently selected worker ID. */
-export const selectedWorkerAtom = atom((get) => {
-  return get(selectedWorkerIdAtom);
-});

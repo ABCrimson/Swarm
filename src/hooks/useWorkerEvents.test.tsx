@@ -1,185 +1,240 @@
-// ── Agent-metadata leak fix (fix wave, item 11) ──────
-//
-// useWorker's kill() path already cleaned up useWorkerAgentStore, but a
-// worker that exits on its own (crash, process exit) only ever reaches
-// the worker_killed event — without this fix, a self-exiting templated
-// worker's role/model/systemPrompt entry would leak in the agent store
-// for the app's lifetime.
+// useWorkerEvents against the real event bus: Rust-shaped envelopes go
+// in through the `swarm://events` listener, and the stores come out.
 
-import { renderHook } from "@testing-library/react";
+import { configure, renderHook, waitFor } from "@testing-library/react";
+import { getDefaultStore } from "jotai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkerEvents } from "#hooks/useWorkerEvents";
+import { connectEventBus, resetEventBus } from "#lib/event-bus";
 import { useSessionStore } from "#store/sessions";
+import type { Worker } from "#store/types";
+import { selectedWorkerIdAtom } from "#store/ui";
 import { useWorkerAgentStore } from "#store/worker-agents";
 import { useWorkerStore } from "#store/workers";
 
-type Handler = (e: { payload: unknown }) => void;
+// Like the app (main.tsx): effects run twice on mount.
+configure({ reactStrictMode: true });
 
-const registered = new Map<string, Handler>();
+const listeners = new Map<string, (payload: unknown) => void>();
+const mockListWorkers = vi.fn<() => Promise<Worker[]>>();
+const mockSessionRemoveWorker = vi.fn();
 
-vi.mock("#lib/event-bus", () => ({
-  onEvent: (type: string, handler: Handler) => {
-    registered.set(type, handler);
-    return () => registered.delete(type);
-  },
-}));
-
-// Spies on the session_remove_worker IPC wrapper the worker_killed
-// handler now calls — this hook only ever needs sessionRemoveWorker
-// from #lib/tauri, so a full-replacement mock is safe.
-const mockSessionRemoveWorker = vi.fn().mockResolvedValue(undefined);
 vi.mock("#lib/tauri", () => ({
+  listen: async (event: string, handler: (payload: unknown) => void) => {
+    listeners.set(event, handler);
+    return () => listeners.delete(event);
+  },
+  invoke: vi.fn(),
+  listWorkers: () => mockListWorkers(),
   sessionRemoveWorker: (...args: unknown[]) => mockSessionRemoveWorker(...args),
 }));
 
-function resetStores(): void {
-  for (const [id] of useWorkerStore.getState().workers) useWorkerStore.getState().removeWorker(id);
-  for (const [id] of useWorkerAgentStore.getState().metadata) {
-    useWorkerAgentStore.getState().removeAgentMetadata(id);
-  }
-  for (const [id] of useSessionStore.getState().sessions)
-    useSessionStore.getState().removeSession(id);
+let seq = 0;
+function emit(type: string, payload: unknown): void {
+  seq += 1;
+  listeners.get("swarm://events")?.({ seq, ts: seq, type, payload });
+}
+
+const W1 = "11111111-2222-4333-8444-555555555555";
+const W2 = "22222222-3333-4444-8555-666666666666";
+const S1 = "99999999-8888-4777-8666-555555555555";
+const S2 = "aaaaaaaa-1111-4222-8333-444444444444";
+
+function worker(id: string, overrides?: Partial<Worker>): Worker {
+  return {
+    id,
+    state: "running",
+    name: `Worker ${id.slice(0, 4)}`,
+    startedAt: "2026-09-23T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function session(id: string, workerIds: string[]): void {
+  const now = new Date().toISOString();
+  useSessionStore
+    .getState()
+    .addSession({ id, name: id, workerIds, createdAt: now, updatedAt: now });
 }
 
 describe("useWorkerEvents", () => {
-  beforeEach(() => {
-    resetStores();
-    registered.clear();
-    mockSessionRemoveWorker.mockClear();
-  });
-  afterEach(resetStores);
-
-  it("removes agent metadata when a worker is killed, alongside the worker record", () => {
-    const workerId = "11111111-2222-3333-8444-555555555555";
-    useWorkerStore.getState().addWorker({
-      id: workerId,
-      state: "running",
-      name: "Templated Worker",
-      startedAt: new Date().toISOString(),
-    });
-    useWorkerAgentStore.getState().setAgentMetadata(workerId, {
-      role: "coder",
-      model: "sonnet",
-      systemPrompt: "You write code.",
-    });
-
-    renderHook(() => useWorkerEvents());
-    registered.get("worker_killed")?.({ payload: { workerId } });
-
-    expect(useWorkerStore.getState().workers.has(workerId)).toBe(false);
-    expect(useWorkerAgentStore.getState().metadata.has(workerId)).toBe(false);
+  beforeEach(async () => {
+    seq = 0;
+    listeners.clear();
+    resetEventBus();
+    useWorkerStore.setState({ workers: new Map() });
+    useWorkerAgentStore.setState({ metadata: new Map() });
+    useSessionStore.setState({ sessions: new Map() });
+    getDefaultStore().set(selectedWorkerIdAtom, null);
+    mockListWorkers.mockReset().mockResolvedValue([]);
+    mockSessionRemoveWorker.mockReset().mockResolvedValue(undefined);
+    await connectEventBus();
   });
 
-  it("is a no-op for a worker with no agent metadata (plain, non-templated worker)", () => {
-    const workerId = "22222222-3333-4444-8555-666666666666";
-    useWorkerStore.getState().addWorker({
-      id: workerId,
-      state: "running",
-      name: "Plain Worker",
-      startedAt: new Date().toISOString(),
-    });
-
-    renderHook(() => useWorkerEvents());
-    expect(() => registered.get("worker_killed")?.({ payload: { workerId } })).not.toThrow();
-
-    expect(useWorkerStore.getState().workers.has(workerId)).toBe(false);
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it("mirrors worktreePath/branch onto the worker store on worktree_created", () => {
-    const workerId = "33333333-4444-5555-8666-777777777777";
-    useWorkerStore.getState().addWorker({
-      id: workerId,
-      state: "running",
-      name: "Isolated Worker",
-      startedAt: new Date().toISOString(),
+  describe("startup hydration", () => {
+    it("loads the workers the backend is already running", async () => {
+      mockListWorkers.mockResolvedValue([worker(W1), worker(W2, { state: "paused" })]);
+
+      renderHook(() => useWorkerEvents());
+
+      await waitFor(() => expect(useWorkerStore.getState().workers.size).toBe(2));
+      expect(useWorkerStore.getState().workers.get(W2)?.state).toBe("paused");
     });
 
-    renderHook(() => useWorkerEvents());
-    registered.get("worktree_created")?.({
-      payload: {
-        workerId,
-        repoRoot: "/repo",
-        worktreePath: "/home/user/.swarm/worktrees/repo-abcd1234/w-11112222",
-        branch: "swarm/isolated-worker-11112222",
-        baseCommit: "deadbeef",
-      },
+    it("does not bring back a worker killed while the list was in flight", async () => {
+      const list = Promise.withResolvers<Worker[]>();
+      mockListWorkers.mockReturnValue(list.promise);
+      renderHook(() => useWorkerEvents());
+
+      emit("worker_killed", { workerId: W1 });
+      list.resolve([worker(W1), worker(W2)]);
+
+      await waitFor(() => expect(useWorkerStore.getState().workers.has(W2)).toBe(true));
+      expect(useWorkerStore.getState().workers.has(W1)).toBe(false);
     });
 
-    const worker = useWorkerStore.getState().workers.get(workerId);
-    expect(worker?.worktreePath).toBe("/home/user/.swarm/worktrees/repo-abcd1234/w-11112222");
-    expect(worker?.branch).toBe("swarm/isolated-worker-11112222");
+    it("keeps a worker that a live event added before the list arrived", async () => {
+      const list = Promise.withResolvers<Worker[]>();
+      mockListWorkers.mockReturnValue(list.promise);
+      renderHook(() => useWorkerEvents());
+
+      emit("worker_spawned", { workerId: W1, name: "Live", pid: 7, isolation: "none" });
+      list.resolve([worker(W1, { name: "Stale" })]);
+
+      await waitFor(() => expect(mockListWorkers).toHaveBeenCalled());
+      await list.promise;
+      expect(useWorkerStore.getState().workers.get(W1)?.name).toBe("Live");
+    });
+
+    it("logs a failed load and keeps working", async () => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      mockListWorkers.mockRejectedValue(new Error("Not Connected To The SWARM Daemon."));
+      renderHook(() => useWorkerEvents());
+
+      await waitFor(() =>
+        expect(error).toHaveBeenCalledWith(
+          "useWorkerEvents: could not load workers",
+          expect.any(Error),
+        ),
+      );
+      emit("worker_spawned", { workerId: W1, name: "Later", pid: null });
+      expect(useWorkerStore.getState().workers.has(W1)).toBe(true);
+    });
   });
 
-  // ── session_remove_worker pruning (workerIds stops growing forever) ──
-
-  it("calls session_remove_worker for every session that still lists the killed worker", () => {
-    const workerId = "44444444-5555-6666-8777-888888888888";
-    const sessionId = "99999999-8888-7777-8666-555555555555";
-    const now = new Date().toISOString();
-    useSessionStore.getState().addSession({
-      id: sessionId,
-      name: "Test Session",
-      workerIds: [workerId],
-      createdAt: now,
-      updatedAt: now,
-    });
-    useWorkerStore.getState().addWorker({
-      id: workerId,
-      state: "running",
-      name: "Session Worker",
-      startedAt: now,
-    });
-
+  it("dates a spawned worker from the event's ts, not from its delivery", () => {
     renderHook(() => useWorkerEvents());
-    registered.get("worker_killed")?.({ payload: { workerId } });
 
-    expect(mockSessionRemoveWorker).toHaveBeenCalledTimes(1);
-    expect(mockSessionRemoveWorker).toHaveBeenCalledWith(sessionId, workerId);
+    listeners.get("swarm://events")?.({
+      seq: 1,
+      ts: Date.UTC(2026, 8, 23, 12, 30, 15, 250),
+      type: "worker_spawned",
+      payload: { workerId: W1, name: "Replayed", pid: 9, isolation: "none" },
+    });
+
+    expect(useWorkerStore.getState().workers.get(W1)?.startedAt).toBe("2026-09-23T12:30:15.250Z");
   });
 
-  it("calls session_remove_worker for every session containing the worker, not just the first", () => {
-    const workerId = "55555555-6666-7777-8888-999999999999";
-    const sessionA = "aaaaaaaa-1111-2222-8333-444444444444";
-    const sessionB = "bbbbbbbb-1111-2222-8333-444444444444";
-    const now = new Date().toISOString();
-    useSessionStore.getState().addSession({
-      id: sessionA,
-      name: "A",
-      workerIds: [workerId],
-      createdAt: now,
-      updatedAt: now,
-    });
-    useSessionStore.getState().addSession({
-      id: sessionB,
-      name: "B",
-      workerIds: [workerId],
-      createdAt: now,
-      updatedAt: now,
-    });
-
+  it("adds a spawned worker, omitting a null pid", () => {
     renderHook(() => useWorkerEvents());
-    registered.get("worker_killed")?.({ payload: { workerId } });
 
-    expect(mockSessionRemoveWorker).toHaveBeenCalledWith(sessionA, workerId);
-    expect(mockSessionRemoveWorker).toHaveBeenCalledWith(sessionB, workerId);
-    expect(mockSessionRemoveWorker).toHaveBeenCalledTimes(2);
+    emit("worker_spawned", { workerId: W1, name: "Alpha", pid: null, isolation: "worktree" });
+
+    const stored = useWorkerStore.getState().workers.get(W1);
+    expect(stored).toMatchObject({ id: W1, name: "Alpha", state: "running" });
+    expect(stored).not.toHaveProperty("pid");
   });
 
-  it("does not call session_remove_worker for a session that never listed the killed worker", () => {
-    const workerId = "aaaaaaaa-bbbb-cccc-8ddd-eeeeeeeeeeee";
-    const sessionId = "bbbbbbbb-cccc-dddd-8eee-ffffffffffff";
-    const now = new Date().toISOString();
-    useSessionStore.getState().addSession({
-      id: sessionId,
-      name: "Unrelated",
-      workerIds: [],
-      createdAt: now,
-      updatedAt: now,
+  it("applies worker_output, worker_state and worktree_created", () => {
+    useWorkerStore.getState().addWorker(worker(W1));
+    renderHook(() => useWorkerEvents());
+
+    emit("worker_output", { workerId: W1, data: "hello" });
+    emit("worker_state", { workerId: W1, state: "paused" });
+    emit("worktree_created", {
+      workerId: W1,
+      sessionId: null,
+      repoRoot: "/repo",
+      worktreePath: "/home/user/.swarm/worktrees/repo-abcd1234/w-11112222",
+      branch: "swarm/isolated-worker-11112222",
+      baseCommit: "deadbeef",
     });
 
-    renderHook(() => useWorkerEvents());
-    registered.get("worker_killed")?.({ payload: { workerId } });
+    expect(useWorkerStore.getState().workers.get(W1)).toMatchObject({
+      output: "hello",
+      state: "paused",
+      worktreePath: "/home/user/.swarm/worktrees/repo-abcd1234/w-11112222",
+      branch: "swarm/isolated-worker-11112222",
+    });
+  });
 
-    expect(mockSessionRemoveWorker).not.toHaveBeenCalled();
+  it("ignores an event whose payload does not match the Rust shape", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    useWorkerStore.getState().addWorker(worker(W1));
+    renderHook(() => useWorkerEvents());
+
+    emit("worker_state", { workerId: W1, state: "zombie" });
+
+    expect(useWorkerStore.getState().workers.get(W1)?.state).toBe("running");
+  });
+
+  describe("worker_killed", () => {
+    it("removes the worker, its agent metadata and the selection pointing at it", () => {
+      useWorkerStore.getState().addWorker(worker(W1));
+      useWorkerAgentStore.getState().setAgentMetadata(W1, { role: "coder", model: "sonnet" });
+      getDefaultStore().set(selectedWorkerIdAtom, W1);
+      renderHook(() => useWorkerEvents());
+
+      emit("worker_killed", { workerId: W1 });
+
+      expect(useWorkerStore.getState().workers.has(W1)).toBe(false);
+      expect(useWorkerAgentStore.getState().metadata.has(W1)).toBe(false);
+      expect(getDefaultStore().get(selectedWorkerIdAtom)).toBeNull();
+    });
+
+    it("keeps the selection when another worker is killed", () => {
+      getDefaultStore().set(selectedWorkerIdAtom, W2);
+      renderHook(() => useWorkerEvents());
+
+      emit("worker_killed", { workerId: W1 });
+
+      expect(getDefaultStore().get(selectedWorkerIdAtom)).toBe(W2);
+    });
+
+    it("prunes the worker from every session that lists it, and only those", () => {
+      session(S1, [W1]);
+      session(S2, [W2]);
+      renderHook(() => useWorkerEvents());
+
+      emit("worker_killed", { workerId: W1 });
+
+      expect(mockSessionRemoveWorker).toHaveBeenCalledExactlyOnceWith(S1, W1);
+    });
+
+    it("prunes it from each of several sessions", () => {
+      session(S1, [W1]);
+      session(S2, [W1, W2]);
+      renderHook(() => useWorkerEvents());
+
+      emit("worker_killed", { workerId: W1 });
+
+      expect(mockSessionRemoveWorker.mock.calls).toStrictEqual([
+        [S1, W1],
+        [S2, W1],
+      ]);
+    });
+  });
+
+  it("unsubscribes on unmount", () => {
+    const { unmount } = renderHook(() => useWorkerEvents());
+    unmount();
+
+    emit("worker_spawned", { workerId: W1, name: "After", pid: null });
+
+    expect(useWorkerStore.getState().workers.size).toBe(0);
   });
 });

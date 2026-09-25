@@ -1,56 +1,51 @@
-// ── getPersistedRepoRoot Zod-at-the-seam (adversarial review F5) ──
-//
-// read_config returns arbitrary JSON for any key — getPersistedRepoRoot
-// must validate the raw response is a non-empty string rather than
-// trusting it, matching this codebase's safeParse-at-the-seam
-// discipline (see #lib/event-bus, spawnWorker's response validation).
+// `read_config` returns arbitrary JSON for any key, so the persisted
+// project root is validated at the seam instead of trusted.
 
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getPersistedRepoRoot } from "#lib/project-root";
 
-const readConfigMock = vi.fn();
-
-vi.mock("#lib/tauri", () => ({
-  readConfig: (...args: unknown[]) => readConfigMock(...args),
-}));
-
 describe("getPersistedRepoRoot", () => {
   beforeEach(() => {
-    readConfigMock.mockReset();
-  });
-  afterEach(() => {
-    readConfigMock.mockReset();
+    vi.stubGlobal("isTauri", true);
+    vi.mocked(tauriInvoke).mockReset();
   });
 
-  it("returns the persisted string value", async () => {
-    readConfigMock.mockResolvedValueOnce("C:/Projects/swarm-orchestrator");
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads the default_repo_root key and returns its string value", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce("C:/Projects/swarm-orchestrator");
 
     await expect(getPersistedRepoRoot()).resolves.toBe("C:/Projects/swarm-orchestrator");
+    expect(tauriInvoke).toHaveBeenCalledExactlyOnceWith("read_config", {
+      key: "default_repo_root",
+    });
   });
 
   it("returns null when nothing is persisted", async () => {
-    readConfigMock.mockResolvedValueOnce(null);
+    vi.mocked(tauriInvoke).mockResolvedValueOnce(null);
 
     await expect(getPersistedRepoRoot()).resolves.toBeNull();
   });
 
-  it("returns null (never throws) for a malformed non-string value", async () => {
-    readConfigMock.mockResolvedValueOnce({ not: "a string" });
+  it("returns null (never throws) for a non-string value", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce({ not: "a string" });
 
     await expect(getPersistedRepoRoot()).resolves.toBeNull();
   });
 
-  it("returns null for an empty string rather than a falsy-but-truthy config value", async () => {
-    readConfigMock.mockResolvedValueOnce("");
+  it("returns null for an empty string", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce("");
 
     await expect(getPersistedRepoRoot()).resolves.toBeNull();
   });
 
-  it("reads the default_repo_root key", async () => {
-    readConfigMock.mockResolvedValueOnce(null);
+  it("returns null outside the desktop shell, without a backend call", async () => {
+    vi.stubGlobal("isTauri", false);
 
-    await getPersistedRepoRoot();
-
-    expect(readConfigMock).toHaveBeenCalledWith("default_repo_root");
+    await expect(getPersistedRepoRoot()).resolves.toBeNull();
+    expect(tauriInvoke).not.toHaveBeenCalled();
   });
 });

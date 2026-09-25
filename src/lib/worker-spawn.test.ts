@@ -96,7 +96,36 @@ describe("spawnWorkerFromSpec", () => {
     expect(useWorkerAgentStore.getState().metadata.has("worker-plain")).toBe(false);
   });
 
-  it("adds an optimistic worker placeholder to the worker store", async () => {
+  it("keeps the record worker_spawned and worktree_created stored before spawn_worker returned", async () => {
+    // The events can beat the command's response to the webview.
+    spawnWorkerMock.mockImplementationOnce(async () => {
+      useWorkerStore.getState().addWorker({
+        id: "worker-early",
+        state: "running",
+        name: "Early",
+        pid: 4242,
+        startedAt: "2026-09-23T00:00:00.000Z",
+      });
+      useWorkerStore
+        .getState()
+        .setWorktreeInfo("worker-early", "/repo/.swarm/worktrees/w-early", "swarm/early-1");
+      return "worker-early";
+    });
+
+    await spawnWorkerFromSpec({ name: "Early" });
+
+    expect(useWorkerStore.getState().workers.get("worker-early")).toStrictEqual({
+      id: "worker-early",
+      state: "running",
+      name: "Early",
+      pid: 4242,
+      startedAt: "2026-09-23T00:00:00.000Z",
+      worktreePath: "/repo/.swarm/worktrees/w-early",
+      branch: "swarm/early-1",
+    });
+  });
+
+  it("adds a worker placeholder when the store does not hold the worker yet", async () => {
     spawnWorkerMock.mockResolvedValueOnce("worker-3");
 
     await spawnWorkerFromSpec({ name: "Placeholder" });

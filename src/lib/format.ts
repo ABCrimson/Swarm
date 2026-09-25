@@ -1,8 +1,7 @@
 // ── Copy Formatting Helpers ─────────────────────────
-// Centralizes the "{count} {Word}" pluralization pattern that used to be
-// re-derived ad hoc at each call site (and, per the copy-convention audit,
-// got the Title Case wrong at least once). All UI counters should go
-// through `pluralize`/`pluralizeWorkers` rather than re-deriving their own
+// The one "{count} {Word}" formatter for UI counters, so every counter
+// gets the Title Case noun and the plural right. Call sites use
+// `pluralize`/`pluralizeWorkers` instead of their own
 // `count === 1 ? "s" : ""` ternary.
 
 /**

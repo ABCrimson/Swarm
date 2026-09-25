@@ -43,10 +43,11 @@ class FakeWebSocket {
     this.sent.push(data);
   }
 
+  /** Client-initiated close: fires `close` synchronously (a real socket fires it later). */
   close(): void {
     if (this.readyState === FakeWebSocket.CLOSED) return;
     this.readyState = FakeWebSocket.CLOSED;
-    this.emit("close", {});
+    this.emit("close", { code: 1005 });
   }
 
   // ── Test-only "server" simulation ────────────────────────────────
@@ -60,9 +61,18 @@ class FakeWebSocket {
     this.emit("message", { data: JSON.stringify(frame) });
   }
 
-  simulateAbruptClose(): void {
+  simulateRawMessage(data: string): void {
+    this.emit("message", { data });
+  }
+
+  /** The server's close frame arrived; the `close` event has not fired yet. */
+  simulateClosing(): void {
+    this.readyState = FakeWebSocket.CLOSING;
+  }
+
+  simulateAbruptClose(code = 1006): void {
     this.readyState = FakeWebSocket.CLOSED;
-    this.emit("close", {});
+    this.emit("close", { code });
   }
 
   simulateError(): void {
@@ -89,7 +99,7 @@ vi.mock("#lib/event-bus", () => ({
 }));
 let mockLastSeq = 0;
 
-import { initTokenFromLocationHash, WsTransport } from "#lib/transport";
+import { DaemonAuthError, initTokenFromLocationHash, WsTransport } from "#lib/transport";
 
 function latestSocket(): FakeWebSocket {
   const s = FakeWebSocket.instances.at(-1);
@@ -105,48 +115,69 @@ function openAndReady(serverSeq = 0): FakeWebSocket {
   return socket;
 }
 
+/** The last `rpc` frame sent on `socket`. */
+function lastRpc(socket: FakeWebSocket): { frame: string; id: string; cmd: string; args: unknown } {
+  return socket.lastSentFrame() as { frame: string; id: string; cmd: string; args: unknown };
+}
+
+const event = (seq: number) => ({ seq, ts: seq, type: "worker_spawned", payload: {} });
+
 describe("wsTransport", () => {
   let transport: WsTransport;
 
   beforeEach(() => {
     FakeWebSocket.instances = [];
     mockLastSeq = 0;
+    window.sessionStorage.clear();
     transport = new WsTransport();
   });
 
   afterEach(() => {
     transport.dispose();
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
-  describe("handshake", () => {
-    it("sends hello with token from the URL fragment, then scrubs it", async () => {
+  describe("token handling", () => {
+    it("sends hello with the token from the URL fragment, then scrubs it", async () => {
       window.location.hash = "#t=secret-token-123";
       const replaceStateSpy = vi.spyOn(window.history, "replaceState");
-      // Production reads the hash exactly ONCE, at module init
-      // (security-review FIX-8 — see `initTokenFromLocationHash`'s
-      // doc) — the module already ran it once, before this test set
-      // the hash, so it must be re-invoked explicitly to simulate a
-      // fresh page load carrying a fresh token fragment.
+      // Production reads the hash exactly once, at module init — re-run
+      // it to simulate a fresh page load carrying a fresh fragment.
       initTokenFromLocationHash();
 
       const connectPromise = transport.connect();
       const socket = latestSocket();
       socket.simulateOpen();
 
-      const hello = socket.lastSentFrame() as {
-        frame: string;
-        token: string;
-        lastSeq: number | null;
-      };
-      expect(hello.frame).toBe("hello");
-      expect(hello.token).toBe("secret-token-123");
-      expect(hello.lastSeq).toBeNull();
-      expect(replaceStateSpy).toHaveBeenCalled();
+      expect(socket.lastSentFrame()).toStrictEqual({
+        frame: "hello",
+        lastSeq: null,
+        token: "secret-token-123",
+      });
+      expect(replaceStateSpy).toHaveBeenCalledOnce();
       expect(window.location.hash).toBe("");
 
       socket.simulateServerFrame({ frame: "ready", serverSeq: 0, version: 1, caps: {} });
       await connectPromise;
+    });
+
+    it("percent-decodes the fragment token", () => {
+      window.location.hash = "#t=a%2Fb%20c";
+      initTokenFromLocationHash();
+
+      expect(window.sessionStorage.getItem("swarmd.token")).toBe("a/b c");
+    });
+
+    it("ignores an undecodable fragment without throwing, and still scrubs it", () => {
+      window.sessionStorage.setItem("swarmd.token", "earlier");
+      window.location.hash = "#t=abc%E0%A4%A";
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      expect(() => initTokenFromLocationHash()).not.toThrow();
+      expect(window.location.hash).toBe("");
+      expect(window.sessionStorage.getItem("swarmd.token")).toBe("earlier");
+      expect(warn).toHaveBeenCalledWith("[transport] Ignoring an undecodable #t= token fragment.");
     });
 
     it("reuses the stored token from sessionStorage on a later connect with no fragment present", async () => {
@@ -156,195 +187,87 @@ describe("wsTransport", () => {
       const connectPromise = transport.connect();
       const socket = latestSocket();
       socket.simulateOpen();
-      const hello = socket.lastSentFrame() as { token: string };
-      expect(hello.token).toBe("stored-token");
+      expect((socket.lastSentFrame() as { token: string }).token).toBe("stored-token");
 
       socket.simulateServerFrame({ frame: "ready", serverSeq: 0, version: 1, caps: {} });
       await connectPromise;
     });
 
+    it("keeps the token in memory for this tab when sessionStorage throws", async () => {
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+        throw new DOMException("QuotaExceededError");
+      });
+      vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+        throw new DOMException("SecurityError");
+      });
+      window.location.hash = "#t=memory-only";
+      initTokenFromLocationHash();
+
+      const connectPromise = transport.connect();
+      const socket = latestSocket();
+      socket.simulateOpen();
+      expect((socket.lastSentFrame() as { token: string }).token).toBe("memory-only");
+
+      socket.simulateServerFrame({ frame: "ready", serverSeq: 0, version: 1, caps: {} });
+      await connectPromise;
+    });
+  });
+
+  describe("handshake", () => {
     it("sends the CURRENT event-bus lastSeq (not null) when one exists", async () => {
       mockLastSeq = 41;
       const connectPromise = transport.connect();
       const socket = latestSocket();
       socket.simulateOpen();
-      const hello = socket.lastSentFrame() as { lastSeq: number | null };
-      expect(hello.lastSeq).toBe(41);
+      expect((socket.lastSentFrame() as { lastSeq: number | null }).lastSeq).toBe(41);
 
       socket.simulateServerFrame({ frame: "ready", serverSeq: 41, version: 1, caps: {} });
       await connectPromise;
     });
-  });
 
-  describe("reattach: replays then goes live", () => {
-    it("delivers replayed events, ignores replayEnd itself, then continues with live events", async () => {
-      const received: number[] = [];
-      const unlistenPromise = transport.listen<{ seq: number }>("swarm://events", (e) =>
-        received.push(e.seq),
-      );
-      const socket = openAndReady(0);
-      await unlistenPromise;
+    it("shares one socket between concurrent connect() callers", async () => {
+      const first = transport.connect();
+      const second = transport.connect();
+      openAndReady();
 
-      // Replay burst: three bare DomainEvent frames (no "frame" key).
-      socket.simulateServerFrame({ seq: 1, ts: 1, type: "worker_spawned", payload: {} });
-      socket.simulateServerFrame({ seq: 2, ts: 2, type: "worker_spawned", payload: {} });
-      socket.simulateServerFrame({ seq: 3, ts: 3, type: "worker_spawned", payload: {} });
-      socket.simulateServerFrame({ frame: "replayEnd", seq: 3 });
-
-      // Live events continue arriving on the SAME connection afterward.
-      socket.simulateServerFrame({ seq: 4, ts: 4, type: "worker_spawned", payload: {} });
-      socket.simulateServerFrame({ seq: 5, ts: 5, type: "worker_spawned", payload: {} });
-
-      expect(received).toEqual([1, 2, 3, 4, 5]);
+      await Promise.all([first, second]);
+      expect(FakeWebSocket.instances).toHaveLength(1);
     });
 
-    it("a cold attach (lastSeq null) still transitions cleanly from ready/replayEnd into live delivery", async () => {
-      const received: number[] = [];
-      const unlistenPromise = transport.listen<{ seq: number }>("swarm://events", (e) =>
-        received.push(e.seq),
-      );
-      const socket = latestSocket();
-      socket.simulateOpen();
-      socket.simulateServerFrame({ frame: "ready", serverSeq: 9, version: 1, caps: {} });
-      socket.simulateServerFrame({ frame: "replayEnd", seq: 9 }); // empty replay
-      await unlistenPromise;
+    it("rejects connect() when the socket errors before the handshake", async () => {
+      const connectPromise = transport.connect();
+      latestSocket().simulateError();
 
-      socket.simulateServerFrame({ seq: 10, ts: 10, type: "worker_spawned", payload: {} });
-      expect(received).toEqual([10]);
-    });
-  });
-
-  describe("dedupe at the replay/live boundary", () => {
-    it("never delivers a control frame (ready/replayEnd/rpcResult) to an event listener", async () => {
-      const received: unknown[] = [];
-      const unlistenPromise = transport.listen("swarm://events", (e) => received.push(e));
-      const socket = latestSocket();
-      socket.simulateOpen();
-      socket.simulateServerFrame({ frame: "ready", serverSeq: 0, version: 1, caps: {} });
-      await unlistenPromise;
-
-      socket.simulateServerFrame({ frame: "replayEnd", seq: 0 });
-      socket.simulateServerFrame({ frame: "rpcResult", id: "x", ok: true, result: 1 });
-      socket.simulateServerFrame({ seq: 1, ts: 1, type: "worker_spawned", payload: {} });
-
-      // Only the ONE real event frame reaches the listener — every
-      // control frame (including the two sent before it) is filtered
-      // out by the "has a frame key" classification, not merely by
-      // accident of shape.
-      expect(received).toEqual([{ seq: 1, ts: 1, type: "worker_spawned", payload: {} }]);
+      await expect(connectPromise).rejects.toThrow("WebSocket Connection Failed.");
     });
 
-    it("a live event whose seq exactly matches replayEnd's own seq is still delivered (transport does not itself dedupe by seq — event-bus owns that)", async () => {
-      const received: number[] = [];
-      const unlistenPromise = transport.listen<{ seq: number }>("swarm://events", (e) =>
-        received.push(e.seq),
-      );
-      const socket = openAndReady(0);
-      await unlistenPromise;
-
-      socket.simulateServerFrame({ seq: 3, ts: 3, type: "worker_spawned", payload: {} });
-      socket.simulateServerFrame({ frame: "replayEnd", seq: 3 });
-      // A boundary-adjacent live event arriving right after replayEnd.
-      socket.simulateServerFrame({ seq: 4, ts: 4, type: "worker_spawned", payload: {} });
-
-      expect(received).toEqual([3, 4]);
-    });
-
-    it("listen() on any channel other than swarm://events is a harmless no-op (no connection attempted)", async () => {
-      const unlisten = await transport.listen("some://other/channel", () => {});
-      expect(FakeWebSocket.instances).toHaveLength(0);
-      expect(() => unlisten()).not.toThrow();
-    });
-  });
-
-  describe("mid-replay disconnect and reconnect", () => {
-    it("a close mid-replay (before replayEnd) rejects in-flight rpc calls and schedules a reconnect", async () => {
+    it("rejects a stalled handshake instead of hanging, and reconnects", async () => {
       vi.useFakeTimers();
-      const received: number[] = [];
-      void transport
-        .listen<{ seq: number }>("swarm://events", (e) => received.push(e.seq))
-        .catch(() => {});
-      await vi.advanceTimersByTimeAsync(0);
-      const socket1 = openAndReady(0);
-      await vi.advanceTimersByTimeAsync(0);
+      const invokePromise = transport.invoke("list_workers");
+      const assertion = expect(invokePromise).rejects.toThrow(
+        "The SWARM Daemon Did Not Complete The Handshake In Time.",
+      );
+      latestSocket().simulateOpen(); // the server accepts, then never sends `ready`
 
-      socket1.simulateServerFrame({ seq: 1, ts: 1, type: "worker_spawned", payload: {} });
-      // An rpc call in flight when the connection drops.
-      const rpcPromise = transport.invoke("list_workers");
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await assertion;
+      expect(latestSocket().readyState).toBe(FakeWebSocket.CLOSED);
 
-      // Connection drops mid-replay, before replayEnd ever arrived.
-      socket1.simulateAbruptClose();
-
-      await expect(rpcPromise).rejects.toThrow(/closed/i);
-      expect(received).toEqual([1]);
-
-      // A reconnect is scheduled (backoff timer armed) — advance past
-      // it and a SECOND socket must be opened.
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
-    });
-
-    it("reconnect's hello carries the event-bus lastSeq at reconnect time, not the value from the original connect", async () => {
-      vi.useFakeTimers();
-      mockLastSeq = 0;
-      void transport.connect().catch(() => {});
-      await vi.advanceTimersByTimeAsync(0);
-      const socket1 = openAndReady(0);
-      await vi.advanceTimersByTimeAsync(0);
-
-      // Between the first connect and the reconnect, this tab processed
-      // more events (event-bus's cursor advanced).
-      mockLastSeq = 77;
-      socket1.simulateAbruptClose();
-
-      await vi.advanceTimersByTimeAsync(20_000);
-      const socket2 = FakeWebSocket.instances.at(-1);
-      expect(socket2).not.toBe(socket1);
-      socket2?.simulateOpen();
-      const hello = socket2?.lastSentFrame() as { lastSeq: number | null };
-      expect(hello.lastSeq).toBe(77);
-    });
-
-    it("backoff delay increases across consecutive failures (not a fixed interval)", async () => {
-      vi.useFakeTimers();
-      void transport.connect().catch(() => {});
-      await vi.advanceTimersByTimeAsync(0);
-
-      let lastCount = FakeWebSocket.instances.length;
-      const gaps: number[] = [];
-      for (let i = 0; i < 3; i++) {
-        const socket = FakeWebSocket.instances.at(-1);
-        socket?.simulateAbruptClose();
-        // Find the smallest advance that produces a new socket.
-        let elapsed = 0;
-        const step = 100;
-        while (FakeWebSocket.instances.length === lastCount && elapsed < 30_000) {
-          await vi.advanceTimersByTimeAsync(step);
-          elapsed += step;
-        }
-        gaps.push(elapsed);
-        lastCount = FakeWebSocket.instances.length;
-      }
-
-      // Each successive gap (backoff ceiling) is >= the previous —
-      // exponential backoff, not retried at a constant interval.
-      expect(gaps[1]).toBeGreaterThanOrEqual(gaps[0]);
-      expect(gaps[2]).toBeGreaterThanOrEqual(gaps[1]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(FakeWebSocket.instances).toHaveLength(2);
     });
   });
 
   describe("auth failure", () => {
-    it("a close with no prior ready frame surfaces as a rejected connect()", async () => {
+    it("a close with no prior ready frame rejects connect()", async () => {
       const connectPromise = transport.connect();
       const socket = latestSocket();
       socket.simulateOpen();
-      // Server never sends `ready` — closes the socket outright (wrong
-      // token / handshake deadline / Origin-Host refusal already
-      // happened at the HTTP-upgrade layer in the real server).
       socket.simulateAbruptClose();
 
-      await expect(connectPromise).rejects.toThrow();
+      await expect(connectPromise).rejects.toThrow(
+        "WebSocket Closed Before The Handshake Completed.",
+      );
     });
 
     it("invoke() surfaces the same rejection to its caller rather than hanging forever", async () => {
@@ -353,7 +276,203 @@ describe("wsTransport", () => {
       socket.simulateOpen();
       socket.simulateAbruptClose();
 
-      await expect(invokePromise).rejects.toThrow();
+      await expect(invokePromise).rejects.toThrow(
+        "WebSocket Closed Before The Handshake Completed.",
+      );
+    });
+
+    it("stops reconnecting when swarmd refuses the token (close code 4401)", async () => {
+      vi.useFakeTimers();
+      const connectPromise = transport.connect();
+      const assertion = expect(connectPromise).rejects.toBeInstanceOf(DaemonAuthError);
+      latestSocket().simulateOpen();
+      latestSocket().simulateAbruptClose(4401);
+      await assertion;
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+
+      // An explicit call still tries again (e.g. after a fresh #t= link).
+      void transport.connect().catch(() => {});
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    });
+  });
+
+  describe("event delivery", () => {
+    it("delivers replayed events, ignores replayEnd itself, then continues with live events", async () => {
+      const received: number[] = [];
+      await transport.listen<{ seq: number }>("swarm://events", (e) => received.push(e.seq));
+      const socket = openAndReady(0);
+
+      socket.simulateServerFrame(event(1));
+      socket.simulateServerFrame(event(2));
+      socket.simulateServerFrame(event(3));
+      socket.simulateServerFrame({ frame: "replayEnd", seq: 3 });
+      socket.simulateServerFrame(event(4));
+      socket.simulateServerFrame(event(5));
+
+      expect(received).toStrictEqual([1, 2, 3, 4, 5]);
+    });
+
+    it("never delivers a control frame or a malformed frame to an event listener", async () => {
+      const received: unknown[] = [];
+      await transport.listen("swarm://events", (e) => received.push(e));
+      const socket = openAndReady(0);
+
+      socket.simulateServerFrame({ frame: "replayEnd", seq: 0 });
+      socket.simulateServerFrame({ frame: "rpcResult", id: "unknown", ok: true, result: 1 });
+      socket.simulateRawMessage("{not json");
+      socket.simulateServerFrame(event(1));
+
+      expect(received).toStrictEqual([event(1)]);
+    });
+
+    it("does not dedupe by seq — the event bus owns that", async () => {
+      const received: number[] = [];
+      await transport.listen<{ seq: number }>("swarm://events", (e) => received.push(e.seq));
+      const socket = openAndReady(0);
+
+      socket.simulateServerFrame(event(3));
+      socket.simulateServerFrame({ frame: "replayEnd", seq: 3 });
+      socket.simulateServerFrame(event(4));
+
+      expect(received).toStrictEqual([3, 4]);
+    });
+
+    it("stops delivering to a listener once it unlistens", async () => {
+      const received: number[] = [];
+      const unlisten = await transport.listen<{ seq: number }>("swarm://events", (e) =>
+        received.push(e.seq),
+      );
+      const socket = openAndReady(0);
+      socket.simulateServerFrame(event(1));
+
+      unlisten();
+      socket.simulateServerFrame(event(2));
+
+      expect(received).toStrictEqual([1]);
+    });
+
+    it("listen() on any other channel is a no-op that opens no connection", async () => {
+      const unlisten = await transport.listen("some://other/channel", () => {});
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      expect(() => unlisten()).not.toThrow();
+    });
+
+    it("a listener registered while the first handshake fails still receives events after the reconnect", async () => {
+      vi.useFakeTimers();
+      vi.spyOn(Math, "random").mockReturnValue(0);
+      const received: number[] = [];
+
+      const unlisten = transport.listen<{ seq: number }>("swarm://events", (e) =>
+        received.push(e.seq),
+      );
+      latestSocket().simulateOpen();
+      latestSocket().simulateAbruptClose(); // daemon restarting while the page loads
+      await expect(unlisten).resolves.toBeTypeOf("function");
+
+      await vi.advanceTimersByTimeAsync(500);
+      const socket2 = openAndReady(0);
+      socket2.simulateServerFrame(event(1));
+
+      expect(received).toStrictEqual([1]);
+    });
+  });
+
+  describe("reconnect", () => {
+    it("a close mid-replay rejects in-flight rpc calls and schedules a reconnect", async () => {
+      vi.useFakeTimers();
+      const received: number[] = [];
+      await transport.listen<{ seq: number }>("swarm://events", (e) => received.push(e.seq));
+      const socket1 = openAndReady(0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      socket1.simulateServerFrame(event(1));
+      const rpcPromise = transport.invoke("list_workers");
+      await vi.advanceTimersByTimeAsync(0);
+      socket1.simulateAbruptClose();
+
+      await expect(rpcPromise).rejects.toThrow("WebSocket Connection Closed.");
+      expect(received).toStrictEqual([1]);
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    });
+
+    it("reconnect's hello carries the event-bus lastSeq at reconnect time", async () => {
+      vi.useFakeTimers();
+      void transport.connect().catch(() => {});
+      const socket1 = openAndReady(0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      mockLastSeq = 77; // this tab processed more events since the first connect
+      socket1.simulateAbruptClose();
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      const socket2 = latestSocket();
+      expect(socket2).not.toBe(socket1);
+      socket2.simulateOpen();
+      expect((socket2.lastSentFrame() as { lastSeq: number | null }).lastSeq).toBe(77);
+    });
+
+    it("backs off exponentially from 500 ms, capped at 15 s", async () => {
+      vi.useFakeTimers();
+      vi.spyOn(Math, "random").mockReturnValue(0);
+      void transport.connect().catch(() => {});
+
+      const gaps: number[] = [];
+      for (let i = 0; i < 8; i++) {
+        const count = FakeWebSocket.instances.length;
+        latestSocket().simulateAbruptClose();
+        let elapsed = 0;
+        while (FakeWebSocket.instances.length === count && elapsed < 30_000) {
+          await vi.advanceTimersByTimeAsync(100);
+          elapsed += 100;
+        }
+        gaps.push(elapsed);
+      }
+
+      expect(gaps).toStrictEqual([500, 1000, 2000, 4000, 8000, 15_000, 15_000, 15_000]);
+    });
+
+    it("resets the backoff after a successful handshake", async () => {
+      vi.useFakeTimers();
+      vi.spyOn(Math, "random").mockReturnValue(0);
+      void transport.connect().catch(() => {});
+      latestSocket().simulateAbruptClose();
+      await vi.advanceTimersByTimeAsync(500);
+      latestSocket().simulateAbruptClose();
+      await vi.advanceTimersByTimeAsync(1000);
+      openAndReady(0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      latestSocket().simulateAbruptClose();
+      await vi.advanceTimersByTimeAsync(499);
+      expect(FakeWebSocket.instances).toHaveLength(3);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(FakeWebSocket.instances).toHaveLength(4);
+    });
+
+    it("a late close from a replaced socket neither fails the new socket's calls nor duplicates events", async () => {
+      const received: number[] = [];
+      await transport.listen<{ seq: number }>("swarm://events", (e) => received.push(e.seq));
+      const socketA = openAndReady(0);
+      await Promise.resolve();
+
+      // The server sent its close frame; the `close` event has not fired yet.
+      socketA.simulateClosing();
+      const rpc = transport.invoke("worker_input", { id: "w", data: "x" });
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+      const socketB = openAndReady(0);
+      await vi.waitFor(() => expect(lastRpc(socketB).cmd).toBe("worker_input"));
+
+      socketA.simulateAbruptClose(); // A's close finally fires
+      socketB.simulateServerFrame(event(1));
+      socketB.simulateServerFrame({ frame: "rpcResult", id: lastRpc(socketB).id, ok: true });
+
+      await expect(rpc).resolves.toBeUndefined();
+      expect(received).toStrictEqual([1]);
+      expect(FakeWebSocket.instances).toHaveLength(2);
     });
   });
 
@@ -361,60 +480,106 @@ describe("wsTransport", () => {
     it("resolves invoke() with the matching rpcResult's result, correlated by id", async () => {
       const invokePromise = transport.invoke<{ ok: true }>("get_metrics", { foo: "bar" });
       const socket = openAndReady(0);
-      await vi.waitFor(() => expect(socket.sentFrames().length).toBeGreaterThanOrEqual(2));
+      await vi.waitFor(() => expect(socket.sentFrames()).toHaveLength(2));
 
-      const sentRpc = socket.lastSentFrame() as {
-        frame: string;
-        id: string;
-        cmd: string;
-        args: unknown;
-      };
-      expect(sentRpc.frame).toBe("rpc");
-      expect(sentRpc.cmd).toBe("get_metrics");
-      expect(sentRpc.args).toEqual({ foo: "bar" });
+      const sent = lastRpc(socket);
+      expect(sent).toMatchObject({ frame: "rpc", cmd: "get_metrics", args: { foo: "bar" } });
 
+      socket.simulateServerFrame({ frame: "rpcResult", id: "not-mine", ok: true, result: 0 });
       socket.simulateServerFrame({
         frame: "rpcResult",
-        id: sentRpc.id,
+        id: sent.id,
         ok: true,
         result: { ok: true },
       });
-      await expect(invokePromise).resolves.toEqual({ ok: true });
+      await expect(invokePromise).resolves.toStrictEqual({ ok: true });
     });
 
-    it("rejects invoke() when the server responds ok: false", async () => {
+    it("rejects with the daemon's error value unchanged, as Tauri IPC does", async () => {
       const invokePromise = transport.invoke("kill_worker", { id: "bad" });
       const socket = openAndReady(0);
-      await vi.waitFor(() => expect(socket.sentFrames().length).toBeGreaterThanOrEqual(2));
-      const sentRpc = socket.lastSentFrame() as { id: string };
+      await vi.waitFor(() => expect(socket.sentFrames()).toHaveLength(2));
 
       socket.simulateServerFrame({
         frame: "rpcResult",
-        id: sentRpc.id,
+        id: lastRpc(socket).id,
         ok: false,
         error: "Worker Not Found",
       });
-      await expect(invokePromise).rejects.toThrow("Worker Not Found");
+      await expect(invokePromise).rejects.toBe("Worker Not Found");
     });
 
-    // DIRECTIVE (security-review FIX-8): invoke() must not hang
-    // forever when no rpcResult ever arrives — it rejects with a
-    // typed RpcTimeoutError after RPC_TIMEOUT_MS (30s).
+    it("keeps a structured error (e.g. a ship error) structured", async () => {
+      const shipError = { kind: "pushRejected", message: "Rejected.", remedy: "fetchAndRebase" };
+      const invokePromise = transport.invoke("git_push", {});
+      const socket = openAndReady(0);
+      await vi.waitFor(() => expect(socket.sentFrames()).toHaveLength(2));
+
+      socket.simulateServerFrame({
+        frame: "rpcResult",
+        id: lastRpc(socket).id,
+        ok: false,
+        error: shipError,
+      });
+      await expect(invokePromise).rejects.toStrictEqual(shipError);
+    });
+
     it("rejects with RpcTimeoutError when no rpcResult ever arrives", async () => {
       vi.useFakeTimers();
       const invokePromise = transport.invoke("list_workers");
-      const socket = latestSocket();
-      socket.simulateOpen();
-      socket.simulateServerFrame({ frame: "ready", serverSeq: 0, version: 1, caps: {} });
-      const assertion = expect(invokePromise).rejects.toThrow(/timed out/i);
+      openAndReady(0);
+      const assertion = expect(invokePromise).rejects.toThrow(
+        'RPC "list_workers" Timed Out After 30000ms.',
+      );
       await vi.advanceTimersByTimeAsync(30_001);
       await assertion;
+    });
+
+    it("closes a silent (half-open) socket on an RPC timeout, so the reconnect loop replaces it", async () => {
+      vi.useFakeTimers();
+      vi.spyOn(Math, "random").mockReturnValue(0);
+      const invokePromise = transport.invoke("list_workers");
+      const assertion = expect(invokePromise).rejects.toThrow(
+        'RPC "list_workers" Timed Out After 30000ms.',
+      );
+      const socket = openAndReady(0);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await assertion;
+      expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    });
+
+    it("keeps a socket that is still receiving frames when one RPC times out", async () => {
+      vi.useFakeTimers();
+      const invokePromise = transport.invoke("git_push");
+      const assertion = expect(invokePromise).rejects.toThrow(
+        'RPC "git_push" Timed Out After 30000ms.',
+      );
+      const socket = openAndReady(0);
+      await vi.advanceTimersByTimeAsync(10_000);
+      socket.simulateServerFrame(event(1));
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      await assertion;
+      expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it("fails fast when the socket drops between the handshake and the send", async () => {
+      const invokePromise = transport.invoke("list_workers");
+      const socket = openAndReady(0);
+      socket.simulateAbruptClose();
+
+      await expect(invokePromise).rejects.toThrow("Not Connected To The SWARM Daemon.");
     });
   });
 
   describe("capabilities", () => {
     it("declares kind: ws and no native-only surfaces", () => {
-      expect(transport.capabilities).toEqual({
+      expect(transport.capabilities).toStrictEqual({
         kind: "ws",
         workspaceBrowsing: false,
         nativeNotifications: false,

@@ -1,32 +1,36 @@
-// ── WorkerConfig naming-collision fix (Phase 0, Task 2) ─────
-//
-// spawnWorker used to send only {name}, silently dropping any
-// shell/cwd/env a caller specified — this proves the IPC payload now
-// includes them when present (and omits them when absent, matching
-// Rust's #[serde(default)] fields), and that the raw response is
-// Zod-validated (a bare worker UUID) rather than cast, matching the
-// event-bus's safeParse-at-the-seam discipline.
+// #lib/tauri's command wrappers against a mocked Tauri `invoke`: the
+// IPC payload each one sends, zod validation of every response, and the
+// typed errors (with the original rejection as `cause`).
 
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as z from "zod";
 import {
+  AgentSpawnCommandError,
+  agentSpawn,
+  checkForUpdates,
   createSession,
   getSession,
+  gitPush,
   listSessions,
+  listWorkers,
+  readConfig,
+  ShipCommandError,
   sessionAddWorker,
   spawnWorker,
   validateRepoRoot,
 } from "#lib/tauri";
 
 const WORKER_UUID = "550e8400-e29b-41d4-a716-446655440000";
+const SESSION_UUID = "6ba7b810-9dad-41d1-80b4-00c04fd430c8";
 
-/** Forces isTauri() true so #lib/tauri's invoke() wrapper doesn't short-circuit. */
+/** Sets the flag the desktop shell injects, so `isTauri()` is true and IPC is not short-circuited. */
 function enableTauri(): void {
-  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  vi.stubGlobal("isTauri", true);
 }
 
 function disableTauri(): void {
-  Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+  vi.unstubAllGlobals();
 }
 
 describe("spawnWorker", () => {
@@ -324,6 +328,172 @@ describe("validateRepoRoot", () => {
   it("throws (never silently returns null) when there is no Tauri IPC bridge", async () => {
     disableTauri();
 
-    await expect(validateRepoRoot("C:/Projects/x")).rejects.toThrow();
+    await expect(validateRepoRoot("C:/Projects/x")).rejects.toThrow(
+      "Validate Repo Root Returned An Invalid Response.",
+    );
+  });
+});
+
+describe("listWorkers", () => {
+  beforeEach(() => {
+    vi.mocked(tauriInvoke).mockReset();
+    enableTauri();
+  });
+  afterEach(disableTauri);
+
+  it("maps Rust WorkerInfo rows onto Worker, seconds to ISO, nulls omitted", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce([
+      {
+        id: WORKER_UUID,
+        state: "paused",
+        name: "Agent",
+        pid: 4242,
+        startedAt: 1_758_585_600,
+        worktreePath: "/wt/agent",
+        branch: "swarm/agent-550e8400",
+        lastShippedSeq: null,
+        lastShippedCommit: null,
+      },
+      { id: SESSION_UUID, state: "running", name: "Shell", pid: null, startedAt: 0 },
+    ]);
+
+    await expect(listWorkers()).resolves.toStrictEqual([
+      {
+        id: WORKER_UUID,
+        state: "paused",
+        name: "Agent",
+        pid: 4242,
+        startedAt: "2025-09-23T00:00:00.000Z",
+        worktreePath: "/wt/agent",
+        branch: "swarm/agent-550e8400",
+      },
+      { id: SESSION_UUID, state: "running", name: "Shell", startedAt: "1970-01-01T00:00:00.000Z" },
+    ]);
+    expect(tauriInvoke).toHaveBeenCalledExactlyOnceWith("list_workers", undefined);
+  });
+
+  it("rejects an unexpected shape, keeping the zod error as the cause", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce([{ id: "nope" }]);
+
+    const err = await listWorkers().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("List Workers Returned An Unexpected Shape.");
+    expect((err as Error).cause).toBeInstanceOf(z.ZodError);
+  });
+
+  it("returns [] without a backend", async () => {
+    disableTauri();
+
+    await expect(listWorkers()).resolves.toStrictEqual([]);
+    expect(tauriInvoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("readConfig", () => {
+  beforeEach(() => {
+    vi.mocked(tauriInvoke).mockReset();
+    enableTauri();
+  });
+  afterEach(disableTauri);
+
+  it("returns the value when it matches the schema", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce(8);
+
+    await expect(readConfig("max_workers", z.int().positive())).resolves.toBe(8);
+    expect(tauriInvoke).toHaveBeenCalledExactlyOnceWith("read_config", { key: "max_workers" });
+  });
+
+  it("returns null for a value that does not match the schema", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce("eight");
+
+    await expect(readConfig("max_workers", z.int())).resolves.toBeNull();
+  });
+
+  it("returns null without a backend (invoke resolves undefined)", async () => {
+    disableTauri();
+
+    await expect(readConfig("max_workers", z.int())).resolves.toBeNull();
+  });
+});
+
+describe("typed command errors", () => {
+  beforeEach(() => {
+    vi.mocked(tauriInvoke).mockReset();
+    enableTauri();
+  });
+  afterEach(disableTauri);
+
+  it("turns a structured ship rejection into a ShipCommandError with the raw value as cause", async () => {
+    const shipError = { kind: "pushRejected", message: "Rejected.", remedy: "fetchAndRebase" };
+    vi.mocked(tauriInvoke).mockRejectedValueOnce(shipError);
+
+    const err = await gitPush(WORKER_UUID, SESSION_UUID, true).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ShipCommandError);
+    expect((err as ShipCommandError).shipError).toStrictEqual(shipError);
+    expect((err as ShipCommandError).message).toBe("Rejected.");
+    expect((err as ShipCommandError).cause).toBe(shipError);
+  });
+
+  it("wraps a plain string rejection in an Error that keeps it as the cause", async () => {
+    vi.mocked(tauriInvoke).mockRejectedValueOnce("git exited with 128");
+
+    const err = await gitPush(WORKER_UUID, SESSION_UUID, true).catch((e: unknown) => e);
+
+    expect(err).not.toBeInstanceOf(ShipCommandError);
+    expect((err as Error).message).toBe("git exited with 128");
+    expect((err as Error).cause).toBe("git exited with 128");
+  });
+
+  it("turns an agent_spawn attach failure into an AgentSpawnCommandError carrying the worker id", async () => {
+    const raw = { workerId: WORKER_UUID, message: "Claude Code Is Not Signed In." };
+    vi.mocked(tauriInvoke).mockRejectedValueOnce(raw);
+
+    const err = await agentSpawn({ name: "Agent" }, "claude_code", undefined, undefined).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(AgentSpawnCommandError);
+    expect((err as AgentSpawnCommandError).workerId).toBe(WORKER_UUID);
+    expect((err as AgentSpawnCommandError).message).toBe("Claude Code Is Not Signed In.");
+    expect((err as AgentSpawnCommandError).cause).toBe(raw);
+  });
+});
+
+describe("checkForUpdates", () => {
+  beforeEach(() => {
+    vi.mocked(tauriInvoke).mockReset();
+    enableTauri();
+  });
+  afterEach(disableTauri);
+
+  it("accepts the updater's null body/date", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce({
+      available: true,
+      version: "0.9.0",
+      body: null,
+      date: null,
+    });
+
+    await expect(checkForUpdates()).resolves.toStrictEqual({
+      available: true,
+      version: "0.9.0",
+      body: null,
+      date: null,
+    });
+  });
+
+  it("rejects a response without `available`", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce({ version: "0.9.0" });
+
+    await expect(checkForUpdates()).rejects.toThrow("Update Check Returned An Unexpected Shape.");
+  });
+
+  it("resolves { available: false } outside the desktop shell", async () => {
+    disableTauri();
+
+    await expect(checkForUpdates()).resolves.toStrictEqual({ available: false });
+    expect(tauriInvoke).not.toHaveBeenCalled();
   });
 });
