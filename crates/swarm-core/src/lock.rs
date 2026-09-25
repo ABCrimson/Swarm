@@ -17,9 +17,14 @@
 //!   [`File::try_lock`]: an advisory `flock(LOCK_EX | LOCK_NB)` on Unix,
 //!   a mandatory `LockFileEx` byte-range lock with
 //!   `LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY` on Windows.
-//!   Either way it releases itself
-//!   automatically when the handle closes, including on process exit OR
-//!   crash — no stale-lock cleanup, no PID-liveness polling, no `unsafe`.
+//!   Dropping the guard unlocks it explicitly ([`File::unlock`]), and the
+//!   OS releases it anyway on process exit OR crash — no stale-lock
+//!   cleanup, no PID-liveness polling, no `unsafe`. The explicit unlock
+//!   matters on Unix: a `flock` belongs to the open file description, and
+//!   every child forked while the lock is held (a PTY, git or agent CLI
+//!   process) shares that description until its exec closes the
+//!   `O_CLOEXEC` copy, so closing our fd alone could leave the lock held
+//!   past the drop.
 //! - `daemon.lock.json` — informational only (pid, which shell, bind
 //!   address if any, start time), overwritten after every successful
 //!   acquire. A losing contender reads it (best-effort — a missing or
@@ -108,14 +113,14 @@ fn shell_display_name(shell: &str) -> &str {
     }
 }
 
-/// RAII handle to the held lock. Dropping it (including on process
-/// exit/crash) releases the underlying OS lock — no explicit `release()`
-/// needed or provided.
+/// RAII handle to the held lock. Dropping it unlocks the underlying OS
+/// lock (and process exit or crash releases it too) — no explicit
+/// `release()` needed or provided.
 #[derive(Debug)]
 pub struct SingleInstanceLock {
-    // Held only to keep the OS lock alive for `Self`'s lifetime; never
-    // read/written after acquisition.
-    _file: File,
+    // Held to keep the OS lock alive for `Self`'s lifetime; its content
+    // is never read or written after acquisition.
+    file: File,
 }
 
 fn read_info(info_path: &Path) -> LockInfo {
@@ -134,8 +139,9 @@ fn write_info(info_path: &Path, info: &LockInfo) -> io::Result<()> {
 
 /// Opens (creating if needed) `daemon.lock` and takes a non-blocking
 /// exclusive OS lock on it with [`File::try_lock`]. One code path for
-/// every platform: the lock is tied to the open handle, so the OS drops
-/// it when the handle closes (on drop, exit or crash).
+/// every platform: the lock is tied to the open handle (on Unix, to its
+/// open file description), released by [`SingleInstanceLock`]'s `Drop`
+/// or by the OS on exit or crash.
 ///
 /// The file is opened with std's default sharing, so another handle on
 /// it (an antivirus or EDR scanner inspecting the new file, say) never
@@ -195,7 +201,22 @@ impl SingleInstanceLock {
             tracing::warn!(error = %e, "failed to write daemon.lock.json (lock itself is still held)");
         }
 
-        Ok(Self { _file: file })
+        Ok(Self { file })
+    }
+}
+
+impl Drop for SingleInstanceLock {
+    /// Unlocks explicitly rather than relying on the fd closing: on Unix
+    /// a child forked while the lock is held shares its open file
+    /// description (until that child execs, or for its whole life if it
+    /// inherited the fd), and `flock(LOCK_UN)` releases the lock even
+    /// then, where a plain close would not. On Windows this is
+    /// `UnlockFile`. Best-effort: on failure the close that follows still
+    /// releases the lock once no process holds the description.
+    fn drop(&mut self) {
+        if let Err(e) = self.file.unlock() {
+            tracing::warn!(error = %e, "failed to unlock daemon.lock on drop");
+        }
     }
 }
 
@@ -254,6 +275,40 @@ mod tests {
         } // dropped here — OS lock released
         let second = SingleInstanceLock::acquire(&dir, "swarmd", None);
         assert!(second.is_ok(), "expected reacquire to succeed after drop");
+    }
+
+    /// Regression (Unix): a child process that shares the lock's open
+    /// file description must not keep the lock alive past `drop`. Every
+    /// process forked while the lock is held shares it (a PTY, git or
+    /// agent CLI child, until its exec closes the `O_CLOEXEC` copy), and
+    /// a `flock` belongs to the open file description, not to one fd, so
+    /// closing our fd alone left it held. Here the child's stdin IS the
+    /// lock file, which holds that window open for the child's lifetime
+    /// and makes the race deterministic.
+    #[cfg(unix)]
+    #[test]
+    fn test_drop_releases_the_lock_while_a_child_shares_its_file_description() {
+        let dir = std::env::temp_dir().join(format!("swarm-lock-test-{}", uuid::Uuid::new_v4()));
+        let _cleanup = remove_on_drop(dir.clone());
+        let first = SingleInstanceLock::acquire(&dir, "swarmd", None).unwrap();
+
+        let shared = first.file.try_clone().unwrap();
+        let child = std::process::Command::new("sleep")
+            .arg("30")
+            .stdin(shared)
+            .spawn()
+            .unwrap();
+        let _reap = DropGuard::new(child, |mut child| {
+            let _ = child.kill();
+            let _ = child.wait();
+        });
+
+        drop(first);
+        let second = SingleInstanceLock::acquire(&dir, "swarmd", None);
+        assert!(
+            second.is_ok(),
+            "expected reacquire after drop while a child shares the lock's file description, got {second:?}"
+        );
     }
 
     /// Regression (Unix): the info file's temp path was built from the
