@@ -10,11 +10,9 @@
  * File I/O goes through a native dialog, never a hand-built path:
  * `@tauri-apps/plugin-dialog` grants the fs scope for exactly the file
  * the user picked (`allow_file` on that one path), so `saveToFile` /
- * `readFromFile` read or write that path directly. The `#lib/fs`
- * atomic-write helpers must not be used here: they write a `.tmp`
- * sibling first, which lies outside the dialog grant and outside the
- * app's static `$APPDATA`/`~/.swarm` write scope, so plugin-fs rejects it
- * as a forbidden path.
+ * `readFromFile` read or write that path directly, in place. The app has
+ * no static fs scope and no rename grant, so a `.tmp` sibling plus rename
+ * would be refused as a forbidden path.
  *
  * @module export
  */
