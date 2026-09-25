@@ -1,8 +1,9 @@
 //! The command registry: one `name -> handler(Ctx, args)` table that
 //! both shells dispatch through.
 //!
-//! `swarm-desktop`'s `#[tauri::command]` wrappers call
-//! [`Registry::dispatch`]; `swarmd`'s WebSocket `rpc` frames go through
+//! `swarm-desktop`'s `#[tauri::command]` forwarders hand each invoke's
+//! JSON arguments to [`Registry::dispatch`] untouched; `swarmd`'s
+//! WebSocket `rpc` frames go through
 //! [`Registry::dispatch_remote`], which additionally enforces each
 //! command's [`RemotePolicy`]. Every handler body lives here exactly
 //! once, so a command cannot work locally yet be missing — or behave
@@ -21,10 +22,11 @@
 //!
 //! # Drift-proof contract
 //!
-//! [`Registry::keys`] must equal the desktop shell's `generate_handler!`
-//! command list minus [`NATIVE_ONLY`]. `swarm-desktop`'s
-//! `commands::registry_contract` test enforces it by parsing the shell's
-//! own `lib.rs`, so a command added on one side only fails CI.
+//! [`Registry::keys`] must equal the desktop shell's forwarded command
+//! list, and its native commands must equal [`NATIVE_ONLY`].
+//! `swarm-desktop`'s `commands` tests compare the two name lists its
+//! `commands!` macro declares against these, so a command added on one
+//! side only fails CI.
 //!
 //! # `Ctx`
 //!
@@ -64,9 +66,9 @@ pub mod worker;
 /// Commands that exist ONLY as `#[tauri::command]` wrappers in
 /// `swarm-desktop`: they need a live webview or OS integration
 /// (`tauri-plugin-updater`, `tauri-plugin-notification`) that means
-/// nothing over a network, so they have no registry entry. The contract
-/// test subtracts this list from `generate_handler!`'s names before
-/// comparing against [`Registry::keys`].
+/// nothing over a network, so they have no registry entry. The desktop
+/// shell's contract tests check that its native commands are exactly
+/// this list and that none of them is a [`Registry::keys`] entry.
 pub const NATIVE_ONLY: &[&str] = &["check_for_updates", "send_notification"];
 
 /// Shared state for every registry handler. Cloning is one `Arc` bump —

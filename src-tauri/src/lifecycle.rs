@@ -12,16 +12,16 @@
 //! `kill_worker` instead would also remove their worktrees, which a quit
 //! must never do.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use swarm_core::events::{Provenance, SwarmEvent, SystemLogPayload};
 use swarm_core::runtime::Runtime;
 use tauri::{AppHandle, Manager, RunEvent};
-use tokio::task::JoinSet;
 
-/// Upper bound on the exit teardown. Every window is already gone when it
-/// runs, so this can only delay the process exit, never freeze the UI.
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+/// Budget for each of the exit teardown's two phases (agent sessions,
+/// then the event writer's drain), so the whole teardown takes at most
+/// about 5 s. Every window is already gone when it runs, so it can only
+/// delay the process exit, never freeze the UI.
+const SHUTDOWN_PHASE_TIMEOUT: Duration = Duration::from_millis(2500);
 
 /// The app's run-event callback.
 pub(crate) fn on_run_event<R: tauri::Runtime>(app: &AppHandle<R>, event: RunEvent) {
@@ -29,69 +29,30 @@ pub(crate) fn on_run_event<R: tauri::Runtime>(app: &AppHandle<R>, event: RunEven
         // Absent when the start failed, which left nothing to shut down.
         && let Some(runtime) = app.try_state::<Runtime>()
     {
-        tauri::async_runtime::block_on(async {
-            if tokio::time::timeout(SHUTDOWN_TIMEOUT, shutdown(&runtime))
-                .await
-                .is_err()
-            {
-                tracing::warn!(timeout = ?SHUTDOWN_TIMEOUT, "shutdown timed out; exiting anyway");
-            }
-        });
+        tauri::async_runtime::block_on(shutdown(&runtime));
     }
 }
 
-/// Shuts `runtime` down: stops the metrics loop, shuts every live agent
-/// session down, then waits until the event writer has persisted every
-/// event recorded before this call.
+/// Shuts `runtime` down through [`Runtime::shutdown`]: stops the metrics
+/// loop, shuts every live agent session down, then drains and finalizes
+/// the event log.
 ///
 /// A session's shutdown kills its provider CLI and, for a turn still in
 /// flight, records the error `agent_turn_settled` receipt the turn would
-/// otherwise never get. The final wait is a barrier: the writer handles
-/// events strictly in order, so once it acknowledges one more event,
-/// everything queued ahead of it (those receipts, `worker_killed`,
-/// `ship_settled`, …) is in the event log.
+/// otherwise never get. The drain persists everything recorded before it
+/// (those receipts, `worker_killed`, `ship_settled`, …) and records the
+/// exact head seq, so the next start continues without a seq gap.
 pub(crate) async fn shutdown(runtime: &Runtime) {
-    runtime.metrics_cancel.cancel();
-
-    let mut sessions = JoinSet::new();
-    for worker in runtime.registry.list_workers() {
-        if let Some(session) = runtime.agent_session_registry.remove(&worker.id) {
-            sessions.spawn(async move {
-                if let Err(error) = session.shutdown().await {
-                    tracing::warn!(worker_id = %worker.id, %error, "agent session shutdown failed");
-                }
-            });
-        }
-    }
-    while let Some(joined) = sessions.join_next().await {
-        if let Err(error) = joined {
-            tracing::error!(%error, "agent session shutdown task failed");
-        }
-    }
-
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
-        });
-    let drained = runtime.sink.emit_awaiting_seq(
-        SwarmEvent::SystemLog(SystemLogPayload {
-            level: "info".to_owned(),
-            message: "SWARM Is Shutting Down".to_owned(),
-            target: "swarm_desktop".to_owned(),
-            timestamp,
-        }),
-        Provenance::default(),
-    );
-    if drained.await.is_err() {
-        tracing::warn!("the event writer stopped before the shutdown barrier");
+    match runtime.shutdown(SHUTDOWN_PHASE_TIMEOUT).await {
+        Ok(head_seq) => tracing::info!(head_seq, "SWARM shut down; the event log is final"),
+        Err(error) => tracing::warn!(%error, "shutdown did not finish; exiting anyway"),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use swarm_core::commands::{Ctx, Registry};
-    use swarm_core::events::WorkerKilledPayload;
+    use swarm_core::events::{SwarmEvent, WorkerKilledPayload};
     use tauri::test::{mock_builder, mock_context, noop_assets};
 
     use super::*;
