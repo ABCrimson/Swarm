@@ -485,8 +485,8 @@ export function withoutThinking(
  *
  * The refusal-fallback opt-in is new API surface; should the API reject
  * a request carrying it (HTTP 400, decided before any output and not
- * billed), the request is sent once more without it and the model is
- * remembered for the rest of the session.
+ * billed), the request is sent once more without it; only if that retry
+ * succeeds is the model remembered for the rest of the session.
  */
 export async function* streamMessage(
   params: StreamParams,
@@ -495,6 +495,7 @@ export async function* streamMessage(
   let message: ChatResponse | undefined;
   let withFallbacks =
     getModelById(params.model)?.refusalFallback === true && !fallbackRejected.has(params.model);
+  let retriedWithoutFallbacks = false;
 
   while (message === undefined) {
     let yielded = false;
@@ -582,8 +583,8 @@ export async function* streamMessage(
         throw new AiRequestError("aborted", "Request Cancelled", { cause: err });
       }
       if (withFallbacks && !yielded && err instanceof Anthropic.BadRequestError) {
-        fallbackRejected.add(params.model);
         withFallbacks = false;
+        retriedWithoutFallbacks = true;
         continue;
       }
       throw toAiRequestError(err);
@@ -594,6 +595,10 @@ export async function* streamMessage(
     }
   }
 
+  // Only a retry that succeeded without the opt-in proves the opt-in was
+  // what the API rejected; an unrelated 400 (bad transcript, prompt too
+  // long, bad tool schema) fails the retry too and leaves fallbacks on.
+  if (retriedWithoutFallbacks) fallbackRejected.add(params.model);
   recordUsage(params.model, message);
   if (message.stop_reason === "refusal") throw new AiRefusalError(message);
   return message;

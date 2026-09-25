@@ -238,6 +238,26 @@ describe("streamMessage", () => {
       expect(sentBody(2)).not.toHaveProperty("fallbacks");
     });
 
+    it("keeps the fallback opt-in after an unrelated 400 that the retry also gets", async () => {
+      useFreshKey();
+      const tooLong = () =>
+        jsonError(400, "invalid_request_error", "prompt is too long: 300000 tokens > 200000");
+      fetchMock
+        .mockResolvedValueOnce(tooLong())
+        .mockResolvedValueOnce(tooLong())
+        .mockImplementation(async () => textResponse(CLAUDE_MODELS.mythos.id, "Hi"));
+      const mythos = { ...SONNET, model: CLAUDE_MODELS.mythos.id };
+
+      await expect(run(mythos)).rejects.toBeInstanceOf(AiRequestError);
+      await run(mythos);
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(sentBody(0).fallbacks).toBe("default");
+      expect(sentBody(1)).not.toHaveProperty("fallbacks");
+      // The next request still opts in: the opt-in was never the problem.
+      expect(sentBody(2).fallbacks).toBe("default");
+    });
+
     it("marks every tool for eager input streaming", async () => {
       useFreshKey();
       fetchMock.mockResolvedValue(textResponse(CLAUDE_MODELS.sonnet.id, "Hi"));

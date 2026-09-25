@@ -22,8 +22,12 @@
  *    turn with a notice; a refusal ends it with the refusal's category.
  * 4. The history is always left valid for the next request: a turn that
  *    produced nothing is rolled back, a refused turn is rolled back (its
- *    content must not be re-sent), and any `tool_use` left without a
- *    result gets an error `tool_result`.
+ *    content must not be re-sent), any `tool_use` left without a result
+ *    gets an error `tool_result`, and injected `system` messages no
+ *    assistant turn answered are folded into the preceding user message
+ *    (a mid-conversation system message must be last or followed by an
+ *    assistant turn). A cancelled turn also discards its queued
+ *    injections: an instruction never outlives the turn it was meant for.
  *
  * @module ai-chat
  */
@@ -123,6 +127,15 @@ function closeOpenToolUses(
   ];
 }
 
+/** A `system` message's instruction as a user text block, for places a system message cannot go. */
+function operatorText(message: ChatMessageParam): { type: "text"; text: string } {
+  const body =
+    typeof message.content === "string"
+      ? message.content
+      : message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
+  return { type: "text", text: `[Operator Instruction] ${body}` };
+}
+
 /**
  * The messages actually sent: mid-conversation `system` messages become
  * user text for models that do not accept them (a model switch within a
@@ -131,18 +144,29 @@ function closeOpenToolUses(
 function forModel(transcript: readonly ChatMessageParam[], model: ModelInfo): ChatMessageParam[] {
   if (model.systemMessages) return [...transcript];
   return transcript.map((message) =>
-    message.role === "system"
-      ? {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `[Operator Instruction] ${typeof message.content === "string" ? message.content : ""}`,
-            },
-          ],
-        }
-      : message,
+    message.role === "system" ? { role: "user", content: [operatorText(message)] } : message,
   );
+}
+
+/**
+ * Folds trailing `system` messages — injections delivered with tool
+ * results whose next round was cancelled or failed, so no assistant turn
+ * answered them — into the preceding user message as trailing text. The
+ * API rejects a mid-conversation system message followed by a user
+ * message, which is exactly what the next send would otherwise produce.
+ */
+function foldTrailingSystem(transcript: readonly ChatMessageParam[]): ChatMessageParam[] {
+  const start = transcript.findLastIndex((message) => message.role !== "system") + 1;
+  if (start === transcript.length) return [...transcript];
+  const folded = transcript.slice(start).map(operatorText);
+  const head = transcript.slice(0, start);
+  const previous = head.at(-1);
+  if (previous?.role !== "user") return [...head, { role: "user", content: folded }];
+  const content =
+    typeof previous.content === "string"
+      ? [{ type: "text" as const, text: previous.content }]
+      : previous.content;
+  return [...head.slice(0, -1), { role: "user", content: [...content, ...folded] }];
 }
 
 /** A tool input as a display record (`{}` for anything that is not a plain object). */
@@ -203,6 +227,8 @@ interface TurnOutcome {
   notice?: ChatNotice;
   /** Roll the transcript back to before this turn (nothing usable was produced, or it was refused). */
   rollback: boolean;
+  /** The turn was cancelled: its queued injections are dropped, never replayed by a later turn. */
+  discardInjections?: boolean;
 }
 
 /**
@@ -462,6 +488,7 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
       };
     } else if (signal.aborted) {
       outcome.notice = { tone: "info", text: "Cancelled" };
+      outcome.discardInjections = true;
     } else {
       error = toAiRequestError(err).message;
     }
@@ -474,7 +501,8 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
     if (turns.get(workerId)?.itemId === itemId) turns.delete(workerId);
   }
 
-  // Injections that arrived too late for a tool round become the next turn.
+  // Injections that arrived too late for a tool round become the next turn
+  // (a cancelled turn's were already discarded by finishTurn).
   const leftover = thread(workerId)?.injections ?? [];
   if (leftover.length > 0 && !signal.aborted) {
     update(workerId, (t) => ({ ...t, injections: [] }));
@@ -506,7 +534,18 @@ function finishTurn(
     const transcript =
       outcome.rollback && baseIndex >= 0
         ? t.transcript.slice(0, baseIndex)
-        : closeOpenToolUses(t.transcript, "Not Run — The Turn Ended Before This Call Executed.");
+        : closeOpenToolUses(
+            foldTrailingSystem(t.transcript),
+            "Not Run — The Turn Ended Before This Call Executed.",
+          );
+    const discarded = outcome.discardInjections ? t.injections.length : 0;
+    const notice: ChatNotice | undefined =
+      discarded > 0 && outcome.notice
+        ? {
+            ...outcome.notice,
+            text: `${outcome.notice.text} — ${discarded === 1 ? "Queued Instruction" : `${discarded} Queued Instructions`} Discarded`,
+          }
+        : outcome.notice;
 
     const text = live?.text.trim() ?? "";
     const toolCalls = live?.toolCalls.length ? [...live.toolCalls] : undefined;
@@ -515,7 +554,7 @@ function finishTurn(
         ? (getModelById(live.servedBy)?.label ?? live.servedBy)
         : undefined;
     const reply: ChatMessage | null =
-      text || toolCalls || outcome.notice || live?.thinking
+      text || toolCalls || notice || live?.thinking
         ? {
             id: crypto.randomUUID(),
             role: "assistant",
@@ -523,7 +562,7 @@ function finishTurn(
             timestamp: nowIso(),
             ...(toolCalls ? { toolCalls } : {}),
             ...(live?.thinking ? { thinking: live.thinking.trim() } : {}),
-            ...(outcome.notice ? { notice: outcome.notice } : {}),
+            ...(notice ? { notice } : {}),
             ...(servedBy ? { servedBy } : {}),
           }
         : null;
@@ -531,6 +570,7 @@ function finishTurn(
     return {
       ...t,
       transcript,
+      injections: discarded > 0 ? [] : t.injections,
       messages: reply ? [...t.messages, reply] : t.messages,
       live: live ? null : t.live,
       error,
@@ -556,7 +596,7 @@ export function sendChatMessage(workerId: string, text: string): boolean {
  * Injects an operator instruction into `workerId`'s conversation. While a
  * turn is running it is delivered with that turn's next tool results
  * (the model sees it mid-loop); otherwise — or if the turn ends first —
- * it is sent as the next user turn.
+ * it is sent as the next user turn. Cancelling the turn discards it.
  */
 export function injectInstruction(workerId: string, text: string): "sent" | "queued" | "ignored" {
   const trimmed = text.trim();

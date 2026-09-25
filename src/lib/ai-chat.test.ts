@@ -415,6 +415,68 @@ describe("ai-chat engine", () => {
     expect(requests[1]?.model).toBe("claude-sonnet-5");
   });
 
+  it("never leaves an unanswered system injection followed by a user message after a cancel", async () => {
+    const { promise: toolDone, resolve: finishTool } = Promise.withResolvers<{
+      success: true;
+      data: string;
+    }>();
+    vi.mocked(executeTool).mockReturnValue(toolDone);
+    const g = gate();
+    rounds.push({ result: response([toolUse("tu_1", "get_metrics", {})], "tool_use") });
+    rounds.push({ hold: g.hold, result: response([text("Noted.")], "end_turn") });
+    rounds.push({ result: response([text("Sure.")], "end_turn") });
+
+    sendChatMessage(W, "go");
+    await vi.waitFor(() => expect(executeTool).toHaveBeenCalled());
+    injectInstruction(W, "Be brief");
+    finishTool({ success: true, data: "ok" });
+    // The injection rides with the tool results; the round after it is cancelled.
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[1]?.messages.at(-1)).toEqual({ role: "system", content: "Be brief" });
+    cancelChatTurn(W);
+    await settle();
+
+    expect(thread().transcript.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+    sendChatMessage(W, "next");
+    await settle();
+
+    const sent = requests[2]?.messages ?? [];
+    for (const [i, message] of sent.entries()) {
+      if (message.role === "system") expect(sent[i + 1]?.role ?? "assistant").toBe("assistant");
+    }
+    expect(sent.map((m) => m.role)).toEqual(["user", "assistant", "user", "user"]);
+    expect(sent[2]?.content).toEqual([
+      { type: "tool_result", tool_use_id: "tu_1", content: "ok", is_error: false },
+      { type: "text", text: "[Operator Instruction] Be brief" },
+    ]);
+    expect(thread().error).toBeNull();
+  });
+
+  it("discards an injection queued during a turn the user then cancels", async () => {
+    const g = gate();
+    rounds.push({ hold: g.hold, result: response([text("Working…")], "end_turn") });
+    rounds.push({ result: response([text("Answer.")], "end_turn") });
+
+    sendChatMessage(W, "long task");
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    expect(injectInstruction(W, "Also delete the temp dir")).toBe("queued");
+    cancelChatTurn(W);
+    await settle();
+
+    expect(thread().injections).toEqual([]);
+    expect(thread().messages.at(-1)?.notice).toEqual({
+      tone: "info",
+      text: "Cancelled — Queued Instruction Discarded",
+    });
+
+    sendChatMessage(W, "unrelated question");
+    await settle();
+
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.messages).toEqual([{ role: "user", content: "unrelated question" }]);
+    expect(thread().error).toBeNull();
+  });
+
   it("sends an injection straight away when no turn is running", async () => {
     rounds.push({ result: response([text("Ok.")], "end_turn") });
 
