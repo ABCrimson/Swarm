@@ -1,4 +1,5 @@
-# Tool items: a command (streamed output, exit 0), a failed MCP call and a
+# Tool items: a command (exit 0; its outputDelta must be ignored, the
+# output arrives whole in the completed item), a failed MCP call and a
 # declined patch.
 #DIRECTIVE EXPECT_REQUEST initialize
 #DIRECTIVE RESPOND_INITIALIZE

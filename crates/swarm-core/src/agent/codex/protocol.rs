@@ -57,7 +57,8 @@ pub mod method {
     pub const REASONING_SUMMARY_TEXT_DELTA: &str = "item/reasoning/summaryTextDelta";
     /// Streamed text of a `reasoning` item's raw content.
     pub const REASONING_TEXT_DELTA: &str = "item/reasoning/textDelta";
-    /// Streamed stdout/stderr of a `commandExecution` item.
+    /// Streamed stdout/stderr of a `commandExecution` item (ignored: the
+    /// completed item's `aggregatedOutput` carries it whole).
     pub const COMMAND_EXECUTION_OUTPUT_DELTA: &str = "item/commandExecution/outputDelta";
     /// Token usage for a thread's turn.
     pub const THREAD_TOKEN_USAGE_UPDATED: &str = "thread/tokenUsage/updated";
@@ -505,7 +506,7 @@ pub struct ItemNotification {
 }
 
 /// Streamed-text notification parameters (`item/agentMessage/delta`,
-/// `item/reasoning/*Delta`, `item/commandExecution/outputDelta`).
+/// `item/reasoning/*Delta`).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaNotification {
@@ -642,30 +643,27 @@ impl ItemStatus {
 
 // ── Approvals ────────────────────────────────────────────────────────
 
-/// `item/commandExecution/requestApproval` parameters (the fields read;
-/// the full object is forwarded as the permission request's `input`).
+/// Parameters of the three approval requests (the fields read; the full
+/// object is forwarded as the permission request's `input`).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalRequest {
     /// The turn the gated item belongs to.
     pub turn_id: String,
-    /// `item/fileChange/requestApproval` only: the agent asks for write
-    /// access under this root for the rest of the session.
-    #[serde(default)]
-    pub grant_root: Option<String>,
     /// `item/permissions/requestApproval` only: the requested profile.
     #[serde(default)]
     pub permissions: Option<Value>,
 }
 
-/// A command or file-change approval decision.
+/// A command or file-change approval decision. The schema's
+/// session-scoped and policy-amending variants (`acceptForSession`,
+/// `acceptWithExecpolicyAmendment`, ...) are deliberately never sent: the
+/// prompt offers one-shot Allow / Deny only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ApprovalDecision {
     /// Run it once.
     Accept,
-    /// Run it, and similar requests for the rest of the session.
-    AcceptForSession,
     /// Do not run it; the turn continues.
     Decline,
 }

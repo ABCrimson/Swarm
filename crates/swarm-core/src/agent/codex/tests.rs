@@ -253,6 +253,29 @@ fn is_exit(event: &SwarmEvent) -> bool {
     matches!(event, SwarmEvent::AgentSessionExited(_))
 }
 
+/// The `agent_turn_delta` contract the chat relies on: every streamed
+/// `(turn_id, block_index)` is closed by an `agent_block` at the same
+/// index after its last delta — otherwise the UI keeps a live bubble
+/// forever.
+fn assert_every_stream_is_closed(events: &[SwarmEvent]) {
+    let mut open: HashMap<(String, u32), usize> = HashMap::new();
+    for (at, event) in events.iter().enumerate() {
+        match event {
+            SwarmEvent::AgentTurnDelta(p) => {
+                open.insert((p.turn_id.clone(), p.block_index), at);
+            }
+            SwarmEvent::AgentBlock(p) => {
+                open.remove(&(p.turn_id.clone(), p.block_index));
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        open.is_empty(),
+        "streams never closed by an agent_block: {open:?}"
+    );
+}
+
 // ── Pure helpers ─────────────────────────────────────────────────────
 
 #[test]
@@ -461,21 +484,12 @@ fn approval_answers_follow_the_decision_and_request_kind() {
         json!({ "decision": "decline" })
     );
     assert_eq!(
-        answer(
-            ApprovalKind::FileChange {
-                session_scoped: false
-            },
-            PermissionDecision::Allow
-        ),
-        json!({ "decision": "accept" })
+        answer(ApprovalKind::FileChange, PermissionDecision::Allow),
+        json!({ "decision": "accept" }),
+        "one Allow is never a session-long grant"
     );
     assert_eq!(
-        answer(
-            ApprovalKind::FileChange {
-                session_scoped: true
-            },
-            PermissionDecision::Deny
-        ),
+        answer(ApprovalKind::FileChange, PermissionDecision::Deny),
         json!({ "decision": "decline" })
     );
     let requested = json!({ "network": { "enabled": true }, "fileSystem": null });
@@ -810,6 +824,7 @@ async fn a_turn_streams_deltas_emits_blocks_and_settles_ok_with_usage() {
     assert_eq!(blocks[1].kind, "text");
     assert_eq!(blocks[1].content, json!({ "text": "Hello from Codex." }));
     assert_eq!(blocks[1].block_index, text[0].block_index);
+    assert_every_stream_is_closed(&events);
 
     let settled = settlements(&events);
     assert_eq!(settled.len(), 1);
@@ -886,15 +901,23 @@ async fn tool_items_become_tool_calls_and_results_with_honest_error_flags() {
             ("patch-1".to_string(), true),
         ]
     );
-    let output: Vec<&AgentTurnDeltaPayload> = events
+    // Command output streams are not forwarded (nothing would close
+    // them); the output arrives whole in the tool result instead.
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, SwarmEvent::AgentTurnDelta(_))),
+        "no delta stream for command output: {events:#?}"
+    );
+    assert_every_stream_is_closed(&events);
+    let command_result = events
         .iter()
-        .filter_map(|e| match e {
-            SwarmEvent::AgentTurnDelta(p) if p.kind == "tool_output" => Some(p),
+        .find_map(|e| match e {
+            SwarmEvent::AgentToolResult(p) if p.tool_use_id == "cmd-1" => Some(p),
             _ => None,
         })
-        .collect();
-    assert_eq!(output.len(), 1);
-    assert_eq!(output[0].text, "total 0\n");
+        .expect("command result");
+    assert_eq!(command_result.content["aggregatedOutput"], "total 0\n");
     assert_eq!(settlements(&events)[0].status, AgentTurnStatus::Ok);
     session.shutdown().await.expect("shutdown");
 }
@@ -1011,6 +1034,7 @@ async fn a_refused_interrupt_racing_a_finishing_turn_keeps_the_session() {
     );
     session.shutdown().await.expect("shutdown");
 }
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_completion_that_overtakes_its_ack_settles_exactly_once() {
     let h = Harness::new("completion_before_ack.script");
@@ -1043,6 +1067,52 @@ async fn a_completion_that_overtakes_its_ack_settles_exactly_once() {
         .map(|s| s.turn_id.as_str())
         .collect();
     assert_eq!(settled, [first.as_str(), second.as_str()]);
+    session.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_completion_before_turn_started_and_the_ack_settles_from_starting() {
+    let h = Harness::new("completion_before_started.script");
+    let session = h.spawn().await;
+    let first = session
+        .send_turn(TurnInput {
+            prompt: "a".to_string(),
+        })
+        .await
+        .expect("turn");
+    assert_eq!(first, "019a7c00-0000-7000-8000-0000000000d1");
+    tokio::time::timeout(WAIT, session.await_turn_completion(first.clone()))
+        .await
+        .expect("already settled")
+        .expect("await");
+    let second = session
+        .send_turn(TurnInput {
+            prompt: "b".to_string(),
+        })
+        .await
+        .expect("the acknowledgement freed the slot");
+    session
+        .await_turn_completion(second.clone())
+        .await
+        .expect("await");
+    h.flush().await;
+    let events = h.events();
+    let settled: Vec<(&str, AgentTurnStatus, Option<&str>)> = settlements(&events)
+        .iter()
+        .map(|s| (s.turn_id.as_str(), s.status, s.error.as_deref()))
+        .collect();
+    assert_eq!(
+        settled,
+        [
+            (
+                first.as_str(),
+                AgentTurnStatus::Error,
+                Some("Model overloaded")
+            ),
+            (second.as_str(), AgentTurnStatus::Ok, None),
+        ],
+        "one settlement per turn; the duplicate completion is ignored"
+    );
     session.shutdown().await.expect("shutdown");
 }
 
@@ -1145,7 +1215,8 @@ async fn approvals_round_trip_on_the_wire_with_type_exact_ids() {
     );
     assert_eq!(
         h.answer_to(&json!("7")).unwrap()["result"],
-        json!({ "decision": "acceptForSession" })
+        json!({ "decision": "accept" }),
+        "a patch asking for a grantRoot still gets a one-shot accept"
     );
     assert_eq!(
         h.answer_to(&json!(9)).unwrap()["result"],

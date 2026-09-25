@@ -1,7 +1,7 @@
 # Approvals: a command (numeric id 7), a patch asking for a session-long
-# root grant (string id "7", which must stay distinct from 7), a
-# permissions request (id 9), and a command approval the server withdraws
-# (id 10) before anyone answers it.
+# root grant (answered with a one-shot accept; string id "7", which must
+# stay distinct from 7), a permissions request (id 9), and a command
+# approval the server withdraws (id 10) before anyone answers it.
 #DIRECTIVE EXPECT_REQUEST initialize
 #DIRECTIVE RESPOND_INITIALIZE
 #DIRECTIVE EXPECT_NOTIFICATION initialized

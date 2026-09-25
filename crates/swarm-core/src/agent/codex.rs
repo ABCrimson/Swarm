@@ -482,8 +482,7 @@ enum TurnSlot {
 /// `block_index`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum BlockStream {
-    /// The item's primary text (message text, reasoning summary, command
-    /// output).
+    /// The item's primary text (message text, reasoning summary).
     Main,
     /// A reasoning item's raw content.
     ReasoningContent,
@@ -521,9 +520,10 @@ impl BlockIndex {
 enum ApprovalKind {
     /// `item/commandExecution/requestApproval`.
     Command,
-    /// `item/fileChange/requestApproval`; `session_scoped` when the agent
-    /// asked for write access under a root for the rest of the session.
-    FileChange { session_scoped: bool },
+    /// `item/fileChange/requestApproval`. A `grantRoot` in the request is
+    /// never granted: Allow answers `accept` (this change only), because
+    /// the prompt offers no session-long choice.
+    FileChange,
     /// `item/permissions/requestApproval` and the profile it asked for.
     Permissions { requested: Value },
 }
@@ -963,11 +963,11 @@ fn handle_notification(shared: &Shared, method: &str, params: Value) {
                 on_delta(shared, delta, "thinking", BlockStream::ReasoningContent);
             }
         }
-        method::COMMAND_EXECUTION_OUTPUT_DELTA => {
-            if let Some(delta) = parse(method, params) {
-                on_delta(shared, delta, "tool_output", BlockStream::Main);
-            }
-        }
+        // Deliberately not streamed: a delta stream is closed only by an
+        // `agent_block` at the same index, and a command's output already
+        // arrives whole in its `agent_tool_result` (`aggregatedOutput`).
+        // A streamed copy would be a second, never-closed rendering of it.
+        method::COMMAND_EXECUTION_OUTPUT_DELTA => {}
         method::TURN_STARTED => {
             if let Some(TurnNotification { thread_id, turn }) = parse(method, params)
                 && shared.is_own_thread(&thread_id)
@@ -1124,9 +1124,9 @@ fn on_item_completed(shared: &Shared, notification: ItemNotification) {
     }
 }
 
-/// Streams one text chunk as `agent_turn_delta`. The persisted
-/// counterpart is the item's `agent_block` on completion — or, for a
-/// command's `tool_output`, its `agent_tool_result`.
+/// Streams one text chunk as `agent_turn_delta`. Only text items stream,
+/// so every stream is closed by the item's `agent_block` (same
+/// `block_index`) on completion.
 fn on_delta(shared: &Shared, delta: DeltaNotification, kind: &str, stream: BlockStream) {
     if !shared.is_own_thread(&delta.thread_id) {
         return;
@@ -1323,9 +1323,7 @@ fn handle_server_request(shared: &Shared, method: &str, id: RequestId, params: V
         }
     };
     let kind = match method {
-        method::FILE_CHANGE_REQUEST_APPROVAL => ApprovalKind::FileChange {
-            session_scoped: request.grant_root.is_some(),
-        },
+        method::FILE_CHANGE_REQUEST_APPROVAL => ApprovalKind::FileChange,
         method::PERMISSIONS_REQUEST_APPROVAL => ApprovalKind::Permissions {
             requested: request.permissions.unwrap_or(Value::Null),
         },
@@ -1371,22 +1369,18 @@ fn approval_answer(
 ) -> Result<String, String> {
     let allow = decision == PermissionDecision::Allow;
     match approval.kind {
-        ApprovalKind::Command | ApprovalKind::FileChange { .. } => {
-            let decision = match (&approval.kind, allow) {
-                (_, false) => ApprovalDecision::Decline,
-                (
-                    ApprovalKind::FileChange {
-                        session_scoped: true,
-                    },
-                    true,
-                ) => ApprovalDecision::AcceptForSession,
-                (_, true) => ApprovalDecision::Accept,
-            };
-            encode_line(&Response {
-                id: approval.id,
-                result: ApprovalResponse { decision },
-            })
-        }
+        // One Allow approves this one request — never a session-long grant
+        // (`acceptForSession`), which the prompt does not offer.
+        ApprovalKind::Command | ApprovalKind::FileChange => encode_line(&Response {
+            id: approval.id,
+            result: ApprovalResponse {
+                decision: if allow {
+                    ApprovalDecision::Accept
+                } else {
+                    ApprovalDecision::Decline
+                },
+            },
+        }),
         ApprovalKind::Permissions { requested } => {
             // Allow grants exactly what was asked for; deny grants nothing.
             let granted: serde_json::Map<String, Value> = match (allow, requested) {
@@ -1914,8 +1908,8 @@ impl AgentSession for CodexSession {
     }
 
     /// Answers a pending approval on the wire. Commands and patches get
-    /// `accept` / `decline` (`acceptForSession` when a patch asked for a
-    /// session-long write grant); a permissions request is granted
+    /// `accept` / `decline` (one request only, even when a patch asked
+    /// for a session-long `grantRoot`); a permissions request is granted
     /// exactly what it asked for, or nothing, for this turn. An unknown,
     /// already-answered or withdrawn request — or a closed session — is a
     /// no-op.
