@@ -21,13 +21,17 @@
  *    continues; `max_tokens` / `model_context_window_exceeded` end the
  *    turn with a notice; a refusal ends it with the refusal's category.
  * 4. The history is always left valid for the next request: a turn that
- *    produced nothing is rolled back, a refused turn is rolled back (its
- *    content must not be re-sent), any `tool_use` left without a result
- *    gets an error `tool_result`, and injected `system` messages no
- *    assistant turn answered are folded into the preceding user message
- *    (a mid-conversation system message must be last or followed by an
- *    assistant turn). A cancelled turn also discards its queued
- *    injections: an instruction never outlives the turn it was meant for.
+ *    produced nothing is rolled back; a refusal rolls back only the
+ *    refused round (the whole turn when it was the first round), so
+ *    earlier rounds' tool calls — whose side effects already happened —
+ *    stay on record; results of calls that ran are always recorded, even
+ *    when the turn is cancelled while they run; any `tool_use` left
+ *    without a result gets an error `tool_result`; and injected `system`
+ *    messages no assistant turn answered are folded into the preceding
+ *    user message (a mid-conversation system message must be last or
+ *    followed by an assistant turn). A cancelled turn also discards its
+ *    queued injections: an instruction never outlives the turn it was
+ *    meant for.
  *
  * @module ai-chat
  */
@@ -225,8 +229,12 @@ class LiveBuffer {
 
 interface TurnOutcome {
   notice?: ChatNotice;
-  /** Roll the transcript back to before this turn (nothing usable was produced, or it was refused). */
-  rollback: boolean;
+  /**
+   * Transcript length to roll back to, or `null` to keep everything: the
+   * turn's own user message while nothing usable was produced, the
+   * refused round's start on a refusal.
+   */
+  rollbackTo: number | null;
   /** The turn was cancelled: its queued injections are dropped, never replayed by a later turn. */
   discardInjections?: boolean;
 }
@@ -322,6 +330,8 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
     timestamp: nowIso(),
   };
 
+  // Index of this turn's user message: rolling back to it drops the turn.
+  let turnBase = 0;
   update(workerId, (t) => {
     const previous =
       t.prefixKey !== null && t.prefixKey !== prefixKey
@@ -331,6 +341,7 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
       [...previous, { role: "user", content: userText }],
       model.contextWindow - reserve,
     );
+    turnBase = fitted.messages.length - 1;
     return {
       ...t,
       messages: [...t.messages, userMessage],
@@ -349,8 +360,10 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
     status: "pending",
   });
 
-  const outcome: TurnOutcome = { rollback: true };
+  const outcome: TurnOutcome = { rollbackTo: turnBase };
   let error: string | null = null;
+  // Where the current round's output starts (its refusal rolls back to here).
+  let roundStart = turnBase;
 
   try {
     await acquireStreamSlot(itemId, signal);
@@ -372,6 +385,7 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
 
     for (let round = 0; ; round++) {
       signal.throwIfAborted();
+      if (round > 0) roundStart = thread(workerId)?.transcript.length ?? roundStart;
       const message = await streamRound(workerId, model, system, tools, buffer, signal);
       buffer.flush();
 
@@ -381,7 +395,7 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
           ...t,
           transcript: [...t.transcript, { role: "assistant", content }],
         }));
-        outcome.rollback = false;
+        outcome.rollbackTo = null;
       }
       // A refusal fallback that served this round (sticky routing emits
       // no fallback block, only a fallback_message usage iteration).
@@ -443,12 +457,16 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
           return { id: call.id, text, isError: !result.success };
         }),
       );
-      signal.throwIfAborted();
+      // The results are recorded even when the turn was cancelled while
+      // the calls ran: they executed, and the model must know their side
+      // effects happened. A cancelled turn's injections are not delivered
+      // (finishTurn discards them).
+      const aborted = signal.aborted;
 
       // Instructions injected mid-turn ride along with the tool results:
       // as a mid-conversation system message where the model accepts one
       // (operator authority, cache-friendly), else as trailing text.
-      const injections = thread(workerId)?.injections ?? [];
+      const injections = aborted ? [] : (thread(workerId)?.injections ?? []);
       update(workerId, (t) => {
         const toolResults: ChatMessageParam = {
           role: "user",
@@ -466,7 +484,7 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
         };
         return {
           ...t,
-          injections: [],
+          injections: aborted ? t.injections : [],
           transcript: [
             ...t.transcript,
             toolResults,
@@ -474,14 +492,19 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
               ? injections.map((text): ChatMessageParam => ({ role: "system", content: text }))
               : []),
           ],
-          live: t.live ? { ...t.live, phase: "streaming", text: withGap(t.live.text) } : t.live,
+          live:
+            t.live && !aborted
+              ? { ...t.live, phase: "streaming", text: withGap(t.live.text) }
+              : t.live,
         };
       });
+      signal.throwIfAborted();
     }
   } catch (err) {
     buffer.flush();
     if (err instanceof AiRefusalError) {
-      outcome.rollback = true;
+      // Only the refused round goes: earlier rounds' tool calls ran.
+      outcome.rollbackTo = roundStart;
       outcome.notice = {
         tone: "error",
         text: err.explanation ? `${err.message}: ${err.explanation}` : err.message,
@@ -525,19 +548,12 @@ function finishTurn(
 ): void {
   update(workerId, (t) => {
     const live = t.live?.itemId === itemId ? t.live : null;
-    const baseIndex = t.transcript.findLastIndex(
-      (message) =>
-        message.role === "user" &&
-        (typeof message.content === "string" ||
-          !message.content.some((block) => block.type === "tool_result")),
+    const kept =
+      outcome.rollbackTo === null ? t.transcript : t.transcript.slice(0, outcome.rollbackTo);
+    const transcript = closeOpenToolUses(
+      foldTrailingSystem(kept),
+      "Not Run — The Turn Ended Before This Call Executed.",
     );
-    const transcript =
-      outcome.rollback && baseIndex >= 0
-        ? t.transcript.slice(0, baseIndex)
-        : closeOpenToolUses(
-            foldTrailingSystem(t.transcript),
-            "Not Run — The Turn Ended Before This Call Executed.",
-          );
     const discarded = outcome.discardInjections ? t.injections.length : 0;
     const notice: ChatNotice | undefined =
       discarded > 0 && outcome.notice

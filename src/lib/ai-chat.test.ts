@@ -286,6 +286,31 @@ describe("ai-chat engine", () => {
     });
   });
 
+  it("rolls back only the refused round, keeping earlier rounds whose tools already ran", async () => {
+    vi.mocked(executeTool).mockResolvedValue({ success: true, data: "spawned w-2" });
+    const round1 = [toolUse("tu_1", "spawn_worker", { role: "coder" })];
+    rounds.push({ result: response(round1, "tool_use") });
+    const declined = response([text("I can")], "refusal", {
+      stop_details: { type: "refusal", category: "cyber", explanation: null },
+    } as Partial<ChatResponse>);
+    rounds.push({ result: new AiRefusalError(declined) });
+
+    sendChatMessage(W, "spawn and then do the bad thing");
+    await settle();
+
+    expect(thread().transcript).toEqual([
+      { role: "user", content: "spawn and then do the bad thing" },
+      { role: "assistant", content: round1 },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "tu_1", content: "spawned w-2", is_error: false },
+        ],
+      },
+    ]);
+    expect(thread().messages.at(-1)?.notice?.tone).toBe("error");
+  });
+
   it("rolls back a failed request and surfaces its Title Case error", async () => {
     rounds.push({
       result: new AiRequestError("auth", "API Key Rejected (401) — Update It In Settings"),
@@ -316,16 +341,18 @@ describe("ai-chat engine", () => {
     expect(thread().error).toBeNull();
   });
 
-  it("keeps tool calls that already ran when cancelled mid-tools, closing every open tool_use", async () => {
+  it("records the real results of tool calls that ran while the turn was cancelled", async () => {
     const { promise: toolDone, resolve: finishTool } = Promise.withResolvers<{
       success: true;
       data: string;
     }>();
     vi.mocked(executeTool).mockReturnValue(toolDone);
     rounds.push({ result: response([toolUse("tu_9", "get_metrics", {})], "tool_use") });
+    rounds.push({ result: response([text("Still 3%.")], "end_turn") });
 
     sendChatMessage(W, "metrics");
     await vi.waitFor(() => expect(executeTool).toHaveBeenCalled());
+    expect(injectInstruction(W, "Be brief")).toBe("queued");
     cancelChatTurn(W);
     finishTool({ success: true, data: "cpu 3%" });
     await settle();
@@ -334,17 +361,28 @@ describe("ai-chat engine", () => {
     expect(t.messages.at(-1)?.toolCalls).toEqual([
       { id: "tu_9", name: "get_metrics", input: {}, result: "cpu 3%", isError: false },
     ]);
-    expect(t.transcript.at(-1)).toEqual({
-      role: "user",
-      content: [
-        {
-          type: "tool_result",
-          tool_use_id: "tu_9",
-          content: "Not Run — The Turn Ended Before This Call Executed.",
-          is_error: true,
-        },
-      ],
+    expect(t.messages.at(-1)?.notice).toEqual({
+      tone: "info",
+      text: "Cancelled — Queued Instruction Discarded",
     });
+    // The call executed: the model is told its real result, never "Not Run".
+    const results: ChatMessageParam = {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "tu_9", content: "cpu 3%", is_error: false }],
+    };
+    expect(t.transcript.at(-1)).toEqual(results);
+    expect(t.injections).toEqual([]);
+    expect(requests).toHaveLength(1);
+
+    sendChatMessage(W, "again?");
+    await settle();
+
+    expect(requests[1]?.messages).toEqual([
+      { role: "user", content: "metrics" },
+      { role: "assistant", content: [toolUse("tu_9", "get_metrics", {})] },
+      results,
+      { role: "user", content: "again?" },
+    ]);
   });
 
   it("AIQueue's cancelItem aborts the stream itself, not just the queue entry", async () => {
