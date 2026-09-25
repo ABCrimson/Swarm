@@ -21,7 +21,7 @@ import type { Worker } from "#store/types";
 import { useWorkerStore } from "#store/workers";
 
 // Mock the Tauri IPC commands used by useWorker (same pattern as
-// src/hooks/useWorker.test.tsx and src/hooks/useStream.test.tsx —
+// src/hooks/useWorker.test.tsx —
 // module-scope `mock`-prefixed refs so assertions can use them directly).
 const mockPauseWorker = vi.fn().mockResolvedValue(undefined);
 const mockResumeWorker = vi.fn().mockResolvedValue(undefined);

@@ -201,7 +201,7 @@ function toAgentSpawnCommandError(err: unknown): Error {
  * `model`/`trustTier` mean the same 3-token trust-tier vocabulary for
  * EITHER provider (`ClaudeCodeTrustTier`/`CodexTrustTier` share their
  * wire values by deliberate design symmetry — see
- * `#lib/agent-events`'s `CodexTrustTierSchema` doc): `trustTier` defaults
+ * `#lib/agent-events`'s `TrustTierSchema` doc): `trustTier` defaults
  * to `"standard"` server-side when omitted. The attached session's
  * `sessionKey`/`capabilities`/provider badge arrive via the
  * `agent_session_started` event (`#hooks/useAgentSessionEvents`), not

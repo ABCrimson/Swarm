@@ -33,7 +33,7 @@ export function useSettingsBridge(): void {
 
   useEffect(() => {
     // Client-side limiter for the webview-direct chat streaming path
-    // (`AIChat.tsx`) — bounds `useAiStream`'s `activeStreams` check only.
+    // (`#lib/ai-chat`) — bounds `acquireStreamSlot`'s `activeStreams` check only.
     // Harmless to apply on every run (including the pre-hydration
     // default): purely in-memory, never written to disk.
     useAiStore.getState().setConcurrentLimit(settings.aiConcurrentLimit);

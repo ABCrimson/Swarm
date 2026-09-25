@@ -22,9 +22,11 @@ interface SpawnWorkerDialogProps {
 }
 
 /**
- * Plain-language trust tiers, restating what each adapter actually
- * configures (`crates/swarm-core/src/agent/claude_code.rs`,
- * `agent/codex.rs`):
+ * Plain-language trust tiers, restating what each adapter configures
+ * (`crates/swarm-core/src/agent/claude_code.rs`, `agent/codex.rs`). The
+ * Codex copy states the tier mapping the agent-adapter change to
+ * `codex.rs` introduces (Standard no longer `on-request`, Write-Enabled
+ * no longer `on-failure`); this copy and that change ship together.
  *
  * - Claude Code: Restricted = `--permission-mode dontAsk` plus a deny
  *   list for Bash/Write/Edit; Standard = the CLI's default mode (file
