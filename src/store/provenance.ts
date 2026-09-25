@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
-import type { DomainEvent } from "#lib/event-bus";
+import type { DomainEvent, EventType } from "#lib/event-bus";
 
 /**
  * The four kinds of MEASURED causal edge this store derives from stamped
@@ -37,9 +37,9 @@ export interface ProvenanceEdgeRecord {
 const RING_EXCLUDED_TYPES = new Set<string>([
   "worker_output",
   "system_metrics",
-  "ai_stream_delta",
+  "agent_turn_delta",
   "system_log",
-]);
+] satisfies EventType[]);
 
 /**
  * Bound on the `bySeq` ring — CausalityPanel's fast path for "what event

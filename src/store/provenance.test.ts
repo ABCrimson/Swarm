@@ -250,7 +250,7 @@ describe("provenance store", () => {
 
     it("excludes wire-frequent telemetry types from the ring", () => {
       const { ingestEvent } = useProvenanceStore.getState();
-      for (const type of ["worker_output", "system_metrics", "ai_stream_delta", "system_log"]) {
+      for (const type of ["worker_output", "system_metrics", "agent_turn_delta", "system_log"]) {
         ingestEvent(ev({ seq: 1, type, payload: {} }));
       }
 
