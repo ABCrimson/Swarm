@@ -241,6 +241,30 @@ describe("AgentChat", () => {
     expect(screen.queryByRole("button", { name: "Deny" })).not.toBeInTheDocument();
   });
 
+  it("leaves a request expired when its turn settles while the answer is in flight", async () => {
+    const answered = Promise.withResolvers<undefined>();
+    vi.mocked(agentPermissionRespond).mockReturnValueOnce(answered.promise);
+    const user = userEvent.setup();
+    render(<Harness />);
+    startSession("codex", { interactivePermissions: true });
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "r",
+      tool: "fileChange",
+      input: {},
+    });
+
+    await user.click(screen.getByRole("button", { name: "Allow" }));
+    fire("agent_turn_settled", { turnId: "t1", status: "ok", durationMs: 1 });
+    await act(async () => {
+      answered.resolve(undefined);
+      await answered.promise;
+    });
+
+    expect(screen.getByText("Expired Unanswered")).toBeInTheDocument();
+    expect(screen.queryByText("Allowed")).not.toBeInTheDocument();
+  });
+
   it("names the session's own provider in the input", () => {
     render(<Harness />);
     startSession("codex");

@@ -220,12 +220,15 @@ function PermissionRow({
   const answer = async (decision: PermissionDecision) => {
     const { setPermissionState } = useAgentSessionStore.getState();
     setPermissionState(workerId, payload.requestId, "answering");
+    // Both outcomes move the row only while it is still `answering`: the
+    // turn may settle (row -> `expired`) before the answer resolves.
     try {
       await agentPermissionRespond(workerId, payload.requestId, decision);
-      setPermissionState(workerId, payload.requestId, decision);
+      setPermissionState(workerId, payload.requestId, decision, "answering");
     } catch (err) {
-      setPermissionState(workerId, payload.requestId, "pending");
-      toast.error(`Permission Answer Failed: ${Error.isError(err) ? err.message : String(err)}`);
+      if (setPermissionState(workerId, payload.requestId, "pending", "answering")) {
+        toast.error(`Permission Answer Failed: ${Error.isError(err) ? err.message : String(err)}`);
+      }
     }
   };
 

@@ -151,12 +151,18 @@ interface AgentSessionStoreActions {
   readonly addUserTurn: (workerId: string, bubbleId: string, text: string) => void;
   /** Reconciles a send the backend never admitted: no settle will come, so the bubble fails now. */
   readonly failUserTurn: (workerId: string, bubbleId: string) => void;
-  /** Moves a permission request (by `requestId`) to `state`. */
+  /**
+   * Moves a permission request (by `requestId`) to `state`. With `from`,
+   * only a request still in that state moves — so an answer resolving
+   * after the turn settled cannot overwrite `expired`. Returns whether
+   * the request moved.
+   */
   readonly setPermissionState: (
     workerId: string,
     requestId: string,
     state: PermissionState,
-  ) => void;
+    from?: PermissionState,
+  ) => boolean;
 }
 
 type Draft = {
@@ -326,16 +332,19 @@ export const useAgentSessionStore = create<AgentSessionStoreState & AgentSession
       });
     },
 
-    setPermissionState(workerId, requestId, state) {
+    setPermissionState(workerId, requestId, state, from) {
+      let moved = false;
       set((s) => {
         const t = s.transcripts.get(workerId) as Draft | undefined;
         if (!t) return;
-        t.items = t.items.map((item) =>
-          item.kind === "permission" && item.payload.requestId === requestId
-            ? { ...item, state }
-            : item,
-        );
+        t.items = t.items.map((item) => {
+          if (item.kind !== "permission" || item.payload.requestId !== requestId) return item;
+          if (from !== undefined && item.state !== from) return item;
+          moved = true;
+          return { ...item, state };
+        });
       });
+      return moved;
     },
   })),
 );
