@@ -1,5 +1,5 @@
-//! PTY worker commands: spawn, pause, resume, kill, list, input, and the
-//! worker cap. The blocking PTY work runs on Tokio's blocking pool.
+//! PTY worker commands: spawn, pause, resume, kill, list, input, resize,
+//! and the worker cap. The blocking PTY work runs on Tokio's blocking pool.
 
 use serde::Deserialize;
 use serde_json::Value;

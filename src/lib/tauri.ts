@@ -153,8 +153,9 @@ export async function spawnWorker(
 
 /**
  * An `agent_spawn` error value: `{ workerId, message }` (built by
- * `agent_spawn_error` in `crates/swarm-core/src/commands/agent.rs`;
- * `AgentSpawnError` in `src-tauri/src/commands/agent.rs` over IPC).
+ * `agent_spawn_error` in `crates/swarm-core/src/commands/agent.rs`; the
+ * desktop forwarder in `src-tauri/src/commands/mod.rs` passes it over IPC
+ * untouched).
  */
 const AgentSpawnErrorSchema = z.object({
   workerId: z.uuid().nullish(),
@@ -526,7 +527,7 @@ export async function sendNotification(title: string, body: string): Promise<voi
 
 // ── Updater ──────────────────────────────────────────
 
-/** `check_for_updates`' result (`src-tauri/src/commands/updater.rs`). */
+/** `check_for_updates`' result (`src-tauri/src/commands/native.rs`). */
 const UpdateCheckResultSchema = z.object({
   available: z.boolean(),
   version: z.string().optional(),
