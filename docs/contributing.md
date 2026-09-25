@@ -357,7 +357,7 @@ cargo test --doc
 | `events::emitter`          | 40    | Roundtrip serialization, `snake_case` type tags, `camelCase` payload fields, provenance, the `agent_*` family |
 | `worker::registry`         | 12    | Insert, get, remove, `update_state_if` compare-and-set, capacity, aggregate metrics |
 | `worker::lifecycle`        | 17    | Spawn/pause/resume/kill lifecycle transitions, worktree isolation, credential-leak span-capture regression |
-| `worker::proc`             | 12    | NDJSON framer (linear-scan + line-cap regressions), `spawn_piped` round-trip, `kill_and_wait`, stderr tail |
+| `worker::proc`             | 15    | NDJSON framer (linear scan, line cap, overrun-tail discard), `spawn_piped` round-trip and spawn failure, `kill_and_wait`, stderr tail and its cap |
 | `agent::adapter`           | 5     | `AgentAdapter`/`AgentSession` trait contract + object safety, session lifecycle through a live engine, concurrency contract (busy/idempotent shutdown/exactly-once settlement), `ProviderId` wire-value pin |
 | `agent::claude_code`       | 17    | `ClaudeCodeAdapter` against the fake `claude` CLI fixture: turn settlement, tool-call/result ID pairing, permission-denied subclassing, inline-JSON settings flag, probe availability |
 | `agent::codex`             | 17    | `CodexAdapter` against the fake `codex` app-server fixture: JSON-RPC settlement ordering, approval round-trip, kill-mid-turn, resume rejection, trust-tier policy pins |

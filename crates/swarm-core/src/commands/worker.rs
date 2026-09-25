@@ -166,6 +166,28 @@ pub async fn worker_input(ctx: Ctx, args: Value) -> Result<Value, Value> {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResizeArgs {
+    id: String,
+    rows: u16,
+    cols: u16,
+}
+
+/// Resizes a worker's terminal to `rows` × `cols` character cells (see
+/// [`lifecycle::do_resize_worker`]). Emits no event: the size is
+/// terminal state, not history.
+pub async fn resize_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
+    let ResizeArgs { id, rows, cols } = parse_args(args)?;
+    let uuid = parse_uuid(&id)?;
+    let registry = ctx.registry.clone();
+    tokio::task::spawn_blocking(move || lifecycle::do_resize_worker(&registry, uuid, rows, cols))
+        .await
+        .map_err(|e| Value::String(e.to_string()))?
+        .map_err(|e| err_value(&e))?;
+    ok_value(&())
+}
+
+#[derive(Deserialize)]
 struct MaxWorkersArgs {
     max: usize,
 }

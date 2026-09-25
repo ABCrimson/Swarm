@@ -119,6 +119,24 @@ pub async fn worker_input(
 
 #[tauri::command]
 #[tracing::instrument(skip(registry, ctx))]
+pub async fn resize_worker(
+    registry: tauri::State<'_, std::sync::Arc<Registry>>,
+    ctx: tauri::State<'_, swarm_core::commands::Ctx>,
+    id: String,
+    rows: u16,
+    cols: u16,
+) -> Result<(), String> {
+    call(
+        &registry,
+        ctx.inner().clone(),
+        "resize_worker",
+        serde_json::json!({ "id": id, "rows": rows, "cols": cols }),
+    )
+    .await
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(registry, ctx))]
 pub async fn set_max_workers(
     registry: tauri::State<'_, std::sync::Arc<Registry>>,
     ctx: tauri::State<'_, swarm_core::commands::Ctx>,

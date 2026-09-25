@@ -22,6 +22,7 @@ Events are received on a single ordered channel, `swarm://events` -- see [Events
   - [kill_worker](#kill_worker)
   - [list_workers](#list_workers)
   - [worker_input](#worker_input)
+  - [resize_worker](#resize_worker)
   - [set_max_workers](#set_max_workers)
   - [Worktree Isolation Lifecycle](#worktree-isolation-lifecycle)
   - [validate_repo_root](#validate_repo_root)
@@ -87,17 +88,17 @@ Creates a new worker process with a PTY and registers it in the worker registry.
 | Field      | Type                     | Default            | Description                          |
 |------------|--------------------------|---------------------|--------------------------------------|
 | `name`     | `string`                 | `"Worker"`         | Human-readable display name          |
-| `shell`    | `string`                 | System default     | Shell executable path                |
+| `shell`    | `string`                 | `""`               | Shell program (path or name on `PATH`, no arguments). Empty selects the platform default: the user's login shell on Unix (`$SHELL`, else the passwd entry, else `/bin/sh`); `pwsh.exe` when on `PATH`, else `powershell.exe`, on Windows |
 | `cwd`      | `string`                 | `""`                | Initial working directory. Ignored when a worktree is actually created (see `isolation` below) -- the PTY's cwd becomes the new worktree path instead |
 | `env`      | `Record<string, string>` | `{}`                | Additional environment variables     |
-| `rows`     | `number`                 | `24`                | PTY terminal rows                    |
-| `cols`     | `number`                 | `80`                | PTY terminal columns                 |
+| `rows`     | `number`                 | `24`                | Initial PTY rows; see [`resize_worker`](#resize_worker) |
+| `cols`     | `number`                 | `80`                | Initial PTY columns; see [`resize_worker`](#resize_worker) |
 | `repoRoot` | `string \| null`         | `null`              | Root of the git repository to isolate this worker into. `null` (default) reproduces exactly the pre-worktree-isolation spawn -- no git anywhere |
 | `isolation`| `"worktree" \| "none"`   | `"worktree"`        | Isolation mode, effective only when `repoRoot` is present |
 
 **Returns:** `string` -- UUID of the newly spawned worker.
 
-**Worktree isolation (when `repoRoot` is given and `isolation` resolves to `"worktree"`):** resolves `repoRoot`'s git toplevel and `HEAD` sha, creates `~/.swarm/worktrees/<repo>-<hash8>/w-<id8>` on a fresh branch `swarm/<slug>-<id8>` starting at that sha, locks it (`git worktree lock --reason "swarm worker <uuid>"`), and spawns the PTY there instead of at `cwd`. Any failure in that pipeline (repo discovery, `HEAD` resolution, `git worktree add`/`lock`, or the PTY spawn itself) hard-fails the whole command -- **no worker is created and no PTY is started**; there is no silent fallback to spawning unisolated at a shared `cwd`. Omitting `repoRoot` skips this entirely and reproduces exactly the pre-worktree-isolation spawn.
+**Worktree isolation (when `repoRoot` is given and `isolation` resolves to `"worktree"`):** resolves `repoRoot`'s git toplevel and `HEAD` sha, creates `~/.swarm/worktrees/<repo>-<hash8>/w-<id8>` on a fresh branch `swarm/<slug>-<id8>` starting at that sha, locks it (`git worktree lock --reason "swarm worker <uuid>"`), and spawns the PTY there instead of at `cwd`. Any failure in that pipeline (repo discovery, `HEAD` resolution, `git worktree add`/`lock`) hard-fails the whole command -- **no worker is created and no PTY is started**; there is no silent fallback to spawning unisolated at a shared `cwd`. If the shell itself then fails to start, the new worktree is removed and its branch deleted before the error is returned. Omitting `repoRoot` skips this entirely and reproduces exactly the pre-worktree-isolation spawn.
 
 **Errors:**
 
@@ -105,7 +106,7 @@ Creates a new worker process with a PTY and registers it in the worker registry.
 |---------------------|------------------------------------------|
 | Git error           | `repoRoot` given and repo discovery, `HEAD` resolution, or `git worktree add`/`lock` failed |
 | PTY spawn failed    | Shell executable not found or PTY error  |
-| Registry at capacity| Worker count exceeds max_workers (64)    |
+| Registry at capacity| `max_workers` workers (default 64) already exist. Checked before anything is created: no worktree, branch or shell is left behind |
 
 **Example:**
 
@@ -210,7 +211,7 @@ await invoke("resume_worker", { id: "550e8400-e29b-41d4-a716-446655440000" });
 
 Terminates a worker process and removes it from the registry.
 
-Drops the PTY writer (closes master fd), kills the child process, waits for exit to prevent zombie processes (and, on Windows, to release any OS handle the child held on the worktree directory as its cwd), and emits a killed event.
+Removes the worker, kills its shell (unless the shell already exited) and waits for it to exit to prevent zombie processes (and, on Windows, to release any OS handle the shell held on the worktree directory as its cwd), then releases the PTY, and emits a killed event. A worker whose shell exited on its own (state `"error"`) is killed the same way.
 
 If the worker was isolated into a git worktree, also unlocks and `git worktree remove`s it -- **never** with `--force`. git's own refusal on a dirty/untracked worktree is treated as a successful preserve, not an error: SWARM never deletes uncommitted work.
 
@@ -296,7 +297,7 @@ Sends input text to a worker's PTY stdin, then emits a stamped `worker_input` ev
 |------------------|------------------------------------|
 | Invalid UUID     | `id` or `originWorker` is not a valid UUID string |
 | Worker not found | No worker with the given ID        |
-| IPC error        | Worker has no PTY writer or write failed |
+| IPC error        | The worker's shell has exited (state `"error"`), the worker has no PTY writer, or the write failed |
 
 **Example:**
 
@@ -315,6 +316,36 @@ await invoke("worker_input", {
 ```
 
 **Emits:** `worker_input` envelope on `swarm://events` with payload `{ workerId, bytes, source, preview? }` -- emitted only AFTER a successful PTY write. `preview` (first ~120 characters, control characters stripped) is present only for `source ∈ {tool, automation}`; `source == "terminal"` never carries a preview and the row is excluded from persistence entirely (see [Persistence Policy](#persistence-policy)) -- raw human keystrokes, and any secrets typed into a shell, are never archived.
+
+---
+
+### `resize_worker`
+
+Resizes a worker's terminal. The shell sees the new size at once (`SIGWINCH` on Unix, a pseudoconsole resize on Windows); `useTerminal` calls this whenever xterm.js fits itself to its container, and once when the terminal mounts. Allowed in every state. Emits no event: the size is terminal state, not history.
+
+**Parameters:**
+
+| Name   | Type     | Required | Description                       |
+|--------|----------|----------|-----------------------------------|
+| `id`   | `string` | Yes      | UUID of the worker                |
+| `rows` | `number` | Yes      | Terminal height in rows (1-65535) |
+| `cols` | `number` | Yes      | Terminal width in columns (1-65535) |
+
+**Returns:** `void`
+
+**Errors:**
+
+| Error            | Condition                                             |
+|------------------|-------------------------------------------------------|
+| Invalid UUID     | `id` is not a valid UUID string                       |
+| Worker not found | No worker with the given ID                           |
+| IPC error        | `rows` or `cols` is 0, the worker has no PTY, or the OS refused the resize |
+
+**Example:**
+
+```typescript
+await invoke("resize_worker", { id: workerId, rows: 40, cols: 120 });
+```
 
 ---
 
@@ -1125,7 +1156,7 @@ Read and write the app's persisted key/value configuration. Over the `swarmd` We
 
 ### `get_metrics`
 
-Returns a snapshot of the current aggregate worker metrics.
+Returns a snapshot of host usage, the worker count per state, and each worker's process-tree usage.
 
 **Parameters:** None
 
@@ -1135,6 +1166,7 @@ Returns a snapshot of the current aggregate worker metrics.
 |----------------|-----------------|-------------------------------------------|
 | `cpuPercent`   | `number`        | Global CPU usage percentage, via `sysinfo` |
 | `memoryMb`     | `number`        | Used system memory in megabytes, via `sysinfo` |
+| `memoryTotalMb` | `number`       | Installed system memory in megabytes, via `sysinfo` |
 | `totalWorkers` | `number`        | Total registered workers                 |
 | `running`      | `number`        | Workers in `running` state               |
 | `paused`       | `number`        | Workers in `paused` state                |
@@ -1147,9 +1179,9 @@ Returns a snapshot of the current aggregate worker metrics.
 | Field         | Type             | Description                                         |
 |---------------|------------------|------------------------------------------------------|
 | `workerId`    | `string` (UUID)  | UUID of the worker                                  |
-| `pid`         | `number \| null` | OS process ID, if the worker has one                |
-| `cpuPercent`  | `number`         | Process-level CPU usage percentage (`0` if no PID or process not found) |
-| `memoryBytes` | `number`         | Process-level resident memory in bytes (`0` if no PID or process not found) |
+| `pid`         | `number \| null` | OS process ID of the worker's shell, if it has one  |
+| `cpuPercent`  | `number`         | CPU usage of the shell and every process descended from it, in percent of one core (`0` if no PID or the shell is gone, and on the first call: usage is a delta between refreshes) |
+| `memoryBytes` | `number`         | Resident memory of the shell and every process descended from it, in bytes (`0` if no PID or the shell is gone) |
 
 **Example:**
 

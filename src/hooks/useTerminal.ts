@@ -4,6 +4,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import type { RefObject } from "react";
 import { useEffect, useRef } from "react";
+import { syncPtySize } from "#lib/pty-size";
 import { workerInput } from "#lib/tauri";
 import { useWorkerStore } from "#store/workers";
 
@@ -56,7 +57,8 @@ interface UseTerminalReturn {
  *
  * - Creates a Terminal with `allowProposedApi: true` (required for beta).
  * - Loads FitAddon first, then WebglAddon for GPU-accelerated rendering.
- * - Uses `@crimson_dev/use-resize-observer` to auto-fit on container resize.
+ * - Uses `@crimson_dev/use-resize-observer` to auto-fit on container resize,
+ *   and keeps the worker's PTY the same size (`syncPtySize`).
  * - Sends input data to the Rust backend via `invoke("worker_input")`.
  * - Subscribes to the worker store for output data.
  * - Disposes the terminal on unmount.
@@ -108,6 +110,7 @@ export function useTerminal({ workerId, containerRef }: UseTerminalOptions): Use
 
     // Initial fit
     fitAddon.fit();
+    const ptySize = syncPtySize(term, workerId);
 
     // Input: send keystrokes to the backend. source: "terminal" — no
     // provenance (the causer is a human, not a worker's turn) and no
@@ -134,6 +137,7 @@ export function useTerminal({ workerId, containerRef }: UseTerminalOptions): Use
 
     return () => {
       inputDisposable.dispose();
+      ptySize.dispose();
       unsubscribeOutput();
       webglAddon.dispose();
       fitAddon.dispose();

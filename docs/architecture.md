@@ -70,7 +70,7 @@ src-tauri/crates/swarm-core/src/   (swarm-core -- tauri-free domain crate)
 ├── bus/             Inter-agent message bus
 │   ├── channel.rs   MessageBus -- per-topic tokio::sync::broadcast channels
 │   └── router.rs    Router -- direct/broadcast send, emits bus_message onto the ordered spine (pipeline machinery deleted in Phase 4)
-├── commands/        The drift-proof command Registry (35 entries) + per-command RemotePolicy -- both shells dispatch through it
+├── commands/        The drift-proof command Registry (36 entries) + per-command RemotePolicy -- both shells dispatch through it
 ├── events/          Event emission system
 │   └── emitter.rs   SwarmEvent enum + EventSink (routes into OrchestrationEngine)
 ├── git/             Worktree-per-worker isolation + ship chain -- see "Worktree Isolation"/"Ship Chain" below
@@ -136,32 +136,35 @@ let runtime = tokio::runtime::Builder::new_multi_thread()
 
 The `WorkerRegistry` is the central data structure for worker management:
 
-- **Storage:** `DashMap<Uuid, WorkerHandle>` -- lock-free concurrent reads, per-shard write locks
-- **Configuration:** `parking_lot::RwLock<SystemConfig>` -- max workers (64) and default shell
+- **Storage:** `DashMap<Uuid, WorkerHandle>` -- a sharded map: reads take a shard read lock, writes a shard write lock. Callers clone what they need (a PTY writer or master `Arc`) out of an entry before any blocking call, so a blocked PTY write can never stall a kill on the same shard
+- **Configuration:** `parking_lot::RwLock<SystemConfig>` -- max workers (default 64, 1-256) and the worktrees root (default `~/.swarm/worktrees`)
 - **Metrics:** Sequential iteration over worker states for aggregate counts, run inside `tokio::task::spawn_blocking` so the async executor is never blocked. (The 64-worker cap makes sequential aggregation cheaper than `rayon`-style parallel dispatch overhead, so `rayon` was removed from the dependency tree.)
-- **Capacity:** Enforces `max_workers` limit, returns `AppError::RegistryFull` on overflow
+- **Capacity:** `reserve()` admits a spawn against `max_workers` (registered workers plus outstanding reservations, under one lock) before the spawn creates anything, returning `AppError::RegistryFull` when full; the slot is filled at registration or given back when the spawn fails
 - **State transitions:** `update_state_if(id, expected, new)` performs an atomic compare-and-set against the current state under the entry's lock, eliminating the read-then-write TOCTOU window that a separate `get` + `insert` would have
 
 ### PTY Management
 
-Workers spawn real processes via `portable-pty` 0.9.0:
+Workers run their shell on a real pseudo-terminal via `portable-pty` (ConPTY on Windows):
 
 ```text
 spawn_pty()
     │
     ├── native_pty_system().openpty()     Create PTY pair
-    ├── slave.spawn_command(shell)        Spawn shell in slave PTY
-    ├── master.take_writer()              Get writer for input
-    ├── master.try_clone_reader()         Get reader for output
-    │
-    ├── spawn_blocking(reader loop)       4KB buffer, blocking reads
-    │       │
-    │       └── mpsc::channel(4096)        Bridge to async world (bounded)
-    │               │
-    └── tokio::spawn(event emitter)       Forward as worker_output events (ephemeral)
+    ├── slave.spawn_command(shell)        Spawn the shell, then drop the slave
+    ├── master.take_writer()              Input (worker_input)
+    ├── master.try_clone_reader()         Output
+    └── master                            Kept for the worker's lifetime: resize_worker,
+                                          and on Windows it owns the pseudoconsole
+
+do_spawn_worker() then starts two named threads per worker, parked until
+worker_spawned has been emitted:
+    ├── pty-<id8>        blocking 8 KiB reads, UTF-8 decoded across read
+    │                    boundaries, emitted as worker_output (ephemeral)
+    └── pty-exit-<id8>   polls the shell (try_wait); a shell that exits on its
+                         own moves the worker to "error" (worker_state)
 ```
 
-The PTY writer and child process are wrapped in `parking_lot::Mutex` to satisfy `Sync` requirements for `DashMap` storage.
+The writer, master and shell process each sit in an `Arc<parking_lot::Mutex<..>>` on the `WorkerHandle`. The kill path reaps the shell first and only then releases the writer and master: on Windows, dropping the master closes the pseudoconsole under the shell.
 
 ### Worktree Isolation
 
@@ -442,11 +445,11 @@ pub trait AgentSession: Send + Sync {
 | History | SWARM's ordered event log | Every normalized `agent_*` event, seq-ordered -- see [docs/api.md](api.md#type-tags) for the full family and its persistence table. |
 | Process | `AgentSessionRegistry` (ephemeral, `crates/swarm-core/src/agent/registry.rs`) | Live `Arc<dyn AgentSession>` by worker id -- child handle, stdin writer, current turn live inside `ClaudeCodeSession` itself. Reconstructible from the log + `--resume`. |
 
-**Piped-process substrate** (`worker/proc.rs`, `spawn_piped`): a sibling to `spawn_pty` reusing the identical backpressure shape (`spawn_blocking` reader → bounded `mpsc(4096)` → forwarder task) but over `Stdio::piped()` instead of a pseudo-terminal, plus an `NdjsonFramer` that compacts its buffer once per `push()` call rather than once per line (see the module doc for the `ai/client.rs` line-framing loop this transplants and improves on). **A PTY is wrong for JSON**: line discipline echoes input, injects `\r`, and can inject ANSI escapes -- all of which corrupt NDJSON framing. `spawn_pty` stays correct for interactive shells; `spawn_piped` is the only substrate a JSON-protocol provider CLI may use.
+**Piped-process substrate** (`worker/proc.rs`, `spawn_piped`): the provider CLI runs over `Stdio::piped()` instead of a pseudo-terminal. A named `piped-out-<pid>` thread reads stdout into a bounded `mpsc(4096)`, a framing task turns the bytes into NDJSON lines with `NdjsonFramer` (buffer compacted once per `push()`, not once per line), and a `piped-err-<pid>` thread drains stderr. On Windows the child is created with `CREATE_NO_WINDOW`, so the windowless release build never opens a console window for it. **A PTY is wrong for JSON**: line discipline echoes input, injects `\r`, and can inject ANSI escapes -- all of which corrupt NDJSON framing. `spawn_pty` stays correct for interactive shells; `spawn_piped` is the only substrate a JSON-protocol provider CLI may use.
 
-- **Linear scanning, post-review fix.** The framer's `\n` search persists a `scan_from` cursor across `push()` calls instead of rescanning from byte 0 every time -- the first cut re-scanned the retained partial-line prefix on every chunk, an O(n²) amplification measured at ~13.4B byte-comparisons for a single 10MB line fed in `spawn_piped`'s 4096-byte read chunks (>1000x the actual work). Now each byte is scanned at most once over the framer's whole lifetime.
-- **A line cap (`MAX_LINE_BYTES`, 10MB).** An unterminated line past the cap returns `AppError::LineTooLong` -- never silently truncated JSON, and never an unbounded buffer for a provider that desyncs and stops emitting `\n`. The framer clears its own buffer as part of returning the error (subsequent lines keep parsing); the caller must still treat it as a session-level failure.
-- **`PipedHandle::kill_and_wait`** mirrors `spawn_pty`'s reap pattern (drop the stdin writer, kill, wait) so Phase 3 has one call that avoids zombies. `PipedHandle::stderr_tail` retains the last ~4KB of stderr live (not just a byte count) so a provider's fatal startup message is recoverable for diagnostics; the drain thread's lifetime is tied to the child's own (its `read()` unblocks with EOF once the child dies, whether via `kill_and_wait` or on its own).
+- **Linear scanning.** The framer's `\n` search resumes from a `scan_from` cursor instead of rescanning the retained partial line on every chunk, so each byte is examined at most once over the framer's lifetime however the stream is chunked.
+- **A line cap (`MAX_LINE_BYTES`, 10MB).** An unterminated line past the cap returns `AppError::LineTooLong` -- never silently truncated JSON, and never an unbounded buffer for a provider that desyncs and stops emitting `\n`. The framer clears its buffer as part of returning the error and discards the rest of the oversized line up to its `\n` (so that tail never surfaces as a bogus line), then keeps parsing; the caller must still treat the error as a session-level failure.
+- **`PipedHandle::kill_and_wait`** closes stdin, then kills and reaps the child (only the child itself is signalled, not processes it started). `PipedHandle::stderr_tail` keeps the last 4 KiB of stderr live so a provider's fatal startup message is recoverable for diagnostics. Both reader threads end at end of stream, which the OS reports as soon as the child exits.
 
 **The agent-turn scheduler** (`agent/scheduler.rs`, `AgentScheduler`) absorbed the deleted `ai/queue.rs` wholesale: the same `BinaryHeap<PrioritizedRequest>` + `Semaphore::acquire_owned()` + `JoinSet` + bounded `mpsc(256)` machinery, retyped from `AiRequest`/`AiPriority` to `AgentTurnRequest`/`TurnPriority`. The one structural change: the old queue owned a concrete `AiClient` and called `client.stream_message()` directly; `AgentScheduler` is generic over an injected `executor` closure instead. As of Phase 3, `swarm-desktop`'s `lib.rs` constructs one at startup with `AgentSchedulerConfig::default()` (`concurrent_limit: 3`, mirroring `useAiStore`'s existing `concurrentLimit` default -- that TS store is client-side-only and not yet synced to this Rust-side value; a `set_agent_concurrency` command to keep them live-synced is a follow-up) and an executor that looks up the target session in `AgentSessionRegistry` and calls `send_turn` on it. The `agent_send_turn` command (`docs/api.md`) enqueues through this scheduler rather than calling a session directly, so concurrent turns are gated app-wide -- concurrent agent turns are the scarce resource for the reason the plan gives: you do not want 20 Claude Code processes running tools against one repo at once. It is fire-and-forget by design: the command confirms admission, not completion, and the frontend renders from the live `agent_*` event stream rather than a synchronous return value.
 

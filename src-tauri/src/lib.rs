@@ -135,6 +135,7 @@ pub fn run() {
             commands::worker::kill_worker,
             commands::worker::list_workers,
             commands::worker::worker_input,
+            commands::worker::resize_worker,
             commands::worker::set_max_workers,
             // Git commands
             commands::git::validate_repo_root,

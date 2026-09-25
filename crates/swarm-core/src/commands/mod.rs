@@ -238,6 +238,7 @@ impl Registry {
             entry("kill_worker", worker::kill_worker, Allowed),
             entry("list_workers", worker::list_workers, Allowed),
             entry("worker_input", worker::worker_input, Allowed),
+            entry("resize_worker", worker::resize_worker, Allowed),
             entry("set_max_workers", worker::set_max_workers, Allowed),
             // Git / ship
             entry("validate_repo_root", git::validate_repo_root, Allowed),
@@ -412,10 +413,10 @@ mod tests {
         assert_eq!(keys.iter().collect::<BTreeSet<_>>().len(), keys.len());
     }
 
-    /// 37 desktop commands minus the 2 [`NATIVE_ONLY`] ones.
+    /// 38 desktop commands minus the 2 [`NATIVE_ONLY`] ones.
     #[test]
-    fn test_registry_has_35_entries() {
-        assert_eq!(Registry::new().keys().len(), 35);
+    fn test_registry_has_36_entries() {
+        assert_eq!(Registry::new().keys().len(), 36);
     }
 
     #[tokio::test]
