@@ -1,6 +1,7 @@
-import type { CSSProperties } from "react";
+import { type CSSProperties, useId } from "react";
 import { Pill, type PillTone } from "#components/ui/Pill";
-import type { AiProseState } from "#hooks/useShip";
+import type { AiProseState, ShipContextState } from "#hooks/useShip";
+import { pluralize } from "#lib/format";
 import {
   emptyRecordMessage,
   renderTruncationNote,
@@ -15,12 +16,13 @@ interface ShipPreviewProps {
   readonly onMessageChange: (message: string) => void;
   readonly mode: StagingMode;
   readonly onModeChange: (mode: StagingMode) => void;
-  readonly busy: boolean;
   readonly onCommitOnly: () => void;
   readonly onCommitAndPush: () => void;
   readonly onCommitPushAndOpenCompare: () => void;
-  /** The causal record for this ship range — `null` while `ship_context` is still loading or failed (best-effort; never blocks the rest of the preview). */
+  /** The causal record for this ship range — `null` until `contextState` is `"ready"` (best-effort; never blocks the rest of the preview). */
   readonly context: ShipContext | null;
+  readonly contextState: ShipContextState;
+  readonly onRetryContext: () => void;
   readonly aiProse: string | null;
   readonly onAiProseChange: (prose: string) => void;
   readonly aiProseState: AiProseState;
@@ -36,7 +38,7 @@ const sectionStyle: CSSProperties = {
 const labelStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: "0.6875rem",
-  color: "oklch(0.55 0.04 220)",
+  color: "var(--color-text-dim)",
   textTransform: "uppercase",
   letterSpacing: "0.08em",
 };
@@ -44,7 +46,7 @@ const labelStyle: CSSProperties = {
 const monoRowStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: "0.75rem",
-  color: "oklch(0.82 0.04 220)",
+  color: "var(--color-text)",
   display: "flex",
   alignItems: "center",
   gap: 6,
@@ -52,6 +54,8 @@ const monoRowStyle: CSSProperties = {
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
 };
+
+const separatorStyle: CSSProperties = { color: "oklch(0.45 0.03 220)" };
 
 const fileListStyle: CSSProperties = {
   display: "flex",
@@ -62,25 +66,25 @@ const fileListStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: "0.6875rem",
   padding: "8px 10px",
-  background: "oklch(0.06 0.02 220)",
+  background: "var(--color-void)",
   border: "1px solid oklch(0.14 0.03 220)",
   borderRadius: 8,
 };
 
+/**
+ * Layout for the two multi-line fields. Everything else (surface, border,
+ * text color, the focus ring) comes from the house `.swarm-input` class,
+ * so these fields get the same keyboard focus indicator as every other
+ * input — no inline `outline` override.
+ */
 const textareaStyle: CSSProperties = {
-  width: "100%",
+  height: "auto",
   minHeight: 140,
   padding: "10px 12px",
-  borderRadius: 8,
-  border: "1px solid oklch(0.28 0.05 220)",
-  background: "oklch(0.08 0.02 220)",
-  color: "oklch(0.88 0.03 220)",
   fontFamily: "var(--font-mono)",
   fontSize: "0.75rem",
   lineHeight: 1.5,
   resize: "vertical",
-  outline: "none",
-  boxSizing: "border-box",
 };
 
 const trailerNoteStyle: CSSProperties = {
@@ -131,30 +135,28 @@ const actionReasonStyle: CSSProperties = {
   padding: "0 2px",
 };
 
+interface FileRow {
+  readonly path: string;
+  readonly reason: string | null;
+}
+
 /** Deduplicated union of `staged`/`unstaged`/`untracked` paths, annotated with each file's skip reason (if any). */
-function buildFileRows(preflight: ShipPreflight): Array<{ path: string; reason: string | null }> {
+function buildFileRows(preflight: ShipPreflight): FileRow[] {
   const skipped = new Map(preflight.skipped.map((s) => [s.path, s.reason]));
-  const seen = new Set<string>();
-  const rows: Array<{ path: string; reason: string | null }> = [];
-  for (const path of [...preflight.staged, ...preflight.unstaged, ...preflight.untracked]) {
-    if (seen.has(path)) continue;
-    seen.add(path);
-    rows.push({ path, reason: skipped.get(path) ?? null });
-  }
-  return rows;
+  const paths = new Set([...preflight.staged, ...preflight.unstaged, ...preflight.untracked]);
+  return [...paths].map((path) => ({ path, reason: skipped.get(path) ?? null }));
 }
 
 /**
- * The literal, non-abbreviated argv sequence a *specific* action will
- * run — never a blanket plan shared across all three buttons, so
- * "Commit Only" never shows a `git push` line it isn't about to
- * execute (DIRECTIVE F4).
+ * The literal argv sequence one *specific* action will run — never a
+ * blanket plan shared across all three buttons, so "Commit Only" never
+ * shows a `git push` line it isn't about to execute.
  */
 function commandPlanFor(mode: StagingMode, includePush: boolean, includeCompare: boolean): string {
   const steps =
-    mode === "all" ? ["git add -- <files>", "git commit"] : ["git commit (already-staged index)"];
+    mode === "all" ? ["git add -- <files>", "git commit"] : ["git commit (Already-Staged Index)"];
   if (includePush) steps.push("git push -u origin <branch>");
-  if (includeCompare) steps.push("open compare page");
+  if (includeCompare) steps.push("Open Compare Page");
   return `Will Run: ${steps.join(" · ")}`;
 }
 
@@ -163,7 +165,7 @@ function commandPlanFor(mode: StagingMode, includePush: boolean, includeCompare:
 const causalMutedStyle: CSSProperties = {
   fontFamily: "var(--font-body)",
   fontSize: "0.75rem",
-  color: "oklch(0.55 0.04 220)",
+  color: "var(--color-text-dim)",
   fontStyle: "italic",
 };
 
@@ -184,19 +186,19 @@ const causalTableStyle: CSSProperties = {
 const causalHeadCellStyle: CSSProperties = {
   textAlign: "left",
   padding: "6px 10px",
-  color: "oklch(0.55 0.04 220)",
+  color: "var(--color-text-dim)",
   textTransform: "uppercase",
   letterSpacing: "0.06em",
   fontSize: "0.625rem",
   borderBottom: "1px solid oklch(0.14 0.03 220)",
   position: "sticky",
   top: 0,
-  background: "oklch(0.06 0.02 220)",
+  background: "var(--color-void)",
 };
 
 const causalCellStyle: CSSProperties = {
   padding: "5px 10px",
-  color: "oklch(0.82 0.04 220)",
+  color: "var(--color-text)",
   borderBottom: "1px solid oklch(0.11 0.02 220)",
   overflow: "hidden",
   textOverflow: "ellipsis",
@@ -210,34 +212,32 @@ function resultTone(ok: boolean | null): PillTone {
   return "neutral";
 }
 
-/** Every tool call across every turn, flattened into `{ turnLabel, name, target, ok }` rows for the table — one DOM row per call, matching `renderCausalRecordSection`'s markdown table shape. */
-function causalTableRows(
-  turns: readonly CausalTurn[],
-): Array<{ key: string; turnLabel: string; name: string; target: string; ok: boolean | null }> {
-  const rows: Array<{
-    key: string;
-    turnLabel: string;
-    name: string;
-    target: string;
-    ok: boolean | null;
-  }> = [];
-  turns.forEach((turn, turnIndex) => {
+interface CausalTableRow {
+  readonly key: string;
+  readonly turnLabel: string;
+  readonly name: string;
+  readonly target: string;
+  readonly ok: boolean | null;
+}
+
+/** Every tool call across every turn, one row per call — the same shape as `renderCausalRecordSection`'s markdown table. */
+function causalTableRows(turns: readonly CausalTurn[]): CausalTableRow[] {
+  return turns.flatMap((turn, turnIndex) => {
     const turnLabel = `${turnIndex + 1} (${turnStatusLabel(turn.status)})`;
-    turn.toolCalls.forEach((call, callIndex) => {
-      rows.push({
-        key: `${turn.turnId}-${callIndex}`,
-        turnLabel,
-        name: call.name,
-        target: call.target ?? "—",
-        ok: call.ok,
-      });
-    });
+    return turn.toolCalls.map((call, callIndex) => ({
+      key: `${turn.turnId}-${callIndex}`,
+      turnLabel,
+      name: call.name,
+      target: call.target ?? "—",
+      ok: call.ok,
+    }));
   });
-  return rows;
 }
 
 interface CausalRecordSectionProps {
   readonly context: ShipContext | null;
+  readonly contextState: ShipContextState;
+  readonly onRetry: () => void;
 }
 
 /**
@@ -247,16 +247,29 @@ interface CausalRecordSectionProps {
  * `#lib/ship-causal`'s `renderCausalRecordSection` (the markdown
  * counterpart that actually ships in the PR body — both share
  * `emptyRecordMessage`/`renderTruncationNote` so the two never drift on
- * wording). `context == null` (still loading, or `ship_context` failed)
- * and a genuinely empty range both render an honest muted message rather
- * than a table — the two are visually distinct so a user isn't left
- * wondering whether "no rows" means "still loading" or "nothing was
- * recorded". A genuinely empty range further distinguishes "this worker
- * did nothing" from "this worker's activity used the webview chat path,
- * invisible to this query" (`emptyRecordMessage`, review NIT-4) — never
- * one message papering over both.
+ * wording). Loading, a failed load (with a retry) and a genuinely empty
+ * range each render their own message, so "no rows" never leaves a user
+ * wondering whether the record is still coming, could not be read, or
+ * holds nothing. A genuinely empty range further distinguishes "this
+ * worker did nothing" from "this worker's activity used the webview chat
+ * path, invisible to this query" (`emptyRecordMessage`, review NIT-4).
  */
-function CausalRecordSection({ context }: CausalRecordSectionProps): React.ReactElement {
+function CausalRecordSection({
+  context,
+  contextState,
+  onRetry,
+}: CausalRecordSectionProps): React.ReactElement {
+  if (contextState === "failed") {
+    return (
+      <div className="flex items-center gap-2">
+        <span style={causalMutedStyle}>Causal Record Could Not Be Loaded.</span>
+        <Pill interactive tone="neutral" size="sm" onClick={onRetry}>
+          Retry
+        </Pill>
+      </div>
+    );
+  }
+
   if (context == null) {
     return <span style={causalMutedStyle}>Loading Causal Record…</span>;
   }
@@ -274,10 +287,8 @@ function CausalRecordSection({ context }: CausalRecordSectionProps): React.React
         <span>
           {context.seqFrom}..{context.seqTo}
         </span>
-        <span style={{ color: "oklch(0.45 0.03 220)" }}>{"·"}</span>
-        <span>
-          {context.turns.length} Turn{context.turns.length === 1 ? "" : "s"}
-        </span>
+        <span style={separatorStyle}>{"·"}</span>
+        <span>{pluralize("Turn", context.turns.length)}</span>
       </div>
       {truncationNote != null && <span style={causalMutedStyle}>{truncationNote}</span>}
       {rows.length > 0 && (
@@ -319,10 +330,10 @@ function CausalRecordSection({ context }: CausalRecordSectionProps): React.React
  * ahead/behind, diff stat + per-file rows (including Skipped), the
  * editable commit message, and the three ship actions — each labeled
  * with its own literal command plan. Commit Only / Commit + Push are
- * disabled until `preflight.canShip`, the message is non-empty, and
- * not `busy`; the compare action additionally requires
- * `preflight.hostSupportsCompare` (DIRECTIVE F7 — a non-GitHub remote
- * disables *only* that one action, never the other two).
+ * disabled until `preflight.canShip` and the message is non-empty; the
+ * compare action additionally requires `preflight.hostSupportsCompare`
+ * — a non-GitHub remote disables *only* that one action, since the
+ * other two never need a compare URL.
  */
 export function ShipPreview({
   preflight,
@@ -330,19 +341,21 @@ export function ShipPreview({
   onMessageChange,
   mode,
   onModeChange,
-  busy,
   onCommitOnly,
   onCommitAndPush,
   onCommitPushAndOpenCompare,
   context,
+  contextState,
+  onRetryContext,
   aiProse,
   onAiProseChange,
   aiProseState,
   onRegenerateProse,
 }: ShipPreviewProps): React.ReactElement {
+  const messageId = useId();
+  const proseId = useId();
   const fileRows = buildFileRows(preflight);
-  const messageEmpty = message.trim().length === 0;
-  const disabled = !preflight.canShip || busy || messageEmpty;
+  const disabled = !preflight.canShip || message.trim() === "";
   const compareDisabled = disabled || !preflight.hostSupportsCompare;
 
   return (
@@ -363,22 +376,22 @@ export function ShipPreview({
           <Pill tone="info" size="sm">
             {preflight.branch}
           </Pill>
-          <span style={{ color: "oklch(0.45 0.03 220)" }}>{"→"}</span>
+          <span style={separatorStyle}>{"→"}</span>
           <span>{preflight.baseBranch}</span>
           {preflight.remote != null && (
             <>
-              <span style={{ color: "oklch(0.45 0.03 220)" }}>{"·"}</span>
+              <span style={separatorStyle}>{"·"}</span>
               <span title={preflight.remote}>{preflight.host ?? preflight.remote}</span>
             </>
           )}
           {preflight.ahead > 0 && (
             <Pill tone="warning" size="sm">
-              {preflight.ahead === 1 ? "1 Unpushed Commit" : `${preflight.ahead} Unpushed Commits`}
+              {pluralize("Unpushed Commit", preflight.ahead)}
             </Pill>
           )}
           {preflight.behind > 0 && (
             <Pill tone="danger" size="sm">
-              {preflight.behind === 1 ? "1 Commit Behind" : `${preflight.behind} Commits Behind`}
+              {`${pluralize("Commit", preflight.behind)} Behind`}
             </Pill>
           )}
         </div>
@@ -387,16 +400,16 @@ export function ShipPreview({
       <div style={sectionStyle}>
         <span style={labelStyle}>Changes</span>
         <div style={monoRowStyle}>
-          <span>{preflight.diffStat.filesChanged} File(s)</span>
-          <span
-            style={{ color: "oklch(0.75 0.16 150)" }}
-          >{`+${preflight.diffStat.insertions}`}</span>
+          <span>{pluralize("File", preflight.diffStat.filesChanged)}</span>
+          <span style={{ color: "oklch(0.75 0.16 150)" }}>
+            {`+${preflight.diffStat.insertions}`}
+          </span>
           <span style={{ color: "oklch(0.68 0.20 25)" }}>{`-${preflight.diffStat.deletions}`}</span>
         </div>
         {fileRows.length > 0 && (
-          <div style={fileListStyle}>
+          <ul style={{ ...fileListStyle, listStyle: "none", margin: 0 }} aria-label="Changed Files">
             {fileRows.map((row) => (
-              <div
+              <li
                 key={row.path}
                 style={{
                   display: "flex",
@@ -412,9 +425,9 @@ export function ShipPreview({
                   {row.path}
                 </span>
                 {row.reason != null && <span>{row.reason}</span>}
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         )}
       </div>
 
@@ -445,12 +458,15 @@ export function ShipPreview({
       )}
 
       <div style={sectionStyle}>
-        <span style={labelStyle}>Commit Message</span>
+        <label htmlFor={messageId} style={labelStyle}>
+          Commit Message
+        </label>
         <textarea
+          id={messageId}
+          className="swarm-input"
           value={message}
           onChange={(e) => onMessageChange(e.target.value)}
           style={textareaStyle}
-          aria-label="Commit Message"
           spellCheck={false}
         />
         <span style={trailerNoteStyle}>
@@ -460,12 +476,15 @@ export function ShipPreview({
       </div>
 
       <div style={sectionStyle}>
-        <span style={labelStyle}>What Changed / Why (AI-Generated, Editable)</span>
+        <label htmlFor={proseId} style={labelStyle}>
+          What Changed / Why (AI-Generated, Editable)
+        </label>
         <textarea
+          id={proseId}
+          className="swarm-input"
           value={aiProse ?? ""}
           onChange={(e) => onAiProseChange(e.target.value)}
           style={textareaStyle}
-          aria-label="AI-Generated Pull Request Description"
           spellCheck={true}
           placeholder="Click Generate To Draft A Summary From The Causal Record Below — Optional, Editable, Never Required To Ship."
         />
@@ -493,7 +512,11 @@ export function ShipPreview({
 
       <div style={sectionStyle}>
         <span style={labelStyle}>Causal Record</span>
-        <CausalRecordSection context={context} />
+        <CausalRecordSection
+          context={context}
+          contextState={contextState}
+          onRetry={onRetryContext}
+        />
       </div>
 
       <div style={actionsStyle}>

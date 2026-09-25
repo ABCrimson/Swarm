@@ -1,129 +1,191 @@
-import { useEffect, useRef, useState } from "react";
+import { useAtomValue } from "jotai";
+import { MotionConfig } from "motion/react";
+import { Activity, useActionState, useId, useState } from "react";
 import { toast } from "sonner";
 import { HistorySearch } from "#components/session/HistorySearch";
-import { SessionActions, useSessionLifecycle } from "#components/session/SessionActions";
+import { SessionActions } from "#components/session/SessionActions";
 import { SessionList } from "#components/session/SessionList";
 import { TemplateSelector } from "#components/session/TemplateSelector";
 import { Button } from "#components/ui/Button";
-import { exportAsJSON, exportAsMarkdown, exportMetricsCSV, saveToFile } from "#lib/export";
+import { exportAsMarkdown, exportMetricsCSV, saveToFile, sessionFileSlug } from "#lib/export";
 import { pluralizeWorkers } from "#lib/format";
+import { deleteSessionAfterConfirm, exportSessionToFile } from "#lib/session-lifecycle";
 import { createSnapshot } from "#lib/snapshots";
 import { applyTemplate, createTemplateFromSession, saveUserTemplate } from "#lib/templates";
 import { useSessionStore } from "#store/sessions";
 import { useSystemStore } from "#store/system";
-import type { SessionTemplate } from "#store/types";
+import type { Session, SessionTemplate } from "#store/types";
+import { reducedMotionAtom } from "#store/ui";
 
 type SessionView = "list" | "search" | "templates";
 
-/** State for the inline template creation form (replaces blocking prompt()). */
-interface TemplateFormState {
-  readonly sessionId: string;
-  readonly defaultName: string;
-  step: "name" | "description";
-  name: string;
-  description: string;
+const VIEWS = [
+  { id: "list", label: "List" },
+  { id: "search", label: "Search" },
+  { id: "templates", label: "Templates" },
+] as const satisfies readonly { readonly id: SessionView; readonly label: string }[];
+
+/** A stable (module-level) ref callback, so it runs once per mount — never again on a re-render. */
+function focusOnMount(element: HTMLInputElement | null): void {
+  element?.focus();
+}
+
+function errorMessage(err: unknown): string {
+  return Error.isError(err) ? err.message : String(err);
+}
+
+// ── Actions (module level: each one owns its try/catch and its toast) ──
+
+async function deleteSession(id: string): Promise<void> {
+  const session = useSessionStore.getState().sessions.get(id);
+  if (session == null) return;
+  try {
+    if (await deleteSessionAfterConfirm(session))
+      toast.success(`Session "${session.name}" Deleted`);
+  } catch (err) {
+    toast.error(`Failed To Delete Session: ${errorMessage(err)}`);
+  }
+}
+
+async function exportSessionJson(id: string): Promise<void> {
+  const session = useSessionStore.getState().sessions.get(id);
+  if (session == null) return;
+  try {
+    const path = await exportSessionToFile(session);
+    if (path != null) toast.success(`Session Exported To ${path}`);
+  } catch (err) {
+    toast.error(`Export Failed: ${errorMessage(err)}`);
+  }
+}
+
+async function exportSessionMarkdown(session: Session): Promise<void> {
+  try {
+    const markdown = exportAsMarkdown(session);
+    const path = await saveToFile(
+      markdown,
+      `${sessionFileSlug(session.name)}.md`,
+      "Markdown",
+      "md",
+    );
+    if (path != null) toast.success(`Session Exported To ${path}`);
+  } catch (err) {
+    toast.error(`Export Failed: ${errorMessage(err)}`);
+  }
+}
+
+async function exportMetrics(): Promise<void> {
+  try {
+    // Read at click time: subscribing would re-render this page on every metrics tick.
+    const csv = exportMetricsCSV(useSystemStore.getState().metrics.history);
+    const path = await saveToFile(csv, "swarm-metrics.csv", "CSV", "csv");
+    if (path != null) toast.success(`Metrics Exported To ${path}`);
+  } catch (err) {
+    toast.error(`Metrics Export Failed: ${errorMessage(err)}`);
+  }
+}
+
+async function snapshotSession(session: Session): Promise<void> {
+  try {
+    await createSnapshot(session);
+    toast.success("Snapshot Created");
+  } catch (err) {
+    toast.error(`Failed To Create Snapshot: ${errorMessage(err)}`);
+  }
 }
 
 /**
- * Sessions page with list, search, and template views.
+ * Applies `template` (a new session plus one worker per spec) and reports
+ * honestly: an empty template, a total spawn failure and a partial one
+ * each get their own message rather than a blanket success.
+ */
+async function applyTemplateWithReport(template: SessionTemplate): Promise<void> {
+  const total = template.workerConfigs.length;
+  try {
+    const { session, workerIds } = await applyTemplate(template);
+    useSessionStore.getState().setActiveSession(session.id);
+    const spawned = workerIds.length;
+    if (total === 0) {
+      toast.warning(`Template "${template.name}" Has No Workers — Created An Empty Session`);
+    } else if (spawned === 0) {
+      toast.error(`Template "${template.name}" Failed — 0 Of ${total} Workers Spawned`);
+    } else if (spawned < total) {
+      toast.warning(
+        `Template "${template.name}" Partially Applied — ${spawned} Of ${total} Workers Spawned`,
+      );
+    } else {
+      toast.success(`Template "${template.name}" Applied — ${pluralizeWorkers(spawned)} Spawned`);
+    }
+  } catch (err) {
+    toast.error(`Failed To Apply Template "${template.name}": ${errorMessage(err)}`);
+  }
+}
+
+/** What the save-as-template form action leaves behind for the next render. */
+interface TemplateFormState {
+  readonly error: string | null;
+  readonly saved: boolean;
+  /** The submitted values, so a failed submit (which resets the form) keeps what was typed. */
+  readonly name: string | null;
+  readonly description: string;
+}
+
+const INITIAL_TEMPLATE_FORM: TemplateFormState = {
+  error: null,
+  saved: false,
+  name: null,
+  description: "",
+};
+
+async function saveSessionAsTemplate(session: Session, form: FormData): Promise<TemplateFormState> {
+  const name = String(form.get("name") ?? "").trim();
+  const description = String(form.get("description") ?? "").trim();
+  const failure = (error: string): TemplateFormState => ({
+    error,
+    saved: false,
+    name,
+    description,
+  });
+
+  if (name === "") return failure("Enter A Template Name.");
+  const template = createTemplateFromSession(session, { name, description });
+  if (template.workerConfigs.length === 0) {
+    return failure("This Session Has No Workers To Save As A Template.");
+  }
+  try {
+    await saveUserTemplate(template);
+  } catch (err) {
+    return failure(`Failed To Save Template: ${errorMessage(err)}`);
+  }
+  toast.success(`Template "${name}" Saved`);
+  return { ...INITIAL_TEMPLATE_FORM, saved: true };
+}
+
+// ── Page ─────────────────────────────────────────────
+
+/**
+ * Sessions page: the session list, history search and template views,
+ * plus session create/import, snapshots and export (Markdown, JSON, and
+ * the metrics history as CSV).
  *
- * Supports session CRUD, snapshots, and export in Markdown, JSON, and CSV.
+ * Each view sits in an `<Activity>`, so switching views hides the others
+ * instead of unmounting them — a search query, its date range and the
+ * list's scroll position survive a round trip through another view.
  */
 export function Sessions(): React.ReactElement {
   const [view, setView] = useState<SessionView>("list");
-  const [templateForm, setTemplateForm] = useState<TemplateFormState | null>(null);
-  const templateFormInputRef = useRef<HTMLInputElement>(null);
-  const lastFocusedFormKeyRef = useRef<string | null>(null);
-  const sessions = useSessionStore((s) => s.sessions);
+  const [templateSourceId, setTemplateSourceId] = useState<string | null>(null);
+  const reducedMotion = useAtomValue(reducedMotionAtom);
   const setActiveSession = useSessionStore((s) => s.setActiveSession);
-  const { deleteWithConfirm, exportSession } = useSessionLifecycle();
-
-  const activeSessionId = useSessionStore((s) => s.activeSessionId);
-  const activeSession = activeSessionId ? sessions.get(activeSessionId) : undefined;
-  const metrics = useSystemStore((s) => s.metrics);
-
-  // Focus the inline template-form field whenever it opens or advances a step,
-  // replacing the removed `autoFocus` attribute. Keyed on sessionId+step (not
-  // name/description) so typing doesn't repeatedly steal focus.
-  useEffect(() => {
-    if (!templateForm) return;
-    const formKey = `${templateForm.sessionId}-${templateForm.step}`;
-    if (lastFocusedFormKeyRef.current !== formKey) {
-      lastFocusedFormKeyRef.current = formKey;
-      templateFormInputRef.current?.focus();
-    }
-  }, [templateForm]);
-
-  const handleDelete = (id: string) => {
-    void deleteWithConfirm(id);
-  };
-
-  const handleExport = (id: string) => {
-    void exportSession(id);
-  };
-
-  const handleCreateTemplate = (id: string) => {
-    const session = sessions.get(id);
-    if (!session) return;
-
-    setTemplateForm({
-      sessionId: id,
-      defaultName: session.name,
-      step: "name",
-      name: session.name,
-      description: "",
-    });
-  };
-
-  const handleTemplateFormSubmit = async () => {
-    if (!templateForm) return;
-
-    if (templateForm.step === "name") {
-      if (!templateForm.name.trim()) {
-        setTemplateForm(null);
-        return;
-      }
-      setTemplateForm({ ...templateForm, step: "description" });
-      return;
-    }
-
-    // step === "description" — save the template
-    const template = createTemplateFromSession(templateForm.name, templateForm.description, []);
-    try {
-      await saveUserTemplate(template);
-      toast.success(`Template "${templateForm.name}" Saved`);
-    } catch {
-      toast.error("Failed To Save Template");
-    }
-    setTemplateForm(null);
-  };
+  const activeSession = useSessionStore((s) =>
+    s.activeSessionId == null ? undefined : s.sessions.get(s.activeSessionId),
+  );
+  const templateSource = useSessionStore((s) =>
+    templateSourceId == null ? undefined : s.sessions.get(templateSourceId),
+  );
 
   const handleTemplateSelect = (template: SessionTemplate) => {
     setView("list");
-    void (async () => {
-      try {
-        const { session, workerIds } = await applyTemplate(template);
-        setActiveSession(session.id);
-
-        const total = template.workerConfigs.length;
-        const spawned = workerIds.length;
-        if (spawned === 0) {
-          toast.error(`Template "${template.name}" Failed — 0 Of ${total} Workers Spawned`);
-        } else if (spawned < total) {
-          toast.warning(
-            `Template "${template.name}" Partially Applied — ${spawned} Of ${total} Workers Spawned`,
-          );
-        } else {
-          toast.success(
-            `Template "${template.name}" Applied — ${pluralizeWorkers(spawned)} Spawned`,
-          );
-        }
-      } catch (err) {
-        toast.error(
-          `Failed To Apply Template "${template.name}": ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    })();
+    void applyTemplateWithReport(template);
   };
 
   const handleSearchResultSelect = (sessionId: string) => {
@@ -131,208 +193,172 @@ export function Sessions(): React.ReactElement {
     setView("list");
   };
 
-  const handleSnapshot = async () => {
-    if (!activeSession) {
-      toast.error("No Active Session To Snapshot");
-      return;
-    }
-
-    try {
-      await createSnapshot(activeSession);
-      toast.success("Snapshot Created");
-    } catch {
-      toast.error("Failed To Create Snapshot");
-    }
-  };
-
-  const handleExportMarkdown = async () => {
-    if (!activeSession) {
-      toast.error("No Active Session To Export");
-      return;
-    }
-
-    try {
-      const md = exportAsMarkdown(activeSession);
-      const path = await saveToFile(
-        md,
-        `${activeSession.name.replaceAll(/\s+/g, "-").toLowerCase()}.md`,
-        "Markdown",
-        "md",
-      );
-      if (path) toast.success("Exported As Markdown");
-    } catch {
-      toast.error("Export Failed");
-    }
-  };
-
-  const handleExportJSON = async () => {
-    if (!activeSession) {
-      toast.error("No Active Session To Export");
-      return;
-    }
-
-    try {
-      const json = exportAsJSON(activeSession);
-      const path = await saveToFile(
-        json,
-        `${activeSession.name.replaceAll(/\s+/g, "-").toLowerCase()}.json`,
-        "JSON",
-        "json",
-      );
-      if (path) toast.success("Exported As JSON");
-    } catch {
-      toast.error("Export Failed");
-    }
-  };
-
-  const handleExportMetrics = async () => {
-    try {
-      const csv = exportMetricsCSV(metrics.history);
-      const path = await saveToFile(csv, "swarm-metrics.csv", "CSV", "csv");
-      if (path) toast.success("Metrics Exported As CSV");
-    } catch {
-      toast.error("Metrics Export Failed");
-    }
-  };
-
   return (
-    <div className="flex flex-col gap-6 p-6 h-full overflow-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1
-            className="text-2xl font-bold tracking-tight"
-            style={{
-              fontFamily: "var(--font-display)",
-              color: "oklch(0.95 0.02 220)",
-            }}
-          >
+    <MotionConfig reducedMotion={reducedMotion ? "always" : "user"}>
+      <div className="flex h-full flex-col gap-6 overflow-auto p-6">
+        <header>
+          <h1 className="text-2xl font-bold tracking-tight text-[oklch(0.95_0.02_220)] font-[family-name:var(--font-display)]">
             Sessions
           </h1>
-          <p
-            className="text-sm mt-1"
-            style={{
-              fontFamily: "var(--font-body)",
-              color: "oklch(0.55 0.04 220)",
-            }}
-          >
+          <p className="mt-1 text-sm text-[oklch(0.55_0.04_220)] font-[family-name:var(--font-body)]">
             Active And Historical Worker Sessions.
           </p>
-        </div>
-      </div>
+        </header>
 
-      {/* Toolbar */}
-      <div
-        className="flex items-center justify-between gap-4 rounded-xl p-3"
-        style={{
-          background: "oklch(0.12 0.02 220 / 0.6)",
-          backdropFilter: "blur(12px)",
-          border: "1px solid oklch(0.25 0.04 220 / 0.5)",
-        }}
-      >
-        <SessionActions />
-
-        <div className="flex items-center gap-2">
-          <ViewToggle label="List" active={view === "list"} onClick={() => setView("list")} />
-          <ViewToggle label="Search" active={view === "search"} onClick={() => setView("search")} />
-          <ViewToggle
-            label="Templates"
-            active={view === "templates"}
-            onClick={() => setView("templates")}
-          />
-
-          {/* Export dropdown for active session */}
-          {activeSession && (
-            <div
-              className="flex items-center gap-1 ml-2 pl-2"
-              style={{ borderLeft: "1px solid oklch(0.25 0.03 220)" }}
-            >
-              <Button variant="ghost" size="sm" onClick={() => void handleSnapshot()}>
-                Snapshot
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => void handleExportMarkdown()}>
-                Export MD
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => void handleExportJSON()}>
-                Export JSON
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => void handleExportMetrics()}>
-                Export Metrics
-              </Button>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Inline template creation form (replaces blocking prompt()) */}
-      {templateForm && (
         <div
-          className="flex items-center gap-3 rounded-xl p-3"
-          style={{
-            background: "oklch(0.14 0.03 290 / 0.4)",
-            border: "1px solid oklch(0.35 0.08 290 / 0.5)",
-          }}
+          className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-[oklch(0.25_0.04_220/0.5)] bg-[oklch(0.12_0.02_220/0.6)] p-3"
+          style={{ backdropFilter: "blur(12px)" }}
         >
-          <label
-            htmlFor="template-form-field"
-            className="text-xs font-medium"
-            style={{ color: "oklch(0.75 0.08 290)", fontFamily: "var(--font-body)" }}
-          >
-            {templateForm.step === "name" ? "Template Name:" : "Description:"}
-          </label>
-          <input
-            id="template-form-field"
-            ref={templateFormInputRef}
-            type="text"
-            className="flex-1 rounded-lg px-3 py-1.5 text-sm"
-            style={{
-              background: "oklch(0.10 0.02 220)",
-              border: "1px solid oklch(0.30 0.04 220)",
-              color: "oklch(0.90 0.02 220)",
-              fontFamily: "var(--font-body)",
-              outline: "none",
-            }}
-            value={templateForm.step === "name" ? templateForm.name : templateForm.description}
-            onChange={(e) =>
-              setTemplateForm({
-                ...templateForm,
-                [templateForm.step === "name" ? "name" : "description"]: e.target.value,
-              })
-            }
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void handleTemplateFormSubmit();
-              if (e.key === "Escape") setTemplateForm(null);
-            }}
-            placeholder={
-              templateForm.step === "name" ? "Enter Template Name" : "Enter Description (Optional)"
-            }
-          />
-          <Button variant="ghost" size="sm" onClick={() => void handleTemplateFormSubmit()}>
-            {templateForm.step === "name" ? "Next" : "Save"}
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setTemplateForm(null)}>
-            Cancel
-          </Button>
+          <SessionActions />
+
+          <div className="flex flex-wrap items-center gap-2">
+            <fieldset className="m-0 flex items-center gap-2 border-0 p-0">
+              <legend className="sr-only">View</legend>
+              {VIEWS.map(({ id, label }) => (
+                <ViewToggle
+                  key={id}
+                  label={label}
+                  active={view === id}
+                  onClick={() => setView(id)}
+                />
+              ))}
+            </fieldset>
+
+            {/* Actions on the active session */}
+            {activeSession != null && (
+              <div className="ml-2 flex items-center gap-1 border-l border-[oklch(0.25_0.03_220)] pl-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void snapshotSession(activeSession)}
+                >
+                  Snapshot
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void exportSessionMarkdown(activeSession)}
+                >
+                  Export MD
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void exportSessionJson(activeSession.id)}
+                >
+                  Export JSON
+                </Button>
+              </div>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => void exportMetrics()}>
+              Export Metrics
+            </Button>
+          </div>
         </div>
-      )}
 
-      {/* Content */}
-      <div className="flex-1 min-h-0">
-        {view === "list" && (
-          <SessionList
-            onDelete={handleDelete}
-            onExport={handleExport}
-            onCreateTemplate={handleCreateTemplate}
+        {templateSource != null && (
+          <TemplateForm
+            key={templateSource.id}
+            session={templateSource}
+            onDone={() => setTemplateSourceId(null)}
           />
         )}
 
-        {view === "search" && <HistorySearch onResultSelect={handleSearchResultSelect} />}
-
-        {view === "templates" && (
-          <TemplateSelector onSelect={handleTemplateSelect} onClose={() => setView("list")} />
-        )}
+        <div className="min-h-0 flex-1">
+          <Activity mode={view === "list" ? "visible" : "hidden"}>
+            <SessionList
+              onDelete={(id) => void deleteSession(id)}
+              onExport={(id) => void exportSessionJson(id)}
+              onCreateTemplate={setTemplateSourceId}
+            />
+          </Activity>
+          <Activity mode={view === "search" ? "visible" : "hidden"}>
+            <HistorySearch onResultSelect={handleSearchResultSelect} />
+          </Activity>
+          <Activity mode={view === "templates" ? "visible" : "hidden"}>
+            <TemplateSelector onSelect={handleTemplateSelect} onClose={() => setView("list")} />
+          </Activity>
+        </div>
       </div>
-    </div>
+    </MotionConfig>
+  );
+}
+
+/**
+ * The inline "Save As Template" form for one session (keyed by it, so
+ * opening it for another session starts fresh and focuses the name).
+ * Submission is a form action: while the save is pending the submit
+ * button is disabled, so Enter plus a click can never save twice.
+ */
+function TemplateForm({
+  session,
+  onDone,
+}: {
+  readonly session: Session;
+  readonly onDone: () => void;
+}): React.ReactElement {
+  const nameId = useId();
+  const descriptionId = useId();
+  const errorId = useId();
+  const [state, saveAction, saving] = useActionState(
+    async (_previous: TemplateFormState, form: FormData) => {
+      const next = await saveSessionAsTemplate(session, form);
+      if (next.saved) onDone();
+      return next;
+    },
+    INITIAL_TEMPLATE_FORM,
+  );
+
+  const labelClass =
+    "text-xs font-medium text-[oklch(0.75_0.08_290)] font-[family-name:var(--font-body)]";
+  const errorProps =
+    state.error != null ? { "aria-invalid": true, "aria-describedby": errorId } : {};
+
+  return (
+    <form
+      action={saveAction}
+      aria-label={`Save "${session.name}" As A Template`}
+      className="flex flex-wrap items-center gap-3 rounded-xl border border-[oklch(0.35_0.08_290/0.5)] bg-[oklch(0.14_0.03_290/0.4)] p-3"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onDone();
+      }}
+    >
+      <label htmlFor={nameId} className={labelClass}>
+        Template Name
+      </label>
+      <input
+        id={nameId}
+        name="name"
+        type="text"
+        required
+        ref={focusOnMount}
+        defaultValue={state.name ?? session.name}
+        className="swarm-input h-8 flex-1 text-sm"
+        {...errorProps}
+      />
+      <label htmlFor={descriptionId} className={labelClass}>
+        Description
+      </label>
+      <input
+        id={descriptionId}
+        name="description"
+        type="text"
+        placeholder="Optional"
+        defaultValue={state.description}
+        className="swarm-input h-8 flex-1 text-sm"
+      />
+      <Button type="submit" variant="primary" size="sm" loading={saving}>
+        Save Template
+      </Button>
+      <Button variant="ghost" size="sm" onClick={onDone}>
+        Cancel
+      </Button>
+      {state.error != null && (
+        <span id={errorId} role="alert" className="basis-full text-xs text-[oklch(0.72_0.20_25)]">
+          {state.error}
+        </span>
+      )}
+    </form>
   );
 }
 
@@ -348,14 +374,13 @@ function ViewToggle({
   return (
     <button
       type="button"
+      aria-pressed={active}
       onClick={onClick}
-      className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer"
-      style={{
-        fontFamily: "var(--font-body)",
-        background: active ? "oklch(0.25 0.06 290 / 0.4)" : "transparent",
-        color: active ? "oklch(0.85 0.12 290)" : "oklch(0.55 0.03 220)",
-        border: active ? "1px solid oklch(0.45 0.15 290 / 0.4)" : "1px solid transparent",
-      }}
+      className={`cursor-pointer rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors font-[family-name:var(--font-body)] focus-visible:outline-2 focus-visible:outline-plasma ${
+        active
+          ? "border-[oklch(0.45_0.15_290/0.4)] bg-[oklch(0.25_0.06_290/0.4)] text-[oklch(0.85_0.12_290)]"
+          : "border-transparent bg-transparent text-[oklch(0.55_0.03_220)] hover:text-[oklch(0.75_0.04_220)]"
+      }`}
     >
       {label}
     </button>

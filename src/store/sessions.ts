@@ -15,7 +15,15 @@ interface SessionStoreState {
 
 /** Mutation actions for managing sessions in the store. */
 interface SessionStoreActions {
+  /** Inserts or replaces one session. */
   readonly addSession: (session: Session) => void;
+  /**
+   * Adds every session not already in the store, in one update — the
+   * startup restore of the backend's persisted sessions. An entry the
+   * store already holds (created or grown this run) is newer than the
+   * persisted copy and is kept as is.
+   */
+  readonly hydrateSessions: (sessions: readonly Session[]) => void;
   readonly removeSession: (id: string) => void;
   readonly removeWorkerFromSession: (sessionId: string, workerId: string) => void;
   readonly setActiveSession: (id: string | null) => void;
@@ -37,6 +45,14 @@ export const useSessionStore = create<SessionStoreState & SessionStoreActions>()
       addSession(session) {
         set((s) => {
           s.sessions.set(session.id, session);
+        });
+      },
+
+      hydrateSessions(sessions) {
+        set((s) => {
+          for (const session of sessions) {
+            if (!s.sessions.has(session.id)) s.sessions.set(session.id, session);
+          }
         });
       },
 

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CLAUDE_MODELS } from "#lib/models";
 import {
   buildCausalPromptInput,
   composeShipBody,
@@ -13,8 +14,8 @@ import {
 import type { CausalTurn, DiffStat, ShipContext } from "#store/types";
 
 const mockStreamMessage = vi.fn();
-vi.mock("#lib/anthropic", () => ({
-  streamMessage: (...args: unknown[]) => mockStreamMessage(...args),
+vi.mock(import("#lib/anthropic"), () => ({
+  streamMessage: (...args) => mockStreamMessage(...args),
 }));
 
 function makeTurn(overrides: Partial<CausalTurn> = {}): CausalTurn {
@@ -218,6 +219,26 @@ describe("stripUnknownSeqCitations", () => {
     const context = makeContext({ seqFrom: 9, seqTo: 14 });
     expect(stripUnknownSeqCitations("[SEQ 11] works", context)).toBe("[SEQ 11] works");
   });
+
+  it("never joins a line to the previous one when a stripped citation starts it", () => {
+    const context = makeContext({ seqFrom: 9, seqTo: 14 });
+    expect(stripUnknownSeqCitations("First line.\n[seq 99] Second line.", context)).toBe(
+      "First line.\nSecond line.",
+    );
+  });
+
+  it("leaves nested-list and indented-code whitespace exactly as written", () => {
+    const context = makeContext({ seqFrom: 9, seqTo: 14 });
+    const prose = "- Parent [seq 99]\n  - Child [seq 11]\n\n    indented  code  block";
+    expect(stripUnknownSeqCitations(prose, context)).toBe(
+      "- Parent\n  - Child [seq 11]\n\n    indented  code  block",
+    );
+  });
+
+  it("collapses back-to-back stripped citations to one space between words", () => {
+    const context = makeContext({ seqFrom: 9, seqTo: 14 });
+    expect(stripUnknownSeqCitations("before [seq 1] [seq 2] after", context)).toBe("before after");
+  });
 });
 
 // ── buildCausalPromptInput (the no-secrets-in-prompt boundary) ───────
@@ -267,26 +288,29 @@ describe("buildCausalPromptInput", () => {
     expect(user).not.toContain("ANTHROPIC_API_KEY");
   });
 
-  it("the module source never imports readConfig or #lib/tauri at all (static proof)", () => {
-    // DIRECTIVE (prompt-assembly no-secrets test, static half): the only
-    // source of a config value/token in this codebase is `readConfig`
-    // from `#lib/tauri` (see anthropic.ts's `getClient`, which calls it
-    // for the API key — but that's the HTTP auth header, never prompt
-    // text). Reading ship-causal.ts's own source and asserting it never
-    // imports that function at all means no future edit to this file can
-    // introduce a config-value leak into the prompt without also
-    // failing this test, regardless of what runtime behavior looks like.
+  it("the module source never reaches the IPC layer or the environment (static proof)", () => {
+    // DIRECTIVE (prompt-assembly no-secrets test, static half): config
+    // values and tokens only ever come from the backend, via `readConfig`
+    // in `#lib/tauri` (anthropic.ts's `getClient` reads the API key that
+    // way — for the HTTP auth header, never prompt text) or a raw
+    // transport `invoke`. Scanning ship-causal.ts's own source for any
+    // spelling of an import of the IPC layer (the `#lib/` alias or a
+    // relative path, with or without `.ts`, static or dynamic), a Tauri
+    // API import, an `invoke`/`readConfig` call, or an environment read
+    // makes such an edit fail here, whatever its runtime behavior.
     // Resolved against this file (the test sits next to its module), so
     // the scan never depends on the directory vitest was launched from.
     // (Not `new URL(..., import.meta.url)`: Vite rewrites that pattern
     // into a served asset URL, which readFileSync rejects.)
     const source = readFileSync(join(import.meta.dirname, "ship-causal.ts"), "utf-8");
-    // Matches an actual call/import, not this test's own doc-comment
-    // prose mentioning "readConfig" as a name (see the module's JSDoc,
-    // which explains the absence in words).
-    expect(source).not.toMatch(/\breadConfig\(/);
-    expect(source).not.toMatch(/from ["']#lib\/tauri["']/);
-    expect(source).not.toMatch(/process\.env/);
+    // Calls and imports only — the module's JSDoc names `readConfig` in
+    // prose to explain its absence.
+    expect(source).not.toMatch(
+      /["'](?:#lib\/|\.{1,2}\/(?:lib\/)?)(?:tauri|transport)(?:\.ts)?["']/,
+    );
+    expect(source).not.toMatch(/["']@tauri-apps\//);
+    expect(source).not.toMatch(/\b(?:invoke|readConfig)\s*[<(]/);
+    expect(source).not.toMatch(/process\.env|import\.meta\.env/);
   });
 
   it("renders '(No Recorded Turns In This Range)' for an empty turn list, not a blank section", () => {
@@ -313,7 +337,7 @@ describe("generateCausalProse", () => {
     );
     const prose = await generateCausalProse(
       { context: makeContext(), diffStat, branch: "swarm/x", baseBranch: "main" },
-      "claude-sonnet-4-5",
+      CLAUDE_MODELS.sonnet.id,
     );
     expect(prose).toContain("[seq 11]");
     expect(prose).not.toContain("[seq 9999]");
@@ -335,7 +359,7 @@ describe("generateCausalProse", () => {
     await expect(
       generateCausalProse(
         { context: makeContext(), diffStat, branch: "swarm/x", baseBranch: "main" },
-        "claude-sonnet-4-5",
+        CLAUDE_MODELS.sonnet.id,
       ),
     ).rejects.toThrow(/API Key Not Configured/);
   });

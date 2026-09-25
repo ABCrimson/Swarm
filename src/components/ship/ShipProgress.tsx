@@ -6,11 +6,24 @@ interface ShipProgressProps {
   readonly rows: readonly ShipProgressRow[];
 }
 
-const STEP_LABELS: Record<string, string> = {
-  staging: "Staging",
-  commit: "Commit",
-  push: "Push",
-  compare: "Open Compare Page",
+/**
+ * Title Case labels for the steps the backend reports; an unknown step
+ * shows its raw name. `compare` is `ship_compare_url` building the link —
+ * the browser opens it only after the ship has settled (`useShip`), so the
+ * row must not claim the page was opened.
+ */
+const STEP_LABELS = new Map([
+  ["staging", "Staging"],
+  ["commit", "Commit"],
+  ["push", "Push"],
+  ["compare", "Compare Page Link"],
+]);
+
+/** Screen-reader wording for a step's status (the icons are decorative). */
+const STATUS_LABELS: Record<ShipProgressRow["status"], string> = {
+  running: "In Progress",
+  ok: "Done",
+  error: "Failed",
 };
 
 const containerStyle: CSSProperties = {
@@ -18,6 +31,8 @@ const containerStyle: CSSProperties = {
   flexDirection: "column",
   gap: 8,
   padding: 16,
+  listStyle: "none",
+  margin: 0,
 };
 
 const rowStyle: CSSProperties = {
@@ -27,7 +42,7 @@ const rowStyle: CSSProperties = {
   padding: "8px 10px",
   borderRadius: 8,
   background: "oklch(0.10 0.03 220 / 0.6)",
-  border: "1px solid oklch(0.22 0.04 220)",
+  border: "1px solid var(--color-border)",
 };
 
 const labelStyle: CSSProperties = {
@@ -40,7 +55,7 @@ const labelStyle: CSSProperties = {
 const detailStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: "0.6875rem",
-  color: "oklch(0.55 0.04 220)",
+  color: "var(--color-text-dim)",
   maxWidth: 220,
   overflow: "hidden",
   textOverflow: "ellipsis",
@@ -54,27 +69,23 @@ function StatusIcon({
 }): React.ReactElement {
   if (status === "ok") {
     return (
-      <span
-        role="img"
-        aria-label="Done"
-        style={{ color: "oklch(0.75 0.16 150)", fontSize: "0.875rem" }}
-      >
+      <span aria-hidden="true" style={{ color: "oklch(0.75 0.16 150)", fontSize: "0.875rem" }}>
         {"✓"}
       </span>
     );
   }
   if (status === "error") {
     return (
-      <span
-        role="img"
-        aria-label="Failed"
-        style={{ color: "oklch(0.68 0.20 25)", fontSize: "0.875rem" }}
-      >
+      <span aria-hidden="true" style={{ color: "oklch(0.68 0.20 25)", fontSize: "0.875rem" }}>
         {"✕"}
       </span>
     );
   }
-  return <Spinner size="sm" />;
+  return (
+    <span aria-hidden="true">
+      <Spinner size="sm" />
+    </span>
+  );
 }
 
 /**
@@ -84,29 +95,34 @@ function StatusIcon({
  * `"running"` to `"ok"`/`"error"`. Rows appear only for steps the
  * chosen action actually runs (never pre-rendered as pending), since
  * this app doesn't fabricate progress for steps that might not
- * happen.
+ * happen. The list is a polite live region, so each step's completion
+ * or failure is announced as it lands.
  */
 export function ShipProgress({ rows }: ShipProgressProps): React.ReactElement {
   // Collapse to the latest row per step (a step transitions
-  // running → ok/error, both events land in `rows`).
-  const latestByStep = new Map<string, ShipProgressRow>();
-  for (const row of rows) {
-    latestByStep.set(row.step, row);
-  }
+  // running → ok/error, both events land in `rows`); a Map keeps each
+  // step at the position it first appeared.
+  const latestByStep = new Map(rows.map((row) => [row.step, row]));
 
   return (
-    <ul style={{ ...containerStyle, listStyle: "none", margin: 0 }} aria-label="Ship Progress">
-      {[...latestByStep.values()].map((row) => (
-        <li key={row.step} style={rowStyle}>
-          <StatusIcon status={row.status} />
-          <span style={labelStyle}>{STEP_LABELS[row.step] ?? row.step}</span>
-          {row.detail != null && (
-            <span style={detailStyle} title={row.detail}>
-              {row.detail}
+    <ul style={containerStyle} aria-label="Ship Progress" aria-live="polite">
+      {latestByStep
+        .values()
+        .map((row) => (
+          <li key={row.step} style={rowStyle}>
+            <StatusIcon status={row.status} />
+            <span style={labelStyle}>
+              {STEP_LABELS.get(row.step) ?? row.step}
+              <span className="sr-only">{` — ${STATUS_LABELS[row.status]}`}</span>
             </span>
-          )}
-        </li>
-      ))}
+            {row.detail != null && (
+              <span style={detailStyle} title={row.detail}>
+                {row.detail}
+              </span>
+            )}
+          </li>
+        ))
+        .toArray()}
     </ul>
   );
 }

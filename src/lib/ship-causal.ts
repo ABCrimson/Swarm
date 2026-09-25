@@ -1,6 +1,3 @@
-import { streamMessage } from "#lib/anthropic";
-import type { CausalTurn, DiffStat, ShipContext } from "#store/types";
-
 /**
  * The two-part ship PR body: a DETERMINISTIC, code-generated "Causal
  * Record" section (`renderCausalRecordSection`) the model never writes,
@@ -11,8 +8,8 @@ import type { CausalTurn, DiffStat, ShipContext } from "#store/types";
  * telemetry once (the Math.random() charts) — provenance claims in a PR
  * body must be as machine-generated and unforgeable as that fix made
  * chart data. See `docs/architecture.md`'s Ship Chain section for the
- * full design and `src-tauri/crates/swarm-core/src/git/causal.rs` for
- * where `ShipContext` itself comes from.
+ * full design and `crates/swarm-core/src/git/causal.rs` for where
+ * `ShipContext` itself comes from.
  *
  * The AI half degrades gracefully by construction: `generateCausalProse`
  * is the ONLY function here that can fail (no API key, network error,
@@ -20,13 +17,15 @@ import type { CausalTurn, DiffStat, ShipContext } from "#store/types";
  * catches a `generateCausalProse` rejection and passes `null` as
  * `aiProse` to `composeShipBody` gets exactly the deterministic section
  * alone; nothing here fabricates a substitute for the prose.
+ *
+ * @module ship-causal
  */
 
-// ── Deterministic Causal Record (code-generated, never model-written) ──
+import { streamMessage } from "#lib/anthropic";
+import { pluralize } from "#lib/format";
+import type { CausalTurn, DiffStat, ShipContext } from "#store/types";
 
-function pluralize(count: number, singular: string, plural = `${singular}s`): string {
-  return count === 1 ? singular : plural;
-}
+// ── Deterministic Causal Record (code-generated, never model-written) ──
 
 /** Exported for `ShipPreview.tsx`'s in-app Causal Record table, which renders the same labeling as this module's markdown output rather than re-deriving it. */
 export function resultLabel(ok: boolean | null): "OK" | "Error" | "Pending" {
@@ -44,25 +43,18 @@ export function turnStatusLabel(status: string | null): "Completed" | "Failed" |
 
 /** Markdown-table-cell-safe: escapes `|` and collapses embedded newlines — a tool's `target` is a short path/command string, never expected to need more than this. */
 function escapeCell(value: string): string {
-  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  return value.replaceAll("|", String.raw`\|`).replaceAll(/\r?\n/g, " ");
 }
 
 function renderToolCallRows(turns: readonly CausalTurn[]): string[] {
-  const rows: string[] = [];
-  turns.forEach((turn, index) => {
+  return turns.flatMap((turn, index) => {
     const turnLabel = `${index + 1} (${turnStatusLabel(turn.status)})`;
-    if (turn.toolCalls.length === 0) {
-      rows.push(`| ${turnLabel} | — | — | — |`);
-      return;
-    }
-    for (const call of turn.toolCalls) {
+    if (turn.toolCalls.length === 0) return [`| ${turnLabel} | — | — | — |`];
+    return turn.toolCalls.map((call) => {
       const target = call.target != null ? escapeCell(call.target) : "—";
-      rows.push(
-        `| ${turnLabel} | ${escapeCell(call.name)} | ${target} | ${resultLabel(call.ok)} |`,
-      );
-    }
+      return `| ${turnLabel} | ${escapeCell(call.name)} | ${target} | ${resultLabel(call.ok)} |`;
+    });
   });
-  return rows;
 }
 
 /**
@@ -89,7 +81,7 @@ function renderToolCallRows(turns: readonly CausalTurn[]): string[] {
 export function renderTruncationNote(context: ShipContext): string | null {
   if (context.omittedTurnCount === 0 && !context.eventsTruncated) return null;
   const shown = context.turns.length;
-  return `Showing The Most Recent ${shown} ${pluralize(shown, "Turn")} In This Range — Older Turns Omitted.`;
+  return `Showing The Most Recent ${pluralize("Turn", shown)} In This Range — Older Turns Omitted.`;
 }
 
 /**
@@ -123,44 +115,43 @@ export function emptyRecordMessage(context: ShipContext): string {
  * applies, never silently.
  */
 export function renderCausalRecordSection(context: ShipContext, diffStat: DiffStat): string {
-  const lines: string[] = ["## Causal Record", ""];
-
   const turnCount = context.turns.length;
-  lines.push(
-    `**Seq Range:** \`${context.seqFrom}..${context.seqTo}\` — ${turnCount} ${pluralize(turnCount, "Turn")}`,
-  );
-  lines.push(
-    `**Diff:** ${diffStat.filesChanged} ${pluralize(diffStat.filesChanged, "File")} Changed, +${diffStat.insertions}/-${diffStat.deletions}`,
-  );
-  for (const commit of context.commits) {
-    lines.push(`**Commit:** \`${commit.sha.slice(0, 12)}\` On \`${commit.branch}\``);
-  }
-  lines.push("");
+  const lines = [
+    "## Causal Record",
+    "",
+    `**Seq Range:** \`${context.seqFrom}..${context.seqTo}\` — ${pluralize("Turn", turnCount)}`,
+    `**Diff:** ${pluralize("File", diffStat.filesChanged)} Changed, +${diffStat.insertions}/-${diffStat.deletions}`,
+    ...context.commits.map(
+      (commit) => `**Commit:** \`${commit.sha.slice(0, 12)}\` On \`${commit.branch}\``,
+    ),
+    "",
+  ];
 
   const truncationNote = renderTruncationNote(context);
 
   if (turnCount === 0) {
     lines.push(`_${emptyRecordMessage(context)}_`);
-    if (truncationNote != null) {
-      lines.push("", `_${truncationNote}_`);
-    }
+    if (truncationNote != null) lines.push("", `_${truncationNote}_`);
     return lines.join("\n");
   }
 
-  if (truncationNote != null) {
-    lines.push(`_${truncationNote}_`, "");
-  }
-
-  lines.push("| Turn | Tool | Target | Result |");
-  lines.push("|------|------|--------|--------|");
-  lines.push(...renderToolCallRows(context.turns));
-
+  if (truncationNote != null) lines.push(`_${truncationNote}_`, "");
+  lines.push(
+    "| Turn | Tool | Target | Result |",
+    "|------|------|--------|--------|",
+    ...renderToolCallRows(context.turns),
+  );
   return lines.join("\n");
 }
 
 // ── Citation validity + stripping (the honesty rule) ────────────────
 
-const SEQ_CITATION_RE = /\s?\[seq\s+(\d+)\]/gi;
+/**
+ * One `[seq N]` citation plus at most one plain space on each side —
+ * never a newline or tab, so removing a citation can never join two
+ * lines or eat a list item's indentation.
+ */
+const SEQ_CITATION_RE = /( ?)\[seq\s+(\d+)\]( ?)/gi;
 
 function isSeqInRange(seq: number, context: ShipContext): boolean {
   return seq > context.seqFrom && seq <= context.seqTo;
@@ -169,25 +160,27 @@ function isSeqInRange(seq: number, context: ShipContext): boolean {
 /**
  * Strips every `[seq N]` citation in `prose` whose `N` does not fall
  * within `context`'s actual `(seqFrom, seqTo]` range — the honesty gate
- * between whatever the model wrote and what actually renders. Matches
- * the preceding whitespace too, so "the Bash call [seq 42] failed"
- * degrades to "the Bash call failed" rather than leaving a double space.
- * A model citing a seq it was never given (hallucination) or one
- * outside the fetched window is functionally indistinguishable from
- * fabricated provenance — both are removed the same way, unconditionally,
- * never surfaced as a "trust me" citation.
+ * between whatever the model wrote and what actually renders. A model
+ * citing a seq it was never given (hallucination) or one outside the
+ * fetched window is functionally indistinguishable from fabricated
+ * provenance — both are removed the same way, unconditionally, never
+ * surfaced as a "trust me" citation.
+ *
+ * Spacing is repaired only where a citation was removed: a citation
+ * between two words collapses to the single space that separated them
+ * ("the Bash call [seq 42] failed" → "the Bash call failed"), one at the
+ * start of a line or before punctuation takes its adjacent space with it.
+ * Nothing else in the prose is touched — nested-list indentation,
+ * indented code and line breaks survive exactly as the model wrote them.
  */
 export function stripUnknownSeqCitations(prose: string, context: ShipContext): string {
-  const stripped = prose.replace(SEQ_CITATION_RE, (match, seqStr: string) => {
-    const seq = Number(seqStr);
-    return isSeqInRange(seq, context) ? match : "";
-  });
-  // A removed citation can leave a doubled space (two citations back to
-  // back) or a leading space (a citation was the very first thing in the
-  // string) behind — collapsed here rather than left visible. Only the
-  // space character is touched, never a newline, so intentional
-  // paragraph breaks in the model's prose are untouched.
-  return stripped.replace(/ {2,}/g, " ").replace(/^ +/, "");
+  return prose.replaceAll(
+    SEQ_CITATION_RE,
+    (match, before: string, seqStr: string, after: string) => {
+      if (isSeqInRange(Number(seqStr), context)) return match;
+      return before && after ? " " : "";
+    },
+  );
 }
 
 // ── AI prose (optional, degrades gracefully) ─────────────────────────
@@ -265,15 +258,15 @@ export async function generateCausalProse(
   signal?: AbortSignal,
 ): Promise<string> {
   const { system, user } = buildCausalPromptInput(input);
-  let text = "";
-  for await (const delta of streamMessage(
-    { model, maxTokens: 768, system, messages: [{ role: "user", content: user }] },
-    signal,
-  )) {
-    if (delta.toolUse) continue; // tools were never offered; defensive, not expected.
-    text += delta.content;
-  }
-  return stripUnknownSeqCitations(text.trim(), input.context);
+  const parts = await Array.fromAsync(
+    streamMessage(
+      { model, maxTokens: 768, system, messages: [{ role: "user", content: user }] },
+      signal,
+    ),
+    // Tools were never offered; a tool-use delta is defensive, not expected.
+    (delta) => (delta.toolUse ? "" : delta.content),
+  );
+  return stripUnknownSeqCitations(parts.join("").trim(), input.context);
 }
 
 // ── Compose ───────────────────────────────────────────────────────────
