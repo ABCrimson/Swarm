@@ -148,6 +148,8 @@ export function CommandPalette(): React.ReactElement {
     toast.warning(`Kill ${name}?`, {
       id: `kill:${id}`,
       description: "This Stops Its Terminal Process",
+      // Long enough to reach the action from the keyboard (Alt+T focuses toasts).
+      duration: 10_000,
       action: { label: "Kill", onClick: () => void kill(id) },
       cancel: { label: "Keep", onClick: () => {} },
     });
