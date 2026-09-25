@@ -43,7 +43,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use swarm_core::Paths;
-use swarm_core::events::{Provenance, SwarmEvent, SystemLogPayload};
+use swarm_core::events::{SwarmEvent, SystemLogPayload};
 use swarm_core::lock::LockError;
 use swarm_core::runtime::{Runtime, RuntimeConfig, RuntimeStartError};
 use swarmd::auth::{DaemonToken, HostPolicy};
@@ -62,8 +62,9 @@ const DEFAULT_LOG_FILTER: &str = "swarm_core=info,swarmd=info,warn";
 
 /// How long shutdown waits for workers to stop.
 const STOP_WORKERS_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long shutdown waits for the event writer to persist what is queued.
-const FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
+/// Budget for each phase of [`Runtime::shutdown`] (agent sessions still
+/// registered, then the event writer's drain), so it takes at most 5 s.
+const SHUTDOWN_PHASE_TIMEOUT: Duration = Duration::from_millis(2500);
 
 fn main() -> ExitCode {
     let command = match cli::parse(std::env::args_os().skip(1)) {
@@ -456,10 +457,12 @@ fn shutdown_signal() -> io::Result<impl Future<Output = &'static str>> {
     }
 }
 
-/// Stops what the runtime started, after the server has stopped: the
-/// metrics loop, then every worker (through `kill_worker`, so each agent
-/// session shuts down and each worktree gets its usual disposition), then
-/// waits for the event writer to persist everything recorded so far.
+/// Stops what the runtime started, after the server has stopped: every
+/// worker first (through `kill_worker`, so each agent session shuts down
+/// and each worktree gets its usual disposition), then
+/// [`Runtime::shutdown`], which stops the metrics loop, shuts down any
+/// agent session still registered, drains the event writer and records
+/// the exact head seq, so the next start continues without a seq gap.
 /// Dropping the runtime at the end releases the single-instance lock.
 async fn stop_runtime(state: &AppState, runtime: Runtime) {
     runtime.metrics_cancel.cancel();
@@ -482,24 +485,22 @@ async fn stop_runtime(state: &AppState, runtime: Runtime) {
         }
     }
 
-    // The writer handles events in order, so its acknowledgement of this
-    // last one means everything recorded before it has been persisted.
     let timestamp = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |elapsed| {
             i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
         });
-    let flushed = ctx.sink.emit_awaiting_seq(
-        SwarmEvent::SystemLog(SystemLogPayload {
-            level: "info".to_owned(),
-            message: "SWARM Daemon Stopped.".to_owned(),
-            target: "swarmd".to_owned(),
-            timestamp,
-        }),
-        Provenance::default(),
-    );
-    if tokio::time::timeout(FLUSH_TIMEOUT, flushed).await.is_err() {
-        tracing::warn!("the event writer did not drain within the shutdown timeout");
+    ctx.sink.emit(SwarmEvent::SystemLog(SystemLogPayload {
+        level: "info".to_owned(),
+        message: "SWARM Daemon Stopped.".to_owned(),
+        target: "swarmd".to_owned(),
+        timestamp,
+    }));
+    // Everything recorded before this call, the log line above included,
+    // is persisted when it returns.
+    match runtime.shutdown(SHUTDOWN_PHASE_TIMEOUT).await {
+        Ok(head_seq) => tracing::info!(head_seq, "the event log is final"),
+        Err(error) => tracing::warn!(%error, "the runtime did not shut down cleanly"),
     }
     drop(runtime);
 }

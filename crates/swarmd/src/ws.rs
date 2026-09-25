@@ -39,9 +39,10 @@
 //! # Event stream
 //!
 //! The connection subscribes to the engine's broadcast fanout BEFORE reading
-//! the log head, so nothing published in between is missed: anything the
-//! engine emits after the subscription is buffered in the receiver, and a
-//! seq filter drops whatever a replay already delivered. A warm `hello`
+//! the engine's head seq (`OrchestrationEngine::head_seq`, an in-memory
+//! read), so nothing published in between is missed: anything the engine
+//! emits after the subscription is buffered in the receiver, and a seq
+//! filter drops whatever a replay already delivered. A warm `hello`
 //! (`lastSeq: n`) replays every persisted event after `n` from SQLite, in
 //! pages of [`REPLAY_PAGE_SIZE`]; a cold one (`lastSeq: null`) replays
 //! nothing and starts at the head, because the client hydrates from the
@@ -49,9 +50,9 @@
 //! events. If the receiver lags the fanout, the same replay heals the gap
 //! from the log; a replay that cannot read the log closes the connection
 //! with `1011 Internal Error`, so the client reconnects and retries instead
-//! of believing it is caught up. Seqs are assumed unique across daemon
-//! restarts (the engine's contract), so a client's `lastSeq` stays valid
-//! when it reconnects to a restarted daemon.
+//! of believing it is caught up. Seqs never repeat across daemon restarts
+//! (the engine reserves them in the log), so a client's `lastSeq` stays
+//! valid when it reconnects to a restarted daemon.
 //!
 //! # Lanes and ordering
 //!
@@ -373,15 +374,8 @@ async fn connection(socket: WebSocket, state: AppState, peer: SocketAddr, admiss
 
     // Subscribe BEFORE reading the head (see the module doc).
     let live = state.ctx.engine.subscribe();
+    let server_seq = state.ctx.engine.head_seq();
     let log_path = state.ctx.engine.db_path().map(Path::to_path_buf);
-    let server_seq = match head_seq(log_path.clone()).await {
-        Ok(seq) => seq,
-        Err(error) => {
-            tracing::error!(%peer, %error, "WebSocket closed: cannot read the event log head");
-            close_now(&mut sink, close_code::ERROR, "Event Log Unavailable.").await;
-            return;
-        }
-    };
     tracing::info!(%peer, last_seq, server_seq, "WebSocket client connected");
 
     let (events_tx, events_rx) = mpsc::channel(EVENT_LANE_CAPACITY);
@@ -634,14 +628,6 @@ async fn write_frames<S: Sink<Message> + Unpin>(
             return Ok(());
         }
     }
-}
-
-/// The highest persisted seq, read off the Tokio worker threads.
-async fn head_seq(log_path: Option<PathBuf>) -> Result<u64, FeedEnd> {
-    let Some(path) = log_path else {
-        return Ok(0);
-    };
-    blocking(move || EventLog::open_readonly(&path)?.max_seq()).await
 }
 
 /// Runs blocking SQLite work on the blocking pool.

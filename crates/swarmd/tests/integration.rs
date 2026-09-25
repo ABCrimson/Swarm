@@ -127,17 +127,16 @@ impl TestServer {
 /// How long [`start_runtime`] keeps retrying a lock that is still held.
 const LOCK_RETRY_DEADLINE: Duration = Duration::from_secs(5);
 
-/// Starts the runtime on `data_dir`, retrying while the single-instance lock
-/// is still held.
+/// Starts the runtime on `data_dir`, retrying briefly while the
+/// single-instance lock is still held.
 ///
 /// A restart ([`TestServer::stop`], then [`TestServer::start_in`] on the same
-/// directory) can find the previous runtime's `daemon.lock` still locked
-/// even though that runtime is dropped: the lock belongs to the open file
-/// description, and a process that another test in this binary is spawning
-/// at that moment holds a copy of the descriptor from fork until exec closes
-/// it (it is close-on-exec). That window is short, so a bounded retry makes
-/// the restart deterministic without hiding a real leak: a lock held for
-/// the whole deadline still fails the test.
+/// directory) should always find `daemon.lock` free: dropping the runtime
+/// unlocks it explicitly (`SingleInstanceLock`'s `Drop`), even while a
+/// process that another test in this binary is spawning still shares its
+/// open file description between fork and exec. The bounded retry is only a
+/// safety net and hides no real leak: a lock held for the whole deadline
+/// still fails the test.
 async fn start_runtime(data_dir: &Path, addr: SocketAddr) -> Runtime {
     let deadline = Instant::now() + LOCK_RETRY_DEADLINE;
     loop {
@@ -853,6 +852,9 @@ async fn test_reattach_after_restart_replays_events_recorded_by_the_new_daemon()
         .await;
         assert!(ok, "{error:?}");
     }
+    // An RPC answers before its event is persisted; the replay reads the
+    // log, so wait for the writer before reattaching.
+    second.runtime.engine.flush().await.unwrap();
 
     let mut ws = connect(&second).await;
     hello(&mut ws, Some(last_seen), Some(&token)).await;
@@ -883,7 +885,6 @@ async fn test_reattach_after_restart_replays_events_recorded_by_the_new_daemon()
 /// consume seqs but are never persisted. After a restart, events the new
 /// daemon records must still sort after everything the client saw.
 #[tokio::test]
-#[ignore = "needs swarm-core's restart-monotonic seqs (engine reserves seqs in the log); un-ignore when that lands"]
 async fn test_reattach_after_restart_with_an_ephemeral_tail_keeps_new_events() {
     let first = TestServer::start().await;
     let data_dir = first.data_dir.clone();
@@ -931,6 +932,9 @@ async fn test_reattach_after_restart_with_an_ephemeral_tail_keeps_new_events() {
     )
     .await;
     assert!(ok);
+    // An RPC answers before its event is persisted; the replay reads the
+    // log, so wait for the writer before reattaching.
+    second.runtime.engine.flush().await.unwrap();
 
     let mut ws = connect(&second).await;
     hello(&mut ws, Some(last_seen), Some(&token)).await;

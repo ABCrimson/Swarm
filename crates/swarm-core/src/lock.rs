@@ -248,8 +248,8 @@ mod tests {
         // A second attempt while the first guard is alive fails as
         // AlreadyRunning, even within one process. The cross-process case
         // (two real `swarmd` binaries on one data dir) is covered by
-        // swarmd's
-        // `test_second_daemon_on_the_same_data_dir_is_refused_by_the_single_instance_lock`.
+        // crates/swarmd/tests/integration.rs's
+        // `test_second_daemon_on_the_same_data_dir_exits_75`.
         let dir = std::env::temp_dir().join(format!("swarm-lock-test-{}", uuid::Uuid::new_v4()));
         let _cleanup = remove_on_drop(dir.clone());
         let first = SingleInstanceLock::acquire(&dir, "swarm-desktop", None).unwrap();
