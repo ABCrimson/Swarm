@@ -92,12 +92,11 @@ tokio-util                = { version = "=0.7.19", features = ["rt"] }
 # See docs/architecture.md's "Runtime Modes" section for the
 # cargo-tree-verified justification.
 axum                      = { version = "=0.8.9", features = ["ws"] }
-# swarmd-only: ServeDir (--serve-ui) and the browser-build CSP response
-# header. Not shared with the desktop shell: tauri reaches tower-http only
+# swarmd-only: ServeDir (--serve-ui) and its security response headers.
+# Not shared with the desktop shell: tauri reaches tower-http only
 # through reqwest, which resolves the 0.6 line, so the lock carries 0.6
 # (desktop) and 0.7 (swarmd) side by side.
-tower-http                = { version = "=0.7.1", features = ["fs", "set-header", "trace"] }
-tower                     = { version = "=0.5.3", features = ["util"] }
+tower-http                = { version = "=0.7.1", features = ["fs", "set-header"] }
 # Already present transitively at this exact version (uuid v4's own
 # randomness source) — made direct for the 256-bit daemon-token.
 getrandom                 = "=0.4.3"
@@ -113,6 +112,10 @@ tokio-tungstenite         = "=0.30.0"
 # Already present transitively (hyper/tower's own plumbing) — made
 # direct for `WebSocket::split()` in swarmd's per-connection handler.
 futures-util              = "=0.3.34"
+# Already present transitively at this exact version — made direct for
+# swarmd, which mints the daemon token into a private temporary file and
+# links it into place without clobbering (its tests use temp dirs too).
+tempfile                  = "=3.27.0"
 
 [profile.release]
 opt-level     = 3

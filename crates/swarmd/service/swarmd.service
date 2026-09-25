@@ -1,52 +1,59 @@
 # SWARM Orchestrator headless daemon — systemd USER unit.
 #
-# This is a USER service, not a system service: swarmd runs worker agents
-# as you, reads and writes your app-data directory under $HOME, and shells
-# out to git against your repositories and worktrees. Running it as root
-# (a system unit) would both break that ownership model and needlessly
-# expand its blast radius. Install it with `systemctl --user`, never
-# `systemctl` (see docs/daemon.md, or run service/install.sh).
+# A USER service, not a system one: swarmd runs worker agents as you, reads
+# and writes your app-data directory under $HOME, and runs git against your
+# repositories. Install it with `systemctl --user`, never as root.
 #
-# Install:   cp swarmd.service ~/.config/systemd/user/
-#            systemctl --user daemon-reload
-#            systemctl --user enable --now swarmd
-# Token:     journalctl --user -u swarmd | grep 'Listening On'
-# Logs:      journalctl --user -u swarmd -f
+# Install:     service/install.sh (recommended). It copies the binary, then
+#              adds a drop-in (swarmd.service.d/install.conf) that points
+#              ExecStart at the installed binary and passes your shell's
+#              PATH, so agent CLIs such as `claude` and `codex` are found.
+# By hand:     cp swarmd.service ~/.config/systemd/user/
+#              systemctl --user daemon-reload
+#              systemctl --user enable --now swarmd
+#              (the systemd user manager's default PATH usually lacks
+#              ~/.local/bin and npm/nvm directories; add an Environment=PATH=
+#              drop-in yourself, or agent spawns fail.)
+# Connect URL: swarmd connect-url   (prints the tokenized URL on demand; the
+#              token never reaches the journal)
+# Logs:        journalctl --user -u swarmd -f
 
 [Unit]
 Description=SWARM Orchestrator headless daemon (swarmd)
 Documentation=https://github.com/ABCrimson/Swarm/blob/main/docs/daemon.md
-After=network-online.target
-Wants=network-online.target
+# At most 5 starts per 5 minutes, then systemd gives up instead of looping.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
-Type=simple
-# %h is the user's home. install.sh drops the binary here; adjust if you
-# installed swarmd elsewhere on PATH.
+# `exec` reports a missing or non-executable binary as a start failure.
+Type=exec
+# %h is your home directory; install.sh overrides this with the path it
+# installed the binary to.
 ExecStart=%h/.local/bin/swarmd
 Restart=on-failure
-RestartSec=3
+RestartSec=5
+# 75 (EX_TEMPFAIL): another SWARM instance (usually the desktop app) holds
+# the data directory. Retrying cannot help until it exits.
+RestartPreventExitStatus=75
+# swarmd shuts down gracefully on SIGTERM: clients are closed, workers are
+# stopped and the event log is flushed, which can take about 25 s (see
+# ExitTimeOut in dev.crimson.swarmd.plist, which matches this value).
+TimeoutStopSec=30
 
-# Loopback-only by default. swarmd refuses a non-loopback bind on a data
-# directory that has never completed a loopback run (it has no token yet),
-# so this unit deliberately passes no --bind. To reach the daemon off-box,
-# establish the token with one loopback run, then front it with your own
-# TLS/tunnel — see docs/daemon.md. Do NOT add `--bind 0.0.0.0:...` here
-# expecting it to be safe on its own; the token is the only auth.
+# Loopback only: no --bind. swarmd refuses a non-loopback bind until a
+# loopback run has minted its token, and the token is the only
+# authentication, so front an off-box setup with your own TLS or tunnel
+# (see docs/daemon.md) instead of adding `--bind 0.0.0.0:...` here.
 
-# Hardening — deliberately conservative. swarmd must keep $HOME writable
-# (its app-data dir and your worktrees live there) and must be able to
-# exec git, so ProtectHome and a locked-down ReadWritePaths are NOT used.
-# Everything below is safe for a userspace daemon that writes user files
-# and spawns git/agent subprocesses.
-NoNewPrivileges=true
-ProtectSystem=full
-PrivateTmp=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-RestrictSUIDSGID=true
-LockPersonality=true
+# No sandboxing directives, deliberately. Every worker terminal swarmd
+# spawns inherits its sandbox: NoNewPrivileges= and RestrictSUIDSGID= break
+# `sudo` inside them, and in a user unit ProtectSystem=, PrivateTmp= and the
+# Protect*= options imply PrivateUsers=yes, which needs unprivileged user
+# namespaces (restricted on some distributions, failing the unit with
+# 226/NAMESPACE) and shows every other user's files as owned by `nobody`
+# (tripping git's safe.directory check). If you want them anyway, add them
+# in a drop-in (`systemctl --user edit swarmd`).
 
 [Install]
 WantedBy=default.target
