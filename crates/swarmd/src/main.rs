@@ -6,7 +6,9 @@
 //! event stream over an authenticated WebSocket (see [`swarmd::ws`]).
 //! `swarmd --help` lists the options; [`swarmd::cli`] parses them.
 //!
-//! Startup order matters:
+//! Startup order matters. The shutdown signal handlers are installed before
+//! any of it, and steps 1-3 (blocking file work) run on the main thread
+//! before the async runtime serves anything:
 //!
 //! 1. The data directory is created (or tightened) to mode `0700` on Unix:
 //!    it holds the Anthropic API key, the event log and the token.
@@ -84,17 +86,7 @@ fn main() -> ExitCode {
             // Under a service manager stderr may go nowhere (the Windows
             // task has no visible console), so a fatal error is logged too.
             let log_to_file = args.log_file.is_some();
-            let runtime = match tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    eprintln!("Failed To Start The Async Runtime: {error}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            match runtime.block_on(serve(args)) {
+            match run(args) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(fatal) => {
                     if log_to_file {
@@ -106,6 +98,32 @@ fn main() -> ExitCode {
             }
         }
     }
+}
+
+/// Runs the daemon: the synchronous startup steps on the main thread, then
+/// [`serve`] on a multi-threaded async runtime, so no blocking file or
+/// process work (`icacls.exe` on Windows) runs on a runtime worker.
+fn run(args: ServeArgs) -> Result<(), Fatal> {
+    init_tracing(args.log_file.as_deref()).map_err(|error| {
+        fatal(format!(
+            "Failed To Open The Log File {}: {error}",
+            args.log_file.as_deref().unwrap_or(Path::new("")).display()
+        ))
+    })?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| fatal(format!("Failed To Start The Async Runtime: {error}")))?;
+    // Installed before any startup work: a SIGTERM that arrives during
+    // startup, or right after the "Listening On" line, is then held for
+    // `serve` instead of killing the process with the signal's default
+    // action. The handlers need the runtime's signal driver.
+    let signals = {
+        let _context = runtime.enter();
+        shutdown_signal()
+    };
+    let startup = prepare(&args)?;
+    runtime.block_on(serve(args, startup, signals))
 }
 
 /// A startup or runtime failure: the message printed to stderr and the
@@ -160,18 +178,15 @@ fn print_connect_url(args: &ConnectUrlArgs) -> ExitCode {
     }
 }
 
-async fn serve(args: ServeArgs) -> Result<(), Fatal> {
-    init_tracing(args.log_file.as_deref()).map_err(|error| {
-        fatal(format!(
-            "Failed To Open The Log File {}: {error}",
-            args.log_file.as_deref().unwrap_or(Path::new("")).display()
-        ))
-    })?;
-    // Installed first: a SIGTERM that arrives during startup, or right after
-    // the "Listening On" line, is then held for the shutdown task below
-    // instead of killing the process with the signal's default action.
-    let signals = shutdown_signal();
+/// What the synchronous startup steps established.
+struct Startup {
+    data_dir: PathBuf,
+    token: DaemonToken,
+}
 
+/// Startup steps 1-3 (see the crate doc), plus the `--serve-ui` bundle
+/// check: blocking file work, run before the async runtime starts serving.
+fn prepare(args: &ServeArgs) -> Result<Startup, Fatal> {
     let data_dir = resolve_data_dir(args.data_dir.clone())?;
     let loopback = args.bind.ip().to_canonical().is_loopback();
 
@@ -229,7 +244,19 @@ async fn serve(args: ServeArgs) -> Result<(), Fatal> {
             ))
         })?;
     }
+    Ok(Startup {
+        data_dir,
+        token: loaded.token,
+    })
+}
 
+/// Startup steps 4-5 (see the crate doc), then serves until a shutdown
+/// signal and stops the runtime.
+async fn serve(
+    args: ServeArgs,
+    Startup { data_dir, token }: Startup,
+    signals: io::Result<impl Future<Output = &'static str> + Send + 'static>,
+) -> Result<(), Fatal> {
     let listener = TcpListener::bind(args.bind).await.map_err(|error| {
         let hint = if error.kind() == io::ErrorKind::AddrInUse {
             " (Is Another swarmd Already Listening There?)"
@@ -265,11 +292,11 @@ async fn serve(args: ServeArgs) -> Result<(), Fatal> {
 
     let state = AppState::new(
         &runtime,
-        loaded.token.clone(),
+        token.clone(),
         HostPolicy::new(args.allow_hosts),
         Limits::default(),
     );
-    announce(local_addr, &loaded.token, args.data_dir.as_deref());
+    announce(local_addr, &token, args.data_dir.as_deref());
     tracing::info!(bind = %local_addr, data_dir = %data_dir.display(), "swarmd started");
 
     match signals {
