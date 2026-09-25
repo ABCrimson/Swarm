@@ -124,6 +124,19 @@ pub enum AppError {
     #[error("Git error: {0}")]
     Git(String),
 
+    /// A `git` invocation exceeded its wall-clock budget and was
+    /// terminated. A typed variant (not an [`AppError::Git`] string) so
+    /// callers classify timeouts by variant, never by sniffing message
+    /// text. `command` is the git subcommand only (e.g. `"commit"`),
+    /// never the full argv, which can carry a commit message.
+    #[error("Git error: `git {command}` timed out after {}s", timeout.as_secs())]
+    GitTimeout {
+        /// The git subcommand that timed out.
+        command: String,
+        /// The budget it exceeded.
+        timeout: std::time::Duration,
+    },
+
     /// A [`crate::agent::adapter::AgentSession::send_turn`] call arrived
     /// while a turn was already in flight on that session. Its own
     /// variant because the trait's concurrency contract makes it an
@@ -239,6 +252,18 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Git error: worktree add refused: index.lock exists"
+        );
+    }
+
+    #[test]
+    fn test_git_timeout_display_names_only_the_subcommand() {
+        let err = AppError::GitTimeout {
+            command: "commit".to_string(),
+            timeout: std::time::Duration::from_secs(900),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Git error: `git commit` timed out after 900s"
         );
     }
 

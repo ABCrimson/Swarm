@@ -1,31 +1,57 @@
-//! Git repo-root validation and the ship chain's registry handlers.
-//! Ported verbatim from `swarm-desktop`'s former `commands::git` — see
-//! that module's original doc for the full design rationale (B2's
-//! `git_push` HEAD-resolution behavior, the `Swarm-Seq-Range` trailer,
-//! etc.), unchanged here.
+//! Registry handlers for repo-root validation and the ship chain:
+//! `git_ship_preflight`, `git_stage_commit`, `git_push`,
+//! `ship_compare_url`, and the read-only causal record `ship_context`.
+//!
+//! The git layer blocks, so every git call runs inside
+//! `tokio::task::spawn_blocking`; the handlers themselves only do
+//! registry reads and event emission on the async thread. Ship errors
+//! are [`ShipError`] objects, not strings (see its doc).
+//!
+//! # Receipts
+//!
+//! The mutating handlers report each step as a `ship_progress` event and
+//! end a ship attempt with exactly one `ship_settled` receipt: on any
+//! failure, or on success of the call the client marked `finalStep`
+//! (`ship_compare_url` is always final). A `nothingToCommit` failure of
+//! `git_stage_commit` is the one exception — it settles nothing,
+//! because the client recovers from it by pushing commits that already
+//! exist.
+//!
+//! # The seq range
+//!
+//! A commit's `Swarm-Seq-Range` trailer and `ship_context` cover
+//! `(seqFrom, seqTo]`: from the worker's last shipped seq (or, before its
+//! first ship, its `worktree_created` row) to the event log's current
+//! maximum. `git_push` records the maximum it read before pushing as the
+//! next `seqFrom`.
+
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
+use super::{Ctx, err_value, ok_value, parse_args};
+use crate::error::AppError;
 use crate::events::{
     CommitCreatedPayload, EventSink, ShipProgressPayload, ShipSettledPayload, SwarmEvent,
 };
-use crate::git::{self, ShipContext, ShipError, ShipErrorKind, StagingMode};
+use crate::git::{self, CommitRequest, ShipContext, ShipError, ShipErrorKind, StagingMode};
 use crate::orchestration::{EventLog, OrchestrationEngine};
 use crate::worker::registry::WorkerRegistry;
-
-use super::{Ctx, err_value, ok_value, parse_args};
 
 /// Cap on rows fetched per `ship_context` call — deliberately generous
 /// (well above `commands::orchestration::events_since`'s IPC-facing
 /// `PAGE_LIMIT` of 5000): a single busy turn can emit a dozen-plus rows
-/// (block + tool_call + tool_result per tool use), so 200 turns'
-/// worth easily exceeds 5000 raw event rows even though
-/// `git::causal::build_ship_context`'s own `MAX_TURNS` cap keeps the
-/// *returned* turn count bounded regardless of how many rows this
+/// (block + tool_call + tool_result per tool use), so 200 turns' worth
+/// easily exceeds 5000 raw rows, while `git::causal::build_ship_context`
+/// caps the *returned* turn count regardless of how many rows this
 /// fetches.
 const SHIP_CONTEXT_EVENT_LIMIT: u32 = 50_000;
+
+/// The config key holding the `Co-Authored-By` identity for ship
+/// commits (see `docs/api.md`).
+const CO_AUTHOR_CONFIG_KEY: &str = "shipCoAuthoredBy";
 
 fn parse_worker_id(raw: &str) -> Result<Uuid, ShipError> {
     Uuid::parse_str(raw).map_err(|_| ShipError {
@@ -35,122 +61,147 @@ fn parse_worker_id(raw: &str) -> Result<Uuid, ShipError> {
     })
 }
 
-fn parse_ship_id(raw: &str) -> Uuid {
-    Uuid::parse_str(raw).unwrap_or_else(|_| Uuid::new_v4())
+/// A ship id is the client's correlation key for every event of the
+/// attempt, so a malformed one is rejected outright — nothing could
+/// ever match its receipts.
+fn parse_ship_id(raw: &str) -> Result<Uuid, ShipError> {
+    Uuid::parse_str(raw).map_err(|_| ShipError {
+        kind: ShipErrorKind::Unknown,
+        message: format!("`{raw}` Is Not A Valid Ship ID."),
+        remedy: None,
+    })
 }
 
-fn parse_worker_id_or_settle(
-    sink: &EventSink,
+/// Emits one ship attempt's `ship_progress` events and `ship_settled`
+/// receipt.
+struct ShipReporter<'a> {
+    sink: &'a EventSink,
     ship_id: Uuid,
-    raw: &str,
-    step: &str,
-) -> Result<Uuid, ShipError> {
-    match parse_worker_id(raw) {
-        Ok(id) => Ok(id),
-        Err(err) => {
-            emit_progress(
-                sink,
-                ship_id,
-                Uuid::nil(),
-                step,
-                "error",
-                Some(err.message.clone()),
-            );
-            emit_settled(
-                sink,
-                ship_id,
-                Uuid::nil(),
-                None,
-                None,
-                None,
-                Some(err.clone()),
-            );
-            Err(err)
-        }
+    worker_id: Uuid,
+}
+
+impl ShipReporter<'_> {
+    fn progress(&self, step: &str, status: &str, detail: Option<String>) {
+        self.sink
+            .emit(SwarmEvent::ShipProgress(ShipProgressPayload {
+                ship_id: self.ship_id,
+                worker_id: self.worker_id,
+                step: step.to_owned(),
+                status: status.to_owned(),
+                detail,
+            }));
+    }
+
+    fn settle_ok(
+        &self,
+        commit_sha: Option<String>,
+        pushed_ref: Option<String>,
+        pr_url: Option<String>,
+    ) {
+        self.settle(commit_sha, pushed_ref, pr_url, None);
+    }
+
+    fn settle(
+        &self,
+        commit_sha: Option<String>,
+        pushed_ref: Option<String>,
+        pr_url: Option<String>,
+        error: Option<ShipError>,
+    ) {
+        let status = if error.is_some() { "error" } else { "ok" };
+        self.sink.emit(SwarmEvent::ShipSettled(ShipSettledPayload {
+            ship_id: self.ship_id,
+            worker_id: self.worker_id,
+            commit_sha,
+            pushed_ref,
+            pr_url,
+            status: status.to_owned(),
+            error,
+        }));
+    }
+
+    /// Reports `error` as `step`'s failure, settles the attempt with it,
+    /// and returns it as the handler's error value.
+    fn fail(&self, step: &str, error: ShipError) -> Value {
+        self.progress(step, "error", Some(error.message.clone()));
+        let value = err_value(&error);
+        self.settle(None, None, None, Some(error));
+        value
     }
 }
 
-fn find_worktree_created_seq(db_path: &std::path::Path, worker_id: &str) -> Option<u64> {
-    EventLog::open_readonly(db_path)
-        .ok()?
-        .find_first_for_worker("worktree_created", worker_id)
-        .ok()?
+/// Parses the ship and worker ids of a mutating call. An invalid worker
+/// id is still reported and settled (under a nil worker id), since the
+/// ship id is valid.
+fn parse_ids(
+    sink: &EventSink,
+    ship_id: &str,
+    worker_id: &str,
+    step: &str,
+) -> Result<(Uuid, Uuid), Value> {
+    let ship_id = parse_ship_id(ship_id).map_err(|e| err_value(&e))?;
+    let worker_id = parse_worker_id(worker_id).map_err(|error| {
+        ShipReporter {
+            sink,
+            ship_id,
+            worker_id: Uuid::nil(),
+        }
+        .fail(step, error)
+    })?;
+    Ok((ship_id, worker_id))
 }
 
-fn current_max_seq(db_path: &std::path::Path) -> u64 {
-    EventLog::open_readonly(db_path)
-        .and_then(|l| l.max_seq())
-        .unwrap_or(0)
+/// `(seq_from, seq_to)` for `worker_id` read from `log`: `seq_from` is
+/// `last_shipped`, or else the worker's `worktree_created` seq (`0` if
+/// none is logged); `seq_to` is the log's current maximum.
+fn seq_range_from_log(
+    log: &EventLog,
+    worker_id: Uuid,
+    last_shipped: Option<u64>,
+) -> Result<(u64, u64), AppError> {
+    let seq_to = log.max_seq()?;
+    let seq_from = match last_shipped {
+        Some(seq) => seq,
+        None => log
+            .find_first_for_worker("worktree_created", &worker_id.to_string())?
+            .unwrap_or(0),
+    };
+    Ok((seq_from, seq_to))
 }
 
+/// Resolves the worker's ship range (see the module doc) on a blocking
+/// thread. An engine without a database (an in-memory test engine) has
+/// no range: `(0, 0)`, which the commit trailer treats as unknown.
 async fn resolve_seq_range(
     engine: &OrchestrationEngine,
     registry: &WorkerRegistry,
     worker_id: Uuid,
-) -> (u64, u64) {
+) -> Result<(u64, u64), AppError> {
     let last_shipped = git::ship::worktree_info_for_worker(registry, worker_id)
         .ok()
         .and_then(|info| info.last_shipped_seq);
-
-    let Some(db_path) = engine.db_path().map(std::path::Path::to_path_buf) else {
-        return (last_shipped.unwrap_or(0), 0);
+    let Some(db_path) = engine.db_path().map(Path::to_path_buf) else {
+        return Ok((0, 0));
     };
-    let worker_id_str = worker_id.to_string();
     tokio::task::spawn_blocking(move || {
-        let seq_to = current_max_seq(&db_path);
-        let seq_from = last_shipped
-            .unwrap_or_else(|| find_worktree_created_seq(&db_path, &worker_id_str).unwrap_or(0));
-        (seq_from, seq_to)
+        seq_range_from_log(&EventLog::open_readonly(&db_path)?, worker_id, last_shipped)
     })
     .await
-    .unwrap_or((last_shipped.unwrap_or(0), 0))
+    .map_err(|e| AppError::EventLog(format!("seq range task failed: {e}")))?
 }
 
-async fn current_max_seq_for_engine(engine: &OrchestrationEngine) -> u64 {
-    let Some(db_path) = engine.db_path().map(std::path::Path::to_path_buf) else {
-        return 0;
+/// The event log's current maximum seq, read on a blocking thread.
+async fn current_max_seq(engine: &OrchestrationEngine) -> Result<u64, AppError> {
+    let Some(db_path) = engine.db_path().map(Path::to_path_buf) else {
+        return Ok(0);
     };
-    tokio::task::spawn_blocking(move || current_max_seq(&db_path))
+    tokio::task::spawn_blocking(move || EventLog::open_readonly(&db_path)?.max_seq())
         .await
-        .unwrap_or(0)
+        .map_err(|e| AppError::EventLog(format!("max seq task failed: {e}")))?
 }
 
-fn emit_progress(
-    sink: &EventSink,
-    ship_id: Uuid,
-    worker_id: Uuid,
-    step: &str,
-    status: &str,
-    detail: Option<String>,
-) {
-    sink.emit(SwarmEvent::ShipProgress(ShipProgressPayload {
-        ship_id,
-        worker_id,
-        step: step.to_string(),
-        status: status.to_string(),
-        detail,
-    }));
-}
-
-fn emit_settled(
-    sink: &EventSink,
-    ship_id: Uuid,
-    worker_id: Uuid,
-    commit_sha: Option<String>,
-    pushed_ref: Option<String>,
-    pr_url: Option<String>,
-    error: Option<ShipError>,
-) {
-    let status = if error.is_some() { "error" } else { "ok" };
-    sink.emit(SwarmEvent::ShipSettled(ShipSettledPayload {
-        ship_id,
-        worker_id,
-        commit_sha,
-        pushed_ref,
-        pr_url,
-        status: status.to_string(),
-        error,
-    }));
+fn task_panicked(command: &str, error: &tokio::task::JoinError) -> Value {
+    Value::String(format!("{command} task panicked: {error}"))
 }
 
 #[derive(Deserialize)]
@@ -158,14 +209,16 @@ struct PathArgs {
     path: String,
 }
 
+/// `validate_repo_root { path }` → the canonical toplevel path of the
+/// repository containing `path`. Errors are strings (`AppError`
+/// display): not inside a repository, `git` unavailable, or a timeout.
 pub async fn validate_repo_root(_ctx: Ctx, args: Value) -> Result<Value, Value> {
     let PathArgs { path } = parse_args(args)?;
-    let toplevel = tokio::task::spawn_blocking(move || {
-        git::repo::discover_toplevel(std::path::Path::new(&path))
-    })
-    .await
-    .map_err(|e| Value::String(e.to_string()))?
-    .map_err(|e| Value::String(e.to_string()))?;
+    let toplevel =
+        tokio::task::spawn_blocking(move || git::repo::discover_toplevel(Path::new(&path)))
+            .await
+            .map_err(|e| task_panicked("validate_repo_root", &e))?
+            .map_err(|e| Value::String(e.to_string()))?;
     ok_value(&toplevel.display().to_string())
 }
 
@@ -177,17 +230,19 @@ struct PreflightArgs {
     mode: Option<StagingMode>,
 }
 
+/// `git_ship_preflight { workerId, mode? }` → `ShipPreflight` for
+/// `mode` (default `"all"`). Read-only; emits no events. Errors are
+/// `ShipError` objects.
 pub async fn git_ship_preflight(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let PreflightArgs { worker_id, mode } = parse_args(args)?;
     let id = parse_worker_id(&worker_id).map_err(|e| err_value(&e))?;
     let mode = mode.unwrap_or(StagingMode::All);
     let registry = ctx.registry.clone();
-    let result = tokio::task::spawn_blocking(move || git::ship::preflight(&registry, id, mode))
+    tokio::task::spawn_blocking(move || git::ship::preflight(&registry, id, mode))
         .await
-        .map_err(|e| Value::String(format!("git_ship_preflight task panicked: {e}")))?;
-    result
-        .map(|p| ok_value(&p))
-        .unwrap_or_else(|e| Err(err_value(&e)))
+        .map_err(|e| task_panicked("git_ship_preflight", &e))?
+        .map_err(|e| err_value(&e))
+        .and_then(|preflight| ok_value(&preflight))
 }
 
 #[derive(Deserialize)]
@@ -200,6 +255,10 @@ struct StageCommitArgs {
     final_step: bool,
 }
 
+/// `git_stage_commit { workerId, shipId, message, mode, finalStep }` →
+/// `CommitOutcome`. Stages per `mode` (deny list enforced), commits with
+/// the `Swarm-Seq-Range` and configured `Co-Authored-By` trailers, and
+/// emits `commit_created`. Errors are `ShipError` objects.
 pub async fn git_stage_commit(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let StageCommitArgs {
         worker_id,
@@ -208,80 +267,71 @@ pub async fn git_stage_commit(ctx: Ctx, args: Value) -> Result<Value, Value> {
         mode,
         final_step,
     } = parse_args(args)?;
-    let sid = parse_ship_id(&ship_id);
-    let sink = ctx.sink.clone();
-    let id =
-        parse_worker_id_or_settle(&sink, sid, &worker_id, "staging").map_err(|e| err_value(&e))?;
-    let registry = ctx.registry.clone();
-    let repo_locks = ctx.repo_locks.clone();
+    let sink = &ctx.sink;
+    let (ship_id, id) = parse_ids(sink, &ship_id, &worker_id, "staging")?;
+    let reporter = ShipReporter {
+        sink,
+        ship_id,
+        worker_id: id,
+    };
+    reporter.progress("staging", "running", None);
 
-    emit_progress(&sink, sid, id, "staging", "running", None);
-
-    let branch = match git::ship::worktree_info_for_worker(&registry, id) {
+    let branch = match git::ship::worktree_info_for_worker(&ctx.registry, id) {
         Ok(info) => info.branch,
-        Err(err) => {
-            emit_progress(
-                &sink,
-                sid,
-                id,
-                "staging",
-                "error",
-                Some(err.message.clone()),
-            );
-            emit_settled(&sink, sid, id, None, None, None, Some(err.clone()));
-            return Err(err_value(&err));
-        }
+        Err(error) => return Err(reporter.fail("staging", error)),
     };
 
-    let (seq_from, seq_to) = resolve_seq_range(&ctx.engine, &registry, id).await;
-    let co_authored_by = crate::config::read_value(&ctx.paths, "shipCoAuthoredBy")
-        .and_then(|v| v.as_str().map(str::to_string));
+    // An unreadable log must not block shipping: the commit goes ahead
+    // with the trailer omitted (`0..0` is "unknown").
+    let (seq_from, seq_to) = resolve_seq_range(&ctx.engine, &ctx.registry, id)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(worker_id = %id, %error, "ship: seq range unavailable; committing without a Swarm-Seq-Range trailer");
+            (0, 0)
+        });
 
+    let registry = ctx.registry.clone();
+    let repo_locks = ctx.repo_locks.clone();
+    let paths = ctx.paths.clone();
     let result = tokio::task::spawn_blocking(move || {
-        git::ship::stage_and_commit(
-            &registry,
-            &repo_locks,
-            id,
-            &message,
+        let request = CommitRequest {
+            message,
             mode,
             seq_from,
             seq_to,
-            co_authored_by.as_deref(),
-        )
+            co_authored_by: crate::config::read_value(&paths, CO_AUTHOR_CONFIG_KEY)
+                .and_then(|value| value.as_str().map(str::to_owned)),
+        };
+        git::ship::stage_and_commit(&registry, &repo_locks, id, &request)
     })
     .await
-    .map_err(|e| Value::String(format!("git_stage_commit task panicked: {e}")))?;
+    .map_err(|e| task_panicked("git_stage_commit", &e))?;
 
     match result {
         Ok(outcome) => {
-            emit_progress(
-                &sink,
-                sid,
-                id,
+            reporter.progress(
                 "staging",
                 "ok",
                 Some(format!("{} File(s) Skipped", outcome.skipped.len())),
             );
-            emit_progress(&sink, sid, id, "commit", "ok", Some(outcome.sha.clone()));
+            reporter.progress("commit", "ok", Some(outcome.sha.clone()));
             sink.emit(SwarmEvent::CommitCreated(CommitCreatedPayload {
                 worker_id: id,
                 sha: outcome.sha.clone(),
-                branch: branch.clone(),
+                branch,
                 seq_from: outcome.seq_from,
                 seq_to: outcome.seq_to,
             }));
             if final_step {
-                emit_settled(&sink, sid, id, Some(outcome.sha.clone()), None, None, None);
+                reporter.settle_ok(Some(outcome.sha.clone()), None, None);
             }
             ok_value(&outcome)
         }
-        Err(err) => {
-            emit_progress(&sink, sid, id, "commit", "error", Some(err.message.clone()));
-            if err.kind != ShipErrorKind::NothingToCommit {
-                emit_settled(&sink, sid, id, None, None, None, Some(err.clone()));
-            }
-            Err(err_value(&err))
+        Err(error) if error.kind == ShipErrorKind::NothingToCommit => {
+            reporter.progress("commit", "error", Some(error.message.clone()));
+            Err(err_value(&error))
         }
+        Err(error) => Err(reporter.fail("commit", error)),
     }
 }
 
@@ -293,60 +343,59 @@ struct PushArgs {
     final_step: bool,
 }
 
+/// `git_push { workerId, shipId, finalStep }` → `PushOutcome`. Pushes
+/// the branch checked out now (never forced) and records the ship
+/// range's end as the worker's last shipped seq. Errors are `ShipError`
+/// objects.
 pub async fn git_push(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let PushArgs {
         worker_id,
         ship_id,
         final_step,
     } = parse_args(args)?;
-    let sid = parse_ship_id(&ship_id);
-    let sink = ctx.sink.clone();
-    let id =
-        parse_worker_id_or_settle(&sink, sid, &worker_id, "push").map_err(|e| err_value(&e))?;
+    let sink = &ctx.sink;
+    let (ship_id, id) = parse_ids(sink, &ship_id, &worker_id, "push")?;
+    let reporter = ShipReporter {
+        sink,
+        ship_id,
+        worker_id: id,
+    };
+    reporter.progress("push", "running", None);
+
+    // Read before pushing: everything up to here is what this push ships.
+    let seq_to = current_max_seq(&ctx.engine).await;
+
     let registry = ctx.registry.clone();
     let repo_locks = ctx.repo_locks.clone();
-
-    emit_progress(&sink, sid, id, "push", "running", None);
-
-    let seq_to = current_max_seq_for_engine(&ctx.engine).await;
-
-    let registry_for_task = registry.clone();
-    let result =
-        tokio::task::spawn_blocking(move || git::ship::push(&registry_for_task, &repo_locks, id))
-            .await
-            .map_err(|e| Value::String(format!("git_push task panicked: {e}")))?;
+    let result = tokio::task::spawn_blocking(move || git::ship::push(&registry, &repo_locks, id))
+        .await
+        .map_err(|e| task_panicked("git_push", &e))?;
 
     match result {
         Ok(outcome) => {
-            if let Err(e) = registry.set_last_shipped(&id, seq_to, &outcome.sha) {
-                tracing::warn!(worker_id = %id, error = %e, "failed to record last_shipped after a successful push");
+            // Record only a seq that was actually read: a stale `0` would
+            // widen the next ship's range to the whole log.
+            match seq_to {
+                Ok(seq_to) => {
+                    if let Err(error) = ctx.registry.set_last_shipped(&id, seq_to, &outcome.sha) {
+                        tracing::warn!(worker_id = %id, %error, "ship: failed to record last_shipped after a successful push");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(worker_id = %id, %error, "ship: event log unreadable; last_shipped left unchanged after a successful push");
+                }
             }
-            emit_progress(
-                &sink,
-                sid,
-                id,
-                "push",
-                "ok",
-                Some(outcome.pushed_ref.clone()),
-            );
+            reporter.progress("push", "ok", Some(outcome.pushed_ref.clone()));
             if final_step {
-                emit_settled(
-                    &sink,
-                    sid,
-                    id,
+                reporter.settle_ok(
                     Some(outcome.sha.clone()),
                     Some(outcome.pushed_ref.clone()),
-                    None,
                     None,
                 );
             }
             ok_value(&outcome)
         }
-        Err(err) => {
-            emit_progress(&sink, sid, id, "push", "error", Some(err.message.clone()));
-            emit_settled(&sink, sid, id, None, None, None, Some(err.clone()));
-            Err(err_value(&err))
-        }
+        Err(error) => Err(reporter.fail("push", error)),
     }
 }
 
@@ -361,6 +410,10 @@ struct CompareUrlArgs {
     body: String,
 }
 
+/// `ship_compare_url { workerId, shipId, commitSha, pushedRef, title,
+/// body }` → the prefilled GitHub compare URL. Always the ship
+/// attempt's final step: it settles with `commitSha`/`pushedRef`/the
+/// URL. Errors are `ShipError` objects.
 pub async fn ship_compare_url(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let CompareUrlArgs {
         worker_id,
@@ -370,45 +423,28 @@ pub async fn ship_compare_url(ctx: Ctx, args: Value) -> Result<Value, Value> {
         title,
         body,
     } = parse_args(args)?;
-    let sid = parse_ship_id(&ship_id);
-    let sink = ctx.sink.clone();
-    let id =
-        parse_worker_id_or_settle(&sink, sid, &worker_id, "compare").map_err(|e| err_value(&e))?;
+    let sink = &ctx.sink;
+    let (ship_id, id) = parse_ids(sink, &ship_id, &worker_id, "compare")?;
+    let reporter = ShipReporter {
+        sink,
+        ship_id,
+        worker_id: id,
+    };
+    reporter.progress("compare", "running", None);
+
     let registry = ctx.registry.clone();
-
-    emit_progress(&sink, sid, id, "compare", "running", None);
-
     let result =
         tokio::task::spawn_blocking(move || git::ship::compare_url(&registry, id, &title, &body))
             .await
-            .map_err(|e| Value::String(format!("ship_compare_url task panicked: {e}")))?;
+            .map_err(|e| task_panicked("ship_compare_url", &e))?;
 
     match result {
         Ok(url) => {
-            emit_progress(&sink, sid, id, "compare", "ok", Some(url.clone()));
-            emit_settled(
-                &sink,
-                sid,
-                id,
-                Some(commit_sha),
-                Some(pushed_ref),
-                Some(url.clone()),
-                None,
-            );
+            reporter.progress("compare", "ok", Some(url.clone()));
+            reporter.settle_ok(Some(commit_sha), Some(pushed_ref), Some(url.clone()));
             ok_value(&url)
         }
-        Err(err) => {
-            emit_progress(
-                &sink,
-                sid,
-                id,
-                "compare",
-                "error",
-                Some(err.message.clone()),
-            );
-            emit_settled(&sink, sid, id, None, None, None, Some(err.clone()));
-            Err(err_value(&err))
-        }
+        Err(error) => Err(reporter.fail("compare", error)),
     }
 }
 
@@ -418,61 +454,46 @@ struct ShipContextArgs {
     worker_id: String,
 }
 
-/// Read-only: the causal record for a worker's ship range. Resolves
-/// `(seqFrom, seqTo]` via the exact same [`resolve_seq_range`] algorithm
-/// `git_stage_commit` uses (`lastShippedSeq ?? worktree_created seq ..
-/// current max`) — so a `ship_context` call made just before "Commit +
-/// Push" describes the same range the resulting commit's `Swarm-Seq-Range`
-/// trailer will (barring new events landing in the gap between preview
-/// and commit, which is unavoidable and harmless: the trailer is always
-/// the source of truth, this is a preview of it).
+/// `ship_context { workerId }` → the `ShipContext` causal record for the
+/// worker's pending ship range. Read-only; emits no events.
 ///
-/// Runs on a [`EventLog::open_readonly`] connection inside `spawn_blocking`
-/// — the identical pattern `commands::orchestration::events_since` already
-/// uses for a read-only backfill query. Fetches via
-/// [`EventLog::events_for_worker_between`] (worker-and-type-scoped, newest
-/// survives any truncation — see that method's doc for the FIX-1 bug this
-/// closes: a plain range-wide cap applied before filtering to one worker
-/// let a busy multi-worker session's other workers crowd the shipping
-/// worker's own newest turns out of the fetched window entirely), then
-/// threads the returned truncation flag straight into
-/// [`git::build_ship_context`] so [`ShipContext::events_truncated`] is
-/// never silently `false` when it shouldn't be. Emits no events (a query,
-/// not a mutation) — `RemotePolicy::Allowed` in the registry, same as
-/// every other ship command (`git_ship_preflight` is the closest analog:
-/// also read-only, also `Allowed`, and a remote client legitimately
-/// previewing a ship it's about to trigger needs this exactly as much as
-/// it needs the preflight).
+/// Resolves `(seqFrom, seqTo]` with the same algorithm
+/// `git_stage_commit` uses, so a preview taken just before "Commit +
+/// Push" describes the range the commit's `Swarm-Seq-Range` trailer
+/// will (events landing in between are unavoidable and harmless — the
+/// trailer is the source of truth). Fetches with
+/// [`EventLog::events_for_worker_between`], which filters to this worker
+/// and the relevant types in SQL and keeps the newest rows when capped,
+/// and threads its truncation flag into
+/// [`ShipContext::events_truncated`]. Errors are strings: an unreadable
+/// event log is reported, never papered over with an empty record.
 pub async fn ship_context(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let ShipContextArgs { worker_id } = parse_args(args)?;
     let id = parse_worker_id(&worker_id).map_err(|e| err_value(&e))?;
-    let registry = ctx.registry.clone();
 
-    let (seq_from, seq_to) = resolve_seq_range(&ctx.engine, &registry, id).await;
-
-    let Some(db_path) = ctx.engine.db_path().map(std::path::Path::to_path_buf) else {
+    let (seq_from, seq_to) = resolve_seq_range(&ctx.engine, &ctx.registry, id)
+        .await
+        .map_err(|e| Value::String(e.to_string()))?;
+    let Some(db_path) = ctx.engine.db_path().map(PathBuf::from) else {
         return ok_value(&ShipContext::empty(id, seq_from, seq_to));
     };
 
-    let worker_id_str = id.to_string();
-    let context = tokio::task::spawn_blocking(move || -> Result<ShipContext, String> {
-        let log = EventLog::open_readonly(&db_path).map_err(|e| e.to_string())?;
-        let (events, truncated) = log
-            .events_for_worker_between(
-                git::causal::RELEVANT_EVENT_TYPES,
-                &worker_id_str,
-                seq_from,
-                seq_to,
-                SHIP_CONTEXT_EVENT_LIMIT,
-            )
-            .map_err(|e| e.to_string())?;
+    let context = tokio::task::spawn_blocking(move || -> Result<ShipContext, AppError> {
+        let log = EventLog::open_readonly(&db_path)?;
+        let (events, truncated) = log.events_for_worker_between(
+            git::causal::RELEVANT_EVENT_TYPES,
+            &id.to_string(),
+            seq_from,
+            seq_to,
+            SHIP_CONTEXT_EVENT_LIMIT,
+        )?;
         Ok(git::build_ship_context(
             events, id, seq_from, seq_to, truncated,
         ))
     })
     .await
-    .map_err(|e| Value::String(format!("ship_context task panicked: {e}")))?
-    .map_err(Value::String)?;
+    .map_err(|e| task_panicked("ship_context", &e))?
+    .map_err(|e| Value::String(e.to_string()))?;
 
     ok_value(&context)
 }
@@ -482,47 +503,95 @@ mod tests {
     use super::*;
     use crate::events::Provenance;
 
-    fn append_agent_tool_call(log: &mut EventLog, seq: u64, worker_id: uuid::Uuid, command: &str) {
+    fn append(log: &mut EventLog, seq: u64, event_type: &str, payload: &Value) {
         log.append(
             seq,
             seq.cast_signed(),
-            "agent_tool_call",
-            &serde_json::json!({
-                "workerId": worker_id, "turnId": format!("t{seq}"), "toolUseId": format!("u{seq}"),
-                "name": "Bash", "input": { "command": command }
-            })
-            .to_string(),
+            event_type,
+            &payload.to_string(),
             &Provenance::default(),
         )
         .unwrap();
     }
 
-    /// DIRECTIVE: exercises the exact two-step composition
-    /// `ship_context` performs — `EventLog::events_for_worker_between`
-    /// then `git::build_ship_context` — against a real (in-memory)
-    /// `EventLog`, proving the seam between the data layer and the pure
-    /// builder works end-to-end, not just each half in isolation (the
-    /// data-layer half is covered in `orchestration::log`'s own tests;
-    /// the builder half in `git::causal`'s). Goes around the full
-    /// `Ctx`/registry wiring deliberately: `resolve_seq_range` and the
-    /// worker-lookup plumbing above are already exercised by the ship
-    /// command tests in `git::ship`, and standing up a fake
-    /// `WorkerHandle` here would duplicate that coverage without adding
-    /// anything this seam test doesn't already prove.
+    fn append_agent_tool_call(log: &mut EventLog, seq: u64, worker_id: Uuid, command: &str) {
+        append(
+            log,
+            seq,
+            "agent_tool_call",
+            &serde_json::json!({
+                "workerId": worker_id, "turnId": format!("t{seq}"), "toolUseId": format!("u{seq}"),
+                "name": "Bash", "input": { "command": command }
+            }),
+        );
+    }
+
+    #[test]
+    fn test_parse_ship_id_rejects_a_malformed_id() {
+        let err = parse_ship_id("not-a-uuid").unwrap_err();
+        assert!(
+            err.message.contains("Not A Valid Ship ID"),
+            "{}",
+            err.message
+        );
+        let id = Uuid::new_v4();
+        assert_eq!(parse_ship_id(&id.to_string()).unwrap(), id);
+    }
+
+    #[test]
+    fn test_parse_worker_id_rejects_a_malformed_id() {
+        let err = parse_worker_id("nope").unwrap_err();
+        assert_eq!(err.kind, ShipErrorKind::WorkerNotFound);
+    }
+
+    /// Before the first ship the range starts at `worktree_created`;
+    /// after it, at the recorded last shipped seq.
+    #[test]
+    fn test_seq_range_from_log() {
+        let mut log = EventLog::open_in_memory().unwrap();
+        let me = Uuid::new_v4();
+        append(
+            &mut log,
+            1,
+            "worker_spawned",
+            &serde_json::json!({ "workerId": me }),
+        );
+        append(
+            &mut log,
+            2,
+            "worktree_created",
+            &serde_json::json!({ "workerId": me }),
+        );
+        append_agent_tool_call(&mut log, 3, me, "pnpm build");
+
+        assert_eq!(seq_range_from_log(&log, me, None).unwrap(), (2, 3));
+        assert_eq!(seq_range_from_log(&log, me, Some(3)).unwrap(), (3, 3));
+        assert_eq!(
+            seq_range_from_log(&log, Uuid::new_v4(), None).unwrap(),
+            (0, 3),
+            "no worktree_created row: the range starts at the log's beginning"
+        );
+    }
+
+    /// DIRECTIVE: exercises the exact two-step composition `ship_context`
+    /// performs — `EventLog::events_for_worker_between` then
+    /// `git::build_ship_context` — against a real (in-memory) `EventLog`,
+    /// proving the seam between the data layer and the pure builder works
+    /// end to end, not just each half in isolation (the data-layer half is
+    /// covered in `orchestration::log`'s own tests, the builder half in
+    /// `git::causal`'s).
     #[test]
     fn test_ship_context_composition_seeded_log_excludes_other_worker() {
         let mut log = EventLog::open_in_memory().unwrap();
-        let me = uuid::Uuid::new_v4();
-        let other = uuid::Uuid::new_v4();
+        let me = Uuid::new_v4();
+        let other = Uuid::new_v4();
 
-        log.append(
-            1,
+        append(
+            &mut log,
             1,
             "worktree_created",
-            &serde_json::json!({ "workerId": me }).to_string(),
-            &Provenance::default(),
-        )
-        .unwrap();
+            &serde_json::json!({ "workerId": me }),
+        );
         append_agent_tool_call(&mut log, 2, other, "npm test");
         append_agent_tool_call(&mut log, 3, me, "pnpm build");
 
@@ -550,7 +619,7 @@ mod tests {
     #[test]
     fn test_ship_context_empty_range_has_no_turns() {
         let log = EventLog::open_in_memory().unwrap();
-        let me = uuid::Uuid::new_v4();
+        let me = Uuid::new_v4();
         let (events, truncated) = log
             .events_for_worker_between(
                 git::causal::RELEVANT_EVENT_TYPES,
@@ -566,43 +635,26 @@ mod tests {
         assert!(!context.events_truncated);
     }
 
-    /// DIRECTIVE (review FIX-1, the bug reproduced and closed): a range
-    /// where OTHER workers' rows vastly outnumber the shipping worker's
-    /// own — enough that a naive range-wide cap (the original
-    /// `events_between(fromSeq, toSeq, N)` call this replaced) would fill
-    /// entirely on the oldest cross-worker rows before ever reaching the
-    /// shipping worker's own newest turn. `events_for_worker_between`
-    /// filters to `me` in SQL before any cap is applied, so this must
-    /// still find `me`'s one turn, untruncated, regardless of how much
-    /// other-worker noise sits in the same range.
+    /// DIRECTIVE (review FIX-1): a range where OTHER workers' rows vastly
+    /// outnumber the shipping worker's own — enough that a range-wide cap
+    /// would fill on cross-worker rows before reaching this worker's
+    /// newest turn. `events_for_worker_between` filters to the worker in
+    /// SQL before capping, so its one turn survives, untruncated.
     #[test]
     fn test_ship_context_worker_scoping_survives_heavy_cross_worker_noise() {
         let mut log = EventLog::open_in_memory().unwrap();
-        let me = uuid::Uuid::new_v4();
-        let other = uuid::Uuid::new_v4();
+        let me = Uuid::new_v4();
+        let other = Uuid::new_v4();
 
-        let mut seq = 1u64;
-        // Far more "noise" rows from another worker than the tiny limit
-        // below — the bug this test pins would have let these crowd out
-        // `me`'s single real row entirely.
-        for _ in 0..20 {
+        for seq in 1..=20 {
             append_agent_tool_call(&mut log, seq, other, "noise");
-            seq += 1;
         }
-        append_agent_tool_call(&mut log, seq, me, "pnpm build");
-        let to_seq = seq;
+        append_agent_tool_call(&mut log, 21, me, "pnpm build");
 
-        let small_limit = 3;
         let (events, truncated) = log
-            .events_for_worker_between(
-                git::causal::RELEVANT_EVENT_TYPES,
-                &me.to_string(),
-                0,
-                to_seq,
-                small_limit,
-            )
+            .events_for_worker_between(git::causal::RELEVANT_EVENT_TYPES, &me.to_string(), 0, 21, 3)
             .unwrap();
-        let context = git::build_ship_context(events, me, 0, to_seq, truncated);
+        let context = git::build_ship_context(events, me, 0, 21, truncated);
 
         assert!(
             !truncated,

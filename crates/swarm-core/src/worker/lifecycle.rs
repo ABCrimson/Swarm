@@ -1595,7 +1595,10 @@ mod tests {
         full.extend(args.iter().map(ToString::to_string));
         let out = git::cli::run(&full, git::cli::CREATE_TIMEOUT).unwrap();
         assert!(out.success(), "git {args:?} failed: {}", out.stderr);
-        out.stdout.lines().map(str::to_owned).collect()
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
 
     fn swarm_branches(repo: &Path) -> Vec<String> {

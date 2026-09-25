@@ -5,21 +5,22 @@
 //! the same logical remote:
 //!
 //! - `https://github.com/owner/repo.git`
-//! - `https://github.com/owner/repo` (no `.git` suffix)
-//! - `https://user@github.com/owner/repo.git` (username, no password —
-//!   a bare username is not a credential leak the way `user:pass@` is,
-//!   so this is not something [`super::redact`] strips)
+//! - `https://github.com/owner/repo` (no `.git` suffix, or a trailing `/`)
+//! - `https://<userinfo>@github.com/owner/repo.git` — a `user:pass` pair
+//!   or a bare token used as the username (GitHub accepts both). Either
+//!   is a credential: [`parse`] discards it, and [`super::redact`] strips
+//!   it from any URL that is surfaced.
 //! - `git@github.com:owner/repo.git` (SSH "scp-like" syntax)
 //! - `ssh://git@github.com/owner/repo.git` (SSH URL syntax)
 //! - Any of the above with a GitHub Enterprise Server host instead of
 //!   `github.com` — [`parse`] does not special-case the host, so GHES
 //!   falls out for free.
 //!
-//! [`parse`] normalizes all of these into a [`ParsedRemote`]; anything
-//! else (a non-`github`-shaped host is still parsed structurally, but
-//! [`compare_url`]'s caller — `git_ship_preflight`/`ship_compare_url` —
-//! decides whether the host is one a GitHub-style compare URL makes
-//! sense for).
+//! [`parse`] normalizes all of these into a [`ParsedRemote`]. It parses
+//! any host structurally; whether that host can have a GitHub-style
+//! compare URL is [`looks_like_github_host`]'s call, which the ship
+//! chain (`ship::preflight` and `ship::compare_url`) makes before
+//! building one with [`compare_url`].
 
 use std::sync::LazyLock;
 
@@ -28,17 +29,18 @@ use regex::Regex;
 /// A remote URL broken into the three components a compare URL needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedRemote {
+    /// The host, without port or userinfo.
     pub host: String,
+    /// The owner (user or organization) path segment.
     pub owner: String,
+    /// The repository name, without `.git`.
     pub repo: String,
 }
 
-/// `scheme://[user[:pass]@]host[:port]/owner/repo[.git]` — covers
-/// both `https://` and `ssh://` URL-form remotes. Credentials (if any)
-/// are matched but discarded; [`super::redact`] is the module
-/// responsible for never letting a `user:pass@` shape reach a log or
-/// event in the first place, so this parser doesn't need to repeat
-/// that concern.
+/// `scheme://[userinfo@]host[:port]/owner/repo[.git]` — covers both
+/// `https://` and `ssh://` URL-form remotes. Userinfo (if any) is
+/// matched but discarded; keeping credentials out of logs and events is
+/// [`super::redact`]'s job.
 static URL_FORM: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/]+@)?([^/:]+)(?::\d+)?/([^/]+)/(.+?)$")
         .expect("valid regex")
@@ -49,38 +51,28 @@ static URL_FORM: LazyLock<Regex> = LazyLock::new(|| {
 static SCP_FORM: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(?:[^@/:]+@)?([^/:]+):([^/]+)/(.+?)$").expect("valid regex"));
 
-/// Strips a trailing `.git` suffix, if present.
-fn strip_dot_git(s: &str) -> &str {
-    s.trim_suffix(".git")
+/// The repository name: trailing `/` and then `.git` removed.
+fn repo_name(raw: &str) -> &str {
+    raw.trim_end_matches('/').trim_suffix(".git")
 }
 
 /// Parses a `git remote get-url` value into its host/owner/repo parts.
 /// Returns `None` for a shape this parser doesn't recognize (e.g. a
 /// local filesystem path remote) rather than guessing.
+#[must_use]
 pub fn parse(url: &str) -> Option<ParsedRemote> {
     let url = url.trim();
-
-    if let Some(caps) = URL_FORM.captures(url) {
-        let host = caps.get(1)?.as_str().to_string();
-        let owner = caps.get(2)?.as_str().to_string();
-        let repo = strip_dot_git(caps.get(3)?.as_str()).to_string();
-        if owner.is_empty() || repo.is_empty() {
-            return None;
-        }
-        return Some(ParsedRemote { host, owner, repo });
+    let caps = URL_FORM.captures(url).or_else(|| SCP_FORM.captures(url))?;
+    let owner = caps.get(2)?.as_str();
+    let repo = repo_name(caps.get(3)?.as_str());
+    if owner.is_empty() || repo.is_empty() {
+        return None;
     }
-
-    if let Some(caps) = SCP_FORM.captures(url) {
-        let host = caps.get(1)?.as_str().to_string();
-        let owner = caps.get(2)?.as_str().to_string();
-        let repo = strip_dot_git(caps.get(3)?.as_str()).to_string();
-        if owner.is_empty() || repo.is_empty() {
-            return None;
-        }
-        return Some(ParsedRemote { host, owner, repo });
-    }
-
-    None
+    Some(ParsedRemote {
+        host: caps.get(1)?.as_str().to_owned(),
+        owner: owner.to_owned(),
+        repo: repo.to_owned(),
+    })
 }
 
 /// Whether `host` is one [`compare_url`] can build a meaningful
@@ -90,22 +82,35 @@ pub fn parse(url: &str) -> Option<ParsedRemote> {
 /// against, so this is intentionally permissive rather than an
 /// allowlist that would reject every real GHES customer. The one
 /// thing it rejects outright is a host that is obviously not GitHub
-/// at all by name (`gitlab.com`, `bitbucket.org`) — see
-/// [`is_known_non_github_host`].
+/// by name — see [`NON_GITHUB_DOMAINS`].
+#[must_use]
 pub fn looks_like_github_host(host: &str) -> bool {
     !is_known_non_github_host(host)
 }
 
-/// Hosts known to not be GitHub/GHES — used only to reject the clearly
-/// wrong case, never to affirmatively confirm a host IS GitHub (GHES
-/// hostnames are arbitrary and unknowable in advance).
+/// Forges that are known not to be GitHub. Each matches the domain and
+/// every subdomain (`ssh.dev.azure.com`, `altssh.bitbucket.org`,
+/// `git.sr.ht`). Used only to reject the clearly wrong case, never to
+/// confirm a host IS GitHub (GHES hostnames are arbitrary).
+pub const NON_GITHUB_DOMAINS: &[&str] = &[
+    "gitlab.com",
+    "bitbucket.org",
+    "dev.azure.com",
+    "visualstudio.com",
+    "sourceforge.net",
+    "codeberg.org",
+    "gitea.com",
+    "sr.ht",
+];
+
 fn is_known_non_github_host(host: &str) -> bool {
-    let lower = host.to_ascii_lowercase();
-    matches!(
-        lower.as_str(),
-        "gitlab.com" | "bitbucket.org" | "dev.azure.com" | "sourceforge.net"
-    ) || lower.ends_with(".gitlab.com")
-        || lower.ends_with(".visualstudio.com")
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    NON_GITHUB_DOMAINS.iter().any(|domain| {
+        host == *domain
+            || host
+                .strip_suffix(domain)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    })
 }
 
 /// Percent-encodes `s` for a URL path segment, per RFC 3986's
@@ -119,12 +124,19 @@ fn percent_encode_path_segment(s: &str) -> String {
     for byte in s.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
-                out.push(byte as char);
+                out.push(char::from(byte));
             }
-            _ => out.push_str(&format!("%{byte:02X}")),
+            _ => push_percent_encoded(&mut out, byte),
         }
     }
     out
+}
+
+fn push_percent_encoded(out: &mut String, byte: u8) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    out.push('%');
+    out.push(char::from(HEX[usize::from(byte >> 4)]));
+    out.push(char::from(HEX[usize::from(byte & 0x0F)]));
 }
 
 /// Percent-encodes `s` for a URL query-parameter value — the
@@ -136,10 +148,10 @@ fn percent_encode_query_value(s: &str) -> String {
     for byte in s.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
+                out.push(char::from(byte));
             }
             b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{byte:02X}")),
+            _ => push_percent_encoded(&mut out, byte),
         }
     }
     out
@@ -153,25 +165,28 @@ fn percent_encode_query_value(s: &str) -> String {
 /// — see [`compare_url`].
 pub const MAX_COMPARE_URL_LEN: usize = 6000;
 
-/// Binary-searches the largest char-prefix of `text` for which
-/// `fits(prefix)` holds (`fits` must be monotonic: a shorter prefix
-/// never makes the built URL longer), returning that prefix. Operates
-/// on `char`s, never bytes, so a multi-byte UTF-8 sequence is never
-/// split. Returns `""` if even an empty prefix doesn't satisfy `fits`.
-fn largest_fitting_prefix(text: &str, fits: impl Fn(&str) -> bool) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut lo = 0usize;
-    let mut hi = chars.len();
+/// Binary-searches the longest prefix of `text` for which `fits(prefix)`
+/// holds (`fits` must be monotonic: a shorter prefix never makes the
+/// built URL longer). Cuts only on char boundaries, so a multi-byte
+/// UTF-8 sequence is never split. Returns `""` if even an empty prefix
+/// doesn't satisfy `fits`.
+fn largest_fitting_prefix(text: &str, fits: impl Fn(&str) -> bool) -> &str {
+    let boundaries: Vec<usize> = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain([text.len()])
+        .collect();
+    // `boundaries[n]` is the byte length of the first `n` chars.
+    let (mut lo, mut hi) = (0, boundaries.len() - 1);
     while lo < hi {
         let mid = lo + (hi - lo).div_ceil(2);
-        let candidate: String = chars[..mid].iter().collect();
-        if fits(&candidate) {
+        if fits(&text[..boundaries[mid]]) {
             lo = mid;
         } else {
             hi = mid - 1;
         }
     }
-    chars[..lo].iter().collect()
+    &text[..boundaries[lo]]
 }
 
 /// Builds a GitHub-style compare URL prefilled with a PR title/body
@@ -187,6 +202,7 @@ fn largest_fitting_prefix(text: &str, fits: impl Fn(&str) -> bool) -> String {
 /// truncated, since a corrupted ref there would silently build a URL
 /// pointing at the wrong compare, a worse failure than a clipped
 /// title.
+#[must_use]
 pub fn compare_url(
     remote: &ParsedRemote,
     base_branch: &str,
@@ -233,8 +249,7 @@ pub fn compare_url(
         return empty_body;
     }
     let title_fits = |t: &str| build(t, "").len() <= MAX_COMPARE_URL_LEN;
-    let shrunk_title = largest_fitting_prefix(title, title_fits);
-    build(&shrunk_title, "")
+    build(largest_fitting_prefix(title, title_fits), "")
 }
 
 #[cfg(test)]
@@ -294,6 +309,21 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_trailing_slash() {
+        assert_eq!(parse("https://github.com/o/r.git/").unwrap().repo, "r");
+        assert_eq!(parse("https://github.com/o/r/").unwrap().repo, "r");
+    }
+
+    #[test]
+    fn test_parse_discards_credentials_in_userinfo() {
+        let token = format!("github_pat_{}", "A1".repeat(20));
+        let r = parse(&format!("https://{token}@github.com/o/r.git")).unwrap();
+        assert_eq!((r.host.as_str(), r.owner.as_str()), ("github.com", "o"));
+        let r = parse("https://alice:hunter2@ghes.example.com:8443/team/repo").unwrap();
+        assert_eq!(r.host, "ghes.example.com");
+    }
+
+    #[test]
     fn test_parse_rejects_unrecognized_shape() {
         assert!(parse("/local/path/to/repo").is_none());
         assert!(parse("not a url at all").is_none());
@@ -308,9 +338,40 @@ mod tests {
 
     #[test]
     fn test_looks_like_github_host_rejects_known_non_github_hosts() {
-        assert!(!looks_like_github_host("gitlab.com"));
-        assert!(!looks_like_github_host("bitbucket.org"));
-        assert!(!looks_like_github_host("dev.azure.com"));
+        for host in [
+            "gitlab.com",
+            "GitLab.com",
+            "bitbucket.org",
+            "altssh.bitbucket.org",
+            "dev.azure.com",
+            "ssh.dev.azure.com",
+            "myorg.visualstudio.com",
+            "codeberg.org",
+            "gitea.com",
+            "git.sr.ht",
+            "gitlab.com.",
+        ] {
+            assert!(!looks_like_github_host(host), "{host}");
+        }
+        // A suffix match needs a label boundary.
+        assert!(looks_like_github_host("notgitlab.com"));
+    }
+
+    /// Azure DevOps SSH remotes parse structurally; the host check is
+    /// what keeps them from getting a bogus GitHub compare URL.
+    #[test]
+    fn test_azure_ssh_remote_is_not_github() {
+        let r = parse("git@ssh.dev.azure.com:v3/org/proj/repo").unwrap();
+        assert!(!looks_like_github_host(&r.host));
+    }
+
+    #[test]
+    fn test_largest_fitting_prefix_respects_char_boundaries() {
+        let text = "a\u{e9}\u{20ac}b";
+        assert_eq!(largest_fitting_prefix(text, |p| p.len() <= 3), "a\u{e9}");
+        assert_eq!(largest_fitting_prefix(text, |p| p.len() <= 100), text);
+        assert_eq!(largest_fitting_prefix(text, |_| false), "");
+        assert_eq!(largest_fitting_prefix("", |_| true), "");
     }
 
     #[test]
