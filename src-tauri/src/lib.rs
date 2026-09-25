@@ -1,124 +1,88 @@
-//! # SWARM Orchestrator Desktop Shell
+//! # SWARM Orchestrator desktop shell
 //!
-//! The Tauri desktop shell for the SWARM Orchestrator application. All
-//! domain logic (worker management, AI streaming, session CRUD, the
-//! ordered event log, the inter-agent message bus) lives in the
-//! Tauri-free `swarm-core` crate; this crate wires that domain layer to
-//! Tauri: it registers plugins and IPC command handlers, resolves
-//! filesystem paths from `app.path()`, and forwards the ordered event
-//! stream onto the `swarm://events` webview channel.
+//! The Tauri 3 shell around `swarm-core`. All domain logic (workers,
+//! provider agents, sessions, the ordered event log, the message bus, git
+//! and the ship chain) lives in the Tauri-free `swarm-core` crate, which the
+//! headless `swarmd` daemon embeds as well. This crate only connects that
+//! core to a desktop window:
 //!
-//! ## Runtime construction (headless-daemon plan Phase 2)
-//!
-//! Everything that used to be built by hand in this file's `setup()`
-//! closure (the worker registry, session manager, message bus, ordered
-//! event log, agent scheduler, background metrics loop, git capability
-//! probe, startup worktree prune) is now
-//! [`swarm_core::runtime::Runtime::start`] — the SAME constructor
-//! `swarmd` calls. This shell's only remaining jobs are: resolve
-//! `Paths` from `app.path()`, supply the PRIMARY lossless `emit`
-//! closure (`app.emit(EVENT_CHANNEL, envelope)` — unchanged from
-//! before the split), and `app.manage()` the result. Every
-//! `#[tauri::command]` wrapper in `commands::*` is now thin: it packs
-//! its args into JSON and calls
-//! [`swarm_core::commands::Registry::dispatch`] — the SAME dispatch
-//! table `swarmd`'s WS `rpc` frames use (see `commands::mod`'s doc and
-//! `commands::registry_contract`'s drift-proof test).
-//!
-//! All async work runs on a Tokio multi-threaded runtime scaled to the
-//! number of logical CPU cores. CPU-bound operations are dispatched
-//! through `tokio::task::spawn_blocking` to avoid starving the async
-//! executor.
+//! - [`install_async_runtime`] creates the process's one Tokio runtime and
+//!   hands it to Tauri, so IPC commands and swarm-core's background tasks
+//!   share a single worker pool.
+//! - [`startup`] starts [`swarm_core::runtime::Runtime`] against the app
+//!   data directory, forwards its ordered event stream to the webview on
+//!   [`swarm_core::orchestration::EVENT_CHANNEL`], and shows the main
+//!   window, or reports why it could not start.
+//! - [`commands`] exposes every [`swarm_core::commands::Registry`] command
+//!   under its own name (the same table `swarmd` serves as WebSocket `rpc`
+//!   frames), plus the two desktop-only commands that drive OS integrations.
+//! - [`lifecycle`] shuts the runtime down when the event loop exits.
 
-use std::sync::Arc;
+use std::path::PathBuf;
 
-use tauri::{Emitter, Manager};
-use tauri_plugin_dialog::DialogExt;
+use tauri::Manager;
+
+mod commands;
+mod lifecycle;
+mod startup;
 
 #[cfg(test)]
 mod capability_contract;
-mod commands;
+#[cfg(test)]
+mod config_contract;
+#[cfg(test)]
+mod test_support;
 
-use swarm_core::Paths;
-use swarm_core::commands::{Ctx, Registry};
-use swarm_core::error::AppError;
-use swarm_core::orchestration::EVENT_CHANNEL;
-use swarm_core::runtime::{Runtime, RuntimeConfig, RuntimeStartError};
-
-/// Initializes the tracing subscriber for structured logging.
+/// Builds the process's Tokio runtime and installs it as Tauri's async
+/// runtime.
 ///
-/// Configures output format based on the build profile:
-/// - **Debug mode:** Pretty-printed, human-readable output with thread names
-/// - **Release mode:** JSON-formatted output for structured log aggregation
-///
-/// The default log filter is `swarm_core=debug,swarm_desktop=debug,warn`
-/// unless overridden by the `RUST_LOG` environment variable.
-fn init_tracing() {
-    use tracing_subscriber::EnvFilter;
-
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("swarm_core=debug,swarm_desktop=debug,warn"));
-
-    if cfg!(debug_assertions) {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_target(true)
-            .with_thread_names(true)
-            .pretty()
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_target(true)
-            .json()
-            .init();
-    }
-
-    tracing::info!("tracing initialized");
-}
-
-/// Resolves the shared [`swarm_core::Paths`] from the Tauri app handle,
-/// creating the app data directory if it does not exist yet.
-pub(crate) fn resolve_paths(app: &tauri::AppHandle) -> Result<Paths, AppError> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::Config(format!("failed to resolve app data dir: {e}")))?;
-    std::fs::create_dir_all(&data_dir)?;
-    Ok(Paths { data_dir })
-}
-
-/// Builds and runs the SWARM Orchestrator Tauri application.
+/// Tauri runs async commands and plugin tasks on
+/// [`tauri::async_runtime`], which creates a runtime of its own on first
+/// use unless one is installed first. Installing this one means commands,
+/// plugins and every task swarm-core spawns (with `tokio::spawn`, from
+/// inside the runtime context [`run`] enters) share one worker pool, whose
+/// threads are named `swarm-tokio`.
 ///
 /// # Panics
 ///
-/// Panics if:
-/// - The main webview window cannot be found
-/// - The single-instance lock is already held by another process (see
-///   [`swarm_core::lock::SingleInstanceLock`]) — this is the ONE
-///   intentional early exit: a second engine on the same data
-///   directory would collide on the event log's primary key (see the
-///   headless-daemon plan's Phase 2 item 1), so this shell refuses to
-///   proceed at all rather than run in a corrupted state.
-/// - The Tauri application fails to start
-pub fn run() {
-    init_tracing();
+/// If the runtime cannot be built (the OS refused to create its threads),
+/// or if Tauri's async runtime was already initialized, since the second
+/// runtime this function exists to prevent would then already be running.
+pub fn install_async_runtime() -> tokio::runtime::Runtime {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("swarm-tokio")
+        .build()
+        .expect("failed to build the Tokio runtime");
+    tauri::async_runtime::set(runtime.handle().clone());
+    runtime
+}
 
-    // Tauri 3 selects the webview runtime on the builder, not through
-    // Cargo features of `tauri`: `Builder::default()` is the type-erased
-    // `tauri::DynRuntime` builder, and building without `.runtime(..)`
-    // fails with `RuntimeNotConfigured`. wry is the system webview
-    // (WebView2 / WKWebView / webkit2gtk).
-    tauri::Builder::default()
+/// Builds and runs SWARM Orchestrator. Does not return: the event loop
+/// exits the process when the app quits.
+///
+/// # Panics
+///
+/// If the Tauri app cannot be built, which only happens for an invalid
+/// bundled configuration. Failures to start swarm-core are not panics:
+/// [`startup`] reports them in a dialog and exits with status 1.
+pub fn run() {
+    let tokio = install_async_runtime();
+    let _tokio_context = tokio.enter();
+
+    // Tauri 3 takes the webview runtime as a value: `Builder::default()`
+    // is the type-erased `tauri::DynRuntime` builder, and wry is the
+    // system webview (WebView2 / WKWebView / WebKitGTK).
+    let app = tauri::Builder::default()
         .runtime(tauri_runtime_wry::Wry::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         // The frontend opens exactly two things, both explicitly: the
         // ship chain's GitHub compare page (`openUrl`) and a worker's
         // worktree folder (`openPath`), each scoped in
-        // capabilities/default.json. The plugin's default injected
-        // click handler (routing `target="_blank"` links to `open_url`)
-        // is left out: the app renders no such links.
+        // capabilities/default.json. The plugin's injected click handler
+        // (routing `target="_blank"` links to `open_url`) stays off: the
+        // app renders no such links.
         .plugin(
             tauri_plugin_opener::Builder::new()
                 .open_js_links_on_click(false)
@@ -127,133 +91,109 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![
-            // Worker commands
-            commands::worker::spawn_worker,
-            commands::worker::pause_worker,
-            commands::worker::resume_worker,
-            commands::worker::kill_worker,
-            commands::worker::list_workers,
-            commands::worker::worker_input,
-            commands::worker::resize_worker,
-            commands::worker::set_max_workers,
-            // Git commands
-            commands::git::validate_repo_root,
-            commands::git::git_ship_preflight,
-            commands::git::git_stage_commit,
-            commands::git::git_push,
-            commands::git::ship_context,
-            commands::git::ship_compare_url,
-            // Session commands
-            commands::session::create_session,
-            commands::session::delete_session,
-            commands::session::list_sessions,
-            commands::session::get_session,
-            commands::session::session_add_worker,
-            commands::session::session_remove_worker,
-            // Agent commands
-            commands::agent::agent_turn_started,
-            commands::agent::agent_spawn,
-            commands::agent::agent_send_turn,
-            commands::agent::agent_cancel,
-            commands::agent::agent_shutdown,
-            commands::agent::agent_probe,
-            commands::agent::agent_permission_respond,
-            commands::agent::set_agent_concurrency,
-            // Config commands
-            commands::config::read_config,
-            commands::config::write_config,
-            // File system commands
-            commands::fs::read_file,
-            commands::fs::write_file,
-            // Metrics commands
-            commands::metrics::get_metrics,
-            // Orchestration commands
-            commands::orchestration::events_since,
-            // Bus commands — bus_subscribe/bus_create_pipeline/
-            // bus_list_pipelines DELETED in Phase 4 (see
-            // swarm_core::bus::router's module doc).
-            commands::bus::bus_send,
-            commands::bus::bus_list_channels,
-            // Updater commands
-            commands::updater::check_for_updates,
-            // Notification commands
-            commands::notification::send_notification,
-        ])
-        .setup(move |app| {
-            let window = app
-                .get_webview_window("main")
-                .ok_or("failed to get main window")?;
-
-            let icon_bytes = include_bytes!("../icons/icon.png");
-            let icon = tauri::image::Image::from_bytes(icon_bytes)?;
-            window.set_icon(icon)?;
-
-            let paths = resolve_paths(app.handle())?;
-
-            // The PRIMARY delivery path — called synchronously, in
-            // order, for every event, exactly mirroring the pre-split
-            // direct `app.emit` call (lossless; a slow webview backs up
-            // the writer channel rather than dropping events). Passed
-            // straight through to `Runtime::start`, which wires it into
-            // the engine exactly as `lib.rs` used to do by hand.
-            let emit_app = app.handle().clone();
-            let runtime = match Runtime::start(
-                RuntimeConfig {
-                    paths,
-                    shell_name: "swarm-desktop",
-                    bind: None, // no network listener — this is the desktop shell
-                },
-                move |envelope| {
-                    if let Err(e) = emit_app.emit(EVENT_CHANNEL, envelope) {
-                        tracing::error!(error = %e, "failed to emit domain event");
-                    }
-                },
-            ) {
-                Ok(rt) => rt,
-                Err(RuntimeStartError::Lock(lock_err)) => {
-                    // security-review FIX-7: `eprintln!` alone is
-                    // invisible on a `windows_subsystem = "windows"`
-                    // release build (no console) — this runs INSIDE
-                    // `setup()`, where the app handle (and therefore
-                    // `tauri-plugin-dialog`, already a registered
-                    // plugin) exists, so a blocking native dialog
-                    // surfaces the SAME Title Case, pid-and-shell-bearing
-                    // message (see `LockError`'s `Display`, which now
-                    // names which shell holds the lock) on every
-                    // platform, console or not.
-                    eprintln!("{lock_err}");
-                    tracing::error!(error = %lock_err, "single-instance lock held by another process");
-                    app.dialog()
-                        .message(lock_err.to_string())
-                        .title("SWARM Orchestrator")
-                        .kind(tauri_plugin_dialog::MessageDialogKind::Error)
-                        .blocking_show();
-                    std::process::exit(1);
-                }
-                Err(other) => {
-                    eprintln!("Failed To Start The SWARM Runtime: {other}");
-                    app.dialog()
-                        .message(other.to_string())
-                        .title("SWARM Orchestrator")
-                        .kind(tauri_plugin_dialog::MessageDialogKind::Error)
-                        .blocking_show();
-                    std::process::exit(1);
-                }
-            };
-
-            let ctx = Ctx::from_runtime(&runtime);
-            app.manage(ctx);
-            app.manage(Arc::new(Registry::new()));
-            // Keeps the single-instance lock (and every background task
-            // `Runtime::start` spawned) alive for the app's entire
-            // lifetime — dropping `runtime` early would release the
-            // lock immediately, defeating its purpose.
-            app.manage(runtime);
-
-            tracing::info!("SWARM Orchestrator setup complete");
+        .invoke_handler(commands::handler())
+        .setup(|app| {
+            startup::setup(app.handle());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run SWARM Orchestrator");
+        .build(tauri::generate_context!())
+        .expect("failed to build the SWARM Orchestrator app");
+
+    init_tracing(app.path().app_log_dir().ok());
+    app.run(lifecycle::on_run_event);
+}
+
+/// Name of the release log file inside the app log directory.
+const LOG_FILE: &str = "swarm-desktop.log";
+
+/// A release log larger than this is moved to `swarm-desktop.log.1`
+/// (replacing the previous one) when the app starts, so the two files
+/// together stay bounded.
+const LOG_ROTATE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Installs the global `tracing` subscriber, which also receives the `log`
+/// records Tauri and its plugins write.
+///
+/// Debug builds print human-readable events with thread names to stdout,
+/// at `debug` for SWARM's own crates. Release builds have no console (a
+/// GUI-subsystem executable on Windows, a detached process when launched
+/// from a macOS or Linux desktop), so they append JSON lines to
+/// `swarm-desktop.log` in `log_dir` at `info`; without a log directory they
+/// fall back to stderr. `RUST_LOG` overrides either default filter.
+///
+/// Each event is one small append to a file the OS page cache absorbs,
+/// written by the thread that logs it: a background writer thread would
+/// lose its queued lines when Tauri exits the process, the shutdown log
+/// included.
+fn init_tracing(log_dir: Option<PathBuf>) {
+    use tracing_subscriber::EnvFilter;
+
+    if cfg!(debug_assertions) {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                    EnvFilter::new("swarm_core=debug,swarm_desktop=debug,warn")
+                }),
+            )
+            .with_thread_names(true)
+            .pretty()
+            .init();
+    } else {
+        let filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("swarm_core=info,swarm_desktop=info,warn"));
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .json();
+        match log_dir.and_then(|dir| open_log_file(&dir).ok()) {
+            Some(file) => subscriber.with_writer(std::sync::Arc::new(file)).init(),
+            None => subscriber.with_writer(std::io::stderr).init(),
+        }
+    }
+
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "tracing initialized");
+}
+
+/// Opens the release log for appending, rotating it first when it has
+/// grown past [`LOG_ROTATE_BYTES`].
+fn open_log_file(dir: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join(LOG_FILE);
+    if std::fs::metadata(&path).is_ok_and(|meta| meta.len() > LOG_ROTATE_BYTES) {
+        // A rename can fail while another instance still has the file
+        // open on Windows; appending to the oversized log is harmless.
+        let _ = std::fs::rename(&path, path.with_extension("log.1"));
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::temp_dir;
+
+    #[test]
+    fn log_file_is_rotated_once_it_outgrows_the_limit() {
+        let dir = temp_dir("log");
+        let log = dir.join(LOG_FILE);
+
+        drop(open_log_file(&dir).unwrap());
+        std::fs::write(
+            &log,
+            vec![b'x'; usize::try_from(LOG_ROTATE_BYTES).unwrap() + 1],
+        )
+        .unwrap();
+        drop(open_log_file(&dir).unwrap());
+
+        assert_eq!(std::fs::metadata(&log).unwrap().len(), 0);
+        assert_eq!(
+            std::fs::metadata(dir.join("swarm-desktop.log.1"))
+                .unwrap()
+                .len(),
+            LOG_ROTATE_BYTES + 1
+        );
+    }
 }

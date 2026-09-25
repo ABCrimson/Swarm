@@ -4132,13 +4132,10 @@ dependencies = [
 name = "swarm-desktop"
 version = "0.13.1"
 dependencies = [
- "anyhow",
  "glob",
- "parking_lot",
  "serde",
  "serde_json",
  "swarm-core",
- "sysinfo",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -4148,11 +4145,10 @@ dependencies = [
  "tauri-plugin-store",
  "tauri-plugin-updater",
  "tauri-runtime-wry",
+ "thiserror 2.0.20",
  "tokio",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

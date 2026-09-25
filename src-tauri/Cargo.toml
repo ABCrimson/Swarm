@@ -32,18 +32,17 @@ tauri-plugin-store        = { workspace = true }
 tauri-plugin-updater      = { workspace = true }
 tauri-plugin-notification = { workspace = true }
 tokio                     = { workspace = true }
-tokio-util                = { workspace = true }
 serde                     = { workspace = true }
 serde_json                = { workspace = true }
-uuid                      = { workspace = true }
+thiserror                 = { workspace = true }
 tracing                   = { workspace = true }
 tracing-subscriber        = { workspace = true }
-anyhow                    = { workspace = true }
-sysinfo                   = { workspace = true }
-parking_lot               = { workspace = true }
 
 [dev-dependencies]
-glob = { workspace = true }
+# `test` adds tauri::test's MockRuntime, which drives real IPC requests
+# through the app's invoke handler without a webview.
+tauri = { workspace = true, features = ["test"] }
+glob  = { workspace = true }
 
 [build-dependencies]
 tauri-build = { workspace = true }
