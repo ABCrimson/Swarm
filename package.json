@@ -6,12 +6,12 @@
   "type": "module",
   "packageManager": "pnpm@12.7.0",
   "engines": {
-    "node": "27.0.0-nightly202609233d85c94cfa"
+    "node": "27.0.0-nightly20260925a3bb551ea7"
   },
   "devEngines": {
     "runtime": {
       "name": "node",
-      "version": "27.0.0-nightly202609233d85c94cfa",
+      "version": "27.0.0-nightly20260925a3bb551ea7",
       "onFail": "download"
     }
   },

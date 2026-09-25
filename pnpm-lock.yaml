@@ -312,8 +312,8 @@ importers:
         specifier: 18.0.14
         version: 18.0.14
       node:
-        specifier: runtime:27.0.0-nightly202609233d85c94cfa
-        version: runtime:27.0.0-nightly202609233d85c94cfa
+        specifier: runtime:27.0.0-nightly20260925a3bb551ea7
+        version: runtime:27.0.0-nightly20260925a3bb551ea7
       oxc-transform-react:
         specifier: 0.151.0
         version: 0.151.0
@@ -2458,7 +2458,7 @@ packages:
     resolution: {integrity: sha512-kQK9LGGFiHtrWiNhZtA7Qbw17AQz+dmsEKODRIVTXA9+e5MS/2gZEBhYJt13GrAz5/IOZKddH/0Z3TP/Zgo+yw==}
     engines: {node: '>=18'}
 
-  node@runtime:27.0.0-nightly202609233d85c94cfa:
+  node@runtime:27.0.0-nightly20260925a3bb551ea7:
     resolution:
       type: variations
       variants:
@@ -2466,9 +2466,9 @@ packages:
             archive: tarball
             bin:
               node: bin/node
-            integrity: sha256-MO+o7zo2nVWnRmQRSDVt0aIIho/pC1r5m9scMr71244=
+            integrity: sha256-g3UvEqcjWqRMVtHx/ZDG+yH2FMIX0lHH2yjqHM61YdI=
             type: binary
-            url: https://nodejs.org/download/nightly/v27.0.0-nightly202609233d85c94cfa/node-v27.0.0-nightly202609233d85c94cfa-aix-ppc64.tar.gz
+            url: https://nodejs.org/download/nightly/v27.0.0-nightly20260925a3bb551ea7/node-v27.0.0-nightly20260925a3bb551ea7-aix-ppc64.tar.gz
           targets:
             - cpu: ppc64
               os: aix
@@ -2476,9 +2476,9 @@ packages:
             archive: tarball
             bin:
               node: bin/node
-            integrity: sha256-PzoONv0r3v/JuP+mpGg6a5oVvaoQ73ZbmO4ZlDCbiGs=
+            integrity: sha256-UgW4BDq4Pm1LB7dSe/PpJaOiSC1TngC2wulrP9K7/kQ=
             type: binary
-            url: https://nodejs.org/download/nightly/v27.0.0-nightly202609233d85c94cfa/node-v27.0.0-nightly202609233d85c94cfa-darwin-arm64.tar.gz
+            url: https://nodejs.org/download/nightly/v27.0.0-nightly20260925a3bb551ea7/node-v27.0.0-nightly20260925a3bb551ea7-darwin-arm64.tar.gz
           targets:
             - cpu: arm64
               os: darwin
@@ -2486,19 +2486,9 @@ packages:
             archive: tarball
             bin:
               node: bin/node
-            integrity: sha256-Mq1jgJxggRao97lcmwQpxekIarKkI1mZnrGdI8b/L2U=
+            integrity: sha256-ugzABH8EKFewegI9M8WMDxRvWJ4PhPQ2Xs9v3omw6XE=
             type: binary
-            url: https://nodejs.org/download/nightly/v27.0.0-nightly202609233d85c94cfa/node-v27.0.0-nightly202609233d85c94cfa-darwin-x64.tar.gz
-          targets:
-            - cpu: x64
-              os: darwin
-        - resolution:
-            archive: tarball
-            bin:
-              node: bin/node
-            integrity: sha256-0eiuFxBTx8t9r7FuzzajrfyYqlABBU8Hj8BCCIVExkE=
-            type: binary
-            url: https://nodejs.org/download/nightly/v27.0.0-nightly202609233d85c94cfa/node-v27.0.0-nightly202609233d85c94cfa-linux-arm64.tar.gz
+            url: https://nodejs.org/download/nightly/v27.0.0-nightly20260925a3bb551ea7/node-v27.0.0-nightly20260925a3bb551ea7-linux-arm64.tar.gz
           targets:
             - cpu: arm64
               os: linux
@@ -2506,9 +2496,9 @@ packages:
             archive: tarball
             bin:
               node: bin/node
-            integrity: sha256-KAnkln0eS2RdlLFcKz0NTqzapKYHCWICZmVtTg0vehw=
+            integrity: sha256-Jb2muMheZ2bYMVsPTRVezN1dPODbIpOpUU8C6A6ruwE=
             type: binary
-            url: https://nodejs.org/download/nightly/v27.0.0-nightly202609233d85c94cfa/node-v27.0.0-nightly202609233d85c94cfa-linux-ppc64le.tar.gz
+            url: https://nodejs.org/download/nightly/v27.0.0-nightly20260925a3bb551ea7/node-v27.0.0-nightly20260925a3bb551ea7-linux-ppc64le.tar.gz
           targets:
             - cpu: ppc64le
               os: linux
@@ -2516,9 +2506,9 @@ packages:
             archive: tarball
             bin:
               node: bin/node
-            integrity: sha256-ppO9qxS7MA9+A2vCnhhZXD9ctaaWiE2m4H1TgTHZOJM=
+            integrity: sha256-iQH3vM73uWGGmQfOd6BM97tzI5ztnMOu93SD90OfuLs=
             type: binary
-            url: https://nodejs.org/download/nightly/v27.0.0-nightly202609233d85c94cfa/node-v27.0.0-nightly202609233d85c94cfa-linux-s390x.tar.gz
+            url: https://nodejs.org/download/nightly/v27.0.0-nightly20260925a3bb551ea7/node-v27.0.0-nightly20260925a3bb551ea7-linux-s390x.tar.gz
           targets:
             - cpu: s390x
               os: linux
@@ -2526,9 +2516,9 @@ packages:
             archive: tarball
             bin:
               node: bin/node
-            integrity: sha256-e4Ev0kKupJHKHUruuONpMQXXn0dIU+MSs6GyCDoZd1s=
+            integrity: sha256-NYMrY5qmxK7Wg02amld82n1W+4771rOXvhj7Yc/vk0k=
             type: binary
-            url: https://nodejs.org/download/nightly/v27.0.0-nightly202609233d85c94cfa/node-v27.0.0-nightly202609233d85c94cfa-linux-x64-musl.tar.gz
+            url: https://nodejs.org/download/nightly/v27.0.0-nightly20260925a3bb551ea7/node-v27.0.0-nightly20260925a3bb551ea7-linux-x64-musl.tar.gz
           targets:
             - cpu: x64
               os: linux
@@ -2537,9 +2527,9 @@ packages:
             archive: tarball
             bin:
               node: bin/node
-            integrity: sha256-XQ1+MRHGPBlXK8HWf/oTHVcZVbqt1vZ5tv6hGdUCqpc=
+            integrity: sha256-NNtOM3KXw5ISeFAgTg9wsw1AHaKnJbw/P7fr6WSG1TI=
             type: binary
-            url: https://nodejs.org/download/nightly/v27.0.0-nightly202609233d85c94cfa/node-v27.0.0-nightly202609233d85c94cfa-linux-x64.tar.gz
+            url: https://nodejs.org/download/nightly/v27.0.0-nightly20260925a3bb551ea7/node-v27.0.0-nightly20260925a3bb551ea7-linux-x64.tar.gz
           targets:
             - cpu: x64
               os: linux
@@ -2547,10 +2537,10 @@ packages:
             archive: zip
             bin:
               node: node.exe
-            integrity: sha256-yo3Hr96Viu60FxLzI8ctYYyF6daL662KG6PjlByl/qo=
-            prefix: node-v27.0.0-nightly202609233d85c94cfa-win-arm64
+            integrity: sha256-C9LEla1yTrvCqsvmOEYtvc2ihMwYNeIlw9gIfjYDeQI=
+            prefix: node-v27.0.0-nightly20260925a3bb551ea7-win-arm64
             type: binary
-            url: https://nodejs.org/download/nightly/v27.0.0-nightly202609233d85c94cfa/node-v27.0.0-nightly202609233d85c94cfa-win-arm64.zip
+            url: https://nodejs.org/download/nightly/v27.0.0-nightly20260925a3bb551ea7/node-v27.0.0-nightly20260925a3bb551ea7-win-arm64.zip
           targets:
             - cpu: arm64
               os: win32
@@ -2558,14 +2548,14 @@ packages:
             archive: zip
             bin:
               node: node.exe
-            integrity: sha256-WLHKv1o06xx+YpxRameRk4v9GXgJogXy5kNYkgk3Kyg=
-            prefix: node-v27.0.0-nightly202609233d85c94cfa-win-x64
+            integrity: sha256-wLmR6f8YSbWipAr8MyMW0v5wJCpysH7ki+kO2PeZVe0=
+            prefix: node-v27.0.0-nightly20260925a3bb551ea7-win-x64
             type: binary
-            url: https://nodejs.org/download/nightly/v27.0.0-nightly202609233d85c94cfa/node-v27.0.0-nightly202609233d85c94cfa-win-x64.zip
+            url: https://nodejs.org/download/nightly/v27.0.0-nightly20260925a3bb551ea7/node-v27.0.0-nightly20260925a3bb551ea7-win-x64.zip
           targets:
             - cpu: x64
               os: win32
-    version: 27.0.0-nightly202609233d85c94cfa
+    version: 27.0.0-nightly20260925a3bb551ea7
     hasBin: true
 
   obug@2.2.1:
@@ -4921,7 +4911,7 @@ snapshots:
 
   node-releases@2.0.57: {}
 
-  node@runtime:27.0.0-nightly202609233d85c94cfa: {}
+  node@runtime:27.0.0-nightly20260925a3bb551ea7: {}
 
   obug@2.2.1: {}
 
