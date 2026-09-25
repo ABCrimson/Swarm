@@ -72,8 +72,8 @@ fn csp_is_otherwise_strict() {
     }
 }
 
-/// The main window starts hidden; `startup::boot` shows it once
-/// swarm-core runs, so a failed start shows only its error dialog.
+/// The main window starts hidden: `startup` shows it once swarm-core
+/// runs, or under the error dialog when the start failed.
 #[test]
 fn main_window_starts_hidden() {
     let config = config();

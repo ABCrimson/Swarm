@@ -2,10 +2,11 @@
 //!
 //! The main window is created hidden (`"visible": false` in
 //! tauri.conf.json), so the webview loads the UI while the runtime starts,
-//! and [`boot`] shows it only once swarm-core is running and its state is
-//! registered. When the start fails, nothing is shown except the report:
-//! [`setup`] never returns an error to Tauri, which would turn it into a
-//! "Failed to setup app" panic with no explanation for the user.
+//! and [`boot`] shows it once swarm-core is running and its state is
+//! registered. When the start fails, the window is shown as the parent of
+//! the error dialog instead: [`setup`] never returns an error to Tauri,
+//! which would turn it into a "Failed to setup app" panic with no
+//! explanation for the user.
 
 use std::path::PathBuf;
 
@@ -13,7 +14,7 @@ use swarm_core::Paths;
 use swarm_core::commands::{Ctx, Registry};
 use swarm_core::orchestration::EVENT_CHANNEL;
 use swarm_core::runtime::{Runtime, RuntimeConfig, RuntimeStartError};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 /// Label of the window tauri.conf.json declares.
@@ -43,14 +44,24 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &AppHandle<R>) {
 }
 
 /// Boots from `data_dir` and hands any failure to `report`, never to the
-/// caller.
+/// caller, together with the main window once it is shown: the report's
+/// dialog needs a visible parent (see [`report_with_dialog`]).
 fn start_or_report<R: tauri::Runtime>(
     app: &AppHandle<R>,
     data_dir: Result<PathBuf, StartupError>,
-    report: impl FnOnce(&AppHandle<R>, StartupError),
+    report: impl FnOnce(&AppHandle<R>, Option<&WebviewWindow<R>>, StartupError),
 ) {
     if let Err(error) = data_dir.and_then(|data_dir| boot(app, data_dir)) {
-        report(app, error);
+        let parent = app
+            .get_webview_window(MAIN_WINDOW)
+            .filter(|window| match window.show() {
+                Ok(()) => true,
+                Err(show_error) => {
+                    tracing::warn!(%show_error, "failed to show the main window for the startup error");
+                    false
+                }
+            });
+        report(app, parent.as_ref(), error);
     }
 }
 
@@ -108,25 +119,38 @@ fn boot<R: tauri::Runtime>(app: &AppHandle<R>, data_dir: PathBuf) -> Result<(), 
     Ok(())
 }
 
-/// Shows `error` in a native dialog and exits with status 1 once the user
-/// dismisses it.
+/// Shows `error` in a native dialog over `parent` and exits with status 1
+/// once the user dismisses it.
 ///
 /// `setup` runs on the main thread, inside the event loop, so the dialog
 /// must not block: `blocking_show` would wait for a dialog the blocked
 /// event loop can never complete (on macOS the dialog is a sheet driven
 /// by the main run loop), and a second launch would hang instead of
 /// explaining itself. `show` returns at once and the exit happens in its
-/// callback. The message is also written to stderr and the log, for
-/// launches from a terminal.
-fn report_with_dialog<R: tauri::Runtime>(app: &AppHandle<R>, error: StartupError) {
+/// callback.
+///
+/// The parent must be visible. On macOS, rfd attaches a dialog without a
+/// parent to the app's main or first window as a sheet, and would pick
+/// the hidden main window: the sheet would never appear, and the process
+/// would linger invisibly instead of exiting. The message is also
+/// written to stderr and the log, for launches from a terminal.
+fn report_with_dialog<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    parent: Option<&WebviewWindow<R>>,
+    error: StartupError,
+) {
     tracing::error!(%error, "SWARM Orchestrator failed to start");
     eprintln!("{error}");
-    let exit = app.clone();
-    app.dialog()
+    let mut dialog = app
+        .dialog()
         .message(error.to_string())
         .title("SWARM Orchestrator")
-        .kind(MessageDialogKind::Error)
-        .show(move |_| exit.exit(1));
+        .kind(MessageDialogKind::Error);
+    if let Some(parent) = parent {
+        dialog = dialog.parent(parent);
+    }
+    let exit = app.clone();
+    dialog.show(move |_| exit.exit(1));
 }
 
 #[cfg(test)]
@@ -135,6 +159,7 @@ mod tests {
 
     use swarm_core::lock::SingleInstanceLock;
     use tauri::test::{MockRuntime, mock_builder, mock_context, noop_assets};
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
 
     use super::*;
     use crate::test_support::temp_dir;
@@ -157,7 +182,7 @@ mod tests {
         let app = mock_app();
         let mut reported = None;
 
-        start_or_report(app.handle(), Ok(dir.to_path_buf()), |_, error| {
+        start_or_report(app.handle(), Ok(dir.to_path_buf()), |_, _, error| {
             reported = Some(error);
         });
 
@@ -182,7 +207,7 @@ mod tests {
         start_or_report(
             app.handle(),
             Err(StartupError::DataDir("no home directory".into())),
-            |_, error| reported = Some(error.to_string()),
+            |_, _, error| reported = Some(error.to_string()),
         );
 
         assert_eq!(
@@ -190,6 +215,26 @@ mod tests {
             Some("Failed To Open The App Data Directory: no home directory")
         );
         assert!(app.try_state::<Runtime>().is_none());
+    }
+
+    /// A failed start hands the reporter the main window, shown, as the
+    /// dialog's parent, so the dialog is never attached to a hidden window.
+    #[test]
+    fn a_failed_start_reports_over_the_shown_main_window() {
+        let app = mock_app();
+        WebviewWindowBuilder::new(&app, MAIN_WINDOW, WebviewUrl::default())
+            .visible(false)
+            .build()
+            .unwrap();
+        let mut parent = None;
+
+        start_or_report(
+            app.handle(),
+            Err(StartupError::DataDir("no home directory".into())),
+            |_, window, _| parent = window.map(|window| window.label().to_owned()),
+        );
+
+        assert_eq!(parent.as_deref(), Some(MAIN_WINDOW));
     }
 
     /// A free data directory boots and registers the handlers' state.
@@ -200,7 +245,7 @@ mod tests {
         let dir = temp_dir("startup-free");
         let app = mock_app();
 
-        start_or_report(app.handle(), Ok(dir.to_path_buf()), |_, error| {
+        start_or_report(app.handle(), Ok(dir.to_path_buf()), |_, _, error| {
             panic!("{error}")
         });
 
