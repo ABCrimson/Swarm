@@ -1204,6 +1204,39 @@ fn test_fresh_dir_non_loopback_bind_is_refused_twice_in_a_row() {
     }
 }
 
+/// The data directory (it holds the API key, the event log and the token)
+/// ends up owner-only: an existing, looser directory is tightened, and a
+/// missing nested path is created private at every level swarmd creates.
+/// Both happen before the non-loopback gate, so a refused run is enough.
+#[cfg(unix)]
+#[test]
+fn test_data_dir_is_made_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+    let root = tempfile::tempdir().unwrap();
+    let existing = root.path().join("existing");
+    std::fs::create_dir(&existing).unwrap();
+    std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let nested = root.path().join("new").join("data");
+
+    for dir in [&existing, &nested] {
+        let (code, _, stderr) = run(&["--bind", "0.0.0.0:0", "--data-dir", path_str(dir)]);
+        assert_eq!(code, Some(1), "{stderr}");
+        assert!(
+            stderr.contains("Refusing To Bind A Non-Loopback Address"),
+            "{stderr}"
+        );
+    }
+    assert_eq!(mode(&existing), 0o700, "an existing directory is tightened");
+    assert_eq!(mode(&nested), 0o700, "a new directory is private");
+    assert_eq!(
+        mode(nested.parent().unwrap()),
+        0o700,
+        "missing parents are created private too"
+    );
+}
+
 /// A malformed token file does not satisfy the gate and is never
 /// overwritten, not even by a loopback run.
 #[test]

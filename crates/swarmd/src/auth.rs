@@ -527,6 +527,63 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600);
     }
 
+    /// Losing the mint race: when another process linked its token into
+    /// place between our read and our rename, `mint` keeps that file
+    /// byte-for-byte and returns its token. The old write-then-chmod code
+    /// overwrote it, invalidating the winner's connect URL.
+    #[test]
+    fn test_mint_never_clobbers_a_token_that_landed_first() {
+        let dir = temp_dir();
+        let path = token_path(dir.path());
+        let winner = "0123456789abcdef".repeat(TOKEN_HEX_LEN / 16);
+        std::fs::write(&path, &winner).unwrap();
+
+        let loaded = mint(&path).unwrap();
+        assert!(!loaded.minted, "the existing token is loaded, not minted");
+        assert_eq!(loaded.token.as_str(), winner);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), winner);
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, [TOKEN_FILE], "the losing temporary file is removed");
+    }
+
+    /// Racing first runs converge on one token, and nobody reads a partial
+    /// file along the way (that would be an `InvalidData` error).
+    #[test]
+    fn test_racing_first_runs_agree_on_one_token() {
+        const RACERS: usize = 8;
+        let dir = temp_dir();
+        let barrier = std::sync::Barrier::new(RACERS);
+        let results: Vec<LoadedToken> = std::thread::scope(|scope| {
+            let racers: Vec<_> = (0..RACERS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        DaemonToken::load_or_create(dir.path()).unwrap()
+                    })
+                })
+                .collect();
+            racers
+                .into_iter()
+                .map(|racer| racer.join().unwrap())
+                .collect()
+        });
+        let on_disk = DaemonToken::load(dir.path()).unwrap().unwrap();
+        assert!(
+            results
+                .iter()
+                .all(|loaded| loaded.token.as_str() == on_disk.as_str()),
+            "every racer returns the token on disk"
+        );
+        assert_eq!(
+            results.iter().filter(|loaded| loaded.minted).count(),
+            1,
+            "exactly one racer mints"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_loosened_permissions_are_restored_on_load() {
