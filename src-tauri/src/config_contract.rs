@@ -72,8 +72,8 @@ fn csp_is_otherwise_strict() {
     }
 }
 
-/// The main window starts hidden; `startup::boot` shows it once
-/// swarm-core runs, so a failed start shows only its error dialog.
+/// The main window starts hidden: `startup` shows it once swarm-core
+/// runs, or under the error dialog when the start failed.
 #[test]
 fn main_window_starts_hidden() {
     let config = config();
@@ -114,6 +114,35 @@ fn updater_requires_signed_versions() {
     assert!(updater.require_signed_version);
     assert!(!updater.allow_downgrades);
     assert_eq!(updater.endpoints.len(), 1);
+}
+
+/// `plugins.fs.requireLiteralLeadingDot` is off, so a folder allowed on
+/// an fs scope built with it (the capability's global `fs:scope`, where
+/// `dialog_grants` mirrors dialog grants) covers its dot entries on macOS
+/// and Linux too: `.github/`, `.gitignore`, `.env.example`. The plugin's
+/// default, `true` on Unix, leaves them out of every `**`.
+#[test]
+fn fs_scopes_match_dot_entries() {
+    use tauri::utils::config::FsScope;
+
+    let conf: serde_json::Value = serde_json::from_str(TAURI_CONF).unwrap();
+    let require_literal_leading_dot = conf["plugins"]["fs"]["requireLiteralLeadingDot"].as_bool();
+    assert_eq!(require_literal_leading_dot, Some(false));
+
+    let app = tauri::test::mock_app();
+    let root = std::path::Path::new("/workspace");
+    let scope = tauri::scope::fs::Scope::new(
+        &app,
+        &FsScope::Scope {
+            allow: vec![root.join("**")],
+            deny: Vec::new(),
+            require_literal_leading_dot,
+        },
+    )
+    .unwrap();
+    for entry in [".github/workflows/ci.yml", ".gitignore", "src/.env.example"] {
+        assert!(scope.is_allowed(root.join(entry)), "{entry} is not allowed");
+    }
 }
 
 /// `version` is the path `../package.json`, so the bundle and updater

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the SWARM Orchestrator webview may do. File access carries no static path scope: the fs commands reach only what the user picks in an open or save dialog, which grants that path (a directory with its contents when opened recursively) for the rest of the session.",
+  "description": "What the SWARM Orchestrator webview may do. File access carries no static path scope: the fs commands read, list and write only what the user picks in an open or save dialog, which grants that path (a directory with all its contents, dot entries included, when opened recursively) for the rest of the session. They never create directories, delete or rename.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -9,8 +9,6 @@
     "fs:allow-read-dir",
     "fs:allow-exists",
     "fs:allow-write-text-file",
-    "fs:allow-remove",
-    "fs:allow-rename",
     {
       "identifier": "fs:scope",
       "deny": [

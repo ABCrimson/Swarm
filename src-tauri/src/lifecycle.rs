@@ -1,11 +1,18 @@
 //! Orderly shutdown when the app quits.
 //!
-//! Every way out of the app (closing the last window, Cmd+Q,
-//! `AppHandle::exit` / `restart`) ends the event loop with
-//! [`RunEvent::Exit`], after which Tauri exits the process without
+//! The ways the app quits (closing the last window, Cmd+Q,
+//! `AppHandle::exit`, `AppHandle::request_restart`) end the event loop
+//! with [`RunEvent::Exit`], after which Tauri exits the process without
 //! running the destructors of managed state. The run-event callback
 //! therefore shuts the runtime down itself, on the main thread, while
 //! handling that event.
+//!
+//! Two exits skip that event, and with it this teardown:
+//! `AppHandle::restart` called on the main thread restarts the process
+//! directly (off the main thread it goes through the event), and `exit`
+//! falls back to `std::process::exit` when the event loop cannot be
+//! asked to stop. The app calls neither `restart` nor `request_restart`;
+//! a future restart must use `request_restart`.
 //!
 //! Terminal workers are left to the operating system: their PTYs close
 //! with the process, which ends the shells they run. Killing them through

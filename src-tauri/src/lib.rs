@@ -13,16 +13,21 @@
 //!   data directory, forwards its ordered event stream to the webview on
 //!   [`swarm_core::orchestration::EVENT_CHANNEL`], and shows the main
 //!   window, or reports why it could not start.
+//! - [`dialog_grants`] lets a folder opened in a dialog reach its dot
+//!   entries on macOS and Linux.
 //! - [`commands`] exposes every [`swarm_core::commands::Registry`] command
 //!   under its own name (the same table `swarmd` serves as WebSocket `rpc`
 //!   frames), plus the two desktop-only commands that drive OS integrations.
-//! - [`lifecycle`] shuts the runtime down when the event loop exits.
+//! - [`lifecycle`] shuts the runtime down when the event loop exits, and
+//!   the release log is flushed after it.
 
 use std::path::PathBuf;
 
-use tauri::Manager;
+use tauri::{Manager, RunEvent};
+use tracing_appender::non_blocking::WorkerGuard;
 
 mod commands;
+mod dialog_grants;
 mod lifecycle;
 mod startup;
 
@@ -93,14 +98,24 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(commands::handler())
         .setup(|app| {
+            dialog_grants::mirror_dialog_grants(app.handle());
             startup::setup(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("failed to build the SWARM Orchestrator app");
 
-    init_tracing(app.path().app_log_dir().ok());
-    app.run(lifecycle::on_run_event);
+    let mut log_writer = init_tracing(app.path().app_log_dir().ok());
+    app.run(move |app, event| {
+        let exiting = matches!(event, RunEvent::Exit);
+        lifecycle::on_run_event(app, event);
+        if exiting {
+            // Tauri exits the process right after this callback: flush
+            // what the log writer thread still holds, the shutdown's own
+            // lines included.
+            drop(log_writer.take());
+        }
+    });
 }
 
 /// Name of the release log file inside the app log directory.
@@ -117,17 +132,19 @@ const LOG_ROTATE_BYTES: u64 = 8 * 1024 * 1024;
 /// Debug builds print human-readable events with thread names to stdout,
 /// at `debug` for SWARM's own crates. Release builds have no console (a
 /// GUI-subsystem executable on Windows, a detached process when launched
-/// from a macOS or Linux desktop), so they append JSON lines to
+/// from a macOS or Linux desktop), so they write JSON lines to
 /// `swarm-desktop.log` in `log_dir` at `info`; without a log directory they
 /// fall back to stderr. `RUST_LOG` overrides either default filter.
 ///
-/// Each event is one small append to a file the OS page cache absorbs,
-/// written by the thread that logs it: a background writer thread would
-/// lose its queued lines when Tauri exits the process, the shutdown log
-/// included.
-fn init_tracing(log_dir: Option<PathBuf>) {
+/// The release log file is written by a dedicated thread, so logging from
+/// a Tokio worker or the main thread never waits on the disk. The returned
+/// guard owns that thread: dropping it writes out every queued line, which
+/// [`run`] does after the exit teardown, because Tauri then exits the
+/// process without running destructors.
+fn init_tracing(log_dir: Option<PathBuf>) -> Option<WorkerGuard> {
     use tracing_subscriber::EnvFilter;
 
+    let mut writer_guard = None;
     if cfg!(debug_assertions) {
         tracing_subscriber::fmt()
             .with_env_filter(
@@ -146,12 +163,23 @@ fn init_tracing(log_dir: Option<PathBuf>) {
             .with_ansi(false)
             .json();
         match log_dir.and_then(|dir| open_log_file(&dir).ok()) {
-            Some(file) => subscriber.with_writer(std::sync::Arc::new(file)).init(),
+            Some(file) => {
+                let (writer, guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
+                    // Past 128,000 queued lines a logging thread waits
+                    // for the writer instead of dropping lines: the log is
+                    // the only record a release build keeps.
+                    .lossy(false)
+                    .thread_name("swarm-log")
+                    .finish(file);
+                writer_guard = Some(guard);
+                subscriber.with_writer(writer).init();
+            }
             None => subscriber.with_writer(std::io::stderr).init(),
         }
     }
 
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "tracing initialized");
+    writer_guard
 }
 
 /// Opens the release log for appending, rotating it first when it has
