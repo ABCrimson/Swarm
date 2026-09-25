@@ -56,6 +56,9 @@ pub struct Limits {
     /// unauthenticated sockets can never occupy an authenticated client's
     /// slot.
     pub max_pending_handshakes: usize,
+    /// How many of those handshakes one client IP address may hold, so a
+    /// single address cannot keep the whole pool busy with idle sockets.
+    pub max_pending_handshakes_per_peer: usize,
     /// Largest message, and largest single frame, a client may send.
     /// Advertised to clients in `ready`.
     pub max_message_bytes: usize,
@@ -71,6 +74,7 @@ impl Default for Limits {
         Self {
             max_connections: 32,
             max_pending_handshakes: 16,
+            max_pending_handshakes_per_peer: 4,
             max_message_bytes: 2 * 1024 * 1024,
             handshake_deadline: Duration::from_secs(5),
             drain_timeout: Duration::from_secs(5),
@@ -103,6 +107,8 @@ pub struct Shared {
     pub(crate) limits: Limits,
     /// Permits for WebSocket upgrades still inside their handshake.
     pub(crate) handshakes: Arc<Semaphore>,
+    /// The per-address share of those handshakes.
+    pub(crate) peer_handshakes: Arc<ws::PeerHandshakes>,
     /// Permits for authenticated WebSocket connections.
     pub(crate) connections: Arc<Semaphore>,
     /// Cancelled once to stop the server and close every connection.
@@ -129,6 +135,7 @@ impl AppState {
             token,
             hosts,
             handshakes: Arc::new(Semaphore::new(limits.max_pending_handshakes)),
+            peer_handshakes: ws::PeerHandshakes::new(limits.max_pending_handshakes_per_peer),
             connections: Arc::new(Semaphore::new(limits.max_connections)),
             limits,
             shutdown: CancellationToken::new(),

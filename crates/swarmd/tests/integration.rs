@@ -105,7 +105,9 @@ impl TestServer {
         format!("ws://{}/ws", self.addr)
     }
 
-    /// Shuts the server down the way `main` does and releases the lock.
+    /// Stops the server and drops the runtime, releasing the lock. Unlike
+    /// `main` it neither stops workers nor waits for the event writer to
+    /// flush, which these tests do not need.
     async fn stop(self) -> Option<tempfile::TempDir> {
         let Self {
             state,
@@ -546,6 +548,85 @@ async fn test_pending_handshakes_are_capped() {
     let _b = connect(&server).await;
     let refused = tokio_tungstenite::connect_async(server.ws_url()).await;
     assert_eq!(upgrade_status(refused), 503);
+}
+
+/// The status and body of a refused upgrade.
+fn refusal(result: Result<impl std::fmt::Debug, tungstenite::Error>) -> (u16, String) {
+    match result {
+        Err(tungstenite::Error::Http(response)) => (
+            response.status().as_u16(),
+            String::from_utf8_lossy(response.body().as_deref().unwrap_or_default()).into_owned(),
+        ),
+        other => panic!("expected an HTTP rejection, got: {other:?}"),
+    }
+}
+
+/// One address cannot hold the whole handshake pool with idle sockets:
+/// past its share it is refused while other addresses still get in.
+#[tokio::test]
+async fn test_pending_handshakes_are_capped_per_address() {
+    let server = TestServer::start_with(Options {
+        limits: Limits {
+            max_pending_handshakes: 16,
+            max_pending_handshakes_per_peer: 2,
+            ..Limits::default()
+        },
+        ..Options::default()
+    })
+    .await;
+    let _a = connect(&server).await;
+    let _b = connect(&server).await;
+    let (status, body) = refusal(tokio_tungstenite::connect_async(server.ws_url()).await);
+    assert_eq!(status, 503);
+    assert_eq!(body, "Too Many Pending Connections From This Address.");
+
+    // The whole of 127.0.0.0/8 is loopback on Linux, so a second client
+    // address needs no network setup there.
+    #[cfg(target_os = "linux")]
+    {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.2:0".parse().unwrap()).unwrap();
+        let tcp = socket.connect(server.addr).await.unwrap();
+        let (mut ws, _) =
+            tokio_tungstenite::client_async(server.ws_url(), MaybeTlsStream::Plain(tcp))
+                .await
+                .expect("another address still gets a handshake");
+        hello(&mut ws, None, Some(&server.token)).await;
+        assert!(matches!(
+            next_frame(&mut ws).await,
+            Inbound::Control(ServerFrame::Ready { .. })
+        ));
+    }
+}
+
+/// A valid Bearer header needs no handshake permit, so idle unauthenticated
+/// sockets filling the pool cannot lock a real client out.
+#[tokio::test]
+async fn test_bearer_client_skips_a_full_handshake_pool() {
+    let server = TestServer::start_with(Options {
+        limits: Limits {
+            max_pending_handshakes: 1,
+            ..Limits::default()
+        },
+        ..Options::default()
+    })
+    .await;
+    let _idle = connect(&server).await;
+    let (status, body) = refusal(tokio_tungstenite::connect_async(server.ws_url()).await);
+    assert_eq!(status, 503);
+    assert_eq!(body, "Too Many Pending Connections.");
+
+    let mut request = server.ws_url().into_client_request().unwrap();
+    request.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {}", server.token).parse().unwrap(),
+    );
+    let mut ws = connect_request(request).await;
+    hello(&mut ws, None, None).await;
+    assert!(matches!(
+        next_frame(&mut ws).await,
+        Inbound::Control(ServerFrame::Ready { .. })
+    ));
 }
 
 /// Asserts the server ends the connection without sending any frame (no

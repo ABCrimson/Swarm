@@ -7,12 +7,14 @@
 //! # Admission
 //!
 //! The router-wide `Host`/`Origin` check runs first (see `crate::auth`).
-//! The upgrade handler then takes a handshake permit (a separate, smaller
-//! pool, so sockets that never authenticate cannot occupy a client's slot)
-//! and, for a valid `Authorization: Bearer` header, the connection slot
-//! itself; a full daemon answers 503 before upgrading. A client that authenticates through
-//! `hello` instead takes its slot after the token is checked, or is closed
-//! with `1013 Try Again Later` if the daemon filled up in the meantime.
+//! A valid `Authorization: Bearer` header then takes the connection slot
+//! itself. Any other upgrade takes a handshake permit instead: from a
+//! separate, smaller pool, so sockets that never authenticate cannot occupy
+//! a client's slot, and at most [`Limits::max_pending_handshakes_per_peer`]
+//! per client IP address, so one address cannot hold the whole pool. Every
+//! refusal is a 503 before upgrading. A client that authenticates through
+//! `hello` takes its slot after the token is checked, or is closed with
+//! `1013 Try Again Later` if the daemon filled up in the meantime.
 //! Messages (and single frames) are capped at [`Limits::max_message_bytes`]
 //! from the first byte, authenticated or not.
 //!
@@ -70,10 +72,14 @@
 //! # Shutdown
 //!
 //! When the daemon's shutdown token fires, every connection sends
-//! `1001 Going Away` and ends; its tasks are aborted when it ends.
+//! `1001 Going Away` and ends. Its writer and feeder are aborted when it
+//! ends; in-flight RPCs finish on the daemon's task tracker, which
+//! [`crate::serve`] drains.
 
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::convert::Infallible;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -84,6 +90,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, StreamExt};
+use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
@@ -140,13 +147,11 @@ pub(crate) async fn upgrade(
     if state.shutdown.is_cancelled() {
         return refuse(peer, "Daemon Shutting Down.");
     }
-    let Ok(handshake) = Arc::clone(&state.handshakes).try_acquire_owned() else {
-        return refuse(peer, "Too Many Pending Connections.");
-    };
-    let bearer = bearer_token(&headers).is_some_and(|token| state.token.matches(token));
-    let slot = if bearer {
+    let admission = if bearer_token(&headers).is_some_and(|token| state.token.matches(token)) {
+        // Already authenticated: straight to a connection slot, with no
+        // handshake permit that idle sockets could have used up.
         match Arc::clone(&state.connections).try_acquire_owned() {
-            Ok(slot) => Some(slot),
+            Ok(slot) => Admission::Authenticated(slot),
             Err(_) => return refuse(peer, "Too Many Connections."),
         }
     } else if state.connections.available_permits() == 0 {
@@ -154,7 +159,13 @@ pub(crate) async fn upgrade(
         // reservation happens once `hello` authenticates.
         return refuse(peer, "Too Many Connections.");
     } else {
-        None
+        let Some(from_peer) = state.peer_handshakes.try_acquire(peer.ip()) else {
+            return refuse(peer, "Too Many Pending Connections From This Address.");
+        };
+        let Ok(pooled) = Arc::clone(&state.handshakes).try_acquire_owned() else {
+            return refuse(peer, "Too Many Pending Connections.");
+        };
+        Admission::Pending(pooled, from_peer)
     };
 
     let limit = state.limits.max_message_bytes;
@@ -166,7 +177,7 @@ pub(crate) async fn upgrade(
         })
         .on_upgrade(move |socket| async move {
             let _tracked = tracked;
-            connection(socket, state, peer, Admission { handshake, slot }).await;
+            connection(socket, state, peer, admission).await;
         })
 }
 
@@ -187,11 +198,64 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
 }
 
 /// What [`upgrade`] reserved for a connection.
-struct Admission {
-    /// Released once the handshake ends, successfully or not.
-    handshake: OwnedSemaphorePermit,
-    /// The connection slot, when a Bearer header already authenticated it.
-    slot: Option<OwnedSemaphorePermit>,
+enum Admission {
+    /// A valid Bearer header: the connection slot itself.
+    Authenticated(OwnedSemaphorePermit),
+    /// Not yet authenticated: a permit from the daemon-wide handshake pool
+    /// and one from the client address's share, both released once the
+    /// handshake ends, successfully or not.
+    Pending(OwnedSemaphorePermit, PeerPermit),
+}
+
+/// Handshakes in flight per client IP address, capped at
+/// [`Limits::max_pending_handshakes_per_peer`] so one address cannot take
+/// the whole handshake pool.
+pub(crate) struct PeerHandshakes {
+    limit: usize,
+    counts: Mutex<HashMap<IpAddr, usize>>,
+}
+
+impl PeerHandshakes {
+    pub(crate) fn new(limit: usize) -> Arc<Self> {
+        Arc::new(Self {
+            limit,
+            counts: Mutex::default(),
+        })
+    }
+
+    /// Takes one of `ip`'s handshake permits, if it has one left.
+    fn try_acquire(self: &Arc<Self>, ip: IpAddr) -> Option<PeerPermit> {
+        // An IPv4 client of a dual-stack listener shows up v4-mapped.
+        let ip = ip.to_canonical();
+        let mut counts = self.counts.lock();
+        let count = counts.entry(ip).or_default();
+        if *count >= self.limit {
+            return None;
+        }
+        *count += 1;
+        Some(PeerPermit {
+            peers: Arc::clone(self),
+            ip,
+        })
+    }
+}
+
+/// One of a client address's handshake permits; returned on drop.
+struct PeerPermit {
+    peers: Arc<PeerHandshakes>,
+    ip: IpAddr,
+}
+
+impl Drop for PeerPermit {
+    fn drop(&mut self) {
+        let mut counts = self.peers.counts.lock();
+        if let Entry::Occupied(mut count) = counts.entry(self.ip) {
+            *count.get_mut() -= 1;
+            if *count.get() == 0 {
+                count.remove();
+            }
+        }
+    }
 }
 
 /// Why a connection's writer or feeder task ended.
@@ -228,7 +292,15 @@ async fn connection(socket: WebSocket, state: AppState, peer: SocketAddr, admiss
         return;
     };
 
-    let authenticated = admission.slot.is_some()
+    let slot = match admission {
+        Admission::Authenticated(slot) => Some(slot),
+        Admission::Pending(pooled, from_peer) => {
+            // The handshake is over, whatever its outcome.
+            drop((pooled, from_peer));
+            None
+        }
+    };
+    let authenticated = slot.is_some()
         || token
             .as_deref()
             .is_some_and(|token| state.token.matches(token));
@@ -237,7 +309,7 @@ async fn connection(socket: WebSocket, state: AppState, peer: SocketAddr, admiss
         close_now(&mut sink, CLOSE_UNAUTHORIZED, "Unauthorized.").await;
         return;
     }
-    let slot = match admission.slot {
+    let _slot = match slot {
         Some(slot) => slot,
         None => match Arc::clone(&state.connections).try_acquire_owned() {
             Ok(slot) => slot,
@@ -248,8 +320,6 @@ async fn connection(socket: WebSocket, state: AppState, peer: SocketAddr, admiss
             }
         },
     };
-    let _slot = slot;
-    drop(admission.handshake);
 
     // Subscribe BEFORE reading the head (see the module doc).
     let live = state.ctx.engine.subscribe();
@@ -773,6 +843,35 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(texts(&written), ["<close>"]);
+    }
+
+    /// Each address gets its own share of handshake permits, v4-mapped
+    /// spellings count as the IPv4 address, and dropped permits come back
+    /// without leaving empty entries behind.
+    #[test]
+    fn test_peer_handshake_permits_are_capped_per_address() {
+        let peers = PeerHandshakes::new(2);
+        let a: IpAddr = "192.0.2.1".parse().unwrap();
+        let first = peers.try_acquire(a).unwrap();
+        let second = peers.try_acquire(a).unwrap();
+        assert!(
+            peers.try_acquire(a).is_none(),
+            "the address's share is used up"
+        );
+        assert!(
+            peers
+                .try_acquire("::ffff:192.0.2.1".parse().unwrap())
+                .is_none(),
+            "a v4-mapped spelling shares the IPv4 address's share"
+        );
+        assert!(
+            peers.try_acquire("192.0.2.2".parse().unwrap()).is_some(),
+            "other addresses are unaffected"
+        );
+        drop(first);
+        let third = peers.try_acquire(a).expect("a dropped permit is returned");
+        drop((second, third));
+        assert!(peers.counts.lock().is_empty());
     }
 
     #[test]
