@@ -38,8 +38,10 @@ enableMapSet();
 
 /**
  * Where a permission request stands. `report`: the provider already
- * decided (Claude Code reports denials after the fact); `pending`: the
- * provider is blocked waiting for an answer (`interactivePermissions`);
+ * decided (the request carries a `suggestedDecision`, e.g. a denial
+ * Claude Code reports after the fact); `pending`: the provider is
+ * blocked waiting for an answer (`interactivePermissions`, no
+ * `suggestedDecision`);
  * `answering`: an answer is in flight; `allow`/`deny`: answered;
  * `expired`: the turn settled before it was answered.
  */
@@ -238,10 +240,12 @@ function reduce(t: Draft, event: AgentTranscriptEvent, interactivePermissions: b
     case "agent_permission_request": {
       const request = event.payload;
       mapTurn(t, request.turnId);
-      // A classified denial is always a report; otherwise the session's
-      // capability says whether the provider is waiting for an answer.
+      // A request that carries a suggested decision reports one the
+      // provider already made (a Claude Code denial, classified or not);
+      // one without it, from a session with interactive permissions, is a
+      // question the provider is blocked on until it is answered.
       const state: PermissionState =
-        interactivePermissions && request.denialSubclass == null ? "pending" : "report";
+        interactivePermissions && request.suggestedDecision == null ? "pending" : "report";
       t.items.push({ id, kind: "permission", payload: request, state });
       return;
     }

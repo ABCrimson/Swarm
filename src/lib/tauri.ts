@@ -277,12 +277,13 @@ export async function agentProbe(
 
 /**
  * Answers a pending `agent_permission_request` (Rust's
- * `agent_permission_respond`). A real round trip for a `CodexAdapter`
- * session (`CodexSession::respond_permission` answers the child's
- * JSON-RPC request); a documented no-op for a `ClaudeCodeAdapter`
- * session (see `AgentPermissionRequestPayloadSchema`). Render an
- * Allow/Deny affordance only when the session's
- * `capabilities.interactivePermissions` is `true`.
+ * `agent_permission_respond`): a real round trip for both providers
+ * (Codex's JSON-RPC approval request, Claude Code's `can_use_tool`
+ * control request). Render an Allow/Deny affordance only when the
+ * session's `capabilities.interactivePermissions` is `true` and the
+ * request carries no `suggestedDecision` (see
+ * `AgentPermissionRequestPayloadSchema`); one with a suggested decision
+ * reports a decision already made.
  */
 export async function agentPermissionRespond(
   workerId: string,

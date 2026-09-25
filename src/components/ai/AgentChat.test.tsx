@@ -175,6 +175,7 @@ describe("AgentChat", () => {
       requestId: "req-1",
       tool: "Write",
       input: {},
+      suggestedDecision: "deny",
       denialSubclass: "ungranted_write",
       message: "you haven't granted Write yet",
     });
@@ -192,11 +193,48 @@ describe("AgentChat", () => {
       requestId: "req-1",
       tool: "Bash",
       input: {},
+      suggestedDecision: "deny",
       denialSubclass: null,
       message: null,
     });
 
     expect(screen.getByText("Permission Denied")).toBeInTheDocument();
+  });
+
+  // Regression: an interactive session's unclassified report (Claude Code
+  // denials known only from result.permission_denials) was offered as a
+  // pending Allow/Deny that the backend could never act on.
+  it("keeps a denial report read-only in an interactive session", () => {
+    render(<Harness />);
+    startSession("claude_code", { interactivePermissions: true });
+
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "toolu_01",
+      tool: "Glob",
+      input: { pattern: "**/*.env" },
+      suggestedDecision: "deny",
+    });
+
+    expect(screen.getByText("Permission Denied")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument();
+  });
+
+  it("answers a Claude Code can_use_tool ask over agent_permission_respond", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    startSession("claude_code", { interactivePermissions: true });
+
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "ctl-3",
+      tool: "Write",
+      input: { file_path: "notes.md" },
+      message: "Claude wants to write notes.md",
+    });
+    await user.click(screen.getByRole("button", { name: "Deny" }));
+
+    expect(agentPermissionRespond).toHaveBeenCalledExactlyOnceWith(WORKER_ID, "ctl-3", "deny");
   });
 
   it("answers an interactive permission request over agent_permission_respond", async () => {

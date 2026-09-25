@@ -23,15 +23,15 @@ interface SpawnWorkerDialogProps {
 
 /**
  * Plain-language trust tiers, restating what each adapter configures
- * (`crates/swarm-core/src/agent/claude_code.rs`, `agent/codex.rs`). The
- * Codex copy states the tier mapping the agent-adapter change to
- * `codex.rs` introduces (Standard no longer `on-request`, Write-Enabled
- * no longer `on-failure`); this copy and that change ship together.
+ * (`crates/swarm-core/src/agent/claude_code.rs`, `agent/codex.rs`).
  *
- * - Claude Code: Restricted = `--permission-mode dontAsk` plus a deny
- *   list for Bash/Write/Edit; Standard = the CLI's default mode (file
- *   writes denied); Write-Enabled = `--permission-mode acceptEdits`.
- *   Destructive commands stay denied in every tier.
+ * - Claude Code: Restricted = `--restricted` + `--permission-mode
+ *   dontAsk` plus a deny list for the writing tools; Standard =
+ *   `--permission-mode manual` (commands with side effects and file
+ *   edits are asked of the human); Write-Enabled = `--permission-mode
+ *   acceptEdits` (file edits run, commands are asked). Asks are answered
+ *   from the worker's chat, and destructive commands stay denied in
+ *   every tier.
  * - Codex: Restricted = `approvalPolicy: "untrusted"` + read-only
  *   sandbox; Standard = `untrusted` + workspace-write sandbox;
  *   Write-Enabled = `on-request` + workspace-write. Codex's approval
@@ -46,12 +46,12 @@ const TRUST_TIER_INFO = {
     standard: {
       label: "Standard",
       explanation:
-        "Commands Run Normally; File Writes Are Denied. Destructive Commands Like sudo And rm -rf Are Always Blocked.",
+        "Reads Run; Commands With Side Effects And File Edits Ask You First. Destructive Commands Like sudo And rm -rf Are Always Blocked.",
     },
     write_enabled: {
       label: "Write-Enabled",
       explanation:
-        "Commands Run And File Writes Are Accepted Without Asking. Destructive Commands Like sudo And rm -rf Are Always Blocked.",
+        "File Edits Are Accepted Without Asking; Commands Ask You First. Destructive Commands Like sudo And rm -rf Are Always Blocked.",
     },
   },
   codex: {

@@ -158,13 +158,19 @@ export const AgentToolResultPayloadSchema = z.object({
 export type AgentToolResultPayload = z.infer<typeof AgentToolResultPayloadSchema>;
 
 /**
- * `agent_permission_request` — the only permission-gating surface. With
- * `capabilities.interactivePermissions` (Codex) it is a pending question
- * answered through `agent_permission_respond`; otherwise (Claude Code)
- * it reports a denial the provider already made, classified by
- * `denialSubclass` when possible (`mode`, `ungranted_write`,
- * `redirection_guard` — free-form provider-observed text, not a closed
- * set). A provider's auto-approve list is never surfaced here, and its
+ * `agent_permission_request` — the only permission-gating surface. Two
+ * kinds, told apart by `suggestedDecision`:
+ * - absent: a pending question from a session with
+ *   `capabilities.interactivePermissions` (Codex's approval requests,
+ *   Claude Code's `can_use_tool` asks), answered through
+ *   `agent_permission_respond`; the provider blocks until it is answered
+ *   (Claude Code denies an ask nobody answers within 10 minutes);
+ * - `"deny"`: a report of a denial the provider already made (Claude
+ *   Code), classified by `denialSubclass` when possible (`mode`,
+ *   `ungranted_write`, `redirection_guard` — free-form
+ *   provider-observed text, not a closed set). It needs no answer.
+ *
+ * A provider's auto-approve list is never surfaced here, and its
  * absence is not a denial.
  *
  * Optional fields are omitted on the wire when unset but accepted as
