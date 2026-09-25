@@ -151,12 +151,23 @@ describe("naming rules", () => {
   it("parsePersistedCustomTools drops only the invalid entries", () => {
     const good = makeTool();
     const badName = makeTool({ name: "Search Docs" });
-    const badParam = makeTool({
-      params: [{ id: "x", name: "a b", type: "string", description: "" }],
-    });
     const corrupt = { id: "x", name: "ok_tool" };
-    const tools = parsePersistedCustomTools([good, badName, badParam, corrupt, "junk"]);
+    const tools = parsePersistedCustomTools([good, badName, corrupt, "junk"]);
     expect(tools.map((tool) => tool.id)).toEqual([good.id]);
+  });
+
+  it("parsePersistedCustomTools keeps a legacy tool with a free-text parameter name", () => {
+    const legacy = makeTool({
+      params: [
+        { id: "x", name: "file path", type: "string", description: "" },
+        { id: "y", name: "query", type: "string", description: "" },
+      ],
+    });
+    expect(parsePersistedCustomTools([legacy])).toEqual([legacy]);
+    // The API never sees the invalid name.
+    expect(Object.keys(customToolToAnthropic(legacy).input_schema.properties ?? {})).toEqual([
+      "query",
+    ]);
   });
 
   it("parsePersistedCustomTools returns [] for non-array input", () => {

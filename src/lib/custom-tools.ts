@@ -108,9 +108,14 @@ export function hasNoIssues(issues: CustomToolIssues): boolean {
 
 // ── Persistence schema ──────────────────────────────
 
+// Parameter names are deliberately not pattern-checked here: the builder
+// once accepted free text ("file path"), and such a tool must survive
+// hydration — the next save rewrites the whole list, so a dropped tool
+// would be erased with its script. Invalid or duplicate names never reach
+// the API (sentParams filters them) and the builder flags them on edit.
 const ToolParamSchema = z.object({
   id: z.string(),
-  name: z.union([z.literal(""), z.string().regex(PARAM_NAME_PATTERN)]),
+  name: z.string(),
   type: z.enum(PARAM_TYPES),
   description: z.string(),
 });
@@ -126,8 +131,8 @@ const CustomToolDefSchema = z.object({
 /**
  * Validates a persisted value entry-by-entry, keeping the valid tools —
  * one corrupted or invalid-named entry drops only itself, not the
- * user's whole collection. Invalid parameter names invalidate their
- * tool the same way.
+ * user's whole collection. A tool whose parameter names the API would
+ * reject is kept: those parameters are left out of requests instead.
  */
 export function parsePersistedCustomTools(raw: unknown): CustomToolDef[] {
   if (!Array.isArray(raw)) return [];
