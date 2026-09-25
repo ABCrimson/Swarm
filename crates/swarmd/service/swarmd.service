@@ -37,7 +37,8 @@ RestartSec=5
 # the data directory. Retrying cannot help until it exits.
 RestartPreventExitStatus=75
 # swarmd shuts down gracefully on SIGTERM: clients are closed, workers are
-# stopped and the event log is flushed.
+# stopped and the event log is flushed, which can take about 25 s (see
+# ExitTimeOut in dev.crimson.swarmd.plist, which matches this value).
 TimeoutStopSec=30
 
 # Loopback only: no --bind. swarmd refuses a non-loopback bind until a
