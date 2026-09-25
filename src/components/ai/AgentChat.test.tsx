@@ -86,6 +86,22 @@ beforeEach(() => {
 });
 
 describe("AgentChat", () => {
+  it("pins the transcript to the newest row with a column-reverse scroller around one in-order column", () => {
+    render(<Harness />);
+
+    // jsdom has no layout, so this pins the mechanism: a reversed flex
+    // scroller starts (and stays, until the user scrolls up) at its end.
+    const log = screen.getByRole("log");
+    expect(log).toHaveStyle({
+      display: "flex",
+      flexDirection: "column-reverse",
+      overflowY: "auto",
+    });
+    // A single child: the reversal moves the scroll anchor, never the message order.
+    expect(log.children).toHaveLength(1);
+    expect(log.firstElementChild).toHaveStyle({ flexDirection: "column" });
+  });
+
   it("appends agent_turn_delta text live to the same in-progress bubble", () => {
     render(<Harness />);
 
