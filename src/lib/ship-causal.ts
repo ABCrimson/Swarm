@@ -260,7 +260,15 @@ export async function generateCausalProse(
   const { system, user } = buildCausalPromptInput(input);
   const parts = await Array.fromAsync(
     streamMessage(
-      { model, maxTokens: 768, system, messages: [{ role: "user", content: user }] },
+      // Low effort: routine summarization. 8K leaves room for adaptive
+      // thinking, which counts against max_tokens, before the prose itself.
+      {
+        model,
+        maxTokens: 8_000,
+        effort: "low",
+        system,
+        messages: [{ role: "user", content: user }],
+      },
       signal,
     ),
     // Tools were never offered; a tool-use delta is defensive, not expected.

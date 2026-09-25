@@ -194,7 +194,7 @@ function toAgentSpawnCommandError(err: unknown): Error {
  *
  * `options` maps to `WorkerConfig` exactly like {@link spawnWorker}.
  * `model`/`trustTier` use the same trust-tier vocabulary for either
- * provider (see `#lib/agent-events`' `CodexTrustTierSchema`); the
+ * provider (see `#lib/agent-events`' `TrustTierSchema`); the
  * backend defaults `trustTier` to `"standard"`. The session's
  * `sessionKey`/`capabilities` arrive with the `agent_session_started`
  * event (`#hooks/useAgentSessionEvents`), not in this call's result.
@@ -302,9 +302,16 @@ export async function resumeWorker(id: string): Promise<void> {
   return invoke<void>("resume_worker", { id });
 }
 
-/** Terminates a worker process by UUID (`kill_worker`). */
-export async function killWorker(id: string): Promise<void> {
-  return invoke<void>("kill_worker", { id });
+/**
+ * Terminates a worker process by UUID (`kill_worker`). `prov` stamps the
+ * resulting `worker_killed` event with its causer (an AI turn's tool call).
+ */
+export async function killWorker(id: string, prov?: ProvenanceArgs): Promise<void> {
+  return invoke<void>("kill_worker", {
+    id,
+    originWorker: prov?.originWorker,
+    causeSeq: prov?.causeSeq,
+  });
 }
 
 /**

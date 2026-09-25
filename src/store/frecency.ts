@@ -1,4 +1,3 @@
-import { atom } from "jotai";
 import * as z from "zod";
 import { atomWithSettings } from "#store/persisted";
 
@@ -25,10 +24,12 @@ const FrecencyEntrySchema = z.tuple([
 ]);
 
 /**
- * Persisted command-palette usage, keyed by command id. Stored as an
- * array of `[commandId, FrecencyEntry]` tuples; a malformed tuple is
- * dropped on load without discarding the others, so a bad `lastUsed`
- * can never reach `Temporal.Instant.from` in {@link frecencyScoreAtom}.
+ * Persisted command-palette usage, keyed by command id — the backing
+ * store of the palette's `modern-cmdk` frecency engine
+ * (`#components/command/CommandPalette`), which computes the scores.
+ * Stored as an array of `[commandId, FrecencyEntry]` tuples; a malformed
+ * tuple is dropped on load without discarding the others, so a bad
+ * `lastUsed` can never reach the palette's `Temporal.Instant.from`.
  */
 export const frecencyAtom = atomWithSettings<Map<string, FrecencyEntry>>(
   "swarm:frecency",
@@ -47,20 +48,3 @@ export const frecencyAtom = atomWithSettings<Map<string, FrecencyEntry>>(
     serialize: (entries) => [...entries],
   },
 );
-
-/** Hours for a command's frecency weight to halve. */
-const HALF_LIFE_HOURS = 72;
-
-/** Derived atom that computes a frecency score for sorting commands. */
-export const frecencyScoreAtom = atom((get) => {
-  const entries = get(frecencyAtom);
-
-  return (commandId: string): number => {
-    const entry = entries.get(commandId);
-    if (!entry) return 0;
-    const hoursAgo = Temporal.Now.instant()
-      .since(Temporal.Instant.from(entry.lastUsed))
-      .total("hours");
-    return entry.uses * 2 ** (-hoursAgo / HALF_LIFE_HOURS);
-  };
-});

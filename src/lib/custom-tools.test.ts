@@ -2,13 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildWorkerSource,
   type CustomToolDef,
+  customToolInputSchema,
+  customToolIssues,
   customToolToAnthropic,
+  hasNoIssues,
+  isValidParamName,
   isValidToolName,
   parsePersistedCustomTools,
   runCustomTool,
 } from "#lib/custom-tools";
 import { executeTool, getAllAnthropicTools, toolRegistry } from "#lib/tools";
-import { useCustomToolsStore } from "#store/custom-tools";
+import { customToolsReady, useCustomToolsStore } from "#store/custom-tools";
 
 function makeTool(overrides?: Partial<CustomToolDef>): CustomToolDef {
   return {
@@ -50,6 +54,20 @@ class MockSandboxWorker {
   }
 }
 
+/** Replaces Worker and the Blob-URL statics, keeping `URL` a real constructible class. */
+function stubSandbox(): void {
+  MockSandboxWorker.instances = [];
+  MockSandboxWorker.respond = null;
+  vi.stubGlobal("Worker", MockSandboxWorker);
+  vi.stubGlobal(
+    "URL",
+    Object.assign(class extends URL {}, {
+      createObjectURL: vi.fn(() => "blob:mock"),
+      revokeObjectURL: vi.fn(),
+    }),
+  );
+}
+
 describe("customToolToAnthropic", () => {
   it("produces the Anthropic tool shape with named params required", () => {
     const tool = customToolToAnthropic(makeTool());
@@ -66,10 +84,36 @@ describe("customToolToAnthropic", () => {
     const tool = customToolToAnthropic(makeTool({ params: [] }));
     expect(tool.input_schema).toEqual({ type: "object", properties: {}, required: [] });
   });
+
+  it("never sends an API-invalid or duplicate parameter name", () => {
+    const tool = customToolToAnthropic(
+      makeTool({
+        params: [
+          { id: "a", name: "file path", type: "string", description: "space" },
+          { id: "b", name: "path", type: "string", description: "first" },
+          { id: "c", name: "path", type: "number", description: "duplicate" },
+        ],
+      }),
+    );
+    expect(tool.input_schema).toEqual({
+      type: "object",
+      properties: { path: { type: "string", description: "first" } },
+      required: ["path"],
+    });
+  });
+
+  it("keeps a __proto__ parameter as an own, serialized property", () => {
+    const tool = customToolToAnthropic(
+      makeTool({ params: [{ id: "a", name: "__proto__", type: "string", description: "x" }] }),
+    );
+    expect(JSON.stringify(tool.input_schema)).toBe(
+      '{"type":"object","properties":{"__proto__":{"type":"string","description":"x"}},"required":["__proto__"]}',
+    );
+  });
 });
 
-describe("tool name validation (API contract ^[a-zA-Z0-9_-]{1,64}$)", () => {
-  it("accepts conforming names and rejects spaces/empty/overlong", () => {
+describe("naming rules", () => {
+  it("accepts API-conforming tool names and rejects spaces/empty/overlong", () => {
     expect(isValidToolName("lookup_docs")).toBe(true);
     expect(isValidToolName("Tool-2")).toBe(true);
     expect(isValidToolName("Search Docs")).toBe(false);
@@ -77,18 +121,74 @@ describe("tool name validation (API contract ^[a-zA-Z0-9_-]{1,64}$)", () => {
     expect(isValidToolName("a".repeat(65))).toBe(false);
   });
 
+  it("accepts API-conforming parameter names, dots included", () => {
+    expect(isValidParamName("file.path")).toBe(true);
+    expect(isValidParamName("file path")).toBe(false);
+    expect(isValidParamName("ünïcode")).toBe(false);
+    expect(isValidParamName("")).toBe(false);
+  });
+
+  it("reports invalid names, taken names and duplicate parameters per field", () => {
+    const issues = customToolIssues(
+      {
+        name: "spawn_worker",
+        params: [
+          { id: "a", name: "bad name", type: "string", description: "" },
+          { id: "b", name: "q", type: "string", description: "" },
+          { id: "c", name: "q", type: "string", description: "" },
+          { id: "d", name: "", type: "string", description: "" },
+        ],
+      },
+      new Set(["spawn_worker"]),
+    );
+    expect(issues.name).toBe("Name Already In Use By Another Tool.");
+    expect([...issues.params.keys()]).toEqual(["a", "b", "c"]);
+    expect(issues.params.get("b")).toBe("Duplicate Parameter Name.");
+    expect(hasNoIssues(issues)).toBe(false);
+    expect(hasNoIssues(customToolIssues(makeTool(), new Set()))).toBe(true);
+  });
+
   it("parsePersistedCustomTools drops only the invalid entries", () => {
     const good = makeTool();
     const badName = makeTool({ name: "Search Docs" });
-    const corrupt = { id: "x", name: "ok_tool" }; // missing fields
+    const corrupt = { id: "x", name: "ok_tool" };
     const tools = parsePersistedCustomTools([good, badName, corrupt, "junk"]);
-    expect(tools).toHaveLength(1);
-    expect(tools[0].id).toBe(good.id);
+    expect(tools.map((tool) => tool.id)).toEqual([good.id]);
+  });
+
+  it("parsePersistedCustomTools keeps a legacy tool with a free-text parameter name", () => {
+    const legacy = makeTool({
+      params: [
+        { id: "x", name: "file path", type: "string", description: "" },
+        { id: "y", name: "query", type: "string", description: "" },
+      ],
+    });
+    expect(parsePersistedCustomTools([legacy])).toEqual([legacy]);
+    // The API never sees the invalid name.
+    expect(Object.keys(customToolToAnthropic(legacy).input_schema.properties ?? {})).toEqual([
+      "query",
+    ]);
   });
 
   it("parsePersistedCustomTools returns [] for non-array input", () => {
     expect(parsePersistedCustomTools(undefined)).toEqual([]);
     expect(parsePersistedCustomTools({ not: "an array" })).toEqual([]);
+  });
+});
+
+describe("customToolInputSchema", () => {
+  it("requires every sent parameter with its declared JSON type", () => {
+    const schema = customToolInputSchema(
+      makeTool({
+        params: [
+          { id: "a", name: "query", type: "string", description: "" },
+          { id: "b", name: "limit", type: "number", description: "" },
+        ],
+      }),
+    );
+    expect(schema.safeParse({ query: "x", limit: 3 }).success).toBe(true);
+    expect(schema.safeParse({ query: "x" }).success).toBe(false);
+    expect(schema.safeParse({ query: "x", limit: "3" }).success).toBe(false);
   });
 });
 
@@ -103,20 +203,11 @@ describe("buildWorkerSource", () => {
 });
 
 describe("runCustomTool (sandboxed)", () => {
-  beforeEach(() => {
-    MockSandboxWorker.instances = [];
-    MockSandboxWorker.respond = null;
-    vi.stubGlobal("Worker", MockSandboxWorker);
-    vi.stubGlobal("URL", {
-      ...URL,
-      createObjectURL: vi.fn(() => "blob:mock"),
-      revokeObjectURL: vi.fn(),
-    });
-  });
+  beforeEach(stubSandbox);
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   it("resolves success with the script's return value", async () => {
@@ -134,18 +225,16 @@ describe("runCustomTool (sandboxed)", () => {
 
   it("terminates and reports a Title-Cased timeout when the script hangs", async () => {
     vi.useFakeTimers();
-    MockSandboxWorker.respond = () => null; // never replies
+    MockSandboxWorker.respond = () => null;
     const pending = runCustomTool(makeTool(), {});
     await vi.advanceTimersByTimeAsync(10_000);
     const result = await pending;
     expect(result.success).toBe(false);
     expect(result.error).toContain("Timed Out After 10s");
     expect(MockSandboxWorker.instances[0]?.terminate).toHaveBeenCalled();
-    vi.useRealTimers();
   });
 
   it("reports a startup failure when the worker errors", async () => {
-    MockSandboxWorker.respond = null;
     const pending = runCustomTool(makeTool(), {});
     MockSandboxWorker.instances[0]?.onerror?.(new ErrorEvent("error", { message: "bad script" }));
     const result = await pending;
@@ -155,7 +244,12 @@ describe("runCustomTool (sandboxed)", () => {
 
 describe("custom tools in the shared registry pipeline", () => {
   beforeEach(() => {
-    useCustomToolsStore.setState({ customTools: [], hydrated: true });
+    stubSandbox();
+    useCustomToolsStore.setState({ customTools: [] });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("getAllAnthropicTools appends persisted custom tools after built-ins", () => {
@@ -169,7 +263,7 @@ describe("custom tools in the shared registry pipeline", () => {
     useCustomToolsStore.setState({ customTools: [makeTool({ name: "spawn_worker" })] });
     const tools = getAllAnthropicTools();
     expect(tools.length).toBe(toolRegistry.size);
-    expect(tools.filter((t) => t.name === "spawn_worker").length).toBe(1);
+    expect(tools.filter((t) => t.name === "spawn_worker")).toHaveLength(1);
   });
 
   it("drops custom tools with API-invalid names and dedupes duplicate custom names", () => {
@@ -184,42 +278,62 @@ describe("custom tools in the shared registry pipeline", () => {
     expect(tools.length).toBe(toolRegistry.size + 1);
     const dups = tools.filter((t) => t.name === "dup_tool");
     expect(dups).toHaveLength(1);
-    expect(dups[0].description).toBe("First.");
+    expect(dups[0]?.description).toBe("First.");
     expect(tools.some((t) => t.name === "Search Docs")).toBe(false);
   });
 
-  it("executeTool falls back to custom tools for unknown registry names", async () => {
+  it("executeTool runs a custom tool with validated input", async () => {
     MockSandboxWorker.respond = () => ({ ok: true, result: 42 });
-    vi.stubGlobal("Worker", MockSandboxWorker);
-    vi.stubGlobal("URL", {
-      ...URL,
-      createObjectURL: vi.fn(() => "blob:mock"),
-      revokeObjectURL: vi.fn(),
-    });
-
     useCustomToolsStore.setState({ customTools: [makeTool()] });
-    const result = await executeTool("lookup_docs", { query: "q" });
-    expect(result).toEqual({ success: true, data: 42 });
 
-    vi.unstubAllGlobals();
+    expect(await executeTool("lookup_docs", { query: "q" })).toEqual({ success: true, data: 42 });
+  });
+
+  it("executeTool rejects custom-tool input that violates its parameters without running the script", async () => {
+    useCustomToolsStore.setState({ customTools: [makeTool()] });
+
+    const result = await executeTool("lookup_docs", { query: 7 });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Invalid Input For lookup_docs");
+    expect(MockSandboxWorker.instances).toHaveLength(0);
+  });
+
+  it("executeTool runs only one of two same-named custom tools", async () => {
+    useCustomToolsStore.setState({
+      customTools: [
+        makeTool({ name: "dup_tool", script: "return 1;" }),
+        makeTool({ name: "dup_tool", script: "return 2;" }),
+      ],
+    });
+    MockSandboxWorker.respond = () => ({ ok: true, result: "first" });
+
+    await executeTool("dup_tool", { query: "q" });
+
+    expect(MockSandboxWorker.instances).toHaveLength(1);
   });
 
   it("executeTool still reports unknown names when no custom tool matches", async () => {
-    const result = await executeTool("does_not_exist", {});
-    expect(result).toEqual({ success: false, error: "Unknown Tool: does_not_exist" });
+    expect(await executeTool("does_not_exist", {})).toEqual({
+      success: false,
+      error: "Unknown Tool: does_not_exist",
+    });
   });
 
-  it("store saveTool inserts then updates by id; deleteTool removes", () => {
+  it("store saveTool inserts then updates by id; deleteTool removes", async () => {
     const tool = makeTool();
     useCustomToolsStore.getState().saveTool(tool);
+    await customToolsReady();
     expect(useCustomToolsStore.getState().customTools).toHaveLength(1);
 
     useCustomToolsStore.getState().saveTool({ ...tool, description: "Updated." });
+    await customToolsReady();
     const tools = useCustomToolsStore.getState().customTools;
     expect(tools).toHaveLength(1);
-    expect(tools[0].description).toBe("Updated.");
+    expect(tools[0]?.description).toBe("Updated.");
 
     useCustomToolsStore.getState().deleteTool(tool.id);
+    await customToolsReady();
     expect(useCustomToolsStore.getState().customTools).toHaveLength(0);
   });
 });

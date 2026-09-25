@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAiStore } from "#store/ai";
+import { beforeEach, describe, expect, it } from "vitest";
+import { acquireStreamSlot, registerQueueAbort, releaseStreamSlot, useAiStore } from "#store/ai";
 import type { AiQueueItem, TokenUsageRecord } from "#store/types";
 
 function createQueueItem(overrides?: Partial<AiQueueItem>): AiQueueItem {
@@ -13,19 +13,10 @@ function createQueueItem(overrides?: Partial<AiQueueItem>): AiQueueItem {
   };
 }
 
-function resetStore(): void {
-  const state = useAiStore.getState();
-  // Dequeue all items
-  for (const item of [...state.queue]) {
-    state.dequeue(item.id);
-  }
-  state.setActiveStreams(0);
-  state.setConcurrentLimit(3);
-}
-
 describe("AiStore", () => {
-  beforeEach(resetStore);
-  afterEach(resetStore);
+  beforeEach(() => {
+    useAiStore.setState(useAiStore.getInitialState(), true);
+  });
 
   describe("enqueue", () => {
     it("adds an item to the queue", () => {
@@ -182,13 +173,6 @@ describe("AiStore", () => {
     });
   });
 
-  describe("setActiveStreams", () => {
-    it("updates the active stream count", () => {
-      useAiStore.getState().setActiveStreams(2);
-      expect(useAiStore.getState().activeStreams).toBe(2);
-    });
-  });
-
   describe("addTokenUsage", () => {
     const T0 = 1_000_000;
 
@@ -203,10 +187,6 @@ describe("AiStore", () => {
         ...overrides,
       };
     }
-
-    beforeEach(() => {
-      useAiStore.getState().resetUsage();
-    });
 
     it("accumulates totals across records", () => {
       useAiStore.getState().addTokenUsage(usageRecord());
@@ -245,16 +225,66 @@ describe("AiStore", () => {
       expect(usage.totalInputTokens).toBe(200);
       expect(usage.totalOutputTokens).toBe(100);
     });
+  });
 
-    it("resetUsage clears totals and history", () => {
-      useAiStore.getState().addTokenUsage(usageRecord());
-      useAiStore.getState().resetUsage();
+  describe("stream slots", () => {
+    function pending(id: string, priority: AiQueueItem["priority"] = "normal"): void {
+      useAiStore.getState().enqueue(createQueueItem({ id, priority }));
+    }
 
-      const usage = useAiStore.getState().cumulativeUsage;
-      expect(usage.totalInputTokens).toBe(0);
-      expect(usage.totalOutputTokens).toBe(0);
-      expect(usage.totalCostUsd).toBe(0);
-      expect(usage.history).toHaveLength(0);
+    it("grants a slot immediately when capacity is free and marks the item streaming", async () => {
+      pending("a");
+      await acquireStreamSlot("a", new AbortController().signal);
+
+      expect(useAiStore.getState().activeStreams).toBe(1);
+      expect(useAiStore.getState().queue[0]?.status).toBe("streaming");
+      releaseStreamSlot("a");
+      releaseStreamSlot("a");
+      expect(useAiStore.getState().activeStreams).toBe(0);
+    });
+
+    it("makes a turn wait for a free slot, then starts it when one is released", async () => {
+      useAiStore.getState().setConcurrentLimit(1);
+      pending("first");
+      pending("second");
+      await acquireStreamSlot("first", new AbortController().signal);
+
+      let started = false;
+      const waiting = acquireStreamSlot("second", new AbortController().signal).then(() => {
+        started = true;
+      });
+      await Promise.resolve();
+      expect(started).toBe(false);
+
+      releaseStreamSlot("first");
+      useAiStore.getState().dequeue("first");
+      await waiting;
+      expect(started).toBe(true);
+      releaseStreamSlot("second");
+    });
+
+    it("rejects a waiting acquire when its signal aborts", async () => {
+      useAiStore.getState().setConcurrentLimit(0);
+      pending("x");
+      const controller = new AbortController();
+      const waiting = acquireStreamSlot("x", controller.signal);
+      controller.abort(new Error("stop"));
+      await expect(waiting).rejects.toThrow("stop");
+      expect(useAiStore.getState().activeStreams).toBe(0);
+    });
+
+    it("cancelItem aborts the running turn (not just its queue entry) and frees its slot", async () => {
+      pending("run");
+      const controller = new AbortController();
+      const unregister = registerQueueAbort("run", controller);
+      await acquireStreamSlot("run", controller.signal);
+
+      useAiStore.getState().cancelItem("run");
+
+      expect(controller.signal.aborted).toBe(true);
+      expect(useAiStore.getState().queue).toHaveLength(0);
+      expect(useAiStore.getState().activeStreams).toBe(0);
+      unregister();
     });
   });
 });

@@ -1,9 +1,9 @@
-// ── SpawnWorkerDialog ────────────────────────────────
-// Covers: provider switching reveals/hides the Claude Code fields,
-// probe-failure disables the Claude Code option with the reported
-// reason, and submit calls the right IPC wrapper (agentSpawn vs.
-// spawnWorker) with the right shape per provider.
+// SpawnWorkerDialog: a native modal <dialog>; provider switching reveals
+// the agent fields, an unavailable or failed probe disables its provider
+// with the reason, a failed project-root read still lets you spawn, and
+// submit calls the right IPC wrapper with the right shape per provider.
 
+import "#test/dom-polyfills";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -53,6 +53,40 @@ describe("SpawnWorkerDialog", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("opens as a modal dialog labelled by its title", async () => {
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await waitForProbeSettled();
+
+    const dialog = screen.getByRole("dialog", { name: "Spawn Worker" });
+    expect(dialog.tagName).toBe("DIALOG");
+    expect(dialog).toHaveAttribute("open");
+  });
+
+  it("disables a provider whose probe rejects, instead of leaving it enabled as if still probing", async () => {
+    vi.mocked(agentProbe).mockImplementation((provider) =>
+      provider === "claude_code"
+        ? Promise.reject(new Error("ipc down"))
+        : Promise.resolve(AVAILABLE),
+    );
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Claude Code" })).toBeDisabled());
+    expect(screen.getByText(/Claude Code Unavailable/)).toHaveTextContent(
+      "Claude Code Unavailable — Probe Failed: ipc down",
+    );
+    expect(screen.getByRole("radio", { name: "Codex" })).toBeEnabled();
+  });
+
+  it("stops loading and allows spawning when reading the saved project root fails", async () => {
+    getPersistedRepoRootMock.mockRejectedValue(new Error("config unreadable"));
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+
+    expect(
+      await screen.findByText("No Project Root — Spawns Without Worktree Isolation"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Spawn Worker" })).toBeEnabled();
   });
 
   it("hides the Claude Code fields until that provider is selected, then hides them again on switch-back", async () => {
@@ -167,6 +201,38 @@ describe("SpawnWorkerDialog", () => {
     expect(spawnWorker).not.toHaveBeenCalled();
   });
 
+  it("leaves the Codex model blank by default so Codex runs its own configured default", async () => {
+    const user = userEvent.setup();
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await waitForProbeSettled();
+
+    await user.click(screen.getByRole("radio", { name: "Codex" }));
+    expect(screen.getByLabelText("Model Alias")).toHaveValue("");
+    await user.click(screen.getByRole("radio", { name: /^Write-Enabled/ }));
+    await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
+
+    await waitFor(() =>
+      expect(agentSpawn).toHaveBeenCalledWith(
+        { name: "Worker" },
+        "codex",
+        undefined,
+        "write_enabled",
+      ),
+    );
+  });
+
+  it("closes itself (firing onClose once) after a successful spawn", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<SpawnWorkerDialog onClose={onClose} />);
+    await waitForProbeSettled();
+
+    await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("dialog", { hidden: true })).not.toHaveAttribute("open");
+  });
+
   it("probes Claude Code and Codex independently — one unavailable does not disable the other (Phase 4)", async () => {
     vi.mocked(agentProbe).mockImplementation((provider) =>
       Promise.resolve(
@@ -211,7 +277,7 @@ describe("SpawnWorkerDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
 
-    expect(await screen.findByText("Spawn Failed: boom")).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Spawn Failed: boom");
     expect(onClose).not.toHaveBeenCalled();
   });
 

@@ -1,8 +1,10 @@
+import type { CSSProperties } from "react";
+import { useId } from "react";
+import { Button } from "#components/ui/Button";
 import { Pill } from "#components/ui/Pill";
+import type { CustomToolDef } from "#lib/custom-tools";
 import { pluralize } from "#lib/format";
 import { toolRegistry } from "#lib/tools";
-
-import type { CustomToolDef } from "./ToolBuilder.tsx";
 
 /** Props for the tool list component. */
 interface ToolListProps {
@@ -11,16 +13,44 @@ interface ToolListProps {
   /** Callback to edit a custom tool. */
   readonly onEdit: (tool: CustomToolDef) => void;
   /** Callback to delete a custom tool. */
-  readonly onDelete: (id: string) => void;
+  readonly onDelete: (tool: CustomToolDef) => void;
   /** Callback to create a new tool. */
   readonly onCreateNew: () => void;
 }
 
+const sectionHeadingStyle: CSSProperties = {
+  margin: "0 0 8px",
+  fontFamily: "var(--font-body)",
+  fontSize: "0.6875rem",
+  fontWeight: 600,
+  color: "oklch(0.50 0.04 220)",
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
+};
+
+const gridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+  gap: 8,
+};
+
+/** Built-in tools as shown on the page — their Title Case `uiDescription`, never the model-facing one. */
+const BUILT_IN_TOOLS = toolRegistry
+  .values()
+  .map((tool) => {
+    const { properties } = tool.anthropicTool.input_schema;
+    return {
+      name: tool.name,
+      description: tool.uiDescription,
+      paramCount: properties && typeof properties === "object" ? Object.keys(properties).length : 0,
+    };
+  })
+  .toArray();
+
 /**
- * List of all tools (built-in + custom) displayed as OKLCH-styled cards.
- *
- * Shows tool name, description, and parameter count. Custom tools
- * include edit and delete actions.
+ * List of all tools (built-in + custom) as OKLCH-styled cards: name,
+ * description and parameter count, with Edit/Delete actions (named per
+ * tool for assistive technology) on custom tools.
  */
 export function ToolList({
   customTools,
@@ -28,18 +58,8 @@ export function ToolList({
   onDelete,
   onCreateNew,
 }: ToolListProps): React.ReactElement {
-  // Merge built-in and custom tools. Built-in tools show `uiDescription`
-  // (Title Case, UI-only) here — `description` (sentence case) is reserved
-  // for the Anthropic API tool-schema path; see #lib/tools.
-  const builtInTools = [...toolRegistry.values()].map((tool) => ({
-    name: tool.name,
-    description: tool.uiDescription,
-    paramCount: Object.keys(
-      (tool.anthropicTool.input_schema as { properties?: Record<string, unknown> }).properties ??
-        {},
-    ).length,
-    isCustom: false as const,
-  }));
+  const builtInHeadingId = useId();
+  const customHeadingId = useId();
 
   return (
     <div
@@ -52,14 +72,7 @@ export function ToolList({
         padding: 16,
       }}
     >
-      {/* Header with create button */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span
           style={{
             fontFamily: "var(--font-display)",
@@ -70,88 +83,37 @@ export function ToolList({
             textTransform: "uppercase",
           }}
         >
-          Tools ({builtInTools.length + customTools.length})
+          Tools ({BUILT_IN_TOOLS.length + customTools.length})
         </span>
-        <button
-          type="button"
-          onClick={onCreateNew}
-          style={{
-            padding: "6px 14px",
-            borderRadius: 8,
-            border: "1px solid oklch(0.78 0.18 205 / 0.4)",
-            background: "oklch(0.78 0.18 205 / 0.1)",
-            color: "oklch(0.78 0.18 205)",
-            fontFamily: "var(--font-body)",
-            fontSize: "0.75rem",
-            fontWeight: 600,
-            cursor: "pointer",
-            transition: "background 0.15s ease",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "oklch(0.78 0.18 205 / 0.2)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "oklch(0.78 0.18 205 / 0.1)";
-          }}
-        >
+        <Button variant="secondary" size="sm" onClick={onCreateNew}>
           + New Tool
-        </button>
+        </Button>
       </div>
 
-      {/* Built-in tools */}
-      {builtInTools.length > 0 && (
-        <div>
-          <div
-            style={{
-              fontFamily: "var(--font-body)",
-              fontSize: "0.6875rem",
-              fontWeight: 600,
-              color: "oklch(0.50 0.04 220)",
-              textTransform: "uppercase",
-              letterSpacing: "0.06em",
-              marginBottom: 8,
-            }}
-          >
-            Built-In
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-              gap: 8,
-            }}
-          >
-            {builtInTools.map((tool) => (
-              <ToolCard
-                key={tool.name}
-                name={tool.name}
-                description={tool.description}
-                paramCount={tool.paramCount}
-                isCustom={false}
-              />
-            ))}
-          </div>
+      <section aria-labelledby={builtInHeadingId}>
+        <h2 id={builtInHeadingId} style={sectionHeadingStyle}>
+          Built-In
+        </h2>
+        <div style={gridStyle}>
+          {BUILT_IN_TOOLS.map((tool) => (
+            <ToolCard
+              key={tool.name}
+              name={tool.name}
+              description={tool.description}
+              paramCount={tool.paramCount}
+            />
+          ))}
         </div>
-      )}
+      </section>
 
-      {/* Custom tools */}
-      <div>
-        <div
-          style={{
-            fontFamily: "var(--font-body)",
-            fontSize: "0.6875rem",
-            fontWeight: 600,
-            color: "oklch(0.50 0.04 220)",
-            textTransform: "uppercase",
-            letterSpacing: "0.06em",
-            marginBottom: 8,
-          }}
-        >
+      <section aria-labelledby={customHeadingId}>
+        <h2 id={customHeadingId} style={sectionHeadingStyle}>
           Custom
-        </div>
+        </h2>
         {customTools.length === 0 ? (
-          <div
+          <p
             style={{
+              margin: 0,
               padding: "24px 16px",
               textAlign: "center",
               fontFamily: "var(--font-body)",
@@ -161,30 +123,23 @@ export function ToolList({
               borderRadius: 12,
             }}
           >
-            No Custom Tools Yet. Click &quot;New Tool&quot; To Create One.
-          </div>
+            No Custom Tools Yet. Click “New Tool” To Create One.
+          </p>
         ) : (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-              gap: 8,
-            }}
-          >
+          <div style={gridStyle}>
             {customTools.map((tool) => (
               <ToolCard
                 key={tool.id}
                 name={tool.name}
                 description={tool.description}
-                paramCount={tool.params.length}
-                isCustom
+                paramCount={tool.params.filter((param) => param.name !== "").length}
                 onEdit={() => onEdit(tool)}
-                onDelete={() => onDelete(tool.id)}
+                onDelete={() => onDelete(tool)}
               />
             ))}
           </div>
         )}
-      </div>
+      </section>
     </div>
   );
 }
@@ -193,19 +148,20 @@ function ToolCard({
   name,
   description,
   paramCount,
-  isCustom,
   onEdit,
   onDelete,
 }: {
   readonly name: string;
   readonly description: string;
   readonly paramCount: number;
-  readonly isCustom: boolean;
+  /** Present on custom tools only — built-ins cannot be edited or deleted. */
   readonly onEdit?: () => void;
   readonly onDelete?: () => void;
 }): React.ReactElement {
+  const headingId = useId();
   return (
-    <div
+    <article
+      aria-labelledby={headingId}
       style={{
         padding: 14,
         borderRadius: 10,
@@ -215,13 +171,13 @@ function ToolCard({
         display: "flex",
         flexDirection: "column",
         gap: 6,
-        transition: "border-color 0.15s ease",
       }}
     >
-      {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span
+        <h3
+          id={headingId}
           style={{
+            margin: 0,
             fontFamily: "var(--font-mono)",
             fontSize: "0.8125rem",
             fontWeight: 600,
@@ -229,13 +185,12 @@ function ToolCard({
           }}
         >
           {name}
-        </span>
+        </h3>
         <Pill tone="neutral" size="sm">
           {pluralize("Param", paramCount)}
         </Pill>
       </div>
 
-      {/* Description */}
       <p
         style={{
           fontFamily: "var(--font-body)",
@@ -244,7 +199,6 @@ function ToolCard({
           lineHeight: 1.5,
           margin: 0,
           overflow: "hidden",
-          textOverflow: "ellipsis",
           display: "-webkit-box",
           WebkitLineClamp: 2,
           WebkitBoxOrient: "vertical",
@@ -253,17 +207,22 @@ function ToolCard({
         {description}
       </p>
 
-      {/* Custom tool actions */}
-      {isCustom && (
+      {onEdit && onDelete && (
         <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-          <Pill interactive tone="neutral" size="sm" onClick={onEdit}>
+          <Pill interactive tone="neutral" size="sm" onClick={onEdit} aria-label={`Edit ${name}`}>
             Edit
           </Pill>
-          <Pill interactive tone="danger" size="sm" onClick={onDelete}>
+          <Pill
+            interactive
+            tone="danger"
+            size="sm"
+            onClick={onDelete}
+            aria-label={`Delete ${name}`}
+          >
             Delete
           </Pill>
         </div>
       )}
-    </div>
+    </article>
   );
 }

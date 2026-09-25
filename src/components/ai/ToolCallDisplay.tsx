@@ -1,30 +1,29 @@
-// ── ToolCallDisplay ─────────────────────────────────
-// Animated accordion showing tool name, input, and result.
-// Uses Framer Motion for expand/collapse.
-// Status indicators: pending (spinner), executing (pulse),
-// complete (checkmark), error (rose).
-
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import type { CSSProperties } from "react";
 import { useState } from "react";
 import { Pill } from "#components/ui/Pill";
-import { Spinner } from "#components/ui/Spinner";
-import { tokenizeJson } from "#lib/syntax-highlight";
+import { HighlightedJson } from "./HighlightedJson.tsx";
 
 // ── Types ───────────────────────────────────────────
 
-type ToolStatus = "pending" | "executing" | "complete" | "error";
+type ToolStatus = "executing" | "complete" | "error";
 
 interface ToolCallDisplayProps {
   /** Tool name (e.g., "spawn_worker"). */
   readonly name: string;
   /** Tool input as a record. */
   readonly input: Record<string, unknown>;
-  /** Tool result, if available. */
+  /** Tool result, once the call has run. */
   readonly result?: string;
   /** Current execution status. */
   readonly status: ToolStatus;
 }
+
+const STATUS_LABEL: Record<ToolStatus, string> = {
+  executing: "Executing",
+  complete: "Complete",
+  error: "Error",
+};
 
 // ── Styles (OKLCH) ──────────────────────────────────
 
@@ -41,11 +40,18 @@ const headerStyle: CSSProperties = {
   alignItems: "center",
   gap: 8,
   padding: "8px 12px",
+  width: "100%",
+  border: "none",
+  textAlign: "left",
+  fontFamily: "inherit",
+  fontSize: "inherit",
+  color: "inherit",
   cursor: "pointer",
   userSelect: "none",
   transition: "background 0.15s ease",
 };
 
+/** Per-tool accent colors for the built-in tools; custom tools get the neutral default. */
 const TOOL_BADGE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   spawn_worker: {
     bg: "oklch(0.18 0.06 205 / 0.4)",
@@ -85,14 +91,10 @@ const DEFAULT_BADGE_COLORS = {
   border: "oklch(0.30 0.05 220)",
 };
 
-const jsonContainerStyle: CSSProperties = {
+const jsonStyle: CSSProperties = {
   padding: "10px 14px",
-  margin: 0,
-  fontFamily: "var(--font-mono, 'JetBrains Mono Variable', 'Fira Code', monospace)",
   fontSize: 12,
   lineHeight: 1.6,
-  whiteSpace: "pre-wrap",
-  wordBreak: "break-all",
   background: "oklch(0.08 0.02 220)",
   borderTop: "1px solid oklch(0.18 0.03 220)",
 };
@@ -108,149 +110,114 @@ const sectionLabelStyle: CSSProperties = {
   background: "oklch(0.08 0.02 220)",
 };
 
-const chevronStyle: CSSProperties = {
-  marginLeft: "auto",
-  color: "oklch(0.55 0.03 220)",
-  fontSize: 14,
-  transition: "transform 0.2s ease",
+const expandButtonStyle: CSSProperties = {
+  display: "block",
+  width: "100%",
+  padding: "4px 14px",
+  background: "oklch(0.08 0.02 220)",
+  border: "none",
+  borderTop: "1px solid oklch(0.18 0.03 220)",
+  color: "oklch(0.65 0.10 205)",
+  fontSize: 11,
+  cursor: "pointer",
+  textAlign: "center",
 };
 
 // ── Status Indicator ────────────────────────────────
 
-function StatusIndicator({ status }: { status: ToolStatus }): React.ReactElement {
+function StatusIndicator({ status }: { readonly status: ToolStatus }): React.ReactElement {
   switch (status) {
-    case "pending":
-      return <Spinner size="sm" />;
-
     case "executing":
       return (
-        <output
+        <span
+          className="motion-safe:animate-[tool-pulse_1.5s_ease-in-out_infinite]"
           style={{
             display: "inline-block",
             width: 8,
             height: 8,
             borderRadius: "50%",
             background: "oklch(0.82 0.19 70)",
-            animation: "tool-pulse 1.5s ease-in-out infinite",
           }}
-          aria-label="Executing"
+          aria-hidden="true"
         />
       );
-
     case "complete":
       return (
-        <output
+        <span
           style={{ color: "oklch(0.82 0.18 140)", fontSize: 16, lineHeight: 1 }}
-          aria-label="Complete"
+          aria-hidden="true"
         >
-          {"\u2713"}
-        </output>
+          ✓
+        </span>
       );
-
     case "error":
       return (
-        <output
+        <span
           style={{ color: "oklch(0.72 0.20 10)", fontSize: 16, lineHeight: 1 }}
-          aria-label="Error"
+          aria-hidden="true"
         >
-          {"\u2717"}
-        </output>
+          ✗
+        </span>
       );
   }
-}
-
-// ── JSON Renderer with OKLCH Highlighting ───────────
-
-function HighlightedJson({ data }: { data: unknown }): React.ReactElement {
-  const jsonStr = JSON.stringify(data, null, 2);
-  const tokens = tokenizeJson(jsonStr);
-
-  // Keyed by cumulative character offset in the source string — a stable,
-  // data-derived position since tokens are never reordered or spliced.
-  let offset = 0;
-  const keyedTokens = tokens.map((token) => {
-    const key = offset;
-    offset += token.value.length;
-    return { ...token, key };
-  });
-
-  return (
-    <pre style={jsonContainerStyle}>
-      {keyedTokens.map((token) => (
-        <span key={token.key} style={{ color: token.color }}>
-          {token.value}
-        </span>
-      ))}
-    </pre>
-  );
 }
 
 // ── Collapsible Result Viewer ───────────────────────
 
-function ResultViewer({ result }: { result: string }): React.ReactElement {
-  const [collapsed, setCollapsed] = useState(result.length > 500);
+/** Results longer than this start collapsed. */
+const COLLAPSE_THRESHOLD = 500;
 
-  // Try to parse as JSON
-  let parsed: unknown;
+function parseJson(
+  text: string,
+): { readonly ok: true; readonly value: unknown } | { readonly ok: false } {
   try {
-    parsed = JSON.parse(result);
+    return { ok: true, value: JSON.parse(text) };
   } catch {
-    parsed = null;
+    return { ok: false };
   }
+}
 
-  if (parsed !== null) {
-    if (collapsed) {
-      return (
-        <div>
-          <pre style={{ ...jsonContainerStyle, maxHeight: 120, overflow: "hidden" }}>
-            {result.slice(0, 200)}...
-          </pre>
-          <button
-            type="button"
-            onClick={() => setCollapsed(false)}
-            style={{
-              display: "block",
-              width: "100%",
-              padding: "4px 14px",
-              background: "oklch(0.08 0.02 220)",
-              border: "none",
-              borderTop: "1px solid oklch(0.18 0.03 220)",
-              color: "oklch(0.65 0.10 205)",
-              fontSize: 11,
-              cursor: "pointer",
-              textAlign: "center",
-            }}
-          >
-            Expand result
-          </button>
-        </div>
-      );
-    }
+function ResultViewer({ result }: { readonly result: string }): React.ReactElement {
+  const [collapsed, setCollapsed] = useState(result.length > COLLAPSE_THRESHOLD);
+  const parsed = parseJson(result);
 
-    return <HighlightedJson data={parsed} />;
-  }
-
-  // Plain text fallback
-  return (
-    <pre style={{ ...jsonContainerStyle, color: "oklch(0.82 0.04 220)" }}>
-      {collapsed ? `${result.slice(0, 200)}...` : result}
-      {collapsed && (
-        <button
-          type="button"
-          onClick={() => setCollapsed(false)}
+  if (collapsed) {
+    return (
+      <div>
+        <pre
           style={{
-            display: "inline",
-            background: "none",
-            border: "none",
-            color: "oklch(0.65 0.10 205)",
-            fontSize: 11,
-            cursor: "pointer",
-            marginLeft: 4,
+            ...jsonStyle,
+            margin: 0,
+            maxHeight: 120,
+            overflow: "hidden",
+            fontFamily: "var(--font-mono, monospace)",
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
           }}
         >
-          Show more
+          {result.slice(0, 200)}…
+        </pre>
+        <button type="button" onClick={() => setCollapsed(false)} style={expandButtonStyle}>
+          Show Full Result
         </button>
-      )}
+      </div>
+    );
+  }
+
+  return parsed.ok ? (
+    <HighlightedJson data={parsed.value} style={jsonStyle} />
+  ) : (
+    <pre
+      style={{
+        ...jsonStyle,
+        margin: 0,
+        color: "oklch(0.82 0.04 220)",
+        fontFamily: "var(--font-mono, monospace)",
+        whiteSpace: "pre-wrap",
+        overflowWrap: "anywhere",
+      }}
+    >
+      {result}
     </pre>
   );
 }
@@ -258,13 +225,10 @@ function ResultViewer({ result }: { result: string }): React.ReactElement {
 // ── Component ───────────────────────────────────────
 
 /**
- * Animated accordion displaying a tool call's name, input, and result.
- *
- * - Badge colored per tool name (OKLCH)
- * - Input: JSON with syntax highlighting
- * - Result: collapsible JSON viewer
- * - Status indicators per execution phase
- * - Framer Motion expand/collapse animation
+ * Collapsible card for one tool call: a status indicator (reduced-motion
+ * aware), the tool's name badge, and — expanded — its input and result
+ * as highlighted JSON (long results start collapsed). The expand button's
+ * accessible name carries the tool and its status.
  */
 export function ToolCallDisplay({
   name,
@@ -273,7 +237,6 @@ export function ToolCallDisplay({
   status,
 }: ToolCallDisplayProps): React.ReactElement {
   const [expanded, setExpanded] = useState(false);
-
   const badgeColors = TOOL_BADGE_COLORS[name] ?? DEFAULT_BADGE_COLORS;
 
   return (
@@ -283,19 +246,12 @@ export function ToolCallDisplay({
         style={{
           ...headerStyle,
           background: expanded ? "oklch(0.12 0.03 220 / 0.5)" : "oklch(0 0 0 / 0)",
-          border: "none",
-          width: "100%",
-          textAlign: "left",
-          fontFamily: "inherit",
-          fontSize: "inherit",
-          color: "inherit",
         }}
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
-        aria-label={`Tool call: ${name}`}
+        aria-label={`Tool Call: ${name}, ${STATUS_LABEL[status]}`}
       >
         <StatusIndicator status={status} />
-
         <Pill
           tone="neutral"
           size="sm"
@@ -307,31 +263,36 @@ export function ToolCallDisplay({
         >
           {name}
         </Pill>
-
-        <span style={chevronStyle}>{expanded ? "\u25B4" : "\u25BE"}</span>
+        <span
+          style={{ marginLeft: "auto", color: "oklch(0.55 0.03 220)", fontSize: 14 }}
+          aria-hidden="true"
+        >
+          {expanded ? "▴" : "▾"}
+        </span>
       </button>
 
-      <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: "easeInOut" }}
-            style={{ overflow: "hidden" }}
-          >
-            <span style={sectionLabelStyle}>Input</span>
-            <HighlightedJson data={input} />
-
-            {result !== undefined && (
-              <>
-                <span style={sectionLabelStyle}>Result</span>
-                <ResultViewer result={result} />
-              </>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <MotionConfig reducedMotion="user">
+        <AnimatePresence initial={false}>
+          {expanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2, ease: "easeInOut" }}
+              style={{ overflow: "hidden" }}
+            >
+              <span style={sectionLabelStyle}>Input</span>
+              <HighlightedJson data={input} style={jsonStyle} />
+              {result !== undefined && (
+                <>
+                  <span style={sectionLabelStyle}>Result</span>
+                  <ResultViewer result={result} />
+                </>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </MotionConfig>
     </div>
   );
 }

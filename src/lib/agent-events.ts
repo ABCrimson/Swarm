@@ -1,37 +1,27 @@
-import * as z from "zod";
-
 /**
- * Zod schemas for the `agent_*` event family (multi-provider agent
- * execution, Phase 2 of the multi-provider plan — see
- * `docs/architecture.md`'s "Adapter Layer" section and
+ * Zod schemas for the `agent_*` event family and the agent command
+ * results — the webview side of the provider-adapter layer
+ * (`crates/swarm-core/src/agent/`, payloads emitted from
  * `crates/swarm-core/src/events/emitter.rs`).
  *
- * As of Phase 3, `ClaudeCodeAdapter` (`crates/swarm-core/src/agent/claude_code.rs`)
- * is a real, wired provider — `useAgentSessionEvents`
- * (`#hooks/useAgentSessionEvents`) and `AgentChat`
- * (`#components/ai/AgentChat`) consume this module's schemas via
- * `safeParse` at the event-bus seam, the same discipline
- * `#lib/event-bus`'s `DomainEventSchema` already applies at the
- * envelope level. Phase 4 adds `CodexAdapter`
- * (`crates/swarm-core/src/agent/codex.rs`) as a second, structurally
- * different provider (stateful JSON-RPC vs. one-way stream-json) behind
- * the SAME event family — see `Capabilities.interactivePermissions` for
- * the one wire-visible difference a consumer needs to branch on.
+ * `#hooks/useAgentSessionEvents` parses every event with these schemas
+ * at the event-bus seam before it reaches `#store/agent-sessions`; an
+ * unexpected shape is dropped, never trusted via `as`.
  *
- * Field names are camelCase, mirroring the Rust payload structs'
- * `#[serde(rename_all = "camelCase")]` convention exactly.
+ * Field names are camelCase, mirroring the Rust structs'
+ * `#[serde(rename_all = "camelCase")]`; closed enums mirror their Rust
+ * `#[serde(rename_all = "snake_case")]` variants. `agent-events.contract.test.ts`
+ * checks both against the Rust source, so a field or variant added on
+ * either side without the other fails the test suite.
  *
- * **Manual cross-language contract, no automated diff:** every closed
- * enum below (`ProviderIdSchema`, `CancelGranularitySchema`,
- * `PermissionDecisionSchema`) is hand-kept in sync with its Rust
- * counterpart in `crates/swarm-core/src/agent/adapter.rs`. The Rust
- * side pins its wire values in a dedicated test
- * (`agent::adapter::tests::test_provider_id_wire_values_pinned_for_the_typescript_schema`)
- * — if that test ever needs to change, this file needs the identical
- * edit, and vice versa.
+ * @module agent-events
  */
 
-/** Mirrors Rust's `ProviderId` (`crates/swarm-core/src/agent/adapter.rs`) — closed, snake_case wire values. */
+import * as z from "zod";
+
+// ── Enums ────────────────────────────────────────────
+
+/** Mirrors Rust's `ProviderId` (`agent/adapter.rs`). */
 export const ProviderIdSchema = z.enum([
   "claude_code",
   "codex",
@@ -41,6 +31,15 @@ export const ProviderIdSchema = z.enum([
 ]);
 export type ProviderId = z.infer<typeof ProviderIdSchema>;
 
+/** Title Case display label per provider — the one list every provider-naming UI uses. */
+export const PROVIDER_LABELS: Readonly<Record<ProviderId, string>> = {
+  claude_code: "Claude Code",
+  codex: "Codex",
+  open_code: "Open Code",
+  gemini: "Gemini",
+  webview_anthropic: "Webview Anthropic",
+};
+
 /** Mirrors Rust's `CancelGranularity`. */
 export const CancelGranularitySchema = z.enum(["kill_only", "graceful"]);
 export type CancelGranularity = z.infer<typeof CancelGranularitySchema>;
@@ -49,11 +48,28 @@ export type CancelGranularity = z.infer<typeof CancelGranularitySchema>;
 export const PermissionDecisionSchema = z.enum(["allow", "deny"]);
 export type PermissionDecision = z.infer<typeof PermissionDecisionSchema>;
 
+/** Mirrors Rust's `AgentTurnStatus`. */
+export const AgentTurnStatusSchema = z.enum(["ok", "error"]);
+export type AgentTurnStatus = z.infer<typeof AgentTurnStatusSchema>;
+
 /**
- * Mirrors Rust's `Capabilities` — see its doc for the "honesty
- * doctrine": every field traces to an empirical Phase 1 spike finding,
- * never an aspiration. A future UI must disable (not silently no-op)
- * an affordance a session's `capabilities` reports as unsupported.
+ * The spawn-time trust dial, mirroring both Rust's `ClaudeCodeTrustTier`
+ * (`agent/claude_code.rs`) and `CodexTrustTier` (`agent/codex.rs`) —
+ * the same three wire tokens, each mapped by its adapter onto that
+ * provider's own permission vocabulary. Neither mapping can express a
+ * bypass-everything mode.
+ */
+export const TrustTierSchema = z.enum(["restricted", "standard", "write_enabled"]);
+export type TrustTier = z.infer<typeof TrustTierSchema>;
+/** The trust dial as `agent_spawn` takes it for a Claude Code session (see {@link TrustTierSchema}). */
+export type ClaudeCodeTrustTier = TrustTier;
+
+// ── Capabilities & probe ─────────────────────────────
+
+/**
+ * Mirrors Rust's `Capabilities`: what a provider can honestly promise,
+ * each flag measured rather than assumed. A UI disables — never
+ * silently no-ops — an affordance a session reports as unsupported.
  */
 export const CapabilitiesSchema = z.object({
   partialDeltas: z.boolean(),
@@ -61,26 +77,32 @@ export const CapabilitiesSchema = z.object({
   nativeCost: z.boolean(),
   permissionModes: z.array(z.string()),
   cancelGranularity: CancelGranularitySchema,
+  /** Sending during a turn interrupts it; otherwise the new turn queues behind it. */
   interruptMidturn: z.boolean(),
   worktreeAware: z.boolean(),
   /**
-   * Phase 4: the provider's own protocol supports a REAL
-   * `agent_permission_request` -> `agentPermissionRespond` round-trip —
-   * `respondPermission` (`#lib/tauri`) actually answers a pending
-   * question on the wire, as opposed to the event being a report-only
-   * notice of an already-decided denial (Claude Code: `false` —
-   * `--permission-mode manual` is a silent no-op, see
-   * `AgentPermissionRequestPayloadSchema`'s doc). Codex: `true` — its
-   * JSON-RPC app-server protocol issues a genuine server -> client
-   * request that blocks until answered. A consumer MUST branch on this
-   * flag before rendering Allow/Deny affordances rather than assuming
-   * every provider behaves like Claude Code.
+   * The provider blocks on an `agent_permission_request` until it is
+   * answered with `agentPermissionRespond` (`#lib/tauri`). When `false`,
+   * the event reports a decision the provider already made.
    */
   interactivePermissions: z.boolean(),
 });
 export type Capabilities = z.infer<typeof CapabilitiesSchema>;
 
-/** Payload schema for the `agent_session_started` event. */
+/**
+ * The `agent_probe` command's result (Rust's `ProbeReport`). `detail` is
+ * always human-readable and never a credential.
+ */
+export const ProbeReportSchema = z.object({
+  available: z.boolean(),
+  version: z.string().nullish(),
+  detail: z.string().nullish(),
+});
+export type ProbeReport = z.infer<typeof ProbeReportSchema>;
+
+// ── Event payloads ───────────────────────────────────
+
+/** `agent_session_started`. */
 export const AgentSessionStartedPayloadSchema = z.object({
   workerId: z.uuid(),
   provider: ProviderIdSchema,
@@ -92,31 +114,30 @@ export const AgentSessionStartedPayloadSchema = z.object({
 export type AgentSessionStartedPayload = z.infer<typeof AgentSessionStartedPayloadSchema>;
 
 /**
- * Payload schema for the `agent_turn_delta` event. EPHEMERAL on the
- * Rust side (never persisted, never replayed after a gap) — the same
- * is true here: a consumer that misses one live cannot recover it via
- * `events_since`.
+ * `agent_turn_delta` — ephemeral: never persisted or replayed, so a
+ * consumer that misses one cannot recover it; the finalized
+ * `agent_block` supersedes it.
  */
 export const AgentTurnDeltaPayloadSchema = z.object({
   workerId: z.uuid(),
   turnId: z.string(),
-  blockIndex: z.number().int().nonnegative(),
+  blockIndex: z.int().nonnegative(),
   kind: z.string(),
   text: z.string(),
 });
 export type AgentTurnDeltaPayload = z.infer<typeof AgentTurnDeltaPayloadSchema>;
 
-/** Payload schema for the `agent_block` event (persisted counterpart to `agent_turn_delta`). */
+/** `agent_block` — a finalized content block (the persisted counterpart of `agent_turn_delta`). */
 export const AgentBlockPayloadSchema = z.object({
   workerId: z.uuid(),
   turnId: z.string(),
-  blockIndex: z.number().int().nonnegative(),
+  blockIndex: z.int().nonnegative(),
   kind: z.string(),
   content: z.unknown(),
 });
 export type AgentBlockPayload = z.infer<typeof AgentBlockPayloadSchema>;
 
-/** Payload schema for the `agent_tool_call` event. */
+/** `agent_tool_call`. */
 export const AgentToolCallPayloadSchema = z.object({
   workerId: z.uuid(),
   turnId: z.string(),
@@ -126,7 +147,7 @@ export const AgentToolCallPayloadSchema = z.object({
 });
 export type AgentToolCallPayload = z.infer<typeof AgentToolCallPayloadSchema>;
 
-/** Payload schema for the `agent_tool_result` event — `toolUseId` correlates with the originating `agent_tool_call`. */
+/** `agent_tool_result` — `toolUseId` correlates it with its `agent_tool_call`. */
 export const AgentToolResultPayloadSchema = z.object({
   workerId: z.uuid(),
   turnId: z.string(),
@@ -137,14 +158,17 @@ export const AgentToolResultPayloadSchema = z.object({
 export type AgentToolResultPayload = z.infer<typeof AgentToolResultPayloadSchema>;
 
 /**
- * Payload schema for the `agent_permission_request` event.
+ * `agent_permission_request` — the only permission-gating surface. With
+ * `capabilities.interactivePermissions` (Codex) it is a pending question
+ * answered through `agent_permission_respond`; otherwise (Claude Code)
+ * it reports a denial the provider already made, classified by
+ * `denialSubclass` when possible (`mode`, `ungranted_write`,
+ * `redirection_guard` — free-form provider-observed text, not a closed
+ * set). A provider's auto-approve list is never surfaced here, and its
+ * absence is not a denial.
  *
- * **Condition C (binding, see `docs/architecture.md`):** this event,
- * answered via a future `agent_permission_respond` command, is the
- * ONLY legitimate permission-gating surface. `allowedTools` (a
- * provider CLI flag, never surfaced here) is an auto-approve list, not
- * a restriction — a future consumer must never treat its absence as a
- * denial.
+ * Optional fields are omitted on the wire when unset but accepted as
+ * `null` too.
  */
 export const AgentPermissionRequestPayloadSchema = z.object({
   workerId: z.uuid(),
@@ -152,87 +176,34 @@ export const AgentPermissionRequestPayloadSchema = z.object({
   requestId: z.string(),
   tool: z.string(),
   input: z.unknown(),
-  // .nullable().optional() (review F1, belt #2 alongside Rust's
-  // skip_serializing_if): Tauri's JSON bridge can hand back an
-  // explicit `null` for an absent Option<T> in some serialization
-  // paths even though the emitter now omits the key entirely on the
-  // wire — accept both rather than trusting the omission alone.
-  suggestedDecision: PermissionDecisionSchema.nullable().optional(),
-  /**
-   * Phase 3 semantics shift for `ClaudeCodeAdapter`: this event is a
-   * REPORT of an already-decided denial, not a pending request — see
-   * Rust's `AgentPermissionRequestPayload` doc. `denialSubclass` is one
-   * of `"mode"` | `"ungranted_write"` | `"redirection_guard"` (the §0b
-   * mini-spike's three observed subclasses) when classifiable, `null`
-   * otherwise. Free-form (not a closed enum) — provider-observed text
-   * classification, not a SWARM-owned vocabulary.
-   */
-  denialSubclass: z.string().nullable().optional(),
-  /** Raw, human-readable denial message from the provider, verbatim. */
-  message: z.string().nullable().optional(),
+  suggestedDecision: PermissionDecisionSchema.nullish(),
+  denialSubclass: z.string().nullish(),
+  /** The provider's own human-readable text (the denial message, or the command awaiting approval). */
+  message: z.string().nullish(),
 });
 export type AgentPermissionRequestPayload = z.infer<typeof AgentPermissionRequestPayloadSchema>;
 
 /**
- * Payload schema for the `agent_turn_settled` receipt — exactly once
- * per turn, on success AND on ungraceful child exit (Condition B).
- * `costUsd`/`usage` are `null` on a synthesized (kill-path) settlement
- * — honestly absent, never a fabricated estimate. `status` mirrors
- * Rust's closed `AgentTurnStatus` enum (not a bare string) — see this
- * file's header doc on the manual cross-language contract.
+ * `agent_turn_settled` — exactly once per turn, on success and on an
+ * ungraceful child exit alike. `costUsd`/`usage` are `null` on a
+ * synthesized (kill-path) settlement: honestly absent, never estimated.
  */
 export const AgentTurnSettledPayloadSchema = z.object({
   workerId: z.uuid(),
   turnId: z.string(),
-  status: z.enum(["ok", "error"]),
-  error: z.string().nullable().optional(),
-  costUsd: z.number().nullable().optional(),
-  usage: z.unknown().nullable().optional(),
+  status: AgentTurnStatusSchema,
+  error: z.string().nullish(),
+  costUsd: z.number().nullish(),
+  usage: z.unknown().nullish(),
   durationMs: z.number().nonnegative(),
-  numTurns: z.number().int().nonnegative().nullable().optional(),
+  numTurns: z.int().nonnegative().nullish(),
 });
 export type AgentTurnSettledPayload = z.infer<typeof AgentTurnSettledPayloadSchema>;
 
-/** Payload schema for the `agent_session_exited` event. */
+/** `agent_session_exited`. */
 export const AgentSessionExitedPayloadSchema = z.object({
   workerId: z.uuid(),
-  exitCode: z.number().int().nullable().optional(),
-  signal: z.string().nullable().optional(),
+  exitCode: z.int().nullish(),
+  signal: z.string().nullish(),
 });
 export type AgentSessionExitedPayload = z.infer<typeof AgentSessionExitedPayloadSchema>;
-
-/**
- * Phase 3: `ClaudeCodeAdapter`'s spawn-time trust dial
- * (`crates/swarm-core/src/agent/claude_code.rs`'s `ClaudeCodeTrustTier`).
- * Spawn-time only — permission modes are never a mid-turn prompt for
- * this provider (the interactive round-trip is a documented no-op, see
- * `AgentPermissionRequestPayloadSchema`'s semantics-shift doc below).
- */
-export const ClaudeCodeTrustTierSchema = z.enum(["restricted", "standard", "write_enabled"]);
-export type ClaudeCodeTrustTier = z.infer<typeof ClaudeCodeTrustTierSchema>;
-
-/**
- * Phase 4: `CodexAdapter`'s spawn-time trust dial
- * (`crates/swarm-core/src/agent/codex.rs`'s `CodexTrustTier`). The same
- * three wire tokens as {@link ClaudeCodeTrustTierSchema} by deliberate
- * design symmetry, but mapped onto Codex's own
- * `approvalPolicy`/`sandboxPolicy` vocabulary
- * (`untrusted`/`on-request`/`on-failure`, never `"never"` — Codex's
- * full-auto/bypass-equivalent mode is unconstructible through this
- * vocabulary, mirroring Claude Code's `bypassPermissions`/`manual`).
- */
-export const CodexTrustTierSchema = z.enum(["restricted", "standard", "write_enabled"]);
-export type CodexTrustTier = z.infer<typeof CodexTrustTierSchema>;
-
-/**
- * Payload schema for the `agent_probe` command's response
- * (mirrors Rust's `ProbeReport`, `crates/swarm-core/src/agent/adapter.rs`).
- * `detail` is always human-readable, never a credential — see
- * `ProbeReport`'s doc ("Detect and report, never store").
- */
-export const ProbeReportSchema = z.object({
-  available: z.boolean(),
-  version: z.string().nullable().optional(),
-  detail: z.string().nullable().optional(),
-});
-export type ProbeReport = z.infer<typeof ProbeReportSchema>;

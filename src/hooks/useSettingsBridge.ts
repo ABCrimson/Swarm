@@ -30,7 +30,8 @@ export function useSettingsBridge(): void {
 
   useEffect(() => {
     // Client-side limiter for the webview-direct chat streaming path
-    // (`AIChat.tsx`): purely in-memory, so it is applied on every run.
+    // (`#lib/ai-chat`, through `#store/ai`'s `acquireStreamSlot`): purely
+    // in-memory, so it is applied on every run.
     useAiStore.getState().setConcurrentLimit(settings.aiConcurrentLimit);
 
     // Backend agent-turn scheduler cap for the provider-adapter path

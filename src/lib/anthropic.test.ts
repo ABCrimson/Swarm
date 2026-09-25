@@ -1,223 +1,547 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { StreamParams } from "#lib/anthropic";
-import { resetClient, streamMessage } from "#lib/anthropic";
+// streamMessage against the REAL @anthropic-ai/sdk — only `fetch` is
+// stubbed, with canned SSE responses — so authentication, request
+// wiring, stream accumulation and error mapping are all exercised the
+// way they run in the app.
 
-// ── Mock the Anthropic SDK ───────────────────────────
-// `mockAnthropicStream` backs `client.messages.stream()`. Tests configure
-// its return value per-case with a fake async-iterable of SSE-shaped
-// events, matching the SDK's `RawMessageStreamEvent` union. Naming starts
-// with "mock" so Vitest's vi.mock hoisting allows referencing it inside the
-// factory below — same convention as useAiStream.test.tsx / useStream.test.tsx.
-const mockAnthropicStream = vi.fn();
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import type { ChatResponse, StreamDelta, StreamParams } from "#lib/anthropic";
+import {
+  AiRefusalError,
+  AiRequestError,
+  replayableContent,
+  streamMessage,
+  toolUseBlocks,
+  withoutThinking,
+  zodToTool,
+} from "#lib/anthropic";
+import { CLAUDE_MODELS } from "#lib/models";
+import { useAiStore } from "#store/ai";
 
-vi.mock("@anthropic-ai/sdk", () => {
-  class MockAnthropicClient {
-    messages = { stream: mockAnthropicStream };
-  }
-  return { default: MockAnthropicClient };
-});
+vi.mock("#lib/tauri", () => ({ readConfig: vi.fn() }));
 
-// The mocked SDK constructor above never invokes the `apiKey` callback
-// (no real HTTP call happens), so #lib/tauri's readConfig is never called
-// in these tests. Stub it anyway for isolation from the global
-// @tauri-apps/api/core mock in setup.ts.
-vi.mock("#lib/tauri", () => ({
-  readConfig: vi.fn().mockResolvedValue("test-api-key"),
-}));
+import * as z from "zod";
+import { readConfig } from "#lib/tauri";
 
-/** Wraps a fixed array of fake SSE events as an async-iterable stream. */
-async function* fakeAnthropicStream(events: unknown[]): AsyncGenerator<unknown> {
-  for (const event of events) {
-    yield event;
+const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
+
+/** A distinct key per test forces a fresh SDK client, which captures the current `fetch` stub. */
+let keySeq = 0;
+function useFreshKey(): string {
+  const key = `sk-ant-test-${++keySeq}`;
+  vi.mocked(readConfig).mockResolvedValue(key);
+  return key;
+}
+
+/** Serializes events as a `text/event-stream` response body. */
+function sse(events: readonly Record<string, unknown>[]): Response {
+  const body = events
+    .map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join("");
+  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+function jsonError(status: number, type: string, message: string): Response {
+  return new Response(JSON.stringify({ type: "error", error: { type, message } }), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      "request-id": "req_test",
+      "x-should-retry": "false",
+    },
+  });
+}
+
+const USAGE = {
+  input_tokens: 10,
+  output_tokens: 5,
+  cache_creation_input_tokens: null,
+  cache_read_input_tokens: null,
+};
+
+function messageStart(model: string): Record<string, unknown> {
+  return {
+    type: "message_start",
+    message: {
+      id: "msg_1",
+      type: "message",
+      role: "assistant",
+      model,
+      content: [],
+      stop_reason: null,
+      stop_sequence: null,
+      stop_details: null,
+      usage: USAGE,
+    },
+  };
+}
+
+function messageEnd(
+  stopReason: string,
+  stopDetails: Record<string, unknown> | null = null,
+): Record<string, unknown>[] {
+  return [
+    {
+      type: "message_delta",
+      delta: { stop_reason: stopReason, stop_sequence: null, stop_details: stopDetails },
+      usage: { output_tokens: 5 },
+    },
+    { type: "message_stop" },
+  ];
+}
+
+function textResponse(model: string, text: string): Response {
+  return sse([
+    messageStart(model),
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+    { type: "content_block_stop", index: 0 },
+    ...messageEnd("end_turn"),
+  ]);
+}
+
+/** Drives the generator to completion, returning its deltas and final message. */
+async function run(
+  params: StreamParams,
+  signal?: AbortSignal,
+): Promise<{ deltas: StreamDelta[]; final: ChatResponse }> {
+  const gen = streamMessage(params, signal);
+  const deltas: StreamDelta[] = [];
+  for (;;) {
+    const step = await gen.next();
+    if (step.done) return { deltas, final: step.value };
+    deltas.push(step.value);
   }
 }
 
-/** Drains an async generator into an array of its yielded values. */
-async function drain<T>(gen: AsyncGenerator<T>): Promise<T[]> {
-  const out: T[] = [];
-  for await (const value of gen) {
-    out.push(value);
-  }
-  return out;
+function sentBody(call = 0): Record<string, unknown> {
+  const init = fetchMock.mock.calls[call]?.[1];
+  return JSON.parse(String(init?.body)) as Record<string, unknown>;
 }
 
-const BASIC_PARAMS: StreamParams = {
-  model: "claude-opus-4-8",
-  maxTokens: 1024,
+function sentHeaders(call = 0): Headers {
+  return new Headers(fetchMock.mock.calls[call]?.[1]?.headers);
+}
+
+const SONNET: StreamParams = {
+  model: CLAUDE_MODELS.sonnet.id,
+  maxTokens: 64_000,
   messages: [{ role: "user", content: "Hello" }],
 };
 
-describe("streamMessage — refusal stop_reason handling", () => {
+describe("streamMessage", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mockAnthropicStream.mockReset();
-    resetClient();
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    useAiStore.setState(useAiStore.getInitialState(), true);
   });
 
-  it("throws the exact refusal message when message_delta carries stop_reason: refusal", async () => {
-    mockAnthropicStream.mockReturnValue(
-      fakeAnthropicStream([
-        {
-          type: "message_delta",
-          delta: {
-            stop_reason: "refusal",
-            stop_sequence: null,
-            container: null,
-            stop_details: null,
-          },
-          usage: {},
-        },
-      ]),
-    );
-
-    await expect(drain(streamMessage(BASIC_PARAMS))).rejects.toThrow(
-      "Request Declined By Safety Classifiers",
-    );
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it("does not throw for non-refusal stop reasons (end_turn)", async () => {
-    mockAnthropicStream.mockReturnValue(
-      fakeAnthropicStream([
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "All good" },
-        },
-        {
-          type: "message_delta",
-          delta: {
-            stop_reason: "end_turn",
-            stop_sequence: null,
-            container: null,
-            stop_details: null,
-          },
-          usage: {},
-        },
-      ]),
-    );
+  describe("authentication", () => {
+    it("sends the configured API key as x-api-key on the request itself", async () => {
+      const key = useFreshKey();
+      fetchMock.mockResolvedValue(textResponse(CLAUDE_MODELS.sonnet.id, "Hi"));
 
-    const deltas = await drain(streamMessage(BASIC_PARAMS));
-    expect(deltas.map((d) => d.content)).toEqual(["All good", ""]);
+      await run(SONNET);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(sentHeaders().get("x-api-key")).toBe(key);
+    });
+
+    it("re-reads the key before every request, so a key changed in Settings applies immediately", async () => {
+      const first = useFreshKey();
+      fetchMock.mockImplementation(async () => textResponse(CLAUDE_MODELS.sonnet.id, "Hi"));
+      await run(SONNET);
+      const second = useFreshKey();
+      await run(SONNET);
+
+      expect(sentHeaders(0).get("x-api-key")).toBe(first);
+      expect(sentHeaders(1).get("x-api-key")).toBe(second);
+    });
+
+    it("throws missing_key without any HTTP request when no key is configured", async () => {
+      vi.mocked(readConfig).mockResolvedValue(null);
+
+      await expect(run(SONNET)).rejects.toMatchObject({
+        name: "AiRequestError",
+        kind: "missing_key",
+        message: "API Key Not Configured — Add It In Settings",
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
-  it("does not yield a completed result when partial text precedes a refusal", async () => {
-    mockAnthropicStream.mockReturnValue(
-      fakeAnthropicStream([
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "Partial answer before the block " },
-        },
-        {
-          type: "message_delta",
-          delta: {
-            stop_reason: "refusal",
-            stop_sequence: null,
-            container: null,
-            stop_details: null,
-          },
-          usage: {},
-        },
-      ]),
-    );
+  describe("request body", () => {
+    it("sends adaptive summarized thinking and effort, and never sampling parameters", async () => {
+      useFreshKey();
+      fetchMock.mockResolvedValue(textResponse(CLAUDE_MODELS.sonnet.id, "Hi"));
 
-    const gen = streamMessage(BASIC_PARAMS);
-    const yielded: string[] = [];
+      await run({ ...SONNET, effort: "low", system: "Be terse.", cache: true });
 
-    await expect(
-      (async () => {
-        for await (const delta of gen) {
-          yielded.push(delta.content);
-        }
-      })(),
-    ).rejects.toThrow("Request Declined By Safety Classifiers");
-
-    // The partial text streamed before the refusal was yielded (so a live
-    // UI could have rendered it)...
-    expect(yielded).toEqual(["Partial answer before the block "]);
-    // ...but the generator never reaches a normal, completed exit — the
-    // consumer's `for await` loop is broken by the thrown error, so no
-    // caller can treat the partial text as a valid final reply.
-    // (Equivalent assertion: draining the same events end-to-end rejects,
-    // it never resolves.)
-  });
-
-  it("propagates the refusal from the generator so callers cannot swallow it silently", async () => {
-    mockAnthropicStream.mockReturnValue(
-      fakeAnthropicStream([
-        {
-          type: "message_delta",
-          delta: {
-            stop_reason: "refusal",
-            stop_sequence: null,
-            container: null,
-            stop_details: null,
-          },
-          usage: {},
-        },
-      ]),
-    );
-
-    const gen = streamMessage(BASIC_PARAMS);
-    let threw = false;
-    let message = "";
-    try {
-      for await (const _delta of gen) {
-        // no-op — draining only for the throw
+      const body = sentBody();
+      expect(body).toMatchObject({
+        model: "claude-sonnet-5",
+        max_tokens: 64_000,
+        stream: true,
+        system: "Be terse.",
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "low" },
+        cache_control: { type: "ephemeral" },
+      });
+      for (const sampling of ["temperature", "top_p", "top_k"]) {
+        expect(body).not.toHaveProperty(sampling);
       }
-    } catch (err) {
-      threw = true;
-      message = err instanceof Error ? err.message : String(err);
-    }
+      // Sonnet 5 has no refusal-fallback opt-in: no beta header, no fallbacks.
+      expect(body).not.toHaveProperty("fallbacks");
+      expect(sentHeaders().get("anthropic-beta")).toBeNull();
+    });
 
-    expect(threw).toBe(true);
-    expect(message).toBe("Request Declined By Safety Classifiers");
+    it("drops thinking and effort for Haiku 4.5 and clamps max_tokens to its 64K output limit", async () => {
+      useFreshKey();
+      fetchMock.mockResolvedValue(textResponse(CLAUDE_MODELS.haiku.id, "Hi"));
+
+      await run({ ...SONNET, model: CLAUDE_MODELS.haiku.id, maxTokens: 100_000, effort: "high" });
+
+      const body = sentBody();
+      expect(body.max_tokens).toBe(64_000);
+      expect(body).not.toHaveProperty("thinking");
+      expect(body).not.toHaveProperty("output_config");
+    });
+
+    it("opts Opus 5.5 into server-side refusal fallbacks", async () => {
+      useFreshKey();
+      fetchMock.mockResolvedValue(textResponse(CLAUDE_MODELS.opus.id, "Hi"));
+
+      await run({ ...SONNET, model: CLAUDE_MODELS.opus.id });
+
+      expect(sentBody().fallbacks).toBe("default");
+      expect(sentHeaders().get("anthropic-beta")).toContain("server-side-fallback-2026-07-01");
+    });
+
+    it("retries once without the fallback opt-in when the API rejects it, then stops sending it", async () => {
+      useFreshKey();
+      fetchMock
+        .mockResolvedValueOnce(
+          jsonError(400, "invalid_request_error", "fallbacks: not supported for this model"),
+        )
+        .mockImplementation(async () => textResponse(CLAUDE_MODELS.fable.id, "Hi"));
+
+      const { final } = await run({ ...SONNET, model: CLAUDE_MODELS.fable.id });
+      await run({ ...SONNET, model: CLAUDE_MODELS.fable.id });
+
+      expect(final.content).toMatchObject([{ type: "text", text: "Hi" }]);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(sentBody(0).fallbacks).toBe("default");
+      expect(sentBody(1)).not.toHaveProperty("fallbacks");
+      expect(sentBody(2)).not.toHaveProperty("fallbacks");
+    });
+
+    it("keeps the fallback opt-in after an unrelated 400 that the retry also gets", async () => {
+      useFreshKey();
+      const tooLong = () =>
+        jsonError(400, "invalid_request_error", "prompt is too long: 300000 tokens > 200000");
+      fetchMock
+        .mockResolvedValueOnce(tooLong())
+        .mockResolvedValueOnce(tooLong())
+        .mockImplementation(async () => textResponse(CLAUDE_MODELS.mythos.id, "Hi"));
+      const mythos = { ...SONNET, model: CLAUDE_MODELS.mythos.id };
+
+      await expect(run(mythos)).rejects.toBeInstanceOf(AiRequestError);
+      await run(mythos);
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(sentBody(0).fallbacks).toBe("default");
+      expect(sentBody(1)).not.toHaveProperty("fallbacks");
+      // The next request still opts in: the opt-in was never the problem.
+      expect(sentBody(2).fallbacks).toBe("default");
+    });
+
+    it("marks every tool for eager input streaming", async () => {
+      useFreshKey();
+      fetchMock.mockResolvedValue(textResponse(CLAUDE_MODELS.sonnet.id, "Hi"));
+      const tool = zodToTool("echo", "Echo text.", z.object({ text: z.string() }));
+
+      await run({ ...SONNET, tools: [tool] });
+
+      expect(sentBody().tools).toEqual([{ ...tool, eager_input_streaming: true }]);
+    });
+  });
+
+  describe("streaming and the final message", () => {
+    it("yields text and summarized thinking, and returns the full turn with signatures intact", async () => {
+      useFreshKey();
+      fetchMock.mockResolvedValue(
+        sse([
+          messageStart(CLAUDE_MODELS.sonnet.id),
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "thinking", thinking: "", signature: "" },
+          },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "Considering." },
+          },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "signature_delta", signature: "sig-abc" },
+          },
+          { type: "content_block_stop", index: 0 },
+          { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Done." } },
+          { type: "content_block_stop", index: 1 },
+          ...messageEnd("end_turn"),
+        ]),
+      );
+
+      const { deltas, final } = await run(SONNET);
+
+      expect(deltas).toEqual([
+        { type: "thinking", content: "", thinking: "Considering." },
+        { type: "text", content: "Done." },
+      ]);
+      expect(final.stop_reason).toBe("end_turn");
+      expect(final.content).toEqual([
+        { type: "thinking", thinking: "Considering.", signature: "sig-abc" },
+        { type: "text", text: "Done." },
+      ]);
+      expect(replayableContent(final)).toEqual(final.content);
+    });
+
+    it("streams tool_use input and returns the parsed block in model order", async () => {
+      useFreshKey();
+      fetchMock.mockResolvedValue(
+        sse([
+          messageStart(CLAUDE_MODELS.sonnet.id),
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "toolu_1", name: "echo", input: {} },
+          },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '{"text":' },
+          },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '"hi"}' },
+          },
+          { type: "content_block_stop", index: 0 },
+          ...messageEnd("tool_use"),
+        ]),
+      );
+
+      const { deltas, final } = await run(SONNET);
+
+      expect(deltas.map((d) => d.toolUse)).toEqual([
+        { id: "toolu_1", toolName: "echo", partialInput: "", complete: false },
+        { id: "toolu_1", toolName: "echo", partialInput: '{"text":', complete: false },
+        { id: "toolu_1", toolName: "echo", partialInput: '{"text":"hi"}', complete: false },
+        { id: "toolu_1", toolName: "echo", partialInput: '{"text":"hi"}', complete: true },
+      ]);
+      expect(final.stop_reason).toBe("tool_use");
+      expect(toolUseBlocks(final)).toEqual([
+        { type: "tool_use", id: "toolu_1", name: "echo", input: { text: "hi" } },
+      ]);
+    });
+
+    it("leaves max_tokens to the caller rather than treating it as an error", async () => {
+      useFreshKey();
+      fetchMock.mockResolvedValue(
+        sse([
+          messageStart(CLAUDE_MODELS.sonnet.id),
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Part" } },
+          { type: "content_block_stop", index: 0 },
+          ...messageEnd("max_tokens"),
+        ]),
+      );
+
+      const { final } = await run(SONNET);
+
+      expect(final.stop_reason).toBe("max_tokens");
+    });
+
+    it("records token usage and catalog-priced cost in the AI store", async () => {
+      useFreshKey();
+      fetchMock.mockResolvedValue(textResponse(CLAUDE_MODELS.sonnet.id, "Hi"));
+
+      await run(SONNET);
+
+      const usage = useAiStore.getState().cumulativeUsage;
+      expect(usage.totalInputTokens).toBe(10);
+      expect(usage.totalOutputTokens).toBe(5);
+      // Sonnet 5 at $2/$10 per MTok.
+      expect(usage.totalCostUsd).toBeCloseTo((10 * 2 + 5 * 10) / 1_000_000, 12);
+    });
+  });
+
+  describe("refusals", () => {
+    it("throws AiRefusalError carrying stop_details when the model declines", async () => {
+      useFreshKey();
+      fetchMock.mockResolvedValue(
+        sse([
+          messageStart(CLAUDE_MODELS.sonnet.id),
+          ...messageEnd("refusal", {
+            type: "refusal",
+            category: "cyber",
+            explanation: "Exploit development.",
+          }),
+        ]),
+      );
+
+      const error = await run(SONNET).catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(AiRefusalError);
+      expect(error).toMatchObject({
+        kind: "refusal",
+        message: "Request Declined (Cybersecurity)",
+        category: "cyber",
+        explanation: "Exploit development.",
+      });
+    });
+
+    it("keeps only the declined partial's text before a fallback marker when replaying", async () => {
+      useFreshKey();
+      fetchMock.mockResolvedValue(
+        sse([
+          messageStart(CLAUDE_MODELS.opus.id),
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "thinking", thinking: "", signature: "" },
+          },
+          { type: "content_block_stop", index: 0 },
+          { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Sure, " } },
+          { type: "content_block_stop", index: 1 },
+          {
+            type: "content_block_start",
+            index: 2,
+            content_block: { type: "tool_use", id: "toolu_declined", name: "echo", input: {} },
+          },
+          { type: "content_block_stop", index: 2 },
+          {
+            type: "content_block_start",
+            index: 3,
+            content_block: {
+              type: "fallback",
+              from: { model: CLAUDE_MODELS.opus.id },
+              to: { model: "claude-opus-5" },
+              trigger: { type: "refusal", category: "bio" },
+            },
+          },
+          { type: "content_block_stop", index: 3 },
+          { type: "content_block_start", index: 4, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 4, delta: { type: "text_delta", text: "here." } },
+          { type: "content_block_stop", index: 4 },
+          ...messageEnd("end_turn"),
+        ]),
+      );
+
+      const { deltas, final } = await run({ ...SONNET, model: CLAUDE_MODELS.opus.id });
+
+      expect(deltas).toContainEqual({
+        type: "fallback",
+        content: "",
+        from: CLAUDE_MODELS.opus.id,
+        to: "claude-opus-5",
+      });
+      expect(replayableContent(final)).toEqual([
+        { type: "text", text: "Sure, " },
+        { type: "text", text: "here." },
+      ]);
+      expect(toolUseBlocks(final)).toEqual([]);
+    });
+  });
+
+  describe("errors", () => {
+    it.each([
+      [401, "authentication_error", "auth", "API Key Rejected (401) — Update It In Settings"],
+      [
+        403,
+        "permission_error",
+        "permission",
+        "Permission Denied (403) — This API Key Cannot Use This Model",
+      ],
+      [404, "not_found_error", "not_found", "Model Not Found (404) — Pick Another Model"],
+      [429, "rate_limit_error", "rate_limit", "Rate Limited (429) — Retry Shortly"],
+      [529, "overloaded_error", "overloaded", "Anthropic API Overloaded — Try Again Shortly"],
+      [500, "api_error", "server", "Anthropic API Error (500) — Try Again Shortly"],
+      [400, "invalid_request_error", "bad_request", "Request Rejected (400): prompt is too long"],
+    ])("maps HTTP %i to the typed %s error", async (status, type, kind, message) => {
+      useFreshKey();
+      fetchMock.mockResolvedValue(jsonError(status, type, "prompt is too long"));
+
+      const error = await run(SONNET).catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(AiRequestError);
+      expect(error).toMatchObject({ kind, message, requestId: "req_test" });
+      expect((error as Error).cause).toBeInstanceOf(Error);
+    });
+
+    it("maps a network failure to a retryable connection error", async () => {
+      useFreshKey();
+      fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+
+      const error = await run({ ...SONNET }).catch((err: unknown) => err);
+
+      expect(error).toMatchObject({ kind: "connection", retryable: true });
+    }, 30_000);
+
+    it("reports a caller abort as aborted", async () => {
+      useFreshKey();
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(run(SONNET, controller.signal)).rejects.toMatchObject({ kind: "aborted" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 });
 
-describe("streamMessage — temperature is never forwarded", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockAnthropicStream.mockReset();
-    resetClient();
+describe("withoutThinking", () => {
+  it("strips thinking and redacted thinking blocks and keeps everything else in order", () => {
+    expect(
+      withoutThinking([
+        { type: "thinking", thinking: "x", signature: "s" },
+        { type: "text", text: "a" },
+        { type: "redacted_thinking", data: "d" },
+        { type: "tool_use", id: "t", name: "n", input: {} },
+      ]),
+    ).toEqual([
+      { type: "text", text: "a" },
+      { type: "tool_use", id: "t", name: "n", input: {} },
+    ]);
+    expect(withoutThinking("plain")).toBe("plain");
+  });
+});
+
+describe("zodToTool", () => {
+  it("emits an object input schema without the $schema dialect marker", () => {
+    const tool = zodToTool("echo", "Echo text.", z.object({ text: z.string() }));
+
+    expect(tool).toEqual({
+      name: "echo",
+      description: "Echo text.",
+      input_schema: {
+        type: "object",
+        properties: { text: { type: "string" } },
+        required: ["text"],
+        additionalProperties: false,
+      },
+    });
   });
 
-  it("request body has no temperature field for a normal call", async () => {
-    mockAnthropicStream.mockReturnValue(fakeAnthropicStream([]));
-
-    await drain(streamMessage(BASIC_PARAMS));
-
-    expect(mockAnthropicStream).toHaveBeenCalledTimes(1);
-    const [requestBody] = mockAnthropicStream.mock.calls[0] as [Record<string, unknown>];
-    expect(requestBody).not.toHaveProperty("temperature");
-  });
-
-  it("request body has no temperature field even when a caller still supplies one", async () => {
-    mockAnthropicStream.mockReturnValue(fakeAnthropicStream([]));
-
-    // StreamParams no longer declares `temperature` — simulate a stale
-    // caller (untyped JS, or a future regression) supplying it anyway via
-    // an unsafe cast, and assert it is still never placed in the request
-    // body. Mirrors the Rust side's `build_request_body` invariant:
-    // temperature is never sent, for any model, no matter what the caller
-    // passes in.
-    const paramsWithTemperature = {
-      ...BASIC_PARAMS,
-      temperature: 0.9,
-    } as StreamParams & { temperature: number };
-
-    await drain(streamMessage(paramsWithTemperature));
-
-    expect(mockAnthropicStream).toHaveBeenCalledTimes(1);
-    const [requestBody] = mockAnthropicStream.mock.calls[0] as [Record<string, unknown>];
-    expect(requestBody).not.toHaveProperty("temperature");
-  });
-
-  it("StreamParams no longer declares a temperature field (type-level regression guard)", () => {
-    // @ts-expect-error — `temperature` must not exist on StreamParams. If
-    // this stops erroring (field re-added), `pnpm typecheck` fails on the
-    // now-unused `@ts-expect-error` directive, catching the regression.
-    const _params: StreamParams = { ...BASIC_PARAMS, temperature: 0.5 };
-    expect(true).toBe(true);
+  it("offers no sampling parameters on StreamParams", () => {
+    expectTypeOf<StreamParams>().not.toHaveProperty("temperature");
+    expectTypeOf<StreamParams>().not.toHaveProperty("top_p");
+    expectTypeOf<StreamParams>().not.toHaveProperty("top_k");
   });
 });

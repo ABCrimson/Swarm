@@ -1,13 +1,12 @@
-// ── WorkerAIPanel ───────────────────────────────────
-// Combined view: terminal on top, AI chat on bottom.
-// AI tool execution routes through worker's PTY.
-// Bidirectional flow visualization + inject instruction button.
-
 import type { CSSProperties } from "react";
-import { useState } from "react";
+import { useId, useState } from "react";
+import { toast } from "sonner";
 import { SplitPane } from "#components/layout/SplitPane";
+import { Button } from "#components/ui/Button";
 import { ProviderBadge } from "#components/worker/ProviderBadge";
 import { WorkerTerminal } from "#components/worker/WorkerTerminal";
+import { PROVIDER_LABELS } from "#lib/agent-events";
+import { injectInstruction } from "#lib/ai-chat";
 import { useAgentSessionStore } from "#store/agent-sessions";
 import { AgentChat } from "./AgentChat.tsx";
 import { AIChat } from "./AIChat.tsx";
@@ -17,7 +16,7 @@ import { ModelSelector } from "./ModelSelector.tsx";
 interface WorkerAIPanelProps {
   /** Worker ID for this combined view. */
   readonly workerId: string;
-  /** Whether this worker has an isolated worktree — shipping (and therefore the toolbar Ship button) requires one (DIRECTIVE F13). Defaults to `true` for callers that don't yet track this. */
+  /** Whether this worker has an isolated worktree — shipping (and so the toolbar Ship button) requires one. Defaults to `true`. */
   readonly canShip?: boolean;
   /**
    * Invoked when the toolbar's Ship button is clicked — the detail
@@ -64,7 +63,7 @@ const flowDotStyle: CSSProperties = {
   background: "oklch(0.82 0.18 140)",
 };
 
-const injectButtonStyle: CSSProperties = {
+const toolbarButtonStyle: CSSProperties = {
   padding: "4px 10px",
   borderRadius: 6,
   border: "1px solid oklch(0.35 0.10 70)",
@@ -76,18 +75,9 @@ const injectButtonStyle: CSSProperties = {
   transition: "background 0.15s ease",
 };
 
-const modalOverlayStyle: CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "oklch(0 0 0 / 0.5)",
-  backdropFilter: "blur(4px)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 100,
-};
-
-const modalStyle: CSSProperties = {
+/** Tailwind's preflight zeroes dialog margins; `margin: auto` re-centers the modal. */
+const dialogStyle: CSSProperties = {
+  margin: "auto",
   width: 400,
   padding: 20,
   borderRadius: 12,
@@ -95,36 +85,14 @@ const modalStyle: CSSProperties = {
   border: "1px solid oklch(0.28 0.05 220)",
   backdropFilter: "blur(16px) saturate(1.5)",
   boxShadow: "0 16px 48px oklch(0 0 0 / 0.5)",
+  color: "oklch(0.82 0.04 220)",
 };
 
-const modalTitleStyle: CSSProperties = {
+const dialogTitleStyle: CSSProperties = {
+  margin: "0 0 12px",
   fontSize: 15,
   fontWeight: 600,
   color: "oklch(0.82 0.04 220)",
-  marginBottom: 12,
-};
-
-const modalTextareaStyle: CSSProperties = {
-  width: "100%",
-  padding: "10px 12px",
-  borderRadius: 8,
-  border: "1px solid oklch(0.28 0.05 220)",
-  background: "oklch(0.08 0.02 220)",
-  color: "oklch(0.88 0.03 220)",
-  fontFamily: "var(--font-body, 'DM Sans Variable', system-ui, sans-serif)",
-  fontSize: 13,
-  lineHeight: 1.5,
-  resize: "vertical",
-  outline: "none",
-  minHeight: 80,
-  boxSizing: "border-box",
-};
-
-const modalActionsStyle: CSSProperties = {
-  display: "flex",
-  justifyContent: "flex-end",
-  gap: 8,
-  marginTop: 12,
 };
 
 const labelStyle: CSSProperties = {
@@ -143,117 +111,108 @@ const paneWrapperStyle: CSSProperties = {
   overflow: "hidden",
 };
 
-// ── Inject Instruction Modal ────────────────────────
+// ── Inject Instruction Dialog ───────────────────────
 
-function InjectModal({
+/**
+ * Ref callback that opens its `<dialog>` as a modal when it mounts.
+ * Unmounting needs no cleanup — removing a dialog from the document takes
+ * it out of the top layer without a `close` event — and returning none
+ * keeps React Strict Mode's dev-only ref re-run from closing (and so
+ * dismissing) the dialog it just opened.
+ */
+function showModalOnMount(dialog: HTMLDialogElement | null): void {
+  if (dialog && !dialog.open) dialog.showModal();
+}
+
+/**
+ * Modal for injecting an instruction into the running conversation — a
+ * native `<dialog>` opened with `showModal()` (top layer, inert page,
+ * Escape and backdrop-click dismissal via `closedby="any"`).
+ */
+function InjectDialog({
   onSubmit,
   onClose,
 }: {
-  onSubmit: (instruction: string) => void;
-  onClose: () => void;
+  readonly onSubmit: (instruction: string) => void;
+  readonly onClose: () => void;
 }): React.ReactElement {
+  const titleId = useId();
   const [value, setValue] = useState("");
 
-  const handleSubmit = () => {
-    const trimmed = value.trim();
-    if (trimmed) {
-      onSubmit(trimmed);
-      onClose();
-    }
-  };
-
   return (
-    <div style={modalOverlayStyle}>
-      <dialog
-        open
-        style={{
-          ...modalStyle,
-          position: "relative",
+    <dialog
+      ref={showModalOnMount}
+      closedby="any"
+      aria-labelledby={titleId}
+      onClose={onClose}
+      style={dialogStyle}
+      className="backdrop:bg-[oklch(0_0_0/0.5)] backdrop:backdrop-blur-sm"
+    >
+      <form
+        action={() => {
+          const trimmed = value.trim();
+          if (!trimmed) return;
+          onSubmit(trimmed);
+          onClose();
         }}
-        aria-label="Inject Instruction"
-        onClose={onClose}
       >
-        <div style={modalTitleStyle}>Inject Mid-Conversation Instruction</div>
+        <h2 id={titleId} style={dialogTitleStyle}>
+          Inject Mid-Conversation Instruction
+        </h2>
         <textarea
+          className="swarm-input"
+          aria-label="Instruction"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder="Enter Instruction To Inject Into The AI Conversation..."
-          style={modalTextareaStyle}
+          placeholder="Enter An Instruction For The AI…"
+          autoFocus
+          style={{ height: "auto", minHeight: 80, padding: "10px 12px", resize: "vertical" }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
-              handleSubmit();
+              e.currentTarget.form?.requestSubmit();
             }
           }}
         />
-        <div style={modalActionsStyle}>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              padding: "6px 14px",
-              borderRadius: 6,
-              border: "1px solid oklch(0.28 0.05 220)",
-              background: "oklch(0.12 0.03 220)",
-              color: "oklch(0.65 0.04 220)",
-              fontSize: 12,
-              cursor: "pointer",
-            }}
-          >
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+          <Button variant="ghost" size="sm" onClick={onClose}>
             Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!value.trim()}
-            style={{
-              padding: "6px 14px",
-              borderRadius: 6,
-              border: "none",
-              background: "oklch(0.78 0.18 205)",
-              color: "oklch(0.10 0.03 205)",
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: value.trim() ? "pointer" : "not-allowed",
-              opacity: value.trim() ? 1 : 0.5,
-            }}
-          >
+          </Button>
+          <Button type="submit" variant="primary" size="sm" disabled={!value.trim()}>
             Inject
-          </button>
+          </Button>
         </div>
-      </dialog>
-    </div>
+      </form>
+    </dialog>
   );
 }
 
 // ── Component ───────────────────────────────────────
 
 /**
- * Combined worker terminal + AI chat panel.
+ * A worker's terminal (top) and chat (bottom) in a resizable split, with
+ * a toolbar: the model selector (webview chat) or the attached agent
+ * session's provider badge, an instruction-injection dialog, the Ship
+ * shortcut and this worker's slice of the AI queue.
  *
- * - Terminal on top, AI chat on bottom in a SplitPane
- * - Toolbar with model selector, queue info, flow indicators
- * - Inject instruction button for mid-conversation commands
- * - Bidirectional flow: AI sends commands to PTY, results flow back
+ * A worker with a live provider-adapter session (`#store/agent-sessions`)
+ * gets `AgentChat` (turns routed to that session); every other worker
+ * gets the webview `AIChat`, whose tools act on workers through their
+ * PTYs.
  */
 export function WorkerAIPanel({
   workerId,
-  canShip = true,
+  canShip,
   onRequestShipTab,
 }: WorkerAIPanelProps): React.ReactElement {
-  const [showInjectModal, setShowInjectModal] = useState(false);
+  const shippable = canShip ?? true;
+  const [showInject, setShowInject] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
-  // Each injection gets a fresh id so AIChat's effect fires even when the
-  // same instruction text is injected twice in a row.
-  const [injection, setInjection] = useState<{ id: string; content: string } | null>(null);
-  // Presence, not just truthiness \u2014 an entry means this worker has a
-  // LIVE provider-adapter session attached (Phase 3's agent_spawn),
-  // which routes the chat input through agentSendTurn/AgentChat instead
-  // of the webview-direct AIChat path (see #store/agent-sessions' doc).
   const agentSession = useAgentSessionStore((s) => s.sessions.get(workerId));
 
   const handleInject = (instruction: string) => {
-    setInjection({ id: crypto.randomUUID(), content: instruction });
+    const outcome = injectInstruction(workerId, instruction);
+    if (outcome === "queued") toast.info("Instruction Queued For The Running Turn");
   };
 
   return (
@@ -266,17 +225,12 @@ export function WorkerAIPanel({
         )}
 
         <div style={flowIndicatorStyle}>
-          <span style={flowDotStyle} />
-          <span>AI {"\u2194"} PTY</span>
+          <span style={flowDotStyle} aria-hidden="true" />
+          <span>AI ↔ PTY</span>
         </div>
 
         {!agentSession && (
-          <button
-            type="button"
-            onClick={() => setShowInjectModal(true)}
-            style={injectButtonStyle}
-            aria-label="Inject Instruction"
-          >
+          <button type="button" onClick={() => setShowInject(true)} style={toolbarButtonStyle}>
             Inject Instruction
           </button>
         )}
@@ -285,16 +239,15 @@ export function WorkerAIPanel({
           <button
             type="button"
             onClick={onRequestShipTab}
-            disabled={!canShip}
-            title={canShip ? undefined : "Shipping Requires An Isolated Worktree"}
+            disabled={!shippable}
+            title={shippable ? undefined : "Shipping Requires An Isolated Worktree"}
             style={{
-              ...injectButtonStyle,
-              borderColor: canShip ? "oklch(0.35 0.10 150)" : "oklch(0.28 0.05 220)",
-              background: canShip ? "oklch(0.14 0.06 150 / 0.6)" : "oklch(0.12 0.03 220 / 0.6)",
-              color: canShip ? "oklch(0.75 0.16 150)" : "oklch(0.40 0.03 220)",
-              cursor: canShip ? "pointer" : "not-allowed",
+              ...toolbarButtonStyle,
+              borderColor: shippable ? "oklch(0.35 0.10 150)" : "oklch(0.28 0.05 220)",
+              background: shippable ? "oklch(0.14 0.06 150 / 0.6)" : "oklch(0.12 0.03 220 / 0.6)",
+              color: shippable ? "oklch(0.75 0.16 150)" : "oklch(0.40 0.03 220)",
+              cursor: shippable ? "pointer" : "not-allowed",
             }}
-            aria-label="Ship"
           >
             Ship
           </button>
@@ -305,13 +258,12 @@ export function WorkerAIPanel({
             type="button"
             onClick={() => setShowQueue(!showQueue)}
             style={{
-              ...injectButtonStyle,
+              ...toolbarButtonStyle,
               borderColor: "oklch(0.35 0.10 205)",
               background: showQueue ? "oklch(0.20 0.08 205 / 0.6)" : "oklch(0.14 0.06 205 / 0.6)",
               color: "oklch(0.78 0.18 205)",
               marginLeft: "auto",
             }}
-            aria-label="Toggle Queue"
             aria-pressed={showQueue}
           >
             Queue
@@ -321,7 +273,7 @@ export function WorkerAIPanel({
 
       {showQueue && !agentSession && (
         <div style={{ padding: "8px 12px", borderBottom: "1px solid oklch(0.18 0.03 220)" }}>
-          <AIQueue />
+          <AIQueue workerId={workerId} />
         </div>
       )}
 
@@ -340,12 +292,14 @@ export function WorkerAIPanel({
           }
           secondary={
             <div style={paneWrapperStyle}>
-              <div style={labelStyle}>{agentSession ? "Claude Code" : "AI Chat"}</div>
+              <div style={labelStyle}>
+                {agentSession ? PROVIDER_LABELS[agentSession.provider] : "AI Chat"}
+              </div>
               <div style={{ flex: 1, minHeight: 0 }}>
                 {agentSession ? (
-                  <AgentChat workerId={workerId} />
+                  <AgentChat key={workerId} workerId={workerId} />
                 ) : (
-                  <AIChat workerId={workerId} injectedInstruction={injection} />
+                  <AIChat key={workerId} workerId={workerId} />
                 )}
               </div>
             </div>
@@ -353,9 +307,7 @@ export function WorkerAIPanel({
         />
       </div>
 
-      {showInjectModal && (
-        <InjectModal onSubmit={handleInject} onClose={() => setShowInjectModal(false)} />
-      )}
+      {showInject && <InjectDialog onSubmit={handleInject} onClose={() => setShowInject(false)} />}
     </div>
   );
 }

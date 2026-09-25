@@ -10,8 +10,8 @@ import {
   saveToFile,
   sessionFileSlug,
 } from "#lib/export";
-import { useMessageHistoryStore } from "#store/message-history";
-import type { AiMessage, MetricPoint, Session } from "#store/types";
+import { type ChatMessage, useMessageHistoryStore } from "#store/message-history";
+import type { MetricPoint, Session } from "#store/types";
 import { useWorkerStore } from "#store/workers";
 
 const SESSION_ID = "0b6f7a52-5c3e-4d1a-9f0e-2a8b3c4d5e6f";
@@ -37,7 +37,7 @@ function addWorker(name = "worker-alpha"): void {
   });
 }
 
-function message(overrides: Partial<AiMessage> = {}): AiMessage {
+function message(overrides: Partial<ChatMessage> = {}): ChatMessage {
   return {
     id: crypto.randomUUID(),
     role: "user",
@@ -45,6 +45,14 @@ function message(overrides: Partial<AiMessage> = {}): AiMessage {
     timestamp: "2026-01-15T10:31:02.000Z",
     ...overrides,
   };
+}
+
+/** Appends display messages to the worker's chat thread. */
+function addMessages(...messages: ChatMessage[]): void {
+  useMessageHistoryStore.getState().updateThread(WORKER_ID, (thread) => ({
+    ...thread,
+    messages: [...thread.messages, ...messages],
+  }));
 }
 
 function resetStores(): void {
@@ -105,14 +113,14 @@ describe("exportAsMarkdown", () => {
 
   it("renders each worker's transcript, tool calls and results included", () => {
     addWorker();
-    useMessageHistoryStore.getState().addMessages(WORKER_ID, [
+    addMessages(
       message({ content: "List the files" }),
       message({
         role: "assistant",
         content: "Listing now.",
         toolCalls: [{ id: "tc-1", name: "list_dir", input: { path: "." }, result: "a.ts\nb.ts" }],
       }),
-    ]);
+    );
 
     const md = exportAsMarkdown(createSession({ workerIds: [WORKER_ID] }));
 
@@ -143,7 +151,7 @@ describe("exportAsJSON", () => {
   it("includes each worker's store record and its messages", () => {
     addWorker("w1");
     const hello = message();
-    useMessageHistoryStore.getState().addMessage(WORKER_ID, hello);
+    addMessages(hello);
 
     const parsed = JSON.parse(exportAsJSON(createSession({ workerIds: [WORKER_ID] })));
 

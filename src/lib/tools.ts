@@ -1,13 +1,28 @@
-// ── SWARM Tool System ───────────────────────────────
-// Defines SWARM tools as Zod v4 schemas → Anthropic tool format.
-// Each tool has a name, description, input schema, and execute function.
+/**
+ * SWARM's built-in AI tools — Zod input schemas, their Anthropic tool
+ * definitions, and the runtime that executes a model's `tool_use`
+ * calls — plus the merge with the user's custom tools (`#lib/custom-tools`).
+ *
+ * Tool input is untrusted model output. The chat streams tool input
+ * eagerly (`eager_input_streaming`), so the API does not validate it
+ * either: every call is checked against its schema here, before any
+ * side effect, and a mismatch comes back to the model as an error
+ * `tool_result` it can correct.
+ *
+ * @module tools
+ */
 
-import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
 import * as z from "zod";
+import type { ChatTool } from "#lib/anthropic";
 import { zodToTool } from "#lib/anthropic";
-import { customToolToAnthropic, isValidToolName, runCustomTool } from "#lib/custom-tools";
+import {
+  customToolInputSchema,
+  customToolToAnthropic,
+  isValidToolName,
+  runCustomTool,
+} from "#lib/custom-tools";
 import type { ProvenanceArgs } from "#lib/tauri";
-import { invoke } from "#lib/tauri";
+import { invoke, killWorker, workerInput } from "#lib/tauri";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
 import { useCustomToolsStore } from "#store/custom-tools";
 
@@ -21,13 +36,11 @@ export interface SwarmToolResult {
 }
 
 /**
- * Causal attribution passed from an AI turn's tool loop
- * (`AIChat.tsx`'s `doSend`) into a built-in tool's `execute`. `undefined`
- * when a tool runs outside a turn context (there is none today, but the
- * signature stays honest either way) — every `execute` treats it as
- * optional and forwards `originWorker`/`causeSeq` as-is to whichever IPC
- * command it calls. Re-exported from `#lib/tauri`'s `ProvenanceArgs` —
- * one shape, one name, used at both seams.
+ * Causal attribution passed from an AI turn's tool loop (`#lib/ai-chat`)
+ * into a built-in tool: the turn's worker id and `agent_turn_started`
+ * seq. Forwarded as-is to whichever IPC command the tool calls, so the
+ * side effect joins the causality graph. The same shape as `#lib/tauri`'s
+ * `ProvenanceArgs`.
  */
 export type ToolProvenance = ProvenanceArgs;
 
@@ -35,33 +48,51 @@ export type ToolProvenance = ProvenanceArgs;
  * A registered SWARM tool with its Zod schema and Anthropic-compatible
  * definition.
  *
- * `description` and `uiDescription` are deliberately split (dual-use
- * strings, one audience each):
- *   - `description` is sent to the Anthropic API as the tool-schema
- *     description (via `anthropicTool`/`zodToTool`) — natural sentence
- *     case reads better as a model-facing instruction and yields better
- *     prompt quality than a Title-Cased label.
- *   - `uiDescription` is shown on the Tools page (`ToolCard`) — Title
- *     Case, matching this app's UI copy convention.
+ * `description` and `uiDescription` are deliberately split (one
+ * audience each): `description` is the model-facing tool-schema text in
+ * natural sentence case; `uiDescription` is the Title Case copy the
+ * Tools page shows.
  */
 export interface SwarmTool {
   readonly name: string;
   /** Sentence-case description sent to the Anthropic API as the tool's schema description. */
   readonly description: string;
-  /** Title Case description rendered in the Tools page UI (`ToolCard`). */
+  /** Title Case description rendered in the Tools page UI (`ToolList`). */
   readonly uiDescription: string;
   readonly schema: z.ZodType;
-  readonly anthropicTool: Tool;
-  readonly execute: (
-    input: Record<string, unknown>,
-    prov?: ToolProvenance,
-  ) => Promise<SwarmToolResult>;
+  readonly anthropicTool: ChatTool;
+  /** Validates `input` against `schema`, then runs the tool. */
+  readonly execute: (input: unknown, prov?: ToolProvenance) => Promise<SwarmToolResult>;
+}
+
+/** A failed tool result carrying a Title Case, model- and user-readable message. */
+function failure(error: unknown): SwarmToolResult {
+  return { success: false, error: Error.isError(error) ? error.message : String(error) };
+}
+
+/** Validates model-supplied input, returning the parsed value or a failed result. */
+function parseInput<S extends z.ZodType>(
+  toolName: string,
+  schema: S,
+  input: unknown,
+):
+  | { readonly ok: true; readonly data: z.output<S> }
+  | { readonly ok: false; readonly result: SwarmToolResult } {
+  const parsed = schema.safeParse(input);
+  if (parsed.success) return { ok: true, data: parsed.data };
+  return {
+    ok: false,
+    result: {
+      success: false,
+      error: `Invalid Input For ${toolName}:\n${z.prettifyError(parsed.error)}`,
+    },
+  };
 }
 
 // ── Tool Input Schemas ──────────────────────────────
 
 const SpawnWorkerInput = z.object({
-  name: z.string().optional().describe("Optional human-readable name for the worker"),
+  name: z.string().min(1).optional().describe("Optional human-readable name for the worker"),
 });
 
 const KillWorkerInput = z.object({
@@ -69,42 +100,45 @@ const KillWorkerInput = z.object({
 });
 
 const RunCommandInput = z.object({
-  workerId: z.uuid().describe("UUID of the worker to run the command in"),
-  command: z.string().describe("Shell command to execute"),
+  workerId: z.uuid().describe("UUID of the worker whose terminal receives the command"),
+  command: z.string().min(1).describe("Shell command line to type into the terminal"),
 });
 
 const ReadFileInput = z.object({
-  path: z.string().describe("Absolute path to the file to read"),
-  maxLines: z.number().int().min(1).optional().describe("Maximum number of lines to read"),
+  path: z.string().min(1).describe("Absolute path to the file to read"),
+  maxLines: z.int().min(1).optional().describe("Maximum number of lines to return"),
 });
 
 const WriteFileInput = z.object({
-  path: z.string().describe("Absolute path to the file to write"),
+  path: z.string().min(1).describe("Absolute path to the file to write"),
   content: z.string().describe("Content to write to the file"),
 });
 
 const GetMetricsInput = z.object({
-  workerId: z.uuid().optional().describe("Optional worker UUID; omit for system-wide metrics"),
+  workerId: z
+    .uuid()
+    .optional()
+    .describe("Optional worker UUID to also report that worker's process metrics"),
+});
+
+/** The parts of `get_metrics`' response this tool relies on (`crates/swarm-core/src/metrics.rs`). */
+const MetricsSnapshotSchema = z.looseObject({
+  perWorker: z.array(z.looseObject({ workerId: z.string() })).default([]),
 });
 
 // ── Tool Definitions ────────────────────────────────
 
 /**
- * Factory for creating a SWARM tool with its Anthropic-compatible definition.
- *
- * @param name - Tool identifier used in Anthropic tool_use blocks.
- * @param description - Sentence-case description sent to the model as the tool-schema description (via `zodToTool`).
- * @param uiDescription - Title Case description rendered in the Tools page UI (`ToolCard`); never sent to the API.
- * @param schema - Zod schema defining the tool's input parameters.
- * @param execute - Async function that runs the tool and returns a result.
- * @returns Fully constructed {@link SwarmTool} with API-compatible definition.
+ * Builds a SWARM tool whose `execute` validates the model's input
+ * against `schema` before `run` sees it, so no handler ever touches raw
+ * model output.
  */
-function createTool(
+function createTool<S extends z.ZodType>(
   name: string,
   description: string,
   uiDescription: string,
-  schema: z.ZodType,
-  execute: (input: Record<string, unknown>, prov?: ToolProvenance) => Promise<SwarmToolResult>,
+  schema: S,
+  run: (input: z.output<S>, prov?: ToolProvenance) => Promise<SwarmToolResult>,
 ): SwarmTool {
   return {
     name,
@@ -112,7 +146,15 @@ function createTool(
     uiDescription,
     schema,
     anthropicTool: zodToTool(name, description, schema),
-    execute,
+    async execute(input, prov) {
+      const parsed = parseInput(name, schema, input);
+      if (!parsed.ok) return parsed.result;
+      try {
+        return await run(parsed.data, prov);
+      } catch (error) {
+        return failure(error);
+      }
+    },
   };
 }
 
@@ -121,30 +163,16 @@ const spawnWorkerTool = createTool(
   "Spawn a new worker process. Returns the worker ID.",
   "Spawn A New Worker Process. Returns The Worker ID.",
   SpawnWorkerInput,
-  async (input, prov) => {
-    try {
-      const { name } = SpawnWorkerInput.parse(input);
-      // Routed through spawnWorkerFromSpec (not a hand-rolled invoke())
-      // so an AI-spawned worker gets the same Zod-validated response and
-      // store bookkeeping (useWorkerStore placeholder) as every other
-      // spawn path — see #lib/worker-spawn. `prov` (the turn's
-      // workerId/turnSeq) is threaded through, when present, so the new
-      // worker's worker_spawned/worktree_created events carry a real
-      // causer, distinct from the subject (the new worker's own id) —
-      // that difference is the causal edge. Called with exactly two
-      // args when `prov` is absent, matching every pre-provenance
-      // caller's call shape.
-      const spec = { name: name ?? "Worker" };
-      const workerId = prov
-        ? await spawnWorkerFromSpec(spec, undefined, prov)
-        : await spawnWorkerFromSpec(spec);
-      if (workerId === null) {
-        return { success: false, error: "Spawn Worker Unavailable Outside The Desktop App." };
-      }
-      return { success: true, data: { id: workerId } };
-    } catch (error) {
-      return { success: false, error: String(error) };
+  async ({ name }, prov) => {
+    // Through spawnWorkerFromSpec, like every other spawn path, so the
+    // worker gets the same validated response and store bookkeeping. The
+    // turn's provenance makes the new worker's spawn events cite their
+    // causer — the "spawn" edge of the causality graph.
+    const workerId = await spawnWorkerFromSpec({ name: name ?? "Worker" }, undefined, prov);
+    if (workerId === null) {
+      return { success: false, error: "Spawn Worker Unavailable Outside The Desktop App." };
     }
+    return { success: true, data: { id: workerId } };
   },
 );
 
@@ -153,113 +181,77 @@ const killWorkerTool = createTool(
   "Terminate a running worker process by its UUID.",
   "Terminate A Running Worker Process By Its UUID.",
   KillWorkerInput,
-  async (input, prov) => {
-    try {
-      await invoke<void>("kill_worker", {
-        id: input.workerId,
-        originWorker: prov?.originWorker,
-        causeSeq: prov?.causeSeq,
-      });
-      return { success: true, data: { killed: input.workerId } };
-    } catch (error) {
-      return { success: false, error: String(error) };
-    }
+  async ({ workerId }, prov) => {
+    await killWorker(workerId, prov);
+    return { success: true, data: { killed: workerId } };
   },
 );
 
 const runCommandTool = createTool(
   "run_command",
-  "Execute a shell command within a worker's PTY. Returns stdout/stderr output.",
-  "Execute A Shell Command Within A Worker's PTY. Returns Stdout/Stderr Output.",
+  "Type a shell command into a worker's terminal and press Enter. The command's output is not returned; it appears in the worker's terminal.",
+  "Type A Shell Command Into A Worker's Terminal. Its Output Stays In The Terminal.",
   RunCommandInput,
-  async (input, prov) => {
-    try {
-      await invoke<void>("worker_input", {
-        id: input.workerId,
-        data: `${input.command}\n`,
-        source: "tool",
-        originWorker: prov?.originWorker,
-        causeSeq: prov?.causeSeq,
-      });
-      return { success: true, data: { sent: input.command } };
-    } catch (error) {
-      return { success: false, error: String(error) };
-    }
+  async ({ workerId, command }, prov) => {
+    await workerInput(workerId, `${command}\n`, "tool", prov);
+    return { success: true, data: { sent: command } };
   },
 );
 
 const readFileTool = createTool(
   "read_file",
-  "Read the contents of a file at the given path.",
-  "Read The Contents Of A File At The Given Path.",
+  "Read the contents of a file at the given absolute path.",
+  "Read The Contents Of A File At The Given Absolute Path.",
   ReadFileInput,
-  async (input) => {
-    try {
-      const { path, maxLines } = ReadFileInput.parse(input);
-      // Routed through the real read_file Rust command (not
-      // tauri-plugin-fs) — see commands/fs.rs. The file is always read
-      // in full, then sliced in memory — there is no streaming/
-      // early-exit read path yet. Acceptable for now given these are
-      // AI-tool reads of small config/text files, not a
-      // general-purpose log tailer; revisit if maxLines is ever used
-      // against multi-gigabyte files.
-      const fullContent = await invoke<string>("read_file", { path });
-      const content =
-        typeof maxLines === "number"
-          ? fullContent.split("\n").slice(0, maxLines).join("\n")
-          : fullContent;
-      return { success: true, data: { path, content } };
-    } catch (error) {
-      return { success: false, error: String(error) };
-    }
+  async ({ path, maxLines }) => {
+    // The real read_file Rust command (commands/fs.rs), scoped to the app
+    // data and home directories. The file is read in full and sliced in
+    // memory — fine for the small text files an AI turn reads.
+    const fullContent = z.string().parse(await invoke<unknown>("read_file", { path }));
+    const content =
+      maxLines === undefined ? fullContent : fullContent.split("\n").slice(0, maxLines).join("\n");
+    return { success: true, data: { path, content } };
   },
 );
 
 const writeFileTool = createTool(
   "write_file",
-  "Write content to a file at the given path, creating or overwriting it.",
-  "Write Content To A File At The Given Path, Creating Or Overwriting It.",
+  "Write content to a file at the given absolute path, creating or overwriting it.",
+  "Write Content To A File At The Given Absolute Path, Creating Or Overwriting It.",
   WriteFileInput,
-  async (input, prov) => {
-    try {
-      const { path, content } = WriteFileInput.parse(input);
-      // Routed through the real write_file Rust command (not
-      // tauri-plugin-fs) — see commands/fs.rs. Stamped: the resulting
-      // file_written event carries this turn's originWorker/causeSeq,
-      // joining the causality graph.
-      await invoke<void>("write_file", {
-        path,
-        content,
-        originWorker: prov?.originWorker,
-        causeSeq: prov?.causeSeq,
-      });
-      return { success: true, data: { path, written: true } };
-    } catch (error) {
-      return { success: false, error: String(error) };
-    }
+  async ({ path, content }, prov) => {
+    // The real write_file Rust command (commands/fs.rs); its file_written
+    // event carries this turn's provenance, joining the causality graph.
+    await invoke<void>("write_file", {
+      path,
+      content,
+      originWorker: prov?.originWorker,
+      causeSeq: prov?.causeSeq,
+    });
+    return { success: true, data: { path, written: true } };
   },
 );
 
 const getMetricsTool = createTool(
   "get_metrics",
-  "Retrieve system or per-worker performance metrics (CPU, memory, uptime).",
-  "Retrieve System Or Per-Worker Performance Metrics (CPU, Memory, Uptime).",
+  "Retrieve system-wide metrics (CPU, memory, worker counts by state) and every worker's process CPU and memory; pass a worker UUID to get just that worker's process metrics alongside the system figures.",
+  "Retrieve System Metrics And Per-Worker Process CPU And Memory.",
   GetMetricsInput,
-  async (input) => {
-    try {
-      const metrics = await invoke<Record<string, unknown>>("get_metrics", {
-        workerId: input.workerId,
-      });
-      return { success: true, data: metrics };
-    } catch (error) {
-      return { success: false, error: String(error) };
+  async ({ workerId }) => {
+    const snapshot = MetricsSnapshotSchema.parse(await invoke<unknown>("get_metrics"));
+    if (workerId === undefined) return { success: true, data: snapshot };
+    const { perWorker, ...system } = snapshot;
+    const worker = perWorker.find((entry) => entry.workerId === workerId);
+    if (!worker) {
+      return { success: false, error: `No Running Worker Process With ID ${workerId}.` };
     }
+    return { success: true, data: { ...system, worker } };
   },
 );
 
 // ── Tool Registry ───────────────────────────────────
 
-const TOOLS: SwarmTool[] = [
+const TOOLS: readonly SwarmTool[] = [
   spawnWorkerTool,
   killWorkerTool,
   runCommandTool,
@@ -268,58 +260,59 @@ const TOOLS: SwarmTool[] = [
   getMetricsTool,
 ];
 
-/** Registry of all SWARM tools, keyed by name. */
-export const toolRegistry: Map<string, SwarmTool> = new Map(TOOLS.map((t) => [t.name, t]));
+/** Registry of all built-in SWARM tools, keyed by name. */
+export const toolRegistry: ReadonlyMap<string, SwarmTool> = new Map(
+  TOOLS.map((tool) => [tool.name, tool]),
+);
 
-/** Returns an array of Anthropic Tool definitions for use in API calls. */
-export function getAnthropicTools(): Tool[] {
-  return TOOLS.map((t) => t.anthropicTool);
+/** Anthropic tool definitions for the built-in tools, in registry order. */
+export function getAnthropicTools(): ChatTool[] {
+  return TOOLS.map((tool) => tool.anthropicTool);
 }
 
 /**
- * Returns Anthropic Tool definitions for built-ins plus every persisted
- * custom tool from the Tools page builder.
- *
- * Defensive filtering at request-assembly time (one bad definition
- * would 400 every chat request app-wide): custom tools with names
- * violating the API's `^[a-zA-Z0-9_-]{1,64}$` contract are dropped, a
- * name colliding with a built-in loses to the built-in, and duplicate
- * custom names keep only the first.
+ * The custom tools that are actually offered to the model: valid names
+ * only, a name taken by a built-in loses to the built-in, and duplicate
+ * custom names keep the first. The same filter backs {@link executeTool},
+ * so a shadowed custom tool can never run.
  */
-export function getAllAnthropicTools(): Tool[] {
+function activeCustomTools() {
   const seen = new Set<string>(toolRegistry.keys());
-  const customs: Tool[] = [];
-  for (const t of useCustomToolsStore.getState().customTools) {
-    if (!isValidToolName(t.name) || seen.has(t.name)) continue;
-    seen.add(t.name);
-    customs.push(customToolToAnthropic(t));
-  }
-  return [...getAnthropicTools(), ...customs];
+  return useCustomToolsStore.getState().customTools.filter((tool) => {
+    if (!isValidToolName(tool.name) || seen.has(tool.name)) return false;
+    seen.add(tool.name);
+    return true;
+  });
 }
 
 /**
- * Execute a tool by name with the given input.
- *
- * Built-ins run their registry execute function, forwarding `prov`
- * (causal attribution — the calling AI turn's workerId/turnSeq, when
- * this call happens inside one) to whichever IPC command the tool
- * calls. Names not in the registry fall back to the persisted custom
- * tools, whose scripts run in a sandboxed Blob Worker (see
- * #lib/custom-tools) — those have no side effects of their own to
- * stamp, so `prov` is not forwarded there.
+ * Anthropic tool definitions for built-ins plus every persisted custom
+ * tool (see {@link activeCustomTools}) — defensive at request-assembly
+ * time, because one bad definition would 400 every chat request.
+ */
+export function getAllAnthropicTools(): ChatTool[] {
+  return [...getAnthropicTools(), ...activeCustomTools().map(customToolToAnthropic)];
+}
+
+/**
+ * Executes a tool call by name. Built-ins validate and run through the
+ * registry, forwarding `prov` (the calling AI turn's attribution) to the
+ * IPC command they call. Other names resolve to the active custom tools,
+ * whose input is validated against their declared parameters and whose
+ * scripts run in a sandboxed Blob Worker (see `#lib/custom-tools`) —
+ * they have no backend side effects to stamp, so `prov` is not forwarded.
  */
 export async function executeTool(
   name: string,
-  input: Record<string, unknown>,
+  input: unknown,
   prov?: ToolProvenance,
 ): Promise<SwarmToolResult> {
   const tool = toolRegistry.get(name);
-  if (tool) {
-    return tool.execute(input, prov);
-  }
-  const custom = useCustomToolsStore.getState().customTools.find((t) => t.name === name);
-  if (custom) {
-    return runCustomTool(custom, input);
-  }
-  return { success: false, error: `Unknown Tool: ${name}` };
+  if (tool) return tool.execute(input, prov);
+
+  const custom = activeCustomTools().find((candidate) => candidate.name === name);
+  if (!custom) return { success: false, error: `Unknown Tool: ${name}` };
+  const parsed = parseInput(name, customToolInputSchema(custom), input);
+  if (!parsed.ok) return parsed.result;
+  return runCustomTool(custom, parsed.data);
 }

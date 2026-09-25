@@ -1,175 +1,183 @@
 /**
- * Per-worker AI conversation history store with LRU eviction.
+ * Per-worker AI chat threads — the webview chat's source of truth, kept
+ * outside React so a conversation (and a turn still running) survives
+ * the chat unmounting on a tab switch.
  *
- * Caps at {@link MAX_MESSAGES_PER_WORKER} messages per worker and
- * {@link MAX_WORKERS} total workers. Least-recently-used workers
- * are evicted when the cap is exceeded.
+ * A thread holds two views of one conversation:
+ * - `messages`: the display/export transcript (`ChatMessage`, a superset
+ *   of `AiMessage`, so session export keeps working through
+ *   {@link MessageHistoryActions.getMessages});
+ * - `transcript`: the Messages API history, replayed verbatim each
+ *   request — full content blocks, thinking signatures included — and
+ *   only ever appended to, except where `#lib/ai-chat` deliberately
+ *   trims it (context budget, rolled-back turns).
+ *
+ * Threads are LRU-evicted beyond `maxWorkers` (the Chat History Worker
+ * Cap setting, default {@link MAX_WORKERS}); a thread with a turn in
+ * flight is never evicted.
  *
  * @module message-history
  */
 
-import { enableMapSet } from "immer";
 import { create } from "zustand";
-import { subscribeWithSelector } from "zustand/middleware";
-import { immer } from "zustand/middleware/immer";
+import type { ChatMessageParam } from "#lib/anthropic";
 import type { AiMessage } from "#store/types";
 
-// Required for immer producers that mutate native Map instances (below).
-enableMapSet();
-
-/** Maximum messages stored per worker. */
-const MAX_MESSAGES_PER_WORKER = 100;
-/**
- * Default maximum number of workers to keep history for. The live cap
- * comes from the Chat History Worker Cap setting via useSettingsBridge.
- */
+/** Display messages kept per worker; older ones scroll out of the visible history. */
+const MAX_MESSAGES_PER_WORKER = 200;
+/** Default worker cap until the Chat History Worker Cap setting is applied. */
 const MAX_WORKERS = 50;
 
+/** One tool call as displayed: its input, and its result once it ran. */
+export interface ChatToolCall {
+  readonly id: string;
+  readonly name: string;
+  readonly input: Record<string, unknown>;
+  readonly result?: string;
+  readonly isError?: boolean;
+}
+
+/** A status line attached to an assistant message (cut off, declined, cancelled, …). */
+export interface ChatNotice {
+  readonly tone: "info" | "warning" | "error";
+  readonly text: string;
+}
+
+/** A display message: an `AiMessage` plus the chat's own presentation fields. */
+export interface ChatMessage extends Omit<AiMessage, "toolCalls"> {
+  readonly toolCalls?: ChatToolCall[];
+  /** The model's summarized thinking for this reply, when it streamed any. */
+  readonly thinking?: string;
+  readonly notice?: ChatNotice;
+  /** The model that actually answered, when it differs from the one requested (refusal fallback). */
+  readonly servedBy?: string;
+}
+
+/** The in-flight turn's live, not-yet-committed output. */
+export interface LiveTurn {
+  /** The turn's `useAiStore` queue item. */
+  readonly itemId: string;
+  /** `queued`: waiting for a stream slot; `streaming`: the model is writing; `tools`: running tool calls. */
+  readonly phase: "queued" | "streaming" | "tools";
+  readonly text: string;
+  readonly thinking: string;
+  readonly toolCalls: readonly ChatToolCall[];
+  readonly servedBy?: string;
+}
+
+/** One worker's chat. */
+export interface ChatThread {
+  readonly messages: readonly ChatMessage[];
+  readonly transcript: readonly ChatMessageParam[];
+  /**
+   * Fingerprint of the `system` prompt and `tools` the transcript's
+   * thinking blocks were produced under — a change means those blocks no
+   * longer match their prefix and must be stripped before replay.
+   */
+  readonly prefixKey: string | null;
+  readonly live: LiveTurn | null;
+  readonly error: string | null;
+  /** Instructions injected while a turn runs, delivered after its next tool round. */
+  readonly injections: readonly string[];
+}
+
+/** The empty thread every worker starts from. */
+export const EMPTY_THREAD: ChatThread = {
+  messages: [],
+  transcript: [],
+  prefixKey: null,
+  live: null,
+  error: null,
+  injections: [],
+};
+
+const NO_MESSAGES: readonly AiMessage[] = [];
+
 interface MessageHistoryState {
-  /** Per-worker message history. */
-  readonly history: Map<string, AiMessage[]>;
-  /** LRU order: most recently accessed worker IDs. */
-  readonly lruOrder: string[];
+  readonly threads: ReadonlyMap<string, ChatThread>;
+  /** Most recently used worker first. */
+  readonly lruOrder: readonly string[];
   /** Live LRU cap — driven by the Chat History Worker Cap setting. */
   readonly maxWorkers: number;
 }
 
 interface MessageHistoryActions {
-  /** Add a message to a worker's history. */
-  readonly addMessage: (workerId: string, message: AiMessage) => void;
-  /** Add multiple messages to a worker's history. */
-  readonly addMessages: (workerId: string, messages: AiMessage[]) => void;
-  /** Get messages for a worker. */
-  readonly getMessages: (workerId: string) => AiMessage[];
-  /** Clear history for a specific worker. */
+  /** A worker's display messages (a stable empty array when it has none). */
+  readonly getMessages: (workerId: string) => readonly AiMessage[];
+  /** Applies `recipe` to a worker's thread (created on first use) and marks it most recently used. */
+  readonly updateThread: (workerId: string, recipe: (thread: ChatThread) => ChatThread) => void;
+  /** Drops one worker's thread. */
   readonly clearWorker: (workerId: string) => void;
-  /** Clear all history. */
+  /** Drops every thread. */
   readonly clearAll: () => void;
-  /** Touch a worker to move it to the front of the LRU. */
-  readonly touch: (workerId: string) => void;
-  /** Update the LRU cap, evicting least-recently-used workers if it shrank. */
+  /** Updates the LRU cap, evicting least-recently-used idle threads if it shrank. */
   readonly setMaxWorkers: (max: number) => void;
 }
 
-/**
- * Moves a worker ID to the front of the LRU list.
- * Evicts the least recently used worker if we exceed MAX_WORKERS.
- */
-function touchLru(
-  lruOrder: string[],
-  workerId: string,
-  history: Map<string, AiMessage[]>,
-  maxWorkers: number,
-): void {
-  const idx = lruOrder.indexOf(workerId);
-  if (idx !== -1) {
-    lruOrder.splice(idx, 1);
-  }
-  lruOrder.unshift(workerId);
-
-  // Evict LRU workers beyond max
-  while (lruOrder.length > maxWorkers) {
-    const evicted = lruOrder.pop();
-    if (evicted) {
-      history.delete(evicted);
+/** Evicts least-recently-used idle threads until at most `max` remain. */
+function evict(
+  threads: Map<string, ChatThread>,
+  lruOrder: readonly string[],
+  max: number,
+): string[] {
+  const order = [...lruOrder];
+  for (let i = order.length - 1; i >= 0 && order.length > max; i--) {
+    const id = order[i];
+    if (id !== undefined && !threads.get(id)?.live) {
+      threads.delete(id);
+      order.splice(i, 1);
     }
   }
+  return order;
 }
 
-/**
- * Zustand store for per-worker AI message history.
- *
- * Messages are capped per worker and workers are LRU-evicted
- * when the total exceeds {@link MAX_WORKERS}.
- */
-/**
- * Standalone selector for retrieving messages for a specific worker.
- * Prefer this over the store action `getMessages` for reactive usage in components.
- */
-export const selectMessages = (workerId: string) => (state: MessageHistoryState) =>
-  state.history.get(workerId) ?? [];
-
 export const useMessageHistoryStore = create<MessageHistoryState & MessageHistoryActions>()(
-  subscribeWithSelector(
-    immer((set, get) => ({
-      history: new Map(),
-      lruOrder: [],
-      maxWorkers: MAX_WORKERS,
+  (set, get) => ({
+    threads: new Map(),
+    lruOrder: [],
+    maxWorkers: MAX_WORKERS,
 
-      addMessage(workerId, message) {
-        set((s) => {
-          if (!s.history.has(workerId)) {
-            s.history.set(workerId, []);
-          }
-          const workerMessages = s.history.get(workerId);
-          if (!workerMessages) return;
-          workerMessages.push(message);
+    getMessages(workerId) {
+      return get().threads.get(workerId)?.messages ?? NO_MESSAGES;
+    },
 
-          // LRU eviction within worker
-          if (workerMessages.length > MAX_MESSAGES_PER_WORKER) {
-            const excess = workerMessages.length - MAX_MESSAGES_PER_WORKER;
-            workerMessages.splice(0, excess);
-          }
+    updateThread(workerId, recipe) {
+      set((s) => {
+        const threads = new Map(s.threads);
+        const next = recipe(threads.get(workerId) ?? EMPTY_THREAD);
+        threads.set(
+          workerId,
+          next.messages.length > MAX_MESSAGES_PER_WORKER
+            ? { ...next, messages: next.messages.slice(-MAX_MESSAGES_PER_WORKER) }
+            : next,
+        );
+        const touched = [workerId, ...s.lruOrder.filter((id) => id !== workerId)];
+        return { threads, lruOrder: evict(threads, touched, s.maxWorkers) };
+      });
+    },
 
-          touchLru(s.lruOrder, workerId, s.history, s.maxWorkers);
-        });
-      },
+    clearWorker(workerId) {
+      set((s) => {
+        const threads = new Map(s.threads);
+        threads.delete(workerId);
+        return { threads, lruOrder: s.lruOrder.filter((id) => id !== workerId) };
+      });
+    },
 
-      addMessages(workerId, messages) {
-        set((s) => {
-          if (!s.history.has(workerId)) {
-            s.history.set(workerId, []);
-          }
-          const workerMessages = s.history.get(workerId);
-          if (!workerMessages) return;
-          workerMessages.push(...messages);
+    clearAll() {
+      set({ threads: new Map(), lruOrder: [] });
+    },
 
-          // LRU eviction within worker
-          if (workerMessages.length > MAX_MESSAGES_PER_WORKER) {
-            const excess = workerMessages.length - MAX_MESSAGES_PER_WORKER;
-            workerMessages.splice(0, excess);
-          }
-
-          touchLru(s.lruOrder, workerId, s.history, s.maxWorkers);
-        });
-      },
-
-      getMessages(workerId) {
-        return get().history.get(workerId) ?? [];
-      },
-
-      clearWorker(workerId) {
-        set((s) => {
-          s.history.delete(workerId);
-          const idx = s.lruOrder.indexOf(workerId);
-          if (idx !== -1) s.lruOrder.splice(idx, 1);
-        });
-      },
-
-      clearAll() {
-        set((s) => {
-          s.history.clear();
-          s.lruOrder.length = 0;
-        });
-      },
-
-      touch(workerId) {
-        set((s) => {
-          touchLru(s.lruOrder, workerId, s.history, s.maxWorkers);
-        });
-      },
-
-      setMaxWorkers(max) {
-        set((s) => {
-          s.maxWorkers = max;
-          while (s.lruOrder.length > max) {
-            const evicted = s.lruOrder.pop();
-            if (evicted) {
-              s.history.delete(evicted);
-            }
-          }
-        });
-      },
-    })),
-  ),
+    setMaxWorkers(max) {
+      set((s) => {
+        const threads = new Map(s.threads);
+        return { maxWorkers: max, threads, lruOrder: evict(threads, s.lruOrder, max) };
+      });
+    },
+  }),
 );
+
+/** Subscribes a component to one worker's chat thread. */
+export function useChatThread(workerId: string): ChatThread {
+  return useMessageHistoryStore((s) => s.threads.get(workerId)) ?? EMPTY_THREAD;
+}

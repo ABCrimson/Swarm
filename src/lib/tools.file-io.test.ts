@@ -1,15 +1,8 @@
-// ── read_file / write_file boundary fix (Phase 0 → provenance Phase 5) ──
-//
-// Phase 0 fixed both tools to route through #lib/fs's capability-scoped
-// absolute-path helpers (tauri-plugin-fs), since the Rust commands they
-// originally named didn't exist. Provenance Phase 5 implements the real
-// read_file/write_file Rust commands (commands/fs.rs) and migrates both
-// tools onto them — write_file's side effect (a stamped, persisted
-// file_written event) is what lets file writes join the causality
-// graph, which plugin-fs alone could never do. These tests now mock
-// #lib/tauri's invoke() instead of the plugin-fs functions, but keep
-// asserting the same envelope shape, maxLines behavior, and truthful
-// deny-semantics wording the Rust commands were written to preserve.
+// read_file / write_file run through the real Rust commands in
+// commands/fs.rs. write_file's side effect — a stamped, persisted
+// file_written event — is what lets file writes join the causality
+// graph, so it carries the turn's provenance; read_file never does. The
+// scope-denial wording asserted below is exactly what FsScopes returns.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toolRegistry } from "#lib/tools";

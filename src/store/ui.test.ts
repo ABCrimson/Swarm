@@ -6,7 +6,7 @@ vi.mock("#lib/lazy-store", () => ({
   settingsStore: { entries: vi.fn(async () => []), set: vi.fn(async () => {}) },
 }));
 
-import { frecencyAtom, frecencyScoreAtom } from "#store/frecency";
+import { frecencyAtom } from "#store/frecency";
 import { resetPersistedSettingsCache } from "#store/persisted";
 import {
   appSettingsAtom,
@@ -132,13 +132,5 @@ describe("frecencyAtom", () => {
 
     const store = createStore();
     expect([...store.get(frecencyAtom).keys()]).toStrictEqual(["palette.workers"]);
-    expect(store.get(frecencyScoreAtom)("palette.bad-date")).toBe(0);
-  });
-
-  it("halves a command's score every 72 hours", () => {
-    const lastUsed = Temporal.Now.instant().subtract({ hours: 72 }).toString();
-    resetPersistedSettingsCache([["swarm:frecency", [["cmd", { uses: 8, lastUsed }]]]]);
-
-    expect(createStore().get(frecencyScoreAtom)("cmd")).toBeCloseTo(4, 3);
   });
 });

@@ -1,68 +1,76 @@
-// ── spawn_worker AI tool routing (fix wave) ──────────
-//
-// The spawn_worker tool used to hand-roll invoke("spawn_worker", ...)
-// with an unvalidated `as string` cast, bypassing both the Zod
-// validation and the store bookkeeping that every other spawn path
-// gets via spawnWorkerFromSpec. This proves it's routed through
-// spawnWorkerFromSpec instead, and degrades truthfully (not a crash)
-// when that returns null (no Tauri IPC bridge).
+// spawn_worker routes through spawnWorkerFromSpec — the same validated,
+// store-updating path as every other spawn — and threads the calling
+// turn's provenance into it, which is what gives the causality graph its
+// "spawn" edges.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { toolRegistry } from "#lib/tools";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const spawnWorkerFromSpecMock = vi.fn();
+vi.mock("#lib/worker-spawn", () => ({ spawnWorkerFromSpec: vi.fn() }));
 
-vi.mock("#lib/worker-spawn", () => ({
-  spawnWorkerFromSpec: (...args: unknown[]) => spawnWorkerFromSpecMock(...args),
-}));
-
-const spawnWorkerTool = toolRegistry.get("spawn_worker");
+import { executeTool, toolRegistry } from "#lib/tools";
+import { spawnWorkerFromSpec } from "#lib/worker-spawn";
 
 describe("spawn_worker tool", () => {
   beforeEach(() => {
-    spawnWorkerFromSpecMock.mockReset();
-  });
-  afterEach(() => {
-    spawnWorkerFromSpecMock.mockReset();
+    vi.mocked(spawnWorkerFromSpec).mockReset();
   });
 
   it("is registered", () => {
-    expect(spawnWorkerTool).toBeDefined();
+    expect(toolRegistry.has("spawn_worker")).toBe(true);
   });
 
-  it("routes through spawnWorkerFromSpec instead of a hand-rolled invoke() call", async () => {
-    spawnWorkerFromSpecMock.mockResolvedValueOnce("worker-abc");
+  it("spawns through spawnWorkerFromSpec with the requested name", async () => {
+    vi.mocked(spawnWorkerFromSpec).mockResolvedValueOnce("worker-abc");
 
-    const result = await spawnWorkerTool?.execute({ name: "Research Agent" });
+    const result = await executeTool("spawn_worker", { name: "Research Agent" });
 
-    expect(spawnWorkerFromSpecMock).toHaveBeenCalledWith({ name: "Research Agent" });
-    expect(result?.success).toBe(true);
-    expect(result?.data).toEqual({ id: "worker-abc" });
+    expect(spawnWorkerFromSpec).toHaveBeenCalledExactlyOnceWith(
+      { name: "Research Agent" },
+      undefined,
+      undefined,
+    );
+    expect(result).toEqual({ success: true, data: { id: "worker-abc" } });
+  });
+
+  it("threads the turn's provenance into the spawn", async () => {
+    vi.mocked(spawnWorkerFromSpec).mockResolvedValueOnce("worker-abc");
+    const prov = { originWorker: "w-a", causeSeq: 3 };
+
+    await executeTool("spawn_worker", { name: "Child" }, prov);
+
+    expect(spawnWorkerFromSpec).toHaveBeenCalledExactlyOnceWith({ name: "Child" }, undefined, prov);
   });
 
   it("defaults the name to Worker when omitted", async () => {
-    spawnWorkerFromSpecMock.mockResolvedValueOnce("worker-def");
+    vi.mocked(spawnWorkerFromSpec).mockResolvedValueOnce("worker-def");
 
-    await spawnWorkerTool?.execute({});
+    await executeTool("spawn_worker", {});
 
-    expect(spawnWorkerFromSpecMock).toHaveBeenCalledWith({ name: "Worker" });
+    expect(spawnWorkerFromSpec).toHaveBeenCalledWith({ name: "Worker" }, undefined, undefined);
   });
 
-  it("reports a truthful error instead of crashing when there is no Tauri IPC bridge", async () => {
-    spawnWorkerFromSpecMock.mockResolvedValueOnce(null);
+  it("reports a truthful error when there is no desktop backend", async () => {
+    vi.mocked(spawnWorkerFromSpec).mockResolvedValueOnce(null);
 
-    const result = await spawnWorkerTool?.execute({ name: "Agent" });
-
-    expect(result?.success).toBe(false);
-    expect(result?.error).toBeDefined();
+    expect(await executeTool("spawn_worker", { name: "Agent" })).toEqual({
+      success: false,
+      error: "Spawn Worker Unavailable Outside The Desktop App.",
+    });
   });
 
-  it("surfaces a thrown error truthfully", async () => {
-    spawnWorkerFromSpecMock.mockRejectedValueOnce(new Error("Registry Full"));
+  it("surfaces a thrown error's message", async () => {
+    vi.mocked(spawnWorkerFromSpec).mockRejectedValueOnce(new Error("Registry Full"));
 
-    const result = await spawnWorkerTool?.execute({ name: "Agent" });
+    expect(await executeTool("spawn_worker", { name: "Agent" })).toEqual({
+      success: false,
+      error: "Registry Full",
+    });
+  });
 
-    expect(result?.success).toBe(false);
-    expect(result?.error).toContain("Registry Full");
+  it("rejects a non-string name without spawning", async () => {
+    const result = await executeTool("spawn_worker", { name: 5 });
+
+    expect(result.success).toBe(false);
+    expect(spawnWorkerFromSpec).not.toHaveBeenCalled();
   });
 });

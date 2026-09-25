@@ -1,16 +1,17 @@
-// ── AgentChat transcript rendering ───────────────────
-// Covers the follow-up UI-overhaul refinement: agent_turn_delta
-// appends live to the in-progress bubble, a tool call renders as a
-// labeled collapsible ToolCallDisplay block (name/input/result), a
-// permission denial's denialSubclass maps to a Title Case label, the
-// settled receipt shows cost/duration/turns, and the send button reads
-// "Queue Next Turn" (not "Interrupt") when the session's Capabilities
-// report no mid-turn interrupt.
+// AgentChat + the agent_* transcript reducer (#store/agent-sessions, fed
+// by #hooks/useAgentSessionEvents): live deltas, tool calls, permission
+// reports vs. interactive requests answered over agent_permission_respond,
+// settled receipts, queued-turn accounting, and a transcript that
+// outlives the component.
 
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Capabilities } from "#lib/agent-events";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentChat } from "#components/ai/AgentChat";
+import { useAgentSessionEvents } from "#hooks/useAgentSessionEvents";
+import type { Capabilities, ProviderId } from "#lib/agent-events";
+import { agentCancel, agentPermissionRespond, agentSendTurn } from "#lib/tauri";
+import { useAgentSessionStore } from "#store/agent-sessions";
 
 type Handler = (e: { seq: number; payload: unknown }) => void;
 
@@ -23,26 +24,16 @@ vi.mock("#lib/event-bus", () => ({
   },
 }));
 
-vi.mock("#lib/tauri", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("#lib/tauri")>();
-  return {
-    ...actual,
-    agentSendTurn: vi.fn().mockResolvedValue(undefined),
-    agentCancel: vi.fn().mockResolvedValue(undefined),
-  };
-});
-
-import { AgentChat } from "#components/ai/AgentChat";
-import { agentSendTurn } from "#lib/tauri";
-import { useAgentSessionStore } from "#store/agent-sessions";
-
-// jsdom does not implement scrollTo — the transcript's auto-scroll
-// effect calls it on mount.
-Element.prototype.scrollTo = vi.fn();
+vi.mock("#lib/tauri", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("#lib/tauri")>()),
+  agentSendTurn: vi.fn(),
+  agentCancel: vi.fn(),
+  agentPermissionRespond: vi.fn(),
+}));
 
 const WORKER_ID = "11111111-2222-3333-8444-555555555555";
 
-const CAPABILITIES_NO_INTERRUPT: Capabilities = {
+const CAPABILITIES: Capabilities = {
   partialDeltas: true,
   resume: true,
   nativeCost: true,
@@ -53,129 +44,134 @@ const CAPABILITIES_NO_INTERRUPT: Capabilities = {
   interactivePermissions: false,
 };
 
-function fire(type: string, payload: unknown, seq = 1): void {
+/** Each event gets its own, increasing seq — exactly as the bus delivers them. */
+let seq = 0;
+function fire(type: string, payload: Record<string, unknown>): void {
   act(() => {
-    registered.get(type)?.({ seq, payload });
+    registered.get(type)?.({ seq: ++seq, payload: { workerId: WORKER_ID, ...payload } });
   });
 }
 
-function resetSessionStore(): void {
-  for (const [id] of useAgentSessionStore.getState().sessions) {
-    useAgentSessionStore.getState().removeSession(id);
-  }
+function startSession(provider: ProviderId, capabilities: Partial<Capabilities> = {}): void {
+  fire("agent_session_started", {
+    provider,
+    sessionKey: WORKER_ID,
+    model: "claude-sonnet-5",
+    cwd: "/repo",
+    capabilities: { ...CAPABILITIES, ...capabilities },
+  });
+}
+
+function Harness(): React.ReactElement {
+  useAgentSessionEvents();
+  return <AgentChat workerId={WORKER_ID} />;
 }
 
 async function submit(text: string): Promise<void> {
-  const input = screen.getByLabelText("Message Claude Code");
-  fireEvent.change(input, { target: { value: text } });
-  const form = input.closest("form");
-  if (!form) throw new Error("chat form not found");
-  await act(async () => {
-    fireEvent.submit(form);
-  });
+  const user = userEvent.setup();
+  const input = screen.getByRole("textbox", { name: /^Message / });
+  // React resets the form via form.reset(), which user-event's own
+  // tracked input value does not observe; clear it explicitly.
+  await user.clear(input);
+  await user.type(input, text);
+  await user.click(screen.getByRole("button", { name: /^(Send|Queue Next Turn|Interrupt)$/ }));
 }
 
-describe("AgentChat", () => {
-  beforeEach(() => {
-    registered.clear();
-    resetSessionStore();
-    vi.mocked(agentSendTurn).mockClear();
-  });
+beforeEach(() => {
+  registered.clear();
+  useAgentSessionStore.setState(useAgentSessionStore.getInitialState(), true);
+  vi.mocked(agentSendTurn).mockReset().mockResolvedValue(undefined);
+  vi.mocked(agentCancel).mockReset().mockResolvedValue(undefined);
+  vi.mocked(agentPermissionRespond).mockReset().mockResolvedValue(undefined);
+});
 
-  afterEach(() => {
-    resetSessionStore();
+describe("AgentChat", () => {
+  it("pins the transcript to the newest row with a column-reverse scroller around one in-order column", () => {
+    render(<Harness />);
+
+    // jsdom has no layout, so this pins the mechanism: a reversed flex
+    // scroller starts (and stays, until the user scrolls up) at its end.
+    const log = screen.getByRole("log");
+    expect(log).toHaveStyle({
+      display: "flex",
+      flexDirection: "column-reverse",
+      overflowY: "auto",
+    });
+    // A single child: the reversal moves the scroll anchor, never the message order.
+    expect(log.children).toHaveLength(1);
+    expect(log.firstElementChild).toHaveStyle({ flexDirection: "column" });
   });
 
   it("appends agent_turn_delta text live to the same in-progress bubble", () => {
-    render(<AgentChat workerId={WORKER_ID} />);
+    render(<Harness />);
 
-    fire("agent_turn_delta", {
-      workerId: WORKER_ID,
-      turnId: "turn-1",
-      blockIndex: 0,
-      kind: "text",
-      text: "Hello ",
-    });
-    fire("agent_turn_delta", {
-      workerId: WORKER_ID,
-      turnId: "turn-1",
-      blockIndex: 0,
-      kind: "text",
-      text: "World",
-    });
+    fire("agent_turn_delta", { turnId: "t1", blockIndex: 0, kind: "text", text: "Hello " });
+    fire("agent_turn_delta", { turnId: "t1", blockIndex: 0, kind: "text", text: "World" });
 
     expect(screen.getByText("Hello World")).toBeInTheDocument();
   });
 
+  it("drops a settled turn's unfinalized streaming bubble", () => {
+    render(<Harness />);
+
+    fire("agent_turn_delta", { turnId: "t1", blockIndex: 0, kind: "text", text: "Half a" });
+    fire("agent_turn_settled", {
+      turnId: "t1",
+      status: "error",
+      error: "Cancelled",
+      durationMs: 5,
+    });
+
+    expect(screen.queryByText("Half a")).not.toBeInTheDocument();
+    expect(screen.getByText("Turn Failed: Cancelled · 5ms")).toBeInTheDocument();
+  });
+
   it("renders a tool call as a labeled collapsible block showing name, input, and result", async () => {
     const user = userEvent.setup();
-    render(<AgentChat workerId={WORKER_ID} />);
+    render(<Harness />);
 
     fire("agent_tool_call", {
-      workerId: WORKER_ID,
-      turnId: "turn-1",
+      turnId: "t1",
       toolUseId: "tool-1",
       name: "run_command",
       input: { command: "ls" },
     });
-    fire(
-      "agent_tool_result",
-      {
-        workerId: WORKER_ID,
-        turnId: "turn-1",
-        toolUseId: "tool-1",
-        isError: false,
-        content: "file.txt",
-      },
-      2,
-    );
+    fire("agent_tool_result", {
+      turnId: "t1",
+      toolUseId: "tool-1",
+      isError: false,
+      content: "file.txt",
+    });
 
-    const toggle = screen.getByRole("button", { name: "Tool call: run_command" });
-    expect(toggle).toBeInTheDocument();
-
-    await user.click(toggle);
+    await user.click(screen.getByRole("button", { name: "Tool Call: run_command, Complete" }));
 
     expect(screen.getByText("Input")).toBeInTheDocument();
     expect(screen.getByText(/"command"/)).toBeInTheDocument();
-    expect(screen.getByText("Result")).toBeInTheDocument();
     expect(screen.getByText("file.txt")).toBeInTheDocument();
   });
 
-  it("shows an is_error tool result via the error status, not the success one", async () => {
-    const user = userEvent.setup();
-    render(<AgentChat workerId={WORKER_ID} />);
+  it("shows an is_error tool result via the error status", () => {
+    render(<Harness />);
 
-    fire("agent_tool_call", {
-      workerId: WORKER_ID,
-      turnId: "turn-1",
+    fire("agent_tool_call", { turnId: "t1", toolUseId: "tool-2", name: "write_file", input: {} });
+    fire("agent_tool_result", {
+      turnId: "t1",
       toolUseId: "tool-2",
-      name: "write_file",
-      input: { path: "a.txt" },
+      isError: true,
+      content: "nope",
     });
-    fire(
-      "agent_tool_result",
-      {
-        workerId: WORKER_ID,
-        turnId: "turn-1",
-        toolUseId: "tool-2",
-        isError: true,
-        content: "permission denied",
-      },
-      2,
-    );
 
-    await user.click(screen.getByRole("button", { name: "Tool call: write_file" }));
-
-    expect(screen.getByLabelText("Error")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Complete")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Tool Call: write_file, Error" }),
+    ).toBeInTheDocument();
   });
 
-  it("maps a permission denial's denialSubclass to its Title Case label", () => {
-    render(<AgentChat workerId={WORKER_ID} />);
+  it("reports a Claude Code denial with its Title Case subclass and no answer buttons", () => {
+    render(<Harness />);
+    startSession("claude_code");
 
     fire("agent_permission_request", {
-      workerId: WORKER_ID,
-      turnId: "turn-1",
+      turnId: "t1",
       requestId: "req-1",
       tool: "Write",
       input: {},
@@ -185,14 +181,14 @@ describe("AgentChat", () => {
 
     expect(screen.getByText("Write Not Granted")).toBeInTheDocument();
     expect(screen.getByText("you haven't granted Write yet")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument();
   });
 
-  it("falls back to a generic label for an unrecognized denialSubclass", () => {
-    render(<AgentChat workerId={WORKER_ID} />);
+  it("falls back to a generic label for an unclassified report", () => {
+    render(<Harness />);
 
     fire("agent_permission_request", {
-      workerId: WORKER_ID,
-      turnId: "turn-1",
+      turnId: "t1",
       requestId: "req-1",
       tool: "Bash",
       input: {},
@@ -203,12 +199,85 @@ describe("AgentChat", () => {
     expect(screen.getByText("Permission Denied")).toBeInTheDocument();
   });
 
-  it("shows cost, duration, and turn count in the settled receipt when present", () => {
-    render(<AgentChat workerId={WORKER_ID} />);
+  it("answers an interactive permission request over agent_permission_respond", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    startSession("codex", { interactivePermissions: true });
+
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "req-7",
+      tool: "commandExecution",
+      input: "rm -rf build",
+      message: "rm -rf build",
+    });
+
+    const request = screen.getByRole("group", { name: "Permission Request: commandExecution" });
+    expect(request).toHaveTextContent("Permission Requested");
+    await user.click(screen.getByRole("button", { name: "Allow" }));
+
+    expect(agentPermissionRespond).toHaveBeenCalledExactlyOnceWith(WORKER_ID, "req-7", "allow");
+    expect(await screen.findByText("Allowed")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Deny" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a request answerable when the answer fails, and expires it when its turn settles", async () => {
+    vi.mocked(agentPermissionRespond).mockRejectedValueOnce(new Error("stdin closed"));
+    const user = userEvent.setup();
+    render(<Harness />);
+    startSession("codex", { interactivePermissions: true });
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "r",
+      tool: "fileChange",
+      input: {},
+    });
+
+    await user.click(screen.getByRole("button", { name: "Deny" }));
+    expect(await screen.findByRole("button", { name: "Deny" })).toBeEnabled();
+
+    fire("agent_turn_settled", { turnId: "t1", status: "ok", durationMs: 1 });
+    expect(screen.getByText("Expired Unanswered")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Deny" })).not.toBeInTheDocument();
+  });
+
+  it("leaves a request expired when its turn settles while the answer is in flight", async () => {
+    const answered = Promise.withResolvers<undefined>();
+    vi.mocked(agentPermissionRespond).mockReturnValueOnce(answered.promise);
+    const user = userEvent.setup();
+    render(<Harness />);
+    startSession("codex", { interactivePermissions: true });
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "r",
+      tool: "fileChange",
+      input: {},
+    });
+
+    await user.click(screen.getByRole("button", { name: "Allow" }));
+    fire("agent_turn_settled", { turnId: "t1", status: "ok", durationMs: 1 });
+    await act(async () => {
+      answered.resolve(undefined);
+      await answered.promise;
+    });
+
+    expect(screen.getByText("Expired Unanswered")).toBeInTheDocument();
+    expect(screen.queryByText("Allowed")).not.toBeInTheDocument();
+  });
+
+  it("names the session's own provider in the input", () => {
+    render(<Harness />);
+    startSession("codex");
+
+    expect(screen.getByRole("textbox", { name: "Message Codex" })).toBeInTheDocument();
+    expect(screen.getByRole("log", { name: "Codex Chat" })).toBeInTheDocument();
+  });
+
+  it("shows cost, duration, and turn count in the settled receipt", () => {
+    render(<Harness />);
 
     fire("agent_turn_settled", {
-      workerId: WORKER_ID,
-      turnId: "turn-1",
+      turnId: "t1",
       status: "ok",
       costUsd: 0.1234,
       durationMs: 1500,
@@ -218,30 +287,13 @@ describe("AgentChat", () => {
     expect(screen.getByText("Turn Complete · 1.5s · 2 Turns · $0.1234")).toBeInTheDocument();
   });
 
-  it('labels the send button "Queue Next Turn" (not "Interrupt") when interruptMidturn is false, once busy', async () => {
-    useAgentSessionStore.getState().setSession(WORKER_ID, {
-      workerId: WORKER_ID,
-      provider: "claude_code",
-      sessionKey: WORKER_ID,
-      model: "sonnet",
-      cwd: "/repo",
-      capabilities: CAPABILITIES_NO_INTERRUPT,
-    });
+  it('labels the send button "Queue Next Turn" when the provider cannot interrupt, once busy', async () => {
+    render(<Harness />);
+    startSession("claude_code");
 
-    render(<AgentChat workerId={WORKER_ID} />);
-
-    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
-
-    const input = screen.getByLabelText("Message Claude Code");
-    fireEvent.change(input, { target: { value: "hello" } });
-    const form = input.closest("form");
-    if (!form) throw new Error("chat form not found");
-    await act(async () => {
-      fireEvent.submit(form);
-    });
+    await submit("hello");
 
     expect(screen.getByRole("button", { name: "Queue Next Turn" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Interrupt" })).not.toBeInTheDocument();
     expect(
       screen.getByText(
         "This Provider Has No Mid-Turn Interrupt — Sending Now Queues Behind The Current Turn.",
@@ -249,133 +301,86 @@ describe("AgentChat", () => {
     ).toBeInTheDocument();
   });
 
-  it('labels the send button "Interrupt" when the session reports interruptMidturn true', async () => {
-    useAgentSessionStore.getState().setSession(WORKER_ID, {
-      workerId: WORKER_ID,
-      provider: "claude_code",
-      sessionKey: WORKER_ID,
-      model: "sonnet",
-      cwd: "/repo",
-      capabilities: { ...CAPABILITIES_NO_INTERRUPT, interruptMidturn: true },
-    });
+  it('labels the send button "Interrupt" when the session reports interruptMidturn', async () => {
+    render(<Harness />);
+    startSession("claude_code", { interruptMidturn: true });
 
-    render(<AgentChat workerId={WORKER_ID} />);
-
-    const input = screen.getByLabelText("Message Claude Code");
-    fireEvent.change(input, { target: { value: "hello" } });
-    const form = input.closest("form");
-    if (!form) throw new Error("chat form not found");
-    await act(async () => {
-      fireEvent.submit(form);
-    });
+    await submit("hello");
 
     expect(screen.getByRole("button", { name: "Interrupt" })).toBeInTheDocument();
   });
 
-  it("still allows submitting a follow-up message while a turn is already in flight (queueing, not blocking)", async () => {
-    render(<AgentChat workerId={WORKER_ID} />);
+  it("queues follow-ups instead of blocking, and clears the input after each send", async () => {
+    render(<Harness />);
 
-    const input = screen.getByLabelText("Message Claude Code");
-    fireEvent.change(input, { target: { value: "first" } });
-    const form = input.closest("form");
-    if (!form) throw new Error("chat form not found");
-    await act(async () => {
-      fireEvent.submit(form);
-    });
+    await submit("first");
+    expect(screen.getByRole("textbox", { name: /^Message / })).toHaveValue("");
+    await submit("second");
 
-    expect(input).not.toBeDisabled();
-
-    fireEvent.change(input, { target: { value: "second" } });
-    await act(async () => {
-      fireEvent.submit(form);
-    });
-
-    expect(agentSendTurn).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("textbox", { name: /^Message / })).toHaveValue("");
     expect(agentSendTurn).toHaveBeenNthCalledWith(1, WORKER_ID, "first");
     expect(agentSendTurn).toHaveBeenNthCalledWith(2, WORKER_ID, "second");
   });
 
-  it("FIX-1: stays busy (Queue Next Turn label, Cancel visible) until BOTH of two queued turns settle, not just the first", async () => {
-    render(<AgentChat workerId={WORKER_ID} />);
-
+  it("stays busy until every queued turn settles, and Cancel targets the running turn", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
     await submit("first");
     await submit("second");
 
-    // Both admitted, neither settled yet.
+    fire("agent_turn_delta", { turnId: "t1", blockIndex: 0, kind: "text", text: "working" });
+    await user.click(screen.getByRole("button", { name: "Cancel Turn" }));
+    expect(agentCancel).toHaveBeenCalledWith(WORKER_ID, "t1");
+
+    fire("agent_turn_settled", { turnId: "t1", status: "ok", durationMs: 100 });
     expect(screen.getByRole("button", { name: "Queue Next Turn" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Cancel Turn" })).toBeInTheDocument();
 
-    // turn-1 starts producing events, then settles — the FIRST of the
-    // two outstanding turns.
-    fire("agent_turn_delta", {
-      workerId: WORKER_ID,
-      turnId: "turn-1",
-      blockIndex: 0,
-      kind: "text",
-      text: "working",
-    });
-    fire("agent_turn_settled", {
-      workerId: WORKER_ID,
-      turnId: "turn-1",
-      status: "ok",
-      durationMs: 100,
-    });
-
-    // The old boolean `busy` would have flipped to idle here even
-    // though "second" is still outstanding — must still read busy.
-    expect(screen.getByRole("button", { name: "Queue Next Turn" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Cancel Turn" })).toBeInTheDocument();
-
-    // turn-2 (the actually-queued one) now settles too.
-    fire("agent_turn_delta", {
-      workerId: WORKER_ID,
-      turnId: "turn-2",
-      blockIndex: 0,
-      kind: "text",
-      text: "working",
-    });
-    fire("agent_turn_settled", {
-      workerId: WORKER_ID,
-      turnId: "turn-2",
-      status: "ok",
-      durationMs: 100,
-    });
-
+    fire("agent_turn_settled", { turnId: "t2", status: "ok", durationMs: 100 });
     expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel Turn" })).not.toBeInTheDocument();
   });
 
-  it("FIX-2: an error on the FIRST of two queued turns marks the FIRST bubble failed, never the last", async () => {
-    render(<AgentChat workerId={WORKER_ID} />);
-
+  it("marks the bubble of the turn that failed — the first of two queued — never the last", async () => {
+    render(<Harness />);
     await submit("first");
     await submit("second");
 
-    // turn-1 (correlates to "first", the oldest pending bubble) is the
-    // one that errors — "second" is still queued behind it and has
-    // produced no events of its own yet.
-    fire("agent_turn_delta", {
-      workerId: WORKER_ID,
-      turnId: "turn-1",
+    fire("agent_turn_delta", { turnId: "t1", blockIndex: 0, kind: "text", text: "working" });
+    fire("agent_turn_settled", { turnId: "t1", status: "error", error: "boom", durationMs: 100 });
+
+    const failed = { border: "1px solid oklch(0.45 0.18 25)" };
+    expect(screen.getByText("first")).toHaveStyle(failed);
+    expect(screen.getByText("second")).not.toHaveStyle(failed);
+  });
+
+  it("fails the bubble of a send the backend never admitted", async () => {
+    vi.mocked(agentSendTurn).mockRejectedValueOnce(new Error("queue full"));
+    render(<Harness />);
+
+    await submit("hello");
+
+    await vi.waitFor(() =>
+      expect(screen.getByText("hello")).toHaveStyle({ border: "1px solid oklch(0.45 0.18 25)" }),
+    );
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+  });
+
+  it("keeps the transcript when the chat unmounts (tab switch)", () => {
+    function Events(): null {
+      useAgentSessionEvents();
+      return null;
+    }
+    render(<Events />);
+    const chat = render(<AgentChat workerId={WORKER_ID} />);
+    fire("agent_block", {
+      turnId: "t1",
       blockIndex: 0,
       kind: "text",
-      text: "working",
+      content: { type: "text", text: "Persisted answer" },
     });
-    fire("agent_turn_settled", {
-      workerId: WORKER_ID,
-      turnId: "turn-1",
-      status: "error",
-      error: "boom",
-      durationMs: 100,
-    });
+    chat.unmount();
 
-    const firstBubble = screen.getByText("first");
-    const secondBubble = screen.getByText("second");
-    // userBubbleFailedStyle sets a red border; plain userBubbleStyle
-    // does not — assert via the actual failed-state color rather than
-    // a snapshot, so this fails loudly if the wrong bubble is marked.
-    expect(firstBubble).toHaveStyle({ border: "1px solid oklch(0.45 0.18 25)" });
-    expect(secondBubble).not.toHaveStyle({ border: "1px solid oklch(0.45 0.18 25)" });
+    render(<AgentChat workerId={WORKER_ID} />);
+    expect(screen.getByText("Persisted answer")).toBeInTheDocument();
   });
 });
