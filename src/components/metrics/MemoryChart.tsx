@@ -1,131 +1,101 @@
 // ── MemoryChart ─────────────────────────────────────
-// Stacked area chart: used / cached / available.
-// OKLCH area fills: used=plasma, cached=amber, available=dim.
-// Recharts AreaChart with ResponsiveContainer, isAnimationActive={false}.
+// Stacked area chart of used vs free memory — exactly the two figures the
+// backend reports (sysinfo used and total), nothing estimated.
+// OKLCH fills: used = plasma, free = dim.
 
-import type { CSSProperties } from "react";
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  Legend,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import {
-  axisProps,
-  formatMb,
-  formatTime,
-  glassPanelStyle,
-  gridProps,
-  legendStyle,
-  tooltipProps,
-} from "#lib/chart-theme";
+import { useId } from "react";
+import { Area, AreaChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from "recharts";
+import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
+import { formatMb, formatTime, METRIC_COLOR } from "#lib/chart-theme";
 import { lastN } from "#lib/chart-window";
-import { memoryAvailableMb } from "#lib/memory";
+import { memoryFreeMb } from "#lib/memory";
 import { useSystemStore } from "#store/system";
+import type { MetricPoint } from "#store/types";
 
-// OKLCH colors
-const COLOR_USED = "oklch(0.72 0.18 205)";
-const COLOR_CACHED = "oklch(0.78 0.16 70)";
-const COLOR_AVAILABLE = "oklch(0.45 0.04 220)";
+const COLOR_USED = METRIC_COLOR.memory;
+const COLOR_FREE = "oklch(0.45 0.04 220)";
 
-const containerStyle: CSSProperties = {
-  ...glassPanelStyle,
-  padding: 12,
-  width: "100%",
-  height: "100%",
-  minHeight: 240,
-};
-
-const headerStyle: CSSProperties = {
-  fontFamily: "var(--font-display)",
-  fontSize: 14,
-  fontWeight: 600,
-  color: "oklch(0.85 0.04 220)",
-  marginBottom: 8,
-};
+/** One chart row: used and free memory in MB at `time`. */
+export interface MemoryChartPoint {
+  readonly time: number;
+  readonly used: number;
+  readonly free: number;
+}
 
 /**
- * Stacked area chart showing memory usage breakdown (used, cached, available)
- * over the trailing sample window (see `MAX_CHART_POINTS`) with OKLCH
- * gradient fills.
+ * Maps the trailing chart window of `history` to used/free rows. Free is
+ * `total - used`, and 0 while the total is still unknown (the backend has
+ * not reported one yet) rather than measured against a guessed ceiling.
  */
+export function memoryChartData(
+  history: readonly MetricPoint[],
+  memoryTotalMb: number,
+): MemoryChartPoint[] {
+  return lastN(history).map((p) => ({
+    time: p.time,
+    used: p.memory,
+    free: memoryFreeMb(p.memory, memoryTotalMb),
+  }));
+}
+
+/** Stacked used/free memory over the trailing sample window (see `MAX_CHART_POINTS`). */
 export function MemoryChart(): React.ReactElement {
   const history = useSystemStore((s) => s.metrics.history);
   const memoryTotalMb = useSystemStore((s) => s.metrics.memoryTotalMb);
-
-  const data = lastN(history).map((p) => ({
-    time: p.time,
-    used: p.memory,
-    cached: Math.max(0, p.memory * 0.15),
-    available: memoryAvailableMb(p.memory, memoryTotalMb),
-  }));
+  const data = memoryChartData(history, memoryTotalMb);
+  // Gradient ids are document-global; useId keeps two mounted charts apart.
+  const gradientId = useId();
 
   return (
-    <div style={containerStyle}>
-      <div style={headerStyle}>Memory Usage</div>
-      <ResponsiveContainer width="100%" height="85%">
-        <AreaChart data={data} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-          <defs>
-            <linearGradient id="grad-mem-used" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor={COLOR_USED} stopOpacity={0.4} />
-              <stop offset="95%" stopColor={COLOR_USED} stopOpacity={0.05} />
-            </linearGradient>
-            <linearGradient id="grad-mem-cached" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor={COLOR_CACHED} stopOpacity={0.35} />
-              <stop offset="95%" stopColor={COLOR_CACHED} stopOpacity={0.05} />
-            </linearGradient>
-            <linearGradient id="grad-mem-avail" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor={COLOR_AVAILABLE} stopOpacity={0.2} />
-              <stop offset="95%" stopColor={COLOR_AVAILABLE} stopOpacity={0.02} />
-            </linearGradient>
-          </defs>
+    <ChartPanel title="Memory Usage">
+      <AreaChart
+        responsive
+        style={CHART_FILL_STYLE}
+        data={data}
+        margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
+        title="Used And Free Memory Over Time"
+      >
+        <defs>
+          <linearGradient id={`${gradientId}-used`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor={COLOR_USED} stopOpacity={0.4} />
+            <stop offset="95%" stopColor={COLOR_USED} stopOpacity={0.05} />
+          </linearGradient>
+          <linearGradient id={`${gradientId}-free`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor={COLOR_FREE} stopOpacity={0.2} />
+            <stop offset="95%" stopColor={COLOR_FREE} stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
 
-          <CartesianGrid {...gridProps} />
-          <XAxis dataKey="time" tickFormatter={formatTime} {...axisProps} />
-          <YAxis tickFormatter={formatMb} {...axisProps} />
-          <Tooltip
-            {...tooltipProps}
-            labelFormatter={(label) => formatTime(Number(label))}
-            formatter={(value) => formatMb(Number(value))}
-          />
-          <Legend wrapperStyle={legendStyle} />
+        <CartesianGrid />
+        <XAxis dataKey="time" tickFormatter={formatTime} />
+        <YAxis tickFormatter={formatMb} />
+        <Tooltip
+          labelFormatter={(label) => formatTime(Number(label))}
+          formatter={(value) => formatMb(Number(value))}
+        />
+        <Legend />
 
-          <Area
-            type="monotone"
-            dataKey="used"
-            name="Used"
-            stackId="mem"
-            stroke={COLOR_USED}
-            fill="url(#grad-mem-used)"
-            strokeWidth={1.5}
-            isAnimationActive={false}
-          />
-          <Area
-            type="monotone"
-            dataKey="cached"
-            name="Cached"
-            stackId="mem"
-            stroke={COLOR_CACHED}
-            fill="url(#grad-mem-cached)"
-            strokeWidth={1.5}
-            isAnimationActive={false}
-          />
-          <Area
-            type="monotone"
-            dataKey="available"
-            name="Available"
-            stackId="mem"
-            stroke={COLOR_AVAILABLE}
-            fill="url(#grad-mem-avail)"
-            strokeWidth={1.5}
-            isAnimationActive={false}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
-    </div>
+        <Area
+          type="monotone"
+          dataKey="used"
+          name="Used"
+          stackId="mem"
+          stroke={COLOR_USED}
+          fill={`url(#${gradientId}-used)`}
+          strokeWidth={1.5}
+          isAnimationActive={false}
+        />
+        <Area
+          type="monotone"
+          dataKey="free"
+          name="Free"
+          stackId="mem"
+          stroke={COLOR_FREE}
+          fill={`url(#${gradientId}-free)`}
+          strokeWidth={1.5}
+          isAnimationActive={false}
+        />
+      </AreaChart>
+    </ChartPanel>
   );
 }

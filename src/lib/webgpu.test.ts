@@ -6,7 +6,7 @@
 // correct Title-Cased `WebGPUUnavailableReason` at each silent-null
 // gate, and does it `console.warn` that same reason? An actual GPU
 // adapter/device/render pass cannot be exercised here — that boundary
-// is documented in the Task 5 report, not simulated.
+// is out of reach here, not simulated.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getWebGPUUnavailableReason, initWebGPU, isWebGPUSupported } from "#lib/webgpu";
@@ -29,11 +29,10 @@ function makeCanvas(contextResult: unknown): HTMLCanvasElement {
   return canvas;
 }
 
-function makeMockDevice(): GPUDevice {
+function makeMockDevice(lost: Promise<GPUDeviceLostInfo> = new Promise(() => {})): GPUDevice {
   return {
-    // Never resolves within a test's lifetime — fine, we only assert the
-    // synchronous/awaited return value of initWebGPU, not device-loss.
-    lost: new Promise(() => {}),
+    lost,
+    addEventListener: vi.fn(),
     queue: { submit: vi.fn() },
     createTexture: vi.fn(),
     createCommandEncoder: vi.fn(),
@@ -46,8 +45,6 @@ function makeMockAdapter(
   requestDeviceImpl?: () => Promise<GPUDevice>,
 ): GPUAdapter {
   return {
-    features: { has: () => false },
-    limits: { maxBufferSize: 1_000_000_000, maxStorageBufferBindingSize: 1_000_000_000 },
     requestDevice: vi.fn(requestDeviceImpl ?? (() => Promise.resolve(device))),
   } as unknown as GPUAdapter;
 }
@@ -120,6 +117,7 @@ describe("initWebGPU", () => {
     const result = await initWebGPU(canvas);
 
     expect(result).toEqual({ ok: false, reason: "Failed To Acquire Canvas Rendering Context" });
+    expect(device.destroy).toHaveBeenCalledTimes(1); // no orphaned device
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("Failed To Acquire Canvas Rendering Context"),
     );
@@ -167,5 +165,50 @@ describe("initWebGPU", () => {
       alphaMode: "premultiplied",
     });
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("requests a device with the default limits and no optional features", async () => {
+    const device = makeMockDevice();
+    const adapter = makeMockAdapter(device);
+    setNavigatorGpu({
+      requestAdapter: vi.fn().mockResolvedValue(adapter),
+      getPreferredCanvasFormat: vi.fn().mockReturnValue("bgra8unorm"),
+    });
+
+    await initWebGPU(makeCanvas({ configure: vi.fn() }));
+
+    expect(adapter.requestDevice).toHaveBeenCalledWith();
+  });
+
+  describe("device loss", () => {
+    async function initWithLoss(info: Partial<GPUDeviceLostInfo>) {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const onDeviceLost = vi.fn();
+      const device = makeMockDevice(Promise.resolve(info as GPUDeviceLostInfo));
+      setNavigatorGpu({
+        requestAdapter: vi.fn().mockResolvedValue(makeMockAdapter(device)),
+        getPreferredCanvasFormat: vi.fn().mockReturnValue("bgra8unorm"),
+      });
+      await initWebGPU(makeCanvas({ configure: vi.fn() }), onDeviceLost);
+      await Promise.resolve();
+      return { onDeviceLost, errorSpy };
+    }
+
+    it("recovers from an accidental loss and logs its message", async () => {
+      const { onDeviceLost, errorSpy } = await initWithLoss({
+        reason: "unknown",
+        message: "GPU process crashed",
+      });
+
+      expect(onDeviceLost).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith("[webgpu] Device lost:", "GPU process crashed");
+    });
+
+    it("ignores the loss an intentional destroy() causes", async () => {
+      const { onDeviceLost, errorSpy } = await initWithLoss({ reason: "destroyed", message: "" });
+
+      expect(onDeviceLost).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
   });
 });

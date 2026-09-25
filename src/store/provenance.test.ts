@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DomainEvent } from "#lib/event-bus";
 import {
+  RING_LIMIT,
   selectMostRecentSeqForWorker,
   selectVisibleEdges,
   useProvenanceStore,
@@ -258,7 +259,6 @@ describe("provenance store", () => {
 
     it("evicts the oldest entry once the ring exceeds its bound", () => {
       const { ingestEvent } = useProvenanceStore.getState();
-      const RING_LIMIT = 2000;
       for (let seq = 1; seq <= RING_LIMIT; seq++) {
         ingestEvent(ev({ seq, type: "worker_state", payload: { workerId: "w", state: "idle" } }));
       }
@@ -278,6 +278,39 @@ describe("provenance store", () => {
       expect(useProvenanceStore.getState().bySeq.has(1)).toBe(false);
       expect(useProvenanceStore.getState().bySeq.has(2)).toBe(true);
       expect(useProvenanceStore.getState().bySeq.has(RING_LIMIT + 1)).toBe(true);
+    });
+  });
+
+  describe("notifications", () => {
+    it("telemetry and ring-only events notify no subscriber", () => {
+      const listener = vi.fn();
+      const unsubscribe = useProvenanceStore.subscribe(listener);
+      const { ingestEvent } = useProvenanceStore.getState();
+
+      ingestEvent(ev({ seq: 1, type: "worker_output", payload: { workerId: "w", data: "x" } }));
+      ingestEvent(ev({ seq: 2, type: "agent_turn_started", payload: { workerId: "w" } }));
+      ingestEvent(ev({ seq: 3, type: "worker_spawned", payload: { workerId: "w" } })); // unstamped
+      unsubscribe();
+
+      expect(listener).not.toHaveBeenCalled();
+      expect(useProvenanceStore.getState().bySeq.has(2)).toBe(true);
+    });
+
+    it("an edge change replaces the edges map (and leaves the file counts alone)", () => {
+      const before = useProvenanceStore.getState();
+      before.ingestEvent(
+        ev({
+          seq: 1,
+          type: "worker_spawned",
+          originWorker: "w-a",
+          payload: { workerId: "w-b", name: "B", pid: 1 },
+        }),
+      );
+
+      const after = useProvenanceStore.getState();
+      expect(after.edges).not.toBe(before.edges);
+      expect(after.fileWriteCounts).toBe(before.fileWriteCounts);
+      expect(after.bySeq).toBe(before.bySeq);
     });
   });
 

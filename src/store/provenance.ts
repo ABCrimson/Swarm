@@ -1,11 +1,6 @@
-import { enableMapSet } from "immer";
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
-import { immer } from "zustand/middleware/immer";
 import type { DomainEvent } from "#lib/event-bus";
-
-// Required for immer producers that mutate native Map instances (below).
-enableMapSet();
 
 /**
  * The four kinds of MEASURED causal edge this store derives from stamped
@@ -52,7 +47,7 @@ const RING_EXCLUDED_TYPES = new Set<string>([
  * (see `CausalityPanel.tsx`), so this bound trades a rarer network hop
  * for bounded memory, never correctness.
  */
-const RING_LIMIT = 2000;
+export const RING_LIMIT = 2000;
 
 function edgeKey(from: string, to: string, kind: ProvenanceEdgeKind): string {
   return `${from}->${to}:${kind}`;
@@ -95,13 +90,19 @@ function resolveEdgeKind(type: string): ProvenanceEdgeKind | undefined {
   }
 }
 
-/** Reactive state slice for measured causality. */
+/** State slice for measured causality. */
 interface ProvenanceStoreState {
-  readonly edges: Map<string, ProvenanceEdgeRecord>;
-  /** Bounded recent-event ring keyed by seq — see {@link RING_LIMIT}. */
+  /** Measured edges by `from->to:kind`. Replaced (never mutated) when an edge changes. */
+  readonly edges: ReadonlyMap<string, ProvenanceEdgeRecord>;
+  /**
+   * Bounded recent-event ring keyed by seq — see {@link RING_LIMIT}. One
+   * Map for the store's lifetime, mutated in place and never replaced: it
+   * is read on demand (`getState().bySeq`, CausalityPanel's walk), never
+   * subscribed to, so ringing an event notifies no subscriber.
+   */
   readonly bySeq: Map<number, DomainEvent>;
-  /** Per-worker `file_written` counts, rendered as a node badge, never an edge. */
-  readonly fileWriteCounts: Map<string, number>;
+  /** Per-worker `file_written` counts, rendered as a node badge, never an edge. Replaced on change. */
+  readonly fileWriteCounts: ReadonlyMap<string, number>;
 }
 
 /** Mutation actions for the provenance store. */
@@ -113,83 +114,84 @@ interface ProvenanceStoreActions {
    * `originWorker` and an edge-shaped type) derives or collapses a
    * measured edge. The engine records provenance; this store only ever
    * mirrors what it recorded — never infers a cause of its own.
+   *
+   * Only an edge or file-count change produces a state update; the far
+   * more frequent telemetry and ring-only events cost a Map write at most.
    */
   readonly ingestEvent: (event: DomainEvent) => void;
   /** Test-only: clears all derived state. */
   readonly reset: () => void;
 }
 
+/** Rings `event` in place, evicting the oldest entry past {@link RING_LIMIT}. */
+function ring(bySeq: Map<number, DomainEvent>, event: DomainEvent): void {
+  if (RING_EXCLUDED_TYPES.has(event.type)) return;
+  bySeq.set(event.seq, event);
+  if (bySeq.size > RING_LIMIT) {
+    // The ring only ever grows one entry past its bound before this trims
+    // it back, and the ordered bus dispatches in ascending seq order
+    // (event-bus.ts dedups/sorts pending events), so insertion order
+    // tracks seq order — the first key iterated is reliably the oldest.
+    const oldest = bySeq.keys().next().value;
+    if (oldest !== undefined) bySeq.delete(oldest);
+  }
+}
+
 /**
- * Zustand store for measured causal edges derived from the ordered
- * event bus — replaces the fabricated "Spawn Order" chain that used to
- * connect workers in Map insertion order. Uses immer for immutable
- * updates and `subscribeWithSelector` for fine-grained subscriptions,
- * matching `store/workers.ts`'s conventions.
+ * Zustand store for measured causal edges derived from the ordered event
+ * bus — replaces the fabricated "Spawn Order" chain that used to connect
+ * workers in Map insertion order. Plain copy-on-write updates (no immer:
+ * drafting copied the 2000-entry ring on every event);
+ * `subscribeWithSelector` for fine-grained subscriptions.
  */
 export const useProvenanceStore = create<ProvenanceStoreState & ProvenanceStoreActions>()(
-  subscribeWithSelector(
-    immer((set) => ({
-      edges: new Map(),
-      bySeq: new Map(),
-      fileWriteCounts: new Map(),
+  subscribeWithSelector((set, get) => ({
+    edges: new Map(),
+    bySeq: new Map(),
+    fileWriteCounts: new Map(),
 
-      ingestEvent(event) {
-        set((s) => {
-          if (!RING_EXCLUDED_TYPES.has(event.type)) {
-            s.bySeq.set(event.seq, event);
-            if (s.bySeq.size > RING_LIMIT) {
-              // The ring only ever grows one entry past its bound before
-              // this trims it back, and the ordered bus dispatches in
-              // ascending seq order (event-bus.ts dedups/sorts pending
-              // events), so insertion order tracks seq order — the
-              // first key iterated is reliably the oldest.
-              const oldest = s.bySeq.keys().next().value;
-              if (oldest !== undefined) s.bySeq.delete(oldest);
-            }
-          }
+    ingestEvent(event) {
+      ring(get().bySeq, event);
 
-          // file_written -> node badge, never an edge (files aren't
-          // workers, and a node-per-file would explode the layout).
-          if (event.type === "file_written") {
-            if (event.originWorker) {
-              s.fileWriteCounts.set(
-                event.originWorker,
-                (s.fileWriteCounts.get(event.originWorker) ?? 0) + 1,
-              );
-            }
-            return;
-          }
+      // file_written -> node badge, never an edge (files aren't workers,
+      // and a node-per-file would explode the layout).
+      if (event.type === "file_written") {
+        const writer = event.originWorker;
+        if (!writer) return;
+        set((s) => ({
+          fileWriteCounts: new Map(s.fileWriteCounts).set(
+            writer,
+            (s.fileWriteCounts.get(writer) ?? 0) + 1,
+          ),
+        }));
+        return;
+      }
 
-          if (!event.originWorker) return; // unattributed -- no measured edge to draw
+      const from = event.originWorker;
+      if (!from) return; // unattributed -- no measured edge to draw
+      const kind = resolveEdgeKind(event.type);
+      if (!kind) return; // not an edge-shaped event type
+      const to = resolveEdgeTarget(event);
+      if (!to) return; // no resolvable target (e.g. a broadcast bus_message)
 
-          const to = resolveEdgeTarget(event);
-          if (!to) return; // no resolvable target (e.g. a broadcast bus_message)
+      const key = edgeKey(from, to, kind);
+      set((s) => ({
+        edges: new Map(s.edges).set(key, {
+          from,
+          to,
+          kind,
+          count: (s.edges.get(key)?.count ?? 0) + 1,
+          lastSeq: event.seq,
+          lastTs: event.ts,
+        }),
+      }));
+    },
 
-          const kind = resolveEdgeKind(event.type);
-          if (!kind) return; // not an edge-shaped event type
-
-          const key = edgeKey(event.originWorker, to, kind);
-          const existing = s.edges.get(key);
-          s.edges.set(key, {
-            from: event.originWorker,
-            to,
-            kind,
-            count: (existing?.count ?? 0) + 1,
-            lastSeq: event.seq,
-            lastTs: event.ts,
-          });
-        });
-      },
-
-      reset() {
-        set((s) => {
-          s.edges.clear();
-          s.bySeq.clear();
-          s.fileWriteCounts.clear();
-        });
-      },
-    })),
-  ),
+    reset() {
+      get().bySeq.clear();
+      set({ edges: new Map(), fileWriteCounts: new Map() });
+    },
+  })),
 );
 
 /**

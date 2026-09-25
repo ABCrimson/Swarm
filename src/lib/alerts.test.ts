@@ -1,13 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { createStore } from "jotai";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AlertThresholds, MetricsSnapshot } from "#lib/alerts";
-import { ALERT_COOLDOWN_MS, evaluateThresholds } from "#lib/alerts";
+import {
+  ALERT_COOLDOWN_MS,
+  alertThresholdsAtom,
+  DEFAULT_THRESHOLDS,
+  evaluateThresholds,
+} from "#lib/alerts";
 
-const DEFAULT_THRESHOLDS: AlertThresholds = {
-  cpuWarning: 70,
-  cpuCritical: 80,
-  memoryWarning: 80,
-  memoryCritical: 90,
-};
+const { storedValue } = vi.hoisted(() => ({ storedValue: vi.fn<() => Promise<unknown>>() }));
+
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  isTauri: () => true,
+}));
+
+vi.mock(import("#lib/lazy-store"), () => ({
+  settingsStore: {
+    get: storedValue,
+    set: vi.fn().mockResolvedValue(undefined),
+    delete: vi.fn().mockResolvedValue(undefined),
+  } as never,
+}));
 
 const BASE_NOW = 1_000_000;
 
@@ -163,5 +177,46 @@ describe("alert cooldown (parametrized)", () => {
     const cooldowns = { cpu: 0 };
     expect(evaluateThresholds(hotSnapshot, thresholds, cooldowns, 29_000)).toHaveLength(0);
     expect(evaluateThresholds(hotSnapshot, thresholds, cooldowns, 31_000)).toHaveLength(1);
+  });
+});
+
+// Regression: persisted thresholds were trusted as-is, so an older or
+// malformed object compared metrics against `undefined` and alerts
+// silently stopped. The stored value is now validated on hydrate.
+describe("alertThresholdsAtom hydration", () => {
+  afterEach(() => {
+    storedValue.mockReset();
+  });
+
+  async function hydrate(stored: unknown): Promise<AlertThresholds> {
+    storedValue.mockResolvedValue(stored);
+    const store = createStore();
+    const unsubscribe = store.sub(alertThresholdsAtom, () => {});
+    await vi.waitFor(() => expect(storedValue).toHaveBeenCalled());
+    // Let the storage subscription's .then() settle (a macrotask outlasts it).
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const value = store.get(alertThresholdsAtom);
+    unsubscribe();
+    return value;
+  }
+
+  it("hydrates a valid stored value", async () => {
+    const saved = { cpuWarning: 50, cpuCritical: 60, memoryWarning: 70, memoryCritical: 75 };
+    expect(await hydrate(saved)).toEqual(saved);
+  });
+
+  it("fills fields an older stored object lacks from the defaults", async () => {
+    expect(await hydrate({ cpuWarning: 55 })).toEqual({ ...DEFAULT_THRESHOLDS, cpuWarning: 55 });
+  });
+
+  it("keeps the defaults when the stored value is malformed", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await hydrate({ cpuWarning: "high", memoryCritical: 400 })).toEqual(DEFAULT_THRESHOLDS);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("keeps the defaults when nothing is stored", async () => {
+    expect(await hydrate(null)).toEqual(DEFAULT_THRESHOLDS);
   });
 });

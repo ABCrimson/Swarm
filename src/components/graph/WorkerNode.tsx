@@ -1,90 +1,66 @@
 import type { Node, NodeProps } from "@xyflow/react";
 import { Handle, Position } from "@xyflow/react";
-import { motion } from "motion/react";
+import type { CSSProperties } from "react";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Pill } from "#components/ui/Pill";
 import { withAlpha, workerColor } from "#lib/theme";
-import type { WorkerState } from "#store/types";
+import { useProvenanceStore } from "#store/provenance";
+import { useWorkerStore } from "#store/workers";
 
-export interface WorkerNodeData {
-  readonly label: string;
-  readonly state: WorkerState;
+/** Node data: which worker, and its colour slot. Everything live is read from the stores. */
+export interface WorkerNodeData extends Record<string, unknown> {
+  readonly workerId: string;
   readonly index: number;
-  readonly pid?: number;
-  /**
-   * Count of `file_written` events this worker originated — rendered as
-   * a node badge, never an edge (files aren't workers, and a
-   * node-per-file would explode the layout). Zero/absent renders no
-   * badge at all.
-   */
-  readonly fileWriteCount?: number;
 }
 
-type WorkerNodeType = Node<WorkerNodeData & Record<string, unknown>, "worker">;
+/** The graph's one node type. */
+export type WorkerFlowNode = Node<WorkerNodeData, "worker">;
+
+const handleStyle = (color: string): CSSProperties => ({
+  background: color,
+  border: "none",
+  width: 8,
+  height: 8,
+});
 
 /**
- * Custom React Flow node representing a SWARM worker in the dependency graph.
+ * One worker in the Workers topology graph (measured causality): name,
+ * state badge, PID and — once it has written any — a "Wrote N Files"
+ * badge counted from `file_written` events.
  *
- * Renders a glass-morphism card with OKLCH glow when running,
- * state badge, PID, and connection handles.
+ * The node subscribes to its own worker's name/state/PID and file count
+ * with primitive selectors, so a PTY output chunk (which replaces the
+ * worker object) re-renders nothing here, and the graph itself never
+ * re-renders for a state change. Keyboard focus and the accessible name
+ * live on xyflow's node wrapper (see `WorkerGraph`'s `ariaLabel`); this
+ * content is presentational. Glow and hover scale are CSS (`graph.css`),
+ * off under reduced motion.
  */
-export function WorkerNode({ data }: NodeProps<WorkerNodeType>): React.ReactElement {
-  const { label, state, index, pid, fileWriteCount } = data;
-  const color = workerColor(index);
-  const glowColor = withAlpha(color, 0.3);
-  const borderColor = withAlpha(color, 0.5);
-  const isRunning = state === "running";
+export function WorkerNode({ data }: NodeProps<WorkerFlowNode>): React.ReactElement | null {
+  const { workerId, index } = data;
+  const name = useWorkerStore((s) => s.workers.get(workerId)?.name);
+  const state = useWorkerStore((s) => s.workers.get(workerId)?.state);
+  const pid = useWorkerStore((s) => s.workers.get(workerId)?.pid);
+  const fileWriteCount = useProvenanceStore((s) => s.fileWriteCounts.get(workerId) ?? 0);
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      // Trigger the same activation path as a mouse click — XYFlow binds
-      // its onNodeClick handler to a click listener on the node wrapper,
-      // so a synthetic click bubbles up through it.
-      event.currentTarget.click();
-    }
-  };
+  // The worker left the store; the graph drops this node on its next render.
+  if (state === undefined) return null;
+
+  const color = workerColor(index);
 
   return (
-    <motion.div
+    <div
+      className="worker-node"
       data-state={state}
-      tabIndex={0}
-      role="button"
-      aria-label={`Worker ${label}, status: ${stateLabels[state]}${pid != null ? `, PID ${pid}` : ""}`}
-      onKeyDown={handleKeyDown}
-      whileHover={{ scale: 1.02 }}
-      whileFocus={{ scale: 1.02 }}
-      transition={{ type: "spring", stiffness: 400, damping: 25 }}
-      style={{
-        position: "relative",
-        width: 220,
-        minHeight: 100,
-        background: "oklch(0.12 0.03 220 / 0.7)",
-        backdropFilter: "blur(12px) saturate(1.5)",
-        border: `1px solid ${borderColor}`,
-        borderRadius: 12,
-        padding: 16,
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-        cursor: "pointer",
-        boxShadow: isRunning
-          ? `0 0 0 1px ${borderColor}, 0 0 20px ${glowColor}, 0 0 40px ${withAlpha(color, 0.15)}`
-          : `0 0 0 1px ${borderColor}`,
-        transition:
-          "box-shadow 0.3s cubic-bezier(0.0, 0.0, 0.2, 1.0), border-color 0.3s cubic-bezier(0.0, 0.0, 0.2, 1.0)",
-      }}
+      style={
+        {
+          "--node-border": withAlpha(color, 0.5),
+          "--node-glow": withAlpha(color, 0.3),
+          "--node-glow-far": withAlpha(color, 0.15),
+        } as CSSProperties
+      }
     >
-      <Handle
-        type="target"
-        position={Position.Top}
-        style={{
-          background: color,
-          border: "none",
-          width: 8,
-          height: 8,
-        }}
-      />
+      <Handle type="target" position={Position.Top} style={handleStyle(color)} />
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span
@@ -99,7 +75,7 @@ export function WorkerNode({ data }: NodeProps<WorkerNodeType>): React.ReactElem
             maxWidth: 140,
           }}
         >
-          {label}
+          {name ?? workerId.slice(0, 8)}
         </span>
         <Badge state={state}>{stateLabels[state]}</Badge>
       </div>
@@ -116,37 +92,15 @@ export function WorkerNode({ data }: NodeProps<WorkerNodeType>): React.ReactElem
         </span>
       )}
 
-      {fileWriteCount != null && fileWriteCount > 0 && (
+      {fileWriteCount > 0 && (
         <Pill tone="info" size="sm" style={{ alignSelf: "flex-start" }}>
           Wrote {fileWriteCount} {fileWriteCount === 1 ? "File" : "Files"}
         </Pill>
       )}
 
-      {isRunning && (
-        <div
-          aria-hidden="true"
-          style={{
-            position: "absolute",
-            inset: -1,
-            borderRadius: 12,
-            pointerEvents: "none",
-            animation: "glow-breathe 2s ease-in-out infinite",
-            boxShadow: `0 0 20px ${glowColor}`,
-            opacity: "var(--glow-intensity, 0.3)",
-          }}
-        />
-      )}
+      {state === "running" && <div aria-hidden="true" className="worker-node__glow" />}
 
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        style={{
-          background: color,
-          border: "none",
-          width: 8,
-          height: 8,
-        }}
-      />
-    </motion.div>
+      <Handle type="source" position={Position.Bottom} style={handleStyle(color)} />
+    </div>
   );
 }

@@ -1,0 +1,190 @@
+/*
+ * Logs page styles (LogViewer + LogFilter). In `@layer components` so the
+ * unlayered reduced-motion rule in animations.css still wins over the
+ * transitions here.
+ */
+@layer components {
+  .log-viewer {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+    background: var(--color-surface-0);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+  }
+
+  .log-viewer__scroll {
+    position: relative;
+    flex: 1;
+    overflow: auto;
+  }
+
+  .log-viewer__scroll:focus-visible {
+    outline: 2px solid oklch(0.78 0.18 205 / 0.6);
+    outline-offset: -2px;
+  }
+
+  .log-viewer__track {
+    position: relative;
+  }
+
+  .log-viewer__window {
+    position: absolute;
+    inset-inline: 0;
+  }
+
+  .log-viewer__empty {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    margin: 0;
+    font-family: var(--font-body);
+    font-size: 0.875rem;
+    color: oklch(0.45 0.04 220);
+  }
+
+  .log-viewer__resume {
+    position: absolute;
+    inset-block-end: 16px;
+    inset-inline-end: 24px;
+    z-index: 10;
+    backdrop-filter: blur(12px);
+  }
+
+  /* ── Rows ─────────────────────────────────────── */
+  .log-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    border-bottom: 1px solid oklch(0.12 0.03 220);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+  }
+
+  .log-row__time {
+    flex-shrink: 0;
+    width: 96px;
+    white-space: nowrap;
+    color: oklch(0.45 0.04 220);
+  }
+
+  .log-row__level {
+    flex-shrink: 0;
+    width: 44px;
+    text-transform: uppercase;
+  }
+
+  .log-row__source {
+    flex-shrink: 0;
+    width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: oklch(0.6 0.1 205);
+  }
+
+  .log-row__message {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-text);
+  }
+
+  .log-row__match {
+    padding: 0 1px;
+    border-radius: 2px;
+    background: oklch(0.82 0.19 70 / 0.3);
+    color: var(--color-text-bright);
+  }
+
+  /* ── Filter toolbar ───────────────────────────── */
+  .log-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--color-border);
+    background: oklch(0.1 0.03 220 / 0.6);
+    backdrop-filter: blur(12px) saturate(1.5);
+  }
+
+  .log-filter__levels {
+    display: flex;
+    gap: 4px;
+  }
+
+  .log-filter__level {
+    --level-color: oklch(0.65 0.04 220);
+    padding: 4px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: oklch(0 0 0 / 0);
+    color: oklch(0.45 0.04 220);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition:
+      background var(--duration-fast) var(--ease-out),
+      border-color var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
+  }
+
+  .log-filter__level[data-level="info"] {
+    --level-color: var(--color-plasma);
+  }
+
+  .log-filter__level[data-level="warn"] {
+    --level-color: var(--color-amber);
+  }
+
+  .log-filter__level[data-level="error"] {
+    --level-color: var(--color-rose);
+  }
+
+  .log-filter__level:hover {
+    border-color: var(--level-color);
+  }
+
+  .log-filter__level[aria-pressed="true"] {
+    border-color: var(--level-color);
+    background: oklch(from var(--level-color) l c h / 0.2);
+    color: var(--level-color);
+  }
+
+  .log-filter__level:focus-visible,
+  .log-filter__source:focus-visible {
+    outline: 2px solid oklch(0.78 0.18 205 / 0.6);
+    outline-offset: 1px;
+  }
+
+  .log-filter__source {
+    min-width: 120px;
+    padding: 4px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: oklch(0.1 0.03 220);
+    color: oklch(0.72 0.04 220);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    cursor: pointer;
+  }
+
+  .log-filter .log-filter__search {
+    flex: 1;
+    min-width: 140px;
+    width: auto;
+    height: 28px;
+    padding: 0 10px;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+  }
+}

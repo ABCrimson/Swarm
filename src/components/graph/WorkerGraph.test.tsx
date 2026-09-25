@@ -7,45 +7,39 @@
 // SpawnOrderEdge.tsx). This file also proves the manual-acceptance
 // parity case: worker A's AI spawning B + running a command yields
 // exactly A->B spawn + A->B command, no chain edges.
+//
+// The interaction suite below covers the node context menu (its actions
+// reach the backend), the derived node list (a departed worker's node
+// goes with it), xyflow's delete keys (never a live worker), workflow
+// import, and render isolation from PTY output.
 
-import { act, render, screen } from "@testing-library/react";
+// The node context menu is a native popover (see the shim's header).
+import "./top-layer-shim";
+
+import { open } from "@tauri-apps/plugin-dialog";
+import { readTextFile } from "@tauri-apps/plugin-fs";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MarkerType } from "@xyflow/react";
+import { getDefaultStore } from "jotai";
+import { Profiler } from "react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WorkerGraph } from "#components/graph/WorkerGraph";
+import { reduceNodeUi, toFlowEdges, WorkerGraph } from "#components/graph/WorkerGraph";
+import { MockElkWorker as MockWorker } from "#hooks/elk-worker-fake";
 import type { DomainEvent } from "#lib/event-bus";
 import { useProvenanceStore } from "#store/provenance";
 import type { Worker } from "#store/types";
+import { detailPanelOpenAtom, selectedWorkerIdAtom } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
 
-/**
- * Minimal mock of the DOM `Worker` API — same shape as
- * `useElkLayout.test.tsx`'s `MockWorker` (jsdom has no real Worker/module
- * worker support). `autoRespondLayout` speaks enough of elkjs's own
- * `{cmd, id}` protocol to resolve `elk.layout()` so `isLayouting` settles
- * to `false` and this file can assert on the settled DOM.
- */
-class MockWorker {
-  static instances: MockWorker[] = [];
-
-  onmessage: ((ev: MessageEvent) => void) | null = null;
-  onerror: ((ev: ErrorEvent) => void) | null = null;
-  onmessageerror: ((ev: MessageEvent) => void) | null = null;
-  postMessage = vi.fn(
-    (msg: { id: number; cmd?: string; graph?: { children?: { id: string }[] } }) => {
-      if (msg.cmd !== "layout") return;
-      const children = (msg.graph?.children ?? []).map((child, i) => ({
-        id: child.id,
-        x: (i + 1) * 100,
-        y: (i + 1) * 50,
-      }));
-      this.onmessage?.({ data: { id: msg.id, data: { id: "root", children } } } as MessageEvent);
-    },
-  );
-  terminate = vi.fn();
-
-  constructor() {
-    MockWorker.instances.push(this);
-  }
-}
+// The worker lifecycle IPC the context menu must reach (via useWorker).
+const ipc = vi.hoisted(() => ({
+  pauseWorker: vi.fn(async (_id: string) => {}),
+  resumeWorker: vi.fn(async (_id: string) => {}),
+  killWorker: vi.fn(async (_id: string) => {}),
+}));
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({ ...(await importOriginal()), ...ipc }));
 
 /**
  * jsdom has no layout engine, so a real `ResizeObserver` never fires and
@@ -95,14 +89,14 @@ function resetStores(): void {
 
 /** Waits for the ELK layout overlay to clear (the mocked worker has responded and state committed). */
 async function waitForLayoutSettled(): Promise<void> {
-  await vi.waitFor(() => {
+  await waitFor(() => {
     expect(screen.queryByText("Computing Layout")).not.toBeInTheDocument();
   });
 }
 
 describe("WorkerGraph — measured edges", () => {
   beforeEach(() => {
-    MockWorker.instances = [];
+    MockWorker.reset(true);
     vi.stubGlobal("Worker", MockWorker);
     vi.stubGlobal("ResizeObserver", MockResizeObserver);
   });
@@ -227,8 +221,8 @@ describe("WorkerGraph — measured edges", () => {
     // useElkLayout keys off (node ids + edge source->target pairs) is
     // unchanged, so this must never trigger a relayout, yet the badge
     // must still update: it's read fresh from the provenance store every
-    // render via withLiveNodeData, not baked into the ELK-round-tripped
-    // node data.
+    // render by the node itself (WorkerNode's own store subscription), not
+    // baked into the ELK-round-tripped node data.
     act(() => {
       useProvenanceStore.getState().ingestEvent(
         ev({
@@ -243,5 +237,237 @@ describe("WorkerGraph — measured edges", () => {
     expect(await screen.findByText("Wrote 1 File")).toBeInTheDocument();
     // The layout overlay never reappeared -- proves no relayout fired.
     expect(screen.queryByText("Computing Layout")).not.toBeInTheDocument();
+  });
+});
+
+/** The xyflow node wrapper for a worker id (focusable, carries the accessible name). */
+function nodeFor(id: string): HTMLElement {
+  const node = document.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`);
+  if (!node) throw new Error(`no node rendered for ${id}`);
+  return node;
+}
+
+describe("WorkerGraph — interactions", () => {
+  beforeEach(() => {
+    MockWorker.reset(true);
+    vi.stubGlobal("Worker", MockWorker);
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+  });
+
+  afterEach(() => {
+    resetStores();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  async function renderWith(...workers: Worker[]): Promise<void> {
+    act(() => {
+      for (const worker of workers) useWorkerStore.getState().addWorker(worker);
+    });
+    render(<WorkerGraph />);
+    await waitForLayoutSettled();
+  }
+
+  it("context-menu Kill reaches the kill IPC and drops the node only once the backend confirms", async () => {
+    const user = userEvent.setup();
+    const { promise, resolve } = Promise.withResolvers<void>();
+    ipc.killWorker.mockReturnValueOnce(promise);
+    await renderWith(
+      createWorker({ id: "w-a", name: "Alpha" }),
+      createWorker({ id: "w-b", name: "Beta" }),
+    );
+
+    fireEvent.contextMenu(nodeFor("w-a"));
+    await user.click(screen.getByRole("menuitem", { name: "Kill" }));
+
+    expect(ipc.killWorker).toHaveBeenCalledWith("w-a");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(useWorkerStore.getState().workers.has("w-a")).toBe(true); // still in flight
+    await act(async () => resolve());
+    expect(useWorkerStore.getState().workers.has("w-a")).toBe(false);
+    expect(screen.queryByText("Alpha")).not.toBeInTheDocument();
+  });
+
+  it("context-menu Pause reaches the pause IPC; Resume is unavailable for a running worker", async () => {
+    const user = userEvent.setup();
+    await renderWith(createWorker({ id: "w-a", name: "Alpha", state: "running" }));
+
+    fireEvent.contextMenu(nodeFor("w-a"));
+    expect(screen.getByRole("menuitem", { name: "Resume" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Pause" }));
+
+    expect(ipc.pauseWorker).toHaveBeenCalledWith("w-a");
+    await waitFor(() => expect(useWorkerStore.getState().workers.get("w-a")?.state).toBe("paused"));
+  });
+
+  it("the menu is labelled by its worker, takes focus, and closes on Escape", async () => {
+    const user = userEvent.setup();
+    await renderWith(createWorker({ id: "w-a", name: "Alpha" }));
+
+    fireEvent.contextMenu(nodeFor("w-a"));
+
+    expect(screen.getByRole("menu", { name: "Alpha" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Pause" })).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+    expect(screen.getByRole("menuitem", { name: "Kill" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("right-clicking a second node retargets the open menu instead of closing it", async () => {
+    await renderWith(
+      createWorker({ id: "w-a", name: "Alpha" }),
+      createWorker({ id: "w-b", name: "Beta" }),
+    );
+
+    fireEvent.contextMenu(nodeFor("w-a"));
+    fireEvent.pointerDown(nodeFor("w-b"));
+    fireEvent.contextMenu(nodeFor("w-b"));
+
+    expect(screen.getByRole("menu", { name: "Beta" })).toBeInTheDocument();
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+  });
+
+  it("removing the last worker removes its node and shows the empty state (no ghost node)", async () => {
+    await renderWith(createWorker({ id: "w-a", name: "Alpha" }));
+
+    act(() => useWorkerStore.getState().removeWorker("w-a"));
+
+    expect(screen.queryByText("Alpha")).not.toBeInTheDocument();
+    expect(await screen.findByText(/No Workers Running/)).toBeInTheDocument();
+  });
+
+  it("Backspace/Delete never remove a selected live worker's node", async () => {
+    const user = userEvent.setup();
+    await renderWith(
+      createWorker({ id: "w-a", name: "Alpha" }),
+      createWorker({ id: "w-b", name: "Beta" }),
+    );
+
+    // fireEvent: user-event's mousedown reaches d3-drag with no view under jsdom.
+    fireEvent.click(nodeFor("w-a"));
+    expect(nodeFor("w-a")).toHaveClass("selected");
+    await user.keyboard("{Backspace}{Delete}");
+
+    expect(screen.getByText("Alpha")).toBeInTheDocument();
+    expect(useWorkerStore.getState().workers.has("w-a")).toBe(true);
+  });
+
+  it("gives each node wrapper an accessible name and opens the detail panel on Enter", async () => {
+    const user = userEvent.setup();
+    await renderWith(createWorker({ id: "w-a", name: "Alpha", pid: 42 }));
+
+    const node = nodeFor("w-a");
+    // (jsdom never measures nodes, so xyflow keeps the wrapper visibility:
+    // hidden and computes no accessible name; assert the attribute.)
+    expect(node).toHaveAttribute("aria-label", "Worker Alpha, Status: Running, PID 42");
+    // The wrapper is the one tab stop: nothing inside the node is focusable.
+    expect(node.querySelectorAll("[tabindex]")).toHaveLength(0);
+    node.focus();
+    await user.keyboard("{Enter}");
+    // Selection landed in the ui atoms — the Workers page renders the panel.
+    expect(getDefaultStore().get(selectedWorkerIdAtom)).toBe("w-a");
+    expect(getDefaultStore().get(detailPanelOpenAtom)).toBe(true);
+  });
+
+  it("a PTY output chunk re-renders nothing in the graph", async () => {
+    const commits = vi.fn();
+    act(() => useWorkerStore.getState().addWorker(createWorker({ id: "w-a", name: "Alpha" })));
+    render(
+      <Profiler id="graph" onRender={commits}>
+        <WorkerGraph />
+      </Profiler>,
+    );
+    await waitForLayoutSettled();
+    commits.mockClear();
+
+    act(() => {
+      for (let i = 0; i < 5; i++) useWorkerStore.getState().appendOutput("w-a", `chunk ${i}\n`);
+    });
+
+    expect(commits).not.toHaveBeenCalled();
+  });
+
+  it("imports a workflow onto live workers only: positions and annotations, nothing fabricated", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("isTauri", true);
+    vi.mocked(open).mockResolvedValueOnce("/tmp/wf.json");
+    vi.mocked(readTextFile).mockResolvedValueOnce(
+      JSON.stringify({
+        id: "wf",
+        name: "Saved",
+        nodes: [
+          { id: "w-a", type: "worker", position: { x: 5, y: 5 }, data: {} },
+          { id: "w-gone", type: "worker", position: { x: 9, y: 9 }, data: {} },
+        ],
+        edges: [
+          { id: "m-1", source: "w-a", target: "w-b" },
+          { id: "m-2", source: "w-a", target: "w-gone" },
+        ],
+      }),
+    );
+    await renderWith(
+      createWorker({ id: "w-a", name: "Alpha" }),
+      createWorker({ id: "w-b", name: "Beta" }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Import Workflow" }));
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith("Workflow Imported", {
+        description: "Placed 1 Of 2 Nodes, Added 1 Annotations",
+      }),
+    );
+    expect(screen.queryByText("w-gone")).not.toBeInTheDocument();
+    // The imported annotation renders as the manual kind, in its own legend group.
+    expect(screen.getByText("Annotation")).toBeInTheDocument();
+    expect(screen.getByText("Manual")).toBeInTheDocument();
+  });
+});
+
+describe("toFlowEdges", () => {
+  it("builds non-deletable measured edges with an arrowhead and a worker-named accessible label", () => {
+    const [edge] = toFlowEdges(
+      [{ from: "w-a", to: "w-b", kind: "spawn", count: 3, lastSeq: 9 } as never],
+      { "w-a": "Alpha", "w-b": "Beta" },
+    );
+
+    expect(edge).toMatchObject({
+      id: "prov-w-a-w-b-spawn",
+      deletable: false,
+      markerEnd: { type: MarkerType.ArrowClosed },
+      ariaLabel: "Spawn: Alpha To Beta (×3)",
+      data: { kind: "spawn", count: 3, lastSeq: 9 },
+    });
+  });
+});
+
+describe("reduceNodeUi", () => {
+  it("keeps a dragged position, measured size and selection per node", () => {
+    const ui = reduceNodeUi(new Map(), [
+      { type: "position", id: "a", position: { x: 1, y: 2 }, dragging: true },
+      { type: "dimensions", id: "a", dimensions: { width: 220, height: 100 } },
+      { type: "select", id: "a", selected: true },
+    ]);
+
+    expect(ui.get("a")).toEqual({
+      position: { x: 1, y: 2 },
+      dragging: true,
+      measured: { width: 220, height: 100 },
+      selected: true,
+    });
+  });
+
+  it("a drag end without a position keeps the last one", () => {
+    const start = reduceNodeUi(new Map(), [
+      { type: "position", id: "a", position: { x: 1, y: 2 } },
+    ]);
+
+    const ended = reduceNodeUi(start, [{ type: "position", id: "a", dragging: false }]);
+
+    expect(ended.get("a")?.position).toEqual({ x: 1, y: 2 });
   });
 });

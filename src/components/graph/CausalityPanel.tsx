@@ -1,11 +1,13 @@
+import "./graph.css";
+
 import { useSetAtom } from "jotai";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import * as z from "zod";
+import { useShallow } from "zustand/react/shallow";
 import { Spinner } from "#components/ui/Spinner";
 import { type DomainEvent, DomainEventSchema } from "#lib/event-bus";
 import { invoke } from "#lib/tauri";
 import { useProvenanceStore } from "#store/provenance";
-import type { Worker } from "#store/types";
 import { detailPanelOpenAtom, selectedWorkerIdAtom } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
 
@@ -32,12 +34,10 @@ const EventsSincePageSchema = z.array(DomainEventSchema);
  * Resolves the event at `seq`: the bySeq ring first (the inspector's
  * fast path — populated by every non-telemetry envelope that has
  * flowed through this session, see `#store/provenance`), falling back
- * to a single-row `events_since` backfill on a miss. This is why
- * `events_since` grew an optional `limit` (see
- * `docs/api.md#events_since`) — a bulk backfill page would be
- * needlessly wasteful for "what happened at exactly this one seq".
- * Returns `null` when nothing is found at that exact seq (a malformed
- * response, or a seq that was never persisted).
+ * to a single-row `events_since` backfill on a miss (`limit: 1` — see
+ * `docs/api.md#events_since`). Returns `null` when nothing is found at
+ * that exact seq (a malformed response, or a seq that was never
+ * persisted).
  */
 async function resolveEvent(
   seq: number,
@@ -85,16 +85,21 @@ export interface CausalityWalkResult {
  * ends the walk early and sets {@link CausalityWalkResult.incomplete} —
  * the rows already collected are still true, just explicitly marked as
  * possibly short of the root rather than silently passed off as complete.
+ *
+ * `signal` stops the walk between hops (no further `events_since` calls)
+ * once aborted; the pending promise then rejects with the abort reason.
  */
 export async function walkCausalityChain(
   startSeq: number,
   ring: ReadonlyMap<number, DomainEvent>,
+  signal?: AbortSignal,
 ): Promise<CausalityWalkResult> {
   const chain: DomainEvent[] = []; // collected most-recent-first
   let currentSeq: number | undefined = startSeq;
   let incomplete = false;
 
   while (currentSeq !== undefined && chain.length < MAX_CAUSALITY_HOPS) {
+    signal?.throwIfAborted();
     const event = await resolveEvent(currentSeq, ring);
     if (!event) {
       incomplete = true; // genuine lookup miss -- stop with whatever's already collected
@@ -108,9 +113,12 @@ export async function walkCausalityChain(
   return { rows: chain.toReversed(), truncated, incomplete };
 }
 
-function workerLabel(id: string | undefined, workers: ReadonlyMap<string, Worker>): string {
+/** Display name per live worker id. */
+type LiveNames = Readonly<Record<string, string>>;
+
+function workerLabel(id: string | undefined, names: LiveNames): string {
   if (!id) return "An Unknown Worker";
-  return workers.get(id)?.name ?? id.slice(0, 8);
+  return names[id] ?? id.slice(0, 8);
 }
 
 function titleCaseType(type: string): string {
@@ -127,7 +135,7 @@ interface RowDescription {
 }
 
 /** Renders one causality row's chrome per event type — Title Case, matching the plan's "Worker A's Turn @412 -> Spawned B @418" example shape. */
-function describeRow(event: DomainEvent, workers: ReadonlyMap<string, Worker>): RowDescription {
+function describeRow(event: DomainEvent, names: LiveNames): RowDescription {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
   const workerIdOf = (key: string): string | undefined =>
     typeof payload[key] === "string" ? (payload[key] as string) : undefined;
@@ -135,20 +143,20 @@ function describeRow(event: DomainEvent, workers: ReadonlyMap<string, Worker>): 
   switch (event.type) {
     case "agent_turn_started": {
       const workerId = workerIdOf("workerId");
-      return { text: `${workerLabel(workerId, workers)}'s Turn`, workerId };
+      return { text: `${workerLabel(workerId, names)}'s Turn`, workerId };
     }
     case "worker_spawned": {
       const workerId = workerIdOf("workerId");
-      return { text: `Spawned ${workerLabel(workerId, workers)}`, workerId };
+      return { text: `Spawned ${workerLabel(workerId, names)}`, workerId };
     }
     case "worker_killed": {
       const workerId = workerIdOf("workerId");
-      return { text: `Killed ${workerLabel(workerId, workers)}`, workerId };
+      return { text: `Killed ${workerLabel(workerId, names)}`, workerId };
     }
     case "worker_input": {
       const workerId = workerIdOf("workerId");
       const preview = typeof payload.preview === "string" ? payload.preview.trim() : "";
-      const label = workerLabel(workerId, workers);
+      const label = workerLabel(workerId, names);
       return { text: preview ? `${label} Ran ${preview}` : `${label} Received Input`, workerId };
     }
     case "bus_message": {
@@ -156,7 +164,7 @@ function describeRow(event: DomainEvent, workers: ReadonlyMap<string, Worker>): 
       const toWorker = workerIdOf("toWorker");
       const topic = typeof payload.topic === "string" ? payload.topic : "A Topic";
       return {
-        text: `${workerLabel(fromWorker, workers)} Sent "${topic}" To ${workerLabel(toWorker, workers)}`,
+        text: `${workerLabel(fromWorker, names)} Sent "${topic}" To ${workerLabel(toWorker, names)}`,
         workerId: toWorker ?? fromWorker,
       };
     }
@@ -169,6 +177,38 @@ function describeRow(event: DomainEvent, workers: ReadonlyMap<string, Worker>): 
   }
 }
 
+const rowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+  width: "100%",
+  padding: "10px 12px",
+  background: "oklch(0.13 0.03 220 / 0.7)",
+  border: "1px solid oklch(0.24 0.04 220)",
+  borderRadius: 8,
+  textAlign: "left",
+  color: "oklch(0.85 0.03 220)",
+  fontFamily: "var(--font-body)",
+  fontSize: "0.8125rem",
+};
+
+function SeqLabel({ seq }: { readonly seq: number }): React.ReactElement {
+  return (
+    <span
+      style={{
+        fontFamily: "var(--font-mono)",
+        fontSize: "0.6875rem",
+        color: "oklch(0.55 0.04 220)",
+        fontVariantNumeric: "tabular-nums",
+        flexShrink: 0,
+      }}
+    >
+      @{seq}
+    </span>
+  );
+}
+
 interface CausalityPanelProps {
   /** Seq of the measured event to walk backward from — an edge's `lastSeq`, or a worker's most recent inbound event. */
   readonly startSeq: number;
@@ -176,318 +216,214 @@ interface CausalityPanelProps {
 }
 
 /**
- * Causality inspector — opened from a measured edge click
- * (`WorkerGraph.tsx`'s `handleEdgeClick`) or from `WorkerDetail`'s
- * "View Causality" action, both via the shared `causalityInspectorAtom`.
- * Walks backward from `startSeq` (see {@link walkCausalityChain}) and
- * renders the trace as a vertical, root-first list — rows click through
- * to the worker they name, when that worker is still live.
+ * Causality inspector — opened from a measured edge (`WorkerGraph`'s edge
+ * click or Enter) or from `WorkerDetail`'s "View Causality" action, both
+ * via the shared `causalityInspectorAtom`. Walks backward from `startSeq`
+ * (see {@link walkCausalityChain}) and renders the trace as a root-first
+ * ordered list; a row naming a live worker is a button that selects that
+ * worker, opens its detail panel and closes the inspector.
+ *
+ * A native modal `<dialog>` (`showModal()`): the browser provides the
+ * top layer, an inert background, the focus trap, focus restore on
+ * close, Escape, and (`closedby="any"`) closing on a backdrop click. Key
+ * events still bubble to `document`, so the graph's own shortcuts stay
+ * gated on the inspector atom. A fresh panel mounts per open cycle, and
+ * closing it aborts a walk still in flight.
  *
  * Forward traversal (from a cause to everything it caused) is
  * deliberately out of scope for v1.
  */
 export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): React.ReactElement {
-  const workers = useWorkerStore((s) => s.workers);
+  // Names of live workers, compared shallowly: a PTY output chunk (which
+  // replaces a worker object) does not re-render the open inspector.
+  const names = useWorkerStore(
+    useShallow((s) =>
+      Object.fromEntries(s.workers.values().map((w) => [w.id, w.name ?? w.id.slice(0, 8)])),
+    ),
+  );
   const setSelectedWorkerId = useSetAtom(selectedWorkerIdAtom);
   const setDetailOpen = useSetAtom(detailPanelOpenAtom);
   const [result, setResult] = useState<CausalityWalkResult | null>(null);
-  const [loading, setLoading] = useState(true);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const unmountingRef = useRef(false);
+  const titleId = useId();
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setResult(null);
-    // Read the ring imperatively (not via a reactive selector) -- the
-    // ring's Map reference changes on nearly every incoming event, and
-    // subscribing to it here would re-run the walk (and flicker the
-    // loading state) on every tick the panel happens to stay open for.
-    // A snapshot taken once, at walk-start, is correct: a ring miss
-    // always falls through to a live backfill regardless of how stale
-    // the snapshot is.
-    const ring = useProvenanceStore.getState().bySeq;
-    void walkCausalityChain(startSeq, ring).then((r) => {
-      if (!cancelled) {
-        setResult(r);
-        setLoading(false);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
+    const controller = new AbortController();
+    // The ring is read once, at walk start (its Map changes on nearly
+    // every event, and a subscription would restart the walk). A stale
+    // snapshot is still correct: a ring miss falls through to a backfill.
+    walkCausalityChain(startSeq, useProvenanceStore.getState().bySeq, controller.signal)
+      .then(setResult)
+      .catch(() => {
+        // Aborted on close — nothing left to render.
+      });
+    return () => controller.abort();
   }, [startSeq]);
 
-  // Focus management: a modal dialog must move focus INTO itself on
-  // open (nothing did by default -- role="dialog" alone doesn't), and
-  // restore it to whatever had focus before on close, so a keyboard/
-  // screen-reader user isn't left on (or dropped back onto) an element
-  // behind an overlay they can no longer reach. Runs once per mount,
-  // not per `startSeq` change -- WorkerGraph/WorkerDetail always mount
-  // a fresh CausalityPanel per open cycle (the atom holds `{startSeq}`
-  // or `null`, never rewritten to a new seq while already open), so
-  // "on open"/"on close" and "on mount"/"on unmount" coincide here.
-  useEffect(() => {
-    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
-    closeButtonRef.current?.focus();
+  // Open as a modal before paint; close before the node leaves the
+  // document on unmount, so the browser restores focus to the opener.
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return undefined;
+    unmountingRef.current = false;
+    dialog.showModal();
     return () => {
-      previouslyFocusedRef.current?.focus?.();
+      unmountingRef.current = true;
+      if (dialog.open) dialog.close();
     };
   }, []);
 
-  // Focus trap: Tab/Shift+Tab cycle among the dialog's own focusable
-  // elements only, never escaping to the graph/page behind it. Recomputes
-  // the focusable set on every Tab press (not once at mount) since rows
-  // appear asynchronously once the walk resolves.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== "Tab" || !panelRef.current) return;
-      const focusable = panelRef.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      );
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
+  const close = (): void => dialogRef.current?.close();
 
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, []);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [onClose]);
-
-  // Click-outside-to-close via a document-level listener (same pattern as
-  // GraphContextMenu.tsx) rather than an onClick handler on the backdrop
-  // div itself — a full-viewport div is not a semantically interactive
-  // element, and this avoids needing to fake one up with a role/tabIndex
-  // just to catch a click.
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [onClose]);
-
-  const handleRowClick = (workerId: string | undefined) => {
-    if (!workerId || !workers.has(workerId)) return;
+  const handleRowClick = (workerId: string): void => {
     setSelectedWorkerId(workerId);
     setDetailOpen(true);
+    close();
   };
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 60,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "oklch(0.04 0.01 220 / 0.55)",
-        backdropFilter: "blur(2px)",
+    <dialog
+      ref={dialogRef}
+      className="causality-panel"
+      aria-labelledby={titleId}
+      closedby="any"
+      onClose={(event) => {
+        // `close` is delivered as a queued task. Ignore it when this panel
+        // is unmounting, and when the dialog is open again by then —
+        // StrictMode's effect replay closes and re-opens it on mount, and
+        // that stale event must not report a close.
+        if (!unmountingRef.current && !event.currentTarget.open) onClose();
       }}
     >
       <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Causality Trace"
         style={{
-          width: 420,
-          maxHeight: "70vh",
           display: "flex",
-          flexDirection: "column",
-          background: "oklch(0.10 0.03 220)",
-          border: "1px solid oklch(0.28 0.05 220)",
-          borderRadius: 12,
-          boxShadow: "0 0 0 1px oklch(0.78 0.18 205 / 0.1), 0 16px 48px oklch(0.06 0.02 220 / 0.6)",
-          overflow: "hidden",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "14px 16px",
+          borderBottom: "1px solid oklch(0.22 0.04 220)",
         }}
       >
-        <div
+        <h2
+          id={titleId}
           style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "14px 16px",
-            borderBottom: "1px solid oklch(0.22 0.04 220)",
+            fontFamily: "var(--font-display)",
+            fontSize: "0.9375rem",
+            fontWeight: 600,
+            color: "oklch(0.95 0.02 220)",
+            margin: 0,
           }}
         >
-          <h2
+          Causality Trace
+        </h2>
+        <button
+          type="button"
+          onClick={close}
+          aria-label="Close Causality Trace"
+          className="graph-icon-button"
+        >
+          <svg width={14} height={14} viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path
+              d="M2 2l10 10M12 2L2 12"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+      </div>
+
+      <div
+        className="scroll-area"
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          padding: 16,
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {result === null && (
+          <div role="status" style={{ display: "flex", justifyContent: "center", padding: 24 }}>
+            <Spinner size="md" />
+          </div>
+        )}
+
+        {/* Terminal placeholder for a genuine lookup miss (`incomplete`)
+            — rendered FIRST (it's the earliest point in the chain the
+            walk couldn't resolve), distinct in both wording and style
+            from a real root so the topmost thing on screen never reads
+            as "this is where causality began" when it's actually "the
+            trail went cold here". Covers both "nothing at all" (zero
+            rows) and "some rows, then a miss". */}
+        {result?.incomplete && (
+          <p
             style={{
-              fontFamily: "var(--font-display)",
-              fontSize: "0.9375rem",
-              fontWeight: 600,
-              color: "oklch(0.95 0.02 220)",
               margin: 0,
-            }}
-          >
-            Causality Trace
-          </h2>
-          <button
-            ref={closeButtonRef}
-            type="button"
-            onClick={onClose}
-            aria-label="Close Causality Trace"
-            style={{
-              width: 28,
-              height: 28,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "oklch(0 0 0 / 0)",
-              border: "none",
-              borderRadius: 6,
+              fontFamily: "var(--font-body)",
+              fontSize: "0.75rem",
+              fontStyle: "italic",
               color: "oklch(0.55 0.04 220)",
-              cursor: "pointer",
-              fontSize: "1rem",
+              textAlign: "center",
+              padding: "10px 12px",
+              border: "1px dashed oklch(0.30 0.05 220)",
+              borderRadius: 8,
             }}
           >
-            <svg width={14} height={14} viewBox="0 0 14 14" fill="none">
-              <title>Close</title>
-              <path
-                d="M2 2l10 10M12 2L2 12"
-                stroke="currentColor"
-                strokeWidth={1.5}
-                strokeLinecap="round"
-              />
-            </svg>
-          </button>
-        </div>
+            Cause Event Not Available (Ephemeral Or Pruned)
+          </p>
+        )}
 
-        <div
-          className="scroll-area"
-          style={{
-            flex: 1,
-            overflowY: "auto",
-            padding: 16,
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          {loading && (
-            <div style={{ display: "flex", justifyContent: "center", padding: 24 }}>
-              <Spinner size="md" />
-            </div>
-          )}
-
-          {/* Terminal placeholder for a genuine lookup miss (`incomplete`)
-              — rendered FIRST (it's the earliest point in the chain the
-              walk couldn't resolve), distinct in both wording and style
-              from a real root so the topmost thing on screen never reads
-              as "this is where causality began" when it's actually "the
-              trail went cold here". Covers both "nothing at all" (zero
-              rows) and "some rows, then a miss" uniformly — the old
-              generic "Causality Trace Unavailable" message is exactly
-              the zero-rows case of this, so it's subsumed rather than
-              duplicated. */}
-          {!loading && result?.incomplete && (
-            <div
-              style={{
-                fontFamily: "var(--font-body)",
-                fontSize: "0.75rem",
-                fontStyle: "italic",
-                color: "oklch(0.55 0.04 220)",
-                textAlign: "center",
-                padding: "10px 12px",
-                border: "1px dashed oklch(0.30 0.05 220)",
-                borderRadius: 8,
-              }}
-            >
-              Cause Event Not Available (Ephemeral Or Pruned)
-            </div>
-          )}
-
-          {!loading &&
-            result &&
-            result.rows.map((row, index) => {
-              const { text, workerId } = describeRow(row, workers);
-              const clickable = workerId != null && workers.has(workerId);
-              const showArrowAbove = index > 0 || result.incomplete;
+        {result && result.rows.length > 0 && (
+          <ol aria-label="Causes, Earliest First" className="causality-panel__trace">
+            {result.rows.map((row, index) => {
+              const { text, workerId } = describeRow(row, names);
+              const liveWorkerId =
+                workerId != null && Object.hasOwn(names, workerId) ? workerId : null;
               return (
-                <div key={row.seq} style={{ display: "flex", flexDirection: "column" }}>
-                  {showArrowAbove && (
-                    <div
-                      aria-hidden="true"
-                      style={{
-                        alignSelf: "center",
-                        color: "oklch(0.45 0.04 220)",
-                        fontSize: "0.875rem",
-                        lineHeight: 1,
-                        padding: "2px 0",
-                      }}
-                    >
+                <li key={row.seq}>
+                  {(index > 0 || result.incomplete) && (
+                    <span aria-hidden="true" className="causality-panel__arrow">
                       ↓
+                    </span>
+                  )}
+                  {liveWorkerId ? (
+                    <button
+                      type="button"
+                      className="causality-panel__row"
+                      style={{ ...rowStyle, cursor: "pointer" }}
+                      onClick={() => handleRowClick(liveWorkerId)}
+                    >
+                      <span>{text}</span>
+                      <SeqLabel seq={row.seq} />
+                    </button>
+                  ) : (
+                    <div style={rowStyle}>
+                      <span>{text}</span>
+                      <SeqLabel seq={row.seq} />
                     </div>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => handleRowClick(workerId)}
-                    disabled={!clickable}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: 12,
-                      width: "100%",
-                      padding: "10px 12px",
-                      background: "oklch(0.13 0.03 220 / 0.7)",
-                      border: "1px solid oklch(0.24 0.04 220)",
-                      borderRadius: 8,
-                      textAlign: "left",
-                      cursor: clickable ? "pointer" : "default",
-                      color: "oklch(0.85 0.03 220)",
-                      fontFamily: "var(--font-body)",
-                      fontSize: "0.8125rem",
-                    }}
-                  >
-                    <span>{text}</span>
-                    <span
-                      style={{
-                        fontFamily: "var(--font-mono)",
-                        fontSize: "0.6875rem",
-                        color: "oklch(0.55 0.04 220)",
-                        fontVariantNumeric: "tabular-nums",
-                        flexShrink: 0,
-                      }}
-                    >
-                      @{row.seq}
-                    </span>
-                  </button>
-                </div>
+                </li>
               );
             })}
+          </ol>
+        )}
 
-          {!loading && result?.truncated && (
-            <span
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: "0.6875rem",
-                color: "oklch(0.55 0.04 220)",
-                textAlign: "center",
-                marginTop: 12,
-              }}
-            >
-              Trace Truncated At {MAX_CAUSALITY_HOPS} Hops.
-            </span>
-          )}
-        </div>
+        {result?.truncated && (
+          <p
+            style={{
+              margin: "12px 0 0",
+              fontFamily: "var(--font-mono)",
+              fontSize: "0.6875rem",
+              color: "oklch(0.55 0.04 220)",
+              textAlign: "center",
+            }}
+          >
+            Trace Truncated At {MAX_CAUSALITY_HOPS} Hops.
+          </p>
+        )}
       </div>
-    </div>
+    </dialog>
   );
 }

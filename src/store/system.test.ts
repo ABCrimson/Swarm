@@ -1,141 +1,88 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { downsampledHistory, useSystemStore } from "#store/system";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { MetricsSample } from "#store/system";
+import { MAX_HISTORY, useSystemStore } from "#store/system";
 import type { MetricPoint } from "#store/types";
 
-function resetStore(): void {
-  useSystemStore.getState().clearHistory();
-  useSystemStore.getState().updateMetrics({
-    cpuPercent: 0,
-    memoryMb: 0,
-    workerCount: 0,
+function sample(overrides: Partial<MetricsSample> = {}): MetricsSample {
+  return {
+    cpuPercent: 50,
+    memoryMb: 1024,
+    memoryTotalMb: 16_384,
+    workerCount: 2,
     aiReqPerSec: 0,
     tokensPerSec: 0,
-  });
+    ...overrides,
+  };
 }
 
-function makePoint(time: number, cpu = 50, memory = 60, workerCount = 2): MetricPoint {
-  return { time, cpu, memory, workerCount };
+function point(time: number): MetricPoint {
+  return { time, cpu: 1, memory: 1, workerCount: 1 };
 }
 
 describe("SystemStore", () => {
-  beforeEach(resetStore);
-  afterEach(resetStore);
+  beforeEach(() => {
+    useSystemStore.setState(useSystemStore.getInitialState(), true);
+  });
 
-  describe("updateMetrics", () => {
-    it("updates CPU metrics", () => {
-      useSystemStore.getState().updateMetrics({ cpuPercent: 75 });
-
-      expect(useSystemStore.getState().metrics.cpuPercent).toBe(75);
-    });
-
-    it("updates multiple metrics at once", () => {
-      useSystemStore.getState().updateMetrics({
-        cpuPercent: 42,
-        memoryMb: 1024,
-        workerCount: 5,
-      });
+  describe("recordSample", () => {
+    it("replaces every current value, including tokensPerSec", () => {
+      useSystemStore
+        .getState()
+        .recordSample(sample({ cpuPercent: 42, memoryMb: 2048, tokensPerSec: 12.5 }), 1);
 
       const { metrics } = useSystemStore.getState();
-      expect(metrics.cpuPercent).toBe(42);
-      expect(metrics.memoryMb).toBe(1024);
-      expect(metrics.workerCount).toBe(5);
+      expect(metrics).toMatchObject({ cpuPercent: 42, memoryMb: 2048, tokensPerSec: 12.5 });
     });
 
-    it("preserves fields not in the update", () => {
-      useSystemStore.getState().updateMetrics({ tokensPerSec: 100 });
-      useSystemStore.getState().updateMetrics({ cpuPercent: 55 });
+    it("appends a history point stamped with the given time", () => {
+      useSystemStore.getState().recordSample(sample({ cpuPercent: 7, workerCount: 3 }), 123);
 
-      expect(useSystemStore.getState().metrics.tokensPerSec).toBe(100);
+      expect(useSystemStore.getState().metrics.history).toEqual([
+        { time: 123, cpu: 7, memory: 1024, workerCount: 3 },
+      ]);
     });
-  });
 
-  describe("pushHistory (ring buffer)", () => {
-    it("pushes a metric point to the history", () => {
-      const point = makePoint(1000);
-      useSystemStore.getState().pushHistory(point);
+    it("keeps history in insertion order", () => {
+      const { recordSample } = useSystemStore.getState();
+      recordSample(sample(), 1);
+      recordSample(sample(), 2);
+      recordSample(sample(), 3);
+
+      expect(useSystemStore.getState().metrics.history.map((p) => p.time)).toEqual([1, 2, 3]);
+    });
+
+    it("notifies subscribers once per sample (values and history in one update)", () => {
+      let notifications = 0;
+      const unsubscribe = useSystemStore.subscribe(() => {
+        notifications += 1;
+      });
+      useSystemStore.getState().recordSample(sample(), 1);
+      unsubscribe();
+
+      expect(notifications).toBe(1);
+    });
+
+    it(`caps history at MAX_HISTORY (${MAX_HISTORY}), dropping the oldest`, () => {
+      // Seed a full history directly; the append/cap arithmetic itself is
+      // covered by appendCapped's tests in metrics-aggregation.test.ts.
+      const full = Array.from({ length: MAX_HISTORY }, (_, i) => point(i));
+      useSystemStore.setState({ metrics: { ...useSystemStore.getState().metrics, history: full } });
+
+      useSystemStore.getState().recordSample(sample(), MAX_HISTORY);
 
       const { history } = useSystemStore.getState().metrics;
-      expect(history).toHaveLength(1);
-      expect(history[0]).toEqual(point);
+      expect(history).toHaveLength(MAX_HISTORY);
+      expect(history.at(0)?.time).toBe(1);
+      expect(history.at(-1)?.time).toBe(MAX_HISTORY);
     });
 
-    it("maintains insertion order for multiple points", () => {
-      const { pushHistory } = useSystemStore.getState();
-      pushHistory(makePoint(1));
-      pushHistory(makePoint(2));
-      pushHistory(makePoint(3));
+    it("never mutates the previous history array", () => {
+      useSystemStore.getState().recordSample(sample(), 1);
+      const before = useSystemStore.getState().metrics.history;
 
-      const { history } = useSystemStore.getState().metrics;
-      expect(history).toHaveLength(3);
-      expect(history[0].time).toBe(1);
-      expect(history[1].time).toBe(2);
-      expect(history[2].time).toBe(3);
-    });
+      useSystemStore.getState().recordSample(sample(), 2);
 
-    // 3610 pushes each rebuild + re-freeze the full history array under immer,
-    // so this test is CPU-bound (~6s) and load-sensitive; the default 5s
-    // timeout flakes. Production pushes once per metrics tick and is unaffected.
-    it("caps at MAX_HISTORY (3600) and wraps around", { timeout: 30_000 }, () => {
-      const { pushHistory } = useSystemStore.getState();
-
-      // Push 3610 points (10 over the limit)
-      for (let i = 0; i < 3610; i++) {
-        pushHistory(makePoint(i));
-      }
-
-      const { history } = useSystemStore.getState().metrics;
-      expect(history).toHaveLength(3600);
-      // Oldest should be index 10 (first 10 were evicted)
-      expect(history[0].time).toBe(10);
-      // Last should be 3609
-      expect(history[history.length - 1].time).toBe(3609);
-    });
-  });
-
-  describe("clearHistory", () => {
-    it("clears all history and resets the buffer", () => {
-      const { pushHistory, clearHistory } = useSystemStore.getState();
-      pushHistory(makePoint(1));
-      pushHistory(makePoint(2));
-
-      clearHistory();
-
-      expect(useSystemStore.getState().metrics.history).toHaveLength(0);
-    });
-
-    it("allows pushing new data after clearing", () => {
-      const { pushHistory, clearHistory } = useSystemStore.getState();
-      pushHistory(makePoint(1));
-      clearHistory();
-      pushHistory(makePoint(100));
-
-      expect(useSystemStore.getState().metrics.history).toHaveLength(1);
-      expect(useSystemStore.getState().metrics.history[0].time).toBe(100);
-    });
-  });
-
-  describe("downsampledHistory", () => {
-    it("returns all points when count is below maxPoints", () => {
-      const { pushHistory } = useSystemStore.getState();
-      for (let i = 0; i < 10; i++) {
-        pushHistory(makePoint(i, i * 10));
-      }
-
-      const result = downsampledHistory(60);
-      expect(result).toHaveLength(10);
-    });
-
-    it("downsamples to maxPoints when history exceeds threshold", () => {
-      const { pushHistory } = useSystemStore.getState();
-      for (let i = 0; i < 200; i++) {
-        pushHistory(makePoint(i, Math.sin(i / 10) * 50 + 50));
-      }
-
-      const result = downsampledHistory(20);
-      expect(result.length).toBeLessThanOrEqual(20);
-      // First and last points are always preserved by LTTB
-      expect(result[0].time).toBe(0);
-      expect(result[result.length - 1].time).toBe(199);
+      expect(before.map((p) => p.time)).toEqual([1]);
     });
   });
 });

@@ -1,82 +1,66 @@
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
-import { immer } from "zustand/middleware/immer";
-import type { RingBuffer } from "#lib/metrics-aggregation";
-import {
-  createRingBuffer,
-  downsampleLTTB,
-  ringBufferPush,
-  ringBufferToArray,
-} from "#lib/metrics-aggregation";
+import { appendCapped } from "#lib/metrics-aggregation";
 import type { MetricPoint, SystemMetrics } from "#store/types";
+
+/** Point-in-time values carried by one `system_metrics` sample. */
+export type MetricsSample = Omit<SystemMetrics, "history">;
 
 /** Reactive state slice for system-level metrics. */
 interface SystemStoreState {
   readonly metrics: SystemMetrics;
-  /** Ring buffer for efficient fixed-size history storage. */
-  readonly historyBuffer: RingBuffer<MetricPoint>;
 }
 
 /** Mutation actions for updating system metrics and history. */
 interface SystemStoreActions {
-  readonly updateMetrics: (metrics: Partial<SystemMetrics>) => void;
-  readonly pushHistory: (point: MetricPoint) => void;
-  readonly clearHistory: () => void;
+  /**
+   * Records one sample: replaces the current values and appends a history
+   * point stamped `time`, in a single store update (one notification per
+   * tick for every subscriber).
+   */
+  readonly recordSample: (sample: MetricsSample, time: number) => void;
 }
 
-/** 3600 samples = 30 min at 500ms intervals. */
-const MAX_HISTORY = 3600;
+/**
+ * History retained for the Sessions page's CSV export: 3600 samples is
+ * 30 minutes at the backend's 500ms cadence. The charts render only the
+ * trailing `MAX_CHART_POINTS` of it.
+ */
+export const MAX_HISTORY = 3600;
 
 /**
- * Zustand store for system performance metrics.
+ * Zustand store for system performance metrics (CPU, memory, worker
+ * count, AI throughput) plus a capped sample history for charts and CSV
+ * export.
  *
- * Tracks CPU, memory, worker count, and AI throughput with a
- * ring-buffered history for time-series chart rendering.
+ * Plain immutable updates, deliberately without immer: drafting a
+ * 3600-element history on every tick copied and re-froze the whole
+ * array each time, where appending to a capped array is one shallow copy.
  */
 export const useSystemStore = create<SystemStoreState & SystemStoreActions>()(
-  subscribeWithSelector(
-    immer((set) => ({
-      metrics: {
-        cpuPercent: 0,
-        memoryMb: 0,
-        memoryTotalMb: 0,
-        workerCount: 0,
-        aiReqPerSec: 0,
-        tokensPerSec: 0,
-        history: [],
-      },
+  subscribeWithSelector((set) => ({
+    metrics: {
+      cpuPercent: 0,
+      memoryMb: 0,
+      memoryTotalMb: 0,
+      workerCount: 0,
+      aiReqPerSec: 0,
+      tokensPerSec: 0,
+      history: [],
+    },
 
-      historyBuffer: createRingBuffer<MetricPoint>(MAX_HISTORY),
-
-      updateMetrics(updates) {
-        set((s) => {
-          Object.assign(s.metrics, updates);
-        });
-      },
-
-      pushHistory(point) {
-        set((s) => {
-          s.historyBuffer = ringBufferPush(s.historyBuffer, point);
-          // Keep the flat history array synced for backward compatibility
-          s.metrics.history = ringBufferToArray(s.historyBuffer);
-        });
-      },
-
-      clearHistory() {
-        set((s) => {
-          s.historyBuffer = createRingBuffer<MetricPoint>(MAX_HISTORY);
-          s.metrics.history = [];
-        });
-      },
-    })),
-  ),
+    recordSample(sample, time) {
+      set(({ metrics }) => {
+        const point: MetricPoint = {
+          time,
+          cpu: sample.cpuPercent,
+          memory: sample.memoryMb,
+          workerCount: sample.workerCount,
+        };
+        return {
+          metrics: { ...sample, history: appendCapped(metrics.history, point, MAX_HISTORY) },
+        };
+      });
+    },
+  })),
 );
-
-/**
- * Selector: returns downsampled history for chart rendering.
- * Uses LTTB algorithm to reduce to at most `maxPoints` data points.
- */
-export function downsampledHistory(maxPoints = 60): MetricPoint[] {
-  const history = useSystemStore.getState().metrics.history;
-  return downsampleLTTB(history, maxPoints);
-}

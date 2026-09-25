@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { memoryAvailableMb, memPercent, memSeverity } from "#lib/memory";
+import { memoryFreeMb, memPercent, memSeverity } from "#lib/memory";
+
+/** The alert system's default memory bands (see DEFAULT_THRESHOLDS in #lib/alerts). */
+const BANDS = { warning: 80, critical: 90 };
 
 // ── memPercent ──────────────────────────────────────
 
@@ -11,9 +14,7 @@ describe("memPercent", () => {
   it("computes the real-hardware regression case (256GB machine)", () => {
     // Bug report: 35,389 MB used on a 256GB (262,144 MB) machine should
     // read ~13.5%, not 216% (which came from dividing by a hardcoded 16GB).
-    const pct = memPercent(35_389, 262_144);
-    expect(pct).toBeDefined();
-    expect(pct as number).toBeCloseTo(13.5, 1);
+    expect(memPercent(35_389, 262_144)).toBeCloseTo(13.5, 1);
   });
 
   it("returns undefined when total is zero (divide-by-zero guard)", () => {
@@ -42,63 +43,46 @@ describe("memPercent", () => {
 // ── memSeverity ─────────────────────────────────────
 
 describe("memSeverity", () => {
-  it("returns 'good' below the warning threshold", () => {
-    expect(memSeverity(1024, 16_384)).toBe("good"); // ~6.25%
+  it("returns 'good' below the warning band", () => {
+    expect(memSeverity(79.9, 100, BANDS)).toBe("good");
   });
 
-  it("returns 'good' exactly at the warning threshold (strict >)", () => {
-    expect(memSeverity(70, 100)).toBe("good"); // exactly 70%
+  it("returns 'warning' exactly at the warning band (inclusive, like the alert toasts)", () => {
+    expect(memSeverity(80, 100, BANDS)).toBe("warning");
   });
 
-  it("returns 'warning' just above the warning threshold", () => {
-    expect(memSeverity(70.1, 100)).toBe("warning");
+  it("returns 'critical' exactly at the critical band (inclusive, like the alert toasts)", () => {
+    expect(memSeverity(90, 100, BANDS)).toBe("critical");
   });
 
-  it("returns 'warning' exactly at the critical threshold (strict >)", () => {
-    expect(memSeverity(90, 100)).toBe("warning"); // exactly 90%
-  });
-
-  it("returns 'critical' just above the critical threshold", () => {
-    expect(memSeverity(90.1, 100)).toBe("critical");
-  });
-
-  it("respects custom warning/critical thresholds", () => {
-    expect(memSeverity(51, 100, 50, 80)).toBe("warning");
-    expect(memSeverity(81, 100, 50, 80)).toBe("critical");
+  it("follows user-edited bands instead of fixed defaults", () => {
+    expect(memSeverity(71, 100, { warning: 85, critical: 95 })).toBe("good");
+    expect(memSeverity(51, 100, { warning: 50, critical: 80 })).toBe("warning");
   });
 
   it("never returns 'critical' when total is 0, regardless of used (216% bug regression)", () => {
-    // This is the exact shape of the original bug: a huge used value with
-    // no known total must never be classified as critical.
-    expect(memSeverity(35_389, 0)).toBe("good");
-    expect(memSeverity(999_999, 0)).toBe("good");
+    expect(memSeverity(35_389, 0, BANDS)).toBe("good");
+    expect(memSeverity(999_999, 0, BANDS)).toBe("good");
   });
 
   it("returns 'good' when total is negative or non-finite", () => {
-    expect(memSeverity(1024, -1)).toBe("good");
-    expect(memSeverity(1024, Number.NaN)).toBe("good");
+    expect(memSeverity(1024, -1, BANDS)).toBe("good");
+    expect(memSeverity(1024, Number.NaN, BANDS)).toBe("good");
   });
 });
 
-// ── memoryAvailableMb ───────────────────────────────
+// ── memoryFreeMb ────────────────────────────────────
 
-describe("memoryAvailableMb", () => {
-  it("computes available memory as total minus used minus cached fraction", () => {
-    // used=1000, cached=15% of used=150, total=16384 -> 16384-1000-150
-    expect(memoryAvailableMb(1000, 16_384)).toBeCloseTo(15_234, 5);
+describe("memoryFreeMb", () => {
+  it("is exactly total minus used — nothing estimated", () => {
+    expect(memoryFreeMb(1000, 16_384)).toBe(15_384);
   });
 
   it("clamps to 0 rather than going negative", () => {
-    expect(memoryAvailableMb(1000, 500)).toBe(0);
+    expect(memoryFreeMb(1000, 500)).toBe(0);
   });
 
-  it("returns 0 when total is 0 (divide-by-zero guard, no fictitious ceiling)", () => {
-    // Original bug: available was computed against a fake 16384 ceiling.
-    // With no known total yet, available must be 0, not a fabricated cap.
-    expect(memoryAvailableMb(1000, 0)).toBe(0);
-  });
-
-  it("accepts a custom cached fraction", () => {
-    expect(memoryAvailableMb(1000, 16_384, 0)).toBeCloseTo(15_384, 5);
+  it("returns 0 when total is unknown (no fictitious ceiling)", () => {
+    expect(memoryFreeMb(1000, 0)).toBe(0);
   });
 });

@@ -1,12 +1,16 @@
 /**
- * GPU-driven particle system (Milestones 0.6.1 + 0.6.2).
+ * GPU-driven particle system for the app background.
  *
- * Compute shader simulates particles with PCG RNG, velocity damping,
- * and a gravity-well attractor. Render pipeline uses instanced billboard
- * quads with additive blending for a soft-glow aesthetic.
+ * A compute shader simulates particles (PCG RNG respawn, velocity
+ * damping, one gravity-well attractor per running worker); a render
+ * pipeline draws them as instanced billboard quads with additive blending
+ * for a soft glow.
  *
  * @module particles
  */
+
+/** Compute workgroup size — the WGSL `override` below is set from this. */
+export const WORKGROUP_SIZE = 64;
 
 /** WGSL compute shader for particle simulation (position, velocity, life, colour). */
 export const PARTICLE_COMPUTE_WGSL = /* wgsl */ `
@@ -22,8 +26,6 @@ struct SimParams {
   workerCount: u32,
   time: f32,
   deltaHue: f32,
-  canvasWidth: f32,
-  canvasHeight: f32,
   speedMultiplier: f32,
   chromaMultiplier: f32,
   throughput: f32,
@@ -46,7 +48,9 @@ fn rand(seed: u32) -> f32 {
   return f32(pcg(seed)) / 4294967295.0;
 }
 
-@compute @workgroup_size(64)
+override WORKGROUP_SIZE: u32 = 64u;
+
+@compute @workgroup_size(WORKGROUP_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   let idx = gid.x;
   if (idx >= arrayLength(&particles)) { return; }
@@ -79,15 +83,15 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
     p.life = rand(seed1 + 31u) * 0.7 + 0.3;
 
-    // OKLCH-derived color: rotate hue based on worker count
-    // errorRate shifts hue toward red (h=10)
+    // Hue: one slot per worker around the wheel from deltaHue;
+    // errorRate pulls it toward rose (h=10).
     let workerF = f32(params.workerCount);
     let baseHue = mix(params.deltaHue, 10.0, params.errorRate);
     let hueBase = baseHue + f32(idx % max(params.workerCount, 1u)) * (360.0 / max(workerF, 1.0));
     let hueNorm = fract(hueBase / 360.0);
 
-    // Approximate OKLCH to linear sRGB for GPU rendering
-    // Using a simplified mapping: hue -> RGB with constant L=0.78 C=0.18
+    // OKLCH-inspired cosine palette (not an OKLCH conversion): three
+    // phase-shifted cosines around a 0.78 grey, amplitude 0.18 × chroma.
     let h = hueNorm * 6.28318530718;
     let chroma = 0.18 * params.chromaMultiplier;
     p.color = vec4f(
@@ -221,14 +225,16 @@ fn main(in: FragInput) -> @location(0) vec4f {
 }
 `;
 
-/** Uniform parameters passed to the compute shader each frame. */
+/** Uniform parameters for the compute shader (the WGSL `SimParams`). */
 export interface SimParams {
   dt: number;
   workerCount: number;
   time: number;
   deltaHue: number;
-  canvasWidth: number;
-  canvasHeight: number;
+  /** @deprecated Ignored — the simulation runs in clip space. */
+  canvasWidth?: number;
+  /** @deprecated Ignored — the simulation runs in clip space. */
+  canvasHeight?: number;
   speedMultiplier: number;
   chromaMultiplier: number;
   /** Tokens/sec normalized to 0-1 range. Drives particle speed. */
@@ -242,13 +248,11 @@ export interface SimParams {
 }
 
 /** Default simulation parameters. */
-export const DEFAULT_SIM_PARAMS: Required<SimParams> = {
+export const DEFAULT_SIM_PARAMS: Required<Omit<SimParams, "canvasWidth" | "canvasHeight">> = {
   dt: 0.016,
   workerCount: 0,
   time: 0,
   deltaHue: 205,
-  canvasWidth: 1920,
-  canvasHeight: 1080,
   speedMultiplier: 1.0,
   chromaMultiplier: 1.0,
   throughput: 0.5,
@@ -261,8 +265,25 @@ export const DEFAULT_SIM_PARAMS: Required<SimParams> = {
 // pos: vec2f (8 bytes), vel: vec2f (8 bytes), life: f32 (4 bytes),
 // padding: 12 bytes (align to 16), color: vec4f (16 bytes) = 48 bytes total
 const PARTICLE_BYTE_SIZE = 48;
-const SIM_PARAMS_BYTE_SIZE = 48; // 12 fields * 4 bytes
+/** 10 four-byte fields (40 bytes), allocated in 16-byte steps. */
+const SIM_PARAMS_FIELDS = 10;
+const SIM_PARAMS_BYTE_SIZE = 48;
 const RENDER_PARAMS_BYTE_SIZE = 8; // 2 fields * 4 bytes
+
+/**
+ * Staging memory for one SimParams write, reused every frame (`writeBuffer`
+ * copies synchronously). f32 and u32 views over the same bytes.
+ */
+const simParamsBytes = new ArrayBuffer(SIM_PARAMS_FIELDS * 4);
+const simParamsF32 = new Float32Array(simParamsBytes);
+const simParamsU32 = new Uint32Array(simParamsBytes);
+
+/**
+ * sRGB-encoded clear colour of oklch(0.06 0.02 220) (the `--color-void`
+ * token), written as-is into the non-sRGB canvas format. Its red channel
+ * is just outside sRGB and clips to 0.
+ */
+const VOID_CLEAR: GPUColor = { r: 0, g: 0.0039, b: 0.0082, a: 1 };
 
 /** GPU resource handles comprising the full particle simulation + render system. */
 export interface ParticleSystem {
@@ -274,18 +295,15 @@ export interface ParticleSystem {
   computeBindGroup: GPUBindGroup;
   renderBindGroup: GPUBindGroup;
   maxParticles: number;
-  querySet: GPUQuerySet | null;
-  queryBuffer: GPUBuffer | null;
-  readbackBuffer: GPUBuffer | null;
-  timestampsSupported: boolean;
 }
 
 /**
  * Creates the full particle system: compute pipeline for simulation,
  * render pipeline for instanced billboard drawing.
  *
- * Uses `createComputePipelineAsync` / `createRenderPipelineAsync` for
- * non-blocking pipeline compilation.
+ * Both pipelines compile concurrently (`create*PipelineAsync`). New
+ * WebGPU buffers are zero-filled, so every particle starts with zero life
+ * and respawns on the first step.
  */
 export async function createParticleSystem(
   device: GPUDevice,
@@ -308,10 +326,6 @@ export async function createParticleSystem(
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
-  // Initialize particles with zero life so they respawn immediately
-  const initData = new Float32Array(maxParticles * (PARTICLE_BYTE_SIZE / 4));
-  device.queue.writeBuffer(particleBuffer, 0, initData);
-
   // ── Compute Pipeline ───────────────────────────
   const computeBindGroupLayout = device.createBindGroupLayout({
     entries: [
@@ -328,13 +342,13 @@ export async function createParticleSystem(
     ],
   });
 
-  const computePipeline = await device.createComputePipelineAsync({
+  const computePipelinePromise = device.createComputePipelineAsync({
     layout: device.createPipelineLayout({
       bindGroupLayouts: [computeBindGroupLayout],
     }),
     compute: {
       module: device.createShaderModule({ code: PARTICLE_COMPUTE_WGSL }),
-      entryPoint: "main",
+      constants: { WORKGROUP_SIZE },
     },
   });
 
@@ -362,17 +376,13 @@ export async function createParticleSystem(
     ],
   });
 
-  const renderPipeline = await device.createRenderPipelineAsync({
+  const renderPipelinePromise = device.createRenderPipelineAsync({
     layout: device.createPipelineLayout({
       bindGroupLayouts: [renderBindGroupLayout],
     }),
-    vertex: {
-      module: device.createShaderModule({ code: PARTICLE_VERTEX_WGSL }),
-      entryPoint: "main",
-    },
+    vertex: { module: device.createShaderModule({ code: PARTICLE_VERTEX_WGSL }) },
     fragment: {
       module: device.createShaderModule({ code: PARTICLE_FRAGMENT_WGSL }),
-      entryPoint: "main",
       targets: [
         {
           format,
@@ -392,11 +402,7 @@ export async function createParticleSystem(
         },
       ],
     },
-    primitive: {
-      topology: "triangle-strip",
-      stripIndexFormat: "uint32",
-    },
-    multisample: { count: 1 },
+    primitive: { topology: "triangle-strip" },
   });
 
   const renderBindGroup = device.createBindGroup({
@@ -407,28 +413,10 @@ export async function createParticleSystem(
     ],
   });
 
-  // ── Timestamp Queries (optional) ───────────────
-  const timestampsSupported = device.features.has("timestamp-query");
-  let querySet: GPUQuerySet | null = null;
-  let queryBuffer: GPUBuffer | null = null;
-  let readbackBuffer: GPUBuffer | null = null;
-
-  if (timestampsSupported) {
-    querySet = device.createQuerySet({
-      type: "timestamp",
-      count: 2,
-    });
-
-    queryBuffer = device.createBuffer({
-      size: 16, // 2 * BigUint64
-      usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
-    });
-
-    readbackBuffer = device.createBuffer({
-      size: 16,
-      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-    });
-  }
+  const [computePipeline, renderPipeline] = await Promise.all([
+    computePipelinePromise,
+    renderPipelinePromise,
+  ]);
 
   return {
     computePipeline,
@@ -439,42 +427,29 @@ export async function createParticleSystem(
     computeBindGroup,
     renderBindGroup,
     maxParticles,
-    querySet,
-    queryBuffer,
-    readbackBuffer,
-    timestampsSupported,
   };
 }
 
-/** Write simulation parameters into the GPU uniform buffer. */
+/**
+ * Writes simulation parameters into the GPU uniform, in the WGSL
+ * `SimParams` field order (`workerCount`, `activeWorkers` and
+ * `queueDepth` as u32, the rest as f32).
+ */
 export function writeSimParams(device: GPUDevice, system: ParticleSystem, params: SimParams): void {
-  const throughput = params.throughput ?? DEFAULT_SIM_PARAMS.throughput;
-  const errorRate = params.errorRate ?? DEFAULT_SIM_PARAMS.errorRate;
-  const activeWorkers = params.activeWorkers ?? DEFAULT_SIM_PARAMS.activeWorkers;
-  const queueDepth = params.queueDepth ?? DEFAULT_SIM_PARAMS.queueDepth;
-
-  const data = new Float32Array([
+  simParamsF32.set([
     params.dt,
-    params.workerCount, // will be reinterpreted as u32 in shader via bitcast
+    0, // workerCount (u32, below)
     params.time,
     params.deltaHue,
-    params.canvasWidth,
-    params.canvasHeight,
     params.speedMultiplier,
     params.chromaMultiplier,
-    throughput,
-    errorRate,
-    activeWorkers, // u32, patched below
-    queueDepth, // u32, patched below
+    params.throughput ?? DEFAULT_SIM_PARAMS.throughput,
+    params.errorRate ?? DEFAULT_SIM_PARAMS.errorRate,
   ]);
-
-  // Patch integer fields as u32
-  const u32View = new Uint32Array(data.buffer);
-  u32View[1] = params.workerCount;
-  u32View[10] = activeWorkers;
-  u32View[11] = queueDepth;
-
-  device.queue.writeBuffer(system.simUniformBuffer, 0, data);
+  simParamsU32[1] = params.workerCount;
+  simParamsU32[8] = params.activeWorkers ?? DEFAULT_SIM_PARAMS.activeWorkers;
+  simParamsU32[9] = params.queueDepth ?? DEFAULT_SIM_PARAMS.queueDepth;
+  device.queue.writeBuffer(system.simUniformBuffer, 0, simParamsBytes);
 }
 
 /** Write render parameters (aspect ratio + particle size). */
@@ -490,17 +465,22 @@ export function writeRenderParams(
   device.queue.writeBuffer(system.renderUniformBuffer, 0, data);
 }
 
-/** Dispatch the compute shader to update particles. */
-export function dispatchCompute(encoder: GPUCommandEncoder, system: ParticleSystem): void {
-  const pass = encoder.beginComputePass({
-    timestampWrites:
-      system.timestampsSupported && system.querySet
-        ? { querySet: system.querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 }
-        : undefined,
-  });
+/**
+ * Encodes one simulation step for the first `count` particles (default:
+ * all of them) — pass the drawn count so particles that are not drawn are
+ * not simulated either.
+ */
+export function dispatchCompute(
+  encoder: GPUCommandEncoder,
+  system: ParticleSystem,
+  count: number = system.maxParticles,
+): void {
+  const simulated = Math.min(Math.max(count, 0), system.maxParticles);
+  if (simulated === 0) return;
+  const pass = encoder.beginComputePass({ label: "particles-simulate" });
   pass.setPipeline(system.computePipeline);
   pass.setBindGroup(0, system.computeBindGroup);
-  pass.dispatchWorkgroups(Math.ceil(system.maxParticles / 64));
+  pass.dispatchWorkgroups(Math.ceil(simulated / WORKGROUP_SIZE));
   pass.end();
 }
 
@@ -515,7 +495,7 @@ export function renderParticles(
     colorAttachments: [
       {
         view: textureView,
-        clearValue: { r: 0.024, g: 0.022, b: 0.027, a: 1.0 }, // oklch(0.06 0.02 220) approx
+        clearValue: VOID_CLEAR,
         loadOp: "clear",
         storeOp: "store",
       },
@@ -527,52 +507,9 @@ export function renderParticles(
   pass.end();
 }
 
-/**
- * Resolve GPU timestamps and read back frame time in milliseconds.
- * Returns null if timestamps are not supported or the buffer is still mapped.
- */
-export async function readGPUFrameTime(
-  device: GPUDevice,
-  encoder: GPUCommandEncoder,
-  system: ParticleSystem,
-): Promise<number | null> {
-  if (
-    !system.timestampsSupported ||
-    !system.querySet ||
-    !system.queryBuffer ||
-    !system.readbackBuffer
-  ) {
-    return null;
-  }
-
-  encoder.resolveQuerySet(system.querySet, 0, 2, system.queryBuffer, 0);
-  encoder.copyBufferToBuffer(system.queryBuffer, 0, system.readbackBuffer, 0, 16);
-
-  device.queue.submit([encoder.finish()]);
-
-  try {
-    await system.readbackBuffer.mapAsync(GPUMapMode.READ);
-    const data = new BigUint64Array(system.readbackBuffer.getMappedRange());
-    const start = data[0];
-    const end = data[1];
-    system.readbackBuffer.unmap();
-
-    if (start === undefined || end === undefined) return null;
-
-    // Timestamps are in nanoseconds
-    const ns = Number(end - start);
-    return ns / 1_000_000; // Convert to milliseconds
-  } catch {
-    return null;
-  }
-}
-
 /** Destroy all GPU resources held by the particle system. */
 export function destroyParticleSystem(system: ParticleSystem): void {
   system.particleBuffer.destroy();
   system.simUniformBuffer.destroy();
   system.renderUniformBuffer.destroy();
-  system.querySet?.destroy();
-  system.queryBuffer?.destroy();
-  system.readbackBuffer?.destroy();
 }

@@ -1,98 +1,95 @@
 // ── Centralized Log Store ────────────────────────────
-// In-memory ring buffer of the last 10,000 log entries with Zustand.
+// Bounded, immutable in-memory log (newest last) for the Logs page.
 
 import { create } from "zustand";
-import { subscribeWithSelector } from "zustand/middleware";
 
 /** Severity level for a log entry. */
 export type LogLevel = "debug" | "info" | "warn" | "error";
+
+/** Every level, in severity order — the Logs page's filter toggles render in this order. */
+export const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
+
+/** Title Case display label per level (the Logs page renders them upper-case via CSS). */
+export const LOG_LEVEL_LABEL: Readonly<Record<LogLevel, string>> = {
+  debug: "Debug",
+  info: "Info",
+  warn: "Warn",
+  error: "Error",
+};
 
 /** A single structured log entry. */
 export interface LogEntry {
   readonly id: string;
   readonly timestamp: number;
   readonly level: LogLevel;
-  /** Source identifier, e.g. "worker:uuid", "ai", "system", "bus". */
+  /** Source identifier, e.g. "backend", "worker:uuid", "ai". */
   readonly source: string;
   readonly message: string;
   readonly metadata?: Record<string, unknown>;
 }
 
-/** Default maximum entries retained in the ring buffer. */
+/** Default retention cap; the live value comes from the Log Retention setting. */
 const MAX_ENTRIES = 10_000;
 
 /** State slice for the log store. */
 interface LogStoreState {
-  readonly entries: LogEntry[];
-  readonly sources: Set<string>;
+  readonly entries: readonly LogEntry[];
+  /** Every source seen since the last {@link LogStoreActions.clear}, for the source filter. */
+  readonly sources: ReadonlySet<string>;
   /** Live retention cap — driven by the Log Retention setting via useSettingsBridge. */
   readonly maxEntries: number;
 }
 
 /** Mutation actions for the log store. */
 interface LogStoreActions {
-  /** Append a new log entry, evicting the oldest if at capacity. */
+  /** Append an entry, dropping the oldest ones beyond {@link LogStoreState.maxEntries}. */
   readonly addEntry: (entry: Omit<LogEntry, "id">) => void;
-  /** Append multiple log entries in a single batch update. */
-  readonly addBatch: (entries: ReadonlyArray<Omit<LogEntry, "id">>) => void;
   /** Remove all log entries and reset sources. */
   readonly clear: () => void;
   /** Update the retention cap, trimming existing entries if it shrank. */
   readonly setMaxEntries: (max: number) => void;
 }
 
+/** The trailing `max` entries of `entries` (none when `max <= 0`). */
+function keepLast(entries: readonly LogEntry[], max: number): readonly LogEntry[] {
+  if (max <= 0) return [];
+  return entries.length > max ? entries.slice(entries.length - max) : entries;
+}
+
 /**
  * Zustand store for centralized log aggregation.
  *
- * Stores up to 10,000 log entries in a ring buffer. Each entry has a
- * level (debug/info/warn/error), source tag, and optional metadata.
- * Sources are tracked for filter dropdowns.
+ * Entries are an immutable array (newest last) capped at `maxEntries`, so
+ * every append is one O(n) copy — cheap at the Settings maximum and what
+ * lets `LogViewer` (and the React Compiler) key derived work on the
+ * array's identity. The `sources` set is copied only when a new source
+ * appears.
  */
-export const useLogStore = create<LogStoreState & LogStoreActions>()(
-  subscribeWithSelector((set) => ({
-    entries: [],
-    sources: new Set<string>(),
-    maxEntries: MAX_ENTRIES,
+export const useLogStore = create<LogStoreState & LogStoreActions>()((set) => ({
+  entries: [],
+  sources: new Set<string>(),
+  maxEntries: MAX_ENTRIES,
 
-    addEntry(entry) {
-      set((state) => {
-        const newEntry: LogEntry = { ...entry, id: crypto.randomUUID() };
-        const nextEntries =
-          state.entries.length >= state.maxEntries
-            ? [...state.entries.slice(-(state.maxEntries - 1)), newEntry]
-            : [...state.entries, newEntry];
-        const nextSources = new Set(state.sources);
-        nextSources.add(entry.source);
-        return { entries: nextEntries, sources: nextSources };
-      });
-    },
+  addEntry(entry) {
+    set((state) => ({
+      entries:
+        state.maxEntries > 0
+          ? [
+              ...keepLast(state.entries, state.maxEntries - 1),
+              { ...entry, id: crypto.randomUUID() },
+            ]
+          : [],
+      sources: state.sources.has(entry.source)
+        ? state.sources
+        : new Set(state.sources).add(entry.source),
+    }));
+  },
 
-    addBatch(entries) {
-      set((state) => {
-        const newEntries: LogEntry[] = entries.map((e) => ({
-          ...e,
-          id: crypto.randomUUID(),
-        }));
-        const combined = [...state.entries, ...newEntries];
-        const trimmed =
-          combined.length > state.maxEntries ? combined.slice(-state.maxEntries) : combined;
-        const nextSources = new Set(state.sources);
-        for (const e of entries) {
-          nextSources.add(e.source);
-        }
-        return { entries: trimmed, sources: nextSources };
-      });
-    },
+  clear() {
+    set({ entries: [], sources: new Set<string>() });
+  },
 
-    clear() {
-      set({ entries: [], sources: new Set<string>() });
-    },
-
-    setMaxEntries(max) {
-      set((state) => ({
-        maxEntries: max,
-        entries: state.entries.length > max ? state.entries.slice(-max) : state.entries,
-      }));
-    },
-  })),
-);
+  setMaxEntries(max) {
+    set((state) => ({ maxEntries: max, entries: keepLast(state.entries, max) }));
+  },
+}));

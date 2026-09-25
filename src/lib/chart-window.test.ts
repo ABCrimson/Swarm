@@ -29,4 +29,13 @@ describe("lastN (chart sliding window)", () => {
   it("honors a custom cap", () => {
     expect(lastN([1, 2, 3, 4, 5], 2)).toEqual([4, 5]);
   });
+
+  it("keeps nothing for a cap of 0 (regression: slice(-0) returned every item)", () => {
+    expect(lastN([1, 2, 3], 0)).toEqual([]);
+  });
+
+  it("returns a copy, never the input array", () => {
+    const pings = [1, 2];
+    expect(lastN(pings)).not.toBe(pings);
+  });
 });

@@ -1,12 +1,11 @@
 // ── PerformanceOverlay ──────────────────────────────
-// Dev-only performance overlay (Ctrl+Shift+P toggle).
-// Shows: React render count, Zustand selector count, GPU frame time,
-// FPS counter, particle count.
-// Semi-transparent, top-right corner, OKLCH monospace styling.
+// Development-build overlay (toggle: the remappable perfOverlay binding,
+// Ctrl+Shift+P by default) with FPS, GPU frame time and the adaptive
+// particle count. Production builds render nothing and ship none of it.
 
 import { useAtom, useAtomValue } from "jotai";
 import type { CSSProperties } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { matchesBinding } from "#lib/keybindings";
 import {
   gpuFrameTimeAtom,
@@ -38,7 +37,7 @@ const overlayStyle: CSSProperties = {
 const titleStyle: CSSProperties = {
   fontSize: 10,
   fontWeight: 700,
-  textTransform: "uppercase" as const,
+  textTransform: "uppercase",
   letterSpacing: "0.1em",
   color: "oklch(0.78 0.18 205)",
   marginBottom: 2,
@@ -50,112 +49,99 @@ const rowStyle: CSSProperties = {
   alignItems: "center",
 };
 
-const labelStyle: CSSProperties = {
-  color: "oklch(0.58 0.04 220)",
-};
-
 const valueStyle: CSSProperties = {
   color: "oklch(0.78 0.04 220)",
   fontWeight: 600,
 };
 
-/**
- * Dev-only performance overlay showing FPS, GPU frame time, particle count,
- * and React render count. Toggle with Ctrl+Shift+P.
- *
- * Only renders when `import.meta.env.DEV` is true.
- */
-export function PerformanceOverlay(): React.ReactElement | null {
+function fpsColor(fps: number): string {
+  if (fps >= 55) return "oklch(0.78 0.18 140)";
+  if (fps >= 30) return "oklch(0.78 0.18 70)";
+  return "oklch(0.68 0.22 15)";
+}
+
+/** Frames per second, measured with requestAnimationFrame while `active`. */
+function useFps(active: boolean): number {
+  const [fps, setFps] = useState(0);
+  useEffect(() => {
+    if (!active) return undefined;
+    let frames = 0;
+    let since = performance.now();
+    let raf = requestAnimationFrame(function tick(now) {
+      frames++;
+      if (now - since >= 1000) {
+        setFps(Math.round((frames * 1000) / (now - since)));
+        frames = 0;
+        since = now;
+      }
+      raf = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [active]);
+  return fps;
+}
+
+function Row({
+  label,
+  children,
+  color,
+}: {
+  readonly label: string;
+  readonly children: React.ReactNode;
+  readonly color?: string;
+}): React.ReactElement {
+  return (
+    <div style={rowStyle}>
+      <span style={{ color: "oklch(0.58 0.04 220)" }}>{label}</span>
+      <span style={color ? { ...valueStyle, color } : valueStyle}>{children}</span>
+    </div>
+  );
+}
+
+function DevPerformanceOverlay(): React.ReactElement | null {
   const [isOpen, setIsOpen] = useAtom(perfOverlayOpenAtom);
   const gpuFrameTime = useAtomValue(gpuFrameTimeAtom);
   const particleCount = useAtomValue(particleCountAtom);
-  const [fps, setFps] = useState(0);
-  const renderCountRef = useRef(0);
-  const [renderCount, setRenderCount] = useState(0);
+  const keybindings = useAtomValue(keybindingsAtom);
+  const fps = useFps(isOpen);
 
-  // Track renders
-  useEffect(() => {
-    renderCountRef.current += 1;
+  // Registered once; the Effect Event reads the current (remappable) binding.
+  const onKeyDown = useEffectEvent((event: KeyboardEvent): void => {
+    if (!matchesBinding(event, keybindings.perfOverlay)) return;
+    event.preventDefault();
+    setIsOpen((open) => !open);
   });
   useEffect(() => {
-    const id = setInterval(() => {
-      setRenderCount(renderCountRef.current);
-    }, 1000);
-    return () => clearInterval(id);
+    const listener = (event: KeyboardEvent): void => onKeyDown(event);
+    document.addEventListener("keydown", listener);
+    return () => document.removeEventListener("keydown", listener);
   }, []);
 
-  // FPS counter
-  useEffect(() => {
-    if (!isOpen) return;
-
-    let frameCount = 0;
-    let lastTimestamp = performance.now();
-    let rafId: number;
-
-    const tick = (now: number): void => {
-      frameCount++;
-      const elapsed = now - lastTimestamp;
-      if (elapsed >= 1000) {
-        setFps(Math.round((frameCount * 1000) / elapsed));
-        frameCount = 0;
-        lastTimestamp = now;
-      }
-      rafId = requestAnimationFrame(tick);
-    };
-
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
-  }, [isOpen]);
-
-  // Overlay toggle — binding is remappable in Settings.
-  const keybindings = useAtomValue(keybindingsAtom);
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (matchesBinding(e, keybindings.perfOverlay)) {
-        e.preventDefault();
-        setIsOpen((v) => !v);
-      }
-    };
-
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [setIsOpen, keybindings]);
-
-  // Only render in dev mode
-  if (!import.meta.env.DEV) return null;
   if (!isOpen) return null;
 
-  const fpsColor =
-    fps >= 55 ? "oklch(0.78 0.18 140)" : fps >= 30 ? "oklch(0.78 0.18 70)" : "oklch(0.68 0.22 15)";
-
+  // A plain labelled region, not a live region: the numbers change every
+  // second and must not be announced.
   return (
-    <output style={overlayStyle} aria-label="Performance Overlay">
-      <div style={titleStyle}>Perf Overlay</div>
-
-      <div style={rowStyle}>
-        <span style={labelStyle}>FPS</span>
-        <span style={{ ...valueStyle, color: fpsColor }}>{fps}</span>
-      </div>
-
-      <div style={rowStyle}>
-        <span style={labelStyle}>GPU Frame</span>
-        <span style={valueStyle}>{gpuFrameTime.toFixed(2)}ms</span>
-      </div>
-
-      <div style={rowStyle}>
-        <span style={labelStyle}>Particles</span>
-        <span style={valueStyle}>{particleCount.toLocaleString()}</span>
-      </div>
-
-      <div style={rowStyle}>
-        <span style={labelStyle}>React Renders</span>
-        <span style={valueStyle}>{renderCount}</span>
-      </div>
-
-      <div style={rowStyle}>
-        <span style={labelStyle}>Zustand Evals</span>
-        <span style={valueStyle}>--</span>
-      </div>
-    </output>
+    <section style={overlayStyle} aria-label="Performance Overlay">
+      <div style={titleStyle}>Performance</div>
+      <Row label="FPS" color={fpsColor(fps)}>
+        {fps}
+      </Row>
+      <Row label="GPU Frame">{gpuFrameTime.toFixed(2)}ms</Row>
+      <Row label="Particles">{particleCount.toLocaleString()}</Row>
+    </section>
   );
+}
+
+/**
+ * Development-only performance overlay: FPS (measured only while open),
+ * GPU frame time and the adaptive particle count. For render timing use
+ * React's Performance Tracks in the browser's DevTools.
+ *
+ * In a production build `import.meta.env.DEV` is the constant `false`,
+ * so this renders nothing, runs no hooks or listeners, and the overlay
+ * itself is removed from the bundle as dead code.
+ */
+export function PerformanceOverlay(): React.ReactElement | null {
+  return import.meta.env.DEV ? <DevPerformanceOverlay /> : null;
 }

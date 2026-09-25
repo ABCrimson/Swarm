@@ -1,134 +1,134 @@
-// ── Worker State → Visual Coupling ───────────────────
-// Milestone 0.6.4 + Feature 19: Maps worker/system/AI states to particle parameters
+// ── Worker State → Particle Parameters ───────────────
+// Maps worker states, AI throughput and the AI queue onto the particle
+// simulation's uniform.
 
-import { useEffect, useRef } from "react";
-
+import { useEffect } from "react";
 import type { ParticleSystem, SimParams } from "#lib/particles";
 import { DEFAULT_SIM_PARAMS, writeSimParams } from "#lib/particles";
 import { useAiStore } from "#store/ai";
 import { useSystemStore } from "#store/system";
-import type { WorkerState } from "#store/types";
+import type { Worker } from "#store/types";
 import { useWorkerStore } from "#store/workers";
 
 interface ParticleSyncConfig {
-  device: GPUDevice | null;
-  system: ParticleSystem | null;
-  canvasWidth: number;
-  canvasHeight: number;
+  readonly device: GPUDevice | null;
+  readonly system: ParticleSystem | null;
+  /** @deprecated Ignored — the simulation runs in clip space. */
+  readonly canvasWidth?: number;
+  /** @deprecated Ignored — the simulation runs in clip space. */
+  readonly canvasHeight?: number;
+}
+
+/** What the simulation reads from the worker store: counts by state. */
+export interface WorkerCounts {
+  readonly total: number;
+  readonly running: number;
+  readonly paused: number;
+  readonly errored: number;
+}
+
+/** Tokens/s that saturates the particle speed. */
+const MAX_TOKENS_PER_SEC = 500;
+
+/** Counts workers by the states the simulation distinguishes. */
+export function countWorkers(workers: ReadonlyMap<string, Worker>): WorkerCounts {
+  let running = 0;
+  let paused = 0;
+  let errored = 0;
+  for (const { state } of workers.values()) {
+    if (state === "running") running++;
+    else if (state === "paused") paused++;
+    else if (state === "error") errored++;
+  }
+  return { total: workers.size, running, paused, errored };
 }
 
 /**
- * Subscribes to the worker store via `subscribeWithSelector` and maps
- * worker states to particle simulation parameters.
+ * The simulation parameters for a worker/AI snapshot:
  *
- * - Running: full saturation, normal speed
- * - Error: hue shifts to rose (h=10), increased velocity
- * - Paused: slow (dt *= 0.1), desaturated (chroma *= 0.3)
- * - Idle: baseline parameters
+ * - Any worker errored: hue shifts to rose (h=10), faster, more chroma.
+ * - Every worker paused: slow (dt × 0.1), desaturated (chroma × 0.3).
+ * - Otherwise: baseline plasma hue (h=205), normal speed.
  *
- * Updates are debounced to 60fps via `requestAnimationFrame`.
+ * Throughput (tokens/s, saturating at 500) drives speed, the error share
+ * drives hue shift and turbulence, running workers become attractors and
+ * the AI queue depth raises the respawn rate.
  */
-export function useParticleSync(config: ParticleSyncConfig): void {
-  const { device, system, canvasWidth, canvasHeight } = config;
-  const pendingUpdateRef = useRef<number | null>(null);
+export function simParamsFor(
+  counts: WorkerCounts,
+  tokensPerSec: number,
+  queueDepth: number,
+): SimParams {
+  const params: SimParams = {
+    ...DEFAULT_SIM_PARAMS,
+    workerCount: counts.total,
+    time: performance.now() / 1000,
+    throughput: Math.min(tokensPerSec / MAX_TOKENS_PER_SEC, 1),
+    errorRate: counts.total > 0 ? Math.min(counts.errored / counts.total, 1) : 0,
+    activeWorkers: counts.running,
+    queueDepth,
+  };
 
+  if (counts.errored > 0) {
+    params.deltaHue = 10;
+    params.speedMultiplier = 2.0;
+    params.chromaMultiplier = 1.5;
+  } else if (counts.total > 0 && counts.paused === counts.total) {
+    params.dt *= 0.1;
+    params.chromaMultiplier = 0.3;
+    params.speedMultiplier = 0.3;
+  }
+  return params;
+}
+
+/** A primitive fingerprint of the worker counts: equal strings, equal parameters. */
+const countsKey = (s: { workers: ReadonlyMap<string, Worker> }): string => {
+  const { total, running, paused, errored } = countWorkers(s.workers);
+  return `${total}:${running}:${paused}:${errored}`;
+};
+
+/**
+ * Keeps the particle simulation's parameters in sync with the stores.
+ *
+ * Subscribes (via `subscribeWithSelector`) only to what the parameters
+ * depend on — worker counts by state (as a primitive key, so a PTY output
+ * chunk, which replaces a worker object, schedules nothing), tokens/s and
+ * the AI queue length — and writes at most once per animation frame.
+ */
+export function useParticleSync({ device, system }: ParticleSyncConfig): void {
   useEffect(() => {
     if (!device || !system) return;
 
-    /** Maximum tokens/sec for throughput normalization. */
-    const MAX_TOKENS_PER_SEC = 500;
-
-    const computeParams = (): SimParams => {
-      const workers = useWorkerStore.getState().workers;
-      const workerCount = workers.size;
-      const systemMetrics = useSystemStore.getState().metrics;
-      const aiState = useAiStore.getState();
-
-      // Aggregate state from all workers
-      let hasError = false;
-      let allPaused = workerCount > 0;
-      let hasRunning = false;
-      let runningCount = 0;
-      let errorCount = 0;
-
-      for (const [, worker] of workers) {
-        const state: WorkerState = worker.state;
-        if (state === "error") {
-          hasError = true;
-          errorCount++;
-        }
-        if (state !== "paused") allPaused = false;
-        if (state === "running") {
-          hasRunning = true;
-          runningCount++;
-        }
-      }
-
-      // Data-driven fields (Feature 19)
-      const throughput = Math.min(systemMetrics.tokensPerSec / MAX_TOKENS_PER_SEC, 1);
-      const errorRate = workerCount > 0 ? Math.min(errorCount / workerCount, 1) : 0;
-      const activeWorkers = runningCount;
-      const queueDepth = aiState.queue.length;
-
-      const params: SimParams = {
-        ...DEFAULT_SIM_PARAMS,
-        workerCount,
-        canvasWidth,
-        canvasHeight,
-        time: performance.now() / 1000,
-        throughput,
-        errorRate,
-        activeWorkers,
-        queueDepth,
-      };
-
-      if (hasError) {
-        // Rose hue (h=10 in OKLCH), faster particles
-        params.deltaHue = 10;
-        params.speedMultiplier = 2.0;
-        params.chromaMultiplier = 1.5;
-      } else if (allPaused) {
-        // Slow and desaturated
-        params.dt *= 0.1;
-        params.chromaMultiplier = 0.3;
-        params.speedMultiplier = 0.3;
-      } else if (hasRunning) {
-        // Full saturation, normal speed
-        params.deltaHue = 205;
-        params.speedMultiplier = 1.0;
-        params.chromaMultiplier = 1.0;
-      }
-
-      return params;
+    const write = (): void => {
+      writeSimParams(
+        device,
+        system,
+        simParamsFor(
+          countWorkers(useWorkerStore.getState().workers),
+          useSystemStore.getState().metrics.tokensPerSec,
+          useAiStore.getState().queue.length,
+        ),
+      );
     };
 
-    // Write initial params
-    writeSimParams(device, system, computeParams());
-
-    const scheduleUpdate = () => {
-      if (pendingUpdateRef.current !== null) return;
-
-      pendingUpdateRef.current = requestAnimationFrame(() => {
-        pendingUpdateRef.current = null;
-        if (device && system) {
-          writeSimParams(device, system, computeParams());
-        }
+    let pending: number | null = null;
+    const schedule = (): void => {
+      pending ??= requestAnimationFrame(() => {
+        pending = null;
+        write();
       });
     };
 
-    // Subscribe to worker, system metrics, and AI queue changes
-    const unsubWorkers = useWorkerStore.subscribe((state) => state.workers, scheduleUpdate);
-    const unsubSystem = useSystemStore.subscribe((state) => state.metrics, scheduleUpdate);
-    const unsubAi = useAiStore.subscribe((state) => state.queue, scheduleUpdate);
+    write();
+    const unsubscribers = [
+      useWorkerStore.subscribe(countsKey, schedule),
+      useSystemStore.subscribe((s) => s.metrics.tokensPerSec, schedule),
+      useAiStore.subscribe((s) => s.queue.length, schedule),
+    ];
 
     return () => {
-      unsubWorkers();
-      unsubSystem();
-      unsubAi();
-      if (pendingUpdateRef.current !== null) {
-        cancelAnimationFrame(pendingUpdateRef.current);
-        pendingUpdateRef.current = null;
-      }
+      for (const unsubscribe of unsubscribers) unsubscribe();
+      if (pending !== null) cancelAnimationFrame(pending);
     };
-  }, [device, system, canvasWidth, canvasHeight]);
+  }, [device, system]);
 }

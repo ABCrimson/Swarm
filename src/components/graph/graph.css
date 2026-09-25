@@ -1,0 +1,377 @@
+/*
+ * Workers graph styles: the xyflow dark theme, worker nodes, provenance
+ * edges, the floating controls, the node context menu, the causality
+ * inspector dialog and the worker detail panel.
+ *
+ * In `@layer components` like the other component sheets. xyflow's own
+ * base stylesheet (panel/handle/minimap positioning, its --xy-* theme) is
+ * imported as the nested `components.xyflow` layer, which ranks below
+ * the rules written directly in `components` — so the overrides here win
+ * without specificity games. Every infinite or decorative animation is
+ * declared only under `prefers-reduced-motion: no-preference`, so a
+ * reduced-motion user never gets it (inline animation styles would beat
+ * the global override).
+ */
+@import "@xyflow/react/dist/style.css" layer(components.xyflow);
+
+@layer components {
+  /* ── xyflow theme (ReactFlow colorMode="dark") ───────────────────── */
+  .worker-graph .react-flow {
+    --xy-background-color: oklch(0.08 0.02 220);
+    --xy-background-pattern-dots-color: oklch(0.14 0.03 220);
+    --xy-edge-stroke: oklch(0.6 0.02 220 / 0.6);
+    --xy-edge-stroke-selected: oklch(0.85 0.2 205);
+    --xy-connectionline-stroke: oklch(0.6 0.02 220 / 0.8);
+    --xy-connectionline-stroke-width: 2;
+    --xy-minimap-background-color: oklch(0.1 0.03 220);
+    --xy-minimap-mask-background-color: oklch(0.06 0.02 220 / 0.8);
+    --xy-selection-background-color: oklch(0.78 0.18 205 / 0.08);
+    --xy-selection-border: 1px dotted oklch(0.78 0.18 205 / 0.8);
+    --xy-handle-border-color: transparent;
+  }
+
+  .worker-graph .react-flow__minimap {
+    border: 1px solid oklch(0.22 0.04 220);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  /* The node wrapper is the single tab stop per node. */
+  .worker-graph .react-flow__node:focus-visible {
+    outline: 2px solid oklch(0.78 0.18 205 / 0.7);
+    outline-offset: 3px;
+    border-radius: 12px;
+  }
+
+  .worker-graph .react-flow__edge:focus-visible .provenance-edge__path {
+    stroke: oklch(0.85 0.2 205);
+  }
+
+  /* ── Worker node ───────────────────────────────────────────────── */
+  .worker-node {
+    position: relative;
+    width: 220px;
+    min-height: 100px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px;
+    border-radius: 12px;
+    background: oklch(0.12 0.03 220 / 0.7);
+    backdrop-filter: blur(12px) saturate(1.5);
+    border: 1px solid var(--node-border);
+    box-shadow: 0 0 0 1px var(--node-border);
+    cursor: pointer;
+    transition:
+      box-shadow 0.3s cubic-bezier(0, 0, 0.2, 1),
+      border-color 0.3s cubic-bezier(0, 0, 0.2, 1),
+      scale 0.15s cubic-bezier(0, 0, 0.2, 1);
+  }
+
+  .worker-node[data-state="running"] {
+    box-shadow:
+      0 0 0 1px var(--node-border),
+      0 0 20px var(--node-glow),
+      0 0 40px var(--node-glow-far);
+  }
+
+  .worker-node__glow {
+    position: absolute;
+    inset: -1px;
+    border-radius: 12px;
+    pointer-events: none;
+    box-shadow: 0 0 20px var(--node-glow);
+    opacity: 0.3;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .react-flow__node:hover > .worker-node {
+      scale: 1.02;
+    }
+
+    .worker-node__glow {
+      animation: worker-node-glow 2s ease-in-out infinite;
+    }
+  }
+
+  @keyframes worker-node-glow {
+    0%,
+    100% {
+      opacity: 0.3;
+    }
+    50% {
+      opacity: 0.8;
+    }
+  }
+
+  /* ── Provenance edges ──────────────────────────────────────────── */
+  .provenance-edge__path[data-selected="true"] {
+    filter: drop-shadow(0 0 4px var(--edge-stroke));
+  }
+
+  /*
+   * A measured edge pulses (dash flow + glow) for a few cycles when it
+   * first renders and again on each new occurrence — the path is keyed on
+   * the occurrence's seq — then rests. An idle graph repaints nothing.
+   */
+  @media (prefers-reduced-motion: no-preference) {
+    .provenance-edge__path[data-measured="true"] {
+      animation: provenance-edge-pulse 1.2s linear 3;
+    }
+  }
+
+  @keyframes provenance-edge-pulse {
+    from {
+      stroke-dashoffset: 24;
+      filter: drop-shadow(0 0 4px var(--edge-stroke));
+    }
+    to {
+      stroke-dashoffset: 0;
+      filter: drop-shadow(0 0 0 transparent);
+    }
+  }
+
+  .provenance-edge__count {
+    position: absolute;
+    translate: -50% -50%;
+    pointer-events: none;
+    padding: 1px 5px;
+    border: 1px solid var(--edge-stroke);
+    border-radius: 4px;
+    background: oklch(0.1 0.03 220 / 0.85);
+    color: oklch(0.95 0.02 220);
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    font-weight: 600;
+  }
+
+  /* ── Floating controls ─────────────────────────────────────────── */
+  .graph-control {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid oklch(0.28 0.05 220);
+    border-radius: 8px;
+    background: oklch(0.12 0.03 220 / 0.7);
+    backdrop-filter: blur(12px) saturate(1.5);
+    color: oklch(0.82 0.04 220);
+    cursor: pointer;
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease;
+  }
+
+  .graph-control:hover {
+    background: oklch(0.17 0.04 220);
+    border-color: oklch(0.35 0.06 220);
+  }
+
+  .graph-control:focus-visible {
+    outline: 2px solid oklch(0.78 0.18 205 / 0.7);
+    outline-offset: 2px;
+  }
+
+  /* ── Node context menu (popover="auto") ────────────────────────── */
+  .graph-context-menu__anchor {
+    position: fixed;
+    top: var(--menu-y);
+    left: var(--menu-x);
+    width: 0;
+    height: 0;
+    anchor-name: --graph-context-menu;
+    pointer-events: none;
+  }
+
+  .graph-context-menu {
+    position: fixed;
+    inset: auto;
+    /* Fallback when anchor positioning is unavailable: open at the cursor. */
+    top: var(--menu-y);
+    left: var(--menu-x);
+    margin: 0;
+    min-width: 160px;
+    padding: 4px;
+    border: 1px solid oklch(0.28 0.05 220);
+    border-radius: 8px;
+    background: oklch(0.12 0.03 220 / 0.85);
+    backdrop-filter: blur(16px) saturate(1.5);
+    color: oklch(0.82 0.04 220);
+    box-shadow:
+      0 0 0 1px oklch(0.78 0.18 205 / 0.1),
+      0 12px 32px oklch(0.06 0.02 220 / 0.6);
+  }
+
+  /* Collision-aware placement: below-right of the cursor, flipping at the viewport edges. */
+  @supports (position-anchor: --graph-context-menu) {
+    .graph-context-menu {
+      top: auto;
+      left: auto;
+      position-anchor: --graph-context-menu;
+      position-area: bottom span-right;
+      position-try-fallbacks:
+        flip-block,
+        flip-inline,
+        flip-block flip-inline;
+    }
+  }
+
+  .graph-context-menu__title {
+    padding: 4px 12px 6px;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    color: oklch(0.55 0.04 220);
+    user-select: text;
+  }
+
+  .graph-context-menu__item {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font-family: var(--font-body);
+    font-size: 0.8125rem;
+    text-align: start;
+    cursor: pointer;
+    transition: background 0.1s ease;
+  }
+
+  .graph-context-menu__item[data-variant="danger"] {
+    color: oklch(0.72 0.2 10);
+  }
+
+  .graph-context-menu__item:is(:hover, :focus-visible):not([aria-disabled="true"]) {
+    background: oklch(0.78 0.18 205 / 0.12);
+    outline: none;
+  }
+
+  .graph-context-menu__item[data-variant="danger"]:is(:hover, :focus-visible) {
+    background: oklch(0.72 0.2 10 / 0.12);
+  }
+
+  .graph-context-menu__item[aria-disabled="true"] {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .graph-context-menu__item[aria-disabled="true"]:focus-visible {
+    outline: 1px dashed oklch(0.55 0.04 220);
+    outline-offset: -2px;
+  }
+
+  .graph-context-menu hr {
+    height: 1px;
+    margin: 4px 0;
+    border: none;
+    background: oklch(0.22 0.04 220);
+  }
+
+  /* ── Causality inspector (modal <dialog>) ──────────────────────── */
+  /* Centred by position, not the UA's `margin: auto`, which any author
+     margin reset overrides. */
+  .causality-panel {
+    inset: 50% auto auto 50%;
+    translate: -50% -50%;
+    width: min(420px, calc(100vw - 32px));
+    max-height: 70vh;
+    padding: 0;
+    border: 1px solid oklch(0.28 0.05 220);
+    border-radius: 12px;
+    background: oklch(0.1 0.03 220);
+    color: oklch(0.85 0.03 220);
+    box-shadow:
+      0 0 0 1px oklch(0.78 0.18 205 / 0.1),
+      0 16px 48px oklch(0.06 0.02 220 / 0.6);
+    overflow: hidden;
+  }
+
+  .causality-panel[open] {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .causality-panel::backdrop {
+    background: oklch(0.04 0.01 220 / 0.55);
+    backdrop-filter: blur(2px);
+  }
+
+  /* Square icon-only button (panel close buttons). */
+  .graph-icon-button {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: oklch(0.55 0.04 220);
+    cursor: pointer;
+  }
+
+  .graph-icon-button:hover {
+    background: oklch(0.17 0.04 220);
+    color: oklch(0.82 0.04 220);
+  }
+
+  .graph-icon-button:focus-visible,
+  .causality-panel__row:focus-visible,
+  .worker-detail__path:focus-visible {
+    outline: 2px solid oklch(0.78 0.18 205 / 0.7);
+    outline-offset: 2px;
+  }
+
+  .causality-panel__row:hover {
+    border-color: oklch(0.35 0.06 220);
+  }
+
+  /* Worktree path in the detail panel: a link-styled button (desktop) or plain text. */
+  .worker-detail__path {
+    display: block;
+    max-width: 180px;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    color: oklch(0.78 0.18 205);
+    font: inherit;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  button.worker-detail__path {
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  span.worker-detail__path {
+    color: oklch(0.82 0.04 220);
+  }
+
+  .causality-panel__trace {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .causality-panel__trace > li {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .causality-panel__arrow {
+    align-self: center;
+    padding: 2px 0;
+    color: oklch(0.45 0.04 220);
+    font-size: 0.875rem;
+    line-height: 1;
+  }
+}

@@ -1,18 +1,20 @@
+import "./graph.css";
+
 import type {
   Connection,
-  Edge,
+  Dimensions,
   EdgeMouseHandler,
   EdgeTypes,
-  Node,
+  NodeChange,
   NodeMouseHandler,
   NodeTypes,
   OnEdgesChange,
-  OnNodesChange,
+  XYPosition,
 } from "@xyflow/react";
 import {
   applyEdgeChanges,
-  applyNodeChanges,
   Background,
+  MarkerType,
   MiniMap,
   Panel,
   ReactFlow,
@@ -20,383 +22,366 @@ import {
   useReactFlow,
 } from "@xyflow/react";
 import { useAtom, useSetAtom } from "jotai";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { GraphContextMenu } from "#components/graph/GraphContextMenu";
+import { GraphControls } from "#components/graph/GraphControls";
+import { GraphLegend } from "#components/graph/GraphLegend";
+import type { GraphEdgeKind, ProvenanceFlowEdge } from "#components/graph/ProvenanceEdge";
+import { KIND_LABEL, KIND_STYLE, ProvenanceEdge } from "#components/graph/ProvenanceEdge";
+import type { WorkerFlowNode } from "#components/graph/WorkerNode";
+import { WorkerNode } from "#components/graph/WorkerNode";
+import { stateLabels } from "#components/ui/Badge";
+import { Button } from "#components/ui/Button";
 import { Spinner } from "#components/ui/Spinner";
 import { useElkLayout } from "#hooks/useElkLayout";
 import { workerColor } from "#lib/theme";
+import type { WorkflowDefinition } from "#lib/workflow";
+import { exportWorkflow } from "#lib/workflow";
 import type { ProvenanceEdgeRecord } from "#store/provenance";
 import { selectVisibleEdges, useProvenanceStore } from "#store/provenance";
-import type { Worker, WorkerState } from "#store/types";
+import type { Worker } from "#store/types";
 import { causalityInspectorAtom, detailPanelOpenAtom, selectedWorkerIdAtom } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
-import { GraphContextMenu } from "./GraphContextMenu.tsx";
-import { GraphControls } from "./GraphControls.tsx";
-import { GraphLegend } from "./GraphLegend.tsx";
-import type { GraphEdgeKind, ProvenanceEdgeData } from "./ProvenanceEdge.tsx";
-import { ProvenanceEdge } from "./ProvenanceEdge.tsx";
-import { WorkerNode } from "./WorkerNode.tsx";
 
-import "@xyflow/react/dist/style.css";
+const nodeTypes = { worker: WorkerNode } satisfies NodeTypes;
+const edgeTypes = { provenance: ProvenanceEdge } satisfies EdgeTypes;
 
-const nodeTypes: NodeTypes = {
-  worker: WorkerNode,
-};
-
-const edgeTypes: EdgeTypes = {
-  provenance: ProvenanceEdge,
-};
+const ORIGIN: XYPosition = { x: 0, y: 0 };
+const NO_EDGE_IDS: ReadonlySet<string> = new Set();
 
 interface ContextMenuState {
   readonly x: number;
   readonly y: number;
   readonly workerId: string;
-  readonly workerState: WorkerState;
-}
-
-/** Builds nodes from the live worker registry — one per worker, no fabricated edges. `fileWriteCounts` feeds each node's "Wrote N Files" badge. */
-function buildNodes(
-  workers: ReadonlyMap<string, Worker>,
-  fileWriteCounts: ReadonlyMap<string, number>,
-): Node[] {
-  return [...workers.entries()].map(([id, worker], index) => ({
-    id,
-    type: "worker",
-    position: { x: 0, y: 0 },
-    data: {
-      label: worker.name ?? id.slice(0, 8),
-      state: worker.state,
-      index,
-      pid: worker.pid,
-      fileWriteCount: fileWriteCounts.get(id) ?? 0,
-    },
-  }));
+  /** A button was still down when the menu was requested (see GraphContextMenu). */
+  readonly openOnRelease: boolean;
 }
 
 /**
- * Overlays LIVE per-worker data onto already-positioned nodes, every
- * render — without this, `state`/`pid`/`fileWriteCount` would only ever
- * refresh on the next ELK relayout, and none of the three ever change
- * the topology fingerprint (same node ids, same edges), so in practice
- * they'd refresh close to never (a file_written badge would render
- * whatever the count was — usually zero — at the last time a worker was
- * added or removed). Same principle as measured edges: positions come
- * from `layoutedNodes`/the `nodes` state, but data that can change
- * without a topology change is recomputed fresh every render, never
- * round-tripped through ELK. A node with no backing worker (a scratch
- * node from `handleAddNode`) passes through unchanged.
+ * The per-node UI state xyflow reports through `onNodesChange` in
+ * controlled mode — everything about a node that is not derived from the
+ * stores or the layout. `position` is set only by a user drag, so it
+ * overrides the layout until the next Reset Layout.
  */
-function withLiveNodeData(
-  positioned: readonly Node[],
-  workers: ReadonlyMap<string, Worker>,
-  fileWriteCounts: ReadonlyMap<string, number>,
-): Node[] {
-  return positioned.map((node) => {
-    const worker = workers.get(node.id);
-    if (!worker) return node;
-    return {
-      ...node,
-      data: {
-        ...node.data,
-        state: worker.state,
-        pid: worker.pid,
-        fileWriteCount: fileWriteCounts.get(node.id) ?? 0,
-      },
-    };
-  });
+export interface NodeUiState {
+  readonly position?: XYPosition;
+  readonly measured?: Dimensions;
+  readonly selected?: boolean;
+  readonly dragging?: boolean;
 }
 
 /**
- * Converts visible provenance-store edge records into React Flow edges.
+ * Folds xyflow node changes into per-node UI state. Worker nodes are not
+ * deletable and the graph never adds nodes through xyflow, so only
+ * position (drag), dimensions (measurement) and selection changes matter.
+ */
+export function reduceNodeUi(
+  previous: ReadonlyMap<string, NodeUiState>,
+  changes: readonly NodeChange<WorkerFlowNode>[],
+): ReadonlyMap<string, NodeUiState> {
+  const next = new Map(previous);
+  for (const change of changes) {
+    switch (change.type) {
+      case "position": {
+        const current = next.get(change.id);
+        next.set(change.id, {
+          ...current,
+          position: change.position ?? current?.position,
+          dragging: change.dragging ?? false,
+        });
+        break;
+      }
+      case "dimensions":
+        if (change.dimensions) {
+          next.set(change.id, { ...next.get(change.id), measured: change.dimensions });
+        }
+        break;
+      case "select":
+        next.set(change.id, { ...next.get(change.id), selected: change.selected });
+        break;
+      case "remove":
+        next.delete(change.id);
+        break;
+      default:
+        break;
+    }
+  }
+  return next;
+}
+
+/** Accessible name of a worker node's (focusable) xyflow wrapper. */
+function nodeAriaLabel(worker: Worker): string {
+  const name = worker.name ?? worker.id.slice(0, 8);
+  const pid = worker.pid != null ? `, PID ${worker.pid}` : "";
+  return `Worker ${name}, Status: ${stateLabels[worker.state]}${pid}`;
+}
+
+/** Display name per worker id. */
+const selectNames = (s: { workers: ReadonlyMap<string, Worker> }): Record<string, string> =>
+  Object.fromEntries(s.workers.values().map((w) => [w.id, w.name ?? w.id.slice(0, 8)]));
+
+/** Node accessible name per worker id (changes with state and PID). */
+const selectNodeLabels = (s: { workers: ReadonlyMap<string, Worker> }): Record<string, string> =>
+  Object.fromEntries(s.workers.values().map((w) => [w.id, nodeAriaLabel(w)]));
+
+/**
+ * Converts visible provenance-store edge records into xyflow edges.
  * Each record already collapsed repeated same-kind occurrences (see
  * `#store/provenance`'s `ingestEvent`) — `count`/`lastSeq` ride along in
  * `data` for `ProvenanceEdge`'s ×N label and `CausalityPanel`'s walk
- * starting point, respectively.
+ * starting point. Measured edges are facts: not deletable, with an
+ * arrowhead for direction and an accessible name built from worker names.
  */
-function toFlowEdges(records: readonly ProvenanceEdgeRecord[]): Edge[] {
+export function toFlowEdges(
+  records: readonly ProvenanceEdgeRecord[],
+  names: Readonly<Record<string, string>>,
+): ProvenanceFlowEdge[] {
   return records.map((r) => ({
     id: `prov-${r.from}-${r.to}-${r.kind}`,
     source: r.from,
     target: r.to,
     type: "provenance",
-    data: { kind: r.kind, count: r.count, lastSeq: r.lastSeq } satisfies ProvenanceEdgeData,
+    deletable: false,
+    markerEnd: { type: MarkerType.ArrowClosed, color: KIND_STYLE[r.kind].stroke },
+    ariaLabel: `${KIND_LABEL[r.kind]}: ${names[r.from] ?? r.from} To ${names[r.to] ?? r.to}${
+      r.count > 1 ? ` (×${r.count})` : ""
+    }`,
+    data: { kind: r.kind, count: r.count, lastSeq: r.lastSeq },
   }));
 }
 
+/** A user-drawn annotation edge. */
+function manualEdge(id: string, source: string, target: string): ProvenanceFlowEdge {
+  return {
+    id,
+    source,
+    target,
+    type: "provenance",
+    markerEnd: { type: MarkerType.ArrowClosed, color: KIND_STYLE.manual.stroke },
+    ariaLabel: "Manual Annotation",
+    data: { kind: "manual" },
+  };
+}
+
 function WorkerGraphInner(): React.ReactElement {
-  const workers = useWorkerStore((s) => s.workers);
-  const updateState = useWorkerStore((s) => s.updateState);
-  const removeWorker = useWorkerStore((s) => s.removeWorker);
+  // Graph-only projections with shallow equality: a PTY output chunk
+  // (which replaces the worker object) leaves both records unchanged, so
+  // the graph re-renders only when a worker is added, removed, renamed or
+  // changes state/PID. Nodes read their own live fields (see WorkerNode).
+  const names = useWorkerStore(useShallow(selectNames));
+  const nodeLabels = useWorkerStore(useShallow(selectNodeLabels));
+  const workerIds = Object.keys(nodeLabels);
+
   const provenanceEdges = useProvenanceStore((s) => s.edges);
-  const fileWriteCounts = useProvenanceStore((s) => s.fileWriteCounts);
   const setSelectedId = useSetAtom(selectedWorkerIdAtom);
   const setDetailOpen = useSetAtom(detailPanelOpenAtom);
-  // Read (not just set): the delete-key handler below must gate itself
-  // on whether the causality inspector is open — a document-level
-  // listener stays live underneath any overlay, so without this a
-  // Backspace meant for the modal would delete a manual graph edge
-  // behind it.
+  // Read, not just set: while the causality inspector is open, graph
+  // shortcuts (xyflow's delete keys) must not act on the canvas behind it.
   const [causalityTarget, setCausalityTarget] = useAtom(causalityInspectorAtom);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [nodeUi, setNodeUi] = useState<ReadonlyMap<string, NodeUiState>>(new Map());
+  const [selectedEdgeIds, setSelectedEdgeIds] = useState(NO_EDGE_IDS);
+  // User-drawn annotation edges (kind "manual") — the only edges that are
+  // state. Measured edges are recomputed every render from the provenance
+  // store, so a repeat occurrence's count never waits on a relayout.
+  const [manualEdges, setManualEdges] = useState<readonly ProvenanceFlowEdge[]>([]);
   const initialFitDone = useRef(false);
 
-  const { fitView, getViewport } = useReactFlow();
+  const { fitView } = useReactFlow<WorkerFlowNode, ProvenanceFlowEdge>();
 
-  // Nodes come from the live worker registry; measured edges come from
-  // the provenance store, filtered to workers still on the canvas (an
-  // edge whose endpoint departed drops from the graph but stays in the
-  // store — see `selectVisibleEdges`'s doc, still findable via
-  // CausalityPanel by seq).
-  const rawNodes = buildNodes(workers, fileWriteCounts);
-  const visibleRecords = selectVisibleEdges(provenanceEdges, new Set(workers.keys()));
-  const measuredEdges = toFlowEdges(visibleRecords);
+  // Measured edges come from the provenance store, filtered to workers
+  // still on the canvas (an edge whose endpoint departed drops from the
+  // graph but stays in the store — still findable via CausalityPanel).
+  const measuredEdges = toFlowEdges(selectVisibleEdges(provenanceEdges, new Set(workerIds)), names);
 
-  // Run ELK layout. Only measured edges feed the topology (crossing
-  // minimization) — user-drawn manual edges never did (onConnect always
-  // appended straight into rendered state, bypassing layout) and still
-  // don't here.
+  // Layout: only measured edges feed ELK's crossing minimization; manual
+  // annotations never did.
+  const layoutNodes = workerIds.map((id) => ({ id }));
   const {
-    layoutedNodes,
+    positions,
     isLayouting,
     error: layoutError,
     runLayout,
-  } = useElkLayout(rawNodes, measuredEdges);
+  } = useElkLayout(layoutNodes, measuredEdges);
 
-  // Controlled nodes state for interactive editing (drag, add, kill).
-  const [nodes, setNodes] = useState<Node[]>([]);
-  // User-drawn annotation edges only (kind: "manual") — kept as real
-  // React state since nothing else derives them. Measured edges are
-  // NOT stored as state: they're recomputed fresh every render from the
-  // provenance store above, so a repeat occurrence's count/×N label
-  // never goes stale waiting on the next ELK relayout (ELK only
-  // repositions NODES; it passes edges through unchanged, so routing
-  // edge content through it would leave collapsed-edge counts stuck at
-  // whatever was true the last time the node topology itself changed).
-  const [manualEdges, setManualEdges] = useState<Edge[]>([]);
-
-  const edges = [...measuredEdges, ...manualEdges];
-  // Optional-chained: an edge with no `data` (never happens for one this
-  // component constructs itself, but defends against a future caller —
-  // e.g. a raw onConnect payload before onConnect below normalizes it)
-  // would otherwise white-screen the whole graph on a bare `.kind` read.
-  // ProvenanceEdge already defends the same way for its own render.
-  const presentKinds = new Set<GraphEdgeKind>(
-    edges
-      .map((e) => (e.data as ProvenanceEdgeData | undefined)?.kind)
-      .filter((k): k is GraphEdgeKind => k != null),
-  );
-
-  // Sync layout results into controlled node state.
-  useEffect(() => {
-    if (layoutedNodes.length > 0) {
-      setNodes(layoutedNodes);
-    }
-  }, [layoutedNodes]);
-
-  // Positions come from `nodes` (ELK, above); live per-worker data
-  // (state/pid/fileWriteCount) is overlaid fresh every render — see
-  // `withLiveNodeData`'s doc for why this can't wait on the next
-  // relayout.
-  const renderedNodes = withLiveNodeData(nodes, workers, fileWriteCounts);
-
-  // Fit view on first layout completion. The guard is consumed inside the rAF
-  // callback: while occluded, Chromium suppresses rAF, and a topology change
-  // cancels the pending fit — leaving the guard unset lets the next layout
-  // completion reschedule it instead of losing the initial fit forever.
-  useEffect(() => {
-    if (!isLayouting && nodes.length > 0 && !initialFitDone.current) {
-      const raf = requestAnimationFrame(() => {
-        initialFitDone.current = true;
-        void fitView({ duration: 300, padding: 0.2 });
-      });
-      return () => cancelAnimationFrame(raf);
-    }
-    return undefined;
-  }, [isLayouting, nodes.length, fitView]);
-
-  // Controlled change handlers for drag, select, remove.
-  const onNodesChange: OnNodesChange = (changes) => {
-    setNodes((nds) => applyNodeChanges(changes, nds));
-  };
-
-  // Only manual edges are ever structurally mutable — measured edges are
-  // read-only facts recomputed from the store, so changes targeting
-  // their ids are inert here (there's nothing in `manualEdges` for them
-  // to match).
-  const onEdgesChange: OnEdgesChange = (changes) => {
-    setManualEdges((eds) => applyEdgeChanges(changes, eds));
-  };
-
-  // Connect handler — draw a new MANUAL annotation edge by dragging
-  // between handles. Kept visually and structurally distinct from
-  // measured edges (own `kind: "manual"`, own legend row) — annotations
-  // must never be mistaken for measured facts.
-  const onConnect = (connection: Connection) => {
-    if (!connection.source || !connection.target) return;
-    const newEdge: Edge = {
-      id: `manual-${connection.source}-${connection.target}-${Date.now()}`,
-      source: connection.source,
-      target: connection.target,
-      type: "provenance",
-      data: { kind: "manual" } satisfies ProvenanceEdgeData,
-    };
-    setManualEdges((eds) => [...eds, newEdge]);
-  };
-
-  // Add a new worker node at viewport center.
-  const handleAddNode = () => {
-    const viewport = getViewport();
-    const centerX = (-viewport.x + 400) / viewport.zoom;
-    const centerY = (-viewport.y + 300) / viewport.zoom;
-
-    const newId = crypto.randomUUID();
-    const newNode: Node = {
-      id: newId,
+  // Rendered nodes are derived, never copied into state: exactly one per
+  // live worker (a departed worker's node disappears with it), positioned
+  // by a user drag if there was one, else by the latest layout.
+  const nodes: WorkerFlowNode[] = workerIds.map((id, index) => {
+    const ui = nodeUi.get(id);
+    return {
+      id,
       type: "worker",
-      position: { x: centerX, y: centerY },
-      data: {
-        label: `Worker ${nodes.length + 1}`,
-        state: "idle" as WorkerState,
-        index: nodes.length,
-      },
+      position: ui?.position ?? positions.get(id) ?? ORIGIN,
+      data: { workerId: id, index },
+      ariaLabel: nodeLabels[id],
+      deletable: false,
+      selected: ui?.selected ?? false,
+      dragging: ui?.dragging ?? false,
+      ...(ui?.measured && { measured: ui.measured }),
     };
-    setNodes((nds) => [...nds, newNode]);
-  };
+  });
 
-  // Delete selected (manual) edge via Delete/Backspace key.
+  const edges = [...measuredEdges, ...manualEdges].map((edge) => ({
+    ...edge,
+    selected: selectedEdgeIds.has(edge.id),
+  }));
+  const presentKinds = new Set<GraphEdgeKind>(edges.flatMap((e) => (e.data ? [e.data.kind] : [])));
+  const selectedManualIds = manualEdges
+    .filter((edge) => selectedEdgeIds.has(edge.id))
+    .map((edge) => edge.id);
+
+  // Fit the view once, after the first layout lands. The guard is consumed
+  // inside the rAF: while occluded, Chromium suppresses rAF and a topology
+  // change cancels the pending fit — leaving the guard unset lets the next
+  // layout completion schedule it again instead of losing it forever.
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
-        return;
-      }
-      // The causality inspector owns Delete/Backspace while open (see
-      // the `causalityTarget` read above) — this listener is
-      // document-level and stays live underneath the modal's own
-      // overlay, so without this gate a Backspace meant to do nothing
-      // in particular there would delete a manual edge on the canvas
-      // behind it.
-      if (causalityTarget) return;
+    if (isLayouting || positions.size === 0 || initialFitDone.current) return undefined;
+    const raf = requestAnimationFrame(() => {
+      initialFitDone.current = true;
+      void fitView({ duration: 300, padding: 0.2 });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isLayouting, positions, fitView]);
 
-      if ((e.key === "Delete" || e.key === "Backspace") && selectedEdgeId) {
-        e.preventDefault();
-        setManualEdges((eds) => eds.filter((edge) => edge.id !== selectedEdgeId));
-        setSelectedEdgeId(null);
-      }
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [selectedEdgeId, causalityTarget]);
-
-  // Edge click: a MEASURED edge opens the causality inspector at its
-  // most recent occurrence; a MANUAL edge selects for deletion (the
-  // pre-existing annotation-editing UX) — never both, so a click can
-  // never be ambiguous about which kind of edge it landed on.
-  const handleEdgeClick: EdgeMouseHandler = (_event, edge) => {
-    const data = edge.data as ProvenanceEdgeData | undefined;
-    if (data?.kind === "manual") {
-      setSelectedEdgeId((prev) => (prev === edge.id ? null : edge.id));
-      return;
-    }
-    if (typeof data?.lastSeq === "number") {
-      setCausalityTarget({ startSeq: data.lastSeq });
-    }
+  const onNodesChange = (changes: NodeChange<WorkerFlowNode>[]): void => {
+    setNodeUi((previous) => reduceNodeUi(previous, changes));
   };
 
-  // Delete selected edge (toolbar button).
-  const handleDeleteEdge = () => {
-    if (selectedEdgeId) {
-      setManualEdges((eds) => eds.filter((e) => e.id !== selectedEdgeId));
-      setSelectedEdgeId(null);
-    }
+  // Selection is tracked for every edge; only manual edges are removable
+  // (measured edges are `deletable: false`, so xyflow never removes them).
+  const onEdgesChange: OnEdgesChange<ProvenanceFlowEdge> = (changes) => {
+    setSelectedEdgeIds((previous) => {
+      let next = previous;
+      for (const change of changes) {
+        if (change.type === "select" && change.selected) next = next.union(new Set([change.id]));
+        else if (change.type === "select" || change.type === "remove") {
+          next = next.difference(new Set([change.id]));
+        }
+      }
+      return next;
+    });
+    const removals = changes.filter((change) => change.type === "remove");
+    if (removals.length > 0) setManualEdges((current) => applyEdgeChanges(removals, [...current]));
   };
 
-  // Node click → select worker + open detail.
-  const handleNodeClick: NodeMouseHandler = (_event, node) => {
-    setSelectedId(node.id);
+  // Drawing between handles adds a MANUAL annotation edge — kept visually
+  // and structurally distinct from measured edges (own kind, own legend
+  // group) so an annotation is never mistaken for a measured fact.
+  const onConnect = (connection: Connection): void => {
+    const { source, target } = connection;
+    setManualEdges((current) => [
+      ...current,
+      manualEdge(`manual-${source}-${target}-${Date.now()}`, source, target),
+    ]);
+  };
+
+  const deleteSelectedManualEdges = (): void => {
+    const doomed = new Set(selectedManualIds);
+    setManualEdges((current) => current.filter((edge) => !doomed.has(edge.id)));
+    setSelectedEdgeIds((previous) => previous.difference(doomed));
+  };
+
+  const openDetail = (workerId: string): void => {
+    setSelectedId(workerId);
     setDetailOpen(true);
-    setContextMenu(null);
-    setSelectedEdgeId(null);
   };
 
-  // Right-click → context menu with delete option.
-  const handleNodeContextMenu: NodeMouseHandler = (event, node) => {
-    event.preventDefault();
-    const worker = workers.get(node.id);
-    const nodeData = node.data as { state?: WorkerState } | undefined;
+  const openCausality = (edgeId: string): boolean => {
+    const lastSeq = measuredEdges.find((edge) => edge.id === edgeId)?.data?.lastSeq;
+    if (lastSeq === undefined) return false;
+    setCausalityTarget({ startSeq: lastSeq });
+    return true;
+  };
 
+  // A measured edge opens the causality inspector at its most recent
+  // occurrence; a manual edge just selects (xyflow handles that).
+  const handleEdgeClick: EdgeMouseHandler<ProvenanceFlowEdge> = (_event, edge) => {
+    openCausality(edge.id);
+  };
+
+  const handleNodeClick: NodeMouseHandler<WorkerFlowNode> = (_event, node) => {
+    openDetail(node.id);
+  };
+
+  const handleNodeContextMenu: NodeMouseHandler<WorkerFlowNode> = (event, node) => {
+    event.preventDefault();
     setContextMenu({
       x: event.clientX,
       y: event.clientY,
       workerId: node.id,
-      workerState: worker?.state ?? nodeData?.state ?? ("idle" as WorkerState),
+      openOnRelease: event.buttons !== 0,
     });
   };
 
-  const handlePaneClick = () => {
-    setContextMenu(null);
-    setSelectedEdgeId(null);
-  };
-
-  // Context menu actions.
-  const handlePause = () => {
-    if (contextMenu) {
-      updateState(contextMenu.workerId, "paused");
-      setContextMenu(null);
+  // Keyboard activation for the focusable node and edge wrappers xyflow
+  // renders (Enter/Space only select them natively): a node opens its
+  // detail panel, a measured edge its causality trace.
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (!(event.target instanceof Element)) return;
+    const element = event.target.closest<HTMLElement | SVGElement>(
+      ".react-flow__node, .react-flow__edge",
+    );
+    const id = element?.dataset.id;
+    if (!element || element !== event.target || !id) return;
+    if (element.classList.contains("react-flow__node")) {
+      event.preventDefault();
+      openDetail(id);
+    } else if (openCausality(id)) {
+      event.preventDefault();
     }
   };
 
-  const handleResume = () => {
-    if (contextMenu) {
-      updateState(contextMenu.workerId, "running");
-      setContextMenu(null);
-    }
+  const resetLayout = (): void => {
+    setNodeUi(
+      (previous) =>
+        new Map(previous.entries().map(([id, ui]) => [id, { ...ui, position: undefined }])),
+    );
+    runLayout();
   };
 
-  const handleKill = () => {
-    if (contextMenu) {
-      // Remove from store if it exists there.
-      if (workers.has(contextMenu.workerId)) {
-        removeWorker(contextMenu.workerId);
-      }
-      // Always remove from graph. Measured edges auto-drop next render
-      // via selectVisibleEdges once the worker leaves the store; only
-      // manual edges (real state) need an explicit filter here.
-      setNodes((nds) => nds.filter((n) => n.id !== contextMenu.workerId));
-      setManualEdges((eds) =>
-        eds.filter((e) => e.source !== contextMenu.workerId && e.target !== contextMenu.workerId),
-      );
-      setContextMenu(null);
-    }
+  const getWorkflow = (): WorkflowDefinition =>
+    exportWorkflow(
+      nodes.map((node) => ({
+        id: node.id,
+        type: node.type,
+        position: node.position,
+        data: { label: names[node.id] ?? node.id, index: node.data.index },
+      })),
+      manualEdges,
+    );
+
+  // Imports apply to what is live: saved positions for workers still
+  // running, and annotation edges whose two ends are both on the canvas.
+  // Nothing is fabricated for a worker that is not running.
+  const importWorkflow = (workflow: WorkflowDefinition): string => {
+    const live = new Set(workerIds);
+    const placed = workflow.nodes.filter((node) => live.has(node.id));
+    const annotations = workflow.edges.filter(
+      (edge) => live.has(edge.source) && live.has(edge.target),
+    );
+    setNodeUi((previous) => {
+      const next = new Map(previous);
+      for (const node of placed)
+        next.set(node.id, { ...next.get(node.id), position: node.position });
+      return next;
+    });
+    setManualEdges((current) => {
+      const known = new Set(current.map((edge) => edge.id));
+      return [
+        ...current,
+        ...annotations
+          .filter((edge) => !known.has(edge.id))
+          .map((edge) => manualEdge(edge.id, edge.source, edge.target)),
+      ];
+    });
+    return `Placed ${placed.length} Of ${workflow.nodes.length} Nodes, Added ${annotations.length} Annotations`;
   };
 
-  const handleInspect = () => {
-    if (contextMenu) {
-      setSelectedId(contextMenu.workerId);
-      setDetailOpen(true);
-      setContextMenu(null);
-    }
-  };
-
-  const handleCloseContextMenu = () => {
-    setContextMenu(null);
-  };
-
-  // MiniMap node color.
-  const miniMapNodeColor = (node: Node): string => {
-    const data = node.data as { index?: number } | undefined;
-    return workerColor(data?.index ?? 0);
-  };
-
-  // Edge styles — highlight selected (manual) edge.
-  const styledEdges = edges.map((edge) => ({
-    ...edge,
-    selected: edge.id === selectedEdgeId,
-  }));
-
-  // Empty state — zero workers.
-  if (workers.size === 0 && nodes.length === 0) {
+  if (workerIds.length === 0) {
     return (
       <div
         style={{
@@ -409,8 +394,7 @@ function WorkerGraphInner(): React.ReactElement {
           gap: 12,
         }}
       >
-        <svg width={48} height={48} viewBox="0 0 48 48" fill="none">
-          <title>No Workers</title>
+        <svg width={48} height={48} viewBox="0 0 48 48" fill="none" aria-hidden="true">
           <circle cx={24} cy={24} r={20} stroke="oklch(0.28 0.05 220)" strokeWidth={2} />
           <path
             d="M18 24h12M24 18v12"
@@ -433,8 +417,7 @@ function WorkerGraphInner(): React.ReactElement {
   }
 
   return (
-    <div style={{ width: "100%", height: "100%", position: "relative" }}>
-      {/* Loading / layout-error overlay */}
+    <div className="worker-graph" style={{ width: "100%", height: "100%", position: "relative" }}>
       <AnimatePresence>
         {(isLayouting || layoutError) && (
           <motion.div
@@ -456,6 +439,7 @@ function WorkerGraphInner(): React.ReactElement {
           >
             {layoutError ? (
               <div
+                role="alert"
                 style={{
                   display: "flex",
                   flexDirection: "column",
@@ -476,32 +460,14 @@ function WorkerGraphInner(): React.ReactElement {
                 >
                   {layoutError}
                 </span>
-                <button
-                  type="button"
-                  onClick={runLayout}
-                  style={{
-                    padding: "8px 20px",
-                    fontSize: "0.75rem",
-                    fontWeight: 500,
-                    fontFamily: "var(--font-body)",
-                    background: "oklch(0.78 0.18 205 / 0.15)",
-                    border: "1px solid oklch(0.78 0.18 205 / 0.3)",
-                    borderRadius: 8,
-                    color: "oklch(0.78 0.18 205)",
-                    cursor: "pointer",
-                  }}
-                >
+                <Button variant="secondary" size="sm" onClick={runLayout}>
                   Retry Layout
-                </button>
+                </Button>
               </div>
             ) : (
               <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: 8,
-                }}
+                role="status"
+                style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}
               >
                 <Spinner size="lg" />
                 <span
@@ -519,34 +485,32 @@ function WorkerGraphInner(): React.ReactElement {
         )}
       </AnimatePresence>
 
-      <ReactFlow
-        nodes={renderedNodes}
-        edges={styledEdges}
+      <ReactFlow<WorkerFlowNode, ProvenanceFlowEdge>
+        nodes={nodes}
+        edges={edges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
+        colorMode="dark"
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onNodeClick={handleNodeClick}
         onNodeContextMenu={handleNodeContextMenu}
         onEdgeClick={handleEdgeClick}
-        onPaneClick={handlePaneClick}
-        nodesDraggable
-        nodesConnectable
+        onKeyDown={handleKeyDown}
+        deleteKeyCode={causalityTarget ? null : ["Backspace", "Delete"]}
         proOptions={{ hideAttribution: true }}
-        style={{ background: "oklch(0.08 0.02 220)" }}
       >
-        <Background color="oklch(0.14 0.03 220)" gap={20} size={1} />
+        <Background gap={20} size={1} />
 
         <GraphLegend presentKinds={presentKinds} />
 
         {/* Empty-causality hint: workers exist but nothing measured has
-            happened between them yet (e.g. three hand-spawned workers).
-            This is the acceptance criterion for measured provenance —
-            an honest, quiet canvas rather than a fabricated chain. Only
-            shown once layout has actually settled, so it doesn't flash
-            during the initial computing-layout overlay. */}
-        {!isLayouting && !layoutError && nodes.length > 0 && edges.length === 0 && (
+            happened between them yet (e.g. three hand-spawned workers) —
+            an honest, quiet canvas rather than a fabricated chain. Shown
+            only once layout has settled, so it doesn't flash during the
+            computing-layout overlay. */}
+        {!isLayouting && !layoutError && edges.length === 0 && (
           <Panel
             position="bottom-center"
             title="Provenance Edges Are Session-Scoped In v1 — A Reload Shows Nodes Without Historical Edges By Design."
@@ -565,43 +529,26 @@ function WorkerGraphInner(): React.ReactElement {
           </Panel>
         )}
 
-        <MiniMap
-          nodeColor={miniMapNodeColor}
-          maskColor="oklch(0.06 0.02 220 / 0.8)"
-          style={{
-            background: "oklch(0.10 0.03 220)",
-            border: "1px solid oklch(0.22 0.04 220)",
-            borderRadius: 8,
-          }}
-        />
+        <MiniMap<WorkerFlowNode> nodeColor={(node) => workerColor(node.data.index)} />
         <GraphControls
-          onResetLayout={runLayout}
-          onAddNode={handleAddNode}
-          onDeleteEdge={selectedEdgeId ? handleDeleteEdge : undefined}
-          nodes={renderedNodes}
-          // `manualEdges` ONLY, never the full `edges` (measured +
-          // manual): GraphControls' Export Workflow feeds this straight
-          // into `exportWorkflow`, and a measured edge exported then
-          // re-imported would come back tagged `kind: "manual"` — the
-          // exact "measured fact laundered into a user annotation" merge
-          // `#store/provenance`'s own doc forbids. Measured facts aren't
-          // a portable workflow; only what the user hand-drew is.
-          edges={manualEdges}
+          onResetLayout={resetLayout}
+          onDeleteEdge={selectedManualIds.length > 0 ? deleteSelectedManualEdges : undefined}
+          getWorkflow={getWorkflow}
+          onImport={importWorkflow}
         />
       </ReactFlow>
 
-      {/* Context menu */}
       {contextMenu && (
         <GraphContextMenu
+          // A new right-click mounts a fresh menu; the closed one's late
+          // `onClose` then no longer matches and is ignored.
+          key={`${contextMenu.workerId}:${contextMenu.x}:${contextMenu.y}`}
           x={contextMenu.x}
           y={contextMenu.y}
           workerId={contextMenu.workerId}
-          workerState={contextMenu.workerState}
-          onPause={handlePause}
-          onResume={handleResume}
-          onKill={handleKill}
-          onInspect={handleInspect}
-          onClose={handleCloseContextMenu}
+          openOnRelease={contextMenu.openOnRelease}
+          onInspect={() => openDetail(contextMenu.workerId)}
+          onClose={() => setContextMenu((current) => (current === contextMenu ? null : current))}
         />
       )}
     </div>
@@ -609,20 +556,23 @@ function WorkerGraphInner(): React.ReactElement {
 }
 
 /**
- * Interactive worker topology graph with ELK layout, context menus,
- * zoom controls, edge drawing, node addition, and a mini-map.
+ * Interactive Workers topology graph (measured causality): ELK layout,
+ * node context menu, zoom controls, annotation edge drawing, workflow
+ * export/import and a mini-map.
  *
  * Edges are MEASURED causal facts derived from stamped `swarm://events`
  * envelopes (see `#store/provenance`) — spawn/kill/command/message —
  * plus user-drawn `manual` annotations, kept visually and structurally
  * distinct. Workers with no measured causality render with zero edges
  * and a quiet "No Measured Causality Yet" hint; nothing is ever
- * fabricated. Wraps React Flow with a provider.
+ * fabricated. Motion honours the user's reduced-motion preference.
  */
 export function WorkerGraph(): React.ReactElement {
   return (
     <ReactFlowProvider>
-      <WorkerGraphInner />
+      <MotionConfig reducedMotion="user">
+        <WorkerGraphInner />
+      </MotionConfig>
     </ReactFlowProvider>
   );
 }
