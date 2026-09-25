@@ -1,180 +1,291 @@
-//! Tauri-free session persistence: atomic JSON, shared by both shells.
+//! `sessions.json`: the persisted session set, shared by both shells.
 //!
-//! Headless-daemon plan Phase 2 item 11: sessions move off
-//! `tauri-plugin-store` onto `swarm_core`'s own atomic JSON persistence,
-//! so `swarm-desktop` and `swarmd` share one on-disk session set instead
-//! of the daemon needing its own separate store implementation.
+//! The file is a JSON object whose `sessions` key holds an array of
+//! [`Session`]s — the exact layout `tauri-plugin-store` wrote before the
+//! core took persistence over, so files from those builds load
+//! unchanged. Any other top-level key is preserved across saves.
 //!
-//! # Format compatibility (no explicit migration needed)
+//! # Damage handling
 //!
-//! `tauri-plugin-store` persists each store as a flat JSON object at
-//! `<data_dir>/<store_file>`, where `store.set(key, value)` sets a
-//! top-level key in that object. The pre-Phase-2 desktop shell used
-//! `PluginSessionStore` with `STORE_FILE = "sessions.json"` and
-//! `STORE_KEY = "sessions"` — i.e. exactly `{"sessions": [...]}` at
-//! `<data_dir>/sessions.json`. This module targets the SAME filename and
-//! the SAME top-level key with the same atomic-write discipline as
-//! [`crate::config`], so an existing pre-Phase-2 `sessions.json` loads
-//! here unmodified — no read-then-rewrite migration step is needed, the
-//! wire format was always plain JSON underneath the plugin.
+//! A file that is not a JSON object (or whose `sessions` is not an
+//! array) is never treated as "no sessions" and overwritten: it is moved
+//! aside to `sessions.json.corrupt-<unix ms>` and the app starts with no
+//! sessions. A single entry that does not parse is skipped (and logged),
+//! keeping every other session. A file that exists but cannot be read is
+//! left untouched — loading fails and saving refuses — until it can be.
+//!
+//! # Concurrency and durability
+//!
+//! One process-wide lock covers every read and write, and [`save`] takes
+//! its snapshot of the manager INSIDE it, so two overlapping saves can
+//! never land out of order (an older snapshot overwriting a newer one).
+//! Each write replaces the file atomically and durably (see
+//! `state_file::write_atomic`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use parking_lot::Mutex;
+use serde_json::{Map, Value};
 
-use super::SessionStore;
 use super::manager::{Session, SessionManager};
 use crate::Paths;
+use crate::error::AppError;
+use crate::state_file::{self, StoredObject};
 
 const SESSIONS_FILE: &str = "sessions.json";
 const SESSIONS_KEY: &str = "sessions";
 
-/// Process-wide lock serializing read-modify-write cycles — mirrors
-/// [`crate::config::CONFIG_LOCK`]'s discipline for a second file.
+/// Serializes every read and write of the file, and — in [`save`] — the
+/// snapshot each write is taken from.
 static SESSIONS_LOCK: Mutex<()> = Mutex::new(());
 
 fn sessions_path(paths: &Paths) -> PathBuf {
     paths.data_dir.join(SESSIONS_FILE)
 }
 
-/// [`SessionStore`] backed by [`Paths::data_dir`]`/sessions.json`,
-/// atomic-write-then-rename on save. Used by both shells' `Runtime`
-/// construction — no shell-specific persistence backend remains.
-pub struct JsonSessionStore<'a>(pub &'a Paths);
-
-impl SessionStore for JsonSessionStore<'_> {
-    fn load(&self) -> anyhow::Result<Option<Vec<Session>>> {
-        let _guard = SESSIONS_LOCK.lock();
-        let path = sessions_path(self.0);
-        let contents = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
-        let map: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(&contents).unwrap_or_default();
-        match map.get(SESSIONS_KEY) {
-            Some(value) => Ok(Some(serde_json::from_value(value.clone())?)),
-            None => Ok(None),
-        }
-    }
-
-    fn save(&self, sessions: &[Session]) -> anyhow::Result<()> {
-        let _guard = SESSIONS_LOCK.lock();
-        let path = sessions_path(self.0);
-
-        // Preserve any other top-level keys already in the file (none
-        // exist in practice — the plugin-store era only ever wrote
-        // `sessions` — but read-modify-write is the same safe discipline
-        // `config.rs` uses, and costs nothing here).
-        let mut map: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|c| serde_json::from_str(&c).ok())
-            .unwrap_or_default();
-        map.insert(SESSIONS_KEY.to_string(), serde_json::to_value(sessions)?);
-
-        let json = serde_json::to_string_pretty(&map)?;
-        let tmp_path = PathBuf::from(format!("{}.tmp", path.display()));
-        std::fs::write(&tmp_path, json)?;
-        std::fs::rename(&tmp_path, &path)?;
-        Ok(())
+/// The file's top-level object, with a malformed file moved aside (and
+/// read as empty). `None` when there is no file yet.
+fn read_root(path: &Path) -> Result<Option<Map<String, Value>>, AppError> {
+    let malformed = || -> Result<Option<Map<String, Value>>, AppError> {
+        let aside = state_file::quarantine(path)?;
+        tracing::warn!(
+            moved_to = %aside.display(),
+            "sessions.json was malformed; moved it aside and started with no sessions"
+        );
+        Ok(Some(Map::new()))
+    };
+    match state_file::read_object(path)? {
+        StoredObject::Missing => Ok(None),
+        StoredObject::Malformed => malformed(),
+        StoredObject::Object(root) => match root.get(SESSIONS_KEY) {
+            None | Some(Value::Array(_)) => Ok(Some(root)),
+            Some(_) => malformed(),
+        },
     }
 }
 
-/// Loads persisted sessions into `manager`. A no-op (logged) when the
-/// file doesn't exist yet — a fresh install/data dir.
-pub fn load(paths: &Paths, manager: &SessionManager) -> anyhow::Result<()> {
-    match JsonSessionStore(paths).load()? {
-        Some(sessions) => manager.restore_sessions(sessions),
-        None => tracing::debug!("no sessions.json found, starting fresh"),
-    }
+/// Loads the persisted sessions into `manager`. A no-op when the file
+/// does not exist yet (a fresh data directory).
+///
+/// # Errors
+///
+/// [`AppError::Io`] when the file exists but cannot be read, or a
+/// malformed file cannot be moved aside.
+pub fn load(paths: &Paths, manager: &SessionManager) -> Result<(), AppError> {
+    let _guard = SESSIONS_LOCK.lock();
+    let Some(mut root) = read_root(&sessions_path(paths))? else {
+        tracing::debug!("no sessions.json yet; starting with no sessions");
+        return Ok(());
+    };
+    let Some(Value::Array(entries)) = root.remove(SESSIONS_KEY) else {
+        return Ok(());
+    };
+    let sessions = entries
+        .into_iter()
+        .filter_map(|entry| {
+            serde_json::from_value::<Session>(entry)
+                .inspect_err(|e| {
+                    tracing::warn!(error = %e, "skipping a sessions.json entry that does not parse");
+                })
+                .ok()
+        })
+        .collect();
+    manager.restore_sessions(sessions);
     Ok(())
 }
 
-/// Saves `manager`'s full session list to disk.
-pub fn save(paths: &Paths, manager: &SessionManager) -> anyhow::Result<()> {
+/// Writes `manager`'s current sessions to disk, snapshotting them under
+/// the file lock (see the module doc).
+///
+/// # Errors
+///
+/// [`AppError::Io`] when the existing file cannot be read (it is left
+/// untouched) or the new one cannot be written.
+pub fn save(paths: &Paths, manager: &SessionManager) -> Result<(), AppError> {
+    let _guard = SESSIONS_LOCK.lock();
+    let path = sessions_path(paths);
+    let mut root = read_root(&path)?.unwrap_or_default();
     let sessions = manager.list_sessions();
-    JsonSessionStore(paths).save(&sessions)?;
+    root.insert(SESSIONS_KEY.to_owned(), serde_json::to_value(&sessions)?);
+    state_file::write_atomic(&path, &serde_json::to_vec_pretty(&root)?)?;
     tracing::debug!(count = sessions.len(), "sessions saved");
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::mem::DropGuard;
+    use std::fs;
 
-    use super::*;
+    use serde_json::json;
     use uuid::Uuid;
 
-    /// A fresh data dir plus a guard that removes it when dropped, so a
-    /// failing assertion still cleans up.
-    fn temp_paths() -> (Paths, DropGuard<PathBuf, impl FnOnce(PathBuf)>) {
-        let dir = std::env::temp_dir().join(format!("swarm-sessions-test-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let cleanup = DropGuard::new(dir.clone(), |dir| {
-            let _ = std::fs::remove_dir_all(dir);
-        });
-        (Paths { data_dir: dir }, cleanup)
+    use super::*;
+    use crate::state_file::tests::temp_dir;
+
+    fn paths(dir: &Path) -> Paths {
+        Paths {
+            data_dir: dir.to_path_buf(),
+        }
+    }
+
+    fn corrupt_files(dir: &Path) -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("sessions.json.corrupt-")
+            })
+            .collect()
     }
 
     #[test]
-    fn test_load_missing_file_returns_none() {
-        let (paths, _cleanup) = temp_paths();
-        assert!(JsonSessionStore(&paths).load().unwrap().is_none());
+    fn test_load_without_a_file_is_a_no_op() {
+        let (dir, _cleanup) = temp_dir("sessions");
+        let manager = SessionManager::new();
+        load(&paths(&dir), &manager).unwrap();
+        assert!(manager.list_sessions().is_empty());
     }
 
     #[test]
     fn test_save_then_load_roundtrip() {
-        let (paths, _cleanup) = temp_paths();
+        let (dir, _cleanup) = temp_dir("sessions");
+        let paths = paths(&dir);
         let manager = SessionManager::new();
-        let s = manager.create_session("Research".to_string(), serde_json::json!({"a": 1}));
-
+        let s = manager.create_session("Research".to_string(), json!({"a": 1}));
         save(&paths, &manager).unwrap();
+        assert!(!sessions_path(&paths).with_added_extension("tmp").exists());
 
-        let manager2 = SessionManager::new();
-        load(&paths, &manager2).unwrap();
-        let loaded = manager2.get_session(&s.id).unwrap();
+        let restored = SessionManager::new();
+        load(&paths, &restored).unwrap();
+        let loaded = restored.get_session(&s.id).unwrap();
         assert_eq!(loaded.name, "Research");
-        assert_eq!(loaded.config, serde_json::json!({"a": 1}));
+        assert_eq!(loaded.config, json!({"a": 1}));
     }
 
-    /// DIRECTIVE: a plugin-store-era `sessions.json` (plain
-    /// `{"sessions": [...]}`, camelCase fields — exactly what
-    /// `tauri-plugin-store`'s `store.save()` wrote) must load here with
-    /// zero migration code, proving format compatibility.
+    /// A file `tauri-plugin-store` wrote (plain `{"sessions": [...]}`,
+    /// camelCase fields) loads with no migration step.
     #[test]
     fn test_loads_a_plugin_store_era_file_unmodified() {
-        let (paths, _cleanup) = temp_paths();
+        let (dir, _cleanup) = temp_dir("sessions");
+        let paths = paths(&dir);
         let id = Uuid::new_v4();
-        let legacy_json = serde_json::json!({
-            "sessions": [
-                {
-                    "id": id,
-                    "name": "Legacy Session",
-                    "workerIds": [],
-                    "createdAt": 1_700_000_000,
-                    "config": {}
-                }
-            ]
+        let legacy = json!({
+            "sessions": [{
+                "id": id,
+                "name": "Legacy Session",
+                "workerIds": [],
+                "createdAt": 1_700_000_000,
+                "config": {}
+            }]
         });
-        std::fs::write(
-            paths.data_dir.join("sessions.json"),
-            serde_json::to_string_pretty(&legacy_json).unwrap(),
-        )
-        .unwrap();
+        fs::write(sessions_path(&paths), legacy.to_string()).unwrap();
 
         let manager = SessionManager::new();
         load(&paths, &manager).unwrap();
-        let loaded = manager.get_session(&id).unwrap();
-        assert_eq!(loaded.name, "Legacy Session");
+        assert_eq!(manager.get_session(&id).unwrap().name, "Legacy Session");
+    }
+
+    /// CONFIRMED regression: a malformed file used to load as "no
+    /// sessions", and the next autosave overwrote it — losing every
+    /// session. Now it is moved aside intact first.
+    #[test]
+    fn test_a_malformed_file_is_quarantined_not_overwritten() {
+        let (dir, _cleanup) = temp_dir("sessions");
+        let paths = paths(&dir);
+        let damaged = r#"{"sessions": [{"id": "#;
+        fs::write(sessions_path(&paths), damaged).unwrap();
+
+        let manager = SessionManager::new();
+        load(&paths, &manager).unwrap();
+        assert!(manager.list_sessions().is_empty());
+        manager.create_session("After".to_string(), json!({}));
+        save(&paths, &manager).unwrap();
+
+        let quarantined = corrupt_files(&dir);
+        assert_eq!(quarantined.len(), 1);
+        assert_eq!(fs::read_to_string(&quarantined[0]).unwrap(), damaged);
+    }
+
+    /// `sessions` present but not an array is damage too, not "empty".
+    #[test]
+    fn test_a_non_array_sessions_key_is_quarantined() {
+        let (dir, _cleanup) = temp_dir("sessions");
+        let paths = paths(&dir);
+        fs::write(sessions_path(&paths), r#"{"sessions": {"oops": true}}"#).unwrap();
+        load(&paths, &SessionManager::new()).unwrap();
+        assert_eq!(corrupt_files(&dir).len(), 1);
+    }
+
+    /// One bad entry costs only itself, never its siblings.
+    #[test]
+    fn test_one_unparseable_entry_is_skipped_and_the_rest_load() {
+        let (dir, _cleanup) = temp_dir("sessions");
+        let paths = paths(&dir);
+        let good = Uuid::new_v4();
+        let file = json!({
+            "sessions": [
+                {"id": "not-a-uuid", "name": "Bad", "workerIds": [], "createdAt": 0, "config": {}},
+                {"id": good, "name": "Good", "workerIds": [], "createdAt": 0, "config": {}}
+            ]
+        });
+        fs::write(sessions_path(&paths), file.to_string()).unwrap();
+
+        let manager = SessionManager::new();
+        load(&paths, &manager).unwrap();
+        assert_eq!(manager.list_sessions().len(), 1);
+        assert_eq!(manager.get_session(&good).unwrap().name, "Good");
     }
 
     #[test]
-    fn test_save_is_atomic_no_tmp_file_left_behind() {
-        let (paths, _cleanup) = temp_paths();
+    fn test_save_preserves_other_top_level_keys() {
+        let (dir, _cleanup) = temp_dir("sessions");
+        let paths = paths(&dir);
+        fs::write(
+            sessions_path(&paths),
+            r#"{"sessions": [], "other": {"kept": true}}"#,
+        )
+        .unwrap();
+        save(&paths, &SessionManager::new()).unwrap();
+        let root: Value =
+            serde_json::from_str(&fs::read_to_string(sessions_path(&paths)).unwrap()).unwrap();
+        assert_eq!(root["other"]["kept"], true);
+    }
+
+    /// CONFIRMED regression: the snapshot used to be taken outside the
+    /// file lock, so a slower save could write an OLDER snapshot over a
+    /// newer one. With the snapshot inside the lock, the file always
+    /// ends at the state after the last mutation, however the
+    /// concurrent saves interleave.
+    #[test]
+    fn test_concurrent_saves_always_leave_the_newest_state() {
+        let (dir, _cleanup) = temp_dir("sessions");
+        let paths = paths(&dir);
         let manager = SessionManager::new();
-        manager.create_session("A".to_string(), serde_json::json!({}));
-        save(&paths, &manager).unwrap();
-        assert!(!paths.data_dir.join("sessions.json.tmp").exists());
+
+        std::thread::scope(|scope| {
+            for i in 0..16 {
+                manager.create_session(format!("S{i}"), json!({}));
+                let (paths, manager) = (&paths, &manager);
+                scope.spawn(move || save(paths, manager).unwrap());
+            }
+        });
+
+        let restored = SessionManager::new();
+        load(&paths, &restored).unwrap();
+        assert_eq!(restored.list_sessions().len(), 16);
+    }
+
+    #[test]
+    fn test_an_unreadable_file_fails_load_and_is_never_overwritten() {
+        let (dir, _cleanup) = temp_dir("sessions");
+        let paths = paths(&dir);
+        fs::create_dir(sessions_path(&paths)).unwrap();
+
+        assert!(load(&paths, &SessionManager::new()).is_err());
+        assert!(save(&paths, &SessionManager::new()).is_err());
+        assert!(sessions_path(&paths).is_dir());
     }
 }

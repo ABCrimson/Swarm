@@ -1,6 +1,11 @@
-//! Provider-adapter agent commands: `agent_turn_started`/`agent_spawn`/
-//! `agent_send_turn`/`agent_cancel`/`agent_shutdown`/`agent_probe`.
-//! Ported from `swarm-desktop`'s former `commands::agent`.
+//! Provider-agent commands: `agent_turn_started`, `agent_spawn`,
+//! `agent_send_turn`, `agent_cancel`, `agent_shutdown`, `agent_probe`,
+//! `agent_permission_respond` and `set_agent_concurrency`.
+//!
+//! Only `with_adapter!` knows which Rust adapter serves which
+//! [`ProviderId`]. Every command after `agent_spawn` reaches the live
+//! session through `ctx.agent_session_registry`, keyed by worker id,
+//! never by provider.
 
 use std::time::Duration;
 
@@ -18,7 +23,39 @@ use crate::worker::lifecycle;
 
 use super::{Ctx, err_value, ok_value, parse_args, parse_provenance, parse_uuid};
 
+/// How long `agent_turn_started` waits for the writer to assign a seq.
 const AGENT_TURN_STARTED_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Evaluates `$body` with `$adapter` bound to the Rust adapter serving
+/// `$provider`, as `Some(result)`; `None` for a provider with no Rust
+/// adapter (the webview chat path, or one not implemented yet). The
+/// single provider-to-adapter mapping, written as a macro so each arm
+/// is monomorphic: the adapters need not be object-safe.
+macro_rules! with_adapter {
+    ($ctx:expr, $provider:expr, |$adapter:ident| $body:expr) => {
+        match $provider {
+            ProviderId::ClaudeCode => {
+                let $adapter = &*$ctx.claude_adapter;
+                Some($body)
+            }
+            ProviderId::Codex => {
+                let $adapter = &*$ctx.codex_adapter;
+                Some($body)
+            }
+            ProviderId::OpenCode | ProviderId::Gemini | ProviderId::WebviewAnthropic => None,
+        }
+    };
+}
+
+/// The Title Case refusal for a provider `with_adapter!` has no
+/// adapter for.
+fn no_adapter(provider: ProviderId) -> String {
+    let name = serde_json::to_value(provider)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_else(|| format!("{provider:?}"));
+    format!("Provider Not Supported By The Backend: {name}.")
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +65,9 @@ struct AgentTurnStartedArgs {
     request_id: String,
 }
 
+/// Records `agent_turn_started` for a turn the webview chat path runs
+/// itself, and resolves to its seq (the `causeSeq` the turn's later
+/// events cite).
 pub async fn agent_turn_started(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let AgentTurnStartedArgs {
         worker_id,
@@ -47,16 +87,14 @@ pub async fn agent_turn_started(ctx: Ctx, args: Value) -> Result<Value, Value> {
 
     match tokio::time::timeout(AGENT_TURN_STARTED_ACK_TIMEOUT, ack).await {
         Ok(Ok(seq)) => ok_value(&seq),
-        Ok(Err(_)) => Err(Value::String("Event Writer Unavailable.".to_string())),
-        Err(_elapsed) => Err(Value::String("Agent Turn Started Timed Out.".to_string())),
+        Ok(Err(_)) => Err(Value::String("Event Writer Unavailable.".to_owned())),
+        Err(_elapsed) => Err(Value::String("Agent Turn Started Timed Out.".to_owned())),
     }
 }
 
-fn parse_provider(raw: &str) -> Result<ProviderId, Value> {
-    serde_json::from_value(Value::String(raw.to_string()))
-        .map_err(|_| Value::String(format!("Unknown Provider: {raw}")))
-}
-
+/// `agent_spawn`'s error: `{ workerId, message }`, where `workerId` is
+/// set when the PTY worker was created but the agent session failed to
+/// attach (the worker stays usable as a plain terminal).
 fn agent_spawn_error(worker_id: Option<String>, message: String) -> Value {
     serde_json::json!({ "workerId": worker_id, "message": message })
 }
@@ -65,7 +103,7 @@ fn agent_spawn_error(worker_id: Option<String>, message: String) -> Value {
 #[serde(rename_all = "camelCase")]
 struct AgentSpawnArgs {
     config: WorkerConfig,
-    provider: String,
+    provider: ProviderId,
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
@@ -76,6 +114,8 @@ struct AgentSpawnArgs {
     cause_seq: Option<u64>,
 }
 
+/// Spawns a PTY worker, then attaches a `provider` agent session to it.
+/// Resolves to the worker id.
 pub async fn agent_spawn(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let AgentSpawnArgs {
         config,
@@ -86,20 +126,16 @@ pub async fn agent_spawn(ctx: Ctx, args: Value) -> Result<Value, Value> {
         cause_seq,
     } = parse_args(args)?;
 
-    let provider_id = parse_provider(&provider)?;
-    if !matches!(provider_id, ProviderId::ClaudeCode | ProviderId::Codex) {
-        return Err(agent_spawn_error(
-            None,
-            format!("Provider Not Yet Supported: {provider} (only claude_code/codex today)"),
-        ));
+    // Refuse before any side effect.
+    if with_adapter!(ctx, provider, |_adapter| ()).is_none() {
+        return Err(agent_spawn_error(None, no_adapter(provider)));
     }
-
     let provenance = parse_provenance(origin_worker, cause_seq).map_err(|e| {
         agent_spawn_error(
             None,
             e.as_str()
                 .unwrap_or("Invalid Provenance Arguments.")
-                .to_string(),
+                .to_owned(),
         )
     })?;
     let fallback_cwd = config.cwd.clone();
@@ -114,13 +150,13 @@ pub async fn agent_spawn(ctx: Ctx, args: Value) -> Result<Value, Value> {
     .map_err(|e| agent_spawn_error(None, e.to_string()))?
     .map_err(|e| agent_spawn_error(None, e.to_string()))?;
 
+    // An isolated worker runs in its own worktree, not the requested cwd.
     let cwd = ctx
         .registry
         .get_worker(&worker_id)
         .ok()
         .and_then(|info| info.worktree_path)
         .unwrap_or(fallback_cwd);
-
     let spec = AgentSpawnSpec {
         worker_id,
         cwd,
@@ -129,34 +165,26 @@ pub async fn agent_spawn(ctx: Ctx, args: Value) -> Result<Value, Value> {
         permission_mode: trust_tier,
     };
 
-    // Provider-generic dispatch — `agent_spawn`/`agent_send_turn`/
-    // `agent_cancel`/`agent_shutdown`/`agent_probe` never grew a
-    // provider-specific twin; only this one `match` (and `agent_probe`'s
-    // below) knows which adapter a `ProviderId` maps to. Every other
-    // command reaches the live session purely through
-    // `ctx.agent_session_registry`, keyed by worker id, never by
-    // provider — see `crate::agent::registry`'s doc.
-    let spawn_result = match provider_id {
-        ProviderId::ClaudeCode => ctx.claude_adapter.spawn(spec).await,
-        ProviderId::Codex => ctx.codex_adapter.spawn(spec).await,
-        _ => unreachable!("rejected above"),
+    let Some(spawned) = with_adapter!(ctx, provider, |adapter| adapter.spawn(spec).await) else {
+        return Err(agent_spawn_error(
+            Some(worker_id.to_string()),
+            no_adapter(provider),
+        ));
     };
-
-    match spawn_result {
+    match spawned {
         Ok(session) => {
             ctx.agent_session_registry
                 .insert(worker_id, std::sync::Arc::from(session));
+            ok_value(&worker_id.to_string())
         }
         Err(e) => {
-            tracing::error!(worker_id = %worker_id, error = %e, "agent_spawn: session attach failed — worker remains usable as a plain terminal");
-            return Err(agent_spawn_error(
+            tracing::error!(%worker_id, error = %e, "agent_spawn: session attach failed; the worker remains usable as a plain terminal");
+            Err(agent_spawn_error(
                 Some(worker_id.to_string()),
                 e.to_string(),
-            ));
+            ))
         }
     }
-
-    ok_value(&worker_id.to_string())
 }
 
 #[derive(Deserialize)]
@@ -166,6 +194,7 @@ struct AgentSendTurnArgs {
     prompt: String,
 }
 
+/// Queues a turn on the scheduler for the worker's agent session.
 pub async fn agent_send_turn(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let AgentSendTurnArgs { worker_id, prompt } = parse_args(args)?;
     let uuid = parse_uuid(&worker_id)?;
@@ -186,6 +215,7 @@ struct AgentCancelArgs {
     turn_id: String,
 }
 
+/// Cancels an in-flight turn on the worker's agent session.
 pub async fn agent_cancel(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let AgentCancelArgs { worker_id, turn_id } = parse_args(args)?;
     let uuid = parse_uuid(&worker_id)?;
@@ -203,6 +233,8 @@ struct AgentShutdownArgs {
     worker_id: String,
 }
 
+/// Shuts down the worker's agent session, if it has one. The PTY worker
+/// itself is untouched.
 pub async fn agent_shutdown(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let AgentShutdownArgs { worker_id } = parse_args(args)?;
     let uuid = parse_uuid(&worker_id)?;
@@ -215,32 +247,20 @@ pub async fn agent_shutdown(ctx: Ctx, args: Value) -> Result<Value, Value> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentProbeArgs {
-    /// Which provider to probe. `None`/absent/explicit `null` all
-    /// default to `claude_code` — the pre-Phase-4 wire shape (`{}`)
-    /// stays a valid call, never a breaking change for an existing
-    /// caller (and tolerant of a Tauri wrapper serializing an omitted
-    /// optional argument as an explicit `null` rather than dropping the
-    /// key).
+    /// Which provider to probe; omitted or `null` means `claude_code`
+    /// (so the original argument-less `{}` call keeps working).
     #[serde(default)]
-    provider: Option<String>,
+    provider: Option<ProviderId>,
 }
 
+/// Probes whether `provider`'s CLI is installed and usable.
 pub async fn agent_probe(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let AgentProbeArgs { provider } = parse_args(args)?;
-    let provider = provider.unwrap_or_else(|| "claude_code".to_string());
-    let provider_id = parse_provider(&provider)?;
-    let probe_result = match provider_id {
-        ProviderId::ClaudeCode => ctx.claude_adapter.probe().await,
-        ProviderId::Codex => ctx.codex_adapter.probe().await,
-        other => {
-            return Err(Value::String(format!(
-                "Provider Not Yet Probeable: {other:?}"
-            )));
-        }
-    };
-    match probe_result {
-        Ok(report) => ok_value(&report),
-        Err(e) => Err(err_value(&e)),
+    let provider = provider.unwrap_or(ProviderId::ClaudeCode);
+    match with_adapter!(ctx, provider, |adapter| adapter.probe().await) {
+        Some(Ok(report)) => ok_value(&report),
+        Some(Err(e)) => Err(err_value(&e)),
+        None => Err(Value::String(no_adapter(provider))),
     }
 }
 
@@ -252,15 +272,9 @@ struct AgentPermissionRespondArgs {
     decision: PermissionDecision,
 }
 
-/// Answers a pending `agent_permission_request` (`CodexSession::respond_permission`'s
-/// REAL round-trip — see that method's doc; a documented no-op against a
-/// `ClaudeCodeAdapter` session, per Condition C/§0b). Not part of the
-/// original Phase 2/3 command surface — the multi-provider plan
-/// anticipated it ("a future `agent_permission_respond` command",
-/// `src/lib/agent-events.ts`'s header doc) but nothing needed to CALL
-/// [`crate::agent::adapter::AgentSession::respond_permission`] through
-/// the command layer until Codex made it a genuine round-trip rather
-/// than an inert no-op.
+/// Answers a pending `agent_permission_request` on the worker's agent
+/// session (see
+/// [`crate::agent::adapter::AgentSession::respond_permission`]).
 pub async fn agent_permission_respond(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let AgentPermissionRespondArgs {
         worker_id,
@@ -284,18 +298,12 @@ struct SetAgentConcurrencyArgs {
     limit: u32,
 }
 
-/// Updates the agent-turn scheduler's live concurrency cap — the
-/// backend counterpart to the frontend's `aiConcurrentLimit` Settings
-/// control. Applies immediately (see
-/// [`crate::agent::AgentScheduler::set_concurrency`]) and persists to
-/// `swarm-config.json` (key `agent_concurrency`) so it survives
-/// restarts — [`crate::runtime::Runtime::start`] re-applies the
-/// persisted value on launch, same pattern as
-/// [`crate::commands::worker::set_max_workers`]'s `max_workers`.
+/// Sets how many agent turns run at once: persisted to
+/// `swarm-config.json` (`agent_concurrency`, re-applied by
+/// [`crate::runtime::Runtime::start`]) and applied live.
 ///
-/// Ordering: validate -> persist -> apply. A persistence failure must
-/// not leave the live scheduler enforcing a cap that neither the UI
-/// nor disk agrees with.
+/// Validate, persist, then apply: a failed write must not leave the
+/// scheduler enforcing a cap neither the UI nor the file agrees with.
 pub async fn set_agent_concurrency(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let SetAgentConcurrencyArgs { limit } = parse_args(args)?;
 
@@ -315,4 +323,63 @@ pub async fn set_agent_concurrency(ctx: Ctx, args: Value) -> Result<Value, Value
 
     ctx.scheduler.set_concurrency(limit as usize);
     ok_value(&())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::commands::test_support::test_ctx;
+
+    #[test]
+    fn test_no_adapter_names_the_provider_by_its_wire_name() {
+        assert_eq!(
+            no_adapter(ProviderId::WebviewAnthropic),
+            "Provider Not Supported By The Backend: webview_anthropic."
+        );
+    }
+
+    /// A provider without a Rust adapter is refused before a PTY worker
+    /// is spawned for it.
+    #[tokio::test]
+    async fn test_agent_spawn_refuses_an_adapterless_provider_without_spawning() {
+        let (ctx, _dir, _events) = test_ctx();
+        let err = agent_spawn(
+            ctx.clone(),
+            json!({"config": {"name": "w"}, "provider": "gemini"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err["workerId"], Value::Null);
+        assert_eq!(
+            err["message"],
+            "Provider Not Supported By The Backend: gemini."
+        );
+        assert!(ctx.registry.list_workers().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_agent_spawn_rejects_an_unknown_provider_name() {
+        let (ctx, _dir, _events) = test_ctx();
+        let err = agent_spawn(ctx, json!({"config": {"name": "w"}, "provider": "nope"}))
+            .await
+            .unwrap_err();
+        assert!(
+            err.as_str().unwrap().starts_with("Invalid Arguments: "),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_agent_probe_refuses_an_adapterless_provider() {
+        let (ctx, _dir, _events) = test_ctx();
+        let err = agent_probe(ctx, json!({"provider": "webview_anthropic"}))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "Provider Not Supported By The Backend: webview_anthropic."
+        );
+    }
 }

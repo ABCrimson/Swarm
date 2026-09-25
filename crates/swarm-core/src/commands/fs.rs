@@ -1,7 +1,9 @@
-//! `read_file`/`write_file` registry handlers — ported verbatim from
-//! `swarm-desktop`'s former `commands::fs` (including its `FsScopes`
-//! boundary, which never depended on `tauri` beyond the `AppHandle` used
-//! only to resolve [`crate::Paths`], now just `ctx.paths` directly).
+//! `read_file` and `write_file`, confined to fixed directory scopes.
+//!
+//! Reads may touch the data directory and the home directory; writes
+//! only the data directory and `~/.swarm`. Paths must be absolute and
+//! are normalized lexically (`..` and `.` resolved without touching the
+//! filesystem) before the scope check, so a traversal cannot climb out.
 
 use std::path::{Path, PathBuf};
 
@@ -13,6 +15,7 @@ use crate::git;
 
 use super::{Ctx, ok_value, parse_args, parse_provenance};
 
+/// The directories `read_file`/`write_file` may touch.
 struct FsScopes {
     app_data: PathBuf,
     home: PathBuf,
@@ -29,11 +32,11 @@ impl FsScopes {
 
     fn check_read(&self, path: &Path) -> Result<PathBuf, Value> {
         let normalized = normalize_lexically(path);
-        if within(&normalized, &self.app_data) || within(&normalized, &self.home) {
+        if normalized.starts_with(&self.app_data) || normalized.starts_with(&self.home) {
             Ok(normalized)
         } else {
             Err(Value::String(
-                "Read Access Is Limited To The App Data And Home Directories.".to_string(),
+                "Read Access Is Limited To The App Data And Home Directories.".to_owned(),
             ))
         }
     }
@@ -41,16 +44,18 @@ impl FsScopes {
     fn check_write(&self, path: &Path) -> Result<PathBuf, Value> {
         let normalized = normalize_lexically(path);
         let swarm_home = self.home.join(".swarm");
-        if within(&normalized, &self.app_data) || within(&normalized, &swarm_home) {
+        if normalized.starts_with(&self.app_data) || normalized.starts_with(&swarm_home) {
             Ok(normalized)
         } else {
             Err(Value::String(
-                "Write Access Is Limited To The App Data And .swarm Directories.".to_string(),
+                "Write Access Is Limited To The App Data And .swarm Directories.".to_owned(),
             ))
         }
     }
 }
 
+/// Resolves `.` and `..` components without touching the filesystem
+/// (`..` at the root stays at the root).
 fn normalize_lexically(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -63,10 +68,6 @@ fn normalize_lexically(path: &Path) -> PathBuf {
         }
     }
     out
-}
-
-fn within(candidate: &Path, base: &Path) -> bool {
-    candidate.starts_with(base)
 }
 
 fn truthful_read_error(err: &std::io::Error, path: &str) -> String {
@@ -96,11 +97,12 @@ struct ReadFileArgs {
     path: String,
 }
 
+/// Reads a UTF-8 file inside the read scope.
 pub async fn read_file(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let ReadFileArgs { path } = parse_args(args)?;
     let candidate = PathBuf::from(&path);
     if !candidate.is_absolute() {
-        return Err(Value::String("Read Requires An Absolute Path.".to_string()));
+        return Err(Value::String("Read Requires An Absolute Path.".to_owned()));
     }
     let scopes = FsScopes::resolve(&ctx)?;
     let resolved = scopes.check_read(&candidate)?;
@@ -124,6 +126,7 @@ struct WriteFileArgs {
     cause_seq: Option<u64>,
 }
 
+/// Writes a file inside the write scope and records `file_written`.
 pub async fn write_file(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let WriteFileArgs {
         path,
@@ -133,9 +136,7 @@ pub async fn write_file(ctx: Ctx, args: Value) -> Result<Value, Value> {
     } = parse_args(args)?;
     let candidate = PathBuf::from(&path);
     if !candidate.is_absolute() {
-        return Err(Value::String(
-            "Write Requires An Absolute Path.".to_string(),
-        ));
+        return Err(Value::String("Write Requires An Absolute Path.".to_owned()));
     }
     let scopes = FsScopes::resolve(&ctx)?;
     let resolved = scopes.check_write(&candidate)?;
@@ -171,14 +172,25 @@ mod tests {
     }
 
     #[test]
-    fn test_within_rejects_sibling_path() {
-        assert!(!within(Path::new("/etc/passwd"), Path::new("/home/user")));
+    fn test_scope_check_rejects_a_sibling_path() {
+        let scopes = FsScopes {
+            app_data: PathBuf::from("/data/swarm"),
+            home: PathBuf::from("/home/user"),
+        };
+        assert!(scopes.check_read(Path::new("/etc/passwd")).is_err());
+        assert!(scopes.check_read(Path::new("/home/user/notes.txt")).is_ok());
+        assert!(
+            scopes
+                .check_write(Path::new("/home/user/notes.txt"))
+                .is_err()
+        );
+        assert!(scopes.check_write(Path::new("/home/user/.swarm/x")).is_ok());
     }
 
     #[test]
     fn test_traversal_escaping_the_scope_is_normalized_before_the_scope_check() {
         let escaped = normalize_lexically(Path::new("/home/user/.swarm/../../../etc/passwd"));
         assert_eq!(escaped, PathBuf::from("/etc/passwd"));
-        assert!(!within(&escaped, Path::new("/home/user/.swarm")));
+        assert!(!escaped.starts_with("/home/user/.swarm"));
     }
 }

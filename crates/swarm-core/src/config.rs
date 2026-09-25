@@ -1,229 +1,226 @@
-//! App configuration: atomic key-value JSON persistence.
+//! `swarm-config.json`: the app's flat key-value settings file.
 //!
-//! Persists arbitrary key-value configuration (currently just the
-//! Anthropic API key, under the `anthropic_api_key` key) to a flat
-//! JSON file — `swarm-config.json` — inside the shell-provided
-//! [`Paths::data_dir`].
+//! One JSON object in [`Paths::data_dir`], keyed by setting name. It
+//! holds `anthropic_api_key`, `max_workers`, `agent_concurrency`,
+//! `default_repo_root`, `shipCoAuthoredBy`, and the frontend's
+//! namespaced `<store>:<key>` entries. Keys are written in sorted order,
+//! so the file diffs cleanly between saves.
 //!
 //! # Security
 //!
-//! Config values may be secrets (e.g. an API key). No function here
-//! ever formats a value into a log line, error message, or trace
-//! field. Callers should mirror this discipline in their own tracing.
+//! Values may be secrets (the Anthropic API key). Nothing here formats a
+//! value into a log line or an error message, and callers must not
+//! either. On Unix the file is owner-only (`0600`).
 //!
-//! # Format compatibility
+//! # A damaged file is never overwritten blindly
 //!
-//! An earlier era of the app already created an empty `{}`
-//! `swarm-config.json` in some installs. `load_config_map` treats
-//! a missing file, an empty object, and malformed JSON identically —
-//! all fall back to an empty map — so those pre-existing files are
-//! transparently reused rather than rejected.
+//! A missing file is an empty config. [`read_value`] is lenient: a file
+//! that cannot be read or parsed reads as "not configured" (and is
+//! logged). [`write_value`] rewrites the whole file, so it is strict: it
+//! refuses when the file exists but cannot be read, and it moves a
+//! malformed file aside (`swarm-config.json.corrupt-<unix ms>`) before
+//! writing, so a hand-edit typo can never silently cost every other key.
 //!
-//! # Concurrency
+//! # Concurrency and durability
 //!
-//! Reads and writes are serialized through a process-wide
-//! [`parking_lot::Mutex`] so two concurrent writes (or a write racing
-//! a read) can't interleave their read-modify-write cycles. Writes
-//! themselves are additionally crash-safe: the new content is written
-//! to a sibling `.tmp` file and then atomically renamed over the
-//! destination, so a crash or power loss mid-write can never leave a
-//! truncated/corrupt config file on disk.
+//! A process-wide lock serializes every read-modify-write cycle, and each
+//! write replaces the file atomically and durably (see
+//! `state_file::write_atomic`).
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use parking_lot::Mutex;
 use serde_json::Value;
 
 use crate::Paths;
 use crate::error::AppError;
+use crate::state_file::{self, StoredObject};
 
 /// Config file name within the app data directory.
 const CONFIG_FILE: &str = "swarm-config.json";
 
-/// Process-wide lock serializing config file read-modify-write cycles.
+/// Serializes every read and read-modify-write of the file.
 static CONFIG_LOCK: Mutex<()> = Mutex::new(());
 
-/// Resolves the absolute path to `swarm-config.json` under `paths`.
 fn config_path(paths: &Paths) -> PathBuf {
     paths.data_dir.join(CONFIG_FILE)
 }
 
-/// Loads the full config map from `path`.
+/// Reads one config value.
 ///
-/// Tolerant by design: a missing file, an empty/`{}` file, and
-/// malformed JSON all resolve to an empty map rather than an error.
-/// Config corruption should degrade to "not configured" rather than
-/// hard-fail an unrelated command.
-fn load_config_map(path: &Path) -> HashMap<String, Value> {
-    match std::fs::read_to_string(path) {
-        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
-        Err(_) => HashMap::new(),
+/// `None` when the key is absent, the file does not exist yet, or the
+/// file cannot be read or parsed (logged, without its contents).
+pub fn read_value(paths: &Paths, key: &str) -> Option<Value> {
+    let _guard = CONFIG_LOCK.lock();
+    match state_file::read_object(&config_path(paths)) {
+        Ok(StoredObject::Object(mut map)) => map.remove(key),
+        Ok(StoredObject::Missing) => None,
+        Ok(StoredObject::Malformed) => {
+            tracing::warn!("swarm-config.json is malformed; reading it as not configured");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "swarm-config.json is unreadable; reading it as not configured");
+            None
+        }
     }
 }
 
-/// Writes `map` to `path` atomically.
-///
-/// Serializes to pretty JSON, writes it to a sibling `<file>.tmp`
-/// path, then renames it over `path`. The rename is atomic on both
-/// Windows and POSIX filesystems, so readers never observe a
-/// partially-written file.
-fn save_config_map(path: &Path, map: &HashMap<String, Value>) -> Result<(), AppError> {
-    let json = serde_json::to_string_pretty(map)?;
-    let tmp_path = PathBuf::from(format!("{}.tmp", path.display()));
-    std::fs::write(&tmp_path, json)?;
-    std::fs::rename(&tmp_path, path)?;
-    Ok(())
-}
-
-/// Reads a single config value by key.
-///
-/// Returns `None` if the key is absent, the config file doesn't exist
-/// yet, or the file is malformed (see `load_config_map`).
-pub fn read_value(paths: &Paths, key: &str) -> Option<Value> {
-    let _guard = CONFIG_LOCK.lock();
-    load_config_map(&config_path(paths)).remove(key)
-}
-
-/// Writes a single config value by key.
-///
-/// Merges `value` into the existing config map (other keys are
-/// preserved) and persists atomically.
+/// Sets one config value, keeping every other key, and persists the
+/// file atomically.
 ///
 /// # Errors
 ///
-/// Returns [`AppError`] if the write-temp-then-rename sequence fails
-/// (disk full, permission denied, etc).
+/// [`AppError::Config`] when the existing file cannot be read (it is
+/// left untouched), a malformed file cannot be moved aside, or the new
+/// file cannot be written.
 pub fn write_value(paths: &Paths, key: &str, value: Value) -> Result<(), AppError> {
     let _guard = CONFIG_LOCK.lock();
     let path = config_path(paths);
-    let mut map = load_config_map(&path);
-    map.insert(key.to_string(), value);
-    save_config_map(&path, &map)
+    let config_error = |action: &str, e: std::io::Error| {
+        AppError::Config(format!("Failed To {action} {}: {e}", path.display()))
+    };
+
+    let mut map = match state_file::read_object(&path) {
+        Ok(StoredObject::Object(map)) => map,
+        Ok(StoredObject::Missing) => serde_json::Map::new(),
+        Ok(StoredObject::Malformed) => {
+            let aside = state_file::quarantine(&path)
+                .map_err(|e| config_error("Move Aside The Malformed", e))?;
+            tracing::warn!(
+                moved_to = %aside.display(),
+                "swarm-config.json was malformed; moved it aside and started a fresh config"
+            );
+            serde_json::Map::new()
+        }
+        Err(e) => return Err(config_error("Read (So Not Overwriting)", e)),
+    };
+    map.insert(key.to_owned(), value);
+    let json = serde_json::to_vec_pretty(&map)?;
+    state_file::write_atomic(&path, &json).map_err(|e| config_error("Write", e))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::mem::DropGuard;
+    use std::assert_matches;
+    use std::fs;
+
+    use serde_json::json;
 
     use super::*;
-    use uuid::Uuid;
+    use crate::state_file::tests::temp_dir;
 
-    /// Returns a fresh, unique path under the OS temp dir for one test.
-    /// Not created on disk — callers write it (or not) as needed.
-    fn temp_config_path() -> PathBuf {
-        std::env::temp_dir().join(format!("swarm-config-test-{}.json", Uuid::new_v4()))
-    }
-
-    /// RAII cleanup so a failing assertion still removes the temp file
-    /// and its atomic-write `.tmp` sibling.
-    fn remove_on_drop(path: PathBuf) -> DropGuard<PathBuf, impl FnOnce(PathBuf)> {
-        DropGuard::new(path, |path| {
-            let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_file(format!("{}.tmp", path.display()));
-        })
+    fn paths(dir: &std::path::Path) -> Paths {
+        Paths {
+            data_dir: dir.to_path_buf(),
+        }
     }
 
     #[test]
-    fn test_missing_file_defaults_to_empty_map() {
-        let path = temp_config_path();
-        let _cleanup = remove_on_drop(path.clone());
+    fn test_missing_file_reads_as_not_configured() {
+        let (dir, _cleanup) = temp_dir("config");
+        assert_eq!(read_value(&paths(&dir), "anthropic_api_key"), None);
+    }
 
-        let map = load_config_map(&path);
-        assert!(map.is_empty(), "expected empty map for a nonexistent file");
+    /// The `{}` file an early build created is simply an empty config.
+    #[test]
+    fn test_an_empty_object_file_is_reused() {
+        let (dir, _cleanup) = temp_dir("config");
+        let paths = paths(&dir);
+        fs::write(config_path(&paths), "{}").unwrap();
+        assert_eq!(read_value(&paths, "max_workers"), None);
+        write_value(&paths, "max_workers", json!(8)).unwrap();
+        assert_eq!(read_value(&paths, "max_workers"), Some(json!(8)));
     }
 
     #[test]
-    fn test_preexisting_empty_object_file_is_tolerated() {
-        // Matches the real earlier-era swarm-config.json content: `{}`.
-        let path = temp_config_path();
-        let _cleanup = remove_on_drop(path.clone());
-        std::fs::write(&path, "{}").unwrap();
+    fn test_write_then_read_roundtrip_keeps_other_keys() {
+        let (dir, _cleanup) = temp_dir("config");
+        let paths = paths(&dir);
+        write_value(&paths, "other_setting", json!(true)).unwrap();
+        write_value(&paths, "anthropic_api_key", json!("sk-ant-test")).unwrap();
 
-        let map = load_config_map(&path);
-        assert!(map.is_empty(), "expected empty map for a `{{}}` file");
-    }
-
-    #[test]
-    fn test_malformed_file_is_tolerated() {
-        let path = temp_config_path();
-        let _cleanup = remove_on_drop(path.clone());
-        std::fs::write(&path, "{not valid json at all").unwrap();
-
-        let map = load_config_map(&path);
-        assert!(map.is_empty(), "expected empty map for malformed JSON");
-    }
-
-    #[test]
-    fn test_write_then_read_roundtrip() {
-        let path = temp_config_path();
-        let _cleanup = remove_on_drop(path.clone());
-
-        let mut map = HashMap::new();
-        map.insert(
-            "anthropic_api_key".to_string(),
-            Value::String("sk-ant-test-roundtrip".to_string()),
-        );
-        save_config_map(&path, &map).expect("save should succeed");
-
-        let loaded = load_config_map(&path);
+        assert_eq!(read_value(&paths, "other_setting"), Some(json!(true)));
         assert_eq!(
-            loaded.get("anthropic_api_key"),
-            Some(&Value::String("sk-ant-test-roundtrip".to_string()))
+            read_value(&paths, "anthropic_api_key"),
+            Some(json!("sk-ant-test"))
         );
+        assert_eq!(read_value(&paths, "absent"), None);
+        assert!(!config_path(&paths).with_added_extension("tmp").exists());
     }
 
     #[test]
-    fn test_write_preserves_other_keys() {
-        let path = temp_config_path();
-        let _cleanup = remove_on_drop(path.clone());
+    fn test_keys_are_written_in_sorted_order() {
+        let (dir, _cleanup) = temp_dir("config");
+        let paths = paths(&dir);
+        for key in ["zeta", "alpha", "mid"] {
+            write_value(&paths, key, json!(1)).unwrap();
+        }
+        let text = fs::read_to_string(config_path(&paths)).unwrap();
+        let positions: Vec<usize> = ["alpha", "mid", "zeta"]
+            .iter()
+            .map(|key| text.find(key).unwrap())
+            .collect();
+        assert!(positions.is_sorted(), "{text}");
+    }
 
-        let mut map = HashMap::new();
-        map.insert("other_setting".to_string(), Value::Bool(true));
-        save_config_map(&path, &map).expect("save should succeed");
+    /// CONFIRMED regression: a malformed file used to read as empty, so
+    /// the next write replaced it with a single key — silently dropping
+    /// the API key and every other setting. Now reads stay lenient, and
+    /// a write moves the damaged file aside (intact) before writing.
+    #[test]
+    fn test_writing_over_a_malformed_file_quarantines_it_instead_of_dropping_keys() {
+        let (dir, _cleanup) = temp_dir("config");
+        let paths = paths(&dir);
+        let damaged = r#"{"anthropic_api_key": "sk-ant-keep-me", "max_workers": 8,}"#;
+        fs::write(config_path(&paths), damaged).unwrap();
 
-        // Simulate a second, independent write_config call for a
-        // different key — it must not clobber `other_setting`.
-        let mut map = load_config_map(&path);
-        map.insert(
-            "anthropic_api_key".to_string(),
-            Value::String("sk-ant-other".to_string()),
-        );
-        save_config_map(&path, &map).expect("save should succeed");
+        assert_eq!(read_value(&paths, "max_workers"), None);
+        write_value(&paths, "theme", json!("dark")).unwrap();
 
-        let loaded = load_config_map(&path);
-        assert_eq!(loaded.get("other_setting"), Some(&Value::Bool(true)));
+        assert_eq!(read_value(&paths, "theme"), Some(json!("dark")));
+        let quarantined: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("swarm-config.json.corrupt-")
+            })
+            .collect();
+        assert_eq!(quarantined.len(), 1);
+        assert_eq!(fs::read_to_string(&quarantined[0]).unwrap(), damaged);
+    }
+
+    /// A non-object top level (e.g. `[]`) is malformed too, never
+    /// "empty".
+    #[test]
+    fn test_a_non_object_file_is_malformed() {
+        let (dir, _cleanup) = temp_dir("config");
+        let paths = paths(&dir);
+        fs::write(config_path(&paths), "[1, 2]").unwrap();
+        write_value(&paths, "k", json!(1)).unwrap();
+        assert_eq!(read_value(&paths, "k"), Some(json!(1)));
         assert_eq!(
-            loaded.get("anthropic_api_key"),
-            Some(&Value::String("sk-ant-other".to_string()))
+            fs::read_dir(&dir).unwrap().count(),
+            2,
+            "config + quarantine"
         );
     }
 
+    /// A file that exists but cannot be read is never overwritten.
     #[test]
-    fn test_save_leaves_no_tmp_file_behind_on_success() {
-        let path = temp_config_path();
-        let _cleanup = remove_on_drop(path.clone());
+    fn test_an_unreadable_file_is_left_untouched() {
+        let (dir, _cleanup) = temp_dir("config");
+        let paths = paths(&dir);
+        fs::create_dir(config_path(&paths)).unwrap();
 
-        let map = HashMap::new();
-        save_config_map(&path, &map).expect("save should succeed");
-
-        let tmp_path = format!("{}.tmp", path.display());
-        assert!(
-            !Path::new(&tmp_path).exists(),
-            "temp file should be renamed away, not left behind"
+        assert_eq!(read_value(&paths, "k"), None);
+        assert_matches!(
+            write_value(&paths, "k", json!(1)),
+            Err(AppError::Config(msg)) if msg.contains("Not Overwriting")
         );
-    }
-
-    #[test]
-    fn test_load_missing_key_returns_none() {
-        let path = temp_config_path();
-        let _cleanup = remove_on_drop(path.clone());
-
-        let mut map = HashMap::new();
-        map.insert("unrelated".to_string(), Value::Bool(false));
-        save_config_map(&path, &map).expect("save should succeed");
-
-        let loaded = load_config_map(&path);
-        assert!(!loaded.contains_key("anthropic_api_key"));
+        assert!(config_path(&paths).is_dir());
     }
 }

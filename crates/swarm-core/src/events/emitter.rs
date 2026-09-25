@@ -1,12 +1,12 @@
 //! Domain event types and the [`EventSink`] emission seam.
 //!
-//! Provides a typed event system for broadcasting worker state
-//! changes, session events, AI stream deltas, and system metrics
-//! to any shell embedding `swarm-core`. Every event is routed through
-//! an [`EventSink`] into the [`crate::orchestration::OrchestrationEngine`],
-//! which assigns a monotonic sequence number and broadcasts an ordered
-//! envelope for shells to forward onward (e.g. the Tauri desktop shell
-//! emits it on the `swarm://events` webview channel).
+//! Provides a typed event system for broadcasting worker, session,
+//! agent, git and system-metrics changes to any shell embedding
+//! `swarm-core`. Every event is routed through an [`EventSink`] into
+//! the [`crate::orchestration::OrchestrationEngine`], which assigns a
+//! monotonic sequence number and hands an ordered envelope to the shell
+//! (the Tauri desktop shell emits it on the `swarm://events` webview
+//! channel; `swarmd` fans it out to its WebSocket clients).
 //!
 //! ## Serialization Convention
 //!
@@ -14,8 +14,12 @@
 //! - Payload fields use `camelCase` (e.g., `"workerId"`)
 //! - This matches the frontend's expected JSON format
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Sender, SyncSender};
+
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::Sender;
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::agent::adapter::{
@@ -71,16 +75,15 @@ pub enum SwarmEvent {
     SessionCreated(SessionCreatedPayload),
     /// A session has been deleted.
     SessionDeleted(SessionDeletedPayload),
+    /// A worker joined a session's `workerIds` list — see
+    /// [`crate::session::manager::SessionManager::add_worker_to_session`].
+    SessionWorkerAdded(SessionWorkerAddedPayload),
     /// A worker was pruned from a session's `workerIds` list (typically
     /// because the worker was killed or exited) — see
     /// [`crate::session::manager::SessionManager::remove_worker_from_session`].
     SessionWorkerRemoved(SessionWorkerRemovedPayload),
     /// Periodic system metrics snapshot.
     SystemMetrics(SystemMetricsPayload),
-    /// A delta chunk from an AI streaming response.
-    AiStreamDelta(AiStreamDeltaPayload),
-    /// Terminal receipt for an AI stream: exactly one per request.
-    AiStreamSettled(AiStreamSettledPayload),
     /// A backend log message for the frontend console.
     SystemLog(SystemLogPayload),
     /// A message was sent through the inter-agent bus.
@@ -102,8 +105,8 @@ pub enum SwarmEvent {
     AgentTurnStarted(AgentTurnStartedPayload),
     /// A file was written via the `write_file` command.
     FileWritten(FileWrittenPayload),
-    /// A provider-adapter session started for a worker (Phase 3+
-    /// adapters; see `crate::agent::adapter::AgentAdapter::spawn`).
+    /// A provider-adapter session started for a worker (see
+    /// [`crate::agent::adapter::AgentAdapter::spawn`]).
     AgentSessionStarted(AgentSessionStartedPayload),
     /// One sub-message delta within a turn. EPHEMERAL — see
     /// [`crate::orchestration::is_persistent`]'s `AgentTurnDelta`
@@ -118,18 +121,81 @@ pub enum SwarmEvent {
     AgentToolCall(AgentToolCallPayload),
     /// The result of a previously-issued [`Self::AgentToolCall`].
     AgentToolResult(AgentToolResultPayload),
-    /// The provider is asking a human to approve or deny a tool call.
-    /// See [`crate::agent::adapter::PermissionDecision`]'s Condition C
-    /// doc — this is the ONLY legitimate gating surface, never
-    /// `allowedTools`.
+    /// The provider asked a human to approve or deny a tool call, or
+    /// reported one it already denied — see
+    /// [`AgentPermissionRequestPayload`]'s doc for the two shapes.
     AgentPermissionRequest(AgentPermissionRequestPayload),
     /// Terminal receipt for one turn: exactly one per turn, on success
     /// AND on ungraceful child exit — see
-    /// `crate::agent::adapter::AgentSession::shutdown`'s Condition B
-    /// doc for the synthesized-on-kill guarantee.
+    /// [`crate::agent::adapter::AgentSession::shutdown`] for the
+    /// synthesized-on-kill guarantee.
     AgentTurnSettled(AgentTurnSettledPayload),
     /// A provider-adapter session's underlying process exited.
     AgentSessionExited(AgentSessionExitedPayload),
+}
+
+/// Generates [`SwarmEvent::type_tag`] and [`SwarmEvent::payload_json`]
+/// from one `Variant => "tag"` list. Both are exhaustive `match`es, so
+/// a new variant fails to compile until it is listed here; the
+/// `test_type_tag_and_payload_json_match_serde_for_every_variant` test
+/// pins every literal to the tag `serde` actually writes.
+macro_rules! swarm_event_tags {
+    ($($variant:ident => $tag:literal),+ $(,)?) => {
+        impl SwarmEvent {
+            /// How many variants the enum has (keeps the every-variant
+            /// test honest).
+            #[cfg(test)]
+            pub(crate) const VARIANT_COUNT: usize = [$(stringify!($variant)),+].len();
+
+            /// The `snake_case` wire tag of this event (the envelope's
+            /// `"type"` field and the event log's `type` column),
+            /// without serializing anything.
+            pub const fn type_tag(&self) -> &'static str {
+                match self {
+                    $(Self::$variant(_) => $tag,)+
+                }
+            }
+
+            /// The event's payload alone (the envelope's `"payload"`
+            /// field), serialized straight to a JSON string — the shape
+            /// the event log's `payload` column stores.
+            pub(crate) fn payload_json(&self) -> serde_json::Result<String> {
+                match self {
+                    $(Self::$variant(payload) => serde_json::to_string(payload),)+
+                }
+            }
+        }
+    };
+}
+
+swarm_event_tags! {
+    WorkerSpawned => "worker_spawned",
+    WorkerKilled => "worker_killed",
+    WorkerOutput => "worker_output",
+    WorkerState => "worker_state",
+    SessionCreated => "session_created",
+    SessionDeleted => "session_deleted",
+    SessionWorkerAdded => "session_worker_added",
+    SessionWorkerRemoved => "session_worker_removed",
+    SystemMetrics => "system_metrics",
+    SystemLog => "system_log",
+    BusMessage => "bus_message",
+    WorktreeCreated => "worktree_created",
+    WorktreeRemoved => "worktree_removed",
+    ShipProgress => "ship_progress",
+    ShipSettled => "ship_settled",
+    CommitCreated => "commit_created",
+    WorkerInput => "worker_input",
+    AgentTurnStarted => "agent_turn_started",
+    FileWritten => "file_written",
+    AgentSessionStarted => "agent_session_started",
+    AgentTurnDelta => "agent_turn_delta",
+    AgentBlock => "agent_block",
+    AgentToolCall => "agent_tool_call",
+    AgentToolResult => "agent_tool_result",
+    AgentPermissionRequest => "agent_permission_request",
+    AgentTurnSettled => "agent_turn_settled",
+    AgentSessionExited => "agent_session_exited",
 }
 
 /// Payload for the `worker_spawned` event.
@@ -215,13 +281,29 @@ pub struct SessionDeletedPayload {
     pub session_id: Uuid,
 }
 
+/// Payload for the `session_worker_added` event.
+///
+/// Emitted when a worker joins a session's `workerIds` list — only when
+/// membership actually changed (re-adding a current member emits
+/// nothing). Persisted, like its [`SessionWorkerRemovedPayload`]
+/// counterpart, so a client replaying the log sees membership grow and
+/// shrink exactly as a live listener did.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionWorkerAddedPayload {
+    /// UUID of the session the worker joined.
+    pub session_id: Uuid,
+    /// UUID of the added worker.
+    pub worker_id: Uuid,
+}
+
 /// Payload for the `session_worker_removed` event.
 ///
 /// Emitted when a worker is pruned from a session's `workerIds` list.
 /// Persisted (the default policy — see
-/// [`crate::orchestration::is_persistent`]), so a backfilling client
-/// reconstructs the same membership a live listener would have
-/// observed, rather than only ever seeing `workerIds` grow.
+/// [`crate::orchestration::is_persistent`]); together with
+/// `session_worker_added` it lets a backfilling client rebuild the same
+/// membership a live listener observed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionWorkerRemovedPayload {
@@ -249,42 +331,12 @@ pub struct SystemMetricsPayload {
     pub memory_total_mb: f64,
     /// Total number of registered workers.
     pub worker_count: usize,
-    /// AI API requests per second. Currently a placeholder.
+    /// Always `0.0`: Anthropic API requests are made by the webview
+    /// (`src/lib/anthropic.ts`), which the core cannot observe. Kept so
+    /// the `systemMetrics` wire shape stays stable for existing clients.
     pub ai_req_per_sec: f64,
     /// Unix timestamp in milliseconds when this snapshot was taken.
     pub timestamp: i64,
-}
-
-/// Payload for the `ai_stream_delta` event.
-///
-/// Emitted for each text delta chunk received from the AI
-/// streaming API. The frontend accumulates these deltas to
-/// build the complete response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AiStreamDeltaPayload {
-    /// Correlation ID matching the original AI request.
-    pub request_id: String,
-    /// Text delta chunk from the AI response. Empty string on final event.
-    pub delta: String,
-    /// `true` when this is the final delta (message complete).
-    pub done: bool,
-}
-
-/// Payload for the `ai_stream_settled` receipt.
-///
-/// Emitted exactly once per AI request, after the final delta, on both
-/// success and failure paths. Frontends and tests await this receipt
-/// instead of polling stream state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AiStreamSettledPayload {
-    /// Correlation ID matching the original AI request.
-    pub request_id: String,
-    /// `"ok"` or `"error"`.
-    pub status: String,
-    /// Error description when `status == "error"`.
-    pub error: Option<String>,
 }
 
 /// Payload for the `bus_message` event.
@@ -386,8 +438,8 @@ pub struct ShipProgressPayload {
 ///
 /// Emitted exactly once per `shipId`, after the last [`ShipProgressPayload`],
 /// on both success and failure. Frontends `waitFor` this receipt
-/// instead of polling progress state — the same pattern as
-/// `ai_stream_settled`.
+/// instead of polling progress state — the same receipt pattern as
+/// `agent_turn_settled`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShipSettledPayload {
@@ -399,8 +451,9 @@ pub struct ShipSettledPayload {
     pub commit_sha: Option<String>,
     /// `"origin/<branch>"`, if the push step completed.
     pub pushed_ref: Option<String>,
-    /// PR/compare-page URL, if one was opened (Phase 1: only ever the
-    /// compare-URL fallback — real `gh pr create` is Phase 3).
+    /// PR or compare-page URL, when the ship flow opened one. No ship
+    /// command sets it today (`ship_compare_url` returns its URL to the
+    /// caller directly), so it is currently always `null`.
     pub pr_url: Option<String>,
     /// `"ok"` or `"error"`.
     pub status: String,
@@ -618,7 +671,7 @@ pub struct AgentBlockPayload {
 /// this call — the same id [`AgentToolResultPayload::tool_use_id`]
 /// echoes back, letting a replay reconstruct call/result pairs
 /// unambiguously even when several tool calls are in flight within one
-/// turn (confirmed reconstructable in the Phase 1 spike's Gate 5).
+/// turn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentToolCallPayload {
@@ -656,28 +709,20 @@ pub struct AgentToolResultPayload {
 
 /// Payload for the `agent_permission_request` event.
 ///
-/// Persisted. See
-/// [`crate::agent::adapter::PermissionDecision`]'s Condition C doc:
-/// this event, answered via `respond_permission`, is the only
-/// legitimate gating surface — never `allowedTools`.
+/// Persisted. Carries one of two shapes, depending on what the
+/// provider's protocol can do:
 ///
-/// ## Semantics shift for `ClaudeCodeAdapter` (Phase 3, §0b of
-/// `RECONCILIATION.md`, BINDING)
-///
-/// The mid-turn `agent_permission_request` → `respond_permission`
-/// round-trip this doc describes above is **not buildable** on `claude
-/// -p` (`--permission-mode manual` is a silent no-op — verified via the
-/// permission-gating mini-spike). `ClaudeCodeAdapter` repurposes this
-/// SAME event as a **REPORT**: it is emitted only after the provider's
-/// own `system/permission_denied` line proves a tool call was ALREADY
-/// denied, never while one is pending. Concretely, for this adapter:
-/// `suggested_decision` is always `Some(`[`PermissionDecision::Deny`]`)`
-/// (there is nothing left to decide — the denial already happened) and
-/// [`Self::denial_subclass`]/[`Self::message`] carry the actual
-/// provider-observed detail. Calling `respond_permission` against a
-/// `ClaudeCodeAdapter` session is a documented no-op (see
-/// `crate::agent::claude_code::ClaudeCodeSession::respond_permission`)
-/// — there is no pending decision on the other end to answer.
+/// - **A pending request** (the session advertises
+///   [`Capabilities::interactive_permissions`]): the provider is
+///   blocked on a human decision, answered through the
+///   `agent_permission_respond` command
+///   ([`crate::agent::adapter::AgentSession::respond_permission`]).
+///   [`Self::denial_subclass`] and [`Self::message`] are absent.
+/// - **A denial report**: the provider already refused the call on its
+///   own (for example because the active permission mode disallows
+///   it). Nothing is left to decide, so `suggested_decision` is
+///   `Some(`[`PermissionDecision::Deny`]`)` and
+///   `denial_subclass`/`message` carry the provider-observed detail.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPermissionRequestPayload {
@@ -686,49 +731,29 @@ pub struct AgentPermissionRequestPayload {
     /// Correlation id for the turn this request belongs to.
     pub turn_id: TurnId,
     /// Correlation id for this specific permission request, echoed
-    /// back on `respond_permission`.
+    /// back by `agent_permission_respond`.
     pub request_id: PermissionId,
     /// Name of the tool awaiting approval.
     pub tool: String,
-    /// The tool's proposed input, for display before approval. Best
-    /// effort for a report-only denial (see the struct doc's semantics
-    /// shift) — `claude -p`'s `system/permission_denied` line does not
-    /// carry the tool's input, only its name; `Value::Null` when no
-    /// earlier `agent_tool_call` for the same `tool_use_id` was
-    /// observed to correlate against.
+    /// The tool's proposed input, for display before approval.
+    /// `Value::Null` when the provider did not report it (some denial
+    /// reports carry only the tool's name).
     pub input: serde_json::Value,
-    /// The provider's own suggested decision, when it has one (e.g. a
-    /// hook-computed recommendation) — advisory only, never
-    /// auto-applied by SWARM. Always `Some(Deny)` for a
-    /// `ClaudeCodeAdapter` report (see the struct doc's semantics
-    /// shift) — the fine-grained reason lives in
-    /// [`Self::denial_subclass`]. Omitted from the wire entirely
-    /// (review F1 — belt #2 alongside the TS schema's
-    /// `.nullable().optional()`) when absent, rather than serialized as
-    /// `null`.
+    /// The provider's own suggested decision, when it has one —
+    /// advisory only, never auto-applied by SWARM. Always
+    /// `Some(Deny)` for a denial report. Omitted from the wire (not
+    /// `null`) when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggested_decision: Option<PermissionDecision>,
-    /// Best-effort classification of WHY the provider denied this
-    /// call. For `ClaudeCodeAdapter`, one of three values (the §0b
-    /// mini-spike's three empirically observed subclasses),
-    /// classified from the provider's raw `decision_reason_type`/
-    /// `message` fields: `"mode"` (denied because the active
-    /// `--permission-mode` disallows it, e.g. `plan`/`dontAsk`),
-    /// `"ungranted_write"` (default -p mode auto-denies Write/Edit —
-    /// "you haven't granted it yet"), or `"redirection_guard"` (the
-    /// static Bash output-redirection guard). `None` for providers/
-    /// events with no such concept, or when the raw shape doesn't match
-    /// any known subclass. Free-form (not a closed enum) because this
-    /// is provider-CLI-observed text classification, not a SWARM-owned
-    /// vocabulary — see `crate::agent::claude_code`'s classifier doc.
-    /// Omitted from the wire when absent (review F1).
+    /// Best-effort classification of WHY the provider denied the call
+    /// (e.g. `"mode"`, `"ungranted_write"`, `"redirection_guard"`),
+    /// derived by the adapter from the provider's own denial fields.
+    /// Free-form, not a closed enum: it classifies provider-CLI text,
+    /// not a SWARM-owned vocabulary. Omitted from the wire when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub denial_subclass: Option<String>,
-    /// Raw, human-readable denial message from the provider, verbatim,
-    /// when available. `None` for a genuine pending-request event (the
-    /// pre-Phase-3 meaning this struct was designed for); `Some` for a
-    /// `ClaudeCodeAdapter` report. Omitted from the wire when absent
-    /// (review F1).
+    /// The provider's human-readable denial message, verbatim, for a
+    /// denial report. Omitted from the wire when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
@@ -737,10 +762,10 @@ pub struct AgentPermissionRequestPayload {
 ///
 /// Persisted. Emitted exactly once per turn, on success AND on
 /// ungraceful child exit — see
-/// `crate::agent::adapter::AgentSession::shutdown`'s Condition B doc.
+/// [`crate::agent::adapter::AgentSession::shutdown`].
 /// `cost_usd`/`usage` are `None` on a synthesized (kill-path)
-/// settlement — the provider's terminal `result` line, which is the
-/// only source of truth for cost, is never observed on a kill.
+/// settlement — the provider's terminal result, the only source of
+/// truth for cost, is never observed on a kill.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentTurnSettledPayload {
@@ -748,10 +773,8 @@ pub struct AgentTurnSettledPayload {
     pub worker_id: Uuid,
     /// Correlation id for the settled turn.
     pub turn_id: TurnId,
-    /// `"ok"` or `"error"` — a closed enum (see
-    /// [`AgentTurnStatus`]'s doc for why this one is typed where the
-    /// older `ai_stream_settled`/`ship_settled` receipts stayed plain
-    /// strings).
+    /// `"ok"` or `"error"` — a closed enum, unlike the older
+    /// `ship_settled` receipt's plain-string `status`.
     pub status: AgentTurnStatus,
     /// Error description when `status == `[`AgentTurnStatus::Error`].
     pub error: Option<String>,
@@ -806,7 +829,7 @@ pub struct Provenance {
     pub cause_seq: Option<u64>,
 }
 
-/// One item on the writer channel: the event to order/persist/emit,
+/// One event on the writer channel: the event to order/persist/emit,
 /// its causal attribution, and an optional one-shot ack the caller can
 /// use to learn the seq the writer thread assigns it.
 ///
@@ -822,26 +845,104 @@ pub(crate) struct WriterMsg {
     /// `Err` in that case, which the writer loop ignores) — a caller
     /// that drops its receiver (e.g. a cancelled IPC call) can never
     /// stall the single writer thread.
-    pub(crate) ack: Option<tokio::sync::oneshot::Sender<u64>>,
+    pub(crate) ack: Option<oneshot::Sender<u64>>,
+}
+
+/// Everything the single writer thread can be asked to do. The channel
+/// is FIFO, so both barriers below observe every event queued before
+/// them.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Record is the hot variant; boxing it would add an allocation per event to shrink two rare control messages"
+)]
+pub(crate) enum WriterCmd {
+    /// Order, persist (per policy) and emit one event.
+    Record(WriterMsg),
+    /// Barrier: resolves with the head seq once every command queued
+    /// before it has been persisted and emitted — see
+    /// [`crate::orchestration::OrchestrationEngine::flush`].
+    Flush(oneshot::Sender<u64>),
+    /// Barrier, then finalize the log and stop the writer thread;
+    /// resolves with the final head seq — see
+    /// [`crate::orchestration::OrchestrationEngine::shutdown`].
+    Shutdown(SyncSender<u64>),
+}
+
+/// Where an [`EventSink`] delivers.
+#[derive(Clone)]
+enum Outlet {
+    /// The engine's writer thread.
+    Writer(Sender<WriterCmd>),
+    /// A plain channel a unit test reads events back from.
+    #[cfg(test)]
+    Capture(Sender<WriterMsg>),
 }
 
 /// A cloneable handle for recording [`SwarmEvent`]s into the
 /// [`crate::orchestration::OrchestrationEngine`]'s ordered pipeline.
 ///
-/// Obtained via [`crate::orchestration::OrchestrationEngine::sink`] —
-/// there is no way to construct an `EventSink` before the engine exists,
-/// which structurally removes the "engine not managed yet, event
-/// dropped" hazard that a lookup-based dispatcher (e.g. one keyed off
-/// Tauri's `try_state`) would otherwise need to guard against at every
-/// call site.
+/// Obtained via [`crate::orchestration::OrchestrationEngine::sink`]:
+/// there is no way to build one before the engine exists, so no call
+/// site ever has to handle "the engine is not up yet".
 #[derive(Clone)]
-pub struct EventSink(Sender<WriterMsg>);
+pub struct EventSink {
+    outlet: Outlet,
+    /// Set once the engine starts shutting down: later events are
+    /// dropped with a debug log instead of queueing behind a writer
+    /// that will never process them.
+    closed: Arc<AtomicBool>,
+}
 
 impl EventSink {
-    /// Wraps a raw channel sender. Called only by
-    /// [`crate::orchestration::OrchestrationEngine::start`].
+    /// Wraps the writer channel. Called only by
+    /// [`crate::orchestration::OrchestrationEngine::try_start`], which
+    /// keeps a clone of `closed` to flip at shutdown.
+    pub(crate) fn for_writer(tx: Sender<WriterCmd>, closed: Arc<AtomicBool>) -> Self {
+        Self {
+            outlet: Outlet::Writer(tx),
+            closed,
+        }
+    }
+
+    /// A sink that delivers every event to `tx` instead of a writer
+    /// thread, so a unit test can assert on exactly what a function
+    /// emits (no seqs are assigned, nothing is persisted).
+    #[cfg(test)]
     pub(crate) fn new(tx: Sender<WriterMsg>) -> Self {
-        Self(tx)
+        Self {
+            outlet: Outlet::Capture(tx),
+            closed: Arc::default(),
+        }
+    }
+
+    /// Queues a control command (a flush or shutdown barrier) behind
+    /// every event already queued. `false` when there is no live writer
+    /// thread to receive it.
+    pub(crate) fn send_command(&self, cmd: WriterCmd) -> bool {
+        match &self.outlet {
+            Outlet::Writer(tx) => tx.send(cmd).is_ok(),
+            #[cfg(test)]
+            Outlet::Capture(_) => false,
+        }
+    }
+
+    /// Hands one event to the writer thread, or drops it (logged) when
+    /// the engine is shutting down or its writer thread is gone. A
+    /// dropped event's ack sender is dropped with it.
+    fn record(&self, msg: WriterMsg) {
+        let event_type = msg.event.type_tag();
+        if self.closed.load(Ordering::Acquire) {
+            tracing::debug!(event_type, "event engine is shut down; event dropped");
+            return;
+        }
+        let delivered = match &self.outlet {
+            Outlet::Writer(tx) => tx.send(WriterCmd::Record(msg)).is_ok(),
+            #[cfg(test)]
+            Outlet::Capture(tx) => tx.send(msg).is_ok(),
+        };
+        if !delivered {
+            tracing::error!(event_type, "event writer thread is gone; event dropped");
+        }
     }
 
     /// Records an event for ordering, persistence, and emission, with
@@ -849,9 +950,9 @@ impl EventSink {
     /// not a guess).
     ///
     /// Fire-and-forget: the dedicated writer thread assigns a sequence
-    /// number, persists (per policy), and broadcasts the ordered
-    /// envelope. If the writer thread is gone, the event is dropped
-    /// with an error log rather than panicking.
+    /// number, persists (per policy), and emits the ordered envelope.
+    /// If the engine has shut down (or its writer thread is gone), the
+    /// event is dropped with a log line rather than panicking.
     pub fn emit(&self, event: SwarmEvent) {
         self.emit_with(event, Provenance::default());
     }
@@ -868,17 +969,14 @@ impl EventSink {
     /// (see `docs/architecture.md`'s ordered-event-core section). Every
     /// `Provenance` passed here must trace back to an explicit,
     /// caller-supplied value — an IPC argument, a message's own
-    /// `from_worker`, a turn's own recorded seq — never a inferred
+    /// `from_worker`, a turn's own recorded seq — never an inferred
     /// "current cause" guess.
     pub fn emit_with(&self, event: SwarmEvent, provenance: Provenance) {
-        let msg = WriterMsg {
+        self.record(WriterMsg {
             event,
             provenance,
             ack: None,
-        };
-        if self.0.send(msg).is_err() {
-            tracing::error!("event writer thread is gone; event dropped");
-        }
+        });
     }
 
     /// Records an event like [`Self::emit_with`], returning a receiver
@@ -894,24 +992,21 @@ impl EventSink {
     /// receiver (e.g. a cancelled IPC call) before the writer thread
     /// gets to it, the subsequent `ack.send(seq)` inside the writer
     /// loop simply returns `Err` and is ignored — the writer thread
-    /// never blocks on, or even notices, a disinterested receiver.
+    /// never blocks on, or even notices, a disinterested receiver. If
+    /// the event is dropped instead (engine shut down, writer gone),
+    /// the ack sender is dropped with it, so the receiver resolves to a
+    /// `RecvError` rather than hanging forever.
     pub fn emit_awaiting_seq(
         &self,
         event: SwarmEvent,
         provenance: Provenance,
-    ) -> tokio::sync::oneshot::Receiver<u64> {
-        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-        let msg = WriterMsg {
+    ) -> oneshot::Receiver<u64> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.record(WriterMsg {
             event,
             provenance,
             ack: Some(ack_tx),
-        };
-        if self.0.send(msg).is_err() {
-            tracing::error!("event writer thread is gone; event dropped");
-            // `ack_tx` is dropped here (it was moved into `msg`, which
-            // is now dropped) — the awaiting receiver resolves to a
-            // `RecvError` rather than hanging forever.
-        }
+        });
         ack_rx
     }
 }
@@ -1010,24 +1105,6 @@ mod tests {
     }
 
     #[test]
-    fn test_ai_stream_delta_roundtrip() {
-        let event = SwarmEvent::AiStreamDelta(AiStreamDeltaPayload {
-            request_id: "req-123".to_string(),
-            delta: "Hello ".to_string(),
-            done: false,
-        });
-        let json = serde_json::to_string(&event).expect("serialize");
-        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
-        if let SwarmEvent::AiStreamDelta(p) = deserialized {
-            assert_eq!(p.request_id, "req-123");
-            assert_eq!(p.delta, "Hello ");
-            assert!(!p.done);
-        } else {
-            panic!("expected AiStreamDelta variant");
-        }
-    }
-
-    #[test]
     fn test_session_created_roundtrip() {
         let id = Uuid::new_v4();
         let event = SwarmEvent::SessionCreated(SessionCreatedPayload {
@@ -1078,25 +1155,6 @@ mod tests {
             assert_eq!(p.message, "something happened");
         } else {
             panic!("expected SystemLog variant");
-        }
-    }
-
-    #[test]
-    fn test_ai_stream_settled_roundtrip() {
-        let event = SwarmEvent::AiStreamSettled(AiStreamSettledPayload {
-            request_id: "req-9".to_string(),
-            status: "error".to_string(),
-            error: Some("rate limited".to_string()),
-        });
-        let json = serde_json::to_string(&event).expect("serialize");
-        assert!(json.contains("\"type\":\"ai_stream_settled\""));
-        assert!(json.contains("\"requestId\":\"req-9\""));
-        let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
-        if let SwarmEvent::AiStreamSettled(p) = deserialized {
-            assert_eq!(p.status, "error");
-            assert_eq!(p.error.as_deref(), Some("rate limited"));
-        } else {
-            panic!("expected AiStreamSettled variant");
         }
     }
 
@@ -1377,7 +1435,7 @@ mod tests {
         }
     }
 
-    /// DIRECTIVE (BLOCKING fix): `source` is a closed, typed enum — an
+    /// `source` is a closed, typed enum — an
     /// unrecognized string must fail deserialization outright, not
     /// silently coerce into some default. This is what makes the
     /// "typed secrets never archived" guarantee independent of the
@@ -1611,8 +1669,8 @@ mod tests {
         assert!(json.contains("\"status\":\"ok\""));
         assert!(json.contains("\"costUsd\":0.0123"));
 
-        // Condition B: a synthesized settlement on ungraceful exit
-        // carries no cost data — honestly None, not a fabricated 0.
+        // A synthesized settlement on ungraceful exit carries no cost
+        // data — honestly None, not a fabricated 0.
         let synthesized = SwarmEvent::AgentTurnSettled(AgentTurnSettledPayload {
             worker_id: Uuid::nil(),
             turn_id: "turn-2".to_string(),
@@ -1635,7 +1693,7 @@ mod tests {
         }
     }
 
-    /// DIRECTIVE (review nit F): `status` is a closed enum, not a bare
+    /// `status` is a closed enum, not a bare
     /// string — an unrecognized value must fail deserialization
     /// outright, matching the [`crate::events::InputSource`]/
     /// `ProviderId` precedent.
@@ -1671,23 +1729,250 @@ mod tests {
         }
     }
 
-    // ── EventSink emit_with / emit_awaiting_seq ─────────────────────
+    // ── type_tag / payload_json ─────────────────────────────────────
+
+    /// One instance of every variant, in declaration order.
+    fn one_of_each_variant() -> Vec<SwarmEvent> {
+        use crate::agent::adapter::{
+            AgentTurnStatus, CancelGranularity, Capabilities, PermissionDecision, ProviderId,
+        };
+
+        let id = Uuid::nil();
+        vec![
+            SwarmEvent::WorkerSpawned(WorkerSpawnedPayload {
+                worker_id: id,
+                name: "w".to_string(),
+                pid: Some(1),
+                isolation: None,
+            }),
+            SwarmEvent::WorkerKilled(WorkerKilledPayload { worker_id: id }),
+            SwarmEvent::WorkerOutput(WorkerOutputPayload {
+                worker_id: id,
+                data: "out".to_string(),
+            }),
+            SwarmEvent::WorkerState(WorkerStatePayload {
+                worker_id: id,
+                state: WorkerState::Running,
+            }),
+            SwarmEvent::SessionCreated(SessionCreatedPayload {
+                session_id: id,
+                name: "s".to_string(),
+            }),
+            SwarmEvent::SessionDeleted(SessionDeletedPayload { session_id: id }),
+            SwarmEvent::SessionWorkerAdded(SessionWorkerAddedPayload {
+                session_id: id,
+                worker_id: id,
+            }),
+            SwarmEvent::SessionWorkerRemoved(SessionWorkerRemovedPayload {
+                session_id: id,
+                worker_id: id,
+            }),
+            SwarmEvent::SystemMetrics(SystemMetricsPayload {
+                cpu_percent: 1.0,
+                memory_mb: 2.0,
+                memory_total_mb: 3.0,
+                worker_count: 4,
+                ai_req_per_sec: 0.0,
+                timestamp: 5,
+            }),
+            SwarmEvent::SystemLog(SystemLogPayload {
+                level: "info".to_string(),
+                message: "m".to_string(),
+                target: "t".to_string(),
+                timestamp: 6,
+            }),
+            SwarmEvent::BusMessage(BusMessagePayload {
+                message_id: id,
+                from_worker: id,
+                to_worker: None,
+                topic: "topic".to_string(),
+                payload: serde_json::json!({"k": 1}),
+            }),
+            SwarmEvent::WorktreeCreated(WorktreeCreatedPayload {
+                worker_id: id,
+                session_id: None,
+                repo_root: "/r".to_string(),
+                worktree_path: "/r-wt".to_string(),
+                branch: "b".to_string(),
+                base_commit: "c".to_string(),
+            }),
+            SwarmEvent::WorktreeRemoved(WorktreeRemovedPayload {
+                worker_id: id,
+                worktree_path: "/r-wt".to_string(),
+                branch: "b".to_string(),
+                disposition: "removed".to_string(),
+                head_commit: None,
+                reason: None,
+            }),
+            SwarmEvent::ShipProgress(ShipProgressPayload {
+                ship_id: id,
+                worker_id: id,
+                step: "push".to_string(),
+                status: "ok".to_string(),
+                detail: None,
+            }),
+            SwarmEvent::ShipSettled(ShipSettledPayload {
+                ship_id: id,
+                worker_id: id,
+                commit_sha: None,
+                pushed_ref: None,
+                pr_url: None,
+                status: "ok".to_string(),
+                error: None,
+            }),
+            SwarmEvent::CommitCreated(CommitCreatedPayload {
+                worker_id: id,
+                sha: "c".to_string(),
+                branch: "b".to_string(),
+                seq_from: 1,
+                seq_to: 2,
+            }),
+            SwarmEvent::WorkerInput(WorkerInputPayload {
+                worker_id: id,
+                bytes: 1,
+                source: InputSource::Tool,
+                preview: Some("x".to_string()),
+            }),
+            SwarmEvent::AgentTurnStarted(AgentTurnStartedPayload {
+                worker_id: id,
+                model: "m".to_string(),
+                request_id: "r".to_string(),
+            }),
+            SwarmEvent::FileWritten(FileWrittenPayload {
+                path: "/f".to_string(),
+                bytes: 1,
+            }),
+            SwarmEvent::AgentSessionStarted(AgentSessionStartedPayload {
+                worker_id: id,
+                provider: ProviderId::Codex,
+                session_key: "k".to_string(),
+                model: "m".to_string(),
+                cwd: "/".to_string(),
+                capabilities: Capabilities {
+                    partial_deltas: false,
+                    resume: false,
+                    native_cost: false,
+                    permission_modes: vec![],
+                    cancel_granularity: CancelGranularity::KillOnly,
+                    interrupt_midturn: false,
+                    worktree_aware: false,
+                    interactive_permissions: true,
+                },
+            }),
+            SwarmEvent::AgentTurnDelta(AgentTurnDeltaPayload {
+                worker_id: id,
+                turn_id: "t".to_string(),
+                block_index: 0,
+                kind: "text".to_string(),
+                text: "d".to_string(),
+            }),
+            SwarmEvent::AgentBlock(AgentBlockPayload {
+                worker_id: id,
+                turn_id: "t".to_string(),
+                block_index: 0,
+                kind: "text".to_string(),
+                content: serde_json::json!("b"),
+            }),
+            SwarmEvent::AgentToolCall(AgentToolCallPayload {
+                worker_id: id,
+                turn_id: "t".to_string(),
+                tool_use_id: "u".to_string(),
+                name: "n".to_string(),
+                input: serde_json::json!({}),
+            }),
+            SwarmEvent::AgentToolResult(AgentToolResultPayload {
+                worker_id: id,
+                turn_id: "t".to_string(),
+                tool_use_id: "u".to_string(),
+                is_error: false,
+                content: serde_json::json!(null),
+            }),
+            SwarmEvent::AgentPermissionRequest(AgentPermissionRequestPayload {
+                worker_id: id,
+                turn_id: "t".to_string(),
+                request_id: "p".to_string(),
+                tool: "Bash".to_string(),
+                input: serde_json::json!({}),
+                suggested_decision: Some(PermissionDecision::Deny),
+                denial_subclass: Some("mode".to_string()),
+                message: None,
+            }),
+            SwarmEvent::AgentTurnSettled(AgentTurnSettledPayload {
+                worker_id: id,
+                turn_id: "t".to_string(),
+                status: AgentTurnStatus::Ok,
+                error: None,
+                cost_usd: None,
+                usage: None,
+                duration_ms: 1,
+                num_turns: None,
+            }),
+            SwarmEvent::AgentSessionExited(AgentSessionExitedPayload {
+                worker_id: id,
+                exit_code: Some(0),
+                signal: None,
+            }),
+        ]
+    }
+
+    /// `type_tag`/`payload_json` must agree with what `serde` writes for
+    /// every variant — they replace a full `serde_json::Value`
+    /// round-trip on the writer's hot path, so a drifted literal would
+    /// persist rows under a tag no reader recognizes.
+    #[test]
+    fn test_type_tag_and_payload_json_match_serde_for_every_variant() {
+        let events = one_of_each_variant();
+        assert_eq!(
+            events.len(),
+            SwarmEvent::VARIANT_COUNT,
+            "one_of_each_variant() must list every variant"
+        );
+        let mut tags = std::collections::HashSet::new();
+        for event in &events {
+            let tagged = serde_json::to_value(event).expect("serialize");
+            assert_eq!(tagged["type"], event.type_tag());
+            let payload: serde_json::Value =
+                serde_json::from_str(&event.payload_json().expect("payload_json")).unwrap();
+            assert_eq!(payload, tagged["payload"], "{}", event.type_tag());
+            assert!(
+                tags.insert(event.type_tag()),
+                "duplicate tag {}",
+                event.type_tag()
+            );
+        }
+    }
+
+    // ── EventSink ────────────────────────────────────────────────────
+
+    /// A capture sink over a fresh channel, plus the receiving end.
+    fn sink() -> (EventSink, std::sync::mpsc::Receiver<WriterMsg>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        (EventSink::new(tx), rx)
+    }
+
+    fn recv_record(rx: &std::sync::mpsc::Receiver<WriterMsg>) -> WriterMsg {
+        rx.recv().expect("an event on the capture channel")
+    }
+
+    fn killed() -> SwarmEvent {
+        SwarmEvent::WorkerKilled(WorkerKilledPayload {
+            worker_id: Uuid::nil(),
+        })
+    }
 
     #[test]
     fn test_emit_with_carries_provenance_onto_the_writer_channel() {
-        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
-        let sink = EventSink::new(tx);
+        let (sink, rx) = sink();
         let worker_id = Uuid::new_v4();
-
         sink.emit_with(
-            SwarmEvent::WorkerKilled(WorkerKilledPayload { worker_id }),
+            killed(),
             Provenance {
                 origin_worker: Some(worker_id),
                 cause_seq: Some(9),
             },
         );
 
-        let msg = rx.recv().expect("message on writer channel");
+        let msg = recv_record(&rx);
         assert_eq!(msg.provenance.origin_worker, Some(worker_id));
         assert_eq!(msg.provenance.cause_seq, Some(9));
         assert!(msg.ack.is_none());
@@ -1695,76 +1980,47 @@ mod tests {
 
     #[test]
     fn test_emit_defaults_to_unattributed_provenance() {
-        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
-        let sink = EventSink::new(tx);
-        sink.emit(SwarmEvent::WorkerKilled(WorkerKilledPayload {
-            worker_id: Uuid::nil(),
-        }));
-        let msg = rx.recv().expect("message on writer channel");
-        assert_eq!(msg.provenance, Provenance::default());
+        let (sink, rx) = sink();
+        sink.emit(killed());
+        assert_eq!(recv_record(&rx).provenance, Provenance::default());
     }
 
-    /// DIRECTIVE: dropping the `emit_awaiting_seq` receiver must never
-    /// stall the writer — the writer-side `ack.send(seq)` is
-    /// non-blocking by construction (oneshot semantics), and this pins
-    /// that down at the `EventSink` boundary rather than only trusting
-    /// the type. See the kill-criterion in the provenance plan.
+    /// Dropping the `emit_awaiting_seq` receiver must never stall the
+    /// writer: the writer-side `ack.send(seq)` is non-blocking by
+    /// construction and reports the dropped receiver instead.
     #[test]
     fn test_ack_send_after_receiver_dropped_does_not_panic_or_block() {
-        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
-        let sink = EventSink::new(tx);
+        let (sink, rx) = sink();
+        drop(sink.emit_awaiting_seq(killed(), Provenance::default()));
 
-        let ack_rx = sink.emit_awaiting_seq(
-            SwarmEvent::WorkerKilled(WorkerKilledPayload {
-                worker_id: Uuid::nil(),
-            }),
-            Provenance::default(),
-        );
-        drop(ack_rx); // caller lost interest before the writer got to it
-
-        let msg = rx.recv().expect("message on writer channel");
-        let ack = msg
+        let ack = recv_record(&rx)
             .ack
             .expect("emit_awaiting_seq must attach an ack sender");
-        // This is the exact call the writer loop makes. It must return
-        // without panicking regardless of the (already-dropped) receiver.
-        let send_result = ack.send(7);
-        assert!(
-            send_result.is_err(),
-            "send must report the dropped receiver, not hang"
-        );
+        assert!(ack.send(7).is_err());
     }
 
-    /// DIRECTIVE (BLOCKING fix, `agent_turn_started` hardening): a
-    /// caller awaiting `emit_awaiting_seq`'s receiver through
-    /// `tokio::time::timeout` must observe a bounded timeout, not an
-    /// indefinite hang, when nothing ever resolves the ack (e.g. a
-    /// wedged writer thread that received the message but never reaches
-    /// `ack.send(seq)`). This is the exact mechanism
-    /// `commands::ai::agent_turn_started` wraps in a 5s timeout; proven
-    /// here at the `EventSink` boundary (accessible from swarm-core's
-    /// own tests, unlike the desktop-crate command) with a short
-    /// duration so the test itself stays fast.
+    /// An ack nothing ever resolves (a wedged writer that received the
+    /// message but never reaches `ack.send`) can be bounded with a
+    /// timeout, as `commands::agent::agent_turn_started` does.
     #[tokio::test]
     async fn test_emit_awaiting_seq_ack_can_be_bounded_with_a_timeout() {
-        let (tx, rx) = std::sync::mpsc::channel::<WriterMsg>();
-        let sink = EventSink::new(tx);
-        // Kept alive (not dropped) — a dropped receiver resolves the ack
-        // immediately with a RecvError (see the test above), which is a
-        // different code path than a genuine timeout.
-        let _rx = rx;
-
-        let ack = sink.emit_awaiting_seq(
-            SwarmEvent::WorkerKilled(WorkerKilledPayload {
-                worker_id: Uuid::nil(),
-            }),
-            Provenance::default(),
-        );
-
+        let (sink, _rx) = sink();
+        let ack = sink.emit_awaiting_seq(killed(), Provenance::default());
         let result = tokio::time::timeout(std::time::Duration::from_millis(30), ack).await;
-        assert!(
-            result.is_err(),
-            "an ack nothing ever resolves must time out, not hang forever"
-        );
+        assert!(result.is_err(), "an unresolved ack must time out, not hang");
+    }
+
+    /// Once the engine is shutting down, events are dropped at the sink
+    /// (never queued behind a writer that will not process them), and an
+    /// awaited seq resolves to an error instead of hanging.
+    #[tokio::test]
+    async fn test_a_closed_sink_drops_events_and_fails_acks() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let sink = EventSink::for_writer(tx, Arc::new(AtomicBool::new(true)));
+
+        sink.emit(killed());
+        let ack = sink.emit_awaiting_seq(killed(), Provenance::default());
+        assert!(ack.await.is_err());
+        assert!(rx.try_recv().is_err(), "nothing reached the writer channel");
     }
 }

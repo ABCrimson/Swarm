@@ -1,11 +1,11 @@
 //! Filesystem paths shared by every shell that embeds `swarm-core`.
 //!
 //! A single identifier-scoped data directory anchors the event log,
-//! the config file, and (via [`crate::session::SessionStore`]
-//! implementations) session persistence. `swarm-core` never resolves
-//! this directory itself — that is inherently platform/shell-specific
-//! (e.g. Tauri's `app.path().app_data_dir()`) — the shell constructs
-//! [`Paths`] once at startup and passes it in.
+//! the config file, and `sessions.json` ([`crate::session::persist`]).
+//! `swarm-core` never resolves this directory itself — that is
+//! inherently platform/shell-specific (e.g. Tauri's
+//! `app.path().app_data_dir()`) — the shell constructs [`Paths`] once at
+//! startup and passes it in.
 
 use std::path::PathBuf;
 

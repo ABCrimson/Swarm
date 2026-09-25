@@ -24,16 +24,9 @@ dashmap       = { workspace = true }
 parking_lot   = { workspace = true }
 rusqlite      = { workspace = true }
 regex         = { workspace = true }
-# `swarm_core::metrics` (moved here from the desktop shell so both
-# shells' Runtime construction can start the same background collection
-# loop) — already a workspace dep the desktop shell used at runtime;
-# zero new crate.
 sysinfo       = { workspace = true }
 
 [dev-dependencies]
-# Test-only, for the credential-leak-in-waiting span-capture test
-# (worker::lifecycle::tests) — captures formatted tracing output into
-# an in-memory buffer via a custom MakeWriter so the test can assert no
-# env value ever appears in it. Exact-pinned via the workspace, same
-# version swarm-desktop already depends on at runtime.
+# Captures formatted tracing output in tests that prove a worker's env
+# secrets never reach a log line (commands::worker, worker::lifecycle).
 tracing-subscriber = { workspace = true }

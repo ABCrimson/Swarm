@@ -1,4 +1,5 @@
-//! Event-sourced orchestration core: ordered event log + single push bus.
+//! The ordered event core: the single-writer [`OrchestrationEngine`]
+//! and the SQLite [`EventLog`] it persists to.
 
 pub mod engine;
 pub mod log;

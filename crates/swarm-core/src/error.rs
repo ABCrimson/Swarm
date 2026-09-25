@@ -1,36 +1,38 @@
-//! Application-wide error types for the SWARM Orchestrator backend.
+//! The shared application error type.
 //!
-//! All error variants are serializable for Tauri IPC transport.
-//! The [`AppError`] enum uses `thiserror` 2.0.18 for ergonomic
-//! `Display` and `From` implementations, and a custom [`Serialize`]
-//! impl that serializes each variant as its display string.
+//! [`AppError`] is `thiserror`-derived for `Display`/`From`, and
+//! serializes as its `Display` string — the error shape both transports
+//! carry to the frontend: a Tauri IPC command's rejection and a
+//! `swarmd` `rpcResult` frame's `error` field.
 
 use serde::Serialize;
 
-/// Application-wide error types for SWARM Orchestrator.
+/// Application-wide error type for the SWARM Orchestrator backend.
 ///
-/// Uses `thiserror` 2.0.18 at library boundaries.
-/// All variants are serializable for Tauri IPC transport,
-/// allowing errors to propagate cleanly from the Rust backend
-/// to the React frontend over the IPC bridge.
+/// Every variant is serializable (see the [`Serialize`] impl below), so
+/// an error propagates from a registry handler to the React frontend
+/// unchanged over either transport.
 ///
 /// # Variants
 ///
-/// | Variant            | Trigger                                          |
-/// |--------------------|--------------------------------------------------|
-/// | `WorkerNotFound`   | Worker ID does not exist in the registry          |
-/// | `PtySpawn`         | PTY process creation failed                      |
-/// | `Ipc`              | IPC communication failure (write, flush, parse)   |
-/// | `Ai`               | AI API request or streaming error                 |
-/// | `Io`               | Underlying `std::io::Error`                       |
-/// | `PermissionDenied` | Filesystem or resource access denied               |
-/// | `RegistryFull`     | Worker registry has reached `max_workers` capacity |
-/// | `Serialization`    | JSON serialization/deserialization failure         |
-/// | `SessionNotFound`  | Session ID does not exist in the manager           |
-/// | `ChannelClosed`    | Tokio mpsc or broadcast channel was dropped        |
-/// | `EventLog`         | SQLite event-log operation failed                 |
-/// | `QueueFull`        | AI request queue is full (backpressure)           |
-/// | `Config`           | App config file read/write/resolve failed         |
+/// | Variant            | Trigger                                                   |
+/// |--------------------|-----------------------------------------------------------|
+/// | `WorkerNotFound`   | Worker ID does not exist in the registry                  |
+/// | `PtySpawn`         | PTY process creation failed                               |
+/// | `Ipc`              | Process I/O plumbing failed (write, flush, parse)         |
+/// | `Ai`               | A provider-agent CLI failed to start or rejected a request |
+/// | `Io`               | Underlying `std::io::Error`                               |
+/// | `PermissionDenied` | Resource access denied (e.g. an unknown permission mode)  |
+/// | `RegistryFull`     | Worker registry has reached `max_workers` capacity        |
+/// | `Serialization`    | JSON serialization/deserialization failure                |
+/// | `SessionNotFound`  | Session ID does not exist in the manager                  |
+/// | `ChannelClosed`    | A Tokio mpsc or broadcast channel was dropped             |
+/// | `EventLog`         | SQLite event-log operation failed, or the engine is down  |
+/// | `QueueFull`        | The agent-turn scheduler's queue is full (backpressure)   |
+/// | `Config`           | `swarm-config.json` could not be read, parsed or written  |
+/// | `Git`              | A `git` invocation failed, timed out, or `git` is missing |
+/// | `AgentSessionBusy` | A turn was sent while another was in flight               |
+/// | `LineTooLong`      | A provider's NDJSON line exceeded the framer's cap        |
 ///
 /// # Examples
 ///
@@ -40,7 +42,7 @@ use serde::Serialize;
 /// let err = AppError::WorkerNotFound { id: "abc-123".to_string() };
 /// assert_eq!(err.to_string(), "Worker `abc-123` not found");
 ///
-/// // Serializes as a plain string for IPC:
+/// // Serializes as a plain string on the wire:
 /// let json = serde_json::to_string(&err).unwrap();
 /// assert_eq!(json, r#""Worker `abc-123` not found""#);
 /// ```
@@ -57,11 +59,12 @@ pub enum AppError {
     #[error("PTY spawn failed: {0}")]
     PtySpawn(String),
 
-    /// An IPC communication error occurred (write, flush, or parse failure).
+    /// A child-process I/O operation failed (write, flush, or parse).
     #[error("IPC error: {0}")]
     Ipc(String),
 
-    /// An AI API request or streaming operation failed.
+    /// A provider-agent operation failed: the provider CLI could not be
+    /// started, or it rejected a session or turn request.
     #[error("AI error: {0}")]
     Ai(String),
 
@@ -95,18 +98,19 @@ pub enum AppError {
     #[error("Channel closed: {0}")]
     ChannelClosed(String),
 
-    /// SQLite event-log operation failed.
+    /// An event-log operation failed: a SQLite error, or the
+    /// orchestration engine's writer thread is shut down or gone.
     #[error("event log: {0}")]
     EventLog(String),
 
-    /// The AI request queue is full (backpressure).
+    /// The agent-turn scheduler's bounded queue is full (backpressure).
     #[error("AI queue full ({capacity} capacity)")]
     QueueFull {
         /// The configured capacity of the bounded channel.
         capacity: usize,
     },
 
-    /// The app config file could not be resolved, read, or written.
+    /// `swarm-config.json` could not be read, parsed, or written.
     ///
     /// Never carries secret values (e.g. API keys) in its message —
     /// only path/IO context, so it is safe to log and display.
@@ -121,11 +125,10 @@ pub enum AppError {
     Git(String),
 
     /// A [`crate::agent::adapter::AgentSession::send_turn`] call arrived
-    /// while a turn was already in flight on that session. A typed
-    /// variant (not a generic `Ipc` string) because callers are
-    /// expected to match on it: per the trait's concurrency contract, a
-    /// session never queues a second turn internally — turn-level
-    /// queueing across multiple turns is
+    /// while a turn was already in flight on that session. Its own
+    /// variant because the trait's concurrency contract makes it an
+    /// expected outcome: a session never queues a second turn
+    /// internally — turn-level queueing is
     /// [`crate::agent::scheduler::AgentScheduler`]'s job.
     #[error("agent session busy: a turn is already in flight")]
     AgentSessionBusy,
@@ -144,22 +147,28 @@ pub enum AppError {
     },
 }
 
-/// Serializes [`AppError`] as a plain string for Tauri IPC transport.
-///
-/// Rather than serializing the enum structure, this produces the
-/// `Display` representation as a JSON string, which the frontend
-/// can display directly to the user.
+/// Every SQLite failure is an event-log failure: the event log is the
+/// crate's only SQLite database. Lets [`crate::orchestration::EventLog`]
+/// use `?` on `rusqlite` calls.
+impl From<rusqlite::Error> for AppError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::EventLog(e.to_string())
+    }
+}
+
+/// Serializes [`AppError`] as its `Display` string — the wire shape
+/// every IPC and WS error carries today, which the frontend displays
+/// (and classifies) directly.
 impl Serialize for AppError {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
 
     #[test]
@@ -215,21 +224,13 @@ mod tests {
     }
 
     #[test]
-    fn test_queue_full_display() {
+    fn test_queue_full_display_and_serialize() {
         let err = AppError::QueueFull { capacity: 256 };
-        let msg = err.to_string();
-        assert!(
-            msg.contains("256"),
-            "expected capacity '256' in display, got: {msg}"
+        assert_eq!(err.to_string(), "AI queue full (256 capacity)");
+        assert_eq!(
+            serde_json::to_string(&err).expect("serialize"),
+            r#""AI queue full (256 capacity)""#
         );
-        assert_eq!(msg, "AI queue full (256 capacity)");
-    }
-
-    #[test]
-    fn test_queue_full_serialize() {
-        let err = AppError::QueueFull { capacity: 128 };
-        let json = serde_json::to_string(&err).expect("serialize");
-        assert_eq!(json, r#""AI queue full (128 capacity)""#);
     }
 
     #[test]
@@ -248,6 +249,13 @@ mod tests {
             err.to_string(),
             "Config error: failed to resolve app data dir"
         );
+    }
+
+    #[test]
+    fn test_rusqlite_error_maps_to_event_log() {
+        let err = AppError::from(rusqlite::Error::InvalidQuery);
+        assert_matches!(&err, AppError::EventLog(msg) if !msg.is_empty());
+        assert!(err.to_string().starts_with("event log: "));
     }
 
     #[test]

@@ -1,11 +1,12 @@
-//! `get_metrics` registry handler — the pull-based complement to the
-//! background loop [`crate::runtime::Runtime::start`] already spawns
-//! via [`crate::metrics::start_metrics_loop`].
+//! `get_metrics`: one on-demand metrics sample, the pull complement to
+//! the `system_metrics` events [`crate::runtime::Runtime::start`]'s
+//! background loop emits.
 
 use serde_json::Value;
 
 use super::Ctx;
 
+/// A fresh system and per-worker metrics snapshot.
 pub async fn get_metrics(ctx: Ctx, _args: Value) -> Result<Value, Value> {
     let registry = ctx.registry.clone();
     let shared_system = ctx.shared_system.clone();
