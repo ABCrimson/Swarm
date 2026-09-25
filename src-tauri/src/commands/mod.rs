@@ -254,21 +254,26 @@ mod tests {
     }
 
     /// Every registry command answers under its own name, from the
-    /// registry itself: called with `null` arguments, each either runs or
-    /// is rejected by the registry's argument parser, never by Tauri's
-    /// router ("Command … not found") or its ACL ("… not allowed").
+    /// registry itself: called with arguments that are not a JSON object,
+    /// each is rejected by the registry's argument check, never by
+    /// Tauri's router ("Command … not found") or its ACL ("… not
+    /// allowed"). Not `null`: the registry reads `null` as `{}`, which
+    /// would really run every command whose arguments are all optional,
+    /// `agent_probe` included, and that one launches the provider CLIs
+    /// installed on the host.
     #[test]
     fn every_registry_command_is_invocable() {
         let harness = Harness::new("reachable");
         for command in Registry::new().keys() {
-            if let Err(error) = harness.invoke(command, Value::Null) {
-                assert!(
-                    error
-                        .as_str()
-                        .is_some_and(|message| message.starts_with("Invalid Arguments")),
-                    "{command}: {error}"
-                );
-            }
+            let error = harness
+                .invoke(command, Value::String("not an object".to_owned()))
+                .expect_err(command);
+            assert!(
+                error
+                    .as_str()
+                    .is_some_and(|message| message.starts_with("Invalid Arguments")),
+                "{command}: {error}"
+            );
         }
     }
 
