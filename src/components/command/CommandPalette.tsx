@@ -47,11 +47,20 @@ function errorText(err: unknown): string {
   return Error.isError(err) ? err.message : String(err);
 }
 
+/** The first `Worker N` no current worker is named — never reuses a live worker's name after a kill. */
+function nextWorkerName(names: Iterable<string | undefined>): string {
+  const taken = new Set(names);
+  let n = 1;
+  while (taken.has(`Worker ${n}`)) n++;
+  return `Worker ${n}`;
+}
+
 /**
  * Global command palette (the remappable Command Palette binding,
  * Ctrl+K by default) built on `modern-cmdk`: navigation, worker spawn
- * and kill (real backend calls), the graph/list view toggle and session
- * snapshots.
+ * (a real backend spawn under the first free `Worker N` name) and kill
+ * (a real backend kill, confirmed from a toast first), the graph/list
+ * view toggle and session snapshots.
  *
  * Ranking uses `modern-cmdk`'s own frecency engine, persisted through
  * {@link frecencyAtom}: a typed query is scored by the machine's
@@ -114,7 +123,9 @@ export function CommandPalette(): React.ReactElement {
 
   const spawn = async () => {
     try {
-      const id = await spawnWorkerFromSpec({ name: `Worker ${workers.size + 1}` });
+      const id = await spawnWorkerFromSpec({
+        name: nextWorkerName(workers.values().map((worker) => worker.name)),
+      });
       if (id === null) toast.error("Spawning Workers Needs The Desktop App");
     } catch (err) {
       toast.error(`Spawn Failed: ${errorText(err)}`);
@@ -129,6 +140,17 @@ export function CommandPalette(): React.ReactElement {
     } catch (err) {
       toast.error(`Kill Failed: ${errorText(err)}`);
     }
+  };
+
+  // Killing is destructive and a palette selection is one keystroke, so
+  // it only asks: the kill runs from the confirmation toast's action.
+  const confirmKill = (id: string, name: string) => {
+    toast.warning(`Kill ${name}?`, {
+      id: `kill:${id}`,
+      description: "This Stops Its Terminal Process",
+      action: { label: "Kill", onClick: () => void kill(id) },
+      cancel: { label: "Keep", onClick: () => {} },
+    });
   };
 
   const snapshot = async () => {
@@ -182,15 +204,16 @@ export function CommandPalette(): React.ReactElement {
       keywords: ["create", "new", "add", "agent"],
       action: () => void spawn(),
     },
-    ...workers.entries().map(
-      ([id, worker]): CommandDef => ({
+    ...workers.entries().map(([id, worker]): CommandDef => {
+      const name = worker.name ?? id.slice(0, 8);
+      return {
         id: `worker:kill:${id}`,
-        label: `Kill ${worker.name ?? id.slice(0, 8)}`,
+        label: `Kill ${name}`,
         group: "Workers",
         keywords: ["remove", "stop", "terminate"],
-        action: () => void kill(id),
-      }),
-    ),
+        action: () => confirmKill(id, name),
+      };
+    }),
     {
       id: "graph:toggle-view",
       label: graphView === "graph" ? "Switch To List View" : "Switch To Graph View",
