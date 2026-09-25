@@ -72,7 +72,8 @@ fn ship_compare_urls_are_openable() {
     }
 }
 
-/// Only https compare pages open: no other scheme, and no other page.
+/// Only https pages whose path has a `compare` segment open: no other
+/// scheme, and no other kind of page.
 #[test]
 fn url_scope_admits_nothing_else() {
     for url in [
@@ -85,6 +86,22 @@ fn url_scope_admits_nothing_else() {
         "swarm://github.com/o/r/compare/main...b",
     ] {
         assert!(!url_allowed(url), "URL scope admitted {url}");
+    }
+}
+
+/// The scope's actual breadth, a deliberate trade-off: the host is not
+/// pinned (GitHub Enterprise Server hosts are arbitrary), and glob's `*`
+/// also matches `/`, so an https URL on any host with a `/compare/`
+/// segment deeper than two path segments is admitted. The webview only
+/// ever passes it the URL `ship_compare_url` built from the repository's
+/// own remote.
+#[test]
+fn url_scope_admits_any_https_compare_page() {
+    for url in [
+        "https://git.example.org/o/r/compare/main...b",
+        "https://example.net/a/b/c/compare/x",
+    ] {
+        assert!(url_allowed(url), "URL scope rejected {url}");
     }
 }
 
@@ -125,7 +142,9 @@ fn capability_is_least_privilege() {
 }
 
 /// No fs permission grants a static path: the webview reads and writes
-/// only what a dialog granted at runtime. A static `$HOME/**` scope made
+/// only what a dialog granted at runtime, and it can neither create
+/// directories nor delete or rename anything, which no frontend path
+/// needs (a dialog-picked file is written in place). A static `$HOME/**` scope made
 /// every file under the home directory readable (dotfiles and credential
 /// stores included on Windows, where fs scopes match leading dots) whether
 /// or not the user ever opened it.
@@ -140,11 +159,12 @@ fn fs_access_has_no_static_allow_scope() {
             );
         }
     }
-    assert!(
-        !permissions()
-            .iter()
-            .any(|p| identifier(p) == "fs:allow-mkdir")
-    );
+    for denied in ["fs:allow-mkdir", "fs:allow-remove", "fs:allow-rename"] {
+        assert!(
+            !permissions().iter().any(|p| identifier(p) == denied),
+            "{denied} is granted"
+        );
+    }
 }
 
 /// The app's own data directory (the API key in swarm-config.json, the
