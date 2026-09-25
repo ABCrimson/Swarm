@@ -282,12 +282,23 @@ mod tests {
     }
 
     /// Every `invoke` / `invoke<T>` call with a string-literal command
-    /// name in `source`.
+    /// name in `source`, plus every `shipCommand(…)` call: the ship
+    /// commands' runner, which passes its command name and arguments to
+    /// `invoke` unchanged.
     fn frontend_calls(source: &str) -> Vec<FrontendCall> {
+        ["invoke", "shipCommand"]
+            .into_iter()
+            .flat_map(|callee| calls_of(source, callee))
+            .collect()
+    }
+
+    /// Every `callee(…)` / `callee<T>(…)` call with a string-literal
+    /// command name as its first argument in `source`.
+    fn calls_of(source: &str, callee: &str) -> Vec<FrontendCall> {
         let mut calls = Vec::new();
         let mut rest = source;
-        while let Some(at) = rest.find("invoke") {
-            rest = &rest[at + "invoke".len()..];
+        while let Some(at) = rest.find(callee) {
+            rest = &rest[at + callee.len()..];
             let mut after = rest;
             if let Some(generic) = after.strip_prefix('<') {
                 // Skip the (possibly nested) type arguments.

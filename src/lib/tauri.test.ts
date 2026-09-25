@@ -15,6 +15,7 @@ import {
   listSessions,
   listWorkers,
   readConfig,
+  resizeWorker,
   ShipCommandError,
   sessionAddWorker,
   spawnWorker,
@@ -135,6 +136,26 @@ describe("sessionAddWorker", () => {
     expect(tauriInvoke).toHaveBeenCalledWith("session_add_worker", {
       sessionId: "session-1",
       workerId: "worker-1",
+    });
+  });
+});
+
+describe("resizeWorker", () => {
+  beforeEach(() => {
+    vi.mocked(tauriInvoke).mockReset();
+    enableTauri();
+  });
+  afterEach(disableTauri);
+
+  it("invokes resize_worker with the id and size", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce(null);
+
+    await resizeWorker(WORKER_UUID, 40, 120);
+
+    expect(tauriInvoke).toHaveBeenCalledWith("resize_worker", {
+      id: WORKER_UUID,
+      rows: 40,
+      cols: 120,
     });
   });
 });

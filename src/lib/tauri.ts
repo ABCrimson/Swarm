@@ -377,6 +377,16 @@ export async function workerInput(
 }
 
 /**
+ * Resizes a worker's terminal to `rows` × `cols` character cells (Rust's
+ * `resize_worker`, which rejects a zero dimension and a worker without a
+ * PTY). The shell sees the new size at once: `SIGWINCH` on Unix, a
+ * pseudoconsole resize on Windows. Emits no event.
+ */
+export async function resizeWorker(id: string, rows: number, cols: number): Promise<void> {
+  return invoke<void>("resize_worker", { id, rows, cols });
+}
+
+/**
  * Records the start of one AI/agent turn and returns the persisted seq
  * the engine assigned it: the `causeSeq` every tool-driven side effect
  * of that turn then cites (see `AIChat.tsx`'s `doSend`).
