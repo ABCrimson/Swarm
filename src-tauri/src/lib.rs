@@ -13,6 +13,8 @@
 //!   data directory, forwards its ordered event stream to the webview on
 //!   [`swarm_core::orchestration::EVENT_CHANNEL`], and shows the main
 //!   window, or reports why it could not start.
+//! - [`dialog_grants`] lets a folder opened in a dialog reach its dot
+//!   entries on macOS and Linux.
 //! - [`commands`] exposes every [`swarm_core::commands::Registry`] command
 //!   under its own name (the same table `swarmd` serves as WebSocket `rpc`
 //!   frames), plus the two desktop-only commands that drive OS integrations.
@@ -23,6 +25,7 @@ use std::path::PathBuf;
 use tauri::Manager;
 
 mod commands;
+mod dialog_grants;
 mod lifecycle;
 mod startup;
 
@@ -93,6 +96,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(commands::handler())
         .setup(|app| {
+            dialog_grants::mirror_dialog_grants(app.handle());
             startup::setup(app.handle());
             Ok(())
         })
