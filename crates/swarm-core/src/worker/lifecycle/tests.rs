@@ -1255,3 +1255,76 @@ fn test_kill_preserves_dirty_worktree_instead_of_deleting_it() {
         "SWARM never force-removes"
     );
 }
+
+// -- stamped_preview: the redactor must read what the shell reads ---------
+
+/// Backspace edits the line the shell receives, so the preview is
+/// withheld rather than guessed.
+#[test]
+fn test_preview_withheld_when_credential_edited_with_backspace() {
+    for input in [
+        // Stripping BS leaves a redactable token; the shell sees a shorter one.
+        &b"echo sk-ant-XX\x08\x08api03-abcdefghijklmnopqrstuvwx\n"[..],
+        // A space-BS pair erases itself: the shell sees one whole key, the
+        // stripped text a space-split fragment no pattern matches.
+        b"echo sk-ant-api03 \x08-abcdefghijklmnopqrstuvwx\n",
+    ] {
+        assert_eq!(stamped_preview(input), "[preview withheld: line editing]");
+    }
+}
+
+/// DEL anywhere withholds the whole preview, even with no credential.
+#[test]
+fn test_preview_withheld_on_del() {
+    assert_eq!(
+        stamped_preview(b"ls -la\x7f\x7f"),
+        "[preview withheld: line editing]"
+    );
+}
+
+/// A CSI sequence inside a token must not break the match: stripping
+/// ESC alone would leave `[31m` in the middle of the key.
+#[test]
+fn test_preview_redacts_credential_split_by_ansi_sequence() {
+    for input in [
+        &b"export K=sk-ant-api03\x1b[31m-abcdefghijklmnopqrstuvwx\n"[..],
+        b"export K=sk-ant-api03\x1b[1;38;5;196m-abcdefghijklmnopqrstuvwx\n",
+        b"export K=sk-ant-api03\x1b]0;title\x07-abcdefghijklmnopqrstuvwx\n",
+        b"export K=sk-ant-api03\x1b]0;title\x1b\x5c-abcdefghijklmnopqrstuvwx\n",
+        b"export K=sk-ant-api03\x1bM-abcdefghijklmnopqrstuvwx\n",
+    ] {
+        let preview = stamped_preview(input);
+        assert!(preview.contains("[REDACTED]"), "got: {preview:?}");
+        assert!(!preview.contains("api03"), "got: {preview:?}");
+        assert!(!preview.contains("abcdefghij"), "got: {preview:?}");
+    }
+}
+
+/// A zero-width or bidi format character is not `is_control`, yet it
+/// splits a token the terminal shows whole.
+#[test]
+fn test_preview_redacts_credential_split_by_format_character() {
+    for splitter in ['\u{200B}', '\u{202E}', '\u{2060}', '\u{2066}', '\u{FEFF}'] {
+        let input = format!("echo ghp_abcdefghij{splitter}klmnopqrstuvwxyz0123\n");
+        let preview = stamped_preview(input.as_bytes());
+        assert!(preview.contains("[REDACTED]"), "got: {preview:?}");
+        assert!(!preview.contains("ghp_"), "got: {preview:?}");
+        assert!(!preview.contains("klmnop"), "got: {preview:?}");
+    }
+}
+
+/// Positive control: a plain credential is redacted, plain text is
+/// untouched, and the cut is 120 characters after redaction.
+#[test]
+fn test_preview_plain_credential_redacted_and_plain_text_unchanged() {
+    let preview = stamped_preview(b"export K=sk-ant-api03-abcdefghijklmnopqrstuvwx");
+    assert_eq!(preview, "export K=[REDACTED]");
+    assert_eq!(
+        stamped_preview(b"pnpm build --filter web"),
+        "pnpm build --filter web"
+    );
+    assert_eq!(
+        stamped_preview("a".repeat(300).as_bytes()).chars().count(),
+        120
+    );
+}

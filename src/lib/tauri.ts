@@ -347,7 +347,8 @@ export async function listWorkers(): Promise<Worker[]> {
  * call site states deliberately where the bytes came from. Drives both
  * the backend's persistence carve-out (`terminal` input is ephemeral —
  * never archived, see `is_persistent`) and its preview policy (`tool`/
- * `automation` get a control-stripped preview; `terminal` never does).
+ * `automation` get a stripped, credential-redacted preview, or a withheld
+ * notice when the input holds BS or DEL; `terminal` never gets one).
  */
 export type WorkerInputSource = "terminal" | "tool" | "automation";
 

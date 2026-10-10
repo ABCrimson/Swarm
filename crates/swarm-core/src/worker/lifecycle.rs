@@ -764,21 +764,117 @@ fn delete_isolation_branch_if_unchanged(
     }
 }
 
-/// First 120 characters of `data`, control characters stripped and
-/// invalid UTF-8 replaced. Recognized credentials become `[REDACTED]`
-/// via [`git::redact::redact`], run on the raw text (where control
-/// characters are still word boundaries, so a key between two `\r`
-/// is matched) and again after stripping, both before truncation so no
-/// fragment survives the cut. Only for machine-issued input (`tool`,
-/// `automation`); `terminal` input never gets one (see
-/// `WorkerInputPayload`'s "never carries raw keystrokes" note).
+/// Preview text for input a line editor would rewrite: backspace and DEL
+/// delete what the shell receives, so no static transform of the bytes
+/// can say what the shell saw.
+const PREVIEW_WITHHELD: &str = "[preview withheld: line editing]";
+
+/// Characters of a preview kept after redaction.
+const PREVIEW_CHARS: usize = 120;
+
+/// Unicode format characters (category Cf) that render as nothing yet
+/// can split a token the terminal shows whole: zero-width and
+/// direction marks, bidi embeddings and isolates, invisible operators,
+/// and the BOM. `char` has no Cf test, so the list is explicit.
+const fn is_format_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
+}
+
+/// `text` without the escape sequences a terminal consumes and the
+/// control and format characters it does not print. Whole sequences go,
+/// not just the ESC byte: dropping ESC alone leaves `[31m` inside a
+/// token. An unterminated sequence swallows the rest of the text, as a
+/// terminal would.
+fn strip_terminal_noise(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        i += 1;
+        if c != '\x1b' {
+            if !c.is_control() && !is_format_char(c) {
+                out.push(c);
+            }
+            continue;
+        }
+        let Some(&introducer) = chars.get(i) else {
+            break; // a lone trailing ESC
+        };
+        i += 1;
+        match introducer {
+            // CSI: parameters and intermediates, then a final char in
+            // 0x40-0x7E. A non-ASCII char cancels the sequence and is left
+            // for the normal filter, as a terminal cancels on it.
+            '[' => {
+                while let Some(&n) = chars.get(i) {
+                    if !n.is_ascii() {
+                        break;
+                    }
+                    i += 1;
+                    if ('@'..='~').contains(&n) {
+                        break;
+                    }
+                }
+            }
+            // OSC and the other string sequences (DCS, SOS, PM, APC): up to
+            // BEL or ST (`ESC \`). Any other ESC ends the string and starts
+            // a new sequence, so it is left for the main loop.
+            ']' | 'P' | 'X' | '^' | '_' => {
+                while let Some(&n) = chars.get(i) {
+                    if n == '\x07' {
+                        i += 1;
+                        break;
+                    }
+                    if n == '\x1b' {
+                        if chars.get(i + 1) == Some(&'\\') {
+                            i += 2;
+                        }
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            // Two-char `ESC x`: the introducer is consumed with the ESC.
+            _ => {}
+        }
+    }
+    out
+}
+
+/// First 120 characters of `data` for the durable `worker_input` event.
+///
+/// The terminal reads the bytes differently from a static reader, and
+/// the redactor must not be fooled by that gap. Input containing BS or
+/// DEL is withheld outright ([`PREVIEW_WITHHELD`]): line editing makes
+/// `sk-ant-XX\b\bapi03-…` reach the shell as a real key, and guessing
+/// the edited text is a line-discipline emulator's job. Otherwise
+/// [`git::redact::redact`] runs on the raw lossy text (control
+/// characters are still word boundaries there, so a key between two
+/// `\r` matches), then escape sequences, controls and format characters
+/// are stripped (they can split a token the shell sees whole), then
+/// redaction runs again on the joined text. All of it precedes the
+/// 120-character cut so no fragment survives it. Only for
+/// machine-issued input (`tool`, `automation`); `terminal` input never
+/// gets one (see `WorkerInputPayload`'s "never carries raw keystrokes"
+/// note).
 fn stamped_preview(data: &[u8]) -> String {
+    if data.iter().any(|&b| b == 0x08 || b == 0x7f) {
+        return PREVIEW_WITHHELD.to_owned();
+    }
     let raw = String::from_utf8_lossy(data);
-    let printable: String = git::redact::redact(&raw)
+    let stripped = strip_terminal_noise(&git::redact::redact(&raw));
+    git::redact::redact(&stripped)
         .chars()
-        .filter(|c| !c.is_control())
-        .collect();
-    git::redact::redact(&printable).chars().take(120).collect()
+        .take(PREVIEW_CHARS)
+        .collect()
 }
 
 /// Writes `data` to a worker's PTY, then emits a `worker_input` event
@@ -794,7 +890,8 @@ fn stamped_preview(data: &[u8]) -> String {
 /// `preview`, and never persisted, see
 /// [`crate::orchestration::is_persistent`]), [`InputSource::Tool`] or
 /// [`InputSource::Automation`] for machine-issued input (both get a
-/// control-stripped, credential-redacted `preview`). `provenance` is `Provenance::default()`
+/// control-stripped, credential-redacted `preview`, or a withheld notice
+/// when the input holds BS or DEL). `provenance` is `Provenance::default()`
 /// for terminal input: its causer is a person, not a worker's turn.
 ///
 /// # Errors
