@@ -215,8 +215,8 @@ fn test_secret_and_size_guard_neither_file_is_committed() {
     assert_eq!(committed_paths(&worktree, &outcome.sha), ["safe.txt"]);
 }
 
-/// CONFIRMED bug (security): "all" mode committed a pre-staged `.env`
-/// while reporting it skipped. It must be unstaged and left out.
+/// Security: "all" mode unstages a pre-staged `.env`, reports it
+/// skipped and leaves it out of the commit (still on disk, untracked).
 #[test]
 fn test_all_mode_unstages_a_pre_staged_secret() {
     let (_repo, worktree, registry, id) = fixture("all-prestaged", "swarm/prestaged-abcd1234");
@@ -238,8 +238,8 @@ fn test_all_mode_unstages_a_pre_staged_secret() {
     assert_eq!(after.untracked, [".env"], "unstaged, and still on disk");
 }
 
-/// CONFIRMED bug (security): with *only* a pre-staged secret, the old
-/// code committed a commit containing nothing but the secret.
+/// Security: with *only* a pre-staged secret, "all" mode unstages it and
+/// fails with `NothingToCommit`, so no commit holding just the secret exists.
 #[test]
 fn test_all_mode_with_only_a_pre_staged_secret_commits_nothing() {
     let (repo, worktree, registry, id) = fixture("all-only-secret", "swarm/only-secret-abcd1234");
@@ -286,8 +286,9 @@ fn test_staged_mode_unstages_and_omits_denied_secret_from_the_commit() {
     assert_eq!(after.untracked, [".env"]);
 }
 
-/// CONFIRMED bug: porcelain v1 without `-z` C-quoted these names, so
-/// `git add` failed on them and `.env copy` slipped past the deny list.
+/// Names with spaces and non-ASCII come verbatim from `status
+/// --porcelain=v2 -z` (never C-quoted), so they stage cleanly and
+/// `.env copy` still hits the deny list.
 #[test]
 fn test_names_with_spaces_and_non_ascii_ship_and_are_deny_checked() {
     let (_repo, worktree, registry, id) = fixture("quoted-names", "swarm/quoted-abcd1234");
@@ -313,9 +314,9 @@ fn test_names_with_spaces_and_non_ascii_ship_and_are_deny_checked() {
     );
 }
 
-/// CONFIRMED bug: stdout was truncated at 8 KB before being parsed, so
-/// files past the cut were never seen — neither staged nor deny-checked.
-/// ~400 paths make the status output far larger than that.
+/// Status output is parsed in full however large it is: ~400 paths push
+/// it far past 8 KB, every file still ships, and the path that sorts
+/// last is still deny-checked.
 #[test]
 fn test_status_output_over_8_kb_ships_every_file_and_denies_the_last() {
     let (_repo, worktree, registry, id) = fixture("large-status", "swarm/large-abcd1234");
@@ -543,9 +544,8 @@ fn test_co_authored_by_with_embedded_newline_is_dropped_not_injected() {
 
 // ── Lock contention ──────────────────────────────────────────────────
 
-/// CONFIRMED bug: a mutation failing on `index.lock` came back as
-/// `Ok(non-success)`, so `RepoLocks` never retried. It is now an `Err`
-/// — retried once — and a lock released within the backoff is survived.
+/// A mutation failing on `index.lock` is an `Err`, so `RepoLocks`
+/// retries it once, and a lock released within the backoff is survived.
 #[test]
 fn test_index_lock_contention_is_retried() {
     let repo = TempRepo::new("contention");
