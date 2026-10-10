@@ -548,10 +548,10 @@ mod tests {
         assert_eq!(framer.buffered_len(), 0, "buffer cleared on overrun");
     }
 
-    /// Regression: the rest of an oversized line, still streaming in
-    /// after the overrun, came out as a "line" of its own (a fragment of
-    /// JSON) once its `\n` arrived. It is now dropped up to and including
-    /// that `\n`, and framing resumes with the next line.
+    /// The rest of an oversized line, still streaming in after the
+    /// overrun, is dropped up to and including its `\n`, so no JSON
+    /// fragment is ever framed as a line; framing resumes with the next
+    /// line.
     #[test]
     fn test_framer_discards_the_rest_of_an_overrun_line() {
         let mut framer = NdjsonFramer::new();

@@ -55,7 +55,7 @@ struct WorkerIdArgs {
     cause_seq: Option<u64>,
 }
 
-/// Pauses a worker's process.
+/// Marks a running worker paused (state only: no signal reaches its process; see [`lifecycle::do_pause_worker`]).
 pub async fn pause_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let WorkerIdArgs {
         id,
@@ -75,7 +75,7 @@ pub async fn pause_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     ok_value(&())
 }
 
-/// Resumes a paused worker's process.
+/// Marks a paused worker running again (state only; see [`lifecycle::do_resume_worker`]).
 pub async fn resume_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let WorkerIdArgs {
         id,
@@ -302,5 +302,39 @@ mod tests {
                 .starts_with("Max Workers Must Be Between "),
             "{err}"
         );
+    }
+
+    /// Persists `max_workers` and applies it live; both bounds are
+    /// inclusive and a rejected value changes nothing.
+    #[tokio::test]
+    async fn test_set_max_workers_persists_and_applies_live() {
+        use crate::worker::registry::{MAX_MAX_WORKERS, MIN_MAX_WORKERS};
+        let (ctx, _dir, _events) = test_ctx();
+        let persisted = || crate::config::read_value(&ctx.paths, "max_workers");
+        set_max_workers(ctx.clone(), json!({"max": 3}))
+            .await
+            .unwrap();
+        assert_eq!(ctx.registry.config.read().max_workers, 3);
+        assert_eq!(persisted(), Some(json!(3)));
+        set_max_workers(ctx.clone(), json!({"max": MIN_MAX_WORKERS}))
+            .await
+            .unwrap();
+        assert_eq!(ctx.registry.config.read().max_workers, MIN_MAX_WORKERS);
+        assert_eq!(persisted(), Some(json!(MIN_MAX_WORKERS)));
+        set_max_workers(ctx.clone(), json!({"max": MAX_MAX_WORKERS}))
+            .await
+            .unwrap();
+        assert_eq!(ctx.registry.config.read().max_workers, MAX_MAX_WORKERS);
+        let err = set_max_workers(ctx.clone(), json!({"max": MAX_MAX_WORKERS + 1}))
+            .await
+            .unwrap_err();
+        assert!(
+            err.as_str()
+                .unwrap()
+                .starts_with("Max Workers Must Be Between "),
+            "{err}"
+        );
+        assert_eq!(ctx.registry.config.read().max_workers, MAX_MAX_WORKERS);
+        assert_eq!(persisted(), Some(json!(MAX_MAX_WORKERS)));
     }
 }

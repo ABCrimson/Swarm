@@ -516,6 +516,10 @@ mod tests {
         assert!(reg.set_max_workers(MAX_MAX_WORKERS + 1).is_err());
         assert_eq!(reg.config.read().max_workers, DEFAULT_MAX_WORKERS);
 
+        // The upper bound itself is accepted.
+        reg.set_max_workers(MAX_MAX_WORKERS).unwrap();
+        assert_eq!(reg.config.read().max_workers, MAX_MAX_WORKERS);
+
         // A valid cap applies to subsequent spawns immediately.
         reg.set_max_workers(2).unwrap();
         reg.spawn_worker(make_handle("a")).unwrap();
