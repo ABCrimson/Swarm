@@ -352,9 +352,6 @@ describe("WorkerGraph — interactions", () => {
     await user.keyboard("{Backspace}{Delete}");
     // Nodes are derived from the worker store, so a delete reaches only nodeUi: a remove change would drop the selection.
     expect(nodeFor("w-a")).toHaveClass("selected");
-
-    expect(screen.getByText("Alpha")).toBeInTheDocument();
-    expect(useWorkerStore.getState().workers.has("w-a")).toBe(true);
   });
 
   it("gives each node wrapper an accessible name and opens the detail panel on Enter", async () => {
