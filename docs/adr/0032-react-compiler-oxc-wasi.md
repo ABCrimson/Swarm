@@ -16,8 +16,8 @@ Control refuses the native Oxc binding. It pinned Babel below 8 because on Babel
 
 `oxc-transform-react` falls back to its WASI build when the native binding cannot load. With
 `@oxc-transform-react/binding-wasm32-wasip1` installed, `NAPI_RS_FORCE_WASI=true pnpm check:compiler`
-passes on a Smart App Control host with the same result as native (67 of 68 modules memoised, 137 cache
-allocations, 5 of 5 required components). So:
+passes on a Smart App Control host with the same result as native: every component and page module
+except the class component `ErrorBoundary` carries a memo cache, and all 5 required components compile. So:
 
 - `vite.config.ts` is `react({ compiler: true })`; the Babel branch, its environment switch and the
   load-failure probe are gone.
