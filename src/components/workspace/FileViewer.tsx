@@ -1,9 +1,13 @@
 import { use } from "react";
+import { escapeForDisplay } from "#lib/display-escape";
 import { basename, type FilePreview, formatBytes, MAX_PREVIEW_BYTES } from "#lib/file-preview";
 import { tokenizeJson } from "#lib/syntax-highlight";
 
 /** JSON above this size renders as plain text: one span per coloured token gets expensive. */
 const MAX_HIGHLIGHT_CHARS = 256 * 1024;
+
+/** Bidi embedding, override, isolate and mark characters (Trojan Source, CVE-2021-42574): text holding them can display in a different order than it is stored. */
+const BIDI_CONTROL = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
 
 /** A file chosen in the tree, with the (possibly still pending) read of its contents. */
 export interface FileSelection {
@@ -19,10 +23,11 @@ interface FileViewerProps {
 
 /**
  * Read-only file viewer: a header with the file name, then the contents
- * with line numbers. JSON files are syntax-highlighted, but only when the
- * tokens reproduce the file exactly — JSONC comments, or anything else
- * the JSON tokenizer does not understand, fall back to plain text rather
- * than showing content that is not in the file.
+ * with line numbers. `.json` and `.jsonc` files are syntax-highlighted,
+ * comments included. The tokenizer is lossless (anything it does not
+ * understand becomes a `plain` token); a final check that the tokens join
+ * back to the exact file text guards the render, and plain text is shown
+ * if it ever fails. Files above `MAX_HIGHLIGHT_CHARS` are also plain text.
  *
  * Suspends on `selection.preview` via `use()`; render it inside a
  * `<Suspense>`. The header and body always come from the same
@@ -46,7 +51,7 @@ export function FileViewer({ selection, pending = false }: FileViewerProps): Rea
         className="truncate border-border border-b bg-surface-1/60 px-4 py-2 font-mono text-fg-muted text-sm"
         title={selection.path}
       >
-        {basename(selection.path)}
+        {escapeForDisplay(basename(selection.path))}
       </p>
       <PreviewBody path={selection.path} preview={preview} />
     </div>
@@ -85,7 +90,12 @@ function Notice({
   readonly tone?: "info" | "error";
 }): React.ReactElement {
   return (
-    <p className={`p-4 text-md ${tone === "error" ? "text-rose" : "text-fg-muted"}`}>{children}</p>
+    <p
+      role={tone === "error" ? "alert" : "status"}
+      className={`p-4 text-md ${tone === "error" ? "text-rose" : "text-fg-muted"}`}
+    >
+      {children}
+    </p>
   );
 }
 
@@ -108,33 +118,41 @@ function TextView({
   const faithful = tokens !== null && tokens.map((t) => t.value).join("") === text;
 
   return (
-    <section
-      aria-label={`Contents Of ${name}`}
-      // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1).
-      tabIndex={0}
-      className="scroll-area flex flex-1 overflow-auto py-3 font-mono text-md leading-relaxed"
-    >
-      <pre
-        aria-hidden="true"
-        className="sticky left-0 shrink-0 select-none bg-surface-0 pr-4 pl-4 text-right text-fg-dim"
-        style={{ minWidth: `${String(lineCount).length + 2}ch` }}
+    <>
+      {BIDI_CONTROL.test(text) && (
+        <Notice tone="error">
+          This File Contains Bidirectional Control Characters — The Text Below May Display In A
+          Different Order Than It Is Stored
+        </Notice>
+      )}
+      <section
+        aria-label={`Contents Of ${name}`}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1).
+        tabIndex={0}
+        className="scroll-area flex flex-1 overflow-auto py-3 font-mono text-md leading-relaxed"
       >
-        {gutter}
-      </pre>
-      <pre className="pr-4 text-fg">
-        {faithful
-          ? tokens.map((token, i) =>
-              token.type === "whitespace" ? (
-                token.value
-              ) : (
-                // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reorder
-                <span key={i} style={{ color: token.color }}>
-                  {token.value}
-                </span>
-              ),
-            )
-          : text}
-      </pre>
-    </section>
+        <pre
+          aria-hidden="true"
+          className="sticky left-0 shrink-0 select-none bg-surface-0 pr-4 pl-4 text-right text-fg-dim"
+          style={{ minWidth: `${String(lineCount).length + 2}ch` }}
+        >
+          {gutter}
+        </pre>
+        <pre className="pr-4 text-fg">
+          {faithful
+            ? tokens.map((token, i) =>
+                token.type === "whitespace" ? (
+                  token.value
+                ) : (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reorder
+                  <span key={i} style={{ color: token.color }}>
+                    {token.value}
+                  </span>
+                ),
+              )
+            : text}
+        </pre>
+      </section>
+    </>
   );
 }

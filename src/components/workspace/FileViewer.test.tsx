@@ -60,6 +60,14 @@ describe("FileViewer", () => {
     expect(code?.childElementCount).toBe(0);
   });
 
+  it("warns about bidi control characters and still shows the text exactly", async () => {
+    const text = "a\u202Eb";
+    const { code } = await renderPreview("/proj/a.js", { kind: "text", text });
+
+    expect(screen.getByText(/Bidirectional Control Characters/)).toBeInTheDocument();
+    expect(code?.textContent).toBe(text);
+  });
+
   it.for([
     [{ kind: "binary" }, "Binary File — Not Shown"],
     [{ kind: "too-large", bytes: 5 * 1024 * 1024 }, /File Too Large To Preview \(5\.0 MB/],
