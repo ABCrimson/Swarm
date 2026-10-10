@@ -993,8 +993,10 @@ impl EventSink {
     /// gets to it, the subsequent `ack.send(seq)` inside the writer
     /// loop simply returns `Err` and is ignored — the writer thread
     /// never blocks on, or even notices, a disinterested receiver. If
-    /// the event is dropped instead (engine shut down, writer gone),
-    /// the ack sender is dropped with it, so the receiver resolves to a
+    /// the event is dropped instead (engine shut down, writer gone, or
+    /// the writer could not reserve its seq or persist it — it fails
+    /// closed and emits nothing for an event the log lacks), the ack
+    /// sender is dropped with it, so the receiver resolves to a
     /// `RecvError` rather than hanging forever.
     pub fn emit_awaiting_seq(
         &self,

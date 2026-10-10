@@ -174,8 +174,8 @@ pub struct GitOutput {
 }
 
 impl GitOutput {
-    fn new(status: ExitStatus, stdout: Vec<u8>, stderr: &[u8]) -> Self {
-        let raw_stderr = String::from_utf8_lossy(stderr).into_owned();
+    fn new(status: ExitStatus, stdout: Vec<u8>, stderr: Vec<u8>) -> Self {
+        let raw_stderr = String::from_utf8_lossy_owned(stderr);
         Self {
             status,
             stdout,
@@ -185,7 +185,7 @@ impl GitOutput {
     }
 
     /// Whether `git` exited with status 0.
-    #[must_use]
+    #[must_use = "the exit status is the only signal that git succeeded"]
     pub fn success(&self) -> bool {
         self.status.success()
     }
@@ -193,14 +193,14 @@ impl GitOutput {
     /// stdout decoded as UTF-8 (lossily) and trimmed — for commands
     /// whose whole output is one value: a sha, a branch name, a URL, a
     /// path.
-    #[must_use]
+    #[must_use = "the decoded output is the only result of this call"]
     pub fn stdout_trimmed(&self) -> String {
         String::from_utf8_lossy(&self.stdout).trim().to_owned()
     }
 
     /// The full, unredacted stderr. For matching failure phrases only —
     /// build every surfaced string from [`Self::stderr`] instead.
-    #[must_use]
+    #[must_use = "the raw stderr exists only to be matched against failure phrases"]
     pub fn raw_stderr(&self) -> &str {
         &self.raw_stderr
     }
@@ -397,7 +397,7 @@ fn execute(
         }
     }
 
-    Ok(GitOutput::new(status, collected.stdout, &collected.stderr))
+    Ok(GitOutput::new(status, collected.stdout, collected.stderr))
 }
 
 /// Drains `pipe` on a background thread, forwarding each chunk as it
@@ -516,7 +516,7 @@ pub enum GitCapability {
 /// [`GitCapability::Unavailable`] to the user (a `system_log` event)
 /// rather than letting worktree isolation fail mysteriously on the
 /// first spawn.
-#[must_use]
+#[must_use = "an unavailable git must be surfaced to the user, not ignored"]
 pub fn probe_capability() -> GitCapability {
     let output = match run(&["--version"], READ_TIMEOUT) {
         Ok(output) => output,
@@ -658,7 +658,7 @@ mod tests {
     fn test_repo_local_env_vars_cover_what_git_reports() {
         let out = run(&["rev-parse", "--local-env-vars"], READ_TIMEOUT).unwrap();
         assert!(out.success(), "{}", out.stderr);
-        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        let text = String::from_utf8_lossy_owned(out.stdout);
         for var in text.lines().filter(|l| !l.is_empty()) {
             assert!(
                 REPO_LOCAL_ENV_VARS.contains(&var),

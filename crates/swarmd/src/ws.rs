@@ -92,7 +92,6 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -651,7 +650,7 @@ async fn feed(
     events: mpsc::Sender<Utf8Bytes>,
     page_size: u32,
 ) -> FeedEnd {
-    let Err(end) = stream_events(
+    stream_events(
         live,
         log_path.as_deref(),
         last_seq,
@@ -659,8 +658,8 @@ async fn feed(
         &events,
         page_size,
     )
-    .await;
-    end
+    .await
+    .into_err()
 }
 
 async fn stream_events(
@@ -670,7 +669,7 @@ async fn stream_events(
     server_seq: u64,
     events: &mpsc::Sender<Utf8Bytes>,
     page_size: u32,
-) -> Result<Infallible, FeedEnd> {
+) -> Result<!, FeedEnd> {
     let mut cursor = match last_seq {
         Some(last_seq) => replay(log_path, last_seq, events, page_size).await?,
         None => server_seq,

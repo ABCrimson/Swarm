@@ -8,6 +8,16 @@
 //! wire order is the seq order, and every persisted event a client sees
 //! live is already readable from the log.
 //!
+//! # Failing closed
+//!
+//! A write failure never leaks: an event whose seq cannot be reserved,
+//! or which cannot be appended to the log, reaches no delivery path (not
+//! the `emit` closure, not the broadcast fanout), does not move
+//! [`OrchestrationEngine::head_seq`], and resolves its
+//! [`EventSink::emit_awaiting_seq`] receiver to a `RecvError`. A failed
+//! append leaves a one-seq gap that one ephemeral `system_log` error
+//! event explains; clients backfill an empty page and skip it.
+//!
 //! # Seq guarantees
 //!
 //! Seqs are unique and strictly increasing for the lifetime of the data
@@ -33,7 +43,7 @@ use uuid::Uuid;
 
 use super::log::EventLog;
 use crate::error::AppError;
-use crate::events::{EventSink, Provenance, SwarmEvent, WriterCmd, WriterMsg};
+use crate::events::{EventSink, Provenance, SwarmEvent, SystemLogPayload, WriterCmd, WriterMsg};
 
 /// The single ordered channel name every backend event is logically
 /// pushed on. The desktop shell's `emit` closure (see
@@ -136,10 +146,11 @@ impl OrchestrationEngine {
     /// handle.
     ///
     /// `emit` is the PRIMARY delivery path: called on the writer thread,
-    /// in seq order, for every event (persisted or not). It must not be
+    /// in seq order, for every event the writer issues a seq to and, if
+    /// persistent, appends (see # Failing closed). It must not be
     /// lossy — a slow consumer should back up the (unbounded) writer
     /// channel rather than drop events, since ephemeral events can never
-    /// be backfilled. Every event is also offered to the secondary
+    /// be backfilled. Every delivered event is also offered to the secondary
     /// broadcast fanout ([`Self::subscribe`]), which costs nothing while
     /// nothing is subscribed.
     ///
@@ -242,7 +253,8 @@ impl OrchestrationEngine {
     }
 
     /// Resolves once every event recorded before this call has been
-    /// persisted and emitted, with the head seq at that point.
+    /// handled (persisted and emitted, or dropped fail-closed; see
+    /// # Failing closed), with the head seq at that point.
     ///
     /// # Errors
     ///
@@ -347,6 +359,8 @@ struct Writer<E> {
     /// The primary, lossless delivery path.
     emit: E,
     fanout: Fanout,
+    /// Whether the last seq reservation failed (to log an outage once).
+    reserve_failing: bool,
 }
 
 impl<E: FnMut(&DomainEvent)> Writer<E> {
@@ -360,6 +374,7 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
             head,
             emit,
             fanout,
+            reserve_failing: false,
         })
     }
 
@@ -390,6 +405,22 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
     /// head, offers it to the fanout, and resolves its ack — in exactly
     /// that order (see [`OrchestrationEngine::head_seq`] for why the
     /// head is published between the emit and the fanout).
+    ///
+    /// # Fail closed
+    ///
+    /// A seq nobody can prove durable is never shown to anyone:
+    ///
+    /// - If the seq cannot be reserved in the log (after one retry) the
+    ///   event is dropped whole — no emit, no head, no fanout — and the
+    ///   seq counter is rolled back, so the next event retries the
+    ///   reservation.
+    /// - If a persistent event cannot be appended, nothing is emitted
+    ///   on either delivery path and the head does not move; the ack
+    ///   sender is dropped (the receiver resolves to a `RecvError`, the
+    ///   same signal as a shut-down engine), and one ephemeral
+    ///   `system_log` error event takes the next seq so clients see the
+    ///   gap explained. A client treats the gap as ephemeral and
+    ///   backfills an empty page.
     fn record(&mut self, msg: WriterMsg) {
         let WriterMsg {
             event,
@@ -397,32 +428,24 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
             ack,
         } = msg;
 
-        self.seq += 1;
-        if self.seq > self.reserved {
-            let through = self.seq + SEQ_RESERVATION_BLOCK - 1;
-            match self.log.reserve_seqs(through) {
-                Ok(()) => self.reserved = through,
-                Err(e) => tracing::error!(
-                    seq = self.seq,
-                    error = %e,
-                    "failed to reserve event seqs; a restart after a crash may reissue this seq"
-                ),
-            }
-        }
-
-        let envelope = DomainEvent {
-            seq: self.seq,
-            ts: crate::clock::unix_millis(),
-            origin_worker: provenance.origin_worker,
-            cause_seq: provenance.cause_seq,
-            event,
+        let Some(envelope) = self.issue(event, &provenance) else {
+            // Dropping `ack` resolves its receiver to a `RecvError`.
+            return;
         };
-        if is_persistent(&envelope.event) {
-            self.persist(&envelope, &provenance);
+        if is_persistent(&envelope.event)
+            && let Err(e) = self.persist(&envelope, &provenance)
+        {
+            tracing::error!(
+                seq = envelope.seq,
+                event_type = envelope.event.type_tag(),
+                error = %e,
+                "failed to persist event; it is not emitted"
+            );
+            drop(ack);
+            self.report_persist_failure(&envelope, &e);
+            return;
         }
-        (self.emit)(&envelope);
-        self.head.store(self.seq, Ordering::Release);
-        self.fanout.offer(&envelope);
+        self.deliver(&envelope);
 
         // Non-blocking by oneshot construction: a dropped receiver
         // (e.g. a cancelled IPC call) makes `send` return `Err`, which
@@ -432,19 +455,88 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
         }
     }
 
-    fn persist(&mut self, envelope: &DomainEvent, provenance: &Provenance) {
-        let event_type = envelope.event.type_tag();
-        let result = envelope
-            .event
-            .payload_json()
-            .map_err(AppError::from)
-            .and_then(|payload| {
-                self.log
-                    .append(envelope.seq, envelope.ts, event_type, &payload, provenance)
-            });
-        if let Err(e) = result {
-            tracing::error!(seq = envelope.seq, event_type, error = %e, "failed to persist event");
+    /// Takes the next seq (reserving a block in the log when it passes
+    /// the current reservation) and stamps `event` into an envelope.
+    /// `None` — with the counter rolled back — when the reservation
+    /// fails twice: handing out a seq the log has not reserved could
+    /// reissue it after a crash.
+    fn issue(&mut self, event: SwarmEvent, provenance: &Provenance) -> Option<DomainEvent> {
+        self.seq += 1;
+        if self.seq > self.reserved {
+            let through = self.seq + SEQ_RESERVATION_BLOCK - 1;
+            let reserved = self
+                .log
+                .reserve_seqs(through)
+                .or_else(|_| self.log.reserve_seqs(through));
+            match reserved {
+                Ok(()) => {
+                    self.reserved = through;
+                    self.reserve_failing = false;
+                }
+                Err(e) => {
+                    // One error line per outage, not one per event.
+                    if self.reserve_failing {
+                        tracing::debug!(seq = self.seq, error = %e, "event seq reservation still failing");
+                    } else {
+                        tracing::error!(
+                            seq = self.seq,
+                            error = %e,
+                            "failed to reserve event seqs; events are dropped until the log recovers"
+                        );
+                        self.reserve_failing = true;
+                    }
+                    self.seq -= 1;
+                    return None;
+                }
+            }
         }
+        Some(DomainEvent {
+            seq: self.seq,
+            ts: crate::clock::unix_millis(),
+            origin_worker: provenance.origin_worker,
+            cause_seq: provenance.cause_seq,
+            event,
+        })
+    }
+
+    /// Delivers a durable-or-ephemeral envelope: primary emit, then the
+    /// head, then the fanout (the order [`OrchestrationEngine::head_seq`]
+    /// documents).
+    fn deliver(&mut self, envelope: &DomainEvent) {
+        (self.emit)(envelope);
+        self.head.store(envelope.seq, Ordering::Release);
+        self.fanout.offer(envelope);
+    }
+
+    /// Tells clients, with one ephemeral `system_log` error, that
+    /// `failed`'s seq will never arrive. Best effort: if even this seq
+    /// cannot be issued, the tracing line is all there is.
+    fn report_persist_failure(&mut self, failed: &DomainEvent, error: &AppError) {
+        let ts = crate::clock::unix_millis();
+        let event = SwarmEvent::SystemLog(SystemLogPayload {
+            level: "error".to_owned(),
+            message: format!(
+                "Event {} ({}) Could Not Be Saved And Was Dropped: {error}",
+                failed.seq,
+                failed.event.type_tag()
+            ),
+            target: module_path!().to_owned(),
+            timestamp: ts,
+        });
+        if let Some(envelope) = self.issue(event, &Provenance::default()) {
+            self.deliver(&envelope);
+        }
+    }
+
+    fn persist(&mut self, envelope: &DomainEvent, provenance: &Provenance) -> Result<(), AppError> {
+        let payload = envelope.event.payload_json().map_err(AppError::from)?;
+        self.log.append(
+            envelope.seq,
+            envelope.ts,
+            envelope.event.type_tag(),
+            &payload,
+            provenance,
+        )
     }
 
     fn finalize(&mut self) {
@@ -895,6 +987,118 @@ mod tests {
             ],
         );
         assert_eq!(seqs(&seen), vec![1, 2]);
+    }
+
+    type BoxedEmit = Box<dyn FnMut(&DomainEvent)>;
+
+    /// A writer wired to record what reaches each delivery path.
+    struct Probe {
+        writer: Writer<BoxedEmit>,
+        emitted: Arc<Mutex<Vec<DomainEvent>>>,
+        fanout: broadcast::Receiver<Arc<DomainEvent>>,
+        head: Arc<AtomicU64>,
+    }
+
+    fn probe() -> Probe {
+        let emitted = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&emitted);
+        let (tx, fanout) = broadcast::channel(64);
+        let head = Arc::new(AtomicU64::new(0));
+        let writer = Writer::new(
+            EventLog::open_in_memory().unwrap(),
+            Arc::clone(&head),
+            Box::new(move |e: &DomainEvent| sink.lock().push(e.clone())) as BoxedEmit,
+            Fanout::new(tx),
+        )
+        .unwrap();
+        Probe {
+            writer,
+            emitted,
+            fanout,
+            head,
+        }
+    }
+
+    fn acked(event: SwarmEvent) -> (WriterMsg, oneshot::Receiver<u64>) {
+        let (tx, rx) = oneshot::channel();
+        let msg = WriterMsg {
+            event,
+            provenance: Provenance::default(),
+            ack: Some(tx),
+        };
+        (msg, rx)
+    }
+
+    /// CRITIQUE F3: a persist failure emits nothing on EITHER channel,
+    /// leaves `head` where it was, and resolves the ack to `RecvError`;
+    /// only one ephemeral `system_log` error takes the next seq.
+    #[test]
+    fn test_failed_persist_emits_nothing_and_holds_the_head() {
+        let mut p = probe();
+        p.writer.record(bare(spawned()));
+        assert_eq!(p.head.load(Ordering::Acquire), 1);
+        p.writer.log.break_table("events");
+
+        let (msg, mut ack) = acked(spawned());
+        p.writer.record(msg);
+
+        // The failed seq (2) never reached the wire; the gap is explained
+        // by one system_log at seq 3, which is what moved the head.
+        let emitted = p.emitted.lock();
+        assert_eq!(seqs(&emitted), vec![1, 3]);
+        assert_matches!(emitted[1].event, SwarmEvent::SystemLog(ref l) if l.level == "error");
+        assert_eq!(p.head.load(Ordering::Acquire), 3);
+        drop(emitted);
+
+        let mut delivered = Vec::new();
+        while let Ok(e) = p.fanout.try_recv() {
+            delivered.push(e.seq);
+        }
+        assert_eq!(delivered, vec![1, 3]);
+        assert_matches!(ack.try_recv(), Err(oneshot::error::TryRecvError::Closed));
+    }
+
+    /// When even the explanatory `system_log` cannot take a seq, a
+    /// failed persist leaves `head`, the wire and the fanout exactly as
+    /// they were.
+    #[test]
+    fn test_failed_persist_alone_never_advances_the_head() {
+        let mut p = probe();
+        p.writer.record(bare(spawned()));
+        p.writer.log.break_table("events");
+        p.writer.log.break_table("meta");
+        // Seq 2 is reserved but seq 3 (the system_log) is not.
+        p.writer.reserved = 2;
+        p.writer.record(bare(spawned()));
+
+        assert_eq!(seqs(&p.emitted.lock()), vec![1]);
+        assert_eq!(p.head.load(Ordering::Acquire), 1);
+        assert_eq!(p.fanout.try_recv().unwrap().seq, 1);
+        assert!(p.fanout.try_recv().is_err());
+    }
+
+    /// CRITIQUE F3: when the seq reservation fails the event is dropped
+    /// whole (no seq above `reserved` is handed out), the counter rolls
+    /// back, and the next event retries and succeeds once the log heals.
+    #[test]
+    fn test_failed_reservation_fails_closed_and_recovers() {
+        let mut p = probe();
+        p.writer.log.break_table("meta");
+        let (msg, mut ack) = acked(spawned());
+        p.writer.record(msg);
+        p.writer.record(bare(output()));
+
+        assert!(p.emitted.lock().is_empty());
+        assert_eq!(p.head.load(Ordering::Acquire), 0);
+        assert!(p.fanout.try_recv().is_err());
+        assert_eq!(p.writer.seq, 0, "the counter rolls back");
+        assert_matches!(ack.try_recv(), Err(oneshot::error::TryRecvError::Closed));
+
+        // Heal the table and the very next event gets seq 1.
+        p.writer.log.repair_table("meta");
+        p.writer.record(bare(spawned()));
+        assert_eq!(seqs(&p.emitted.lock()), vec![1]);
+        assert!(p.writer.reserved >= 1);
     }
 
     // ── Live engine ──────────────────────────────────────────────────
