@@ -16,15 +16,17 @@
 
 ## Current Suite
 
-Playwright drives the real app headless in Chromium — no mocking, no component harness. CI runs it against the production bundle (`vite build` + `vite preview`), local runs against the dev server. 29 tests across four spec files, all built on the shared fixture in `e2e/fixtures.ts`:
+Playwright drives the real app headless in Chromium — no mocking, no component harness. CI runs it against the production bundle (`vite build` + `vite preview`), local runs against the dev server. 39 tests across six spec files, all built on the shared fixture in `e2e/fixtures.ts`:
 
 | File                    | Covers                                                                 |
 |--------------------------|------------------------------------------------------------------------|
 | `e2e/fixtures.ts`       | The `app` fixture every spec uses: opens the app and waits for the app-ready signal (below), plus landmark locators, sidebar navigation and the palette shortcut |
-| `e2e/navigation.spec.ts` | Dashboard load inside the shell's landmarks (title, banner, `Main Navigation`), the sidebar nav landmark, click-through to all 5 sidebar pages, arrow/Home/End keyboard nav, palette-only routing to Tools/Logs/Workspace (no sidebar entry for these three), the Workers empty state (graph + list view), the Sessions empty state |
+| `e2e/navigation.spec.ts` | Dashboard load inside the shell's landmarks, the sidebar nav landmark with every top-level page, click-through navigation, arrow-key focus movement and Tab reaching the sidebar, command-palette routing to every page, a visited page keeping its state when you leave and return (`<Activity>`), the Workers empty state (graph + list view), the Sessions empty state |
 | `e2e/palette.spec.ts`    | Ctrl+K open, Escape close, query filtering (a matching query narrows the list; a non-matching one hits `Command.Empty`), selecting a nav command routes and closes the palette, frecency (a used command's badge reads exactly `1` on next open) |
-| `e2e/settings.spec.ts`   | Every settings section renders, the AI model catalog (switching selection, the gated-model warning toast), keybinding capture (accepting a new binding, rejecting a binding already in use), number-field min/max clamping on blur |
+| `e2e/settings.spec.ts`   | Every settings section renders, the AI model catalog (switching selection, the gated-model warning toast), keybinding capture (accepting a new binding, rejecting a binding already in use), number-field min/max clamping on commit, keyboard focus rings and button contrast, the inverted-threshold inline error |
 | `e2e/dialogs.spec.ts`    | The Spawn Worker dialog: opens from the Workers toolbar, provider radios render, Claude Code is deterministically disabled with the real `agentProbe()`-sourced reason, Escape/click-outside close it and restore focus |
+| `e2e/styles.spec.ts`     | The stylesheet cascade: Tailwind's `utilities` layer is the last cascade layer, so no custom reset can zero a utility's padding or margin |
+| `e2e/temporal.spec.ts`   | The Temporal polyfill path: with `Temporal` deleted before load (standing in for WKWebView/WebKitGTK) `src/boot.ts` installs the polyfill and the palette, chart and log paths run on it; with a native `Temporal` it is left alone |
 
 **The app-ready signal.** The global shortcuts (Ctrl+K, the graph/list toggle) attach their `keydown` listeners in effects of the shell's first commit; a key pressed before then is silently lost, which is what made the palette specs flaky. The fixture therefore waits for the current page's `<h1>` inside `<main>` — pages are lazy chunks that commit after the shell, and React flushes the shell's pending effects before rendering anything else — followed by one macrotask yield. No spec sleeps on the clock.
 
@@ -32,11 +34,11 @@ Playwright drives the real app headless in Chromium — no mocking, no component
 
 ```bash
 pnpm exec playwright install --with-deps --only-shell chromium   # once per machine
-pnpm test:e2e            # dev server on :1420, reused if already running
+pnpm test:e2e            # dev server on :1420, reused if already running (see below)
 CI=1 pnpm test:e2e       # exactly what CI runs: production build + vite preview on :4173
 ```
 
-`playwright.config.ts`'s `webServer` block starts the server itself — no manual step. Locally it runs `pnpm dev` (Tauri's `devUrl` port) and reuses a server that is already up; with `CI` set it runs `vite build && vite preview --port 4173 --strictPort`, so the suite exercises the same Rolldown and React Compiler output the desktop bundle ships. Both run Playwright's default worker count (half the logical cores). With `CI` set, a test only counts as passed on its first attempt: `retries: 2` classifies a failure, and `failOnFlakyTests` fails the run when a retry was needed, keeping that retry's trace for diagnosis.
+`playwright.config.ts`'s `webServer` block starts the server itself — no manual step. Locally it runs `pnpm dev` (Tauri's `devUrl` port, `strictPort`) and reuses whatever is already answering on :1420 -- which may be a dev server from another worktree, in which case that tree's code is the one under test. A parallel checkout needs its own port (a throwaway config that spreads `playwright.config.ts` and overrides `use.baseURL` and `webServer` with `vite --port <n> --strictPort` and `reuseExistingServer: false`); with `CI` set it runs `vite build && vite preview --port 4173 --strictPort`, so the suite exercises the same Rolldown and React Compiler output the desktop bundle ships. Both run Playwright's default worker count (half the logical cores); pass `--workers=2` on a busy machine. With `CI` set, a test only counts as passed on its first attempt: `retries: 2` classifies a failure, and `failOnFlakyTests` fails the run when a retry was needed, keeping that retry's trace for diagnosis.
 
 ## CI
 
@@ -44,7 +46,7 @@ CI=1 pnpm test:e2e       # exactly what CI runs: production build + vite preview
 
 ## The Hard Boundary: No Tauri Backend
 
-Playwright runs the web build directly in a browser (the dev server locally, `vite preview` in CI) — there is no `tauri dev`, no WebView2/WebKitGTK host, no Rust process. `src/lib/tauri.ts`'s `isTauri()` checks for `"__TAURI_INTERNALS__" in window`, which is only ever true inside an actual Tauri-hosted webview; under Playwright it's permanently `false`, and `#lib/transport`'s `wsTransport` is never selected either (that requires the `pnpm build:web` + `swarmd --serve-ui` combination, a different build entirely). So every `invoke()` call in this suite runs through `tauriTransport`'s no-bridge branch and resolves `undefined` rather than rejecting — see that file's doc comment. Most command wrappers in `#lib/tauri` are written to degrade gracefully from there (`agentProbe()` returns `{ available: false, detail: "No Backend Transport Available." }`, `spawnWorker`/`agentSpawn` resolve `null`, `readConfig` resolves `null`), which is exactly what lets `dialogs.spec.ts` assert the Spawn Worker dialog's Claude Code-disabled state deterministically instead of skipping it.
+Playwright runs the web build directly in a browser (the dev server locally, `vite preview` in CI) — there is no `tauri dev`, no WebView2/WebKitGTK host, no Rust process. `src/lib/tauri.ts`'s `isTauri()` (from `@tauri-apps/api/core`) is only ever true inside an actual Tauri-hosted webview; under Playwright it's permanently `false`, and `#lib/transport`'s `wsTransport` is never selected either (that requires the `pnpm build:web` + `swarmd --serve-ui` combination, a different build entirely). So every `invoke()` call in this suite runs through `tauriTransport`'s no-bridge branch and resolves `undefined` rather than rejecting — see that file's doc comment. Most command wrappers in `#lib/tauri` are written to degrade gracefully from there (`agentProbe()` returns `{ available: false, detail: "No Backend Transport Available." }`, `spawnWorker`/`agentSpawn` resolve `null`, `readConfig` resolves `null`), which is exactly what lets `dialogs.spec.ts` assert the Spawn Worker dialog's Claude Code-disabled state deterministically instead of skipping it.
 
 **What this means concretely:**
 
