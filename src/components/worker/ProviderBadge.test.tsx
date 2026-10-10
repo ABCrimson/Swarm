@@ -20,7 +20,7 @@ describe("ProviderBadge", () => {
     expect(screen.getByText("Claude Code · opus").closest(".swarm-pill")).not.toBeNull();
   });
 
-  it("shows the Codex label for a codex-provider session (Phase 4)", () => {
+  it("shows the Codex label for a codex-provider session", () => {
     render(<ProviderBadge provider="codex" model="gpt-5-codex" />);
 
     expect(screen.getByText("Codex · gpt-5-codex")).toBeInTheDocument();

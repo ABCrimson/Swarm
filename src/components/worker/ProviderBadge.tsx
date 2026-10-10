@@ -1,4 +1,4 @@
-import { Pill, type PillSize } from "#components/ui/Pill";
+import { Pill } from "#components/ui/Pill";
 import { PROVIDER_LABELS, type ProviderId } from "#lib/agent-events";
 
 /**
@@ -16,7 +16,6 @@ interface ProviderBadgeProps {
   readonly provider: ProviderId;
   /** The session's model; empty when the provider runs its own default. */
   readonly model: string;
-  readonly size?: PillSize;
 }
 
 /**
@@ -24,17 +23,11 @@ interface ProviderBadgeProps {
  * "Claude Code · sonnet" — shown in the Workers list and in
  * `WorkerAIPanel`'s toolbar.
  */
-export function ProviderBadge({ provider, model, size }: ProviderBadgeProps): React.ReactElement {
+export function ProviderBadge({ provider, model }: ProviderBadgeProps): React.ReactElement {
   const label = PROVIDER_LABELS[provider];
   const text = model ? `${label} · ${model}` : label;
   return (
-    <Pill
-      tone="neutral"
-      size={size ?? "sm"}
-      style={PROVIDER_BADGE_COLOR}
-      maxWidth={220}
-      title={text}
-    >
+    <Pill tone="neutral" style={PROVIDER_BADGE_COLOR} maxWidth={220} title={text}>
       {text}
     </Pill>
   );

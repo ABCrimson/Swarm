@@ -4,6 +4,7 @@ import { useActionState, useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { PROVIDER_LABELS, type TrustTier, TrustTierSchema } from "#lib/agent-events";
+import { errorMessage } from "#lib/is-error";
 import { DEFAULT_REPO_ROOT_KEY, getPersistedRepoRoot } from "#lib/project-root";
 import { agentProbe, agentSpawn, spawnWorker, validateRepoRoot, writeConfig } from "#lib/tauri";
 
@@ -98,10 +99,6 @@ function isAgentProvider(p: SpawnProvider): p is AgentProvider {
  */
 function showModalOnMount(dialog: HTMLDialogElement | null): void {
   if (dialog && !dialog.open) dialog.showModal();
-}
-
-function errorText(err: unknown): string {
-  return Error.isError(err) ? err.message : String(err);
 }
 
 // ── Styles (OKLCH) ───────────────────────────────────
@@ -338,7 +335,7 @@ export function SpawnWorkerDialog({
         .then(
           (report) =>
             report.available ? null : (report.detail ?? `${PROVIDER_LABELS[p]} CLI Not Available`),
-          (err: unknown) => `Probe Failed: ${errorText(err)}`,
+          (err: unknown) => `Probe Failed: ${errorMessage(err)}`,
         )
         .then((reason) => {
           if (!cancelled) setUnavailable((prev) => ({ ...prev, [p]: reason }));
@@ -356,7 +353,7 @@ export function SpawnWorkerDialog({
       try {
         persisted = await getPersistedRepoRoot();
       } catch (err) {
-        if (!cancelled) setNotice(`Could Not Read The Saved Project Root: ${errorText(err)}`);
+        if (!cancelled) setNotice(`Could Not Read The Saved Project Root: ${errorMessage(err)}`);
         return null;
       }
       if (!persisted) return null;
@@ -364,7 +361,7 @@ export function SpawnWorkerDialog({
         return await validateRepoRoot(persisted);
       } catch (err) {
         if (!cancelled) {
-          setNotice(`Could Not Validate The Saved Project Root ${persisted}: ${errorText(err)}`);
+          setNotice(`Could Not Validate The Saved Project Root ${persisted}: ${errorMessage(err)}`);
         }
         return null;
       }
@@ -394,24 +391,30 @@ export function SpawnWorkerDialog({
     } catch (err) {
       // The adapter's own report (an init timeout, a non-zero exit…),
       // never a guessed cause.
-      const message = `Spawn Failed: ${errorText(err)}`;
+      const message = `Spawn Failed: ${errorMessage(err)}`;
       toast.error(message);
       return message;
     }
   }, null);
 
   const pickProjectRoot = async () => {
-    const selected = await openFolderPicker({
-      title: "Choose Project Root For Worktree Isolation",
-      directory: true,
-      multiple: false,
-    });
+    let selected: string | null;
+    try {
+      selected = await openFolderPicker({
+        title: "Choose Project Root For Worktree Isolation",
+        directory: true,
+        multiple: false,
+      });
+    } catch (err) {
+      setNotice(`Could Not Open The Folder Picker: ${errorMessage(err)}`);
+      return;
+    }
     if (!selected) return;
     let toplevel: string;
     try {
       toplevel = await validateRepoRoot(selected);
     } catch (err) {
-      setNotice(`Could Not Use ${selected} As The Project Root: ${errorText(err)}`);
+      setNotice(`Could Not Use ${selected} As The Project Root: ${errorMessage(err)}`);
       return;
     }
     setProjectRoot(toplevel);
@@ -419,7 +422,7 @@ export function SpawnWorkerDialog({
     try {
       await writeConfig(DEFAULT_REPO_ROOT_KEY, toplevel);
     } catch (err) {
-      setNotice(`Could Not Save Project Root: ${errorText(err)}`);
+      setNotice(`Could Not Save Project Root: ${errorMessage(err)}`);
     }
   };
 

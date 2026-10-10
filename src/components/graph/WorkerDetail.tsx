@@ -8,6 +8,7 @@ import { Pill } from "#components/ui/Pill";
 import { toast } from "#components/ui/Toast";
 import { useWorker } from "#hooks/useWorker";
 import { stripAnsi } from "#lib/ansi";
+import { errorMessage } from "#lib/is-error";
 import { isTauri } from "#lib/tauri";
 import { formatElapsed } from "#lib/time";
 import { selectMostRecentSeqForWorker, useProvenanceStore } from "#store/provenance";
@@ -123,7 +124,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
       // opens in the system file manager, which is what the link says.
       await openPath(path);
     } catch (err) {
-      toast.error(`Could Not Open Worktree: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Could Not Open Worktree: ${errorMessage(err)}`);
     }
   };
 

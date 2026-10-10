@@ -35,10 +35,11 @@ import { agentProbe, agentSpawn, spawnWorker, validateRepoRoot } from "#lib/taur
 const AVAILABLE: ProbeReport = { available: true, version: "1.0.0", detail: null };
 
 async function waitForProbeSettled(): Promise<void> {
-  // Every test resolves the project-root load to `null` (no persisted
-  // root) so the "Loading…" placeholder always clears once effects
+  // Callers leave the project-root load at its `null` default (no
+  // persisted root), so the "Loading…" placeholder clears once effects
   // flush — a stable signal that both open-effects (probe + root load)
-  // have settled before assertions run.
+  // have settled before assertions run. Tests that load or reject a root
+  // wait on the root text or the alert instead.
   await waitFor(() => {
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
   });
@@ -121,6 +122,19 @@ describe("SpawnWorkerDialog", () => {
     await user.click(screen.getByRole("button", { name: "Choose…" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     expect(screen.getByText("/repo/root")).toBeInTheDocument();
+  });
+
+  it("shows a rejected folder picker inside the dialog", async () => {
+    const user = userEvent.setup();
+    vi.mocked(openFolderPicker).mockRejectedValueOnce(new Error("dialog unavailable"));
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await waitForProbeSettled();
+
+    await user.click(screen.getByRole("button", { name: "Choose…" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could Not Open The Folder Picker: dialog unavailable",
+    );
+    expect(validateRepoRoot).not.toHaveBeenCalled();
   });
 
   it("hides the Claude Code fields until that provider is selected, then hides them again on switch-back", async () => {
@@ -212,7 +226,7 @@ describe("SpawnWorkerDialog", () => {
     expect(spawnWorker).not.toHaveBeenCalled();
   });
 
-  it('submits via agentSpawn with provider "codex" when Codex is selected (Phase 4)', async () => {
+  it('submits via agentSpawn with provider "codex" when Codex is selected', async () => {
     const user = userEvent.setup();
     render(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitForProbeSettled();
@@ -262,7 +276,7 @@ describe("SpawnWorkerDialog", () => {
     expect(screen.getByRole("dialog", { hidden: true })).not.toHaveAttribute("open");
   });
 
-  it("probes Claude Code and Codex independently — one unavailable does not disable the other (Phase 4)", async () => {
+  it("probes Claude Code and Codex independently — one unavailable does not disable the other", async () => {
     vi.mocked(agentProbe).mockImplementation((provider) =>
       Promise.resolve(
         provider === "codex"
