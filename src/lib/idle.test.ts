@@ -24,8 +24,8 @@ describe("onIdle", () => {
     expect(cancelIdleCallback).toHaveBeenCalledWith(7);
   });
 
-  // WKWebView / WebKitGTK: calling the missing global used to throw a
-  // ReferenceError from App's mount effect and take down the root boundary.
+  // WKWebView / WebKitGTK lack requestIdleCallback: calling the missing global
+  // would throw a ReferenceError from App's mount effect and take down the root boundary.
   it("falls back to a macrotask when requestIdleCallback is missing (WebKit)", () => {
     vi.useFakeTimers();
     vi.stubGlobal("requestIdleCallback", undefined);
