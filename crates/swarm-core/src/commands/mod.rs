@@ -630,9 +630,23 @@ mod tests {
 
         // The local path refuses them too: no handler ever sees one.
         let local = registry
-            .dispatch("read_config", ctx, json!(["anthropic_api_key"]))
+            .dispatch("read_config", ctx.clone(), json!(["anthropic_api_key"]))
             .await;
         assert_eq!(local, Err(not_an_object()));
+
+        // Only normalization can produce these: read_file is Denied, so a
+        // policy check that ran first would answer instead, and
+        // list_workers ignores its arguments.
+        assert_eq!(
+            registry
+                .dispatch_remote("read_file", ctx.clone(), json!(["x"]))
+                .await,
+            Err(not_an_object())
+        );
+        assert_eq!(
+            registry.dispatch("list_workers", ctx, json!(["x"])).await,
+            Err(not_an_object())
+        );
     }
 
     /// The filter is narrow: an ordinary key still works remotely.
