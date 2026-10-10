@@ -38,6 +38,7 @@ describe("createParticleSystem", () => {
     ]);
     expect(system.computePipeline).toMatchObject({ kind: "compute-pipeline" });
     expect(system.renderPipeline).toMatchObject({ kind: "render-pipeline" });
+    expect(device.createBuffer.mock.calls.map(([d]) => d.size)).toEqual([48 * 1000, 48, 8]);
   });
 });
 
@@ -75,6 +76,26 @@ describe("writeSimParams", () => {
     expect(f32[at("errorRate")]).toBe(0.75);
     expect(u32[at("activeWorkers")]).toBe(2);
     expect(u32[at("queueDepth")]).toBe(7);
+    expect(device.queue.writeBuffer.mock.calls[0]?.[0]).toBe(system.simUniformBuffer);
+    expect(device.queue.writeBuffer.mock.calls[0]?.[1]).toBe(0);
+  });
+
+  it("fills omitted optional fields from DEFAULT_SIM_PARAMS", async () => {
+    const { device, asGpu } = recordingDevice();
+    const system = await createParticleSystem(asGpu, "bgra8unorm", 64);
+    writeSimParams(asGpu, system, {
+      dt: 0.016,
+      workerCount: 1,
+      time: 0,
+      deltaHue: 0,
+      speedMultiplier: 1,
+      chromaMultiplier: 1,
+    });
+    const bytes = device.queue.writeBuffer.mock.calls[0]?.[2] as ArrayBuffer;
+    const f32 = new Float32Array(bytes);
+    const at = (name: string): number => wgslSimParamsFields().indexOf(name);
+    expect(f32[at("throughput")]).toBe(DEFAULT_SIM_PARAMS.throughput);
+    expect(f32[at("errorRate")]).toBe(DEFAULT_SIM_PARAMS.errorRate);
   });
 });
 
@@ -93,6 +114,9 @@ describe("dispatchCompute", () => {
       [Math.ceil(10_000 / WORKGROUP_SIZE)],
       [Math.ceil(10_000 / WORKGROUP_SIZE)],
     ]);
+    expect(pass.setPipeline).toHaveBeenCalledWith(system.computePipeline);
+    expect(pass.setBindGroup).toHaveBeenCalledWith(0, system.computeBindGroup);
+    expect(pass.end).toHaveBeenCalledTimes(3);
   });
 
   it("encodes nothing for zero particles", async () => {
