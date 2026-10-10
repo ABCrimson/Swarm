@@ -533,8 +533,12 @@ pub fn probe_capability() -> GitCapability {
         };
     }
 
-    let text = String::from_utf8_lossy(&output.stdout);
-    match parse_version(&text) {
+    classify_version(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Classifies `git --version` output against [`MIN_GIT_VERSION`].
+fn classify_version(text: &str) -> GitCapability {
+    match parse_version(text) {
         Some(version) if version >= MIN_GIT_VERSION => GitCapability::Available { version },
         Some((major, minor, patch)) => {
             let (min_major, min_minor, min_patch) = MIN_GIT_VERSION;
@@ -547,7 +551,7 @@ pub fn probe_capability() -> GitCapability {
         None => GitCapability::Unavailable {
             reason: format!(
                 "could not parse `git --version` output: {:?}",
-                redact::sanitize(&text)
+                redact::sanitize(text)
             ),
         },
     }
@@ -682,11 +686,29 @@ mod tests {
     #[test]
     fn test_probe_capability_against_real_git() {
         match probe_capability() {
-            GitCapability::Available { version } => assert!(version >= MIN_GIT_VERSION),
+            GitCapability::Available { .. } => {}
             GitCapability::Unavailable { reason } => {
                 panic!("expected git to be available in the test environment: {reason}")
             }
         }
+    }
+
+    #[test]
+    fn test_classify_version_enforces_the_minimum() {
+        assert_eq!(
+            classify_version("git version 2.32.0\n"),
+            GitCapability::Available {
+                version: (2, 32, 0)
+            }
+        );
+        assert!(matches!(
+            classify_version("git version 2.31.9\n"),
+            GitCapability::Unavailable { reason } if reason.contains("older than the required 2.32.0")
+        ));
+        assert!(matches!(
+            classify_version("not git"),
+            GitCapability::Unavailable { reason } if reason.contains("could not parse")
+        ));
     }
 
     #[test]
