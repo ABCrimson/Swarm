@@ -81,13 +81,16 @@ describe("useProvenanceEvents", () => {
   it("forwards an unstamped envelope to the store, producing no edge", () => {
     renderHook(() => useProvenanceEvents());
 
-    emit({
+    const envelope: DomainEvent = {
       seq: 1,
       ts: 1000,
       type: "worker_spawned",
       payload: { workerId: "w-new", name: "Human Spawned", pid: 1 },
-    });
+    };
+    emit(envelope);
 
+    // Reached the store (the bySeq ring keeps it for CausalityPanel), yet drew no edge.
+    expect(useProvenanceStore.getState().bySeq.get(1)).toBe(envelope);
     expect(useProvenanceStore.getState().edges.size).toBe(0);
   });
 

@@ -43,12 +43,6 @@ const TERMINAL_THEME = {
   brightWhite: "oklch(0.92 0.02 220)",
 } as const;
 
-/** `worker_output` event payload (see `#hooks/useWorkerEvents`). */
-interface WorkerOutputPayload {
-  readonly workerId: string;
-  readonly data: string;
-}
-
 interface UseTerminalOptions {
   /** Worker whose PTY this terminal shows and types into. */
   readonly workerId: string;
@@ -62,9 +56,9 @@ interface UseTerminalOptions {
  * - Output: on mount the worker store's buffered history (its last 10,000
  *   characters) is written first, then every `worker_output` chunk for
  *   this worker is written straight from the ordered event bus. The live
- *   path never diffs the store's capped string — that stopped updating
- *   for good once the 10k buffer was full (old and new strings then have
- *   the same length, so the "delta" was always empty).
+ *   path never diffs the store's capped string (`OUTPUT_BUFFER_CHARS` in
+ *   `#store/workers`): once it is full, old and new strings have equal
+ *   length, so a diff would always be empty.
  * - Input: keystrokes go to the backend with `workerInput(…, "terminal")`
  *   (human input: no provenance, never persisted). Nothing is sent once
  *   the worker is in the `error` state (its shell has exited and the
@@ -125,9 +119,8 @@ export function useTerminal({ workerId, containerRef }: UseTerminalOptions): voi
     // or written twice.
     const history = useWorkerStore.getState().workers.get(workerId)?.output;
     if (history) term.write(history);
-    const offOutput = onEvent("worker_output", (e) => {
-      const { workerId: from, data } = e.payload as WorkerOutputPayload;
-      if (from === workerId) term.write(data);
+    const offOutput = onEvent("worker_output", ({ payload }) => {
+      if (payload.workerId === workerId) term.write(payload.data);
     });
 
     let inputRefusedLogged = false;

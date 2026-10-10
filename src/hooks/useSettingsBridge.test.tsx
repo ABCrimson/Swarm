@@ -75,7 +75,7 @@ describe("useSettingsBridge — agent concurrency push", () => {
   it("logs a rejected push instead of silently swallowing it", async () => {
     const failure = new Error("out of range");
     mockSetAgentConcurrency.mockRejectedValueOnce(failure);
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
     renderHook(() => useSettingsBridge());
     act(() => {
@@ -88,6 +88,5 @@ describe("useSettingsBridge — agent concurrency push", () => {
         failure,
       ),
     );
-    consoleError.mockRestore();
   });
 });

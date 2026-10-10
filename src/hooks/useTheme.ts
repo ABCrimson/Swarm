@@ -7,6 +7,6 @@ import { reducedMotionAtom } from "#store/ui";
  * (see `reducedMotionAtom`); calling this at the app root keeps that
  * listener mounted for the app's lifetime.
  */
-export function useTheme(): { reducedMotion: boolean } {
-  return { reducedMotion: useAtomValue(reducedMotionAtom) };
+export function useTheme(): void {
+  useAtomValue(reducedMotionAtom);
 }

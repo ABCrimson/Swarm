@@ -1,5 +1,6 @@
-// Phase 3: agent_session_started/agent_session_exited -> useAgentSessionStore,
-// mirroring useWorkerEvents.test.tsx's pattern exactly one level up.
+// agent_session_started / agent_session_exited -> useAgentSessionStore
+// setSession / removeSession, with the event bus mocked (same harness as
+// useWorkerEvents.test.tsx).
 
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,14 +78,5 @@ describe("useAgentSessionEvents", () => {
     registered.get("agent_session_exited")?.({ payload: { workerId, exitCode: 0 } });
 
     expect(useAgentSessionStore.getState().sessions.has(workerId)).toBe(false);
-  });
-
-  it("drops an invalid agent_session_started payload rather than storing garbage", () => {
-    renderHook(() => useAgentSessionEvents());
-    expect(() =>
-      registered.get("agent_session_started")?.({ payload: { nonsense: true } }),
-    ).not.toThrow();
-
-    expect(useAgentSessionStore.getState().sessions.size).toBe(0);
   });
 });

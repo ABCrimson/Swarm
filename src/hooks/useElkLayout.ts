@@ -43,6 +43,9 @@ const LAYOUT_ENGINE_ERROR = "Layout Engine Failed To Start";
 /** Shown when `elk.layout()` neither resolves nor rejects within {@link LAYOUT_TIMEOUT_MS} — the worker is presumed hung. */
 const LAYOUT_TIMEOUT_ERROR = "Layout Engine Timed Out";
 
+/** Shown when the running engine rejects an `elk.layout()` request (elkjs's worker posts back the engine's exception). */
+const LAYOUT_RUN_ERROR = "Layout Failed";
+
 /** How long to wait for `elk.layout()` to settle before treating it as a hung/failed layout. */
 const LAYOUT_TIMEOUT_MS = 10_000;
 
@@ -96,7 +99,8 @@ function clearWatchdog(watchdog: RefObject<ReturnType<typeof setTimeout> | null>
  * current nodes and edges. Positions are committed synchronously in the
  * `.then()` as one batched update — never deferred to
  * `requestAnimationFrame`, which Chromium suppresses for occluded or
- * minimized windows (that used to leave `isLayouting` stuck forever).
+ * minimized windows (a deferred commit would leave `isLayouting` stuck
+ * while the window is hidden).
  *
  * @param nodes - Nodes to position (only their ids are read).
  * @param edges - Edges defining connections (only their endpoints are read).
@@ -210,7 +214,8 @@ export function useElkLayout(
         if (runId !== runIdRef.current) return;
         clearWatchdog(watchdogRef);
         const timedOut = err instanceof Error && err.message === "elk-layout-watchdog-timeout";
-        setError(timedOut ? LAYOUT_TIMEOUT_ERROR : LAYOUT_ENGINE_ERROR);
+        if (!timedOut) console.error("[elk] Layout failed:", err);
+        setError(timedOut ? LAYOUT_TIMEOUT_ERROR : LAYOUT_RUN_ERROR);
         setIsLayouting(false);
       });
   };

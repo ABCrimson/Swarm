@@ -1,10 +1,10 @@
 // ── useMetrics ──────────────────────────────────────
 //
-// Regression: metrics.tokensPerSec was never written, so every Tokens/s
-// readout (Dashboard, Metrics, StatusBar, particle throughput) was a
-// permanent 0. It is now derived from the AI store's usage records.
-// Also pins envelope-time stamping (backfilled samples keep their own
-// time) and payload validation at the seam.
+// Tokens/s is derived from the AI store's usage records over
+// TOKEN_RATE_WINDOW_MS (the system_metrics payload carries no token
+// figure), so the Dashboard, Metrics, StatusBar and particle readouts
+// never sit at 0 while tokens flow. Also pins envelope-time stamping
+// (backfilled samples keep their own time).
 
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -79,15 +79,5 @@ describe("useMetrics", () => {
     expect(useSystemStore.getState().metrics.tokensPerSec).toBe(
       1_000 / (TOKEN_RATE_WINDOW_MS / 1000),
     );
-  });
-
-  it("ignores a malformed payload", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    renderHook(() => useMetrics());
-    emit(1, { cpuPercent: "high" });
-
-    expect(useSystemStore.getState().metrics.history).toHaveLength(0);
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
   });
 });

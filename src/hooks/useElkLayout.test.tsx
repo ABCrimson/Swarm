@@ -169,11 +169,10 @@ describe("useElkLayout", () => {
     // watchdog and starting a layout call on the first engine. The
     // construction effect's cleanup then terminates that engine's worker
     // and clears the watchdog mid-flight. The replayed auto-layout effect
-    // must lay out again on the fresh engine; a guard that skipped layout
-    // when the topology looked "unchanged" (an earlier version kept the
-    // last fingerprint in a ref that survived the replay) left the fresh
-    // engine idle and isLayouting stuck true forever. This exercises that
-    // exact sequence via a real React.StrictMode wrapper.
+    // must lay out again on the fresh engine: the effect fires on every
+    // mount, because a guard that skips an "unchanged" topology would
+    // leave the fresh engine idle and isLayouting stuck true. This
+    // exercises that exact sequence via a real React.StrictMode wrapper.
     beforeEach(() => {
       vi.useFakeTimers();
     });
@@ -201,9 +200,8 @@ describe("useElkLayout", () => {
       // and left it idle.
       expect(layoutCallsOnSecondWorker.length).toBe(1);
 
-      // A fresh watchdog must be armed for that second layout request. If
-      // the bug were present, runLayout() would never have been called on
-      // the second engine, so no watchdog would be running at all here.
+      // A fresh watchdog must be armed for that second layout request; a
+      // skipped runLayout() on the second engine would leave none here.
       expect(vi.getTimerCount()).toBe(1);
       expect(result.current.isLayouting).toBe(true);
 
@@ -331,6 +329,21 @@ describe("useElkLayout", () => {
         x: 300,
         y: 150,
       });
+    });
+
+    it("reports a rejected active run as a layout failure and logs the cause", async () => {
+      using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { result } = renderHook(() => useElkLayout(nodes, edges));
+      const worker = MockWorker.instances.at(-1);
+      expect(worker).toBeDefined();
+      if (!worker) return;
+
+      const [id] = layoutRequestIds(worker);
+      await deliver(worker, { id, error: { message: "boom" } });
+
+      expect(result.current.error).toBe("Layout Failed");
+      expect(result.current.isLayouting).toBe(false);
+      expect(consoleError).toHaveBeenCalledWith("[elk] Layout failed:", expect.anything());
     });
   });
 
