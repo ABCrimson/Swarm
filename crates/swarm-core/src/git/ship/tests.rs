@@ -909,6 +909,19 @@ fn test_push_hard_fails_on_detached_head() {
 }
 
 #[test]
+fn test_push_refuses_protected_branch() {
+    let repo = TempRepo::new("push-protected");
+    let bare = repo.add_bare_origin();
+    let wt = repo.add_worktree("wt", "swarm/prot-abcd1234");
+    let registry = WorkerRegistry::new();
+    let id = register(&registry, &repo, &wt, "swarm/prot-abcd1234");
+    git_in(&wt, &["switch", "-c", "release/x"]);
+    let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
+    assert_eq!(err.kind, ShipErrorKind::InvalidBranch);
+    assert!(repo::rev_parse(&bare, "release/x").is_err());
+}
+
+#[test]
 fn test_push_without_origin_is_no_remote() {
     let (_repo, _worktree, registry, id) = fixture("push-no-remote", "swarm/no-remote-abcd1234");
     let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
