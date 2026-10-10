@@ -15,7 +15,7 @@
  * the prompt-caching page (mid-conversation system messages) and the
  * refusals-and-fallback page
  * (https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback).
- * Current lineup: Fable 5.1, Mythos 5.1 (Project Glasswing only),
+ * Current lineup: Fable 5.1, Mythos 5.1 (verified organizations only, via Anthropic's verification programs such as the Cyber Verification Program: Mythos 5.1 overview, 2026-10-10),
  * Opus 5.5, Sonnet 5.5 (released 2026-09-28) and Haiku 5.5 (released
  * 2026-10-07). Every model has a 1M context window and 128K max output;
  * all take adaptive thinking and `effort`. Claude 4.6 and later models
@@ -98,7 +98,7 @@ export interface ModelInfo {
   readonly refusalFallback: boolean;
   /** Accepts mid-conversation `role: "system"` messages (every current model; legacy Sonnet 5 did not). */
   readonly systemMessages: boolean;
-  /** Access gate required beyond a valid API key, if any (Mythos → Project Glasswing). */
+  /** Access gate required beyond a valid API key, if any (Mythos 5.1 → Anthropic verification programs; `glasswing` is a persisted legacy key). */
   readonly gated?: ModelGate;
 }
 
@@ -203,10 +203,11 @@ type PricingOnly = Pick<ModelInfo, "inputPerMTok" | "cacheReadPerMTok" | "output
  * and the Fable 5.1 what's-new page, 2026-10-10):
  * - Fable 5.1 and Opus 5.5: `claude-opus-4-8` and `claude-opus-5`.
  * - Sonnet 5.5: `claude-sonnet-5`.
- * - Mythos 5.1: its targets are not published on those pages (default
- *   routing is server-side and not exposed on the Models API), so an
- *   attempt served by a model with no row here is priced at the requested
- *   model's rates, which for Mythos equal Fable 5.1's.
+ * - Mythos 5.1: its targets are not listed on those pages; the Models API
+ *   reports them as `allowed_fallback_models` under the
+ *   `server-side-fallback-2026-07-01` beta header (needs Mythos access,
+ *   not checked here). An attempt served by a model with no row here is
+ *   priced at the requested model's rates, which for Mythos equal Fable 5.1's.
  * - Haiku 5.5 has no server-side fallback.
  * Rates from the pricing page
  * (https://platform.claude.com/docs/en/about-claude/pricing, 2026-10-10):
@@ -283,7 +284,7 @@ export function formatMaxOutputLabel(maxOutputTokens: number): string {
 }
 
 /**
- * Fires the Project Glasswing warning toast for a gated model selection
+ * Fires the access-gate warning toast for a gated model selection
  * (currently just Mythos) — selection itself is still allowed, this is a
  * notice, not a block. No-ops (and returns `false`) for non-gated models.
  *

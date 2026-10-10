@@ -353,7 +353,7 @@ function buildRequest(params: StreamParams, withFallbacks: boolean): BetaMessage
       ? { tools: params.tools.map((tool) => ({ ...tool, eager_input_streaming: true })) }
       : {}),
     // Summarized thinking streams readable reasoning — and, on Fable 5.1,
-    // Opus 5.5 and Sonnet 5.5, the progress notes written between tool calls —
+    // Mythos 5.1, Opus 5.5 and Sonnet 5.5, the progress notes written between tool calls —
     // instead of a silent pause (the default display is "omitted").
     // Unknown models get the API's own default rather than a guess.
     ...(model?.adaptiveThinking
