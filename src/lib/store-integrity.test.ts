@@ -45,6 +45,17 @@ describe("validateStoreData", () => {
     for (const store of Object.values(stores)) store.entries.mockResolvedValue([]);
   });
 
+  it("keeps a template array that holds an invalid entry", async () => {
+    stores.templatesStore.entries.mockResolvedValue([["swarm:templates", [{ id: "nope" }]]]);
+
+    const results = await validateStoreData();
+
+    expect(results).toStrictEqual([
+      { file: "swarm-templates.json", key: "swarm:templates", valid: true },
+    ]);
+    expect(stores.templatesStore.delete).not.toHaveBeenCalled();
+  });
+
   it("never opens swarm-config.json (or any file) through plugin-store's load()", async () => {
     await validateStoreData();
     expect(load).not.toHaveBeenCalled();

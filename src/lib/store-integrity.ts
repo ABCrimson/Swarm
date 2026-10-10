@@ -15,7 +15,7 @@ import { errorMessage } from "#lib/is-error";
 import { settingsStore, snapshotsStore, templatesStore } from "#lib/lazy-store";
 import { isTauri } from "#lib/tauri";
 import { persistedSettings, removePersistedSetting } from "#store/persisted";
-import { SessionTemplateSchema, SnapshotSchema } from "#store/types";
+import { SnapshotSchema } from "#store/types";
 
 /** Outcome of validating one persisted key (`key: "*"` when the file itself could not be read). */
 interface ValidationResult {
@@ -105,9 +105,11 @@ const TARGETS: readonly IntegrityTarget[] = [
     store: templatesStore,
     rules: () => [
       {
+        // `loadUserTemplates` (#lib/templates) skips an invalid entry and
+        // leaves it on disk; only a non-array value is unrecoverable.
         label: "Session Templates",
         matches: (k) => k === "swarm:templates",
-        schema: z.array(SessionTemplateSchema),
+        schema: z.array(z.unknown()),
         reset: deleteFrom(templatesStore),
       },
     ],
