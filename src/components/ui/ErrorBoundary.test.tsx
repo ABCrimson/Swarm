@@ -11,9 +11,9 @@ function Child(): React.ReactElement {
   return <p>Rendered Successfully</p>;
 }
 
-function renderBoundary(props: Partial<React.ComponentProps<typeof ErrorBoundary>> = {}) {
+function renderBoundary() {
   return render(
-    <ErrorBoundary {...props}>
+    <ErrorBoundary>
       <Child />
     </ErrorBoundary>,
   );
@@ -71,29 +71,9 @@ describe("ErrorBoundary", () => {
 
   it("normalizes a thrown non-Error value into a readable message", () => {
     failure.thrown = "Plain String Failure";
-    const onError = vi.fn();
-    renderBoundary({ onError });
+    renderBoundary();
 
     expect(screen.getByRole("alert")).toHaveTextContent("Plain String Failure");
-    expect(onError).toHaveBeenCalledOnce();
-    expect(onError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-    expect(onError.mock.calls[0]?.[0].message).toBe("Plain String Failure");
-  });
-
-  it("uses a custom fallback when provided", () => {
-    render(
-      <ErrorBoundary
-        fallback={(error, reset) => (
-          <button type="button" onClick={reset}>
-            Custom: {error.message}
-          </button>
-        )}
-      >
-        <Child />
-      </ErrorBoundary>,
-    );
-
-    expect(screen.getByRole("button", { name: "Custom: Test Render Error" })).toBeInTheDocument();
   });
 
   it("retries after a 1s backoff and renders the recovered children", () => {

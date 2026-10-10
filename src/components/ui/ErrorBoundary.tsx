@@ -1,4 +1,4 @@
-import type { ErrorInfo, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Component } from "react";
 import { Button } from "#components/ui/Button";
 import { toast } from "#components/ui/Toast";
@@ -58,10 +58,6 @@ function toError(thrown: unknown): Error {
 
 interface ErrorBoundaryProps {
   readonly children: ReactNode;
-  /** Optional fallback UI factory. Receives the error and a reset callback. */
-  readonly fallback?: (error: Error, reset: () => void) => ReactNode;
-  /** Called when the boundary catches an error. */
-  readonly onError?: (error: Error, errorInfo: ErrorInfo) => void;
 }
 
 interface ErrorBoundaryState {
@@ -77,9 +73,10 @@ interface ErrorBoundaryState {
  * no hook for catching render errors, so this is a class component.
  *
  * - Every caught error raises a toast (a typed Tauri IPC error gets its
- *   own title). React itself already logs the error and component stack
- *   to the console (`createRoot`'s default `onCaughtError`), so this
- *   boundary does not log it a second time.
+ *   own title). The root's `onCaughtError` (`reportRenderError` in
+ *   main.tsx) already logs the error to the console and records it, with
+ *   the component stack, on the Logs page, so this boundary does not log
+ *   it a second time.
  * - "Retry" re-renders the children after 1s, 2s, then 4s. Clicks while
  *   a retry is pending are ignored. Once the children have rendered for
  *   {@link STABLE_RESET_MS} without throwing, the budget refills.
@@ -95,9 +92,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     return { error: toError(thrown) };
   }
 
-  override componentDidCatch(thrown: unknown, errorInfo: ErrorInfo): void {
+  override componentDidCatch(thrown: unknown): void {
     clearTimeout(this.stableTimer);
-    this.props.onError?.(toError(thrown), errorInfo);
     toastError(thrown);
   }
 
@@ -133,10 +129,9 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   override render(): ReactNode {
     const { error, retryCount, retrying } = this.state;
-    const { children, fallback } = this.props;
+    const { children } = this.props;
 
     if (!error) return children;
-    if (fallback) return fallback(error, this.handleRetry);
 
     const remaining = MAX_RETRIES - retryCount;
     return (
