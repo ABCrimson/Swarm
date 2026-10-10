@@ -12,7 +12,7 @@ import {
   runCustomTool,
 } from "#lib/custom-tools";
 import { executeTool, getAllAnthropicTools, toolRegistry } from "#lib/tools";
-import { customToolsReady, useCustomToolsStore } from "#store/custom-tools";
+import { useCustomToolsStore } from "#store/custom-tools";
 
 function makeTool(overrides?: Partial<CustomToolDef>): CustomToolDef {
   return {
@@ -348,22 +348,5 @@ describe("custom tools in the shared registry pipeline", () => {
       success: false,
       error: "Unknown Tool: does_not_exist",
     });
-  });
-
-  it("store saveTool inserts then updates by id; deleteTool removes", async () => {
-    const tool = makeTool();
-    useCustomToolsStore.getState().saveTool(tool);
-    await customToolsReady();
-    expect(useCustomToolsStore.getState().customTools).toHaveLength(1);
-
-    useCustomToolsStore.getState().saveTool({ ...tool, description: "Updated." });
-    await customToolsReady();
-    const tools = useCustomToolsStore.getState().customTools;
-    expect(tools).toHaveLength(1);
-    expect(tools[0]?.description).toBe("Updated.");
-
-    useCustomToolsStore.getState().deleteTool(tool.id);
-    await customToolsReady();
-    expect(useCustomToolsStore.getState().customTools).toHaveLength(0);
   });
 });

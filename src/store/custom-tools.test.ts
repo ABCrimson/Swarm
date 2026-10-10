@@ -62,4 +62,28 @@ describe("custom tools store", () => {
     const sent = getAllAnthropicTools().find((tool) => tool.name === "read_notes");
     expect(Object.keys(sent?.input_schema.properties ?? {})).toEqual(["limit"]);
   });
+
+  it("saveTool inserts then updates by id; deleteTool removes", async () => {
+    useCustomToolsStore.setState({ customTools: [] });
+    const tool: CustomToolDef = {
+      id: "crud",
+      name: "lookup_docs",
+      description: "Searches the local docs index.",
+      params: [],
+      script: "return 1;",
+    };
+    useCustomToolsStore.getState().saveTool(tool);
+    await customToolsReady();
+    expect(useCustomToolsStore.getState().customTools).toHaveLength(1);
+
+    useCustomToolsStore.getState().saveTool({ ...tool, description: "Updated." });
+    await customToolsReady();
+    const tools = useCustomToolsStore.getState().customTools;
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.description).toBe("Updated.");
+
+    useCustomToolsStore.getState().deleteTool(tool.id);
+    await customToolsReady();
+    expect(useCustomToolsStore.getState().customTools).toHaveLength(0);
+  });
 });
