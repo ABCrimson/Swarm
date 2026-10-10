@@ -42,7 +42,7 @@ use swarm_core::commands::{Ctx, Registry};
 use swarm_core::protocol::ServerCaps;
 use swarm_core::runtime::Runtime;
 
-use crate::auth::{DaemonToken, HostPolicy};
+use crate::auth::{DaemonToken, HostPolicy, Rejection};
 
 /// Connection and message limits. [`Limits::default`] is what the daemon
 /// runs with; tests shrink the timeouts.
@@ -228,6 +228,10 @@ async fn guard_host(State(state): State<AppState>, request: Request, next: Next)
         .get::<ConnectInfo<ConnectionAddrs>>()
         .map(|ConnectInfo(addrs)| *addrs);
     let headers = request.headers();
+    // A `Host` that is present but not visible ASCII is malformed, not missing.
+    let host_unreadable = headers
+        .get(header::HOST)
+        .is_some_and(|value| value.to_str().is_err());
     // HTTP/2 carries the authority in the request line instead of `Host`.
     let host = headers
         .get(header::HOST)
@@ -241,10 +245,14 @@ async fn guard_host(State(state): State<AppState>, request: Request, next: Next)
     let origin = headers
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok());
-    if let Err(rejection) = state
-        .hosts
-        .check(addrs.and_then(|addrs| addrs.local), host, origin)
-    {
+    let checked = if host_unreadable {
+        Err(Rejection::MalformedHost)
+    } else {
+        state
+            .hosts
+            .check(addrs.and_then(|addrs| addrs.local), host, origin)
+    };
+    if let Err(rejection) = checked {
         tracing::warn!(
             peer = ?addrs.map(|addrs| addrs.remote),
             host,
