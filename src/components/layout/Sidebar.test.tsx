@@ -43,8 +43,8 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: "Dashboard" })).not.toHaveAttribute("aria-current");
   });
 
-  // Regression: on Logs/Tools/Workspace every button had tabIndex -1, so
-  // the navigation could not be reached with Tab at all.
+  // The nav is exactly one Tab stop, on the current page's button,
+  // whichever page is current.
   it.for(["logs", "tools", "workspace", "dashboard"] as const)(
     "has exactly one Tab stop, on the current page (%s)",
     (page) => {

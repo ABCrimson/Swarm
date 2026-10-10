@@ -42,8 +42,8 @@ export class SwarmApp {
   /**
    * The app-ready signal. The global shortcuts (Ctrl+K, the graph/list
    * toggle) attach their `keydown` listeners in effects of the shell's
-   * first commit, and a key pressed before that is silently lost — the
-   * old palette flake. Pages are lazy chunks, so a page `<h1>` inside
+   * first commit, and a key pressed before that is silently lost.
+   * Pages are lazy chunks, so a page `<h1>` inside
    * `<main>` only renders in a later commit, and React flushes the
    * shell's pending effects before it renders anything else. The
    * macrotask barrier then covers the one other ordering — page and shell

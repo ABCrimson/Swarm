@@ -53,8 +53,7 @@ describe("Button", () => {
     expect(handleClick).not.toHaveBeenCalled();
   });
 
-  // Regression: `disabled` on the focused button dropped keyboard focus
-  // to <body> the moment it started loading.
+  // A loading button keeps keyboard focus: `disabled` would drop it to <body>.
   it("keeps keyboard focus when it starts loading", () => {
     const { rerender } = render(<Button>Save</Button>);
     const button = screen.getByRole("button", { name: "Save" });

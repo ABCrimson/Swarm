@@ -4,10 +4,10 @@ import { expect, test } from "./fixtures.ts";
 
 // ── Stylesheet cascade ────────────────────────────────
 //
-// Guards the regression where a custom `@layer` declared after
-// `@import "tailwindcss"` was appended AFTER Tailwind's `utilities`
-// layer, and its universal `* { padding: 0; margin: 0 }` reset silently
-// zeroed every utility and component padding in the app.
+// A custom `@layer` declared after `@import "tailwindcss"` lands after
+// Tailwind's `utilities` layer, and a universal `* { padding: 0; margin: 0 }`
+// reset in it would zero every utility and component padding in the app,
+// so `utilities` must stay the last cascade layer.
 
 test.describe("Stylesheet cascade", () => {
   test("Tailwind's utilities layer is the last cascade layer", async ({ app, page }) => {

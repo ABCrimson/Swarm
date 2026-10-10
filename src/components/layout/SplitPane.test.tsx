@@ -35,8 +35,7 @@ describe("SplitPane", () => {
     expect(divider).toHaveAttribute("aria-controls", screen.getByText("Primary").parentElement?.id);
   });
 
-  // Regression: every pointermove persisted the size (two IPC calls and a
-  // full settings-file rewrite at pointer rate).
+  // A drag persists once, when the pointer capture ends, not on every pointermove.
   it("persists a drag once, when the pointer capture ends", () => {
     const { store, grid, writes, divider } = renderSplit();
 
@@ -75,7 +74,8 @@ describe("SplitPane", () => {
     expect(writes).toHaveLength(0);
   });
 
-  // The persisted value arrives after mount (plugin-store hydration).
+  // A stored value outside [minPercent, maxPercent] (corrupt, or written by
+  // another build) is clamped on read.
   it("clamps an out-of-range hydrated size", () => {
     const { store, grid } = renderSplit();
     act(() => store.set(paneSizesAtom, { main: 99, detail: 1 }));

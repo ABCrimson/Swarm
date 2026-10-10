@@ -155,7 +155,7 @@ test.describe("Settings accessibility", () => {
   });
 
   test("the primary buttons use dark text on the accent", async ({ page }) => {
-    // --color-void text on --color-plasma: ~11.8:1, not the old 1.54:1 near-white.
+    // --color-void text on --color-plasma: ~11.8:1.
     const button = page.getByRole("button", { name: "Check For Updates" });
     const [text, background, voidColor, plasma] = await button.evaluate((el) => {
       const probe = (value: string): string => {

@@ -51,9 +51,8 @@ describe("ErrorBoundary", () => {
     expect(retryButton()).toHaveTextContent(`Retry (${MAX_RETRIES} Remaining)`);
   });
 
-  // Regression: every Error has a string `message`, so the old duck-typed
-  // check labelled plain render errors "IPC Error" and the `instanceof
-  // Error` branch could never run.
+  // Every Error has a string `message`, so the Tauri-error check must
+  // exclude Error instances.
   it("toasts a plain Error with its own message, not as an IPC error", () => {
     renderBoundary();
 
@@ -113,7 +112,7 @@ describe("ErrorBoundary", () => {
     expect(screen.getByText("Rendered Successfully")).toBeInTheDocument();
   });
 
-  // Regression: each click scheduled its own timer and spent a retry.
+  // Extra Retry clicks while a retry is pending schedule no timer and spend no retry.
   it("ignores extra Retry clicks while a retry is pending", () => {
     vi.useFakeTimers();
     renderBoundary();
@@ -148,8 +147,8 @@ describe("ErrorBoundary", () => {
     vi.unstubAllGlobals();
   });
 
-  // Regression: the budget never refilled, so the app-lifetime root
-  // boundary could retry only three times ever.
+  // The budget refills once the children stay up, so the app-lifetime root
+  // boundary can keep retrying.
   it("refills the retry budget once the children stay up", () => {
     vi.useFakeTimers();
     const { rerender } = renderBoundary();
