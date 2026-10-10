@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { useState } from "react";
+import { Fragment, useId, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { Pill, type PillTone } from "#components/ui/Pill";
@@ -13,6 +13,15 @@ import {
   useAgentTranscript,
 } from "#store/agent-sessions";
 import { AIMessageStream } from "./AIMessageStream.tsx";
+import {
+  ArgValue,
+  approvalArgs,
+  argsStyle,
+  escapeForDisplay,
+  isTruncated,
+  labelStyle,
+  reasonStyle,
+} from "./ApprovalArgs.tsx";
 import { ToolCallDisplay } from "./ToolCallDisplay.tsx";
 
 interface AgentChatProps {
@@ -138,7 +147,7 @@ const thinkingBlockStyle: CSSProperties = {
   ...bubbleBaseStyle,
   alignSelf: "flex-start",
   background: "oklch(0 0 0 / 0)",
-  color: "oklch(0.50 0.03 220)",
+  color: "var(--color-fg-dim)",
   fontStyle: "italic",
   maxWidth: "90%",
   whiteSpace: "pre-wrap",
@@ -182,7 +191,7 @@ const permissionMessageStyle: CSSProperties = {
 
 const settledStyle: CSSProperties = {
   alignSelf: "center",
-  color: "oklch(0.50 0.04 220)",
+  color: "var(--color-fg-dim)",
   fontFamily: "var(--font-mono, monospace)",
   fontSize: 10.5,
 };
@@ -193,7 +202,7 @@ const capabilityNoteStyle: CSSProperties = {
   padding: "4px 12px",
   fontFamily: "var(--font-mono, monospace)",
   fontSize: 10.5,
-  color: "oklch(0.55 0.04 220)",
+  color: "var(--color-fg-dim)",
   flexShrink: 0,
 };
 
@@ -216,6 +225,20 @@ function PermissionRow({
 }): React.ReactElement {
   const { payload, state } = item;
   const waiting = state === "pending" || state === "answering";
+  const [showing, setShowing] = useState<ReadonlySet<string>>(new Set());
+  const [seen, setSeen] = useState<ReadonlySet<string>>(new Set());
+  const reasonId = useId();
+  // The exact arguments are what the user approves; the provider's message
+  // is only prose beside them (Codex sends none).
+  const args = approvalArgs(payload.tool, payload.input);
+  const unseen = args.filter((arg) => isTruncated(arg) && !seen.has(arg.key));
+  const blocked = unseen.length > 0;
+  const toggle = (key: string): void => {
+    setShowing((prev) =>
+      prev.has(key) ? prev.difference(new Set([key])) : prev.union(new Set([key])),
+    );
+    setSeen((prev) => prev.union(new Set([key])));
+  };
 
   const answer = async (decision: PermissionDecision) => {
     const { setPermissionState } = useAgentSessionStore.getState();
@@ -246,13 +269,33 @@ function PermissionRow({
         </Pill>
         <span style={permissionToolStyle}>{payload.tool}</span>
       </div>
-      {payload.message && <span style={permissionMessageStyle}>{payload.message}</span>}
+      {args.length > 0 && (
+        <dl style={argsStyle}>
+          {args.map((arg) => (
+            <Fragment key={arg.key}>
+              <dt style={labelStyle}>{arg.label}</dt>
+              <ArgValue arg={arg} showing={showing.has(arg.key)} onToggle={() => toggle(arg.key)} />
+            </Fragment>
+          ))}
+        </dl>
+      )}
+      {payload.message && (
+        <span style={permissionMessageStyle}>{escapeForDisplay(payload.message)}</span>
+      )}
+      {waiting && blocked && (
+        <p id={reasonId} style={reasonStyle}>
+          Allow is off until you have used Show All on every shortened value (
+          {unseen.map((arg) => arg.label).join(", ")}).
+        </p>
+      )}
       {waiting && (
         <div style={{ display: "flex", gap: 8 }}>
           <Button
             size="sm"
             variant={payload.suggestedDecision === "deny" ? "secondary" : "primary"}
             loading={state === "answering"}
+            disabled={blocked}
+            aria-describedby={blocked ? reasonId : undefined}
             onClick={() => void answer("allow")}
           >
             Allow
@@ -275,7 +318,15 @@ function TranscriptRow({
 }): React.ReactNode {
   switch (item.kind) {
     case "user":
-      return <div style={item.failed ? userBubbleFailedStyle : userBubbleStyle}>{item.text}</div>;
+      // The red tint is not the only sign of a failed send: it also says so in words.
+      return item.failed ? (
+        <div style={userBubbleFailedStyle}>
+          {item.text}
+          <div style={settledErrorStyle}>Not Sent</div>
+        </div>
+      ) : (
+        <div style={userBubbleStyle}>{item.text}</div>
+      );
     case "block": {
       // tool_use blocks render through their agent_tool_call event instead.
       if (item.payload.kind === "tool_use") return null;
@@ -367,7 +418,13 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
 
   return (
     <div style={containerStyle}>
-      <div role="log" aria-label={`${provider} Chat`} style={scrollerStyle}>
+      <div
+        role="log"
+        aria-label={`${provider} Chat`}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: WebKit (macOS, Linux) never makes a scroll container focusable on its own, and the transcript must scroll from the keyboard (WCAG 2.1.1).
+        tabIndex={0}
+        style={scrollerStyle}
+      >
         <div style={transcriptStyle}>
           {transcript.items.length === 0 && streaming.length === 0 && (
             <div style={{ ...settledStyle, marginTop: 24 }}>

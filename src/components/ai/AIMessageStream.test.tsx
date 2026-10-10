@@ -39,6 +39,17 @@ describe("AIMessageStream", () => {
     expect(container.querySelector("code")?.textContent).toBe("const s = 'oops\n");
   });
 
+  it("highlights a long line of escaped quotes with no closing quote in linear time", () => {
+    const line = `"${'\\"'.repeat(100_000)}`;
+    const started = performance.now();
+    const { container } = render(
+      <AIMessageStream content={`\`\`\`js\n${line}\n\`\`\``} isStreaming={false} />,
+    );
+    const elapsed = performance.now() - started;
+    expect(container.querySelector("code")?.textContent).toBe(`${line}\n`);
+    expect(elapsed).toBeLessThan(1000);
+  });
+
   it("treats # as a comment only in hash-comment languages", () => {
     render(<AIMessageStream content={"```rust\n#[derive(Debug)]\n```"} isStreaming={false} />);
     const hash = screen.getByText("#[");

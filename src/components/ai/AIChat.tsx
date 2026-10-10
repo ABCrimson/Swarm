@@ -96,7 +96,7 @@ const assistantBubbleStyle: CSSProperties = {
 
 const metaStyle: CSSProperties = {
   fontSize: 11,
-  color: "oklch(0.55 0.03 220)",
+  color: "var(--color-fg-dim)",
   marginTop: 4,
 };
 
@@ -122,7 +122,7 @@ const emptyStateStyle: CSSProperties = {
   justifyContent: "center",
   minHeight: 160,
   gap: 8,
-  color: "oklch(0.55 0.06 205)",
+  color: "var(--color-fg-dim)",
   fontSize: 14,
 };
 
@@ -260,8 +260,13 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
 
   return (
     <div style={chatContainerStyle}>
-      {/* Chromium (WebView2) makes scroll containers keyboard-focusable natively. */}
-      <div role="log" aria-label={`AI Chat With ${model.label}`} style={scrollerStyle}>
+      <div
+        role="log"
+        aria-label={`AI Chat With ${model.label}`}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1); WebKit (WKWebView, WebKitGTK) does not focus scroll containers natively.
+        tabIndex={0}
+        style={scrollerStyle}
+      >
         <div style={messagesStyle}>
           {thread.messages.length === 0 && !busy && (
             <div style={emptyStateStyle}>
@@ -294,22 +299,20 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
           onInput={(e) => setDraftEmpty(!e.currentTarget.value.trim())}
           onKeyDown={handleKeyDown}
         />
-        {busy ? (
-          <Button variant="danger" onClick={() => cancelChatTurn(workerId)}>
-            Stop
+        {!busy && thread.messages.length > 0 && (
+          <Button variant="ghost" onClick={() => clearChat(workerId)}>
+            New Chat
           </Button>
-        ) : (
-          <>
-            {thread.messages.length > 0 && (
-              <Button variant="ghost" onClick={() => clearChat(workerId)}>
-                New Chat
-              </Button>
-            )}
-            <Button type="submit" variant="primary" disabled={draftEmpty}>
-              Send
-            </Button>
-          </>
         )}
+        {/* One button that turns from Send into Stop, so keyboard focus stays on it when a turn starts. */}
+        <Button
+          type={busy ? "button" : "submit"}
+          variant={busy ? "danger" : "primary"}
+          disabled={!busy && draftEmpty}
+          onClick={busy ? () => cancelChatTurn(workerId) : undefined}
+        >
+          {busy ? "Stop" : "Send"}
+        </Button>
       </form>
     </div>
   );

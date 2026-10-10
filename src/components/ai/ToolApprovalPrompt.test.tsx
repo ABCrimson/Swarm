@@ -112,6 +112,19 @@ describe("ToolApprovalPrompt", () => {
     expect(prompt.textContent).not.toContain("\n");
   });
 
+  it("renders tag characters, variation selectors and other default-ignorables visibly", async () => {
+    render(<ToolApprovalPrompt workerId={W} />);
+    const command = "a\u{E0041}️ ­b";
+
+    void executeTool("run_command", { workerId: W, command }, { originWorker: W, causeSeq: 1 });
+
+    const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
+    expect(prompt).toHaveTextContent("a\\u{E0041}\\uFE0F\\u2028\\u00ADb");
+    for (const raw of ["\u{E0041}", "️", " ", "­"]) {
+      expect(prompt.textContent).not.toContain(raw);
+    }
+  });
+
   it("renders a literal backslash-n differently from a real newline", async () => {
     render(<ToolApprovalPrompt workerId={W} />);
     const prov = { originWorker: W, causeSeq: 1 };

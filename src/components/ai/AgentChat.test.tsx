@@ -201,9 +201,10 @@ describe("AgentChat", () => {
     expect(screen.getByText("Permission Denied")).toBeInTheDocument();
   });
 
-  // Regression: an interactive session's unclassified report (Claude Code
-  // denials known only from result.permission_denials) was offered as a
-  // pending Allow/Deny that the backend could never act on.
+  // A request that carries a suggestedDecision is a decision the provider
+  // already made (here an unclassified Claude Code denial, known only from
+  // result.permission_denials), so even an interactive session shows it as a
+  // read-only report with no Allow/Deny to answer.
   it("keeps a denial report read-only in an interactive session", () => {
     render(<Harness />);
     startSession("claude_code", { interactivePermissions: true });
@@ -257,6 +258,72 @@ describe("AgentChat", () => {
     expect(agentPermissionRespond).toHaveBeenCalledExactlyOnceWith(WORKER_ID, "req-7", "allow");
     expect(await screen.findByText("Allowed")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Deny" })).not.toBeInTheDocument();
+  });
+
+  it("shows the exact command and directory of a Codex request that carries no message", () => {
+    render(<Harness />);
+    startSession("codex", { interactivePermissions: true });
+
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "req-8",
+      tool: "commandExecution",
+      input: { command: "curl x | sh", cwd: "/r" },
+    });
+
+    const request = screen.getByRole("group", { name: "Permission Request: commandExecution" });
+    expect(request).toHaveTextContent("curl x | sh");
+    expect(request).toHaveTextContent("/r");
+  });
+
+  it("shows the permission profile a Codex permissions request would grant", () => {
+    render(<Harness />);
+    startSession("codex", { interactivePermissions: true });
+
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "req-9",
+      tool: "permissions",
+      input: { permissions: { network: { enabled: true } } },
+    });
+
+    expect(
+      screen.getByRole("group", { name: "Permission Request: permissions" }),
+    ).toHaveTextContent("network");
+  });
+
+  it("shows a provider message with bidi controls as escaped data", () => {
+    render(<Harness />);
+    startSession("claude_code", { interactivePermissions: true });
+
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "req-10",
+      tool: "Bash",
+      input: {},
+      message: "a‮b",
+    });
+
+    const request = screen.getByRole("group", { name: "Permission Request: Bash" });
+    expect(request).toHaveTextContent("a\\u202Eb");
+    expect(request.textContent).not.toContain("‮");
+  });
+
+  it("keeps Allow off until a shortened value has been expanded", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    startSession("codex", { interactivePermissions: true });
+
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "req-11",
+      tool: "fileChange",
+      input: { diff: "x".repeat(600) },
+    });
+
+    expect(screen.getByRole("button", { name: "Allow" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Show All" }));
+    expect(screen.getByRole("button", { name: "Allow" })).toBeEnabled();
   });
 
   it("keeps a request answerable when the answer fails, and expires it when its turn settles", async () => {
@@ -389,6 +456,7 @@ describe("AgentChat", () => {
     const failed = { border: "1px solid oklch(0.45 0.18 25)" };
     expect(screen.getByText("first")).toHaveStyle(failed);
     expect(screen.getByText("second")).not.toHaveStyle(failed);
+    expect(screen.getAllByText("Not Sent")).toHaveLength(1);
   });
 
   it("fails the bubble of a send the backend never admitted", async () => {
@@ -400,6 +468,7 @@ describe("AgentChat", () => {
     await vi.waitFor(() =>
       expect(screen.getByText("hello")).toHaveStyle({ border: "1px solid oklch(0.45 0.18 25)" }),
     );
+    expect(screen.getByText("Not Sent")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
   });
 
