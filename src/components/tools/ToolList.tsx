@@ -23,7 +23,7 @@ const sectionHeadingStyle: CSSProperties = {
   fontFamily: "var(--font-body)",
   fontSize: "0.6875rem",
   fontWeight: 600,
-  color: "oklch(0.50 0.04 220)",
+  color: "var(--color-fg-dim)",
   textTransform: "uppercase",
   letterSpacing: "0.06em",
 };
@@ -118,7 +118,7 @@ export function ToolList({
               textAlign: "center",
               fontFamily: "var(--font-body)",
               fontSize: "0.8125rem",
-              color: "oklch(0.45 0.04 220)",
+              color: "var(--color-fg-dim)",
               border: "1px dashed oklch(0.22 0.04 220)",
               borderRadius: 12,
             }}
@@ -195,7 +195,7 @@ function ToolCard({
         style={{
           fontFamily: "var(--font-body)",
           fontSize: "0.75rem",
-          color: "oklch(0.55 0.04 220)",
+          color: "var(--color-fg-dim)",
           lineHeight: 1.5,
           margin: 0,
           overflow: "hidden",
