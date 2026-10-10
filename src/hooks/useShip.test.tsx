@@ -496,6 +496,10 @@ describe("useShip", () => {
     const { result } = await renderPreviewing();
     const seededMessage = result.current.message;
     await act(async () => {
+      result.current.setMode("staged");
+      await Promise.resolve();
+    });
+    await act(async () => {
       await result.current.commitOnly();
     });
     expect(result.current.state).toBe("settled");
@@ -509,6 +513,7 @@ describe("useShip", () => {
     expect(result.current.result).toBeNull();
     expect(result.current.progress).toEqual([]);
     expect(result.current.message).toBe(seededMessage);
+    expect(result.current.mode).toBe("staged");
   });
 
   // ── B1: explicit 30s receipt timeout (not the library's 5s default) ──
