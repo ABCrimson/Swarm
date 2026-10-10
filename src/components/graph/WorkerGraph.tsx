@@ -426,6 +426,9 @@ function WorkerGraphInner(): React.ReactElement {
 
   return (
     <div className="worker-graph" style={{ width: "100%", height: "100%", position: "relative" }}>
+      <p role="status" className="sr-only">
+        {isLayouting ? "Computing Layout" : ""}
+      </p>
       <AnimatePresence>
         {(isLayouting || layoutError) && (
           <motion.div
@@ -474,10 +477,10 @@ function WorkerGraphInner(): React.ReactElement {
               </div>
             ) : (
               <div
-                role="status"
+                aria-hidden="true"
                 style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}
               >
-                <Spinner size="lg" />
+                <Spinner size="lg" decorative />
                 <span
                   style={{
                     fontFamily: "var(--font-body)",
