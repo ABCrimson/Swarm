@@ -7,10 +7,17 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use super::reader::{advance_cost, classify_denial, settlement_error};
+use super::tier::{
+    accepted_permission_modes, build_claude_flags, claude_code_capabilities, deny_list,
+    parse_trust_tier, permission_mode_flag, probe_flags,
+};
 use super::wire::{
-    self, AccountInfo, Delta, Inbound, InitializeResponse, SignIn, StreamEvent, strip_ansi,
+    self, AccountInfo, Delta, Inbound, InitializeResponse, ResultLine, SignIn, StreamEvent,
+    StreamEventLine, System, strip_ansi,
 };
 use super::*;
+use crate::agent::adapter::CancelGranularity;
 use crate::orchestration::{EventLog, OrchestrationEngine};
 
 // ── Harness ──────────────────────────────────────────────────────────
