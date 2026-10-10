@@ -19,7 +19,7 @@
  * @module agent-sessions
  */
 
-import { enableMapSet } from "immer";
+import { type Draft, enableMapSet } from "immer";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import type {
@@ -167,26 +167,24 @@ interface AgentSessionStoreActions {
   ) => boolean;
 }
 
-type Draft = {
-  -readonly [K in keyof AgentTranscript]: AgentTranscript[K] extends ReadonlyMap<infer Key, infer V>
-    ? Map<Key, V>
-    : AgentTranscript[K] extends readonly (infer T)[]
-      ? T[]
-      : AgentTranscript[K];
-};
+type TranscriptDraft = Draft<AgentTranscript>;
 
 function streamKey(turnId: string, blockIndex: number): string {
   return `${turnId}:${blockIndex}`;
 }
 
 /** Maps `turnId` to the oldest unmapped bubble, once. */
-function mapTurn(t: Draft, turnId: string): void {
+function mapTurn(t: TranscriptDraft, turnId: string): void {
   if (t.turnBubbles.has(turnId)) return;
   const bubbleId = t.unmappedBubbles.shift();
   if (bubbleId) t.turnBubbles.set(turnId, bubbleId);
 }
 
-function reduce(t: Draft, event: AgentTranscriptEvent, interactivePermissions: boolean): void {
+function reduce(
+  t: TranscriptDraft,
+  event: AgentTranscriptEvent,
+  interactivePermissions: boolean,
+): void {
   const id = `${event.seq}`;
   switch (event.type) {
     case "agent_turn_delta": {
@@ -279,13 +277,16 @@ function reduce(t: Draft, event: AgentTranscriptEvent, interactivePermissions: b
   }
 }
 
-function transcriptOf(transcripts: Map<string, AgentTranscript>, workerId: string): Draft {
+function transcriptOf(
+  transcripts: Map<string, TranscriptDraft>,
+  workerId: string,
+): TranscriptDraft {
   let t = transcripts.get(workerId);
   if (!t) {
-    t = structuredClone(EMPTY_TRANSCRIPT);
+    t = structuredClone(EMPTY_TRANSCRIPT) as TranscriptDraft;
     transcripts.set(workerId, t);
   }
-  return t as Draft;
+  return t;
 }
 
 export const useAgentSessionStore = create<AgentSessionStoreState & AgentSessionStoreActions>()(
@@ -339,7 +340,7 @@ export const useAgentSessionStore = create<AgentSessionStoreState & AgentSession
     setPermissionState(workerId, requestId, state, from) {
       let moved = false;
       set((s) => {
-        const t = s.transcripts.get(workerId) as Draft | undefined;
+        const t = s.transcripts.get(workerId);
         if (!t) return;
         t.items = t.items.map((item) => {
           if (item.kind !== "permission" || item.payload.requestId !== requestId) return item;
