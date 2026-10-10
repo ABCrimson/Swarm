@@ -100,7 +100,7 @@ export function SessionCard({
           </Pill>
         </span>
 
-        <span className="mt-1.5 block text-xs text-[oklch(0.55_0.03_220)] font-[family-name:var(--font-body)]">
+        <span className="mt-1.5 block text-xs text-fg-dim font-[family-name:var(--font-body)]">
           {relativeTime}
         </span>
 
