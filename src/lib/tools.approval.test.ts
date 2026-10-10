@@ -10,13 +10,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invokeMock = vi.fn();
 
-vi.mock("#lib/tauri", () => ({
+vi.mock(import("#lib/tauri"), () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
   workerInput: vi.fn().mockResolvedValue(undefined),
   killWorker: vi.fn().mockResolvedValue(undefined),
   isTauri: () => false,
 }));
-vi.mock("#lib/worker-spawn", () => ({ spawnWorkerFromSpec: vi.fn().mockResolvedValue("w-new") }));
+vi.mock(import("#lib/worker-spawn"), () => ({
+  spawnWorkerFromSpec: vi.fn().mockResolvedValue("w-new"),
+}));
 
 import { killWorker, workerInput } from "#lib/tauri";
 import {

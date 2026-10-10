@@ -42,10 +42,10 @@ export interface CustomToolDef {
  * entire request (built-in tools included), so it is enforced at save
  * time (ToolBuilder), at hydrate time and at request assembly.
  */
-export const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
 /** The API's contract for `input_schema` property keys — the same stakes as {@link TOOL_NAME_PATTERN}. */
-export const PARAM_NAME_PATTERN = /^[a-zA-Z0-9_.-]{1,64}$/;
+const PARAM_NAME_PATTERN = /^[a-zA-Z0-9_.-]{1,64}$/;
 
 /** Whether a custom tool name is safe to send to the Anthropic API. */
 export function isValidToolName(name: string): boolean {
@@ -108,8 +108,8 @@ export function hasNoIssues(issues: CustomToolIssues): boolean {
 
 // ── Persistence schema ──────────────────────────────
 
-// Parameter names are deliberately not pattern-checked here: the builder
-// once accepted free text ("file path"), and such a tool must survive
+// Parameter names are deliberately not pattern-checked here: a tool
+// persisted with a free-text parameter name ("file path") must survive
 // hydration — the next save rewrites the whole list, so a dropped tool
 // would be erased with its script. Invalid or duplicate names never reach
 // the API (sentParams filters them) and the builder flags them on edit.

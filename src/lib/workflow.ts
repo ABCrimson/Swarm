@@ -5,7 +5,7 @@
 import * as z from "zod";
 
 /** Serialisable node: a worker's id, node type, canvas position and display data. */
-export interface WorkflowNode {
+interface WorkflowNode {
   readonly id: string;
   readonly type: string;
   readonly position: { readonly x: number; readonly y: number };
@@ -13,7 +13,7 @@ export interface WorkflowNode {
 }
 
 /** Serialisable annotation edge between two worker nodes. */
-export interface WorkflowEdge {
+interface WorkflowEdge {
   readonly id: string;
   readonly source: string;
   readonly target: string;
@@ -35,7 +35,7 @@ const Id = z.string().min(1);
  * numbers and ids non-empty strings; unknown keys are ignored, so files
  * from older builds (which carried extra node data) still load.
  */
-export const WorkflowDefinitionSchema = z.object({
+const WorkflowDefinitionSchema = z.object({
   id: Id,
   name: z.string(),
   nodes: z.array(

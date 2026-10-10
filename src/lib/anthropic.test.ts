@@ -17,7 +17,7 @@ import {
 import { CLAUDE_MODELS } from "#lib/models";
 import { useAiStore } from "#store/ai";
 
-vi.mock("#lib/tauri", () => ({ readConfig: vi.fn() }));
+vi.mock(import("#lib/tauri"), () => ({ readConfig: vi.fn() }));
 
 import * as z from "zod";
 import { readConfig } from "#lib/tauri";
@@ -196,6 +196,12 @@ describe("streamMessage", () => {
       // Sonnet 5.5 has classifiers: it opts into server-side refusal fallbacks.
       expect(body).toMatchObject({ fallbacks: "default" });
       expect(sentHeaders().get("anthropic-beta")).toBe("server-side-fallback-2026-07-01");
+    });
+
+    it("offers no sampling parameters on StreamParams", () => {
+      expectTypeOf<StreamParams>().not.toHaveProperty("temperature");
+      expectTypeOf<StreamParams>().not.toHaveProperty("top_p");
+      expectTypeOf<StreamParams>().not.toHaveProperty("top_k");
     });
 
     it("sends thinking and effort for Haiku 5.5, clamps max_tokens to its 128K output limit and sends no fallbacks", async () => {
@@ -634,11 +640,5 @@ describe("zodToTool", () => {
         additionalProperties: false,
       },
     });
-  });
-
-  it("offers no sampling parameters on StreamParams", () => {
-    expectTypeOf<StreamParams>().not.toHaveProperty("temperature");
-    expectTypeOf<StreamParams>().not.toHaveProperty("top_p");
-    expectTypeOf<StreamParams>().not.toHaveProperty("top_k");
   });
 });

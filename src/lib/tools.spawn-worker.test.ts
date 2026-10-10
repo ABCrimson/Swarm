@@ -5,7 +5,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("#lib/worker-spawn", () => ({ spawnWorkerFromSpec: vi.fn() }));
+vi.mock(import("#lib/worker-spawn"), () => ({ spawnWorkerFromSpec: vi.fn() }));
 
 import { executeTool, grantToolCallForSession, resetToolApprovals, toolRegistry } from "#lib/tools";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";

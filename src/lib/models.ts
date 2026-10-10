@@ -38,7 +38,7 @@ export const MODEL_KEYS = ["fable", "mythos", "opus", "sonnet", "haiku"] as cons
 export type ModelKey = (typeof MODEL_KEYS)[number];
 
 /** An access gate a model requires beyond a valid API key. */
-export type ModelGate = "glasswing";
+type ModelGate = "glasswing";
 
 /**
  * The long-prompt price tier. A request whose prompt is longer than
@@ -47,7 +47,7 @@ export type ModelGate = "glasswing";
  * input tokens, including cache reads and cache writes", and each
  * request is priced on its own (pricing page, 2026-10-10).
  */
-export interface LongPromptPricing {
+interface LongPromptPricing {
   /** Prompts strictly longer than this many input tokens are billed at the long-prompt rates. */
   readonly thresholdTokens: number;
   /** USD per million uncached input tokens (5-minute cache writes bill at 1.25x this). */
@@ -212,7 +212,7 @@ type PricingOnly = Pick<ModelInfo, "inputPerMTok" | "cacheReadPerMTok" | "output
  * Rates from the pricing page
  * (https://platform.claude.com/docs/en/about-claude/pricing, 2026-10-10):
  * Opus 5 and Opus 4.8 are $5 input / $0.50 cache read / $25 output;
- * Sonnet 5 is $2 / $0.20 / $10 (its introductory price is now standard).
+ * Sonnet 5 is $2 / $0.20 / $10.
  */
 const FALLBACK_PRICING: ReadonlyMap<string, PricingOnly> = new Map([
   ["claude-opus-4-8", { inputPerMTok: 5, cacheReadPerMTok: 0.5, outputPerMTok: 25 }],

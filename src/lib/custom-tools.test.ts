@@ -200,6 +200,28 @@ describe("buildWorkerSource", () => {
     expect(src).toContain("self.postMessage({ ok: true, result })");
     expect(src).toContain("self.postMessage({ ok: false");
   });
+
+  /** Evaluates the generated source against a fake worker global and delivers one message. */
+  async function runWorkerSource(script: string, data: unknown): Promise<unknown[]> {
+    const posted: unknown[] = [];
+    const fakeSelf: { onmessage?: (e: { data: unknown }) => Promise<void> } = {};
+    Object.assign(fakeSelf, { postMessage: (message: unknown) => posted.push(message) });
+    new Function("self", buildWorkerSource(script))(fakeSelf);
+    await fakeSelf.onmessage?.({ data });
+    return posted;
+  }
+
+  it("posts the awaited return value of the script, called with the message data", async () => {
+    expect(await runWorkerSource("await null; return input.x + 1;", { x: 1 })).toEqual([
+      { ok: true, result: 2 },
+    ]);
+  });
+
+  it("posts the thrown error's message when the script throws", async () => {
+    expect(await runWorkerSource('throw new Error("boom");', {})).toEqual([
+      { ok: false, error: "boom" },
+    ]);
+  });
 });
 
 describe("runCustomTool (sandboxed)", () => {

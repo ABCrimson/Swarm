@@ -5,9 +5,9 @@
  *
  * - The API key is read from the backend config (`anthropic_api_key`,
  *   written by Settings) before every request and handed to the SDK as
- *   a plain string. The SDK only honours a string `apiKey`: an async
- *   getter type-checks but is silently dropped at runtime, which is how
- *   every request once went out with no key at all.
+ *   a plain string. The SDK keeps `apiKey` only when it is a string: an
+ *   async getter type-checks (`ApiKeySetter`) but is discarded at runtime,
+ *   leaving the client with no key, so every request fails authentication.
  * - {@link streamMessage} streams through the SDK's `BetaMessageStream`
  *   and returns `stream.finalMessage()` — the complete assistant turn
  *   (thinking blocks with signatures, text and `tool_use` blocks in model
@@ -98,7 +98,7 @@ export interface StreamParams {
 }
 
 /** Streaming progress of one `tool_use` block. */
-export interface ToolUseDelta {
+interface ToolUseDelta {
   /** The API's `tool_use` block id — echoed back as `tool_use_id` in the `tool_result`. */
   readonly id: string;
   readonly toolName: string;
@@ -483,7 +483,7 @@ export function withoutThinking(
  * abort via `signal`, a broken event stream — throws
  * {@link AiRequestError}.
  *
- * The refusal-fallback opt-in is new API surface; should the API reject
+ * The refusal-fallback opt-in is a beta feature; should the API reject
  * a request carrying it (HTTP 400, decided before any output and not
  * billed), the request is sent once more without it; only if that retry
  * succeeds is the model remembered for the rest of the session.

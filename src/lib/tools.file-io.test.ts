@@ -15,7 +15,7 @@ import {
 
 const invokeMock = vi.fn();
 
-vi.mock("#lib/tauri", () => ({
+vi.mock(import("#lib/tauri"), () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
   // #lib/tools transitively imports the custom-tools store, which calls
   // isTauri() at module load time — must be present on this mock even
@@ -69,9 +69,7 @@ describe("read_file tool", () => {
 
   it("surfaces a truthful, actionable error when the fs scope denies the read", async () => {
     // Exactly the wording commands/fs.rs's FsScopes::check_read returns
-    // for a path outside $APPDATA/**, $HOME/** — matching the wording
-    // the plugin-fs path already used, so the user-facing message is
-    // stable across the migration.
+    // (READ_SCOPE_MESSAGE) for a path outside $APPDATA/**, $HOME/**.
     invokeMock.mockRejectedValueOnce(
       "Read Access Is Limited To The App Data And Home Directories.",
     );

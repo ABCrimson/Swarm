@@ -72,13 +72,13 @@ import { useWorkerAgentStore } from "#store/worker-agents";
  * documented starting point for Opus 5.5 and Haiku 5.5 and a sound
  * cost/quality balance for an interactive orchestration chat on every model.
  */
-export const CHAT_EFFORT: Effort = "medium";
+const CHAT_EFFORT: Effort = "medium";
 
 /** Streaming `max_tokens` for a chat round — room for adaptive thinking plus the reply (clamped per model). */
 export const CHAT_MAX_TOKENS = 64_000;
 
 /** Tool rounds per turn before the loop stops handing results back to the model. */
-export const MAX_TOOL_ROUNDS = 10;
+const MAX_TOOL_ROUNDS = 10;
 
 /** In-flight turns by worker id. */
 const turns = new Map<string, { readonly controller: AbortController; readonly itemId: string }>();
@@ -102,7 +102,7 @@ function nowIso(): string {
 }
 
 /** The model a worker's next turn uses: its template-pinned model, else the global selection. */
-export function resolveChatModel(workerId: string): ModelInfo {
+function resolveChatModel(workerId: string): ModelInfo {
   const pinned = useWorkerAgentStore.getState().metadata.get(workerId)?.model;
   return CLAUDE_MODELS[pinned ?? getDefaultStore().get(selectedModelAtom)];
 }

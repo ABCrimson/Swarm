@@ -30,17 +30,17 @@ import { useMessageHistoryStore } from "#store/message-history";
 import { selectedModelAtom } from "#store/ui";
 import { useWorkerAgentStore } from "#store/worker-agents";
 
-vi.mock("#lib/anthropic", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("#lib/anthropic")>()),
+vi.mock(import("#lib/anthropic"), async (importOriginal) => ({
+  ...(await importOriginal()),
   streamMessage: vi.fn(),
 }));
-vi.mock("#lib/tools", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("#lib/tools")>()),
+vi.mock(import("#lib/tools"), async (importOriginal) => ({
+  ...(await importOriginal()),
   executeTool: vi.fn(),
   getAllAnthropicTools: vi.fn(() => []),
 }));
-vi.mock("#lib/tauri", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("#lib/tauri")>()),
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
   agentTurnStarted: vi.fn(),
 }));
 

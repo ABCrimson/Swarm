@@ -12,8 +12,8 @@ describe("memPercent", () => {
   });
 
   it("computes the real-hardware regression case (256GB machine)", () => {
-    // Bug report: 35,389 MB used on a 256GB (262,144 MB) machine should
-    // read ~13.5%, not 216% (which came from dividing by a hardcoded 16GB).
+    // 35,389 MB used on a 256GB (262,144 MB) machine reads ~13.5%: the
+    // total comes from the hardware, never a fixed 16GB (which gives 216%).
     expect(memPercent(35_389, 262_144)).toBeCloseTo(13.5, 1);
   });
 

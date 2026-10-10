@@ -3,8 +3,8 @@
 // applyTemplate creates a session, spawns one worker per workerConfigs
 // entry, and wires each into the session. User templates live in a
 // plugin-store file; building one from a session must capture that
-// session's workers (an empty workerConfigs used to be saved, which
-// then "failed" with 0 of 0 workers spawned).
+// session's workers (an empty workerConfigs would apply as a session
+// with no workers).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -320,7 +320,10 @@ describe("createTemplateFromSession", () => {
       description: "Two Agents",
       builtIn: false,
     });
-    expect(template.workerConfigs).toHaveLength(2);
+    expect(template.workerConfigs).toEqual([
+      { name: "Researcher", role: "analyst", model: "opus", systemPrompt: "Research things." },
+      { name: "Worker 2", model: "haiku" },
+    ]);
   });
 
   it("yields no worker specs for a session whose workers are all gone", () => {
