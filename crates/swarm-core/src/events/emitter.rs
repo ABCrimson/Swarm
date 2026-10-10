@@ -862,9 +862,10 @@ pub(crate) enum WriterCmd {
     /// [`crate::orchestration::OrchestrationEngine::flush`].
     Flush(oneshot::Sender<u64>),
     /// Barrier, then finalize the log and stop the writer thread;
-    /// resolves with the final head seq — see
+    /// resolves with the final head seq, or why the log could not be
+    /// finalized — see
     /// [`crate::orchestration::OrchestrationEngine::shutdown`].
-    Shutdown(SyncSender<u64>),
+    Shutdown(SyncSender<Result<u64, String>>),
 }
 
 /// Where an [`EventSink`] delivers.
