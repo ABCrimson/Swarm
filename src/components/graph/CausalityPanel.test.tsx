@@ -366,6 +366,23 @@ describe("CausalityPanel (component)", () => {
     expect(screen.getByText(/Killed Worker Beta/)).toBeInTheDocument();
   });
 
+  it("announces the walk through one persistent status region", async () => {
+    const lookup = Promise.withResolvers<DomainEvent[]>();
+    invoke.mockImplementationOnce(() => lookup.promise);
+    seedRing(ev({ seq: 30, type: "worker_input", causeSeq: 25, payload: { workerId: "w" } }));
+
+    renderPanel(30);
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Loading Causality Trace");
+
+    await act(async () => {
+      lookup.resolve([]);
+    });
+    await waitFor(() =>
+      expect(status).toHaveTextContent("1 Event In Trace, Earlier Causes Unavailable"),
+    );
+  });
+
   it("aborts a walk still in flight when it closes", async () => {
     const lookup = Promise.withResolvers<DomainEvent[]>();
     seedRing(ev({ seq: 30, type: "worker_input", causeSeq: 20, payload: { workerId: "w" } }));

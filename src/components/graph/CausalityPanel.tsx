@@ -344,8 +344,16 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
           flexDirection: "column",
         }}
       >
+        <p role="status" className="sr-only">
+          {result === null
+            ? "Loading Causality Trace"
+            : `${result.rows.length} ${result.rows.length === 1 ? "Event" : "Events"} In Trace${result.incomplete ? ", Earlier Causes Unavailable" : ""}${result.truncated ? `, Truncated At ${MAX_CAUSALITY_HOPS} Hops` : ""}`}
+        </p>
         {result === null && (
-          <div role="status" style={{ display: "flex", justifyContent: "center", padding: 24 }}>
+          <div
+            aria-hidden="true"
+            style={{ display: "flex", justifyContent: "center", padding: 24 }}
+          >
             <Spinner size="md" />
           </div>
         )}
