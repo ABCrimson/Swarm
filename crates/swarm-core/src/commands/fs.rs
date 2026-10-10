@@ -15,8 +15,9 @@
 //! short names (`SWARM-~1.JSO`) to the real name the deny list sees. On
 //! Windows a write is refused outright when its file name contains `:`
 //! (an NTFS alternate data stream), ends in `.` or a space, or is a
-//! reserved device name (`CON`, `NUL`, `COM1`, ...), with or without an
-//! extension.
+//! reserved device name (`CON`, `NUL`, `COM1`, `COM¹`, ...), with or
+//! without an extension. The superscript digits `¹ ² ³` are reserved
+//! after `COM` and `LPT` just like `1`..`3`.
 //!
 //! A deny list applies to the canonical path of both reads and writes,
 //! so the app's secrets can never be read through (or planted by) these
@@ -71,8 +72,12 @@ fn invalid_windows_name(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or(name).to_lowercase();
     WINDOWS_DEVICE_NAMES.contains(&stem.as_str())
         || WINDOWS_NUMBERED_DEVICES.iter().any(|device| {
-            stem.strip_prefix(device)
-                .is_some_and(|digit| matches!(digit.as_bytes(), [b'1'..=b'9']))
+            stem.strip_prefix(device).is_some_and(|digit| {
+                matches!(
+                    digit,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
         })
 }
 
@@ -507,6 +512,8 @@ mod tests {
             "CON",
             "con.txt",
             "LPT9.log",
+            "COM¹",
+            "lpt².log",
             "notes.txt:x",
             "notes.txt.",
             "notes.txt ",

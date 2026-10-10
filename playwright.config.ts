@@ -39,7 +39,7 @@ export default defineConfig({
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
     },
-    // Opt-in engines, not part of the default run: install them once with `pnpm exec playwright install webkit firefox`, then run `pnpm exec playwright test --project=webkit` (or `--project=firefox`). The whole suite passes on all three engines.
+    // Opt-in engines, not part of the default run: install them once with `pnpm exec playwright install webkit firefox`, then run `pnpm exec playwright test --project=webkit` (or `--project=firefox`). The whole suite passes on all three engines (one test, the arrow-key focus ring in e2e/settings.spec.ts, is `fixme` on WebKit).
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },

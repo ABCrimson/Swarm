@@ -18,6 +18,11 @@ configure({ reactStrictMode: true });
 const listeners = new Map<string, (payload: unknown) => void>();
 const mockListWorkers = vi.fn<() => Promise<Worker[]>>();
 const mockSessionRemoveWorker = vi.fn();
+const mockCancelChatTurn = vi.fn();
+
+vi.mock("#lib/ai-chat", () => ({
+  cancelChatTurn: (...args: unknown[]) => mockCancelChatTurn(...args),
+}));
 
 vi.mock("#lib/tauri", () => ({
   listen: async (event: string, handler: (payload: unknown) => void) => {
@@ -194,6 +199,15 @@ describe("useWorkerEvents", () => {
       expect(useWorkerStore.getState().workers.has(W1)).toBe(false);
       expect(useWorkerAgentStore.getState().metadata.has(W1)).toBe(false);
       expect(getDefaultStore().get(selectedWorkerIdAtom)).toBeNull();
+    });
+
+    it("worker_killed cancels the worker's in-flight chat turn", () => {
+      renderHook(() => useWorkerEvents());
+      mockCancelChatTurn.mockClear();
+
+      emit("worker_killed", { workerId: W1 });
+
+      expect(mockCancelChatTurn).toHaveBeenCalledExactlyOnceWith(W1);
     });
 
     it("keeps the selection when another worker is killed", () => {

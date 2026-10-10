@@ -1,19 +1,13 @@
-// Cancel on a queue item aborts the turn and denies the worker's tool
-// calls still waiting for approval, so the parked tool loop finishes
-// instead of waiting on a prompt nobody will answer.
+// Cancel on a queue item aborts the turn registered for it and dequeues the
+// item. The abort is what denies the turn's waiting tool calls (covered in
+// ai-chat.test.ts), so the button needs no denial of its own.
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { AIQueue } from "#components/ai/AIQueue";
 
-vi.mock("#lib/tauri", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("#lib/tauri")>()),
-  invoke: vi.fn().mockResolvedValue("file text"),
-}));
-
-import { executeTool, getPendingToolApprovals, resetToolApprovals } from "#lib/tools";
-import { useAiStore } from "#store/ai";
+import { registerQueueAbort, useAiStore } from "#store/ai";
 
 const W = "11111111-2222-4333-8444-555555555555";
 const ITEM = "66666666-7777-4888-8999-aaaaaaaaaaaa";
@@ -22,12 +16,8 @@ beforeEach(() => {
   useAiStore.setState(useAiStore.getInitialState(), true);
 });
 
-afterEach(() => {
-  resetToolApprovals();
-});
-
 describe("AIQueue", () => {
-  it("Cancel denies the worker's waiting tool approvals and dequeues the item", async () => {
+  it("Cancel aborts the item's turn and dequeues it", async () => {
     const user = userEvent.setup();
     useAiStore.getState().enqueue({
       id: ITEM,
@@ -36,21 +26,13 @@ describe("AIQueue", () => {
       messages: [],
       status: "streaming",
     });
+    const controller = new AbortController();
+    registerQueueAbort(ITEM, controller);
     render(<AIQueue workerId={W} />);
-    const result = executeTool(
-      "read_file",
-      { path: "/home/u/a.txt" },
-      { originWorker: W, causeSeq: 1 },
-    );
-    await vi.waitFor(() => expect(getPendingToolApprovals()).toHaveLength(1));
 
     await user.click(screen.getByRole("button", { name: "Cancel Queue Item 1" }));
 
-    expect(await result).toEqual({
-      success: false,
-      error: "The User Denied read_file. It Was Not Run.",
-    });
-    expect(getPendingToolApprovals()).toHaveLength(0);
+    expect(controller.signal.aborted).toBe(true);
     expect(useAiStore.getState().queue).toHaveLength(0);
   });
 });

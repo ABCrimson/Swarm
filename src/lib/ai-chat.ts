@@ -48,7 +48,12 @@ import {
 import { estimateTokens, fitTranscript, stripThinking } from "#lib/context-manager";
 import { CLAUDE_MODELS, getModelById, type ModelInfo } from "#lib/models";
 import { agentTurnStarted } from "#lib/tauri";
-import { executeTool, getAllAnthropicTools, type ToolProvenance } from "#lib/tools";
+import {
+  denyPendingToolApprovals,
+  executeTool,
+  getAllAnthropicTools,
+  type ToolProvenance,
+} from "#lib/tools";
 import { acquireStreamSlot, registerQueueAbort, releaseStreamSlot, useAiStore } from "#store/ai";
 import {
   type ChatMessage,
@@ -317,6 +322,9 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
   const { signal } = controller;
   turns.set(workerId, { controller, itemId });
   const unregisterAbort = registerQueueAbort(itemId, controller);
+  // Every way a turn ends early (Stop, a queue Cancel, a killed worker) aborts this signal. A tool
+  // call parked on its approval prompt would otherwise keep the turn, and its stream slot, forever.
+  signal.addEventListener("abort", () => denyPendingToolApprovals(workerId), { once: true });
   const buffer = new LiveBuffer(workerId);
 
   const system = useWorkerAgentStore.getState().metadata.get(workerId)?.systemPrompt || undefined;
