@@ -89,7 +89,7 @@ describe("evaluateThresholds", () => {
   describe("cooldown enforcement", () => {
     it("suppresses an alert when within the cooldown window", () => {
       const snapshot: MetricsSnapshot = { cpuPercent: 85, memoryPercent: 50 };
-      // Last alert was 10 seconds ago (within 30s cooldown)
+      // Last alert was 10 seconds ago, inside the default cooldown
       const cooldowns = { cpu: BASE_NOW - 10_000 };
 
       const alerts = evaluateThresholds(
@@ -106,7 +106,7 @@ describe("evaluateThresholds", () => {
 
     it("allows an alert after the cooldown has elapsed", () => {
       const snapshot: MetricsSnapshot = { cpuPercent: 85, memoryPercent: 50 };
-      // Last alert was 31 seconds ago (past the 30s cooldown)
+      // Last alert was one second past the default cooldown
       const cooldowns = { cpu: BASE_NOW - COOLDOWN_MS - 1_000 };
 
       const alerts = evaluateThresholds(
