@@ -4,11 +4,10 @@
  * plus an OPTIONAL AI-generated "What Changed / Why" prose section
  * (`generateCausalProse`) that may cite `[seq N]` — any citation not
  * actually present in the fetched range is stripped before render
- * (`stripUnknownSeqCitations`). This repo already shipped fabricated
- * telemetry once (the Math.random() charts) — provenance claims in a PR
- * body must be as machine-generated and unforgeable as that fix made
- * chart data. See `docs/architecture.md`'s Ship Chain section for the
- * full design and `crates/swarm-core/src/git/causal.rs` for where
+ * (`stripUnknownSeqCitations`). Provenance claims in a PR body are
+ * machine-generated and unforgeable, so the Causal Record never comes
+ * from the model. See `docs/architecture.md`'s Ship Chain section for
+ * the full design and `crates/swarm-core/src/git/causal.rs` for where
  * `ShipContext` itself comes from.
  *
  * The AI half degrades gracefully by construction: `generateCausalProse`
@@ -60,7 +59,7 @@ function renderToolCallRows(turns: readonly CausalTurn[]): string[] {
 /**
  * The single, honest disclosure for "you are not seeing this worker's
  * complete history" — folds BOTH truncation sources into one message
- * (review FIX-1) rather than two separate ones a reader would have to
+ * rather than two separate ones a reader would have to
  * reconcile themselves:
  *
  * - `omittedTurnCount > 0` — `build_ship_context`'s own `MAX_TURNS` (200)
@@ -86,7 +85,7 @@ export function renderTruncationNote(context: ShipContext): string | null {
 
 /**
  * The honest message for a zero-turn range — two DISTINCT messages,
- * never one blurring both (review NIT-4): a worker with genuinely no
+ * never one blurring both: a worker with genuinely no
  * recorded activity in range reads differently from a worker whose
  * activity used the webview chat path (`AIChat.tsx`), which
  * `ship_context` structurally cannot see turn-level detail for (see
@@ -285,7 +284,7 @@ export async function generateCausalProse(
  * to `git_stage_commit`'s trailer-bearing message is untouched by this;
  * this is specifically the `ship_compare_url` `body` (see `useShip.ts`).
  *
- * **Review FIX-2: deterministic-first is a deliberate ordering, not
+ * **Deterministic-first is a deliberate ordering, not
  * cosmetic.** `stripUnknownSeqCitations` removes an out-of-range `[seq
  * N]` citation, but nothing stops a model from writing its OWN `##
  * Causal Record` heading (plus a fabricated table) inside its prose —

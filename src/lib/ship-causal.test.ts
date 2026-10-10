@@ -96,7 +96,7 @@ describe("renderCausalRecordSection", () => {
     );
   });
 
-  // ── DIRECTIVE (review FIX-1): the unified truncation disclosure ─────
+  // ── The unified truncation disclosure ──
 
   it("discloses a SQL-level truncated fetch with the same wording as a turn-level omission", () => {
     const context = makeContext({ eventsTruncated: true });
@@ -135,7 +135,7 @@ describe("renderCausalRecordSection", () => {
     expect(section).not.toContain("a\nb |");
   });
 
-  // ── DIRECTIVE (review NIT-4): "did nothing" vs. "structurally invisible" ──
+  // ── "Did nothing" vs. "structurally invisible" ──
 
   it("renders a DIFFERENT honest message for a webview-chat worker than for one that genuinely did nothing", () => {
     const genuinelyEmpty = makeContext({ turns: [], hasUncapturedWebviewActivity: false });
@@ -156,7 +156,7 @@ describe("renderCausalRecordSection", () => {
   });
 });
 
-// ── renderTruncationNote / emptyRecordMessage (review FIX-1 / NIT-4) ──
+// ── renderTruncationNote / emptyRecordMessage ──
 
 describe("renderTruncationNote", () => {
   it("returns null when nothing was omitted or truncated", () => {
@@ -368,7 +368,7 @@ describe("generateCausalProse", () => {
 // ── composeShipBody ───────────────────────────────────────────────────
 
 describe("composeShipBody", () => {
-  // ── DIRECTIVE (review FIX-2): deterministic-first, always ──────────
+  // ── Deterministic-first, always ──
 
   it("puts the deterministic Causal Record ABOVE the AI prose, never the reverse", () => {
     const body = composeShipBody(makeContext(), diffStat, "This change adds a helper function.");
