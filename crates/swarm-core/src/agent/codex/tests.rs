@@ -7,6 +7,7 @@
 //! adapter writes. Events go through a real in-memory
 //! [`OrchestrationEngine`] and are captured in emission order.
 
+use std::assert_matches;
 use std::path::{Path, PathBuf};
 
 use super::*;
@@ -314,10 +315,7 @@ fn unknown_trust_tiers_are_refused() {
         "",
     ] {
         let error = parse_trust_tier(Some(token)).expect_err(token);
-        assert!(
-            matches!(error, AppError::PermissionDenied(_)),
-            "{token:?}: {error:?}"
-        );
+        assert_matches!(error, AppError::PermissionDenied(_), "{token:?}");
     }
 }
 
@@ -439,8 +437,9 @@ fn applied_policy_may_be_stricter_but_never_looser() {
             asked_sandbox,
         )
         .expect_err(sandbox);
-        assert!(
-            matches!(error, AppError::PermissionDenied(_)),
+        assert_matches!(
+            error,
+            AppError::PermissionDenied(_),
             "{sandbox} / {approval}"
         );
     }
@@ -724,10 +723,7 @@ async fn a_handshake_timeout_kills_and_reaps_the_child() {
         .await
         .err()
         .expect("spawn must time out");
-    assert!(
-        matches!(&error, AppError::Ai(m) if m.contains("handshake")),
-        "{error:?}"
-    );
+    assert_matches!(&error, AppError::Ai(m) if m.contains("handshake"));
     let pid = h.record()[0]["pid"]
         .as_u64()
         .expect("the fake records its pid");
@@ -750,7 +746,7 @@ async fn an_unknown_trust_tier_never_starts_a_process() {
         .await
         .err()
         .expect("refused");
-    assert!(matches!(error, AppError::PermissionDenied(_)), "{error:?}");
+    assert_matches!(error, AppError::PermissionDenied(_));
     assert!(h.record().is_empty(), "the fake never ran");
 }
 
@@ -1150,7 +1146,7 @@ async fn a_second_turn_while_one_is_running_is_busy() {
             prompt: "b".to_string(),
         })
         .await;
-    assert!(matches!(busy, Err(AppError::AgentSessionBusy)), "{busy:?}");
+    assert_matches!(busy, Err(AppError::AgentSessionBusy));
     session.shutdown().await.expect("shutdown");
     let first = first.await.expect("join");
     assert!(
@@ -1297,7 +1293,7 @@ async fn a_server_death_mid_turn_synthesizes_the_settlement_then_exits() {
             prompt: "again".to_string(),
         })
         .await;
-    assert!(matches!(after, Err(AppError::Ipc(_))), "{after:?}");
+    assert_matches!(after, Err(AppError::Ipc(_)));
     let exit = session.shutdown().await.expect("shutdown is idempotent");
     assert_eq!(exit.exit_code, Some(1));
 }
@@ -1319,10 +1315,7 @@ async fn an_unacknowledged_turn_shuts_the_session_down_and_kills_the_child() {
         })
         .await
         .expect_err("no acknowledgement");
-    assert!(
-        matches!(&error, AppError::Ai(m) if m.contains("did not acknowledge")),
-        "{error:?}"
-    );
+    assert_matches!(&error, AppError::Ai(m) if m.contains("did not acknowledge"));
     h.flush().await;
     let events = h.events();
     assert!(
