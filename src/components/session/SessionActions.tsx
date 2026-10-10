@@ -1,4 +1,4 @@
-import { useActionState, useId, useState, useTransition } from "react";
+import { useActionState, useId, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
@@ -46,13 +46,31 @@ async function importSession(): Promise<void> {
 export function SessionActions(): React.ReactElement {
   const [naming, setNaming] = useState(false);
   const [importing, startImport] = useTransition();
+  // Set when the form closes, so New Session takes focus back as it remounts
+  // (the form held focus; without this it falls to <body>).
+  const restoreFocus = useRef(false);
+  const closeForm = () => {
+    restoreFocus.current = true;
+    setNaming(false);
+  };
 
   return (
     <div className="flex flex-wrap items-center gap-2">
       {naming ? (
-        <NewSessionForm onClose={() => setNaming(false)} />
+        <NewSessionForm onClose={closeForm} />
       ) : (
-        <Button variant="primary" size="sm" onClick={() => setNaming(true)}>
+        <Button
+          variant="primary"
+          size="sm"
+          ref={(el) => {
+            if (el == null || !restoreFocus.current) return;
+            restoreFocus.current = false;
+            if (document.activeElement == null || document.activeElement === document.body) {
+              el.focus();
+            }
+          }}
+          onClick={() => setNaming(true)}
+        >
           New Session
         </Button>
       )}
