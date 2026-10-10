@@ -9,6 +9,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 use super::*;
 use crate::events::emitter::WriterMsg;
+use crate::git::test_support::{TempRepo, git_in};
 
 /// How long a test waits for a real shell to react.
 const SHELL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -37,7 +38,9 @@ fn make_handle(state: WorkerState) -> WorkerHandle {
     }
 }
 
-/// A `Write` over a shared buffer: a stand-in PTY writer.
+/// A `Write` over a shared buffer: a stand-in PTY writer, and the sink
+/// for a captured tracing subscriber.
+#[derive(Clone, Default)]
 struct SharedBuf(Arc<Mutex<Vec<u8>>>);
 
 impl Write for SharedBuf {
@@ -47,6 +50,13 @@ impl Write for SharedBuf {
     }
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
+    type Writer = Self;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
     }
 }
 
@@ -383,15 +393,16 @@ fn test_worker_input_terminal_source_has_no_preview() {
     assert_eq!(p.bytes, 22);
 }
 
-/// The preview is capped at 120 characters, line ends included.
+/// Line ends before the 120-character cut become spaces, so the preview
+/// holds no control characters; the cut applies after that.
 #[test]
-fn test_worker_input_preview_strips_control_chars_and_truncates() {
+fn test_worker_input_preview_flattens_line_ends_and_truncates() {
     let registry = WorkerRegistry::new();
     let (handle, _buf) = make_handle_with_pty(WorkerState::Running);
     let id = registry.spawn_worker(handle).unwrap();
     let (sink, rx) = test_sink();
 
-    let data = format!("{}\r\n", "a".repeat(200)).into_bytes();
+    let data = format!("{}\r\n{}", "a".repeat(10), "b".repeat(200)).into_bytes();
 
     do_worker_input(
         &sink,
@@ -407,6 +418,7 @@ fn test_worker_input_preview_strips_control_chars_and_truncates() {
         panic!("expected WorkerInput");
     };
     let preview = p.preview.expect("automation input carries a preview");
+    assert_eq!(preview, format!("{}  {}", "a".repeat(10), "b".repeat(108)));
     assert_eq!(preview.chars().count(), 120);
     assert!(
         !preview.chars().any(char::is_control),
@@ -565,36 +577,13 @@ fn test_resize_rejects_zero_dimensions_and_workers_without_a_pty() {
 
 // ── tracing never records env values ─────────────────────────────
 
-/// `Write` + `MakeWriter` over a shared buffer, so a
-/// `tracing_subscriber::fmt` subscriber writes into memory the test
-/// can inspect.
-#[derive(Clone, Default)]
-struct TracingCaptureBuf(Arc<Mutex<Vec<u8>>>);
-
-impl Write for TracingCaptureBuf {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TracingCaptureBuf {
-    type Writer = Self;
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
-}
-
 const SECRET: &str = "sk-ant-super-secret-value-should-never-be-logged";
 
 /// Runs `do_spawn_worker` with a secret-bearing env under a
 /// subscriber that prints every event and every span's fields as
 /// the span opens, and returns the spawn result and all output.
 fn spawn_under_capture(shell: &str) -> (Result<Uuid, AppError>, String, WorkerRegistry) {
-    let capture = TracingCaptureBuf::default();
+    let capture = SharedBuf::default();
     let subscriber = tracing_subscriber::fmt()
         .with_writer(capture.clone())
         .with_max_level(tracing::Level::DEBUG)
@@ -833,65 +822,31 @@ fn test_spawn_without_repo_root_is_unisolated() {
 
 // ── worktree isolation ───────────────────────────────────────────
 
-/// A disposable git repository with one commit, plus a worktrees
-/// root next to it, both removed when the returned guard drops.
-struct TempRepo {
-    root: PathBuf,
-    worktrees: PathBuf,
+/// The worktrees root of `repo`'s isolated workers, beside the
+/// repository, so it is deleted together with it.
+fn worktrees_of(repo: &TempRepo) -> PathBuf {
+    repo.base().join("worktrees")
 }
 
-fn temp_repo() -> DropGuard<TempRepo, impl FnOnce(TempRepo)> {
-    let base = std::env::temp_dir().join(format!("swarm-lifecycle-git-{}", Uuid::new_v4()));
-    let root = base.join("repo");
-    std::fs::create_dir_all(&root).unwrap();
-
-    let run = |args: &[&str]| {
-        let mut full = git::repo::base_args(&root);
-        full.extend(args.iter().map(ToString::to_string));
-        let out = git::cli::run(&full, git::cli::CREATE_TIMEOUT).unwrap();
-        assert!(out.success(), "git setup failed: {} ({full:?})", out.stderr);
-    };
-    run(&["init"]);
-    run(&["config", "user.email", "swarm-test@example.com"]);
-    run(&["config", "user.name", "Swarm Test"]);
-    std::fs::write(root.join("README.md"), "hello").unwrap();
-    run(&["add", "-A"]);
-    run(&["commit", "-m", "initial"]);
-
-    DropGuard::new(
-        TempRepo {
-            root,
-            worktrees: base.join("worktrees"),
-        },
-        move |_| {
-            let _ = std::fs::remove_dir_all(base);
-        },
-    )
-}
-
-/// A registry whose isolated workers live under `repo.worktrees`
+/// A registry whose isolated workers live under [`worktrees_of`]
 /// instead of the real `~/.swarm/worktrees`.
 fn registry_for(repo: &TempRepo) -> WorkerRegistry {
     let registry = WorkerRegistry::new();
-    registry.config.write().worktrees_root = Some(repo.worktrees.clone());
+    registry.config.write().worktrees_root = Some(worktrees_of(repo));
     registry
 }
 
 fn isolated_config(repo: &TempRepo, name: &str) -> WorkerConfig {
     WorkerConfig {
         name: name.to_owned(),
-        repo_root: Some(repo.root.display().to_string()),
+        repo_root: Some(repo.root().display().to_string()),
         ..WorkerConfig::default()
     }
 }
 
 /// Output lines of `git <args>` run in `repo`.
 fn git_lines(repo: &Path, args: &[&str]) -> Vec<String> {
-    let mut full = git::repo::base_args(repo);
-    full.extend(args.iter().map(ToString::to_string));
-    let out = git::cli::run(&full, git::cli::CREATE_TIMEOUT).unwrap();
-    assert!(out.success(), "git {args:?} failed: {}", out.stderr);
-    String::from_utf8_lossy(&out.stdout)
+    String::from_utf8_lossy(&git_in(repo, args).stdout)
         .lines()
         .map(str::to_owned)
         .collect()
@@ -953,7 +908,7 @@ fn test_spawn_hard_fails_when_repo_root_is_not_a_git_repo() {
 /// capacity creates nothing: no worktree, branch or shell.
 #[test]
 fn test_spawn_at_capacity_creates_no_worktree_branch_or_shell() {
-    let repo = temp_repo();
+    let repo = TempRepo::new("lifecycle");
     let registry = registry_for(&repo);
     registry.set_max_workers(1).unwrap();
     let repo_locks = RepoLocks::new();
@@ -980,13 +935,13 @@ fn test_spawn_at_capacity_creates_no_worktree_branch_or_shell() {
 
     assert_eq!(registry.count(), 1);
     assert_eq!(
-        worktree_dirs(&repo.worktrees).len(),
+        worktree_dirs(&worktrees_of(&repo)).len(),
         1,
         "no second worktree"
     );
-    assert_eq!(swarm_branches(&repo.root).len(), 1, "no second branch");
+    assert_eq!(swarm_branches(repo.root()).len(), 1, "no second branch");
     assert_eq!(
-        git_lines(&repo.root, &["worktree", "list", "--porcelain"])
+        git_lines(repo.root(), &["worktree", "list", "--porcelain"])
             .iter()
             .filter(|line| line.starts_with("worktree "))
             .count(),
@@ -1000,15 +955,15 @@ fn test_spawn_at_capacity_creates_no_worktree_branch_or_shell() {
     );
 
     do_kill_worker(&sink, &registry, &repo_locks, first, Provenance::default()).unwrap();
-    assert!(worktree_dirs(&repo.worktrees).is_empty());
-    assert!(swarm_branches(&repo.root).is_empty());
+    assert!(worktree_dirs(&worktrees_of(&repo)).is_empty());
+    assert!(swarm_branches(repo.root()).is_empty());
 }
 
 /// A shell that cannot start rolls back the worktree it was going to
 /// run in, including its branch, and gives the reserved slot back.
 #[test]
 fn test_failed_shell_spawn_rolls_back_worktree_branch_and_slot() {
-    let repo = temp_repo();
+    let repo = TempRepo::new("lifecycle");
     let registry = registry_for(&repo);
     registry.set_max_workers(1).unwrap();
     let repo_locks = RepoLocks::new();
@@ -1027,10 +982,10 @@ fn test_failed_shell_spawn_rolls_back_worktree_branch_and_slot() {
     assert_matches!(result, Err(AppError::PtySpawn(_)));
     assert_eq!(registry.count(), 0);
     assert!(
-        worktree_dirs(&repo.worktrees).is_empty(),
+        worktree_dirs(&worktrees_of(&repo)).is_empty(),
         "worktree rolled back"
     );
-    assert!(swarm_branches(&repo.root).is_empty(), "branch rolled back");
+    assert!(swarm_branches(repo.root()).is_empty(), "branch rolled back");
     assert!(rx.try_recv().is_err(), "nothing was announced");
 
     let id = do_spawn_worker(
@@ -1049,7 +1004,7 @@ fn test_failed_shell_spawn_rolls_back_worktree_branch_and_slot() {
 /// worktree (`worktree_removed` `removed`) before `worker_killed`.
 #[test]
 fn test_spawn_and_kill_isolated_worker_full_cycle() {
-    let repo = temp_repo();
+    let repo = TempRepo::new("lifecycle");
     let registry = registry_for(&repo);
     let repo_locks = RepoLocks::new();
     let (sink, rx) = test_sink();
@@ -1065,7 +1020,7 @@ fn test_spawn_and_kill_isolated_worker_full_cycle() {
 
     let info = registry.get_worker(&id).unwrap();
     let worktree_path = info.worktree_path.clone().expect("worktree_path is set");
-    assert!(Path::new(&worktree_path).starts_with(&repo.worktrees));
+    assert!(Path::new(&worktree_path).starts_with(worktrees_of(&repo)));
     assert!(worktree_path.contains("w-"));
     let branch = info.branch.clone().expect("branch is set");
     assert!(branch.starts_with("swarm/research-agent-"));
@@ -1106,7 +1061,7 @@ fn test_spawn_and_kill_isolated_worker_full_cycle() {
 /// not pile up in the user's repository.
 #[test]
 fn test_kill_deletes_unchanged_isolation_branch() {
-    let repo = temp_repo();
+    let repo = TempRepo::new("lifecycle");
     let registry = registry_for(&repo);
     let repo_locks = RepoLocks::new();
     let (sink, rx) = test_sink();
@@ -1120,7 +1075,7 @@ fn test_kill_deletes_unchanged_isolation_branch() {
     )
     .unwrap();
     let branch = registry.get_worker(&id).unwrap().branch.unwrap();
-    assert!(git::repo::rev_parse(&repo.root, &branch).is_ok());
+    assert!(git::repo::rev_parse(repo.root(), &branch).is_ok());
 
     do_kill_worker(&sink, &registry, &repo_locks, id, Provenance::default()).unwrap();
 
@@ -1130,7 +1085,7 @@ fn test_kill_deletes_unchanged_isolation_branch() {
     });
     assert_eq!(removed.unwrap().disposition, "removed");
     assert!(
-        git::repo::rev_parse(&repo.root, &branch).is_err(),
+        git::repo::rev_parse(repo.root(), &branch).is_err(),
         "an unchanged isolation branch is deleted after a clean kill"
     );
 }
@@ -1141,7 +1096,7 @@ fn test_kill_deletes_unchanged_isolation_branch() {
 /// repo root's HEAD, so `git branch -d` alone would not keep it.
 #[test]
 fn test_kill_retains_diverged_isolation_branch() {
-    let repo = temp_repo();
+    let repo = TempRepo::new("lifecycle");
     let registry = registry_for(&repo);
     let repo_locks = RepoLocks::new();
     let (sink, rx) = test_sink();
@@ -1164,7 +1119,7 @@ fn test_kill_retains_diverged_isolation_branch() {
     // Fast-forward the repo root's HEAD onto the worker's commit:
     // `git branch -d` would now delete the branch, so only the
     // tip-vs-base check can keep it.
-    git_lines(&repo.root, &["merge", "--ff-only", branch.as_str()]);
+    git_lines(repo.root(), &["merge", "--ff-only", branch.as_str()]);
 
     do_kill_worker(&sink, &registry, &repo_locks, id, Provenance::default()).unwrap();
 
@@ -1174,7 +1129,7 @@ fn test_kill_retains_diverged_isolation_branch() {
     });
     assert_eq!(removed.unwrap().disposition, "removed");
     assert!(
-        git::repo::rev_parse(&repo.root, &branch).is_ok(),
+        git::repo::rev_parse(repo.root(), &branch).is_ok(),
         "a diverged isolation branch must not be deleted"
     );
 }
@@ -1183,7 +1138,7 @@ fn test_kill_retains_diverged_isolation_branch() {
 /// attempted.
 #[test]
 fn test_kill_reports_failed_when_unlock_fails() {
-    let repo = temp_repo();
+    let repo = TempRepo::new("lifecycle");
     let registry = registry_for(&repo);
     let repo_locks = RepoLocks::new();
     let (sink, rx) = test_sink();
@@ -1199,7 +1154,7 @@ fn test_kill_reports_failed_when_unlock_fails() {
     let worktree_path = registry.get_worker(&id).unwrap().worktree_path.unwrap();
 
     // Unlock out of band first, so git reports "not locked".
-    git::worktree::unlock(&repo.root, Path::new(&worktree_path)).unwrap();
+    git::worktree::unlock(repo.root(), Path::new(&worktree_path)).unwrap();
 
     do_kill_worker(&sink, &registry, &repo_locks, id, Provenance::default()).unwrap();
 
@@ -1221,7 +1176,7 @@ fn test_kill_reports_failed_when_unlock_fails() {
 /// refusal as the reason), and so does the work.
 #[test]
 fn test_kill_preserves_dirty_worktree_instead_of_deleting_it() {
-    let repo = temp_repo();
+    let repo = TempRepo::new("lifecycle");
     let registry = registry_for(&repo);
     let repo_locks = RepoLocks::new();
     let (sink, rx) = test_sink();
