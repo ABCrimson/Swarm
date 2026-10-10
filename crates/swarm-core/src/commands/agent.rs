@@ -12,9 +12,8 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::agent::adapter::AgentAdapter;
 use crate::agent::{
-    AgentSpawnSpec, AgentTurnRequest, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY,
+    AgentAdapter, AgentSpawnSpec, AgentTurnRequest, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY,
     PermissionDecision, ProviderId, TurnInput, TurnPriority,
 };
 use crate::events::{AgentTurnStartedPayload, Provenance, SwarmEvent};
@@ -247,8 +246,8 @@ pub async fn agent_shutdown(ctx: Ctx, args: Value) -> Result<Value, Value> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentProbeArgs {
-    /// Which provider to probe; omitted or `null` means `claude_code`
-    /// (so the original argument-less `{}` call keeps working).
+    /// Which provider to probe; omitted or `null` means `claude_code`, so
+    /// an argument-less `{}` call probes Claude Code.
     #[serde(default)]
     provider: Option<ProviderId>,
 }
