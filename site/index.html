@@ -22,7 +22,8 @@
     --r: 16px;
   }
   *{ box-sizing:border-box; }
-  html{ scroll-behavior:smooth; scrollbar-color: var(--gold-dim) transparent; }
+  html{ scrollbar-color: var(--gold-dim) transparent; }
+  @media (prefers-reduced-motion: no-preference){ html{ scroll-behavior:smooth; } }
   body{ margin:0; background:var(--bg); color:var(--ink);
     font: clamp(0.95rem,0.9rem + 0.25vw,1.0625rem)/1.65 system-ui,-apple-system,Inter,sans-serif;
     -webkit-font-smoothing:antialiased; }

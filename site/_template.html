@@ -22,7 +22,8 @@
     --maxw: 82ch;
   }
   *{ box-sizing:border-box; }
-  html{ scroll-behavior:smooth; scrollbar-color: var(--gold-dim) transparent; }
+  html{ scroll-padding-top:5rem; scrollbar-color: var(--gold-dim) transparent; }
+  @media (prefers-reduced-motion: no-preference){ html{ scroll-behavior:smooth; } }
   body{
     margin:0; background:var(--bg); color:var(--ink);
     font: clamp(0.95rem,0.9rem + 0.25vw,1.0625rem)/1.65 system-ui, -apple-system, Inter, sans-serif;
@@ -98,10 +99,9 @@
   .dek{ color:var(--muted); font-size:1.1rem; max-width:70ch; text-wrap:pretty; margin:0; }
 
   /* ---- prose ---- */
-  h2{ font-size:1.5rem; letter-spacing:-.015em; margin:2.75rem 0 .85rem; padding-top:.6rem; scroll-margin-top:5rem; }
-  h3{ font-size:1.15rem; margin:2rem 0 .6rem; color: oklch(from var(--ink) l c h / .92); scroll-margin-top:5rem; }
+  h2{ font-size:1.5rem; letter-spacing:-.015em; margin:2.75rem 0 .85rem; padding-top:.6rem; }
+  h3{ font-size:1.15rem; margin:2rem 0 .6rem; color: oklch(from var(--ink) l c h / .92); }
   h2 + p, h3 + p{ margin-top:0; }
-  .legacy-anchor{ scroll-margin-top:5rem; }
   p, li{ text-wrap:pretty; }
   main :is(h2,h3) a.anchor{ color:var(--faint); text-decoration:none; margin-left:.4rem; opacity:0; font-weight:400; }
   main :is(h2,h3):hover a.anchor, main :is(h2,h3) a.anchor:focus-visible{ opacity:1; }
@@ -136,7 +136,7 @@
   footer.foot a{ color:var(--muted); text-decoration:none; }
   footer.foot a:hover{ color:var(--gold); }
 
-  @media (prefers-reduced-motion: reduce){ *{ animation:none !important; transition:none !important; scroll-behavior:auto; } }
+  @media (prefers-reduced-motion: reduce){ *{ animation:none !important; transition:none !important; } }
   @media print{ header.top,aside.toc,.progress,body::before,body::after{ display:none } a{ color:inherit } pre,table{ border-color:oklch(0.68 0 0) } }
 </style>
 </head>
