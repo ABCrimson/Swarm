@@ -146,10 +146,11 @@ impl OrchestrationEngine {
     /// handle.
     ///
     /// `emit` is the PRIMARY delivery path: called on the writer thread,
-    /// in seq order, for every event (persisted or not). It must not be
+    /// in seq order, for every event the writer issues a seq to and, if
+    /// persistent, appends (see # Failing closed). It must not be
     /// lossy — a slow consumer should back up the (unbounded) writer
     /// channel rather than drop events, since ephemeral events can never
-    /// be backfilled. Every event is also offered to the secondary
+    /// be backfilled. Every delivered event is also offered to the secondary
     /// broadcast fanout ([`Self::subscribe`]), which costs nothing while
     /// nothing is subscribed.
     ///
@@ -252,7 +253,8 @@ impl OrchestrationEngine {
     }
 
     /// Resolves once every event recorded before this call has been
-    /// persisted and emitted, with the head seq at that point.
+    /// handled (persisted and emitted, or dropped fail-closed; see
+    /// # Failing closed), with the head seq at that point.
     ///
     /// # Errors
     ///

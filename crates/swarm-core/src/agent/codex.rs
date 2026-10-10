@@ -784,7 +784,9 @@ async fn teardown(shared: &Arc<Shared>) -> ExitSummary {
             }),
             Provenance::default(),
         );
-        // A dropped acknowledgement only means the event writer is gone.
+        // A dropped acknowledgement means the event writer is gone or the event
+        // could not be saved (it fails closed); either way there is nothing to
+        // wait for.
         let _ = persisted.await;
     }
 

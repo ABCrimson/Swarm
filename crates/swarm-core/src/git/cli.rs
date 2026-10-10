@@ -658,7 +658,7 @@ mod tests {
     fn test_repo_local_env_vars_cover_what_git_reports() {
         let out = run(&["rev-parse", "--local-env-vars"], READ_TIMEOUT).unwrap();
         assert!(out.success(), "{}", out.stderr);
-        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        let text = String::from_utf8_lossy_owned(out.stdout);
         for var in text.lines().filter(|l| !l.is_empty()) {
             assert!(
                 REPO_LOCAL_ENV_VARS.contains(&var),

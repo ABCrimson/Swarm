@@ -722,4 +722,22 @@ mod tests {
         names.sort_unstable();
         assert_eq!(names, ["a", "b"]);
     }
+
+    #[test]
+    fn test_announce_runs_under_the_entry_lock() {
+        let reg = WorkerRegistry::new();
+        let id = reg.spawn_worker(make_handle("locked-announce")).unwrap();
+        let locked = std::cell::Cell::new(None);
+        let probe = || locked.set(Some(reg.workers.try_get(&id).is_locked()));
+        reg.update_state_if_then(&id, WorkerState::Running, WorkerState::Paused, probe)
+            .unwrap();
+        assert_eq!(locked.take(), Some(true));
+        assert!(
+            reg.update_state_if_then(&id, WorkerState::Running, WorkerState::Paused, probe)
+                .is_err()
+        );
+        assert_eq!(locked.take(), None);
+        assert!(reg.mark_exited(&id, probe));
+        assert_eq!(locked.take(), Some(true));
+    }
 }

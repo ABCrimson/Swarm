@@ -284,8 +284,10 @@ fn on_shell_exit(
 /// Checks with `try_wait` first: once a shell has been reaped its pid
 /// can be reused, and `portable-pty`'s Unix `kill` signals the pid
 /// directly. Failures are logged; the worker is being torn down either
-/// way. A `kill` error is advisory (see the comment at the call): a
-/// shell that `try_wait` confirms is gone is not a failure.
+/// way. `portable-pty` 0.9.0's Windows `Child::kill` always returns `Ok`
+/// and its Unix `kill` can fail for a shell that just exited, so the
+/// `kill` result is advisory: after it, `try_wait` (polled briefly) is the
+/// authority on whether the shell is gone, and `wait` reaps it either way.
 fn reap(child: &mut dyn Child, worker_id: Uuid) {
     match child.try_wait() {
         Ok(Some(status)) => {
@@ -297,19 +299,22 @@ fn reap(child: &mut dyn Child, worker_id: Uuid) {
             tracing::warn!(%worker_id, error = %e, "cannot check the worker's shell before killing it")
         }
     }
-    if let Err(e) = child.kill() {
-        // `portable-pty` 0.9.0's Windows `kill()` can report an error for
-        // a shell that is already going away (the fix, wezterm#7709, is
-        // unreleased), so the error is advisory: `try_wait` is the
-        // authority on whether the shell is really gone.
-        match child.try_wait() {
-            Ok(Some(status)) => tracing::debug!(
-                %worker_id, error = %e, ?status,
-                "kill reported an error but the worker's shell had exited"
-            ),
-            Ok(None) | Err(_) => {
-                tracing::warn!(%worker_id, error = %e, "failed to kill the worker's shell");
-            }
+    let killed = child.kill();
+    // 0.9.0's Windows Child::kill always returns Ok; Unix kill can fail with
+    // ESRCH for a shell that just exited. try_wait is the authority.
+    let exited = (0..10).find_map(|i| {
+        if i > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        child.try_wait().ok().flatten()
+    });
+    match (exited, killed) {
+        (Some(status), _) => tracing::debug!(%worker_id, ?status, "worker shell exited after kill"),
+        (None, Err(e)) => {
+            tracing::warn!(%worker_id, error = %e, "failed to kill the worker's shell")
+        }
+        (None, Ok(())) => {
+            tracing::warn!(%worker_id, "kill reported success but the shell is still running; waiting")
         }
     }
     match child.wait() {
