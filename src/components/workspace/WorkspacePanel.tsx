@@ -176,6 +176,11 @@ export function WorkspacePanel(): React.ReactElement {
         onPointerMove={handlePointerMove}
         onLostPointerCapture={handleLostPointerCapture}
         onKeyDown={handleSeparatorKeyDown}
+        onWheel={(e) => {
+          e.currentTarget.nextElementSibling
+            ?.querySelector<HTMLElement>(".scroll-area")
+            ?.scrollBy(e.deltaX, e.deltaY);
+        }}
         className="m-0 h-auto w-1 shrink-0 relative z-10 before:absolute before:inset-y-0 before:left-0 before:-right-5 before:content-[''] cursor-col-resize touch-none select-none border-0 bg-transparent transition-colors duration-150 hover:bg-plasma/20 data-dragging:bg-plasma/40"
       />
 
