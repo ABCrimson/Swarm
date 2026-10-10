@@ -76,6 +76,7 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
 - [Events](#events)
   - [The Envelope](#the-envelope)
   - [Type Tags](#type-tags)
+  - [Unified Bus Event Contract](#unified-bus-event-contract)
   - [Persistence Policy](#persistence-policy)
   - [Failing Closed](#failing-closed)
   - [Receipts](#receipts)
@@ -1574,6 +1575,10 @@ A stamped envelope additionally carries `originWorker`/`causeSeq`:
 | `agent_permission_request` | `{ workerId, turnId, requestId, tool, input, suggestedDecision?, denialSubclass?, message? }` -- two shapes. **Pending** (no `suggestedDecision`): the provider is blocked until [`agent_permission_respond`](#agent_permission_respond) answers `requestId`. **Report** (`suggestedDecision: "deny"`, Claude Code only): a denial the provider already made, with `denialSubclass` one of `"mode"` / `"ungranted_write"` / `"redirection_guard"` (absent when unclassified) and `message` the provider's text; nothing is left to answer | Yes |
 | `agent_turn_settled`  | `{ workerId, turnId, status, error, costUsd, usage, durationMs, numTurns }` -- terminal receipt, exactly once per turn, synthesized on ungraceful child exit too; `status` is `"ok"` or `"error"` | Yes |
 | `agent_session_exited` | `{ workerId, exitCode, signal }`                                | Yes |
+
+### Unified Bus Event Contract
+
+`bus_message` envelopes are delivered through exactly one path: [`bus_send`](#bus_send) records the event itself, synchronously, the moment a message is sent (`Router::send` in `crates/swarm-core/src/bus/router.rs`). Each message therefore reaches every client **exactly once**, in one consistent shape, and appears in a replay; no active subscriber is required and there is no second delivery primitive that could drift out of sync with this one.
 
 ### Persistence Policy
 
