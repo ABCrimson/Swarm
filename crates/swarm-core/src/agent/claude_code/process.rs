@@ -105,6 +105,9 @@ pub(super) struct Process {
 
 impl Process {
     pub(super) async fn start(binary: &str, argv: &[String], cwd: &str) -> anyhow::Result<Self> {
+        // Process creation is a blocking syscall; keep it off the async
+        // worker threads.
+        let (binary, argv, cwd) = (binary.to_owned(), argv.to_vec(), cwd.to_owned());
         let PipedHandle {
             stdin,
             child,
@@ -112,7 +115,9 @@ impl Process {
             lines,
             framer_errors,
             stderr_tail,
-        } = spawn_piped(binary, argv, cwd, &child_env())?;
+        } = tokio::task::spawn_blocking(move || spawn_piped(&binary, &argv, &cwd, &child_env()))
+            .await
+            .map_err(|e| anyhow::anyhow!("the claude spawn task failed: {e}"))??;
         match StdinWriter::start(stdin) {
             Ok(stdin) => Ok(Self {
                 child,
