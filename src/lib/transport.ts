@@ -2,8 +2,6 @@ import { isTauri, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getLastSeq } from "#lib/event-bus";
 
-export type { UnlistenFn };
-
 /**
  * What a transport can honestly promise. Feature-gated call sites
  * (fs/dialog-backed file browsing, OS notifications, the auto-updater,
@@ -97,7 +95,7 @@ const UNAUTHORIZED_CLOSE_CODE = 4401;
  * {@link RPC_TIMEOUT_MS}. When nothing at all arrived on the socket in
  * that window, the socket is also closed so the reconnect loop replaces it.
  */
-export class RpcTimeoutError extends Error {
+class RpcTimeoutError extends Error {
   constructor(cmd: string) {
     super(`RPC "${cmd}" Timed Out After ${RPC_TIMEOUT_MS}ms.`);
     this.name = "RpcTimeoutError";
