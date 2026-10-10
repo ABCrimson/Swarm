@@ -390,6 +390,7 @@ describe("AgentChat", () => {
     const failed = { border: "1px solid oklch(0.45 0.18 25)" };
     expect(screen.getByText("first")).toHaveStyle(failed);
     expect(screen.getByText("second")).not.toHaveStyle(failed);
+    expect(screen.getAllByText("Not Sent")).toHaveLength(1);
   });
 
   it("fails the bubble of a send the backend never admitted", async () => {
@@ -401,6 +402,7 @@ describe("AgentChat", () => {
     await vi.waitFor(() =>
       expect(screen.getByText("hello")).toHaveStyle({ border: "1px solid oklch(0.45 0.18 25)" }),
     );
+    expect(screen.getByText("Not Sent")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
   });
 

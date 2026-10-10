@@ -275,7 +275,15 @@ function TranscriptRow({
 }): React.ReactNode {
   switch (item.kind) {
     case "user":
-      return <div style={item.failed ? userBubbleFailedStyle : userBubbleStyle}>{item.text}</div>;
+      // The red tint is not the only sign of a failed send: it also says so in words.
+      return item.failed ? (
+        <div style={userBubbleFailedStyle}>
+          {item.text}
+          <div style={settledErrorStyle}>Not Sent</div>
+        </div>
+      ) : (
+        <div style={userBubbleStyle}>{item.text}</div>
+      );
     case "block": {
       // tool_use blocks render through their agent_tool_call event instead.
       if (item.payload.kind === "tool_use") return null;
