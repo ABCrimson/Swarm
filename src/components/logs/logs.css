@@ -93,14 +93,14 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--color-text);
+    color: var(--color-fg);
   }
 
   .log-row__match {
     padding: 0 1px;
     border-radius: 2px;
     background: oklch(0.82 0.19 70 / 0.3);
-    color: var(--color-text-bright);
+    color: var(--color-fg-bright);
   }
 
   /* ── Filter toolbar ───────────────────────────── */
@@ -134,9 +134,9 @@
     text-transform: uppercase;
     cursor: pointer;
     transition:
-      background var(--duration-fast) var(--ease-out),
-      border-color var(--duration-fast) var(--ease-out),
-      color var(--duration-fast) var(--ease-out);
+      background 0.12s var(--ease-out),
+      border-color 0.12s var(--ease-out),
+      color 0.12s var(--ease-out);
   }
 
   .log-filter__level[data-level="info"] {
