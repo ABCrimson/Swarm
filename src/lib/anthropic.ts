@@ -44,7 +44,7 @@ import type {
   BetaToolUseBlock,
 } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import * as z from "zod";
-import { ANTHROPIC_API_KEY_CONFIG_KEY } from "#lib/config-keys";
+import { ANTHROPIC_API_KEY_CONFIG_KEY } from "#lib/anthropic-config";
 import { estimateCostUsd, getModelById, hasPricing, type UsageTokens } from "#lib/models";
 import { readConfig } from "#lib/tauri";
 import { useAiStore } from "#store/ai";
