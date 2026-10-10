@@ -18,7 +18,7 @@ use super::protocol::{
     TurnStartResponse, TurnStatus, method,
 };
 use super::state::{ApprovalKind, BlockStream, Inner, PendingApproval, Shared, TurnSlot};
-use super::teardown::teardown;
+use super::teardown::{teardown, teardown_on_drop};
 use super::{RECENTLY_SETTLED, TURN_FAILED, TURN_INTERRUPTED};
 
 use crate::agent::adapter::{AgentTurnStatus, PermissionDecision, PermissionId, TurnId};
@@ -41,13 +41,7 @@ pub(super) async fn run_reader(
     // A panic while mapping a line must still tear the session down
     // (Condition B, the child's reaping), so teardown is armed as a drop
     // guard and disarmed on the normal path.
-    let teardown_on_unwind = DropGuard::new(Arc::clone(&shared), |shared| {
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                teardown(&shared).await;
-            });
-        }
-    });
+    let teardown_on_unwind = teardown_on_drop(&shared);
 
     let mut framer_open = true;
     loop {

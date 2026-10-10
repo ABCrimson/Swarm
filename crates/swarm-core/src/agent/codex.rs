@@ -95,7 +95,7 @@ use self::process::{
 use self::protocol::{TurnInterruptParams, TurnStartParams, TurnStartResponse, UserInput, method};
 use self::reader::{approval_answer, run_reader};
 use self::state::{BlockIndex, Inner, RequestFailure, Settled, Shared, TurnSlot, wait_settled};
-use self::teardown::teardown;
+use self::teardown::{teardown, teardown_on_drop};
 use self::tier::{child_env, codex_capabilities, parse_trust_tier, requested_model};
 
 use crate::agent::adapter::{
@@ -351,13 +351,7 @@ impl AgentAdapter for CodexAdapter {
             // From here on the child must never outlive a failed spawn —
             // including this future being dropped mid-handshake. Teardown
             // is quiet for a session that was never announced.
-            let reap_on_drop = DropGuard::new(Arc::clone(&shared), |shared| {
-                if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                    runtime.spawn(async move {
-                        teardown(&shared).await;
-                    });
-                }
-            });
+            let reap_on_drop = teardown_on_drop(&shared);
 
             match start_stdin_writer(spec.worker_id, stdin) {
                 Ok(writer) => shared.state.lock().writer = Some(writer),

@@ -1,6 +1,7 @@
 //! Session teardown: runs exactly once; also the exit-signal name that
 //! teardown's [`ExitSummary`] carries.
 
+use std::mem::DropGuard;
 use std::sync::Arc;
 
 use super::PROCESS_EXITED_WITHOUT_RECEIPT;
@@ -42,6 +43,21 @@ pub(super) fn signal_name(status: &std::process::ExitStatus) -> Option<String> {
 #[cfg(not(unix))]
 pub(super) fn signal_name(_status: &std::process::ExitStatus) -> Option<String> {
     None
+}
+
+/// Arms teardown for a guard dropped without being dismissed (a dropped
+/// spawn future, a panicking reader): spawns [`teardown`] on the current
+/// runtime, if any.
+pub(super) fn teardown_on_drop(
+    shared: &Arc<Shared>,
+) -> DropGuard<Arc<Shared>, impl FnOnce(Arc<Shared>)> {
+    DropGuard::new(Arc::clone(shared), |shared| {
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                teardown(&shared).await;
+            });
+        }
+    })
 }
 
 /// Tears the session down exactly once; every later call returns the
