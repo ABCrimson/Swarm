@@ -1,7 +1,7 @@
 // ── Worker Spawn (process options + agent metadata split) ──
 //
 // `WorkerSpawnSpec` (#store/types) bundles two halves that must never
-// be conflated: process options (name/shell/cwd/env — sent to Rust's
+// be conflated: process options (name/shell/cwd/env/repoRoot/isolation — sent to Rust's
 // WorkerConfig over IPC) and agent metadata (role/model/systemPrompt —
 // client-side only). This module is the one place that spawns a worker
 // from the combined spec, splitting it correctly and — when spawning
@@ -21,7 +21,7 @@ import { useWorkerStore } from "#store/workers";
 /**
  * Spawns a worker from a full `WorkerSpawnSpec`.
  *
- * - Process options (`name`/`shell`/`cwd`/`env`) go to Rust via
+ * - Process options (`name`/`shell`/`cwd`/`env`/`repoRoot`/`isolation`) go to Rust via
  *   `spawnWorker` (`#lib/tauri`).
  * - Agent metadata (`role`/`model`/`systemPrompt`) is stored
  *   client-side in `useWorkerAgentStore`, keyed by the new worker id —
