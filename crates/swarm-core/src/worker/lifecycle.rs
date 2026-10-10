@@ -285,9 +285,10 @@ fn on_shell_exit(
 /// can be reused, and `portable-pty`'s Unix `kill` signals the pid
 /// directly. Failures are logged; the worker is being torn down either
 /// way. `portable-pty` 0.9.0's Windows `Child::kill` always returns `Ok`
-/// and its Unix `kill` can fail for a shell that just exited, so the
-/// `kill` result is advisory: after it, `try_wait` (polled briefly) is the
-/// authority on whether the shell is gone, and `wait` reaps it either way.
+/// and its Unix `kill` (SIGHUP, about 200 ms of `try_wait`, then SIGKILL)
+/// errors only if a signal cannot be delivered, so the `kill` result is
+/// advisory: after it, `try_wait` (polled briefly) is the authority on
+/// whether the shell is gone, and `wait` reaps it either way.
 fn reap(child: &mut dyn Child, worker_id: Uuid) {
     match child.try_wait() {
         Ok(Some(status)) => {
@@ -300,8 +301,8 @@ fn reap(child: &mut dyn Child, worker_id: Uuid) {
         }
     }
     let killed = child.kill();
-    // 0.9.0's Windows Child::kill always returns Ok; Unix kill can fail with
-    // ESRCH for a shell that just exited. try_wait is the authority.
+    // 0.9.0's Windows Child::kill discards TerminateProcess's result and
+    // always returns Ok, so try_wait is the authority on whether the shell is gone.
     let exited = (0..10).find_map(|i| {
         if i > 0 {
             std::thread::sleep(std::time::Duration::from_millis(20));
