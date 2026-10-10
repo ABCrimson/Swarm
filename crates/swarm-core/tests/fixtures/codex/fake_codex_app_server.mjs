@@ -13,7 +13,7 @@
  *   user's configured default instead (here the most permissive one,
  *   `dangerFullAccess`), exactly as the live server answered a request that
  *   used the wrong `sandboxPolicy` key.
- * - Stdin EOF ends the process (exit 0), unless IGNORE_STDIN_EOF.
+ * - Stdin EOF ends the process (exit 0), unless IGNORE_STDIN_EOF or ON_STDIN_EOF was given.
  *
  * Every message the client writes is appended to the `--record` file as
  * one JSON line, so a test can assert the exact wire traffic; the fake
@@ -44,7 +44,7 @@
  *   RESPOND <json-result>         answer the last request with this result
  *   RESPOND_ERROR <code> <text>   answer the last request with an error
  *   REPEAT <n> <line>             write <line> n times
- *   EMIT_OVERSIZED_LINE           write 11 MB with no newline, then hang
+ *   EMIT_OVERSIZED_LINE           write 11 MiB with no newline, then hang
  *   IGNORE_STDIN_EOF              keep running after stdin closes (a hung server)
  *   ON_STDIN_EOF <line>           keep running after stdin closes and write
  *                                 <line> then (repeatable: lines queue up)
