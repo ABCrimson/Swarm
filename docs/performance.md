@@ -81,12 +81,12 @@ let runtime = tokio::runtime::Builder::new_multi_thread()
 
 | Primitive | Version / Crate | Usage |
 |-----------|----------------|-------|
-| `DashMap` | 6.2.1 | Lock-free worker registry (`WorkerRegistry`), session manager, bus channels |
+| `DashMap` | 7.0.0-rc2 | Sharded concurrent map: worker registry (`WorkerRegistry`), session manager, bus channels |
 | `parking_lot::Mutex` | 0.12.5 | PTY writer/child wrapping, shared sysinfo `System` (`SharedSystem`), agent turn queue heap |
 | `parking_lot::RwLock` | 0.12.5 | System configuration (max workers, default shell) |
-| `tokio::sync::Semaphore` | tokio 1.53.1 | agent-turn concurrency limiting (`AgentScheduler`, default: 3 concurrent turns) |
-| `tokio::sync::mpsc` | tokio 1.53.1 | PTY output channel (4096 capacity), agent turn queue (256 capacity) |
-| `tokio::sync::broadcast` | tokio 1.53.1 | Per-topic message bus channels (`bus::channel::MessageBus`) |
+| `tokio::sync::Semaphore` | tokio 1.53.2 | agent-turn concurrency limiting (`AgentScheduler`, default: 3 concurrent turns) |
+| `tokio::sync::mpsc` | tokio 1.53.2 | PTY output channel (4096 capacity), agent turn queue (256 capacity) |
+| `tokio::sync::broadcast` | tokio 1.53.2 | Per-topic message bus channels (`bus::channel::MessageBus`) |
 
 `rayon` was removed from `Cargo.toml` -- it was an unused dependency. Worker metrics aggregation runs as sequential iteration inside `tokio::task::spawn_blocking`; the 64-worker registry cap makes `rayon`-style parallel dispatch overhead not worth paying for.
 
@@ -142,15 +142,15 @@ When the `timestamp-query` device feature is available, the compute pass records
 
 ## Build Optimization
 
-### Vite 8.2 + Rolldown
+### Vite 8.3 + Rolldown
 
-The frontend builds with Vite 8.2.2 using the Rolldown bundler. The React Compiler runs inside `@vitejs/plugin-react` (`react({ compiler: true })`) as the Oxc port, `oxc-transform-react`: its native binding, or its WASI binding where the native one cannot load (Windows Smart App Control). No Babel is involved:
+The frontend builds with Vite 8.3.4 using the Rolldown bundler. The React Compiler runs inside `@vitejs/plugin-react` (`react({ compiler: true })`) as the Oxc port, `oxc-transform-react`: its native binding, or its WASI binding where the native one cannot load (Windows Smart App Control). No Babel is involved:
 
 ```ts
 build: {
   minify: "oxc",                        // Native oxc minification (Rolldown's minifier)
   sourcemap: true,
-  target: "esnext",                     // Tauri renders in Chromium 146+ (WebView2/WKWebView) — no downleveling needed
+  target: "esnext",                     // WebView2 is Chromium; WKWebView/WebKitGTK are current WebKit (ES2022+, top-level await). The one engine gap, Temporal, is polyfilled at boot (src/boot.ts)
   modulePreload: { polyfill: false },
   rolldownOptions: {
     output: {
@@ -175,7 +175,7 @@ build: {
 | `charts` | `recharts`, `d3-*` |
 
 > [!NOTE]
-> `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 13.1.1, not `framer-motion`.
+> `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 14.1.0, not `framer-motion`.
 
 ### Rust Release Profile
 
