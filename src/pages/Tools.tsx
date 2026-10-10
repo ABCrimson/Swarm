@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import { ToolBuilder } from "#components/tools/ToolBuilder";
@@ -23,6 +23,17 @@ export function Tools(): React.ReactElement {
   const deleteTool = useCustomToolsStore((s) => s.deleteTool);
   const [view, setView] = useState<View>({ mode: "list" });
   const contentRef = useRef<HTMLDivElement>(null);
+  const pendingEditFocus = useRef<string | null>(null);
+
+  // saveTool commits after a microtask (mutate waits on hydration), so the saved tool's card renders after showList returns.
+  useEffect(() => {
+    const name = pendingEditFocus.current;
+    if (name === null || !customTools.some((tool) => tool.name === name)) return;
+    pendingEditFocus.current = null;
+    contentRef.current
+      ?.querySelector<HTMLElement>(`button[aria-label="Edit ${CSS.escape(name)}"]`)
+      ?.focus();
+  }, [customTools]);
 
   // List and builder swap in place, so the activated control unmounts: commit synchronously, then focus the new view.
   const showBuilder = (tool?: CustomToolDef): void => {
@@ -80,6 +91,7 @@ export function Tools(): React.ReactElement {
             initialTool={view.tool}
             takenNames={takenNamesFor(view.tool)}
             onSave={(tool) => {
+              pendingEditFocus.current = tool.name;
               saveTool(tool);
               showList(tool.name);
             }}
