@@ -104,9 +104,10 @@ async fn stream_events(
     }
 }
 
-/// Enqueues one live event on the lane its persistence class calls for.
-/// An ephemeral event over the watermark is dropped before it is
-/// serialized, so a stalled client costs the feeder no JSON work.
+/// Enqueues one live event on the event lane: a persistent event waits for
+/// room, an ephemeral one is dropped once [`EPHEMERAL_WATERMARK`] frames are
+/// queued or when the lane is full or closed. At the watermark it is dropped
+/// before it is serialized, so a stalled client costs the feeder no JSON work.
 async fn forward(event: &DomainEvent, events: &mpsc::Sender<Utf8Bytes>) -> Result<(), FeedEnd> {
     let persistent = is_persistent(&event.event);
     if !persistent && events.max_capacity() - events.capacity() >= EPHEMERAL_WATERMARK {
@@ -325,7 +326,7 @@ mod tests {
     /// dropped instead of blocking the feeder, while machine-issued input
     /// is persistent and waits for room.
     #[tokio::test]
-    async fn test_terminal_worker_input_rides_the_ephemeral_lane() {
+    async fn test_terminal_worker_input_is_dropped_on_a_full_lane() {
         use swarm_core::events::{InputSource, WorkerInputPayload};
         let input = |seq, source| DomainEvent {
             event: SwarmEvent::WorkerInput(WorkerInputPayload {
