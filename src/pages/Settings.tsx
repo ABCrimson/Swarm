@@ -565,8 +565,10 @@ export function Settings(): React.ReactElement {
         setApiKeyDraft(key);
         setApiKeySaved(key);
       })
-      .catch(() => {
-        // No config file yet (fresh install) or IPC unavailable — leave the field empty.
+      .catch((err: unknown) => {
+        // Unset resolves null; a rejection means the backend could not answer (transport
+        // down, or a swarmd page, which is denied secret-shaped keys). It never carries the key.
+        console.warn("[settings] Could not read the saved API key:", err);
       });
     return () => {
       cancelled = true;
@@ -601,8 +603,9 @@ export function Settings(): React.ReactElement {
       .then((v) => {
         if (!cancelled && typeof v === "number" && v >= 1) setMaxWorkersState(v);
       })
-      .catch(() => {
-        // No persisted value yet — keep the backend default.
+      .catch((err: unknown) => {
+        // Unset resolves null; a rejection means the backend could not answer — keep the default.
+        console.warn("[settings] Could not read the saved worker registry cap:", err);
       });
     return () => {
       cancelled = true;
