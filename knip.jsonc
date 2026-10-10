@@ -5,23 +5,27 @@
   // Run it with `pnpm exec knip`; CI runs it as the `knip` job.
   "$schema": "./node_modules/knip/schema-jsonc.json",
 
-  // The Vite, Vitest, Playwright and Biome plugins discover src/main.tsx's
-  // graph, the *.test.* files and e2e/*.spec.ts on their own; only what no
-  // plugin can see is listed here.
+  // The Vite plugin (index.html -> src/boot.ts -> src/main.tsx), the Vitest
+  // and Playwright plugins and the package.json scripts reach the app graph,
+  // the *.test.* files, e2e/*.spec.ts and the scripts package.json runs;
+  // only what none of them can see is listed here.
   "entry": [
-    // The Web Worker bundle entries (tsconfig.worker.json), referenced as
-    // `new Worker(new URL(...))` strings.
-    "src/workers/*.ts",
-    // Run directly by node (package.json scripts), never imported.
-    "scripts/*.ts"
+    // Run by hand (`node scripts/sync-reference-repos.ts`); no package.json
+    // script names it, so no plugin can see it. src/workers/*.ts needs no
+    // entry: knip follows `new Worker(new URL(...))` itself.
+    "scripts/sync-reference-repos.ts"
   ],
 
-  // JS/TS only: crates/**/tests/fixtures/**/*.mjs are fake agent CLIs spawned
-  // by the Rust tests, so they are not unused files, and site/ is built by
+  // JS/TS and CSS (the Tailwind plugin parses CSS imports) only:
+  // crates/**/tests/fixtures/**/*.mjs are fake agent CLIs spawned by the Rust
+  // tests, so they are not unused files, and site/ is built by
   // scripts/build-site.ts as static pages.
   "project": ["src/**/*.{ts,tsx,css}", "e2e/**/*.ts", "scripts/**/*.ts", "*.ts"],
 
   "ignoreDependencies": [
+    // radix-ui is not listed: knip already counts it as the optional peer
+    // modern-cmdk imports for Command.Dialog, and ignoring it would be a
+    // config hint (an error in CI).
     // The WASI binding of the Oxc React Compiler transform. oxc-transform-react
     // loads it by name when NAPI_RS_FORCE_WASI=true (`pnpm check:compiler`
     // in CI) or when the native binding cannot load; no source imports it.
