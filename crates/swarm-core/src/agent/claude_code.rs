@@ -161,8 +161,9 @@ const INTERRUPT_GRACE: Duration = Duration::from_secs(1);
 /// (2.1.281 exits in about 0.6s) before teardown kills it.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
-/// Poll interval while waiting out [`SHUTDOWN_GRACE`] with non-blocking
-/// `try_wait` calls.
+/// Poll interval for the two bounded waits on a child: non-blocking
+/// `try_wait` calls while waiting out [`SHUTDOWN_GRACE`], and the stderr
+/// drain thread after the child exits (`drained_stderr_snippet`).
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// How long a `can_use_tool` ask may wait for a human before the session
