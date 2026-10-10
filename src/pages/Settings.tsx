@@ -1,5 +1,14 @@
 import { useAtom } from "jotai";
-import { useEffect, useEffectEvent, useId, useOptimistic, useState, useTransition } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useId,
+  useOptimistic,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
+import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
@@ -402,6 +411,8 @@ function AlertThresholdsSection({
   const [error, setError] = useState<ThresholdsProblem | null>(null);
   const editing = draft !== null;
   const errorId = `${id}-error`;
+  const firstFieldRef = useRef<HTMLInputElement>(null);
+  const editButtonRef = useRef<HTMLButtonElement>(null);
 
   const parsed = (values: Record<ThresholdKey, string>): AlertThresholds => ({
     cpuWarning: clampNumberInput(values.cpuWarning, 0, 100, thresholds.cpuWarning),
@@ -410,14 +421,28 @@ function AlertThresholdsSection({
     memoryCritical: clampNumberInput(values.memoryCritical, 0, 100, thresholds.memoryCritical),
   });
 
+  // The Edit and Cancel/Save buttons swap places, so the activated button
+  // unmounts: commit synchronously, then move focus to the control that
+  // replaced it instead of letting it fall to <body>.
   const startEditing = (): void => {
-    setError(null);
-    setDraft({
-      cpuWarning: String(thresholds.cpuWarning),
-      cpuCritical: String(thresholds.cpuCritical),
-      memoryWarning: String(thresholds.memoryWarning),
-      memoryCritical: String(thresholds.memoryCritical),
+    flushSync(() => {
+      setError(null);
+      setDraft({
+        cpuWarning: String(thresholds.cpuWarning),
+        cpuCritical: String(thresholds.cpuCritical),
+        memoryWarning: String(thresholds.memoryWarning),
+        memoryCritical: String(thresholds.memoryCritical),
+      });
     });
+    firstFieldRef.current?.focus();
+  };
+
+  const stopEditing = (): void => {
+    flushSync(() => {
+      setDraft(null);
+      setError(null);
+    });
+    editButtonRef.current?.focus();
   };
 
   const save = (event: React.FormEvent<HTMLFormElement>): void => {
@@ -431,8 +456,7 @@ function AlertThresholdsSection({
       return;
     }
     setThresholds(next);
-    setDraft(null);
-    setError(null);
+    stopEditing();
     toast.success("Alert Thresholds Updated");
   };
 
@@ -443,14 +467,7 @@ function AlertThresholdsSection({
         action={
           editing ? (
             <div className="flex gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setDraft(null);
-                  setError(null);
-                }}
-              >
+              <Button variant="ghost" size="sm" onClick={stopEditing}>
                 Cancel
               </Button>
               <Button type="submit" size="sm">
@@ -458,14 +475,14 @@ function AlertThresholdsSection({
               </Button>
             </div>
           ) : (
-            <Button variant="secondary" size="sm" onClick={startEditing}>
+            <Button ref={editButtonRef} variant="secondary" size="sm" onClick={startEditing}>
               Edit Thresholds
             </Button>
           )
         }
       >
         <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-          {THRESHOLD_FIELDS.map(({ key, label, tone }) => {
+          {THRESHOLD_FIELDS.map(({ key, label, tone }, index) => {
             const invalid = editing && error?.keys.has(key) === true;
             return (
               <div key={key}>
@@ -478,6 +495,7 @@ function AlertThresholdsSection({
                 <div className="flex items-center gap-1.5">
                   <Input
                     id={`${id}-${key}`}
+                    ref={index === 0 ? firstFieldRef : undefined}
                     type="number"
                     inputMode="numeric"
                     min={0}
