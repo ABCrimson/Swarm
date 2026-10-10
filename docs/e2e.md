@@ -16,11 +16,12 @@
 
 ## Current Suite
 
-Playwright drives the real app headless in Chromium — no mocking, no component harness. CI runs it against the production bundle (`vite build` + `vite preview`), local runs against the dev server. 40 tests across six spec files, all built on the shared fixture in `e2e/fixtures.ts`. Chromium is the default project; WebKit and Firefox are opt-in (see [Running It](#running-it)):
+Playwright drives the real app headless in Chromium — no mocking, no component harness. CI runs it against the production bundle (`vite build` + `vite preview`), local runs against the dev server. 41 tests across seven spec files, all built on the shared fixture in `e2e/fixtures.ts`. Chromium is the default project; WebKit and Firefox are opt-in (see [Running It](#running-it)):
 
 | File                    | Tests | Covers                                                                 |
 |--------------------------|-------|------------------------------------------------------------------------|
 | `e2e/fixtures.ts`       | n/a | The `app` fixture every spec uses: opens the app and waits for the app-ready signal (below), plus landmark locators, sidebar navigation and the palette shortcut |
+| `e2e/boot.spec.ts`       | 1 | The start-failure path: when the app module (`src/main.tsx`) fails to load, `src/boot.ts` shows the "SWARM Could Not Start" heading and a Reload button in `#root` instead of a blank window |
 | `e2e/navigation.spec.ts` | 12 | Dashboard load inside the shell's landmarks, the sidebar nav landmark with every top-level page, click-through navigation, arrow-key focus movement and Tab reaching the sidebar, command-palette routing to Tools, Logs and Workspace, a visited page keeping its state when you leave and return (`<Activity>`), the Workers empty state (graph + list view), the Sessions empty state |
 | `e2e/palette.spec.ts`    | 6 | Ctrl+K open, Escape close, query filtering (a matching query narrows the list; a non-matching one hits `Command.Empty`), selecting a nav command routes and closes the palette, frecency (a used command's badge reads exactly `1` on next open) |
 | `e2e/settings.spec.ts`   | 11 | Every settings section renders, the AI model catalog (switching selection, the gated-model warning toast), keybinding capture (accepting a new binding, rejecting a binding already in use), number-field min/max clamping on commit, keyboard focus rings (a model card keeps its ring after an arrow-key step; `test.fixme` on WebKit, which does not match `:focus-visible` there) and button contrast, the inverted-threshold inline error |
