@@ -117,19 +117,6 @@ describe("useSessionEvents", () => {
     expect(merged?.name).toBe("Renamed");
   });
 
-  it("drops (and logs) a malformed session_created payload", () => {
-    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    renderHook(() => useSessionEvents());
-
-    deliver("session_created", { sessionId: "not-a-uuid", name: "Nope" });
-
-    expect(useSessionStore.getState().sessions.size).toBe(0);
-    expect(consoleError).toHaveBeenCalledWith(
-      "useSessionEvents: invalid session_created payload",
-      expect.anything(),
-    );
-  });
-
   // ── session_deleted ──
 
   it("removes a session on session_deleted", () => {
@@ -139,17 +126,6 @@ describe("useSessionEvents", () => {
     deliver("session_deleted", { sessionId: SESSION_ID });
 
     expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(false);
-  });
-
-  it("drops (and logs) a malformed session_deleted payload", () => {
-    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    useSessionStore.getState().addSession(makeSession({ id: SESSION_ID }));
-
-    renderHook(() => useSessionEvents());
-    deliver("session_deleted", { id: SESSION_ID });
-
-    expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(true);
-    expect(consoleError).toHaveBeenCalledOnce();
   });
 
   // ── session_worker_added ──
@@ -182,24 +158,7 @@ describe("useSessionEvents", () => {
     ]);
   });
 
-  it("is a no-op (logged, not thrown) for a malformed session_worker_removed payload", () => {
-    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    useSessionStore.getState().addSession(makeSession({ id: SESSION_ID, workerIds: [WORKER_ID] }));
-
-    renderHook(() => useSessionEvents());
-    expect(() =>
-      deliver("session_worker_removed", { sessionId: "not-a-uuid", workerId: WORKER_ID }),
-    ).not.toThrow();
-
-    expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([WORKER_ID]);
-    expect(consoleError).toHaveBeenCalledOnce();
-  });
-
   it("is a no-op for a valid payload naming another session", () => {
-    // A valid RFC 9562 id (version 4, variant 8), and a console spy that
-    // must stay silent: this proves the payload got PAST validation, so
-    // the assertion exercises the session-id match, not the schema.
-    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     useSessionStore.getState().addSession(makeSession({ id: SESSION_ID, workerIds: [WORKER_ID] }));
 
     renderHook(() => useSessionEvents());
@@ -209,7 +168,6 @@ describe("useSessionEvents", () => {
     });
 
     expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([WORKER_ID]);
-    expect(consoleError).not.toHaveBeenCalled();
   });
 
   it("unsubscribes every listener on unmount", () => {

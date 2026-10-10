@@ -1,15 +1,7 @@
 import { useEffect } from "react";
-import * as z from "zod";
 import { onEvent } from "#lib/event-bus";
 import { listSessions } from "#lib/tauri";
 import { useSessionStore } from "#store/sessions";
-import { SessionWorkerAddedPayloadSchema, SessionWorkerRemovedPayloadSchema } from "#store/types";
-
-/** `session_created` payload (Rust `SessionCreatedPayload`) — it never carries more than this. */
-const SessionCreatedPayloadSchema = z.object({ sessionId: z.uuid(), name: z.string() });
-
-/** `session_deleted` payload (Rust `SessionDeletedPayload`). */
-const SessionDeletedPayloadSchema = z.object({ sessionId: z.uuid() });
 
 /**
  * Global session sync. Must be called once, at the app root.
@@ -24,8 +16,8 @@ const SessionDeletedPayloadSchema = z.object({ sessionId: z.uuid() });
  * - `session_worker_added`   -> store.addWorkerToSession() (idempotent)
  * - `session_worker_removed` -> store.removeWorkerFromSession()
  *
- * Every payload is `safeParse`d; an unexpected shape is logged and
- * dropped, never trusted via `as`. All listeners are removed on unmount.
+ * Payloads arrive already validated by `#lib/event-bus`. All listeners
+ * are removed on unmount.
  */
 export function useSessionEvents(): void {
   useEffect(() => {
@@ -42,13 +34,7 @@ export function useSessionEvents(): void {
     });
 
     const offs = [
-      onEvent("session_created", (e) => {
-        const parsed = SessionCreatedPayloadSchema.safeParse(e.payload);
-        if (!parsed.success) {
-          console.error("useSessionEvents: invalid session_created payload", parsed.error);
-          return;
-        }
-        const { sessionId, name } = parsed.data;
+      onEvent("session_created", ({ payload: { sessionId, name } }) => {
         const now = new Date().toISOString();
         // Merge into any record already in the store instead of a blind
         // replace. Rust emits this event as part of `create_session`, so
@@ -73,30 +59,13 @@ export function useSessionEvents(): void {
           updatedAt: existing?.updatedAt ?? now,
         });
       }),
-      onEvent("session_deleted", (e) => {
-        const parsed = SessionDeletedPayloadSchema.safeParse(e.payload);
-        if (!parsed.success) {
-          console.error("useSessionEvents: invalid session_deleted payload", parsed.error);
-          return;
-        }
-        removeSession(parsed.data.sessionId);
-      }),
-      onEvent("session_worker_added", (e) => {
-        const parsed = SessionWorkerAddedPayloadSchema.safeParse(e.payload);
-        if (!parsed.success) {
-          console.error("useSessionEvents: invalid session_worker_added payload", parsed.error);
-          return;
-        }
-        addWorkerToSession(parsed.data.sessionId, parsed.data.workerId);
-      }),
-      onEvent("session_worker_removed", (e) => {
-        const parsed = SessionWorkerRemovedPayloadSchema.safeParse(e.payload);
-        if (!parsed.success) {
-          console.error("useSessionEvents: invalid session_worker_removed payload", parsed.error);
-          return;
-        }
-        removeWorkerFromSession(parsed.data.sessionId, parsed.data.workerId);
-      }),
+      onEvent("session_deleted", ({ payload }) => removeSession(payload.sessionId)),
+      onEvent("session_worker_added", ({ payload }) =>
+        addWorkerToSession(payload.sessionId, payload.workerId),
+      ),
+      onEvent("session_worker_removed", ({ payload }) =>
+        removeWorkerFromSession(payload.sessionId, payload.workerId),
+      ),
     ];
 
     return () => {
