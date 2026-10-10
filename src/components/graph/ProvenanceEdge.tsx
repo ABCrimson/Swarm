@@ -7,7 +7,7 @@ import type { ProvenanceEdgeKind } from "#store/provenance";
 export type GraphEdgeKind = ProvenanceEdgeKind | "manual";
 
 /** Data payload every `ProvenanceEdge` instance reads from xyflow's `edge.data`. */
-export interface ProvenanceEdgeData extends Record<string, unknown> {
+interface ProvenanceEdgeData extends Record<string, unknown> {
   readonly kind: GraphEdgeKind;
   /** Repeat-occurrence count for a measured edge (collapsed same-kind A->B occurrences); absent for a manual edge. */
   readonly count?: number;

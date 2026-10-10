@@ -8,7 +8,7 @@ import { useProvenanceStore } from "#store/provenance";
 import { useWorkerStore } from "#store/workers";
 
 /** Node data: which worker, and its colour slot. Everything live is read from the stores. */
-export interface WorkerNodeData extends Record<string, unknown> {
+interface WorkerNodeData extends Record<string, unknown> {
   readonly workerId: string;
   readonly index: number;
 }

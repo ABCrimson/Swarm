@@ -8,7 +8,7 @@ import { DEFAULT_REPO_ROOT_KEY, getPersistedRepoRoot } from "#lib/project-root";
 import { agentProbe, agentSpawn, spawnWorker, validateRepoRoot, writeConfig } from "#lib/tauri";
 
 /** Where a new worker's chat runs: the webview's own Claude client, or an attached agent CLI. */
-export type SpawnProvider = "webview_anthropic" | "claude_code" | "codex";
+type SpawnProvider = "webview_anthropic" | "claude_code" | "codex";
 
 /** Providers that attach an agent session (and take a model alias and trust tier). */
 type AgentProvider = Extract<SpawnProvider, "claude_code" | "codex">;
