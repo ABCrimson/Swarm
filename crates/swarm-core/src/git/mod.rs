@@ -33,12 +33,9 @@ pub mod ship;
 pub(crate) mod test_support;
 pub mod worktree;
 
-pub use causal::{CausalCommit, CausalToolCall, CausalTurn, ShipContext, build_ship_context};
-pub use cli::{GitCapability, MIN_GIT_VERSION, probe_capability};
-pub use ship::{
-    CommitOutcome, CommitRequest, PushOutcome, ShipError, ShipErrorKind, ShipPreflight, ShipRemedy,
-    ShipWorktreeInfo, StagingMode,
-};
+pub use causal::{ShipContext, build_ship_context};
+pub use cli::{GitCapability, probe_capability};
+pub use ship::{CommitRequest, ShipError, ShipErrorKind, ShipRemedy, StagingMode};
 pub use worktree::RemoveOutcome;
 
 use std::path::{Path, PathBuf};
@@ -154,9 +151,10 @@ pub(crate) fn is_lock_contention_message(message: &str) -> bool {
 
 /// Resolves the user's home directory with [`std::env::home_dir`]: `$HOME`
 /// (then the password database) on Unix, the profile folder on Windows
-/// — the same folder Tauri resolves the `$HOME/.swarm/**` capability
-/// scope to (see `src-tauri/capabilities/default.json`). This is the
-/// root of `~/.swarm/worktrees/**`.
+/// — the same folder Tauri resolves `$HOME` to in the
+/// `opener:allow-open-path` scope `$HOME/.swarm/worktrees/**` (see
+/// `src-tauri/capabilities/default.json`). This is the root of
+/// `~/.swarm/worktrees/**`.
 ///
 /// # Errors
 ///
