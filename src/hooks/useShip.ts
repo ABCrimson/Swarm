@@ -9,8 +9,8 @@
  * the hook compilable by the React Compiler and every transition
  * unit-testable on its own. The rule tags below: B1 (the receipt
  * timeout) is defined at `SHIP_SETTLED_TIMEOUT_MS`; B2 (nothing-to-commit
- * recovery) and B3 (mode-aware preflight) are the backend rules of the
- * same name in `docs/architecture.md`'s Ship Chain section.
+ * recovery) and B3 (mode-aware preflight) are the rules of the same name
+ * in `docs/architecture.md`'s Ship Chain section.
  *
  * @module useShip
  */
@@ -43,7 +43,7 @@ export type AiProseState = "idle" | "generating" | "ready" | "failed";
 export type ShipContextState = "loading" | "ready" | "failed";
 
 /** Ship state machine states — see `shipReducer` for the transitions. */
-export type ShipState = "idle" | "preflighting" | "previewing" | "running" | "settled" | "failed";
+type ShipState = "idle" | "preflighting" | "previewing" | "running" | "settled" | "failed";
 
 /** One row of the live progress checklist, fed by `ship_progress` events. */
 export interface ShipProgressRow {
@@ -53,7 +53,7 @@ export interface ShipProgressRow {
 }
 
 /** Terminal outcome fields, populated as each step of the chosen action completes. */
-export interface ShipResult {
+interface ShipResult {
   readonly commitSha?: string;
   readonly pushedRef?: string;
   readonly prUrl?: string;

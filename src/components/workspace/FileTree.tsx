@@ -20,8 +20,8 @@ interface FileTreeProps {
 
 /**
  * A file-system entry. `kind: "link"` is a symlink whose target type is
- * not known until it is opened (the desktop capability grants `read_dir`
- * but not `stat`, so the target is probed by trying to list it).
+ * not known until it is opened: `readDir` reports `isSymlink` without
+ * following the link, so the target is probed by trying to list it.
  */
 interface TreeNode {
   readonly name: string;
