@@ -93,7 +93,7 @@ Without `--app-version`, the resulting `.sig` has no signed version, and every u
 
 The release builds both Linux bundles (`--bundles deb,appimage` in `.github/workflows/release.yml`), and `tauri-plugin-updater` 3.0.0-alpha.2 can apply either:
 
-- The plugin derives the installer from the running app's bundle type and looks in `latest.json` for `linux-x86_64-<installer>` (`linux-x86_64-appimage`, `linux-x86_64-deb`) before falling back to the bare `linux-x86_64` entry. The `verify-updater-manifest` job asserts the bare key; it does not check for the per-installer ones.
+- The plugin derives the installer from the running app's bundle type and looks in `latest.json` for `linux-x86_64-<installer>` (`linux-x86_64-appimage`, `linux-x86_64-deb`) before falling back to the bare `linux-x86_64` entry. `tauri-apps/tauri-action` writes both per-installer keys beside the bare one (v0.13.1's `latest.json` has `linux-x86_64`, `linux-x86_64-appimage` and `linux-x86_64-deb`; the bare key points at the AppImage). The `verify-updater-manifest` job checks the signature, signed version and attestation of every entry present, but it requires only the four bare keys. If `linux-x86_64-deb` were ever missing, a `.deb` install would fall back to the bare key, download the AppImage and reject it with `InvalidUpdaterFormat`.
 - **AppImage:** the new AppImage is written over the running one, which needs a temp directory on the same mount point as the AppImage.
 - **.deb:** the package is written to a temp file and installed with `dpkg -i`, run through `pkexec`, then through a zenity/kdialog password prompt with `sudo`, then through terminal `sudo`. A `.deb` update therefore always asks for administrator rights.
 

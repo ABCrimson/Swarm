@@ -61,7 +61,7 @@ Parallel-agent orchestrators are a crowded idea. SWARM's wager is that the **sub
 - **🌳 Worktree-per-worker isolation** — each worker spawns in its own `git worktree` on a `swarm/*` branch; a dirty tree is preserved, never force-removed.
 - **🚢 Ship chain** — `commit → push → prefilled compare page`, with `Swarm-Seq-Range` trailers and the machine-generated Causal Record PR body.
 - **🔌 Multi-provider agents** — Claude Code and Codex today, behind a trait pair designed to absorb the next provider without touching the scheduler.
-- **🛡️ Approved AI tools** — the webview chat's machine-acting tools (`run_command`, `spawn_worker`, `kill_worker`, `write_file`, `read_file`) wait for your Allow Once / Allow For Session / Deny, shown with every argument escaped; `read_file`/`write_file` are confined to canonicalized scopes that never reach the API key or the daemon token.
+- **🛡️ Approved AI tools** — the webview chat's machine-acting tools (`run_command`, `spawn_worker`, `kill_worker`, `write_file`, `read_file`) wait for your Allow Once / Allow For Session / Deny, shown with every argument escaped; `read_file`/`write_file` are confined to canonicalized scopes with a deny list over the API key and the daemon token (see SECURITY.md).
 - **🛰️ `swarmd` daemon** — no webview, no Tauri link-time dependency; WebSocket transport, reattach-by-seq-replay, token + Origin + Host auth, and per-user autostart units: systemd (Linux), launchd (macOS) and a logon Scheduled Task (Windows).
 - **🖥️ Integrated terminal per worker** — a real PTY (`portable-pty`) bridged to Tokio, rendered with `@xterm/xterm`'s WebGL2 renderer.
 - **📊 Real-time metrics** — CPU, memory, throughput, and scheduler depth via Recharts on a 500 ms loop, with a per-worker process breakdown.

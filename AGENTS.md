@@ -191,7 +191,7 @@ Workflows (the `workflows` job of `ci.yml`; run it when you touch `.github/`):
 
 ```bash
 actionlint              # the version pinned in ci.yml
-zizmor .github          # the version pinned in ci.yml; online audits check each pinned SHA against its # vX.Y.Z comment
+zizmor .github          # the version pinned in ci.yml; set GH_TOKEN so the online audits (pinned SHA vs its # vX.Y.Z comment, known-vulnerable actions) run as they do in CI
 ```
 
 CI gathers every job into the single required status `CI OK`.

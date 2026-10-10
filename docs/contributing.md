@@ -96,7 +96,7 @@ On Linux, Tauri's WebKitGTK system libraries must be installed first; `.github/w
 
 ### TypeScript / React
 
-**Formatter/Linter:** Biome 2.5.15 (the only one; no ESLint, no Prettier). Its nursery rules in `biome.json` (`noFloatingPromises`, `noReactObjectTypeAsDefaultProp`, `noMeaninglessVoidOperator`, `useReactCompiler` and others) are part of the standard
+**Formatter/Linter:** Biome 2.5.15 (the only one; no ESLint, no Prettier). Its nursery rules in `biome.json` (`noFloatingPromises`, `noReactObjectTypeAsDefaultProp`, `noMeaninglessVoidOperator`, `useReactCompiler` and others) are part of the standard.
 
 ```bash
 # Lint + format (auto-fix)
@@ -309,6 +309,7 @@ docs(api): document the ship_context causal record
 
    # Workflow files (ci.yml `workflows` job: actionlint, then zizmor); only needed when you touch .github/
    actionlint
+   zizmor .github          # online audits (pinned SHA vs its # vX.Y.Z comment, known-vulnerable actions) run only with GH_TOKEN set
    ```
 
    CI also runs these as jobs of `ci.yml`: `frontend`, `knip`, `e2e`, `rust` (three operating systems), `rust-policy`, `cargo-deny` and `workflows`, gathered into the single required status `CI OK`.
