@@ -620,7 +620,7 @@ whose endpoint is gone without deleting them.
   100K input tokens, counting cache reads and writes, bill the whole request at the higher rates); the
   others bill the full window at one rate. Cost is estimated per attempt: with server-side refusal fallbacks
   each `usage.iterations` entry is priced by the model that served it, using a pricing-only table for
-  fallback targets the picker never offers, and a model with no rates costs 0 rather than a guess.
+  fallback targets the picker never offers; an attempt served by a model with no rates is priced at the requested model's rates, and only a requested model with no rates at all costs 0.
 - **Agent chat** (`AgentChat`): shown when `agent-sessions` holds a live session for the worker
   (`agent_spawn`); renders the `agent_*` stream and answers permission requests (Allow/Deny only for
   requests with no `suggestedDecision`, gated on `interactive_permissions`).

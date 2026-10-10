@@ -149,11 +149,11 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
 
 ### Who Can Call What
 
-Three independent layers decide whether a call runs. Each is enforced in code and pinned by a test.
+Three independent layers decide whether a command call runs. Each is enforced in code and pinned by a test; the webview chat's tools add a fourth, described below.
 
 1. **The Tauri ACL (desktop webview).** `src-tauri/build.rs` hands the command-name list to `tauri_build::AppManifest::commands`, which generates an `allow-<name>` / `deny-<name>` permission for every one of the 38 commands. `src-tauri/capabilities/default.json` grants exactly those `allow-*` entries to the `main` window (plus `core:default`, the `fs`, `dialog`, `opener` and `store` plugin permissions it needs). A command with no `allow-*` entry cannot be invoked by the webview at all. `capability_contract.rs` fails the build when the capability names a command that does not exist, omits one that does, or grants a bare non-`allow-` app permission.
 2. **`RemotePolicy` (swarmd).** Every registry entry declares a policy, and `swarmd` dispatches every `rpc` through `Registry::dispatch_remote`, never `dispatch`. `Allowed` commands are reachable by any authenticated client (including `spawn_worker` and `worker_input`: running commands as the daemon's user is the product). `SecretFiltered` commands (`read_config`, `write_config`) are refused when the `key` argument looks like a credential (`is_secret_key`: split into words at `_`, `-`, `:`, `.`, spaces and camelCase; secret-shaped when the last word is `key`, `apikey`, `token`, `secret`, `password`, `passwd`, `pat`, `credential` or `credentials`, or any word is `apikey`, `secret`, `password`, `passwd`, `credential` or `credentials`) with ``Remote Access To Secret-Shaped Config Keys Is Denied.``. `Denied` commands (`read_file`, `write_file`) never reach their handler: `"read_file" Is Not Available Over A Remote Connection.` The local `dispatch` path ignores the policy, because the desktop user is not the boundary it defends.
-3. **The file scope (`read_file` / `write_file`).** Both commands canonicalize the path against the real filesystem (symlinks resolved), confine it to fixed scopes and refuse a deny list of credential files, on the desktop as well as remotely. See [File System Commands](#file-system-commands).
+3. **The file scope (`read_file` / `write_file`).** Both commands canonicalize the path against the real filesystem (symlinks resolved), confine it to fixed scopes and refuse a deny list of credential files for every caller that reaches them (a remote call never does: layer 2 denies it first). See [File System Commands](#file-system-commands).
 
 The webview chat's built-in tools in `src/lib/tools.ts` are a fourth gate in front of these commands. Every tool that acts on the machine (`run_command`, `spawn_worker`, `kill_worker`, `write_file`, `read_file`) waits for the user's answer inside its own `execute`, so no caller, the registry included, can run one unapproved; `get_metrics` and the user's custom tools (sandboxed Blob Workers with no backend side effect) are not gated. The prompt (`ToolApprovalPrompt`) offers **Allow Once**, **Allow For Session** and **Deny**:
 
@@ -1291,12 +1291,14 @@ Writes a file at an absolute path, creating or overwriting it, then emits a stam
 | Error                         | Condition                                    |
 |--------------------------------|-----------------------------------------------|
 | `Write Requires An Absolute Path.` | `path` is not absolute                   |
+| `Write Requires A File Path.` | The normalized path has no file name (for example `/` or `C:\`) |
 | `Write Access Is Limited To The App Data And .swarm Directories.` | The canonical path falls outside both scopes |
 | `This Path Holds Credentials And Is Never Accessible.` | The canonical target is on the deny list |
 | ``Cannot Write "<path>": The File Name Is Not Allowed.`` | Windows only: an alternate data stream, a trailing dot or space, or a device name |
 | ``Cannot Write "<path>": Dangling Symbolic Link.`` | The target is a symbolic link whose destination does not exist |
 | ``Cannot Write "<path>": Parent Directory Does Not Exist.`` | The parent directory doesn't exist (nothing is created) |
 | ``The Operating System Denied Access To "<path>".`` | The OS itself refused the write |
+| ``Failed To Write "<path>": ...`` | Any other I/O failure |
 | ``Invalid UUID "<id>": ...``   | `originWorker` is present but not a valid UUID |
 
 **Example:**
@@ -1579,7 +1581,7 @@ Every other type persists to the SQLite event log (`<data-dir>/swarm-events.db`,
 
 ### Failing Closed
 
-A persistent event is appended to the log before anything is delivered, and a seq nobody can prove durable is never shown. The writer (`crates/swarm-core/src/orchestration/engine.rs`) handles the two write failures the same way:
+A persistent event is appended to the log before anything is delivered, and a seq nobody can prove durable is never shown. The writer (`crates/swarm-core/src/orchestration/engine.rs`) fails closed on both write failures:
 
 - **Seq reservation fails** (the writer reserves seqs in blocks; it retries once). The event is dropped whole: no delivery, no head move, and the seq counter is rolled back so the next event retries the reservation. One error line is logged per outage.
 - **The append fails.** Nothing is emitted on either delivery path (not the shell's `emit` closure, not the swarmd fanout), `head_seq` does not move, and the event's `emit_awaiting_seq` receiver (what [`agent_turn_started`](#agent_turn_started) waits on for its seq) resolves to an error, the same signal as a shut-down engine. The failed seq stays a gap, and one ephemeral `system_log` error event (`Event <seq> (<type>) Could Not Be Saved And Was Dropped: ...`) takes the next seq so a client sees the gap explained. A client treats a gap as ephemeral and backfills an empty page from [`events_since`](#events_since).

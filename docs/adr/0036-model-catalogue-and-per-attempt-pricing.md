@@ -25,7 +25,7 @@ access gate).
 - Cost is estimated per attempt. With server-side refusal fallbacks (`fallbacks: "default"`, beta
   `server-side-fallback-2026-07-01`), `usage.iterations` is priced entry by entry by the model that
   served it. Fallback targets the picker never offers (`claude-opus-4-8`, `claude-opus-5`,
-  `claude-sonnet-5`) have rows in a pricing-only table. A model with no rates costs 0, not a guess.
+  `claude-sonnet-5`) have rows in a pricing-only table. An attempt served by a model with no row is priced at the requested model's rates (`priceUsage` in `src/lib/anthropic.ts`); only when the requested model has no rates either is the cost 0.
 - Mythos 5.1 is gated: selecting it warns that access is needed but does not block.
 
 ## Consequences

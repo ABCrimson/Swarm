@@ -19,7 +19,7 @@ macOS 13 and 14, but `Info.plist` can only require an OS version). `vite.config.
 floor.
 
 Playwright runs Chromium by default and has opt-in `webkit` and `firefox` projects
-(`default: false`); the suite passes on all three, and CI runs it with `--shuffle` so no spec depends
+(`default: false`); the suite passes on all three except one arrow-key focus-ring test marked `fixme` on WebKit (`e2e/settings.spec.ts`), and CI runs it with `--shuffle` so no spec depends
 on order.
 
 ## Consequences
