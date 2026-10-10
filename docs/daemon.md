@@ -28,7 +28,7 @@
 
 It is a **per-user** program, not a system daemon: it runs worker agents as you, reads and writes your app-data directory under your home, and shells out to `git` against your repositories and worktrees. Every install path below registers it as a **user** service (systemd `--user`, a launchd LaunchAgent, a per-user logon Scheduled Task) running **non-elevated**. Running it as root / SYSTEM would break that ownership model and needlessly widen its blast radius.
 
-It uses the **same data directory as the desktop app** (`dev.crimson.swarm-orchestrator` under your platform's app-data location), so the two share one event log, config and session set. A single-instance lock (`daemon.lock`) lets only one of them run against that directory at a time: whichever starts second refuses to start (exit status 75) and says which shell holds it. Stop the desktop app before starting the daemon, or point one of them at another directory with `--data-dir`.
+It uses the **same data directory as the desktop app** (`dev.crimson.swarm-orchestrator` under your platform's app-data location), so the two share one event log, config and session set. A single-instance lock (`daemon.lock`) lets only one of them run against that directory at a time: whichever starts second refuses to start and says which shell holds it (`swarmd` exits with status 75; the desktop app shows a dialog and exits with status 1). Stop the desktop app before starting the daemon, or point one of them at another directory with `--data-dir`.
 
 ## Getting the Binary
 
