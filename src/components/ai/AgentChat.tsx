@@ -138,7 +138,7 @@ const thinkingBlockStyle: CSSProperties = {
   ...bubbleBaseStyle,
   alignSelf: "flex-start",
   background: "oklch(0 0 0 / 0)",
-  color: "oklch(0.50 0.03 220)",
+  color: "var(--color-fg-dim)",
   fontStyle: "italic",
   maxWidth: "90%",
   whiteSpace: "pre-wrap",
@@ -182,7 +182,7 @@ const permissionMessageStyle: CSSProperties = {
 
 const settledStyle: CSSProperties = {
   alignSelf: "center",
-  color: "oklch(0.50 0.04 220)",
+  color: "var(--color-fg-dim)",
   fontFamily: "var(--font-mono, monospace)",
   fontSize: 10.5,
 };
@@ -193,7 +193,7 @@ const capabilityNoteStyle: CSSProperties = {
   padding: "4px 12px",
   fontFamily: "var(--font-mono, monospace)",
   fontSize: 10.5,
-  color: "oklch(0.55 0.04 220)",
+  color: "var(--color-fg-dim)",
   flexShrink: 0,
 };
 
