@@ -62,9 +62,8 @@ describe("SessionList", () => {
     renderList();
 
     for (const row of screen.getAllByRole("listitem")) {
-      expect(row.style.position).toBe("");
-      expect(row.style.height).toBe("");
-      expect(row.style.top).toBe("");
+      expect(row).not.toHaveAttribute("style");
+      expect(row.className).not.toMatch(/(?:^|\s)(?:absolute|fixed|top-\S+|h-\S+)(?=\s|$)/);
     }
   });
 });
