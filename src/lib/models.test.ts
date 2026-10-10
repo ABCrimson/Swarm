@@ -39,7 +39,7 @@ describe("model catalog", () => {
     ]);
   });
 
-  it("gates only Mythos behind Project Glasswing", () => {
+  it("gates only Mythos 5.1 (verification programs; persisted legacy key `glasswing`)", () => {
     expect(MODEL_KEYS.filter((key) => CLAUDE_MODELS[key].gated === "glasswing")).toEqual([
       "mythos",
     ]);
