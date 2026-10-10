@@ -9,7 +9,6 @@ use axum::extract::ws::Utf8Bytes;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{broadcast, mpsc};
 
-use swarm_core::commands::orchestration::stored_event_to_json;
 use swarm_core::error::AppError;
 use swarm_core::orchestration::{DomainEvent, EventLog, is_persistent};
 use swarm_core::protocol::ServerFrame;
@@ -106,7 +105,13 @@ async fn stream_events(
 }
 
 /// Enqueues one live event on the lane its persistence class calls for.
+/// An ephemeral event over the watermark is dropped before it is
+/// serialized, so a stalled client costs the feeder no JSON work.
 async fn forward(event: &DomainEvent, events: &mpsc::Sender<Utf8Bytes>) -> Result<(), FeedEnd> {
+    let persistent = is_persistent(&event.event);
+    if !persistent && events.max_capacity() - events.capacity() >= EPHEMERAL_WATERMARK {
+        return Ok(());
+    }
     let text = match serde_json::to_string(event) {
         Ok(text) => Utf8Bytes::from(text),
         Err(error) => {
@@ -114,13 +119,11 @@ async fn forward(event: &DomainEvent, events: &mpsc::Sender<Utf8Bytes>) -> Resul
             return Ok(());
         }
     };
-    if is_persistent(&event.event) {
+    if persistent {
         events.send(text).await.map_err(|_| FeedEnd::Disconnected)
     } else {
-        if events.max_capacity() - events.capacity() < EPHEMERAL_WATERMARK {
-            // Full or closed: dropped, like any ephemeral event under load.
-            let _ = events.try_send(text);
-        }
+        // Full or closed: dropped, like any ephemeral event under load.
+        let _ = events.try_send(text);
         Ok(())
     }
 }
@@ -145,7 +148,10 @@ async fn replay(
         let last_page = page.len() < page_size as usize;
         for stored in page {
             let seq = stored.seq;
-            let text = stored_event_to_json(stored).to_string();
+            // Serialized straight from the row: the same JSON as a live
+            // `DomainEvent`, with no intermediate `Value` tree.
+            let text =
+                serde_json::to_string(&stored).map_err(|e| FeedEnd::Replay(e.to_string()))?;
             events
                 .send(text.into())
                 .await
