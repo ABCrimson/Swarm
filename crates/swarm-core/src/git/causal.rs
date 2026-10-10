@@ -213,7 +213,7 @@ pub struct ShipContext {
 impl ShipContext {
     /// The honest empty record for a range with no engine/db path at all
     /// (e.g. an in-memory-only test engine) — never fabricated turns.
-    #[must_use]
+    #[must_use = "this only builds an empty ShipContext"]
     pub fn empty(worker_id: Uuid, seq_from: u64, seq_to: u64) -> Self {
         ShipContext {
             worker_id,

@@ -64,7 +64,7 @@ static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
 /// Redacts every recognized secret in `input`, replacing it with
 /// `[REDACTED]`. A redacted URL keeps its scheme and the trailing `@`
 /// (`https://[REDACTED]@github.com/…`) so it still reads as a URL.
-#[must_use]
+#[must_use = "returns a new value; the input is unchanged"]
 pub fn redact(input: &str) -> String {
     let without_userinfo = URL_USERINFO.replace_all(input, |caps: &Captures<'_>| {
         if caps[2].eq_ignore_ascii_case("git") {
@@ -81,7 +81,7 @@ pub fn redact(input: &str) -> String {
 /// last, so the tail is usually the part that explains the error. Cuts
 /// only on UTF-8 char boundaries and marks how many bytes were dropped.
 /// A no-op when `input` already fits.
-#[must_use]
+#[must_use = "returns a new value; the input is unchanged"]
 pub fn truncate(input: &str, max_bytes: usize) -> String {
     if input.len() <= max_bytes {
         return input.to_owned();
@@ -99,7 +99,7 @@ pub fn truncate(input: &str, max_bytes: usize) -> String {
 /// The full choke-point transform: redact secrets against the complete
 /// text, then [`truncate`] to [`MAX_OUTPUT_BYTES`]. See the module doc
 /// for why that order.
-#[must_use]
+#[must_use = "returns a new value; the input is unchanged"]
 pub fn sanitize(input: &str) -> String {
     truncate(&redact(input), MAX_OUTPUT_BYTES)
 }

@@ -102,7 +102,7 @@ impl Location {
     /// Whether this checkout is the repository's primary checkout: only
     /// there is the admin directory the shared one. A linked worktree's
     /// `--git-dir` always differs from `--git-common-dir`.
-    #[must_use]
+    #[must_use = "the check is the only result"]
     pub fn is_primary_checkout(&self) -> bool {
         canonical(&self.git_dir) == canonical(&self.common_dir)
     }
@@ -110,7 +110,7 @@ impl Location {
     /// Whether `dir` is exactly this checkout's toplevel — not a
     /// subdirectory of it, and not a path that has since been moved or
     /// deleted.
-    #[must_use]
+    #[must_use = "the check is the only result"]
     pub fn is_toplevel(&self, dir: &Path) -> bool {
         canonical(&self.toplevel) == canonical(dir)
     }
