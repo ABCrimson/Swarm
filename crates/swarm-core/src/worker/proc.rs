@@ -175,8 +175,7 @@ impl NdjsonFramer {
 pub struct PipedHandle {
     /// The child's stdin, for protocol input (see [`write_to_piped`]).
     pub stdin: Box<dyn Write + Send>,
-    /// The child process, for `kill`/`wait`; or use
-    /// [`Self::kill_and_wait`].
+    /// The child process, for `kill`/`wait`.
     pub child: Child,
     /// OS process ID of the child.
     pub pid: Option<u32>,
@@ -194,30 +193,6 @@ pub struct PipedHandle {
     /// as they arrive, for diagnostics such as a provider's fatal startup
     /// message. The `piped-err-<pid>` thread is the only writer.
     pub stderr_tail: Arc<Mutex<VecDeque<u8>>>,
-}
-
-impl PipedHandle {
-    /// Closes the child's stdin, kills it and waits for it to exit, so
-    /// no zombie is left behind.
-    ///
-    /// Only the child itself is signalled; processes it started are not.
-    /// The reader threads and the framing task end on their own once the
-    /// child's pipes close.
-    ///
-    /// # Errors
-    ///
-    /// Fails if waiting on the child fails. A kill that fails because the
-    /// child already exited is only logged: the end state is the same.
-    pub fn kill_and_wait(self) -> anyhow::Result<std::process::ExitStatus> {
-        drop(self.stdin);
-        let mut child = self.child;
-        if let Err(e) = child.kill() {
-            tracing::warn!(error = %e, "failed to kill piped child process (it may have already exited)");
-        }
-        child
-            .wait()
-            .context("failed to wait on piped child process")
-    }
 }
 
 /// Spawns `program` with piped stdio and frames its stdout as NDJSON.
@@ -592,25 +567,6 @@ mod tests {
         }
     }
 
-    /// A command that runs for a minute unless killed.
-    fn platform_sleep() -> (&'static str, Vec<String>) {
-        if cfg!(windows) {
-            (
-                "powershell.exe",
-                [
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    "Start-Sleep -Seconds 60",
-                ]
-                .map(String::from)
-                .into(),
-            )
-        } else {
-            ("/bin/sh", ["-c", "sleep 60"].map(String::from).into())
-        }
-    }
-
     /// A command that writes `bytes` `x`s and then `END` to stderr.
     fn platform_stderr_flood(bytes: usize) -> (&'static str, Vec<String>) {
         if cfg!(windows) {
@@ -687,25 +643,6 @@ mod tests {
         let result = spawn_piped("swarm-no-such-program", &[], "", &HashMap::new());
         let err = result.err().expect("spawning a missing program fails");
         assert!(format!("{err:#}").contains("failed to spawn"), "{err:#}");
-    }
-
-    /// `kill_and_wait` kills and reaps a child that would otherwise run
-    /// for a minute.
-    #[tokio::test]
-    async fn test_kill_and_wait_reaps_a_long_running_child() {
-        let (program, args) = platform_sleep();
-        let handle = spawn_piped(program, &args, "", &HashMap::new()).expect("spawns");
-
-        let result = tokio::time::timeout(
-            Duration::from_secs(10),
-            tokio::task::spawn_blocking(move || handle.kill_and_wait()),
-        )
-        .await
-        .expect("kill_and_wait must not hang")
-        .expect("spawn_blocking task must not panic");
-
-        let status = result.expect("kill_and_wait reaps the child");
-        assert!(!status.success(), "a killed child does not exit cleanly");
     }
 
     /// A provider's fatal stderr message can be read from `stderr_tail`.
