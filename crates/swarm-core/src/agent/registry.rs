@@ -134,11 +134,6 @@ impl AgentSessionRegistry {
             .remove(worker_id)
             .map(|(_, entry)| entry.session)
     }
-
-    /// Number of currently registered sessions.
-    pub fn count(&self) -> usize {
-        self.entries.len()
-    }
 }
 
 #[cfg(test)]
@@ -207,13 +202,11 @@ mod tests {
         let registry = AgentSessionRegistry::new();
         let worker_id = Uuid::new_v4();
         registry.insert(worker_id, Arc::new(NoopSession::new("key-1")));
-        assert_eq!(registry.count(), 1);
 
         let fetched = registry.get(&worker_id).expect("session should exist");
         assert_eq!(fetched.session_key(), "key-1");
 
         assert!(registry.remove(&worker_id).is_some());
-        assert_eq!(registry.count(), 0);
         assert!(registry.get(&worker_id).is_err());
     }
 
