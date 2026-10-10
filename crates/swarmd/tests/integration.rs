@@ -1168,6 +1168,7 @@ fn web_bundle() -> tempfile::TempDir {
     std::fs::create_dir(dir.path().join("assets")).unwrap();
     std::fs::write(dir.path().join("assets").join("app-1234.js"), "export {};").unwrap();
     std::fs::write(dir.path().join(".env"), "SECRET=1").unwrap();
+    std::fs::write(dir.path().join("assets").join(".hidden"), "SECRET=2").unwrap();
     dir
 }
 
@@ -1226,7 +1227,14 @@ async fn test_serve_ui_security_headers_caching_and_fallbacks() {
     assert_eq!(header(&headers, "cache-control"), Some("no-store"));
 
     // Hidden files are never served.
-    for path in ["/.env", "/%2eenv", "/assets/.hidden"] {
+    for path in [
+        "/.env",
+        "/%2eenv",
+        "/assets/.hidden",
+        "/assets%2f.hidden",
+        "/assets%2F.hidden",
+        "/assets%5c.hidden",
+    ] {
         let (status, _, _) = http_get(server.addr, path, &host).await;
         assert_eq!(status, 404, "{path}");
     }
