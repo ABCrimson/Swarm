@@ -206,11 +206,7 @@ function PaletteBody({
     }
   };
 
-  const navigate = (
-    page: PageId,
-    label: string,
-    keywords: readonly string[],
-  ): CommandDef => ({
+  const navigate = (page: PageId, label: string, keywords: readonly string[]): CommandDef => ({
     id: `nav:${page}`,
     label: `Go To ${label}`,
     group: "Navigation",
@@ -300,7 +296,12 @@ function PaletteBody({
               >
                 {cmd.label}
                 {frecency.has(cmd.id) && (
-                  <Command.Badge className="swarm-pill" data-tone="info" data-size="sm" aria-hidden="true">
+                  <Command.Badge
+                    className="swarm-pill"
+                    data-tone="info"
+                    data-size="sm"
+                    aria-hidden="true"
+                  >
                     {frecency.get(cmd.id)?.uses}
                   </Command.Badge>
                 )}
