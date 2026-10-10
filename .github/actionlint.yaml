@@ -6,7 +6,6 @@
 self-hosted-runner:
   labels:
     - ubuntu-26.04
-    - ubuntu-26.04-arm
 
 # - The self-repository `uses: $/...` syntax (GitHub changelog 2026-07-30),
 #   GitHub's recommended way to reference an action or reusable workflow in

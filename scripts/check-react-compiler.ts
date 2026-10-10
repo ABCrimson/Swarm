@@ -8,9 +8,8 @@
  * `react.memo_cache_sentinel` symbol it initialises slots with.
  *
  * Why this exists: unit tests run without the compiler (vitest.config.ts
- * has no React plugin), and a compiler bail-out is silent — under
- * babel-plugin-react-compiler 1.0.0 on Babel 8, every component with a
- * destructured default shipped uncompiled and all tests stayed green.
+ * has no React plugin), and a compiler bail-out is silent — the component
+ * ships uncompiled and every test stays green.
  * Modules are matched by their source path in each chunk's module map,
  * so chunk names and hashes are irrelevant.
  *

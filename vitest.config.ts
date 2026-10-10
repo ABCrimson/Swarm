@@ -5,9 +5,9 @@ import pkg from "./package.json" with { type: "json" };
 // (see vite.config.ts) — no alias block here either.
 //
 // Deliberately no plugins: unit tests run on Vite's built-in Oxc JSX/TS
-// transform WITHOUT the React Compiler, on both compiler pipelines, so
-// they exercise plain component semantics. Compiler coverage is gated
-// separately by `pnpm check:compiler` (scripts/check-react-compiler.ts).
+// transform WITHOUT the React Compiler, so they exercise plain component
+// semantics. Compiler coverage is gated separately by
+// `pnpm check:compiler` (scripts/check-react-compiler.ts).
 export default defineConfig({
   // Mirrors vite.config.ts's `define` — components reading __APP_VERSION__
   // (e.g. Settings, Sidebar) need it defined to render under vitest/jsdom.
@@ -28,9 +28,9 @@ export default defineConfig({
     css: false,
     // `pnpm test:coverage` (CI runs it on every push and PR). The
     // thresholds are a ratchet, not a target: the measured floor, rounded
-    // down (2026-09-23: 44.41% statements, 38.13% branches, 41.55%
-    // functions, 45.40% lines), so coverage can only go up. Raise them
-    // whenever a change lifts the numbers.
+    // down (2026-10-10, Vitest 5.0.3: 91.14% statements, 84.19% branches,
+    // 87.62% functions, 92.79% lines), so coverage can only go up. Raise
+    // them whenever a change lifts the numbers.
     coverage: {
       provider: "v8",
       include: ["src/**/*.{ts,tsx}"],
@@ -38,10 +38,10 @@ export default defineConfig({
       // Full table in the log, browsable report in coverage/index.html.
       reporter: ["text", "html"],
       thresholds: {
-        statements: 44,
-        branches: 38,
-        functions: 41,
-        lines: 45,
+        statements: 91,
+        branches: 84,
+        functions: 87,
+        lines: 92,
       },
     },
   },

@@ -134,10 +134,9 @@ jobs:
           releaseBody: "See CHANGELOG.md for details."
           releaseDraft: true
           # Only semver pre-release tags (v0.14.0-beta.1) are GitHub
-          # pre-releases. A plain vX.Y.Z, the 0.x line included, is a full
-          # release, so /releases/latest (the updater endpoint's base)
-          # resolves to it; flagging all of 0.x as pre-release broke the
-          # updater through v0.13.0.
+          # pre-releases. GitHub leaves pre-releases out of /releases/latest,
+          # which the updater endpoint resolves, so a plain vX.Y.Z (the 0.x
+          # line included) is a full release that in-app updates can see.
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
           uploadWorkflowArtifacts: ${{ github.event_name == 'workflow_dispatch' }}
