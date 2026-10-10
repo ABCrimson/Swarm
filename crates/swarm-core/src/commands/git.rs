@@ -42,11 +42,12 @@ use crate::worker::registry::WorkerRegistry;
 
 /// Cap on rows fetched per `ship_context` call — deliberately generous
 /// (well above `commands::orchestration::events_since`'s IPC-facing
-/// `PAGE_LIMIT` of 5000): a single busy turn can emit a dozen-plus rows
-/// (block + tool_call + tool_result per tool use), so 200 turns' worth
-/// easily exceeds 5000 raw rows, while `git::causal::build_ship_context`
-/// caps the *returned* turn count regardless of how many rows this
-/// fetches.
+/// `PAGE_LIMIT` of 5000): a single busy turn can emit ~150 rows (block +
+/// tool_call + tool_result for each of up to 50 tool uses, the Claude
+/// Code adapter's `--max-turns`), so 200 turns' worth
+/// (`git::causal::MAX_TURNS`) can reach ~30,000 raw rows, while
+/// `git::causal::build_ship_context` caps the *returned* turn count
+/// regardless of how many rows this fetches.
 const SHIP_CONTEXT_EVENT_LIMIT: u32 = 50_000;
 
 /// The config key holding the `Co-Authored-By` identity for ship
