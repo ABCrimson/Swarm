@@ -18,8 +18,10 @@
 //! - `crates/swarm-core/src/agent/claude_code.rs` (`ClaudeCodeAdapter`,
 //!   driving `AgentChat.tsx`) generates its own `turn_id: TurnId =
 //!   Uuid::new_v4().to_string()` inside `send_turn` and **never emits
-//!   `AgentTurnStarted` at all** — the first wire event for one of its
-//!   turns is `agent_block`/`agent_tool_call`.
+//!   `AgentTurnStarted` at all** — the first persisted event for one of
+//!   its turns is `agent_block`/`agent_tool_call` (its streamed
+//!   `agent_turn_delta` chunks arrive earlier but are ephemeral and never
+//!   reach the log).
 //!
 //! These are not the same `turnId`. A causal record keyed off
 //! `agent_turn_started` would silently show ZERO turns for every
