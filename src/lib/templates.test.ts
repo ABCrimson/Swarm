@@ -46,15 +46,15 @@ const templateStore = vi.hoisted(() => ({
 }));
 
 vi.mock("@tauri-apps/plugin-store", () => ({
-  load: async () => ({
+  LazyStore: class {
     async get(key: string) {
       if (templateStore.failReads) throw new Error("store unavailable");
       return structuredClone(templateStore.data.get(key));
-    },
+    }
     async set(key: string, value: unknown) {
       templateStore.data.set(key, structuredClone(value));
-    },
-  }),
+    }
+  },
 }));
 
 const STORE_KEY = "swarm:templates";
@@ -176,9 +176,10 @@ describe("applyTemplate", () => {
       .mockResolvedValueOnce("w3");
     using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const { workerIds } = await applyTemplate(template);
+    const { workerIds, failures } = await applyTemplate(template);
 
     expect(workerIds).toEqual(["w1", "w3"]);
+    expect(failures).toEqual([`${template.workerConfigs[1]?.name}: spawn failed`]);
     expect(consoleError).toHaveBeenCalledTimes(1);
   });
 
@@ -191,9 +192,10 @@ describe("applyTemplate", () => {
       .mockResolvedValueOnce("w3");
     using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const { workerIds } = await applyTemplate(template);
+    const { workerIds, failures } = await applyTemplate(template);
 
     expect(workerIds).toEqual(["w1", "w3"]);
+    expect(failures).toEqual([`${template.workerConfigs[1]?.name}: No Tauri IPC Bridge`]);
     expect(consoleError).toHaveBeenCalledTimes(1);
   });
 

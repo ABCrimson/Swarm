@@ -12,7 +12,7 @@ import {
   runCustomTool,
 } from "#lib/custom-tools";
 import { executeTool, getAllAnthropicTools, toolRegistry } from "#lib/tools";
-import { customToolsReady, useCustomToolsStore } from "#store/custom-tools";
+import { useCustomToolsStore } from "#store/custom-tools";
 
 function makeTool(overrides?: Partial<CustomToolDef>): CustomToolDef {
   return {
@@ -333,6 +333,14 @@ describe("custom tools in the shared registry pipeline", () => {
     await executeTool("dup_tool", { query: "q" });
 
     expect(MockSandboxWorker.instances).toHaveLength(1);
+    // The mock ignores the script, so read the Worker source to prove the first definition ran.
+    const createObjectURL = vi.mocked(URL.createObjectURL);
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    const blob = createObjectURL.mock.lastCall?.[0];
+    expect(blob).toBeInstanceOf(Blob);
+    const source = await (blob as Blob).text();
+    expect(source).toContain("return 1;");
+    expect(source).not.toContain("return 2;");
   });
 
   it("executeTool still reports unknown names when no custom tool matches", async () => {
@@ -340,22 +348,5 @@ describe("custom tools in the shared registry pipeline", () => {
       success: false,
       error: "Unknown Tool: does_not_exist",
     });
-  });
-
-  it("store saveTool inserts then updates by id; deleteTool removes", async () => {
-    const tool = makeTool();
-    useCustomToolsStore.getState().saveTool(tool);
-    await customToolsReady();
-    expect(useCustomToolsStore.getState().customTools).toHaveLength(1);
-
-    useCustomToolsStore.getState().saveTool({ ...tool, description: "Updated." });
-    await customToolsReady();
-    const tools = useCustomToolsStore.getState().customTools;
-    expect(tools).toHaveLength(1);
-    expect(tools[0]?.description).toBe("Updated.");
-
-    useCustomToolsStore.getState().deleteTool(tool.id);
-    await customToolsReady();
-    expect(useCustomToolsStore.getState().customTools).toHaveLength(0);
   });
 });

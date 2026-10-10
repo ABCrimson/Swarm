@@ -12,7 +12,9 @@
  * @module templates
  */
 
-import { load } from "@tauri-apps/plugin-store";
+import type { LazyStore } from "@tauri-apps/plugin-store";
+import { errorMessage } from "#lib/is-error";
+import { templatesStore } from "#lib/lazy-store";
 import { createSession as createSessionIpc } from "#lib/tauri";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
 import { useSessionStore } from "#store/sessions";
@@ -137,15 +139,8 @@ export const BUILT_IN_TEMPLATES: readonly SessionTemplate[] = [
   },
 ];
 
-/** The plugin-store instance backing user templates. */
-function getTemplateStore() {
-  return load("swarm-templates.json", { defaults: {}, autoSave: true });
-}
-
 /** The persisted list exactly as stored (anything but an array reads as empty). */
-async function readStoredEntries(
-  store: Awaited<ReturnType<typeof getTemplateStore>>,
-): Promise<unknown[]> {
+async function readStoredEntries(store: LazyStore): Promise<unknown[]> {
   const stored = await store.get<unknown>(USER_TEMPLATES_KEY);
   return Array.isArray(stored) ? stored : [];
 }
@@ -157,7 +152,7 @@ async function readStoredEntries(
  * they stay in the store untouched.
  */
 export async function loadUserTemplates(): Promise<SessionTemplate[]> {
-  const entries = await readStoredEntries(await getTemplateStore());
+  const entries = await readStoredEntries(templatesStore);
   return entries.flatMap((entry) => {
     const parsed = SessionTemplateSchema.safeParse(entry);
     return parsed.success ? [parsed.data] : [];
@@ -239,7 +234,7 @@ function serializeWrite(write: () => Promise<void>): Promise<void> {
 /** Appends a user template to plugin-store. */
 export function saveUserTemplate(template: SessionTemplate): Promise<void> {
   return serializeWrite(async () => {
-    const store = await getTemplateStore();
+    const store = templatesStore;
     await store.set(USER_TEMPLATES_KEY, [...(await readStoredEntries(store)), template]);
   });
 }
@@ -247,7 +242,7 @@ export function saveUserTemplate(template: SessionTemplate): Promise<void> {
 /** Deletes a user template from plugin-store by id; entries it cannot read an id from are kept. */
 export function deleteUserTemplate(templateId: string): Promise<void> {
   return serializeWrite(async () => {
-    const store = await getTemplateStore();
+    const store = templatesStore;
     const entries = await readStoredEntries(store);
     await store.set(
       USER_TEMPLATES_KEY,
@@ -317,22 +312,26 @@ export function createTemplateFromSession(
  * there for the full ordering analysis.
  *
  * A worker whose spawn fails (thrown error) or degrades to `null` (no
- * Tauri IPC bridge — see `spawnWorkerFromSpec`) is skipped, logged, and
- * does not stop the rest of the template from applying. Callers should
- * compare the returned `workerIds.length` against
- * `template.workerConfigs.length` to detect a partial or total failure
- * and report it honestly instead of always toasting success.
+ * Tauri IPC bridge — see `spawnWorkerFromSpec`) is skipped, logged, recorded
+ * in `failures` as "<worker name>: <reason>", and does not stop the rest of
+ * the template from applying. Callers should compare the returned
+ * `workerIds.length` against `template.workerConfigs.length` to detect a
+ * partial or total failure and report it, with `failures`, honestly instead
+ * of always toasting success.
  *
- * @returns The created session and the worker IDs that spawned
- * successfully, in template order.
+ * @returns The created session, the worker IDs that spawned successfully (in
+ * template order), and `failures`, one entry per worker that did not.
  */
-export async function applyTemplate(
-  template: SessionTemplate,
-): Promise<{ readonly session: Session; readonly workerIds: string[] }> {
+export async function applyTemplate(template: SessionTemplate): Promise<{
+  readonly session: Session;
+  readonly workerIds: string[];
+  readonly failures: string[];
+}> {
   const session = await createSessionIpc(template.name);
   useSessionStore.getState().addSession(session);
 
   const workerIds: string[] = [];
+  const failures: string[] = [];
   for (const spec of template.workerConfigs) {
     try {
       const workerId = await spawnWorkerFromSpec(spec, session.id);
@@ -340,6 +339,7 @@ export async function applyTemplate(
         console.error(
           `applyTemplate: spawnWorkerFromSpec returned null for worker "${spec.name}" from template "${template.name}" (no Tauri IPC bridge)`,
         );
+        failures.push(`${spec.name}: No Tauri IPC Bridge`);
         continue;
       }
       workerIds.push(workerId);
@@ -348,8 +348,9 @@ export async function applyTemplate(
         `applyTemplate: failed to spawn worker "${spec.name}" from template "${template.name}"`,
         err,
       );
+      failures.push(`${spec.name}: ${errorMessage(err)}`);
     }
   }
 
-  return { session, workerIds };
+  return { session, workerIds, failures };
 }

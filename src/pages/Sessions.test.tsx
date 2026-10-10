@@ -236,7 +236,11 @@ describe("Sessions — export and templates", () => {
   it("reports a template whose workers all failed to spawn as a failure, and activates its session", async () => {
     const user = userEvent.setup();
     const session = appliedSession();
-    mockApplyTemplate.mockResolvedValue({ session, workerIds: [] });
+    mockApplyTemplate.mockResolvedValue({
+      session,
+      workerIds: [],
+      failures: ["Coder: Worker Limit Reached"],
+    });
     const template = BUILT_IN_TEMPLATES[0] as SessionTemplate;
     await renderPage();
 
@@ -246,6 +250,7 @@ describe("Sessions — export and templates", () => {
     await vi.waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith(
         `Template "${template.name}" Failed — 0 Of ${template.workerConfigs.length} Workers Spawned`,
+        { description: "Coder: Worker Limit Reached" },
       );
     });
     expect(useSessionStore.getState().activeSessionId).toBe(session.id);
@@ -261,7 +266,11 @@ describe("Sessions — export and templates", () => {
       builtIn: false,
     };
     userTemplates = Promise.resolve({ templates: [empty], failed: false });
-    mockApplyTemplate.mockResolvedValue({ session: appliedSession(), workerIds: [] });
+    mockApplyTemplate.mockResolvedValue({
+      session: appliedSession(),
+      workerIds: [],
+      failures: [],
+    });
     await renderPage();
 
     await user.click(screen.getByRole("button", { name: "Templates" }));
