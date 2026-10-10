@@ -188,9 +188,29 @@ const MODELS_BY_ID: ReadonlyMap<string, ModelInfo> = new Map(
   MODEL_KEYS.map((key) => [CLAUDE_MODELS[key].id, CLAUDE_MODELS[key]]),
 );
 
+/** The rate fields of {@link ModelInfo}, for a model priced but not offered. */
+type PricingOnly = Pick<ModelInfo, "inputPerMTok" | "cacheReadPerMTok" | "outputPerMTok"> &
+  Partial<Pick<ModelInfo, "longPrompt">>;
+
+/**
+ * Pricing-only rates for a model the app never requests but the API can
+ * serve: Sonnet 5.5's cyber / frontier_llm server-side fallback target,
+ * `claude-sonnet-5` (pricing page, 2026-10-10). Kept out of the picker
+ * catalog; it only lets per-attempt usage be priced by the model that
+ * actually served it.
+ */
+const FALLBACK_PRICING: ReadonlyMap<string, PricingOnly> = new Map([
+  ["claude-sonnet-5", { inputPerMTok: 2, cacheReadPerMTok: 0.2, outputPerMTok: 10 }],
+]);
+
 /** Looks up a model's catalog entry by its Claude API model ID. Returns `undefined` if unknown. */
 export function getModelById(id: string): ModelInfo | undefined {
   return MODELS_BY_ID.get(id);
+}
+
+/** Whether {@link estimateCostUsd} has rates for this model (catalog or fallback target). */
+export function hasPricing(id: string): boolean {
+  return MODELS_BY_ID.has(id) || FALLBACK_PRICING.has(id);
 }
 
 /** Token counts from a response's `usage` block (cache fields are `null` when absent). */
@@ -209,10 +229,11 @@ export interface UsageTokens {
  * model with a {@link LongPromptPricing} tier (Haiku 5.5) prices the
  * whole request at the long-prompt rates once input + cache reads +
  * cache writes exceed its threshold.
- * Returns `0` for a model outside the catalog rather than guessing.
+ * Returns `0` for a model with no rates (outside the catalog and the
+ * fallback-target table) rather than guessing.
  */
 export function estimateCostUsd(modelId: string, usage: UsageTokens): number {
-  const model = getModelById(modelId);
+  const model: PricingOnly | undefined = getModelById(modelId) ?? FALLBACK_PRICING.get(modelId);
   if (!model) return 0;
   const cacheWrites = usage.cache_creation_input_tokens ?? 0;
   const cacheReads = usage.cache_read_input_tokens ?? 0;

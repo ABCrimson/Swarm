@@ -6,6 +6,7 @@ import {
   formatContextLabel,
   formatMaxOutputLabel,
   getModelById,
+  hasPricing,
   MODEL_KEYS,
   warnIfModelGated,
 } from "#lib/models";
@@ -72,6 +73,20 @@ describe("estimateCostUsd", () => {
       }),
     ).toBeCloseTo(2, 10);
     expect(estimateCostUsd("claude-unknown", { input_tokens: 1, output_tokens: 1 })).toBe(0);
+  });
+});
+
+describe("fallback-target pricing", () => {
+  it("prices claude-sonnet-5, Sonnet 5.5's fallback target, without listing it in the catalog", () => {
+    expect(hasPricing("claude-sonnet-5")).toBe(true);
+    expect(getModelById("claude-sonnet-5")).toBeUndefined();
+    expect(
+      estimateCostUsd("claude-sonnet-5", {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(0.2, 10);
   });
 });
 

@@ -202,10 +202,10 @@ describe("streamMessage", () => {
       useFreshKey();
       fetchMock.mockResolvedValue(textResponse(CLAUDE_MODELS.haiku.id, "Hi"));
 
-      await run({ ...SONNET, model: CLAUDE_MODELS.haiku.id, maxTokens: 100_000, effort: "high" });
+      await run({ ...SONNET, model: CLAUDE_MODELS.haiku.id, maxTokens: 200_000, effort: "high" });
 
       const body = sentBody();
-      expect(body.max_tokens).toBe(100_000);
+      expect(body.max_tokens).toBe(128_000);
       expect(body).toMatchObject({
         thinking: { type: "adaptive", display: "summarized" },
         output_config: { effort: "high" },
@@ -213,6 +213,19 @@ describe("streamMessage", () => {
       // Haiku 5.5 has no server-side fallback: `"default"` would leave a refusal standing.
       expect(body).not.toHaveProperty("fallbacks");
       expect(sentHeaders().get("anthropic-beta")).toBeNull();
+    });
+
+    it("drops thinking, effort and fallbacks for a model outside the catalog and keeps the caller's max_tokens", async () => {
+      useFreshKey();
+      fetchMock.mockResolvedValue(textResponse("claude-future-9", "Hi"));
+
+      await run({ ...SONNET, model: "claude-future-9", maxTokens: 300_000, effort: "high" });
+
+      const body = sentBody();
+      expect(body.max_tokens).toBe(300_000);
+      expect(body).not.toHaveProperty("thinking");
+      expect(body).not.toHaveProperty("output_config");
+      expect(body).not.toHaveProperty("fallbacks");
     });
 
     it("opts Opus 5.5 into server-side refusal fallbacks", async () => {
@@ -384,6 +397,44 @@ describe("streamMessage", () => {
       expect(usage.totalOutputTokens).toBe(5);
       // Sonnet 5.5 at $2/$10 per MTok.
       expect(usage.totalCostUsd).toBeCloseTo((10 * 2 + 5 * 10) / 1_000_000, 12);
+    });
+  });
+
+  describe("per-attempt pricing", () => {
+    it("prices a fallback attempt by the model that served it", async () => {
+      useFreshKey();
+      const attempt = (type: string, model: string, reads: number) => ({
+        type,
+        model,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: reads,
+      });
+      fetchMock.mockResolvedValue(
+        sse([
+          messageStart(CLAUDE_MODELS.sonnet.id),
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn", stop_sequence: null, stop_details: null },
+            usage: {
+              output_tokens: 0,
+              iterations: [
+                attempt("message", CLAUDE_MODELS.sonnet.id, 1_000_000),
+                attempt("fallback_message", "claude-sonnet-5", 1_000_000),
+              ],
+            },
+          },
+          { type: "message_stop" },
+        ]),
+      );
+
+      await run(SONNET);
+
+      // $0.10 per MTok of Sonnet 5.5 cache reads + $0.20 on the Sonnet 5 fallback.
+      expect(useAiStore.getState().cumulativeUsage.totalCostUsd).toBeCloseTo(0.3, 10);
     });
   });
 
