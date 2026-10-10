@@ -41,7 +41,7 @@ fn test_powershell_scripts_are_ascii_only() {
 }
 
 /// The Scheduled Task has no execution time limit. The default (72 hours)
-/// stopped the daemon after three days, and a stopped task is not restarted.
+/// would stop the daemon after three days, and a stopped task is not restarted.
 /// install.ps1 also reads the setting back and fails if it did not stick.
 #[test]
 fn test_scheduled_task_has_no_execution_time_limit() {
@@ -223,11 +223,11 @@ mod executed {
         calls.iter().filter(|line| *line == call).count()
     }
 
-    /// install.sh installs to `$SWARMD_BIN_DEST` (it used to ignore it),
-    /// points the unit at that binary and passes the installing shell's
-    /// PATH (agent CLIs were not found without it), both escaped for
-    /// systemd, and restarts the service on every run so an upgrade takes
-    /// effect (`enable --now` left a running daemon on the old binary).
+    /// install.sh installs to `$SWARMD_BIN_DEST`, points the unit at that
+    /// binary and passes the installing shell's PATH (agent CLIs are not
+    /// found without it), both escaped for systemd, and restarts the service
+    /// on every run so an upgrade takes effect (`enable --now` would leave a
+    /// running daemon on the old binary).
     /// uninstall.sh --purge-binary then removes all of it.
     #[test]
     fn test_systemd_install_upgrade_and_uninstall() {

@@ -1109,8 +1109,9 @@ async fn test_shutdown_closes_clients_with_1001() {
 }
 
 /// A socket still in its handshake is closed with 1001 as soon as shutdown
-/// starts, not when its handshake deadline passes: an idle unauthenticated
-/// socket used to hold `serve`'s WebSocket drain for the whole deadline.
+/// starts, not when its handshake deadline passes; otherwise an idle
+/// unauthenticated socket would hold `serve`'s WebSocket drain for the
+/// whole deadline.
 #[tokio::test]
 async fn test_shutdown_closes_pending_handshakes_promptly() {
     let server = TestServer::start_with(Options {

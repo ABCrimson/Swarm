@@ -65,8 +65,9 @@ mod tests {
     }
 
     /// An `rpcResult` queued behind a flood of events is written first, and
-    /// the events keep their order after it. The writer used to serve the
-    /// event lane first, so the result waited for the whole flood to drain.
+    /// the events keep their order after it: the writer serves the control
+    /// lane before the event lane, so the result never waits for the flood
+    /// to drain.
     #[tokio::test]
     async fn test_writer_serves_rpc_results_before_a_queued_event_flood() {
         const FLOOD: usize = 1000;

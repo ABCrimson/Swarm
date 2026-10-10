@@ -169,8 +169,8 @@ mod tests {
     }
 
     /// Loopback peers (every client of a local reverse proxy or `ssh -L`
-    /// tunnel) take no per-address permit; only the pool bounds them. The
-    /// cap used to put all of them in one bucket of
+    /// tunnel) take no per-address permit; only the pool bounds them. A
+    /// per-address cap would put all of them in one bucket of
     /// `max_pending_handshakes_per_peer`.
     #[test]
     fn test_loopback_peers_have_no_per_address_share() {
