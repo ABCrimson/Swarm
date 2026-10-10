@@ -161,8 +161,9 @@ describe("resizeWorker", () => {
 
 // ── createSession normalization ──────────────────────
 //
-// create_session requires its `config` argument (IPC deserialization
-// fails with "missing required key config" without it). Rust's Session
+// create_session requires its `config` argument (the registry rejects
+// the call with "Invalid Arguments: missing field `config`" without
+// it). Rust's Session
 // has no `updatedAt` field and represents `createdAt` as Unix seconds,
 // while the frontend's SessionSchema requires ISO-8601 strings for both,
 // so a raw pass-through would leave `updatedAt` undefined in the store.
