@@ -48,3 +48,13 @@ minimumReleaseAgeExclude:
   - '@tailwindcss/oxide-win32-x64-msvc@0.0.0-insiders.de2255b'
   - '@types/node@26.6.5'
   - '@anthropic-ai/sdk@0.133.0'
+
+# @oxc-transform-react/binding-wasm32-wasip1 0.153.0 exact-pins @emnapi/core
+# and @emnapi/runtime at 2.0.0-alpha.3, below its own loader's peer range
+# (@napi-rs/wasm-runtime 1.2.5 wants ^1.7.1 || ^2.0.0-alpha.4). Lift both to
+# the newest alpha so the WASI React-Compiler binding loads on a runtime its
+# loader supports; `NAPI_RS_FORCE_WASI=true pnpm check:compiler` (CI) proves it.
+# Scoped to that binding: other WASI bindings stay on their own emnapi.
+overrides:
+  '@oxc-transform-react/binding-wasm32-wasip1>@emnapi/core': 2.0.0-alpha.6
+  '@oxc-transform-react/binding-wasm32-wasip1>@emnapi/runtime': 2.0.0-alpha.6
