@@ -80,6 +80,7 @@ tauri-plugin-notification = "=3.0.0-alpha.2"
 # tauri-plugin-opener evaluates URL scopes with (already in the tree
 # through it, at this exact version).
 glob                      = "=0.3.4"
+# ── Runtime (swarm-core; swarm-desktop and swarmd share several) ─────
 tokio                     = { version = "=1.53.2", features = ["full"] }
 portable-pty              = "=0.9.0"
 serde                     = { version = "=1.0.229", features = ["derive"] }
@@ -95,35 +96,31 @@ rusqlite                  = { version = "=0.40.2", features = ["bundled"] }
 regex                     = "=1.13.1"
 sysinfo                   = "=0.39.6"
 tokio-util                = { version = "=0.7.20", features = ["rt"] }
-# ── swarmd (Phase 2 headless daemon) ─────────────────────────────────
-# axum is the one genuinely NEW dependency this workspace takes on for
-# swarmd — nothing else in the tree pulled in an HTTP/WS server stack.
-# See docs/architecture.md's "Runtime Modes" section for the
-# cargo-tree-verified justification.
+# ── swarmd (headless daemon) ─────────────────────────────────────────
+# axum is swarmd's HTTP/WebSocket server stack; only swarmd depends on it
+# (see docs/adr/0002-swarmd-separate-binary.md).
 axum                      = { version = "=0.8.9", features = ["ws"] }
 # swarmd-only: ServeDir (--serve-ui) and its security response headers.
 # Not shared with the desktop shell: tauri reaches tower-http only
 # through reqwest, which resolves the 0.6 line, so the lock carries 0.6
 # (desktop) and 0.7 (swarmd) side by side.
 tower-http                = { version = "=0.7.1", features = ["fs", "set-header"] }
-# Already present transitively at this exact version (uuid v4's own
-# randomness source) — made direct for the 256-bit daemon-token.
+# The 256-bit daemon token; the same version uuid v4 draws its randomness
+# from, so the lock keeps one copy.
 getrandom                 = "=0.4.3"
-# Already present transitively at this exact version (pulled in by
-# something in the existing dependency tree) — made direct for the
-# constant-time token comparison on the WS auth path.
+# Constant-time token comparison on the WS auth path; the same version
+# rustls uses.
 subtle                    = "=2.6.1"
 # Dev-only, swarmd's integration test: drives a real WS client against a
 # real swarmd instance. The newest release; axum 0.8's `ws` feature still
 # resolves the 0.29 line, so the dev graph carries both tungstenite
 # versions while the shipped swarmd binary carries only axum's.
 tokio-tungstenite         = "=0.30.0"
-# Already present transitively (hyper/tower's own plumbing) — made
-# direct for `WebSocket::split()` in swarmd's per-connection handler.
+# `WebSocket::split()` in swarmd's per-connection handler; the same version
+# axum and hyper-util use.
 futures-util              = "=0.3.34"
-# Already present transitively at this exact version — made direct for
-# swarmd, which mints the daemon token into a private temporary file and
-# links it into place without clobbering (its tests use temp dirs too).
+# swarmd mints the daemon token into a private temporary file and links it
+# into place without clobbering; its tests use temp dirs too.
 tempfile                  = "=3.27.0"
 
 [profile.release]
