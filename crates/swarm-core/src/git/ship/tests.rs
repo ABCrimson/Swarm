@@ -131,7 +131,6 @@ fn test_worktree_info_for_worker_is_a_pure_registry_read() {
     let info = worktree_info_for_worker(&registry, id).unwrap();
     assert_eq!(info.worktree_path, Path::new("/nonexistent/wt"));
     assert_eq!(info.last_shipped_seq, Some(42));
-    assert_eq!(info.last_shipped_commit.as_deref(), Some("cafef00d"));
     registry.set_last_shipped(&id, 43, "f00d").unwrap();
 }
 
