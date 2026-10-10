@@ -15,8 +15,7 @@ import pkg from "./package.json" with { type: "json" };
  * `NAPI_RS_FORCE_WASI=true pnpm check:compiler` exercises that path on
  * any host; `pnpm check:compiler` fails the build when the key UI
  * components ship uncompiled either way. The dev server also surfaces
- * the compiler's recoverable bail-out diagnostics (`reportDiagnostics`,
- * which replaced the plugin's deprecated `logDiagnostics`).
+ * the compiler's recoverable bail-out diagnostics (`reportDiagnostics`).
  */
 const reactWithCompiler = (dev: boolean): PluginOption[] =>
   react({ compiler: dev ? { reportDiagnostics: true } : true });
@@ -44,12 +43,9 @@ export default defineConfig(async ({ mode, command }): Promise<UserConfig> => {
 
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
-      // Headless-daemon plan Phase 3: selects `wsTransport` at build
-      // time for `pnpm build:web` (`--mode web`, see below); every
-      // other mode leaves this undefined, so `#lib/transport`'s
-      // `selectTransport()` keeps `tauriTransport` — the existing
-      // `tauri dev`/`tauri build`/plain `pnpm dev` behavior is
-      // completely unaffected by this define's existence.
+      // Selects `wsTransport` at build time for `pnpm build:web`
+      // (`--mode web`); every other mode sets it to "tauri", so
+      // `#lib/transport`'s `selectTransport()` picks `tauriTransport`.
       __SWARM_TRANSPORT__: JSON.stringify(mode === "web" ? "ws" : "tauri"),
     },
 
@@ -65,7 +61,7 @@ export default defineConfig(async ({ mode, command }): Promise<UserConfig> => {
       modulePreload: { polyfill: false },
       rolldownOptions: {
         output: {
-          // Vite 8/Rolldown: manualChunks is gone; codeSplitting is the replacement
+          // Rolldown's codeSplitting groups define the vendor chunks.
           codeSplitting: {
             groups: [
               { name: "react-vendor", test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
