@@ -99,39 +99,6 @@ pub(super) fn inline_settings_json(tier: ClaudeCodeTrustTier) -> String {
     .to_string()
 }
 
-/// Settings keys that make the CLI run a host command or send
-/// credentials somewhere, with no prompt. `-p` skips the workspace trust
-/// dialog, so the CLI applies these from the repository's
-/// `.claude/settings.json` unasked; `disableAllHooks` only closes the
-/// hooks row.
-pub(super) const REFUSED_PROJECT_SETTINGS: [&str; 5] = [
-    "apiKeyHelper",
-    "awsAuthRefresh",
-    "awsCredentialExport",
-    "otelHeadersHelper",
-    "env",
-];
-
-/// Refuses a repository's `.claude/settings.json` (`settings` is its
-/// bytes) that is not a JSON object or that defines any of
-/// [`REFUSED_PROJECT_SETTINGS`]; `--setting-sources project` would load it.
-pub(super) fn check_project_settings(settings: &[u8]) -> Result<(), AppError> {
-    let Ok(serde_json::Value::Object(settings)) = serde_json::from_slice(settings) else {
-        return Err(AppError::PermissionDenied(
-            "Project Settings Are Not A JSON Object; Refusing To Spawn".to_owned(),
-        ));
-    };
-    match REFUSED_PROJECT_SETTINGS
-        .into_iter()
-        .find(|key| settings.contains_key(*key))
-    {
-        Some(key) => Err(AppError::PermissionDenied(format!(
-            "Project Settings Define {key}; Refusing To Run A Repository-Supplied              Credential Helper Or Environment"
-        ))),
-        None => Ok(()),
-    }
-}
-
 /// What this adapter can honestly promise — identical for every trust
 /// tier: the tier changes what the CLI is ALLOWED to do, never what the
 /// protocol can do.
@@ -184,8 +151,7 @@ pub(super) fn build_claude_flags(
         // Condition A: no user or local settings, no MCP servers (claude.ai
         // connectors included). Project settings load with their hooks
         // disabled and the tier's deny list added by the inline settings
-        // below; `spawn_session` has already refused a project that
-        // defines a credential helper or `env` (`check_project_settings`).
+        // below.
         "--setting-sources",
         "project",
         "--strict-mcp-config",

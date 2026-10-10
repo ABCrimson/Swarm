@@ -115,8 +115,8 @@ use self::reader::{run_reader, watch_framer_errors};
 use self::state::{Inner, Shared, Status, Stop, TurnState};
 use self::teardown::teardown;
 use self::tier::{
-    accepted_permission_modes, build_claude_flags, check_project_settings,
-    claude_code_capabilities, parse_trust_tier, probe_flags,
+    accepted_permission_modes, build_claude_flags, claude_code_capabilities, parse_trust_tier,
+    probe_flags,
 };
 use self::wire::{ControlResponse, SignIn};
 use crate::agent::adapter::{
@@ -314,34 +314,7 @@ impl ClaudeCodeAdapter {
         }
     }
 
-    /// Runs [`Self::probe_in`] in a fresh owner-only directory, never the
-    /// shared temp root: the CLI applies the working directory's
-    /// `.claude/settings.json` (`apiKeyHelper` and `env` included), and on
-    /// Linux any local user can create `/tmp/.claude`. A non-recursive
-    /// create fails if the path already exists or is a planted symlink.
     async fn run_probe(&self) -> ProbeReport {
-        let cwd = std::env::temp_dir().join(format!("swarm-claude-probe-{}", Uuid::new_v4()));
-        #[cfg(unix)]
-        let created = tokio::fs::DirBuilder::new().mode(0o700).create(&cwd).await;
-        #[cfg(not(unix))]
-        let created = tokio::fs::create_dir(&cwd).await;
-        if let Err(error) = created {
-            return ProbeReport {
-                available: false,
-                version: None,
-                detail: Some(format!(
-                    "Claude Code CLI Probe Directory Could Not Be Created: {error}"
-                )),
-            };
-        }
-        let report = self.probe_in(&cwd).await;
-        if let Err(error) = tokio::fs::remove_dir_all(&cwd).await {
-            tracing::warn!(path = %cwd.display(), %error, "claude probe: could not remove its working directory");
-        }
-        report
-    }
-
-    async fn probe_in(&self, cwd: &std::path::Path) -> ProbeReport {
         let unavailable = |version: Option<String>, detail: String| ProbeReport {
             available: false,
             version,
@@ -349,6 +322,7 @@ impl ClaudeCodeAdapter {
         };
         let mut argv = self.prefix_args.clone();
         argv.extend(probe_flags());
+        let cwd = std::env::temp_dir();
         let mut process = match Process::start(&self.binary, &argv, &cwd.to_string_lossy()).await {
             Ok(process) => process,
             Err(error) => {
@@ -366,16 +340,7 @@ impl ClaudeCodeAdapter {
             }
         };
         let answer = tokio::time::timeout(PROBE_TIMEOUT, handshake(&mut process, true)).await;
-        let framer_error = process.framer_errors.try_recv().ok();
         let stderr = process.finish(true).await;
-        if let (Ok(Err(HandshakeError::Exited)) | Err(_), Some(error)) = (&answer, &framer_error) {
-            return unavailable(
-                None,
-                format!(
-                    "Claude Code CLI Wrote An Unreadable Line During The Probe: {error} ({stderr})"
-                ),
-            );
-        }
         let (init, version) = match answer {
             Ok(Ok(answer)) => answer,
             Ok(Err(HandshakeError::Rejected(error))) => {
@@ -391,7 +356,7 @@ impl ClaudeCodeAdapter {
                 );
             }
             Err(_elapsed) => {
-                return unavailable(None, format!("Claude Code CLI Probe Timed Out ({stderr})"));
+                return unavailable(None, "Claude Code CLI Probe Timed Out".to_owned());
             }
         };
         if let Some(found) = version.as_deref().and_then(parse_version)
@@ -422,19 +387,6 @@ impl ClaudeCodeAdapter {
 
     async fn spawn_session(&self, spec: AgentSpawnSpec) -> Result<ClaudeCodeSession, AppError> {
         let tier = parse_trust_tier(spec.permission_mode.as_deref())?;
-        let settings = std::path::Path::new(&spec.cwd)
-            .join(".claude")
-            .join("settings.json");
-        match tokio::fs::read(&settings).await {
-            Ok(bytes) => check_project_settings(&bytes)?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(AppError::PermissionDenied(format!(
-                    "Could Not Read Project Settings {}: {error}",
-                    settings.display()
-                )));
-            }
-        }
         let requested_model = spec
             .model
             .clone()
@@ -456,19 +408,15 @@ impl ClaudeCodeAdapter {
         {
             Ok(Ok((init, _))) => init,
             failed => {
-                let framer_error = process.framer_errors.try_recv().ok();
                 let stderr = process.finish(false).await;
-                return Err(AppError::Ai(match (failed, framer_error) {
-                    (Ok(Err(HandshakeError::Rejected(error))), _) => {
+                return Err(AppError::Ai(match failed {
+                    Ok(Err(HandshakeError::Rejected(error))) => {
                         format!("Claude Code Rejected The Session Handshake: {error}")
                     }
-                    (Ok(Err(HandshakeError::StartupFailure(error))), _) => {
+                    Ok(Err(HandshakeError::StartupFailure(error))) => {
                         format!("Claude Code Could Not Start The Session: {error}")
                     }
-                    (_, Some(error)) => format!(
-                        "Claude Code Wrote An Unreadable Line During The Session Handshake:                          {error} ({stderr})"
-                    ),
-                    (Ok(Err(HandshakeError::Exited)), None) => {
+                    Ok(Err(HandshakeError::Exited)) => {
                         format!("Claude Code Exited During The Session Handshake ({stderr})")
                     }
                     _ => format!(
