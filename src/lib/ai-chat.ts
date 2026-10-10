@@ -520,7 +520,12 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
       outcome.notice = { tone: "info", text: "Cancelled" };
       outcome.discardInjections = true;
     } else {
-      error = toAiRequestError(err).message;
+      const failure = toAiRequestError(err);
+      // A client-side failure has no request id to trace: its stack and cause survive only in the console.
+      if (failure.kind === "unknown" || failure.kind === "stream") {
+        console.error("ai-chat: turn failed", failure);
+      }
+      error = failure.message;
     }
   } finally {
     buffer.flush();
