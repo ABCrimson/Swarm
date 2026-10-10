@@ -24,6 +24,7 @@
 //! Each write replaces the file atomically and durably (see
 //! `state_file::write_atomic`).
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 use parking_lot::Mutex;
@@ -45,18 +46,23 @@ fn sessions_path(paths: &Paths) -> PathBuf {
     paths.data_dir.join(SESSIONS_FILE)
 }
 
+/// An I/O error on `path`, carrying the file's path (the error kind is kept).
+fn io_at(path: &Path, e: io::Error) -> AppError {
+    AppError::Io(io::Error::new(e.kind(), format!("{}: {e}", path.display())))
+}
+
 /// The file's top-level object, with a malformed file moved aside (and
 /// read as empty). `None` when there is no file yet.
 fn read_root(path: &Path) -> Result<Option<Map<String, Value>>, AppError> {
     let malformed = || -> Result<Option<Map<String, Value>>, AppError> {
-        let aside = state_file::quarantine(path)?;
+        let aside = state_file::quarantine(path).map_err(|e| io_at(path, e))?;
         tracing::warn!(
             moved_to = %aside.display(),
             "sessions.json was malformed; moved it aside and started with no sessions"
         );
         Ok(Some(Map::new()))
     };
-    match state_file::read_object(path)? {
+    match state_file::read_object(path).map_err(|e| io_at(path, e))? {
         StoredObject::Missing => Ok(None),
         StoredObject::Malformed => malformed(),
         StoredObject::Object(root) => match root.get(SESSIONS_KEY) {
@@ -127,7 +133,8 @@ pub fn save(paths: &Paths, manager: &SessionManager) -> Result<(), AppError> {
     let mut root = read_root(&path)?.unwrap_or_default();
     let sessions = manager.list_sessions();
     root.insert(SESSIONS_KEY.to_owned(), serde_json::to_value(&sessions)?);
-    state_file::write_atomic(&path, &serde_json::to_vec_pretty(&root)?)?;
+    state_file::write_atomic(&path, &serde_json::to_vec_pretty(&root)?)
+        .map_err(|e| io_at(&path, e))?;
     tracing::debug!(count = sessions.len(), "sessions saved");
     Ok(())
 }
