@@ -1361,6 +1361,10 @@ fn test_fresh_dir_non_loopback_bind_is_refused_twice_in_a_row() {
             "{stderr}"
         );
         assert!(
+            stderr.contains("Run `swarmd` Once With The Default Loopback Bind First"),
+            "{stderr}"
+        );
+        assert!(
             !dir.path().join("daemon-token").exists(),
             "attempt {attempt} minted a token"
         );
@@ -1413,6 +1417,7 @@ fn test_malformed_token_file_is_refused_and_kept() {
         stderr.contains("Refusing To Bind A Non-Loopback Address"),
         "{stderr}"
     );
+    assert!(stderr.contains("Cannot Read The Daemon Token"), "{stderr}");
     let (code, _, stderr) = run(&["--bind", "127.0.0.1:0", "--data-dir", path_str(dir.path())]);
     assert_eq!(code, Some(1));
     assert!(

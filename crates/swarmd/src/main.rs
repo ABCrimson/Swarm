@@ -218,7 +218,8 @@ fn prepare(args: &ServeArgs) -> Result<Startup, Fatal> {
             Ok(Some(_)) => {}
             Ok(None) => {
                 return Err(fatal(format!(
-                    "Refusing To Bind A Non-Loopback Address Without A Valid Daemon Token. Run `swarmd` Once                      With The Default Loopback Bind First (It Mints The Token), Then Retry With --bind {}.",
+                    "Refusing To Bind A Non-Loopback Address Without A Valid Daemon Token. Run `swarmd` Once \
+                    With The Default Loopback Bind First (It Mints The Token), Then Retry With --bind {}.",
                     args.bind
                 )));
             }

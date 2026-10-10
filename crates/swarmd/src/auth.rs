@@ -105,9 +105,9 @@ impl DaemonToken {
         self.0.len() == candidate.len() && bool::from(self.0.as_bytes().ct_eq(candidate.as_bytes()))
     }
 
-    /// `true` if `<data_dir>/daemon-token` holds a valid token. A pure check:
-    /// it never creates, rewrites or re-permissions anything, which is what
-    /// the non-loopback bind gate relies on (see the module doc).
+    /// `true` if `<data_dir>/daemon-token` holds a valid token. A pure check,
+    /// like [`Self::load`]: it never creates, rewrites or re-permissions
+    /// anything.
     pub fn exists(data_dir: &Path) -> bool {
         matches!(Self::load(data_dir), Ok(Some(_)))
     }
