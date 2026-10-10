@@ -762,15 +762,17 @@ fn delete_isolation_branch_if_unchanged(
 }
 
 /// First 120 characters of `data`, control characters stripped and
-/// invalid UTF-8 replaced. Only for machine-issued input (`tool`,
-/// `automation`); `terminal` input never gets one (see
+/// invalid UTF-8 replaced, and recognized credentials replaced with
+/// `[REDACTED]` by [`git::redact::redact`] on the full text before
+/// truncation, so no fragment survives the cut. Only for machine-issued
+/// input (`tool`, `automation`); `terminal` input never gets one (see
 /// `WorkerInputPayload`'s "never carries raw keystrokes" note).
 fn stamped_preview(data: &[u8]) -> String {
-    String::from_utf8_lossy(data)
+    let printable: String = String::from_utf8_lossy(data)
         .chars()
         .filter(|c| !c.is_control())
-        .take(120)
-        .collect()
+        .collect();
+    git::redact::redact(&printable).chars().take(120).collect()
 }
 
 /// Writes `data` to a worker's PTY, then emits a `worker_input` event
@@ -786,7 +788,7 @@ fn stamped_preview(data: &[u8]) -> String {
 /// `preview`, and never persisted, see
 /// [`crate::orchestration::is_persistent`]), [`InputSource::Tool`] or
 /// [`InputSource::Automation`] for machine-issued input (both get a
-/// control-stripped `preview`). `provenance` is `Provenance::default()`
+/// control-stripped, credential-redacted `preview`). `provenance` is `Provenance::default()`
 /// for terminal input: its causer is a person, not a worker's turn.
 ///
 /// # Errors
@@ -1248,6 +1250,33 @@ mod tests {
             !preview.chars().any(char::is_control),
             "preview must strip control characters, got: {preview:?}"
         );
+    }
+
+    /// Machine-issued input can carry a typed credential; the preview is
+    /// the only durable copy, so it is redacted before it is stamped.
+    #[test]
+    fn test_worker_input_preview_redacts_credentials() {
+        let registry = WorkerRegistry::new();
+        let (handle, _buf) = make_handle_with_pty(WorkerState::Running);
+        let id = registry.spawn_worker(handle).unwrap();
+        let (sink, rx) = test_sink();
+
+        do_worker_input(
+            &sink,
+            &registry,
+            id,
+            b"export K=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789\n",
+            InputSource::Tool,
+            Provenance::default(),
+        )
+        .unwrap();
+
+        let SwarmEvent::WorkerInput(p) = rx.recv().unwrap().event else {
+            panic!("expected WorkerInput");
+        };
+        let preview = p.preview.expect("tool input carries a preview");
+        assert!(preview.contains("[REDACTED]"), "got: {preview:?}");
+        assert!(!preview.contains("sk-ant-api03"), "got: {preview:?}");
     }
 
     /// A writer that blocks until released, like a PTY whose
