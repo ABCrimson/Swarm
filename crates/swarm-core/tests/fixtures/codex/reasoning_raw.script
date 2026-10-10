@@ -1,0 +1,19 @@
+# One turn with a raw reasoning stream (textDelta, indexed by contentIndex),
+# a reasoning item that streamed a summary yet completes with an empty one,
+# and an unmapped item kind (a web search) that is forwarded verbatim.
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_THREAD_START 019a7c00-0000-7000-8000-000000000001
+#DIRECTIVE EXPECT_REQUEST turn/start
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000d1
+{"method":"item/started","params":{"item":{"type":"reasoning","id":"item-r","summary":[],"content":[]},"threadId":"@THREAD","turnId":"@TURN","startedAtMs":1790201250000}}
+{"method":"item/reasoning/textDelta","params":{"threadId":"@THREAD","turnId":"@TURN","itemId":"item-r","delta":"a","contentIndex":0}}
+{"method":"item/reasoning/textDelta","params":{"threadId":"@THREAD","turnId":"@TURN","itemId":"item-r","delta":"b","contentIndex":1}}
+{"method":"item/completed","params":{"item":{"type":"reasoning","id":"item-r","summary":[],"content":["a","b"]},"threadId":"@THREAD","turnId":"@TURN","completedAtMs":1790201250100}}
+{"method":"item/started","params":{"item":{"type":"reasoning","id":"item-s","summary":[],"content":[]},"threadId":"@THREAD","turnId":"@TURN","startedAtMs":1790201250200}}
+{"method":"item/reasoning/summaryTextDelta","params":{"threadId":"@THREAD","turnId":"@TURN","itemId":"item-s","delta":"partial","summaryIndex":0}}
+{"method":"item/completed","params":{"item":{"type":"reasoning","id":"item-s","summary":[],"content":[]},"threadId":"@THREAD","turnId":"@TURN","completedAtMs":1790201250300}}
+{"method":"item/completed","params":{"item":{"type":"webSearch","id":"ws-1","query":"tauri","action":null},"threadId":"@THREAD","turnId":"@TURN","completedAtMs":1790201250400}}
+{"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"completed","error":null,"startedAt":1790201250,"completedAt":1790201252,"durationMs":500}}}

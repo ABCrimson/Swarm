@@ -984,6 +984,78 @@ async fn failed_turns_settle_error_with_the_server_message() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn raw_reasoning_and_unmapped_items_become_blocks() {
+    let h = Harness::new("reasoning_raw.script");
+    let session = h.spawn().await;
+    let turn = session
+        .send_turn(TurnInput {
+            prompt: "think".to_string(),
+        })
+        .await
+        .expect("turn");
+    session.await_turn_completion(turn).await.expect("await");
+    h.flush().await;
+    let events = h.events();
+
+    let deltas: Vec<&AgentTurnDeltaPayload> = events
+        .iter()
+        .filter_map(|e| match e {
+            SwarmEvent::AgentTurnDelta(p) => Some(p),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        deltas
+            .iter()
+            .map(|d| (d.kind.as_str(), d.text.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("thinking", "a"),
+            (
+                "thinking", "
+
+b"
+            ),
+            ("thinking", "partial")
+        ],
+        "a new contentIndex starts a paragraph"
+    );
+    assert_eq!(deltas[0].block_index, deltas[1].block_index);
+    assert_ne!(deltas[0].block_index, deltas[2].block_index);
+
+    let blocks: Vec<&AgentBlockPayload> = events
+        .iter()
+        .filter_map(|e| match e {
+            SwarmEvent::AgentBlock(p) => Some(p),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(blocks.len(), 3, "{blocks:#?}");
+    assert_eq!(blocks[0].kind, "thinking");
+    assert_eq!(
+        blocks[0].content,
+        json!({ "thinking": "a
+
+b" })
+    );
+    assert_eq!(blocks[0].block_index, deltas[0].block_index);
+    assert_eq!(blocks[1].kind, "thinking");
+    assert_eq!(
+        blocks[1].content,
+        json!({ "thinking": "" }),
+        "a streamed item that completes empty still closes its stream"
+    );
+    assert_eq!(blocks[1].block_index, deltas[2].block_index);
+    assert_eq!(blocks[2].kind, "webSearch");
+    assert_eq!(
+        blocks[2].content,
+        json!({ "type": "webSearch", "id": "ws-1", "query": "tauri", "action": null })
+    );
+    assert_every_stream_is_closed(&events);
+    session.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancel_interrupts_the_turn_and_keeps_the_thread() {
     let h = Harness::new("interrupt.script");
     let session = h.spawn().await;
