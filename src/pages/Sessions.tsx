@@ -202,23 +202,14 @@ export function Sessions(): React.ReactElement {
     templateSourceId == null ? undefined : s.sessions.get(templateSourceId),
   );
 
-  const listToggleRef = useRef<HTMLButtonElement>(null);
-
-  // The view being left is about to be hidden (display: none), which would drop
-  // focus to <body>; hand it to the List toggle, which stays visible.
-  const showList = (): void => {
-    listToggleRef.current?.focus();
-    setView("list");
-  };
-
   const handleTemplateSelect = (template: SessionTemplate) => {
-    showList();
+    setView("list");
     void applyTemplateWithReport(template);
   };
 
   const handleSearchResultSelect = (sessionId: string) => {
     setActiveSession(sessionId);
-    showList();
+    setView("list");
   };
 
   return (
@@ -245,7 +236,6 @@ export function Sessions(): React.ReactElement {
               {VIEWS.map(({ id, label }) => (
                 <ViewToggle
                   key={id}
-                  ref={id === "list" ? listToggleRef : undefined}
                   label={label}
                   active={view === id}
                   onClick={() => setView(id)}
@@ -305,7 +295,7 @@ export function Sessions(): React.ReactElement {
             <HistorySearch onResultSelect={handleSearchResultSelect} />
           </Activity>
           <Activity mode={view === "templates" ? "visible" : "hidden"}>
-            <TemplateSelector onSelect={handleTemplateSelect} onClose={showList} />
+            <TemplateSelector onSelect={handleTemplateSelect} onClose={() => setView("list")} />
           </Activity>
         </div>
       </div>
@@ -392,19 +382,16 @@ function TemplateForm({
 }
 
 function ViewToggle({
-  ref,
   label,
   active,
   onClick,
 }: {
-  readonly ref?: React.Ref<HTMLButtonElement>;
   readonly label: string;
   readonly active: boolean;
   readonly onClick: () => void;
 }): React.ReactElement {
   return (
     <button
-      ref={ref}
       type="button"
       aria-pressed={active}
       onClick={onClick}
