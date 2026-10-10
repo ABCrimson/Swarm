@@ -367,20 +367,15 @@ describe("CausalityPanel (component)", () => {
   });
 
   it("aborts a walk still in flight when it closes", async () => {
-    let resolveLookup: (rows: DomainEvent[]) => void = () => {};
+    const lookup = Promise.withResolvers<DomainEvent[]>();
     seedRing(ev({ seq: 30, type: "worker_input", causeSeq: 20, payload: { workerId: "w" } }));
-    invoke.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveLookup = resolve;
-        }),
-    );
+    invoke.mockImplementationOnce(() => lookup.promise);
 
     const { unmount } = renderPanel(30);
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
     unmount();
     await act(async () => {
-      resolveLookup([
+      lookup.resolve([
         ev({ seq: 20, type: "worker_input", causeSeq: 10, payload: { workerId: "w" } }),
       ]);
     });

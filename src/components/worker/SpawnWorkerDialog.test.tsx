@@ -126,13 +126,8 @@ describe("SpawnWorkerDialog", () => {
   });
 
   it("keeps the Claude Code option enabled while the probe is still in flight", async () => {
-    let resolveProbe: (report: ProbeReport) => void = () => {};
-    vi.mocked(agentProbe).mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveProbe = resolve;
-        }),
-    );
+    const probe = Promise.withResolvers<ProbeReport>();
+    vi.mocked(agentProbe).mockImplementation(() => probe.promise);
 
     render(<SpawnWorkerDialog onClose={vi.fn()} />);
 
@@ -142,7 +137,7 @@ describe("SpawnWorkerDialog", () => {
     await waitFor(() => expect(screen.queryByText("Loading…")).not.toBeInTheDocument());
     expect(screen.getByRole("radio", { name: "Claude Code" })).not.toBeDisabled();
 
-    resolveProbe(AVAILABLE);
+    probe.resolve(AVAILABLE);
   });
 
   it("submits via spawnWorker (not agentSpawn) for the default Webview Anthropic provider", async () => {
