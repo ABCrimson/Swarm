@@ -1,4 +1,4 @@
-# An unterminated line past the framer's 10 MiB cap.
+# An unterminated line past the framer's 10 MB cap.
 #DIRECTIVE IGNORE_STDIN_EOF
 #DIRECTIVE EXPECT_REQUEST initialize
 #DIRECTIVE RESPOND_INITIALIZE

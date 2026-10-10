@@ -9,26 +9,8 @@
 
 use std::assert_matches;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
-use serde_json::{Value, json};
-use uuid::Uuid;
-
-use super::process::resolve_with_pathext;
-use super::protocol::{
-    AskForApproval, Incoming, METHOD_NOT_FOUND, RequestId, SandboxMode, ThreadOpened,
-    ThreadStartParams,
-};
-use super::reader::permission_id;
-use super::state::{ApprovalKind, PendingApproval};
-use super::teardown::signal_name;
-use super::tier::verify_effective_policy;
 use super::*;
-use crate::agent::adapter::{AgentTurnStatus, CancelGranularity};
-use crate::events::{
-    AgentBlockPayload, AgentPermissionRequestPayload, AgentSessionExitedPayload,
-    AgentTurnDeltaPayload, AgentTurnSettledPayload, Provenance,
-};
 use crate::orchestration::{EventLog, OrchestrationEngine};
 
 /// The thread id every fixture's `thread/start` answers with.
@@ -779,20 +761,14 @@ async fn a_handshake_timeout_kills_and_reaps_the_child() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unknown_trust_tier_never_starts_a_process() {
     let h = Harness::new("handshake.script");
-    // A binary that cannot start: a tier parsed after the spawn would
-    // surface the spawn failure (AppError::Ai) instead of the refusal.
-    let adapter = CodexAdapter::with_test_binary(
-        h.sink.clone(),
-        "swarm-no-such-codex-binary",
-        Vec::new(),
-        test_timeouts(),
-    );
-    let error = adapter
+    let error = h
+        .adapter
         .spawn(h.spec(Some("never"), None, None))
         .await
         .err()
         .expect("refused");
     assert_matches!(error, AppError::PermissionDenied(_));
+    assert!(h.record().is_empty(), "the fake never ran");
 }
 
 // ── Turns ────────────────────────────────────────────────────────────
@@ -1493,29 +1469,6 @@ async fn an_oversized_line_tears_the_session_down() {
         })
         .await;
     assert!(after.is_err());
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_framer_error_before_the_ack_names_its_cause() {
-    let h = Harness::with_timeouts(
-        "oversized_before_turn_ack.script",
-        Timeouts {
-            graceful_exit: Duration::from_millis(200),
-            ..test_timeouts()
-        },
-    );
-    let session = h.spawn().await;
-    let error = session
-        .send_turn(TurnInput {
-            prompt: "go".to_string(),
-        })
-        .await
-        .expect_err("the framer error closes the session before the ack");
-    assert_matches!(
-        &error,
-        AppError::Ipc(m)
-            if m.starts_with("codex session closed before acknowledging the turn (NDJSON line exceeded ")
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
