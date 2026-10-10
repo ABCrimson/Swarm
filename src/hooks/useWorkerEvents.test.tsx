@@ -20,7 +20,7 @@ const mockListWorkers = vi.fn<() => Promise<Worker[]>>();
 const mockSessionRemoveWorker = vi.fn();
 const mockCancelChatTurn = vi.fn();
 
-vi.mock("#lib/chat-turns", () => ({
+vi.mock("#lib/ai-chat", () => ({
   cancelChatTurn: (...args: unknown[]) => mockCancelChatTurn(...args),
 }));
 
