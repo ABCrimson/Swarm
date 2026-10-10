@@ -370,24 +370,24 @@ cargo test --workspace --doc
 
 | Crate / module                | Tests | Covers                                                  |
 |-------------------------------|-------|---------------------------------------------------------|
-| `swarm-core` `git`            | 161   | Binary discovery, worktree add/lock/unlock/remove, ship preflight/commit/push, causal-record generation, secret redaction |
-| `swarm-core` `agent`          | 114   | The `AgentAdapter` contract, Claude Code and Codex adapters against the fake-CLI fixtures, the session registry, the turn scheduler |
-| `swarm-core` `worker`         | 64    | Registry (capacity, `update_state_if`), lifecycle, PTY and piped-process plumbing, NDJSON framing |
-| `swarm-core` `commands`       | 51    | Registry dispatch, `RemotePolicy` gating, `events_since` paging, `read_file`/`write_file` scope and deny list (canonicalization, Windows name refusals), credential-leak regressions |
-| `swarm-core` `orchestration`  | 43    | Persistence policy, envelope shape, provenance stamping, the SQLite event log, fail-closed persistence and seq reservation |
+| `swarm-core` `git`            | 176   | Binary discovery, worktree add/lock/unlock/remove, ship preflight/commit/push, causal-record generation, secret redaction |
+| `swarm-core` `agent`          | 119   | The `AgentAdapter` contract, Claude Code and Codex adapters against the fake-CLI fixtures, the session registry, the turn scheduler |
+| `swarm-core` `worker`         | 72    | Registry (capacity, `update_state_if`), lifecycle, PTY and piped-process plumbing, NDJSON framing |
+| `swarm-core` `commands`       | 57    | Registry dispatch, `RemotePolicy` gating, `events_since` paging, `read_file`/`write_file` scope and deny list (canonicalization, Windows name refusals), credential-leak regressions |
+| `swarm-core` `orchestration`  | 45    | Persistence policy, envelope shape, provenance stamping, the SQLite event log, fail-closed persistence and seq reservation |
 | `swarm-core` `events`         | 40    | Wire serialization, `snake_case` type tags, `camelCase` payloads, provenance |
-| `swarm-core` `session`        | 15    | Session manager CRUD and atomic persistence |
-| `swarm-core` `bus`            | 6     | Channels and the router |
-| `swarm-core` top-level modules | 51    | `error`, `config`, `lock`, `metrics`, `protocol`, `runtime`, `state_file`, `clock` |
+| `swarm-core` `session`        | 16    | Session manager CRUD and atomic persistence |
+| `swarm-core` `bus`            | 7     | Channels and the router |
+| `swarm-core` top-level modules | 52    | `error`, `config`, `lock`, `metrics`, `protocol`, `runtime`, `state_file`, `clock` |
 | `swarmd`                      | 83    | 41 unit tests (CLI parsing, the daemon token and Host/Origin policy, the WebSocket writer, per-peer caps and replay) and 42 integration tests: 35 drive a real daemon over WebSocket and HTTP (the static UI included), 7 cover the service scripts (3 run `install.sh`/`uninstall.sh` against shims on Linux; 4 check the PowerShell scripts and unit files statically) |
 | `swarm-desktop`               | 36    | 35 unit tests (command list and per-command ACL, capability and config contracts, dialog grants, lifecycle teardown) and 1 integration test (the shared Tokio runtime) |
-| **Total**                     | **664** |                                                       |
+| **Total**                     | **703** |                                                       |
 
-`cargo test --workspace --locked` ran 677 tests at that head (in WSL; one more is ignored: it drives the installed `claude` CLI): 558 in `swarm-core` (542 unit plus 16 doc-tests), 36 in `swarm-desktop` and 83 in `swarmd`. The attribute total leaves out the 16 doc-tests but counts tests that did not run in WSL: the ignored one and the `#[cfg(windows)]` tests (for example the short-name and invalid-name tests in `commands/fs.rs`). The doc-tests run with `cargo test --workspace --doc`.
+`cargo test --workspace --locked` ran 716 tests at that head (in WSL; one more is ignored: it drives the installed `claude` CLI): 597 in `swarm-core` (581 unit plus 16 doc-tests), 36 in `swarm-desktop` and 83 in `swarmd`. The attribute total leaves out the 16 doc-tests but counts tests that did not run in WSL: the ignored one and the `#[cfg(windows)]` tests (for example the short-name and invalid-name tests in `commands/fs.rs`). The doc-tests run with `cargo test --workspace --doc`.
 
 ### Frontend Testing
 
-Frontend tests run via Vitest (`pnpm test`): **120 test files, 1248 tests** _(all green at the 2026-10-10 head)_, covering components, hooks, stores, and `lib/` utilities. `pnpm test:coverage` adds the coverage floor from `vitest.config.ts`.
+Frontend tests run via Vitest (`pnpm test`): **122 test files, 1268 tests** _(all green at the 2026-10-10 head)_, covering components, hooks, stores, and `lib/` utilities. `pnpm test:coverage` adds the coverage floor from `vitest.config.ts`.
 
 Tests are **colocated**: `X.test.ts(x)` sits next to the `X.ts(x)` it covers, and a suite that covers one facet of a larger module takes a dotted suffix (`src/lib/tools.file-io.test.ts`, `src/lib/tools.spawn-worker.test.ts`). Import the module under test through its `#` alias like any other code. Vitest collects `src/**/*.test.{ts,tsx}` only, so the Playwright `e2e/*.spec.ts` suites are never picked up.
 
@@ -395,9 +395,9 @@ Tests are **colocated**: `X.test.ts(x)` sits next to the `X.ts(x)` it covers, an
 |-----------------------------------|-------|-----------------------------------------------------------------|
 | `src/components/**/*.test.{ts,tsx}` | 49  | UI primitives, the graph and causality surfaces, layout, logs, metrics charts, sessions, and the agent/ship surfaces |
 | `src/hooks/*.test.tsx`            | 15    | `useWorker`, `useElkLayout`, `useTerminal`, `useWebGPU`, `useSettingsBridge`, `useShip`, and the event-stream hooks |
-| `src/lib/*.test.ts`               | 43    | `anthropic`, `event-bus`, `export`, `keybindings`, `log-store`, `models`, `time`, the `tools*` suites, `transport` (the `wsTransport` client), `webgpu`, `worker-spawn`, ... |
+| `src/lib/*.test.ts`               | 44    | `anthropic`, `event-bus`, `export`, `keybindings`, `log-store`, `models`, `time`, the `tools*` suites, `transport` (the `wsTransport` client), `webgpu`, `worker-spawn`, ... |
 | `src/pages/*.test.tsx`            | 3     | The pages with their own control surface (e.g. `Settings`) |
-| `src/store/*.test.ts`             | 10    | The Zustand stores and persisted settings |
+| `src/store/*.test.ts`             | 11    | The Zustand stores and persisted settings |
 
 Tauri IPC is mocked globally in `src/test/setup.ts`: `vi.mock` stubs `@tauri-apps/api/core` (`invoke`, `isTauri`) and `@tauri-apps/api/event` (`listen`), plus the `dialog`, `fs`, `opener` and `store` plugins and `sonner`. Individual tests override the default rejected/no-op behavior with `vi.mocked(invoke).mockResolvedValueOnce(...)` as needed. `src/test/dom-polyfills.ts` fills the jsdom gaps.
 
