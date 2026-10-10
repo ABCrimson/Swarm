@@ -1268,9 +1268,9 @@ mod tests {
         }
     }
 
-    /// Regression: a write blocked on a full PTY input queue used to
-    /// hold the registry's shard lock, so the kill that would unblock it
-    /// could never run.
+    /// A write blocked on a full PTY input queue must not hold the
+    /// registry's shard lock, or the kill that would unblock it could
+    /// never run.
     #[test]
     fn test_kill_is_not_blocked_by_an_input_write_in_progress() {
         let registry = WorkerRegistry::new();
@@ -1403,10 +1403,10 @@ mod tests {
         (result, captured, registry)
     }
 
-    /// Regression: `spawn_pty`'s span once recorded its `env` argument
-    /// (values included), so anything logged inside it, or any
-    /// span-printing layer, leaked per-profile API keys. Asserted with
-    /// span fields printed, so the test cannot pass vacuously.
+    /// `spawn_pty`'s span records `env_key_count`, never `env` values, so
+    /// nothing logged inside it, and no span-printing layer, can leak
+    /// per-profile API keys. Asserted with span fields printed, so the
+    /// test cannot pass vacuously.
     #[test]
     fn test_spawn_never_records_env_values_in_events_or_spans() {
         let (result, captured, _) = spawn_under_capture("");
@@ -1443,9 +1443,8 @@ mod tests {
 
     // ── real shells ──────────────────────────────────────────────────
 
-    /// Regression (Windows): the pseudoconsole used to be closed as soon
-    /// as `spawn_pty` returned, killing every worker's shell at birth.
-    /// The shell must be alive after the spawn and answer input.
+    /// On Windows the pseudoconsole outlives `spawn_pty`'s return: the
+    /// shell must be alive after the spawn and answer input.
     #[test]
     fn test_spawned_shell_stays_alive_and_answers_input() {
         let registry = WorkerRegistry::new();
@@ -1536,9 +1535,9 @@ mod tests {
         do_kill_worker(&sink, &registry, &repo_locks, id, Provenance::default()).unwrap();
     }
 
-    /// Regression: a shell that exited on its own left its worker
-    /// `running` forever. It must move to `error`, announced by a
-    /// `worker_state` event, refuse input, and still be killable.
+    /// A shell that exits on its own moves its worker to `error`,
+    /// announced by a `worker_state` event; the worker then refuses input
+    /// and is still killable.
     #[test]
     fn test_a_shell_that_exits_on_its_own_marks_its_worker_errored() {
         let registry = WorkerRegistry::new();
@@ -1730,9 +1729,8 @@ mod tests {
         );
     }
 
-    /// Regression: `RegistryFull` used to be detected only after the
-    /// worktree, branch and shell existed, and leaked all three. A spawn
-    /// at capacity must create nothing.
+    /// `RegistryFull` is detected before any side effect, so a spawn at
+    /// capacity creates nothing: no worktree, branch or shell.
     #[test]
     fn test_spawn_at_capacity_creates_no_worktree_branch_or_shell() {
         let repo = temp_repo();
