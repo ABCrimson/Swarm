@@ -1,9 +1,10 @@
 // The Rust ↔ TypeScript agent-event contract, checked against the Rust
-// source itself: every payload struct's serde field names (camelCase)
-// must equal its Zod schema's keys, with Rust `Option<…>` fields accepting
-// both undefined and null on this side and every other field (bar
-// `serde_json::Value`) required, and every closed enum's snake_case
-// variants must equal its Zod enum's options.
+// source itself: every payload struct's serde field names (rename_all
+// camelCase, read from the source) must equal its Zod schema's keys, with
+// Rust `Option<…>` fields accepting both undefined and null on this side
+// and every other field (bar `serde_json::Value`) required, and every
+// closed enum's snake_case variants (rename_all read from the source)
+// must equal its Zod enum's options.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -47,6 +48,13 @@ function body(src: string, kind: "struct" | "enum", name: string): string[] {
 
 const camel = (snake: string) => snake.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
 const snake = (pascal: string) => pascal.replace(/(?<!^)([A-Z])/g, "_$1").toLowerCase();
+
+/** The `rename_all` rule of the `#[serde(…)]` attribute directly above `pub <kind> <name> {`. */
+function renameAll(src: string, kind: "struct" | "enum", name: string): string | undefined {
+  return new RegExp(
+    String.raw`#\[serde\([^)\n]*\brename_all = "([^"]+)"[^)\n]*\)\]\s*pub ${kind} ${name} \{`,
+  ).exec(src)?.[1];
+}
 
 /** Each serde field name (camelCase) mapped to its Rust type. */
 function structFields(src: string, name: string): Map<string, string> {
@@ -92,6 +100,7 @@ const ENUMS: readonly [string, string, z.ZodEnum][] = [
 
 describe("agent event contract (Rust source ↔ Zod)", () => {
   it.each(STRUCTS)("%#: %s fields match", (src, name, schema) => {
+    expect(renameAll(src, "struct", name), `${name} rename_all`).toBe("camelCase");
     const fields = structFields(src, name);
     expect([...fields.keys()].toSorted()).toEqual(Object.keys(schema.shape).toSorted());
     for (const [field, type] of fields) {
@@ -108,6 +117,7 @@ describe("agent event contract (Rust source ↔ Zod)", () => {
   });
 
   it.each(ENUMS)("%#: %s variants match", (src, name, schema) => {
+    expect(renameAll(src, "enum", name), `${name} rename_all`).toBe("snake_case");
     expect(enumVariants(src, name)).toEqual(schema.options);
   });
 });
