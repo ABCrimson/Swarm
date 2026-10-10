@@ -9,6 +9,12 @@
  * side effect, and a mismatch comes back to the model as an error
  * `tool_result` it can correct.
  *
+ * The four tools that act on the user's machine (`run_command`,
+ * `spawn_worker`, `write_file`, `read_file`) also need the user's
+ * approval (allow once, allow for the session, or deny) before they
+ * run; see "Tool Approval" below. The prompt is `ToolApprovalPrompt` in
+ * `#components/ai`. The Rust side still enforces its own file scope.
+ *
  * @module tools
  */
 
@@ -61,6 +67,12 @@ export interface SwarmTool {
   readonly uiDescription: string;
   readonly schema: z.ZodType;
   readonly anthropicTool: ChatTool;
+  /**
+   * Present on the tools that need the user's approval before
+   * {@link executeTool} runs them: a one-sentence, human-readable
+   * account of what the call would do, built from its validated input.
+   */
+  readonly approvalSummary?: (input: unknown) => string;
   /** Validates `input` against `schema`, then runs the tool. */
   readonly execute: (input: unknown, prov?: ToolProvenance) => Promise<SwarmToolResult>;
 }
@@ -139,6 +151,7 @@ function createTool<S extends z.ZodType>(
   uiDescription: string,
   schema: S,
   run: (input: z.output<S>, prov?: ToolProvenance) => Promise<SwarmToolResult>,
+  approvalSummary?: (input: z.output<S>) => string,
 ): SwarmTool {
   return {
     name,
@@ -146,6 +159,10 @@ function createTool<S extends z.ZodType>(
     uiDescription,
     schema,
     anthropicTool: zodToTool(name, description, schema),
+    // Only ever called with input that passed `schema` (see executeTool).
+    ...(approvalSummary && {
+      approvalSummary: (input: unknown) => approvalSummary(schema.parse(input)),
+    }),
     async execute(input, prov) {
       const parsed = parseInput(name, schema, input);
       if (!parsed.ok) return parsed.result;
@@ -174,6 +191,7 @@ const spawnWorkerTool = createTool(
     }
     return { success: true, data: { id: workerId } };
   },
+  ({ name }) => `Spawn a new worker process named "${name ?? "Worker"}".`,
 );
 
 const killWorkerTool = createTool(
@@ -196,6 +214,8 @@ const runCommandTool = createTool(
     await workerInput(workerId, `${command}\n`, "tool", prov);
     return { success: true, data: { sent: command } };
   },
+  ({ workerId, command }) =>
+    `Type "${command}" into the terminal of worker ${workerId} and run it.`,
 );
 
 const readFileTool = createTool(
@@ -204,14 +224,16 @@ const readFileTool = createTool(
   "Read The Contents Of A File At The Given Absolute Path.",
   ReadFileInput,
   async ({ path, maxLines }) => {
-    // The real read_file Rust command (commands/fs.rs), scoped to the app
-    // data and home directories. The file is read in full and sliced in
+    // The real read_file Rust command (commands/fs.rs): canonicalized,
+    // scoped to the app data and home directories, with the app's
+    // credential files denied. The file is read in full and sliced in
     // memory — fine for the small text files an AI turn reads.
     const fullContent = z.string().parse(await invoke<unknown>("read_file", { path }));
     const content =
       maxLines === undefined ? fullContent : fullContent.split("\n").slice(0, maxLines).join("\n");
     return { success: true, data: { path, content } };
   },
+  ({ path }) => `Read the file ${path}.`,
 );
 
 const writeFileTool = createTool(
@@ -230,6 +252,8 @@ const writeFileTool = createTool(
     });
     return { success: true, data: { path, written: true } };
   },
+  ({ path, content }) =>
+    `Write ${content.length} characters to ${path}, replacing any existing file.`,
 );
 
 const getMetricsTool = createTool(
@@ -294,10 +318,121 @@ export function getAllAnthropicTools(): ChatTool[] {
   return [...getAnthropicTools(), ...activeCustomTools().map(customToolToAnthropic)];
 }
 
+// ── Tool Approval ───────────────────────────────────
+
+/** The user's answer to an approval prompt. */
+export type ApprovalChoice = "once" | "session" | "deny";
+
+/** A tool call waiting for the user's decision. */
+export interface ToolApprovalRequest {
+  readonly id: string;
+  readonly tool: string;
+  /** What the call would do, in one sentence. */
+  readonly summary: string;
+  /** The worker whose AI turn made the call, when it is known. */
+  readonly workerId?: string;
+}
+
+/** Tools the user allowed for the rest of this app session. */
+const sessionGrants = new Set<string>();
+const resolvers = new Map<string, (choice: ApprovalChoice) => void>();
+const listeners = new Set<() => void>();
+let pending: readonly ToolApprovalRequest[] = [];
+
+function publish(next: readonly ToolApprovalRequest[]): void {
+  pending = next;
+  for (const listener of listeners) listener();
+}
+
+/** `useSyncExternalStore` subscription to the pending approval list. */
+export function subscribeToolApprovals(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => void listeners.delete(listener);
+}
+
+/** The pending approvals, oldest first; the same array until it changes. */
+export function getPendingToolApprovals(): readonly ToolApprovalRequest[] {
+  return pending;
+}
+
+function release(requests: readonly ToolApprovalRequest[], choice: ApprovalChoice): void {
+  if (requests.length === 0) return;
+  publish(pending.filter((request) => !requests.includes(request)));
+  for (const request of requests) {
+    resolvers.get(request.id)?.(choice);
+    resolvers.delete(request.id);
+  }
+}
+
+/**
+ * Records the user's answer. "Allow for session" also releases every
+ * other pending call of the same tool and silences its future prompts
+ * until the app reloads.
+ */
+export function resolveToolApproval(id: string, choice: ApprovalChoice): void {
+  const request = pending.find((candidate) => candidate.id === id);
+  if (!request) return;
+  if (choice === "session") sessionGrants.add(request.tool);
+  release(
+    pending.filter(
+      (candidate) =>
+        candidate.id === id || (choice === "session" && candidate.tool === request.tool),
+    ),
+    choice,
+  );
+}
+
+/**
+ * Denies the pending calls of one worker's turn (or all of them): the
+ * turn that made them was stopped, so nobody is left to answer. Calls
+ * with no known worker are denied too.
+ */
+export function denyPendingToolApprovals(workerId?: string): void {
+  release(
+    pending.filter(
+      (request) =>
+        workerId === undefined || request.workerId === undefined || request.workerId === workerId,
+    ),
+    "deny",
+  );
+}
+
+/** Allows `tool` for the rest of the session without a prompt. */
+export function grantToolForSession(tool: string): void {
+  sessionGrants.add(tool);
+}
+
+/** Forgets every session grant and denies every pending call. */
+export function resetToolApprovals(): void {
+  sessionGrants.clear();
+  denyPendingToolApprovals();
+}
+
+/** Resolves to whether the user lets this call run. */
+async function requestApproval(
+  tool: SwarmTool,
+  summary: string,
+  workerId?: string,
+): Promise<boolean> {
+  if (sessionGrants.has(tool.name)) return true;
+  const request: ToolApprovalRequest = {
+    id: crypto.randomUUID(),
+    tool: tool.name,
+    summary,
+    ...(workerId !== undefined && { workerId }),
+  };
+  const { promise, resolve } = Promise.withResolvers<ApprovalChoice>();
+  resolvers.set(request.id, resolve);
+  publish([...pending, request]);
+  return (await promise) !== "deny";
+}
+
 /**
  * Executes a tool call by name. Built-ins validate and run through the
  * registry, forwarding `prov` (the calling AI turn's attribution) to the
- * IPC command they call. Other names resolve to the active custom tools,
+ * IPC command they call. A built-in with an `approvalSummary` first
+ * waits for the user's approval, once its input has validated; a denial
+ * comes back to the model as an error result. Other names resolve to the active custom tools,
  * whose input is validated against their declared parameters and whose
  * scripts run in a sandboxed Blob Worker (see `#lib/custom-tools`) —
  * they have no backend side effects to stamp, so `prov` is not forwarded.
@@ -308,7 +443,17 @@ export async function executeTool(
   prov?: ToolProvenance,
 ): Promise<SwarmToolResult> {
   const tool = toolRegistry.get(name);
-  if (tool) return tool.execute(input, prov);
+  if (tool) {
+    if (tool.approvalSummary) {
+      const parsed = parseInput(name, tool.schema, input);
+      if (!parsed.ok) return parsed.result;
+      const summary = tool.approvalSummary(parsed.data);
+      if (!(await requestApproval(tool, summary, prov?.originWorker))) {
+        return { success: false, error: `The User Denied ${name}. It Was Not Run.` };
+      }
+    }
+    return tool.execute(input, prov);
+  }
 
   const custom = activeCustomTools().find((candidate) => candidate.name === name);
   if (!custom) return { success: false, error: `Unknown Tool: ${name}` };

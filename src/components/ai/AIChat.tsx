@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button } from "#components/ui/Button";
 import { cancelChatTurn, clearChat, sendChatMessage } from "#lib/ai-chat";
 import { CLAUDE_MODELS } from "#lib/models";
+import { denyPendingToolApprovals } from "#lib/tools";
 import {
   type ChatMessage,
   type ChatNotice,
@@ -14,6 +15,7 @@ import {
 import { selectedModelAtom } from "#store/ui";
 import { useWorkerAgentStore } from "#store/worker-agents";
 import { AIMessageStream } from "./AIMessageStream.tsx";
+import { ToolApprovalPrompt } from "./ToolApprovalPrompt.tsx";
 import { ToolCallDisplay } from "./ToolCallDisplay.tsx";
 
 // ── Styles (OKLCH) ──────────────────────────────────
@@ -280,6 +282,8 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
         </div>
       </div>
 
+      <ToolApprovalPrompt workerId={workerId} />
+
       <form action={send} style={inputAreaStyle}>
         <textarea
           name="message"
@@ -292,7 +296,14 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
           onKeyDown={handleKeyDown}
         />
         {busy ? (
-          <Button variant="danger" onClick={() => cancelChatTurn(workerId)}>
+          <Button
+            variant="danger"
+            onClick={() => {
+              // A call waiting for approval would keep the stopped turn's tool loop paused.
+              denyPendingToolApprovals(workerId);
+              cancelChatTurn(workerId);
+            }}
+          >
             Stop
           </Button>
         ) : (

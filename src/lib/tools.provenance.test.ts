@@ -16,7 +16,7 @@ vi.mock("#lib/tauri", async (importOriginal) => ({
 }));
 
 import { killWorker, workerInput } from "#lib/tauri";
-import { executeTool } from "#lib/tools";
+import { executeTool, grantToolForSession } from "#lib/tools";
 
 const TARGET = "11111111-2222-4333-8444-555555555555";
 const CALLER = "66666666-7777-4888-8999-aaaaaaaaaaaa";
@@ -24,6 +24,8 @@ const CALLER = "66666666-7777-4888-8999-aaaaaaaaaaaa";
 beforeEach(() => {
   vi.mocked(killWorker).mockClear();
   vi.mocked(workerInput).mockClear();
+  // The approval step has its own tests (tools.approval.test.ts).
+  grantToolForSession("run_command");
 });
 
 describe("kill_worker", () => {

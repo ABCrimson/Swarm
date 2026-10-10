@@ -7,12 +7,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("#lib/worker-spawn", () => ({ spawnWorkerFromSpec: vi.fn() }));
 
-import { executeTool, toolRegistry } from "#lib/tools";
+import { executeTool, grantToolForSession, toolRegistry } from "#lib/tools";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
 
 describe("spawn_worker tool", () => {
   beforeEach(() => {
     vi.mocked(spawnWorkerFromSpec).mockReset();
+    // The approval step has its own tests (tools.approval.test.ts).
+    grantToolForSession("spawn_worker");
   });
 
   it("is registered", () => {
