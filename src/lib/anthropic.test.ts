@@ -438,6 +438,44 @@ describe("streamMessage", () => {
     });
   });
 
+  describe("per-attempt pricing of Fable 5.1 fallbacks", () => {
+    it("prices a Fable run rescued by Opus 5 at the Fable rate plus the Opus 5 rate", async () => {
+      useFreshKey();
+      const attempt = (type: string, model: string) => ({
+        type,
+        model,
+        input_tokens: 1_000_000,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      });
+      fetchMock.mockResolvedValue(
+        sse([
+          messageStart(CLAUDE_MODELS.fable.id),
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn", stop_sequence: null, stop_details: null },
+            usage: {
+              output_tokens: 0,
+              iterations: [
+                attempt("message", CLAUDE_MODELS.fable.id),
+                attempt("fallback_message", "claude-opus-5"),
+              ],
+            },
+          },
+          { type: "message_stop" },
+        ]),
+      );
+
+      await run({ ...SONNET, model: CLAUDE_MODELS.fable.id });
+
+      // $10 per MTok of Fable 5.1 input + $5 per MTok of Opus 5 input.
+      expect(useAiStore.getState().cumulativeUsage.totalCostUsd).toBeCloseTo(15, 10);
+    });
+  });
+
   describe("refusals", () => {
     it("throws AiRefusalError carrying stop_details when the model declines", async () => {
       useFreshKey();

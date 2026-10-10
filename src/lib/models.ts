@@ -193,13 +193,29 @@ type PricingOnly = Pick<ModelInfo, "inputPerMTok" | "cacheReadPerMTok" | "output
   Partial<Pick<ModelInfo, "longPrompt">>;
 
 /**
- * Pricing-only rates for a model the app never requests but the API can
- * serve: Sonnet 5.5's cyber / frontier_llm server-side fallback target,
- * `claude-sonnet-5` (pricing page, 2026-10-10). Kept out of the picker
- * catalog; it only lets per-attempt usage be priced by the model that
- * actually served it.
+ * Pricing-only rates for models the app never requests but the API can
+ * serve as a server-side refusal-fallback target, so per-attempt usage
+ * (`usage.iterations`) is priced by the model that actually served each
+ * attempt instead of the requested model's rates. Kept out of the picker
+ * catalog. Permitted targets per catalog model with `refusalFallback`
+ * (fallback-credit page,
+ * https://platform.claude.com/docs/en/build-with-claude/fallback-credit,
+ * and the Fable 5.1 what's-new page, 2026-10-10):
+ * - Fable 5.1 and Opus 5.5: `claude-opus-4-8` and `claude-opus-5`.
+ * - Sonnet 5.5: `claude-sonnet-5`.
+ * - Mythos 5.1: its targets are not published on those pages (default
+ *   routing is server-side and not exposed on the Models API), so an
+ *   attempt served by a model with no row here is priced at the requested
+ *   model's rates, which for Mythos equal Fable 5.1's.
+ * - Haiku 5.5 has no server-side fallback.
+ * Rates from the pricing page
+ * (https://platform.claude.com/docs/en/about-claude/pricing, 2026-10-10):
+ * Opus 5 and Opus 4.8 are $5 input / $0.50 cache read / $25 output;
+ * Sonnet 5 is $2 / $0.20 / $10 (its introductory price is now standard).
  */
 const FALLBACK_PRICING: ReadonlyMap<string, PricingOnly> = new Map([
+  ["claude-opus-4-8", { inputPerMTok: 5, cacheReadPerMTok: 0.5, outputPerMTok: 25 }],
+  ["claude-opus-5", { inputPerMTok: 5, cacheReadPerMTok: 0.5, outputPerMTok: 25 }],
   ["claude-sonnet-5", { inputPerMTok: 2, cacheReadPerMTok: 0.2, outputPerMTok: 10 }],
 ]);
 

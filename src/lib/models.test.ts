@@ -90,6 +90,28 @@ describe("fallback-target pricing", () => {
   });
 });
 
+describe("Opus fallback-target pricing", () => {
+  it.each(["claude-opus-5", "claude-opus-4-8"])(
+    "prices %s, a Fable 5.1 and Opus 5.5 fallback target, at 5 / 0.5 / 25 USD per MTok outside the catalog",
+    (id) => {
+      expect(hasPricing(id)).toBe(true);
+      expect(getModelById(id)).toBeUndefined();
+      expect(estimateCostUsd(id, { input_tokens: 1_000_000, output_tokens: 0 })).toBeCloseTo(5, 10);
+      expect(
+        estimateCostUsd(id, {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_input_tokens: 1_000_000,
+        }),
+      ).toBeCloseTo(0.5, 10);
+      expect(estimateCostUsd(id, { input_tokens: 0, output_tokens: 1_000_000 })).toBeCloseTo(
+        25,
+        10,
+      );
+    },
+  );
+});
+
 describe("Haiku 5.5 long-prompt tier", () => {
   const HAIKU = "claude-haiku-5-5";
 
