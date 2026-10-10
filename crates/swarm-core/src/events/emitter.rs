@@ -92,7 +92,7 @@ pub enum SwarmEvent {
     WorktreeCreated(WorktreeCreatedPayload),
     /// A git worktree was removed (or preserved, if dirty) at kill time.
     WorktreeRemoved(WorktreeRemovedPayload),
-    /// One step of an in-flight ship operation (preflight/staging/commit/push).
+    /// One step of an in-flight ship operation (staging/commit/push/compare).
     ShipProgress(ShipProgressPayload),
     /// Terminal receipt for a ship operation: exactly one per `shipId`.
     ShipSettled(ShipSettledPayload),
@@ -572,7 +572,7 @@ pub struct WorkerInputPayload {
 pub struct AgentTurnStartedPayload {
     /// UUID of the worker whose chat panel started this turn.
     pub worker_id: Uuid,
-    /// Model identifier used for this turn (e.g. `"claude-sonnet-4-5"`).
+    /// Model identifier used for this turn (e.g. `"claude-sonnet-5-5"`).
     pub model: String,
     /// Client-generated correlation ID for this turn (the chat item id).
     pub request_id: String,
@@ -1457,7 +1457,7 @@ mod tests {
         let worker_id = Uuid::new_v4();
         let event = SwarmEvent::AgentTurnStarted(AgentTurnStartedPayload {
             worker_id,
-            model: "claude-sonnet-4-5".to_string(),
+            model: "claude-sonnet-5-5".to_string(),
             request_id: "turn-1".to_string(),
         });
         let json = serde_json::to_string(&event).expect("serialize");
@@ -1466,7 +1466,7 @@ mod tests {
         let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
         if let SwarmEvent::AgentTurnStarted(p) = deserialized {
             assert_eq!(p.worker_id, worker_id);
-            assert_eq!(p.model, "claude-sonnet-4-5");
+            assert_eq!(p.model, "claude-sonnet-5-5");
         } else {
             panic!("expected AgentTurnStarted variant");
         }
@@ -1981,18 +1981,17 @@ mod tests {
         assert_eq!(recv_record(&rx).provenance, Provenance::default());
     }
 
-    /// Dropping the `emit_awaiting_seq` receiver must never stall the
-    /// writer: the writer-side `ack.send(seq)` is non-blocking by
-    /// construction and reports the dropped receiver instead.
+    /// `emit_awaiting_seq` attaches its ack sender to the recorded message;
+    /// the writer loop's handling of a dropped receiver is covered by
+    /// `orchestration::engine`'s `test_writer_loop_survives_dropped_ack_receiver`.
     #[test]
-    fn test_ack_send_after_receiver_dropped_does_not_panic_or_block() {
+    fn test_emit_awaiting_seq_attaches_an_ack_sender() {
         let (sink, rx) = sink();
-        drop(sink.emit_awaiting_seq(killed(), Provenance::default()));
-
-        let ack = recv_record(&rx)
-            .ack
-            .expect("emit_awaiting_seq must attach an ack sender");
-        assert!(ack.send(7).is_err());
+        let _ack_rx = sink.emit_awaiting_seq(killed(), Provenance::default());
+        assert!(
+            recv_record(&rx).ack.is_some(),
+            "emit_awaiting_seq must attach an ack sender"
+        );
     }
 
     /// An ack nothing ever resolves (a wedged writer that received the
