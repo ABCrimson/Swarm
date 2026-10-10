@@ -145,12 +145,22 @@ describe("#store/persisted", () => {
 
   it("removes a key from memory and from disk", async () => {
     resetPersistedSettingsCache([["test:counter", 9]]);
-    removePersistedSetting("test:counter");
-    await settingsWritesSettled();
+    await removePersistedSetting("test:counter");
 
     expect(readPersistedRaw("test:counter")).toBeUndefined();
     expect(settingsStore.delete).toHaveBeenCalledWith("test:counter");
     expect(createStore().get(counterAtom)).toBe(1);
+  });
+
+  it("rejects when the delete fails, and later writes still run", async () => {
+    settingsStore.delete.mockRejectedValueOnce(new Error("locked"));
+    const deleted = removePersistedSetting("test:counter");
+    const rejection = expect(deleted).rejects.toThrow("locked");
+    createStore().set(counterAtom, 4);
+    await rejection;
+    await settingsWritesSettled();
+
+    expect(settingsStore.set).toHaveBeenLastCalledWith("test:counter", 4);
   });
 
   it("registers every key with its label and schema for the integrity check", () => {

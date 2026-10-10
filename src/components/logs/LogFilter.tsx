@@ -1,6 +1,6 @@
 import { Button } from "#components/ui/Button";
-import type { LogLevel } from "#lib/log-store";
-import { LOG_LEVEL_LABEL, LOG_LEVELS } from "#lib/log-store";
+import type { LogLevel } from "#store/logs";
+import { LOG_LEVEL_LABEL, LOG_LEVELS } from "#store/logs";
 
 /** Props for the log filter toolbar. */
 interface LogFilterProps {

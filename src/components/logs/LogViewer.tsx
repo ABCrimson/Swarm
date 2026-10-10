@@ -6,8 +6,8 @@ import { LogFilter } from "#components/logs/LogFilter";
 import { Button } from "#components/ui/Button";
 import type { PillTone } from "#components/ui/Pill";
 import { Pill } from "#components/ui/Pill";
-import type { LogEntry, LogLevel } from "#lib/log-store";
-import { LOG_LEVEL_LABEL, LOG_LEVELS, useLogStore } from "#lib/log-store";
+import type { LogEntry, LogLevel } from "#store/logs";
+import { LOG_LEVEL_LABEL, LOG_LEVELS, useLogStore } from "#store/logs";
 
 const LEVEL_TONE: Record<LogLevel, PillTone> = {
   debug: "neutral",

@@ -315,6 +315,7 @@ describe("validateRepoRoot", () => {
     await expect(validateRepoRoot("C:/Projects/x")).rejects.toThrow(
       "Validate Repo Root Returned An Invalid Response.",
     );
+    expect(tauriInvoke).not.toHaveBeenCalled();
   });
 });
 

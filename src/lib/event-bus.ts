@@ -6,6 +6,7 @@ import {
   isEventType,
 } from "#lib/event-payloads";
 import { invoke, listen } from "#lib/tauri";
+import { EVENT_CHANNEL } from "#lib/transport";
 
 export type { EventPayload, EventType } from "#lib/event-payloads";
 
@@ -34,11 +35,10 @@ export const DomainEventSchema = z.object({
 export type DomainEvent = Readonly<z.output<typeof DomainEventSchema>>;
 
 /** An event of type `K` whose payload passed that type's schema (`#lib/event-payloads`). */
-export type TypedDomainEvent<K extends EventType> = Readonly<
+type TypedDomainEvent<K extends EventType> = Readonly<
   Omit<DomainEvent, "type" | "payload"> & { type: K; payload: EventPayload<K> }
 >;
 
-const EVENT_CHANNEL = "swarm://events";
 /** Server page size for `events_since`: a full page means "ask again". */
 const PAGE_LIMIT = 5000;
 /** First retry delay after a failed backfill; doubles per consecutive failure. */

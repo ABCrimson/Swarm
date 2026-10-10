@@ -8,8 +8,8 @@ import "modern-cmdk/styles.css";
 import "#styles/global.css";
 import { type ReactNode, StrictMode, Suspense, use } from "react";
 import { createRoot } from "react-dom/client";
-import { type LogLevel, useLogStore } from "#lib/log-store";
 import { isTauri } from "#lib/tauri";
+import { type LogLevel, useLogStore } from "#store/logs";
 import { preloadSettings } from "#store/persisted";
 import { App } from "./App.tsx";
 

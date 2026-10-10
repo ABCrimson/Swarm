@@ -1,6 +1,7 @@
 import { isTauri, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getLastSeq } from "#lib/event-bus";
+import { isError } from "#lib/is-error";
 
 /**
  * What a transport can honestly promise. `hasTransport()` in
@@ -76,7 +77,8 @@ export const tauriTransport: Transport = {
 // from every control frame by the absence of a `"frame"` key.
 
 const TOKEN_STORAGE_KEY = "swarmd.token";
-const EVENT_CHANNEL_NAME = "swarm://events";
+/** The one event channel; `#lib/event-bus` listens on it and `wsTransport.listen` serves only it. */
+export const EVENT_CHANNEL = "swarm://events";
 const BASE_RECONNECT_DELAY_MS = 500;
 const MAX_RECONNECT_DELAY_MS = 15_000;
 const JITTER_FRACTION = 0.3;
@@ -270,7 +272,7 @@ export class WsTransport implements Transport {
       ws = new WebSocket(this.wsUrl());
     } catch (err) {
       this.armReconnect();
-      return Promise.reject(Error.isError(err) ? err : new Error(String(err)));
+      return Promise.reject(isError(err) ? err : new Error(String(err), { cause: err }));
     }
     const conn: Connection = { ws, pending: new Map(), framesReceived: 0 };
     this.connection = conn;
@@ -400,7 +402,7 @@ export class WsTransport implements Transport {
    * reconnect loop gets through. Any other channel is a no-op.
    */
   async listen<T>(event: string, handler: (payload: T) => void): Promise<UnlistenFn> {
-    if (event !== EVENT_CHANNEL_NAME) return noopUnlisten;
+    if (event !== EVENT_CHANNEL) return noopUnlisten;
     const listener = (payload: unknown): void => handler(payload as T);
     this.listeners.add(listener);
     this.connect().catch(() => {

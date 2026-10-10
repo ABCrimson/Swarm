@@ -8,9 +8,9 @@
 import { useAtomValue } from "jotai";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { useLogStore } from "#lib/log-store";
 import { checkForUpdates, isTauri, setAgentConcurrency } from "#lib/tauri";
 import { useAiStore } from "#store/ai";
+import { useLogStore } from "#store/logs";
 import { useMessageHistoryStore } from "#store/message-history";
 import { appSettingsAtom } from "#store/ui";
 

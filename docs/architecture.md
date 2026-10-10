@@ -556,7 +556,7 @@ Three tiers ([ADR-0027](adr/0027-three-tier-frontend-state.md)):
 
 | Tier | Where | Examples |
 | --- | --- | --- |
-| Domain (Zustand 5, immer, `subscribeWithSelector`) | `src/store/` | `workers`, `sessions`, `agent-sessions`, `worker-agents`, `provenance`, `system`, `ai` (webview queue and accounting), `message-history`, `custom-tools` |
+| Domain (Zustand 5, immer, `subscribeWithSelector`) | `src/store/` | `workers`, `sessions`, `agent-sessions`, `worker-agents`, `provenance`, `system`, `ai` (webview queue and accounting), `message-history`, `custom-tools`, `logs` |
 | Ephemeral UI (Jotai) | `store/ui.ts` | selection, current page, panels, `causalityInspectorAtom`, `reducedMotionAtom` (starts from the OS setting and follows it), perf overlay |
 | Persisted preferences (Jotai `atomWithSettings`) | `store/ui.ts` over `store/persisted.ts` | theme, pane sizes, app settings, keybindings, selected model; `swarm-settings.json`, validated per key |
 

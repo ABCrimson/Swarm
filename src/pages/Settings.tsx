@@ -10,6 +10,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { toast } from "sonner";
+import * as z from "zod";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
@@ -583,9 +584,9 @@ export function Settings(): React.ReactElement {
 
   useEffect(() => {
     let cancelled = false;
-    readConfig<string>(ANTHROPIC_API_KEY_CONFIG_KEY)
+    readConfig(ANTHROPIC_API_KEY_CONFIG_KEY, z.string().min(1))
       .then((key) => {
-        if (cancelled || typeof key !== "string" || key.length === 0) return;
+        if (cancelled || key === null) return;
         setApiKeyDraft(key);
         setApiKeySaved(key);
       })
@@ -623,9 +624,9 @@ export function Settings(): React.ReactElement {
 
   useEffect(() => {
     let cancelled = false;
-    readConfig<number>("max_workers")
+    readConfig("max_workers", z.int().min(1))
       .then((v) => {
-        if (!cancelled && typeof v === "number" && v >= 1) setMaxWorkersState(v);
+        if (!cancelled && v !== null) setMaxWorkersState(v);
       })
       .catch((err: unknown) => {
         // Unset resolves null; a rejection means the backend could not answer — keep the default.

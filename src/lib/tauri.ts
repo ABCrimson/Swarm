@@ -3,6 +3,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import * as z from "zod";
 import type { PermissionDecision, ProbeReport, ProviderId, TrustTier } from "#lib/agent-events";
 import { ProbeReportSchema } from "#lib/agent-events";
+import { isError } from "#lib/is-error";
 import { transport } from "#lib/transport";
 import type {
   CommitOutcome,
@@ -85,7 +86,7 @@ function parseResponse<S extends z.ZodType>(schema: S, raw: unknown, message: st
 
 /** Wraps a rejection value that is not already an `Error`, keeping it as the `cause`. */
 function asError(err: unknown): Error {
-  return Error.isError(err) ? err : new Error(String(err), { cause: err });
+  return isError(err) ? err : new Error(String(err), { cause: err });
 }
 
 // ── Worker commands ──────────────────────────────────
@@ -351,7 +352,7 @@ export async function listWorkers(): Promise<Worker[]> {
  * when the input contains any control other than CR or LF; `terminal`
  * never gets one).
  */
-export type WorkerInputSource = "terminal" | "tool" | "automation";
+type WorkerInputSource = "terminal" | "tool" | "automation";
 
 /**
  * Writes `data` to a worker's PTY stdin. A string, not bytes: Rust's
@@ -525,7 +526,7 @@ const UpdateCheckResultSchema = z.object({
 });
 
 /** Result of a manual or on-launch update check. */
-export type UpdateCheckResult = z.output<typeof UpdateCheckResultSchema>;
+type UpdateCheckResult = z.output<typeof UpdateCheckResultSchema>;
 
 /**
  * Asks the configured update endpoint for a newer version.
@@ -549,17 +550,9 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
 export async function readConfig<S extends z.ZodType>(
   key: string,
   schema: S,
-): Promise<z.output<S> | null>;
-/**
- * Reads `key` from `swarm-config.json` without validation; `T` is not
- * checked.
- *
- * @deprecated Pass a zod schema as the second argument.
- */
-export async function readConfig<T = unknown>(key: string): Promise<T | null>;
-export async function readConfig(key: string, schema?: z.ZodType): Promise<unknown> {
+): Promise<z.output<S> | null> {
   const raw = (await invoke("read_config", { key })) ?? null;
-  if (schema === undefined || raw === null) return raw;
+  if (raw === null) return null;
   const parsed = schema.safeParse(raw);
   return parsed.success ? parsed.data : null;
 }

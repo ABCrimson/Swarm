@@ -80,7 +80,7 @@ The desktop process builds one multi-threaded Tokio runtime (`install_async_runt
 
 ### Memory
 
-- **Log store:** Bounded at 10,000 entries (`MAX_ENTRIES` in `log-store.ts`), oldest entries evicted on overflow
+- **Log store:** Bounded at 10,000 entries (`MAX_ENTRIES` in `src/store/logs.ts`), oldest entries evicted on overflow
 - **Metrics loop:** 500ms interval, missed ticks delayed rather than caught up, one shared `sysinfo::System` reused across ticks for accurate CPU deltas
 - **Agent turn queue:** At most 256 turns wait for dispatch (`AGENT_TURN_QUEUE_CAPACITY`); `enqueue` beyond that fails with `QueueFull` instead of growing. Dispatch order is priority, then FIFO, and a follow-up for a busy worker waits without holding a permit
 - **Worker output:** PTY output is read in 8 KiB chunks and emitted straight onto the ordered event stream; piped workers read 4 KiB chunks through a 4096-slot channel that applies backpressure
