@@ -442,7 +442,7 @@ const handleControlRequest = ({ request_id: requestId, request }) => {
       });
     case "interrupt":
       controlSuccess(requestId, { still_queued: [] });
-      return interrupts.push({ requestId, cancelQueued: request.cancel_queued === true });
+      return interrupts.push(undefined);
     default:
       return controlError(requestId, `Unsupported control request subtype: ${request.subtype}`);
   }
@@ -499,7 +499,7 @@ const cli = {
   /** Resolves on the next `interrupt` control request (already acknowledged). */
   interrupted: () => interrupts.next(),
   exit: (code) => process.exit(code),
-  /** An 11MB line with no newline, past the adapter's 10MB NDJSON cap. */
+  /** An 11 MiB line with no newline, past the adapter's 10 MiB NDJSON cap (`MAX_LINE_BYTES`). */
   oversized: () => writeSync(1, "x".repeat(11 * 1024 * 1024)),
   /** Never resolves: the process stays up until it is killed or stdin closes. */
   hang: () => new Promise(() => {}),
