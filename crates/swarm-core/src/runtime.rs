@@ -237,10 +237,16 @@ impl Runtime {
                 });
             }
         }
-        if tokio::time::timeout(timeout, sessions.join_all())
-            .await
-            .is_err()
-        {
+        // `join_next`, not `join_all`: `join_all` re-raises a panicked
+        // session task, which would skip the engine drain below.
+        let drain = async move {
+            while let Some(joined) = sessions.join_next().await {
+                if let Err(e) = joined {
+                    tracing::warn!(error = %e, "an agent session shutdown task failed");
+                }
+            }
+        };
+        if tokio::time::timeout(timeout, drain).await.is_err() {
             tracing::warn!("agent sessions did not all shut down in time");
         }
 
