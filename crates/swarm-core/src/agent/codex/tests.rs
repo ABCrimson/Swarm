@@ -761,14 +761,20 @@ async fn a_handshake_timeout_kills_and_reaps_the_child() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unknown_trust_tier_never_starts_a_process() {
     let h = Harness::new("handshake.script");
-    let error = h
-        .adapter
+    // A binary that cannot start: a tier parsed after the spawn would
+    // surface the spawn failure (AppError::Ai) instead of the refusal.
+    let adapter = CodexAdapter::with_test_binary(
+        h.sink.clone(),
+        "swarm-no-such-codex-binary",
+        Vec::new(),
+        test_timeouts(),
+    );
+    let error = adapter
         .spawn(h.spec(Some("never"), None, None))
         .await
         .err()
         .expect("refused");
     assert_matches!(error, AppError::PermissionDenied(_));
-    assert!(h.record().is_empty(), "the fake never ran");
 }
 
 // ── Turns ────────────────────────────────────────────────────────────
