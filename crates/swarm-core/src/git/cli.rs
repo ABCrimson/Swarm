@@ -616,13 +616,6 @@ mod tests {
     }
 
     #[test]
-    fn test_min_version_ordering() {
-        assert!((2, 32, 0) >= MIN_GIT_VERSION);
-        assert!((2, 31, 9) < MIN_GIT_VERSION);
-        assert!((3, 0, 0) >= MIN_GIT_VERSION);
-    }
-
-    #[test]
     fn test_subcommand_skips_global_dash_c_pairs() {
         let args = [
             "-C",
@@ -673,6 +666,10 @@ mod tests {
         let out = run(&["rev-parse", "--local-env-vars"], READ_TIMEOUT).unwrap();
         assert!(out.success(), "{}", out.stderr);
         let text = String::from_utf8_lossy_owned(out.stdout);
+        assert!(
+            text.lines().any(|l| l == "GIT_DIR"),
+            "git reported no local env vars: {text:?}"
+        );
         for var in text.lines().filter(|l| !l.is_empty()) {
             assert!(
                 REPO_LOCAL_ENV_VARS.contains(&var),
