@@ -189,7 +189,6 @@ fn fs_grants_are_the_v3_command_set() {
     assert_eq!(
         granted,
         [
-            "fs:allow-exists",
             "fs:allow-read-dir",
             "fs:allow-read-file",
             "fs:allow-stat",
