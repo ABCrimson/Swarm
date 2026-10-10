@@ -61,11 +61,10 @@ describe("createAndActivateSession", () => {
 });
 
 describe("exportSessionToFile", () => {
-  // The export writes the dialog-chosen path directly: an atomic
-  // `.tmp`-then-rename helper's `.tmp` sibling is outside both the
-  // dialog's one-file grant and the static fs scope, so every
-  // destination outside $APPDATA / ~/.swarm would fail with a
-  // forbidden-path error.
+  // The export writes the dialog-chosen path directly: the dialog grants
+  // exactly that one file, and the app has no static fs allow scope and no
+  // rename grant, so a `.tmp` sibling plus rename would be refused as a
+  // forbidden path (see `#lib/export`).
   it("writes exactly the dialog-chosen path, with no temp sibling or base directory", async () => {
     vi.mocked(save).mockResolvedValue("D:\\Exports\\research-sprint.json");
     const session = makeSession();
