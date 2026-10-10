@@ -514,6 +514,35 @@ async fn a_lifecycle_close_without_a_result_settles_the_turn() {
     }
 }
 
+/// The one text block a scenario wrote, parsed as the JSON it echoes.
+fn echoed_reply(events: &Recorder) -> Value {
+    let blocks = events.payloads("agent_block");
+    assert_eq!(blocks.len(), 1, "one echoed reply, got: {blocks:?}");
+    serde_json::from_str(blocks[0]["content"]["text"].as_str().expect("reply text"))
+        .expect("the reply is JSON")
+}
+
+/// A `result` the host cannot parse still settles its turn, as an error,
+/// instead of leaving the turn open until the process exits.
+#[tokio::test]
+async fn an_unreadable_result_settles_the_turn_as_an_error() {
+    let harness = Harness::new();
+    let session = harness.spawn("unreadable_result.mjs").await;
+    let turn = send(session.as_ref(), "Say done.").await;
+    harness.recorder.wait_for("agent_turn_settled", 1).await;
+
+    let settled = settled_for(&harness.recorder, &turn);
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0]["status"], "error");
+    assert!(
+        settled[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with("Unreadable Result Frame: ")),
+        "got: {settled:?}"
+    );
+    session.shutdown().await.expect("shutdown");
+}
+
 // ── Permissions ──────────────────────────────────────────────────────
 
 /// Runs a denial scenario and returns its single permission report.
@@ -723,6 +752,27 @@ async fn an_ask_that_needs_the_cli_dialog_is_denied_and_reported() {
     );
     assert_eq!(settled_for(&harness.recorder, &turn)[0]["status"], "ok");
 
+    session.shutdown().await.expect("shutdown");
+}
+
+/// A control request of a kind the host does not serve, and one it
+/// cannot parse, are both refused so the CLI never waits on them.
+#[tokio::test]
+async fn unsupported_and_unreadable_control_requests_are_refused() {
+    let harness = Harness::new();
+    let session = harness.spawn("unsupported_control_requests.mjs").await;
+    let turn = send(session.as_ref(), "Ask me something.").await;
+    harness.recorder.wait_for("agent_turn_settled", 1).await;
+
+    let reply = echoed_reply(&harness.recorder);
+    let answers = reply.as_array().expect("two answers");
+    assert_eq!(answers.len(), 2);
+    for (answer, request_id) in answers.iter().zip(["dialog-1", "malformed-1"]) {
+        assert_eq!(answer["subtype"], "error");
+        assert_eq!(answer["request_id"], request_id);
+        assert_eq!(answer["error"], UNSUPPORTED_REQUEST);
+    }
+    assert_eq!(settled_for(&harness.recorder, &turn)[0]["status"], "ok");
     session.shutdown().await.expect("shutdown");
 }
 
