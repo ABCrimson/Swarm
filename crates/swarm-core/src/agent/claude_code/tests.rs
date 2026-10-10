@@ -1001,6 +1001,15 @@ async fn await_turn_completion_resolves_on_settlement_and_on_teardown() {
     let harness = Harness::new();
     let session = harness.spawn("hang_mid_turn.mjs").await;
     let turn = send(session.as_ref(), "start something long").await;
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(300),
+            session.await_turn_completion(turn.clone())
+        )
+        .await
+        .is_err(),
+        "a turn still in flight keeps the future pending"
+    );
     let (waited, _) = tokio::join!(
         tokio::time::timeout(WAIT, session.await_turn_completion(turn)),
         session.shutdown()
