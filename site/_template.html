@@ -104,7 +104,7 @@
   .legacy-anchor{ scroll-margin-top:5rem; }
   p, li{ text-wrap:pretty; }
   main :is(h2,h3) a.anchor{ color:var(--faint); text-decoration:none; margin-left:.4rem; opacity:0; font-weight:400; }
-  main :is(h2,h3):hover a.anchor{ opacity:1; }
+  main :is(h2,h3):hover a.anchor, main :is(h2,h3) a.anchor:focus-visible{ opacity:1; }
   ul, ol{ padding-left:1.3rem; }
   li{ margin:.35rem 0; }
   li::marker{ color: var(--gold-dim); }
@@ -193,9 +193,10 @@
       anc.className = 'anchor';
       anc.href = `#${h.id}`;
       anc.textContent = '#';
-      anc.setAttribute('aria-hidden', 'true');
+      anc.setAttribute('aria-label', 'Permalink');
       h.append(anc);
     }
+    for (const el of main.querySelectorAll('pre, .tablewrap')) el.tabIndex = 0;
     const links = new Map(Array.from(toc.querySelectorAll('a'), (a) => [a.getAttribute('href').slice(1), a]));
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
