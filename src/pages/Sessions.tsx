@@ -9,6 +9,7 @@ import { TemplateSelector } from "#components/session/TemplateSelector";
 import { Button } from "#components/ui/Button";
 import { exportAsMarkdown, exportMetricsCSV, saveToFile, sessionFileSlug } from "#lib/export";
 import { pluralizeWorkers } from "#lib/format";
+import { errorMessage } from "#lib/is-error";
 import { deleteSessionAfterConfirm, exportSessionToFile } from "#lib/session-lifecycle";
 import { createSnapshot } from "#lib/snapshots";
 import { applyTemplate, createTemplateFromSession, saveUserTemplate } from "#lib/templates";
@@ -28,10 +29,6 @@ const VIEWS = [
 /** A stable (module-level) ref callback, so it runs once per mount — never again on a re-render. */
 function focusOnMount(element: HTMLInputElement | null): void {
   element?.focus();
-}
-
-function errorMessage(err: unknown): string {
-  return Error.isError(err) ? err.message : String(err);
 }
 
 // ── Actions (module level: each one owns its try/catch and its toast) ──
