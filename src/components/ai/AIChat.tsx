@@ -34,6 +34,8 @@ const chatContainerStyle: CSSProperties = {
  */
 const scrollerStyle: CSSProperties = {
   flex: 1,
+  // The container clips overflow, so the focus ring is drawn inside the scroller.
+  outlineOffset: -2,
   overflowY: "auto",
   display: "flex",
   flexDirection: "column-reverse",

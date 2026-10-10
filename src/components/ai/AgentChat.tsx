@@ -98,6 +98,8 @@ const containerStyle: CSSProperties = {
 /** `column-reverse` pins the scroll position to the newest row natively, and leaves it alone once the user scrolls up. */
 const scrollerStyle: CSSProperties = {
   flex: 1,
+  // The container clips overflow, so the focus ring is drawn inside the scroller.
+  outlineOffset: -2,
   overflowY: "auto",
   display: "flex",
   flexDirection: "column-reverse",
@@ -346,8 +348,8 @@ function TranscriptRow({
  * it, sends turns (`agent_send_turn`), cancels the running one, and
  * answers permission requests (`agent_permission_respond`) when the
  * provider is actually waiting for an answer
- * (`capabilities.interactivePermissions`) — otherwise a request is a
- * report of a decision the provider already made.
+ * (`capabilities.interactivePermissions` and no `suggestedDecision`) —
+ * otherwise a request is a report of a decision the provider already made.
  *
  * Sending while a turn runs never blocks: the session either interrupts
  * (`interruptMidturn`) or queues the new turn, and the send button and
