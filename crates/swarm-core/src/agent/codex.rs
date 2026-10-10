@@ -273,7 +273,14 @@ impl AgentAdapter for CodexAdapter {
                     version,
                     detail: Some("Not Signed In — Run `codex login` In A Terminal".to_string()),
                 },
-                Err(_) => ProbeReport {
+                Err(ProbeFailure::Spawn(error)) => ProbeReport {
+                    available: true,
+                    version,
+                    detail: Some(format!(
+                        "Sign-In State Unknown: `codex login status` Could Not Be Started: {error}"
+                    )),
+                },
+                Err(ProbeFailure::TimedOut) => ProbeReport {
                     available: true,
                     version,
                     detail: Some(
