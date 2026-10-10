@@ -255,7 +255,7 @@ interface CausalRecordSectionProps {
  * wondering whether the record is still coming, could not be read, or
  * holds nothing. A genuinely empty range further distinguishes "this
  * worker did nothing" from "this worker's activity used the webview chat
- * path, invisible to this query" (`emptyRecordMessage`, review NIT-4).
+ * path, invisible to this query" (`emptyRecordMessage`).
  */
 function CausalRecordSection({
   context,
@@ -321,8 +321,11 @@ function CausalRecordSection({
                 <tr key={row.key}>
                   <td style={causalCellStyle}>{row.turnLabel}</td>
                   <td style={causalCellStyle}>{row.name}</td>
-                  <td style={{ ...causalCellStyle, maxWidth: 260 }} title={row.target}>
-                    {row.target}
+                  <td
+                    style={{ ...causalCellStyle, maxWidth: 260 }}
+                    title={escapeForDisplay(row.target)}
+                  >
+                    {escapeForDisplay(row.target)}
                   </td>
                   <td style={causalCellStyle}>
                     <Pill tone={resultTone(row.ok)} size="sm">
@@ -369,6 +372,7 @@ export function ShipPreview({
 }: ShipPreviewProps): React.ReactElement {
   const messageId = useId();
   const proseId = useId();
+  const stagingId = useId();
   const fileRows = buildFileRows(preflight);
   const disabled = !preflight.canShip || message.trim() === "";
   const compareDisabled = disabled || !preflight.hostSupportsCompare;
@@ -379,7 +383,7 @@ export function ShipPreview({
         <div style={blockerListStyle} role="alert">
           {preflight.blockers.map((blocker) => (
             <span key={blocker} style={blockerItemStyle}>
-              {blocker}
+              {escapeForDisplay(blocker)}
             </span>
           ))}
         </div>
@@ -455,8 +459,13 @@ export function ShipPreview({
 
       {preflight.staged.length > 0 && (
         <div style={sectionStyle}>
-          <span style={labelStyle}>Staging Mode</span>
-          <div style={{ display: "flex", gap: 8 }}>
+          <span id={stagingId} style={labelStyle}>
+            Staging Mode
+          </span>
+          <fieldset
+            aria-labelledby={stagingId}
+            style={{ display: "flex", gap: 8, margin: 0, padding: 0, border: 0, minWidth: 0 }}
+          >
             <Pill
               interactive
               tone={mode === "all" ? "info" : "neutral"}
@@ -477,7 +486,7 @@ export function ShipPreview({
               {mode === "staged" && <span aria-hidden="true">✓ </span>}
               Already Staged
             </Pill>
-          </div>
+          </fieldset>
         </div>
       )}
 

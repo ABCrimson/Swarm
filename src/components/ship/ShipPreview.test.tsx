@@ -101,6 +101,20 @@ describe("ShipPreview — Causal Record section", () => {
     expect(screen.queryByText("Loading Causal Record…")).not.toBeInTheDocument();
   });
 
+  it("escapes bidi controls in an agent-supplied target", () => {
+    renderPreview({
+      context: makeContext({
+        turns: [
+          makeTurn({
+            toolCalls: [{ seq: 5, name: "Bash", target: "echo \u202Etxt.exe", ok: true }],
+          }),
+        ],
+      }),
+    });
+
+    expect(screen.getByText("echo \\u202Etxt.exe")).toHaveAttribute("title", "echo \\u202Etxt.exe");
+  });
+
   it("surfaces an omitted-turn-count warning honestly rather than silently truncating", () => {
     renderPreview({ context: makeContext({ omittedTurnCount: 5 }) });
 
@@ -109,7 +123,7 @@ describe("ShipPreview — Causal Record section", () => {
     ).toBeInTheDocument();
   });
 
-  // ── DIRECTIVE (review FIX-1): SQL-level truncation, same disclosure ──
+  // ── DIRECTIVE: the SQL-level truncation disclosure ──
   it("surfaces the same truncation disclosure when the fetch itself was capped, not just when turns were", () => {
     renderPreview({ context: makeContext({ omittedTurnCount: 0, eventsTruncated: true }) });
 
@@ -118,7 +132,7 @@ describe("ShipPreview — Causal Record section", () => {
     ).toBeInTheDocument();
   });
 
-  // ── DIRECTIVE (review NIT-4): "did nothing" vs. "structurally invisible" ──
+  // ── DIRECTIVE: "did nothing" vs. "structurally invisible" ──
   it("renders the webview-chat-path message instead of 'did nothing' when the worker had uncaptured webview activity", () => {
     renderPreview({
       context: makeContext({ turns: [], hasUncapturedWebviewActivity: true }),
