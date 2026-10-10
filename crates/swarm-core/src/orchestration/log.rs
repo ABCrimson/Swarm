@@ -96,7 +96,6 @@ impl StoredEvent {
     }
 }
 
-/// A stored TEXT column that does not parse as the type it must hold.
 /// Creates `path` if missing and limits it, and its `-wal`/`-shm`
 /// siblings when present, to the owner. Done before SQLite opens the file
 /// so no window exists in which a fresh log is world-readable.
@@ -123,6 +122,7 @@ fn restrict_to_owner(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A stored TEXT column that does not parse as the type it must hold.
 fn conversion_error(
     column: usize,
     error: impl std::error::Error + Send + Sync + 'static,
