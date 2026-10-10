@@ -179,24 +179,38 @@
   <span><a href="https://github.com/ABCrimson/Swarm">ABCrimson/Swarm</a></span>
 </footer>
 
-<script>
-  // Build scroll-spy TOC from h2/h3 in <main>, no deps.
-  (function(){
-    var main=document.getElementById('content'), toc=document.getElementById('toc');
-    if(!main||!toc) return;
-    var heads=[].slice.call(main.querySelectorAll('h2, h3'));
-    heads.forEach(function(h){
-      if(!h.id){ h.id=h.textContent.trim().toLowerCase().replace(/[^\w]+/g,'-').replace(/^-|-$/g,''); }
-      var a=document.createElement('a'); a.href='#'+h.id; a.textContent=h.textContent.replace(/#$/,'').trim();
-      var li=document.createElement('li'); if(h.tagName==='H3') li.className='sub'; li.appendChild(a); toc.appendChild(li);
-      var anc=document.createElement('a'); anc.className='anchor'; anc.href='#'+h.id; anc.textContent='#'; anc.setAttribute('aria-hidden','true'); h.appendChild(anc);
-    });
-    var links={}; [].slice.call(toc.querySelectorAll('a')).forEach(function(a){ links[a.getAttribute('href').slice(1)]=a; });
-    var io=new IntersectionObserver(function(es){
-      es.forEach(function(e){ if(e.isIntersecting){ for(var k in links) links[k].classList.remove('active'); var l=links[e.target.id]; if(l) l.classList.add('active'); } });
-    },{ rootMargin:'-10% 0px -80% 0px' });
-    heads.forEach(function(h){ io.observe(h); });
-  })();
+<script type="module">
+  // Builds the scroll-spy TOC from the h2/h3 headings in <main>, no deps.
+  const main = document.getElementById('content');
+  const toc = document.getElementById('toc');
+  if (main && toc) {
+    const heads = main.querySelectorAll('h2, h3');
+    for (const h of heads) {
+      h.id ||= h.textContent.trim().toLowerCase().replace(/[^\w]+/g, '-').replace(/^-|-$/g, '');
+      const a = document.createElement('a');
+      a.href = `#${h.id}`;
+      a.textContent = h.textContent.replace(/#$/, '').trim();
+      const li = document.createElement('li');
+      if (h.tagName === 'H3') li.className = 'sub';
+      li.append(a);
+      toc.append(li);
+      const anc = document.createElement('a');
+      anc.className = 'anchor';
+      anc.href = `#${h.id}`;
+      anc.textContent = '#';
+      anc.setAttribute('aria-hidden', 'true');
+      h.append(anc);
+    }
+    const links = new Map(Array.from(toc.querySelectorAll('a'), (a) => [a.getAttribute('href').slice(1), a]));
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        for (const l of links.values()) l.classList.remove('active');
+        links.get(e.target.id)?.classList.add('active');
+      }
+    }, { rootMargin: '-10% 0px -80% 0px' });
+    for (const h of heads) io.observe(h);
+  }
 </script>
 </body>
 </html>
