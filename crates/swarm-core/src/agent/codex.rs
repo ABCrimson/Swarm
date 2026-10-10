@@ -1872,9 +1872,18 @@ impl AgentSession for CodexSession {
                     Err(error) => format!("codex acknowledged turn/start without a turn: {error}"),
                 },
                 Ok(Err(RequestFailure::Closed)) => {
-                    return Err(AppError::Ipc(
-                        "codex session closed before acknowledging the turn".to_string(),
-                    ));
+                    // An unacknowledged turn gets no `agent_turn_settled`, and teardown
+                    // leaves `teardown_cause` in place while the slot is `Starting`,
+                    // so this error is the only place the cause can surface. The
+                    // lock is taken in its own statement so its !Send guard ends first.
+                    let cause = shared.teardown_cause.lock().clone();
+                    let detail = match cause {
+                        Some(cause) => cause,
+                        None => drained_stderr_snippet(&shared.stderr_tail).await,
+                    };
+                    return Err(AppError::Ipc(format!(
+                        "codex session closed before acknowledging the turn ({detail})"
+                    )));
                 }
                 Ok(Err(failure)) => {
                     shared.release_start();
