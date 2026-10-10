@@ -151,7 +151,7 @@ impl Ctx {
 }
 
 /// A handler's return future, boxed for storage in the registry map.
-pub type BoxFuture = Pin<Box<dyn Future<Output = Result<Value, Value>> + Send>>;
+type BoxFuture = Pin<Box<dyn Future<Output = Result<Value, Value>> + Send>>;
 
 type Handler = Box<dyn Fn(Ctx, Value) -> BoxFuture + Send + Sync>;
 
