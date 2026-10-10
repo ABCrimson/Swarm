@@ -221,13 +221,24 @@ fn guard_not_primary_checkout(worktree: &Path) -> Result<(), ShipError> {
 }
 
 /// The branch checked out in `worktree` right now, or `None` on a
-/// detached `HEAD` (`-q` makes that a silent non-zero exit).
+/// detached `HEAD` (exit 1 under `-q`). Any other failed exit (128 for a
+/// missing directory, a non-repository or a broken config) is an error,
+/// never "detached".
 fn current_branch(worktree: &Path) -> Result<Option<String>, AppError> {
     let output = git(
         worktree,
         &["symbolic-ref", "-q", "--short", "HEAD"],
         READ_TIMEOUT,
     )?;
+    if output.status.code() == Some(1) {
+        return Ok(None);
+    }
+    if !output.success() {
+        return Err(AppError::Git(format!(
+            "`git symbolic-ref HEAD` failed: {}",
+            output.stderr.trim()
+        )));
+    }
     Ok(single_value(&output))
 }
 
@@ -254,12 +265,20 @@ fn is_protected_branch(branch: &str) -> bool {
 }
 
 /// `git remote get-url <remote_name>`, raw (credentials included — the
-/// caller redacts before surfacing it).
-fn remote_url(worktree: &Path, remote_name: &str) -> Option<String> {
-    git(worktree, &["remote", "get-url", remote_name], READ_TIMEOUT)
-        .ok()
-        .as_ref()
-        .and_then(single_value)
+/// caller redacts). `Ok(None)` only for "no such remote" (exit 2) or
+/// empty output; a timeout or any other failure is an error.
+fn remote_url(worktree: &Path, remote_name: &str) -> Result<Option<String>, AppError> {
+    let output = git(worktree, &["remote", "get-url", remote_name], READ_TIMEOUT)?;
+    if output.status.code() == Some(2) {
+        return Ok(None);
+    }
+    if !output.success() {
+        return Err(AppError::Git(format!(
+            "`git remote get-url {remote_name}` failed: {}",
+            output.stderr.trim()
+        )));
+    }
+    Ok(single_value(&output))
 }
 
 /// The branch a worker's isolation branch is compared against. Only the

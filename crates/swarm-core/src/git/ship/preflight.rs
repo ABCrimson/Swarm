@@ -84,6 +84,8 @@ pub struct ShipPreflight {
 /// * [`super::ShipErrorKind::Unknown`] / [`super::ShipErrorKind::Timeout`]
 ///   — with no upstream, the commit count since the base commit failed
 ///   (e.g. that commit no longer exists).
+/// * [`super::ShipErrorKind::Unknown`] / [`super::ShipErrorKind::Timeout`]
+///   — `git remote get-url origin` failed other than for a missing remote.
 pub fn preflight(
     registry: &WorkerRegistry,
     id: WorkerId,
@@ -125,7 +127,7 @@ pub fn preflight(
         ));
     }
 
-    let remote_raw = remote_url(wt, "origin");
+    let remote_raw = remote_url(wt, "origin")?;
     if remote_raw.is_none() {
         blockers.push("No `origin` Remote Configured — Add One Before Shipping.".to_owned());
     }

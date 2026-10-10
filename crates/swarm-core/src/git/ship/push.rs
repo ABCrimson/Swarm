@@ -110,7 +110,8 @@ fn classify_push_error(raw_stderr: &str, surfaced_stderr: &str) -> ShipError {
 /// * [`ShipErrorKind::NoRemote`] — no `origin` remote configured.
 /// * [`ShipErrorKind::PushRejected`] / [`ShipErrorKind::AuthExpired`] /
 ///   [`ShipErrorKind::Timeout`] / [`ShipErrorKind::Unknown`] — the push
-///   itself failed.
+///   itself failed, or reading the live branch or the `origin` remote
+///   did.
 pub fn push(
     registry: &WorkerRegistry,
     repo_locks: &RepoLocks,
@@ -121,7 +122,7 @@ pub fn push(
 
     guard_not_primary_checkout(wt)?;
     let branch = resolve_live_branch(wt)?;
-    if remote_url(wt, "origin").is_none() {
+    if remote_url(wt, "origin")?.is_none() {
         return Err(ShipError::new(
             ShipErrorKind::NoRemote,
             "No `origin` Remote Configured.",
@@ -163,6 +164,8 @@ pub fn push(
 /// * [`ShipErrorKind::NoRemote`] — no `origin` remote configured.
 /// * [`ShipErrorKind::NonGitHubHost`] — the remote's host isn't one a
 ///   GitHub-style compare URL applies to.
+/// * [`ShipErrorKind::Timeout`] / [`ShipErrorKind::Unknown`] — reading the
+///   live branch or the `origin` remote failed.
 pub fn compare_url(
     registry: &WorkerRegistry,
     id: WorkerId,
@@ -173,7 +176,7 @@ pub fn compare_url(
     let wt = info.worktree_path.as_path();
     let branch = resolve_live_branch(wt)?;
 
-    let raw_remote = remote_url(wt, "origin")
+    let raw_remote = remote_url(wt, "origin")?
         .ok_or_else(|| ShipError::new(ShipErrorKind::NoRemote, "No `origin` Remote Configured."))?;
     let parsed = remote::parse(&raw_remote).ok_or_else(|| {
         ShipError::new(
