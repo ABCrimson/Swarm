@@ -185,8 +185,10 @@ const MAX_TURNS_PER_TURN: &str = "50";
 /// launched it.
 const DISABLE_BACKGROUND_TASKS_ENV: &str = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS";
 
-/// Synthesized settlement error for every ungraceful exit (child killed,
-/// crashed, or an NDJSON framer failure) — Condition B.
+/// Prefix of the synthesized settlement error for every ungraceful exit
+/// (child killed, crashed, or an NDJSON framer failure) — Condition B. In
+/// parentheses it is followed by the cause SWARM knows (a framer error)
+/// or else the tail of the child's stderr.
 const PROCESS_EXITED_WITHOUT_RECEIPT: &str = "Process Exited Without A Receipt";
 
 /// Settlement error for a turn [`AgentSession::cancel`] interrupted.
@@ -926,6 +928,11 @@ struct Shared {
     stdin: StdinWriter,
     status: watch::Sender<Status>,
     teardown_started: AtomicBool,
+    /// The child's stderr tail, appended to a synthesized settlement error
+    /// when no better cause is known.
+    stderr_tail: Arc<parking_lot::Mutex<VecDeque<u8>>>,
+    /// Why the session is torn down, when SWARM knows it (a framer error).
+    teardown_cause: parking_lot::Mutex<Option<String>>,
 }
 
 impl Shared {
@@ -1004,13 +1011,18 @@ async fn run_teardown(shared: Arc<Shared>, stop: Stop) {
     };
 
     if let Some(turn) = in_flight {
+        let cause = shared.teardown_cause.lock().take();
+        let detail = match cause {
+            Some(cause) => cause,
+            None => drained_stderr_snippet(&shared.stderr_tail).await,
+        };
         shared
             .sink
             .emit(SwarmEvent::AgentTurnSettled(AgentTurnSettledPayload {
                 worker_id: shared.worker_id,
                 turn_id: turn.id,
                 status: AgentTurnStatus::Error,
-                error: Some(PROCESS_EXITED_WITHOUT_RECEIPT.to_owned()),
+                error: Some(format!("{PROCESS_EXITED_WITHOUT_RECEIPT} ({detail})")),
                 cost_usd: None,
                 usage: None,
                 duration_ms: 0,
@@ -1582,12 +1594,13 @@ async fn run_reader(
 /// to discard is a session-level failure (`PipedHandle::framer_errors`'s
 /// contract). Never calls [`teardown`] itself; see [`run_reader`].
 async fn watch_framer_errors(
-    worker_id: Uuid,
+    shared: Arc<Shared>,
     mut framer_errors: mpsc::UnboundedReceiver<AppError>,
     drain_signal: Arc<Notify>,
 ) {
     if let Some(error) = framer_errors.recv().await {
-        tracing::error!(%worker_id, %error, "claude code: ndjson framer error; draining and tearing the session down");
+        tracing::error!(worker_id = %shared.worker_id, %error, "claude code: ndjson framer error; draining and tearing the session down");
+        *shared.teardown_cause.lock() = Some(error.to_string());
         drain_signal.notify_one();
     }
 }
@@ -1759,7 +1772,7 @@ impl ClaudeCodeAdapter {
             stdin,
             lines,
             framer_errors,
-            stderr_tail: _,
+            stderr_tail,
         } = process;
         let fresh = spec.resume.is_none();
         let session_key = spec
@@ -1782,12 +1795,14 @@ impl ClaudeCodeAdapter {
             stdin,
             status: watch::Sender::new(Status::default()),
             teardown_started: AtomicBool::new(false),
+            stderr_tail,
+            teardown_cause: parking_lot::Mutex::new(None),
         });
 
         let drain_signal = Arc::new(Notify::new());
         tokio::spawn(run_reader(shared.clone(), lines, drain_signal.clone()));
         tokio::spawn(watch_framer_errors(
-            spec.worker_id,
+            shared.clone(),
             framer_errors,
             drain_signal,
         ));

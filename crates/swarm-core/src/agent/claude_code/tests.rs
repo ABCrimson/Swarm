@@ -777,7 +777,13 @@ async fn cancel_without_a_receipt_falls_back_to_a_kill() {
 
     let settled = settled_for(&harness.recorder, &turn);
     assert_eq!(settled.len(), 1);
-    assert_eq!(settled[0]["error"], PROCESS_EXITED_WITHOUT_RECEIPT);
+    assert!(
+        settled[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with(PROCESS_EXITED_WITHOUT_RECEIPT)),
+        "{:?}",
+        settled[0]["error"]
+    );
     assert_eq!(harness.recorder.count("agent_session_exited"), 1);
     assert!(matches!(
         session
@@ -830,7 +836,13 @@ async fn shutdown_mid_turn_synthesizes_exactly_one_settlement() {
     let settled = settled_for(&harness.recorder, &turn);
     assert_eq!(settled.len(), 1);
     assert_eq!(settled[0]["status"], "error");
-    assert_eq!(settled[0]["error"], PROCESS_EXITED_WITHOUT_RECEIPT);
+    assert!(
+        settled[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with(PROCESS_EXITED_WITHOUT_RECEIPT)),
+        "{:?}",
+        settled[0]["error"]
+    );
     assert_eq!(harness.recorder.count("agent_session_exited"), 1);
 }
 
@@ -844,7 +856,20 @@ async fn a_framer_error_settles_the_turn_and_tears_the_session_down() {
 
     let settled = settled_for(&harness.recorder, &turn);
     assert_eq!(settled.len(), 1);
-    assert_eq!(settled[0]["error"], PROCESS_EXITED_WITHOUT_RECEIPT);
+    assert!(
+        settled[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with(PROCESS_EXITED_WITHOUT_RECEIPT)),
+        "{:?}",
+        settled[0]["error"]
+    );
+    assert!(
+        settled[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("NDJSON line exceeded")),
+        "the framer error is the cause: {:?}",
+        settled[0]["error"]
+    );
 }
 
 #[tokio::test]
