@@ -18,7 +18,7 @@ import { persistedSettings, removePersistedSetting } from "#store/persisted";
 import { SessionTemplateSchema, SnapshotSchema } from "#store/types";
 
 /** Outcome of validating one persisted key (`key: "*"` when the file itself could not be read). */
-export interface ValidationResult {
+interface ValidationResult {
   readonly file: string;
   readonly key: string;
   readonly valid: boolean;
