@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import type { PillTone } from "#components/ui/Pill";
 import { Pill } from "#components/ui/Pill";
 import { Spinner } from "#components/ui/Spinner";
+import { denyPendingToolApprovals } from "#lib/tools";
 import { useAiStore } from "#store/ai";
 import type { AiQueueItem } from "#store/types";
 
@@ -135,7 +136,8 @@ interface AIQueueProps {
  * (waiting for a stream slot, or running) and place in line, plus the
  * slots in use against the concurrent limit. Cancel aborts the turn
  * itself — its stream, or its tool calls between rounds — not just the
- * queue entry.
+ * queue entry, and denies the worker's tool calls still waiting for the
+ * user's approval, so the parked turn can finish.
  */
 export function AIQueue({ workerId }: AIQueueProps): React.ReactElement {
   const allItems = useAiStore((s) => s.queue);
@@ -193,7 +195,10 @@ export function AIQueue({ workerId }: AIQueueProps): React.ReactElement {
                   interactive
                   tone="danger"
                   size="sm"
-                  onClick={() => cancelItem(item.id)}
+                  onClick={() => {
+                    denyPendingToolApprovals(item.workerId);
+                    cancelItem(item.id);
+                  }}
                   aria-label={`Cancel Queue Item ${index + 1}`}
                   style={{ marginLeft: "auto", flexShrink: 0 }}
                 >

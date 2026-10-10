@@ -3,17 +3,27 @@
 //! Reads may touch the data directory and the home directory; writes
 //! only the data directory and `~/.swarm`. Every path must be absolute.
 //! It is normalized lexically (`..` and `.` resolved without touching
-//! the filesystem), then canonicalized against the real filesystem
-//! (symlinks resolved: for reads the file itself, for writes its parent
-//! and, when it is a symlink, the target) before the scope check, so
-//! neither a traversal nor a symlink inside a scope can climb out.
+//! the filesystem) and refused at once when it lies outside every scope
+//! (so a missing path elsewhere on disk cannot be told from an existing
+//! one), then canonicalized against the real filesystem (symlinks
+//! resolved: for reads the file itself, for writes its parent and, when
+//! the target already exists, the target itself) before the scope check,
+//! so neither a traversal nor a symlink inside a scope can climb out.
+//! Canonicalizing an existing write target also expands Windows 8.3
+//! short names (`SWARM-~1.JSO`) to the real name the deny list sees. On
+//! Windows a write is refused outright when its file name contains `:`
+//! (an NTFS alternate data stream), ends in `.` or a space, or is a
+//! reserved device name (`CON`, `NUL`, `COM1`, ...), with or without an
+//! extension.
 //!
 //! A deny list applies to the canonical path of both reads and writes,
 //! so the app's secrets can never be read through (or planted by) these
 //! commands, whatever scope they sit in: `swarm-config.json` (it holds
 //! the Anthropic API key) and `daemon-token` in the data directory,
 //! along with the backup files named after them (for example
-//! `swarm-config.json.corrupt-<ms>`), and the credential directories
+//! `swarm-config.json.corrupt-<ms>`, or the daemon's `.daemon-token.<rand>`
+//! mint-time temp file, compared with leading dots ignored), and the
+//! credential directories
 //! `~/.ssh`, `~/.gnupg` and `~/.aws`. A hard link to a secret is not
 //! detected.
 
@@ -36,6 +46,33 @@ const DENIED_DATA_FILE_PREFIXES: [&str; 2] = ["swarm-config.json", "daemon-token
 const DENIED_HOME_DIRS: [&str; 3] = [".ssh", ".gnupg", ".aws"];
 
 const DENIED_MESSAGE: &str = "This Path Holds Credentials And Is Never Accessible.";
+
+const READ_SCOPE_MESSAGE: &str = "Read Access Is Limited To The App Data And Home Directories.";
+
+const WRITE_SCOPE_MESSAGE: &str = "Write Access Is Limited To The App Data And .swarm Directories.";
+
+/// Windows device names that open a device instead of a file.
+const WINDOWS_DEVICE_NAMES: [&str; 4] = ["con", "prn", "aux", "nul"];
+
+/// Windows device names followed by a digit 1-9.
+const WINDOWS_NUMBERED_DEVICES: [&str; 2] = ["com", "lpt"];
+
+/// Whether `name` cannot be an ordinary file name on Windows: it holds
+/// `:` (an alternate data stream), ends in `.` or a space (stripped by
+/// Win32, so it aliases the name without it), or its stem before the
+/// first `.` is a reserved device name. Platform-independent; callers
+/// apply it where Windows semantics hold.
+fn invalid_windows_name(name: &str) -> bool {
+    if name.contains(':') || name.ends_with('.') || name.ends_with(' ') {
+        return true;
+    }
+    let stem = name.split('.').next().unwrap_or(name).to_lowercase();
+    WINDOWS_DEVICE_NAMES.contains(&stem.as_str())
+        || WINDOWS_NUMBERED_DEVICES.iter().any(|device| {
+            stem.strip_prefix(device)
+                .is_some_and(|digit| matches!(digit.as_bytes(), [b'1'..=b'9']))
+        })
+}
 
 /// The directories `read_file`/`write_file` may touch.
 struct FsScopes {
@@ -65,6 +102,7 @@ impl FsScopes {
         let secret_in_data_dir = real.parent() == Some(app_data.as_path())
             && real.file_name().is_some_and(|name| {
                 let name = name.to_string_lossy().to_lowercase();
+                let name = name.trim_start_matches('.');
                 DENIED_DATA_FILE_PREFIXES
                     .iter()
                     .any(|prefix| name.starts_with(prefix))
@@ -75,17 +113,26 @@ impl FsScopes {
                 .any(|dir| real.starts_with(home.join(dir)))
     }
 
+    /// Whether `normalized` sits under any of `roots` (as given or with
+    /// symlinks resolved), judged without touching `normalized` itself.
+    fn lexically_within(&self, normalized: &Path, roots: &[&Path]) -> bool {
+        roots.iter().any(|root| {
+            normalized.starts_with(root) || normalized.starts_with(canonical_root(root))
+        })
+    }
+
     /// Resolves `path` to the real file a read would open, or the error
     /// to return. Blocks on the filesystem; call from `spawn_blocking`.
     fn check_read(&self, path: &Path) -> Result<PathBuf, Value> {
+        if !self.lexically_within(&normalize_lexically(path), &[&self.app_data, &self.home]) {
+            return Err(Value::String(READ_SCOPE_MESSAGE.to_owned()));
+        }
         let real = std::fs::canonicalize(normalize_lexically(path))
             .map_err(|e| Value::String(truthful_read_error(&e, &path.display().to_string())))?;
         if !real.starts_with(canonical_root(&self.app_data))
             && !real.starts_with(canonical_root(&self.home))
         {
-            return Err(Value::String(
-                "Read Access Is Limited To The App Data And Home Directories.".to_owned(),
-            ));
+            return Err(Value::String(READ_SCOPE_MESSAGE.to_owned()));
         }
         if self.is_denied(&real) {
             return Err(Value::String(DENIED_MESSAGE.to_owned()));
@@ -102,22 +149,31 @@ impl FsScopes {
         let (Some(parent), Some(name)) = (normalized.parent(), normalized.file_name()) else {
             return Err(Value::String("Write Requires A File Path.".to_owned()));
         };
+        if cfg!(windows) && invalid_windows_name(&name.to_string_lossy()) {
+            return Err(Value::String(format!(
+                "Cannot Write \"{display}\": The File Name Is Not Allowed."
+            )));
+        }
+        let swarm_dir = self.home.join(".swarm");
+        if !self.lexically_within(&normalized, &[&self.app_data, &swarm_dir]) {
+            return Err(Value::String(WRITE_SCOPE_MESSAGE.to_owned()));
+        }
         let real_parent = std::fs::canonicalize(parent)
             .map_err(|e| Value::String(truthful_write_error(&e, &display)))?;
         let mut real = real_parent.join(name);
-        // A symlink at the target would redirect the write elsewhere.
-        if std::fs::symlink_metadata(&real).is_ok_and(|meta| meta.is_symlink()) {
+        // An existing entry may be a symlink (redirecting the write) or
+        // reached through an 8.3 short name; its canonical form is the
+        // file the write would really replace.
+        if std::fs::symlink_metadata(&real).is_ok() {
             real = std::fs::canonicalize(&real).map_err(|_| {
                 Value::String(format!(
                     "Cannot Write \"{display}\": Dangling Symbolic Link."
                 ))
             })?;
         }
-        let swarm_home = canonical_root(&self.home.join(".swarm"));
+        let swarm_home = canonical_root(&swarm_dir);
         if !real.starts_with(canonical_root(&self.app_data)) && !real.starts_with(swarm_home) {
-            return Err(Value::String(
-                "Write Access Is Limited To The App Data And .swarm Directories.".to_owned(),
-            ));
+            return Err(Value::String(WRITE_SCOPE_MESSAGE.to_owned()));
         }
         if self.is_denied(&real) {
             return Err(Value::String(DENIED_MESSAGE.to_owned()));
@@ -211,22 +267,22 @@ pub async fn write_file(ctx: Ctx, args: Value) -> Result<Value, Value> {
     if !candidate.is_absolute() {
         return Err(Value::String("Write Requires An Absolute Path.".to_owned()));
     }
+    let event_path = normalize_lexically(&candidate).display().to_string();
     let scopes = FsScopes::resolve(&ctx)?;
     let provenance = parse_provenance(origin_worker, cause_seq)?;
 
     let bytes = content.len();
-    let resolved = tokio::task::spawn_blocking(move || -> Result<PathBuf, Value> {
+    tokio::task::spawn_blocking(move || -> Result<(), Value> {
         let resolved = scopes.check_write(&candidate)?;
         std::fs::write(&resolved, content.as_bytes())
-            .map_err(|e| Value::String(truthful_write_error(&e, &path)))?;
-        Ok(resolved)
+            .map_err(|e| Value::String(truthful_write_error(&e, &path)))
     })
     .await
     .map_err(|e| Value::String(e.to_string()))??;
 
     ctx.sink.emit_with(
         SwarmEvent::FileWritten(FileWrittenPayload {
-            path: resolved.display().to_string(),
+            path: event_path,
             bytes,
         }),
         provenance,
@@ -319,6 +375,7 @@ mod tests {
             "swarm-config.json.corrupt-1760000000000",
             "daemon-token",
             "DAEMON-TOKEN",
+            ".daemon-token.abc123",
         ] {
             let secret = tree.scopes.app_data.join(name);
             std::fs::write(&secret, "sk-ant-SECRET").unwrap();
@@ -389,5 +446,72 @@ mod tests {
                 .unwrap()
                 .contains("Parent Directory Does Not Exist")
         );
+    }
+
+    #[test]
+    fn test_invalid_windows_name_flags_streams_trailing_dots_and_devices() {
+        for name in [
+            "swarm-config.json:x",
+            "swarm-config.json::$DATA",
+            "swarm-config.json.",
+            "swarm-config.json ",
+            "CON",
+            "con.txt",
+            "LPT9.log",
+        ] {
+            assert!(invalid_windows_name(name), "{name} must be refused");
+        }
+        for name in ["notes.txt", "console.log", "com0", "lpt10", "COM1x"] {
+            assert!(!invalid_windows_name(name), "{name} must be allowed");
+        }
+    }
+
+    #[test]
+    fn test_a_missing_file_outside_the_scopes_gets_the_scope_error() {
+        let tree = Tree::new();
+        let missing = tree.root.join("elsewhere/missing.txt");
+        let read = tree.scopes.check_read(&missing).unwrap_err();
+        assert_eq!(read.as_str(), Some(READ_SCOPE_MESSAGE));
+        let write = tree.scopes.check_write(&missing).unwrap_err();
+        assert_eq!(write.as_str(), Some(WRITE_SCOPE_MESSAGE));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[expect(
+        unsafe_code,
+        reason = "calls the Win32 GetShortPathNameW, which has no safe std wrapper"
+    )]
+    fn test_windows_short_name_of_a_secret_is_denied() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+        unsafe extern "system" {
+            fn GetShortPathNameW(long: *const u16, short: *mut u16, len: u32) -> u32;
+        }
+
+        let tree = Tree::new();
+        let secret = tree.scopes.app_data.join("swarm-config.json");
+        std::fs::write(&secret, "sk-ant-SECRET").unwrap();
+        let wide: Vec<u16> = secret.as_os_str().encode_wide().chain([0]).collect();
+        let mut buf = vec![0u16; 1024];
+        // SAFETY: `wide` is NUL-terminated and `buf` is writable for its length.
+        let n = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+        if n == 0 || n as usize >= buf.len() {
+            return;
+        }
+        let short = PathBuf::from(std::ffi::OsString::from_wide(&buf[..n as usize]));
+        if short.file_name() == secret.file_name() {
+            return; // 8.3 names are off on this volume
+        }
+        assert_eq!(tree.scopes.check_write(&short), denied());
+        assert_eq!(tree.scopes.check_read(&short), denied());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_windows_alternate_data_stream_write_is_refused() {
+        let tree = Tree::new();
+        let ads = tree.scopes.app_data.join("swarm-config.json:x");
+        assert!(tree.scopes.check_write(&ads).is_err());
     }
 }

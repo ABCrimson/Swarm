@@ -62,7 +62,7 @@ describe("ToolApprovalPrompt", () => {
     expect(getPendingToolApprovals()).toHaveLength(0);
   });
 
-  it("runs the call and stops asking on Allow For Session", async () => {
+  it("runs the call on Allow For Session and stops asking for that exact call only", async () => {
     const user = userEvent.setup();
     render(<ToolApprovalPrompt workerId={W} />);
     const prov = { originWorker: W, causeSeq: 1 };
@@ -71,8 +71,57 @@ describe("ToolApprovalPrompt", () => {
     await user.click(await screen.findByRole("button", { name: "Allow For Session" }));
     expect((await first).success).toBe(true);
 
-    expect((await executeTool("read_file", { path: "/home/u/b.txt" }, prov)).success).toBe(true);
+    expect((await executeTool("read_file", { path: "/home/u/a.txt" }, prov)).success).toBe(true);
     expect(screen.queryByRole("alert", { name: "Tool Approval" })).toBeNull();
+
+    void executeTool("read_file", { path: "/home/u/b.txt" }, prov);
+    expect(await screen.findByRole("alert", { name: "Tool Approval" })).toHaveTextContent(
+      "/home/u/b.txt",
+    );
+  });
+
+  it("hides Allow For Session for write_file and shows its size", async () => {
+    render(<ToolApprovalPrompt workerId={W} />);
+
+    void executeTool(
+      "write_file",
+      { path: "/home/u/.swarm/x.txt", content: "h\u00e9llo" },
+      { originWorker: W, causeSeq: 1 },
+    );
+
+    const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
+    expect(prompt).toHaveTextContent("6 bytes");
+    expect(screen.queryByRole("button", { name: "Allow For Session" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Allow Once" })).toBeDefined();
+  });
+
+  it("renders a command with quotes, a newline and a bidi override literally escaped", async () => {
+    render(<ToolApprovalPrompt workerId={W} />);
+    const command = 'echo "a"\nrm -rf ~\u202E';
+
+    void executeTool("run_command", { workerId: W, command }, { originWorker: W, causeSeq: 1 });
+
+    const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
+    expect(prompt).toHaveTextContent('echo "a"\\nrm -rf ~\\u202E');
+    expect(prompt.textContent).not.toContain("\u202E");
+    expect(prompt.textContent).not.toContain("\n");
+  });
+
+  it("truncates a long value behind a Show All toggle", async () => {
+    const user = userEvent.setup();
+    render(<ToolApprovalPrompt workerId={W} />);
+    const content = `${"x".repeat(1999)}END`;
+
+    void executeTool(
+      "write_file",
+      { path: "/home/u/.swarm/x.txt", content },
+      { originWorker: W, causeSeq: 1 },
+    );
+
+    const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
+    expect(prompt.textContent).not.toContain("END");
+    await user.click(screen.getByRole("button", { name: "Show All" }));
+    expect(prompt.textContent).toContain(content);
   });
 
   it("does not show another worker's calls", async () => {
