@@ -268,7 +268,11 @@ function CodeBlock({ segment }: { readonly segment: ParsedSegment }): React.Reac
     offset += text.length + 1;
   }
   return (
-    <pre style={codeBlockStyle}>
+    <pre
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: a horizontally scrollable block must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1); WebKit (WKWebView, WebKitGTK) does not focus scroll containers natively.
+      tabIndex={0}
+      style={codeBlockStyle}
+    >
       {segment.language && <span style={langLabelStyle}>{segment.language}</span>}
       <code>
         {lines.map((line) => (
