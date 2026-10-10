@@ -47,7 +47,8 @@
 //! own are pushed as they are — and a process that stages a file in
 //! the worktree between that final check and `git commit` is not seen.
 //!
-//! Every function here blocks on `git`; async callers run them inside
+//! Every public function here except [`worktree_info_for_worker`] (a
+//! pure registry read) blocks on `git`; async callers run them inside
 //! `tokio::task::spawn_blocking`.
 
 mod commit;
@@ -204,9 +205,11 @@ fn guard_not_primary_checkout(worktree: &Path) -> Result<(), ShipError> {
     let location = match repo::locate(worktree) {
         Ok(location) => location,
         // A timeout says nothing about the path itself, so it surfaces as
-        // `Timeout`; any other failure leaves the path unverifiable.
+        // `Timeout`; any other failure leaves the path unverifiable, and
+        // git's own (redacted) reason rides along, so a missing `git` or a
+        // dubious-ownership refusal does not read as a bare path problem.
         Err(err @ AppError::GitTimeout { .. }) => return Err(err.into()),
-        Err(_) => return Err(refuse(NOT_A_WORKTREE)),
+        Err(err) => return Err(refuse(&format!("{NOT_A_WORKTREE} {err}"))),
     };
     if !location.is_toplevel(worktree) {
         return Err(refuse(NOT_A_WORKTREE));
@@ -218,15 +221,14 @@ fn guard_not_primary_checkout(worktree: &Path) -> Result<(), ShipError> {
 }
 
 /// The branch checked out in `worktree` right now, or `None` on a
-/// detached `HEAD` (exit 1 under `-q`). Any other failed exit (128 for a
+/// detached `HEAD` (exit 1 under `-q`). Reads the full ref and strips
+/// `refs/heads/`, because `--short` prints the shortest unambiguous name:
+/// a tag that shares the branch's name turns `swarm/a` into
+/// `heads/swarm/a`. Any other failed exit (128 for a
 /// missing directory, a non-repository or a broken config) is an error,
 /// never "detached".
 fn current_branch(worktree: &Path) -> Result<Option<String>, AppError> {
-    let output = git(
-        worktree,
-        &["symbolic-ref", "-q", "--short", "HEAD"],
-        READ_TIMEOUT,
-    )?;
+    let output = git(worktree, &["symbolic-ref", "-q", "HEAD"], READ_TIMEOUT)?;
     if output.status.code() == Some(1) {
         return Ok(None);
     }
@@ -236,7 +238,7 @@ fn current_branch(worktree: &Path) -> Result<Option<String>, AppError> {
             output.stderr.trim()
         )));
     }
-    Ok(single_value(&output))
+    Ok(single_value(&output).and_then(|full| full.strip_prefix("refs/heads/").map(str::to_owned)))
 }
 
 /// Resolves the branch **currently** checked out in `worktree`,

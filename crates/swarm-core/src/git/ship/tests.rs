@@ -214,6 +214,17 @@ fn test_current_branch_detects_detached_head() {
     assert_eq!(current_branch(repo.root()).unwrap(), None);
 }
 
+/// A tag named like the branch must not turn `main` into `heads/main`.
+#[test]
+fn test_current_branch_is_exact_when_a_tag_shares_its_name() {
+    let repo = TempRepo::new("branch-tag-clash");
+    repo.git(&["tag", "main"]);
+    assert_eq!(
+        current_branch(repo.root()).unwrap().as_deref(),
+        Some("main")
+    );
+}
+
 /// A failed read is an error, never "detached" (`Ok(None)`).
 #[test]
 fn test_current_branch_errors_when_git_cannot_read_the_directory() {
