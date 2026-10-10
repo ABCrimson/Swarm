@@ -1,7 +1,7 @@
 // The approval prompt shows a worker's waiting AI tool calls and answers
 // them: Allow Once, Allow For Session, Deny.
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToolApprovalPrompt } from "#components/ai/ToolApprovalPrompt";
@@ -49,6 +49,37 @@ describe("ToolApprovalPrompt", () => {
 
     expect((await result).success).toBe(true);
     expect(screen.queryByRole("alert", { name: "Tool Approval" })).toBeNull();
+  });
+
+  it("calls onResolved when a focused button answers, whether or not a row remains", async () => {
+    const user = userEvent.setup();
+    const onResolved = vi.fn();
+    render(<ToolApprovalPrompt workerId={W} onResolved={onResolved} />);
+    const prov = { originWorker: W, causeSeq: 1 };
+
+    const first = executeTool("read_file", { path: "/home/u/a.txt" }, prov);
+    const second = executeTool("read_file", { path: "/home/u/b.txt" }, prov);
+    await screen.findAllByRole("button", { name: "Deny" });
+    screen.getAllByRole("button", { name: "Deny" })[0]?.focus();
+    await user.keyboard("{Enter}");
+    expect((await first).success).toBe(false);
+    expect(onResolved).toHaveBeenCalledTimes(1);
+
+    screen.getByRole("button", { name: "Deny" }).focus();
+    await user.keyboard("{Enter}");
+    expect((await second).success).toBe(false);
+    expect(onResolved).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert", { name: "Tool Approval" })).toBeNull();
+  });
+
+  it("does not call onResolved for an answer that did not come from a focused button", async () => {
+    const onResolved = vi.fn();
+    render(<ToolApprovalPrompt workerId={W} onResolved={onResolved} />);
+
+    void executeTool("read_file", { path: "/home/u/a.txt" }, { originWorker: W, causeSeq: 1 });
+    fireEvent.click(await screen.findByRole("button", { name: "Deny" }));
+
+    expect(onResolved).not.toHaveBeenCalled();
   });
 
   it("denies the call on Deny", async () => {

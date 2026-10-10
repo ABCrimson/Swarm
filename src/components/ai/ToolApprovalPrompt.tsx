@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import { useSyncExternalStore } from "react";
 import { Button } from "#components/ui/Button";
 import {
+  type ApprovalChoice,
   getPendingToolApprovals,
   resolveToolApproval,
   subscribeToolApprovals,
@@ -28,8 +29,20 @@ const rowStyle: CSSProperties = { border: 0, margin: 0, padding: 0, minWidth: 0 
 
 const actionsStyle: CSSProperties = { display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 };
 
-function ApprovalRow({ request }: { readonly request: ToolApprovalRequest }): React.ReactElement {
+function ApprovalRow({
+  request,
+  onResolved,
+}: {
+  readonly request: ToolApprovalRequest;
+  readonly onResolved?: () => void;
+}): React.ReactElement {
   const review = useApprovalReview(request.tool, request.input);
+  // Answering removes this row, so a focused button would drop focus to <body>; hand it back to the chat.
+  const answer = (choice: ApprovalChoice, button: HTMLButtonElement): void => {
+    const hadFocus = document.activeElement === button;
+    resolveToolApproval(request.id, choice);
+    if (hadFocus) onResolved?.();
+  };
   return (
     <fieldset aria-label={`Approve ${request.tool}`} style={rowStyle}>
       <div style={headingStyle}>
@@ -43,7 +56,7 @@ function ApprovalRow({ request }: { readonly request: ToolApprovalRequest }): Re
           variant="primary"
           disabled={review.blocked}
           aria-describedby={review.blocked ? review.reasonId : undefined}
-          onClick={() => resolveToolApproval(request.id, "once")}
+          onClick={(e) => answer("once", e.currentTarget)}
         >
           Allow Once
         </Button>
@@ -53,12 +66,12 @@ function ApprovalRow({ request }: { readonly request: ToolApprovalRequest }): Re
             variant="secondary"
             disabled={review.blocked}
             aria-describedby={review.blocked ? review.reasonId : undefined}
-            onClick={() => resolveToolApproval(request.id, "session")}
+            onClick={(e) => answer("session", e.currentTarget)}
           >
             Allow For Session
           </Button>
         )}
-        <Button size="sm" variant="danger" onClick={() => resolveToolApproval(request.id, "deny")}>
+        <Button size="sm" variant="danger" onClick={(e) => answer("deny", e.currentTarget)}>
           Deny
         </Button>
       </div>
@@ -74,15 +87,19 @@ function ApprovalRow({ request }: { readonly request: ToolApprovalRequest }): Re
  * escaped data (never prose built from model strings). A long value is
  * cut with a count of what is hidden; commands and file paths never are.
  * Allow Once and Allow For Session stay off until each cut value has been
- * expanded once; Deny is always available. Shows the calls made by
+ * expanded once; Deny is always available. An answer given from a focused
+ * button calls `onResolved`, which moves focus off the row before it unmounts. Shows the calls made by
  * `workerId`'s turn (and any whose worker is unknown). The tool loop
  * stays paused until each row is answered, so the region is an alert.
  * Renders nothing when no call is waiting.
  */
 export function ToolApprovalPrompt({
   workerId,
+  onResolved,
 }: {
   readonly workerId: string;
+  /** Called after a call is answered from a focused button, so the caller can take keyboard focus. */
+  readonly onResolved?: () => void;
 }): React.ReactElement | null {
   const pending = useSyncExternalStore(subscribeToolApprovals, getPendingToolApprovals);
   const mine = pending.filter(
@@ -92,7 +109,7 @@ export function ToolApprovalPrompt({
   return (
     <div role="alert" aria-label="Tool Approval" style={promptListStyle}>
       {mine.map((request) => (
-        <ApprovalRow key={request.id} request={request} />
+        <ApprovalRow key={request.id} request={request} onResolved={onResolved} />
       ))}
     </div>
   );
