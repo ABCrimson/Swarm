@@ -9,8 +9,9 @@ use serde_json::{Value, json};
 
 use super::reader::{advance_cost, classify_denial, settlement_error};
 use super::tier::{
-    accepted_permission_modes, build_claude_flags, child_env, claude_code_capabilities, deny_list,
-    parse_trust_tier, permission_mode_flag, probe_flags,
+    REFUSED_PROJECT_SETTINGS, accepted_permission_modes, build_claude_flags,
+    check_project_settings, child_env, claude_code_capabilities, deny_list, parse_trust_tier,
+    permission_mode_flag, probe_flags,
 };
 use super::wire::{
     self, AccountInfo, Delta, Inbound, InitializeResponse, ResultLine, SignIn, StreamEvent,
