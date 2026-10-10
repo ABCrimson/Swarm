@@ -519,6 +519,7 @@ export function ShipPreview({
             size="sm"
             disabled={context == null}
             aria-disabled={aiProseState === "generating" || undefined}
+            style={aiProseState === "generating" ? { opacity: 0.5, cursor: "progress" } : undefined}
             onClick={() => {
               if (aiProseState !== "generating") onRegenerateProse();
             }}

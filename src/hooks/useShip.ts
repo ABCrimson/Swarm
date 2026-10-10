@@ -299,6 +299,9 @@ type ShipSteps = (workerId: string, shipId: string, draft: ShipDraft) => Promise
  */
 const inFlightWorkers = new Set<string>();
 
+/** The newest refetch per worker, so a superseded refetch's failure can stay silent. */
+const latestRefresh = new Map<string, symbol>();
+
 /**
  * DIRECTIVE (B1): how long the receipt (`ship_settled`) may stay missing
  * after the final step's invoke resolves before the flow reports
@@ -346,7 +349,8 @@ async function loadPreflight(
  * keeps the previous preview rather than clobbering the UI over a
  * transient refetch error, and says so in an error toast, because that
  * preview may describe the other staging mode. A `quiet` refetch (after
- * a failed action) leaves the action's error as the only message.
+ * a failed action) leaves the action's error as the only message. A
+ * failure of a refetch that a later one superseded stays silent.
  */
 async function refreshPreflight(
   workerId: string,
@@ -354,11 +358,14 @@ async function refreshPreflight(
   dispatch: ShipDispatch,
   { quiet = false } = {},
 ): Promise<void> {
+  const token = Symbol();
+  latestRefresh.set(workerId, token);
   try {
     const preflight = await gitShipPreflight(workerId, mode);
     dispatch({ type: "preflightRefreshed", preflight, mode });
   } catch (err) {
-    if (!quiet) toast.error(`Could Not Refresh The Preview: ${toShipError(err).message}`);
+    if (!quiet && latestRefresh.get(workerId) === token)
+      toast.error(`Could Not Refresh The Preview: ${toShipError(err).message}`);
   }
 }
 

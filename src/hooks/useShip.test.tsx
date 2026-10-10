@@ -714,4 +714,39 @@ describe("useShip", () => {
     expect(result.current.mode).toBe("staged");
     expect(result.current.preflight?.skipped).toHaveLength(1);
   });
+
+  it("toasts and keeps the previous preview when a mode-switch refetch fails", async () => {
+    mockGitShipPreflight
+      .mockResolvedValueOnce(makePreflight())
+      .mockRejectedValueOnce(new Error("boom"));
+
+    const { result } = await renderPreviewing();
+    const before = result.current.preflight;
+
+    await act(async () => {
+      result.current.setMode("staged");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(toast.error).toHaveBeenCalledOnce();
+    expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toMatch(/^Could Not Refresh The Preview:/);
+    expect(result.current.preflight).toBe(before);
+  });
+
+  it("keeps the action's error as the only message when the refetch after a failed action also fails", async () => {
+    mockGitShipPreflight
+      .mockResolvedValueOnce(makePreflight())
+      .mockRejectedValueOnce(new Error("boom"));
+    mockGitStageCommit.mockResolvedValueOnce(makeCommitOutcome());
+    mockGitPush.mockRejectedValueOnce(pushRejectedError());
+
+    const { result } = await renderPreviewing();
+    await act(async () => {
+      await result.current.commitAndPush();
+    });
+
+    expect(result.current.state).toBe("failed");
+    expect(toast.error).not.toHaveBeenCalled();
+  });
 });
