@@ -157,7 +157,7 @@ Three independent layers decide whether a command call runs. Each is enforced in
 The webview chat's built-in tools in `src/lib/tools.ts` are a fourth gate in front of these commands. Every tool that acts on the machine (`run_command`, `spawn_worker`, `kill_worker`, `write_file`, `read_file`) waits for the user's answer inside its own `execute`, so no caller, the registry included, can run one unapproved; `get_metrics` and the user's custom tools (sandboxed Blob Workers with no backend side effect) are not gated. The prompt (`ToolApprovalPrompt`) offers **Allow Once**, **Allow For Session** and **Deny**:
 
 - A session grant covers exactly one call shape, keyed by tool, the worker whose turn made the call, and the exact argument (`run_command`: worker and command string; `read_file` and `write_file`: the path as given; `kill_worker`: the worker id; `spawn_worker`: the name). It lasts until the app reloads. Answering one pending call never releases another, and `write_file` never gets a session grant (the button is absent; each write is answered on its own).
-- The prompt renders the tool name and every field of the validated input, not a sentence built from model text. Each value is escaped for display: backslashes are doubled, newline, carriage return and tab are spelled `\n`, `\r` and `\t`, and any other control, bidi-override or zero-width character shows as `\uXXXX`. Non-string values print as canonical JSON, and `write_file` also shows the content size in bytes.
+- The prompt renders the tool name and every field of the validated input, not a sentence built from model text. Each value is escaped for display: backslashes are doubled, newline, carriage return and tab are spelled `\n`, `\r` and `\t`, and any other control, format, line/paragraph separator or default-ignorable character (bidi, zero-width, tag, variation selector, soft hyphen) shows as `\uXXXX`, or `\u{XXXXX}` above U+FFFF. Non-string values print as canonical JSON, and `write_file` also shows the content size in bytes.
 - A value over 500 characters is cut (on the raw value, before escaping) with a "N more characters" count, and Allow Once and Allow For Session stay disabled until each cut value has been expanded with Show All. Commands and file paths are never cut. Deny is always available.
 - Stopping a turn or killing its worker denies the turn's pending tool calls (aborting the turn is what denies them, so the Stop button, a queue Cancel and `worker_killed` all do), and a denial returns to the model as an error result (`The User Denied <tool>. It Was Not Run.`).
 
@@ -496,7 +496,7 @@ A still-locked worktree is not dirty, and a permission error can strike *after* 
 
 **Location:** worktrees live under `~/.swarm/worktrees/<repo>-<hash8>/w-<id8>` (`<repo>` a sanitized repo directory name, `<hash8>` an 8-hex-character tag derived from the repo's absolute path, `<id8>` the worker UUID's first 8 hex characters) -- already inside the [`write_file`](#write_file) scope (`~/.swarm`).
 
-**Startup probe:** on launch, `Runtime::start` (so the desktop app and `swarmd` alike) runs `git --version` off the startup path and requires >= 2.32 (`swarm_core::git::cli::MIN_GIT_VERSION`; the floor is the newest git feature the ship chain uses, `git commit --trailer`). A missing or too-old git is never silently degraded -- it logs a warning and emits a `system_log` envelope (`level: "warn"`, message "Git Unavailable -- Isolated Spawns Will Fail Until Git Is Installed Or Upgraded") consumed by `useSystemLogEvents` into the existing Logs page. It does not mean workers spawn unisolated -- a `repoRoot`-bearing spawn still hard-fails per the failure policy above; this only makes that fact visible before the user hits it as a spawn error.
+**Startup probe:** on launch, `Runtime::start` (so the desktop app and `swarmd` alike) runs `git --version` off the startup path and requires >= 2.32 (`swarm_core::git::cli::MIN_GIT_VERSION`; the floor is the newest git feature the ship chain uses, `git commit --trailer`). A missing or too-old git is never silently degraded -- it logs a warning and emits a `system_log` envelope (`level: "warn"`, message "Git Unavailable — Isolated Spawns Will Fail Until Git Is Installed Or Upgraded: <reason>") consumed by `useSystemLogEvents` into the existing Logs page. It does not mean workers spawn unisolated -- a `repoRoot`-bearing spawn still hard-fails per the failure policy above; this only makes that fact visible before the user hits it as a spawn error.
 
 **Startup prune:** the same task also runs `git worktree prune` against the persisted `default_repo_root` config key (see the Project Root picker on the Workers page), logging the pruned count.
 
@@ -739,9 +739,12 @@ Always the true final step of the "Commit + Push + Open Compare Page" action -- 
 
 | Error kind      | Condition                                                       |
 |------------------|--------------------------------------------------------------------|
+| `workerNotFound` / `noWorktree` | `workerId` is malformed or names no worker, or the worker was spawned without worktree isolation |
 | `invalidBranch`  | Detached `HEAD`                                                     |
 | `noRemote`       | No `origin` remote configured                                       |
 | `nonGitHubHost`  | The remote's host isn't one a GitHub-style compare URL applies to (e.g. GitLab, Bitbucket) |
+| `timeout` | Reading the live branch or the `origin` remote exceeded its timeout budget |
+| `unknown` | `shipId` is not a UUID, or any other failure, including reading the live branch or the `origin` remote |
 
 **Example:**
 
@@ -937,10 +940,12 @@ Registers a worker against a session's `workerIds` list.
 
 **Parameters:**
 
-| Name         | Type     | Required | Description                        |
-|--------------|----------|----------|-------------------------------------|
-| `sessionId`  | `string` | Yes      | UUID of the target session          |
-| `workerId`   | `string` | Yes      | UUID of the worker to add           |
+| Name           | Type     | Required | Description                        |
+|----------------|----------|----------|-------------------------------------|
+| `sessionId`    | `string` | Yes      | UUID of the target session          |
+| `workerId`     | `string` | Yes      | UUID of the worker to add           |
+| `originWorker` | `string` | No       | UUID of the causer                  |
+| `causeSeq`     | `number` | No       | `seq` this action is reacting to    |
 
 **Returns:** `void`
 
