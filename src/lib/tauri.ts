@@ -388,7 +388,7 @@ export async function resizeWorker(id: string, rows: number, cols: number): Prom
 /**
  * Records the start of one AI/agent turn and returns the persisted seq
  * the engine assigned it: the `causeSeq` every tool-driven side effect
- * of that turn then cites (see `AIChat.tsx`'s `doSend`).
+ * of that turn then cites (see `runTurn` in `#lib/ai-chat`).
  */
 export async function agentTurnStarted(
   workerId: string,
