@@ -159,14 +159,13 @@ describe("resizeWorker", () => {
   });
 });
 
-// ── createSession normalization (fix wave) ───────────
+// ── createSession normalization ──────────────────────
 //
-// create_session was invoked without its required `config` argument,
-// failing IPC deserialization on every call ("missing required key
-// config"). Rust's Session also has no `updatedAt` field at all and
-// represents `createdAt` as Unix seconds, while the frontend's
-// SessionSchema requires ISO-8601 strings for both — a raw pass-through
-// would poison the store with a value whose `updatedAt` is `undefined`.
+// create_session requires its `config` argument (IPC deserialization
+// fails with "missing required key config" without it). Rust's Session
+// has no `updatedAt` field and represents `createdAt` as Unix seconds,
+// while the frontend's SessionSchema requires ISO-8601 strings for both,
+// so a raw pass-through would leave `updatedAt` undefined in the store.
 
 describe("createSession", () => {
   const RAW_SESSION = {
@@ -217,10 +216,10 @@ describe("createSession", () => {
   });
 });
 
-// ── listSessions normalization (recommended, fix wave) ──
+// ── listSessions normalization ───────────────────────
 //
-// listSessions routes through the same normalizeSession seam as createSession;
-// useSessionEvents hydrates the store from it at startup.
+// listSessions parses through the same SessionResponseSchema as
+// createSession; useSessionEvents hydrates the store from it at startup.
 
 describe("listSessions", () => {
   const RAW_SESSION_A = {
@@ -271,7 +270,7 @@ describe("listSessions", () => {
   });
 });
 
-// ── validateRepoRoot (adversarial review F5) ─────────
+// ── validateRepoRoot ─────────────────────────────────
 //
 // The Project Root picker must confirm a directory is a real git repo
 // via a live Rust round-trip before persisting it — otherwise a typo
