@@ -146,8 +146,9 @@ fn child_env() -> HashMap<String, String> {
     HashMap::from([(NO_CWD_EXE_LOOKUP_ENV.to_owned(), "1".to_owned())])
 }
 
-/// Every bound this adapter puts on waiting for the child — no wait is
-/// unbounded.
+/// The bounds this adapter puts on waiting for the child's handshake,
+/// requests, interrupt, exit and probes. A running turn is not bounded: it
+/// ends when the server settles it or the session is torn down.
 #[derive(Debug, Clone, Copy)]
 struct Timeouts {
     /// `initialize` + `thread/start` (or `thread/resume`).
