@@ -14,7 +14,7 @@ import { isTauri } from "#lib/tauri";
 const Percent = z.number().min(0).max(100);
 
 /** Warning and critical thresholds (percentages) for CPU and memory. */
-export const AlertThresholdsSchema = z.object({
+const AlertThresholdsSchema = z.object({
   cpuWarning: Percent,
   cpuCritical: Percent,
   memoryWarning: Percent,
@@ -76,7 +76,9 @@ export const alertThresholdsAtom = atomWithStorage<AlertThresholds>(
           if (parsed.success) callback({ ...DEFAULT_THRESHOLDS, ...parsed.data });
           else console.warn("[alerts] Ignoring invalid stored alert thresholds:", parsed.error);
         })
-        .catch(() => {});
+        .catch((err: unknown) => {
+          console.warn("[alerts] Failed to load alert thresholds:", err);
+        });
       return undefined;
     },
   },
@@ -85,10 +87,10 @@ export const alertThresholdsAtom = atomWithStorage<AlertThresholds>(
 // ── Alert state ────────────────────────────────────
 
 /** Severity level of a triggered alert (a non-`"good"` {@link Severity}). */
-export type AlertSeverity = Exclude<Severity, "good">;
+type AlertSeverity = Exclude<Severity, "good">;
 
 /** Metric an alert can fire for; also the cooldown key. */
-export type AlertMetric = "cpu" | "memory";
+type AlertMetric = "cpu" | "memory";
 
 /** A triggered alert with metric details and severity classification. */
 export interface Alert {
