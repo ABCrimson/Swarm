@@ -98,6 +98,7 @@ use crate::agent::adapter::{
     Capabilities, ExitSummary, PermissionDecision, PermissionId, ProbeReport, ProviderId,
     SessionKey, TurnId, TurnInput,
 };
+use crate::agent::stderr_snippet;
 use crate::error::AppError;
 use crate::events::{
     AgentBlockPayload, AgentPermissionRequestPayload, AgentSessionExitedPayload,
@@ -451,18 +452,6 @@ fn signal_name(status: &std::process::ExitStatus) -> Option<String> {
 #[cfg(not(unix))]
 fn signal_name(_status: &std::process::ExitStatus) -> Option<String> {
     None
-}
-
-/// The child's recent stderr, for spawn-failure messages.
-fn stderr_snippet(tail: &parking_lot::Mutex<VecDeque<u8>>) -> String {
-    let bytes: Vec<u8> = tail.lock().iter().copied().collect();
-    let text = String::from_utf8_lossy(&bytes);
-    let text = text.trim();
-    if text.is_empty() {
-        "no stderr output".to_string()
-    } else {
-        format!("stderr: {text}")
-    }
 }
 
 // ── Session state ────────────────────────────────────────────────────

@@ -31,6 +31,23 @@
 //! [`adapter::ProviderId`]; every other agent command reaches the live
 //! session through the registry by worker id.
 
+use std::collections::VecDeque;
+
+use parking_lot::Mutex;
+
+/// The tail of a child's stderr as one line for a failure message:
+/// `Stderr: <text>`, or `No Stderr Output` when it wrote nothing.
+/// Shared by both provider adapters, which keep the same bounded byte
+/// tail of their CLI's stderr.
+pub(crate) fn stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String {
+    let mut tail = tail.lock();
+    let text = String::from_utf8_lossy(tail.make_contiguous());
+    match text.trim() {
+        "" => "No Stderr Output".to_owned(),
+        text => format!("Stderr: {text}"),
+    }
+}
+
 pub mod adapter;
 pub mod claude_code;
 pub mod codex;
