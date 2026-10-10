@@ -368,7 +368,8 @@ Two provider adapters implement one trait pair ([ADR-0013](adr/0013-provider-ada
 `AgentAdapter` (`provider`, `capabilities`, `probe`, `spawn`) and `AgentSession` (`session_key`,
 `send_turn`, `await_turn_completion`, `cancel`, `respond_permission`, `shutdown`). `ProviderId` also
 reserves `OpenCode`, `Gemini` and `WebviewAnthropic` (the TypeScript chat path) with no adapter.
-`agent_spawn` and `agent_probe` pick the adapter by provider; every other agent command reaches the live `Arc<dyn AgentSession>` through the
+`agent_spawn` and `agent_probe` pick the adapter by provider; every other agent command reaches the
+live `Arc<dyn AgentSession>` through the
 `AgentSessionRegistry` by worker id. `AgentSpawnSpec` is `workerId, cwd, model, resume, permissionMode`.
 
 | | Claude Code ([ADR-0016](adr/0016-claude-code-control-protocol.md)) | Codex ([ADR-0017](adr/0017-codex-app-server-protocol.md)) |
