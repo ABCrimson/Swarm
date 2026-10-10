@@ -62,7 +62,7 @@ const langLabelStyle: CSSProperties = {
   display: "block",
   marginBottom: 6,
   fontSize: 11,
-  color: "oklch(0.55 0.08 205)",
+  color: "oklch(0.62 0.08 205)",
   textTransform: "uppercase",
   letterSpacing: "0.05em",
   fontFamily: "var(--font-body, 'DM Sans Variable', system-ui, sans-serif)",
@@ -70,7 +70,7 @@ const langLabelStyle: CSSProperties = {
 
 const TOKEN_COLORS = {
   string: "oklch(0.82 0.18 140)",
-  comment: "oklch(0.55 0.03 220)",
+  comment: "oklch(0.62 0.03 220)",
   number: "oklch(0.82 0.19 70)",
   keyword: "oklch(0.72 0.20 290)",
 } as const;
