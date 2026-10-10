@@ -9,8 +9,26 @@
 
 use std::assert_matches;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
+use serde_json::{Value, json};
+use uuid::Uuid;
+
+use super::process::resolve_with_pathext;
+use super::protocol::{
+    AskForApproval, Incoming, METHOD_NOT_FOUND, RequestId, SandboxMode, ThreadOpened,
+    ThreadStartParams,
+};
+use super::reader::permission_id;
+use super::state::{ApprovalKind, PendingApproval};
+use super::teardown::signal_name;
+use super::tier::verify_effective_policy;
 use super::*;
+use crate::agent::adapter::{AgentTurnStatus, CancelGranularity};
+use crate::events::{
+    AgentBlockPayload, AgentPermissionRequestPayload, AgentSessionExitedPayload,
+    AgentTurnDeltaPayload, AgentTurnSettledPayload, Provenance,
+};
 use crate::orchestration::{EventLog, OrchestrationEngine};
 
 /// The thread id every fixture's `thread/start` answers with.
