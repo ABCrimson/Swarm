@@ -321,7 +321,14 @@ function TranscriptRow({
       if (item.payload.kind === "tool_use") return null;
       const text = blockText(item.payload.kind, item.payload.content);
       if (!text.trim()) return null;
-      if (item.payload.kind === "thinking") return <div style={thinkingBlockStyle}>{text}</div>;
+      if (item.payload.kind === "thinking") {
+        return (
+          <div style={thinkingBlockStyle}>
+            <span className="sr-only">Assistant (thinking): </span>
+            {text}
+          </div>
+        );
+      }
       return (
         <div style={streamWrapStyle}>
           <span className="sr-only">Assistant: </span>
@@ -428,6 +435,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
           {streaming.map(([key, block]) =>
             block.kind === "thinking" ? (
               <div key={key} style={thinkingBlockStyle} aria-busy="true">
+                <span className="sr-only">Assistant (thinking): </span>
                 {block.text}
               </div>
             ) : (
