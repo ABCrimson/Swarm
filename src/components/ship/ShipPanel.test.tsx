@@ -201,6 +201,33 @@ describe("ShipPanel", () => {
     expect(mockGitShipPreflight.mock.calls.length).toBeGreaterThan(callsBefore);
   });
 
+  it("renders the <branch> placeholder for a branch name carrying shell metacharacters", async () => {
+    const user = userEvent.setup();
+    mockGitShipPreflight.mockResolvedValue(makePreflight({ branch: "w$(id);x" }));
+    mockGitStageCommit.mockResolvedValue({
+      sha: "deadbeefcafe0123",
+      filesChanged: 1,
+      insertions: 5,
+      deletions: 1,
+      seqFrom: 0,
+      seqTo: 1,
+      skipped: [],
+    });
+    mockGitPush.mockRejectedValue(
+      new ShipCommandError({
+        kind: "pushRejected",
+        message: "Push Rejected — Fetch And Rebase, Then Ship Again.",
+        remedy: "fetchAndRebase",
+      }),
+    );
+
+    render(<ShipPanel workerId={WORKER_A} />);
+    await user.click(await screen.findByRole("button", { name: "Commit + Push" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("git pull --rebase origin <branch>")).toBeInTheDocument();
+  });
+
   it("offers Retry Preflight when preflight itself failed", async () => {
     const user = userEvent.setup();
     mockGitShipPreflight

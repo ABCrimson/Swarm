@@ -97,6 +97,14 @@ const ERROR_TITLES = {
   unknown: "Ship Failed",
 } as const satisfies Record<ShipErrorKind, string>;
 
+/** Branch names pasted unquoted into a POSIX or PowerShell command line; git allows `$ ( ) ;` in branch names and the worker controls its branch. */
+const SHELL_SAFE_BRANCH = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
+
+/** `branch` when it is inert in a pasted shell command, else the `<branch>` placeholder. */
+function shellSafeBranch(branch: string | undefined): string {
+  return branch != null && SHELL_SAFE_BRANCH.test(branch) ? branch : "<branch>";
+}
+
 /** What to do about each backend remedy: a Title Case hint plus the concrete command(s), run in the worker's worktree. */
 function remedyInstructions(
   remedy: ShipRemedy,
@@ -106,7 +114,7 @@ function remedyInstructions(
     case "fetchAndRebase":
       return {
         hint: "Rebase Onto The Remote Branch In The Worker's Worktree, Then Ship Again:",
-        command: `git pull --rebase origin ${preflight?.branch ?? "<branch>"}`,
+        command: `git pull --rebase origin ${shellSafeBranch(preflight?.branch)}`,
       };
     case "reAuthenticate":
       return {
