@@ -2,7 +2,7 @@
 
 > Development setup, code standards, and contribution guidelines for SWARM Orchestrator.
 
-The house rules (exact pins, pnpm only, no manual memoization, `parking_lot`, and the traps that waste an afternoon) live in [`AGENTS.md`](https://github.com/ABCrimson/Swarm/blob/main/AGENTS.md) and apply to every contributor, human or agent. This page covers setup, standards and process.
+The house rules (exact pins, pnpm only, no manual memoization, `parking_lot`, and the traps that waste an afternoon) live in [`AGENTS.md`](../AGENTS.md) and apply to every contributor, human or agent. This page covers setup, standards and process.
 
 ---
 
@@ -48,7 +48,7 @@ targets    = [
 The repo is one virtual Cargo workspace: run `cargo` from the repository root, not from `src-tauri`.
 
 > [!WARNING]
-> On a Windows host with Smart App Control in enforce mode, freshly compiled build scripts and test binaries are blocked (`os error 4551`). `cargo fmt` still works; run `clippy` and `test` in WSL. See [`AGENTS.md`](https://github.com/ABCrimson/Swarm/blob/main/AGENTS.md#ways-to-hurt-yourself).
+> On a Windows host with Smart App Control in enforce mode, freshly compiled build scripts and test binaries are blocked (`os error 4551`). `cargo fmt` still works; run `clippy` and `test` in WSL. See [`AGENTS.md`](../AGENTS.md#ways-to-hurt-yourself).
 
 ### First-Time Setup
 
@@ -220,9 +220,9 @@ OKLCH (Oklab Lightness Chroma Hue) is a perceptually uniform color space:
 
 ### Why DashMap?
 
-- Lock-free concurrent reads (critical for metrics collection)
+- Concurrent reads: each shard is a `RwLock`, so readers never block each other (critical for metrics collection)
 - Per-shard write locks (minimal contention)
-- Drop-in replacement for `HashMap` with `Arc<Mutex<_>>`
+- A direct replacement for `RwLock<HashMap<K, V>>`, with an API close to `std::collections::HashMap`
 - Used by the worker registry, the session manager, the agent session registry and the per-repository git locks
 
 ---
