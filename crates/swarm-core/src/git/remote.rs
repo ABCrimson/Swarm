@@ -59,7 +59,7 @@ fn repo_name(raw: &str) -> &str {
 /// Parses a `git remote get-url` value into its host/owner/repo parts.
 /// Returns `None` for a shape this parser doesn't recognize (e.g. a
 /// local filesystem path remote) rather than guessing.
-#[must_use]
+#[must_use = "parsing has no side effects"]
 pub fn parse(url: &str) -> Option<ParsedRemote> {
     let url = url.trim();
     let caps = URL_FORM.captures(url).or_else(|| SCP_FORM.captures(url))?;
@@ -83,7 +83,7 @@ pub fn parse(url: &str) -> Option<ParsedRemote> {
 /// allowlist that would reject every real GHES customer. The one
 /// thing it rejects outright is a host that is obviously not GitHub
 /// by name — see [`NON_GITHUB_DOMAINS`].
-#[must_use]
+#[must_use = "the check is the only result"]
 pub fn looks_like_github_host(host: &str) -> bool {
     !is_known_non_github_host(host)
 }
@@ -202,7 +202,7 @@ fn largest_fitting_prefix(text: &str, fits: impl Fn(&str) -> bool) -> &str {
 /// truncated, since a corrupted ref there would silently build a URL
 /// pointing at the wrong compare, a worse failure than a clipped
 /// title.
-#[must_use]
+#[must_use = "building the URL has no side effects"]
 pub fn compare_url(
     remote: &ParsedRemote,
     base_branch: &str,

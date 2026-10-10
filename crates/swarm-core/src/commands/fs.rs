@@ -3,12 +3,14 @@
 //! Reads may touch the data directory and the home directory; writes
 //! only the data directory and `~/.swarm`. Every path must be absolute.
 //! It is normalized lexically (`..` and `.` resolved without touching
-//! the filesystem) and refused at once when it lies outside every scope
-//! (so a missing path elsewhere on disk cannot be told from an existing
-//! one), then canonicalized against the real filesystem (symlinks
-//! resolved: for reads the file itself, for writes its parent and, when
-//! the target already exists, the target itself) before the scope check,
-//! so neither a traversal nor a symlink inside a scope can climb out.
+//! the filesystem) and canonicalized against the real filesystem
+//! (symlinks resolved: for reads the file itself, for writes its parent
+//! and, when the target already exists, the target itself) before the
+//! scope check, so neither a traversal nor a symlink inside a scope can
+//! climb out. When canonicalization fails, the lexical form only picks
+//! the error: a path outside every scope gets the scope error whether or
+//! not it exists, so a missing path elsewhere on disk cannot be told
+//! from an existing one.
 //! Canonicalizing an existing write target also expands Windows 8.3
 //! short names (`SWARM-~1.JSO`) to the real name the deny list sees. On
 //! Windows a write is refused outright when its file name contains `:`
@@ -115,6 +117,10 @@ impl FsScopes {
 
     /// Whether `normalized` sits under any of `roots` (as given or with
     /// symlinks resolved), judged without touching `normalized` itself.
+    /// The comparison is case-sensitive and blind to 8.3 short names, so
+    /// it never grants or refuses access: it only picks which error to
+    /// return once `canonicalize` has failed (a missing path outside the
+    /// scopes must not reveal whether it exists).
     fn lexically_within(&self, normalized: &Path, roots: &[&Path]) -> bool {
         roots.iter().any(|root| {
             normalized.starts_with(root) || normalized.starts_with(canonical_root(root))
@@ -124,11 +130,19 @@ impl FsScopes {
     /// Resolves `path` to the real file a read would open, or the error
     /// to return. Blocks on the filesystem; call from `spawn_blocking`.
     fn check_read(&self, path: &Path) -> Result<PathBuf, Value> {
-        if !self.lexically_within(&normalize_lexically(path), &[&self.app_data, &self.home]) {
-            return Err(Value::String(READ_SCOPE_MESSAGE.to_owned()));
-        }
-        let real = std::fs::canonicalize(normalize_lexically(path))
-            .map_err(|e| Value::String(truthful_read_error(&e, &path.display().to_string())))?;
+        let normalized = normalize_lexically(path);
+        let real = match std::fs::canonicalize(&normalized) {
+            Ok(real) => real,
+            Err(_) if !self.lexically_within(&normalized, &[&self.app_data, &self.home]) => {
+                return Err(Value::String(READ_SCOPE_MESSAGE.to_owned()));
+            }
+            Err(e) => {
+                return Err(Value::String(truthful_read_error(
+                    &e,
+                    &path.display().to_string(),
+                )));
+            }
+        };
         if !real.starts_with(canonical_root(&self.app_data))
             && !real.starts_with(canonical_root(&self.home))
         {
@@ -155,24 +169,33 @@ impl FsScopes {
             )));
         }
         let swarm_dir = self.home.join(".swarm");
-        if !self.lexically_within(&normalized, &[&self.app_data, &swarm_dir]) {
-            return Err(Value::String(WRITE_SCOPE_MESSAGE.to_owned()));
-        }
-        let real_parent = std::fs::canonicalize(parent)
-            .map_err(|e| Value::String(truthful_write_error(&e, &display)))?;
+        let app_data_real = canonical_root(&self.app_data);
+        let swarm_home = canonical_root(&swarm_dir);
+        let in_scope = |p: &Path| p.starts_with(&app_data_real) || p.starts_with(&swarm_home);
+        let real_parent = match std::fs::canonicalize(parent) {
+            Ok(real_parent) => real_parent,
+            Err(_) if !self.lexically_within(&normalized, &[&self.app_data, &swarm_dir]) => {
+                return Err(Value::String(WRITE_SCOPE_MESSAGE.to_owned()));
+            }
+            Err(e) => return Err(Value::String(truthful_write_error(&e, &display))),
+        };
         let mut real = real_parent.join(name);
         // An existing entry may be a symlink (redirecting the write) or
         // reached through an 8.3 short name; its canonical form is the
-        // file the write would really replace.
+        // file the write would really replace. Outside the scopes the
+        // failure stays the scope error, so no entry's existence leaks.
         if std::fs::symlink_metadata(&real).is_ok() {
             real = std::fs::canonicalize(&real).map_err(|_| {
-                Value::String(format!(
-                    "Cannot Write \"{display}\": Dangling Symbolic Link."
-                ))
+                if in_scope(&real_parent) {
+                    Value::String(format!(
+                        "Cannot Write \"{display}\": Dangling Symbolic Link."
+                    ))
+                } else {
+                    Value::String(WRITE_SCOPE_MESSAGE.to_owned())
+                }
             })?;
         }
-        let swarm_home = canonical_root(&swarm_dir);
-        if !real.starts_with(canonical_root(&self.app_data)) && !real.starts_with(swarm_home) {
+        if !in_scope(&real) {
             return Err(Value::String(WRITE_SCOPE_MESSAGE.to_owned()));
         }
         if self.is_denied(&real) {
@@ -437,6 +460,32 @@ mod tests {
     }
 
     #[test]
+    fn test_a_dangling_link_outside_the_scopes_gets_the_scope_error() {
+        let tree = Tree::new();
+        let link = tree.root.join("dangling.txt");
+        if !try_symlink(&tree.root.join("nowhere"), &link) {
+            return;
+        }
+        assert_eq!(
+            tree.scopes.check_write(&link).unwrap_err().as_str(),
+            Some(WRITE_SCOPE_MESSAGE)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_a_path_reaching_a_scope_through_an_outside_alias_is_judged_by_its_real_path() {
+        let tree = Tree::new();
+        std::fs::write(tree.scopes.home.join("notes.txt"), "n").unwrap();
+        let alias = tree.root.join("home-alias");
+        std::os::unix::fs::symlink(&tree.scopes.home, &alias).unwrap();
+        assert!(tree.scopes.check_read(&alias.join("notes.txt")).is_ok());
+        let sw = tree.root.join("swarm-alias");
+        std::os::unix::fs::symlink(tree.scopes.home.join(".swarm"), &sw).unwrap();
+        assert!(tree.scopes.check_write(&sw.join("new.txt")).is_ok());
+    }
+
+    #[test]
     fn test_write_to_a_missing_parent_reports_the_missing_directory() {
         let tree = Tree::new();
         let target = tree.scopes.home.join(".swarm/nope/x.txt");
@@ -458,6 +507,10 @@ mod tests {
             "CON",
             "con.txt",
             "LPT9.log",
+            "notes.txt:x",
+            "notes.txt.",
+            "notes.txt ",
+            "NUL.txt",
         ] {
             assert!(invalid_windows_name(name), "{name} must be refused");
         }
@@ -509,9 +562,18 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn test_windows_alternate_data_stream_write_is_refused() {
+    fn test_windows_invalid_names_are_refused_with_the_name_message() {
         let tree = Tree::new();
-        let ads = tree.scopes.app_data.join("swarm-config.json:x");
-        assert!(tree.scopes.check_write(&ads).is_err());
+        // None of these is on the deny list, so only the invalid-name
+        // refusal can turn them away.
+        for name in ["notes.txt:x", "notes.txt.", "NUL.txt"] {
+            let target = tree.scopes.app_data.join(name);
+            let err = tree.scopes.check_write(&target).unwrap_err();
+            let message = err.as_str().unwrap();
+            assert!(
+                message.ends_with("The File Name Is Not Allowed."),
+                "{name}: {message}"
+            );
+        }
     }
 }

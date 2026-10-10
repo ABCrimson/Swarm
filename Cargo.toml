@@ -37,6 +37,7 @@ missing_unsafe_on_extern = "deny"
 # the build once the suppressed lint stops firing.
 allow_attributes                = "deny"
 allow_attributes_without_reason = "deny"
+must_use_without_reason         = "deny"
 undocumented_unsafe_blocks      = "deny"
 # Enforce clippy.toml's house rules (std::sync::Mutex/RwLock are banned
 # in favour of parking_lot).

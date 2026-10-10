@@ -93,7 +93,7 @@ pub struct RepoLocks {
 
 impl RepoLocks {
     /// An empty lock table.
-    #[must_use]
+    #[must_use = "constructing it has no side effects"]
     pub fn new() -> Self {
         Self::default()
     }
@@ -143,7 +143,7 @@ impl RepoLocks {
 /// create file …" checkout errors must never trigger a retry, because a
 /// retried `worktree add -b` would then fail on the branch its first
 /// attempt already created and hide the real error.
-#[must_use]
+#[must_use = "the check is the only result"]
 pub(crate) fn is_lock_contention_message(message: &str) -> bool {
     let lower = message.to_lowercase();
     lower.contains("index.lock")
@@ -172,7 +172,7 @@ pub fn home_dir() -> Result<PathBuf, AppError> {
 /// repos under `~/.swarm/worktrees/<repo>-<hash8>/` without a hashing
 /// crate dependency. The output is part of every worktree's on-disk
 /// path, so the algorithm must never change.
-#[must_use]
+#[must_use = "returns a new value; the input is unchanged"]
 pub fn short_hash8(input: &str) -> String {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -188,7 +188,7 @@ pub fn short_hash8(input: &str) -> String {
 /// 48 bytes (`MAX_SLUG_LEN`). Falls back to `"worker"` when nothing
 /// survives (an all-emoji or all-punctuation name), so a branch name is
 /// always constructible.
-#[must_use]
+#[must_use = "returns a new value; the input is unchanged"]
 pub fn slugify(input: &str) -> String {
     let mut slug = String::with_capacity(input.len().min(MAX_SLUG_LEN));
     for ch in input.chars() {
