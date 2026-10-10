@@ -167,7 +167,7 @@ const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// denies it: bounded, so a turn never blocks forever on a dialog nobody
 /// is looking at while it holds a scheduler slot.
 #[cfg(not(test))]
-const PERMISSION_DECISION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const PERMISSION_DECISION_TIMEOUT: Duration = Duration::from_mins(10);
 #[cfg(test)]
 const PERMISSION_DECISION_TIMEOUT: Duration = Duration::from_secs(2);
 
