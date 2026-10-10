@@ -243,7 +243,10 @@ pub(super) async fn handshake(
                         .unwrap_or_else(|| format!("Ended With {}", result.subtype)),
                 ));
             }
-            _ => {}
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, "claude code: unreadable ndjson line during the handshake, skipping");
+            }
         }
         if !version_pending && let Some(init) = init.take() {
             return Ok((init, version));
