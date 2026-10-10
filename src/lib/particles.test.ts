@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { recordingDevice, stubGpuGlobals } from "#lib/gpu-test-device";
 import {
   createParticleSystem,
   DEFAULT_SIM_PARAMS,
@@ -8,6 +7,7 @@ import {
   WORKGROUP_SIZE,
   writeSimParams,
 } from "#lib/particles";
+import { recordingDevice, stubGpuGlobals } from "#test/gpu-device";
 
 /** Field names of the WGSL `SimParams` struct, in declaration order. */
 function wgslSimParamsFields(): string[] {

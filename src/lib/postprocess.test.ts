@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { recordingDevice, stubGpuGlobals } from "#lib/gpu-test-device";
 import {
   createPostProcessPipeline,
   destroyPostProcessPipeline,
   renderPostProcess,
 } from "#lib/postprocess";
+import { recordingDevice, stubGpuGlobals } from "#test/gpu-device";
 
 beforeEach(stubGpuGlobals);
 
