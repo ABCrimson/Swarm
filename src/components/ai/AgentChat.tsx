@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { Pill, type PillTone } from "#components/ui/Pill";
@@ -218,8 +218,10 @@ const formStyle: CSSProperties = {
 function PermissionRow({
   workerId,
   item,
+  inputRef,
 }: {
   readonly workerId: string;
+  readonly inputRef: React.RefObject<HTMLInputElement | null>;
   readonly item: Extract<AgentTranscriptItem, { kind: "permission" }>;
 }): React.ReactElement {
   const { payload, state } = item;
@@ -228,14 +230,18 @@ function PermissionRow({
   // is only prose beside them (Codex sends none).
   const review = useApprovalReview(payload.tool, payload.input);
 
-  const answer = async (decision: PermissionDecision) => {
+  const answer = async (decision: PermissionDecision, button: HTMLButtonElement) => {
     const { setPermissionState } = useAgentSessionStore.getState();
     setPermissionState(workerId, payload.requestId, "answering");
     // Both outcomes move the row only while it is still `answering`: the
     // turn may settle (row -> `expired`) before the answer resolves.
     try {
       await agentPermissionRespond(workerId, payload.requestId, decision);
-      setPermissionState(workerId, payload.requestId, decision, "answering");
+      // The buttons unmount once the row leaves `answering`; keep focus in the chat.
+      const hadFocus = document.activeElement === button;
+      if (setPermissionState(workerId, payload.requestId, decision, "answering") && hadFocus) {
+        inputRef.current?.focus();
+      }
     } catch (err) {
       if (setPermissionState(workerId, payload.requestId, "pending", "answering")) {
         toast.error(`Permission Answer Failed: ${Error.isError(err) ? err.message : String(err)}`);
@@ -244,11 +250,9 @@ function PermissionRow({
   };
 
   return (
-    // A fieldset groups the request with its answer buttons and disables
-    // them all natively while an answer is in flight.
+    // A fieldset groups the request with its answer buttons; `loading`, not `disabled`, holds them while an answer is in flight, so keyboard focus stays on the pressed button.
     <fieldset
       aria-label={`Permission Request: ${payload.tool}`}
-      disabled={state === "answering"}
       style={waiting ? permissionPendingStyle : permissionStyle}
     >
       <div style={permissionHeaderStyle}>
@@ -270,11 +274,16 @@ function PermissionRow({
             loading={state === "answering"}
             disabled={review.blocked}
             aria-describedby={review.blocked ? review.reasonId : undefined}
-            onClick={() => void answer("allow")}
+            onClick={(e) => void answer("allow", e.currentTarget)}
           >
             Allow
           </Button>
-          <Button size="sm" variant="danger" onClick={() => void answer("deny")}>
+          <Button
+            size="sm"
+            variant="danger"
+            loading={state === "answering"}
+            onClick={(e) => void answer("deny", e.currentTarget)}
+          >
             Deny
           </Button>
         </div>
@@ -286,8 +295,10 @@ function PermissionRow({
 function TranscriptRow({
   workerId,
   item,
+  inputRef,
 }: {
   readonly workerId: string;
+  readonly inputRef: React.RefObject<HTMLInputElement | null>;
   readonly item: AgentTranscriptItem;
 }): React.ReactNode {
   switch (item.kind) {
@@ -328,7 +339,7 @@ function TranscriptRow({
         />
       );
     case "permission":
-      return <PermissionRow workerId={workerId} item={item} />;
+      return <PermissionRow workerId={workerId} item={item} inputRef={inputRef} />;
     case "settled": {
       const { status, error, durationMs, numTurns, costUsd } = item.payload;
       const parts = [
@@ -364,6 +375,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
   const transcript = useAgentTranscript(workerId);
   const session = useAgentSessionStore((s) => s.sessions.get(workerId));
   const [draftEmpty, setDraftEmpty] = useState(true);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const provider = session ? PROVIDER_LABELS[session.provider] : "Agent";
   // No session announcement yet → never claim an interrupt it hasn't reported.
@@ -411,7 +423,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
             </div>
           )}
           {transcript.items.map((item) => (
-            <TranscriptRow key={item.id} workerId={workerId} item={item} />
+            <TranscriptRow key={item.id} workerId={workerId} item={item} inputRef={inputRef} />
           ))}
           {streaming.map(([key, block]) =>
             block.kind === "thinking" ? (
@@ -439,6 +451,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
 
       <form action={send} style={formStyle}>
         <input
+          ref={inputRef}
           name="message"
           className="swarm-input"
           style={{ flex: 1 }}
