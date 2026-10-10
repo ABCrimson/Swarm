@@ -2,7 +2,7 @@
 //!
 //! [`start_metrics_loop`] pushes a `system_metrics` event every
 //! [`METRICS_INTERVAL`] (host CPU and RAM plus the worker count);
-//! [`snapshot`] answers `get_metrics` on demand with the same host
+//! [`MetricsSnapshot::collect`] answers `get_metrics` on demand with the same host
 //! figures, the worker count per state, and each worker's CPU and memory
 //! summed over its whole process tree.
 
@@ -28,17 +28,17 @@ pub const METRICS_INTERVAL: Duration = Duration::from_millis(500);
 
 const BYTES_PER_MIB: f64 = 1024.0 * 1024.0;
 
-/// The `sysinfo` state shared by the metrics loop and [`snapshot`].
+/// The `sysinfo` state shared by the metrics loop and [`MetricsSnapshot::collect`].
 ///
 /// CPU usage is a delta between two refreshes of the same `System`, so
 /// one instance lives for the whole run instead of a fresh one per
 /// sample.
 #[derive(Clone)]
-pub struct SharedSystem(pub Arc<Mutex<System>>);
+pub struct SharedSystem(Arc<Mutex<System>>);
 
 impl SharedSystem {
     /// Loads only what the host metrics read (global CPU usage and RAM);
-    /// the process table is read on demand by [`snapshot`].
+    /// the process table is read on demand by [`MetricsSnapshot::collect`].
     pub fn new() -> Self {
         let host = RefreshKind::nothing()
             .with_cpu(CpuRefreshKind::nothing().with_cpu_usage())
@@ -137,7 +137,7 @@ pub struct WorkerProcessMetrics {
     pub memory_bytes: u64,
 }
 
-/// The `get_metrics` result; see [`snapshot`].
+/// The `get_metrics` result, built by [`Self::collect`].
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetricsSnapshot {
@@ -189,7 +189,7 @@ impl MetricsSnapshot {
 /// Measures every registered worker's process tree in `sys`, whose
 /// process table the caller has already refreshed. A worker without a
 /// PID, or whose shell has exited, reports zeros.
-pub fn collect_per_worker_metrics(
+fn collect_per_worker_metrics(
     registry: &WorkerRegistry,
     sys: &System,
 ) -> Vec<WorkerProcessMetrics> {
@@ -255,13 +255,6 @@ impl<'s> ProcessTree<'s> {
     }
 }
 
-/// [`MetricsSnapshot::collect`], serialized for the `get_metrics`
-/// command. Blocking: run it on `spawn_blocking` from async code.
-pub fn snapshot(registry: &WorkerRegistry, shared_sys: &SharedSystem) -> serde_json::Value {
-    serde_json::to_value(MetricsSnapshot::collect(registry, shared_sys))
-        .expect("a metrics snapshot always serializes (non-finite floats become null)")
-}
-
 #[cfg(test)]
 mod tests {
     use std::process::{Child, Command, Stdio};
@@ -291,7 +284,8 @@ mod tests {
     #[test]
     fn test_snapshot_shape_on_empty_registry() {
         let registry = WorkerRegistry::new();
-        let snap = snapshot(&registry, &SharedSystem::new());
+        let snap = serde_json::to_value(MetricsSnapshot::collect(&registry, &SharedSystem::new()))
+            .unwrap();
         assert_eq!(snap["totalWorkers"], 0);
         assert_eq!(snap["running"], 0);
         assert!(snap["memoryTotalMb"].as_f64().unwrap() > 0.0);
