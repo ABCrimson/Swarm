@@ -222,8 +222,10 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// [`AppError::EventLog`] if the engine was already shut down or did
-    /// not drain in time.
+    /// [`AppError::EventLog`] if the engine did not drain in time, its
+    /// writer thread is gone, or an earlier shutdown failed; a repeat call
+    /// after a clean shutdown returns the same head (see
+    /// [`OrchestrationEngine::shutdown`]).
     pub async fn shutdown(&self, timeout: Duration) -> Result<u64, AppError> {
         self.metrics_cancel.cancel();
 

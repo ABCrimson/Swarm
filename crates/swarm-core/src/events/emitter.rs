@@ -1040,6 +1040,7 @@ mod tests {
         let id = Uuid::new_v4();
         let event = SwarmEvent::WorkerKilled(WorkerKilledPayload { worker_id: id });
         let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"workerId\""));
         let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
         if let SwarmEvent::WorkerKilled(p) = deserialized {
             assert_eq!(p.worker_id, id);
@@ -1104,6 +1105,7 @@ mod tests {
             name: "My Session".to_string(),
         });
         let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("\"sessionId\""));
         let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
         if let SwarmEvent::SessionCreated(p) = deserialized {
             assert_eq!(p.session_id, id);
@@ -1236,6 +1238,9 @@ mod tests {
         let json = serde_json::to_string(&event).expect("serialize");
         assert!(json.contains("\"type\":\"worktree_removed\""));
         assert!(json.contains("\"disposition\":\"removed\""));
+        assert!(json.contains("\"workerId\""));
+        assert!(json.contains("\"worktreePath\""));
+        assert!(json.contains("\"headCommit\":\"sha123\""));
         let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
         if let SwarmEvent::WorktreeRemoved(p) = deserialized {
             assert_eq!(p.worker_id, worker_id);
