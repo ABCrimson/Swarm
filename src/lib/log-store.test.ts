@@ -35,7 +35,7 @@ describe("log store retention cap", () => {
     expect(messages(useLogStore.getState().entries)).toEqual(["m2", "m3", "m4"]);
   });
 
-  it("enforces a cap of 1 (the old slice(-0) path kept everything)", () => {
+  it("enforces a cap of 1", () => {
     useLogStore.getState().setMaxEntries(1);
     for (let i = 0; i < 3; i++) add(`m${i}`);
 
