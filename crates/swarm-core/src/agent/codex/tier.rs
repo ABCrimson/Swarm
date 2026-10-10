@@ -1,5 +1,6 @@
-//! Trust-tier mapping, requested-model filtering, effective-policy verification and
-//! capabilities.
+//! Trust-tier mapping, the child's environment (current-directory exe
+//! lookup off), requested-model filtering, effective-policy verification
+//! and capabilities.
 
 use std::collections::HashMap;
 
