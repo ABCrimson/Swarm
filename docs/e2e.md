@@ -16,17 +16,17 @@
 
 ## Current Suite
 
-Playwright drives the real app headless in Chromium — no mocking, no component harness. CI runs it against the production bundle (`vite build` + `vite preview`), local runs against the dev server. 39 tests across six spec files, all built on the shared fixture in `e2e/fixtures.ts`:
+Playwright drives the real app headless in Chromium — no mocking, no component harness. CI runs it against the production bundle (`vite build` + `vite preview`), local runs against the dev server. 40 tests across six spec files, all built on the shared fixture in `e2e/fixtures.ts`. Chromium is the default project; WebKit and Firefox are opt-in (see [Running It](#running-it)):
 
-| File                    | Covers                                                                 |
-|--------------------------|------------------------------------------------------------------------|
-| `e2e/fixtures.ts`       | The `app` fixture every spec uses: opens the app and waits for the app-ready signal (below), plus landmark locators, sidebar navigation and the palette shortcut |
-| `e2e/navigation.spec.ts` | Dashboard load inside the shell's landmarks, the sidebar nav landmark with every top-level page, click-through navigation, arrow-key focus movement and Tab reaching the sidebar, command-palette routing to every page, a visited page keeping its state when you leave and return (`<Activity>`), the Workers empty state (graph + list view), the Sessions empty state |
-| `e2e/palette.spec.ts`    | Ctrl+K open, Escape close, query filtering (a matching query narrows the list; a non-matching one hits `Command.Empty`), selecting a nav command routes and closes the palette, frecency (a used command's badge reads exactly `1` on next open) |
-| `e2e/settings.spec.ts`   | Every settings section renders, the AI model catalog (switching selection, the gated-model warning toast), keybinding capture (accepting a new binding, rejecting a binding already in use), number-field min/max clamping on commit, keyboard focus rings and button contrast, the inverted-threshold inline error |
-| `e2e/dialogs.spec.ts`    | The Spawn Worker dialog: opens from the Workers toolbar, provider radios render, Claude Code is deterministically disabled with the real `agentProbe()`-sourced reason, Escape/click-outside close it and restore focus |
-| `e2e/styles.spec.ts`     | The stylesheet cascade: Tailwind's `utilities` layer is the last cascade layer and component/utility padding really applies, so no custom reset can zero it; under `prefers-reduced-motion` the staggered entrance has no delays |
-| `e2e/temporal.spec.ts`   | The Temporal polyfill path: with `Temporal` deleted before load (standing in for WKWebView/WebKitGTK) `src/boot.ts` installs the polyfill and the palette, chart and log paths run on it; with a native `Temporal` it is left alone |
+| File                    | Tests | Covers                                                                 |
+|--------------------------|-------|------------------------------------------------------------------------|
+| `e2e/fixtures.ts`       | n/a | The `app` fixture every spec uses: opens the app and waits for the app-ready signal (below), plus landmark locators, sidebar navigation and the palette shortcut |
+| `e2e/navigation.spec.ts` | 12 | Dashboard load inside the shell's landmarks, the sidebar nav landmark with every top-level page, click-through navigation, arrow-key focus movement and Tab reaching the sidebar, command-palette routing to every page, a visited page keeping its state when you leave and return (`<Activity>`), the Workers empty state (graph + list view), the Sessions empty state |
+| `e2e/palette.spec.ts`    | 6 | Ctrl+K open, Escape close, query filtering (a matching query narrows the list; a non-matching one hits `Command.Empty`), selecting a nav command routes and closes the palette, frecency (a used command's badge reads exactly `1` on next open) |
+| `e2e/settings.spec.ts`   | 11 | Every settings section renders, the AI model catalog (switching selection, the gated-model warning toast), keybinding capture (accepting a new binding, rejecting a binding already in use), number-field min/max clamping on commit, keyboard focus rings (a model card keeps its ring after an arrow-key step; `test.fixme` on WebKit, which does not match `:focus-visible` there) and button contrast, the inverted-threshold inline error |
+| `e2e/dialogs.spec.ts`    | 6 | The Spawn Worker dialog: opens from the Workers toolbar, provider radios render, Claude Code is deterministically disabled with the real `agentProbe()`-sourced reason, Escape/click-outside close it and restore focus |
+| `e2e/styles.spec.ts`     | 3 | The stylesheet cascade: Tailwind's `utilities` layer is the last cascade layer and component/utility padding really applies, so no custom reset can zero it; under `prefers-reduced-motion` the staggered entrance has no delays |
+| `e2e/temporal.spec.ts`   | 2 | The Temporal polyfill path: with `Temporal` deleted before load (standing in for WKWebView/WebKitGTK) `src/boot.ts` installs the polyfill and the palette, chart and log paths run on it; with a native `Temporal` it is left alone |
 
 **The app-ready signal.** The global shortcuts (Ctrl+K, the graph/list toggle) attach their `keydown` listeners in effects of the shell's first commit; a key pressed before then is silently lost, which is what made the palette specs flaky. The fixture therefore waits for the current page's `<h1>` inside `<main>` — pages are lazy chunks that commit after the shell, and React flushes the shell's pending effects before rendering anything else — followed by one macrotask yield. No spec sleeps on the clock.
 
@@ -35,14 +35,20 @@ Playwright drives the real app headless in Chromium — no mocking, no component
 ```bash
 pnpm exec playwright install --with-deps --only-shell chromium   # once per machine
 pnpm test:e2e            # dev server on :1420, reused if already running (see below)
-CI=1 pnpm test:e2e       # exactly what CI runs: production build + vite preview on :4173
+CI=1 pnpm test:e2e --shuffle   # what CI runs: production build + vite preview on :4173, random order
+
+# opt-in engines (not part of the default run)
+pnpm exec playwright install webkit firefox   # once per machine
+pnpm exec playwright test --project=webkit    # or --project=firefox
 ```
+
+The `webkit` and `firefox` projects (`default: false` in `playwright.config.ts`) are the check that the suite does not lean on Chromium: WebKit is the engine behind WKWebView and WebKitGTK, which the desktop app runs on macOS and Linux. The suite passes on all three engines (one test is `fixme` on WebKit). `--shuffle` randomizes the order of spec files and tests, so no spec may depend on another having run.
 
 `playwright.config.ts`'s `webServer` block starts the server itself — no manual step. Locally it runs `pnpm dev` (Tauri's `devUrl` port, `strictPort`) and reuses whatever is already answering on :1420 -- which may be a dev server from another worktree, in which case that tree's code is the one under test. A parallel checkout needs its own port (a throwaway config that spreads `playwright.config.ts` and overrides `use.baseURL` and `webServer` with `vite --port <n> --strictPort` and `reuseExistingServer: false`); with `CI` set it runs `vite build && vite preview --port 4173 --strictPort`, so the suite exercises the same Rolldown and React Compiler output the desktop bundle ships. Both run Playwright's default worker count (half the logical cores); pass `--workers=2` on a busy machine. With `CI` set, a test only counts as passed on its first attempt: `retries: 2` classifies a failure, and `failOnFlakyTests` fails the run when a retry was needed, keeping that retry's trace for diagnosis.
 
 ## CI
 
-`.github/workflows/ci.yml`'s `e2e` job (Ubuntu 26.04) runs on every push and PR to `main`, and inside every release: `pnpm/setup` (pnpm, the pinned Node and a frozen install) → `pnpm exec playwright install --with-deps --only-shell chromium` → `pnpm test:e2e` with `CI` set, i.e. against the production preview build. The `github` reporter annotates failures inline; the HTML report (`playwright-report/`) uploads as an artifact whenever the run was not cancelled (traces from retried tests included), kept 14 days.
+`.github/workflows/ci.yml`'s `e2e` job (Ubuntu 26.04) runs on every push and PR to `main`, and inside every release: `pnpm/setup` (pnpm, the pinned Node and a frozen install) → `pnpm exec playwright install --with-deps --only-shell chromium` → `pnpm test:e2e --shuffle` with `CI` set, i.e. against the production preview build in random order. CI runs Chromium only. The `github` reporter annotates failures inline; the HTML report (`playwright-report/`) uploads as an artifact whenever the run was not cancelled (traces from retried tests included), kept 14 days.
 
 ## The Hard Boundary: No Tauri Backend
 

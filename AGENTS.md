@@ -173,7 +173,7 @@ pnpm test:coverage      # Vitest plus the coverage floor in vitest.config.ts
 pnpm build              # also: pnpm build:web
 pnpm check:compiler     # also: NAPI_RS_FORCE_WASI=true pnpm check:compiler
 pnpm exec knip --treat-config-hints-as-errors   # dead code / unused deps (knip.jsonc)
-pnpm test:e2e           # Playwright
+pnpm test:e2e --shuffle # Playwright (chromium; webkit and firefox are opt-in projects)
 pnpm build:site         # docs site
 ```
 
@@ -186,5 +186,14 @@ cargo test --workspace --locked
 cargo deny check
 # plus: cargo tree -p swarm-core / -p swarmd must contain no tauri crate (ci.yml rust-policy)
 ```
+
+Workflows (the `workflows` job of `ci.yml`; run it when you touch `.github/`):
+
+```bash
+actionlint              # the version pinned in ci.yml
+zizmor .github          # the version pinned in ci.yml; set GH_TOKEN so the online audits (pinned SHA vs its # vX.Y.Z comment, known-vulnerable actions) run as they do in CI
+```
+
+CI gathers every job into the single required status `CI OK`.
 
 Run the desktop app with `pnpm tauri:dev`; package it with `pnpm tauri:build`.

@@ -1,6 +1,6 @@
 # Updater Keys
 
-> How SWARM Orchestrator's in-app updater is signed: the Ed25519 keypair, the CI signing flow, signed-version enforcement, and the Linux caveat.
+> How SWARM Orchestrator's in-app updater is signed: the Ed25519 keypair, the CI signing flow, signed-version enforcement, and how each Linux bundle would update.
 
 ---
 
@@ -11,7 +11,7 @@
 - [Signed-Version Enforcement](#signed-version-enforcement)
 - [Re-Signing an Artifact by Hand](#re-signing-an-artifact-by-hand)
 - [Current Status](#current-status)
-- [Linux Caveat: AppImage-Only Updates](#linux-caveat-appimage-only-updates)
+- [Linux: AppImage And .deb](#linux-appimage-and-deb)
 
 ---
 
@@ -89,6 +89,12 @@ Without `--app-version`, the resulting `.sig` has no signed version, and every u
 
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` is in the workflow for forward compatibility, but the secret is currently unset/empty. If the key is ever rotated to a password-protected one, set that secret in the `release` environment before the next tagged release.
 
-## Linux Caveat: AppImage-Only Updates
+## Linux: AppImage And .deb
 
-`tauri-plugin-updater` only supports self-applying updates via **AppImage** on Linux. The release workflow also produces a `.deb` bundle, but a `.deb` install has no in-place update mechanism through this plugin: `check_for_updates` still reports that a new version is available, but once in-app download and install are wired up they will not be able to replace a `.deb` install in place. `.deb` users must uninstall and reinstall (or wait for a system-package-manager update path in a future release) rather than rely on the in-app updater.
+The release builds both Linux bundles (`--bundles deb,appimage` in `.github/workflows/release.yml`), and `tauri-plugin-updater` 3.0.0-alpha.2 can apply either:
+
+- The plugin derives the installer from the running app's bundle type and looks in `latest.json` for `linux-x86_64-<installer>` (`linux-x86_64-appimage`, `linux-x86_64-deb`) before falling back to the bare `linux-x86_64` entry. `tauri-apps/tauri-action` writes both per-installer keys beside the bare one (v0.13.1's `latest.json` has `linux-x86_64`, `linux-x86_64-appimage` and `linux-x86_64-deb`; the bare key points at the AppImage). The `verify-updater-manifest` job checks the signature, signed version and attestation of every entry present, but it requires only the four bare keys. If `linux-x86_64-deb` were ever missing, a `.deb` install would fall back to the bare key, download the AppImage and reject it with `InvalidUpdaterFormat`.
+- **AppImage:** the new AppImage is written over the running one, which needs a temp directory on the same mount point as the AppImage.
+- **.deb:** the package is written to a temp file and installed with `dpkg -i`, run through `pkexec`, then through a zenity/kdialog password prompt with `sudo`, then through terminal `sudo`. A `.deb` update therefore always asks for administrator rights.
+
+The app does not apply updates yet: `check_for_updates` only reports that a newer release exists (see [Signed-Version Enforcement](#signed-version-enforcement)). Until in-app download and install are wired up, AppImage and `.deb` users alike install a new version from the release page.
