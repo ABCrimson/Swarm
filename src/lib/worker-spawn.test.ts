@@ -7,6 +7,7 @@
 // must never reach the IPC payload. This proves both halves of that
 // split, plus the session_add_worker wiring for template application.
 
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
 import { useSessionStore } from "#store/sessions";
@@ -50,8 +51,7 @@ describe("spawnWorkerFromSpec", () => {
     spawnWorkerMock.mockReset();
     sessionAddWorkerMock.mockReset();
     readConfigMock.mockReset();
-    // Default: no persisted project root — matches pre-F6 behavior for
-    // every test below that doesn't explicitly set one.
+    // Default: no persisted project root unless a test sets one.
     readConfigMock.mockResolvedValue(null);
   });
   afterEach(resetStores);
@@ -163,6 +163,10 @@ describe("spawnWorkerFromSpec", () => {
     const workerId = await spawnWorkerFromSpec({ name: "Agent" }, "missing-session");
 
     expect(workerId).toBe("worker-5");
+    expect(toast.warning).toHaveBeenCalledExactlyOnceWith(
+      'Worker "Agent" Spawned But Could Not Join The Session',
+      { description: "boom" },
+    );
   });
 
   it("returns null and skips all store writes when spawnWorker degrades to null (no Tauri IPC bridge)", async () => {
@@ -179,9 +183,9 @@ describe("spawnWorkerFromSpec", () => {
     expect(sessionAddWorkerMock).not.toHaveBeenCalled();
   });
 
-  // ── DIRECTIVE F6: template/session spawns must not silently skip
-  // isolation — repoRoot falls back to the persisted default_repo_root
-  // when the spec doesn't specify its own.
+  // ── Persisted project root: template/session spawns keep worktree
+  // isolation, so repoRoot falls back to the persisted default_repo_root
+  // when the spec has no repoRoot of its own.
 
   it("falls back to the persisted default_repo_root when the spec has no repoRoot of its own", async () => {
     readConfigMock.mockResolvedValueOnce("C:/Projects/swarm-orchestrator");
