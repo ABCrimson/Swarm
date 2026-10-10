@@ -462,8 +462,8 @@ fn terminate(child: &mut Child) {
 
 /// Sends `SIG<signal>` to process group `pgid` through `kill(1)`: std
 /// only exposes `SIGKILL` for the child itself (`ChildExt::send_signal`
-/// is still unstable, rust-lang/rust#141975) and this crate forbids
-/// `unsafe`, so the POSIX utility is the std-only route to a group.
+/// is still unstable, rust-lang/rust#141975) and the workspace denies
+/// `unsafe_code`, so the POSIX utility is the std-only route to a group.
 #[cfg(unix)]
 fn signal_group(pgid: u32, signal: &str) {
     let status = Command::new("kill")
@@ -634,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn test_command_removes_inherited_repo_location_vars() {
+    fn test_command_sets_env_hygiene_and_removes_repo_location_vars() {
         let command = command(&["status"]);
         let envs: Vec<_> = command.get_envs().collect();
         for var in [
@@ -648,7 +648,17 @@ mod tests {
                 "{var} must be removed from the child environment: {envs:?}"
             );
         }
-        assert!(envs.contains(&(OsStr::new("GIT_TERMINAL_PROMPT"), Some(OsStr::new("0")))));
+        for (key, value) in [
+            ("GIT_TERMINAL_PROMPT", "0"),
+            ("GCM_INTERACTIVE", "never"),
+            ("GIT_OPTIONAL_LOCKS", "0"),
+            ("LC_ALL", "C"),
+        ] {
+            assert!(
+                envs.contains(&(OsStr::new(key), Some(OsStr::new(value)))),
+                "{key}={value} must be set on the child: {envs:?}"
+            );
+        }
     }
 
     /// The hard-coded list must match what the installed git reports, so
@@ -750,8 +760,8 @@ mod tests {
         );
     }
 
-    /// A git that outlives its budget is terminated together with the
-    /// process it started, and the error names only the subcommand.
+    /// A git that outlives its budget fails with a typed error naming only
+    /// the subcommand, without waiting out the process it started.
     #[test]
     fn test_run_timeout_terminates_and_reports_a_typed_error() {
         let repo = TempRepo::new("cli-timeout");
@@ -774,12 +784,12 @@ mod tests {
         );
     }
 
-    /// CONFIRMED bug: a hard kill left `index.lock` behind and wedged the
-    /// checkout. A timeout now signals the group with `SIGTERM` first,
-    /// so git's own handler deletes the locks it holds. `commit -a`
-    /// holds `index.lock` for as long as its `pre-commit` hook runs
-    /// (verified: a `SIGKILL` at that point leaves the lock on disk),
-    /// which makes it a deterministic lock holder to time out.
+    /// A timeout signals the group with `SIGTERM` first, so git's own
+    /// handler deletes the locks it holds instead of leaving `index.lock`
+    /// behind to wedge the checkout. `commit -a` holds `index.lock` for as
+    /// long as its `pre-commit` hook runs (a `SIGKILL` at that point
+    /// leaves the lock on disk), which makes it a deterministic lock
+    /// holder to time out.
     #[cfg(unix)]
     #[test]
     fn test_timeout_mid_commit_leaves_no_index_lock() {
@@ -813,6 +823,42 @@ mod tests {
             "a terminated commit must not leave {} behind",
             index_lock.display()
         );
+    }
+
+    /// A timeout signals git's whole process group, so a process an
+    /// alias backgrounded dies with git.
+    #[cfg(unix)]
+    #[test]
+    fn test_timeout_terminates_backgrounded_descendants() {
+        let repo = TempRepo::new("cli-timeout-descendant");
+        let pid_file = repo.root().join("sleep.pid");
+        let alias = format!(
+            "alias.hang=!sleep 60 & echo $! > '{}'; wait",
+            pid_file.display()
+        );
+        let result = run(
+            &args_in(repo.root(), &["-c", &alias, "hang"]),
+            Duration::from_secs(2),
+        );
+        assert!(
+            matches!(result, Err(AppError::GitTimeout { .. })),
+            "{result:?}"
+        );
+        let pid = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .to_owned();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Command::new("kill")
+            .args(["-0", &pid])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+        {
+            assert!(Instant::now() < deadline, "sleep {pid} outlived git");
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// A descendant that inherits git's pipes and outlives it (an ssh
