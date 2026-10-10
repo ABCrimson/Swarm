@@ -366,6 +366,30 @@ describe("CausalityPanel (component)", () => {
     expect(screen.getByText(/Killed Worker Beta/)).toBeInTheDocument();
   });
 
+  it("reports a rejected events_since as a load failure, not a pruned cause", async () => {
+    act(() => {
+      useWorkerStore.getState().addWorker(createWorker({ id: "w-b", name: "Worker Beta" }));
+    });
+    seedRing(
+      ev({
+        seq: 50,
+        type: "worker_killed",
+        originWorker: "w-a",
+        causeSeq: 10,
+        payload: { workerId: "w-b" },
+      }),
+    );
+    invoke.mockRejectedValueOnce("database is locked");
+
+    renderPanel(50);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could Not Load The Causality Trace: database is locked",
+    );
+    expect(screen.queryByText(/Ephemeral Or Pruned/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Killed Worker Beta/)).toBeInTheDocument();
+  });
+
   it("announces the walk through one persistent status region", async () => {
     const lookup = Promise.withResolvers<DomainEvent[]>();
     invoke.mockImplementationOnce(() => lookup.promise);
