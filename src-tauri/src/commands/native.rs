@@ -30,7 +30,10 @@ pub async fn send_notification<R: tauri::Runtime>(
         .title(title)
         .body(body)
         .show()
-        .map_err(|error| error.to_string())
+        .map_err(|error| {
+            tracing::warn!(%error, "notification failed");
+            error.to_string()
+        })
 }
 
 /// What [`check_for_updates`] found.
@@ -67,7 +70,10 @@ pub async fn check_for_updates<R: tauri::Runtime>(
 ) -> Result<UpdateCheck, String> {
     let update = app
         .updater()
-        .map_err(|error| error.to_string())?
+        .map_err(|error| {
+            tracing::warn!(%error, "the updater is unavailable");
+            error.to_string()
+        })?
         .check()
         .await
         .map_err(|error| {
