@@ -51,7 +51,8 @@ vi.mock(import("#lib/tauri"), async (importOriginal) => ({ ...(await importOrigi
  * considers a node "measured" and never paints an edge `<path>` at all —
  * so this file asserts on OUR OWN render-time computations (the legend's
  * kind rows, the empty-causality hint, the provenance store's edge
- * count) rather than XYFlow's internal `.react-flow__edge` DOM output,
+ * count, the edges posted to the ELK layout worker) rather than XYFlow's
+ * internal `.react-flow__edge` DOM output,
  * which would be vacuously zero here regardless of what WorkerGraph
  * computed.
  */
@@ -162,16 +163,27 @@ describe("WorkerGraph — measured edges", () => {
     render(<WorkerGraph />);
     await waitForLayoutSettled();
 
-    // Exactly these two kinds render (the legend gates on presence) --
-    // never a synthesized A->B->... chain. Cardinality itself (exactly
-    // one record per kind, no duplicate/merged entries) is pinned down
-    // at the store level in provenance.test.ts's collapse/count suite.
+    // Exactly these two kinds render (the legend gates on presence).
     expect(screen.getByText("Spawn")).toBeInTheDocument();
     expect(screen.getByText("Command")).toBeInTheDocument();
     expect(screen.queryByText("Kill")).not.toBeInTheDocument();
     expect(screen.queryByText("Message")).not.toBeInTheDocument();
     expect(screen.queryByText("Manual")).not.toBeInTheDocument();
     expect(screen.queryByText("No Measured Causality Yet")).not.toBeInTheDocument();
+
+    // The edges WorkerGraph computed reach ELK as its layout input: exactly
+    // the two A->B records, in direction -- no duplicate, no chain.
+    const layoutCalls = MockWorker.instances
+      .flatMap((w) => w.postMessage.mock.calls)
+      .filter(([msg]) => msg.cmd === "layout");
+    expect(layoutCalls.at(-1)?.[0]).toMatchObject({
+      graph: {
+        edges: [
+          { id: "prov-w-a-w-b-spawn", sources: ["w-a"], targets: ["w-b"] },
+          { id: "prov-w-a-w-b-command", sources: ["w-a"], targets: ["w-b"] },
+        ],
+      },
+    });
   });
 
   it("drops an edge whose endpoint left the worker store (endpoint-drop), without deleting it from the provenance store", async () => {
