@@ -898,6 +898,67 @@ fn test_preflight_reads_upstream_tracking_after_a_push() {
     assert_eq!((result.ahead, result.behind), (1, 0));
 }
 
+/// "staged" mode previews and commits the index alone: a further
+/// unstaged edit, an untracked file and an untracked secret are neither
+/// counted nor deny-reported, and only the staged version is committed.
+#[test]
+fn test_staged_mode_preflight_and_commit_cover_the_index_alone() {
+    let (_repo, worktree, registry, id) =
+        fixture("staged-index-only", "swarm/staged-index-abcd1234");
+    write_file(&worktree, "a.txt", "one\n");
+    git_in(&worktree, &["add", "a.txt"]);
+    write_file(&worktree, "a.txt", "one\ntwo\nthree\n");
+    write_file(&worktree, "b.txt", "untracked\n");
+    write_file(&worktree, ".env", "API_KEY=leak");
+
+    let preview = preflight(&registry, id, StagingMode::Staged).unwrap();
+    assert!(preview.skipped.is_empty(), "{:?}", preview.skipped);
+    assert_eq!(
+        preview.diff_stat,
+        DiffStat {
+            files_changed: 1,
+            insertions: 1,
+            deletions: 0
+        }
+    );
+
+    let outcome = stage_and_commit(
+        &registry,
+        &RepoLocks::new(),
+        id,
+        &request(StagingMode::Staged, "feat: index only"),
+    )
+    .unwrap();
+    assert!(outcome.skipped.is_empty(), "{:?}", outcome.skipped);
+    assert_eq!(committed_paths(&worktree, &outcome.sha), ["a.txt"]);
+    assert_eq!(
+        preview.diff_stat,
+        DiffStat {
+            files_changed: outcome.files_changed,
+            insertions: outcome.insertions,
+            deletions: outcome.deletions,
+        }
+    );
+}
+
+/// A detached `HEAD` is a blocker, never an error; the preflight then
+/// reports the branch recorded on the worker.
+#[test]
+fn test_preflight_blocks_a_detached_head_and_reports_the_recorded_branch() {
+    let (_repo, worktree, registry, id) =
+        fixture("preflight-detached", "swarm/pf-detached-abcd1234");
+    git_in(&worktree, &["checkout", "--detach"]);
+
+    let result = preflight(&registry, id, StagingMode::All).unwrap();
+    assert!(!result.can_ship);
+    assert!(
+        result.blockers.iter().any(|b| b.contains("Detached HEAD")),
+        "{:?}",
+        result.blockers
+    );
+    assert_eq!(result.branch, "swarm/pf-detached-abcd1234");
+}
+
 // ── Push ─────────────────────────────────────────────────────────────
 
 /// B2: a commit made earlier ("Commit Only") is pushed with no fresh
