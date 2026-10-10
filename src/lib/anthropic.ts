@@ -44,12 +44,10 @@ import type {
   BetaToolUseBlock,
 } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import * as z from "zod";
+import { ANTHROPIC_API_KEY_CONFIG_KEY } from "#lib/config-keys";
 import { estimateCostUsd, getModelById, hasPricing, type UsageTokens } from "#lib/models";
 import { readConfig } from "#lib/tauri";
 import { useAiStore } from "#store/ai";
-
-/** Config key under which Settings persists the Anthropic API key. */
-export const ANTHROPIC_API_KEY_CONFIG_KEY = "anthropic_api_key";
 
 /** Beta header for the scalar `fallbacks: "default"` form of server-side refusal fallbacks. */
 const REFUSAL_FALLBACK_BETA = "server-side-fallback-2026-07-01";

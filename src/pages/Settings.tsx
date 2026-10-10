@@ -15,7 +15,7 @@ import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
 import { type AlertThresholds, alertThresholdsAtom } from "#lib/alerts";
-import { ANTHROPIC_API_KEY_CONFIG_KEY } from "#lib/anthropic";
+import { ANTHROPIC_API_KEY_CONFIG_KEY } from "#lib/config-keys";
 import { errorMessage } from "#lib/is-error";
 import { bindingFromEvent, formatBinding, type Keybindings } from "#lib/keybindings";
 import {
