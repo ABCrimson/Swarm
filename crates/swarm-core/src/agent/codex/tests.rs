@@ -1106,6 +1106,36 @@ async fn failed_turns_settle_error_with_the_server_message() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unreadable_turn_completion_settles_the_turn_as_an_error() {
+    let h = Harness::new("unreadable_completion.script");
+    let session = h.spawn().await;
+    let turn = session
+        .send_turn(TurnInput {
+            prompt: "go".to_string(),
+        })
+        .await
+        .expect("turn");
+    tokio::time::timeout(Duration::from_secs(5), session.await_turn_completion(turn))
+        .await
+        .expect("an unreadable completion must not leave the turn running")
+        .expect("await");
+    h.flush().await;
+    let events = h.events();
+    let settled = settlements(&events);
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0].status, AgentTurnStatus::Error);
+    assert!(
+        settled[0]
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("Codex Sent A Turn Completion That Could Not Be Read (")),
+        "got {:?}",
+        settled[0].error
+    );
+    session.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn raw_reasoning_and_unmapped_items_become_blocks() {
     let h = Harness::new("reasoning_raw.script");
     let session = h.spawn().await;
@@ -1563,6 +1593,43 @@ async fn an_unacknowledged_turn_shuts_the_session_down_and_kills_the_child() {
         (None, Some("SIGKILL")),
         "the hung child ignores stdin EOF and is killed"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_shutdown_future_still_finishes_teardown() {
+    let h = Harness::with_timeouts(
+        "turn_silent_after_ack.script",
+        Timeouts {
+            graceful_exit: Duration::from_millis(500),
+            ..test_timeouts()
+        },
+    );
+    let session = h.spawn().await;
+    session
+        .send_turn(TurnInput {
+            prompt: "go".to_string(),
+        })
+        .await
+        .expect("turn");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), session.shutdown())
+            .await
+            .is_err(),
+        "the child ignores stdin EOF, so shutdown outlasts 50 ms"
+    );
+    let events = h
+        .wait_until("agent_session_exited", |events| events.iter().any(is_exit))
+        .await;
+    let settled = settlements(&events);
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0].status, AgentTurnStatus::Error);
+    assert!(
+        settled[0]
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with(PROCESS_EXITED_WITHOUT_RECEIPT))
+    );
+    assert_eq!(position(&events, is_exit), events.len() - 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

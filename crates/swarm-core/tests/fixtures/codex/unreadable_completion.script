@@ -1,0 +1,10 @@
+# A turn/completed whose turn.durationMs is a string, so the payload cannot
+# be decoded. The turn must still settle (as an error) instead of hanging.
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_THREAD_START 019a7c00-0000-7000-8000-000000000001
+#DIRECTIVE EXPECT_REQUEST turn/start
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000c1
+{"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"status":"completed","error":null,"durationMs":"x"}}}
