@@ -5,7 +5,6 @@ import { Button } from "#components/ui/Button";
 import { Pill, type PillTone } from "#components/ui/Pill";
 import type { PermissionDecision } from "#lib/agent-events";
 import { PROVIDER_LABELS } from "#lib/agent-events";
-import { escapeForDisplay } from "#lib/display-escape";
 import { agentCancel, agentPermissionRespond, agentSendTurn } from "#lib/tauri";
 import {
   type AgentTranscriptItem,
@@ -14,7 +13,12 @@ import {
   useAgentTranscript,
 } from "#store/agent-sessions";
 import { AIMessageStream } from "./AIMessageStream.tsx";
-import { ApprovalArgList, ApprovalBlockedReason, useApprovalReview } from "./ApprovalArgs.tsx";
+import {
+  ApprovalArgList,
+  ApprovalBlockedReason,
+  escapeForDisplay,
+  useApprovalReview,
+} from "./ApprovalArgs.tsx";
 import { ToolCallDisplay } from "./ToolCallDisplay.tsx";
 
 interface AgentChatProps {

@@ -1,7 +1,6 @@
 import type { CSSProperties } from "react";
 import { Fragment, useId, useState } from "react";
 import { Button } from "#components/ui/Button";
-import { escapeForDisplay } from "#lib/display-escape";
 
 // What an approval surface shows of a call: every input field as escaped,
 // labelled data, and the gate on Allow: while any shortened value has not been
@@ -36,6 +35,40 @@ const showAllStyle: CSSProperties = { marginLeft: 8 };
 
 /** Values longer than this are cut until the user asks for the rest. */
 const TRUNCATE_AT = 500;
+
+/** Control, format, line/paragraph separator and default-ignorable characters (bidi, zero-width, tag, variation selector) that must never reach the screen raw. */
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
+
+const NAMED_ESCAPES: Readonly<Record<string, string>> = {
+  "\\": "\\\\",
+  "\n": "\\n",
+  "\r": "\\r",
+  "\t": "\\t",
+};
+
+/**
+ * Makes a model-controlled string safe to show, in one pass so an escape
+ * is never escaped again: a backslash becomes `\\`; newline, carriage
+ * return and tab become `\n`, `\r`, `\t`; every other control,
+ * format, line/paragraph separator or default-ignorable character becomes a visible
+ * `\uXXXX` (`\u{XXXXX}` above U+FFFF).
+ * Because backslashes are doubled, every escape in the output is
+ * unambiguous: a real newline (`\n`) never looks like the two characters
+ * backslash and n (`\\n`).
+ */
+export function escapeForDisplay(value: string): string {
+  let out = "";
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    const named = NAMED_ESCAPES[char];
+    if (named !== undefined) out += named;
+    else if (INVISIBLE.test(char)) {
+      const hex = code.toString(16).toUpperCase();
+      out += code > 0xffff ? `\\u{${hex}}` : `\\u${hex.padStart(4, "0")}`;
+    } else out += char;
+  }
+  return out;
+}
 
 /** JSON with object keys sorted at every depth, so equal values print equally. */
 function canonicalJson(value: unknown): string {

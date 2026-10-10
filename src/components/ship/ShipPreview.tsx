@@ -1,7 +1,7 @@
 import { type CSSProperties, useId } from "react";
+import { escapeForDisplay } from "#components/ai/ApprovalArgs";
 import { Pill, type PillTone } from "#components/ui/Pill";
 import type { AiProseState, ShipContextState } from "#hooks/useShip";
-import { escapeForDisplay } from "#lib/display-escape";
 import { pluralize } from "#lib/format";
 import {
   emptyRecordMessage,
