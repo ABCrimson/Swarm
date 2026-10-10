@@ -228,9 +228,12 @@ async fn guard_host(State(state): State<AppState>, request: Request, next: Next)
         .get::<ConnectInfo<ConnectionAddrs>>()
         .map(|ConnectInfo(addrs)| *addrs);
     let headers = request.headers();
-    // A `Host` that is present but not visible ASCII is malformed, not missing.
+    // A `Host` or `Origin` that is present but not visible ASCII is malformed, not missing.
     let host_unreadable = headers
         .get(header::HOST)
+        .is_some_and(|value| value.to_str().is_err());
+    let origin_unreadable = headers
+        .get(header::ORIGIN)
         .is_some_and(|value| value.to_str().is_err());
     // HTTP/2 carries the authority in the request line instead of `Host`.
     let host = headers
@@ -247,6 +250,8 @@ async fn guard_host(State(state): State<AppState>, request: Request, next: Next)
         .and_then(|value| value.to_str().ok());
     let checked = if host_unreadable {
         Err(Rejection::MalformedHost)
+    } else if origin_unreadable {
+        Err(Rejection::OriginNotAllowed)
     } else {
         state
             .hosts
