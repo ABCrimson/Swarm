@@ -1,0 +1,39 @@
+{
+  // knip finds dead files, unused dependencies and unused exports. It is
+  // neither a linter nor a formatter, so Biome stays the only one of those.
+  // Every entry, project glob and ignore below carries its reason.
+  // Run it with `pnpm exec knip`; CI runs it as the `knip` job.
+  "$schema": "./node_modules/knip/schema-jsonc.json",
+
+  // The Vite, Vitest, Playwright and Biome plugins discover src/main.tsx's
+  // graph, the *.test.* files and e2e/*.spec.ts on their own; only what no
+  // plugin can see is listed here.
+  "entry": [
+    // The Web Worker bundle entries (tsconfig.worker.json), referenced as
+    // `new Worker(new URL(...))` strings.
+    "src/workers/*.ts",
+    // Run directly by node (package.json scripts), never imported.
+    "scripts/*.ts"
+  ],
+
+  // JS/TS only: crates/**/tests/fixtures/**/*.mjs are fake agent CLIs spawned
+  // by the Rust tests, so they are not unused files, and site/ is built by
+  // scripts/build-site.ts as static pages.
+  "project": ["src/**/*.{ts,tsx,css}", "e2e/**/*.ts", "scripts/**/*.ts", "*.ts"],
+
+  "ignoreDependencies": [
+    // The WASI binding of the Oxc React Compiler transform. oxc-transform-react
+    // loads it by name when NAPI_RS_FORCE_WASI=true (`pnpm check:compiler`
+    // in CI) or when the native binding cannot load; no source imports it.
+    "@oxc-transform-react/binding-wasm32-wasip1"
+  ],
+
+  "rules": {
+    // The dead-file and dependency checks gate the build. The export and
+    // type checks currently report real dead exports (zod schemas kept next
+    // to their types, test-only helpers); they stay visible as warnings until
+    // the polish phase removes or justifies each one, then become errors.
+    "exports": "warn",
+    "types": "warn"
+  }
+}
