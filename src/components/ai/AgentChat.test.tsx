@@ -201,9 +201,10 @@ describe("AgentChat", () => {
     expect(screen.getByText("Permission Denied")).toBeInTheDocument();
   });
 
-  // Regression: an interactive session's unclassified report (Claude Code
-  // denials known only from result.permission_denials) was offered as a
-  // pending Allow/Deny that the backend could never act on.
+  // A request that carries a suggestedDecision is a decision the provider
+  // already made (here an unclassified Claude Code denial, known only from
+  // result.permission_denials), so even an interactive session shows it as a
+  // read-only report with no Allow/Deny to answer.
   it("keeps a denial report read-only in an interactive session", () => {
     render(<Harness />);
     startSession("claude_code", { interactivePermissions: true });
