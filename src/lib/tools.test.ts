@@ -10,8 +10,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "#lib/tauri";
 import { executeTool, getAnthropicTools, toolRegistry } from "#lib/tools";
 
-vi.mock("#lib/tauri", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("#lib/tauri")>()),
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
   invoke: vi.fn(),
 }));
 

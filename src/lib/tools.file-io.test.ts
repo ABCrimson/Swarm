@@ -15,7 +15,7 @@ import {
 
 const invokeMock = vi.fn();
 
-vi.mock("#lib/tauri", () => ({
+vi.mock(import("#lib/tauri"), () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
   // #lib/tools transitively imports the custom-tools store, which calls
   // isTauri() at module load time — must be present on this mock even

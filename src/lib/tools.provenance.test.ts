@@ -9,8 +9,8 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("#lib/tauri", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("#lib/tauri")>()),
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
   killWorker: vi.fn().mockResolvedValue(undefined),
   workerInput: vi.fn().mockResolvedValue(undefined),
 }));

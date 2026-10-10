@@ -17,7 +17,7 @@ import {
 import { CLAUDE_MODELS } from "#lib/models";
 import { useAiStore } from "#store/ai";
 
-vi.mock("#lib/tauri", () => ({ readConfig: vi.fn() }));
+vi.mock(import("#lib/tauri"), () => ({ readConfig: vi.fn() }));
 
 import * as z from "zod";
 import { readConfig } from "#lib/tauri";
