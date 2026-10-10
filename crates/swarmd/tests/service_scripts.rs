@@ -299,6 +299,51 @@ mod executed {
         assert!(sandbox.dest.exists());
     }
 
+    /// uninstall.sh stops when systemctl cannot stop the daemon for any
+    /// reason other than a missing unit, and removes nothing, so a unit and
+    /// binary are never deleted under a daemon that keeps running. A unit
+    /// that does not exist is the benign case: the removal proceeds.
+    #[test]
+    fn test_uninstall_stops_when_systemctl_cannot_stop_the_daemon() {
+        let sandbox = Sandbox::new(None);
+        std::fs::write(&sandbox.source, "v1").unwrap();
+        sandbox.run("install.sh", &[]);
+        let unit = sandbox.config().join("systemd/user/swarmd.service");
+
+        shim(
+            &sandbox.shims,
+            "systemctl",
+            "echo 'Failed to connect to user scope bus' >&2; exit 1",
+        );
+        let output = Command::new("sh")
+            .arg(service_dir().join("uninstall.sh"))
+            .arg("--purge-binary")
+            .env_clear()
+            .env("HOME", sandbox.home())
+            .env("XDG_CONFIG_HOME", sandbox.config())
+            .env("PATH", sandbox.path_var())
+            .env("USER", "tester")
+            .env("SWARMD_BIN", &sandbox.source)
+            .env("SWARMD_BIN_DEST", &sandbox.dest)
+            .env("SHIM_LOG", &sandbox.log)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{stderr}");
+        assert!(stderr.contains("nothing was removed"), "{stderr}");
+        assert!(unit.exists());
+        assert!(sandbox.dest.exists());
+
+        shim(
+            &sandbox.shims,
+            "systemctl",
+            "echo 'Failed to disable unit: Unit swarmd.service does not exist' >&2; exit 1",
+        );
+        sandbox.run("uninstall.sh", &["--purge-binary"]);
+        assert!(!unit.exists());
+        assert!(!sandbox.dest.exists());
+    }
+
     /// The macOS branch writes a plist with the installed binary, the log
     /// directory and the installing shell's PATH filled in and XML-escaped
     /// (launchd's own PATH lacks every agent CLI), then reloads the agent
