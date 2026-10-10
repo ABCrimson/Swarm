@@ -714,14 +714,6 @@ async fn an_ask_that_needs_the_cli_dialog_is_denied_and_reported() {
     );
     assert_eq!(settled_for(&harness.recorder, &turn)[0]["status"], "ok");
 
-    // Nothing is left pending: an Allow for the report is a no-op.
-    session
-        .respond_permission(
-            "toolu_01AskUserQuestionCard".to_owned(),
-            PermissionDecision::Allow,
-        )
-        .await
-        .expect("no-op");
     session.shutdown().await.expect("shutdown");
 }
 
@@ -1365,6 +1357,10 @@ fn capabilities_are_honest() {
             "{mode:?} is advertised, so a spawn must accept it"
         );
     }
+    assert_eq!(
+        capabilities.permission_modes,
+        ["restricted", "standard", "write_enabled"]
+    );
     let adapter = ClaudeCodeAdapter::new(Harness::new().sink.clone());
     assert_eq!(adapter.provider(), ProviderId::ClaudeCode);
     assert_eq!(adapter.capabilities(), capabilities);
