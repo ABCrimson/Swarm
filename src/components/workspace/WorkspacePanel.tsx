@@ -1,8 +1,10 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { Suspense, useId, useRef, useState, useTransition } from "react";
+import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { Spinner } from "#components/ui/Spinner";
 import { loadFilePreview } from "#lib/file-preview";
+import { errorMessage } from "#lib/is-error";
 import { FileTree } from "./FileTree.tsx";
 import { type FileSelection, FileViewer } from "./FileViewer.tsx";
 
@@ -40,12 +42,18 @@ export function WorkspacePanel(): React.ReactElement {
   const treePaneId = useId();
 
   const handleOpenProject = async (): Promise<void> => {
-    const selected = await open({
-      title: "Open Project Directory",
-      directory: true,
-      multiple: false,
-      recursive: true,
-    });
+    let selected: string | null;
+    try {
+      selected = await open({
+        title: "Open Project Directory",
+        directory: true,
+        multiple: false,
+        recursive: true,
+      });
+    } catch (err) {
+      toast.error(`Could Not Open The Folder Picker: ${errorMessage(err)}`);
+      return;
+    }
     if (selected) {
       setRootPath(selected);
       setSelection(null);
@@ -168,7 +176,12 @@ export function WorkspacePanel(): React.ReactElement {
         onPointerMove={handlePointerMove}
         onLostPointerCapture={handleLostPointerCapture}
         onKeyDown={handleSeparatorKeyDown}
-        className="m-0 h-auto w-1 shrink-0 cursor-col-resize touch-none select-none border-0 bg-transparent transition-colors duration-150 hover:bg-plasma/20 data-dragging:bg-plasma/40"
+        onWheel={(e) => {
+          e.currentTarget.nextElementSibling
+            ?.querySelector<HTMLElement>(".scroll-area")
+            ?.scrollBy(e.deltaX, e.deltaY);
+        }}
+        className="m-0 h-auto w-1 shrink-0 relative z-10 before:absolute before:inset-y-0 before:left-0 before:-right-5 before:content-[''] cursor-col-resize touch-none select-none border-0 bg-transparent transition-colors duration-150 hover:bg-plasma/20 data-dragging:bg-plasma/40"
       />
 
       <div className="min-w-0 flex-1 overflow-hidden">

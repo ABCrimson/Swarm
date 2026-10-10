@@ -15,7 +15,7 @@ const STAGGER_S = 0.05;
 const MAX_STAGGERED = 8;
 
 const sectionHeadingClass =
-  "mb-3 text-xs font-semibold tracking-widest text-[oklch(0.50_0.06_220)] uppercase font-[family-name:var(--font-mono)]";
+  "mb-3 text-xs font-semibold tracking-widest text-fg-dim uppercase font-[family-name:var(--font-mono)]";
 
 /**
  * Template chooser: the built-in templates render at once; the user's own
@@ -62,7 +62,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
 
       <Suspense
         fallback={
-          <p className="text-xs text-[oklch(0.50_0.04_220)] font-[family-name:var(--font-body)]">
+          <p role="status" className="text-xs text-fg-dim font-[family-name:var(--font-body)]">
             Loading Your Templates…
           </p>
         }
@@ -138,7 +138,7 @@ function TemplateCard({
       <span className="mb-1 block text-sm font-semibold text-[oklch(0.88_0.04_220)] font-[family-name:var(--font-display)]">
         {template.name}
       </span>
-      <span className="mb-2 line-clamp-2 text-xs text-[oklch(0.55_0.03_220)] font-[family-name:var(--font-body)]">
+      <span className="mb-2 line-clamp-2 text-xs text-fg-dim font-[family-name:var(--font-body)]">
         {template.description}
       </span>
       <Pill tone="info" size="sm">

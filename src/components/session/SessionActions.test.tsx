@@ -114,6 +114,17 @@ describe("SessionActions — new session", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("textbox", { name: "Session Name" })).not.toBeInTheDocument();
   });
+
+  it("returns focus to New Session when the form closes", async () => {
+    const user = userEvent.setup();
+    await openForm(user);
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: "New Session" })).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: "New Session" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "New Session" })).toHaveFocus();
+  });
 });
 
 describe("SessionActions — import", () => {

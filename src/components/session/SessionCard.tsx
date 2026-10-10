@@ -100,7 +100,7 @@ export function SessionCard({
           </Pill>
         </span>
 
-        <span className="mt-1.5 block text-xs text-[oklch(0.55_0.03_220)] font-[family-name:var(--font-body)]">
+        <span className="mt-1.5 block text-xs text-fg-dim font-[family-name:var(--font-body)]">
           {relativeTime}
         </span>
 
@@ -251,10 +251,10 @@ function SessionMenuItem({
       role="menuitem"
       tabIndex={-1}
       onClick={onSelect}
-      className={`block w-full cursor-pointer px-3 py-1.5 text-left text-sm transition-colors font-[family-name:var(--font-body)] focus-visible:outline-none ${
+      className={`block w-full cursor-pointer px-3 py-1.5 text-left text-sm transition-colors font-[family-name:var(--font-body)] focus-visible:outline-2 focus-visible:-outline-offset-2 ${
         danger
-          ? "text-rose hover:bg-[oklch(0.20_0.06_10/0.3)] focus:bg-[oklch(0.20_0.06_10/0.3)]"
-          : "hover:bg-[oklch(0.22_0.04_220/0.5)] focus:bg-[oklch(0.22_0.04_220/0.5)]"
+          ? "text-rose hover:bg-[oklch(0.20_0.06_10/0.3)] focus:bg-[oklch(0.20_0.06_10/0.3)] focus-visible:outline-rose"
+          : "hover:bg-[oklch(0.22_0.04_220/0.5)] focus:bg-[oklch(0.22_0.04_220/0.5)] focus-visible:outline-plasma"
       }`}
     >
       {label}

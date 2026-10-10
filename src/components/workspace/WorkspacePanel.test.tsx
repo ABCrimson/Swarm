@@ -68,6 +68,20 @@ describe("WorkspacePanel", () => {
     );
   });
 
+  // The separator's widened hit area overlaps the viewer's left edge, so wheel
+  // events over it are forwarded to the viewer's scroller.
+  it("forwards a wheel over the separator to the file viewer", async () => {
+    await openProject();
+    await act(async () => fireEvent.click(screen.getByRole("treeitem", { name: /README\.md/ })));
+    await screen.findByText("# App");
+    const scrollBy = vi.fn();
+    HTMLElement.prototype.scrollBy = scrollBy;
+
+    fireEvent.wheel(screen.getByRole("separator", { name: "Resize File Tree" }), { deltaY: 100 });
+
+    expect(scrollBy).toHaveBeenCalledWith(0, 100);
+  });
+
   it("resizes the tree with the keyboard and a pointer drag, within limits", async () => {
     await openProject();
     const handle = screen.getByRole("separator", { name: "Resize File Tree" });

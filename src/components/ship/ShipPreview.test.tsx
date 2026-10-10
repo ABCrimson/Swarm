@@ -65,6 +65,7 @@ function renderPreview(overrides: Partial<React.ComponentProps<typeof ShipPrevie
     aiProse: null,
     onAiProseChange: vi.fn(),
     aiProseState: "idle",
+    aiProseError: null,
     onRegenerateProse: vi.fn(),
     ...overrides,
   };
@@ -160,10 +161,14 @@ describe("ShipPreview — AI prose section", () => {
     expect(screen.getByText("Generate")).toBeInTheDocument();
   });
 
-  it("shows a Regenerate label once prose exists", () => {
-    renderPreview({ aiProse: "This change adds a helper.", aiProseState: "ready" });
+  it("shows a Regenerate label once prose exists and regenerates on click", async () => {
+    const user = userEvent.setup();
+    const props = renderPreview({ aiProse: "This change adds a helper.", aiProseState: "ready" });
     expect(screen.getByText("Regenerate")).toBeInTheDocument();
     expect(screen.getByDisplayValue("This change adds a helper.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Regenerate" }));
+    expect(props.onRegenerateProse).toHaveBeenCalledOnce();
   });
 
   it("disables the generate button and shows a generating label while in flight", () => {
@@ -171,6 +176,16 @@ describe("ShipPreview — AI prose section", () => {
     const button = screen.getByText("Generating…");
     expect(button).toBeInTheDocument();
     expect(button.closest("button")).toBeDisabled();
+  });
+
+  it("appends the reason a generation failed", () => {
+    renderPreview({
+      aiProseState: "failed",
+      aiProseError: "API Key Not Configured — Add It In Settings",
+    });
+    expect(
+      screen.getByText(/Still Works\. API Key Not Configured — Add It In Settings\./),
+    ).toBeInTheDocument();
   });
 
   it("surfaces a failure message without blocking the rest of the preview from rendering", () => {

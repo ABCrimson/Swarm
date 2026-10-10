@@ -2,7 +2,7 @@ import { use } from "react";
 import { basename, type FilePreview, formatBytes, MAX_PREVIEW_BYTES } from "#lib/file-preview";
 import { tokenizeJson } from "#lib/syntax-highlight";
 
-/** JSON above this size renders as plain text: one span per token gets expensive. */
+/** JSON above this size renders as plain text: one span per coloured token gets expensive. */
 const MAX_HIGHLIGHT_CHARS = 256 * 1024;
 
 /** A file chosen in the tree, with the (possibly still pending) read of its contents. */
@@ -29,8 +29,9 @@ interface FileViewerProps {
  * selection, so the old file never shows under the new name.
  *
  * The body is one text node for the gutter and one for the text (or
- * one span per JSON token), not a DOM row per line, so a large file
- * cannot flood the webview with nodes.
+ * one span per coloured JSON token, with whitespace as bare text), not
+ * a DOM row per line, so a large file cannot flood the webview with
+ * nodes.
  */
 export function FileViewer({ selection, pending = false }: FileViewerProps): React.ReactElement {
   const preview = use(selection.preview);
@@ -115,12 +116,16 @@ function TextView({
       </pre>
       <pre className="pr-4 text-fg">
         {faithful
-          ? tokens.map((token, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reorder
-              <span key={i} style={{ color: token.color }}>
-                {token.value}
-              </span>
-            ))
+          ? tokens.map((token, i) =>
+              token.type === "whitespace" ? (
+                token.value
+              ) : (
+                // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reorder
+                <span key={i} style={{ color: token.color }}>
+                  {token.value}
+                </span>
+              ),
+            )
           : text}
       </pre>
     </div>

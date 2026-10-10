@@ -26,6 +26,8 @@ interface ShipPreviewProps {
   readonly aiProse: string | null;
   readonly onAiProseChange: (prose: string) => void;
   readonly aiProseState: AiProseState;
+  /** Why the last generation failed, appended to the failure line; `null` when unknown. */
+  readonly aiProseError: string | null;
   readonly onRegenerateProse: () => void;
 }
 
@@ -90,7 +92,7 @@ const textareaStyle: CSSProperties = {
 const trailerNoteStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: "0.625rem",
-  color: "oklch(0.50 0.04 220)",
+  color: "var(--color-fg-dim)",
 };
 
 const blockerListStyle: CSSProperties = {
@@ -124,7 +126,7 @@ const actionGroupStyle: CSSProperties = {
 const actionPlanStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: "0.625rem",
-  color: "oklch(0.50 0.04 220)",
+  color: "var(--color-fg-dim)",
   padding: "0 2px",
 };
 
@@ -271,7 +273,11 @@ function CausalRecordSection({
   }
 
   if (context == null) {
-    return <span style={causalMutedStyle}>Loading Causal Record…</span>;
+    return (
+      <span role="status" style={causalMutedStyle}>
+        Loading Causal Record…
+      </span>
+    );
   }
 
   if (context.turns.length === 0) {
@@ -350,6 +356,7 @@ export function ShipPreview({
   aiProse,
   onAiProseChange,
   aiProseState,
+  aiProseError,
   onRegenerateProse,
 }: ShipPreviewProps): React.ReactElement {
   const messageId = useId();
@@ -505,6 +512,7 @@ export function ShipPreview({
           {aiProseState === "failed" && (
             <span style={actionReasonStyle}>
               Generation Failed — Shipping With The Causal Record Alone Still Works.
+              {aiProseError != null && ` ${aiProseError}.`}
             </span>
           )}
         </div>

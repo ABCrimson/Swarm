@@ -103,8 +103,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
     .toArray()
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 
-  const labelClass =
-    "shrink-0 text-xs text-[oklch(0.55_0.03_220)] font-[family-name:var(--font-body)]";
+  const labelClass = "shrink-0 text-xs text-fg-dim font-[family-name:var(--font-body)]";
 
   return (
     <div className="flex flex-col gap-4">
@@ -156,10 +155,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
 
       {filtering && (
         <section aria-label="Search Results" className="flex flex-col gap-1.5">
-          <p
-            role="status"
-            className="text-xs text-[oklch(0.50_0.04_220)] font-[family-name:var(--font-mono)]"
-          >
+          <p role="status" className="text-xs text-fg-dim font-[family-name:var(--font-mono)]">
             {pluralize("Result", results.length)}
           </p>
 
@@ -173,7 +169,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
           ))}
 
           {results.length === 0 && (
-            <p className="py-4 text-center text-sm text-[oklch(0.55_0.03_220)] font-[family-name:var(--font-body)]">
+            <p className="py-4 text-center text-sm text-fg-dim font-[family-name:var(--font-body)]">
               No Matching Sessions Found.
             </p>
           )}
@@ -208,7 +204,7 @@ function SearchResultItem({
         <Highlighted text={session.name} query={query} />
       </span>
       {description != null && description !== "" && (
-        <span className="mt-1 block truncate text-xs text-[oklch(0.50_0.03_220)] font-[family-name:var(--font-body)]">
+        <span className="mt-1 block truncate text-xs text-fg-dim font-[family-name:var(--font-body)]">
           <Highlighted text={description} query={query} />
         </span>
       )}

@@ -9,8 +9,8 @@
  * the hook compilable by the React Compiler and every transition
  * unit-testable on its own. The rule tags below: B1 (the receipt
  * timeout) is defined at `SHIP_SETTLED_TIMEOUT_MS`; B2 (nothing-to-commit
- * recovery) and B3 (mode-aware preflight) are the backend rules of the
- * same name in `docs/architecture.md`'s Ship Chain section.
+ * recovery) and B3 (mode-aware preflight) are the rules of the same name
+ * in `docs/architecture.md`'s Ship Chain section.
  *
  * @module useShip
  */
@@ -21,6 +21,7 @@ import { useEffect, useReducer, useRef } from "react";
 import { toast } from "sonner";
 import * as z from "zod";
 import { onEvent, waitFor } from "#lib/event-bus";
+import { errorMessage } from "#lib/is-error";
 import { CLAUDE_MODELS } from "#lib/models";
 import { composeShipBody, generateCausalProse } from "#lib/ship-causal";
 import { generateCommitMessage } from "#lib/ship-message";
@@ -42,7 +43,7 @@ export type AiProseState = "idle" | "generating" | "ready" | "failed";
 export type ShipContextState = "loading" | "ready" | "failed";
 
 /** Ship state machine states — see `shipReducer` for the transitions. */
-export type ShipState = "idle" | "preflighting" | "previewing" | "running" | "settled" | "failed";
+type ShipState = "idle" | "preflighting" | "previewing" | "running" | "settled" | "failed";
 
 /** One row of the live progress checklist, fed by `ship_progress` events. */
 export interface ShipProgressRow {
@@ -52,7 +53,7 @@ export interface ShipProgressRow {
 }
 
 /** Terminal outcome fields, populated as each step of the chosen action completes. */
-export interface ShipResult {
+interface ShipResult {
   readonly commitSha?: string;
   readonly pushedRef?: string;
   readonly prUrl?: string;
@@ -78,6 +79,8 @@ export interface ShipSnapshot {
   /** The editable AI prose (the "What Changed / Why" section) — `null` until a successful `regenerateProse`. User edits land here via `setAiProse`, independent of `aiProseState`. */
   readonly aiProse: string | null;
   readonly aiProseState: AiProseState;
+  /** Why the last generation failed (e.g. a missing API key), shown with the failure; `null` unless `aiProseState` is `"failed"`. */
+  readonly aiProseError: string | null;
 }
 
 /** Every transition `shipReducer` knows. */
@@ -98,7 +101,7 @@ export type ShipAction =
   | { readonly type: "contextFailed" }
   | { readonly type: "proseStarted" }
   | { readonly type: "proseReady"; readonly prose: string }
-  | { readonly type: "proseFailed" }
+  | { readonly type: "proseFailed"; readonly reason: string }
   | { readonly type: "proseEdited"; readonly prose: string }
   | { readonly type: "actionStarted" }
   | { readonly type: "progressReported"; readonly row: ShipProgressRow }
@@ -121,6 +124,7 @@ export const INITIAL_SHIP_SNAPSHOT: ShipSnapshot = {
   contextState: "loading",
   aiProse: null,
   aiProseState: "idle",
+  aiProseError: null,
 };
 
 /**
@@ -163,13 +167,13 @@ export function shipReducer(snapshot: ShipSnapshot, action: ShipAction): ShipSna
     case "contextFailed":
       return { ...snapshot, context: null, contextState: "failed" };
     case "proseStarted":
-      return { ...snapshot, aiProseState: "generating" };
+      return { ...snapshot, aiProseState: "generating", aiProseError: null };
     case "proseReady":
-      return { ...snapshot, aiProse: action.prose, aiProseState: "ready" };
+      return { ...snapshot, aiProse: action.prose, aiProseState: "ready", aiProseError: null };
     case "proseFailed":
       // The previous prose (or `null`) stays: a failed regenerate never
       // wipes what the user already has.
-      return { ...snapshot, aiProseState: "failed" };
+      return { ...snapshot, aiProseState: "failed", aiProseError: action.reason };
     case "proseEdited":
       return { ...snapshot, aiProse: action.prose };
     case "actionStarted":
@@ -379,7 +383,9 @@ async function fetchContext(
 
 /**
  * Generates the AI prose. Failure (no API key, network, refusal) sets
- * `aiProseState: "failed"` and leaves `aiProse` as it was — the body
+ * `aiProseState: "failed"` (with the reason in `aiProseError`, so a
+ * missing API key reads differently from a network error) and leaves
+ * `aiProse` as it was — the body
  * then falls back to the deterministic Causal Record alone, never a
  * synthesized placeholder. `signal` aborts the stream when the flow
  * unmounts (see `useShip`).
@@ -393,8 +399,8 @@ async function generateProse(
   dispatch({ type: "proseStarted" });
   try {
     dispatch({ type: "proseReady", prose: await generateCausalProse(input, model, signal) });
-  } catch {
-    dispatch({ type: "proseFailed" });
+  } catch (err) {
+    dispatch({ type: "proseFailed", reason: errorMessage(err) });
   }
 }
 
@@ -556,7 +562,10 @@ async function stageOrRecoverFromNothingToCommit(
  * `await`ing the returned promise) can never surface as a transient
  * unhandled-rejection warning. The `.catch()` creates and discards a
  * *derived* promise — the returned promise still rejects normally when
- * awaited, propagating the real error to `runAction`'s `catch`.
+ * awaited, propagating the real error to `runAction`'s `catch`. A
+ * timeout rejects as a `ShipCommandError` of kind `"timeout"` (the git
+ * step may still complete, see `SHIP_SETTLED_TIMEOUT_MS`), with the
+ * `waitFor` error as its cause.
  */
 function armSettledWait(shipId: string): Promise<unknown> {
   const settled = waitFor(
@@ -564,7 +573,16 @@ function armSettledWait(shipId: string): Promise<unknown> {
       e.type === "ship_settled" &&
       ShipSettledPayloadSchema.safeParse(e.payload).data?.shipId === shipId,
     SHIP_SETTLED_TIMEOUT_MS,
-  );
+  ).catch((err: unknown) => {
+    throw new ShipCommandError(
+      {
+        kind: "timeout",
+        message: `No Confirmation Arrived Within ${SHIP_SETTLED_TIMEOUT_MS / 1000} Seconds — The Commit Or Push May Still Have Completed; Refresh The Preflight To Check.`,
+        remedy: null,
+      },
+      { cause: err },
+    );
+  });
   settled.catch(() => {});
   return settled;
 }
@@ -573,8 +591,4 @@ function armSettledWait(shipId: string): Promise<unknown> {
 function toShipError(err: unknown): ShipError {
   if (err instanceof ShipCommandError) return err.shipError;
   return { kind: "unknown", message: errorMessage(err), remedy: null };
-}
-
-function errorMessage(err: unknown): string {
-  return Error.isError(err) ? err.message : String(err);
 }

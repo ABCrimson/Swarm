@@ -20,8 +20,8 @@ interface FileTreeProps {
 
 /**
  * A file-system entry. `kind: "link"` is a symlink whose target type is
- * not known until it is opened (the desktop capability grants `read_dir`
- * but not `stat`, so the target is probed by trying to list it).
+ * not known until it is opened: `readDir` reports `isSymlink` without
+ * following the link, so the target is probed by trying to list it.
  */
 interface TreeNode {
   readonly name: string;
@@ -133,7 +133,7 @@ export function FileTree({
   selectedPath,
 }: FileTreeProps): React.ReactElement {
   const [root, setRoot] = useState<RootState>({ status: "loading" });
-  const [scrollTop, setScrollTop] = useState(0);
+  const [firstRow, setFirstRow] = useState(0);
   const [activePath, setActivePath] = useState<string | null>(null);
   /** Directories with a listing in flight, so a double click never lists twice. */
   const inFlightRef = useRef(new Set<string>());
@@ -229,7 +229,7 @@ export function FileTree({
     else if (top + ROW_HEIGHT > container.scrollTop + container.clientHeight) {
       container.scrollTop = top + ROW_HEIGHT - container.clientHeight;
     }
-    setScrollTop(container.scrollTop);
+    setFirstRow(Math.floor(container.scrollTop / ROW_HEIGHT));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
@@ -269,10 +269,10 @@ export function FileTree({
     e.preventDefault();
   };
 
-  const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const startIndex = Math.max(0, firstRow - OVERSCAN);
   const endIndex = Math.min(
     rows.length,
-    Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN,
+    firstRow + Math.ceil(viewportHeight / ROW_HEIGHT) + 1 + OVERSCAN,
   );
   const rowId = (index: number): string => `${idPrefix}-row-${index}`;
   // The window, plus the active row wherever it is: aria-activedescendant
@@ -286,9 +286,13 @@ export function FileTree({
     <div
       ref={containerRef}
       className="scroll-area h-full overflow-y-auto px-1 py-2"
-      onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+      onScroll={(e) => setFirstRow(Math.floor(e.currentTarget.scrollTop / ROW_HEIGHT))}
     >
-      {root.status === "loading" && <p className="p-4 text-fg-muted text-md">Loading…</p>}
+      {root.status === "loading" && (
+        <p role="status" className="p-4 text-fg-muted text-md">
+          Loading…
+        </p>
+      )}
       {root.status === "error" && (
         <p role="alert" className="p-4 text-md text-rose">
           Could Not Read This Folder: {root.message}
