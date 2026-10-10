@@ -1,18 +1,8 @@
-# actionlint 1.7.12 (the newest release) predates two GitHub features the
-# workflows use; drop each entry once an actionlint release knows it.
+# actionlint 1.7.12 (the newest release) predates a GitHub feature the
+# workflows use; drop the entry once an actionlint release knows it.
 #
 # - The Ubuntu 26.04 hosted images, GA on 2026-09-17
 #   (actions/runner-images#14747).
 self-hosted-runner:
   labels:
     - ubuntu-26.04
-    - ubuntu-26.04-arm
-
-# - The self-repository `uses: $/...` syntax (GitHub changelog 2026-07-30),
-#   GitHub's recommended way to reference an action or reusable workflow in
-#   the same repository: it resolves to this repository at the exact commit
-#   that is running, with no checkout required.
-paths:
-  .github/workflows/**/*.yml:
-    ignore:
-      - 'reusable workflow call "\$/\.github/workflows/[\w.-]+\.yml" at "uses" is not following the format'
