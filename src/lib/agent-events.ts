@@ -4,9 +4,10 @@
  * (`crates/swarm-core/src/agent/`, payloads emitted from
  * `crates/swarm-core/src/events/emitter.rs`).
  *
- * `#hooks/useAgentSessionEvents` parses every event with these schemas
- * at the event-bus seam before it reaches `#store/agent-sessions`; an
- * unexpected shape is dropped, never trusted via `as`.
+ * `#lib/event-bus` validates each `agent_*` payload against these schemas
+ * (registered in `#lib/event-payloads`) before handing it to a typed
+ * `onEvent` subscriber such as `#hooks/useAgentSessionEvents`; a payload
+ * of unexpected shape is logged and withheld, never trusted via `as`.
  *
  * Field names are camelCase, mirroring the Rust structs'
  * `#[serde(rename_all = "camelCase")]`; closed enums mirror their Rust
