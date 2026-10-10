@@ -1,5 +1,6 @@
-//! Trust tiers: SWARM's closed permission vocabulary and the argv it
-//! maps to for the `claude` CLI.
+//! The `claude` CLI's spawn contract: SWARM's closed trust-tier
+//! vocabulary and the argv each tier maps to, the probe's argv, the
+//! child's environment, and the capabilities the adapter advertises.
 
 use std::collections::HashMap;
 

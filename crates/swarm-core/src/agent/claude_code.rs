@@ -4,11 +4,12 @@
 //!
 //! Verified against `claude` 2.1.280 and 2.1.281 (live traces) and
 //! `@anthropic-ai/claude-agent-sdk` 0.3.280's protocol types; the oldest
-//! CLI it drives is `MIN_CLI_VERSION`. The wire types live in
-//! `wire`; the trust-tier mapping and argv in `tier`, the child process and
-//! handshake in `process`, the shared session state in `state`, teardown
-//! in `teardown` and the reader task's frame handlers in `reader`; this
-//! file holds the constants, the adapter and the session. The unit tests
+//! CLI it drives is `MIN_CLI_VERSION`. The wire types live in `wire`;
+//! the trust tiers, argv, child environment and capabilities in `tier`;
+//! the child process and handshake in `process`; the shared session
+//! state in `state`; teardown in `teardown`; and the reader task's frame
+//! handlers in `reader`. This file holds the constants, the adapter and
+//! the session. The unit tests
 //! drive a fake CLI (`tests/fixtures/claude_code/fake_claude_cli.mjs`)
 //! that plays one scenario module per test with the real CLI's ordering.
 //!
