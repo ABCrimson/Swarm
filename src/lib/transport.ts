@@ -3,11 +3,11 @@ import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getLastSeq } from "#lib/event-bus";
 
 /**
- * What a transport can honestly promise. Feature-gated call sites
- * (fs/dialog-backed file browsing, OS notifications, the auto-updater,
- * the webview-direct AI chat path) read it to render a Title Case
- * empty state instead of a silent no-op when the active transport
- * cannot support them.
+ * What a transport can honestly promise. `hasTransport()` in
+ * `#lib/tauri` reads `kind`. Nothing reads the feature flags yet:
+ * desktop-only surfaces (fs/dialog file browsing, OS notifications, the
+ * auto-updater, the webview-direct AI chat path) gate on `isTauri()`
+ * instead (ADR-0024).
  */
 export interface TransportCapabilities {
   readonly kind: "tauri" | "ws";
@@ -82,7 +82,7 @@ const MAX_RECONNECT_DELAY_MS = 15_000;
 const JITTER_FRACTION = 0.3;
 /**
  * Bound on every wait for the daemon: the `hello` → `ready` handshake
- * and each `rpc` → `rpcResult` round trip (security-review FIX-8). A
+ * and each `rpc` → `rpcResult` round trip. A
  * hung daemon, a lost response or a proxy that holds the upgrade open
  * rejects the caller instead of leaving it pending forever.
  */
@@ -125,8 +125,8 @@ let inMemoryToken: string | null = null;
  * `Referer`-leaking outbound request.
  *
  * Called once at module init (bottom of this file), before any network
- * I/O (security-review FIX-8): a lazy first-connect read left the token
- * in the visible URL for the whole first connect attempt. The fragment
+ * I/O: a lazy first-connect read would leave the token in the visible
+ * URL for the whole first connect attempt. The fragment
  * is scrubbed even when it cannot be decoded, and a malformed one never
  * throws: this runs at import time, where an exception would stop the
  * app from booting. Exported so tests can re-run it after changing
@@ -370,7 +370,7 @@ export class WsTransport implements Transport {
     const id = `r${++this.lastRpcId}`;
     const { promise, resolve, reject } = Promise.withResolvers<T>();
     const framesAtSend = conn.framesReceived;
-    // security-review FIX-8: bounded — see RPC_TIMEOUT_MS's doc.
+    // Bounded: see RPC_TIMEOUT_MS's doc.
     const timer = setTimeout(() => {
       conn.pending.delete(id);
       reject(new RpcTimeoutError(cmd));
@@ -424,8 +424,7 @@ export class WsTransport implements Transport {
 }
 
 // Runs once, at import time — see `initTokenFromLocationHash`'s doc
-// (security-review FIX-8) for why this must not wait for the first
-// connect attempt.
+// for why this must not wait for the first connect attempt.
 initTokenFromLocationHash();
 
 export const wsTransport: Transport = new WsTransport();
