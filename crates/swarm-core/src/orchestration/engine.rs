@@ -47,7 +47,7 @@ use crate::events::{EventSink, Provenance, SwarmEvent, SystemLogPayload, WriterC
 
 /// The single ordered channel name every backend event is logically
 /// pushed on. The desktop shell's `emit` closure (see
-/// [`OrchestrationEngine::start`]) emits each envelope under this name
+/// [`OrchestrationEngine::try_start`]) emits each envelope under this name
 /// on its webview event channel.
 pub const EVENT_CHANNEL: &str = "swarm://events";
 
@@ -129,7 +129,7 @@ pub struct OrchestrationEngine {
     sink: EventSink,
     db_path: Option<PathBuf>,
     /// Secondary fanout; lossy under lag by design. The primary path is
-    /// the synchronous `emit` closure passed to [`Self::start`], which
+    /// the synchronous `emit` closure passed to [`Self::try_start`], which
     /// never drops an event. `swarmd` gives each WebSocket client a
     /// receiver and heals lag by replaying from the log.
     broadcast_tx: broadcast::Sender<Arc<DomainEvent>>,
@@ -201,13 +201,13 @@ impl OrchestrationEngine {
         })
     }
 
-    /// [`Self::try_start`] for callers that cannot recover from a failed
-    /// start (tests, mostly).
+    /// Test helper: [`Self::try_start`] that panics on failure.
     ///
     /// # Panics
     ///
     /// When [`Self::try_start`] fails.
-    pub fn start(
+    #[cfg(test)]
+    pub(crate) fn start(
         log: EventLog,
         db_path: Option<PathBuf>,
         emit: impl FnMut(&DomainEvent) + Send + 'static,

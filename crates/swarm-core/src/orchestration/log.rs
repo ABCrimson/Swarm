@@ -153,6 +153,7 @@ impl EventLog {
     /// # Errors
     ///
     /// [`AppError::EventLog`] if SQLite cannot allocate the database.
+    #[cfg(test)]
     pub fn open_in_memory() -> Result<Self, AppError> {
         Self::init(Connection::open_in_memory()?)
     }
