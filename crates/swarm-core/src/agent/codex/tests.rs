@@ -548,6 +548,13 @@ fn pathext_resolution_finds_the_npm_cmd_shim() {
         resolve_with_pathext("codex", Some(&path), pathext),
         Some(scratch.path().join("codex.CMD"))
     );
+    // Decoys that a missing guard would resolve: `codex.exe` + `.CMD` and
+    // `bin/codex` + `.CMD` both exist, so only the guard keeps these `None`.
+    std::fs::write(scratch.path().join("codex.exe.CMD"), "@echo off\n")
+        .expect("write the extension decoy");
+    std::fs::create_dir_all(scratch.path().join("bin")).expect("create the decoy dir");
+    std::fs::write(scratch.path().join("bin").join("codex.CMD"), "@echo off\n")
+        .expect("write the directory decoy");
     // A name that already has an extension or a directory is left alone.
     assert_eq!(
         resolve_with_pathext("codex.exe", Some(&path), pathext),
@@ -763,6 +770,10 @@ async fn a_handshake_timeout_kills_and_reaps_the_child() {
         .err()
         .expect("spawn must time out");
     assert_matches!(&error, AppError::Ai(m) if m.contains("handshake"));
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(unused_variables, reason = "read only by the Linux /proc reap check")
+    )]
     let pid = h.record()[0]["pid"]
         .as_u64()
         .expect("the fake records its pid");
@@ -771,7 +782,6 @@ async fn a_handshake_timeout_kills_and_reaps_the_child() {
         !Path::new(&format!("/proc/{pid}")).exists(),
         "the hung child {pid} must be killed and reaped before spawn returns"
     );
-    let _ = pid;
     h.flush().await;
     assert!(h.events().is_empty());
 }
@@ -1463,6 +1473,10 @@ async fn an_unacknowledged_turn_shuts_the_session_down_and_kills_the_child() {
         settlements(&events).is_empty(),
         "a turn without an id has nothing to settle"
     );
+    #[cfg_attr(
+        not(unix),
+        expect(unused_variables, reason = "read only by the Unix signal check")
+    )]
     let SwarmEvent::AgentSessionExited(exited) = events.last().expect("exit") else {
         panic!("expected agent_session_exited last: {events:#?}");
     };
@@ -1472,7 +1486,6 @@ async fn an_unacknowledged_turn_shuts_the_session_down_and_kills_the_child() {
         (None, Some("SIGKILL")),
         "the hung child ignores stdin EOF and is killed"
     );
-    let _ = exited;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
