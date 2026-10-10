@@ -4,7 +4,7 @@
 // cancellation, mid-turn injections, and model/prefix handling.
 
 import { getDefaultStore } from "jotai";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   CHAT_MAX_TOKENS,
   cancelChatTurn,
@@ -22,6 +22,7 @@ import {
   type StreamParams,
   streamMessage,
 } from "#lib/anthropic";
+import { CLAUDE_MODELS, type ModelInfo } from "#lib/models";
 import { agentTurnStarted } from "#lib/tauri";
 import { executeTool, getAllAnthropicTools } from "#lib/tools";
 import { useAiStore } from "#store/ai";
@@ -432,6 +433,14 @@ describe("ai-chat engine", () => {
   });
 
   it("folds an injection into user text for models without mid-conversation system messages", async () => {
+    // Every current catalog model takes mid-conversation system messages,
+    // so exercise the fold path with a synthetic Sonnet that does not.
+    const catalog: Record<string, ModelInfo> = CLAUDE_MODELS;
+    const original = CLAUDE_MODELS.sonnet;
+    catalog.sonnet = { ...original, systemMessages: false };
+    onTestFinished(() => {
+      catalog.sonnet = original;
+    });
     getDefaultStore().set(selectedModelAtom, "sonnet");
     vi.mocked(executeTool).mockResolvedValue({ success: true, data: "ok" });
     const g = gate();
@@ -450,7 +459,7 @@ describe("ai-chat engine", () => {
     const last = requests[1]?.messages.at(-1) as ChatMessageParam;
     expect(last.role).toBe("user");
     expect(last.content).toContainEqual({ type: "text", text: "Be brief" });
-    expect(requests[1]?.model).toBe("claude-sonnet-5");
+    expect(requests[1]?.model).toBe("claude-sonnet-5-5");
   });
 
   it("never leaves an unanswered system injection followed by a user message after a cancel", async () => {
@@ -533,7 +542,7 @@ describe("ai-chat engine", () => {
     sendChatMessage(W, "hi");
     await settle();
 
-    expect(requests[0]).toMatchObject({ model: "claude-haiku-4-5", system: "Be terse." });
+    expect(requests[0]).toMatchObject({ model: "claude-haiku-5-5", system: "Be terse." });
   });
 
   it("strips thinking blocks from history once the system prompt changes", async () => {

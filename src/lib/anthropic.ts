@@ -84,7 +84,7 @@ export interface StreamParams {
   readonly tools?: readonly ChatTool[];
   /**
    * `output_config.effort`. Dropped for models whose catalog entry
-   * reports no effort support (Haiku 4.5), so callers can set it per
+   * reports no effort support (none of today's catalog), so callers can set it per
    * route without checking the model.
    */
   readonly effort?: Effort;

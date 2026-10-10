@@ -3,11 +3,11 @@
  * breaking the rules the Messages API puts on replayed history.
  *
  * Token counts here are a deliberately conservative local estimate —
- * ~3 characters per token, since the tokenizers of Opus 4.7+, Fable and
- * Sonnet 5 produce up to ~1.35x more tokens than the old ~4-chars rule —
+ * ~3 characters per token, since the tokenizers of Opus 4.7+, Fable,
+ * Sonnet 5.5 and Haiku 5.5 produce up to ~1.35x more tokens than the old ~4-chars rule —
  * so trimming happens early rather than a request overflowing. It only
- * matters near the limit: every current model but Haiku 4.5 has a 1M
- * window.
+ * matters near the limit: every current model has a 1M window
+ * (platform.claude.com models overview, 2026-10-10).
  *
  * @module context-manager
  */

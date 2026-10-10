@@ -40,7 +40,7 @@ beforeEach(() => {
 describe("ModelSelector", () => {
   it("names the current model on the trigger and opens a popover listbox", async () => {
     render(<ModelSelector />);
-    expect(trigger()).toHaveAccessibleName("AI Model: Claude Sonnet 5");
+    expect(trigger()).toHaveAccessibleName("AI Model: Claude Sonnet 5.5");
     expect(trigger()).toHaveAttribute("aria-expanded", "false");
     expect(listbox()).toHaveAttribute("popover", "auto");
 
@@ -55,18 +55,18 @@ describe("ModelSelector", () => {
     render(<ModelSelector />);
     const user = await openWithKeyboard();
 
-    const sonnet = screen.getByRole("option", { name: /Claude Sonnet 5/ });
+    const sonnet = screen.getByRole("option", { name: /Claude Sonnet 5\.5/ });
     expect(sonnet).toHaveFocus();
     expect(sonnet).toHaveAttribute("tabindex", "0");
 
     await user.keyboard("{ArrowDown}");
-    expect(screen.getByRole("option", { name: /Claude Haiku 4\.5/ })).toHaveFocus();
+    expect(screen.getByRole("option", { name: /Claude Haiku 5\.5/ })).toHaveFocus();
     await user.keyboard("{ArrowDown}");
     expect(screen.getByRole("option", { name: /Claude Fable 5\.1/ })).toHaveFocus();
     await user.keyboard("{End}");
-    expect(screen.getByRole("option", { name: /Claude Haiku 4\.5/ })).toHaveFocus();
+    expect(screen.getByRole("option", { name: /Claude Haiku 5\.5/ })).toHaveFocus();
     await user.keyboard("{Home}{ArrowUp}");
-    expect(screen.getByRole("option", { name: /Claude Haiku 4\.5/ })).toHaveFocus();
+    expect(screen.getByRole("option", { name: /Claude Haiku 5\.5/ })).toHaveFocus();
   });
 
   it("picks with Enter, closes, and returns focus to the trigger", async () => {
@@ -150,7 +150,7 @@ describe("ModelSelector", () => {
       render(<ModelSelector workerId={WORKER_ID} />);
       const user = await openWithKeyboard();
 
-      await user.click(screen.getByRole("option", { name: /Claude Haiku 4\.5/ }));
+      await user.click(screen.getByRole("option", { name: /Claude Haiku 5\.5/ }));
 
       expect(useWorkerAgentStore.getState().metadata.get(WORKER_ID)).toEqual({
         role: "supervisor",

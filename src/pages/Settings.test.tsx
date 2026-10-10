@@ -126,8 +126,8 @@ describe("Settings — AI model", () => {
     render(<Settings />);
 
     const group = screen.getByRole("radiogroup", { name: "AI Model" });
-    const sonnet = within(group).getByRole("radio", { name: "Claude Sonnet 5" });
-    const haiku = within(group).getByRole("radio", { name: "Claude Haiku 4.5" });
+    const sonnet = within(group).getByRole("radio", { name: "Claude Sonnet 5.5" });
+    const haiku = within(group).getByRole("radio", { name: "Claude Haiku 5.5" });
     expect(sonnet).toBeChecked();
     expect(haiku).toHaveAccessibleDescription(/Fastest/);
 
@@ -136,7 +136,7 @@ describe("Settings — AI model", () => {
     expect(haiku).toBeChecked();
     expect(sonnet).not.toBeChecked();
     expect(store.get(selectedModelAtom)).toBe("haiku");
-    expect(toast.success).toHaveBeenCalledWith("Switched To Claude Haiku 4.5");
+    expect(toast.success).toHaveBeenCalledWith("Switched To Claude Haiku 5.5");
   });
 
   it("warns once, and does not also toast success, for the gated model", async () => {

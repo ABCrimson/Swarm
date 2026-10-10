@@ -34,19 +34,19 @@ test.describe("Settings", () => {
 
   test("the AI model catalog lets you switch the selected model", async ({ page }) => {
     const models = page.getByRole("radiogroup", { name: "AI Model" });
-    const sonnetCard = models.getByRole("radio", { name: "Claude Sonnet 5" });
-    const haikuCard = models.getByRole("radio", { name: "Claude Haiku 4.5" });
+    const sonnetCard = models.getByRole("radio", { name: "Claude Sonnet 5.5" });
+    const haikuCard = models.getByRole("radio", { name: "Claude Haiku 5.5" });
 
     // "sonnet" is the default selection (see selectedModelAtom in #store/ui).
     await expect(sonnetCard).toBeChecked();
     await expect(haikuCard).not.toBeChecked();
 
     // The radio itself is visually hidden; its card (a <label>) takes the click.
-    await models.getByText("Claude Haiku 4.5", { exact: true }).click();
+    await models.getByText("Claude Haiku 5.5", { exact: true }).click();
 
     await expect(haikuCard).toBeChecked();
     await expect(sonnetCard).not.toBeChecked();
-    await expect(page.getByText("Switched To Claude Haiku 4.5")).toBeVisible();
+    await expect(page.getByText("Switched To Claude Haiku 5.5")).toBeVisible();
   });
 
   test("selecting the gated model shows a Project Glasswing warning instead of the plain switch toast", async ({
@@ -122,7 +122,7 @@ test.describe("Settings accessibility", () => {
     await expect(particles).toHaveCSS("outline-style", "solid");
 
     // The model radio is visually hidden; its card draws the ring.
-    const selected = page.getByRole("radio", { name: "Claude Sonnet 5" });
+    const selected = page.getByRole("radio", { name: "Claude Sonnet 5.5" });
     await selected.focus();
     await page.keyboard.press("ArrowRight");
     const card = page.locator("label[data-model-id]:has(input:focus-visible)");
