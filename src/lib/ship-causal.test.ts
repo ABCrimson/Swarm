@@ -238,6 +238,20 @@ describe("stripUnknownSeqCitations", () => {
     expect(stripUnknownSeqCitations(prose, context)).toBe(prose);
   });
 
+  it("renders links, images and raw HTML in a tool target as inert text", () => {
+    const context = makeContext({
+      turns: [
+        makeTurn({
+          toolCalls: [
+            { seq: 1, name: "Bash", target: "[ok](https://e.example) <img src=x>", ok: true },
+          ],
+        }),
+      ],
+    });
+    const section = renderCausalRecordSection(context, diffStat);
+    expect(section).toContain(String.raw`\[ok\](https://e.example) \<img src=x>`);
+  });
+
   it("strips an invented citation not present in the fetched range", () => {
     const context = makeContext({ seqFrom: 9, seqTo: 14 });
     const prose = "This was caused by [seq 9999], a turn we never fetched.";

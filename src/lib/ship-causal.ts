@@ -5,7 +5,8 @@
  * (`generateCausalProse`) that may cite `[seq N]` — any citation not
  * actually present in the fetched range is stripped before render
  * (`stripUnknownSeqCitations`). The model never writes the Causal Record, so
- * its provenance claims are machine-generated and unforgeable; the AI prose
+ * its provenance claims are machine-generated, and `escapeCell` renders the
+ * agent-controlled tool names and targets in it as inert text; the AI prose
  * can only cite `[seq N]` entries that exist in the fetched range. See
  * `docs/architecture.md`'s Ship Chain section for the full design and `crates/swarm-core/src/git/causal.rs` for where
  * `ShipContext` itself comes from.
@@ -40,12 +41,9 @@ export function turnStatusLabel(status: string | null): "Completed" | "Failed" |
   return "In Progress";
 }
 
-/** Markdown-table-cell-safe. A tool's name and target are free-form text the agent controls, so backslashes are escaped first, then `|`, then every run of control characters (a lone CR included, which GFM reads as a line ending) folds to one space, so no input adds a row or a cell. */
+/** Markdown-table-cell-safe and inert. A tool's name and target are free-form text the agent controls: every run of control characters (a lone CR included, which GFM reads as a line ending) folds to one space, then backslash, `|`, `<`, `[` and `]` are backslash-escaped (CommonMark escapes any ASCII punctuation; GFM honours `\|` in a cell), so no input adds a row or a cell, opens raw HTML, or forms a link or an image. GitHub's text filters (@-mentions, #-references, bare-URL autolinks) still act on the literal text. */
 function escapeCell(value: string): string {
-  return value
-    .replaceAll("\\", String.raw`\\`)
-    .replaceAll("|", String.raw`\|`)
-    .replaceAll(/\p{Cc}+/gu, " ");
+  return value.replaceAll(/\p{Cc}+/gu, " ").replaceAll(/[\\|<[\]]/g, String.raw`\$&`);
 }
 
 function renderToolCallRows(turns: readonly CausalTurn[]): string[] {
