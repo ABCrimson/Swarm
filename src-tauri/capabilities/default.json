@@ -45,7 +45,6 @@
     "allow-send-notification",
     "fs:allow-read-file",
     "fs:allow-read-dir",
-    "fs:allow-exists",
     "fs:allow-stat",
     "fs:allow-write-file",
     {

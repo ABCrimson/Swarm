@@ -23,12 +23,10 @@ use tauri::scope::fs::{Event, Scope};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_fs::FsExt;
 
+use crate::MAIN_WINDOW;
+
 /// Identifier of the runtime capabilities that carry mirrored grants.
 const CAPABILITY: &str = "dialog-grants";
-
-/// Label of the window the capability applies to, as in
-/// capabilities/default.json.
-const MAIN_WINDOW: &str = "main";
 
 /// Mirrors every folder the fs scope grants from now on (an open dialog,
 /// a drag and drop) into the global `fs:scope`. Called once, from the
@@ -184,7 +182,9 @@ mod tests {
         assert!(read_file(&main, &folder.join("nested/file.txt")).is_err());
     }
 
-    /// A file grant (a save dialog) needs and gets no mirror.
+    /// A file grant (a save dialog) needs and gets no mirror, even inside
+    /// a folder the scope already grants recursively, whose `<folder>/**`
+    /// would otherwise match a probe under the file.
     #[test]
     fn file_grants_are_not_mirrored() {
         let dir = temp_dir("dialog-grants-file");
@@ -192,6 +192,7 @@ mod tests {
         std::fs::write(&file, "{}").unwrap();
         let (app, _main) = app();
 
+        app.fs_scope().allow_directory(&*dir, true).unwrap();
         app.fs_scope().allow_file(&file).unwrap();
 
         assert!(folder_patterns(&app.fs_scope(), &file).is_empty());

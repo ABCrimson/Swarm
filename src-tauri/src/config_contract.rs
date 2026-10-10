@@ -81,7 +81,7 @@ fn main_window_starts_hidden() {
         .app
         .windows
         .iter()
-        .find(|window| window.label == "main")
+        .find(|window| window.label == crate::MAIN_WINDOW)
         .expect("a main window is declared");
     assert!(!main.visible);
     assert!(main.create);
