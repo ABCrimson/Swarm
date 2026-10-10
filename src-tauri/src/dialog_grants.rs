@@ -184,7 +184,9 @@ mod tests {
         assert!(read_file(&main, &folder.join("nested/file.txt")).is_err());
     }
 
-    /// A file grant (a save dialog) needs and gets no mirror.
+    /// A file grant (a save dialog) needs and gets no mirror, even inside
+    /// a folder the scope already grants recursively, whose `<folder>/**`
+    /// would otherwise match a probe under the file.
     #[test]
     fn file_grants_are_not_mirrored() {
         let dir = temp_dir("dialog-grants-file");
@@ -192,6 +194,7 @@ mod tests {
         std::fs::write(&file, "{}").unwrap();
         let (app, _main) = app();
 
+        app.fs_scope().allow_directory(&*dir, true).unwrap();
         app.fs_scope().allow_file(&file).unwrap();
 
         assert!(folder_patterns(&app.fs_scope(), &file).is_empty());
