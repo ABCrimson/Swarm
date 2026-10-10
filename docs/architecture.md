@@ -611,7 +611,8 @@ whose endpoint is gone without deleting them.
   for the user's answer inside their own `execute` ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)):
   Allow Once, Allow For Session (one grant per tool, worker and exact argument; never offered for
   `write_file`) or Deny, in a prompt that shows every validated field escaped, with a cut value
-  expanded before Allow is enabled. Each turn calls
+  expanded before Allow is enabled. Stopping a turn or killing its worker denies the turn's pending tool
+  calls (the turn's abort signal does it). Each turn calls
   `agent_turn_started` and passes the seq as `causeSeq` on side-effecting tools. Queueing and
   concurrency are `store/ai.ts`, independent of the Rust scheduler.
 - **Model catalogue** (`src/lib/models.ts`, [ADR-0036](adr/0036-model-catalogue-and-per-attempt-pricing.md)): Fable 5.1,

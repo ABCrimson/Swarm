@@ -3,7 +3,6 @@ import type { CSSProperties } from "react";
 import type { PillTone } from "#components/ui/Pill";
 import { Pill } from "#components/ui/Pill";
 import { Spinner } from "#components/ui/Spinner";
-import { denyPendingToolApprovals } from "#lib/tools";
 import { useAiStore } from "#store/ai";
 import type { AiQueueItem } from "#store/types";
 
@@ -195,10 +194,7 @@ export function AIQueue({ workerId }: AIQueueProps): React.ReactElement {
                   interactive
                   tone="danger"
                   size="sm"
-                  onClick={() => {
-                    denyPendingToolApprovals(item.workerId);
-                    cancelItem(item.id);
-                  }}
+                  onClick={() => cancelItem(item.id)}
                   aria-label={`Cancel Queue Item ${index + 1}`}
                   style={{ marginLeft: "auto", flexShrink: 0 }}
                 >

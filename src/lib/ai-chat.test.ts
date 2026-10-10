@@ -24,7 +24,7 @@ import {
 } from "#lib/anthropic";
 import { CLAUDE_MODELS, type ModelInfo } from "#lib/models";
 import { agentTurnStarted } from "#lib/tauri";
-import { executeTool, getAllAnthropicTools } from "#lib/tools";
+import { executeTool, getAllAnthropicTools, getPendingToolApprovals } from "#lib/tools";
 import { useAiStore } from "#store/ai";
 import { useMessageHistoryStore } from "#store/message-history";
 import { selectedModelAtom } from "#store/ui";
@@ -384,6 +384,35 @@ describe("ai-chat engine", () => {
       results,
       { role: "user", content: "again?" },
     ]);
+  });
+
+  it("aborting a turn denies its pending approvals: the gated tool returns the denial, the turn settles as Cancelled and its stream slot is released", async () => {
+    // The real gate, so the call parks on a prompt exactly as `read_file` does in the app.
+    const tools = await vi.importActual<typeof import("#lib/tools")>("#lib/tools");
+    vi.mocked(executeTool).mockImplementation(tools.executeTool);
+    rounds.push({
+      result: response([toolUse("tu_1", "read_file", { path: "/home/u/a.txt" })], "tool_use"),
+    });
+    rounds.push({ result: response([text("Understood.")], "end_turn") });
+
+    sendChatMessage(W, "read it");
+    await vi.waitFor(() => expect(getPendingToolApprovals()).toHaveLength(1));
+    expect(useAiStore.getState().activeStreams).toBe(1);
+    cancelChatTurn(W);
+    await settle();
+
+    expect(getPendingToolApprovals()).toHaveLength(0);
+    expect(thread().messages.at(-1)?.toolCalls).toEqual([
+      {
+        id: "tu_1",
+        name: "read_file",
+        input: { path: "/home/u/a.txt" },
+        result: "The User Denied read_file. It Was Not Run.",
+        isError: true,
+      },
+    ]);
+    expect(thread().messages.at(-1)?.notice).toEqual({ tone: "info", text: "Cancelled" });
+    expect(useAiStore.getState().activeStreams).toBe(0);
   });
 
   it("AIQueue's cancelItem aborts the stream itself, not just the queue entry", async () => {

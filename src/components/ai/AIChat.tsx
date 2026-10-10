@@ -4,7 +4,6 @@ import { useState } from "react";
 import { Button } from "#components/ui/Button";
 import { cancelChatTurn, clearChat, sendChatMessage } from "#lib/ai-chat";
 import { CLAUDE_MODELS } from "#lib/models";
-import { denyPendingToolApprovals } from "#lib/tools";
 import {
   type ChatMessage,
   type ChatNotice,
@@ -296,14 +295,7 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
           onKeyDown={handleKeyDown}
         />
         {busy ? (
-          <Button
-            variant="danger"
-            onClick={() => {
-              // A call waiting for approval would keep the stopped turn's tool loop paused.
-              denyPendingToolApprovals(workerId);
-              cancelChatTurn(workerId);
-            }}
-          >
+          <Button variant="danger" onClick={() => cancelChatTurn(workerId)}>
             Stop
           </Button>
         ) : (

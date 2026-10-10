@@ -28,6 +28,8 @@ have no backend side effect and are not gated. Answers are Allow Once, Allow For
   `\uXXXX`, non-string values as canonical JSON, `write_file` also the byte size. A value over 500
   characters is cut on the raw value with a hidden-count, commands and paths are never cut, and the
   Allow buttons stay off until each cut value has been expanded.
+- Stopping a turn or killing its worker denies the turn's pending tool calls: `runTurn` denies them
+  when its abort signal fires, and `worker_killed` cancels the worker's turn.
 
 **File commands, in `crates/swarm-core/src/commands/fs.rs`.** The path is canonicalized (for a write:
 the parent and, when it exists, the target) and the scope and deny checks run on the real path. The

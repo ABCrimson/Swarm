@@ -1,5 +1,6 @@
 import { useSetAtom } from "jotai";
 import { useEffect } from "react";
+import { cancelChatTurn } from "#lib/ai-chat";
 import { onEvent } from "#lib/event-bus";
 import { listWorkers, sessionRemoveWorker } from "#lib/tauri";
 import { useSessionStore } from "#store/sessions";
@@ -21,8 +22,9 @@ import { useWorkerStore } from "#store/workers";
  * - `worker_output`    → `appendOutput`
  * - `worker_state`     → `updateState`
  * - `worktree_created` → `setWorktreeInfo`
- * - `worker_killed`    → `removeWorker`, plus everything else keyed on
- *   the worker (explicit kill and self-exit both end here): its agent
+ * - `worker_killed`    → `cancelChatTurn` (which denies the turn's pending
+ *   tool calls), `removeWorker`, plus everything else keyed on the
+ *   worker (explicit kill and self-exit both end here): its agent
  *   metadata, the worker selection, and its id in every session's
  *   `workerIds`
  */
@@ -60,6 +62,8 @@ export function useWorkerEvents(): void {
       ),
       onEvent("worker_killed", ({ payload: { workerId } }) => {
         if (hydrating) killedWhileHydrating.add(workerId);
+        // Its chat is gone with it: abort the turn so a call parked on approval is denied.
+        cancelChatTurn(workerId);
         removeWorker(workerId);
         useWorkerAgentStore.getState().removeAgentMetadata(workerId);
         setSelectedWorkerId((selected) => (selected === workerId ? null : selected));
