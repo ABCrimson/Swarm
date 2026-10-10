@@ -90,7 +90,7 @@ const textareaStyle: CSSProperties = {
 const trailerNoteStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: "0.625rem",
-  color: "oklch(0.50 0.04 220)",
+  color: "var(--color-fg-dim)",
 };
 
 const blockerListStyle: CSSProperties = {
@@ -124,7 +124,7 @@ const actionGroupStyle: CSSProperties = {
 const actionPlanStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: "0.625rem",
-  color: "oklch(0.50 0.04 220)",
+  color: "var(--color-fg-dim)",
   padding: "0 2px",
 };
 
