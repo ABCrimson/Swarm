@@ -64,9 +64,10 @@
 /* ── Reduced motion ──────────────────────────────── */
 
 /*
- * `!important` is required: most animations in the app are set through
- * inline `style` attributes, and an inline declaration beats every
- * normal stylesheet rule regardless of layer or specificity. Only an
+ * `!important` is required: some components set `transition` through
+ * inline `style` attributes (ModelSelector, ToolCallDisplay,
+ * WorkerAIPanel), and an inline declaration beats every normal
+ * stylesheet rule regardless of layer or specificity. Only an
  * important declaration outranks it. Animations collapse to their end
  * state in one frame instead of being removed, so anything that listens
  * for `animationend`/`transitionend` still gets its event. Delays are
