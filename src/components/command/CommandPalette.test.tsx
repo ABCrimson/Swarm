@@ -169,5 +169,6 @@ describe("CommandPalette", () => {
     const reopened = await palette();
     const [first] = await within(reopened).findAllByRole("option");
     expect(first).toHaveTextContent(/^Go To Workers1$/);
+    expect(first).toHaveAccessibleName("Go To Workers");
   });
 });
