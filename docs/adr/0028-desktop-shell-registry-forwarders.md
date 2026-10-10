@@ -1,6 +1,6 @@
 # ADR-0028: The desktop shell is registry forwarders on one runtime
 
-- **Status:** Accepted
+- **Status:** Accepted; exit teardown superseded by [ADR-0033](0033-cleanup-hook-teardown-and-command-acl.md)
 - **Date:** 2026-09-23
 
 ## Context

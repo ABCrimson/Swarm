@@ -86,10 +86,10 @@ Principles that hold throughout:
 | --- | --- |
 | `crates/swarm-core/` | The Tauri-free domain library. No `tauri*` dependency (CI checks `cargo tree`). |
 | `crates/swarmd/` | The headless daemon: `auth`, `cli`, `ws`, `serve_ui`, and per-user service units in `service/`. |
-| `src-tauri/` | `swarm-desktop`, the Tauri shell: `lib.rs`, `startup.rs`, `lifecycle.rs`, `dialog_grants.rs`, `commands/{mod,native}.rs`, `capabilities/default.json`, `tauri.conf.json`. |
+| `src-tauri/` | `swarm-desktop`, the Tauri shell: `lib.rs`, `startup.rs`, `lifecycle.rs`, `dialog_grants.rs`, `build.rs` (ACL manifest), `commands/{mod,native,command_list}.rs`, `capabilities/default.json`, `tauri.conf.json`. |
 | `src/` | The frontend. `boot.ts` → `main.tsx` → `App.tsx`; `components/`, `hooks/`, `lib/`, `store/`, `pages/`, `workers/elk.worker.ts`, `styles/`, `test/`. |
 | `e2e/` | Playwright specs against the web build; no Tauri backend ([e2e.md](e2e.md)). |
-| `scripts/`, `site/` | The React Compiler gate (`check-react-compiler.ts`) and the documentation site build. |
+| `scripts/`, `site/` | The React Compiler gate (`check-react-compiler.ts`), `sync-reference-repos.ts` (pinned upstream sources into the gitignored `.repos/`) and the documentation site build. |
 | `docs/` | This file, [api.md](api.md), [daemon.md](daemon.md), [adr/](adr/README.md), and the rest. |
 
 The Rust workspace (`Cargo.toml`, `Cargo.lock`, `clippy.toml`, `deny.toml`, `rust-toolchain.toml`) is
@@ -122,7 +122,7 @@ prunes worktrees of `default_repo_root`; start the metrics loop; build both adap
 registry and the scheduler; apply the persisted `agent_concurrency`.
 **Shutdown** (`Runtime::shutdown`, once, on exit): stop the metrics loop, shut every live agent
 session down (in-flight turns get their settlement), then drain the event writer and record the exact
-head seq. PTY workers are not killed.
+head seq. `Runtime::shutdown` kills no PTY worker; `swarmd` stops them itself first (see [Runtime Modes](#runtime-modes)).
 
 ### The command registry
 
@@ -158,9 +158,9 @@ any thread/task ──EventSink::emit / emit_with / emit_awaiting_seq──▶ o
                                          swarm-event-writer thread (the only seq writer)
                                           seq += 1; ts = now
                                           is_persistent(event)? ── yes ─▶ EventLog::append  (SQLite WAL)
-                                          ack.send(seq)            (emit_awaiting_seq only)
                                           emit(DomainEvent)  ──▶ shell's closure ──▶ "swarm://events"
                                                               └─▶ broadcast fanout (4096, lossy under lag)
+                                          ack.send(seq)            (emit_awaiting_seq only)
 ```
 
 - **Envelope:** `{ seq, ts, originWorker?, causeSeq?, type, payload }`; the optional fields are absent,
@@ -444,20 +444,19 @@ shells return the registry's value untouched, so desktop and daemon report ident
 
 - `lib.rs` installs the process's one Tokio runtime (threads named `swarm-tokio`) as Tauri's async runtime
   and builds `tauri::Builder::default().runtime(Wry::default())` with the plugins `fs`, `dialog`,
-  `opener` (link-click handling off), `store`, `updater` and `notification`. Release builds log JSON at
+  `opener` (link-click handling off), `store`, `updater`, `notification` and the app's own `swarm-lifecycle`. Release builds log JSON at
   `info` to `swarm-desktop.log` in the app log directory (rotated past 8 MiB); `RUST_LOG` overrides.
 - `startup.rs` runs in `setup`: resolve the data directory, `Runtime::start` with an `emit` closure that
   forwards each envelope to the webview on `swarm://events` from the writer thread (a slow webview backs
   up the writer instead of losing events), manage `Ctx`, `Registry` and the runtime, then show the main
   window (created hidden). A start failure is shown in a non-blocking dialog and the app exits.
-- `commands/mod.rs`: the `commands!` macro declares one forwarder per registry command (arguments in,
-  registry JSON out, untouched). `commands/native.rs` holds `check_for_updates` and `send_notification`.
-- `lifecycle.rs`: on `RunEvent::Exit`, `Runtime::shutdown` with 2.5 s per phase.
+- `commands/command_list.rs` is the one list of app command names (registry, then native). `commands/mod.rs` expands it through `commands!` into one forwarder per registry command (arguments in, registry JSON out, untouched); `build.rs` hands the same names to `tauri_build::AppManifest::commands`, which generates `allow-<command>`/`deny-<command>` for each. `commands/native.rs` holds `check_for_updates` and `send_notification`.
+- `lifecycle.rs`: the app's `swarm-lifecycle` plugin. Its `on_cleanup_before_exit` hook, which every exit path reaches (including `restart` on the main thread, which skips `RunEvent::Exit`), runs `Runtime::shutdown` once (2.5 s per phase) on a scoped helper thread through the Tokio handle captured at registration, so it is safe when `exit` runs it on a Tokio worker; then it drops the release-log guard so the teardown's own lines are flushed. See [ADR-0033](adr/0033-cleanup-hook-teardown-and-command-acl.md).
 - `dialog_grants.rs`: mirrors dialog folder grants into the global fs scope so dot-entries are readable
   on macOS and Linux.
 
 **Capabilities** (`capabilities/default.json`, [ADR-0030](adr/0030-tauri-3-alpha-capability-scoped-fs.md)):
-`core:default`, `dialog:default`, `store:default`; fs `read-file`, `read-dir`, `exists`, `stat` and
+`core:default`, one `allow-<command>` grant per app command (38; nothing else is invocable; pinned by `app_commands_are_granted_one_by_one`), `dialog:default`, `store:default`; fs `read-file`, `read-dir`, `exists`, `stat` and
 `write-file` with **no static path scope** (only what the user picks in a dialog), `fs:deny-default` and
 a deny list (app data, `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`, `.config/gh`, `.claude`,
 `.codex`, `.git-credentials`, `.netrc`); opener `openUrl` for `https://*/*/*/compare/*` and `openPath`
@@ -496,6 +495,7 @@ and [api.md](api.md#wire-protocol-swarmd)):
   512 watermark); `rpcResult` rides a separate 256-slot lane; at most 8 `rpc` calls run per connection.
 - **Policy:** every `rpc` goes through `Registry::dispatch_remote`. An authenticated client can run
   commands as the daemon's user, so treat the token like an SSH key.
+- **Shutdown:** SIGINT/SIGTERM closes clients with `1001`, stops every worker through `kill_worker` (each worktree gets its usual disposition; 10 s budget, `STOP_WORKERS_TIMEOUT`), then runs `Runtime::shutdown`. The desktop app instead leaves workers to the OS on quit.
 - **Service units** (`crates/swarmd/service/`): `systemd --user`, a launchd LaunchAgent, and on Windows a
   per-user **logon Scheduled Task**, not a Windows service ([ADR-0029](adr/0029-windows-daemon-logon-task.md)).
 - CI checks that neither `swarm-core` nor `swarmd` depends on `tauri*`.
@@ -615,7 +615,7 @@ textures: bloom (threshold, dual Kawase blur, composite), chromatic aberration, 
 | Boundary | Enforcement |
 | --- | --- |
 | Remote clients of `swarmd` | Token, `Host`/`Origin` allow-list, non-loopback gate, `RemotePolicy` ([ADR-0021](adr/0021-command-registry-remote-policy.md), [ADR-0022](adr/0022-swarmd-authentication-and-exposure.md)). An authenticated client can run commands as the daemon's user. |
-| Webview to OS | Capability file (no static fs scope, deny list, opener scopes) and CSP ([ADR-0030](adr/0030-tauri-3-alpha-capability-scoped-fs.md)). |
+| Webview to OS | Capability file (per-command `allow-*` ACL, no static fs scope, deny list, opener scopes) and CSP ([ADR-0030](adr/0030-tauri-3-alpha-capability-scoped-fs.md)). |
 | `read_file` / `write_file` commands | Absolute paths, lexically normalised; reads limited to the data directory and `$HOME`, writes to the data directory and `~/.swarm`; `Denied` remotely. The webview AI tools `read_file` and `write_file` use them, and webview AI tools run without an approval step. |
 | Provider permissions | Closed trust tiers, no bypass modes ([ADR-0015](adr/0015-trust-tiers-closed-vocabulary.md)). |
 | Git | No force push, no hook bypass, deny list, primary-checkout guard, secret redaction ([ADR-0009](adr/0009-ship-chain-structural-guarantees.md), [ADR-0012](adr/0012-single-git-runner.md)). |

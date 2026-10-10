@@ -48,8 +48,9 @@ Each record is `NNNN-<slug>.md` with a status, a date, then Context, Decision an
 | [0025](0025-single-instance-lock.md) | A single-instance lock on the data directory | Accepted |
 | [0026](0026-rust-owns-config-and-sessions.md) | Rust owns config and sessions; the webview owns its plugin-store files | Accepted |
 | [0027](0027-three-tier-frontend-state.md) | Frontend state in three tiers | Accepted |
-| [0028](0028-desktop-shell-registry-forwarders.md) | The desktop shell is registry forwarders on one runtime | Accepted |
+| [0028](0028-desktop-shell-registry-forwarders.md) | The desktop shell is registry forwarders on one runtime | Accepted; exit teardown superseded by [0033](0033-cleanup-hook-teardown-and-command-acl.md) |
 | [0029](0029-windows-daemon-logon-task.md) | The Windows daemon is a per-user logon Scheduled Task | Accepted |
 | [0030](0030-tauri-3-alpha-capability-scoped-fs.md) | Tauri 3 alpha with a capability-scoped filesystem | Accepted |
 | [0031](0031-temporal-polyfill-boot-entry.md) | Temporal is polyfilled by a boot entry module | Accepted |
 | [0032](0032-react-compiler-oxc-wasi.md) | The React Compiler runs through the Oxc WASI binding | Accepted |
+| [0033](0033-cleanup-hook-teardown-and-command-acl.md) | Exit teardown in a cleanup hook; a per-command ACL | Accepted |
