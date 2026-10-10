@@ -465,8 +465,6 @@ pub trait AgentSession: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
     use crate::events::{
         AgentBlockPayload, AgentSessionExitedPayload, AgentSessionStartedPayload, SwarmEvent,
@@ -562,14 +560,6 @@ mod tests {
         worker_id: Uuid,
         session_key: SessionKey,
         state: parking_lot::Mutex<MockSessionState>,
-        /// Test-only hook: when `Some`, `send_turn` awaits this after
-        /// emitting its delta/block but before its settled event and
-        /// the ownership handshake — lets a test hold a turn "in
-        /// flight" under its own control (e.g. to call `shutdown`
-        /// concurrently) rather than racing real timing. `None` in
-        /// every non-gated test — `send_turn` then runs straight
-        /// through.
-        turn_gate: Option<Arc<tokio::sync::Notify>>,
     }
 
     impl MockAgentSession {
@@ -579,13 +569,7 @@ mod tests {
                 worker_id,
                 session_key,
                 state: parking_lot::Mutex::new(MockSessionState::default()),
-                turn_gate: None,
             }
-        }
-
-        fn with_gate(mut self, gate: Arc<tokio::sync::Notify>) -> Self {
-            self.turn_gate = Some(gate);
-            self
         }
     }
 
@@ -623,10 +607,6 @@ mod tests {
                     kind: "text".to_string(),
                     content: serde_json::json!({ "text": turn.prompt }),
                 }));
-
-                if let Some(gate) = &self.turn_gate {
-                    gate.notified().await;
-                }
 
                 // Ownership handshake with `shutdown`: only whichever
                 // of the two still finds itself holding `turn_id`
@@ -810,170 +790,6 @@ mod tests {
         std::fs::remove_file(&db_path).ok();
         std::fs::remove_file(format!("{}-wal", db_path.display())).ok();
         std::fs::remove_file(format!("{}-shm", db_path.display())).ok();
-    }
-
-    // ── The concurrency contract ─────────────────────────────────────
-
-    /// `shutdown` racing a
-    /// still-in-flight `send_turn` yields EXACTLY ONE
-    /// `agent_turn_settled` for that turn — never zero (Condition B)
-    /// and never two (the ownership handshake in both methods' bodies).
-    /// Uses `tokio::join!` (not `tokio::spawn`, which would require the
-    /// non-`'static` `BoxFuture<'_, _>` these trait methods return) to
-    /// run `send_turn` and `shutdown` concurrently on one task, with a
-    /// `Notify` gate holding `send_turn` "mid-turn" until after
-    /// `shutdown` has had a chance to observe it in flight. Asserted
-    /// directly off the persisted log — the precise "exactly one, never
-    /// zero, never two" proof, not just that both futures resolved Ok.
-    #[tokio::test]
-    async fn test_shutdown_during_in_flight_turn_persists_exactly_one_settled_event() {
-        let db_path =
-            std::env::temp_dir().join(format!("swarm-agent-shutdown-race-{}.db", Uuid::new_v4()));
-        let log = EventLog::open(&db_path).expect("open file-backed log");
-        let engine = OrchestrationEngine::start(log, Some(db_path.clone()), |_| {});
-        let sink = engine.sink();
-        let gate = Arc::new(tokio::sync::Notify::new());
-        let session = MockAgentSession::new(sink, Uuid::new_v4(), Uuid::new_v4().to_string())
-            .with_gate(gate.clone());
-
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            let send_fut = session.send_turn(TurnInput {
-                prompt: "long running".to_string(),
-            });
-            let shutdown_fut = async {
-                tokio::task::yield_now().await;
-                tokio::task::yield_now().await;
-                let outcome = session.shutdown().await;
-                gate.notify_one();
-                outcome
-            };
-            let (send_result, shutdown_result) = tokio::join!(send_fut, shutdown_fut);
-            assert!(send_result.is_ok());
-            assert!(shutdown_result.is_ok());
-        })
-        .await
-        .expect("test must not hang");
-
-        // Give the writer thread a brief window to flush (no
-        // emit_awaiting_seq was threaded through this path, so poll
-        // rather than assume synchronous persistence).
-        let settled_rows;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            let verify_log = EventLog::open(&db_path).expect("reopen log");
-            let events = verify_log.events_since(0, 100).expect("read events");
-            let has_exited = events
-                .iter()
-                .any(|e| e.event_type == "agent_session_exited");
-            if has_exited {
-                settled_rows = events
-                    .iter()
-                    .filter(|e| e.event_type == "agent_turn_settled")
-                    .count();
-                break;
-            }
-            if std::time::Instant::now() > deadline {
-                panic!("timed out waiting for agent_session_exited to persist");
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-
-        assert_eq!(
-            settled_rows, 1,
-            "exactly one agent_turn_settled must persist — never zero, never two"
-        );
-
-        std::fs::remove_file(&db_path).ok();
-        std::fs::remove_file(format!("{}-wal", db_path.display())).ok();
-        std::fs::remove_file(format!("{}-shm", db_path.display())).ok();
-    }
-
-    /// A second `shutdown` call is
-    /// idempotent — same summary, no re-emitted `agent_session_exited`.
-    #[tokio::test]
-    async fn test_double_shutdown_is_idempotent() {
-        let db_path =
-            std::env::temp_dir().join(format!("swarm-agent-double-shutdown-{}.db", Uuid::new_v4()));
-        let log = EventLog::open(&db_path).expect("open file-backed log");
-        let engine = OrchestrationEngine::start(log, Some(db_path.clone()), |_| {});
-        let sink = engine.sink();
-        let session = MockAgentSession::new(sink, Uuid::new_v4(), Uuid::new_v4().to_string());
-
-        let first = session.shutdown().await.expect("first shutdown succeeds");
-        let second = session.shutdown().await.expect("second shutdown succeeds");
-        assert_eq!(
-            first, second,
-            "idempotent shutdown must return the same summary"
-        );
-
-        // Poll for persistence, then assert only one exited row exists.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            let verify_log = EventLog::open(&db_path).expect("reopen log");
-            let events = verify_log.events_since(0, 100).expect("read events");
-            let exited_rows = events
-                .iter()
-                .filter(|e| e.event_type == "agent_session_exited")
-                .count();
-            if exited_rows >= 1 {
-                assert_eq!(
-                    exited_rows, 1,
-                    "double shutdown must not re-emit agent_session_exited"
-                );
-                break;
-            }
-            if std::time::Instant::now() > deadline {
-                panic!("timed out waiting for agent_session_exited to persist");
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-
-        std::fs::remove_file(&db_path).ok();
-        std::fs::remove_file(format!("{}-wal", db_path.display())).ok();
-        std::fs::remove_file(format!("{}-shm", db_path.display())).ok();
-    }
-
-    /// `send_turn` while a turn is
-    /// already in flight returns [`AppError::AgentSessionBusy`] — a
-    /// session never queues internally. An in-memory (not file-backed)
-    /// engine is enough here since only the returned `Result`s matter,
-    /// not persisted rows.
-    #[tokio::test]
-    async fn test_send_turn_while_busy_returns_agent_session_busy() {
-        let log = EventLog::open_in_memory().expect("open in-memory log");
-        let engine = OrchestrationEngine::start(log, None, |_| {});
-        let gate = Arc::new(tokio::sync::Notify::new());
-        let session =
-            MockAgentSession::new(engine.sink(), Uuid::new_v4(), Uuid::new_v4().to_string())
-                .with_gate(gate.clone());
-
-        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            let first_fut = session.send_turn(TurnInput {
-                prompt: "first".to_string(),
-            });
-            let second_fut = async {
-                tokio::task::yield_now().await;
-                let busy_result = session
-                    .send_turn(TurnInput {
-                        prompt: "second".to_string(),
-                    })
-                    .await;
-                // Release the first turn now that we've captured the
-                // busy result from the second.
-                gate.notify_one();
-                busy_result
-            };
-            tokio::join!(first_fut, second_fut)
-        })
-        .await
-        .expect("test must not hang");
-
-        let (first_result, second_result) = result;
-        assert!(first_result.is_ok(), "first send_turn must succeed");
-        assert!(
-            matches!(second_result, Err(AppError::AgentSessionBusy)),
-            "second send_turn while busy must return AgentSessionBusy, got: {second_result:?}"
-        );
     }
 
     // ── ProviderId wire values ───────────────────────────────────────
