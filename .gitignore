@@ -50,3 +50,6 @@ test-results/
 
 # Local agent settings
 .claude/settings.local.json
+
+# Reference checkouts of the pinned upstream sources (scripts/sync-reference-repos.ts)
+.repos/

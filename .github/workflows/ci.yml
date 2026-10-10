@@ -65,6 +65,28 @@ jobs:
       - name: Docs site
         run: pnpm build:site
 
+  # Dead files, unused dependencies and (as warnings until the polish phase
+  # promotes them) unused exports; knip.jsonc gives a reason for every entry
+  # and ignore. Needs no build, only the installed dependencies.
+  knip:
+    name: Knip
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          cache: true
+          require-lockfile: true
+
+      - name: knip
+        run: pnpm exec knip --treat-config-hints-as-errors
+
   e2e:
     name: End-to-End (Playwright)
     runs-on: ubuntu-26.04
@@ -230,7 +252,7 @@ jobs:
   ci-ok:
     name: CI OK
     if: ${{ always() }}
-    needs: [frontend, e2e, rust, rust-policy, cargo-deny, workflows]
+    needs: [frontend, knip, e2e, rust, rust-policy, cargo-deny, workflows]
     # A shell loop needs no full VM.
     runs-on: ubuntu-slim
     timeout-minutes: 5

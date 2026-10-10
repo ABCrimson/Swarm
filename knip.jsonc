@@ -1,0 +1,43 @@
+{
+  // knip finds dead files, unused dependencies and unused exports. It is
+  // neither a linter nor a formatter, so Biome stays the only one of those.
+  // Every entry, project glob and ignore below carries its reason.
+  // Run it with `pnpm exec knip`; CI runs it as the `knip` job.
+  "$schema": "./node_modules/knip/schema-jsonc.json",
+
+  // The Vite plugin (index.html -> src/boot.ts -> src/main.tsx), the Vitest
+  // and Playwright plugins and the package.json scripts reach the app graph,
+  // the *.test.* files, e2e/*.spec.ts and the scripts package.json runs;
+  // only what none of them can see is listed here.
+  "entry": [
+    // Run by hand (`node scripts/sync-reference-repos.ts`); no package.json
+    // script names it, so no plugin can see it. src/workers/*.ts needs no
+    // entry: knip follows `new Worker(new URL(...))` itself.
+    "scripts/sync-reference-repos.ts"
+  ],
+
+  // JS/TS and CSS (the Tailwind plugin parses CSS imports) only:
+  // crates/**/tests/fixtures/**/*.mjs are fake agent CLIs spawned by the Rust
+  // tests, so they are not unused files, and site/ is built by
+  // scripts/build-site.ts as static pages.
+  "project": ["src/**/*.{ts,tsx,css}", "e2e/**/*.ts", "scripts/**/*.ts", "*.ts"],
+
+  "ignoreDependencies": [
+    // radix-ui is not listed: knip already counts it as the optional peer
+    // modern-cmdk imports for Command.Dialog, and ignoring it would be a
+    // config hint (an error in CI).
+    // The WASI binding of the Oxc React Compiler transform. oxc-transform-react
+    // loads it by name when NAPI_RS_FORCE_WASI=true (`pnpm check:compiler`
+    // in CI) or when the native binding cannot load; no source imports it.
+    "@oxc-transform-react/binding-wasm32-wasip1"
+  ],
+
+  "rules": {
+    // The dead-file and dependency checks gate the build. The export and
+    // type checks currently report real dead exports (zod schemas kept next
+    // to their types, test-only helpers); they stay visible as warnings until
+    // the polish phase removes or justifies each one, then become errors.
+    "exports": "warn",
+    "types": "warn"
+  }
+}
