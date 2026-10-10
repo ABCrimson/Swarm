@@ -477,6 +477,10 @@ async fn a_cli_without_lifecycle_frames_starts_the_turn_on_init() {
 
     assert_eq!(settled_for(&harness.recorder, &turn)[0]["status"], "ok");
     assert_eq!(harness.recorder.count("agent_block"), 1);
+    assert_eq!(
+        harness.recorder.payloads("agent_block")[0]["content"]["text"],
+        "Binary search halves the search space each step."
+    );
 }
 
 // ── Permissions ──────────────────────────────────────────────────────
