@@ -675,19 +675,22 @@ mod tests {
     fn test_events_for_worker_between_empty_event_types_or_zero_limit_short_circuits() {
         let mut log = EventLog::open_in_memory().unwrap();
         append_agent_tool_call(&mut log, 1, "a");
+        // With the table gone every query errors, so only a call that
+        // never touches the database can still return `Ok`.
+        log.break_table("events");
 
-        assert_eq!(
-            log.events_for_worker_between(&[], "a", 0, 10, 100)
-                .unwrap()
-                .0
-                .len(),
-            0
-        );
+        let (events, truncated) = log.events_for_worker_between(&[], "a", 0, 10, 100).unwrap();
+        assert!(events.is_empty());
+        assert!(!truncated);
         let (events, truncated) = log
             .events_for_worker_between(&["agent_tool_call"], "a", 0, 10, 0)
             .unwrap();
         assert!(events.is_empty());
         assert!(!truncated);
+        assert!(
+            log.events_for_worker_between(&["agent_tool_call"], "a", 0, 10, 100)
+                .is_err()
+        );
     }
 
     #[test]
