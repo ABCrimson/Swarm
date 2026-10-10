@@ -122,7 +122,7 @@ mod tests {
         assert_eq!(read_value(&paths(&dir), "anthropic_api_key"), None);
     }
 
-    /// The `{}` file an early build created is simply an empty config.
+    /// An existing `{}` file is an empty config: reads give `None` and a write keeps working.
     #[test]
     fn test_an_empty_object_file_is_reused() {
         let (dir, _cleanup) = temp_dir("config");

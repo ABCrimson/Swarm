@@ -15,17 +15,8 @@ pub const PAGE_LIMIT: u32 = 5000;
 
 /// A caller's requested page size, capped at [`PAGE_LIMIT`] (and
 /// [`PAGE_LIMIT`] when absent).
-pub fn clamp_limit(limit: Option<u32>) -> u32 {
+fn clamp_limit(limit: Option<u32>) -> u32 {
     limit.map_or(PAGE_LIMIT, |l| l.min(PAGE_LIMIT))
-}
-
-/// A persisted event as the JSON a live `DomainEvent` serializes to.
-///
-/// Prefer serializing the [`StoredEvent`] itself (it has the same
-/// `Serialize` shape) straight into the output; this `Value` detour
-/// exists for callers that need a tree.
-pub fn stored_event_to_json(e: StoredEvent) -> Value {
-    serde_json::to_value(e).unwrap_or(Value::Null)
 }
 
 #[derive(Deserialize)]
@@ -37,7 +28,7 @@ struct EventsSinceArgs {
 }
 
 /// The persisted events after `afterSeq`, oldest first, at most
-/// `limit` (see [`clamp_limit`]).
+/// `limit` (capped at [`PAGE_LIMIT`]).
 ///
 /// An engine with no database file (an in-memory test engine) has no
 /// history, so the page is empty. A configured file that is missing is

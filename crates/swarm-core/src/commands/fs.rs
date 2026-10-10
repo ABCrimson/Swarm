@@ -1,7 +1,8 @@
 //! `read_file` and `write_file`, confined to fixed directory scopes.
 //!
 //! Reads may touch the data directory and the home directory; writes
-//! only the data directory and `~/.swarm`. Every path must be absolute.
+//! only the data directory and `~/.swarm`, never the app's own state
+//! files there. Every path must be absolute.
 //! It is normalized lexically (`..` and `.` resolved without touching
 //! the filesystem) and canonicalized against the real filesystem
 //! (symlinks resolved: for reads the file itself, for writes its parent
@@ -26,10 +27,13 @@
 //! along with the backup files named after them (for example
 //! `swarm-config.json.corrupt-<ms>`, or the daemon's `.daemon-token.<rand>`
 //! mint-time temp file, compared with leading dots ignored), and the
-//! credential stores under `~` that the capability's fs:scope deny list
-//! covers: `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
-//! `.config/gh`, `.claude`, `.codex`, `.git-credentials`, `.netrc`. A
-//! hard link to a secret is not detected.
+//! credential stores under `~`: the capability's fs:scope deny list
+//! (`.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
+//! `.config/gh`, `.claude`, `.codex`, `.git-credentials`, `.netrc`), plus
+//! `AppData/Roaming/GitHub CLI` (gh on Windows), `.npmrc`, `.pypirc`,
+//! `.cargo/credentials.toml`, `.cargo/credentials`, `.config/gcloud` and
+//! `AppData/Roaming/gcloud` (gcloud on Windows). A hard link to a secret
+//! is not detected.
 
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
@@ -50,9 +54,22 @@ const MAX_READ_BYTES: u64 = 16 << 20;
 /// that hold credentials.
 const DENIED_DATA_FILE_PREFIXES: [&str; 2] = ["swarm-config.json", "daemon-token"];
 
-/// Home-relative directories and files that hold credentials (the
-/// fs:scope deny list in `src-tauri/capabilities/default.json`).
-const DENIED_HOME_ENTRIES: [&str; 11] = [
+/// Data-dir file prefixes (lower-case, dots trimmed) of live app state; a
+/// write could corrupt or poison them.
+const DENIED_WRITE_DATA_FILE_PREFIXES: [&str; 6] = [
+    "swarm-events.db",
+    "sessions.json",
+    "daemon.lock",
+    "swarm-settings.json",
+    "swarm-snapshots.json",
+    "swarm-templates.json",
+];
+
+/// Home-relative directories and files that hold credentials: the
+/// fs:scope deny list in `src-tauri/capabilities/default.json` plus
+/// stores that list does not cover (gh's and gcloud's Windows config
+/// dirs, npm, PyPI, Cargo, gcloud on Linux and macOS).
+const DENIED_HOME_ENTRIES: [&str; 18] = [
     ".ssh",
     ".gnupg",
     ".aws",
@@ -64,9 +81,18 @@ const DENIED_HOME_ENTRIES: [&str; 11] = [
     ".codex",
     ".git-credentials",
     ".netrc",
+    "AppData/Roaming/GitHub CLI",
+    ".npmrc",
+    ".pypirc",
+    ".cargo/credentials.toml",
+    ".cargo/credentials",
+    ".config/gcloud",
+    "AppData/Roaming/gcloud",
 ];
 
 const DENIED_MESSAGE: &str = "This Path Holds Credentials And Is Never Accessible.";
+
+const APP_STATE_MESSAGE: &str = "This Path Holds The App's Own State And Is Never Writable.";
 
 const READ_SCOPE_MESSAGE: &str = "Read Access Is Limited To The App Data And Home Directories.";
 
@@ -122,20 +148,23 @@ impl FsScopes {
 
     /// Whether the canonical `real` path is on the deny list.
     fn is_denied(&self, real: &Path) -> bool {
-        let app_data = canonical_root(&self.app_data);
         let home = canonical_root(&self.home);
-        let secret_in_data_dir = real.parent() == Some(app_data.as_path())
-            && real.file_name().is_some_and(|name| {
-                let name = name.to_string_lossy().to_lowercase();
-                let name = name.trim_start_matches('.');
-                DENIED_DATA_FILE_PREFIXES
-                    .iter()
-                    .any(|prefix| name.starts_with(prefix))
-            });
-        secret_in_data_dir
+        self.is_data_file(real, &DENIED_DATA_FILE_PREFIXES)
             || DENIED_HOME_ENTRIES
                 .iter()
                 .any(|entry| real.starts_with(home.join(entry)))
+    }
+
+    /// Whether `real` is a file directly in the data directory whose name
+    /// (lower-cased, leading dots ignored) starts with one of `prefixes`.
+    fn is_data_file(&self, real: &Path, prefixes: &[&str]) -> bool {
+        let app_data = canonical_root(&self.app_data);
+        real.parent() == Some(app_data.as_path())
+            && real.file_name().is_some_and(|name| {
+                let name = name.to_string_lossy().to_lowercase();
+                let name = name.trim_start_matches('.');
+                prefixes.iter().any(|prefix| name.starts_with(prefix))
+            })
     }
 
     /// Whether `normalized` sits under any of `roots` (as given or with
@@ -223,6 +252,9 @@ impl FsScopes {
         }
         if self.is_denied(&real) {
             return Err(Value::String(DENIED_MESSAGE.to_owned()));
+        }
+        if self.is_data_file(&real, &DENIED_WRITE_DATA_FILE_PREFIXES) {
+            return Err(Value::String(APP_STATE_MESSAGE.to_owned()));
         }
         Ok(real)
     }
@@ -483,14 +515,68 @@ mod tests {
     }
 
     #[test]
+    fn test_write_refuses_the_apps_own_state_files_but_reads_them() {
+        let tree = Tree::new();
+        for name in [
+            "swarm-events.db",
+            "swarm-events.db-wal",
+            "sessions.json",
+            "daemon.lock.json",
+            "swarm-settings.json",
+            "swarm-snapshots.json",
+            "swarm-templates.json",
+        ] {
+            let state = tree.scopes.app_data.join(name);
+            std::fs::write(&state, "state").unwrap();
+            assert_eq!(
+                tree.scopes.check_write(&state),
+                Err(Value::String(APP_STATE_MESSAGE.to_owned())),
+                "{name} must be unwritable"
+            );
+            assert!(tree.scopes.check_read(&state).is_ok(), "{name}");
+        }
+        let notes = tree.scopes.app_data.join("notes.txt");
+        assert!(tree.scopes.check_write(&notes).is_ok());
+    }
+
+    #[test]
     fn test_read_denies_credential_stores_under_home() {
         let tree = Tree::new();
-        for entry in DENIED_HOME_ENTRIES {
+        // A literal list, not DENIED_HOME_ENTRIES: an entry dropped from the
+        // production list must fail here instead of leaving the test.
+        for entry in [
+            ".ssh",
+            ".gnupg",
+            ".aws",
+            ".azure",
+            ".kube",
+            ".docker",
+            ".config/gh",
+            ".claude",
+            ".codex",
+            ".git-credentials",
+            ".netrc",
+            "AppData/Roaming/GitHub CLI",
+            ".npmrc",
+            ".pypirc",
+            ".cargo/credentials.toml",
+            ".cargo/credentials",
+            ".config/gcloud",
+            "AppData/Roaming/gcloud",
+        ] {
             let entry = tree.scopes.home.join(entry);
             let secret = if matches!(
                 entry.file_name().and_then(|name| name.to_str()),
-                Some(".git-credentials" | ".netrc")
+                Some(
+                    ".git-credentials"
+                        | ".netrc"
+                        | ".npmrc"
+                        | ".pypirc"
+                        | "credentials.toml"
+                        | "credentials"
+                )
             ) {
+                std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
                 entry
             } else {
                 std::fs::create_dir_all(&entry).unwrap();
@@ -499,6 +585,9 @@ mod tests {
             std::fs::write(&secret, "k").unwrap();
             assert_eq!(tree.scopes.check_read(&secret), denied(), "{secret:?}");
         }
+        let cargo_config = tree.scopes.home.join(".cargo/config.toml");
+        std::fs::write(&cargo_config, "c").unwrap();
+        assert!(tree.scopes.check_read(&cargo_config).is_ok());
         let other = tree.scopes.home.join(".config/other.txt");
         std::fs::write(&other, "o").unwrap();
         assert!(tree.scopes.check_read(&other).is_ok());
