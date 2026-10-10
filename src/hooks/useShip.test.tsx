@@ -549,6 +549,40 @@ describe("useShip", () => {
     expect(result.current.state).toBe("settled");
   });
 
+  it("DIRECTIVE (B1): a push slower than 30 s whose receipt arrives with its response settles success", async () => {
+    vi.useFakeTimers();
+    mockGitShipPreflight.mockResolvedValue(makePreflight());
+    mockGitStageCommit.mockResolvedValue(makeCommitOutcome());
+    const push = Promise.withResolvers<ReturnType<typeof makePushOutcome>>();
+    mockGitPush.mockReturnValue(push.promise);
+
+    const { result } = await renderPreviewing();
+
+    let actionPromise: Promise<void> = Promise.resolve();
+    act(() => {
+      actionPromise = result.current.commitAndPush();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    const shipId = mockGitPush.mock.calls[0]?.[1] as string;
+
+    // The receipt clock must not run while the invoke is still in flight.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45_000);
+    });
+    expect(result.current.state).toBe("running");
+
+    await act(async () => {
+      emit("ship_settled", { shipId, workerId: WORKER_ID });
+      push.resolve(makePushOutcome());
+      await vi.advanceTimersByTimeAsync(0);
+      await actionPromise;
+    });
+
+    expect(result.current.state).toBe("settled");
+  });
+
   it("reports a missing receipt after the 30 s budget as a timeout, not as an unknown failure", async () => {
     vi.useFakeTimers();
     mockGitShipPreflight.mockResolvedValue(makePreflight());
