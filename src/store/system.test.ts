@@ -9,7 +9,6 @@ function sample(overrides: Partial<MetricsSample> = {}): MetricsSample {
     memoryMb: 1024,
     memoryTotalMb: 16_384,
     workerCount: 2,
-    aiReqPerSec: 0,
     tokensPerSec: 0,
     ...overrides,
   };

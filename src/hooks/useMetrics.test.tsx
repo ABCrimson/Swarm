@@ -37,7 +37,6 @@ const PAYLOAD = {
   memoryMb: 2048,
   memoryTotalMb: 16_384,
   workerCount: 2,
-  aiReqPerSec: 0.5,
 };
 
 describe("useMetrics", () => {

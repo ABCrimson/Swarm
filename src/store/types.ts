@@ -188,7 +188,6 @@ export const SystemMetricsSchema = z.object({
   memoryMb: z.number(),
   memoryTotalMb: z.number(),
   workerCount: z.int(),
-  aiReqPerSec: z.number(),
   tokensPerSec: z.number(),
   history: z.array(MetricPointSchema),
 });

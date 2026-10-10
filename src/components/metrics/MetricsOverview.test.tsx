@@ -22,7 +22,6 @@ function record(values: Partial<MetricsSample>, time = 1): void {
       memoryMb: 0,
       memoryTotalMb: 1000,
       workerCount: 0,
-      aiReqPerSec: 0,
       tokensPerSec: 0,
       ...values,
     },

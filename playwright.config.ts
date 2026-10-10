@@ -39,7 +39,7 @@ export default defineConfig({
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
     },
-    // Opt-in: pnpm exec playwright install webkit firefox, then --project=webkit|firefox. Known engine-specific failures are listed in reports/w1-b5.md.
+    // Opt-in engines, not part of the default run: install them once with `pnpm exec playwright install webkit firefox`, then run `pnpm exec playwright test --project=webkit` (or `--project=firefox`). The whole suite passes on all three engines.
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },

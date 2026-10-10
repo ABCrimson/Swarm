@@ -55,7 +55,7 @@ export default defineConfig(async ({ mode, command }): Promise<UserConfig> => {
 
     build: {
       sourcemap: true,
-      // Tauri renders in WebView2 (Chromium, evergreen) on Windows, and in WKWebView (macOS) / WebKitGTK (Linux), whose WebKit version follows the OS. No syntax downleveling (target esnext). Runtime floor: Safari/WebKit 18.4 (iterator helpers, Error.isError, RegExp.escape); Temporal is polyfilled at boot (src/boot.ts).
+      // Tauri renders in WebView2 (Chromium, evergreen) on Windows, WKWebView on macOS (the system WebKit, updated with the OS or a standalone Safari update) and WebKitGTK on Linux (follows the distro). No syntax downleveling (target esnext), so the floor is set by the APIs the code calls unguarded: Safari/WebKit 18.4 (iterator helpers, Error.isError, RegExp.escape). macOS 15.4 is the oldest macOS that guarantees it (Safari 18.4 also installs on 13/14, but Info.plist can only require an OS version), and `bundle.macOS.minimumSystemVersion` in tauri.conf.json enforces it. Temporal is polyfilled at boot (src/boot.ts).
       // `build:web`'s target is any modern evergreen browser, close enough not to warrant a second target.
       target: "esnext",
       // `build:web` writes to a separate directory so it never collides

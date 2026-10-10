@@ -331,10 +331,6 @@ pub struct SystemMetricsPayload {
     pub memory_total_mb: f64,
     /// Total number of registered workers.
     pub worker_count: usize,
-    /// Always `0.0`: Anthropic API requests are made by the webview
-    /// (`src/lib/anthropic.ts`), which the core cannot observe. Kept so
-    /// the `systemMetrics` wire shape stays stable for existing clients.
-    pub ai_req_per_sec: f64,
     /// Unix timestamp in milliseconds when this snapshot was taken.
     pub timestamp: i64,
 }
@@ -1056,7 +1052,6 @@ mod tests {
             memory_mb: 1024.5,
             memory_total_mb: 262_144.0,
             worker_count: 3,
-            ai_req_per_sec: 1.5,
             timestamp: 1700000000,
         });
         let json = serde_json::to_string(&event).expect("serialize");
@@ -1081,7 +1076,6 @@ mod tests {
             memory_mb: 35_389.0,
             memory_total_mb: 262_144.0, // 256GB machine from the bug report
             worker_count: 1,
-            ai_req_per_sec: 0.0,
             timestamp: 1700000000,
         });
 
@@ -1774,7 +1768,6 @@ mod tests {
                 memory_mb: 2.0,
                 memory_total_mb: 3.0,
                 worker_count: 4,
-                ai_req_per_sec: 0.0,
                 timestamp: 5,
             }),
             SwarmEvent::SystemLog(SystemLogPayload {

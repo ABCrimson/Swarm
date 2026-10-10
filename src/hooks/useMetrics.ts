@@ -11,7 +11,6 @@ const SystemMetricsPayloadSchema = z.object({
   memoryMb: z.number(),
   memoryTotalMb: z.number(),
   workerCount: z.number().int(),
-  aiReqPerSec: z.number(),
 });
 
 /**

@@ -296,12 +296,17 @@ type ShipSteps = (workerId: string, shipId: string, draft: ShipDraft) => Promise
 const inFlightWorkers = new Set<string>();
 
 /**
- * DIRECTIVE (B1): the backend's own git budget for a mutating call
- * (`CREATE_TIMEOUT` in `git/cli.rs`) is 20s — a real push legitimately
- * taking anywhere from 5-20s (a slow remote, a large object) must
- * never be reported as "failed" by a frontend timeout that fires
- * first. 30s = the backend's own budget + margin, always passed
- * explicitly rather than relying on `waitFor`'s 5s default.
+ * DIRECTIVE (B1): how long the receipt wait (`ship_settled`) may stay
+ * armed before the flow reports "failed". The wait is armed just before
+ * the final step's invoke and so spans that whole call. It is a
+ * frontend watchdog, not the backend's git budget: `git/cli.rs` bounds
+ * the ship chain's `commit` (`MUTATE_TIMEOUT`) and `push`
+ * (`PUSH_TIMEOUT`) at 600s each (`CREATE_TIMEOUT` is 120s, but that is
+ * `git worktree add`, which the ship chain never runs). Known gap
+ * (not yet fixed): 30s is shorter than those 600s budgets, so a commit
+ * whose hooks, or a push, run past 30s is reported "failed" while the
+ * backend still completes it. Always passed explicitly rather than
+ * relying on `waitFor`'s 5s default.
  */
 const SHIP_SETTLED_TIMEOUT_MS = 30_000;
 
