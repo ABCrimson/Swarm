@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { SplitPane } from "#components/layout/SplitPane";
 import { Button } from "#components/ui/Button";
@@ -127,7 +127,9 @@ function showModalOnMount(dialog: HTMLDialogElement | null): void {
 /**
  * Modal for injecting an instruction into the running conversation — a
  * native `<dialog>` opened with `showModal()` (top layer, inert page,
- * Escape and backdrop-click dismissal via `closedby="any"`).
+ * Escape and backdrop-click dismissal via `closedby="any"`). Cancel and Inject
+ * also close it with `close()`, never by unmounting it: only the native close
+ * returns focus to the button that opened it; its `close` event then unmounts it.
  */
 function InjectDialog({
   onSubmit,
@@ -138,10 +140,14 @@ function InjectDialog({
 }): React.ReactElement {
   const titleId = useId();
   const [value, setValue] = useState("");
+  const dialogRef = useRef<HTMLDialogElement>(null);
 
   return (
     <dialog
-      ref={showModalOnMount}
+      ref={(dialog) => {
+        dialogRef.current = dialog;
+        showModalOnMount(dialog);
+      }}
       closedby="any"
       aria-labelledby={titleId}
       onClose={onClose}
@@ -153,7 +159,7 @@ function InjectDialog({
           const trimmed = value.trim();
           if (!trimmed) return;
           onSubmit(trimmed);
-          onClose();
+          dialogRef.current?.close();
         }}
       >
         <h2 id={titleId} style={dialogTitleStyle}>
@@ -175,7 +181,7 @@ function InjectDialog({
           }}
         />
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
-          <Button variant="ghost" size="sm" onClick={onClose}>
+          <Button variant="ghost" size="sm" onClick={() => dialogRef.current?.close()}>
             Cancel
           </Button>
           <Button type="submit" variant="primary" size="sm" disabled={!value.trim()}>
