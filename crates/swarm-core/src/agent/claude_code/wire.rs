@@ -14,9 +14,11 @@
 //! ignored, fields the adapter can live without are optional, and an
 //! unknown `type`/`subtype` tag lands in an `Other` variant instead of
 //! failing the line, so a newer CLI that adds frames or fields never
-//! breaks a session. Range is the one thing that is strict: an integer
-//! that does not fit its field (a `u32` block index, say) fails the line
-//! instead of wrapping.
+//! breaks a session. Type and range stay strict: a field of the wrong
+//! type, or an integer that does not fit its field (a `u32` block index,
+//! say), fails the frame instead of being coerced or wrapped (only the
+//! `initialize` model list drops an odd entry on its own), and `reader`
+//! still answers an unreadable `result` or `control_request`.
 
 use std::sync::LazyLock;
 
