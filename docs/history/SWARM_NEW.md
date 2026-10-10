@@ -1,5 +1,7 @@
 # SWARM Orchestrator v2 — Claude Code Build Specification
 
+> **Historical document (2026-07).** The original build specification, kept as a record. Its versions, layout and rules are superseded; `AGENTS.md`, `docs/architecture.md` and `docs/adr/` describe the current system.
+
 > **PURPOSE**: This is the complete, authoritative build specification for Claude Code to construct SWARM Orchestrator from scratch. Read every section in full before writing any code. Every version, pattern, architecture decision, and constraint is encoded here. Nothing is optional.
 
 ---

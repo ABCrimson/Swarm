@@ -22,12 +22,12 @@ runtime features (`devtools` and friends) live on `tauri-runtime-wry`; `devtools
 Least-privilege capabilities (`src-tauri/capabilities/default.json`), pinned by `capability_contract`
 tests:
 
-- **No static filesystem scope.** The fs commands (`read-file`, `read-dir`, `exists`, `stat`,
-  `write-file`) act only on paths the user picked in an open or save dialog, which grants that path (a
-  directory with its contents) for the rest of the session. They never create directories, delete or
-  rename. `fs:deny-default` is set, and a `fs:scope` deny list covers the app data directory
-  (`$APPDATA/**`) and credential stores under `$HOME` (`.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`,
-  `.docker`, `.config/gh`, `.claude`, `.codex`, `.git-credentials`, `.netrc`).
+- **No static filesystem scope.** The fs commands (`read-file`, `read-dir`, `stat`, `write-file`) act
+  only on paths the user picked in an open or save dialog, which grants that path (a directory with
+  its contents) for the rest of the session. They never create directories, delete or rename.
+  `fs:deny-default` is set, and a `fs:scope` deny list covers the app data directory (`$APPDATA/**`)
+  and credential stores under `$HOME` (`.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
+  `.config/gh`, `.claude`, `.codex`, `.git-credentials`, `.netrc`).
 - `tauri-plugin-shell` is removed in favour of `tauri-plugin-opener`, scoped to exactly two things:
   `openUrl` for `https://*/*/*/compare/*` and `openPath` for `$HOME/.swarm/worktrees/**`. The plugin's
   injected link-click handler stays off.
