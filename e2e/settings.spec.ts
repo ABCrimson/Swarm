@@ -123,8 +123,12 @@ test.describe("Settings accessibility", () => {
 
     // The model radio is visually hidden; its card draws the ring.
     const selected = page.getByRole("radio", { name: "Claude Sonnet 5.5" });
+    // Reached by Tab, as above. Not by an arrow key: after the first arrow step
+    // WebKit moves focus to the next radio without :focus-visible on it.
     await selected.focus();
-    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await expect(selected).toBeFocused();
     const card = page.locator("label[data-model-id]:has(input:focus-visible)");
     await expect(card).toHaveCSS("outline-style", "solid");
 

@@ -54,12 +54,19 @@ test.describe("Spawn Worker Dialog", () => {
     app,
     page,
   }) => {
-    const dialog = await openSpawnDialog(app);
+    // Opened from the keyboard: a mouse click gives a button no focus on WebKit,
+    // so there would be no focus for the dialog to restore.
+    await app.goTo("Workers");
+    const trigger = page.getByRole("button", { name: "Spawn Worker" });
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
 
     await page.keyboard.press("Escape");
 
     await expect(dialog).toBeHidden();
-    await expect(page.getByRole("button", { name: "Spawn Worker" })).toBeFocused();
+    await expect(trigger).toBeFocused();
   });
 
   test("clicking outside the panel closes the dialog", async ({ app, page }) => {

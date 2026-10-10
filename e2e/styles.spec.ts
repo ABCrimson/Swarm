@@ -52,7 +52,8 @@ test.describe("Stylesheet cascade", () => {
       // AppShell staggers <main> with `delay-250`; under reduced motion it
       // must not sit invisible for that delay before snapping in.
       await expect(app.main).toHaveCSS("transition-delay", "0s");
-      await expect(app.main).toHaveCSS("transition-duration", "1e-05s");
+      // Chromium serializes the 10µs duration as "1e-05s", Firefox and WebKit as "0.00001s".
+      await expect(app.main).toHaveCSS("transition-duration", /^(1e-05|0\.00001)s$/);
       await expect(app.main).toHaveCSS("opacity", "1");
     });
   });
