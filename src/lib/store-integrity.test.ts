@@ -114,4 +114,23 @@ describe("validateStoreData", () => {
       { file: "swarm-templates.json", key: "swarm:templates", valid: true },
     ]);
   });
+
+  it("records a failed delete per key and keeps validating the later keys", async () => {
+    stores.snapshotsStore.entries.mockResolvedValue([
+      ["swarm:snapshots:a", [{ id: "nope" }]],
+      ["swarm:snapshots:b", [{ id: "nope" }]],
+    ]);
+    stores.snapshotsStore.delete.mockRejectedValueOnce(new Error("disk full"));
+    using _warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const results = await validateStoreData();
+
+    expect(results.map(({ key, valid }) => [key, valid])).toStrictEqual([
+      ["swarm:snapshots:a", false],
+      ["swarm:snapshots:b", false],
+    ]);
+    expect(results[0]?.error).toBe("Invalid data could not be deleted: disk full");
+    expect(results[1]?.error).toMatch(/^Invalid data was deleted: /);
+    expect(stores.snapshotsStore.delete).toHaveBeenCalledTimes(2);
+  });
 });

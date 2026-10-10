@@ -11,6 +11,7 @@ import type { LazyStore } from "@tauri-apps/plugin-store";
 import { toast } from "sonner";
 import * as z from "zod";
 import type { AlertThresholds } from "#lib/alerts";
+import { errorMessage } from "#lib/is-error";
 import { settingsStore, snapshotsStore, templatesStore } from "#lib/lazy-store";
 import { isTauri } from "#lib/tauri";
 import { persistedSettings, removePersistedSetting } from "#store/persisted";
@@ -127,7 +128,17 @@ async function validateTarget(
       results.push({ file: target.file, key, valid: true });
       continue;
     }
-    await rule.reset(key);
+    try {
+      await rule.reset(key);
+    } catch (err) {
+      results.push({
+        file: target.file,
+        key,
+        valid: false,
+        error: `Invalid data could not be deleted: ${errorMessage(err)}`,
+      });
+      continue;
+    }
     resetLabels.add(rule.label);
     results.push({
       file: target.file,
@@ -158,7 +169,7 @@ export async function validateStoreData(): Promise<ValidationResult[]> {
         file: target.file,
         key: "*",
         valid: false,
-        error: `Store read failed: ${Error.isError(err) ? err.message : String(err)}`,
+        error: `Store read failed: ${errorMessage(err)}`,
       });
     }
   }
