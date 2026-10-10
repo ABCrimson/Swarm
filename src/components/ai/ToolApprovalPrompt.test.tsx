@@ -11,6 +11,11 @@ vi.mock("#lib/tauri", async (importOriginal) => ({
   invoke: vi.fn().mockResolvedValue("file text"),
 }));
 
+vi.mock("#lib/tools", async (io) => {
+  const a = await io<typeof import("#lib/tools")>();
+  return { ...a, getPendingToolApprovals: vi.fn(a.getPendingToolApprovals) };
+});
+
 import { executeTool, getPendingToolApprovals, resetToolApprovals } from "#lib/tools";
 
 const W = "11111111-2222-4333-8444-555555555555";
@@ -177,6 +182,56 @@ describe("ToolApprovalPrompt", () => {
 
     const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
     expect(prompt.textContent).toContain(command);
+    expect(screen.queryByRole("button", { name: "Show All" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Allow Once" })).toBeEnabled();
+  });
+
+  it("renders a nested object as canonical JSON", () => {
+    const p = vi.mocked(getPendingToolApprovals);
+    p.mockReturnValue([
+      {
+        id: "r1",
+        tool: "future_tool",
+        input: { zeta: "z", options: { b: 2, a: { d: 4, c: 3 } }, list: [3, 1] },
+        sessionAllowed: true,
+        workerId: W,
+      },
+    ]);
+    try {
+      render(<ToolApprovalPrompt workerId={W} />);
+      const el = screen.getByRole("alert", { name: "Tool Approval" });
+      expect(el).toHaveTextContent('Options{"a":{"c":3,"d":4},"b":2}');
+      expect(el).toHaveTextContent("Zetaz");
+      expect(el).toHaveTextContent("List[3,1]");
+    } finally {
+      p.mockReset();
+    }
+  });
+
+  it("keeps Allow For Session off until Show All on a long spawn_worker name", async () => {
+    const user = userEvent.setup();
+    render(<ToolApprovalPrompt workerId={W} />);
+
+    void executeTool("spawn_worker", { name: "n".repeat(2000) }, { originWorker: W, causeSeq: 1 });
+
+    await screen.findByRole("alert", { name: "Tool Approval" });
+    const session = screen.getByRole("button", { name: "Allow For Session" });
+    expect(session).toBeDisabled();
+    expect(session).toHaveAccessibleDescription(/Show All/);
+
+    await user.click(screen.getByRole("button", { name: "Show All" }));
+
+    expect(screen.getByRole("button", { name: "Allow For Session" })).toBeEnabled();
+  });
+
+  it("never truncates a file path", async () => {
+    render(<ToolApprovalPrompt workerId={W} />);
+    const path = `/home/u/${"d".repeat(600)}/x.txt`;
+
+    void executeTool("write_file", { path, content: "hi" }, { originWorker: W, causeSeq: 1 });
+
+    const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
+    expect(prompt.textContent).toContain(path);
     expect(screen.queryByRole("button", { name: "Show All" })).toBeNull();
     expect(screen.getByRole("button", { name: "Allow Once" })).toBeEnabled();
   });

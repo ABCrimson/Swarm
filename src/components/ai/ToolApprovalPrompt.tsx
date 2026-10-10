@@ -82,7 +82,7 @@ const NAMED_ESCAPES: Readonly<Record<string, string>> = {
  * unambiguous: a real newline (`\n`) never looks like the two characters
  * backslash and n (`\\n`).
  */
-export function escapeForDisplay(value: string): string {
+function escapeForDisplay(value: string): string {
   let out = "";
   for (const char of value) {
     const code = char.codePointAt(0) ?? 0;
