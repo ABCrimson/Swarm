@@ -5,6 +5,7 @@ import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
 import { type AlertThresholds, alertThresholdsAtom } from "#lib/alerts";
+import { ANTHROPIC_API_KEY_CONFIG_KEY } from "#lib/anthropic";
 import { bindingFromEvent, formatBinding, type Keybindings } from "#lib/keybindings";
 import {
   CLAUDE_MODELS,
@@ -21,9 +22,6 @@ import {
   selectedModelAtom,
   themeAtom,
 } from "#store/ui";
-
-/** Config key under which the Anthropic API key is persisted (see #lib/anthropic). */
-const ANTHROPIC_API_KEY_CONFIG_KEY = "anthropic_api_key";
 
 /** Worker registry cap shown until the persisted value loads (the backend default). */
 const DEFAULT_MAX_WORKERS = 64;
