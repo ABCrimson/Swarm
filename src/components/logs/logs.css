@@ -1,7 +1,8 @@
 /*
- * Logs page styles (LogViewer + LogFilter). In `@layer components` so the
- * unlayered reduced-motion rule in animations.css still wins over the
- * transitions here.
+ * Logs page styles (LogViewer + LogFilter). In `@layer components` like
+ * the other component sheets, so Tailwind utilities still override them.
+ * The reduced-motion override in animations.css is `!important`, so it
+ * outranks the transitions here regardless of layer.
  */
 @layer components {
   .log-viewer {
