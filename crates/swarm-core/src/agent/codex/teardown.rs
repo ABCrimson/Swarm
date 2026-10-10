@@ -1,16 +1,14 @@
-//! Session teardown: runs exactly once; also the exit-signal name and the
-//! stderr-tail snippet that teardown's settlement error carries.
+//! Session teardown: runs exactly once; also the exit-signal name that
+//! teardown's [`ExitSummary`] carries.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
 
 use super::PROCESS_EXITED_WITHOUT_RECEIPT;
 use super::process::reap;
 use super::state::{Shared, TurnSlot};
 
 use crate::agent::adapter::{AgentTurnStatus, ExitSummary};
-use crate::agent::stderr_snippet;
+use crate::agent::drained_stderr_snippet;
 use crate::events::{AgentSessionExitedPayload, AgentTurnSettledPayload, Provenance, SwarmEvent};
 
 /// The terminating signal's name, on Unix.
@@ -44,20 +42,6 @@ pub(super) fn signal_name(status: &std::process::ExitStatus) -> Option<String> {
 #[cfg(not(unix))]
 pub(super) fn signal_name(_status: &std::process::ExitStatus) -> Option<String> {
     None
-}
-
-/// The child's last stderr bytes, for a failure message. Waits up to 200 ms
-/// for the piped stderr drain thread, which can trail the child's exit:
-/// without the wait, a crash that wrote a panic message could settle as
-/// "No Stderr Output".
-pub(super) async fn drained_stderr_snippet(tail: &parking_lot::Mutex<VecDeque<u8>>) -> String {
-    for _ in 0..10 {
-        if !tail.lock().is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    stderr_snippet(tail)
 }
 
 /// Tears the session down exactly once; every later call returns the

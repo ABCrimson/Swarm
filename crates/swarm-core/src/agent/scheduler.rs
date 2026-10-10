@@ -360,14 +360,19 @@ async fn dispatch_loop<F, Fut>(
                 }
             },
             Some(joined) = running.join_next_with_id(), if !running.is_empty() => {
-                let id = match joined {
-                    Ok((id, ())) => id,
-                    Err(e) => {
-                        tracing::error!(error = %e, "agent turn executor panicked or was cancelled");
-                        e.id()
-                    }
+                let (id, failure) = match joined {
+                    Ok((id, ())) => (id, None),
+                    Err(e) => (e.id(), Some(e)),
                 };
-                if let Some((worker_id, permit)) = running_slots.remove(&id) {
+                let slot = running_slots.remove(&id);
+                if let Some(e) = failure {
+                    tracing::error!(
+                        worker_id = ?slot.as_ref().map(|(worker_id, _)| *worker_id),
+                        error = %e,
+                        "agent turn executor panicked or was cancelled"
+                    );
+                }
+                if let Some((worker_id, permit)) = slot {
                     busy.remove(&worker_id);
                     release_or_forget_permit(permit, &pending_forgets);
                 }
@@ -933,6 +938,7 @@ mod tests {
         scheduler.set_concurrency(4);
         assert_eq!(scheduler.concurrency_limit.load(AtomicOrdering::SeqCst), 4);
         assert_eq!(scheduler.pending_forgets.load(AtomicOrdering::SeqCst), 0);
+        assert_eq!(scheduler.semaphore.available_permits(), 4);
     }
 
     // ── Wire shape ────────────────────────────────────────────────────

@@ -95,14 +95,14 @@ use self::process::{
 use self::protocol::{TurnInterruptParams, TurnStartParams, TurnStartResponse, UserInput, method};
 use self::reader::{approval_answer, run_reader};
 use self::state::{BlockIndex, Inner, RequestFailure, Settled, Shared, TurnSlot, wait_settled};
-use self::teardown::{drained_stderr_snippet, teardown};
+use self::teardown::teardown;
 use self::tier::{child_env, codex_capabilities, parse_trust_tier, requested_model};
 
 use crate::agent::adapter::{
     AgentAdapter, AgentSession, AgentSpawnSpec, BoxFuture, Capabilities, ExitSummary,
     PermissionDecision, PermissionId, ProbeReport, ProviderId, SessionKey, TurnId, TurnInput,
 };
-use crate::agent::stderr_snippet;
+use crate::agent::{drained_stderr_snippet, stderr_snippet};
 use crate::error::AppError;
 use crate::events::{AgentSessionStartedPayload, EventSink, SwarmEvent};
 use crate::worker::proc::{PipedHandle, spawn_piped};

@@ -5,9 +5,10 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use super::PROCESS_EXITED_WITHOUT_RECEIPT;
-use super::process::{drained_stderr_snippet, reap};
+use super::process::reap;
 use super::state::{Shared, Stop};
 use crate::agent::adapter::{AgentTurnStatus, ExitSummary};
+use crate::agent::drained_stderr_snippet;
 use crate::events::{AgentSessionExitedPayload, AgentTurnSettledPayload, Provenance, SwarmEvent};
 
 // ── Teardown ─────────────────────────────────────────────────────────
