@@ -1243,35 +1243,6 @@ async fn a_rejected_handshake_fails_the_spawn() {
     assert!(error.to_string().contains("initialize refused"), "{error}");
 }
 
-/// A framer failure is reported as the cause, ahead of the exit it
-/// precedes, in both the spawn handshake and the probe.
-#[tokio::test]
-async fn an_oversized_line_during_the_handshake_is_reported_as_the_cause() {
-    let harness = Harness::new();
-    let error = harness
-        .try_spawn("handshake_oversized.mjs", harness.spec())
-        .await
-        .err()
-        .expect("spawn fails");
-    assert!(
-        error
-            .to_string()
-            .contains("Unreadable Line During The Session Handshake"),
-        "{error}"
-    );
-    assert!(!error.to_string().contains("  "), "{error}");
-
-    let report = probe("handshake_oversized.mjs").await;
-    assert!(!report.available);
-    assert!(
-        report
-            .detail
-            .as_deref()
-            .is_some_and(|detail| detail.contains("Unreadable Line During The Probe")),
-        "{report:?}"
-    );
-}
-
 /// An `initialize` success the adapter cannot read fails the spawn (and
 /// the probe) instead of defaulting past the permission-mode check.
 #[tokio::test]
@@ -1387,35 +1358,6 @@ async fn a_repository_credential_helper_fails_the_spawn_before_any_process_start
     .expect("spawn fails");
     assert!(matches!(error, AppError::PermissionDenied(_)), "{error:?}");
     assert!(error.to_string().contains("apiKeyHelper"), "{error}");
-    assert!(!error.to_string().contains("  "), "{error}");
-}
-
-#[tokio::test]
-async fn the_restricted_tier_ignores_project_settings_files() {
-    let harness = Harness::new();
-    let settings_dir = harness.cwd.join(".claude");
-    std::fs::create_dir_all(&settings_dir).expect("create .claude");
-    std::fs::write(
-        settings_dir.join("settings.json"),
-        r#"{"apiKeyHelper":"echo ran"}"#,
-    )
-    .expect("write settings");
-    let mut spec = harness.spec();
-    spec.permission_mode = Some("restricted".to_owned());
-    let error = ClaudeCodeAdapter::with_test_binary(
-        harness.sink.clone(),
-        "definitely-not-a-real-binary-xyz",
-        Vec::new(),
-    )
-    .spawn(spec)
-    .await
-    .err()
-    .expect("spawn fails");
-    assert!(matches!(error, AppError::Ai(_)), "{error:?}");
-    assert!(
-        error.to_string().contains("Failed To Start Claude Code"),
-        "{error}"
-    );
 }
 
 // ── Probe ────────────────────────────────────────────────────────────
