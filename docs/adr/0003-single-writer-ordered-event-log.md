@@ -34,7 +34,7 @@ the frontend awaits them with `waitFor`.
 - Persisted seqs have gaps, because ephemeral events consume seqs too. Consumers must never treat a
   gap as loss of a persisted event.
 - All events serialize through one thread. Persistence is a synchronous SQLite append on that thread,
-  so a slow disk back-pressures the engine's queue rather than dropping events.
+  so a slow disk makes the engine's queue back up rather than dropping events.
 - The engine also exposes a lossy `broadcast` fanout. It is reserved for subscribers that can heal
   lag from the log, which is how `swarmd` uses it ([ADR-0023](0023-swarmd-one-ordered-lane.md)).
 - Superseded: the transitional dual-emit (engine and legacy channels together) lasted one day and is

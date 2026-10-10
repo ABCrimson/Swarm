@@ -37,7 +37,10 @@ why the causal record keys off the `agent_*` family ([ADR-0011](0011-pr-body-evi
 - The `ai_stream_delta` and `ai_stream_settled` events are gone from the event enum, along with the
   `useAiStream` hook that consumed them.
 - The webview path needs a network connection from the webview to `api.anthropic.com`, which the
-  desktop CSP allows (`connect-src`). It is capability-gated off in the browser build served by
-  `swarmd` (`TransportCapabilities.localAiChat`): remote AI goes through the adapter RPC surface.
+  desktop CSP allows (`connect-src`). In the browser build served by `swarmd` it cannot work: the
+  served CSP's `connect-src` is `'self'`, and `read_config` is `SecretFiltered` remotely, so the key
+  is unreadable. Remote AI goes through the adapter RPC surface.
+  `TransportCapabilities.localAiChat` is `false` for the WebSocket transport, but no call site reads it
+  yet.
 - Webview tools that act on the machine are an unattended-execution surface; their approval and scope
   are tracked separately from this decision.

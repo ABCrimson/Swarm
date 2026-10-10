@@ -57,8 +57,8 @@ Rewrite the adapter for the control protocol of 2.1.28x (oldest supported CLI 2.
 
 ## Consequences
 
-- Delta granularity is sentence-clause (4 to 6 deltas per response), coarser than the webview SDK's
-  token stream.
+- Delta granularity is sentence-clause (4 to 6 deltas per response, measured on 2.1.232), coarser than
+  the webview SDK's token stream.
 - Cost is derived from the CLI's running total; a killed turn loses cost data.
 - `interrupt_midturn` stays `false`: the CLI could fold a message into a running turn, but a session
   rejects `send_turn` while busy and the scheduler serialises turns.

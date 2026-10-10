@@ -28,5 +28,5 @@ action, before the event log is opened; whichever process starts second refuses 
 ## Consequences
 
 - The desktop app shows the message in a dialog and exits; `swarmd` exits with status 75, and its
-  service units treat 75 as "do not restart".
+  systemd unit treats 75 as "do not restart" (`RestartPreventExitStatus=75`).
 - The runtime keeps the lock until it is dropped, past `Runtime::shutdown`.

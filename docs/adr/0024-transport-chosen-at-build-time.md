@@ -22,8 +22,9 @@ define `__SWARM_TRANSPORT__`, set to `"ws"` only by `pnpm build:web`.
 `src/lib/tauri.ts` keeps its whole public API on top of it. `isTauri()` keeps its original meaning
 ("the Tauri IPC bridge specifically") for features that are Tauri-only (plugin-fs, dialog, opener,
 notification, updater, the webview chat). `hasTransport()` means "some backend is reachable" and backs
-the wrappers that work over either. `TransportCapabilities` lets feature-gated sites render a Title
-Case empty state instead of a silent no-op.
+the wrappers that work over either. `TransportCapabilities` declares what each transport supports
+(`workspaceBrowsing`, `nativeNotifications`, `autoUpdate`, `localAiChat`); at this commit call sites
+gate on `isTauri()` and nothing reads those flags yet.
 
 ## Consequences
 
