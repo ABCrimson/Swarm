@@ -1,4 +1,6 @@
-import { createStore } from "jotai";
+import { act, render, screen } from "@testing-library/react";
+import { createStore, Provider, useAtomValue } from "jotai";
+import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("#lib/tauri", () => ({ isTauri: () => true }));
@@ -173,20 +175,26 @@ describe("reducedMotionAtom", () => {
     expect(createStore().get(await freshAtom())).toBe(true);
   });
 
-  it("delivers the synchronous onMount update to subscribers (jotai 3.0.1 #3373)", async () => {
-    // The OS setting flips between module load and the first mount: onMount's
-    // synchronous set is the only thing that can correct the stale initial value.
+  it("every React subscriber sees the synchronous onMount correction (jotai 3.0.1 #3373)", async () => {
     const media = stubReducedMotion(false);
     const atom = await freshAtom();
     media.query.matches = true;
 
     const store = createStore();
-    const seen: boolean[] = [];
-    const unsub = store.sub(atom, () => seen.push(store.get(atom)));
+    const Probe = ({ name }: { name: string }) =>
+      createElement("output", { "aria-label": name }, String(useAtomValue(atom)));
+    render(
+      createElement(
+        Provider,
+        { store },
+        createElement(Probe, { name: "a" }),
+        createElement(Probe, { name: "b" }),
+      ),
+    );
+    await act(async () => {});
 
-    expect(store.get(atom)).toBe(true);
-    expect(seen).toStrictEqual([true]);
-    unsub();
+    expect(screen.getByLabelText("a").textContent).toBe("true");
+    expect(screen.getByLabelText("b").textContent).toBe("true");
   });
 
   it("follows OS changes while subscribed and detaches its listener on unmount", async () => {

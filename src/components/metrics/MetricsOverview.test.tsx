@@ -88,6 +88,13 @@ describe("MetricCards", () => {
     renderCards();
     expect(screen.getByText("Tokens/s").closest("div")).toHaveTextContent("42");
   });
+
+  it("shows exactly the four measured tiles, no AI Req/s", () => {
+    record({});
+    renderCards();
+    expect(screen.queryByText("AI Req/s")).toBeNull();
+    expect(document.querySelectorAll("dt")).toHaveLength(4);
+  });
 });
 
 describe("trendOf", () => {

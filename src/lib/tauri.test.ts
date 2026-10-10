@@ -10,7 +10,6 @@ import {
   agentSpawn,
   checkForUpdates,
   createSession,
-  getSession,
   gitPush,
   listSessions,
   listWorkers,
@@ -218,14 +217,10 @@ describe("createSession", () => {
   });
 });
 
-// ── listSessions / getSession normalization (recommended, fix wave) ──
+// ── listSessions normalization (recommended, fix wave) ──
 //
-// Both used to cast the raw IPC response straight to Session[]/Session
-// with no validation or timestamp conversion — unreachable today
-// (listSessions/getSession's only caller, useSessionActions, has no
-// consumers) but would poison the store the instant session restore
-// wires up, exactly like create_session did before it was fixed. Both
-// now route through the same normalizeSession seam as createSession.
+// listSessions routes through the same normalizeSession seam as createSession;
+// useSessionEvents hydrates the store from it at startup.
 
 describe("listSessions", () => {
   const RAW_SESSION_A = {
@@ -273,37 +268,6 @@ describe("listSessions", () => {
 
     expect(sessions).toEqual([]);
     expect(tauriInvoke).not.toHaveBeenCalled();
-  });
-});
-
-describe("getSession", () => {
-  const RAW_SESSION = {
-    id: "550e8400-e29b-41d4-a716-446655440000",
-    name: "Research Session",
-    workerIds: [],
-    createdAt: 1_700_000_000,
-    config: {},
-  };
-
-  beforeEach(() => {
-    vi.mocked(tauriInvoke).mockReset();
-    enableTauri();
-  });
-  afterEach(disableTauri);
-
-  it("normalizes the response the same way createSession does", async () => {
-    vi.mocked(tauriInvoke).mockResolvedValueOnce(RAW_SESSION);
-
-    const session = await getSession(RAW_SESSION.id);
-
-    expect(session.createdAt).toBe(new Date(RAW_SESSION.createdAt * 1000).toISOString());
-    expect(session.updatedAt).toBe(session.createdAt);
-  });
-
-  it("throws instead of returning a value that would fail SessionSchema downstream", async () => {
-    vi.mocked(tauriInvoke).mockResolvedValueOnce({ id: "not-a-uuid" });
-
-    await expect(getSession("some-id")).rejects.toThrow(/Unexpected Shape/);
   });
 });
 

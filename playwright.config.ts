@@ -39,8 +39,7 @@ export default defineConfig({
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
     },
-    // Tauri renders in WKWebView (macOS) and WebKitGTK (Linux), both WebKit, so
-    // WebKit is a real target. Opt-in: `pnpm exec playwright test --project=webkit`.
+    // Opt-in: pnpm exec playwright install webkit firefox, then --project=webkit|firefox. Known engine-specific failures are listed in reports/w1-b5.md.
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },

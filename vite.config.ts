@@ -55,9 +55,7 @@ export default defineConfig(async ({ mode, command }): Promise<UserConfig> => {
 
     build: {
       sourcemap: true,
-      // Tauri renders in WebView2 (Chromium) on Windows, WKWebView (WebKit) on macOS and
-      // WebKitGTK (WebKit) on Linux — all evergreen, so no downleveling. Newer ES APIs the
-      // WebKit engines lack (Temporal) are polyfilled at boot (`src/boot.ts`).
+      // Tauri renders in WebView2 (Chromium, evergreen) on Windows, and in WKWebView (macOS) / WebKitGTK (Linux), whose WebKit version follows the OS. No syntax downleveling (target esnext). Runtime floor: Safari/WebKit 18.4 (iterator helpers, Error.isError, RegExp.escape); Temporal is polyfilled at boot (src/boot.ts).
       // `build:web`'s target is any modern evergreen browser, close enough not to warrant a second target.
       target: "esnext",
       // `build:web` writes to a separate directory so it never collides

@@ -52,6 +52,7 @@
         "noMeaninglessVoidOperator": "error",
         "noReactObjectTypeAsDefaultProp": "error",
         "noReturnInFinally": "error",
+        "noTailwindRawColors": "warn",
         "noUnmodifiedLoopCondition": "error",
         "noXorAsExponentiation": "error",
         "useFlatMathMinMax": "error",
