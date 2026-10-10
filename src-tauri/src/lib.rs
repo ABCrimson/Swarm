@@ -36,6 +36,8 @@ mod capability_contract;
 #[cfg(test)]
 mod config_contract;
 #[cfg(test)]
+mod frontend_contract;
+#[cfg(test)]
 mod test_support;
 
 /// Builds the process's Tokio runtime and installs it as Tauri's async

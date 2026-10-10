@@ -11,22 +11,7 @@ use std::collections::BTreeSet;
 use serde_json::Value;
 use swarm_core::git::remote::{compare_url, parse};
 
-/// The app's command names, from the file `build.rs` generates the ACL
-/// manifest from and `commands` declares its forwarders from.
-mod command_names {
-    include!("commands/command_list.rs");
-
-    macro_rules! names {
-        (
-            registry: [$($registry:ident),+ $(,)?],
-            native: [$($native:ident),+ $(,)?] $(,)?
-        ) => {
-            &[$(stringify!($registry),)+ $(stringify!($native)),+]
-        };
-    }
-
-    pub(super) const ALL: &[&str] = command_list!(names);
-}
+use crate::commands::{NATIVE_COMMANDS, REGISTRY_COMMANDS};
 
 const CAPABILITY: &str = include_str!("../capabilities/default.json");
 
@@ -252,6 +237,10 @@ fn app_commands_are_granted_one_by_one() {
         .iter()
         .map(|id| id["allow-".len()..].replace('-', "_"))
         .collect();
-    let commands: BTreeSet<String> = command_names::ALL.iter().map(|&c| c.to_owned()).collect();
+    let commands: BTreeSet<String> = REGISTRY_COMMANDS
+        .iter()
+        .chain(NATIVE_COMMANDS)
+        .map(|&c| c.to_owned())
+        .collect();
     assert_eq!(granted, commands);
 }
