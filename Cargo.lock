@@ -4134,6 +4134,7 @@ name = "swarm-desktop"
 version = "0.13.1"
 dependencies = [
  "glob",
+ "parking_lot",
  "serde",
  "serde_json",
  "swarm-core",

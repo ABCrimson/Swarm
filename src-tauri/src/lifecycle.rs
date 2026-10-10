@@ -27,10 +27,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use swarm_core::runtime::Runtime;
 use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{AppHandle, Manager};
-use tokio::sync::Mutex;
 use tracing_appender::non_blocking::WorkerGuard;
 
 /// Budget for each of the exit teardown's two phases (agent sessions,
@@ -44,7 +44,6 @@ const SHUTDOWN_PHASE_TIMEOUT: Duration = Duration::from_millis(2500);
 /// are flushed.
 pub(crate) struct Teardown {
     done: AtomicBool,
-    // tokio's Mutex only until swarm-desktop depends on parking_lot (a Cargo.lock change outside this lane); never contended, see cleanup.
     log_guard: Mutex<Option<WorkerGuard>>,
     /// How many times the shutdown actually ran.
     #[cfg(test)]
@@ -92,13 +91,9 @@ fn cleanup<R: tauri::Runtime>(app: &AppHandle<R>, tokio: &tokio::runtime::Handle
         }
     }
     // Last: Tauri exits the process right after the hook, and dropping
-    // the guard writes out every line the log thread still holds.
-    // Never contended (the `done` flag admits one caller), so `try_lock`
-    // always succeeds and nothing here can block or panic on a Tokio
-    // thread.
-    if let Ok(mut guard) = teardown.log_guard.try_lock() {
-        drop(guard.take());
-    }
+    // the guard writes out every line the log thread still holds. The
+    // `done` flag admits one caller, so the lock is never contended.
+    drop(teardown.log_guard.lock().take());
 }
 
 /// Shuts `runtime` down through [`Runtime::shutdown`]: stops the metrics
@@ -190,11 +185,7 @@ mod tests {
 
         app.cleanup_before_exit();
         assert!(
-            app.state::<Teardown>()
-                .log_guard
-                .try_lock()
-                .expect("uncontended")
-                .is_none(),
+            app.state::<Teardown>().log_guard.lock().is_none(),
             "the hook did not take the log guard"
         );
         assert!(stopped());
