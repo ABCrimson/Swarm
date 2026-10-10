@@ -150,12 +150,12 @@ pub async fn agent_spawn(ctx: Ctx, args: Value) -> Result<Value, Value> {
     .map_err(|e| agent_spawn_error(None, e.to_string()))?;
 
     // An isolated worker runs in its own worktree, not the requested cwd.
-    let cwd = ctx
+    // A worker already killed since the spawn returned gets no session.
+    let info = ctx
         .registry
         .get_worker(&worker_id)
-        .ok()
-        .and_then(|info| info.worktree_path)
-        .unwrap_or(fallback_cwd);
+        .map_err(|e| agent_spawn_error(None, e.to_string()))?;
+    let cwd = info.worktree_path.unwrap_or(fallback_cwd);
     let spec = AgentSpawnSpec {
         worker_id,
         cwd,
