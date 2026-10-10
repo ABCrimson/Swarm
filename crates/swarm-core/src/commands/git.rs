@@ -867,4 +867,17 @@ mod tests {
         assert!(has_progress(&emitted, "commit", "error"));
         assert!(receipts(&emitted).is_empty(), "{emitted:?}");
     }
+
+    /// A worker that cannot ship is a `ShipError`, never a guessed range.
+    #[tokio::test]
+    async fn test_ship_context_rejects_an_unknown_worker_with_a_ship_error() {
+        let (ctx, _dir, _events) = test_ctx();
+        let err = ship_context(
+            ctx,
+            serde_json::json!({ "workerId": Uuid::new_v4().to_string() }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err["kind"], "workerNotFound");
+    }
 }
