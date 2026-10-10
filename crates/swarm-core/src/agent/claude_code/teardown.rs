@@ -15,7 +15,7 @@ use crate::events::{AgentSessionExitedPayload, AgentTurnSettledPayload, Provenan
 /// Starts teardown once; later calls are no-ops. It runs in its own task
 /// so a caller that stops waiting (a dropped `shutdown` future) cannot
 /// leave it half done.
-pub(super) fn begin_teardown(shared: &Arc<Shared>, stop: Stop) {
+fn begin_teardown(shared: &Arc<Shared>, stop: Stop) {
     if shared.teardown_started.swap(true, Ordering::AcqRel) {
         return;
     }
@@ -42,7 +42,7 @@ pub(super) async fn teardown(shared: &Arc<Shared>, stop: Stop) -> ExitSummary {
 /// closes stdin, stops the child (gracefully only when idle), synthesizes
 /// Condition B's settlement for a turn that never got its receipt, emits
 /// `agent_session_exited`, and publishes the exit summary.
-pub(super) async fn run_teardown(shared: Arc<Shared>, stop: Stop) {
+async fn run_teardown(shared: Arc<Shared>, stop: Stop) {
     let (in_flight, child) = {
         let mut inner = shared.state.lock();
         inner.closing = true;
@@ -106,7 +106,7 @@ pub(super) async fn run_teardown(shared: Arc<Shared>, stop: Stop) {
 
 /// `"SIGKILL"` for a Unix exit status that ended on signal 9, and so on.
 #[cfg(unix)]
-pub(super) fn signal_name(status: ExitStatus) -> Option<String> {
+fn signal_name(status: ExitStatus) -> Option<String> {
     use std::os::unix::process::ExitStatusExt;
     status.signal().map(|signal| {
         match signal {
@@ -126,6 +126,6 @@ pub(super) fn signal_name(status: ExitStatus) -> Option<String> {
 
 /// Windows has no signals: `TerminateProcess` sets an exit code.
 #[cfg(not(unix))]
-pub(super) fn signal_name(_status: ExitStatus) -> Option<String> {
+fn signal_name(_status: ExitStatus) -> Option<String> {
     None
 }

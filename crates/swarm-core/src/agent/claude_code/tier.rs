@@ -1,5 +1,7 @@
-//! Trust tiers: SWARM's closed permission vocabulary and the argv it
-//! maps to for the `claude` CLI.
+//! The `claude` CLI's spawn contract: the argv each trust tier maps to,
+//! the probe's argv, the child's environment, and the capabilities the
+//! adapter advertises. The `ClaudeCodeTrustTier` enum stays in the parent
+//! module, where `src/lib/agent-events.contract.test.ts` reads it.
 
 use std::collections::HashMap;
 

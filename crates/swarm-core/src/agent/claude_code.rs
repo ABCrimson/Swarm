@@ -4,11 +4,12 @@
 //!
 //! Verified against `claude` 2.1.280 and 2.1.281 (live traces) and
 //! `@anthropic-ai/claude-agent-sdk` 0.3.280's protocol types; the oldest
-//! CLI it drives is `MIN_CLI_VERSION`. The wire types live in
-//! `wire`; the trust-tier mapping and argv in `tier`, the child process and
-//! handshake in `process`, the shared session state in `state`, teardown
-//! in `teardown` and the reader task's frame handlers in `reader`; this
-//! file holds the constants, the adapter and the session. The unit tests
+//! CLI it drives is `MIN_CLI_VERSION`. The wire types live in `wire`;
+//! the trust-tier mapping, argv, child environment and capabilities in `tier`;
+//! the child process and handshake in `process`; the shared session
+//! state in `state`; teardown in `teardown`; and the reader task's frame
+//! handlers in `reader`. This file holds the constants, the adapter and
+//! the session. The unit tests
 //! drive a fake CLI (`tests/fixtures/claude_code/fake_claude_cli.mjs`)
 //! that plays one scenario module per test with the real CLI's ordering.
 //!
@@ -161,8 +162,9 @@ const INTERRUPT_GRACE: Duration = Duration::from_secs(1);
 /// (2.1.281 exits in about 0.6s) before teardown kills it.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
-/// Poll interval while waiting out [`SHUTDOWN_GRACE`] with non-blocking
-/// `try_wait` calls.
+/// Poll interval for the two bounded waits on a child: non-blocking
+/// `try_wait` calls while waiting out [`SHUTDOWN_GRACE`], and the stderr
+/// drain thread after the child exits (`drained_stderr_snippet`).
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// How long a `can_use_tool` ask may wait for a human before the session
@@ -281,8 +283,8 @@ fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
 pub struct ClaudeCodeAdapter {
     sink: EventSink,
     binary: String,
-    /// Test-only argv prefix (empty in production) — see
-    /// [`ClaudeCodeAdapter::with_test_binary`].
+    /// Test-only argv prefix (empty in production), set by
+    /// `ClaudeCodeAdapter::with_test_binary`.
     prefix_args: Vec<String>,
 }
 
@@ -325,10 +327,17 @@ impl ClaudeCodeAdapter {
         let mut process = match Process::start(&self.binary, &argv, &cwd.to_string_lossy()).await {
             Ok(process) => process,
             Err(error) => {
-                return unavailable(
-                    None,
-                    format!("Claude Code CLI Not Found On PATH: {error:#}"),
-                );
+                let not_found = error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                });
+                let detail = if not_found {
+                    format!("Claude Code CLI Not Found On PATH: {error:#}")
+                } else {
+                    format!("Claude Code CLI Could Not Be Started: {error:#}")
+                };
+                return unavailable(None, detail);
             }
         };
         let answer = tokio::time::timeout(PROBE_TIMEOUT, handshake(&mut process, true)).await;

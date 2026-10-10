@@ -130,14 +130,14 @@ pub(super) fn advance_cost(baseline: &mut Option<f64>, total: Option<f64>) -> Op
 
 // ── Frame handling (reader task) ─────────────────────────────────────
 
-pub(super) fn handle_line(shared: &Arc<Shared>, line: &str) {
+fn handle_line(shared: &Arc<Shared>, line: &str) {
     match serde_json::from_str::<Inbound>(line) {
         Ok(frame) => dispatch(shared, frame),
         Err(error) => recover_unreadable(shared, line, &error),
     }
 }
 
-pub(super) fn dispatch(shared: &Arc<Shared>, frame: Inbound) {
+fn dispatch(shared: &Arc<Shared>, frame: Inbound) {
     match frame {
         Inbound::System(System::Init(init)) => handle_init(shared, &init),
         Inbound::System(System::PermissionDenied(denied)) => {
@@ -170,7 +170,7 @@ pub(super) fn dispatch(shared: &Arc<Shared>, frame: Inbound) {
 /// still get an answer, because something waits on them: a `result`
 /// settles its turn as an error, and a `control_request` is refused so
 /// the CLI stops waiting.
-pub(super) fn recover_unreadable(shared: &Arc<Shared>, line: &str, error: &serde_json::Error) {
+fn recover_unreadable(shared: &Arc<Shared>, line: &str, error: &serde_json::Error) {
     let value = serde_json::from_str::<Value>(line).unwrap_or_default();
     match value.get("type").and_then(Value::as_str) {
         Some("result") => {
@@ -187,20 +187,24 @@ pub(super) fn recover_unreadable(shared: &Arc<Shared>, line: &str, error: &serde
                 },
             );
         }
-        Some("control_request") => {
-            if let Some(request_id) = value.get("request_id").and_then(Value::as_str) {
+        Some("control_request") => match value.get("request_id").and_then(Value::as_str) {
+            Some(request_id) => {
+                tracing::warn!(worker_id = %shared.worker_id, %error, request_id, "claude code: unreadable control_request; refusing it");
                 shared
                     .stdin
                     .send(wire::control_error(request_id, UNSUPPORTED_REQUEST));
             }
-        }
+            None => {
+                tracing::warn!(worker_id = %shared.worker_id, %error, "claude code: unreadable control_request without a request_id; it cannot be answered");
+            }
+        },
         _ => {
             tracing::warn!(worker_id = %shared.worker_id, %error, "claude code: unreadable ndjson line, skipping");
         }
     }
 }
 
-pub(super) fn handle_init(shared: &Arc<Shared>, init: &InitLine) {
+fn handle_init(shared: &Arc<Shared>, init: &InitLine) {
     if let Some(session_id) = &init.session_id
         && *session_id != shared.session_key
     {
@@ -224,7 +228,7 @@ pub(super) fn handle_init(shared: &Arc<Shared>, init: &InitLine) {
     }
 }
 
-pub(super) fn handle_lifecycle(shared: &Arc<Shared>, lifecycle: &CommandLifecycleLine) {
+fn handle_lifecycle(shared: &Arc<Shared>, lifecycle: &CommandLifecycleLine) {
     let ended = {
         let mut inner = shared.state.lock();
         inner.lifecycle = Some(true);
@@ -261,7 +265,7 @@ pub(super) fn handle_lifecycle(shared: &Arc<Shared>, lifecycle: &CommandLifecycl
     );
 }
 
-pub(super) fn handle_stream_event(shared: &Arc<Shared>, line: StreamEventLine) {
+fn handle_stream_event(shared: &Arc<Shared>, line: StreamEventLine) {
     // A subagent's stream never touches the top-level block state.
     if line.parent_tool_use_id.is_some() {
         return;
@@ -312,7 +316,7 @@ pub(super) fn handle_stream_event(shared: &Arc<Shared>, line: StreamEventLine) {
     shared.sink.emit(SwarmEvent::AgentTurnDelta(delta));
 }
 
-pub(super) fn handle_assistant(shared: &Arc<Shared>, message: &MessageLine) {
+fn handle_assistant(shared: &Arc<Shared>, message: &MessageLine) {
     let (turn_id, block_index) = {
         let mut inner = shared.state.lock();
         let Some(turn) = inner.turn.as_mut() else {
@@ -359,7 +363,7 @@ pub(super) fn handle_assistant(shared: &Arc<Shared>, message: &MessageLine) {
     }
 }
 
-pub(super) fn handle_user(shared: &Arc<Shared>, message: &MessageLine) {
+fn handle_user(shared: &Arc<Shared>, message: &MessageLine) {
     if message.parent_tool_use_id.is_some() {
         return;
     }
@@ -399,7 +403,7 @@ pub(super) fn handle_user(shared: &Arc<Shared>, message: &MessageLine) {
 }
 
 /// A report of a denial the CLI decided on its own.
-pub(super) fn denial_report(
+fn denial_report(
     shared: &Shared,
     turn_id: &TurnId,
     tool_use_id: String,
@@ -422,7 +426,7 @@ pub(super) fn denial_report(
     })
 }
 
-pub(super) fn handle_permission_denied(shared: &Arc<Shared>, denied: PermissionDeniedLine) {
+fn handle_permission_denied(shared: &Arc<Shared>, denied: PermissionDeniedLine) {
     let report = {
         let mut inner = shared.state.lock();
         let Some(turn) = inner.turn.as_mut().filter(|turn| turn.running) else {
@@ -450,7 +454,7 @@ pub(super) fn handle_permission_denied(shared: &Arc<Shared>, denied: PermissionD
     shared.sink.emit(report);
 }
 
-pub(super) fn handle_control_request(shared: &Arc<Shared>, request: ControlRequestLine) {
+fn handle_control_request(shared: &Arc<Shared>, request: ControlRequestLine) {
     match request.request {
         ControlRequest::CanUseTool(ask) => handle_can_use_tool(shared, request.request_id, ask),
         ControlRequest::Other => {
@@ -468,7 +472,7 @@ pub(super) fn handle_control_request(shared: &Arc<Shared>, request: ControlReque
 /// and a `requires_user_interaction` ask (the tool's approval card is
 /// where the user answers it, so a one-tap Allow would pass its input
 /// through unanswered); the latter is still reported, as a denial.
-pub(super) fn handle_can_use_tool(shared: &Arc<Shared>, request_id: PermissionId, ask: CanUseTool) {
+fn handle_can_use_tool(shared: &Arc<Shared>, request_id: PermissionId, ask: CanUseTool) {
     let turn_id = {
         let mut guard = shared.state.lock();
         let inner = &mut *guard;
@@ -545,7 +549,7 @@ pub(super) fn handle_can_use_tool(shared: &Arc<Shared>, request_id: PermissionId
 
 /// Denies the ask `request_id` if it is still open after
 /// [`PERMISSION_DECISION_TIMEOUT`].
-pub(super) fn expire_ask(shared: &Arc<Shared>, request_id: PermissionId) {
+fn expire_ask(shared: &Arc<Shared>, request_id: PermissionId) {
     let session = Arc::downgrade(shared);
     tokio::spawn(async move {
         tokio::time::sleep(PERMISSION_DECISION_TIMEOUT).await;
@@ -565,7 +569,7 @@ pub(super) fn expire_ask(shared: &Arc<Shared>, request_id: PermissionId) {
     });
 }
 
-pub(super) fn handle_result(shared: &Arc<Shared>, result: ResultLine) {
+fn handle_result(shared: &Arc<Shared>, result: ResultLine) {
     let (turn, cost_usd) = {
         let mut inner = shared.state.lock();
         // Every result moves the running total, including results of

@@ -24,6 +24,9 @@ const SUB_READ = {
 export default async function subagentTurn(cli) {
   const f = cli.frames;
   const turn = await cli.nextUser();
+  // Without the variable the real CLI runs the subagent in the background
+  // and ends the turn early: fail the turn instead of faking foreground.
+  if (process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS !== "1") cli.exit(3);
   const sub = { parent: AGENT.id };
   cli.emit(
     f.init(),

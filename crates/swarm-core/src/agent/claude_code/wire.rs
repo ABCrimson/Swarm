@@ -64,9 +64,6 @@ pub(super) enum System {
 #[serde(default)]
 pub(super) struct InitLine {
     pub session_id: Option<String>,
-    pub model: Option<String>,
-    #[serde(rename = "permissionMode")]
-    pub permission_mode: Option<String>,
     /// Protocol capabilities (`msg_lifecycle_v1`, `interrupt_receipt_v1`,
     /// ...). `None` on CLIs that predate the field.
     pub capabilities: Option<Vec<String>>,

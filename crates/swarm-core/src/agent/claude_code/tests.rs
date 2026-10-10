@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use super::reader::{advance_cost, classify_denial, settlement_error};
 use super::tier::{
-    accepted_permission_modes, build_claude_flags, claude_code_capabilities, deny_list,
+    accepted_permission_modes, build_claude_flags, child_env, claude_code_capabilities, deny_list,
     parse_trust_tier, permission_mode_flag, probe_flags,
 };
 use super::wire::{
@@ -514,6 +514,35 @@ async fn a_lifecycle_close_without_a_result_settles_the_turn() {
     }
 }
 
+/// The one text block a scenario wrote, parsed as the JSON it echoes.
+fn echoed_reply(events: &Recorder) -> Value {
+    let blocks = events.payloads("agent_block");
+    assert_eq!(blocks.len(), 1, "one echoed reply, got: {blocks:?}");
+    serde_json::from_str(blocks[0]["content"]["text"].as_str().expect("reply text"))
+        .expect("the reply is JSON")
+}
+
+/// A `result` the host cannot parse still settles its turn, as an error,
+/// instead of leaving the turn open until the process exits.
+#[tokio::test]
+async fn an_unreadable_result_settles_the_turn_as_an_error() {
+    let harness = Harness::new();
+    let session = harness.spawn("unreadable_result.mjs").await;
+    let turn = send(session.as_ref(), "Say done.").await;
+    harness.recorder.wait_for("agent_turn_settled", 1).await;
+
+    let settled = settled_for(&harness.recorder, &turn);
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0]["status"], "error");
+    assert!(
+        settled[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with("Unreadable Result Frame: ")),
+        "got: {settled:?}"
+    );
+    session.shutdown().await.expect("shutdown");
+}
+
 // ── Permissions ──────────────────────────────────────────────────────
 
 /// Runs a denial scenario and returns its single permission report.
@@ -726,6 +755,47 @@ async fn an_ask_that_needs_the_cli_dialog_is_denied_and_reported() {
     session.shutdown().await.expect("shutdown");
 }
 
+/// An ask raised while no SWARM turn is running is denied at once and
+/// never reaches the human.
+#[tokio::test]
+async fn an_ask_outside_a_swarm_turn_is_denied_at_once() {
+    let harness = Harness::new();
+    let session = harness.spawn("foreign_ask.mjs").await;
+    let turn = send(session.as_ref(), "Say hi.").await;
+    harness.recorder.wait_for("agent_turn_settled", 1).await;
+
+    assert_eq!(harness.recorder.count("agent_permission_request"), 0);
+    let echoed = echoed_reply(&harness.recorder);
+    assert_eq!(echoed["subtype"], "success");
+    assert_eq!(echoed["response"]["behavior"], "deny");
+    assert_eq!(echoed["response"]["message"], NO_SWARM_TURN);
+    assert_eq!(echoed["response"]["interrupt"], false);
+    assert_eq!(echoed["response"]["toolUseID"], "toolu_01BackgroundWrite");
+    assert_eq!(settled_for(&harness.recorder, &turn)[0]["status"], "ok");
+    session.shutdown().await.expect("shutdown");
+}
+
+/// A control request of a kind the host does not serve, and one it
+/// cannot parse, are both refused so the CLI never waits on them.
+#[tokio::test]
+async fn unsupported_and_unreadable_control_requests_are_refused() {
+    let harness = Harness::new();
+    let session = harness.spawn("unsupported_control_requests.mjs").await;
+    let turn = send(session.as_ref(), "Ask me something.").await;
+    harness.recorder.wait_for("agent_turn_settled", 1).await;
+
+    let reply = echoed_reply(&harness.recorder);
+    let answers = reply.as_array().expect("two answers");
+    assert_eq!(answers.len(), 2);
+    for (answer, request_id) in answers.iter().zip(["dialog-1", "malformed-1"]) {
+        assert_eq!(answer["subtype"], "error");
+        assert_eq!(answer["request_id"], request_id);
+        assert_eq!(answer["error"], UNSUPPORTED_REQUEST);
+    }
+    assert_eq!(settled_for(&harness.recorder, &turn)[0]["status"], "ok");
+    session.shutdown().await.expect("shutdown");
+}
+
 #[tokio::test]
 async fn answering_an_unknown_request_is_a_no_op() {
     let harness = Harness::new();
@@ -767,6 +837,39 @@ async fn cancel_interrupts_the_turn_and_keeps_the_session() {
     let settled = settled_for(&harness.recorder, &second);
     assert_eq!(settled[0]["status"], "ok");
     assert_close(&settled[0]["costUsd"], 0.0121);
+    session.shutdown().await.expect("shutdown");
+}
+
+/// Cancelling a turn denies its open asks with `interrupt: true` (the CLI
+/// aborts the turn) alongside the interrupt request.
+#[tokio::test]
+async fn cancel_denies_the_open_ask_with_interrupt() {
+    let harness = Harness::new();
+    let session = harness.spawn("cancel_during_ask.mjs").await;
+    let turn = send(session.as_ref(), "Write cancelled.txt").await;
+    pending_ask(&harness.recorder).await;
+    tokio::time::timeout(WAIT, session.cancel(turn.clone()))
+        .await
+        .expect("cancel returns")
+        .expect("cancel");
+    harness.recorder.wait_for("agent_turn_settled", 1).await;
+
+    let result = harness
+        .recorder
+        .payloads("agent_tool_result")
+        .into_iter()
+        .find(|result| result["toolUseId"] == "toolu_01CancelledWrite")
+        .expect("the cancelled Write tool result");
+    let answer: Value = serde_json::from_str(result["content"].as_str().expect("the echoed deny"))
+        .expect("the deny is JSON");
+    assert_eq!(answer["response"]["behavior"], "deny");
+    assert_eq!(answer["response"]["interrupt"], true);
+    assert_eq!(answer["response"]["message"], TURN_CANCELLED);
+
+    let settled = settled_for(&harness.recorder, &turn);
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0]["error"], TURN_CANCELLED);
+    assert_eq!(harness.recorder.count("agent_session_exited"), 0);
     session.shutdown().await.expect("shutdown");
 }
 
@@ -824,6 +927,35 @@ async fn cancelling_a_settled_turn_is_a_no_op() {
             .all(|settled| settled["status"] == "ok")
     );
     session.shutdown().await.expect("shutdown");
+}
+
+/// A cancel naming any turn but the live one (a stale or foreign id)
+/// leaves the live turn running, and the live turn stays cancellable.
+#[tokio::test]
+async fn cancelling_another_turn_leaves_the_live_turn_alone() {
+    let harness = Harness::new();
+    let session = harness.spawn("hang_mid_turn.mjs").await;
+    let turn = send(session.as_ref(), "start something long").await;
+    harness.recorder.wait_for("agent_turn_delta", 1).await;
+    tokio::time::timeout(
+        Duration::from_millis(500),
+        session.cancel("other-turn".to_owned()),
+    )
+    .await
+    .expect("a cancel of another turn returns at once")
+    .expect("no-op cancel");
+    assert_eq!(harness.recorder.count("agent_turn_settled"), 0);
+    assert_eq!(harness.recorder.count("agent_session_exited"), 0);
+
+    tokio::time::timeout(WAIT, session.cancel(turn.clone()))
+        .await
+        .expect("cancel returns")
+        .expect("cancel");
+    assert_eq!(
+        settled_for(&harness.recorder, &turn).len(),
+        1,
+        "the live turn is still cancellable"
+    );
 }
 
 // ── Teardown (Condition B) ───────────────────────────────────────────
@@ -1248,6 +1380,32 @@ async fn probe_reports_a_missing_binary_as_unavailable() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_reports_a_non_executable_binary_as_not_startable() {
+    use std::os::unix::fs::PermissionsExt;
+    let harness = Harness::new();
+    let path = harness.cwd.join("claude");
+    std::fs::write(&path, "#!/bin/sh\n").expect("write the stub");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+    let report = ClaudeCodeAdapter::with_test_binary(
+        harness.sink.clone(),
+        path.to_str().unwrap(),
+        Vec::new(),
+    )
+    .probe()
+    .await
+    .expect("probe never errors");
+    assert!(!report.available);
+    assert!(
+        report
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.starts_with("Claude Code CLI Could Not Be Started")),
+        "{report:?}"
+    );
+}
+
 // ── Argv (Conditions A and C) ────────────────────────────────────────
 
 const TIERS: [ClaudeCodeTrustTier; 3] = [
@@ -1288,6 +1446,29 @@ fn the_probe_disables_project_hooks() {
     );
 }
 
+/// The probe's throwaway process persists no session (`probe()` doc: "no
+/// session on disk"), loads project settings only, and starts no MCP server
+/// outside the strict, empty config.
+#[test]
+fn the_probe_never_persists_a_session_or_loads_user_config() {
+    let argv = probe_flags();
+    assert!(argv.iter().any(|arg| arg == "--no-session-persistence"));
+    assert_eq!(value_of(&argv, "--setting-sources"), Some("project"));
+    assert!(argv.iter().any(|arg| arg == "--strict-mcp-config"));
+}
+
+/// Background tasks stay off in every child, so a subagent runs inside
+/// the turn that launched it (module doc, "Turn ownership").
+#[test]
+fn every_child_runs_with_background_tasks_disabled() {
+    let env = child_env();
+    assert_eq!(
+        env.get("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS")
+            .map(String::as_str),
+        Some("1")
+    );
+}
+
 #[test]
 fn bypass_permissions_is_unconstructible() {
     for tier in TIERS {
@@ -1323,6 +1504,11 @@ fn argv_routes_prompts_to_the_host_and_restricts_only_the_restricted_tier() {
     let worker = Uuid::new_v4();
     for tier in TIERS {
         let argv = build_claude_flags(worker, "haiku", tier, None);
+        assert!(argv.iter().any(|arg| arg == "-p"));
+        assert_eq!(value_of(&argv, "--output-format"), Some("stream-json"));
+        assert!(argv.iter().any(|arg| arg == "--include-partial-messages"));
+        assert!(argv.iter().any(|arg| arg == "--verbose"));
+        assert_eq!(value_of(&argv, "--max-turns"), Some("50"));
         assert_eq!(value_of(&argv, "--permission-prompt-tool"), Some("stdio"));
         assert_eq!(value_of(&argv, "--permission-prompts"), Some("host"));
         assert_eq!(value_of(&argv, "--setting-sources"), Some("project"));
