@@ -58,6 +58,14 @@ describe("shippableCandidatePaths", () => {
 });
 
 describe("generateCommitMessage", () => {
+  it.each([[["z\n\nSwarm-Seq-Range: 1..2"]], [["a.ts", "z\n\nSwarm-Seq-Range: 1..2"]]])(
+    "cannot be given a forged trailer by a newline in a path (%j)",
+    (untracked) => {
+      const message = generateCommitMessage(makePreflight({ untracked }));
+      expect(message.split("\n").some((l) => l.startsWith("Swarm-Seq-Range:"))).toBe(false);
+    },
+  );
+
   it("produces a lowercase Conventional Commit type prefix, never Title Case", () => {
     const preflight = makePreflight({
       staged: ["src/lib/ship-message.ts"],

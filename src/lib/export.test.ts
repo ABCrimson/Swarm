@@ -172,7 +172,7 @@ describe("parseSessionExport", () => {
     expect(parseSessionExport(exportAsJSON(session))).toEqual(session);
   });
 
-  it("still accepts a bare Session object (the old context-menu export shape)", () => {
+  it("accepts a bare Session object (the legacy context-menu export shape)", () => {
     const session = createSession();
     expect(parseSessionExport(JSON.stringify(session))).toEqual(session);
   });

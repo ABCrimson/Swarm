@@ -4,8 +4,8 @@
  *
  * One JSON format is written — `exportAsJSON`'s `{ session, workers,
  * exportedAt }` wrapper — and `parseSessionExport` reads it back. It
- * also still accepts a bare `Session` object, the shape the session
- * context menu's "Export As JSON" wrote before both exports were unified.
+ * also accepts a bare `Session` object, the legacy context-menu export
+ * shape, so session files saved in that shape keep importing.
  *
  * File I/O goes through a native dialog, never a hand-built path:
  * `@tauri-apps/plugin-dialog` grants the fs scope for exactly the file

@@ -180,9 +180,8 @@ describe("alert cooldown (parametrized)", () => {
   });
 });
 
-// Regression: persisted thresholds were trusted as-is, so an older or
-// malformed object compared metrics against `undefined` and alerts
-// silently stopped. The stored value is now validated on hydrate.
+// Stored thresholds are validated on hydrate: a malformed or partial object
+// must never leave a field undefined, which would silently disable alerts.
 describe("alertThresholdsAtom hydration", () => {
   afterEach(() => {
     storedValue.mockReset();

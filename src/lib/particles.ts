@@ -143,7 +143,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 
 /** WGSL vertex shader for instanced billboard quad rendering. */
-export const PARTICLE_VERTEX_WGSL = /* wgsl */ `
+const PARTICLE_VERTEX_WGSL = /* wgsl */ `
 struct Particle {
   pos: vec2f,
   vel: vec2f,
@@ -204,7 +204,7 @@ fn main(
 `;
 
 /** WGSL fragment shader with soft-circle falloff and alpha blending. */
-export const PARTICLE_FRAGMENT_WGSL = /* wgsl */ `
+const PARTICLE_FRAGMENT_WGSL = /* wgsl */ `
 struct FragInput {
   @location(0) uv: vec2f,
   @location(1) color: vec4f,
@@ -231,10 +231,6 @@ export interface SimParams {
   workerCount: number;
   time: number;
   deltaHue: number;
-  /** @deprecated Ignored — the simulation runs in clip space. */
-  canvasWidth?: number;
-  /** @deprecated Ignored — the simulation runs in clip space. */
-  canvasHeight?: number;
   speedMultiplier: number;
   chromaMultiplier: number;
   /** Tokens/sec normalized to 0-1 range. Drives particle speed. */
@@ -248,7 +244,7 @@ export interface SimParams {
 }
 
 /** Default simulation parameters. */
-export const DEFAULT_SIM_PARAMS: Required<Omit<SimParams, "canvasWidth" | "canvasHeight">> = {
+export const DEFAULT_SIM_PARAMS: Required<SimParams> = {
   dt: 0.016,
   workerCount: 0,
   time: 0,
