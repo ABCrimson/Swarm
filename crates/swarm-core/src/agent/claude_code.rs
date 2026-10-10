@@ -298,10 +298,17 @@ impl ClaudeCodeAdapter {
         let mut process = match Process::start(&self.binary, &argv, &cwd.to_string_lossy()).await {
             Ok(process) => process,
             Err(error) => {
-                return unavailable(
-                    None,
-                    format!("Claude Code CLI Not Found On PATH: {error:#}"),
-                );
+                let not_found = error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                });
+                let detail = if not_found {
+                    format!("Claude Code CLI Not Found On PATH: {error:#}")
+                } else {
+                    format!("Claude Code CLI Could Not Be Started: {error:#}")
+                };
+                return unavailable(None, detail);
             }
         };
         let answer = tokio::time::timeout(PROBE_TIMEOUT, handshake(&mut process, true)).await;
