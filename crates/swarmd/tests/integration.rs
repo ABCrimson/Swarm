@@ -587,7 +587,7 @@ fn refusal(result: Result<impl std::fmt::Debug, tungstenite::Error>) -> (u16, St
 /// Loopback clients (every client of a local TLS proxy or `ssh -L` tunnel)
 /// are bounded by the handshake pool only, never by the per-address share,
 /// which would otherwise lump all of them into one small bucket. The
-/// per-address share for remote peers is unit-tested in `ws.rs`.
+/// per-address share for remote peers is unit-tested in `ws/admission.rs`.
 #[tokio::test]
 async fn test_loopback_handshakes_are_not_capped_per_address() {
     let server = TestServer::start_with(Options {
