@@ -25,6 +25,7 @@ describe("FileViewer", () => {
       text: "one\ntwo\nthree",
     });
 
+    expect(screen.getByText("notes.txt")).toHaveAttribute("title", "C:\\proj\\notes.txt");
     expect(gutter?.textContent).toBe("1\n2\n3");
     expect(gutter).toHaveAttribute("aria-hidden", "true");
     expect(code?.textContent).toBe("one\ntwo\nthree");
