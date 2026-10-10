@@ -107,10 +107,47 @@ describe("ToolApprovalPrompt", () => {
     expect(prompt.textContent).not.toContain("\n");
   });
 
-  it("truncates a long value behind a Show All toggle", async () => {
+  it("renders a literal backslash-n differently from a real newline", async () => {
+    render(<ToolApprovalPrompt workerId={W} />);
+    const prov = { originWorker: W, causeSeq: 1 };
+
+    void executeTool("run_command", { workerId: W, command: "echo done\nrm -rf ~" }, prov);
+    void executeTool("run_command", { workerId: W, command: "echo done\\nrm -rf ~" }, prov);
+
+    await vi.waitFor(() => expect(screen.getAllByRole("group")).toHaveLength(2));
+    const [real, literal] = screen.getAllByRole("group").map((row) => row.textContent);
+    expect(real).toContain("echo done\\nrm -rf ~");
+    expect(literal).toContain("echo done\\\\nrm -rf ~");
+    expect(real).not.toEqual(literal);
+  });
+
+  it("shows every field of the parsed input, humanizing the key", async () => {
+    render(<ToolApprovalPrompt workerId={W} />);
+
+    void executeTool(
+      "read_file",
+      { path: "/home/u/a.txt", maxLines: 7 },
+      { originWorker: W, causeSeq: 1 },
+    );
+    const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
+    expect(prompt).toHaveTextContent("Path/home/u/a.txt");
+    expect(prompt).toHaveTextContent("Max Lines7");
+  });
+
+  it("shows a spawn_worker name", async () => {
+    render(<ToolApprovalPrompt workerId={W} />);
+
+    void executeTool("spawn_worker", { name: "builder" }, { originWorker: W, causeSeq: 1 });
+
+    expect(await screen.findByRole("alert", { name: "Tool Approval" })).toHaveTextContent(
+      "Namebuilder",
+    );
+  });
+
+  it("cuts a long value, counts what is hidden, and keeps Allow off until Show All", async () => {
     const user = userEvent.setup();
     render(<ToolApprovalPrompt workerId={W} />);
-    const content = `${"x".repeat(1999)}END`;
+    const content = `${"x".repeat(1997)}END`;
 
     void executeTool(
       "write_file",
@@ -120,8 +157,28 @@ describe("ToolApprovalPrompt", () => {
 
     const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
     expect(prompt.textContent).not.toContain("END");
+    expect(prompt).toHaveTextContent("… 1500 more characters");
+    const allow = screen.getByRole("button", { name: "Allow Once" });
+    expect(allow).toBeDisabled();
+    expect(allow).toHaveAccessibleDescription(/Show All/);
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+
     await user.click(screen.getByRole("button", { name: "Show All" }));
+
     expect(prompt.textContent).toContain(content);
+    expect(screen.getByRole("button", { name: "Allow Once" })).toBeEnabled();
+  });
+
+  it("never truncates a run_command command", async () => {
+    render(<ToolApprovalPrompt workerId={W} />);
+    const command = `${"a".repeat(1999)}END`;
+
+    void executeTool("run_command", { workerId: W, command }, { originWorker: W, causeSeq: 1 });
+
+    const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
+    expect(prompt.textContent).toContain(command);
+    expect(screen.queryByRole("button", { name: "Show All" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Allow Once" })).toBeEnabled();
   });
 
   it("does not show another worker's calls", async () => {
