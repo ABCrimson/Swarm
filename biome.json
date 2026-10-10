@@ -49,6 +49,8 @@
       },
       "nursery": {
         "noFloatingPromises": "error",
+        "noMeaninglessVoidOperator": "error",
+        "noReactObjectTypeAsDefaultProp": "error",
         "noReturnInFinally": "error",
         "noUnmodifiedLoopCondition": "error",
         "noXorAsExponentiation": "error",
