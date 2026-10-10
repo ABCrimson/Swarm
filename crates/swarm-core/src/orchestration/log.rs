@@ -294,6 +294,24 @@ impl EventLog {
         Ok(())
     }
 
+    /// Test hook: renames `table` away so the next write to it fails,
+    /// to exercise the writer's fail-closed paths. Undo with
+    /// [`Self::repair_table`].
+    #[cfg(test)]
+    pub(super) fn break_table(&self, table: &str) {
+        self.conn
+            .execute_batch(&format!("ALTER TABLE {table} RENAME TO {table}_broken"))
+            .unwrap();
+    }
+
+    /// Test hook: undoes [`Self::break_table`].
+    #[cfg(test)]
+    pub(super) fn repair_table(&self, table: &str) {
+        self.conn
+            .execute_batch(&format!("ALTER TABLE {table}_broken RENAME TO {table}"))
+            .unwrap();
+    }
+
     /// Lets SQLite refresh its planner statistics on a connection that
     /// will live for the whole process (`PRAGMA optimize=0x10002`, the
     /// at-open form SQLite recommends for long-lived connections).
