@@ -1252,8 +1252,17 @@ fn settings_are_inline_json_with_the_tier_deny_list_never_a_path() {
             );
             let parsed: Value = serde_json::from_str(settings).expect("valid JSON");
             assert_eq!(parsed["permissions"]["deny"], json!(deny_list(tier)));
+            assert_eq!(parsed["disableAllHooks"], json!(true));
         }
     }
+}
+
+#[test]
+fn the_probe_disables_project_hooks() {
+    assert_eq!(
+        value_of(&probe_flags(), "--settings"),
+        Some(r#"{"disableAllHooks":true}"#)
+    );
 }
 
 #[test]

@@ -315,9 +315,17 @@ fn deny_list(tier: ClaudeCodeTrustTier) -> &'static [&'static str] {
 /// be committed by the ship chain, keep the worktree dirty (so `git
 /// worktree remove` refuses), and could clobber a human-committed
 /// `.claude/settings.json`. `--settings` accepts inline JSON and
-/// composes with `--setting-sources project`.
+/// composes with `--setting-sources project`. `disableAllHooks` stops a
+/// project's hooks: `-p` skips the workspace trust dialog, yet project
+/// hooks still run (measured on 2.1.296: an untrusted repo's
+/// `SessionStart` hook ran during the `initialize` handshake, and with
+/// this key it did not).
 fn inline_settings_json(tier: ClaudeCodeTrustTier) -> String {
-    serde_json::json!({ "permissions": { "deny": deny_list(tier) } }).to_string()
+    serde_json::json!({
+        "disableAllHooks": true,
+        "permissions": { "deny": deny_list(tier) },
+    })
+    .to_string()
 }
 
 /// What this adapter can honestly promise — identical for every trust
@@ -370,7 +378,9 @@ fn build_claude_flags(
         "--max-turns",
         MAX_TURNS_PER_TURN,
         // Condition A: no user or local settings, no MCP servers (claude.ai
-        // connectors included), only the inline deny list below.
+        // connectors included). Project settings load with their hooks
+        // disabled and the tier's deny list added by the inline settings
+        // below.
         "--setting-sources",
         "project",
         "--strict-mcp-config",
@@ -407,6 +417,8 @@ fn probe_flags() -> Vec<String> {
         "--no-session-persistence",
         "--setting-sources",
         "project",
+        "--settings",
+        r#"{"disableAllHooks":true}"#,
         "--strict-mcp-config",
     ]
     .map(String::from)
