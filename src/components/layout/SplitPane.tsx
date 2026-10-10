@@ -26,10 +26,10 @@ const KEYBOARD_STEP = 2;
  * The primary pane's size is persisted in `paneSizesAtom` (plugin-store
  * backed). A drag updates only local state and is committed once, when
  * the pointer is released or the capture is lost (pointer cancelled,
- * window blurred) — persisting on every pointermove rewrote the
- * settings file at pointer rate. A stored value is clamped to this
- * instance's [minPercent, maxPercent] before use, so a corrupt or
- * out-of-range value cannot break the layout.
+ * window blurred), because persisting on every pointermove would
+ * rewrite the settings file at pointer rate. A stored value is clamped
+ * to this instance's [minPercent, maxPercent] before use, so a corrupt
+ * or out-of-range value cannot break the layout.
  */
 export function SplitPane({
   primary,
