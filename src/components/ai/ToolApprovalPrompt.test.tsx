@@ -172,6 +172,41 @@ describe("ToolApprovalPrompt", () => {
 
     expect(prompt.textContent).toContain(content);
     expect(screen.getByRole("button", { name: "Allow Once" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Show Less" }));
+
+    expect(prompt).toHaveTextContent("… 1500 more characters");
+    expect(screen.getByRole("button", { name: "Allow Once" })).toBeEnabled();
+  });
+
+  it("cuts the raw value before escaping, never inside an escape or a surrogate pair", async () => {
+    render(<ToolApprovalPrompt workerId={W} />);
+    const content = `${"x".repeat(498)}‮${"y".repeat(1500)}`;
+
+    void executeTool(
+      "write_file",
+      { path: "/home/u/.swarm/x.txt", content },
+      { originWorker: W, causeSeq: 1 },
+    );
+
+    const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
+    expect(prompt).toHaveTextContent("x\\u202Ey");
+    expect(prompt).toHaveTextContent("… 1499 more characters");
+  });
+
+  it("never cuts between the halves of a surrogate pair", async () => {
+    render(<ToolApprovalPrompt workerId={W} />);
+    const content = `${"x".repeat(499)}\u{1F600}${"z".repeat(600)}`;
+
+    void executeTool(
+      "write_file",
+      { path: "/home/u/.swarm/x.txt", content },
+      { originWorker: W, causeSeq: 1 },
+    );
+
+    const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
+    expect(prompt.textContent).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(prompt).toHaveTextContent("… 601 more characters");
   });
 
   it("never truncates a run_command command", async () => {
