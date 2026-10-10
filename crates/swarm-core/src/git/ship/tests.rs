@@ -16,6 +16,17 @@ use crate::worker::handle::{WorkerHandle, WorkerState};
 /// `repo`'s current `HEAD`.
 fn register(registry: &WorkerRegistry, repo: &TempRepo, worktree: &Path, branch: &str) -> WorkerId {
     let base_commit = repo::head_sha(repo.root()).unwrap();
+    register_at(registry, repo, worktree, branch, &base_commit)
+}
+
+/// [`register`] with an explicit recorded base commit.
+fn register_at(
+    registry: &WorkerRegistry,
+    repo: &TempRepo,
+    worktree: &Path,
+    branch: &str,
+    base_commit: &str,
+) -> WorkerId {
     let handle = WorkerHandle {
         id: Uuid::new_v4(),
         state: WorkerState::Running,
@@ -27,7 +38,7 @@ fn register(registry: &WorkerRegistry, repo: &TempRepo, worktree: &Path, branch:
         worktree_path: Some(worktree.display().to_string()),
         repo_root: Some(repo.root().display().to_string()),
         branch: Some(branch.to_owned()),
-        base_commit: Some(base_commit),
+        base_commit: Some(base_commit.to_owned()),
         last_shipped_seq: None,
         last_shipped_commit: None,
     };
@@ -202,6 +213,21 @@ fn test_current_branch_detects_detached_head() {
     );
     repo.git(&["checkout", "--detach"]);
     assert_eq!(current_branch(repo.root()).unwrap(), None);
+}
+
+/// A failed read is an error, never "detached" (`Ok(None)`).
+#[test]
+fn test_current_branch_errors_when_git_cannot_read_the_directory() {
+    let repo = TempRepo::new("branch-gone");
+    assert!(current_branch(&repo.base().join("gone")).is_err());
+}
+
+/// Only exit 2 means "no such remote"; any other failure is an error.
+#[test]
+fn test_remote_url_errors_on_a_failed_read_and_is_none_for_a_missing_remote() {
+    let repo = TempRepo::new("remote-url");
+    assert!(remote_url(&repo.base().join("gone"), "origin").is_err());
+    assert_eq!(remote_url(repo.root(), "origin").unwrap(), None);
 }
 
 #[test]
@@ -830,6 +856,24 @@ fn test_preflight_computes_ahead_from_base_commit_when_no_upstream() {
     );
 }
 
+/// A base commit that no longer exists is an error, never "0 ahead".
+#[test]
+fn test_preflight_errors_when_the_base_commit_is_gone() {
+    let repo = TempRepo::new("base-gone");
+    let worktree = repo.add_worktree("wt", "swarm/gone-abcd1234");
+    let registry = WorkerRegistry::new();
+    let id = register_at(
+        &registry,
+        &repo,
+        &worktree,
+        "swarm/gone-abcd1234",
+        "0000000000000000000000000000000000000001",
+    );
+
+    let err = preflight(&registry, id, StagingMode::All).unwrap_err();
+    assert_eq!(err.kind, ShipErrorKind::Unknown);
+}
+
 /// After a push the upstream's ahead/behind comes from the same status
 /// snapshot.
 #[test]
@@ -919,6 +963,44 @@ fn test_push_refuses_protected_branch() {
     let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
     assert_eq!(err.kind, ShipErrorKind::InvalidBranch);
     assert!(repo::rev_parse(&bare, "release/x").is_err());
+}
+
+#[test]
+fn test_push_refuses_the_base_branch() {
+    let repo = TempRepo::new("push-base");
+    let bare = repo.add_bare_origin();
+    repo.git(&["push", "origin", "main:trunk"]);
+    repo.git(&["remote", "set-head", "origin", "trunk"]);
+    let before = repo::rev_parse(&bare, "trunk").unwrap();
+    let wt = repo.add_worktree("wt", "swarm/base-abcd1234");
+    let registry = WorkerRegistry::new();
+    let id = register(&registry, &repo, &wt, "swarm/base-abcd1234");
+    git_in(&wt, &["switch", "-c", "trunk"]);
+    write_file(&wt, "x.txt", "x");
+    git_in(&wt, &["add", "x.txt"]);
+    git_in(&wt, &["commit", "-m", "feat: x"]);
+
+    let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
+    assert_eq!(err.kind, ShipErrorKind::InvalidBranch);
+    assert_eq!(repo::rev_parse(&bare, "trunk").unwrap(), before);
+}
+
+/// A branch named `+main` is a literal ref, not a forced push to `main`.
+#[test]
+fn test_push_of_a_force_marker_branch_never_overwrites_origin_main() {
+    let repo = TempRepo::new("push-plus");
+    let bare = repo.add_bare_origin();
+    repo.git(&["push", "origin", "main"]);
+    let original = repo::rev_parse(&bare, "main").unwrap();
+    repo.git(&["commit", "--amend", "--allow-empty", "-m", "rewritten"]);
+    let wt = repo.add_worktree("wt", "swarm/plus-abcd1234");
+    let registry = WorkerRegistry::new();
+    let id = register(&registry, &repo, &wt, "swarm/plus-abcd1234");
+    git_in(&wt, &["switch", "-c", "+main", "main"]);
+
+    let outcome = push(&registry, &RepoLocks::new(), id).unwrap();
+    assert_eq!(outcome.pushed_ref, "origin/+main");
+    assert_eq!(repo::rev_parse(&bare, "main").unwrap(), original);
 }
 
 #[test]

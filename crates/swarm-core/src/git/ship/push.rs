@@ -27,12 +27,18 @@ pub struct PushOutcome {
     pub sha: String,
 }
 
-/// Argv for `git push --set-upstream --end-of-options origin <branch>` —
-/// fixed shape, structurally incapable of carrying `--force`/`-f`/
-/// `--force-with-lease` or `--no-verify`. `--end-of-options` keeps a
-/// branch named like an option (`--all`, `--force`) a refspec: pinned by
-/// `test_push_args_never_contains_force`.
+/// Argv for `git push --set-upstream --end-of-options origin
+/// refs/heads/<branch>:refs/heads/<branch>` — fixed shape, with no
+/// `--force`/`-f`/`--force-with-lease` or `--no-verify` token.
+/// `--end-of-options` keeps an option-shaped branch (`--all`, `--force`) an
+/// operand, and the fully qualified refspec makes a leading `+` (git's
+/// force marker, honoured only at the start of a refspec) part of the
+/// literal ref name, so a branch named `+main` cannot force-update `main`.
+/// The fixed shape is pinned by `test_push_args_never_contains_force`, the
+/// option-shaped branch by `test_push_args_keep_option_shaped_branch_a_refspec`,
+/// the `+` branch by `test_push_args_force_marker_branch_is_a_literal_ref`.
 fn push_args(worktree: &Path, branch: &str) -> Vec<String> {
+    let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
     args_in(
         worktree,
         &[
@@ -40,7 +46,7 @@ fn push_args(worktree: &Path, branch: &str) -> Vec<String> {
             "--set-upstream",
             "--end-of-options",
             "origin",
-            branch,
+            &refspec,
         ],
     )
 }
@@ -249,7 +255,7 @@ mod tests {
                 "--set-upstream",
                 "--end-of-options",
                 "origin",
-                "swarm/agent-abcd1234"
+                "refs/heads/swarm/agent-abcd1234:refs/heads/swarm/agent-abcd1234"
             ]
         );
     }
@@ -264,8 +270,17 @@ mod tests {
                 "--set-upstream",
                 "--end-of-options",
                 "origin",
-                "--force"
+                "refs/heads/--force:refs/heads/--force"
             ]
+        );
+    }
+
+    #[test]
+    fn test_push_args_force_marker_branch_is_a_literal_ref() {
+        let args = push_args(Path::new("/tmp/wt"), "+main");
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("refs/heads/+main:refs/heads/+main")
         );
     }
 
