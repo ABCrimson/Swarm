@@ -529,7 +529,7 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
     }
 
     fn persist(&mut self, envelope: &DomainEvent, provenance: &Provenance) -> Result<(), AppError> {
-        let payload = envelope.event.payload_json().map_err(AppError::from)?;
+        let payload = envelope.event.payload_json()?;
         self.log.append(
             envelope.seq,
             envelope.ts,
