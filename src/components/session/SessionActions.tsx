@@ -1,7 +1,7 @@
 import { useActionState, useId, useState, useTransition } from "react";
+import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
-import { toast } from "#components/ui/Toast";
 import { errorMessage } from "#lib/is-error";
 import { createAndActivateSession, importSessionFromFile } from "#lib/session-lifecycle";
 
