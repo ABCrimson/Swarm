@@ -391,8 +391,7 @@ fn test_worker_input_failed_write_emits_nothing() {
         &sink,
         &registry,
         id,
-        b"ls
-",
+        b"ls\n",
         InputSource::Tool,
         Provenance::default(),
     )
