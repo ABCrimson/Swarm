@@ -1,9 +1,9 @@
 // ── useAlerts ───────────────────────────────────────
 //
 // The hook subscribes to the system store once and reads thresholds and
-// settings through an Effect Event. Regression: cooldowns used to live in
-// a ref that caught up only on re-render, so two metric ticks landing
-// before a render both saw the old cooldowns and fired duplicate toasts.
+// settings through an Effect Event. Cooldowns are written to a ref at
+// alert time, so two metric ticks that land before a re-render fire a
+// given alert once, not as duplicate toasts.
 
 import { act, renderHook } from "@testing-library/react";
 import { createStore, Provider } from "jotai";
