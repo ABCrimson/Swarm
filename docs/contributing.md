@@ -109,7 +109,7 @@ pnpm lint
 pnpm format
 ```
 
-CI runs `pnpm exec biome ci .`, which fails on any diagnostic without fixing it.
+CI runs `pnpm exec biome ci .`, which fails on any error-level diagnostic and writes no fixes; the rules `biome.json` sets to `warn` are reported but do not fail it.
 
 **Import style:** Use hash imports exclusively. `package.json` `"imports"` is the only alias map, and Biome's `noRestrictedImports` rejects parent-relative paths (`../`).
 
