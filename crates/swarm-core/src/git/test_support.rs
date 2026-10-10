@@ -1,7 +1,7 @@
 //! Disposable real-git fixtures for the git module's integration tests.
-//! Every test that needs a repository builds it through [`TempRepo`],
-//! so the setup (identity, default branch, hermetic config) lives in
-//! one place.
+//! Every test in this module that needs a repository builds it through
+//! [`TempRepo`], so the setup (identity, default branch, hermetic
+//! config) lives in one place.
 
 use std::path::{Path, PathBuf};
 
