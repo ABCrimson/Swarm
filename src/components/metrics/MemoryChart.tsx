@@ -1,7 +1,7 @@
 // ── MemoryChart ─────────────────────────────────────
 // Stacked area chart of used vs free memory — exactly the two figures the
 // backend reports (sysinfo used and total), nothing estimated.
-// OKLCH fills: used = plasma, free = dim.
+// OKLCH fills: used = METRIC_COLOR.memory (violet, as in MetricsChart), free = neutral grey.
 
 import { useId } from "react";
 import { Area, AreaChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from "recharts";
@@ -13,7 +13,7 @@ import { useSystemStore } from "#store/system";
 import type { MetricPoint } from "#store/types";
 
 const COLOR_USED = METRIC_COLOR.memory;
-const COLOR_FREE = "oklch(0.45 0.04 220)";
+const COLOR_FREE = "oklch(0.6 0.03 220)";
 
 /** One chart row: used and free memory in MB at `time`. */
 export interface MemoryChartPoint {

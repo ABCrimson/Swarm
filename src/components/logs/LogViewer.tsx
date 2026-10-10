@@ -129,7 +129,11 @@ export function LogViewer(): React.ReactElement {
           variant="secondary"
           size="sm"
           className="log-viewer__resume"
-          onClick={() => setAutoScroll(true)}
+          onClick={() => {
+            setAutoScroll(true);
+            // This button unmounts once following resumes; keep keyboard focus in the log.
+            containerRef.current?.focus();
+          }}
         >
           Resume Auto-Scroll
         </Button>
@@ -184,7 +188,9 @@ function LogRow({
         {LOG_LEVEL_LABEL[entry.level]}
       </Pill>
       <span className="log-row__source">{entry.source}</span>
-      <span className="log-row__message">{highlightText(entry.message, searchQuery)}</span>
+      <span className="log-row__message" title={entry.message}>
+        {highlightText(entry.message, searchQuery)}
+      </span>
     </div>
   );
 }

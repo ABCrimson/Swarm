@@ -115,7 +115,11 @@ describe("Settings — API key", () => {
     await user.type(screen.getByLabelText("API Key"), "sk-ant-x");
     await user.keyboard("{Enter}");
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Failed To Save API Key"));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("Failed To Save API Key", {
+        description: "disk full",
+      }),
+    );
     expect(screen.getByRole("button", { name: "Save API Key" })).toBeEnabled();
   });
 });
@@ -225,7 +229,9 @@ describe("Settings — worker registry cap", () => {
     await user.type(cap, "12{Enter}");
 
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith("Failed To Update Worker Registry Cap"),
+      expect(toast.error).toHaveBeenCalledWith("Failed To Update Worker Registry Cap", {
+        description: "refused",
+      }),
     );
     await waitFor(() => expect(cap).toHaveValue(64));
   });
@@ -357,7 +363,7 @@ describe("Settings — updates", () => {
     await waitFor(() => expect(toast[level]).toHaveBeenCalledWith(message));
   });
 
-  it("reports an unreachable update endpoint", async () => {
+  it("reports why the update check failed", async () => {
     const user = userEvent.setup();
     vi.mocked(checkForUpdates).mockRejectedValue(new Error("offline"));
     render(<Settings />);
@@ -365,9 +371,7 @@ describe("Settings — updates", () => {
     await user.click(screen.getByRole("button", { name: "Check For Updates" }));
 
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(
-        "Update Check Failed — No Update Endpoint Reachable",
-      ),
+      expect(toast.error).toHaveBeenCalledWith("Update Check Failed", { description: "offline" }),
     );
   });
 });

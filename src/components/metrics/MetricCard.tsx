@@ -1,7 +1,9 @@
 // ── MetricCard ──────────────────────────────────────
 // One stat tile: label, current value and, only when the caller measured
 // one, a trend arrow. The value is coloured by severity in OKLCH (green =
-// good, amber = warning, rose = critical) on a glass panel.
+// good, amber = warning, rose = critical) on a glass panel, and a warning
+// or critical value also shows its name, so severity never rests on colour
+// alone.
 //
 // Semantics: a tile is one term/description pair of the enclosing
 // `<dl>` (see `MetricCardList`), so assistive tech reads "CPU Usage,
@@ -26,6 +28,12 @@ export const SEVERITY_COLOR: Readonly<Record<Severity, string>> = {
   good: "oklch(0.78 0.18 140)",
   warning: "oklch(0.78 0.18 70)",
   critical: "oklch(0.68 0.22 15)",
+};
+
+/** Visible name for a non-good severity, so the state never rests on colour alone. */
+const SEVERITY_LABEL: Readonly<Record<Exclude<Severity, "good">, string>> = {
+  warning: "Warning",
+  critical: "Critical",
 };
 
 const TREND: Readonly<Record<Trend, { readonly symbol: string; readonly label: string }>> = {
@@ -88,6 +96,21 @@ export function MetricCard({
         >
           {value}
         </span>
+        {severity !== "good" && (
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              fontWeight: 600,
+              color: accentColor,
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              lineHeight: 1.4,
+            }}
+          >
+            {SEVERITY_LABEL[severity]}
+          </span>
+        )}
         {trend && (
           <span
             style={{

@@ -1,6 +1,6 @@
 // ── AIQueueChart ────────────────────────────────────
 // Pending AI requests by priority as one stacked bar.
-// Colours: critical = rose, high = amber, normal = plasma, low = dim.
+// Colours: critical = rose, high = amber, normal = plasma, low = neutral grey.
 
 import { Bar, BarChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from "recharts";
 import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
@@ -18,7 +18,7 @@ const PRIORITIES: readonly {
   { key: "critical", label: "Critical", color: "oklch(0.68 0.22 15)" },
   { key: "high", label: "High", color: "oklch(0.78 0.18 70)" },
   { key: "normal", label: "Normal", color: "oklch(0.72 0.18 205)" },
-  { key: "low", label: "Low", color: "oklch(0.45 0.04 220)" },
+  { key: "low", label: "Low", color: "oklch(0.6 0.03 220)" },
 ];
 
 /** Counts pending queue items per priority (every priority present, zero when none). */
@@ -56,6 +56,8 @@ export function AIQueueChart(): React.ReactElement {
             name={label}
             stackId="queue"
             fill={color}
+            stroke="oklch(0.08 0.02 220)"
+            strokeWidth={1}
             isAnimationActive={false}
           />
         ))}

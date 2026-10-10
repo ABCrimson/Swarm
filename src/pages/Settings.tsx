@@ -1,10 +1,21 @@
 import { useAtom } from "jotai";
-import { useEffect, useEffectEvent, useId, useOptimistic, useState, useTransition } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useId,
+  useOptimistic,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
+import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
 import { type AlertThresholds, alertThresholdsAtom } from "#lib/alerts";
+import { ANTHROPIC_API_KEY_CONFIG_KEY } from "#lib/anthropic";
+import { errorMessage } from "#lib/is-error";
 import { bindingFromEvent, formatBinding, type Keybindings } from "#lib/keybindings";
 import {
   CLAUDE_MODELS,
@@ -21,9 +32,6 @@ import {
   selectedModelAtom,
   themeAtom,
 } from "#store/ui";
-
-/** Config key under which the Anthropic API key is persisted (see #lib/anthropic). */
-const ANTHROPIC_API_KEY_CONFIG_KEY = "anthropic_api_key";
 
 /** Worker registry cap shown until the persisted value loads (the backend default). */
 const DEFAULT_MAX_WORKERS = 64;
@@ -264,6 +272,9 @@ function KeybindingField({
     if (!listening) return;
 
     const handleKeyDown = (e: KeyboardEvent): void => {
+      // Plain Tab / Shift+Tab can never be a binding (bindingFromEvent needs
+      // Ctrl, Alt or Meta), so let it move focus; onBlur ends listening.
+      if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) return;
       e.preventDefault();
       e.stopPropagation();
       if (e.key === "Escape") {
@@ -290,12 +301,15 @@ function KeybindingField({
         onClick={() => setListening(true)}
         onBlur={() => setListening(false)}
         aria-label={`Change Shortcut For ${label}`}
-        aria-describedby={`${id}-description`}
+        aria-describedby={`${id}-binding ${id}-description`}
         data-listening={listening || undefined}
         className="min-w-32.5 cursor-pointer rounded-md border border-plasma/30 bg-plasma/10 px-3.5 py-1.25 font-mono text-sm font-semibold text-plasma transition-colors hover:bg-plasma/15 data-listening:border-amber data-listening:bg-amber/15 data-listening:text-amber"
       >
-        {listening ? "Press Keys…" : formatBinding(value)}
+        <span id={`${id}-binding`}>{listening ? "Press Keys…" : formatBinding(value)}</span>
       </button>
+      <span role="status" className="sr-only">
+        {listening ? `Press The New Shortcut For ${label}, Escape Cancels` : ""}
+      </span>
     </SettingRow>
   );
 }
@@ -397,6 +411,8 @@ function AlertThresholdsSection({
   const [error, setError] = useState<ThresholdsProblem | null>(null);
   const editing = draft !== null;
   const errorId = `${id}-error`;
+  const firstFieldRef = useRef<HTMLInputElement>(null);
+  const editButtonRef = useRef<HTMLButtonElement>(null);
 
   const parsed = (values: Record<ThresholdKey, string>): AlertThresholds => ({
     cpuWarning: clampNumberInput(values.cpuWarning, 0, 100, thresholds.cpuWarning),
@@ -405,14 +421,28 @@ function AlertThresholdsSection({
     memoryCritical: clampNumberInput(values.memoryCritical, 0, 100, thresholds.memoryCritical),
   });
 
+  // The Edit and Cancel/Save buttons swap places, so the activated button
+  // unmounts: commit synchronously, then move focus to the control that
+  // replaced it instead of letting it fall to <body>.
   const startEditing = (): void => {
-    setError(null);
-    setDraft({
-      cpuWarning: String(thresholds.cpuWarning),
-      cpuCritical: String(thresholds.cpuCritical),
-      memoryWarning: String(thresholds.memoryWarning),
-      memoryCritical: String(thresholds.memoryCritical),
+    flushSync(() => {
+      setError(null);
+      setDraft({
+        cpuWarning: String(thresholds.cpuWarning),
+        cpuCritical: String(thresholds.cpuCritical),
+        memoryWarning: String(thresholds.memoryWarning),
+        memoryCritical: String(thresholds.memoryCritical),
+      });
     });
+    firstFieldRef.current?.focus();
+  };
+
+  const stopEditing = (): void => {
+    flushSync(() => {
+      setDraft(null);
+      setError(null);
+    });
+    editButtonRef.current?.focus();
   };
 
   const save = (event: React.FormEvent<HTMLFormElement>): void => {
@@ -426,8 +456,7 @@ function AlertThresholdsSection({
       return;
     }
     setThresholds(next);
-    setDraft(null);
-    setError(null);
+    stopEditing();
     toast.success("Alert Thresholds Updated");
   };
 
@@ -438,14 +467,7 @@ function AlertThresholdsSection({
         action={
           editing ? (
             <div className="flex gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setDraft(null);
-                  setError(null);
-                }}
-              >
+              <Button variant="ghost" size="sm" onClick={stopEditing}>
                 Cancel
               </Button>
               <Button type="submit" size="sm">
@@ -453,14 +475,14 @@ function AlertThresholdsSection({
               </Button>
             </div>
           ) : (
-            <Button variant="secondary" size="sm" onClick={startEditing}>
+            <Button ref={editButtonRef} variant="secondary" size="sm" onClick={startEditing}>
               Edit Thresholds
             </Button>
           )
         }
       >
         <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-          {THRESHOLD_FIELDS.map(({ key, label, tone }) => {
+          {THRESHOLD_FIELDS.map(({ key, label, tone }, index) => {
             const invalid = editing && error?.keys.has(key) === true;
             return (
               <div key={key}>
@@ -473,6 +495,7 @@ function AlertThresholdsSection({
                 <div className="flex items-center gap-1.5">
                   <Input
                     id={`${id}-${key}`}
+                    ref={index === 0 ? firstFieldRef : undefined}
                     type="number"
                     inputMode="numeric"
                     min={0}
@@ -547,14 +570,14 @@ export function Settings(): React.ReactElement {
         } else {
           toast.success("You Are On The Latest Version");
         }
-      } catch {
-        toast.error("Update Check Failed — No Update Endpoint Reachable");
+      } catch (err) {
+        toast.error("Update Check Failed", { description: errorMessage(err) });
       }
     });
 
   // ── API key (read on mount, written on Save via #lib/tauri) ──
-  // The key itself is never logged, traced, or included in a toast —
-  // only the static "saved"/"failed" messages below are shown.
+  // The key itself is never logged, traced, or included in a toast; a failed
+  // save shows the backend's error text, which never contains the value.
   const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [apiKeySaved, setApiKeySaved] = useState("");
 
@@ -566,8 +589,10 @@ export function Settings(): React.ReactElement {
         setApiKeyDraft(key);
         setApiKeySaved(key);
       })
-      .catch(() => {
-        // No config file yet (fresh install) or IPC unavailable — leave the field empty.
+      .catch((err: unknown) => {
+        // Unset resolves null; a rejection means the backend could not answer (transport
+        // down, or a swarmd page, which is denied secret-shaped keys). It never carries the key.
+        console.warn("[settings] Could not read the saved API key:", err);
       });
     return () => {
       cancelled = true;
@@ -585,8 +610,8 @@ export function Settings(): React.ReactElement {
         await writeConfig(ANTHROPIC_API_KEY_CONFIG_KEY, key);
         setApiKeySaved(key);
         toast.success("API Key Saved");
-      } catch {
-        toast.error("Failed To Save API Key");
+      } catch (err) {
+        toast.error("Failed To Save API Key", { description: errorMessage(err) });
       }
     });
   };
@@ -602,8 +627,9 @@ export function Settings(): React.ReactElement {
       .then((v) => {
         if (!cancelled && typeof v === "number" && v >= 1) setMaxWorkersState(v);
       })
-      .catch(() => {
-        // No persisted value yet — keep the backend default.
+      .catch((err: unknown) => {
+        // Unset resolves null; a rejection means the backend could not answer — keep the default.
+        console.warn("[settings] Could not read the saved worker registry cap:", err);
       });
     return () => {
       cancelled = true;
@@ -617,8 +643,8 @@ export function Settings(): React.ReactElement {
         await setMaxWorkers(v);
         startMaxWorkersUpdate(() => setMaxWorkersState(v));
         toast.success(`Worker Registry Cap Set To ${v}`);
-      } catch {
-        toast.error("Failed To Update Worker Registry Cap");
+      } catch (err) {
+        toast.error("Failed To Update Worker Registry Cap", { description: errorMessage(err) });
       }
     });
 
