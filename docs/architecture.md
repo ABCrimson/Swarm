@@ -367,8 +367,8 @@ path); `ShipPreview.tsx` renders the table straight from `ShipContext`.
 Two provider adapters implement one trait pair ([ADR-0013](adr/0013-provider-adapter-trait-pair.md)):
 `AgentAdapter` (`provider`, `capabilities`, `probe`, `spawn`) and `AgentSession` (`session_key`,
 `send_turn`, `await_turn_completion`, `cancel`, `respond_permission`, `shutdown`). `ProviderId` also
-reserves `OpenCode` and `Gemini` with no adapter. `agent_spawn` and `agent_probe` pick the adapter by
-provider; every other agent command reaches the live `Arc<dyn AgentSession>` through the
+reserves `OpenCode`, `Gemini` and `WebviewAnthropic` (the TypeScript chat path) with no adapter.
+`agent_spawn` and `agent_probe` pick the adapter by provider; every other agent command reaches the live `Arc<dyn AgentSession>` through the
 `AgentSessionRegistry` by worker id. `AgentSpawnSpec` is `workerId, cwd, model, resume, permissionMode`.
 
 | | Claude Code ([ADR-0016](adr/0016-claude-code-control-protocol.md)) | Codex ([ADR-0017](adr/0017-codex-app-server-protocol.md)) |
@@ -388,7 +388,8 @@ provider; every other agent command reaches the live `Arc<dyn AgentSession>` thr
   inline `--settings` JSON with `--setting-sources project`, never as a file in the worktree; the Codex
   adapter refuses a session whose applied policy is looser than requested.
 - **Exactly one `agent_turn_settled` per acknowledged turn**, synthesised ("Process Exited Without A
-  Receipt") if the process ends first. `send_turn` on a busy session is `AgentSessionBusy`.
+  Receipt (<cause>)", the cause being the known teardown reason or the stderr tail) if the process
+  ends first. `send_turn` on a busy session is `AgentSessionBusy`.
 - **Session state has three owners:** the provider CLI owns the conversation (SWARM keeps an opaque
   `SessionKey` and the cwd), the event log owns normalised history, the registry owns the live process.
 - **Piped substrate** (`worker/proc.rs`, [ADR-0014](adr/0014-piped-stdio-for-json-providers.md)):
@@ -663,6 +664,6 @@ True at this commit and deliberately not hidden:
 - Killing a worker signals only its shell; a detached process can keep a worktree busy
   (`disposition: "failed"`). Only the configured default repo is pruned at startup.
 - `swarmd` does not embed the UI, and a desktop window cannot attach to a running daemon.
-- `OpenCode` and `Gemini` provider ids have no adapter; `bus_send`, `bus_list_channels`, `get_session` and
+- `OpenCode`, `Gemini` and `WebviewAnthropic` provider ids have no adapter; `bus_send`, `bus_list_channels`, `get_session` and
   `agent_shutdown` have no frontend caller (`NOT_WIRED` in the desktop shell's contract test).
 - A hard link to a denied file inside a scope is not detected by `read_file`/`write_file`.
