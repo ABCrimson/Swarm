@@ -74,10 +74,18 @@ export function useWorkerEvents(): void {
         // Without pruning, a session's `workerIds` only ever grows.
         // Best effort: the resulting `session_worker_removed` event
         // (handled by `useSessionEvents`) updates the session store; a
-        // failed call leaves one stale id until the next prune.
+        // failed call leaves the dead id in that session's `workerIds`
+        // (nothing retries it), so the failure is logged.
         for (const session of useSessionStore.getState().sessions.values()) {
           if (session.workerIds.includes(workerId)) {
-            sessionRemoveWorker(session.id, workerId).catch(() => {});
+            sessionRemoveWorker(session.id, workerId).catch((err: unknown) =>
+              console.error(
+                "useWorkerEvents: could not prune worker from session",
+                session.id,
+                workerId,
+                err,
+              ),
+            );
           }
         }
       }),
