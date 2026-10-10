@@ -851,7 +851,11 @@ mod tests {
             Some(origin)
         );
 
-        EventLog::migrate(&mut log.conn).expect("a second migrate is a no-op");
+        // `query_only` fails any write with SQLITE_READONLY, so an `Ok`
+        // proves the up-to-date path performs no write at all.
+        log.conn.pragma_update(None, "query_only", true).unwrap();
+        EventLog::migrate(&mut log.conn).expect("a second migrate performs no write");
+        log.conn.pragma_update(None, "query_only", false).unwrap();
         assert_eq!(user_version(&log.conn), SCHEMA_VERSION);
     }
 
