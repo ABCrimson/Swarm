@@ -263,6 +263,9 @@ function KeybindingField({
     if (!listening) return;
 
     const handleKeyDown = (e: KeyboardEvent): void => {
+      // Plain Tab / Shift+Tab can never be a binding (bindingFromEvent needs
+      // Ctrl, Alt or Meta), so let it move focus; onBlur ends listening.
+      if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) return;
       e.preventDefault();
       e.stopPropagation();
       if (e.key === "Escape") {
@@ -289,12 +292,15 @@ function KeybindingField({
         onClick={() => setListening(true)}
         onBlur={() => setListening(false)}
         aria-label={`Change Shortcut For ${label}`}
-        aria-describedby={`${id}-description`}
+        aria-describedby={`${id}-binding ${id}-description`}
         data-listening={listening || undefined}
         className="min-w-32.5 cursor-pointer rounded-md border border-plasma/30 bg-plasma/10 px-3.5 py-1.25 font-mono text-sm font-semibold text-plasma transition-colors hover:bg-plasma/15 data-listening:border-amber data-listening:bg-amber/15 data-listening:text-amber"
       >
-        {listening ? "Press Keys…" : formatBinding(value)}
+        <span id={`${id}-binding`}>{listening ? "Press Keys…" : formatBinding(value)}</span>
       </button>
+      <span role="status" className="sr-only">
+        {listening ? `Press The New Shortcut For ${label}, Escape Cancels` : ""}
+      </span>
     </SettingRow>
   );
 }
