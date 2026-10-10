@@ -61,10 +61,11 @@ import { selectedModelAtom } from "#store/ui";
 import { useWorkerAgentStore } from "#store/worker-agents";
 
 /**
- * Chat effort. Explicit because Opus 5.5 defaults to `medium` while the
- * other models default to `high`; `medium` is the documented starting
- * point for Opus 5.5 and a sound cost/quality balance for an interactive
- * orchestration chat on every model.
+ * Chat effort. Explicit because the defaults differ: Opus 5.5 and Haiku 5.5
+ * default to `medium`, Fable 5.1, Mythos 5.1 and Sonnet 5.5 to `high`
+ * (effort page and models overview, 2026-10-10). `medium` is the
+ * documented starting point for Opus 5.5 and Haiku 5.5 and a sound
+ * cost/quality balance for an interactive orchestration chat on every model.
  */
 export const CHAT_EFFORT: Effort = "medium";
 

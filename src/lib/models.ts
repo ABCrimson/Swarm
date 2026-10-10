@@ -15,7 +15,7 @@
  * the prompt-caching page (mid-conversation system messages) and the
  * refusals-and-fallback page
  * (https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback).
- * Current lineup: Fable 5.1, Mythos 5.1 (Project Glasswing only),
+ * Current lineup: Fable 5.1, Mythos 5.1 (verified organizations only, via Anthropic's verification programs such as the Cyber Verification Program: Mythos 5.1 overview, 2026-10-10),
  * Opus 5.5, Sonnet 5.5 (released 2026-09-28) and Haiku 5.5 (released
  * 2026-10-07). Every model has a 1M context window and 128K max output;
  * all take adaptive thinking and `effort`. Claude 4.6 and later models
@@ -98,7 +98,7 @@ export interface ModelInfo {
   readonly refusalFallback: boolean;
   /** Accepts mid-conversation `role: "system"` messages (every current model; legacy Sonnet 5 did not). */
   readonly systemMessages: boolean;
-  /** Access gate required beyond a valid API key, if any (Mythos → Project Glasswing). */
+  /** Access gate required beyond a valid API key, if any (Mythos 5.1 → Anthropic verification programs; `glasswing` is a persisted legacy key). */
   readonly gated?: ModelGate;
 }
 
@@ -193,13 +193,30 @@ type PricingOnly = Pick<ModelInfo, "inputPerMTok" | "cacheReadPerMTok" | "output
   Partial<Pick<ModelInfo, "longPrompt">>;
 
 /**
- * Pricing-only rates for a model the app never requests but the API can
- * serve: Sonnet 5.5's cyber / frontier_llm server-side fallback target,
- * `claude-sonnet-5` (pricing page, 2026-10-10). Kept out of the picker
- * catalog; it only lets per-attempt usage be priced by the model that
- * actually served it.
+ * Pricing-only rates for models the app never requests but the API can
+ * serve as a server-side refusal-fallback target, so per-attempt usage
+ * (`usage.iterations`) is priced by the model that actually served each
+ * attempt instead of the requested model's rates. Kept out of the picker
+ * catalog. Permitted targets per catalog model with `refusalFallback`
+ * (fallback-credit page,
+ * https://platform.claude.com/docs/en/build-with-claude/fallback-credit,
+ * and the Fable 5.1 what's-new page, 2026-10-10):
+ * - Fable 5.1 and Opus 5.5: `claude-opus-4-8` and `claude-opus-5`.
+ * - Sonnet 5.5: `claude-sonnet-5`.
+ * - Mythos 5.1: its targets are not listed on those pages; the Models API
+ *   reports them as `allowed_fallback_models` under the
+ *   `server-side-fallback-2026-07-01` beta header (needs Mythos access,
+ *   not checked here). An attempt served by a model with no row here is
+ *   priced at the requested model's rates, which for Mythos equal Fable 5.1's.
+ * - Haiku 5.5 has no server-side fallback.
+ * Rates from the pricing page
+ * (https://platform.claude.com/docs/en/about-claude/pricing, 2026-10-10):
+ * Opus 5 and Opus 4.8 are $5 input / $0.50 cache read / $25 output;
+ * Sonnet 5 is $2 / $0.20 / $10 (its introductory price is now standard).
  */
 const FALLBACK_PRICING: ReadonlyMap<string, PricingOnly> = new Map([
+  ["claude-opus-4-8", { inputPerMTok: 5, cacheReadPerMTok: 0.5, outputPerMTok: 25 }],
+  ["claude-opus-5", { inputPerMTok: 5, cacheReadPerMTok: 0.5, outputPerMTok: 25 }],
   ["claude-sonnet-5", { inputPerMTok: 2, cacheReadPerMTok: 0.2, outputPerMTok: 10 }],
 ]);
 
@@ -267,7 +284,7 @@ export function formatMaxOutputLabel(maxOutputTokens: number): string {
 }
 
 /**
- * Fires the Project Glasswing warning toast for a gated model selection
+ * Fires the access-gate warning toast for a gated model selection
  * (currently just Mythos) — selection itself is still allowed, this is a
  * notice, not a block. No-ops (and returns `false`) for non-gated models.
  *
