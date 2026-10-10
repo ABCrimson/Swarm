@@ -1,0 +1,18 @@
+{
+  "holds": [
+    {
+      "kind": "npm",
+      "name": "@babel/core",
+      "pin": "7.29.7",
+      "reason": "React Compiler Babel fallback (vite.config.ts): on @babel/core 8 every published babel-plugin-react-compiler (1.0.0 and 0.0.0-experimental-a1856f3-20260507, the newest build, 2026-05-08) silently skips components with a destructured default. react#36868 and its fix PRs #36956/#37492 are still open on 2026-10-10. Recheck every sweep; drop the hold (and the Babel fallback) once a fixed compiler build ships or the Oxc WASI binding replaces the fallback.",
+      "evidence": "https://github.com/facebook/react/issues/36868"
+    },
+    {
+      "kind": "node",
+      "name": "node",
+      "pin": "27.0.0-nightly202610086d5e309871",
+      "reason": "The 2026-10-09 and 2026-10-10 Node nightlies publish no win-x64 build (only osx/linux/aix), so pnpm cannot provision devEngines.runtime on this repo's Windows host and CI leg (ERR_PNPM_PACKAGE_MANAGER_NO_MATCHING_PLATFORM_VARIANT). 2026-10-08 is the newest nightly with win-x64. Recheck every sweep; move as soon as a newer nightly ships win-x64.",
+      "evidence": "https://nodejs.org/download/nightly/index.json"
+    }
+  ]
+}

@@ -18,7 +18,8 @@ import pkg from "./package.json" with { type: "json" };
  * @babel/core 7. Babel 8 is not an option there: every published
  * babel-plugin-react-compiler (1.0.0 and the experimental line) silently
  * skips components with a destructured default (`({ size = "md" })`,
- * react#36868) — re-measured 2026-09-25 on @babel/core 8.0.6.
+ * react#36868, still open on 2026-10-10; no compiler build since
+ * 2026-05-08). `.peak-modern-holds.json` records the @babel/core 7 hold.
  *
  * `SWARM_REACT_COMPILER=babel` forces the fallback so it can be verified
  * on hosts where Oxc loads. `pnpm check:compiler` fails the build when

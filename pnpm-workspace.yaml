@@ -15,45 +15,45 @@ trustPolicyExclude:
   # provenance the 7.x line already had. Required by @babel/core 7.29.7, the
   # React Compiler's Babel fallback (vite.config.ts): on Babel 8 every
   # babel-plugin-react-compiler build silently skips destructured-default
-  # components (react#36868; re-measured 2026-09-25 with 8.0.6).
+  # components (react#36868, still open on 2026-10-10 with its fix PRs
+  # unmerged and no compiler build since 2026-05-08; held in
+  # .peak-modern-holds.json).
   - semver@6.3.1
 
 # Same-day pins that deliberately bypass the 24h gate. `pnpm add`,
 # `update` and `remove` prune entries the lockfile no longer resolves.
 minimumReleaseAgeExcludePrune: true
 minimumReleaseAgeExclude:
-  - typescript@7.1.0-dev.20260925.1
-  - '@typescript/typescript-darwin-arm64@7.1.0-dev.20260925.1'
-  - '@typescript/typescript-darwin-x64@7.1.0-dev.20260925.1'
-  - '@typescript/typescript-linux-arm64@7.1.0-dev.20260925.1'
-  - '@typescript/typescript-linux-arm@7.1.0-dev.20260925.1'
-  - '@typescript/typescript-linux-x64@7.1.0-dev.20260925.1'
-  - '@typescript/typescript-win32-arm64@7.1.0-dev.20260925.1'
-  - '@typescript/typescript-win32-x64@7.1.0-dev.20260925.1'
-  - '@playwright/test@1.64.0-alpha-2026-09-25'
-  - playwright@1.64.0-alpha-2026-09-25
-  - playwright-core@1.64.0-alpha-2026-09-25
-  - motion@13.4.4
-  - framer-motion@13.4.4
-  - motion-dom@13.4.4
-  - vitest@5.0.2
-  - '@vitest/coverage-v8@5.0.2'
-  - '@vitest/mocker@5.0.2'
-  - '@vitest/spy@5.0.2'
-  - tailwindcss@0.0.0-insiders.fa81d69
-  - '@tailwindcss/vite@0.0.0-insiders.fa81d69'
-  - '@tailwindcss/node@0.0.0-insiders.fa81d69'
-  - '@tailwindcss/oxide@0.0.0-insiders.fa81d69'
-  - '@tailwindcss/oxide-android-arm64@0.0.0-insiders.fa81d69'
-  - '@tailwindcss/oxide-darwin-arm64@0.0.0-insiders.fa81d69'
-  - '@tailwindcss/oxide-darwin-x64@0.0.0-insiders.fa81d69'
-  - '@tailwindcss/oxide-freebsd-x64@0.0.0-insiders.fa81d69'
-  - '@tailwindcss/oxide-linux-arm-gnueabihf@0.0.0-insiders.fa81d69'
-  - '@tailwindcss/oxide-linux-arm64-gnu@0.0.0-insiders.fa81d69'
-  - '@tailwindcss/oxide-linux-arm64-musl@0.0.0-insiders.fa81d69'
-  - '@tailwindcss/oxide-linux-x64-gnu@0.0.0-insiders.fa81d69'
-  - '@tailwindcss/oxide-linux-x64-musl@0.0.0-insiders.fa81d69'
-  - '@tailwindcss/oxide-wasm32-wasi@0.0.0-insiders.fa81d69'
-  - '@tailwindcss/oxide-win32-arm64-msvc@0.0.0-insiders.fa81d69'
-  - '@tailwindcss/oxide-win32-x64-msvc@0.0.0-insiders.fa81d69'
-  - '@types/node@26.6.3'
+  - typescript@7.1.0-dev.20261010.1
+  - '@typescript/typescript-darwin-arm64@7.1.0-dev.20261010.1'
+  - '@typescript/typescript-darwin-x64@7.1.0-dev.20261010.1'
+  - '@typescript/typescript-linux-arm64@7.1.0-dev.20261010.1'
+  - '@typescript/typescript-linux-arm@7.1.0-dev.20261010.1'
+  - '@typescript/typescript-linux-x64@7.1.0-dev.20261010.1'
+  - '@typescript/typescript-win32-arm64@7.1.0-dev.20261010.1'
+  - '@typescript/typescript-win32-x64@7.1.0-dev.20261010.1'
+  - '@playwright/test@1.65.0-alpha-2026-10-10'
+  - playwright@1.65.0-alpha-2026-10-10
+  - playwright-core@1.65.0-alpha-2026-10-10
+  - motion@14.1.0
+  - framer-motion@14.1.0
+  - motion-dom@14.1.0
+  - motion-utils@14.1.0
+  - tailwindcss@0.0.0-insiders.de2255b
+  - '@tailwindcss/vite@0.0.0-insiders.de2255b'
+  - '@tailwindcss/node@0.0.0-insiders.de2255b'
+  - '@tailwindcss/oxide@0.0.0-insiders.de2255b'
+  - '@tailwindcss/oxide-android-arm64@0.0.0-insiders.de2255b'
+  - '@tailwindcss/oxide-darwin-arm64@0.0.0-insiders.de2255b'
+  - '@tailwindcss/oxide-darwin-x64@0.0.0-insiders.de2255b'
+  - '@tailwindcss/oxide-freebsd-x64@0.0.0-insiders.de2255b'
+  - '@tailwindcss/oxide-linux-arm-gnueabihf@0.0.0-insiders.de2255b'
+  - '@tailwindcss/oxide-linux-arm64-gnu@0.0.0-insiders.de2255b'
+  - '@tailwindcss/oxide-linux-arm64-musl@0.0.0-insiders.de2255b'
+  - '@tailwindcss/oxide-linux-x64-gnu@0.0.0-insiders.de2255b'
+  - '@tailwindcss/oxide-linux-x64-musl@0.0.0-insiders.de2255b'
+  - '@tailwindcss/oxide-wasm32-wasi@0.0.0-insiders.de2255b'
+  - '@tailwindcss/oxide-win32-arm64-msvc@0.0.0-insiders.de2255b'
+  - '@tailwindcss/oxide-win32-x64-msvc@0.0.0-insiders.de2255b'
+  - '@types/node@26.6.5'
+  - '@anthropic-ai/sdk@0.133.0'
