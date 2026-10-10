@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::{
     RepoLocks, ShipError, ShipErrorKind, ShipRemedy, guard_not_primary_checkout,
@@ -15,9 +15,9 @@ use crate::git::remote;
 use crate::git::repo::{self, args_in};
 use crate::worker::registry::{WorkerId, WorkerRegistry};
 
-/// A push [`push`] made. Serialized over IPC and read back by the
-/// desktop shell's thin command wrapper, hence `Deserialize` too.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A push [`push`] made — `git_push`'s IPC result, which the frontend
+/// validates with `PushOutcomeSchema` (`src/store/types.ts`).
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PushOutcome {
     /// The remote-tracking ref pushed to (`origin/<branch>`).

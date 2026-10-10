@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use uuid::Uuid;
 
 use super::commit::{StagingMode, staging_candidates};
@@ -19,10 +19,10 @@ use crate::git::cli::SCAN_TIMEOUT;
 use crate::git::{redact, remote, repo};
 use crate::worker::registry::{WorkerId, WorkerRegistry};
 
-/// The ship preflight for one worker — `git_ship_preflight`'s result.
-/// Serialized over IPC and read back by the desktop shell's thin
-/// command wrapper, hence `Deserialize` too.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The ship preflight for one worker — `git_ship_preflight`'s IPC result,
+/// which the frontend validates with `ShipPreflightSchema`
+/// (`src/store/types.ts`).
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShipPreflight {
     /// The worker.
