@@ -11,7 +11,9 @@
 //! array) is never treated as "no sessions" and overwritten: it is moved
 //! aside to `sessions.json.corrupt-<unix ms>` and the app starts with no
 //! sessions. A single entry that does not parse is skipped (and logged),
-//! keeping every other session. A file that exists but cannot be read is
+//! keeping every other session; the file as it was is first copied to
+//! `sessions.json.corrupt-<unix ms>`, since the next save rewrites the
+//! array without it. A file that exists but cannot be read is
 //! left untouched — loading fails and saving refuses — until it can be.
 //!
 //! # Concurrency and durability
@@ -73,23 +75,41 @@ fn read_root(path: &Path) -> Result<Option<Map<String, Value>>, AppError> {
 /// malformed file cannot be moved aside.
 pub fn load(paths: &Paths, manager: &SessionManager) -> Result<(), AppError> {
     let _guard = SESSIONS_LOCK.lock();
-    let Some(mut root) = read_root(&sessions_path(paths))? else {
+    let path = sessions_path(paths);
+    let Some(mut root) = read_root(&path)? else {
         tracing::debug!("no sessions.json yet; starting with no sessions");
         return Ok(());
     };
     let Some(Value::Array(entries)) = root.remove(SESSIONS_KEY) else {
         return Ok(());
     };
+    let mut skipped = 0_usize;
     let sessions = entries
         .into_iter()
         .filter_map(|entry| {
             serde_json::from_value::<Session>(entry)
                 .inspect_err(|e| {
+                    skipped += 1;
                     tracing::warn!(error = %e, "skipping a sessions.json entry that does not parse");
                 })
                 .ok()
         })
         .collect();
+    if skipped > 0 {
+        let aside = path.with_added_extension(format!("corrupt-{}", crate::clock::unix_millis()));
+        match std::fs::copy(&path, &aside) {
+            Ok(_) => tracing::warn!(
+                skipped,
+                copied_to = %aside.display(),
+                "kept a copy of sessions.json before skipping its unparseable entries"
+            ),
+            Err(e) => tracing::error!(
+                error = %e,
+                skipped,
+                "could not copy sessions.json aside; its unparseable entries will be lost on the next save"
+            ),
+        }
+    }
     manager.restore_sessions(sessions);
     Ok(())
 }
@@ -237,6 +257,35 @@ mod tests {
         load(&paths, &manager).unwrap();
         assert_eq!(manager.list_sessions().len(), 1);
         assert_eq!(manager.get_session(&good).unwrap().name, "Good");
+    }
+
+    /// The next save rewrites the array without a skipped entry, so the
+    /// load keeps the file as it was in a `.corrupt-<ms>` copy.
+    #[test]
+    fn test_an_unparseable_entry_survives_the_next_save_in_a_copy() {
+        let (dir, _cleanup) = temp_dir("sessions");
+        let paths = paths(&dir);
+        let file = json!({
+            "sessions": [
+                {"id": "not-a-uuid", "name": "Bad", "workerIds": [], "createdAt": 0, "config": {}}
+            ]
+        });
+        fs::write(sessions_path(&paths), file.to_string()).unwrap();
+
+        let manager = SessionManager::new();
+        load(&paths, &manager).unwrap();
+        manager.create_session("New".to_owned(), json!({}));
+        save(&paths, &manager).unwrap();
+
+        let copies = corrupt_files(&dir);
+        assert_eq!(copies.len(), 1);
+        assert!(
+            fs::read_to_string(&copies[0])
+                .unwrap()
+                .contains("not-a-uuid")
+        );
+        let saved = fs::read_to_string(sessions_path(&paths)).unwrap();
+        assert!(!saved.contains("not-a-uuid"));
     }
 
     #[test]
