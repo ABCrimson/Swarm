@@ -1,6 +1,6 @@
 import { useAtomValue } from "jotai";
 import { MotionConfig } from "motion/react";
-import { Activity, useActionState, useId, useState } from "react";
+import { Activity, useActionState, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { HistorySearch } from "#components/session/HistorySearch";
 import { SessionActions } from "#components/session/SessionActions";
@@ -177,6 +177,22 @@ async function saveSessionAsTemplate(session: Session, form: FormData): Promise<
 export function Sessions(): React.ReactElement {
   const [view, setView] = useState<SessionView>("list");
   const [templateSourceId, setTemplateSourceId] = useState<string | null>(null);
+  const templateOpenerRef = useRef<HTMLElement | null>(null);
+
+  // The session menu has already returned focus to its trigger; remember it
+  // so closing the form hands focus back instead of dropping it to <body>.
+  const openTemplateForm = (id: string): void => {
+    templateOpenerRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setTemplateSourceId(id);
+  };
+
+  const closeTemplateForm = (): void => {
+    const opener = templateOpenerRef.current;
+    templateOpenerRef.current = null;
+    if (opener?.isConnected) opener.focus();
+    setTemplateSourceId(null);
+  };
   const reducedMotion = useAtomValue(reducedMotionAtom);
   const setActiveSession = useSessionStore((s) => s.setActiveSession);
   const activeSession = useSessionStore((s) =>
@@ -203,7 +219,7 @@ export function Sessions(): React.ReactElement {
           <h1 className="text-2xl font-bold tracking-tight text-[oklch(0.95_0.02_220)] font-[family-name:var(--font-display)]">
             Sessions
           </h1>
-          <p className="mt-1 text-sm text-[oklch(0.55_0.04_220)] font-[family-name:var(--font-body)]">
+          <p className="mt-1 text-sm text-fg-dim font-[family-name:var(--font-body)]">
             Active And Historical Worker Sessions.
           </p>
         </header>
@@ -263,7 +279,7 @@ export function Sessions(): React.ReactElement {
           <TemplateForm
             key={templateSource.id}
             session={templateSource}
-            onDone={() => setTemplateSourceId(null)}
+            onDone={closeTemplateForm}
           />
         )}
 
@@ -272,7 +288,7 @@ export function Sessions(): React.ReactElement {
             <SessionList
               onDelete={(id) => void deleteSession(id)}
               onExport={(id) => void exportSessionJson(id)}
-              onCreateTemplate={setTemplateSourceId}
+              onCreateTemplate={openTemplateForm}
             />
           </Activity>
           <Activity mode={view === "search" ? "visible" : "hidden"}>
@@ -382,7 +398,7 @@ function ViewToggle({
       className={`cursor-pointer rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors font-[family-name:var(--font-body)] focus-visible:outline-2 focus-visible:outline-plasma ${
         active
           ? "border-[oklch(0.45_0.15_290/0.4)] bg-[oklch(0.25_0.06_290/0.4)] text-[oklch(0.85_0.12_290)]"
-          : "border-transparent bg-transparent text-[oklch(0.55_0.03_220)] hover:text-[oklch(0.75_0.04_220)]"
+          : "border-transparent bg-transparent text-fg-dim hover:text-fg"
       }`}
     >
       {label}

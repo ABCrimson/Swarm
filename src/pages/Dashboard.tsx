@@ -35,7 +35,7 @@ export function Dashboard(): React.ReactElement {
         >
           Dashboard
         </h1>
-        <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "oklch(0.55 0.04 220)" }}>
+        <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "var(--color-fg-dim)" }}>
           System Overview And Real-Time Metrics
         </p>
       </header>

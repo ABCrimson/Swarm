@@ -1,6 +1,5 @@
-// Regression: the chart drew an invented "Cached" band (15% of used) and
-// understated "Available" by the same amount; the backend reports only
-// used and total.
+// The chart plots only what the backend reports: used, and free = total - used (0 while the
+// total is unknown), with no estimated series.
 
 import { describe, expect, it } from "vitest";
 import { memoryChartData } from "#components/metrics/MemoryChart";

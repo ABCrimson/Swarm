@@ -1,10 +1,7 @@
 // ── MetricCards — severity follows the user's alert thresholds ───────
 //
-// Regression: the Dashboard/Metrics cards hard-coded CPU bands of 60/80
-// (strict `>`) and memory bands of 70/90, while the alert toasts use the
-// persisted, user-editable thresholds (defaults 70/80 and 80/90, `>=`).
-// A card turned amber at 61% CPU with no alert, and Settings changes
-// never reached the cards.
+// The cards band CPU and memory by the user's persisted alert thresholds (defaults 70/80 and
+// 80/90, inclusive `>=`), the same rule as the alert toasts, so a Settings edit reaches them.
 
 import { act, render, screen } from "@testing-library/react";
 import { createStore, Provider } from "jotai";
@@ -51,7 +48,7 @@ describe("MetricCards", () => {
     useSystemStore.setState(useSystemStore.getInitialState(), true);
   });
 
-  it("keeps CPU 'good' below the default 70% warning threshold (old cards warned at 61%)", () => {
+  it("keeps CPU 'good' below the default 70% warning threshold", () => {
     record({ cpuPercent: 65 });
     renderCards();
     expect(severityOf("CPU Usage")).toBe("good");
@@ -63,7 +60,7 @@ describe("MetricCards", () => {
     expect(severityOf("CPU Usage")).toBe("warning");
   });
 
-  it("bands memory by the memory thresholds (80% default, not the old 70%)", () => {
+  it("bands memory by the memory thresholds (80% default warning)", () => {
     record({ memoryMb: 750, memoryTotalMb: 1000 });
     renderCards();
     expect(severityOf("Memory")).toBe("good");
