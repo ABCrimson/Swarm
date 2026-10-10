@@ -57,7 +57,6 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
   - [agent_probe](#agent_probe)
   - [agent_permission_respond](#agent_permission_respond)
   - [set_agent_concurrency](#set_agent_concurrency)
-  - [Webview AI Tool Approval](#webview-ai-tool-approval)
 - [File System Commands](#file-system-commands)
   - [read_file](#read_file)
   - [write_file](#write_file)
@@ -150,12 +149,13 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
 
 ### Who Can Call What
 
-Four independent layers decide whether a call runs. Each is enforced in code and pinned by a test.
+Three independent layers decide whether a call runs. Each is enforced in code and pinned by a test.
 
 1. **The Tauri ACL (desktop webview).** `src-tauri/build.rs` hands the command-name list to `tauri_build::AppManifest::commands`, which generates an `allow-<name>` / `deny-<name>` permission for every one of the 38 commands. `src-tauri/capabilities/default.json` grants exactly those `allow-*` entries to the `main` window (plus `core:default`, the `fs`, `dialog`, `opener` and `store` plugin permissions it needs). A command with no `allow-*` entry cannot be invoked by the webview at all. `capability_contract.rs` fails the build when the capability names a command that does not exist, omits one that does, or grants a bare non-`allow-` app permission.
 2. **`RemotePolicy` (swarmd).** Every registry entry declares a policy, and `swarmd` dispatches every `rpc` through `Registry::dispatch_remote`, never `dispatch`. `Allowed` commands are reachable by any authenticated client (including `spawn_worker` and `worker_input`: running commands as the daemon's user is the product). `SecretFiltered` commands (`read_config`, `write_config`) are refused when the `key` argument looks like a credential (`is_secret_key`: split into words at `_`, `-`, `:`, `.`, spaces and camelCase; secret-shaped when the last word is `key`, `apikey`, `token`, `secret`, `password`, `passwd`, `pat`, `credential` or `credentials`, or any word is `apikey`, `secret`, `password`, `passwd`, `credential` or `credentials`) with ``Remote Access To Secret-Shaped Config Keys Is Denied.``. `Denied` commands (`read_file`, `write_file`) never reach their handler: `"read_file" Is Not Available Over A Remote Connection.` The local `dispatch` path ignores the policy, because the desktop user is not the boundary it defends.
-3. **The file scope (`read_file` / `write_file`).** Both commands canonicalize the path and apply a scope plus a credential deny list on the real path, on both transports. See [File System Commands](#file-system-commands).
-4. **User approval for webview AI tools.** The chat's tool calls that act on the machine (`run_command`, `spawn_worker`, `kill_worker`, `write_file`, `read_file`) wait for the user's decision before they invoke the commands above. This is a frontend gate in `src/lib/tools.ts`, not a backend one; the backend commands themselves stay unconditional. See [Webview AI Tool Approval](#webview-ai-tool-approval).
+3. **The file scope (`read_file` / `write_file`).** Both commands normalize the path lexically and confine it to fixed scopes; no deny list. See [File System Commands](#file-system-commands).
+
+The webview chat's built-in tools in `src/lib/tools.ts` (`run_command`, `spawn_worker`, `kill_worker`, `write_file`, `read_file`) call these commands as soon as the model requests them. There is no per-call user approval today.
 
 ---
 
@@ -235,7 +235,7 @@ const workerId = await invoke("spawn_worker", {
 
 ### `pause_worker`
 
-Pauses a running worker by transitioning its state from `running` to `paused`. The check and the write are one atomic registry update, and the `worker_state` event is sent while the registry entry is still locked, so a racing shell exit or resume can never put events in a different order from the state changes.
+Pauses a running worker by transitioning its state from `running` to `paused`. The check and the write are one atomic registry update, and the `worker_state` event is emitted after the entry is released.
 
 **Parameters:**
 
@@ -305,7 +305,7 @@ Terminates a worker process and removes it from the registry.
 
 Removes the worker, kills its shell (unless the shell already exited) and waits for it to exit to prevent zombie processes (and, on Windows, to release any OS handle the shell held on the worktree directory as its cwd), then releases the PTY, and emits a killed event. A worker whose shell exited on its own (state `"error"`) is killed the same way.
 
-The result of the `kill` call itself is advisory: `portable-pty` 0.9.0's Windows `Child::kill` always reports success, and its Unix `kill` can fail for a shell that just exited. After it, `try_wait` (polled for up to ~200 ms) is the authority on whether the shell is gone, and `wait` reaps it either way. Only the shell is killed; a grandchild it started (a long-running build) is not, because the PTY layer uses no job object or process group.
+Before killing, `try_wait` checks whether the shell already exited, so a reaped pid is never signalled. Otherwise it is killed (a failure is only logged; `portable-pty` 0.9.0's Windows `kill` always reports success) and `wait` reaps it. Only the shell is killed; a grandchild it started is not, because the PTY layer uses no job object or process group.
 
 If the worker was isolated into a git worktree, also unlocks and `git worktree remove`s it -- **never** with `--force`. git's own refusal on a dirty/untracked worktree is treated as a successful preserve, not an error: SWARM never deletes uncommitted work.
 
@@ -988,7 +988,7 @@ Removes a worker from a session's `workerIds`. The app calls it when a member wo
 Two kinds of AI conversation exist side by side:
 
 - **Provider agents** (Claude Code and Codex): the backend spawns the provider's CLI (`claude -p --input-format stream-json`, `codex app-server`) next to a PTY worker, drives it over piped stdio and normalizes its protocol into the `agent_*` events. `agent_spawn`, `agent_send_turn`, `agent_cancel`, `agent_shutdown`, `agent_probe`, `agent_permission_respond` and `set_agent_concurrency` serve these. Adapters are chosen by provider id in one place (`with_adapter!` in `commands/agent.rs`); every command after `agent_spawn` reaches the live session through the `AgentSessionRegistry`, keyed by worker id.
-- **The webview chat** (`src/lib/anthropic.ts`): `@anthropic-ai/sdk` streams directly from the webview to the Anthropic API, and its machine-acting tools call the commands in this document. The backend only learns of a turn through `agent_turn_started`. See [Webview AI Tool Approval](#webview-ai-tool-approval).
+- **The webview chat** (`src/lib/anthropic.ts`): `@anthropic-ai/sdk` streams directly from the webview to the Anthropic API, and its machine-acting tools call the commands in this document. The backend only learns of a turn through `agent_turn_started`.
 
 Provider ids on the wire are `snake_case`: `claude_code` and `codex` have adapters; `opencode`, `gemini` and `webview_anthropic` are reserved names that parse but have none (`Provider Not Supported By The Backend: <name>.`); any other string fails argument parsing.
 
@@ -1013,7 +1013,7 @@ This is how the "the engine records provenance, it never infers it" invariant ho
 | Error (string)                  | Condition                                  |
 |---------------------------------|---------------------------------------------|
 | ``Invalid UUID "<id>": ...``    | `workerId` is not a valid UUID string      |
-| `Event Writer Unavailable.`     | The acknowledgement channel closed without a seq: the engine is shutting down, or the event could not be saved (the writer [fails closed](#failing-closed) and drops the ack rather than cite a seq the log does not hold) |
+| `Event Writer Unavailable.`     | The acknowledgement channel closed without a seq: the engine is shutting down, or the writer thread is gone |
 | `Agent Turn Started Timed Out.` | No acknowledgement within 5 seconds        |
 
 **Example:**
@@ -1142,7 +1142,7 @@ Shuts down `workerId`'s attached agent session (idempotent) and removes it from 
 
 **Emits:** `agent_session_exited`, preceded by a synthesized `agent_turn_settled` (`status: "error"`, `costUsd` and `usage` `null`) if a turn was in flight.
 
-**Wiring:** no shipped UI calls this command (the typed wrapper was removed); see [Built, Not Wired](#built-not-wired).
+**Wiring:** `agentShutdown` in `src/lib/tauri.ts` wraps it; no UI calls it.
 
 ---
 
@@ -1217,35 +1217,13 @@ Sets how many agent turns may execute at the same time. Validated, persisted to 
 
 ---
 
-### Webview AI Tool Approval
-
-The chat's built-in tools live in `src/lib/tools.ts`, not in Rust. Five of them act on the user's machine and need an explicit answer before they run: `run_command` (`worker_input` with `source: "tool"`), `spawn_worker`, `kill_worker`, `write_file` and `read_file`. The model can request them, but the user decides.
-
-- **The gate cannot be skipped.** It sits inside each tool's own `execute`, after its input has validated, so `toolRegistry.get(name).execute(...)` cannot run a gated tool without an answer; `executeTool` adds no second path. A denial comes back to the model as an error result (`The User Denied <tool>. It Was Not Run.`), and the tool does nothing.
-- **The prompt shows what will run.** `ToolApprovalPrompt` renders the tool name and **every field** of the validated input as structured, escaped data (control characters, newlines and bidi or zero-width characters become visible `\u` escapes), never as a sentence interpolating model-controlled text. `write_file` also shows the content size. A long value is truncated on the raw value with an explicit "N more characters" note, and Allow stays disabled until every truncated value has been expanded. `run_command` commands and file paths are never truncated.
-- **Three answers: once, for the session, deny.** "Allow for session" covers one exact decision: the same tool, the same worker and the same normalized argument (the exact command string, the exact path, the exact `spawn_worker` name). It never releases other pending calls whose arguments the user has not seen, and each pending call is answered on its own. `write_file` offers no session grant at all. Grants live in memory until the app reloads.
-- **Stopping a turn denies its pending calls**, so nothing waits on an answer nobody will give.
-- **The backend still enforces its own limits.** `read_file` and `write_file` go through the canonicalizing, deny-listed scope in [File System Commands](#file-system-commands) whether or not the user approved.
-
-This gate is the webview's. Provider agents (Claude Code, Codex) ask through `agent_permission_request` instead, and a remote `swarmd` client is governed by `RemotePolicy`.
-
----
-
 ## File System Commands
 
-`read_file` and `write_file` are the Rust commands behind the `read_file` / `write_file` AI tools (`src/lib/tools.ts`). They are **`Denied` over `swarmd`** (never reachable remotely) and, on the desktop, still confined to a fixed scope with a credential deny list, enforced by `FsScopes` in `crates/swarm-core/src/commands/fs.rs`. The webview's own `fs` plugin permission is a separate mechanism with no static path scope: it reads, lists, stats and writes only what the user picks in an open or save dialog (`src-tauri/capabilities/default.json`).
+`read_file` and `write_file` are the Rust commands behind the `read_file` / `write_file` AI tools (`src/lib/tools.ts`). They are **`Denied` over `swarmd`** (never reachable remotely) and, on the desktop, still confined to fixed scopes, enforced by `FsScopes` in `crates/swarm-core/src/commands/fs.rs`. The webview's own `fs` plugin permission is a separate mechanism with no allow-list path scope: it reads, lists, stats and writes only what the user picks in an open or save dialog, minus a static deny scope that holds even inside a dialog grant: the app data directory (`$APPDATA/**`) and the usual credential stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.config/gh`, `~/.claude`, `~/.codex`, `~/.git-credentials`, `~/.netrc`) (`src-tauri/capabilities/default.json`).
 
 **Scopes.** Every path must be absolute. Reads may touch the app data directory and the home directory; writes only the app data directory and `~/.swarm`.
 
-**How a path is checked** (identical for reads and writes, on the real filesystem, so neither a traversal nor a symlink inside a scope can climb out):
-
-1. The path is normalized lexically (`.` and `..` resolved without touching disk) and refused at once when it lies outside every scope, so a missing path elsewhere on disk cannot be told from an existing one.
-2. It is canonicalized: for a read, the file itself; for a write, its parent and, when the target already exists, the target too (a symlink there would redirect the write, and canonicalizing expands Windows 8.3 short names such as `SWARM-~1.JSO` to the real name the deny list sees). A dangling symlink target is refused.
-3. The canonical path is checked against the scope again, then against the deny list.
-
-**Windows file names.** A write is refused outright when the file name contains `:` (an NTFS alternate data stream), ends in `.` or a space (Win32 strips them, so the name aliases another file), or is a reserved device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`), with or without an extension.
-
-**The deny list** applies to the canonical path of both commands, whatever scope it sits in: `swarm-config.json` (it holds the Anthropic API key) and `daemon-token` in the data directory, together with files named after them (`swarm-config.json.corrupt-<ms>`, the `.daemon-token.<rand>` mint-time temp file; compared case-insensitively with leading dots ignored), and the credential directories `~/.ssh`, `~/.gnupg` and `~/.aws`. A hard link to a secret is not detected. Refusal text: ``This Path Holds Credentials And Is Never Accessible.``
+**How a path is checked.** The path is normalized lexically (`.` and `..` resolved without touching disk) and must start with a scope directory (`FsScopes::check_read` / `check_write`). Nothing is canonicalized (a symlink inside a scope is followed) and there is no deny list: a local caller can read `<data-dir>/swarm-config.json` (the API key) and `<data-dir>/daemon-token`.
 
 ### `read_file`
 
@@ -1264,8 +1242,7 @@ Reads a UTF-8 file at an absolute path.
 | Error                        | Condition                                    |
 |-------------------------------|-----------------------------------------------|
 | `Read Requires An Absolute Path.` | `path` is not absolute                    |
-| `Read Access Is Limited To The App Data And Home Directories.` | The path, normalized or canonical, falls outside both scopes |
-| `This Path Holds Credentials And Is Never Accessible.` | The canonical path is on the deny list |
+| `Read Access Is Limited To The App Data And Home Directories.` | The normalized path falls outside both scopes |
 | ``File Not Found: "<path>".`` | The file does not exist (reported only for in-scope paths) |
 | ``The Operating System Denied Access To "<path>".`` | The OS itself refused (in-scope path, OS-level permission error) |
 | ``Failed To Read "<path>": ...`` | Any other I/O failure, including a file that is not UTF-8 |
@@ -1283,7 +1260,7 @@ const content = await invoke<string>("read_file", { path: "/home/user/notes.txt"
 
 ### `write_file`
 
-Writes a file at an absolute path, creating or overwriting it, then emits a stamped, persisted `file_written` event. The file is written to the canonical path the checks above resolved, and the event carries the lexically normalized path the caller asked for.
+Writes a file at an absolute path, creating or overwriting it, then emits a stamped, persisted `file_written` event. The file is written to the normalized path; the event carries it.
 
 **Parameters:**
 
@@ -1301,11 +1278,7 @@ Writes a file at an absolute path, creating or overwriting it, then emits a stam
 | Error                         | Condition                                    |
 |--------------------------------|-----------------------------------------------|
 | `Write Requires An Absolute Path.` | `path` is not absolute                   |
-| `Write Requires A File Path.`  | `path` has no parent or no file name         |
-| ``Cannot Write "<path>": The File Name Is Not Allowed.`` | A Windows name rejected as above |
-| `Write Access Is Limited To The App Data And .swarm Directories.` | The path, normalized or canonical, falls outside both scopes |
-| `This Path Holds Credentials And Is Never Accessible.` | The canonical path is on the deny list |
-| ``Cannot Write "<path>": Dangling Symbolic Link.`` | The target exists as a symlink that resolves nowhere |
+| `Write Access Is Limited To The App Data And .swarm Directories.` | The normalized path falls outside both scopes |
 | ``Cannot Write "<path>": Parent Directory Does Not Exist.`` | The parent directory doesn't exist (nothing is created) |
 | ``The Operating System Denied Access To "<path>".`` | The OS itself refused the write |
 | ``Invalid UUID "<id>": ...``   | `originWorker` is present but not a valid UUID |
@@ -1390,7 +1363,7 @@ for (const w of metrics.perWorker) {
 }
 ```
 
-**Note:** This is the pull-based complement to the push-based `system_metrics` event (emitted every 500 ms; ephemeral -- it consumes a seq but is never persisted). Both read from the same `SharedSystem` (one `sysinfo::System` behind a `parking_lot::Mutex`), so CPU deltas come from a single source of truth. `system_metrics` carries a field `aiReqPerSec` that is always `0`: nothing counts provider requests yet, the wire field is kept for compatibility, and the metrics page shows no request-rate tile.
+**Note:** This is the pull-based complement to the push-based `system_metrics` event (emitted every 500 ms; ephemeral -- it consumes a seq but is never persisted). Both read from the same `SharedSystem` (one `sysinfo::System` behind a `parking_lot::Mutex`), so CPU deltas come from a single source of truth. `system_metrics` carries a field `aiReqPerSec` that is always `0`: nothing counts provider requests yet, the wire field is kept for compatibility, and the metrics page's 'AI Req/s' tile (`MetricsOverview.tsx`) therefore always reads 0.0.
 
 ---
 
@@ -1517,7 +1490,7 @@ await invoke("send_notification", {
 
 ## Events
 
-Every backend event -- worker lifecycle, session lifecycle, agent streaming, metrics, logs, bus messages, ship receipts -- travels on a **single** channel as a seq-ordered envelope: `swarm://events` on Tauri (`swarm_core::orchestration::EVENT_CHANNEL`), and bare `event` frames on the `swarmd` WebSocket. There are no per-domain channels; `listen()` against anything else is not part of the contract. The event set is the `SwarmEvent` enum in `crates/swarm-core/src/events/emitter.rs`: **26** types.
+Every backend event -- worker lifecycle, session lifecycle, agent streaming, metrics, logs, bus messages, ship receipts -- travels on a **single** channel as a seq-ordered envelope: `swarm://events` on Tauri (`swarm_core::orchestration::EVENT_CHANNEL`), and bare `event` frames on the `swarmd` WebSocket. There are no per-domain channels; `listen()` against anything else is not part of the contract. The event set is the `SwarmEvent` enum in `crates/swarm-core/src/events/emitter.rs`: **27** types.
 
 ### The Envelope
 
@@ -1540,7 +1513,7 @@ A stamped envelope additionally carries `originWorker`/`causeSeq`:
 | `type`         | `string`            | Event type tag, `snake_case` (e.g. `"worker_spawned"`).               |
 | `payload`      | `object`            | The event's data, `camelCase` fields -- shape depends on `type`.       |
 
-`seq` is assigned by one dedicated writer thread (`OrchestrationEngine`) that every backend call routes through via `EventSink`, so there is a single, total order across every event type. For state changes, the order of events follows the order of the mutations: `worker_state` for a pause, a resume and a shell exit is sent while the registry entry is still locked, so racing transitions cannot be announced in a different order from the one they happened in.
+`seq` is assigned by one dedicated writer thread (`OrchestrationEngine`) that every backend call routes through via `EventSink`, so there is a single, total order across every event type.
 
 **The subject-vs-causer rule:** a payload's own `workerId` field is the **SUBJECT** of the event -- whose worker spawned, whose PTY got input, whose file was written. `originWorker` on the envelope is the **CAUSER** -- who made it happen. For a human-driven action (clicking Spawn on the Workers page, typing into a terminal) the two are typically unrelated or `originWorker` is simply absent; for a tool-driven action (an AI turn's `spawn_worker` / `kill_worker` / `worker_input` / `write_file` tool call) `originWorker` is the panel worker whose turn issued the call, while the payload's `workerId` is the worker that got spawned, killed or written to -- **and that difference is the causal edge** the provenance graph is built from. The engine records this attribution; it never infers it (see `EventSink::emit_with` in `crates/swarm-core/src/events/emitter.rs`).
 
@@ -1558,7 +1531,7 @@ A stamped envelope additionally carries `originWorker`/`causeSeq`:
 | `session_worker_added` | `{ sessionId, workerId }` -- emitted by [`session_add_worker`](#session_add_worker) only when membership actually changed | Yes |
 | `session_worker_removed` | `{ sessionId, workerId }` -- emitted by [`session_remove_worker`](#session_remove_worker); persisted so a backfilling client reconstructs the same membership a live listener observed | Yes |
 | `system_metrics`      | `{ cpuPercent, memoryMb, memoryTotalMb, workerCount, aiReqPerSec, timestamp }` -- every 500 ms; `aiReqPerSec` is always `0` | No (ephemeral) |
-| `system_log`          | `{ level, message, target, timestamp }` -- backend notices such as the git startup probe and the [fail-closed](#failing-closed) drop notice | No (ephemeral) |
+| `system_log`          | `{ level, message, target, timestamp }` -- backend notices such as the git startup probe | No (ephemeral) |
 | `bus_message`         | `{ messageId, fromWorker, toWorker, topic, payload }` -- `originWorker` on the envelope is stamped from `fromWorker` | Yes       |
 | `worktree_created`    | `{ workerId, sessionId, repoRoot, worktreePath, branch, baseCommit }` -- its own `seq` is the range start for "what changed" queries | Yes |
 | `worktree_removed`    | `{ workerId, worktreePath, branch, disposition, headCommit, reason }` -- `disposition` is `"removed"`, `"preserved_dirty"`, or `"failed"` | Yes |
@@ -1590,12 +1563,7 @@ Every other type persists to the SQLite event log (`<data-dir>/swarm-events.db`,
 
 ### Failing Closed
 
-For a persistent event, the log is the source of truth, and **nothing is delivered that the log does not hold.** The writer thread appends the row first and only then emits, advances the head and offers the event to the WebSocket fanout. A write failure never leaks:
-
-- **Persist fails** (the append errors): the event reaches **neither** delivery path (not the primary `emit` closure and not the `swarmd` broadcast fanout), the engine's head seq does not move, and the `emit_awaiting_seq` receiver resolves to a `RecvError` (the same signal as a shut-down engine, so a command that cited the event, such as `agent_turn_started`, answers `Event Writer Unavailable.`). The failed seq becomes a one-seq gap. To explain it, one ephemeral `system_log` error takes the next seq: ``Event <seq> (<type>) Could Not Be Saved And Was Dropped: <error>``, level `"error"`. Clients tolerate the gap: the event bus backfills, gets an empty `events_since` page, and skips it as ephemeral.
-- **Seq reservation fails** (the engine hands out seqs in reserved blocks so a crash can never reissue one): the writer retries once; if that fails too, the event is dropped whole, with no seq above the reserved block handed out, and the counter rolls back so the next event retries. The outage is logged once, not once per event.
-
-A test pins both: with the events table broken, a persistent event emits nothing on either channel, leaves the head unchanged and resolves its ack to `RecvError`. Ephemeral events never touch the log and are unaffected. (Session and config files are different: they are best-effort state files, see [Session Commands](#session-commands).)
+Today a failed append is logged (`failed to persist event`) and the event is still emitted, published as the new head and offered to the swarmd fanout. A client can therefore see a persistent event that a later `events_since` or replay will not return. A failed seq reservation is logged, and the event is still delivered.
 
 ### Receipts
 
@@ -1748,7 +1716,7 @@ Past authentication, every `rpc` goes through `Registry::dispatch_remote`, which
 
 `lastSeq` in `hello` resumes exactly where a disconnected client left off: the server pages `events_since(lastSeq, 5000)` from the log until a short page arrives, sending each row as an `event` frame, then sends `replayEnd`. The connection subscribes to the engine's fanout BEFORE reading the head seq, so nothing published in between is missed, and a seq filter drops whatever a replay already delivered. `lastSeq: null` is a cold attach -- no replay at all; the client hydrates via the snapshot commands (`list_workers`, `list_sessions`, ...), exactly like a fresh desktop launch.
 
-`ready`, `replayEnd`, and every `event` frame (replayed or live) share ONE bounded (4096) FIFO lane per connection -- this is what guarantees wire order matches seq order; splitting them across lanes would let a live event race a replay page and deliver frames out of seq order. Persistent events always enqueue, blocking the CONNECTION (never the engine) if the lane is momentarily full. Ephemeral events (`worker_output`, `system_metrics`, `system_log`, `agent_turn_delta`, terminal-source `worker_input`) are dropped once 512 frames are queued, so an ephemeral flood can never starve a persistent frame's send -- but anything that DOES get enqueued keeps its FIFO position. A slow link degrades to a choppy terminal and sparse metrics, never a stale or wrong application state. Because a failed persist is [dropped before delivery](#failing-closed), a connected client never sees an event that a later replay would not return.
+`ready`, `replayEnd`, and every `event` frame (replayed or live) share ONE bounded (4096) FIFO lane per connection -- this is what guarantees wire order matches seq order; splitting them across lanes would let a live event race a replay page and deliver frames out of seq order. Persistent events always enqueue, blocking the CONNECTION (never the engine) if the lane is momentarily full. Ephemeral events (`worker_output`, `system_metrics`, `system_log`, `agent_turn_delta`, terminal-source `worker_input`) are dropped once 512 frames are queued, so an ephemeral flood can never starve a persistent frame's send -- but anything that DOES get enqueued keeps its FIFO position. A slow link degrades to a choppy terminal and sparse metrics, never a stale or wrong application state.
 
 `rpcResult` frames (no seq, no ordering relationship to the event stream) and close frames ride a separate bounded (256) control lane that the writer always serves first, so a PTY flood cannot delay an RPC result -- the command that would stop the flood among them. Concurrently in-flight `rpc` tasks are capped per connection (8): above the cap, a new `rpc` frame gets an immediate `rpcResult` with `ok: false` and `Too Many Concurrent RPC Calls On This Connection.` rather than spawning an unbounded number of handler tasks. The client-side `wsTransport.invoke` additionally gives every outstanding `rpc` a 30-second timeout, rejecting with a typed error if no `rpcResult` ever arrives (a wedged connection fails loud instead of hanging).
 
@@ -1763,7 +1731,7 @@ Implemented and tested in Rust, but with no frontend caller in the shipped app (
 | Piece | Status |
 |-------|--------|
 | [`bus_send`](#bus_send), [`bus_list_channels`](#bus_list_channels) | Fully routed (`bus_message` reaches every client), but no UI surface invokes either. |
-| [`get_session`](#get_session), [`agent_shutdown`](#agent_shutdown) | Registry commands with no frontend caller: the app lists sessions with `list_sessions`, and a session's agent is shut down by `kill_worker`. Their typed wrappers in `src/lib/tauri.ts` were removed. |
+| [`get_session`](#get_session), [`agent_shutdown`](#agent_shutdown) | Registry commands with typed wrappers in `src/lib/tauri.ts` (`getSession`, `agentShutdown`) but no UI caller: the app lists sessions with `list_sessions`, and `kill_worker` shuts a session's agent down. Because the wrappers name them, the contract test treats them as wired. |
 | Provider ids `opencode`, `gemini`, `webview_anthropic` | Reserved wire names with no Rust adapter: `agent_spawn` and `agent_probe` refuse them. The webview chat path (`webview_anthropic`) lives in TypeScript and cannot implement the session trait. |
 | `WorkerState` `idle`, `worker_input` `source: "automation"`, `system_metrics.aiReqPerSec` | Wire values the backend accepts (or, for `aiReqPerSec`, always sends as `0`) but nothing produces or measures today. |
 

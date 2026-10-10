@@ -97,7 +97,7 @@ Flags take their value as the next argument or inline (`--bind=ADDR`). `RUST_LOG
 
 ## Installing as a User Service
 
-The `crates/swarmd/service/` directory holds ready-to-use unit files and install scripts. The scripts locate a `swarmd` binary (`$SWARMD_BIN`, a release asset or `swarmd` next to the script, the repository's `target/release`, or `PATH`), install it to a per-user location, and register the service. All are **idempotent** -- re-run to upgrade the binary or refresh the unit. The service gets the `PATH` of the shell that runs the script, so agent CLIs such as `claude` and `codex` are found; re-run it after installing new ones.
+The `crates/swarmd/service/` directory holds ready-to-use unit files and install scripts. The scripts locate a `swarmd` binary (`$SWARMD_BIN`, a release asset or `swarmd` next to the script, the repository's `target/release`, or `PATH`), install it to a per-user location, and register the service. All are **idempotent** -- re-run to upgrade the binary or refresh the unit. On Linux and macOS the service gets the `PATH` of the shell that runs `install.sh`, so agent CLIs such as `claude` and `codex` are found; re-run it after installing new ones. On Windows the task runs with your logon environment, so a CLI added to your user PATH is found after you sign in again.
 
 ### Linux (systemd)
 
@@ -163,7 +163,7 @@ By default every install binds **loopback only**, and `swarmd` **refuses** a non
 1. **Establish the token.** Run once on loopback (any install above does this). This mints `<data-dir>/daemon-token`.
 2. **Front it with transport security you control.** The token is the *only* authentication and the WebSocket is plain `ws://`; do not put `--bind 0.0.0.0:PORT` on the open internet. Reach it instead through an SSH tunnel (`ssh -L 8787:127.0.0.1:8787 host`, keeping the local port equal to the daemon's, or adding `--allow-host 127.0.0.1:<port>` for another one) or a reverse proxy that terminates TLS, forwards WebSocket upgrades and adds its own access control, started with `--allow-host proxy.example.com` so its `Host` / `Origin` are accepted. Binding a wildcard address works for LAN and tailnet clients: a request whose `Host` names the interface address it actually reached is accepted automatically. A non-loopback bind also hard-fails unless the data directory and the token file could be restricted to you.
 
-The connect URL always shows `127.0.0.1`; replace the origin with the one your client reaches (`https://swarm.example.com/#t=<token>`).
+The connect URL shows the bind address, or the loopback address (`127.0.0.1` / `[::1]`) for a wildcard bind. Replace the origin with the one your client reaches (`https://swarm.example.com/#t=<token>`).
 
 ## Security Model
 
@@ -173,7 +173,6 @@ The connect URL always shows `127.0.0.1`; replace the origin with the one your c
 - **Bounded admission**: 32 authenticated connections, a separate pool of 16 pending handshakes (4 per client address), `hello` within 5 s, 2 MiB per message, 8 concurrent `rpc` calls per connection. Unauthenticated sockets cannot take an authenticated client's slot.
 - **`RemotePolicy` at the command boundary**: `read_file` / `write_file` are `Denied` over the wire and `read_config` / `write_config` are `SecretFiltered` (any key shaped like a credential is refused in both directions), so a remote client cannot exfiltrate the daemon token, API keys, or arbitrary files even though the command runs the same code the desktop shell does. See [API Reference: Who Can Call What](api.md#who-can-call-what).
 - **The trust boundary it does not close**: an authenticated client can `spawn_worker` and `worker_input`, which is a shell as the daemon's user. Treat the token like an SSH private key.
-- **Fail-closed event log**: an event the log could not save is delivered to no client and moves no head; clients see a `system_log` error and a one-seq gap instead of a state a later replay would contradict. See [API Reference: Failing Closed](api.md#failing-closed).
 - **Loopback-first, user-scoped, non-elevated** -- see above. The data directory is created (or tightened) to mode `0700` on Unix.
 
 ## Running and Stopping
