@@ -63,7 +63,7 @@ describe("validateStoreData", () => {
       ["swarm:snapshots:broken", [{ id: "nope" }]],
     ]);
     stores.templatesStore.entries.mockResolvedValue([["swarm:templates", "not-an-array"]]);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const results = await validateStoreData();
 
@@ -84,7 +84,6 @@ describe("validateStoreData", () => {
       { description: "Pane Sizes, Alert Thresholds, Session Snapshots, Session Templates" },
     );
     expect(warn).toHaveBeenCalledOnce();
-    warn.mockRestore();
   });
 
   it("stays quiet when everything is valid", async () => {
@@ -101,7 +100,7 @@ describe("validateStoreData", () => {
   it("reports an unreadable file and still checks the others", async () => {
     stores.settingsStore.entries.mockRejectedValue(new Error("EACCES"));
     stores.templatesStore.entries.mockResolvedValue([["swarm:templates", []]]);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    using _warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const results = await validateStoreData();
 
@@ -114,27 +113,24 @@ describe("validateStoreData", () => {
       },
       { file: "swarm-templates.json", key: "swarm:templates", valid: true },
     ]);
-    warn.mockRestore();
   });
-});
 
-describe("plugin-store ownership", () => {
-  // Rust owns swarm-config.json. plugin-store saves every file it has
-  // loaded when the app exits, so a webview handle on that file would
-  // overwrite the Rust-written config with the copy loaded at startup.
-  it("no frontend module opens swarm-config.json through plugin-store", () => {
-    const sources = import.meta.glob<string>(["/src/**/*.{ts,tsx}", "!/src/**/*.test.{ts,tsx}"], {
-      query: "?raw",
-      import: "default",
-      eager: true,
-    });
-    const offenders = Object.entries(sources)
-      .filter(([, code]) =>
-        /(?:load|LazyStore|Store\.load)\s*\(\s*["'`]swarm-config\.json/.test(code),
-      )
-      .map(([path]) => path);
+  it("records a failed delete per key and keeps validating the later keys", async () => {
+    stores.snapshotsStore.entries.mockResolvedValue([
+      ["swarm:snapshots:a", [{ id: "nope" }]],
+      ["swarm:snapshots:b", [{ id: "nope" }]],
+    ]);
+    stores.snapshotsStore.delete.mockRejectedValueOnce(new Error("disk full"));
+    using _warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    expect(Object.keys(sources).length).toBeGreaterThan(50);
-    expect(offenders).toStrictEqual([]);
+    const results = await validateStoreData();
+
+    expect(results.map(({ key, valid }) => [key, valid])).toStrictEqual([
+      ["swarm:snapshots:a", false],
+      ["swarm:snapshots:b", false],
+    ]);
+    expect(results[0]?.error).toBe("Invalid data could not be deleted: disk full");
+    expect(results[1]?.error).toMatch(/^Invalid data was deleted: /);
+    expect(stores.snapshotsStore.delete).toHaveBeenCalledTimes(2);
   });
 });

@@ -4,11 +4,11 @@ import { LazyStore } from "@tauri-apps/plugin-store";
 // file. plugin-store keeps one in-memory instance per path and applies
 // the options of whichever caller loaded it first; later `load()`
 // options are ignored. A second handle with different options therefore
-// silently changes the first one's behavior (a validation pass that
-// loaded with `autoSave: false` used to switch auto-save off for every
-// later write). These handles pass no options, so plugin-store's
-// defaults apply: auto-save with a 100 ms debounce. Any other `load()`
-// of these files must not pass different options.
+// silently changes the first one's behavior (a load with `autoSave:
+// false` that runs first switches auto-save off for every later write).
+// These handles pass no options, so plugin-store's defaults apply:
+// auto-save with a 100 ms debounce. Any other `load()` of these files
+// must not pass different options.
 //
 // plugin-store also saves every file it has loaded when the app exits.
 // `swarm-config.json` belongs to the Rust side (`read_config` /

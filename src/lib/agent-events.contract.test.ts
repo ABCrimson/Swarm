@@ -1,8 +1,9 @@
 // The Rust ↔ TypeScript agent-event contract, checked against the Rust
 // source itself: every payload struct's serde field names (camelCase)
-// must equal its Zod schema's keys, with Rust `Option<…>` fields optional
-// on this side, and every closed enum's snake_case variants must equal
-// its Zod enum's options.
+// must equal its Zod schema's keys, with Rust `Option<…>` fields accepting
+// both undefined and null on this side and every other field (bar
+// `serde_json::Value`) required, and every closed enum's snake_case
+// variants must equal its Zod enum's options.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -47,11 +48,12 @@ function body(src: string, kind: "struct" | "enum", name: string): string[] {
 const camel = (snake: string) => snake.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
 const snake = (pascal: string) => pascal.replace(/(?<!^)([A-Z])/g, "_$1").toLowerCase();
 
-function structFields(src: string, name: string): Map<string, boolean> {
+/** Each serde field name (camelCase) mapped to its Rust type. */
+function structFields(src: string, name: string): Map<string, string> {
   return new Map(
     body(src, "struct", name).flatMap((line) => {
       const match = /^pub (\w+): (.+),$/.exec(line);
-      return match?.[1] && match[2] ? [[camel(match[1]), match[2].startsWith("Option<")]] : [];
+      return match?.[1] && match[2] ? [[camel(match[1]), match[2]]] : [];
     }),
   );
 }
@@ -92,8 +94,16 @@ describe("agent event contract (Rust source ↔ Zod)", () => {
   it.each(STRUCTS)("%#: %s fields match", (src, name, schema) => {
     const fields = structFields(src, name);
     expect([...fields.keys()].toSorted()).toEqual(Object.keys(schema.shape).toSorted());
-    for (const [field, optional] of fields) {
-      if (optional) expect(schema.shape[field]?.safeParse(undefined).success, field).toBe(true);
+    for (const [field, type] of fields) {
+      const accepts = (value: unknown) => schema.shape[field]?.safeParse(value).success;
+      if (type.startsWith("Option<")) {
+        // Without `skip_serializing_if`, serde writes `None` as `null`.
+        expect(accepts(undefined), `${field} undefined`).toBe(true);
+        expect(accepts(null), `${field} null`).toBe(true);
+      } else if (type !== "serde_json::Value") {
+        // A `serde_json::Value` is any JSON, mirrored as `z.unknown()`.
+        expect(accepts(undefined), `${field} required`).toBe(false);
+      }
     }
   });
 

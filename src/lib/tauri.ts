@@ -1,12 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import * as z from "zod";
-import type {
-  ClaudeCodeTrustTier,
-  PermissionDecision,
-  ProbeReport,
-  ProviderId,
-} from "#lib/agent-events";
+import type { PermissionDecision, ProbeReport, ProviderId, TrustTier } from "#lib/agent-events";
 import { ProbeReportSchema } from "#lib/agent-events";
 import { transport } from "#lib/transport";
 import type {
@@ -208,7 +203,7 @@ export async function agentSpawn(
   options: WorkerProcessOptions,
   provider: Extract<ProviderId, "claude_code" | "codex">,
   model: string | undefined,
-  trustTier: ClaudeCodeTrustTier | undefined,
+  trustTier: TrustTier | undefined,
   prov?: ProvenanceArgs,
 ): Promise<string | null> {
   if (!hasTransport()) return null;
@@ -388,7 +383,7 @@ export async function resizeWorker(id: string, rows: number, cols: number): Prom
 /**
  * Records the start of one AI/agent turn and returns the persisted seq
  * the engine assigned it: the `causeSeq` every tool-driven side effect
- * of that turn then cites (see `AIChat.tsx`'s `doSend`).
+ * of that turn then cites (see `runTurn` in `#lib/ai-chat`).
  */
 export async function agentTurnStarted(
   workerId: string,
