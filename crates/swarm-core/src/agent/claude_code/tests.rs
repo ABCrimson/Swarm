@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use super::reader::{advance_cost, classify_denial, settlement_error};
 use super::tier::{
-    accepted_permission_modes, build_claude_flags, claude_code_capabilities, deny_list,
+    accepted_permission_modes, build_claude_flags, child_env, claude_code_capabilities, deny_list,
     parse_trust_tier, permission_mode_flag, probe_flags,
 };
 use super::wire::{
@@ -826,6 +826,35 @@ async fn cancelling_a_settled_turn_is_a_no_op() {
     session.shutdown().await.expect("shutdown");
 }
 
+/// A cancel naming any turn but the live one (a stale or foreign id)
+/// leaves the live turn running, and the live turn stays cancellable.
+#[tokio::test]
+async fn cancelling_another_turn_leaves_the_live_turn_alone() {
+    let harness = Harness::new();
+    let session = harness.spawn("hang_mid_turn.mjs").await;
+    let turn = send(session.as_ref(), "start something long").await;
+    harness.recorder.wait_for("agent_turn_delta", 1).await;
+    tokio::time::timeout(
+        Duration::from_millis(500),
+        session.cancel("other-turn".to_owned()),
+    )
+    .await
+    .expect("a cancel of another turn returns at once")
+    .expect("no-op cancel");
+    assert_eq!(harness.recorder.count("agent_turn_settled"), 0);
+    assert_eq!(harness.recorder.count("agent_session_exited"), 0);
+
+    tokio::time::timeout(WAIT, session.cancel(turn.clone()))
+        .await
+        .expect("cancel returns")
+        .expect("cancel");
+    assert_eq!(
+        settled_for(&harness.recorder, &turn).len(),
+        1,
+        "the live turn is still cancellable"
+    );
+}
+
 // ── Teardown (Condition B) ───────────────────────────────────────────
 
 #[tokio::test]
@@ -1288,6 +1317,28 @@ fn the_probe_disables_project_hooks() {
     );
 }
 
+/// The promise in the `probe()` doc: no session on disk, no user or
+/// local settings, no MCP servers.
+#[test]
+fn the_probe_never_persists_a_session_or_loads_user_config() {
+    let argv = probe_flags();
+    assert!(argv.iter().any(|arg| arg == "--no-session-persistence"));
+    assert_eq!(value_of(&argv, "--setting-sources"), Some("project"));
+    assert!(argv.iter().any(|arg| arg == "--strict-mcp-config"));
+}
+
+/// Background tasks stay off in every child, so a subagent runs inside
+/// the turn that launched it (module doc, "Turn ownership").
+#[test]
+fn every_child_runs_with_background_tasks_disabled() {
+    let env = child_env();
+    assert_eq!(
+        env.get("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS")
+            .map(String::as_str),
+        Some("1")
+    );
+}
+
 #[test]
 fn bypass_permissions_is_unconstructible() {
     for tier in TIERS {
@@ -1323,6 +1374,11 @@ fn argv_routes_prompts_to_the_host_and_restricts_only_the_restricted_tier() {
     let worker = Uuid::new_v4();
     for tier in TIERS {
         let argv = build_claude_flags(worker, "haiku", tier, None);
+        assert!(argv.iter().any(|arg| arg == "-p"));
+        assert_eq!(value_of(&argv, "--output-format"), Some("stream-json"));
+        assert!(argv.iter().any(|arg| arg == "--include-partial-messages"));
+        assert!(argv.iter().any(|arg| arg == "--verbose"));
+        assert_eq!(value_of(&argv, "--max-turns"), Some("50"));
         assert_eq!(value_of(&argv, "--permission-prompt-tool"), Some("stdio"));
         assert_eq!(value_of(&argv, "--permission-prompts"), Some("host"));
         assert_eq!(value_of(&argv, "--setting-sources"), Some("project"));
