@@ -1300,6 +1300,46 @@ fn the_restricted_tier_never_accepts_a_mode_that_asks() {
     }
 }
 
+/// The fences themselves, pinned by value: the other argv tests compare
+/// `permission_mode_flag` and `deny_list` with their own output.
+#[test]
+fn every_trust_tier_pins_its_literal_mode_and_deny_list() {
+    use ClaudeCodeTrustTier::{Restricted, Standard, WriteEnabled};
+    assert_eq!(permission_mode_flag(Restricted), "dontAsk");
+    assert_eq!(permission_mode_flag(Standard), "manual");
+    assert_eq!(permission_mode_flag(WriteEnabled), "acceptEdits");
+    assert_eq!(accepted_permission_modes(Standard), ["default", "manual"]);
+    assert_eq!(accepted_permission_modes(WriteEnabled), ["acceptEdits"]);
+    assert_eq!(
+        deny_list(Restricted),
+        ["Bash", "Write", "Edit", "NotebookEdit"]
+    );
+    let destructive = [
+        "Bash(rm -rf*)",
+        "Bash(git push --force*)",
+        "Bash(git push -f*)",
+        "Bash(git reset --hard*)",
+        "Bash(sudo*)",
+    ];
+    assert_eq!(deny_list(Standard), destructive);
+    assert_eq!(deny_list(WriteEnabled), destructive);
+}
+
+/// Every tier spawns: the fake CLI reports the permission mode it was
+/// started with, and the handshake accepts that mode for each tier.
+#[tokio::test]
+async fn every_tier_spawns() {
+    let harness = Harness::new();
+    for tier in ["restricted", "standard", "write_enabled"] {
+        let spec = AgentSpawnSpec {
+            permission_mode: Some(tier.to_owned()),
+            ..harness.spec()
+        };
+        let session = harness.try_spawn("happy_turn.mjs", spec).await.expect(tier);
+        session.shutdown().await.expect("shutdown");
+    }
+}
+
 #[test]
 fn capabilities_are_honest() {
     let capabilities = claude_code_capabilities();
