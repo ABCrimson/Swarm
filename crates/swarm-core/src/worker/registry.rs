@@ -89,7 +89,7 @@ pub struct AggregateMetrics {
 ///   locks, so they can wait behind a writer on the same shard. Hold a
 ///   `workers` guard only for as long as it takes to copy what you need
 ///   out of it; never across blocking I/O.
-/// - Writes (`spawn_worker`, `remove_worker`, the state transitions)
+/// - Writes (`register`, `remove_worker`, the state transitions)
 ///   take one shard's write lock.
 /// - Admission ([`Self::reserve`]) is serialized by its own lock, so
 ///   concurrent spawns can never exceed `max_workers`.
@@ -281,10 +281,10 @@ impl WorkerRegistry {
     ///     last_shipped_seq: None,
     ///     last_shipped_commit: None,
     /// };
-    /// registry.spawn_worker(handle).unwrap();
+    /// registry.register(handle).unwrap();
     /// assert_eq!(registry.count(), 1);
     /// ```
-    pub fn spawn_worker(&self, handle: WorkerHandle) -> Result<WorkerId, AppError> {
+    pub fn register(&self, handle: WorkerHandle) -> Result<WorkerId, AppError> {
         Ok(self.reserve()?.fill(handle))
     }
 
@@ -349,7 +349,7 @@ impl WorkerRegistry {
     ///     last_shipped_seq: None,
     ///     last_shipped_commit: None,
     /// };
-    /// let id = registry.spawn_worker(handle).unwrap();
+    /// let id = registry.register(handle).unwrap();
     ///
     /// // Succeeds: the worker is Running as expected.
     /// registry.update_state_if(&id, WorkerState::Running, WorkerState::Paused).unwrap();
@@ -522,20 +522,20 @@ mod tests {
 
         // A valid cap applies to subsequent spawns immediately.
         reg.set_max_workers(2).unwrap();
-        reg.spawn_worker(make_handle("a")).unwrap();
-        reg.spawn_worker(make_handle("b")).unwrap();
-        let err = reg.spawn_worker(make_handle("c")).unwrap_err();
+        reg.register(make_handle("a")).unwrap();
+        reg.register(make_handle("b")).unwrap();
+        let err = reg.register(make_handle("c")).unwrap_err();
         assert_matches!(err, AppError::RegistryFull { max: 2 });
 
         // Shrinking below the live count never evicts running workers —
         // it only blocks new spawns.
         reg.set_max_workers(1).unwrap();
         assert_eq!(reg.count(), 2);
-        assert!(reg.spawn_worker(make_handle("d")).is_err());
+        assert!(reg.register(make_handle("d")).is_err());
 
         // Raising the cap unblocks spawning again.
         reg.set_max_workers(3).unwrap();
-        assert!(reg.spawn_worker(make_handle("e")).is_ok());
+        assert!(reg.register(make_handle("e")).is_ok());
     }
 
     #[test]
@@ -569,7 +569,7 @@ mod tests {
                     let (reg, barrier) = (&reg, &barrier);
                     scope.spawn(move || {
                         barrier.wait();
-                        reg.spawn_worker(make_handle(&format!("w{i}"))).is_ok()
+                        reg.register(make_handle(&format!("w{i}"))).is_ok()
                     })
                 })
                 .collect();
@@ -590,7 +590,7 @@ mod tests {
         let handle = make_handle("test-worker");
         let id = handle.id;
 
-        assert_eq!(reg.spawn_worker(handle).unwrap(), id);
+        assert_eq!(reg.register(handle).unwrap(), id);
         assert_eq!(reg.count(), 1);
 
         let info = reg.get_worker(&id).unwrap();
@@ -614,7 +614,7 @@ mod tests {
     #[test]
     fn test_update_state_if_succeeds_when_expected_matches() {
         let reg = WorkerRegistry::new();
-        let id = reg.spawn_worker(make_handle("cas-worker")).unwrap();
+        let id = reg.register(make_handle("cas-worker")).unwrap();
 
         reg.update_state_if(&id, WorkerState::Running, WorkerState::Paused)
             .unwrap();
@@ -624,7 +624,7 @@ mod tests {
     #[test]
     fn test_update_state_if_fails_when_expected_mismatches() {
         let reg = WorkerRegistry::new();
-        let id = reg.spawn_worker(make_handle("cas-worker-2")).unwrap();
+        let id = reg.register(make_handle("cas-worker-2")).unwrap();
 
         // Running, but Paused is expected: fails without mutating.
         let err = reg
@@ -648,7 +648,7 @@ mod tests {
         let reg = WorkerRegistry::new();
         let mut paused = make_handle("paused");
         paused.state = WorkerState::Paused;
-        let id = reg.spawn_worker(paused).unwrap();
+        let id = reg.register(paused).unwrap();
 
         let announced = std::cell::Cell::new(0);
         let announce = || announced.set(announced.get() + 1);
@@ -677,7 +677,7 @@ mod tests {
         ] {
             let mut handle = make_handle("w");
             handle.state = state;
-            reg.spawn_worker(handle).unwrap();
+            reg.register(handle).unwrap();
         }
 
         let metrics = reg.aggregate_metrics();
@@ -696,8 +696,8 @@ mod tests {
     #[test]
     fn test_set_last_shipped_updates_only_the_target_worker() {
         let reg = WorkerRegistry::new();
-        let a_id = reg.spawn_worker(make_handle("a")).unwrap();
-        let b_id = reg.spawn_worker(make_handle("b")).unwrap();
+        let a_id = reg.register(make_handle("a")).unwrap();
+        let b_id = reg.register(make_handle("b")).unwrap();
 
         reg.set_last_shipped(&a_id, 42, "cafef00d").unwrap();
 
@@ -719,8 +719,8 @@ mod tests {
     #[test]
     fn test_list_workers() {
         let reg = WorkerRegistry::new();
-        reg.spawn_worker(make_handle("a")).unwrap();
-        reg.spawn_worker(make_handle("b")).unwrap();
+        reg.register(make_handle("a")).unwrap();
+        reg.register(make_handle("b")).unwrap();
 
         let mut names: Vec<_> = reg.list_workers().into_iter().map(|w| w.name).collect();
         names.sort_unstable();
@@ -730,7 +730,7 @@ mod tests {
     #[test]
     fn test_announce_runs_under_the_entry_lock() {
         let reg = WorkerRegistry::new();
-        let id = reg.spawn_worker(make_handle("locked-announce")).unwrap();
+        let id = reg.register(make_handle("locked-announce")).unwrap();
         let locked = std::cell::Cell::new(None);
         let probe = || locked.set(Some(reg.workers.try_get(&id).is_locked()));
         reg.update_state_if_then(&id, WorkerState::Running, WorkerState::Paused, probe)

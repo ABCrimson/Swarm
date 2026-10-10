@@ -43,7 +43,7 @@ fn register_at(
         last_shipped_commit: None,
     };
     let id = handle.id;
-    registry.spawn_worker(handle).unwrap();
+    registry.register(handle).unwrap();
     id
 }
 
@@ -114,7 +114,7 @@ fn test_worktree_info_for_worker_no_worktree() {
         last_shipped_commit: None,
     };
     let id = handle.id;
-    registry.spawn_worker(handle).unwrap();
+    registry.register(handle).unwrap();
     let err = worktree_info_for_worker(&registry, id).unwrap_err();
     assert_eq!(err.kind, ShipErrorKind::NoWorktree);
 }

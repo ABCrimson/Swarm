@@ -158,7 +158,7 @@ const fn marker_command() -> (&'static str, &'static str) {
 fn test_pause_then_resume_transition_and_emit_worker_state() {
     let registry = WorkerRegistry::new();
     let id = registry
-        .spawn_worker(make_handle(WorkerState::Running))
+        .register(make_handle(WorkerState::Running))
         .unwrap();
     let (sink, rx) = test_sink();
     let provenance = Provenance {
@@ -199,7 +199,7 @@ fn test_pause_racing_shell_exit_emits_in_mutation_order() {
     for _ in 0..500 {
         let registry = WorkerRegistry::new();
         let id = registry
-            .spawn_worker(make_handle(WorkerState::Running))
+            .register(make_handle(WorkerState::Running))
             .unwrap();
         let (sink, rx) = test_sink();
         let barrier = std::sync::Barrier::new(2);
@@ -231,7 +231,7 @@ fn test_pause_racing_shell_exit_emits_in_mutation_order() {
 fn test_pause_rejects_a_worker_that_is_not_running() {
     for state in [WorkerState::Paused, WorkerState::Idle, WorkerState::Error] {
         let registry = WorkerRegistry::new();
-        let id = registry.spawn_worker(make_handle(state)).unwrap();
+        let id = registry.register(make_handle(state)).unwrap();
         let (sink, rx) = test_sink();
 
         let err = do_pause_worker(&sink, &registry, id, Provenance::default()).unwrap_err();
@@ -246,7 +246,7 @@ fn test_pause_rejects_a_worker_that_is_not_running() {
 fn test_resume_rejects_a_worker_that_is_not_paused() {
     for state in [WorkerState::Running, WorkerState::Idle, WorkerState::Error] {
         let registry = WorkerRegistry::new();
-        let id = registry.spawn_worker(make_handle(state)).unwrap();
+        let id = registry.register(make_handle(state)).unwrap();
         let (sink, rx) = test_sink();
 
         let err = do_resume_worker(&sink, &registry, id, Provenance::default()).unwrap_err();
@@ -292,7 +292,7 @@ fn test_every_operation_reports_an_unknown_worker() {
 fn test_worker_input_no_pty_writer() {
     let registry = WorkerRegistry::new();
     let id = registry
-        .spawn_worker(make_handle(WorkerState::Running))
+        .register(make_handle(WorkerState::Running))
         .unwrap();
     let (sink, _rx) = test_sink();
 
@@ -312,7 +312,7 @@ fn test_worker_input_no_pty_writer() {
 fn test_worker_input_rejects_a_worker_whose_shell_exited() {
     let registry = WorkerRegistry::new();
     let (handle, buf) = make_handle_with_pty(WorkerState::Error);
-    let id = registry.spawn_worker(handle).unwrap();
+    let id = registry.register(handle).unwrap();
     let (sink, rx) = test_sink();
 
     let err = do_worker_input(
@@ -335,7 +335,7 @@ fn test_worker_input_rejects_a_worker_whose_shell_exited() {
 fn test_worker_input_writes_then_emits_stamped_event() {
     let registry = WorkerRegistry::new();
     let (handle, buf) = make_handle_with_pty(WorkerState::Running);
-    let id = registry.spawn_worker(handle).unwrap();
+    let id = registry.register(handle).unwrap();
     let (sink, rx) = test_sink();
     let origin = Uuid::new_v4();
 
@@ -373,7 +373,7 @@ fn test_worker_input_writes_then_emits_stamped_event() {
 fn test_worker_input_terminal_source_has_no_preview() {
     let registry = WorkerRegistry::new();
     let (handle, _buf) = make_handle_with_pty(WorkerState::Running);
-    let id = registry.spawn_worker(handle).unwrap();
+    let id = registry.register(handle).unwrap();
     let (sink, rx) = test_sink();
 
     do_worker_input(
@@ -399,7 +399,7 @@ fn test_worker_input_terminal_source_has_no_preview() {
 fn test_worker_input_preview_flattens_line_ends_and_truncates() {
     let registry = WorkerRegistry::new();
     let (handle, _buf) = make_handle_with_pty(WorkerState::Running);
-    let id = registry.spawn_worker(handle).unwrap();
+    let id = registry.register(handle).unwrap();
     let (sink, rx) = test_sink();
 
     let data = format!("{}\r\n{}", "a".repeat(10), "b".repeat(200)).into_bytes();
@@ -432,7 +432,7 @@ fn test_worker_input_preview_flattens_line_ends_and_truncates() {
 fn test_worker_input_preview_redacts_credentials() {
     let registry = WorkerRegistry::new();
     let (handle, _buf) = make_handle_with_pty(WorkerState::Running);
-    let id = registry.spawn_worker(handle).unwrap();
+    let id = registry.register(handle).unwrap();
     let (sink, rx) = test_sink();
 
     do_worker_input(
@@ -510,7 +510,7 @@ fn test_kill_is_not_blocked_by_an_input_write_in_progress() {
     let (entered_tx, entered) = channel();
     let (release, release_rx) = channel();
     let id = registry
-        .spawn_worker(make_handle_with_writer(
+        .register(make_handle_with_writer(
             WorkerState::Running,
             BlockedWriter {
                 entered: entered_tx,
@@ -564,7 +564,7 @@ fn test_kill_is_not_blocked_by_an_input_write_in_progress() {
 fn test_resize_rejects_zero_dimensions_and_workers_without_a_pty() {
     let registry = WorkerRegistry::new();
     let id = registry
-        .spawn_worker(make_handle(WorkerState::Running))
+        .register(make_handle(WorkerState::Running))
         .unwrap();
 
     for (rows, cols) in [(0, 80), (24, 0)] {
