@@ -6,6 +6,7 @@ import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
 import { type AlertThresholds, alertThresholdsAtom } from "#lib/alerts";
 import { ANTHROPIC_API_KEY_CONFIG_KEY } from "#lib/anthropic";
+import { errorMessage } from "#lib/is-error";
 import { bindingFromEvent, formatBinding, type Keybindings } from "#lib/keybindings";
 import {
   CLAUDE_MODELS,
@@ -545,8 +546,8 @@ export function Settings(): React.ReactElement {
         } else {
           toast.success("You Are On The Latest Version");
         }
-      } catch {
-        toast.error("Update Check Failed — No Update Endpoint Reachable");
+      } catch (err) {
+        toast.error("Update Check Failed", { description: errorMessage(err) });
       }
     });
 

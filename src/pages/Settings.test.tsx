@@ -357,7 +357,7 @@ describe("Settings — updates", () => {
     await waitFor(() => expect(toast[level]).toHaveBeenCalledWith(message));
   });
 
-  it("reports an unreachable update endpoint", async () => {
+  it("reports why the update check failed", async () => {
     const user = userEvent.setup();
     vi.mocked(checkForUpdates).mockRejectedValue(new Error("offline"));
     render(<Settings />);
@@ -365,9 +365,7 @@ describe("Settings — updates", () => {
     await user.click(screen.getByRole("button", { name: "Check For Updates" }));
 
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(
-        "Update Check Failed — No Update Endpoint Reachable",
-      ),
+      expect(toast.error).toHaveBeenCalledWith("Update Check Failed", { description: "offline" }),
     );
   });
 });
