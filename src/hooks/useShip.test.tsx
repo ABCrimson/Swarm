@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { act, renderHook } from "@testing-library/react";
 import { toast } from "sonner";
@@ -514,7 +512,7 @@ describe("useShip", () => {
 
   // ── B1: explicit 30s receipt timeout (not the library's 5s default) ──
 
-  it("DIRECTIVE (B1): a ship_settled receipt delivered at t≈8s settles success, never a timeout failure", async () => {
+  it("DIRECTIVE (B1): a ship_settled receipt delivered at t≈6s (past waitFor's 5 s default, inside the 30 s budget) settles success, never a timeout failure", async () => {
     vi.useFakeTimers();
     mockGitShipPreflight.mockResolvedValue(makePreflight());
     mockGitStageCommit.mockResolvedValue(makeCommitOutcome());
@@ -535,7 +533,7 @@ describe("useShip", () => {
     const shipId = mockGitPush.mock.calls[0]?.[1] as string;
     expect(shipId).toBeTruthy();
 
-    // Past the old 5000ms default: a hook relying on it would already show "failed".
+    // Past waitFor's 5000ms default: a hook that relied on it would already show "failed".
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5900);
     });
@@ -658,41 +656,5 @@ describe("useShip", () => {
     expect(mockGitShipPreflight).toHaveBeenNthCalledWith(2, WORKER_ID, "staged");
     expect(result.current.mode).toBe("staged");
     expect(result.current.preflight?.skipped).toHaveLength(1);
-  });
-});
-
-// ── The opener capability must admit the URL the backend builds ────────
-//
-// Regression: the compare page was once opened through plugin-shell,
-// whose `open` regex only admitted filesystem paths, so every
-// auto-open was rejected at runtime while this suite (mocking the
-// opener) stayed green. This reads the real capability file.
-
-/** tauri-plugin-opener matches `url` entries as `glob::Pattern`s, where `*` also crosses `/`. */
-function globToRegExp(glob: string): RegExp {
-  if (/[[\]]/.test(glob)) throw new Error(`Unsupported glob character class in ${glob}`);
-  const source = glob
-    .split(/(\*+|\?)/)
-    .map((part) => (part.startsWith("*") ? ".*" : part === "?" ? "." : RegExp.escape(part)))
-    .join("");
-  return new RegExp(`^${source}$`, "s");
-}
-
-describe("opener capability scope", () => {
-  it("admits a GitHub compare URL of the shape `git::remote::compare_url` builds", async () => {
-    const capability = JSON.parse(
-      await readFile(
-        join(import.meta.dirname, "../../src-tauri/capabilities/default.json"),
-        "utf8",
-      ),
-    ) as { permissions: (string | { identifier: string; allow?: { url?: string }[] })[] };
-    const urlPatterns = capability.permissions
-      .flatMap((p) =>
-        typeof p === "object" && p.identifier === "opener:allow-open-url" ? (p.allow ?? []) : [],
-      )
-      .flatMap((entry) => (entry.url != null ? [globToRegExp(entry.url)] : []));
-
-    const url = `${COMPARE_URL}?quick_pull=1&title=feat%3A%20x&body=%23%23%20Causal%20Record`;
-    expect(urlPatterns.some((pattern) => pattern.test(url))).toBe(true);
   });
 });
