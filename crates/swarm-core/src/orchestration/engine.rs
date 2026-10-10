@@ -325,10 +325,10 @@ impl Fanout {
         }
     }
 
-    /// Offers `envelope` to every current subscriber. Costs nothing (no
-    /// `Arc`, no clone) while nothing is subscribed.
-    fn offer(&mut self, envelope: &DomainEvent) {
-        if self.tx.receiver_count() == 0 || self.tx.send(Arc::new(envelope.clone())).is_ok() {
+    /// Moves `envelope` into an `Arc` for every current subscriber.
+    /// Costs nothing (no `Arc`) while nothing is subscribed.
+    fn offer(&mut self, envelope: DomainEvent) {
+        if self.tx.receiver_count() == 0 || self.tx.send(Arc::new(envelope)).is_ok() {
             return;
         }
         let now = Instant::now();
@@ -445,7 +445,7 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
             self.report_persist_failure(&envelope, &e);
             return;
         }
-        self.deliver(&envelope);
+        self.deliver(envelope);
 
         // Non-blocking by oneshot construction: a dropped receiver
         // (e.g. a cancelled IPC call) makes `send` return `Err`, which
@@ -502,8 +502,8 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
     /// Delivers a durable-or-ephemeral envelope: primary emit, then the
     /// head, then the fanout (the order [`OrchestrationEngine::head_seq`]
     /// documents).
-    fn deliver(&mut self, envelope: &DomainEvent) {
-        (self.emit)(envelope);
+    fn deliver(&mut self, envelope: DomainEvent) {
+        (self.emit)(&envelope);
         self.head.store(envelope.seq, Ordering::Release);
         self.fanout.offer(envelope);
     }
@@ -524,7 +524,7 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
             timestamp: ts,
         });
         if let Some(envelope) = self.issue(event, &Provenance::default()) {
-            self.deliver(&envelope);
+            self.deliver(envelope);
         }
     }
 
