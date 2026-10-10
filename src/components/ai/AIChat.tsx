@@ -299,22 +299,20 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
           onInput={(e) => setDraftEmpty(!e.currentTarget.value.trim())}
           onKeyDown={handleKeyDown}
         />
-        {busy ? (
-          <Button variant="danger" onClick={() => cancelChatTurn(workerId)}>
-            Stop
+        {!busy && thread.messages.length > 0 && (
+          <Button variant="ghost" onClick={() => clearChat(workerId)}>
+            New Chat
           </Button>
-        ) : (
-          <>
-            {thread.messages.length > 0 && (
-              <Button variant="ghost" onClick={() => clearChat(workerId)}>
-                New Chat
-              </Button>
-            )}
-            <Button type="submit" variant="primary" disabled={draftEmpty}>
-              Send
-            </Button>
-          </>
         )}
+        {/* One button that turns from Send into Stop, so keyboard focus stays on it when a turn starts. */}
+        <Button
+          type={busy ? "button" : "submit"}
+          variant={busy ? "danger" : "primary"}
+          disabled={!busy && draftEmpty}
+          onClick={busy ? () => cancelChatTurn(workerId) : undefined}
+        >
+          {busy ? "Stop" : "Send"}
+        </Button>
       </form>
     </div>
   );
