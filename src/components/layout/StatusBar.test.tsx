@@ -24,8 +24,8 @@ afterEach(() => {
 });
 
 describe("StatusBar", () => {
-  // Regression: the whole bar (numbers that change twice a second and a
-  // button) was one polite live region, so screen readers kept re-reading it.
+  // Only the health label is a live region; the numbers that change twice
+  // a second are not announced.
   it("announces only the health label", () => {
     renderBar();
 

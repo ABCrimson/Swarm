@@ -21,7 +21,7 @@ type InteractivePillProps = PillOwnProps & { readonly interactive: true } & Omit
     keyof PillOwnProps
   >;
 
-export type PillProps = StaticPillProps | InteractivePillProps;
+type PillProps = StaticPillProps | InteractivePillProps;
 
 /**
  * Consolidated pill/chip element — the single implementation for every

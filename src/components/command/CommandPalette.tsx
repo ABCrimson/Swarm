@@ -4,6 +4,7 @@ import { Command } from "modern-cmdk/react";
 import { useEffectEvent, useLayoutEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { errorMessage } from "#lib/is-error";
 import { matchesBinding } from "#lib/keybindings";
 import { createSnapshot } from "#lib/snapshots";
 import { killWorker } from "#lib/tauri";
@@ -43,10 +44,6 @@ function toRecord(entry: FrecencyEntry): { frequency: number; lastUsed: number }
   };
 }
 
-function errorText(err: unknown): string {
-  return Error.isError(err) ? err.message : String(err);
-}
-
 /** The first `Worker N` no current worker is named — never reuses a live worker's name after a kill. */
 function nextWorkerName(names: Iterable<string | undefined>): string {
   const taken = new Set(names);
@@ -76,14 +73,8 @@ function nextWorkerName(names: Iterable<string | undefined>): string {
 export function CommandPalette(): React.ReactElement {
   const store = useStore();
   const [open, setOpen] = useAtom(commandPaletteOpenAtom);
-  const setPage = useSetAtom(currentPageAtom);
-  const setSidebarCollapsed = useSetAtom(sidebarCollapsedAtom);
   const frecency = useAtomValue(frecencyAtom);
-  const [graphView, setGraphView] = useAtom(graphViewAtom);
   const keybindings = useAtomValue(keybindingsAtom);
-  const workers = useWorkerStore((s) => s.workers);
-  const activeSessionId = useSessionStore((s) => s.activeSessionId);
-  const sessions = useSessionStore((s) => s.sessions);
 
   const onKeyDown = useEffectEvent((e: KeyboardEvent) => {
     if (!matchesBinding(e, keybindings.commandPalette)) return;
@@ -121,6 +112,51 @@ export function CommandPalette(): React.ReactElement {
     [Symbol.dispose]() {},
   };
 
+  return (
+    <Command.Dialog
+      // The machine's `search` state survives CLOSE while the input
+      // unmounts empty — on reopen the stale query silently filters
+      // group children out of registration and the list corrupts.
+      // Keying by `open` remounts the dialog (fresh machine, empty
+      // search) each cycle, which also flushes the frecency engine.
+      key={String(open)}
+      open={open}
+      onOpenChange={setOpen}
+      label="SWARM Command Palette"
+      description="Type A Command Or Search, Then Press Enter To Run It"
+      frecency={{ enabled: true, namespace: "swarm-palette", storage: frecencyStorage }}
+      className="swarm-cmdk"
+      overlayClassName="swarm-cmdk-overlay"
+      contentClassName="swarm-cmdk-content"
+    >
+      <PaletteBody frecency={frecency} onRun={() => setOpen(false)} />
+    </Command.Dialog>
+  );
+}
+
+/**
+ * The palette's commands, input and grouped list. Mounted fresh on every
+ * open (the dialog is keyed by `open`, and its content renders only while
+ * open), so the worker and session subscriptions live here: a closed
+ * palette does not re-render on every `worker_output` chunk. `openedAt`
+ * fixes the moment the empty-query order is computed for: commands by the
+ * engine's own frecency bonus, highest first — a stable sort keeps
+ * definition order among unused commands.
+ */
+function PaletteBody({
+  frecency,
+  onRun,
+}: {
+  readonly frecency: ReadonlyMap<string, FrecencyEntry>;
+  readonly onRun: () => void;
+}): React.ReactElement {
+  const setPage = useSetAtom(currentPageAtom);
+  const setSidebarCollapsed = useSetAtom(sidebarCollapsedAtom);
+  const [graphView, setGraphView] = useAtom(graphViewAtom);
+  const workers = useWorkerStore((s) => s.workers);
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const sessions = useSessionStore((s) => s.sessions);
+
   const spawn = async () => {
     try {
       const id = await spawnWorkerFromSpec({
@@ -128,7 +164,7 @@ export function CommandPalette(): React.ReactElement {
       });
       if (id === null) toast.error("Spawning Workers Needs The Desktop App");
     } catch (err) {
-      toast.error(`Spawn Failed: ${errorText(err)}`);
+      toast.error(`Spawn Failed: ${errorMessage(err)}`);
     }
   };
 
@@ -138,7 +174,7 @@ export function CommandPalette(): React.ReactElement {
       useWorkerStore.getState().removeWorker(id);
       useWorkerAgentStore.getState().removeAgentMetadata(id);
     } catch (err) {
-      toast.error(`Kill Failed: ${errorText(err)}`);
+      toast.error(`Kill Failed: ${errorMessage(err)}`);
     }
   };
 
@@ -164,8 +200,8 @@ export function CommandPalette(): React.ReactElement {
     try {
       await createSnapshot(session);
       toast.success("Snapshot Created");
-    } catch {
-      toast.error("Failed To Create Snapshot");
+    } catch (err) {
+      toast.error(`Failed To Create Snapshot: ${errorMessage(err)}`);
     }
   };
 
@@ -186,12 +222,10 @@ export function CommandPalette(): React.ReactElement {
     navigate("workers", "Workers", ["agents"]),
     navigate("sessions", "Sessions", ["history"]),
     navigate("metrics", "Metrics", ["performance", "stats"]),
-    navigate("settings", "Settings", ["preferences", "config"]),
-    // Tools/Logs/Workspace have no sidebar entry: the palette is their
-    // only navigation path.
-    navigate("tools", "Tools", ["custom", "builder"]),
     navigate("logs", "Logs", ["output", "console"]),
+    navigate("tools", "Tools", ["custom", "builder"]),
     navigate("workspace", "Workspace", ["files", "project"]),
+    navigate("settings", "Settings", ["preferences", "config"]),
     {
       id: "ui:toggle-sidebar",
       label: "Toggle Sidebar",
@@ -232,44 +266,6 @@ export function CommandPalette(): React.ReactElement {
     },
   ];
 
-  return (
-    <Command.Dialog
-      // The machine's `search` state survives CLOSE while the input
-      // unmounts empty — on reopen the stale query silently filters
-      // group children out of registration and the list corrupts.
-      // Keying by `open` remounts the dialog (fresh machine, empty
-      // search) each cycle, which also flushes the frecency engine.
-      key={String(open)}
-      open={open}
-      onOpenChange={setOpen}
-      label="SWARM Command Palette"
-      description="Type A Command Or Search, Then Press Enter To Run It"
-      frecency={{ enabled: true, namespace: "swarm-palette", storage: frecencyStorage }}
-      className="swarm-cmdk"
-      overlayClassName="swarm-cmdk-overlay"
-      contentClassName="swarm-cmdk-content"
-    >
-      <PaletteBody commands={commands} frecency={frecency} onRun={() => setOpen(false)} />
-    </Command.Dialog>
-  );
-}
-
-/**
- * The palette's input and grouped list. Mounted fresh on every open
- * (the dialog is keyed by `open`), so `openedAt` fixes the moment the
- * empty-query order is computed for: commands by the engine's own
- * frecency bonus, highest first — a stable sort keeps definition order
- * among unused commands.
- */
-function PaletteBody({
-  commands,
-  frecency,
-  onRun,
-}: {
-  readonly commands: readonly CommandDef[];
-  readonly frecency: ReadonlyMap<string, FrecencyEntry>;
-  readonly onRun: () => void;
-}): React.ReactElement {
   const [openedAt] = useState(Date.now);
   const bonus = (id: string) => {
     const entry = frecency.get(id);

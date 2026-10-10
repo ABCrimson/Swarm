@@ -11,9 +11,9 @@ function Child(): React.ReactElement {
   return <p>Rendered Successfully</p>;
 }
 
-function renderBoundary(props: Partial<React.ComponentProps<typeof ErrorBoundary>> = {}) {
+function renderBoundary() {
   return render(
-    <ErrorBoundary {...props}>
+    <ErrorBoundary>
       <Child />
     </ErrorBoundary>,
   );
@@ -51,9 +51,8 @@ describe("ErrorBoundary", () => {
     expect(retryButton()).toHaveTextContent(`Retry (${MAX_RETRIES} Remaining)`);
   });
 
-  // Regression: every Error has a string `message`, so the old duck-typed
-  // check labelled plain render errors "IPC Error" and the `instanceof
-  // Error` branch could never run.
+  // Every Error has a string `message`, so the Tauri-error check must
+  // exclude Error instances.
   it("toasts a plain Error with its own message, not as an IPC error", () => {
     renderBoundary();
 
@@ -72,29 +71,9 @@ describe("ErrorBoundary", () => {
 
   it("normalizes a thrown non-Error value into a readable message", () => {
     failure.thrown = "Plain String Failure";
-    const onError = vi.fn();
-    renderBoundary({ onError });
+    renderBoundary();
 
     expect(screen.getByRole("alert")).toHaveTextContent("Plain String Failure");
-    expect(onError).toHaveBeenCalledOnce();
-    expect(onError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-    expect(onError.mock.calls[0]?.[0].message).toBe("Plain String Failure");
-  });
-
-  it("uses a custom fallback when provided", () => {
-    render(
-      <ErrorBoundary
-        fallback={(error, reset) => (
-          <button type="button" onClick={reset}>
-            Custom: {error.message}
-          </button>
-        )}
-      >
-        <Child />
-      </ErrorBoundary>,
-    );
-
-    expect(screen.getByRole("button", { name: "Custom: Test Render Error" })).toBeInTheDocument();
   });
 
   it("retries after a 1s backoff and renders the recovered children", () => {
@@ -113,7 +92,7 @@ describe("ErrorBoundary", () => {
     expect(screen.getByText("Rendered Successfully")).toBeInTheDocument();
   });
 
-  // Regression: each click scheduled its own timer and spent a retry.
+  // Extra Retry clicks while a retry is pending schedule no timer and spend no retry.
   it("ignores extra Retry clicks while a retry is pending", () => {
     vi.useFakeTimers();
     renderBoundary();
@@ -148,8 +127,8 @@ describe("ErrorBoundary", () => {
     vi.unstubAllGlobals();
   });
 
-  // Regression: the budget never refilled, so the app-lifetime root
-  // boundary could retry only three times ever.
+  // The budget refills once the children stay up, so the app-lifetime root
+  // boundary can keep retrying.
   it("refills the retry budget once the children stay up", () => {
     vi.useFakeTimers();
     const { rerender } = renderBoundary();

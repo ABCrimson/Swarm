@@ -22,7 +22,7 @@ const SIDEBAR_PAGES = [
 ] as const satisfies readonly SidebarPage[];
 
 // Pages the command palette also navigates to (a sync, untransitioned
-// page change — the path that used to leave <main> empty).
+// page change, which must still render <main>).
 const PALETTE_PAGES = [
   { command: "Go To Tools", heading: "Tools" },
   { command: "Go To Logs", heading: "Logs" },

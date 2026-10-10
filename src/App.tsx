@@ -4,7 +4,7 @@ import { AppShell } from "#components/layout/AppShell";
 import { PageHost } from "#components/layout/PageHost";
 import { PerformanceOverlay } from "#components/metrics/PerformanceOverlay";
 import { ErrorBoundary } from "#components/ui/ErrorBoundary";
-import { SwarmToaster } from "#components/ui/Toast";
+import { SwarmToaster, toast } from "#components/ui/Toast";
 import { useAgentSessionEvents } from "#hooks/useAgentSessionEvents";
 import { useAlerts } from "#hooks/useAlerts";
 import { useAutoSnapshot } from "#hooks/useAutoSnapshot";
@@ -17,6 +17,7 @@ import { useTheme } from "#hooks/useTheme";
 import { useWorkerEvents } from "#hooks/useWorkerEvents";
 import { connectEventBus } from "#lib/event-bus";
 import { onIdle } from "#lib/idle";
+import { errorMessage } from "#lib/is-error";
 import { validateStoreData } from "#lib/store-integrity";
 
 /** Runs the auto-snapshot loop; mounted only once startup has gone idle. */
@@ -42,10 +43,16 @@ export function App(): React.ReactElement {
   useEffect(() => {
     let dispose: (() => void) | undefined;
     let cancelled = false;
-    void connectEventBus().then((off) => {
-      if (cancelled) off();
-      else dispose = off;
-    });
+    void connectEventBus()
+      .then((off) => {
+        if (cancelled) off();
+        else dispose = off;
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        console.error("[App] Event bus connection failed:", err);
+        toast.error("Live Updates Unavailable", { description: errorMessage(err) });
+      });
     return () => {
       cancelled = true;
       dispose?.();

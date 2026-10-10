@@ -86,15 +86,9 @@ function setNavigatorGpu(value: unknown): void {
 
 describe("ParticleBackground diagnostics", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
-  // NOTE: `themeAtom` (particlesEnabled) is intentionally NOT overridden in
-  // these tests. It's an `atomWithStorage`, whose `onMount` unconditionally
-  // resets the value to its hardcoded default on every mount (see
-  // `createTauriStorage().getItem`, which always returns `initialValue`) —
-  // so a pre-render `store.set()` would just be clobbered when
-  // ParticleBackground's `useAtomValue(themeAtom)` (re)subscribes. Its
-  // default (`particlesEnabled: true`) is exactly the state these tests
-  // want anyway. `reducedMotionAtom` is a plain atom (no such trap), so
-  // it's used below to exercise the "intentionally off" bypass instead.
+  // NOTE: `themeAtom` is not overridden here: its default
+  // (`particlesEnabled: true`) is the state these tests want.
+  // `reducedMotionAtom` is used below for the "intentionally off" bypass.
   const store = getDefaultStore();
 
   beforeEach(() => {
@@ -162,8 +156,7 @@ describe("ParticleBackground diagnostics", () => {
   it("does not warn when reduced motion is on, even though WebGPU is unsupported", async () => {
     // WebGPU is unsupported here too, but since the user (or OS) has
     // opted out of motion, this must NOT be treated as a diagnosable
-    // pipeline failure. (Also keeps `shouldRender` false so ParticleCanvas
-    // — which needs a ResizeObserver jsdom doesn't implement — never mounts.)
+    // pipeline failure.
     setNavigatorGpu(undefined);
     store.set(reducedMotionAtom, true);
 

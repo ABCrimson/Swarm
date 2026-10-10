@@ -43,8 +43,8 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: "Dashboard" })).not.toHaveAttribute("aria-current");
   });
 
-  // Regression: on Logs/Tools/Workspace every button had tabIndex -1, so
-  // the navigation could not be reached with Tab at all.
+  // The nav is exactly one Tab stop, on the current page's button,
+  // whichever page is current.
   it.for(["logs", "tools", "workspace", "dashboard"] as const)(
     "has exactly one Tab stop, on the current page (%s)",
     (page) => {
@@ -96,8 +96,11 @@ describe("Sidebar", () => {
       </Provider>,
     );
 
+    // Collapsed buttons show only the icon, so the name must come from aria-label.
     for (const name of PAGES) {
-      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+      const button = screen.getByRole("button", { name });
+      expect(button).toHaveAttribute("aria-label", name);
+      expect(button).not.toHaveTextContent(name);
     }
   });
 });
