@@ -55,16 +55,8 @@ const actionsStyle: CSSProperties = { display: "flex", flexWrap: "wrap", gap: 8,
 /** Values longer than this are cut until the user asks for the rest. */
 const TRUNCATE_AT = 500;
 
-/** Control, bidi and zero-width ranges that must never reach the screen raw. */
-const INVISIBLE_RANGES: ReadonlyArray<readonly [number, number]> = [
-  [0x0000, 0x001f],
-  [0x007f, 0x009f],
-  [0x061c, 0x061c],
-  [0x200b, 0x200f],
-  [0x202a, 0x202e],
-  [0x2060, 0x2069],
-  [0xfeff, 0xfeff],
-];
+/** Control, format, separator and default-ignorable characters (bidi, zero-width, tag, variation selector) that must never reach the screen raw. */
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
 
 const NAMED_ESCAPES: Readonly<Record<string, string>> = {
   "\\": "\\\\",
@@ -77,7 +69,8 @@ const NAMED_ESCAPES: Readonly<Record<string, string>> = {
  * Makes a model-controlled string safe to show, in one pass so an escape
  * is never escaped again: a backslash becomes `\\`; newline, carriage
  * return and tab become `\n`, `\r`, `\t`; every other control,
- * bidi-override or zero-width character becomes a visible `\uXXXX`.
+ * format, separator or default-ignorable character becomes a visible
+ * `\uXXXX` (`\u{XXXXX}` above U+FFFF).
  * Because backslashes are doubled, every escape in the output is
  * unambiguous: a real newline (`\n`) never looks like the two characters
  * backslash and n (`\\n`).
@@ -88,8 +81,9 @@ function escapeForDisplay(value: string): string {
     const code = char.codePointAt(0) ?? 0;
     const named = NAMED_ESCAPES[char];
     if (named !== undefined) out += named;
-    else if (INVISIBLE_RANGES.some(([from, to]) => code >= from && code <= to)) {
-      out += `\\u${code.toString(16).toUpperCase().padStart(4, "0")}`;
+    else if (INVISIBLE.test(char)) {
+      const hex = code.toString(16).toUpperCase();
+      out += code > 0xffff ? `\\u{${hex}}` : `\\u${hex.padStart(4, "0")}`;
     } else out += char;
   }
   return out;
