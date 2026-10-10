@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { Fragment, useState, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { Button } from "#components/ui/Button";
 import {
   getPendingToolApprovals,
@@ -7,14 +7,7 @@ import {
   subscribeToolApprovals,
   type ToolApprovalRequest,
 } from "#lib/tools";
-import {
-  ArgValue,
-  approvalArgs,
-  argsStyle,
-  isTruncated,
-  labelStyle,
-  reasonStyle,
-} from "./ApprovalArgs.tsx";
+import { ApprovalArgList, ApprovalBlockedReason, useApprovalReview } from "./ApprovalArgs.tsx";
 
 const promptListStyle: CSSProperties = {
   display: "flex",
@@ -36,43 +29,20 @@ const rowStyle: CSSProperties = { border: 0, margin: 0, padding: 0, minWidth: 0 
 const actionsStyle: CSSProperties = { display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 };
 
 function ApprovalRow({ request }: { readonly request: ToolApprovalRequest }): React.ReactElement {
-  const [showing, setShowing] = useState<ReadonlySet<string>>(new Set());
-  const [seen, setSeen] = useState<ReadonlySet<string>>(new Set());
-  const args = approvalArgs(request.tool, request.input);
-  const unseen = args.filter((arg) => isTruncated(arg) && !seen.has(arg.key));
-  const blocked = unseen.length > 0;
-  const reasonId = `approval-${request.id}-reason`;
-  const toggle = (key: string): void => {
-    setShowing((prev) =>
-      prev.has(key) ? prev.difference(new Set([key])) : prev.union(new Set([key])),
-    );
-    setSeen((prev) => prev.union(new Set([key])));
-  };
+  const review = useApprovalReview(request.tool, request.input);
   return (
     <fieldset aria-label={`Approve ${request.tool}`} style={rowStyle}>
       <div style={headingStyle}>
         <strong>{request.tool}</strong>
       </div>
-      <dl style={argsStyle}>
-        {args.map((arg) => (
-          <Fragment key={arg.key}>
-            <dt style={labelStyle}>{arg.label}</dt>
-            <ArgValue arg={arg} showing={showing.has(arg.key)} onToggle={() => toggle(arg.key)} />
-          </Fragment>
-        ))}
-      </dl>
-      {blocked && (
-        <p id={reasonId} style={reasonStyle}>
-          Allow is off until you have used Show All on every shortened value (
-          {unseen.map((arg) => arg.label).join(", ")}).
-        </p>
-      )}
+      <ApprovalArgList review={review} />
+      <ApprovalBlockedReason review={review} />
       <div style={actionsStyle}>
         <Button
           size="sm"
           variant="primary"
-          disabled={blocked}
-          aria-describedby={blocked ? reasonId : undefined}
+          disabled={review.blocked}
+          aria-describedby={review.blocked ? review.reasonId : undefined}
           onClick={() => resolveToolApproval(request.id, "once")}
         >
           Allow Once
@@ -81,8 +51,8 @@ function ApprovalRow({ request }: { readonly request: ToolApprovalRequest }): Re
           <Button
             size="sm"
             variant="secondary"
-            disabled={blocked}
-            aria-describedby={blocked ? reasonId : undefined}
+            disabled={review.blocked}
+            aria-describedby={review.blocked ? review.reasonId : undefined}
             onClick={() => resolveToolApproval(request.id, "session")}
           >
             Allow For Session
