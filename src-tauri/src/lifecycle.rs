@@ -9,12 +9,15 @@
 //! `RunEvent::Exit`, the hook also runs on the exits that skip the event
 //! loop (`restart` on the main thread).
 //!
-//! The hook may run on the main thread or, for `exit` and
-//! `request_restart` called from an async command, on a Tokio worker.
-//! `block_on` panics inside a runtime and blocks its worker, so the
-//! shutdown is driven by a scoped helper thread through a handle captured
-//! at registration, which is safe from either. The hook is also guarded:
-//! it runs its teardown once, however often it is called.
+//! The hook runs on the main thread when the event loop ends. `exit`,
+//! `restart` (off the main thread) and `request_restart` run it on the
+//! calling thread instead when they cannot ask the event loop to stop;
+//! from an async command that is a Tokio worker, where `Handle::block_on`
+//! panics. So the shutdown runs on a scoped helper thread through a handle
+//! captured at registration. The caller waits for it (at most two
+//! `SHUTDOWN_PHASE_TIMEOUT`s), acceptable only because the process exits
+//! right after. The hook runs its teardown once, however often it is
+//! called.
 //!
 //! Terminal workers are left to the operating system: their PTYs close
 //! with the process, which ends the shells they run. Killing them through
@@ -41,6 +44,7 @@ const SHUTDOWN_PHASE_TIMEOUT: Duration = Duration::from_millis(2500);
 /// are flushed.
 pub(crate) struct Teardown {
     done: AtomicBool,
+    // tokio's Mutex only until swarm-desktop depends on parking_lot (a Cargo.lock change outside this lane); never contended, see cleanup.
     log_guard: Mutex<Option<WorkerGuard>>,
     /// How many times the shutdown actually ran.
     #[cfg(test)]
@@ -167,7 +171,8 @@ mod tests {
             .build(mock_context(noop_assets()))
             .unwrap();
         app.manage(runtime);
-        app.manage(Teardown::new(None));
+        let (_writer, guard) = tracing_appender::non_blocking(std::io::sink());
+        app.manage(Teardown::new(Some(guard)));
         app
     }
 
@@ -184,6 +189,14 @@ mod tests {
         assert!(!stopped());
 
         app.cleanup_before_exit();
+        assert!(
+            app.state::<Teardown>()
+                .log_guard
+                .try_lock()
+                .expect("uncontended")
+                .is_none(),
+            "the hook did not take the log guard"
+        );
         assert!(stopped());
         assert_eq!(runs(), 1);
 
@@ -191,9 +204,9 @@ mod tests {
         assert_eq!(runs(), 1);
     }
 
-    /// The hook is safe on a Tokio worker thread, where `block_on` would
-    /// panic: `AppHandle::exit` called from an async command runs it
-    /// there.
+    /// Safe on a thread inside a Tokio runtime, where `block_on` would
+    /// panic: exit/restart/request_restart from an async command run the
+    /// hook there when the event loop cannot be asked to stop.
     #[tokio::test(flavor = "multi_thread")]
     async fn cleanup_is_safe_on_a_tokio_worker() {
         let app = app_with_runtime("lifecycle-worker");

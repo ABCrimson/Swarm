@@ -238,19 +238,20 @@ fn app_data_and_credential_stores_are_denied() {
 /// fails the ACL build.
 #[test]
 fn app_commands_are_granted_one_by_one() {
-    let granted: BTreeSet<String> = permissions()
+    let permissions = permissions();
+    let bare: Vec<&str> = permissions
         .iter()
         .map(identifier)
         .filter(|id| !id.contains(':'))
-        .filter_map(|id| id.strip_prefix("allow-"))
-        .map(|name| name.replace('-', "_"))
+        .collect();
+    assert!(
+        bare.iter().all(|id| id.starts_with("allow-")),
+        "a bare app permission other than allow-<command>: {bare:?}"
+    );
+    let granted: BTreeSet<String> = bare
+        .iter()
+        .map(|id| id["allow-".len()..].replace('-', "_"))
         .collect();
     let commands: BTreeSet<String> = command_names::ALL.iter().map(|&c| c.to_owned()).collect();
     assert_eq!(granted, commands);
-    assert!(
-        !permissions()
-            .iter()
-            .any(|p| identifier(p).starts_with("deny-")),
-        "an app command is denied in the default capability"
-    );
 }
