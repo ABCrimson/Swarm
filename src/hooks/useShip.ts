@@ -84,7 +84,7 @@ export interface ShipSnapshot {
 }
 
 /** Every transition `shipReducer` knows. */
-export type ShipAction =
+type ShipAction =
   | { readonly type: "preflightStarted" }
   | { readonly type: "preflightLoaded"; readonly preflight: ShipPreflight }
   | { readonly type: "preflightFailed"; readonly error: ShipError }
