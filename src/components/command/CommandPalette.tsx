@@ -300,7 +300,7 @@ function PaletteBody({
               >
                 {cmd.label}
                 {frecency.has(cmd.id) && (
-                  <Command.Badge className="swarm-pill" data-tone="info" data-size="sm">
+                  <Command.Badge className="swarm-pill" data-tone="info" data-size="sm" aria-hidden="true">
                     {frecency.get(cmd.id)?.uses}
                   </Command.Badge>
                 )}
