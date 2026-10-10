@@ -212,7 +212,7 @@ fn ahead_since_base(worktree: &Path, base_commit: &str) -> Result<u32, AppError>
 /// tracked survivors from one numstat query — `diff HEAD` (index and
 /// working tree) in "all" mode, `diff --cached` (the index alone) in
 /// "staged" mode — plus each untracked survivor counted from disk.
-/// Best effort: a failed query leaves the tracked part at zero.
+/// Best effort: a failed query logs a warning and leaves the tracked part at zero.
 fn preview_diff_stat(
     worktree: &Path,
     mode: StagingMode,
@@ -239,7 +239,10 @@ fn preview_diff_stat(
     let mut stat = if counted.is_empty() {
         DiffStat::default()
     } else {
-        status::numstat(worktree, &args, |path| counted.contains(path)).unwrap_or_default()
+        status::numstat(worktree, &args, |path| counted.contains(path)).unwrap_or_else(|err| {
+            tracing::warn!(error = %err, "ship: preflight could not read the tracked diff stat");
+            DiffStat::default()
+        })
     };
     for path in untracked_survivors {
         status::add_untracked(&mut stat, worktree, path);
