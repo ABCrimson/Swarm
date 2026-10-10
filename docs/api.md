@@ -151,7 +151,7 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
 Three independent layers decide whether a command call runs. Each is enforced in code and pinned by a test; the webview chat's tools add a fourth, described below.
 
 1. **The Tauri ACL (desktop webview).** `src-tauri/build.rs` hands the command-name list to `tauri_build::AppManifest::commands`, which generates an `allow-<name>` / `deny-<name>` permission for every one of the 38 commands. `src-tauri/capabilities/default.json` grants exactly those `allow-*` entries to the `main` window (plus `core:default`, the `fs`, `dialog`, `opener` and `store` plugin permissions it needs). A command with no `allow-*` entry cannot be invoked by the webview at all. `capability_contract.rs` fails the build when the capability names a command that does not exist, omits one that does, or grants a bare non-`allow-` app permission.
-2. **`RemotePolicy` (swarmd).** Every registry entry declares a policy, and `swarmd` dispatches every `rpc` through `Registry::dispatch_remote`, never `dispatch`. `Allowed` commands are reachable by any authenticated client (including `spawn_worker` and `worker_input`: running commands as the daemon's user is the product). `SecretFiltered` commands (`read_config`, `write_config`) are refused when the `key` argument looks like a credential (`is_secret_key`: split into words at `_`, `-`, `:`, `.`, spaces and camelCase; secret-shaped when the last word is `key`, `apikey`, `token`, `secret`, `password`, `passwd`, `pat`, `credential` or `credentials`, or any word is `apikey`, `secret`, `password`, `passwd`, `credential` or `credentials`) with ``Remote Access To Secret-Shaped Config Keys Is Denied.``. `Denied` commands (`read_file`, `write_file`) never reach their handler: `"read_file" Is Not Available Over A Remote Connection.` The local `dispatch` path ignores the policy, because the desktop user is not the boundary it defends.
+2. **`RemotePolicy` (swarmd).** Every registry entry declares a policy, and `swarmd` dispatches every `rpc` through `Registry::dispatch_remote`, never `dispatch`. `Allowed` commands are reachable by any authenticated client (including `spawn_worker` and `worker_input`: running commands as the daemon's user is the product). `SecretFiltered` commands (`read_config`, `write_config`) are refused when the `key` argument looks like a credential (`is_secret_key`: split into words at `_`, `-`, `:`, `.`, spaces and camelCase; secret-shaped when the last word (skipping trailing version words such as `2` or `v2`, and ignoring trailing digits) is `key`, `apikey`, `token`, `secret`, `password`, `passwd`, `pat`, `credential` or `credentials`, or any word (trailing digits ignored) is `apikey`, `secret`, `password`, `passwd`, `credential` or `credentials`) with ``Remote Access To Secret-Shaped Config Keys Is Denied.``. `Denied` commands (`read_file`, `write_file`) never reach their handler: `"read_file" Is Not Available Over A Remote Connection.` The local `dispatch` path ignores the policy, because the desktop user is not the boundary it defends.
 3. **The file scope (`read_file` / `write_file`).** Both commands canonicalize the path against the real filesystem (symlinks resolved), confine it to fixed scopes and refuse a deny list of credential files for every caller that reaches them (a remote call never does: layer 2 denies it first). See [File System Commands](#file-system-commands).
 
 The webview chat's built-in tools in `src/lib/tools.ts` are a fourth gate in front of these commands. Every tool that acts on the machine (`run_command`, `spawn_worker`, `kill_worker`, `write_file`, `read_file`) waits for the user's answer inside its own `execute`, so no caller, the registry included, can run one unapproved; `get_metrics` and the user's custom tools (sandboxed Blob Workers with no backend side effect) are not gated. The prompt (`ToolApprovalPrompt`) offers **Allow Once**, **Allow For Session** and **Deny**:
@@ -174,7 +174,7 @@ Creates a new worker process with a PTY and registers it in the worker registry.
 | Name           | Type           | Required | Description                                    |
 |----------------|----------------|----------|------------------------------------------------|
 | `config`       | `WorkerConfig` | Yes      | Worker spawn configuration                     |
-| `originWorker` | `string`       | No       | UUID of the causer (e.g. the AI turn whose `spawn_worker` tool call triggered this spawn). Omitted (not `null`) for a human-initiated spawn -- absent deserializes as unattributed, matching every pre-provenance caller. |
+| `originWorker` | `string`       | No       | UUID of the causer (e.g. the AI turn whose `spawn_worker` tool call triggered this spawn). Omitted (not `null`) for a human-initiated spawn -- absent deserializes as unattributed. |
 | `causeSeq`     | `number`       | No       | `seq` of the event this spawn is reacting to (typically an `agent_turn_started` seq). |
 
 **`WorkerConfig` object:**
@@ -187,12 +187,12 @@ Creates a new worker process with a PTY and registers it in the worker registry.
 | `env`      | `Record<string, string>` | `{}`                | Additional environment variables     |
 | `rows`     | `number`                 | `24`                | Initial PTY rows; see [`resize_worker`](#resize_worker) |
 | `cols`     | `number`                 | `80`                | Initial PTY columns; see [`resize_worker`](#resize_worker) |
-| `repoRoot` | `string \| null`         | `null`              | Root of the git repository to isolate this worker into. `null` (default) reproduces exactly the pre-worktree-isolation spawn -- no git anywhere |
+| `repoRoot` | `string \| null`         | `null`              | Root of the git repository to isolate this worker into. `null` (default) spawns a plain shell at `cwd` -- no git anywhere |
 | `isolation`| `"worktree" \| "none"`   | `"worktree"`        | Isolation mode, effective only when `repoRoot` is present |
 
 **Returns:** `string` -- UUID of the newly spawned worker.
 
-**Worktree isolation (when `repoRoot` is given and `isolation` resolves to `"worktree"`):** resolves `repoRoot`'s git toplevel and `HEAD` sha, creates `~/.swarm/worktrees/<repo>-<hash8>/w-<id8>` on a fresh branch `swarm/<slug>-<id8>` starting at that sha, locks it (`git worktree lock --reason "swarm worker <uuid>"`), and spawns the PTY there instead of at `cwd`. Any failure in that pipeline (repo discovery, `HEAD` resolution, `git worktree add`/`lock`) hard-fails the whole command -- **no worker is created and no PTY is started**; there is no silent fallback to spawning unisolated at a shared `cwd`. If the shell itself then fails to start, the new worktree is removed and its branch deleted before the error is returned. Omitting `repoRoot` skips this entirely and reproduces exactly the pre-worktree-isolation spawn.
+**Worktree isolation (when `repoRoot` is given and `isolation` resolves to `"worktree"`):** resolves `repoRoot`'s git toplevel and `HEAD` sha, creates `~/.swarm/worktrees/<repo>-<hash8>/w-<id8>` on a fresh branch `swarm/<slug>-<id8>` starting at that sha, locks it (`git worktree lock --reason "swarm worker <uuid>"`), and spawns the PTY there instead of at `cwd`. Any failure in that pipeline (repo discovery, `HEAD` resolution, `git worktree add`/`lock`) hard-fails the whole command -- **no worker is created and no PTY is started**; there is no silent fallback to spawning unisolated at a shared `cwd`. If the shell itself then fails to start, the new worktree is removed and its branch deleted before the error is returned. Omitting `repoRoot` skips this entirely: the shell starts at `cwd`.
 
 **Errors:**
 
@@ -492,7 +492,7 @@ A still-locked worktree is not dirty, and a permission error can strike *after* 
 
 **Branch Cleanup:** after a `"removed"` disposition (never any other), the isolation branch's tip is compared against the commit it was created from. If unchanged (the agent made no commits), the branch is deleted with `git branch -d` -- **never** `-D` (enforced the same way as the no-`--force` guarantee: `git::worktree::tests::test_branch_delete_args_never_contains_capital_d`). If the tip diverged (the agent committed real work), the branch is left in place -- deleting it would be data loss with extra steps. Either outcome is logged (`tracing`, not a `SwarmEvent` -- this is bookkeeping, not history) and never fails the kill itself.
 
-**Failure policy:** no `repoRoot` -> today's unisolated spawn, unconditionally. `repoRoot` present and the worktree-creation pipeline fails at any step -> the whole [`spawn_worker`](#spawn_worker) call fails -- no worker is registered and no PTY is started. There is no silent fallback to sharing a cwd across workers.
+**Failure policy:** no `repoRoot` -> an unisolated spawn at `cwd`, unconditionally. `repoRoot` present and the worktree-creation pipeline fails at any step -> the whole [`spawn_worker`](#spawn_worker) call fails -- no worker is registered and no PTY is started. There is no silent fallback to sharing a cwd across workers.
 
 **Location:** worktrees live under `~/.swarm/worktrees/<repo>-<hash8>/w-<id8>` (`<repo>` a sanitized repo directory name, `<hash8>` an 8-hex-character tag derived from the repo's absolute path, `<id8>` the worker UUID's first 8 hex characters) -- already inside the [`write_file`](#write_file) scope (`~/.swarm`).
 
@@ -518,7 +518,7 @@ Validates that a directory is inside a git repository -- used by the Workers pag
 
 | Error (string)  | Condition                                    |
 |-----------------|-----------------------------------------------|
-| `Git error: ...` | `path` is not inside a git repository, `git` could not be spawned, or the operation timed out (``Git error: `git <subcommand>` timed out after <n>s``) |
+| `Git error: ...` | `path` is not absolute (``Git error: repository path must be absolute: "<path>"``), is not inside a git repository, `git` could not be spawned, or the operation timed out (``Git error: `git <subcommand>` timed out after <n>s``) |
 
 **Example:**
 
@@ -551,7 +551,7 @@ The ship chain turns a worker's finished work into a real commit, a real upstrea
 
 Computes the full ship preflight for a worker's worktree, evaluated for `mode` (defaults to `"all"` when omitted): branch/remote/tracking state, working-tree status, the deny-list preview (mode-aware -- a `"staged"` preview reflects only the index, matching what `git_stage_commit` would actually commit for that mode), and the `canShip`/`blockers` verdict. Read-only -- never mutates the working tree, emits no events.
 
-**Refuses (via non-fatal `blockers`, `canShip: false` when any is present) rather than erroring:** toplevel mismatch (the worktree path no longer resolves to itself), primary checkout (`--git-common-dir == --git-dir`), detached `HEAD`, `branch == baseBranch`, a protected branch (`main`/`master`/`develop`/`release/*`), missing `origin` remote, or nothing to ship at all (clean working tree **and** `ahead == 0`).
+**Refuses (via non-fatal `blockers`, `canShip: false` when any is present) rather than erroring:** toplevel mismatch (the worktree path no longer resolves to itself), primary checkout (`--git-common-dir == --git-dir`), detached `HEAD`, `branch == baseBranch`, a protected branch (`main`/`master`/`develop`/`release/*`), missing `origin` remote, unresolved merge conflicts, or nothing to ship at all (clean working tree **and** `ahead == 0`).
 
 **Parameters:**
 
@@ -685,12 +685,14 @@ Emits `ship_progress` for the `"push"` step, and -- when `finalStep` is `true` (
 
 | Error kind       | Condition                                                              | Remedy            |
 |-------------------|--------------------------------------------------------------------------|--------------------|
+| `workerNotFound` / `noWorktree` | `workerId` is malformed or names no worker, or the worker was spawned without worktree isolation | -- |
 | `primaryCheckout` | The pre-mutation guard fired                                              | --                 |
-| `invalidBranch`   | Detached `HEAD` -- resolved live, the same check `git_ship_preflight` uses | --                 |
+| `invalidBranch`   | Detached `HEAD`, a protected branch (`main`, `master`, `develop`, `release/*`) or the base branch -- resolved live | -- |
 | `noRemote`        | No `origin` remote configured                                             | --                 |
 | `pushRejected`    | Non-fast-forward rejection -- `origin` has commits the local branch doesn't | `fetchAndRebase` (`git pull --rebase`, re-preview, ship again -- **never** an automatic force-push) |
 | `authExpired`     | Authentication failed (expired/missing credentials, `GIT_TERMINAL_PROMPT=0` surfacing what would have been an interactive prompt) | `reAuthenticate`  |
 | `timeout`         | The underlying git invocation exceeded its timeout budget                 | --                 |
+| `unknown` | `shipId` is not a UUID, or any other failure, including reading the live branch or the `origin` remote | -- |
 
 **Example:**
 
@@ -752,7 +754,7 @@ const url = await invoke("ship_compare_url", {
   title: "Add Feature File",
   body: "Adds feature.txt.",
 });
-await open(url); // @tauri-apps/plugin-shell
+await openUrl(url); // import { openUrl } from "@tauri-apps/plugin-opener"
 ```
 
 **Emits:** `ship_progress` (`step: "compare"`), then `ship_settled` with `prUrl` set.
@@ -1000,7 +1002,7 @@ Provider ids on the wire are `snake_case`: `claude_code` and `codex` have adapte
 
 ### `agent_turn_started`
 
-A narrow intake for the webview chat path. `AIChat.tsx`'s `doSend` calls it once per turn, before the first streaming round, and keeps the returned seq (`turnSeq`) in that turn's closure. Every tool-driven side effect the turn runs afterwards (`spawn_worker`, `kill_worker`, `worker_input`, `write_file`) cites `turnSeq` as its `causeSeq`.
+A narrow intake for the webview chat path. `runTurn` in `src/lib/ai-chat.ts` calls it once per turn, before the first streaming round, and keeps the returned seq in the turn's `ToolProvenance`. Every tool-driven side effect the turn runs afterwards (`spawn_worker`, `kill_worker`, `worker_input`, `write_file`) cites that seq as its `causeSeq`.
 
 This is how the "the engine records provenance, it never infers it" invariant holds for AI turns: the frontend cannot cite a cause that does not exist in the log, so this command makes one exist deterministically, with no polling and no timeout-bound `waitFor` correlation. It waits for the writer's acknowledgement (`EventSink::emit_awaiting_seq`) for at most 5 seconds.
 
@@ -1025,13 +1027,13 @@ This is how the "the engine records provenance, it never infers it" invariant ho
 **Example:**
 
 ```typescript
-// AIChat.tsx's doSend, before round 0:
+// The raw IPC calls behind runTurn (src/lib/ai-chat.ts), which goes through agentTurnStarted in src/lib/tauri.ts, before round 0:
 const turnSeq = await invoke<number>("agent_turn_started", {
   workerId,
   model: modelId,
   requestId: itemId,
 });
-// turnSeq now lives in this turn's closure, cited as causeSeq below:
+// runTurn keeps the seq in the turn's ToolProvenance; every tool call cites it as causeSeq:
 await invoke("worker_input", {
   id: workerId,
   data: "pnpm build\n",
@@ -1078,6 +1080,7 @@ Permission gating never rests on `allowedTools` (it widens what runs unasked rat
 |---|---|---|
 | `null` | `Provider Not Supported By The Backend: <name>.` | `provider` is a reserved name with no adapter. Nothing was spawned |
 | `null` | the `spawn_worker` error text | The PTY worker spawn itself failed (registry full, worktree creation failed, ...) |
+| `null` | ``Worker `<id>` not found`` | The worker was killed before or during its session's attach. A session that did attach is shut down, and no worker remains |
 | the new worker's id | the adapter's own error, verbatim | The session failed to attach (binary missing, handshake timeout, an unknown `trustTier`, Codex refusing a policy more permissive than requested, ...). **The PTY worker still exists and is usable as a plain terminal**; it is not rolled back |
 
 **Emits:** `worker_spawned` (and `worktree_created` if isolated) from the underlying spawn, then `agent_session_started` once the adapter's `spawn()` resolves. `payload.capabilities` tells the frontend what the session can honestly do (see [`agent_permission_respond`](#agent_permission_respond) and [`agent_cancel`](#agent_cancel)).
@@ -1104,7 +1107,7 @@ Enqueues one turn for `workerId`'s attached session through the `AgentScheduler`
 | ``Invalid UUID "<id>": ...``    | `workerId` is not a valid UUID string |
 | `AI queue full (256 capacity)`  | The scheduler's bounded admission queue (`AGENT_TURN_QUEUE_CAPACITY`) is full |
 
-A worker with no attached session, or a session already mid-turn, is **not** an error here: the executor logs it server-side (`agent session busy: a turn is already in flight`), because a session never queues a second turn internally; queueing is the scheduler's job.
+A worker with no attached session is **not** an error here: the turn is admitted, and when it runs it settles at once with a synthesized `agent_turn_settled` (`status: "error"`, `error: "No Live Session For This Worker: ..."`); a session that rejects the turn settles the same way with `Turn Rejected: ...`. The scheduler runs at most one turn per worker at a time, so a second turn for a busy worker waits in the queue instead of reaching the session.
 
 ---
 
@@ -1238,7 +1241,7 @@ Sets how many agent turns may execute at the same time. Validated, persisted to 
 
 ### `read_file`
 
-Reads a UTF-8 file at an absolute path.
+Reads a UTF-8 regular file of at most 16 MiB at an absolute path.
 
 **Parameters:**
 
@@ -1257,6 +1260,8 @@ Reads a UTF-8 file at an absolute path.
 | ``File Not Found: "<path>".`` | The file does not exist (reported only for in-scope paths) |
 | `This Path Holds Credentials And Is Never Accessible.` | The canonical path is on the deny list |
 | ``The Operating System Denied Access To "<path>".`` | The OS itself refused (in-scope path, OS-level permission error) |
+| ``Cannot Read "<path>": Not A Regular File.`` | The canonical path is a directory, FIFO, device or other non-regular file |
+| ``Cannot Read "<path>": The File Is Larger Than 16 MiB.`` | The file exceeds 16 MiB (checked on the stat and again on the bytes read) |
 | ``Failed To Read "<path>": ...`` | Any other I/O failure, including a file that is not UTF-8 |
 | ``"read_file" Is Not Available Over A Remote Connection.`` | The call arrived through `swarmd` |
 
@@ -1402,7 +1407,7 @@ Records a message from one worker to another (or to every listener) on a topic.
 | `payload`      | `unknown` (JSON)    | Yes      | Arbitrary JSON payload                                  |
 | `causeSeq`     | `number \| null`    | No       | The `seq` of the event that caused this send (e.g. an `agent_turn_started` or `agent_tool_call` a handoff is reacting to), stamped as the `bus_message` envelope's `causeSeq` |
 
-**Returns:** `0`. The result used to count bus-level receivers; there are none since delivery moved onto the event stream, and the number is kept only so the result type stays stable.
+**Returns:** `0`: the bus delivers nothing itself (every send is a `bus_message` event on the ordered stream), so there are no bus-level receivers. The number keeps the result type stable.
 
 **Errors (strings):**
 
@@ -1410,6 +1415,8 @@ Records a message from one worker to another (or to every listener) on a topic.
 |---------------|------------------------------------------------|
 | ``Invalid UUID "<id>": ...`` | `fromWorkerId` or `toWorkerId` is not a valid UUID |
 | `Too Many Bus Topics: The Limit Is 1024.` | `topic` is new and the registry is full; nothing is recorded |
+| `Event Writer Unavailable.` | The event was dropped (the engine is shut down, or the writer could not persist it, see [Failing Closed](#failing-closed)); nothing is delivered |
+| `Bus Send Timed Out.` | The event was not recorded within five seconds. It stays queued and may still be recorded and delivered, so a retry can duplicate the hand-off |
 
 **Example:**
 
@@ -1754,5 +1761,3 @@ Implemented and tested in Rust, but with no frontend caller in the shipped app (
 | [`get_session`](#get_session), [`agent_shutdown`](#agent_shutdown) | Registry commands with no frontend caller: the app lists sessions with `list_sessions`, and `kill_worker` shuts a session's agent down. The contract test lists both in `NOT_WIRED`. |
 | Provider ids `opencode`, `gemini`, `webview_anthropic` | Reserved wire names with no Rust adapter: `agent_spawn` and `agent_probe` refuse them. The webview chat path (`webview_anthropic`) lives in TypeScript and cannot implement the session trait. |
 | `WorkerState` `idle`, `worker_input` `source: "automation"` | Wire values the backend accepts but nothing produces today. |
-
-Removed, not merely unwired: `ai_request` and the `ai_stream_delta` / `ai_stream_settled` events (the webview chat streams from the SDK directly), and `bus_subscribe` / `bus_create_pipeline` / `bus_list_pipelines`. They no longer exist.
