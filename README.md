@@ -27,7 +27,7 @@
 
 ## What is SWARM?
 
-**SWARM Orchestrator** runs many AI coding agents in parallel — each in its own **isolated git worktree**, on its own **PTY**, feeding a **single ordered event log** that makes every action monotonically sequenced and causally traceable. A Rust core drives a React 19 frontend on Tauri 2; the same core also runs **headless as a daemon** you can reattach to remotely, replaying the exact event stream from any sequence number.
+**SWARM Orchestrator** runs many AI coding agents in parallel — each in its own **isolated git worktree**, on its own **PTY**, feeding a **single ordered event log** that makes every action monotonically sequenced and causally traceable. A Rust core drives a React 19 frontend on Tauri 3 (alpha); the same core also runs **headless as a daemon** you can reattach to remotely, replaying the exact event stream from any sequence number.
 
 It's a complete agent **product loop** — spawn in isolation, watch in real time, and ship the result through a `commit → push → PR` chain whose pull-request body is generated from the actual turns that produced the diff.
 
@@ -51,7 +51,7 @@ Parallel-agent orchestrators are a crowded idea. SWARM's wager is that the **sub
 | **Machine-verifiable ship bodies** | The `commit → push → compare` chain writes a **Causal Record** into the PR body — a deterministic, code-generated table of the exact turns and tool calls (by `seq` range) that produced the diff. Unforgeable, and honest about what it can't see. |
 | **Two providers, one unchanged trait** | `ClaudeCodeAdapter` (the `claude` CLI's `stream-json`) and `CodexAdapter` (the `codex` app-server's bidirectional JSON-RPC) implement the *same* `AgentAdapter`/`AgentSession` traits with **zero signature changes** between two structurally opposite protocols. |
 | **Headless, reattachable** | `swarmd` serves the identical core over an authenticated WebSocket. A remote client **reattaches by replaying the log from a sequence number** — a reconnect resumes exactly where it left off. |
-| **Drift-proof command surface** | A single command `Registry` (35 commands) backs both the Tauri shell and the daemon; a CI contract test parses the Tauri macro and fails the build if the two ever diverge. Remote calls are gated per-command by a declarative `RemotePolicy`. |
+| **Drift-proof command surface** | A single command `Registry` (36 commands) backs both the Tauri shell and the daemon; contract tests compare the shell's `commands!` name lists with the Registry's and fail the build if the two ever diverge. Remote calls are gated per-command by a declarative `RemotePolicy`. |
 
 ---
 
@@ -61,10 +61,10 @@ Parallel-agent orchestrators are a crowded idea. SWARM's wager is that the **sub
 - **🌳 Worktree-per-worker isolation** — each worker spawns in its own `git worktree` on a `swarm/*` branch; a dirty tree is preserved, never force-removed.
 - **🚢 Ship chain** — `commit → push → prefilled compare page`, with `Swarm-Seq-Range` trailers and the machine-generated Causal Record PR body.
 - **🔌 Multi-provider agents** — Claude Code and Codex today, behind a trait pair designed to absorb the next provider without touching the scheduler.
-- **🛰️ `swarmd` daemon** — no webview, no Tauri link-time dependency; WebSocket transport, reattach-by-seq-replay, token + Origin + Host auth, and per-user service units for all three OSes.
+- **🛰️ `swarmd` daemon** — no webview, no Tauri link-time dependency; WebSocket transport, reattach-by-seq-replay, token + Origin + Host auth, and per-user autostart units: systemd (Linux), launchd (macOS) and a logon Scheduled Task (Windows).
 - **🖥️ Integrated terminal per worker** — a real PTY (`portable-pty`) bridged to Tokio, rendered with `@xterm/xterm`'s WebGL2 renderer.
 - **📊 Real-time metrics** — CPU, memory, throughput, and scheduler depth via Recharts on a 500 ms loop, with a per-worker process breakdown.
-- **✨ WebGPU particle system** — GPU compute shaders with adaptive particle counts (2 K–50 K, auto-tuned to frame budget) and bloom / chromatic-aberration / vignette post-processing.
+- **✨ WebGPU particle system** — GPU compute shaders with adaptive particle counts (2 K–10 K, auto-tuned to GPU frame time) and bloom / chromatic-aberration / vignette post-processing.
 - **⌨️ Keyboard-first** — a frecency-ranked command palette powered by [`modern-cmdk`](https://github.com/ABCrimson/modern-cmdk).
 - **🎨 OKLCH design system** — every color derives from the OKLCH perceptual space.
 
@@ -94,7 +94,7 @@ flowchart TB
     CC & CX --> ENG["OrchestrationEngine<br/>single writer · monotonic seq"]
     ENG -->|persist before emit| LOG[("EventLog<br/>WAL SQLite")]
 
-    ENG --> DESK["Desktop UI<br/>Tauri 2 · React 19"]
+    ENG --> DESK["Desktop UI<br/>Tauri 3 · React 19"]
     ENG --> WS["swarmd<br/>WebSocket · reattach-by-seq"]
 
     LOG --> SHIP["Ship chain<br/>commit → push → causal PR body"]
@@ -128,8 +128,10 @@ pnpm tauri:dev      # builds the Rust core and launches the desktop app
 Production bundles:
 
 ```bash
-pnpm tauri:build    # signed installers land in src-tauri/target/release/bundle/
+pnpm tauri:build --no-sign    # local, unsigned; installers land in target/release/bundle/
 ```
+
+Without `--no-sign` the build also signs the updater artifacts and needs `TAURI_SIGNING_PRIVATE_KEY` (see [docs/updater-keys.md](docs/updater-keys.md)); the release workflow supplies it.
 
 Tagged releases (`v*`) build signed installers for **Windows, macOS (Intel + Apple Silicon), and Linux (`.deb` + `.AppImage`)** and attach the standalone `swarmd` binary for each target — see [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
@@ -207,12 +209,11 @@ Swarm/
 │   ├── assets/                 # the README hero
 │   └── workflows/              # CI + four-platform release pipeline
 ├── src/                        # React 19 frontend
-├── src-tauri/
-│   ├── src/                    # swarm-desktop — the thin Tauri shell (command Registry wrappers)
-│   └── crates/
-│       ├── swarm-core/         # tauri-free domain core:
-│       │   └── src/{agent,bus,commands,events,git,orchestration,session,worker}/
-│       └── swarmd/             # headless daemon: ws.rs, auth.rs, serve_ui.rs + service/ units
+├── src-tauri/                  # swarm-desktop — the thin Tauri shell (command Registry forwarders)
+├── crates/
+│   ├── swarm-core/             # tauri-free domain core:
+│   │   └── src/{agent,bus,commands,events,git,orchestration,session,worker}/
+│   └── swarmd/                 # headless daemon: ws.rs, auth.rs, serve_ui.rs + service/ units
 ├── docs/                       # architecture · api · daemon · e2e · performance · contributing
 │   ├── history/                # the original build spec (SWARM_NEW.md), archived
 │   └── superpowers/plans/      # dated execution plans, archived
