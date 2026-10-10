@@ -398,6 +398,7 @@ describe("readConfig", () => {
     disableTauri();
 
     await expect(readConfig("max_workers", z.int())).resolves.toBeNull();
+    expect(tauriInvoke).not.toHaveBeenCalled();
   });
 });
 
