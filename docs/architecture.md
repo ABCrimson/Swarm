@@ -465,7 +465,7 @@ shells return the registry's value untouched, so desktop and daemon report ident
   on macOS and Linux.
 
 **Capabilities** (`capabilities/default.json`, [ADR-0030](adr/0030-tauri-3-alpha-capability-scoped-fs.md)):
-`core:default`, one `allow-<command>` grant per app command (38; nothing else is invocable; pinned by `app_commands_are_granted_one_by_one`), `dialog:default`, `store:default`; fs `read-file`, `read-dir`, `exists`, `stat` and
+`core:default`, one `allow-<command>` grant per app command (38; nothing else is invocable; pinned by `app_commands_are_granted_one_by_one`), `dialog:default`, `store:default`; fs `read-file`, `read-dir`, `stat` and
 `write-file` with **no static path scope** (only what the user picks in a dialog), `fs:deny-default` and
 a deny list (app data, `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`, `.config/gh`, `.claude`,
 `.codex`, `.git-credentials`, `.netrc`); opener `openUrl` for `https://*/*/*/compare/*` and `openPath`
