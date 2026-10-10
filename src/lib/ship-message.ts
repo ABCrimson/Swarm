@@ -22,6 +22,13 @@ import type { ShipPreflight } from "#store/types";
 
 const MAX_LISTED_FILES = 20;
 
+/** A path with a control character (git -z gives newlines raw) is shown JSON-quoted so it cannot add lines or trailers to the message. */
+const CONTROL_CHAR_RE = /\p{Cc}/u;
+
+function displayPath(path: string): string {
+  return CONTROL_CHAR_RE.test(path) ? JSON.stringify(path) : path;
+}
+
 /** Path shapes that infer a `chore` commit when every changed file matches one. */
 const CHORE_PATH_MARKERS = [
   "package.json",
@@ -74,11 +81,15 @@ export function generateCommitMessage(preflight: ShipPreflight): string {
   const { filesChanged, insertions, deletions } = preflight.diffStat;
   const files = pluralize("file", filesChanged);
 
-  const summary = paths.length === 1 ? `update ${paths[0]}` : `update ${files}`;
+  const summary = paths.length === 1 ? `update ${displayPath(paths[0])}` : `update ${files}`;
   const lines = [`${type}: ${summary}`, "", `+${insertions}/-${deletions} across ${files}.`];
 
   if (paths.length > 0) {
-    lines.push("", "Changed:", ...paths.slice(0, MAX_LISTED_FILES).map((path) => `- ${path}`));
+    lines.push(
+      "",
+      "Changed:",
+      ...paths.slice(0, MAX_LISTED_FILES).map((path) => `- ${displayPath(path)}`),
+    );
     if (paths.length > MAX_LISTED_FILES) {
       lines.push(`- ...and ${paths.length - MAX_LISTED_FILES} more`);
     }
