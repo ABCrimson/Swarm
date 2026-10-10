@@ -96,8 +96,11 @@ describe("Sidebar", () => {
       </Provider>,
     );
 
+    // Collapsed buttons show only the icon, so the name must come from aria-label.
     for (const name of PAGES) {
-      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+      const button = screen.getByRole("button", { name });
+      expect(button).toHaveAttribute("aria-label", name);
+      expect(button).not.toHaveTextContent(name);
     }
   });
 });
