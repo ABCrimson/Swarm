@@ -569,7 +569,7 @@ describe("useShip", () => {
 
     expect(result.current.state).toBe("failed");
     expect(result.current.error?.kind).toBe("timeout");
-    expect(result.current.error?.message).toContain("may still have completed");
+    expect(result.current.error?.message).toContain("May Still Have Completed");
   });
 
   // ── B2: NothingToCommit recovery when there's already unpushed work ──

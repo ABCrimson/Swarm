@@ -577,7 +577,7 @@ function armSettledWait(shipId: string): Promise<unknown> {
     throw new ShipCommandError(
       {
         kind: "timeout",
-        message: `No confirmation arrived within ${SHIP_SETTLED_TIMEOUT_MS / 1000} seconds. The commit or push may still have completed; refresh the preflight to check.`,
+        message: `No Confirmation Arrived Within ${SHIP_SETTLED_TIMEOUT_MS / 1000} Seconds — The Commit Or Push May Still Have Completed; Refresh The Preflight To Check.`,
         remedy: null,
       },
       { cause: err },
