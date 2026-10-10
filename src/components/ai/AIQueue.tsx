@@ -40,7 +40,7 @@ const streamCountStyle: CSSProperties = {
   alignItems: "center",
   gap: 6,
   fontSize: 12,
-  color: "oklch(0.55 0.04 220)",
+  color: "var(--color-fg-dim)",
   fontFamily: "var(--font-mono, 'JetBrains Mono Variable', 'Fira Code', monospace)",
 };
 
@@ -62,7 +62,7 @@ const positionStyle: CSSProperties = {
   height: 24,
   borderRadius: 4,
   background: "oklch(0.16 0.03 220)",
-  color: "oklch(0.55 0.04 220)",
+  color: "var(--color-fg-dim)",
   fontSize: 11,
   fontWeight: 700,
   fontFamily: "var(--font-mono, 'JetBrains Mono Variable', 'Fira Code', monospace)",
@@ -72,7 +72,7 @@ const positionStyle: CSSProperties = {
 const emptyStyle: CSSProperties = {
   textAlign: "center",
   padding: "16px 0",
-  color: "oklch(0.55 0.03 220)",
+  color: "var(--color-fg-dim)",
   fontSize: 13,
 };
 
@@ -112,7 +112,7 @@ function StatusLabel({
       );
     case "pending":
       return (
-        <span style={{ fontSize: 11, color: "oklch(0.55 0.04 220)" }}>
+        <span style={{ fontSize: 11, color: "var(--color-fg-dim)" }}>
           Waiting · #{waitPosition} In Line
         </span>
       );

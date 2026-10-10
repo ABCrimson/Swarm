@@ -96,7 +96,7 @@ const assistantBubbleStyle: CSSProperties = {
 
 const metaStyle: CSSProperties = {
   fontSize: 11,
-  color: "oklch(0.55 0.03 220)",
+  color: "var(--color-fg-dim)",
   marginTop: 4,
 };
 
@@ -122,7 +122,7 @@ const emptyStateStyle: CSSProperties = {
   justifyContent: "center",
   minHeight: 160,
   gap: 8,
-  color: "oklch(0.55 0.06 205)",
+  color: "var(--color-fg-dim)",
   fontSize: 14,
 };
 

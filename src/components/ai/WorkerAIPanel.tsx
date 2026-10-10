@@ -97,7 +97,7 @@ const dialogTitleStyle: CSSProperties = {
 
 const labelStyle: CSSProperties = {
   fontSize: 11,
-  color: "oklch(0.55 0.04 220)",
+  color: "var(--color-fg-dim)",
   fontWeight: 500,
   textTransform: "uppercase",
   letterSpacing: "0.06em",
