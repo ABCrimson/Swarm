@@ -1202,6 +1202,27 @@ mod tests {
         (path, guard)
     }
 
+    /// A timed-out drain fails every later call. The emit blocks the first
+    /// event and FIFO keeps the barrier behind it, so the first call always
+    /// times out; a retry must not report an unfinalized log as final.
+    #[test]
+    fn test_a_timed_out_shutdown_fails_every_later_call() {
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let engine =
+            OrchestrationEngine::start(EventLog::open_in_memory().unwrap(), None, move |_| {
+                let _ = release_rx.recv();
+            });
+        engine.sink().emit(output());
+        let first = engine
+            .shutdown(Duration::from_millis(50))
+            .unwrap_err()
+            .to_string();
+        let second = engine.shutdown(Duration::from_secs(5));
+        assert_matches!(&second, Err(AppError::EventLog(_)));
+        assert_eq!(second.unwrap_err().to_string(), first);
+        drop(release_tx);
+    }
+
     /// Shutdown drains everything queued before it
     /// (nothing lost on exit), later events are refused, and a restart
     /// on the same file continues exactly after the final head.
