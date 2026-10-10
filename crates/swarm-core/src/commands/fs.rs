@@ -26,9 +26,11 @@
 //! along with the backup files named after them (for example
 //! `swarm-config.json.corrupt-<ms>`, or the daemon's `.daemon-token.<rand>`
 //! mint-time temp file, compared with leading dots ignored), and the
-//! credential stores under `~` that the capability's fs:scope deny list
-//! covers: `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
-//! `.config/gh`, `.claude`, `.codex`, `.git-credentials`, `.netrc`. A
+//! credential stores under `~`: the capability's fs:scope deny list
+//! (`.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
+//! `.config/gh`, `.claude`, `.codex`, `.git-credentials`, `.netrc`), plus
+//! `AppData/Roaming/GitHub CLI` (gh on Windows), `.npmrc`, `.pypirc`,
+//! `.cargo/credentials.toml`, `.cargo/credentials`, `.config/gcloud`. A
 //! hard link to a secret is not detected.
 
 use std::io::{self, Read};
@@ -50,9 +52,11 @@ const MAX_READ_BYTES: u64 = 16 << 20;
 /// that hold credentials.
 const DENIED_DATA_FILE_PREFIXES: [&str; 2] = ["swarm-config.json", "daemon-token"];
 
-/// Home-relative directories and files that hold credentials (the
-/// fs:scope deny list in `src-tauri/capabilities/default.json`).
-const DENIED_HOME_ENTRIES: [&str; 11] = [
+/// Home-relative directories and files that hold credentials: the
+/// fs:scope deny list in `src-tauri/capabilities/default.json` plus stores
+/// only these commands reach (gh's Windows config dir, npm, PyPI, Cargo,
+/// gcloud).
+const DENIED_HOME_ENTRIES: [&str; 17] = [
     ".ssh",
     ".gnupg",
     ".aws",
@@ -64,6 +68,12 @@ const DENIED_HOME_ENTRIES: [&str; 11] = [
     ".codex",
     ".git-credentials",
     ".netrc",
+    "AppData/Roaming/GitHub CLI",
+    ".npmrc",
+    ".pypirc",
+    ".cargo/credentials.toml",
+    ".cargo/credentials",
+    ".config/gcloud",
 ];
 
 const DENIED_MESSAGE: &str = "This Path Holds Credentials And Is Never Accessible.";
@@ -499,12 +509,26 @@ mod tests {
             ".codex",
             ".git-credentials",
             ".netrc",
+            "AppData/Roaming/GitHub CLI",
+            ".npmrc",
+            ".pypirc",
+            ".cargo/credentials.toml",
+            ".cargo/credentials",
+            ".config/gcloud",
         ] {
             let entry = tree.scopes.home.join(entry);
             let secret = if matches!(
                 entry.file_name().and_then(|name| name.to_str()),
-                Some(".git-credentials" | ".netrc")
+                Some(
+                    ".git-credentials"
+                        | ".netrc"
+                        | ".npmrc"
+                        | ".pypirc"
+                        | "credentials.toml"
+                        | "credentials"
+                )
             ) {
+                std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
                 entry
             } else {
                 std::fs::create_dir_all(&entry).unwrap();
@@ -513,6 +537,9 @@ mod tests {
             std::fs::write(&secret, "k").unwrap();
             assert_eq!(tree.scopes.check_read(&secret), denied(), "{secret:?}");
         }
+        let cargo_config = tree.scopes.home.join(".cargo/config.toml");
+        std::fs::write(&cargo_config, "c").unwrap();
+        assert!(tree.scopes.check_read(&cargo_config).is_ok());
         let other = tree.scopes.home.join(".config/other.txt");
         std::fs::write(&other, "o").unwrap();
         assert!(tree.scopes.check_read(&other).is_ok());
