@@ -4,7 +4,7 @@
 // settled receipts, queued-turn accounting, and a transcript that
 // outlives the component.
 
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentChat } from "#components/ai/AgentChat";
@@ -260,6 +260,24 @@ describe("AgentChat", () => {
     expect(screen.queryByRole("button", { name: "Deny" })).not.toBeInTheDocument();
   });
 
+  it("returns keyboard focus to the message input after a keyboard answer", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    startSession("codex", { interactivePermissions: true });
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "req-focus",
+      tool: "fileChange",
+      input: {},
+    });
+
+    screen.getByRole("button", { name: "Allow" }).focus();
+    await user.keyboard("{Enter}");
+
+    expect(await screen.findByText("Allowed")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Message Codex" })).toHaveFocus();
+  });
+
   it("shows the exact command and directory of a Codex request that carries no message", () => {
     render(<Harness />);
     startSession("codex", { interactivePermissions: true });
@@ -339,7 +357,9 @@ describe("AgentChat", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "Deny" }));
-    expect(await screen.findByRole("button", { name: "Deny" })).toBeEnabled();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Deny" })).not.toHaveAttribute("aria-disabled"),
+    );
 
     fire("agent_turn_settled", { turnId: "t1", status: "ok", durationMs: 1 });
     expect(screen.getByText("Expired Unanswered")).toBeInTheDocument();

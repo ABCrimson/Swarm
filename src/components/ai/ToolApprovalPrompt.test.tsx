@@ -112,6 +112,28 @@ describe("ToolApprovalPrompt", () => {
     expect(prompt.textContent).not.toContain("\n");
   });
 
+  it("renders an input key with a bidi override as escaped data", () => {
+    // A provider-reported request keeps keys the tool schemas would strip.
+    const p = vi.mocked(getPendingToolApprovals);
+    p.mockReturnValue([
+      {
+        id: "r2",
+        tool: "future_tool",
+        input: { "a\u202Eb": "v" },
+        sessionAllowed: true,
+        workerId: W,
+      },
+    ]);
+    try {
+      render(<ToolApprovalPrompt workerId={W} />);
+      const prompt = screen.getByRole("alert", { name: "Tool Approval" });
+      expect(prompt).toHaveTextContent("A\\u202Eb");
+      expect(prompt.textContent).not.toContain("\u202E");
+    } finally {
+      p.mockReset();
+    }
+  });
+
   it("renders tag characters, variation selectors and other default-ignorables visibly", async () => {
     render(<ToolApprovalPrompt workerId={W} />);
     const command = "a\u{E0041}️ ­b";

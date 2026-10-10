@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { Fragment, useId, useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { Pill, type PillTone } from "#components/ui/Pill";
@@ -14,13 +14,10 @@ import {
 } from "#store/agent-sessions";
 import { AIMessageStream } from "./AIMessageStream.tsx";
 import {
-  ArgValue,
-  approvalArgs,
-  argsStyle,
+  ApprovalArgList,
+  ApprovalBlockedReason,
   escapeForDisplay,
-  isTruncated,
-  labelStyle,
-  reasonStyle,
+  useApprovalReview,
 } from "./ApprovalArgs.tsx";
 import { ToolCallDisplay } from "./ToolCallDisplay.tsx";
 
@@ -101,6 +98,8 @@ const containerStyle: CSSProperties = {
 /** `column-reverse` pins the scroll position to the newest row natively, and leaves it alone once the user scrolls up. */
 const scrollerStyle: CSSProperties = {
   flex: 1,
+  // The container clips overflow, so the focus ring is drawn inside the scroller.
+  outlineOffset: -2,
   overflowY: "auto",
   display: "flex",
   flexDirection: "column-reverse",
@@ -219,35 +218,30 @@ const formStyle: CSSProperties = {
 function PermissionRow({
   workerId,
   item,
+  inputRef,
 }: {
   readonly workerId: string;
+  readonly inputRef: React.RefObject<HTMLInputElement | null>;
   readonly item: Extract<AgentTranscriptItem, { kind: "permission" }>;
 }): React.ReactElement {
   const { payload, state } = item;
   const waiting = state === "pending" || state === "answering";
-  const [showing, setShowing] = useState<ReadonlySet<string>>(new Set());
-  const [seen, setSeen] = useState<ReadonlySet<string>>(new Set());
-  const reasonId = useId();
   // The exact arguments are what the user approves; the provider's message
   // is only prose beside them (Codex sends none).
-  const args = approvalArgs(payload.tool, payload.input);
-  const unseen = args.filter((arg) => isTruncated(arg) && !seen.has(arg.key));
-  const blocked = unseen.length > 0;
-  const toggle = (key: string): void => {
-    setShowing((prev) =>
-      prev.has(key) ? prev.difference(new Set([key])) : prev.union(new Set([key])),
-    );
-    setSeen((prev) => prev.union(new Set([key])));
-  };
+  const review = useApprovalReview(payload.tool, payload.input);
 
-  const answer = async (decision: PermissionDecision) => {
+  const answer = async (decision: PermissionDecision, button: HTMLButtonElement) => {
     const { setPermissionState } = useAgentSessionStore.getState();
     setPermissionState(workerId, payload.requestId, "answering");
     // Both outcomes move the row only while it is still `answering`: the
     // turn may settle (row -> `expired`) before the answer resolves.
     try {
       await agentPermissionRespond(workerId, payload.requestId, decision);
-      setPermissionState(workerId, payload.requestId, decision, "answering");
+      // The buttons unmount once the row leaves `answering`; keep focus in the chat.
+      const hadFocus = document.activeElement === button;
+      if (setPermissionState(workerId, payload.requestId, decision, "answering") && hadFocus) {
+        inputRef.current?.focus();
+      }
     } catch (err) {
       if (setPermissionState(workerId, payload.requestId, "pending", "answering")) {
         toast.error(`Permission Answer Failed: ${Error.isError(err) ? err.message : String(err)}`);
@@ -256,11 +250,9 @@ function PermissionRow({
   };
 
   return (
-    // A fieldset groups the request with its answer buttons and disables
-    // them all natively while an answer is in flight.
+    // A fieldset groups the request with its answer buttons; `loading`, not `disabled`, holds them while an answer is in flight, so keyboard focus stays on the pressed button.
     <fieldset
       aria-label={`Permission Request: ${payload.tool}`}
-      disabled={state === "answering"}
       style={waiting ? permissionPendingStyle : permissionStyle}
     >
       <div style={permissionHeaderStyle}>
@@ -269,38 +261,29 @@ function PermissionRow({
         </Pill>
         <span style={permissionToolStyle}>{payload.tool}</span>
       </div>
-      {args.length > 0 && (
-        <dl style={argsStyle}>
-          {args.map((arg) => (
-            <Fragment key={arg.key}>
-              <dt style={labelStyle}>{arg.label}</dt>
-              <ArgValue arg={arg} showing={showing.has(arg.key)} onToggle={() => toggle(arg.key)} />
-            </Fragment>
-          ))}
-        </dl>
-      )}
+      {review.args.length > 0 && <ApprovalArgList review={review} />}
       {payload.message && (
         <span style={permissionMessageStyle}>{escapeForDisplay(payload.message)}</span>
       )}
-      {waiting && blocked && (
-        <p id={reasonId} style={reasonStyle}>
-          Allow is off until you have used Show All on every shortened value (
-          {unseen.map((arg) => arg.label).join(", ")}).
-        </p>
-      )}
+      {waiting && <ApprovalBlockedReason review={review} />}
       {waiting && (
         <div style={{ display: "flex", gap: 8 }}>
           <Button
             size="sm"
             variant={payload.suggestedDecision === "deny" ? "secondary" : "primary"}
             loading={state === "answering"}
-            disabled={blocked}
-            aria-describedby={blocked ? reasonId : undefined}
-            onClick={() => void answer("allow")}
+            disabled={review.blocked}
+            aria-describedby={review.blocked ? review.reasonId : undefined}
+            onClick={(e) => void answer("allow", e.currentTarget)}
           >
             Allow
           </Button>
-          <Button size="sm" variant="danger" onClick={() => void answer("deny")}>
+          <Button
+            size="sm"
+            variant="danger"
+            loading={state === "answering"}
+            onClick={(e) => void answer("deny", e.currentTarget)}
+          >
             Deny
           </Button>
         </div>
@@ -312,8 +295,10 @@ function PermissionRow({
 function TranscriptRow({
   workerId,
   item,
+  inputRef,
 }: {
   readonly workerId: string;
+  readonly inputRef: React.RefObject<HTMLInputElement | null>;
   readonly item: AgentTranscriptItem;
 }): React.ReactNode {
   switch (item.kind) {
@@ -321,20 +306,32 @@ function TranscriptRow({
       // The red tint is not the only sign of a failed send: it also says so in words.
       return item.failed ? (
         <div style={userBubbleFailedStyle}>
+          <span className="sr-only">You: </span>
           {item.text}
           <div style={settledErrorStyle}>Not Sent</div>
         </div>
       ) : (
-        <div style={userBubbleStyle}>{item.text}</div>
+        <div style={userBubbleStyle}>
+          <span className="sr-only">You: </span>
+          {item.text}
+        </div>
       );
     case "block": {
       // tool_use blocks render through their agent_tool_call event instead.
       if (item.payload.kind === "tool_use") return null;
       const text = blockText(item.payload.kind, item.payload.content);
       if (!text.trim()) return null;
-      if (item.payload.kind === "thinking") return <div style={thinkingBlockStyle}>{text}</div>;
+      if (item.payload.kind === "thinking") {
+        return (
+          <div style={thinkingBlockStyle}>
+            <span className="sr-only">Assistant (thinking): </span>
+            {text}
+          </div>
+        );
+      }
       return (
         <div style={streamWrapStyle}>
+          <span className="sr-only">Assistant: </span>
           <AIMessageStream content={text} isStreaming={false} />
         </div>
       );
@@ -349,7 +346,7 @@ function TranscriptRow({
         />
       );
     case "permission":
-      return <PermissionRow workerId={workerId} item={item} />;
+      return <PermissionRow workerId={workerId} item={item} inputRef={inputRef} />;
     case "settled": {
       const { status, error, durationMs, numTurns, costUsd } = item.payload;
       const parts = [
@@ -374,8 +371,8 @@ function TranscriptRow({
  * it, sends turns (`agent_send_turn`), cancels the running one, and
  * answers permission requests (`agent_permission_respond`) when the
  * provider is actually waiting for an answer
- * (`capabilities.interactivePermissions`) — otherwise a request is a
- * report of a decision the provider already made.
+ * (`capabilities.interactivePermissions` and no `suggestedDecision`) —
+ * otherwise a request is a report of a decision the provider already made.
  *
  * Sending while a turn runs never blocks: the session either interrupts
  * (`interruptMidturn`) or queues the new turn, and the send button and
@@ -385,6 +382,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
   const transcript = useAgentTranscript(workerId);
   const session = useAgentSessionStore((s) => s.sessions.get(workerId));
   const [draftEmpty, setDraftEmpty] = useState(true);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const provider = session ? PROVIDER_LABELS[session.provider] : "Agent";
   // No session announcement yet → never claim an interrupt it hasn't reported.
@@ -432,15 +430,17 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
             </div>
           )}
           {transcript.items.map((item) => (
-            <TranscriptRow key={item.id} workerId={workerId} item={item} />
+            <TranscriptRow key={item.id} workerId={workerId} item={item} inputRef={inputRef} />
           ))}
           {streaming.map(([key, block]) =>
             block.kind === "thinking" ? (
               <div key={key} style={thinkingBlockStyle} aria-busy="true">
+                <span className="sr-only">Assistant (thinking): </span>
                 {block.text}
               </div>
             ) : (
               <div key={key} style={streamWrapStyle}>
+                <span className="sr-only">Assistant: </span>
                 <AIMessageStream content={block.text} isStreaming />
               </div>
             ),
@@ -459,6 +459,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
 
       <form action={send} style={formStyle}>
         <input
+          ref={inputRef}
           name="message"
           className="swarm-input"
           style={{ flex: 1 }}
