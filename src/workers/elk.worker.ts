@@ -15,10 +15,9 @@
  * requires supplying `workerUrl`/`workerFactory` (the constructor throws
  * synchronously otherwise — see `elkjs/lib/elk-api.js`), and elkjs's
  * default worker mechanism would spawn *another*, nested Worker to run the
- * algorithm. That nested `new Worker()` call previously crashed during this
- * module's evaluation, before `self.onmessage` was ever assigned — so
- * layout requests were silently dropped and the caller's "Computing
- * Layout" state never resolved.
+ * algorithm. Any throw there happens during this module's evaluation,
+ * before `self.onmessage` is assigned, so layout requests would go
+ * unanswered and the caller's "Computing Layout" state would never resolve.
  *
  * Letting this worker directly *be* elkjs's worker script avoids
  * constructing any Worker at all in here, while still running the layout

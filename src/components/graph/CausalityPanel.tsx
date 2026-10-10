@@ -134,7 +134,7 @@ interface RowDescription {
   readonly workerId?: string;
 }
 
-/** Renders one causality row's chrome per event type — Title Case, matching the plan's "Worker A's Turn @412 -> Spawned B @418" example shape. */
+/** Describes one causality row per event type: Title Case text (e.g. "Worker A's Turn", "Spawned Worker B") plus the live worker a click opens; the row's `@seq` is rendered separately by `SeqLabel`. */
 function describeRow(event: DomainEvent, names: LiveNames): RowDescription {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
   const workerIdOf = (key: string): string | undefined =>

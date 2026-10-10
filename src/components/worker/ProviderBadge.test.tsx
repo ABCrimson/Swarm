@@ -1,8 +1,7 @@
 // ── ProviderBadge ─────────────────────────────────────
 // Shared Pill badge for a live agent session's provider + model —
-// covers the Title Case provider label and that the model is actually
-// shown (not just tucked away in a hover title, the prior WorkerAIPanel
-// toolbar badge's behavior).
+// covers the Title Case provider label and that the model is shown in
+// the badge text, not only in a hover title.
 
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
