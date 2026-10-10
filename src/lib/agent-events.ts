@@ -59,8 +59,6 @@ export const AgentTurnStatusSchema = z.enum(["ok", "error"]);
  */
 export const TrustTierSchema = z.enum(["restricted", "standard", "write_enabled"]);
 export type TrustTier = z.infer<typeof TrustTierSchema>;
-/** The trust dial as `agent_spawn` takes it for a Claude Code session (see {@link TrustTierSchema}). */
-export type ClaudeCodeTrustTier = TrustTier;
 
 // ── Capabilities & probe ─────────────────────────────
 
