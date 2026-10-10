@@ -105,13 +105,6 @@ export interface Alert {
 /** Last alert time per metric, for cooldown enforcement. */
 export type AlertCooldowns = Readonly<Partial<Record<AlertMetric, number>>>;
 
-/**
- * Default cooldown period in ms — don't re-alert the same metric within 30s.
- * The live value comes from the Alert Cooldown setting (appSettingsAtom);
- * this constant remains as {@link evaluateThresholds}'s default.
- */
-export const ALERT_COOLDOWN_MS = 30_000;
-
 // ── Evaluation ─────────────────────────────────────
 
 /** Point-in-time metrics snapshot used for threshold evaluation. */
@@ -130,7 +123,7 @@ export function evaluateThresholds(
   thresholds: AlertThresholds,
   cooldowns: AlertCooldowns,
   now: number,
-  cooldownMs: number = ALERT_COOLDOWN_MS,
+  cooldownMs: number,
 ): Alert[] {
   const candidates = [
     {
