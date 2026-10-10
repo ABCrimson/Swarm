@@ -49,7 +49,7 @@ export function sampleAiMetrics(
   };
 }
 
-/** Series drawn, in legend order: data key, label, axis and colour index. */
+/** Series drawn, in legend order: data key, label, axis and colour. */
 const SERIES = [
   { key: "queueDepth", label: "Queue Depth", axis: "count", color: METRIC_COLOR.queueDepth },
   {
