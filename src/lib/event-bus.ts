@@ -44,11 +44,12 @@ const PAGE_LIMIT = 5000;
 /** First retry delay after a failed backfill; doubles per consecutive failure. */
 const BACKFILL_RETRY_BASE_MS = 250;
 /**
- * Consecutive failed backfills before the gap is given up (retries at
- * 0.25, 0.5, 1, 2, 4 and 8 s, about 16 s in all). Until then every live
- * event stays buffered, in order; after it, the buffered events are
- * delivered and the missing range is logged, so a backend that cannot
- * serve `events_since` does not freeze the UI.
+ * Failed backfills in a row before the gap is given up: the first
+ * attempt plus five retries, waiting 0.25, 0.5, 1, 2 and 4 s after each
+ * failure (7.75 s of waiting in all). Until then every live event stays
+ * buffered, in order; after it, the buffered events are delivered and
+ * the missing range is logged, so a backend that cannot serve
+ * `events_since` does not freeze the UI.
  */
 const MAX_BACKFILL_ATTEMPTS = 6;
 /** Just enough of a backfill row to page past it. */
