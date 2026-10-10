@@ -1,5 +1,7 @@
 # Feedback Batch 1 — Fix Plan
 
+> **Historical document (2026-07-10).** An implementation plan, executed and superseded; kept as a record. Do not execute it. Its versions, commands and rules are out of date; `AGENTS.md`, `docs/architecture.md` and `docs/adr/` describe the current system.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Branch: `fix/feedback-batch-1` (base `7fc81ce` = main). Detailed diagnosis with file:line evidence for every task lives in `C:\Users\alber\Desktop\Projects\Swarm\.superpowers\sdd\feedback-batch-1-findings.json` — each task brief references its finding by `issue` text; implementers MUST read their finding entry.
 
 **Goal:** Fix the 7 diagnosed defects from Albert's 2026-07-10 feedback session plus the discovered P0 (broken AI config path). No feature expansion — the settings catalog is deferred to a separate design session.

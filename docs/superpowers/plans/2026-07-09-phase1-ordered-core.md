@@ -1,5 +1,7 @@
 # SWARM v2 Phase 1 — Ordered Event Core Implementation Plan
 
+> **Historical document (2026-07-09).** An implementation plan, executed and superseded; kept as a record. Do not execute it. Its versions, commands and rules are out of date; `AGENTS.md`, `docs/architecture.md` and `docs/adr/` describe the current system.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Every piece of frontend state arrives through ONE ordered, seq-numbered event stream backed by a SQLite event log — zero polling, gap-recoverable, replayable by construction.
