@@ -1,6 +1,8 @@
 # Architecture decision records
 
-One file per decision that shaped SWARM Orchestrator, in the order the decisions were made.
+One file per decision that shaped SWARM Orchestrator. Numbers are not chronological: 0001 to 0032
+are grouped by area (event core, git and ship, agents, daemon, frontend, desktop), and each later
+record takes the next free number. The **Date** line, not the number, says when a decision landed.
 [`../architecture.md`](../architecture.md) describes how the system works **now**; these records say
 **why** it works that way, what it replaced, and what the choice costs. Read an ADR before changing
 the thing it covers.
