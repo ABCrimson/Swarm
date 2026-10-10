@@ -387,7 +387,7 @@ cargo test --workspace --doc
 
 ### Frontend Testing
 
-Frontend tests run via Vitest (`pnpm test`): **122 test files, 1270 tests** _(all green at the 2026-10-10 head)_, covering components, hooks, stores, and `lib/` utilities. `pnpm test:coverage` adds the coverage floor from `vitest.config.ts`.
+Frontend tests run via Vitest (`pnpm test`): **122 test files, 1281 tests** _(all green at the 2026-10-10 head)_, covering components, hooks, stores, and `lib/` utilities. `pnpm test:coverage` adds the coverage floor from `vitest.config.ts`.
 
 Tests are **colocated**: `X.test.ts(x)` sits next to the `X.ts(x)` it covers, and a suite that covers one facet of a larger module takes a dotted suffix (`src/lib/tools.file-io.test.ts`, `src/lib/tools.spawn-worker.test.ts`). Import the module under test through its `#` alias like any other code. Vitest collects `src/**/*.test.{ts,tsx}` only, so the Playwright `e2e/*.spec.ts` suites are never picked up.
 
