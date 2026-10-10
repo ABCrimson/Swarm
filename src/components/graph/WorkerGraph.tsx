@@ -480,7 +480,7 @@ function WorkerGraphInner(): React.ReactElement {
                 aria-hidden="true"
                 style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}
               >
-                <Spinner size="lg" decorative />
+                <Spinner size="lg" decorative className="text-plasma" />
                 <span
                   style={{
                     fontFamily: "var(--font-body)",

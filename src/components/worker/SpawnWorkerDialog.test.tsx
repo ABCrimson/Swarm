@@ -124,6 +124,19 @@ describe("SpawnWorkerDialog", () => {
     expect(screen.getByText("/repo/root")).toBeInTheDocument();
   });
 
+  it("shows a rejected folder picker inside the dialog", async () => {
+    const user = userEvent.setup();
+    vi.mocked(openFolderPicker).mockRejectedValueOnce(new Error("dialog unavailable"));
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await waitForProbeSettled();
+
+    await user.click(screen.getByRole("button", { name: "Choose…" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could Not Open The Folder Picker: dialog unavailable",
+    );
+    expect(validateRepoRoot).not.toHaveBeenCalled();
+  });
+
   it("hides the Claude Code fields until that provider is selected, then hides them again on switch-back", async () => {
     const user = userEvent.setup();
     render(<SpawnWorkerDialog onClose={vi.fn()} />);
