@@ -520,7 +520,7 @@ pub enum InputSource {
 
 impl InputSource {
     /// `true` for every source except [`Self::Terminal`] — the source
-    /// classes that get a stripped, redacted preview and persist normally.
+    /// classes that get a redacted preview and persist normally.
     pub fn is_machine_issued(self) -> bool {
         !matches!(self, InputSource::Terminal)
     }
@@ -544,11 +544,12 @@ pub struct WorkerInputPayload {
     pub bytes: usize,
     /// Where the input came from.
     pub source: InputSource,
-    /// First ~120 characters of the input with escape sequences, control
-    /// and format characters stripped and recognized credentials
-    /// redacted, or `[preview withheld: line editing]` when the input
-    /// holds BS or DEL (the shell would read an edited line the preview
-    /// cannot reproduce). `None` for `source == "terminal"` — see the struct
+    /// At most 120 characters of the redacted text (recognized
+    /// credentials masked, invisible code points dropped, CR and LF read
+    /// as spaces), or `[preview withheld: line editing]` when the input
+    /// contains any control other than CR or LF (BS, DEL, TAB, ESC, C1
+    /// controls): the shell would read an edited line the preview cannot
+    /// reproduce. CR overwrite is not modelled. `None` for `source == "terminal"` — see the struct
     /// doc's "never carries raw keystrokes" note.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,

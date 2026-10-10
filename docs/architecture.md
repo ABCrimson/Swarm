@@ -217,7 +217,7 @@ keeps the tag list exhaustive). Payload fields are `camelCase`; full shapes are 
 | `worker_killed` | `workerId` | yes |
 | `worker_output` | `workerId, data` | no |
 | `worker_state` | `workerId, state` | yes |
-| `worker_input` | `workerId, bytes, source, preview` (redacted; withheld when the input holds BS or DEL) | not when `source` is `terminal` |
+| `worker_input` | `workerId, bytes, source, preview` (redacted; withheld when the input contains any control other than CR or LF (BS, DEL, TAB, ESC, C1 controls)) | not when `source` is `terminal` |
 | `session_created` / `session_deleted` | `sessionId, name` / `sessionId` | yes |
 | `session_worker_added` / `session_worker_removed` | `sessionId, workerId` | yes |
 | `system_metrics` | `cpuPercent, memoryMb, memoryTotalMb, workerCount, timestamp` | no |

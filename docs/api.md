@@ -417,7 +417,7 @@ await invoke("worker_input", {
 });
 ```
 
-**Emits:** `worker_input` envelope on `swarm://events` with payload `{ workerId, bytes, source, preview? }` -- emitted only AFTER a successful PTY write. `preview` (first ~120 characters, escape sequences and control characters stripped, recognized credentials redacted; the literal `[preview withheld: line editing]` instead when the input contains BS or DEL, which the shell would read as an edited line) is present only for `source ∈ {tool, automation}`; `source == "terminal"` never carries a preview and the row is excluded from persistence entirely (see [Persistence Policy](#persistence-policy)) -- raw human keystrokes, and any secrets typed into a shell, are never archived.
+**Emits:** `worker_input` envelope on `swarm://events` with payload `{ workerId, bytes, source, preview? }` -- emitted only AFTER a successful PTY write. `preview` (at most 120 characters of the redacted text: recognized credentials masked, invisible code points dropped, CR and LF read as spaces; the literal `[preview withheld: line editing]` instead when the input contains any control other than CR or LF (BS, DEL, TAB, ESC, C1 controls), which the shell would read as an edited line) is present only for `source ∈ {tool, automation}`; `source == "terminal"` never carries a preview and the row is excluded from persistence entirely (see [Persistence Policy](#persistence-policy)) -- raw human keystrokes, and any secrets typed into a shell, are never archived.
 
 ---
 
@@ -1543,7 +1543,7 @@ A stamped envelope additionally carries `originWorker`/`causeSeq`:
 | `worker_killed`       | `{ workerId }`                                                   | Yes       |
 | `worker_output`       | `{ workerId, data }`                                             | No (ephemeral) |
 | `worker_state`        | `{ workerId, state }` -- `state` is `"running"`, `"paused"` or `"error"` (the shell exited on its own) | Yes       |
-| `worker_input`        | `{ workerId, bytes, source, preview? }` -- `source` is `"terminal"`, `"tool"`, or `"automation"`; `preview` (first 120 characters, stripped and credential-redacted, or `[preview withheld: line editing]` when the input contains BS or DEL) is present only for `source ∈ {tool, automation}` -- see [Persistence Policy](#persistence-policy) | Only when `source != "terminal"` |
+| `worker_input`        | `{ workerId, bytes, source, preview? }` -- `source` is `"terminal"`, `"tool"`, or `"automation"`; `preview` (at most 120 characters of the redacted text, or `[preview withheld: line editing]` when the input contains any control other than CR or LF (BS, DEL, TAB, ESC, C1 controls)) is present only for `source ∈ {tool, automation}` -- see [Persistence Policy](#persistence-policy) | Only when `source != "terminal"` |
 | `session_created`     | `{ sessionId, name }`                                            | Yes       |
 | `session_deleted`     | `{ sessionId }`                                                  | Yes       |
 | `session_worker_added` | `{ sessionId, workerId }` -- emitted by [`session_add_worker`](#session_add_worker) only when membership actually changed | Yes |
