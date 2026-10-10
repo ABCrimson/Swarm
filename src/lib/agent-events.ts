@@ -4,8 +4,9 @@
  * (`crates/swarm-core/src/agent/`, payloads emitted from
  * `crates/swarm-core/src/events/emitter.rs`).
  *
- * `#lib/event-bus` validates each `agent_*` payload against these schemas
- * (registered in `#lib/event-payloads`) before handing it to a typed
+ * `#lib/event-bus` validates each agent-session payload against these
+ * schemas (registered in `#lib/event-payloads`, which holds the inline
+ * schema for `agent_turn_started`) before handing it to a typed
  * `onEvent` subscriber such as `#hooks/useAgentSessionEvents`; a payload
  * of unexpected shape is logged and withheld, never trusted via `as`.
  *
