@@ -91,6 +91,11 @@ describe("persisted UI settings", () => {
     expect(createStore().get(selectedModelAtom)).toBe("sonnet");
   });
 
+  it("keeps a persisted model that is still in the catalog", () => {
+    resetPersistedSettingsCache([["swarm:ai:model", "opus"]]);
+    expect(createStore().get(selectedModelAtom)).toBe("opus");
+  });
+
   it("restores a blanked keybinding to its default", () => {
     resetPersistedSettingsCache([
       ["swarm:settings:keybindings", { commandPalette: "", graphToggle: "ctrl+g", perfOverlay: 3 }],
