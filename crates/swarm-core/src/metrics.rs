@@ -114,7 +114,8 @@ pub fn start_metrics_loop(
                 memory_mb: host.memory_mb,
                 memory_total_mb: host.memory_total_mb,
                 worker_count: registry.count(),
-                // Not measured: no layer counts provider requests yet.
+                // Not measured: no layer counts provider requests yet, so the UI shows no
+                // request-rate tile; the wire field is kept at 0.0 until a counter exists.
                 ai_req_per_sec: 0.0,
                 timestamp: crate::clock::unix_millis(),
             }));
