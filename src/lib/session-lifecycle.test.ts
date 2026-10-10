@@ -61,10 +61,11 @@ describe("createAndActivateSession", () => {
 });
 
 describe("exportSessionToFile", () => {
-  // Regression: the context-menu export used to write through the atomic
-  // `.tmp`-then-rename helper, whose `.tmp` sibling is outside both the
-  // dialog's one-file grant and the static fs scope — every destination
-  // outside $APPDATA / ~/.swarm failed with a forbidden-path error.
+  // The export writes the dialog-chosen path directly: an atomic
+  // `.tmp`-then-rename helper's `.tmp` sibling is outside both the
+  // dialog's one-file grant and the static fs scope, so every
+  // destination outside $APPDATA / ~/.swarm would fail with a
+  // forbidden-path error.
   it("writes exactly the dialog-chosen path, with no temp sibling or base directory", async () => {
     vi.mocked(save).mockResolvedValue("D:\\Exports\\research-sprint.json");
     const session = makeSession();
@@ -109,8 +110,8 @@ describe("importSessionFromFile", () => {
     expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
-  // Regression: import used to add a store-only session with a random id,
-  // which the backend had never heard of — deleting it always failed.
+  // Import creates a real backend session: a store-only session with a
+  // random id is unknown to the backend, so deleting it would always fail.
   it("imports an exported file as a new backend session, keeping metadata but not another run's ids", async () => {
     const original = makeSession({
       name: "Exported",
