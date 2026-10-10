@@ -172,7 +172,7 @@ function Toggle({
         aria-labelledby={`${id}-label`}
         aria-describedby={description ? `${id}-description` : undefined}
         onClick={() => onChange(!checked)}
-        className="group relative h-6 w-11 cursor-pointer rounded-full border border-border-3 bg-surface-3 transition-colors aria-checked:border-plasma aria-checked:bg-plasma"
+        className="group relative h-6 w-11 cursor-pointer rounded-full border border-border-control bg-surface-3 transition-colors aria-checked:border-plasma aria-checked:bg-plasma"
       >
         <span
           aria-hidden="true"

@@ -272,6 +272,8 @@ describe("Settings — alert thresholds", () => {
     const cpuWarning = screen.getByLabelText("CPU Warning");
     await user.clear(cpuWarning);
     await user.keyboard("{Enter}");
+    expect(toast.success).toHaveBeenCalledWith("Alert Thresholds Updated");
+    expect(screen.getByRole("button", { name: "Edit Thresholds" })).toBeInTheDocument();
 
     expect(store.get(alertThresholdsAtom).cpuWarning).toBe(DEFAULT_THRESHOLDS.cpuWarning);
   });
