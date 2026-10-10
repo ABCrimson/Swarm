@@ -268,6 +268,25 @@ mod tests {
     }
 
     #[test]
+    fn test_discover_toplevel_names_the_rev_parse_failure_truthfully() {
+        let tmp = std::env::temp_dir().join(format!("swarm-not-a-repo-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let not_repo = discover_toplevel(&tmp).unwrap_err().to_string();
+        std::fs::remove_dir_all(&tmp).ok();
+        assert!(
+            not_repo.contains("is not inside a git repository"),
+            "{not_repo}"
+        );
+        let missing = std::env::temp_dir().join(format!("swarm-missing-{}", uuid::Uuid::new_v4()));
+        let err = discover_toplevel(&missing).unwrap_err().to_string();
+        assert!(
+            err.contains("could not be resolved by git rev-parse"),
+            "{err}"
+        );
+        assert!(!err.contains("is not inside a git repository"), "{err}");
+    }
+
+    #[test]
     fn test_discover_toplevel_rejects_empty_and_relative_paths() {
         assert!(discover_toplevel(Path::new("")).is_err());
         assert!(discover_toplevel(Path::new("..")).is_err());

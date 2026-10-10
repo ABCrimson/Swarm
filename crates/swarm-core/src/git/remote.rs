@@ -450,10 +450,9 @@ mod tests {
         );
     }
 
-    /// When the body-shrink binary search bottoms out at `lo == 0` (even
-    /// an empty body + marker doesn't fit), the title itself is clamped
-    /// too, and the *result* respects the cap, not just "the empty-body
-    /// attempt was the best we found".
+    /// When even an empty body plus the truncation marker does not fit,
+    /// the title itself is clamped too, and the *result* respects the
+    /// cap, not just "the empty-body attempt was the best we found".
     #[test]
     fn test_compare_url_clamps_title_when_even_an_empty_body_does_not_fit() {
         let remote = ParsedRemote {
