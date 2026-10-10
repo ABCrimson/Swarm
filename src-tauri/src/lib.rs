@@ -115,7 +115,7 @@ pub fn run() {
     // Managed before the loop starts, taken by the lifecycle plugin's
     // exit hook.
     app.manage(lifecycle::Teardown::new(init_tracing(
-        app.path().app_log_dir().ok(),
+        app.path().app_log_dir(),
     )));
     app.run(|_, _| {});
 }
@@ -135,18 +135,20 @@ const LOG_ROTATE_BYTES: u64 = 8 * 1024 * 1024;
 /// at `debug` for SWARM's own crates. Release builds have no console (a
 /// GUI-subsystem executable on Windows, a detached process when launched
 /// from a macOS or Linux desktop), so they write JSON lines to
-/// `swarm-desktop.log` in `log_dir` at `info`; without a log directory they
-/// fall back to stderr. `RUST_LOG` overrides either default filter.
+/// `swarm-desktop.log` in `log_dir` at `info`; when the log file cannot be
+/// opened they fall back to stderr and log why there. `RUST_LOG` overrides
+/// either default filter.
 ///
 /// The release log file is written by a dedicated thread, so logging from
 /// a Tokio worker or the main thread never waits on the disk. The returned
 /// guard owns that thread: dropping it writes out every queued line, which
 /// the exit hook (see [`lifecycle`]) does after the shutdown, because
 /// Tauri then exits the process without running destructors.
-fn init_tracing(log_dir: Option<PathBuf>) -> Option<WorkerGuard> {
+fn init_tracing(log_dir: tauri::Result<PathBuf>) -> Option<WorkerGuard> {
     use tracing_subscriber::EnvFilter;
 
     let mut writer_guard = None;
+    let mut log_fallback: Option<String> = None;
     if cfg!(debug_assertions) {
         tracing_subscriber::fmt()
             .with_env_filter(
@@ -164,8 +166,15 @@ fn init_tracing(log_dir: Option<PathBuf>) -> Option<WorkerGuard> {
             .with_env_filter(filter)
             .with_ansi(false)
             .json();
-        match log_dir.and_then(|dir| open_log_file(&dir).ok()) {
-            Some(file) => {
+        let file = log_dir
+            .map_err(|error| format!("the app log directory cannot be resolved: {error}"))
+            .and_then(|dir| {
+                open_log_file(&dir).map_err(|error| {
+                    format!("{} cannot be opened: {error}", dir.join(LOG_FILE).display())
+                })
+            });
+        match file {
+            Ok(file) => {
                 let (writer, guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
                     // Past 128,000 queued lines a logging thread waits
                     // for the writer instead of dropping lines: the log is
@@ -176,11 +185,17 @@ fn init_tracing(log_dir: Option<PathBuf>) -> Option<WorkerGuard> {
                 writer_guard = Some(guard);
                 subscriber.with_writer(writer).init();
             }
-            None => subscriber.with_writer(std::io::stderr).init(),
+            Err(reason) => {
+                subscriber.with_writer(std::io::stderr).init();
+                log_fallback = Some(reason);
+            }
         }
     }
 
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "tracing initialized");
+    if let Some(reason) = log_fallback {
+        tracing::warn!(%reason, "the release log file is unavailable; logging to stderr");
+    }
     writer_guard
 }
 
