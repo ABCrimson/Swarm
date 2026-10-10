@@ -42,16 +42,17 @@ export class SwarmApp {
   }
 
   /**
-   * The app-ready signal. The global shortcuts (Ctrl+K, the graph/list
-   * toggle) attach their `keydown` listeners in effects of the shell's
-   * first commit, and a key pressed before that is silently lost.
-   * Pages are lazy chunks, so a page `<h1>` inside
-   * `<main>` only renders in a later commit, and React flushes the
-   * shell's pending effects before it renders anything else. The
-   * macrotask barrier then covers the one other ordering — page and shell
-   * committing together — by letting React's already-queued effect flush
-   * (a scheduler task posted at commit time) run before any input
-   * arrives. It is a yield, not a sleep: nothing waits on the clock.
+   * The app-ready signal. The shell's global shortcuts attach their
+   * `keydown` listeners in effects of its first commit: Ctrl+K in
+   * CommandPalette's layout effect, the dev-only performance-overlay
+   * toggle in a passive effect. A key pressed before then is silently
+   * lost. Pages are lazy chunks, so a page `<h1>` inside `<main>` only
+   * renders in a later commit, and React flushes the shell's pending
+   * effects before it renders anything else. The macrotask barrier then
+   * covers the one other ordering (page and shell committing together)
+   * by letting React's already-queued passive-effect flush (a scheduler
+   * task posted at commit time) run before any input arrives. It is a
+   * yield, not a sleep: nothing waits on the clock.
    */
   async waitUntilReady(): Promise<void> {
     await expect(this.heading()).toBeVisible();
