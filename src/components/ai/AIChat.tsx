@@ -260,8 +260,13 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
 
   return (
     <div style={chatContainerStyle}>
-      {/* Chromium (WebView2) makes scroll containers keyboard-focusable natively. */}
-      <div role="log" aria-label={`AI Chat With ${model.label}`} style={scrollerStyle}>
+      <div
+        role="log"
+        aria-label={`AI Chat With ${model.label}`}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1); WebKit (WKWebView, WebKitGTK) does not focus scroll containers natively.
+        tabIndex={0}
+        style={scrollerStyle}
+      >
         <div style={messagesStyle}>
           {thread.messages.length === 0 && !busy && (
             <div style={emptyStateStyle}>

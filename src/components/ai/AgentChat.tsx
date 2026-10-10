@@ -367,7 +367,13 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
 
   return (
     <div style={containerStyle}>
-      <div role="log" aria-label={`${provider} Chat`} style={scrollerStyle}>
+      <div
+        role="log"
+        aria-label={`${provider} Chat`}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: WebKit (macOS, Linux) never makes a scroll container focusable on its own, and the transcript must scroll from the keyboard (WCAG 2.1.1).
+        tabIndex={0}
+        style={scrollerStyle}
+      >
         <div style={transcriptStyle}>
           {transcript.items.length === 0 && streaming.length === 0 && (
             <div style={{ ...settledStyle, marginTop: 24 }}>
