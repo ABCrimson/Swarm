@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Pill } from "#components/ui/Pill";
 import { Spinner } from "#components/ui/Spinner";
 import { type UseShipReturn, useShip } from "#hooks/useShip";
+import { errorMessage } from "#lib/is-error";
 import type { ShipError, ShipErrorKind, ShipPreflight, ShipRemedy } from "#store/types";
 import { ShipPreview } from "./ShipPreview.tsx";
 import { ShipProgress } from "./ShipProgress.tsx";
@@ -130,9 +131,7 @@ async function openComparePage(url: string): Promise<void> {
   try {
     await openUrl(url);
   } catch (err) {
-    toast.error(
-      `Could Not Open The Compare Page: ${Error.isError(err) ? err.message : String(err)}`,
-    );
+    toast.error(`Could Not Open The Compare Page: ${errorMessage(err)}`);
   }
 }
 

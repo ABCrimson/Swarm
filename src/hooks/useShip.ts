@@ -21,6 +21,7 @@ import { useEffect, useReducer, useRef } from "react";
 import { toast } from "sonner";
 import * as z from "zod";
 import { onEvent, waitFor } from "#lib/event-bus";
+import { errorMessage } from "#lib/is-error";
 import { CLAUDE_MODELS } from "#lib/models";
 import { composeShipBody, generateCausalProse } from "#lib/ship-causal";
 import { generateCommitMessage } from "#lib/ship-message";
@@ -573,8 +574,4 @@ function armSettledWait(shipId: string): Promise<unknown> {
 function toShipError(err: unknown): ShipError {
   if (err instanceof ShipCommandError) return err.shipError;
   return { kind: "unknown", message: errorMessage(err), remedy: null };
-}
-
-function errorMessage(err: unknown): string {
-  return Error.isError(err) ? err.message : String(err);
 }

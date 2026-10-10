@@ -2,11 +2,8 @@ import { useActionState, useId, useState, useTransition } from "react";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { toast } from "#components/ui/Toast";
+import { errorMessage } from "#lib/is-error";
 import { createAndActivateSession, importSessionFromFile } from "#lib/session-lifecycle";
-
-function errorMessage(err: unknown): string {
-  return Error.isError(err) ? err.message : String(err);
-}
 
 /** What the create-session form action leaves behind for the next render. */
 interface CreateFormState {
