@@ -7,7 +7,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::commit::{StagingMode, union_paths};
+use super::commit::{StagingMode, staging_candidates};
 use super::deny::{self, SkippedFile};
 use super::status::{self, DiffStat, NUMSTAT_ARGS, StatusSnapshot};
 use super::{
@@ -157,17 +157,11 @@ pub fn preflight(
         );
     }
 
-    // Mode-aware, exactly like `stage_and_commit`: "all" previews the
-    // full union it would stage; "staged" previews only the index.
+    // Mode-aware through `staging_candidates`, the set `stage_and_commit`
+    // acts on: "all" previews the full union it would stage; "staged"
+    // previews only the index.
     let untracked: HashSet<&str> = classified.untracked.iter().map(String::as_str).collect();
-    let candidates = match mode {
-        StagingMode::All => union_paths([
-            &classified.staged,
-            &classified.unstaged,
-            &classified.untracked,
-        ]),
-        StagingMode::Staged => classified.staged.clone(),
-    };
+    let candidates = staging_candidates(&classified, mode);
     let (survivors, skipped) = deny::partition(wt, candidates, &untracked);
     let diff_stat = preview_diff_stat(wt, mode, &snapshot, &survivors, &untracked);
 
