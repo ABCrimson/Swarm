@@ -1027,13 +1027,13 @@ This is how the "the engine records provenance, it never infers it" invariant ho
 **Example:**
 
 ```typescript
-// src/lib/ai-chat.ts runTurn, before round 0:
+// The raw IPC calls behind runTurn (src/lib/ai-chat.ts), which goes through agentTurnStarted in src/lib/tauri.ts, before round 0:
 const turnSeq = await invoke<number>("agent_turn_started", {
   workerId,
   model: modelId,
   requestId: itemId,
 });
-// turnSeq now lives in this turn's closure, cited as causeSeq below:
+// runTurn keeps the seq in the turn's ToolProvenance; every tool call cites it as causeSeq:
 await invoke("worker_input", {
   id: workerId,
   data: "pnpm build\n",
