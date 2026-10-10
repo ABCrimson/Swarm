@@ -103,11 +103,13 @@ pub(super) fn inline_settings_json(tier: ClaudeCodeTrustTier) -> String {
 /// credentials somewhere, with no prompt. `-p` skips the workspace trust
 /// dialog, so the CLI applies these from the repository's
 /// `.claude/settings.json` unasked; `disableAllHooks` only closes the
-/// hooks row.
-pub(super) const REFUSED_PROJECT_SETTINGS: [&str; 5] = [
+/// hooks row. The Restricted tier is exempt: `--restricted` ignores
+/// project settings files.
+pub(super) const REFUSED_PROJECT_SETTINGS: [&str; 6] = [
     "apiKeyHelper",
     "awsAuthRefresh",
     "awsCredentialExport",
+    "gcpAuthRefresh",
     "otelHeadersHelper",
     "env",
 ];
@@ -126,7 +128,8 @@ pub(super) fn check_project_settings(settings: &[u8]) -> Result<(), AppError> {
         .find(|key| settings.contains_key(*key))
     {
         Some(key) => Err(AppError::PermissionDenied(format!(
-            "Project Settings Define {key}; Refusing To Run A Repository-Supplied              Credential Helper Or Environment"
+            "Project Settings Define {key}; Refusing To Run A Repository-Supplied \
+            Credential Helper Or Environment"
         ))),
         None => Ok(()),
     }

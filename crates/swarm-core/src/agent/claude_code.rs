@@ -422,17 +422,20 @@ impl ClaudeCodeAdapter {
 
     async fn spawn_session(&self, spec: AgentSpawnSpec) -> Result<ClaudeCodeSession, AppError> {
         let tier = parse_trust_tier(spec.permission_mode.as_deref())?;
-        let settings = std::path::Path::new(&spec.cwd)
-            .join(".claude")
-            .join("settings.json");
-        match tokio::fs::read(&settings).await {
-            Ok(bytes) => check_project_settings(&bytes)?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(AppError::PermissionDenied(format!(
-                    "Could Not Read Project Settings {}: {error}",
-                    settings.display()
-                )));
+        // --restricted ignores project settings files, so only the other tiers can load a repository credential helper or env block.
+        if tier != ClaudeCodeTrustTier::Restricted {
+            let settings = std::path::Path::new(&spec.cwd)
+                .join(".claude")
+                .join("settings.json");
+            match tokio::fs::read(&settings).await {
+                Ok(bytes) => check_project_settings(&bytes)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(AppError::PermissionDenied(format!(
+                        "Could Not Read Project Settings {}: {error}",
+                        settings.display()
+                    )));
+                }
             }
         }
         let requested_model = spec
@@ -466,7 +469,8 @@ impl ClaudeCodeAdapter {
                         format!("Claude Code Could Not Start The Session: {error}")
                     }
                     (_, Some(error)) => format!(
-                        "Claude Code Wrote An Unreadable Line During The Session Handshake:                          {error} ({stderr})"
+                        "Claude Code Wrote An Unreadable Line During The Session Handshake: \
+                         {error} ({stderr})"
                     ),
                     (Ok(Err(HandshakeError::Exited)), None) => {
                         format!("Claude Code Exited During The Session Handshake ({stderr})")
