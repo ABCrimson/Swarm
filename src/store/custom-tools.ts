@@ -27,7 +27,15 @@ interface CustomToolsActions {
 
 function persist(tools: readonly CustomToolDef[]): void {
   if (!isTauri()) return;
-  void settingsStore.set(STORE_KEY, tools).then(() => settingsStore.save());
+  // save() writes the file immediately and rejects on an I/O error (disk
+  // full, unwritable app data dir); report it instead of leaving an
+  // unhandled rejection.
+  void settingsStore
+    .set(STORE_KEY, tools)
+    .then(() => settingsStore.save())
+    .catch((err: unknown) => {
+      console.error("[custom-tools] Saving custom tools failed:", err);
+    });
 }
 
 export const useCustomToolsStore = create<CustomToolsState & CustomToolsActions>()(() => ({
