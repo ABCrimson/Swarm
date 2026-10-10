@@ -2,7 +2,8 @@ import { createStore } from "jotai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AlertThresholds, MetricsSnapshot } from "#lib/alerts";
 import { alertThresholdsAtom, DEFAULT_THRESHOLDS, evaluateThresholds } from "#lib/alerts";
-import { resetPersistedSettingsCache } from "#store/persisted";
+import { settingsStore } from "#lib/lazy-store";
+import { resetPersistedSettingsCache, settingsWritesSettled } from "#store/persisted";
 import { DEFAULT_APP_SETTINGS } from "#store/ui";
 
 vi.mock(import("#lib/tauri"), async (importOriginal) => ({
@@ -235,5 +236,15 @@ describe("alertThresholdsAtom hydration", () => {
 
   it("keeps the defaults when nothing is stored", () => {
     expect(hydrate(null)).toEqual(DEFAULT_THRESHOLDS);
+  });
+});
+
+describe("alertThresholdsAtom persistence", () => {
+  it("writes a changed value to the settings store under its key", async () => {
+    const next = { cpuWarning: 50, cpuCritical: 60, memoryWarning: 70, memoryCritical: 75 };
+    createStore().set(alertThresholdsAtom, next);
+    // atomWithSettings hands writes to plugin-store through an ordered queue.
+    await settingsWritesSettled();
+    expect(settingsStore.set).toHaveBeenCalledWith("swarm:alerts:thresholds", next);
   });
 });
