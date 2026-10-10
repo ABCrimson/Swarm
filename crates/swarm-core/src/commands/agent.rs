@@ -11,10 +11,10 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::Value;
+use uuid::Uuid;
 
-use crate::agent::adapter::AgentAdapter;
 use crate::agent::{
-    AgentSpawnSpec, AgentTurnRequest, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY,
+    AgentAdapter, AgentSpawnSpec, AgentTurnRequest, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY,
     PermissionDecision, ProviderId, TurnInput, TurnPriority,
 };
 use crate::events::{AgentTurnStartedPayload, Provenance, SwarmEvent};
@@ -94,7 +94,9 @@ pub async fn agent_turn_started(ctx: Ctx, args: Value) -> Result<Value, Value> {
 
 /// `agent_spawn`'s error: `{ workerId, message }`, where `workerId` is
 /// set when the PTY worker was created but the agent session failed to
-/// attach (the worker stays usable as a plain terminal).
+/// attach (the worker stays usable as a plain terminal), and `null` when
+/// no worker remains (none was created, or it was killed before its
+/// session attached).
 fn agent_spawn_error(worker_id: Option<String>, message: String) -> Value {
     serde_json::json!({ "workerId": worker_id, "message": message })
 }
@@ -150,13 +152,26 @@ pub async fn agent_spawn(ctx: Ctx, args: Value) -> Result<Value, Value> {
     .map_err(|e| agent_spawn_error(None, e.to_string()))?
     .map_err(|e| agent_spawn_error(None, e.to_string()))?;
 
-    // An isolated worker runs in its own worktree, not the requested cwd.
-    let cwd = ctx
+    attach_session(&ctx, worker_id, fallback_cwd, provider, model, trust_tier).await
+}
+
+/// Attaches a `provider` agent session to the PTY worker `worker_id`
+/// and resolves to the worker id. The session runs in the worker's
+/// worktree when it has one, else in `fallback_cwd`.
+async fn attach_session(
+    ctx: &Ctx,
+    worker_id: Uuid,
+    fallback_cwd: String,
+    provider: ProviderId,
+    model: Option<String>,
+    trust_tier: Option<String>,
+) -> Result<Value, Value> {
+    // A worker already killed since its spawn returned gets no session.
+    let info = ctx
         .registry
         .get_worker(&worker_id)
-        .ok()
-        .and_then(|info| info.worktree_path)
-        .unwrap_or(fallback_cwd);
+        .map_err(|e| agent_spawn_error(None, e.to_string()))?;
+    let cwd = info.worktree_path.unwrap_or(fallback_cwd);
     let spec = AgentSpawnSpec {
         worker_id,
         cwd,
@@ -171,13 +186,27 @@ pub async fn agent_spawn(ctx: Ctx, args: Value) -> Result<Value, Value> {
             no_adapter(provider),
         ));
     };
+    // `kill_worker` removes the worker before it looks for a session, so
+    // a kill during the attach handshake shows up as a failed lookup here.
     match spawned {
         Ok(session) => {
             ctx.agent_session_registry
                 .insert(worker_id, std::sync::Arc::from(session));
+            if let Err(e) = ctx.registry.get_worker(&worker_id) {
+                if let Some(session) = ctx.agent_session_registry.remove(&worker_id)
+                    && let Err(err) = session.shutdown().await
+                {
+                    tracing::warn!(%worker_id, error = %err, "agent_spawn: session shutdown after a kill during attach failed");
+                }
+                return Err(agent_spawn_error(None, e.to_string()));
+            }
             ok_value(&worker_id.to_string())
         }
         Err(e) => {
+            if let Err(gone) = ctx.registry.get_worker(&worker_id) {
+                tracing::error!(%worker_id, error = %e, "agent_spawn: session attach failed after the worker was killed");
+                return Err(agent_spawn_error(None, gone.to_string()));
+            }
             tracing::error!(%worker_id, error = %e, "agent_spawn: session attach failed; the worker remains usable as a plain terminal");
             Err(agent_spawn_error(
                 Some(worker_id.to_string()),
@@ -247,8 +276,8 @@ pub async fn agent_shutdown(ctx: Ctx, args: Value) -> Result<Value, Value> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentProbeArgs {
-    /// Which provider to probe; omitted or `null` means `claude_code`
-    /// (so the original argument-less `{}` call keeps working).
+    /// Which provider to probe; omitted or `null` means `claude_code`, so
+    /// an argument-less `{}` call probes Claude Code.
     #[serde(default)]
     provider: Option<ProviderId>,
 }
@@ -327,10 +356,83 @@ pub async fn set_agent_concurrency(ctx: Ctx, args: Value) -> Result<Value, Value
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::time::Instant;
+
     use serde_json::json;
 
     use super::*;
-    use crate::commands::test_support::test_ctx;
+    use crate::agent::ClaudeCodeAdapter;
+    use crate::commands::test_support::{test_ctx, test_ctx_with_claude};
+    use crate::commands::worker::{kill_worker, spawn_worker};
+    use crate::error::AppError;
+    use crate::events::EventSink;
+    use crate::orchestration::DomainEvent;
+
+    /// Written by the fake CLI's `"held"` `initialize` once it is waiting
+    /// (`tests/fixtures/claude_code/fake_claude_cli.mjs`).
+    const HELD_MARKER: &str = "swarm-fake-claude.held";
+    /// Releases the fake CLI's `"held"` `initialize` reply.
+    const RELEASE_MARKER: &str = "swarm-fake-claude.release";
+
+    /// A Claude Code adapter that runs the fake CLI with `scenario`.
+    fn fake_claude(sink: EventSink, scenario: &str) -> ClaudeCodeAdapter {
+        let fixture = |name: &str| {
+            format!(
+                "{}/tests/fixtures/claude_code/{name}",
+                env!("CARGO_MANIFEST_DIR")
+            )
+        };
+        ClaudeCodeAdapter::with_test_binary(
+            sink,
+            "node",
+            vec![fixture("fake_claude_cli.mjs"), fixture(scenario)],
+        )
+    }
+
+    /// Polls `probe` every 10 ms until it yields a value; fails after 10 s.
+    async fn wait_for<T>(what: &str, probe: impl Fn() -> Option<T>) -> T {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(value) = probe() {
+                return value;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Starts `agent_spawn` in `cwd`, waits until the fake CLI holds its
+    /// `initialize` reply, kills the worker, then releases the reply.
+    /// Resolves to the killed worker's id and `agent_spawn`'s result.
+    async fn kill_during_attach(ctx: &Ctx, cwd: &Path) -> (Uuid, Result<Value, Value>) {
+        let spawn = tokio::spawn(agent_spawn(
+            ctx.clone(),
+            json!({"config": {"name": "w", "cwd": cwd}, "provider": "claude_code"}),
+        ));
+        let id = wait_for("the PTY worker", || {
+            ctx.registry.list_workers().first().map(|worker| worker.id)
+        })
+        .await;
+        wait_for("the held initialize", || {
+            cwd.join(HELD_MARKER).exists().then_some(())
+        })
+        .await;
+        kill_worker(ctx.clone(), json!({"id": id.to_string()}))
+            .await
+            .unwrap();
+        std::fs::write(cwd.join(RELEASE_MARKER), "").unwrap();
+        (id, spawn.await.unwrap())
+    }
+
+    /// Every envelope the engine has emitted so far.
+    async fn emitted(
+        ctx: &Ctx,
+        events: &std::sync::mpsc::Receiver<DomainEvent>,
+    ) -> Vec<SwarmEvent> {
+        ctx.engine.flush().await.unwrap();
+        events.try_iter().map(|envelope| envelope.event).collect()
+    }
 
     #[test]
     fn test_no_adapter_names_the_provider_by_its_wire_name() {
@@ -380,6 +482,91 @@ mod tests {
         assert_eq!(
             err,
             "Provider Not Supported By The Backend: webview_anthropic."
+        );
+    }
+
+    /// A kill while the session's handshake is in flight finds no session
+    /// to stop, so `agent_spawn` stops the one that attaches afterwards
+    /// and reports no surviving worker.
+    #[tokio::test]
+    async fn test_agent_spawn_shuts_down_a_session_whose_worker_is_killed_during_attach() {
+        let (ctx, dir, events) =
+            test_ctx_with_claude(|sink| fake_claude(sink, "handshake_held.mjs"));
+        let cwd = dir.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let (id, result) = kill_during_attach(&ctx, &cwd).await;
+
+        let err = result.unwrap_err();
+        assert_eq!(err["workerId"], Value::Null, "{err}");
+        assert!(ctx.agent_session_registry.get(&id).is_err());
+        assert!(
+            emitted(&ctx, &events).await.iter().any(|event| matches!(
+                event,
+                SwarmEvent::AgentSessionExited(exited) if exited.worker_id == id
+            )),
+            "the attached session must have been shut down"
+        );
+    }
+
+    /// A kill during the handshake followed by a failed handshake reports
+    /// no surviving worker, never a worker usable as a plain terminal.
+    #[tokio::test]
+    async fn test_agent_spawn_reports_no_worker_when_attach_fails_after_a_kill() {
+        let (ctx, dir, _events) =
+            test_ctx_with_claude(|sink| fake_claude(sink, "handshake_held_then_refused.mjs"));
+        let cwd = dir.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let (id, result) = kill_during_attach(&ctx, &cwd).await;
+
+        let err = result.unwrap_err();
+        assert_eq!(err["workerId"], Value::Null, "{err}");
+        assert!(ctx.agent_session_registry.get(&id).is_err());
+    }
+
+    /// A worker killed before its session attaches gets none: the lookup
+    /// fails before the CLI starts.
+    #[tokio::test]
+    async fn test_attach_session_refuses_a_worker_killed_before_attach() {
+        let (ctx, dir, events) =
+            test_ctx_with_claude(|sink| fake_claude(sink, "handshake_held.mjs"));
+        let cwd = dir.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        // Were the CLI started, it would answer at once.
+        std::fs::write(cwd.join(RELEASE_MARKER), "").unwrap();
+        let id = spawn_worker(ctx.clone(), json!({"config": {"name": "w", "cwd": &cwd}}))
+            .await
+            .unwrap();
+        let id: Uuid = id.as_str().unwrap().parse().unwrap();
+        kill_worker(ctx.clone(), json!({"id": id.to_string()}))
+            .await
+            .unwrap();
+
+        let err = attach_session(
+            &ctx,
+            id,
+            cwd.display().to_string(),
+            ProviderId::ClaudeCode,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err["workerId"], Value::Null, "{err}");
+        assert_eq!(
+            err["message"],
+            AppError::WorkerNotFound { id: id.to_string() }.to_string()
+        );
+        assert!(!cwd.join(HELD_MARKER).exists(), "the CLI must not start");
+        assert!(ctx.agent_session_registry.get(&id).is_err());
+        assert!(
+            !emitted(&ctx, &events)
+                .await
+                .iter()
+                .any(|event| matches!(event, SwarmEvent::AgentSessionStarted(_))),
+            "no session may start"
         );
     }
 }

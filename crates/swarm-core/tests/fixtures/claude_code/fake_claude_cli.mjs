@@ -28,7 +28,7 @@
  * that Node on PATH.
  */
 import { randomUUID } from "node:crypto";
-import { writeFileSync, writeSync } from "node:fs";
+import { existsSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -47,11 +47,15 @@ const DEFAULTS = {
   /** `system/init.capabilities`; `null` omits the field (a pre-capability CLI). */
   capabilities: ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"],
   /**
-   * `"answer"`, `"never"` (no response at all), `"error"`, or
+   * `"answer"`, `"never"` (no response at all), `"error"`,
    * `"unreadable"` (a success whose `current_permission_mode` is not a
-   * string).
+   * string), or `"held"`: write `HELD_MARKER` in the working directory,
+   * wait until `RELEASE_MARKER` exists there, then reply as `released`
+   * says.
    */
   initialize: "answer",
+  /** How a `"held"` `initialize` replies once released (any mode above but `"held"`). */
+  released: "answer",
   /** Overrides the permission mode `initialize` reports (default: from `--permission-mode`). */
   permissionMode: undefined,
   /** Write `<tmpdir>/swarm-fake-claude-<session id>.pid` at start (process-reaping tests). */
@@ -386,30 +390,48 @@ const controlSuccess = (requestId, response) =>
 const controlError = (requestId, error) =>
   emit({ type: "control_response", response: { subtype: "error", request_id: requestId, error } });
 
+/** Written to the working directory when a `"held"` `initialize` starts waiting. */
+const HELD_MARKER = "swarm-fake-claude.held";
+/** A `"held"` `initialize` replies once this file exists in the working directory. */
+const RELEASE_MARKER = "swarm-fake-claude.release";
+
+const answerInitialize = (requestId, mode) => {
+  if (mode === "never") return;
+  if (mode === "error") return controlError(requestId, "initialize refused");
+  if (mode === "unreadable") {
+    return controlSuccess(requestId, { models: [], current_permission_mode: 7 });
+  }
+  if (mode === "held") {
+    writeFileSync(join(process.cwd(), HELD_MARKER), "");
+    const poll = setInterval(() => {
+      if (!existsSync(join(process.cwd(), RELEASE_MARKER))) return;
+      clearInterval(poll);
+      answerInitialize(requestId, config.released);
+    }, 20);
+    return;
+  }
+  return controlSuccess(requestId, {
+    commands: [{ name: "compact", description: "Compact the conversation", argumentHint: "" }],
+    agents: [{ name: "general-purpose", description: "General-purpose agent" }],
+    output_style: "default",
+    available_output_styles: ["default"],
+    models: [
+      { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default" },
+      { value: "sonnet", resolvedModel: "claude-sonnet-5", displayName: "Sonnet" },
+      { value: "haiku", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku" },
+    ],
+    account: config.account,
+    pid: process.pid,
+    current_permission_mode: config.permissionMode ?? permissionMode,
+    session_state: "idle",
+    pending_permission_requests: [],
+  });
+};
+
 const handleControlRequest = ({ request_id: requestId, request }) => {
   switch (request.subtype) {
     case "initialize":
-      if (config.initialize === "never") return;
-      if (config.initialize === "error") return controlError(requestId, "initialize refused");
-      if (config.initialize === "unreadable") {
-        return controlSuccess(requestId, { models: [], current_permission_mode: 7 });
-      }
-      return controlSuccess(requestId, {
-        commands: [{ name: "compact", description: "Compact the conversation", argumentHint: "" }],
-        agents: [{ name: "general-purpose", description: "General-purpose agent" }],
-        output_style: "default",
-        available_output_styles: ["default"],
-        models: [
-          { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default" },
-          { value: "sonnet", resolvedModel: "claude-sonnet-5", displayName: "Sonnet" },
-          { value: "haiku", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku" },
-        ],
-        account: config.account,
-        pid: process.pid,
-        current_permission_mode: config.permissionMode ?? permissionMode,
-        session_state: "idle",
-        pending_permission_requests: [],
-      });
+      return answerInitialize(requestId, config.initialize);
     case "get_binary_version":
       return controlSuccess(requestId, {
         version: config.version,

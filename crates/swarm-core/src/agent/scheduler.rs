@@ -35,7 +35,6 @@
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::{HashMap, HashSet};
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
@@ -218,7 +217,7 @@ impl AgentScheduler {
     ///   returning it, until the debt reaches zero. The new cap is
     ///   honored going forward without cancelling any running turn.
     /// * **Increase:** retires outstanding `pending_forgets` debt FIRST
-    ///   (a CAS loop that only ever decreases the counter), then calls
+    ///   (one atomic `update` that only ever decreases the counter), then calls
     ///   `Semaphore::add_permits` for whatever increase is left over.
     ///   **Binding invariant:** debt is capacity still checked out by
     ///   RUNNING turns. Adding permits for the full delta while debt is
@@ -236,30 +235,15 @@ impl AgentScheduler {
             .swap(new_limit, AtomicOrdering::SeqCst);
         match new_limit.cmp(&old_limit) {
             Ordering::Greater => {
-                let mut remaining = new_limit - old_limit;
-                while remaining > 0 {
-                    let debt = self.pending_forgets.load(AtomicOrdering::SeqCst);
-                    if debt == 0 {
-                        break;
-                    }
-                    let pay = debt.min(remaining);
-                    // A lost CAS means a concurrent release just paid some
-                    // debt — reload and retry.
-                    if self
-                        .pending_forgets
-                        .compare_exchange(
-                            debt,
-                            debt - pay,
-                            AtomicOrdering::SeqCst,
-                            AtomicOrdering::SeqCst,
-                        )
-                        .is_ok()
-                    {
-                        remaining -= pay;
-                    }
-                }
-                if remaining > 0 {
-                    self.semaphore.add_permits(remaining);
+                let delta = new_limit - old_limit;
+                let paid = self
+                    .pending_forgets
+                    .update(AtomicOrdering::SeqCst, AtomicOrdering::SeqCst, |debt| {
+                        debt - debt.min(delta)
+                    })
+                    .min(delta);
+                if delta > paid {
+                    self.semaphore.add_permits(delta - paid);
                 }
             }
             Ordering::Less => {
@@ -272,13 +256,6 @@ impl AgentScheduler {
             }
             Ordering::Equal => {}
         }
-    }
-
-    /// The current live concurrency cap (the target set by the most
-    /// recent [`Self::set_concurrency`] call, or the constructor's
-    /// clamped [`AgentSchedulerConfig::concurrent_limit`]).
-    pub fn concurrency_limit(&self) -> usize {
-        self.concurrency_limit.load(AtomicOrdering::SeqCst)
     }
 
     /// Queues an agent turn for dispatch. Non-blocking.
@@ -428,28 +405,18 @@ async fn dispatch_loop<F, Fut>(
 /// capacity by one. See [`AgentScheduler::set_concurrency`] for why the
 /// debt can't always be paid synchronously.
 ///
-/// The compare-exchange loop (rather than a plain `fetch_sub`) avoids
-/// underflowing `pending_forgets` if it reaches `0` between the load and
-/// the decrement.
+/// `try_update` with `checked_sub` (rather than a plain `fetch_sub`) leaves
+/// `pending_forgets` at `0` instead of underflowing it when no debt is owed.
 fn release_or_forget_permit(permit: OwnedSemaphorePermit, pending_forgets: &AtomicUsize) {
-    loop {
-        let current = pending_forgets.load(AtomicOrdering::SeqCst);
-        if current == 0 {
-            drop(permit);
-            return;
-        }
-        if pending_forgets
-            .compare_exchange(
-                current,
-                current - 1,
-                AtomicOrdering::SeqCst,
-                AtomicOrdering::SeqCst,
-            )
-            .is_ok()
-        {
-            permit.forget();
-            return;
-        }
+    if pending_forgets
+        .try_update(AtomicOrdering::SeqCst, AtomicOrdering::SeqCst, |debt| {
+            debt.checked_sub(1)
+        })
+        .is_ok()
+    {
+        permit.forget();
+    } else {
+        drop(permit);
     }
 }
 
@@ -776,7 +743,13 @@ mod tests {
     #[tokio::test]
     async fn test_zero_limits_are_clamped_instead_of_stalling_forever() {
         let gated = gated_scheduler(0);
-        assert_eq!(gated.scheduler.concurrency_limit(), 1);
+        assert_eq!(
+            gated
+                .scheduler
+                .concurrency_limit
+                .load(AtomicOrdering::SeqCst),
+            1
+        );
         gated
             .scheduler
             .enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal))
@@ -785,10 +758,19 @@ mod tests {
         gated.drain().await;
 
         gated.scheduler.set_concurrency(0);
-        assert_eq!(gated.scheduler.concurrency_limit(), 1);
+        assert_eq!(
+            gated
+                .scheduler
+                .concurrency_limit
+                .load(AtomicOrdering::SeqCst),
+            1
+        );
         gated.scheduler.set_concurrency(usize::MAX);
         assert_eq!(
-            gated.scheduler.concurrency_limit(),
+            gated
+                .scheduler
+                .concurrency_limit
+                .load(AtomicOrdering::SeqCst),
             MAX_AGENT_CONCURRENCY as usize
         );
     }
@@ -809,7 +791,13 @@ mod tests {
         assert_eq!(gated.in_flight(), 1, "the second turn must still be queued");
 
         gated.scheduler.set_concurrency(2);
-        assert_eq!(gated.scheduler.concurrency_limit(), 2);
+        assert_eq!(
+            gated
+                .scheduler
+                .concurrency_limit
+                .load(AtomicOrdering::SeqCst),
+            2
+        );
         eventually("second turn admitted", || gated.in_flight() == 2).await;
         gated.drain().await;
     }
@@ -828,7 +816,13 @@ mod tests {
         eventually("both permits checked out", || gated.in_flight() == 2).await;
 
         gated.scheduler.set_concurrency(1);
-        assert_eq!(gated.scheduler.concurrency_limit(), 1);
+        assert_eq!(
+            gated
+                .scheduler
+                .concurrency_limit
+                .load(AtomicOrdering::SeqCst),
+            1
+        );
         gated.drain().await;
 
         for _ in 0..2 {
@@ -876,7 +870,7 @@ mod tests {
     /// Three down/up cycles while the original turns never release their
     /// permits — peak concurrency must never exceed the configured limit
     /// at any point in the transition (see `set_concurrency`'s binding
-    /// invariant; without it this measured 13 concurrent turns at 4).
+    /// invariant).
     #[tokio::test]
     async fn test_set_concurrency_down_up_cycles_under_full_load_never_exceed_the_configured_peak()
     {
@@ -915,7 +909,13 @@ mod tests {
             peak.load(AtomicOrdering::SeqCst)
         );
         gated.drain().await;
-        assert_eq!(gated.scheduler.concurrency_limit(), limit);
+        assert_eq!(
+            gated
+                .scheduler
+                .concurrency_limit
+                .load(AtomicOrdering::SeqCst),
+            limit
+        );
         assert_eq!(
             gated.scheduler.pending_forgets.load(AtomicOrdering::SeqCst),
             0
@@ -931,7 +931,7 @@ mod tests {
             |_req: AgentTurnRequest| async {},
         );
         scheduler.set_concurrency(4);
-        assert_eq!(scheduler.concurrency_limit(), 4);
+        assert_eq!(scheduler.concurrency_limit.load(AtomicOrdering::SeqCst), 4);
         assert_eq!(scheduler.pending_forgets.load(AtomicOrdering::SeqCst), 0);
     }
 

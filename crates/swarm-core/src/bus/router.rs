@@ -1,10 +1,16 @@
 //! Turns a bus send into its `bus_message` event.
 
+use std::time::Duration;
+
 use serde_json::Value;
 use uuid::Uuid;
 
 use super::channel::MessageBus;
 use crate::events::{BusMessagePayload, EventSink, Provenance, SwarmEvent};
+
+/// How long [`Router::send`] waits for the event log to record a
+/// `bus_message` before it reports the send as failed.
+const BUS_MESSAGE_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Routes bus sends onto the ordered event stream. Cheap to clone.
 #[derive(Clone)]
@@ -25,13 +31,20 @@ impl Router {
     /// event whose `originWorker` is `from` and whose `causeSeq` is
     /// `cause_seq` — the seq of the event that prompted the send (an
     /// agent handing off after a tool call, say), or `None` for a
-    /// human-initiated send. Returns the new message's id.
+    /// human-initiated send. Returns the new message's id once the event
+    /// is recorded.
     ///
     /// # Errors
     ///
-    /// When `topic` is new and the topic registry is full (see
-    /// [`MessageBus::register`]); nothing is recorded then.
-    pub fn send(
+    /// * When `topic` is new and the topic registry is full (see
+    ///   [`MessageBus::register`]); nothing is recorded then.
+    /// * `Event Writer Unavailable.` when the event was dropped (the
+    ///   engine is shut down, or the writer could not persist it); nothing
+    ///   is delivered.
+    /// * `Bus Send Timed Out.` when the event was not recorded within
+    ///   five seconds. It stays queued and may still be recorded and
+    ///   delivered, so a retry can duplicate the hand-off.
+    pub async fn send(
         &self,
         from: Uuid,
         to: Option<Uuid>,
@@ -41,7 +54,7 @@ impl Router {
     ) -> Result<Uuid, String> {
         self.bus.register(&topic)?;
         let message_id = Uuid::new_v4();
-        self.sink.emit_with(
+        let ack = self.sink.emit_awaiting_seq(
             SwarmEvent::BusMessage(BusMessagePayload {
                 message_id,
                 from_worker: from,
@@ -54,7 +67,11 @@ impl Router {
                 cause_seq,
             },
         );
-        Ok(message_id)
+        match tokio::time::timeout(BUS_MESSAGE_ACK_TIMEOUT, ack).await {
+            Ok(Ok(_seq)) => Ok(message_id),
+            Ok(Err(_)) => Err("Event Writer Unavailable.".to_owned()),
+            Err(_elapsed) => Err("Bus Send Timed Out.".to_owned()),
+        }
     }
 }
 
@@ -91,6 +108,7 @@ mod tests {
                 json!({"task": "review"}),
                 Some(7),
             )
+            .await
             .unwrap();
         engine.flush().await.unwrap();
 
@@ -117,6 +135,7 @@ mod tests {
                 json!("done"),
                 None,
             )
+            .await
             .unwrap();
         engine.flush().await.unwrap();
 
@@ -137,9 +156,28 @@ mod tests {
         assert!(
             router
                 .send(Uuid::new_v4(), None, "new".to_owned(), json!(1), None)
+                .await
                 .is_err()
         );
         engine.flush().await.unwrap();
         assert!(events.try_recv().is_err());
+    }
+
+    /// A send whose event the engine drops (it is shut down) fails
+    /// rather than reporting a hand-off nobody recorded.
+    #[tokio::test]
+    async fn test_a_send_after_engine_shutdown_reports_the_writer_unavailable() {
+        let (router, engine, _events) = router();
+        tokio::task::spawn_blocking(move || engine.shutdown(Duration::from_secs(5)))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            router
+                .send(Uuid::new_v4(), None, "late".to_owned(), json!(1), None)
+                .await,
+            Err("Event Writer Unavailable.".to_owned())
+        );
     }
 }

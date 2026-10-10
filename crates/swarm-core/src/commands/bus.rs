@@ -25,9 +25,10 @@ struct BusSendArgs {
 /// Records a `bus_message` from `fromWorkerId` on `topic`, to
 /// `toWorkerId` or, when it is omitted, to every listener.
 ///
-/// Resolves to `0`: the result used to count bus-level receivers, and
-/// there are none since delivery moved onto the event stream. The number
-/// is kept so the command's result type stays stable.
+/// Resolves to `0`, the receiver count: the bus delivers nothing itself
+/// (every send is a `bus_message` event on the ordered stream), so there
+/// are no bus-level receivers. The number is kept so the command's result
+/// type stays stable.
 pub async fn bus_send(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let BusSendArgs {
         from_worker_id,
@@ -41,6 +42,7 @@ pub async fn bus_send(ctx: Ctx, args: Value) -> Result<Value, Value> {
 
     ctx.router
         .send(from, to, topic, payload, cause_seq)
+        .await
         .map_err(Value::String)?;
     ok_value(&0_usize)
 }
