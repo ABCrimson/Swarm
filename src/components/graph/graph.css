@@ -229,7 +229,7 @@
     padding: 4px 12px 6px;
     font-family: var(--font-mono);
     font-size: 0.6875rem;
-    color: oklch(0.55 0.04 220);
+    color: var(--color-fg-dim);
     user-select: text;
   }
 

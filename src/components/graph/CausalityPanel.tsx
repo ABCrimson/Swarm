@@ -199,7 +199,7 @@ function SeqLabel({ seq }: { readonly seq: number }): React.ReactElement {
       style={{
         fontFamily: "var(--font-mono)",
         fontSize: "0.6875rem",
-        color: "oklch(0.55 0.04 220)",
+        color: "var(--color-fg-dim)",
         fontVariantNumeric: "tabular-nums",
         flexShrink: 0,
       }}
@@ -364,7 +364,7 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
               fontFamily: "var(--font-body)",
               fontSize: "0.75rem",
               fontStyle: "italic",
-              color: "oklch(0.55 0.04 220)",
+              color: "var(--color-fg-dim)",
               textAlign: "center",
               padding: "10px 12px",
               border: "1px dashed oklch(0.30 0.05 220)",
@@ -416,7 +416,7 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
               margin: "12px 0 0",
               fontFamily: "var(--font-mono)",
               fontSize: "0.6875rem",
-              color: "oklch(0.55 0.04 220)",
+              color: "var(--color-fg-dim)",
               textAlign: "center",
             }}
           >

@@ -46,7 +46,7 @@ function DetailRow({
         style={{
           fontFamily: "var(--font-mono)",
           fontSize: "0.6875rem",
-          color: "oklch(0.55 0.04 220)",
+          color: "var(--color-fg-dim)",
           textTransform: "uppercase",
           letterSpacing: "0.08em",
         }}
@@ -244,7 +244,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
               style={{
                 fontFamily: "var(--font-mono)",
                 fontSize: "0.6875rem",
-                color: "oklch(0.55 0.04 220)",
+                color: "var(--color-fg-dim)",
                 textTransform: "uppercase",
                 letterSpacing: "0.08em",
                 display: "block",

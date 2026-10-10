@@ -415,7 +415,7 @@ function WorkerGraphInner(): React.ReactElement {
           style={{
             fontFamily: "var(--font-body)",
             fontSize: "0.875rem",
-            color: "oklch(0.55 0.04 220)",
+            color: "var(--color-fg-dim)",
           }}
         >
           No Workers Running. Spawn A Worker To See The Topology Graph.
@@ -482,7 +482,7 @@ function WorkerGraphInner(): React.ReactElement {
                   style={{
                     fontFamily: "var(--font-body)",
                     fontSize: "0.75rem",
-                    color: "oklch(0.55 0.04 220)",
+                    color: "var(--color-fg-dim)",
                   }}
                 >
                   Computing Layout
@@ -530,7 +530,7 @@ function WorkerGraphInner(): React.ReactElement {
               border: "1px solid oklch(0.22 0.04 220)",
               fontFamily: "var(--font-body)",
               fontSize: "0.6875rem",
-              color: "oklch(0.50 0.04 220)",
+              color: "var(--color-fg-dim)",
             }}
           >
             No Measured Causality Yet

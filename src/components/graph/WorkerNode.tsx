@@ -85,7 +85,7 @@ export function WorkerNode({ data }: NodeProps<WorkerFlowNode>): React.ReactElem
           style={{
             fontFamily: "var(--font-mono)",
             fontSize: "0.6875rem",
-            color: "oklch(0.55 0.04 220)",
+            color: "var(--color-fg-dim)",
           }}
         >
           PID {pid}
