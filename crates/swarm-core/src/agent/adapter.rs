@@ -45,10 +45,11 @@
 //! designed, and binding on every provider since:
 //!
 //! - **Condition A** (controlled config environment): a worker's
-//!   provider CLI runs with a configuration SWARM controls, never the
-//!   operator's personal plugins, hooks or MCP servers. Each adapter
-//!   enforces it at spawn (Claude Code: `--setting-sources project`,
-//!   `--strict-mcp-config` and inline `--settings`).
+//!   provider CLI never loads the operator's personal settings, plugins,
+//!   hooks or MCP servers (Claude Code: `--setting-sources project`,
+//!   `--strict-mcp-config`, inline `--settings` with `disableAllHooks`).
+//!   The repo's project settings, its `env` block and `apiKeyHelper`
+//!   included, still apply outside `--restricted`.
 //! - **Condition B** (synthesize the terminal receipt on ungraceful
 //!   exit): see [`AgentSession::shutdown`]'s doc.
 //! - **Condition C** (never gate permissions on `allowedTools`): see
