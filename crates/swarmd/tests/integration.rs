@@ -1021,7 +1021,14 @@ async fn test_file_commands_are_denied_over_ws() {
     let mut ws = attach(&server).await;
     let token_path = server.data_dir.join("daemon-token");
     let (ok, _, error) = rpc(&mut ws, "r", "read_file", json!({"path": token_path})).await;
-    assert!(!ok && error.is_some(), "read_file must be denied");
+    assert!(!ok, "read_file must be denied");
+    assert_eq!(
+        error,
+        Some(json!(
+            "\"read_file\" Is Not Available Over A Remote Connection."
+        )),
+        "read_file must be refused by RemotePolicy::Denied, not by the handler's deny list"
+    );
     let (ok, _, error) = rpc(
         &mut ws,
         "w",
@@ -1029,7 +1036,14 @@ async fn test_file_commands_are_denied_over_ws() {
         json!({"path": server.data_dir.join("x.txt"), "content": "x"}),
     )
     .await;
-    assert!(!ok && error.is_some(), "write_file must be denied");
+    assert!(!ok, "write_file must be denied");
+    assert_eq!(
+        error,
+        Some(json!(
+            "\"write_file\" Is Not Available Over A Remote Connection."
+        )),
+        "write_file must be refused by RemotePolicy::Denied"
+    );
 }
 
 /// Past the per-connection cap, an `rpc` is answered at once with a busy
