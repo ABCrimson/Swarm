@@ -2,6 +2,8 @@
 
 > Development setup, code standards, and contribution guidelines for SWARM Orchestrator.
 
+The house rules (exact pins, pnpm only, no manual memoization, `parking_lot`, and the traps that waste an afternoon) live in [`AGENTS.md`](https://github.com/ABCrimson/Swarm/blob/main/AGENTS.md) and apply to every contributor, human or agent. This page covers setup, standards and process.
+
 ---
 
 ## Table of Contents
@@ -19,19 +21,21 @@
 
 ### Prerequisites
 
-| Tool      | Version        | Purpose                              |
-|-----------|----------------|--------------------------------------|
-| Node.js   | 26.8.1         | Frontend build and dev server        |
-| pnpm      | 12.0.0        | Package management (pinned via `packageManager` in `package.json`; npm is not used in this project) |
-| Rust      | nightly-2026-08-27 | Backend compilation              |
+| Tool    | Version                                  | Purpose                                      |
+|---------|------------------------------------------|----------------------------------------------|
+| Node.js | nightly in `devEngines.runtime`          | Frontend build and dev server (pnpm downloads it; do not install it separately) |
+| pnpm    | 12.11.2 (`packageManager`)               | Package management; npm and yarn are not used |
+| Rust    | nightly-2026-10-10 (`rust-toolchain.toml`) | Backend compilation (`rust-version` 1.101)   |
+
+Every version is pinned exactly: `package.json`, `pnpm-workspace.yaml`, the root `Cargo.toml` and `rust-toolchain.toml` are the source of truth, and this table follows them. The Node nightly can trail the newest one when that build has no Windows x64 binary; `.peak-modern-holds.json` records the reason.
 
 ### Rust Toolchain
 
-The Rust toolchain is automatically configured by `rust-toolchain.toml`:
+`rust-toolchain.toml` configures the toolchain, and any `cargo` command in the repo installs it:
 
 ```toml
 [toolchain]
-channel    = "nightly-2026-08-27"
+channel    = "nightly-2026-10-10"
 profile    = "minimal"
 components = ["rustfmt", "clippy", "rust-src", "rust-analyzer"]
 targets    = [
@@ -41,7 +45,10 @@ targets    = [
 ]
 ```
 
-Running any `cargo` command in the project will auto-install the correct toolchain.
+The repo is one virtual Cargo workspace: run `cargo` from the repository root, not from `src-tauri`.
+
+> [!WARNING]
+> On a Windows host with Smart App Control in enforce mode, freshly compiled build scripts and test binaries are blocked (`os error 4551`). `cargo fmt` still works; run `clippy` and `test` in WSL. See [`AGENTS.md`](https://github.com/ABCrimson/Swarm/blob/main/AGENTS.md#ways-to-hurt-yourself).
 
 ### First-Time Setup
 
@@ -50,17 +57,17 @@ Running any `cargo` command in the project will auto-install the correct toolcha
 git clone https://github.com/ABCrimson/Swarm.git
 cd Swarm
 
-# Install frontend dependencies
-pnpm install
+# Install frontend dependencies (exact versions from pnpm-lock.yaml)
+pnpm install --frozen-lockfile
 
-# Verify Rust toolchain
-cd src-tauri
-cargo check
-cd ..
+# Verify the Rust workspace
+cargo check --workspace
 
-# Start the dev server
+# Start the desktop app
 pnpm tauri:dev
 ```
+
+On Linux, Tauri's WebKitGTK system libraries must be installed first; `.github/workflows/ci.yml` lists the exact packages.
 
 ### Editor Setup
 
@@ -89,7 +96,7 @@ pnpm tauri:dev
 
 ### TypeScript / React
 
-**Formatter/Linter:** Biome 2.5.10
+**Formatter/Linter:** Biome 2.5.15 (the only one; no ESLint, no Prettier)
 
 ```bash
 # Lint + format (auto-fix)
@@ -102,10 +109,9 @@ pnpm lint
 pnpm format
 ```
 
-> [!WARNING]
-> **Exclusion note:** `src/styles/tokens.css` is excluded from Biome's `files.includes` (`biome.json`). Biome's CSS parser does not yet support the `@function` at-rule syntax used in that file for OKLCH token derivation, so it is formatted/linted by hand until upstream support lands. Do not remove the exclusion without first confirming Biome's CSS parser handles `@function`.
+CI runs `pnpm exec biome ci .`, which fails on any diagnostic without fixing it.
 
-**Import style:** Use hash imports exclusively.
+**Import style:** Use hash imports exclusively. `package.json` `"imports"` is the only alias map, and Biome's `noRestrictedImports` rejects parent-relative paths (`../`).
 
 ```typescript
 // Correct
@@ -120,11 +126,12 @@ import { Button } from "@/components/ui/Button";
 
 **React patterns:**
 
-- React 19 canary with React Compiler -- no manual `useMemo`, `useCallback`, or `React.memo`
+- React 19 canary with the React Compiler (the Oxc port) -- no manual `useMemo`, `useCallback`, or `React.memo`; `pnpm check:compiler` fails when a key component ships uncompiled
 - `ref` as a regular prop (React 19 pattern), not `forwardRef`
 - `useOptimistic` for optimistic UI updates
-- Zustand `subscribeWithSelector` for store subscriptions
-- Jotai atoms for ephemeral UI state (not domain state)
+- Zustand (with `immer` and `subscribeWithSelector` where a store needs them) for domain state
+- Jotai atoms for UI state; settings that persist use `atomWithSettings` (`#store/persisted`)
+- Dates and durations go through `#lib/time` (Temporal plus `Intl`); `src/boot.ts` installs the Temporal polyfill where the webview has none
 
 **Color system:** OKLCH only. Never use `rgb()`, `hsl()`, `hex`, or named colors.
 
@@ -139,47 +146,36 @@ color: rgb(59, 130, 246);
 color: hsl(217, 91%, 60%);
 ```
 
+Every user-facing UI string is Title Case.
+
 ### Rust
 
 **Formatter:** `cargo fmt`
 
-**Linter:** `cargo clippy -- -D warnings` (zero tolerance for warnings)
+**Linter:** `cargo clippy` with warnings denied (zero tolerance). The workspace lint tables in the root `Cargo.toml` and `clippy.toml` are part of the standard: `unsafe_code` is denied, `allow_attributes` is denied (suppress only with `#[expect(lint, reason = "...")]`), and `std::sync::Mutex`/`RwLock` are banned types.
 
 ```bash
-cd src-tauri
-
-# Format
-cargo fmt
-
-# Lint
-cargo clippy -- -D warnings
-
-# Test
-cargo test
+# From the repository root
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo deny check
 ```
 
-**Documentation:** Every public item must have `///` doc comments with:
-
-- Brief one-line description
-- Longer description if behavior is non-obvious
-- `# Arguments` section for functions with parameters
-- `# Returns` section describing the return value
-- `# Errors` section listing error conditions
-- `# Examples` section with runnable (or `ignore`-annotated) code
+**Documentation:** Public items carry `///` doc comments: a one-line summary, a longer description when the behavior is non-obvious, and `# Errors` / `# Panics` sections where the function can fail or panic.
 
 **Error handling:**
 
-- Use `AppError` for all domain errors
-- Use `anyhow::Result` for internal/infrastructure errors (PTY, HTTP)
-- Map `anyhow` to `AppError` at module boundaries
-- Command handlers map `AppError` to `String` for Tauri IPC
+- `AppError` (`thiserror`) is the domain error in `swarm-core`; it serializes as its display string
+- `anyhow::Result` is for internal/infrastructure errors (PTY, child processes); map it to `AppError` at module boundaries
+- Command handlers live once in `swarm-core`'s command registry and return JSON values; the desktop forwarders and `swarmd`'s WebSocket `rpc` frames both go through it, so a command cannot behave differently in the two shells
 
 **Concurrency:**
 
 - `DashMap` for concurrent collections
-- `parking_lot` for mutexes and rwlocks (faster than `std::sync`)
-- `tokio::task::spawn_blocking` for CPU-bound and blocking work (sysinfo refresh, worker metrics aggregation, session persistence)
-- Never do blocking or CPU-bound work directly on a Tokio async task -- always `spawn_blocking`
+- `parking_lot` for mutexes and rwlocks
+- `tokio::task::spawn_blocking` for CPU-bound and blocking work (sysinfo refresh, child waits, PTY teardown)
+- Never do blocking or CPU-bound work directly on a Tokio async task
 - `WorkerRegistry::update_state_if` for compare-and-set state transitions instead of a separate get-then-set (avoids TOCTOU races)
 
 ---
@@ -188,14 +184,14 @@ cargo test
 
 ### Why Zustand + Jotai?
 
-**Zustand** manages domain state (workers, sessions, metrics) because it provides:
+**Zustand** manages domain state (workers, sessions, provenance, AI) because it provides:
 - `subscribeWithSelector` for minimal re-renders
 - `immer` middleware for immutable updates
 - No providers or context -- works with Tauri's single-window model
 
-**Jotai** manages UI state (theme, layout, selections) because it provides:
+**Jotai** manages UI state (theme, layout, selections, current page) because it provides:
 - Atomic granularity (one atom per piece of state)
-- `atomWithStorage` for persistence without Zustand ceremony
+- Persistence through `atomWithSettings` without Zustand ceremony
 - Bottom-up reactivity ideal for UI toggles
 
 ### Why OKLCH?
@@ -211,7 +207,7 @@ OKLCH (Oklab Lightness Chroma Hue) is a perceptually uniform color space:
 - Compute shaders enable GPU-driven particle simulation (no CPU overhead)
 - Instanced rendering handles thousands of particles in a single draw call
 - Post-processing pipeline (bloom, chromatic aberration) runs entirely on GPU
-- Future-proof: WebGPU is the successor to WebGL
+- It is optional: without WebGPU, or with reduced motion, the background is a plain color
 
 ### Why portable-pty?
 
@@ -225,7 +221,7 @@ OKLCH (Oklab Lightness Chroma Hue) is a perceptually uniform color space:
 - Lock-free concurrent reads (critical for metrics collection)
 - Per-shard write locks (minimal contention)
 - Drop-in replacement for `HashMap` with `Arc<Mutex<_>>`
-- Used by both worker registry and session manager
+- Used by the worker registry, the session manager, the agent session registry and the per-repository git locks
 
 ---
 
@@ -289,23 +285,31 @@ docs(api): document the ship_context causal record
    git checkout -b feat/my-feature main
    ```
 
-2. **Run all checks locally:**
+2. **Run all checks locally** (the same gates CI runs, from `AGENTS.md`):
    ```bash
    # Frontend
-   pnpm check
-   pnpm typecheck   # runs tsc --noEmit against both the app tsconfig.json and tsconfig.worker.json
+   pnpm typecheck          # app, worker and node tsconfigs
+   pnpm exec biome ci .
+   pnpm test:coverage
+   pnpm build && pnpm build:web
+   pnpm check:compiler
+   pnpm test:e2e
+   pnpm build:site
 
-   # Backend
-   cd src-tauri
-   cargo clippy -- -D warnings
-   cargo test
-   cargo fmt --check
+   # Backend, from the repository root
+   cargo fmt --all --check
+   cargo clippy --workspace --all-targets --locked -- -D warnings
+   cargo test --workspace --locked
+   cargo deny check
    ```
 
-3. **Write tests** for new backend functionality.
+3. **Write tests** for new behavior, frontend and backend.
 
-4. **Update documentation** if your change affects:
+4. **Walk the "Hit Every Surface" list** in `AGENTS.md`: desktop, `swarmd --serve-ui`, CLI, both providers, replay, reverse states.
+
+5. **Update documentation** if your change affects:
    - Tauri IPC commands (update `docs/api.md`)
+   - The daemon's wire protocol or flags (update `docs/daemon.md`)
    - Architecture (update `docs/architecture.md`)
    - Public Rust APIs (update `///` doc comments)
 
@@ -321,11 +325,12 @@ docs(api): document the ship_context causal record
 
 - [ ] All CI checks pass (lint, type-check, clippy, tests)
 - [ ] New public Rust items have `///` doc comments
-- [ ] New Tauri commands are documented in `docs/api.md`
+- [ ] New commands are documented in `docs/api.md`
 - [ ] No `rgb()`, `hsl()`, or hex colors (OKLCH only)
 - [ ] No `forwardRef` or manual `useMemo`/`useCallback`
 - [ ] Hash imports used (no relative paths)
 - [ ] `isAnimationActive={false}` on new Recharts components
+- [ ] Docs touched by the change state the code as it is now
 
 ---
 
@@ -334,72 +339,59 @@ docs(api): document the ship_context causal record
 ### Rust Tests
 
 ```bash
-cd src-tauri
-
-# Run all tests
-cargo test
+# From the repository root
+cargo test --workspace --locked
 
 # Run a specific test
-cargo test test_registry_insert_get_remove
+cargo test -p swarm-core test_registry_insert_get_remove
 
 # Run tests with output
-cargo test -- --nocapture
+cargo test --workspace -- --nocapture
 
 # Run doc-tests only
-cargo test --doc
+cargo test --workspace --doc
 ```
 
-**Current test coverage** (the `ai::queue`/`ai::stream` modules below were deleted in Phase 2 of the multi-provider agent-execution plan — absorbed into `agent::scheduler`/transplanted into `worker::proc` respectively; this table now reflects the replacement modules, not the deleted ones):
+**In-tree test functions** (counted by `#[test]` / `#[tokio::test]` attribute at the 2026-10-10 head; the number run varies with platform-gated tests):
 
-| Module                    | Tests | Description                                              |
-|----------------------------|-------|-------------------------------------------------------------|
-| `error`                    | 13    | Display formatting, serialization                            |
-| `events::emitter`          | 40    | Roundtrip serialization, `snake_case` type tags, `camelCase` payload fields, provenance, the `agent_*` family |
-| `worker::registry`         | 12    | Insert, get, remove, `update_state_if` compare-and-set, capacity, aggregate metrics |
-| `worker::lifecycle`        | 17    | Spawn/pause/resume/kill lifecycle transitions, worktree isolation, credential-leak span-capture regression |
-| `worker::proc`             | 15    | NDJSON framer (linear scan, line cap, overrun-tail discard), `spawn_piped` round-trip and spawn failure, `kill_and_wait`, stderr tail and its cap |
-| `agent::adapter`           | 5     | `AgentAdapter`/`AgentSession` trait contract + object safety, session lifecycle through a live engine, concurrency contract (busy/idempotent shutdown/exactly-once settlement), `ProviderId` wire-value pin |
-| `agent::claude_code`       | 17    | `ClaudeCodeAdapter` against the fake `claude` CLI fixture: turn settlement, tool-call/result ID pairing, permission-denied subclassing, inline-JSON settings flag, probe availability |
-| `agent::codex`             | 17    | `CodexAdapter` against the fake `codex` app-server fixture: JSON-RPC settlement ordering, approval round-trip, kill-mid-turn, resume rejection, trust-tier policy pins |
-| `agent::registry`          | 5     | `AgentSessionRegistry`: rapid-turn ordering, semaphore-bounded concurrency across sessions |
-| `agent::scheduler`         | 15    | Priority ordering, concurrency limiting, enqueue/dequeue |
-| `orchestration::engine`    | 15    | Persistence policy, envelope shape, provenance stamping, `agent_*` persistence pinning |
-| `orchestration::log`       | 22    | SQLite append/read, migration ladder, partial index |
-| `git::*` (8 files)         | 123   | Binary discovery, worktree add/lock/unlock/remove, ship preflight/commit/push, causal-record generation, secret redaction |
-| `bus::channel`             | 4     | Channel creation, send/receive, broadcast, message serialization |
-| `bus::router`              | 2     | Direct/broadcast send; unconditional `bus_message` emission onto the ordered spine |
-| `session::*`               | 8     | Session manager CRUD + atomic persistence (plugin-store-era file compatibility, no-tmp-file-left-behind) |
-| `config`                   | 7     | Atomic key-value JSON config persistence |
-| `lock`                     | 5     | Single-instance advisory lock, holder-naming error message |
-| `metrics`                  | 3     | `SharedSystem` construction, collection loop |
-| `protocol`                 | 6     | `swarmd` wire-frame serde: `hello`/`ready`/`rpc`/`rpcResult` shapes, cold-attach `lastSeq` |
-| `runtime`                  | 2     | Fresh-data-dir startup, second-instance lock refusal |
-| `commands::*` (6 files)    | 27    | Registry dispatch + `RemotePolicy` gating, `events_since` paging, path scoping, argument-shape and credential-leak regressions |
-| **Total**                  | **377 (swarm-core) + 27 (swarmd) + 4 (swarm-desktop `registry_contract`)** test functions in-tree | the 2026-08-27 evergreen gate ran **391 green** on Windows (platform-gated tests vary by OS), plus the doc-tests via `cargo test --doc` |
+| Crate / module                | Tests | Covers                                                  |
+|-------------------------------|-------|---------------------------------------------------------|
+| `swarm-core` `git`            | 161   | Binary discovery, worktree add/lock/unlock/remove, ship preflight/commit/push, causal-record generation, secret redaction |
+| `swarm-core` `agent`          | 114   | The `AgentAdapter` contract, Claude Code and Codex adapters against the fake-CLI fixtures, the session registry, the turn scheduler |
+| `swarm-core` `worker`         | 62    | Registry (capacity, `update_state_if`), lifecycle, PTY and piped-process plumbing, NDJSON framing |
+| `swarm-core` `commands`       | 40    | Registry dispatch, `RemotePolicy` gating, `events_since` paging, path scoping, credential-leak regressions |
+| `swarm-core` `events`         | 40    | Wire serialization, `snake_case` type tags, `camelCase` payloads, provenance |
+| `swarm-core` `orchestration`  | 40    | Persistence policy, envelope shape, provenance stamping, the SQLite event log |
+| `swarm-core` `session`        | 15    | Session manager CRUD and atomic persistence |
+| `swarm-core` `bus`            | 6     | Channels and the router |
+| `swarm-core` top-level modules | 51   | `error`, `config`, `lock`, `metrics`, `protocol`, `runtime`, `state_file`, `clock` |
+| `swarmd`                      | 83    | 41 unit tests (CLI, auth, host policy, static UI) and 42 integration tests that drive a real daemon over WebSocket |
+| `swarm-desktop`               | 34    | 33 unit tests (command and capability contracts, config contract, dialog grants, lifecycle) and 1 integration test (the shared Tokio runtime) |
+| **Total**                     | **646** |                                                       |
 
-Run `cargo test --workspace` from `src-tauri/` to reproduce this locally; run `cargo test --doc` for just the doc-tests.
+The doc-tests run with `cargo test --workspace --doc`.
 
 ### Frontend Testing
 
-Frontend tests run via Vitest (`pnpm test`): **62 test files, 621 tests** _(all green on the 2026-09-23 modernization gate)_, covering components, hooks, stores, and `lib/` utilities.
+Frontend tests run via Vitest (`pnpm test`): **116 test files, 1193 tests** _(all green at the 2026-10-10 head)_, covering components, hooks, stores, and `lib/` utilities. `pnpm test:coverage` adds the coverage floor from `vitest.config.ts`.
 
 Tests are **colocated**: `X.test.ts(x)` sits next to the `X.ts(x)` it covers, and a suite that covers one facet of a larger module takes a dotted suffix (`src/lib/tools.file-io.test.ts`, `src/lib/tauri.worker-spawn.test.ts`). Import the module under test through its `#` alias like any other code. Vitest collects `src/**/*.test.{ts,tsx}` only, so the Playwright `e2e/*.spec.ts` suites are never picked up.
 
 | Location                          | Files | Focus                                                          |
 |-----------------------------------|-------|-----------------------------------------------------------------|
-| `src/components/**/*.test.tsx`    | 19    | UI primitives (`Badge`, `Button`, `Pill`, `ErrorBoundary`, `MetricCard`), graph surfaces (`WorkerGraph`, `CausalityPanel`, `GraphControls`, `GraphLegend`, `ParticleBackground`), and agent/ship surfaces (`SpawnWorkerDialog`, `AgentChat`, `AIChat`, `ShipPreview`, `ProviderBadge`, ...) |
-| `src/hooks/*.test.tsx`            | 12    | `useAiStream`, `useSession`, `useShip`, `useStream`, `useWorker`, `useElkLayout`, `useSettingsBridge`, and the event-stream hooks (`useWorkerEvents`, `useSessionEvents`, `useAgentSessionEvents`, `useProvenanceEvents`, `useSystemLogEvents`) |
-| `src/lib/*.test.ts`               | 24    | `alerts`, `anthropic`, `event-bus`, `export`, `keybindings`, `kv`, `log-store`, `metrics-aggregation`, `ship-causal`/`ship-message`, `theme`, the `tools*` suites, `transport` (the `wsTransport` client), `webgpu`, `worker-spawn`, ... |
-| `src/pages/*.test.tsx`            | 1     | `Settings` -- the settings page's full control surface |
-| `src/store/*.test.ts`             | 6     | `ai`, `message-history`, `provenance`, `sessions`, `system`, `workers` Zustand stores |
+| `src/components/**/*.test.{ts,tsx}` | 47  | UI primitives, the graph and causality surfaces, layout, logs, metrics charts, sessions, and the agent/ship surfaces |
+| `src/hooks/*.test.tsx`            | 15    | `useWorker`, `useElkLayout`, `useTerminal`, `useWebGPU`, `useSettingsBridge`, `useShip`, and the event-stream hooks |
+| `src/lib/*.test.ts`               | 42    | `anthropic`, `event-bus`, `export`, `keybindings`, `log-store`, `models`, `time`, the `tools*` suites, `transport` (the `wsTransport` client), `webgpu`, `worker-spawn`, ... |
+| `src/pages/*.test.tsx`            | 3     | The pages with their own control surface (e.g. `Settings`) |
+| `src/store/*.test.ts`             | 9     | The Zustand stores and persisted settings |
 
-Tauri IPC is mocked globally in `src/test/setup.ts` via `vi.mock("@tauri-apps/api/core")` (stubs `invoke`) and `vi.mock("@tauri-apps/api/event")` (stubs `listen`), plus mocks for the `dialog`, `fs`, `shell`, and `store` plugins. Individual tests override the default rejected/no-op behavior with `vi.mocked(invoke).mockResolvedValueOnce(...)` as needed. There is no standalone `src/lib/test-utils.ts` module -- the old `agent-loop`, `diff`, `replay`, `test-utils`, and `token-costs` modules under `src/lib/` were removed along with the (dead) session-replay feature.
+Tauri IPC is mocked globally in `src/test/setup.ts`: `vi.mock` stubs `@tauri-apps/api/core` (`invoke`, `isTauri`) and `@tauri-apps/api/event` (`listen`), plus the `dialog`, `fs`, `opener` and `store` plugins and `sonner`. Individual tests override the default rejected/no-op behavior with `vi.mocked(invoke).mockResolvedValueOnce(...)` as needed. `src/test/dom-polyfills.ts` fills the jsdom gaps.
 
 ### End-to-End Tests (Playwright)
 
 ```bash
-pnpm exec playwright install --with-deps chromium   # once per machine
+pnpm exec playwright install --with-deps --only-shell chromium   # once per machine
 pnpm test:e2e
 ```
 
-29 tests across `e2e/navigation.spec.ts`, `e2e/palette.spec.ts`, `e2e/settings.spec.ts`, and `e2e/dialogs.spec.ts`, run headless against the real Vite build with no Tauri backend -- routing, the command palette, Settings' client-side controls, and dialog open/close/focus all pass without a webview or Rust process, since `invoke()` degrades gracefully rather than throwing (see `src/lib/tauri.ts`). Wired into CI as its own `e2e` job (`.github/workflows/ci.yml`). See **[docs/e2e.md](e2e.md)** for the full per-file coverage table, the exact no-backend boundary, and the `tauri-driver` + event-log-oracle design for the next phase (real worker spawn, `seq`-continuity assertions against the ordered event log) -- documented, not yet built.
+39 tests across six spec files (`navigation`, `palette`, `settings`, `dialogs`, `styles`, `temporal`), run headless against the real Vite build with no Tauri backend -- routing, the command palette, Settings' client-side controls, dialog open/close/focus, the stylesheet cascade and the Temporal polyfill path all pass without a webview or Rust process, since `invoke()` degrades gracefully rather than throwing (see `src/lib/tauri.ts`). Wired into CI as its own `e2e` job (`.github/workflows/ci.yml`). See **[docs/e2e.md](e2e.md)** for the per-file coverage table, the exact no-backend boundary, and the `tauri-driver` + event-log-oracle design for the next phase (real worker spawn, `seq`-continuity assertions against the ordered event log) -- documented, not yet built.
