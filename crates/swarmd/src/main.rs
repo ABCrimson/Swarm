@@ -213,12 +213,23 @@ fn prepare(args: &ServeArgs) -> Result<Startup, Fatal> {
 
     // The gate runs BEFORE `load_or_create` can mint a token (see the crate
     // doc): a refused run must not create the file a second run would pass on.
-    if !loopback && !DaemonToken::exists(&data_dir) {
-        return Err(fatal(format!(
-            "Refusing To Bind A Non-Loopback Address Without A Valid Daemon Token. Run `swarmd` Once \
-             With The Default Loopback Bind First (It Mints The Token), Then Retry With --bind {}.",
-            args.bind
-        )));
+    if !loopback {
+        match DaemonToken::load(&data_dir) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return Err(fatal(format!(
+                    "Refusing To Bind A Non-Loopback Address Without A Valid Daemon Token. Run `swarmd` Once \
+                    With The Default Loopback Bind First (It Mints The Token), Then Retry With --bind {}.",
+                    args.bind
+                )));
+            }
+            Err(error) => {
+                return Err(fatal(format!(
+                    "Refusing To Bind A Non-Loopback Address: Cannot Read The Daemon Token In {}: {error}",
+                    data_dir.display()
+                )));
+            }
+        }
     }
     let loaded = DaemonToken::load_or_create(&data_dir)
         .map_err(|error| fatal(format!("Failed To Establish The Daemon Token: {error}")))?;

@@ -587,7 +587,7 @@ fn refusal(result: Result<impl std::fmt::Debug, tungstenite::Error>) -> (u16, St
 /// Loopback clients (every client of a local TLS proxy or `ssh -L` tunnel)
 /// are bounded by the handshake pool only, never by the per-address share,
 /// which would otherwise lump all of them into one small bucket. The
-/// per-address share for remote peers is unit-tested in `ws.rs`.
+/// per-address share for remote peers is unit-tested in `ws/admission.rs`.
 #[tokio::test]
 async fn test_loopback_handshakes_are_not_capped_per_address() {
     let server = TestServer::start_with(Options {
@@ -1021,7 +1021,14 @@ async fn test_file_commands_are_denied_over_ws() {
     let mut ws = attach(&server).await;
     let token_path = server.data_dir.join("daemon-token");
     let (ok, _, error) = rpc(&mut ws, "r", "read_file", json!({"path": token_path})).await;
-    assert!(!ok && error.is_some(), "read_file must be denied");
+    assert!(!ok, "read_file must be denied");
+    assert_eq!(
+        error,
+        Some(json!(
+            "\"read_file\" Is Not Available Over A Remote Connection."
+        )),
+        "read_file must be refused by RemotePolicy::Denied, not by the handler's deny list"
+    );
     let (ok, _, error) = rpc(
         &mut ws,
         "w",
@@ -1029,7 +1036,14 @@ async fn test_file_commands_are_denied_over_ws() {
         json!({"path": server.data_dir.join("x.txt"), "content": "x"}),
     )
     .await;
-    assert!(!ok && error.is_some(), "write_file must be denied");
+    assert!(!ok, "write_file must be denied");
+    assert_eq!(
+        error,
+        Some(json!(
+            "\"write_file\" Is Not Available Over A Remote Connection."
+        )),
+        "write_file must be refused by RemotePolicy::Denied"
+    );
 }
 
 /// Past the per-connection cap, an `rpc` is answered at once with a busy
@@ -1109,8 +1123,9 @@ async fn test_shutdown_closes_clients_with_1001() {
 }
 
 /// A socket still in its handshake is closed with 1001 as soon as shutdown
-/// starts, not when its handshake deadline passes: an idle unauthenticated
-/// socket used to hold `serve`'s WebSocket drain for the whole deadline.
+/// starts, not when its handshake deadline passes; otherwise an idle
+/// unauthenticated socket would hold `serve`'s WebSocket drain for the
+/// whole deadline.
 #[tokio::test]
 async fn test_shutdown_closes_pending_handshakes_promptly() {
     let server = TestServer::start_with(Options {
@@ -1153,6 +1168,7 @@ fn web_bundle() -> tempfile::TempDir {
     std::fs::create_dir(dir.path().join("assets")).unwrap();
     std::fs::write(dir.path().join("assets").join("app-1234.js"), "export {};").unwrap();
     std::fs::write(dir.path().join(".env"), "SECRET=1").unwrap();
+    std::fs::write(dir.path().join("assets").join(".hidden"), "SECRET=2").unwrap();
     dir
 }
 
@@ -1211,7 +1227,14 @@ async fn test_serve_ui_security_headers_caching_and_fallbacks() {
     assert_eq!(header(&headers, "cache-control"), Some("no-store"));
 
     // Hidden files are never served.
-    for path in ["/.env", "/%2eenv", "/assets/.hidden"] {
+    for path in [
+        "/.env",
+        "/%2eenv",
+        "/assets/.hidden",
+        "/assets%2f.hidden",
+        "/assets%2F.hidden",
+        "/assets%5c.hidden",
+    ] {
         let (status, _, _) = http_get(server.addr, path, &host).await;
         assert_eq!(status, 404, "{path}");
     }
@@ -1338,6 +1361,10 @@ fn test_fresh_dir_non_loopback_bind_is_refused_twice_in_a_row() {
             "{stderr}"
         );
         assert!(
+            stderr.contains("Run `swarmd` Once With The Default Loopback Bind First"),
+            "{stderr}"
+        );
+        assert!(
             !dir.path().join("daemon-token").exists(),
             "attempt {attempt} minted a token"
         );
@@ -1390,6 +1417,7 @@ fn test_malformed_token_file_is_refused_and_kept() {
         stderr.contains("Refusing To Bind A Non-Loopback Address"),
         "{stderr}"
     );
+    assert!(stderr.contains("Cannot Read The Daemon Token"), "{stderr}");
     let (code, _, stderr) = run(&["--bind", "127.0.0.1:0", "--data-dir", path_str(dir.path())]);
     assert_eq!(code, Some(1));
     assert!(
