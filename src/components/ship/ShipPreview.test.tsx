@@ -367,4 +367,18 @@ describe("ShipPreview — agent-controlled names", () => {
     expect(files.textContent).not.toContain("\u202E");
     expect(screen.getByText("swarm/agent-\\u202Efdp")).toBeInTheDocument();
   });
+
+  it("names the staging-mode group by its heading", () => {
+    renderPreview({ preflight: makePreflight({ staged: ["src/main.rs"] }) });
+    const group = screen.getByRole("group", { name: "Staging Mode" });
+    expect(within(group).getByRole("button", { name: /All Changes/ })).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: /Already Staged/ })).toBeInTheDocument();
+  });
+
+  it("escapes control characters in a blocker", () => {
+    renderPreview({
+      preflight: makePreflight({ canShip: false, blockers: ["Branch `a\u202Eb` Is Protected"] }),
+    });
+    expect(screen.getByText("Branch `a\\u202Eb` Is Protected")).toBeInTheDocument();
+  });
 });

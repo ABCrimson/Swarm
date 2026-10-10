@@ -207,6 +207,16 @@ describe("Sessions — views", () => {
 
     expect(screen.getByRole("searchbox", { name: "Search Sessions" })).toHaveValue("sprint");
   });
+
+  it("moves focus to the List toggle when the templates view closes", async () => {
+    const user = userEvent.setup();
+    await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Templates" }));
+    await user.click(screen.getByRole("button", { name: "Close Template Selector" }));
+
+    expect(screen.getByRole("button", { name: "List" })).toHaveFocus();
+  });
 });
 
 describe("Sessions — export and templates", () => {
