@@ -134,7 +134,7 @@ impl Process {
     pub(super) async fn finish(self, graceful: bool) -> String {
         self.stdin.close();
         reap(self.child, graceful).await;
-        drained_stderr_snippet(&self.stderr_tail).await
+        crate::agent::drained_stderr_snippet(&self.stderr_tail).await
     }
 }
 
@@ -163,18 +163,6 @@ pub(super) async fn reap(mut child: Child, graceful: bool) -> Option<ExitStatus>
     .await
     .ok()
     .flatten()
-}
-
-/// The child's last stderr bytes, for a failure message. Waits briefly
-/// for the stderr drain thread, which can trail the child's exit.
-pub(super) async fn drained_stderr_snippet(tail: &parking_lot::Mutex<VecDeque<u8>>) -> String {
-    for _ in 0..10 {
-        if !tail.lock().is_empty() {
-            break;
-        }
-        tokio::time::sleep(EXIT_POLL_INTERVAL).await;
-    }
-    crate::agent::stderr_snippet(tail)
 }
 
 /// Why the `initialize` handshake failed.

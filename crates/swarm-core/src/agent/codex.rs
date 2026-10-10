@@ -98,7 +98,7 @@ use crate::agent::adapter::{
     Capabilities, ExitSummary, PermissionDecision, PermissionId, ProbeReport, ProviderId,
     SessionKey, TurnId, TurnInput,
 };
-use crate::agent::stderr_snippet;
+use crate::agent::{drained_stderr_snippet, stderr_snippet};
 use crate::error::AppError;
 use crate::events::{
     AgentBlockPayload, AgentPermissionRequestPayload, AgentSessionExitedPayload,
@@ -727,20 +727,6 @@ async fn wait_settled(shared: &Shared, turn_id: &str) {
     let _ = settled
         .wait_for(|state| state.closed || state.recent.iter().any(|id| id == turn_id))
         .await;
-}
-
-/// The child's last stderr bytes, for a failure message. Waits up to 200 ms
-/// for the piped stderr drain thread, which can trail the child's exit:
-/// without the wait, a crash that wrote a panic message could settle as
-/// "No Stderr Output".
-async fn drained_stderr_snippet(tail: &parking_lot::Mutex<VecDeque<u8>>) -> String {
-    for _ in 0..10 {
-        if !tail.lock().is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    stderr_snippet(tail)
 }
 
 /// Tears the session down exactly once; every later call returns the
