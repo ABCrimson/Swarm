@@ -79,12 +79,13 @@
 //! [`AgentSession::cancel`] sends the `interrupt` control request; the
 //! CLI aborts the turn and writes its `result` (`terminal_reason:
 //! "aborted_streaming"`), which settles the turn as "Turn Cancelled",
-//! and the session stays usable. Only when no receipt arrives within
-//! `INTERRUPT_GRACE` is the process killed. Teardown runs exactly once,
-//! in its own task: an idle session closes stdin and lets the CLI exit
-//! (it saves the session's totals on the way out), a busy one is killed,
-//! and a turn still in flight gets a synthesized settlement (Condition
-//! B, [`AgentSession::shutdown`]).
+//! and the session stays usable. Only when the CLI does not accept the
+//! interrupt within `INTERRUPT_ACK_TIMEOUT`, or writes no receipt within
+//! `INTERRUPT_GRACE` after accepting it, is the process killed. Teardown
+//! runs exactly once, in its own task: an idle session closes stdin and
+//! lets the CLI exit (it saves the session's totals on the way out), a
+//! busy one is killed, and a turn still in flight gets a synthesized
+//! settlement (Condition B, [`AgentSession::shutdown`]).
 
 mod wire;
 
@@ -224,7 +225,7 @@ const SESSION_CLOSED: &str = "Claude Code Session Is Shut Down";
 /// mode (`"acceptEdits"`, `"dontAsk"`) and, above all,
 /// `"bypassPermissions"`. No variant maps to `bypassPermissions`, so the
 /// flag value is unconstructible by this adapter (see
-/// `tests::bypass_permissions_is_unconstructible_across_every_trust_tier`).
+/// `tests::bypass_permissions_is_unconstructible`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaudeCodeTrustTier {
