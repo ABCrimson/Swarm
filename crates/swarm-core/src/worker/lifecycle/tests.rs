@@ -367,6 +367,40 @@ fn test_worker_input_writes_then_emits_stamped_event() {
     assert_eq!(p.preview.as_deref(), Some("pnpm build"));
 }
 
+/// A writer whose PTY is gone: every write fails.
+struct FailingWriter;
+
+impl Write for FailingWriter {
+    fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+        Err(io::ErrorKind::BrokenPipe.into())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// `worker_input` is emitted only after a successful write.
+#[test]
+fn test_worker_input_failed_write_emits_nothing() {
+    let registry = WorkerRegistry::new();
+    let id = registry
+        .register(make_handle_with_writer(WorkerState::Running, FailingWriter))
+        .unwrap();
+    let (sink, rx) = test_sink();
+    let err = do_worker_input(
+        &sink,
+        &registry,
+        id,
+        b"ls
+",
+        InputSource::Tool,
+        Provenance::default(),
+    )
+    .unwrap_err();
+    assert_matches!(err, AppError::Ipc(_));
+    assert!(rx.try_recv().is_err(), "a failed write records nothing");
+}
+
 /// Terminal input never carries a preview: human keystrokes are
 /// recorded as a byte count only.
 #[test]
