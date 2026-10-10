@@ -232,6 +232,12 @@ describe("emptyRecordMessage", () => {
 // ── stripUnknownSeqCitations (the honesty gate) ──────────────────────
 
 describe("stripUnknownSeqCitations", () => {
+  it("strips a long multi-seq citation", () => {
+    expect(
+      stripUnknownSeqCitations("a [seq 101, 102, 103, 104, 105, 106, 107] b", makeContext()),
+    ).toBe("a b");
+  });
+
   it("keeps a citation whose seq falls within (seqFrom, seqTo]", () => {
     const context = makeContext({ seqFrom: 9, seqTo: 14 });
     const prose = "The Write call [seq 11] updated the file.";

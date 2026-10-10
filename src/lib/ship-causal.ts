@@ -3,7 +3,7 @@
  * Record" section (`renderCausalRecordSection`) the model never writes,
  * plus an OPTIONAL AI-generated "What Changed / Why" prose section
  * (`generateCausalProse`) that may cite `[seq N]` — a citation survives
- * only as exact `[seq N]` for a tool-call seq listed in the Turns section;
+ * only as a single-number `[seq N]` (keyword in any case) for a tool-call seq listed in the Turns section;
  * every other `[seq ...]` is stripped before render
  * (`stripUnknownSeqCitations`). The model never writes the Causal Record, so
  * its provenance claims are machine-generated, and `escapeCell` renders the
@@ -149,14 +149,14 @@ export function renderCausalRecordSection(context: ShipContext, diffStat: DiffSt
 
 /**
  * Any `[seq ...]` form — `[seq 9999 ]`, `[seq: 9999]`, `[seq 1, 2]` — with
- * a bounded body and at most one plain space on each side, never a newline
- * or tab, so removing a citation can never join two lines or eat a list
+ * a body that holds no bracket or newline, with at most one plain space
+ * on each side (never a newline or tab), so removing a citation can never join two lines or eat a list
  * item's indentation.
  */
-const SEQ_CITATION_RE = /( ?)\[[ \t]*seq\b([^\]\n]{0,32})\]( ?)/gi;
+const SEQ_CITATION_RE = /( ?)\[[ \t]*seq\b([^[\]\n]*)\]( ?)/gi;
 
 /**
- * Strips every `[seq ...]` citation in `prose` except an exact `[seq N]`
+ * Strips every `[seq ...]` citation in `prose` except a single-number `[seq N]` (keyword in any case)
  * whose `N` is the seq of a tool call listed in `context`'s turns — the
  * same seqs `buildCausalPromptInput` shows the model. That is the honesty
  * gate between whatever the model wrote and what actually renders. A seq
@@ -293,8 +293,7 @@ export async function generateCausalProse(
  * this is specifically the `ship_compare_url` `body` (see `useShip.ts`).
  *
  * **Deterministic-first is a deliberate ordering, not
- * cosmetic.** `stripUnknownSeqCitations` removes an out-of-range `[seq
- * N]` citation, but nothing stops a model from writing its OWN `##
+ * cosmetic.** `stripUnknownSeqCitations` removes every `[seq ...]` citation that is not a listed tool call, but nothing stops a model from writing its OWN `##
  * Causal Record` heading (plus a fabricated table) inside its prose —
  * which, if the prose rendered first, would appear ABOVE the real
  * section and read as the authoritative one to anyone skimming the PR
