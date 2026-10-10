@@ -113,6 +113,8 @@ describe("HistorySearch", () => {
 
     await user.click(screen.getByRole("button", { name: "Clear Dates" }));
     expect(screen.queryByRole("region", { name: "Search Results" })).not.toBeInTheDocument();
+    // The button unmounts; focus moves to From instead of dropping to <body>.
+    expect(screen.getByLabelText("From")).toHaveFocus();
   });
 
   it("ignores a bound Temporal cannot read, such as a five-digit year", () => {
