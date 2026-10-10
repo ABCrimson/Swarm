@@ -1,7 +1,8 @@
 // ── Worker spawn: process options vs agent metadata split ───
 //
 // spawnWorkerFromSpec is the one place a full WorkerSpawnSpec gets
-// split: process options (name/shell/cwd/env) go to Rust via
+// split: process options (name/shell/cwd/env/repoRoot/isolation) go to
+// Rust via
 // spawnWorker; agent metadata (role/model/systemPrompt) is stored
 // client-side in useWorkerAgentStore, keyed by the new worker id, and
 // must never reach the IPC payload. This proves both halves of that
