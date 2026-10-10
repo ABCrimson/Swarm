@@ -253,7 +253,9 @@ fn spawn_worker_threads(
 }
 
 /// Records a shell that exited on its own: the worker moves to
-/// [`WorkerState::Error`] and a `worker_state` event announces it.
+/// [`WorkerState::Error`] and a `worker_state` event announces it, sent
+/// while the registry entry is still locked so the event order matches
+/// the mutation order.
 /// Nothing happens for a worker that is gone (the kill path reaps its
 /// shell itself) or already marked.
 fn on_shell_exit(
@@ -262,19 +264,19 @@ fn on_shell_exit(
     worker_id: Uuid,
     status: &ExitStatus,
 ) {
-    if !registry.mark_exited(&worker_id) {
-        return;
-    }
-    tracing::info!(
-        %worker_id,
-        exit_code = status.exit_code(),
-        signal = status.signal(),
-        "worker shell exited on its own"
-    );
-    sink.emit(SwarmEvent::WorkerState(WorkerStatePayload {
-        worker_id,
-        state: WorkerState::Error,
-    }));
+    let announce = || {
+        tracing::info!(
+            %worker_id,
+            exit_code = status.exit_code(),
+            signal = status.signal(),
+            "worker shell exited on its own"
+        );
+        sink.emit(SwarmEvent::WorkerState(WorkerStatePayload {
+            worker_id,
+            state: WorkerState::Error,
+        }));
+    };
+    registry.mark_exited(&worker_id, announce);
 }
 
 /// Kills a worker's shell unless it has already exited, then reaps it.
@@ -282,7 +284,8 @@ fn on_shell_exit(
 /// Checks with `try_wait` first: once a shell has been reaped its pid
 /// can be reused, and `portable-pty`'s Unix `kill` signals the pid
 /// directly. Failures are logged; the worker is being torn down either
-/// way.
+/// way. A `kill` error is advisory (see the comment at the call): a
+/// shell that `try_wait` confirms is gone is not a failure.
 fn reap(child: &mut dyn Child, worker_id: Uuid) {
     match child.try_wait() {
         Ok(Some(status)) => {
@@ -295,7 +298,19 @@ fn reap(child: &mut dyn Child, worker_id: Uuid) {
         }
     }
     if let Err(e) = child.kill() {
-        tracing::warn!(%worker_id, error = %e, "failed to kill the worker's shell");
+        // `portable-pty` 0.9.0's Windows `kill()` can report an error for
+        // a shell that is already going away (the fix, wezterm#7709, is
+        // unreleased), so the error is advisory: `try_wait` is the
+        // authority on whether the shell is really gone.
+        match child.try_wait() {
+            Ok(Some(status)) => tracing::debug!(
+                %worker_id, error = %e, ?status,
+                "kill reported an error but the worker's shell had exited"
+            ),
+            Ok(None) | Err(_) => {
+                tracing::warn!(%worker_id, error = %e, "failed to kill the worker's shell");
+            }
+        }
     }
     match child.wait() {
         Ok(status) => tracing::debug!(%worker_id, ?status, "worker shell reaped"),
@@ -448,8 +463,9 @@ pub fn do_spawn_worker(
 ///
 /// State-only on every platform (see [`WorkerState::Paused`]): no signal
 /// reaches the process. The check and the write are one atomic
-/// [`WorkerRegistry::update_state_if`], so a racing resume can never
-/// observe a stale state.
+/// [`WorkerRegistry::update_state_if_then`], so a racing resume can
+/// never observe a stale state, and the event is sent under the same
+/// lock.
 ///
 /// # Errors
 ///
@@ -462,22 +478,21 @@ pub fn do_pause_worker(
     id: Uuid,
     provenance: Provenance,
 ) -> Result<(), AppError> {
-    registry.update_state_if(&id, WorkerState::Running, WorkerState::Paused)?;
-    sink.emit_with(
-        SwarmEvent::WorkerState(WorkerStatePayload {
-            worker_id: id,
-            state: WorkerState::Paused,
-        }),
+    set_state(
+        sink,
+        registry,
+        id,
+        (WorkerState::Running, WorkerState::Paused),
         provenance,
-    );
-    Ok(())
+    )
 }
 
 /// Resumes a paused worker: [`WorkerState::Paused`] to
 /// [`WorkerState::Running`], then a `worker_state` event.
 ///
 /// The check and the write are one atomic
-/// [`WorkerRegistry::update_state_if`].
+/// [`WorkerRegistry::update_state_if_then`], with the event sent under
+/// the same lock.
 ///
 /// # Errors
 ///
@@ -490,15 +505,34 @@ pub fn do_resume_worker(
     id: Uuid,
     provenance: Provenance,
 ) -> Result<(), AppError> {
-    registry.update_state_if(&id, WorkerState::Paused, WorkerState::Running)?;
-    sink.emit_with(
-        SwarmEvent::WorkerState(WorkerStatePayload {
-            worker_id: id,
-            state: WorkerState::Running,
-        }),
+    set_state(
+        sink,
+        registry,
+        id,
+        (WorkerState::Paused, WorkerState::Running),
         provenance,
-    );
-    Ok(())
+    )
+}
+
+/// Moves a worker from `from` to `to` and sends the `worker_state`
+/// event under the registry entry lock, so a racing transition (a shell
+/// exit, a resume) cannot reorder the events relative to the mutations.
+fn set_state(
+    sink: &EventSink,
+    registry: &WorkerRegistry,
+    id: Uuid,
+    (from, to): (WorkerState, WorkerState),
+    provenance: Provenance,
+) -> Result<(), AppError> {
+    registry.update_state_if_then(&id, from, to, || {
+        sink.emit_with(
+            SwarmEvent::WorkerState(WorkerStatePayload {
+                worker_id: id,
+                state: to,
+            }),
+            provenance,
+        );
+    })
 }
 
 /// Resizes a worker's terminal to `rows` × `cols` character cells.
@@ -972,6 +1006,44 @@ mod tests {
                 ..
             })
         );
+    }
+
+    /// Emitting under the registry entry lock keeps event order equal to
+    /// mutation order: whichever of a pause and a shell exit mutates
+    /// last also emits last, so the final `worker_state` event always
+    /// names the worker's final state.
+    #[test]
+    fn test_pause_racing_shell_exit_emits_in_mutation_order() {
+        let status = ExitStatus::with_exit_code(0);
+        for _ in 0..500 {
+            let registry = WorkerRegistry::new();
+            let id = registry
+                .spawn_worker(make_handle(WorkerState::Running))
+                .unwrap();
+            let (sink, rx) = test_sink();
+            let barrier = std::sync::Barrier::new(2);
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    barrier.wait();
+                    let _ = do_pause_worker(&sink, &registry, id, Provenance::default());
+                });
+                s.spawn(|| {
+                    barrier.wait();
+                    on_shell_exit(&sink, &registry, id, &status);
+                });
+            });
+
+            let last = rx
+                .try_iter()
+                .filter_map(|m| match m.event {
+                    SwarmEvent::WorkerState(p) => Some(p.state),
+                    _ => None,
+                })
+                .last()
+                .expect("the exit always announces");
+            assert_eq!(last, registry.get_worker(&id).unwrap().state);
+            assert_eq!(last, WorkerState::Error, "an exit is never overwritten");
+        }
     }
 
     #[test]

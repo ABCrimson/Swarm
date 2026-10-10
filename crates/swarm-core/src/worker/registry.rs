@@ -363,6 +363,30 @@ impl WorkerRegistry {
         expected: WorkerState,
         new_state: WorkerState,
     ) -> Result<(), AppError> {
+        self.update_state_if_then(id, expected, new_state, || {})
+    }
+
+    /// [`Self::update_state_if`], additionally running `announce` while
+    /// the shard write lock is still held, once the transition has been
+    /// written (and not at all when it is refused).
+    ///
+    /// Announcing under the lock makes the order events reach the sink
+    /// match the order the state changed: a racing pause and shell exit
+    /// can never emit `worker_state` in the opposite order from the one
+    /// they mutated the state in. `announce` must therefore be cheap
+    /// and non-blocking (an [`crate::events::EventSink`] send is), and
+    /// must not call back into this registry for the same worker.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::update_state_if`].
+    pub fn update_state_if_then(
+        &self,
+        id: &WorkerId,
+        expected: WorkerState,
+        new_state: WorkerState,
+        announce: impl FnOnce(),
+    ) -> Result<(), AppError> {
         let mut entry = self.workers.get_mut(id).ok_or_else(|| not_found(id))?;
         if entry.state != expected {
             return Err(AppError::Ipc(format!(
@@ -372,19 +396,26 @@ impl WorkerRegistry {
         }
         entry.state = new_state;
         tracing::debug!(worker_id = %id, %new_state, "worker state updated");
+        announce();
         Ok(())
     }
 
     /// Records that a worker's shell exited on its own: moves it to
-    /// [`WorkerState::Error`] from any other state.
+    /// [`WorkerState::Error`] from any other state, running `announce`
+    /// under the shard write lock when this call made the transition
+    /// (see [`Self::update_state_if_then`] for why, and for what
+    /// `announce` may do).
     ///
     /// Returns `true` if this call made the transition, `false` if the
     /// worker is gone (it was killed, which reaps the shell itself) or
     /// already marked.
-    pub fn mark_exited(&self, id: &WorkerId) -> bool {
+    pub fn mark_exited(&self, id: &WorkerId, announce: impl FnOnce()) -> bool {
         self.workers.get_mut(id).is_some_and(|mut entry| {
             let live = entry.state != WorkerState::Error;
             entry.state = WorkerState::Error;
+            if live {
+                announce();
+            }
             live
         })
     }
@@ -615,10 +646,19 @@ mod tests {
         paused.state = WorkerState::Paused;
         let id = reg.spawn_worker(paused).unwrap();
 
-        assert!(reg.mark_exited(&id), "a paused worker's exit is recorded");
+        let announced = std::cell::Cell::new(0);
+        let announce = || announced.set(announced.get() + 1);
+        assert!(
+            reg.mark_exited(&id, announce),
+            "a paused worker's exit is recorded"
+        );
         assert_eq!(reg.get_worker(&id).unwrap().state, WorkerState::Error);
-        assert!(!reg.mark_exited(&id), "already marked");
-        assert!(!reg.mark_exited(&Uuid::new_v4()), "unknown (killed) worker");
+        assert!(!reg.mark_exited(&id, announce), "already marked");
+        assert!(
+            !reg.mark_exited(&Uuid::new_v4(), announce),
+            "unknown (killed) worker"
+        );
+        assert_eq!(announced.get(), 1, "only the transition announces");
     }
 
     #[test]
