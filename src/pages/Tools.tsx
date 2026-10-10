@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import { ToolBuilder } from "#components/tools/ToolBuilder";
 import { ToolList } from "#components/tools/ToolList";
@@ -21,6 +22,23 @@ export function Tools(): React.ReactElement {
   const saveTool = useCustomToolsStore((s) => s.saveTool);
   const deleteTool = useCustomToolsStore((s) => s.deleteTool);
   const [view, setView] = useState<View>({ mode: "list" });
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // List and builder swap in place, so the activated control unmounts: commit synchronously, then focus the new view.
+  const showBuilder = (tool?: CustomToolDef): void => {
+    flushSync(() => setView({ mode: "build", tool }));
+    contentRef.current?.querySelector<HTMLInputElement>("input")?.focus();
+  };
+  const showList = (toolName: string | undefined): void => {
+    flushSync(() => setView({ mode: "list" }));
+    const content = contentRef.current;
+    if (!content) return;
+    const edit =
+      toolName === undefined
+        ? null
+        : content.querySelector<HTMLElement>(`button[aria-label="Edit ${CSS.escape(toolName)}"]`);
+    (edit ?? content.querySelector<HTMLElement>("button"))?.focus();
+  };
 
   const handleDelete = (tool: CustomToolDef) => {
     deleteTool(tool.id);
@@ -55,7 +73,7 @@ export function Tools(): React.ReactElement {
         </p>
       </div>
 
-      <div style={{ flex: 1, margin: "0 16px 16px", overflow: "hidden" }}>
+      <div ref={contentRef} style={{ flex: 1, margin: "0 16px 16px", overflow: "hidden" }}>
         {view.mode === "build" ? (
           <ToolBuilder
             key={view.tool?.id ?? "new"}
@@ -63,16 +81,16 @@ export function Tools(): React.ReactElement {
             takenNames={takenNamesFor(view.tool)}
             onSave={(tool) => {
               saveTool(tool);
-              setView({ mode: "list" });
+              showList(tool.name);
             }}
-            onCancel={() => setView({ mode: "list" })}
+            onCancel={() => showList(view.tool?.name)}
           />
         ) : (
           <ToolList
             customTools={customTools}
-            onEdit={(tool) => setView({ mode: "build", tool })}
+            onEdit={(tool) => showBuilder(tool)}
             onDelete={handleDelete}
-            onCreateNew={() => setView({ mode: "build" })}
+            onCreateNew={() => showBuilder()}
           />
         )}
       </div>
