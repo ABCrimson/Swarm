@@ -70,7 +70,7 @@ pub struct CommitOutcome {
 
 /// Deduplicated union of path lists, first occurrence first — the
 /// candidate set of [`StagingMode::All`].
-pub(super) fn union_paths(lists: [&[String]; 3]) -> Vec<String> {
+fn union_paths(lists: [&[String]; 3]) -> Vec<String> {
     let mut seen = HashSet::new();
     lists
         .into_iter()
@@ -78,6 +78,24 @@ pub(super) fn union_paths(lists: [&[String]; 3]) -> Vec<String> {
         .filter(|path| seen.insert(path.as_str()))
         .cloned()
         .collect()
+}
+
+/// The paths `mode` hands to the deny list: the union of index,
+/// working-tree and untracked changes for "all", the index alone for
+/// "staged". Shared with `preflight`, so the Ship tab previews exactly
+/// the set `stage_and_commit` acts on.
+pub(super) fn staging_candidates(
+    classified: &status::Classified,
+    mode: StagingMode,
+) -> Vec<String> {
+    match mode {
+        StagingMode::All => union_paths([
+            &classified.staged,
+            &classified.unstaged,
+            &classified.untracked,
+        ]),
+        StagingMode::Staged => classified.staged.clone(),
+    }
 }
 
 /// Argv for `git add --pathspec-from-file=- --pathspec-file-nul` — the
@@ -236,14 +254,7 @@ pub fn stage_and_commit(
     }
     let classified = before.classify();
     let untracked: HashSet<&str> = classified.untracked.iter().map(String::as_str).collect();
-    let candidates = match request.mode {
-        StagingMode::All => union_paths([
-            &classified.staged,
-            &classified.unstaged,
-            &classified.untracked,
-        ]),
-        StagingMode::Staged => classified.staged.clone(),
-    };
+    let candidates = staging_candidates(&classified, request.mode);
     let (survivors, skipped) = deny::partition(wt, candidates, &untracked);
 
     // DIRECTIVE (B3), in both modes: a denied path already in the index

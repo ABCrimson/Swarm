@@ -1,6 +1,7 @@
-//! Real-git integration tests for the ship chain: every test builds a
-//! disposable repository ([`TempRepo`]), registers a worker on a linked
-//! worktree, and asserts on what actually landed in git.
+//! Tests for the ship chain: its guards and branch resolution, and,
+//! against disposable real repositories ([`TempRepo`]) with a worker on
+//! a linked worktree, the whole chain, asserting on what actually landed
+//! in git.
 
 use std::path::Path;
 use std::time::Duration;
@@ -15,6 +16,17 @@ use crate::worker::handle::{WorkerHandle, WorkerState};
 /// `repo`'s current `HEAD`.
 fn register(registry: &WorkerRegistry, repo: &TempRepo, worktree: &Path, branch: &str) -> WorkerId {
     let base_commit = repo::head_sha(repo.root()).unwrap();
+    register_at(registry, repo, worktree, branch, &base_commit)
+}
+
+/// [`register`] with an explicit recorded base commit.
+fn register_at(
+    registry: &WorkerRegistry,
+    repo: &TempRepo,
+    worktree: &Path,
+    branch: &str,
+    base_commit: &str,
+) -> WorkerId {
     let handle = WorkerHandle {
         id: Uuid::new_v4(),
         state: WorkerState::Running,
@@ -26,7 +38,7 @@ fn register(registry: &WorkerRegistry, repo: &TempRepo, worktree: &Path, branch:
         worktree_path: Some(worktree.display().to_string()),
         repo_root: Some(repo.root().display().to_string()),
         branch: Some(branch.to_owned()),
-        base_commit: Some(base_commit),
+        base_commit: Some(base_commit.to_owned()),
         last_shipped_seq: None,
         last_shipped_commit: None,
     };
@@ -123,6 +135,121 @@ fn test_worktree_info_for_worker_is_a_pure_registry_read() {
     registry.set_last_shipped(&id, 43, "f00d").unwrap();
 }
 
+// ── Guards and branch resolution ─────────────────────────────────────
+
+#[test]
+fn test_is_protected_branch() {
+    assert!(is_protected_branch("main"));
+    assert!(is_protected_branch("master"));
+    assert!(is_protected_branch("develop"));
+    assert!(is_protected_branch("release/1.0"));
+    assert!(!is_protected_branch("swarm/agent-abcd1234"));
+    // The `release/*` glob, not the bare word.
+    assert!(!is_protected_branch("release"));
+}
+
+#[test]
+fn test_literal_pathspecs_payload_shape() {
+    let payload = literal_pathspecs(["a b.txt", "app/[slug]/page.tsx"]);
+    assert_eq!(
+        payload,
+        b":(top,literal)a b.txt\0:(top,literal)app/[slug]/page.tsx\0"
+    );
+    assert!(literal_pathspecs([]).is_empty());
+}
+
+#[test]
+fn test_choose_base_branch_resolution_order() {
+    assert_eq!(
+        choose_base_branch(|| Some("master".to_owned()), || Some("trunk".to_owned())),
+        "master"
+    );
+    assert_eq!(
+        choose_base_branch(|| None, || Some("trunk".to_owned())),
+        "trunk"
+    );
+    assert_eq!(choose_base_branch(|| None, || None), "main");
+}
+
+/// The configured default is only consulted when `origin/HEAD` is
+/// missing — one git query instead of two in the common case.
+#[test]
+fn test_choose_base_branch_is_lazy() {
+    let branch = choose_base_branch(
+        || Some("main".to_owned()),
+        || panic!("the fallback must not run when origin/HEAD resolved"),
+    );
+    assert_eq!(branch, "main");
+}
+
+#[test]
+fn test_resolve_base_branch_uses_origin_head_over_local_checkout() {
+    let repo = TempRepo::new("base-branch-origin");
+    repo.git(&["branch", "-m", "main", "master"]);
+    repo.add_bare_origin();
+    repo.git(&["remote", "set-head", "origin", "-a"]);
+    // The local checkout moves to another branch; the answer is
+    // still origin's default, never the local HEAD.
+    repo.git(&["checkout", "-b", "some-feature-branch"]);
+
+    assert_eq!(resolve_base_branch(repo.root()), "master");
+}
+
+#[test]
+fn test_resolve_base_branch_falls_back_to_configured_default_branch() {
+    let repo = TempRepo::new("base-branch-config");
+    // No remote, so no origin/HEAD; a value distinct from both the
+    // current branch and the "main" literal proves the config read.
+    repo.git(&["config", "init.defaultBranch", "trunk"]);
+    assert_eq!(resolve_base_branch(repo.root()), "trunk");
+}
+
+#[test]
+fn test_current_branch_detects_detached_head() {
+    let repo = TempRepo::new("detached");
+    assert_eq!(
+        current_branch(repo.root()).unwrap().as_deref(),
+        Some("main")
+    );
+    repo.git(&["checkout", "--detach"]);
+    assert_eq!(current_branch(repo.root()).unwrap(), None);
+}
+
+/// A failed read is an error, never "detached" (`Ok(None)`).
+#[test]
+fn test_current_branch_errors_when_git_cannot_read_the_directory() {
+    let repo = TempRepo::new("branch-gone");
+    assert!(current_branch(&repo.base().join("gone")).is_err());
+}
+
+/// Only exit 2 means "no such remote"; any other failure is an error.
+#[test]
+fn test_remote_url_errors_on_a_failed_read_and_is_none_for_a_missing_remote() {
+    let repo = TempRepo::new("remote-url");
+    assert!(remote_url(&repo.base().join("gone"), "origin").is_err());
+    assert_eq!(remote_url(repo.root(), "origin").unwrap(), None);
+}
+
+#[test]
+fn test_guard_accepts_a_linked_worktree_and_refuses_the_primary_checkout() {
+    let repo = TempRepo::new("guard");
+    let worktree = repo.add_worktree("wt", "swarm/guard-abcd1234");
+    assert!(guard_not_primary_checkout(&worktree).is_ok());
+
+    let err = guard_not_primary_checkout(repo.root()).unwrap_err();
+    assert_eq!(err.kind, ShipErrorKind::PrimaryCheckout);
+    assert_eq!(err.message, PRIMARY_CHECKOUT);
+
+    // A subdirectory of a worktree is not the worktree.
+    std::fs::create_dir_all(worktree.join("sub")).unwrap();
+    let err = guard_not_primary_checkout(&worktree.join("sub")).unwrap_err();
+    assert_eq!(err.message, NOT_A_WORKTREE);
+
+    // Nor is a path that no longer exists.
+    let err = guard_not_primary_checkout(&repo.base().join("gone")).unwrap_err();
+    assert_eq!(err.kind, ShipErrorKind::PrimaryCheckout);
+}
+
 // ── The primary-checkout guard ───────────────────────────────────────
 
 /// DIRECTIVE: the guard fires before any mutation. A worker mis-pointed
@@ -215,8 +342,8 @@ fn test_secret_and_size_guard_neither_file_is_committed() {
     assert_eq!(committed_paths(&worktree, &outcome.sha), ["safe.txt"]);
 }
 
-/// CONFIRMED bug (security): "all" mode committed a pre-staged `.env`
-/// while reporting it skipped. It must be unstaged and left out.
+/// Security: "all" mode unstages a pre-staged `.env`, reports it
+/// skipped and leaves it out of the commit (still on disk, untracked).
 #[test]
 fn test_all_mode_unstages_a_pre_staged_secret() {
     let (_repo, worktree, registry, id) = fixture("all-prestaged", "swarm/prestaged-abcd1234");
@@ -238,8 +365,8 @@ fn test_all_mode_unstages_a_pre_staged_secret() {
     assert_eq!(after.untracked, [".env"], "unstaged, and still on disk");
 }
 
-/// CONFIRMED bug (security): with *only* a pre-staged secret, the old
-/// code committed a commit containing nothing but the secret.
+/// Security: with *only* a pre-staged secret, "all" mode unstages it and
+/// fails with `NothingToCommit`, so no commit holding just the secret exists.
 #[test]
 fn test_all_mode_with_only_a_pre_staged_secret_commits_nothing() {
     let (repo, worktree, registry, id) = fixture("all-only-secret", "swarm/only-secret-abcd1234");
@@ -286,8 +413,9 @@ fn test_staged_mode_unstages_and_omits_denied_secret_from_the_commit() {
     assert_eq!(after.untracked, [".env"]);
 }
 
-/// CONFIRMED bug: porcelain v1 without `-z` C-quoted these names, so
-/// `git add` failed on them and `.env copy` slipped past the deny list.
+/// Names with spaces and non-ASCII come verbatim from `status
+/// --porcelain=v2 -z` (never C-quoted), so they stage cleanly and
+/// `.env copy` still hits the deny list.
 #[test]
 fn test_names_with_spaces_and_non_ascii_ship_and_are_deny_checked() {
     let (_repo, worktree, registry, id) = fixture("quoted-names", "swarm/quoted-abcd1234");
@@ -313,9 +441,9 @@ fn test_names_with_spaces_and_non_ascii_ship_and_are_deny_checked() {
     );
 }
 
-/// CONFIRMED bug: stdout was truncated at 8 KB before being parsed, so
-/// files past the cut were never seen — neither staged nor deny-checked.
-/// ~400 paths make the status output far larger than that.
+/// Status output is parsed in full however large it is: ~400 paths push
+/// it far past 8 KB, every file still ships, and the path that sorts
+/// last is still deny-checked.
 #[test]
 fn test_status_output_over_8_kb_ships_every_file_and_denies_the_last() {
     let (_repo, worktree, registry, id) = fixture("large-status", "swarm/large-abcd1234");
@@ -543,9 +671,8 @@ fn test_co_authored_by_with_embedded_newline_is_dropped_not_injected() {
 
 // ── Lock contention ──────────────────────────────────────────────────
 
-/// CONFIRMED bug: a mutation failing on `index.lock` came back as
-/// `Ok(non-success)`, so `RepoLocks` never retried. It is now an `Err`
-/// — retried once — and a lock released within the backoff is survived.
+/// A mutation failing on `index.lock` is an `Err`, so `RepoLocks`
+/// retries it once, and a lock released within the backoff is survived.
 #[test]
 fn test_index_lock_contention_is_retried() {
     let repo = TempRepo::new("contention");
@@ -647,7 +774,9 @@ fn test_preflight_can_ship_true_for_a_healthy_isolated_worktree() {
 #[test]
 fn test_preview_diff_stat_matches_the_commit() {
     let (_repo, worktree, registry, id) = fixture("preview-vs-commit", "swarm/stat-abcd1234");
-    write_file(&worktree, "README.md", "rewritten\nentirely\n");
+    // Keeps over half of README's bytes so git would detect the rename;
+    // only `--no-renames` makes both sides count it as delete + add.
+    write_file(&worktree, "README.md", "hello\nmore\n");
     write_file(&worktree, "added.txt", "one\ntwo\nthree");
     write_file(&worktree, ".env", "SECRET=1\n");
     git_in(&worktree, &["mv", "README.md", "RENAMED.md"]);
@@ -667,6 +796,14 @@ fn test_preview_diff_stat_matches_the_commit() {
             files_changed: outcome.files_changed,
             insertions: outcome.insertions,
             deletions: outcome.deletions,
+        }
+    );
+    assert_eq!(
+        preview.diff_stat,
+        DiffStat {
+            files_changed: 3,
+            insertions: 5,
+            deletions: 1
         }
     );
     assert_eq!(skipped_paths(&preview.skipped), [".env"]);
@@ -717,6 +854,24 @@ fn test_preflight_computes_ahead_from_base_commit_when_no_upstream() {
             .iter()
             .any(|b| b.contains("Nothing To Ship"))
     );
+}
+
+/// A base commit that no longer exists is an error, never "0 ahead".
+#[test]
+fn test_preflight_errors_when_the_base_commit_is_gone() {
+    let repo = TempRepo::new("base-gone");
+    let worktree = repo.add_worktree("wt", "swarm/gone-abcd1234");
+    let registry = WorkerRegistry::new();
+    let id = register_at(
+        &registry,
+        &repo,
+        &worktree,
+        "swarm/gone-abcd1234",
+        "0000000000000000000000000000000000000001",
+    );
+
+    let err = preflight(&registry, id, StagingMode::All).unwrap_err();
+    assert_eq!(err.kind, ShipErrorKind::Unknown);
 }
 
 /// After a push the upstream's ahead/behind comes from the same status
@@ -795,6 +950,57 @@ fn test_push_hard_fails_on_detached_head() {
 
     let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
     assert_eq!(err.kind, ShipErrorKind::InvalidBranch);
+}
+
+#[test]
+fn test_push_refuses_protected_branch() {
+    let repo = TempRepo::new("push-protected");
+    let bare = repo.add_bare_origin();
+    let wt = repo.add_worktree("wt", "swarm/prot-abcd1234");
+    let registry = WorkerRegistry::new();
+    let id = register(&registry, &repo, &wt, "swarm/prot-abcd1234");
+    git_in(&wt, &["switch", "-c", "release/x"]);
+    let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
+    assert_eq!(err.kind, ShipErrorKind::InvalidBranch);
+    assert!(repo::rev_parse(&bare, "release/x").is_err());
+}
+
+#[test]
+fn test_push_refuses_the_base_branch() {
+    let repo = TempRepo::new("push-base");
+    let bare = repo.add_bare_origin();
+    repo.git(&["push", "origin", "main:trunk"]);
+    repo.git(&["remote", "set-head", "origin", "trunk"]);
+    let before = repo::rev_parse(&bare, "trunk").unwrap();
+    let wt = repo.add_worktree("wt", "swarm/base-abcd1234");
+    let registry = WorkerRegistry::new();
+    let id = register(&registry, &repo, &wt, "swarm/base-abcd1234");
+    git_in(&wt, &["switch", "-c", "trunk"]);
+    write_file(&wt, "x.txt", "x");
+    git_in(&wt, &["add", "x.txt"]);
+    git_in(&wt, &["commit", "-m", "feat: x"]);
+
+    let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
+    assert_eq!(err.kind, ShipErrorKind::InvalidBranch);
+    assert_eq!(repo::rev_parse(&bare, "trunk").unwrap(), before);
+}
+
+/// A branch named `+main` is a literal ref, not a forced push to `main`.
+#[test]
+fn test_push_of_a_force_marker_branch_never_overwrites_origin_main() {
+    let repo = TempRepo::new("push-plus");
+    let bare = repo.add_bare_origin();
+    repo.git(&["push", "origin", "main"]);
+    let original = repo::rev_parse(&bare, "main").unwrap();
+    repo.git(&["commit", "--amend", "--allow-empty", "-m", "rewritten"]);
+    let wt = repo.add_worktree("wt", "swarm/plus-abcd1234");
+    let registry = WorkerRegistry::new();
+    let id = register(&registry, &repo, &wt, "swarm/plus-abcd1234");
+    git_in(&wt, &["switch", "-c", "+main", "main"]);
+
+    let outcome = push(&registry, &RepoLocks::new(), id).unwrap();
+    assert_eq!(outcome.pushed_ref, "origin/+main");
+    assert_eq!(repo::rev_parse(&bare, "main").unwrap(), original);
 }
 
 #[test]

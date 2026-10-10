@@ -6,8 +6,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    RepoLocks, ShipError, ShipErrorKind, ShipRemedy, guard_not_primary_checkout, mutate,
-    remote_url, resolve_base_branch, resolve_live_branch, worktree_info_for_worker,
+    RepoLocks, ShipError, ShipErrorKind, ShipRemedy, guard_not_primary_checkout,
+    is_protected_branch, mutate, remote_url, resolve_base_branch, resolve_live_branch,
+    worktree_info_for_worker,
 };
 use crate::git::cli::PUSH_TIMEOUT;
 use crate::git::remote;
@@ -26,11 +27,28 @@ pub struct PushOutcome {
     pub sha: String,
 }
 
-/// Argv for `git push --set-upstream origin <branch>` — fixed shape,
-/// structurally incapable of carrying `--force`/`-f`/`--force-with-lease`
-/// or `--no-verify`: pinned by `test_push_args_never_contains_force`.
+/// Argv for `git push --set-upstream --end-of-options origin
+/// refs/heads/<branch>:refs/heads/<branch>` — fixed shape, with no
+/// `--force`/`-f`/`--force-with-lease` or `--no-verify` token.
+/// `--end-of-options` keeps an option-shaped branch (`--all`, `--force`) an
+/// operand, and the fully qualified refspec makes a leading `+` (git's
+/// force marker, honoured only at the start of a refspec) part of the
+/// literal ref name, so a branch named `+main` cannot force-update `main`.
+/// The fixed shape is pinned by `test_push_args_never_contains_force`, the
+/// option-shaped branch by `test_push_args_keep_option_shaped_branch_a_refspec`,
+/// the `+` branch by `test_push_args_force_marker_branch_is_a_literal_ref`.
 fn push_args(worktree: &Path, branch: &str) -> Vec<String> {
-    args_in(worktree, &["push", "--set-upstream", "origin", branch])
+    let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
+    args_in(
+        worktree,
+        &[
+            "push",
+            "--set-upstream",
+            "--end-of-options",
+            "origin",
+            &refspec,
+        ],
+    )
 }
 
 /// stderr phrases of a credential failure, lowercase. Specific phrases
@@ -106,11 +124,13 @@ fn classify_push_error(raw_stderr: &str, surfaced_stderr: &str) -> ShipError {
 /// * [`ShipErrorKind::WorkerNotFound`] / [`ShipErrorKind::NoWorktree`] —
 ///   as [`super::worktree_info_for_worker`].
 /// * [`ShipErrorKind::PrimaryCheckout`] — the guard fired.
-/// * [`ShipErrorKind::InvalidBranch`] — detached `HEAD`.
+/// * [`ShipErrorKind::InvalidBranch`] — detached `HEAD`, a protected
+///   branch, or the base branch.
 /// * [`ShipErrorKind::NoRemote`] — no `origin` remote configured.
 /// * [`ShipErrorKind::PushRejected`] / [`ShipErrorKind::AuthExpired`] /
 ///   [`ShipErrorKind::Timeout`] / [`ShipErrorKind::Unknown`] — the push
-///   itself failed.
+///   itself failed, or reading the live branch or the `origin` remote
+///   did.
 pub fn push(
     registry: &WorkerRegistry,
     repo_locks: &RepoLocks,
@@ -121,7 +141,19 @@ pub fn push(
 
     guard_not_primary_checkout(wt)?;
     let branch = resolve_live_branch(wt)?;
-    if remote_url(wt, "origin").is_none() {
+    if is_protected_branch(&branch) {
+        return Err(ShipError::new(
+            ShipErrorKind::InvalidBranch,
+            format!("Branch `{branch}` Is Protected — Ship Refuses To Push Directly To It."),
+        ));
+    }
+    if branch == resolve_base_branch(&info.repo_root) {
+        return Err(ShipError::new(
+            ShipErrorKind::InvalidBranch,
+            format!("Branch `{branch}` Is The Base Branch — Ship Refuses To Push Directly To It."),
+        ));
+    }
+    if remote_url(wt, "origin")?.is_none() {
         return Err(ShipError::new(
             ShipErrorKind::NoRemote,
             "No `origin` Remote Configured.",
@@ -163,6 +195,8 @@ pub fn push(
 /// * [`ShipErrorKind::NoRemote`] — no `origin` remote configured.
 /// * [`ShipErrorKind::NonGitHubHost`] — the remote's host isn't one a
 ///   GitHub-style compare URL applies to.
+/// * [`ShipErrorKind::Timeout`] / [`ShipErrorKind::Unknown`] — reading the
+///   live branch or the `origin` remote failed.
 pub fn compare_url(
     registry: &WorkerRegistry,
     id: WorkerId,
@@ -173,7 +207,7 @@ pub fn compare_url(
     let wt = info.worktree_path.as_path();
     let branch = resolve_live_branch(wt)?;
 
-    let raw_remote = remote_url(wt, "origin")
+    let raw_remote = remote_url(wt, "origin")?
         .ok_or_else(|| ShipError::new(ShipErrorKind::NoRemote, "No `origin` Remote Configured."))?;
     let parsed = remote::parse(&raw_remote).ok_or_else(|| {
         ShipError::new(
@@ -216,7 +250,37 @@ mod tests {
         );
         assert_eq!(
             args[4..],
-            ["push", "--set-upstream", "origin", "swarm/agent-abcd1234"]
+            [
+                "push",
+                "--set-upstream",
+                "--end-of-options",
+                "origin",
+                "refs/heads/swarm/agent-abcd1234:refs/heads/swarm/agent-abcd1234"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_push_args_keep_option_shaped_branch_a_refspec() {
+        let args = push_args(Path::new("/tmp/wt"), "--force");
+        assert_eq!(
+            args[4..],
+            [
+                "push",
+                "--set-upstream",
+                "--end-of-options",
+                "origin",
+                "refs/heads/--force:refs/heads/--force"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_push_args_force_marker_branch_is_a_literal_ref() {
+        let args = push_args(Path::new("/tmp/wt"), "+main");
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("refs/heads/+main:refs/heads/+main")
         );
     }
 

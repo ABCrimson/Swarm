@@ -221,13 +221,24 @@ fn guard_not_primary_checkout(worktree: &Path) -> Result<(), ShipError> {
 }
 
 /// The branch checked out in `worktree` right now, or `None` on a
-/// detached `HEAD` (`-q` makes that a silent non-zero exit).
+/// detached `HEAD` (exit 1 under `-q`). Any other failed exit (128 for a
+/// missing directory, a non-repository or a broken config) is an error,
+/// never "detached".
 fn current_branch(worktree: &Path) -> Result<Option<String>, AppError> {
     let output = git(
         worktree,
         &["symbolic-ref", "-q", "--short", "HEAD"],
         READ_TIMEOUT,
     )?;
+    if output.status.code() == Some(1) {
+        return Ok(None);
+    }
+    if !output.success() {
+        return Err(AppError::Git(format!(
+            "`git symbolic-ref HEAD` failed: {}",
+            output.stderr.trim()
+        )));
+    }
     Ok(single_value(&output))
 }
 
@@ -254,12 +265,20 @@ fn is_protected_branch(branch: &str) -> bool {
 }
 
 /// `git remote get-url <remote_name>`, raw (credentials included — the
-/// caller redacts before surfacing it).
-fn remote_url(worktree: &Path, remote_name: &str) -> Option<String> {
-    git(worktree, &["remote", "get-url", remote_name], READ_TIMEOUT)
-        .ok()
-        .as_ref()
-        .and_then(single_value)
+/// caller redacts). `Ok(None)` only for "no such remote" (exit 2) or
+/// empty output; a timeout or any other failure is an error.
+fn remote_url(worktree: &Path, remote_name: &str) -> Result<Option<String>, AppError> {
+    let output = git(worktree, &["remote", "get-url", remote_name], READ_TIMEOUT)?;
+    if output.status.code() == Some(2) {
+        return Ok(None);
+    }
+    if !output.success() {
+        return Err(AppError::Git(format!(
+            "`git remote get-url {remote_name}` failed: {}",
+            output.stderr.trim()
+        )));
+    }
+    Ok(single_value(&output))
 }
 
 /// The branch a worker's isolation branch is compared against. Only the
@@ -310,108 +329,4 @@ fn configured_default_branch(repo_root: &Path) -> Option<String> {
     )
     .ok()?;
     single_value(&output)
-}
-
-#[cfg(test)]
-mod unit_tests {
-    use super::*;
-    use crate::git::test_support::TempRepo;
-
-    #[test]
-    fn test_is_protected_branch() {
-        assert!(is_protected_branch("main"));
-        assert!(is_protected_branch("master"));
-        assert!(is_protected_branch("develop"));
-        assert!(is_protected_branch("release/1.0"));
-        assert!(!is_protected_branch("swarm/agent-abcd1234"));
-        // The `release/*` glob, not the bare word.
-        assert!(!is_protected_branch("release"));
-    }
-
-    #[test]
-    fn test_literal_pathspecs_payload_shape() {
-        let payload = literal_pathspecs(["a b.txt", "app/[slug]/page.tsx"]);
-        assert_eq!(
-            payload,
-            b":(top,literal)a b.txt\0:(top,literal)app/[slug]/page.tsx\0"
-        );
-        assert!(literal_pathspecs([]).is_empty());
-    }
-
-    #[test]
-    fn test_choose_base_branch_resolution_order() {
-        assert_eq!(
-            choose_base_branch(|| Some("master".to_owned()), || Some("trunk".to_owned())),
-            "master"
-        );
-        assert_eq!(
-            choose_base_branch(|| None, || Some("trunk".to_owned())),
-            "trunk"
-        );
-        assert_eq!(choose_base_branch(|| None, || None), "main");
-    }
-
-    /// The configured default is only consulted when `origin/HEAD` is
-    /// missing — one git query instead of two in the common case.
-    #[test]
-    fn test_choose_base_branch_is_lazy() {
-        let branch = choose_base_branch(
-            || Some("main".to_owned()),
-            || panic!("the fallback must not run when origin/HEAD resolved"),
-        );
-        assert_eq!(branch, "main");
-    }
-
-    #[test]
-    fn test_resolve_base_branch_uses_origin_head_over_local_checkout() {
-        let repo = TempRepo::new("base-branch-origin");
-        repo.git(&["branch", "-m", "main", "master"]);
-        repo.add_bare_origin();
-        repo.git(&["remote", "set-head", "origin", "-a"]);
-        // The local checkout moves to another branch; the answer is
-        // still origin's default, never the local HEAD.
-        repo.git(&["checkout", "-b", "some-feature-branch"]);
-
-        assert_eq!(resolve_base_branch(repo.root()), "master");
-    }
-
-    #[test]
-    fn test_resolve_base_branch_falls_back_to_configured_default_branch() {
-        let repo = TempRepo::new("base-branch-config");
-        // No remote, so no origin/HEAD; a value distinct from both the
-        // current branch and the "main" literal proves the config read.
-        repo.git(&["config", "init.defaultBranch", "trunk"]);
-        assert_eq!(resolve_base_branch(repo.root()), "trunk");
-    }
-
-    #[test]
-    fn test_current_branch_detects_detached_head() {
-        let repo = TempRepo::new("detached");
-        assert_eq!(
-            current_branch(repo.root()).unwrap().as_deref(),
-            Some("main")
-        );
-        repo.git(&["checkout", "--detach"]);
-        assert_eq!(current_branch(repo.root()).unwrap(), None);
-    }
-
-    #[test]
-    fn test_guard_accepts_a_linked_worktree_and_refuses_the_primary_checkout() {
-        let repo = TempRepo::new("guard");
-        let worktree = repo.add_worktree("wt", "swarm/guard-abcd1234");
-        assert!(guard_not_primary_checkout(&worktree).is_ok());
-
-        let err = guard_not_primary_checkout(repo.root()).unwrap_err();
-        assert_eq!(err.kind, ShipErrorKind::PrimaryCheckout);
-        assert_eq!(err.message, PRIMARY_CHECKOUT);
-
-        // A subdirectory of a worktree is not the worktree.
-        std::fs::create_dir_all(worktree.join("sub")).unwrap();
-        let err = guard_not_primary_checkout(&worktree.join("sub")).unwrap_err();
-        assert_eq!(err.message, NOT_A_WORKTREE);
-
-        // Nor is a path that no longer exists.
-        let err = guard_not_primary_checkout(&repo.base().join("gone")).unwrap_err();
-        assert_eq!(err.kind, ShipErrorKind::PrimaryCheckout);
-    }
 }
