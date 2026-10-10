@@ -40,6 +40,12 @@ const labelStyle: CSSProperties = { margin: 0, color: "oklch(0.7 0.04 220)" };
 
 const valueStyle: CSSProperties = { margin: 0 };
 
+const reasonStyle: CSSProperties = {
+  margin: "6px 0 0",
+  fontSize: 12,
+  color: "oklch(0.78 0.1 75)",
+};
+
 const showAllStyle: CSSProperties = { marginLeft: 8 };
 
 const rowStyle: CSSProperties = { border: 0, margin: 0, padding: 0, minWidth: 0 };
@@ -61,15 +67,20 @@ const INVISIBLE_RANGES: ReadonlyArray<readonly [number, number]> = [
 ];
 
 const NAMED_ESCAPES: Readonly<Record<string, string>> = {
+  "\\": "\\\\",
   "\n": "\\n",
   "\r": "\\r",
   "\t": "\\t",
 };
 
 /**
- * Makes a model-controlled string safe to show: newlines, carriage
- * returns and tabs become `\n`, `\r`, `\t`; every other control,
+ * Makes a model-controlled string safe to show, in one pass so an escape
+ * is never escaped again: a backslash becomes `\\`; newline, carriage
+ * return and tab become `\n`, `\r`, `\t`; every other control,
  * bidi-override or zero-width character becomes a visible `\uXXXX`.
+ * Because backslashes are doubled, every escape in the output is
+ * unambiguous: a real newline (`\n`) never looks like the two characters
+ * backslash and n (`\\n`).
  */
 function escapeForDisplay(value: string): string {
   let out = "";
@@ -84,64 +95,105 @@ function escapeForDisplay(value: string): string {
   return out;
 }
 
+/** JSON with object keys sorted at every depth, so equal values print equally. */
+function canonicalJson(value: unknown): string {
+  return (
+    JSON.stringify(value, (_key, inner: unknown) =>
+      typeof inner === "object" && inner !== null && !Array.isArray(inner)
+        ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+        : inner,
+    ) ?? String(value)
+  );
+}
+
 interface ApprovalArg {
+  readonly key: string;
   readonly label: string;
+  /** The raw value: a string as is, anything else as canonical JSON. */
   readonly value: string;
+  /** Whether a long value may be cut behind "Show All". */
+  readonly truncatable: boolean;
 }
 
-function text(value: unknown): string {
-  return typeof value === "string" ? value : String(value ?? "");
+/** `maxLines` becomes `Max Lines`, `workerId` becomes `Worker Id`. */
+function humanize(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(
+      /(^|\s)(\p{L})/gu,
+      (_match, gap: string, letter: string) => gap + letter.toUpperCase(),
+    );
 }
 
-/** The exact arguments of a call, as labelled raw values (escaped at render time). */
+/** Commands and file paths are always shown whole. */
+function neverTruncated(tool: string, key: string): boolean {
+  return /path/i.test(key) || (tool === "run_command" && key === "command");
+}
+
+/**
+ * Every field of the validated input that will execute, in parsed key
+ * order, as raw labelled values (escaped at render time). Per-tool extras
+ * (the byte size of `write_file` content) are added beside the fields,
+ * never in place of them.
+ */
 function approvalArgs(tool: string, input: unknown): ReadonlyArray<ApprovalArg> {
-  const args: Record<string, unknown> =
-    typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
-  switch (tool) {
-    case "write_file": {
-      const content = text(args["content"]);
-      return [
-        { label: "Path", value: text(args["path"]) },
-        { label: "Size", value: `${new TextEncoder().encode(content).length} bytes` },
-        { label: "Content", value: content },
-      ];
+  const entries: ReadonlyArray<readonly [string, unknown]> =
+    typeof input === "object" && input !== null && !Array.isArray(input)
+      ? Object.entries(input).filter(([, value]) => value !== undefined)
+      : input === undefined
+        ? []
+        : [["input", input]];
+  const args: ApprovalArg[] = [];
+  for (const [key, value] of entries) {
+    if (tool === "write_file" && key === "content" && typeof value === "string") {
+      args.push({
+        key: "size",
+        label: "Size",
+        value: `${new TextEncoder().encode(value).length} bytes`,
+        truncatable: false,
+      });
     }
-    case "run_command":
-      return [
-        { label: "Worker", value: text(args["workerId"]) },
-        { label: "Command", value: text(args["command"]) },
-      ];
-    case "read_file":
-      return [
-        { label: "Path", value: text(args["path"]) },
-        ...(args["maxLines"] === undefined
-          ? []
-          : [{ label: "Max Lines", value: text(args["maxLines"]) }]),
-      ];
-    case "spawn_worker":
-      return [{ label: "Name", value: text(args["name"]) }];
-    case "kill_worker":
-      return [{ label: "Worker", value: text(args["workerId"]) }];
-    default:
-      return Object.entries(args).map(([label, value]) => ({ label, value: text(value) }));
+    args.push({
+      key,
+      label: humanize(key),
+      value: typeof value === "string" ? value : canonicalJson(value),
+      truncatable: !neverTruncated(tool, key),
+    });
   }
+  return args;
 }
 
-function ArgValue({ value }: { readonly value: string }): React.ReactElement {
-  const [showAll, setShowAll] = useState(false);
-  const escaped = escapeForDisplay(value);
-  const long = escaped.length > TRUNCATE_AT;
+function isTruncated(arg: ApprovalArg): boolean {
+  return arg.truncatable && arg.value.length > TRUNCATE_AT;
+}
+
+/** Where to cut a raw value: never between the halves of a surrogate pair. */
+function cutPoint(raw: string): number {
+  const last = raw.charCodeAt(TRUNCATE_AT - 1);
+  return last >= 0xd800 && last <= 0xdbff ? TRUNCATE_AT - 1 : TRUNCATE_AT;
+}
+
+function ArgValue({
+  arg,
+  showing,
+  onToggle,
+}: {
+  readonly arg: ApprovalArg;
+  readonly showing: boolean;
+  readonly onToggle: () => void;
+}): React.ReactElement {
+  const long = isTruncated(arg);
+  const cut = long && !showing ? cutPoint(arg.value) : arg.value.length;
+  // Cut the raw value, then escape it, so an escape is never split.
+  const hidden = [...arg.value.slice(cut)].length;
   return (
     <dd style={valueStyle}>
-      {long && !showAll ? `${escaped.slice(0, TRUNCATE_AT)}...` : escaped}
+      {escapeForDisplay(arg.value.slice(0, cut))}
+      {hidden > 0 && ` … ${hidden} more characters`}
       {long && (
-        <Button
-          size="sm"
-          variant="secondary"
-          style={showAllStyle}
-          onClick={() => setShowAll(!showAll)}
-        >
-          {showAll ? "Show Less" : "Show All"}
+        <Button size="sm" variant="secondary" style={showAllStyle} onClick={onToggle}>
+          {showing ? "Show Less" : "Show All"}
         </Button>
       )}
     </dd>
@@ -149,27 +201,53 @@ function ArgValue({ value }: { readonly value: string }): React.ReactElement {
 }
 
 function ApprovalRow({ request }: { readonly request: ToolApprovalRequest }): React.ReactElement {
+  const [showing, setShowing] = useState<ReadonlySet<string>>(new Set());
+  const [seen, setSeen] = useState<ReadonlySet<string>>(new Set());
+  const args = approvalArgs(request.tool, request.input);
+  const unseen = args.filter((arg) => isTruncated(arg) && !seen.has(arg.key));
+  const blocked = unseen.length > 0;
+  const reasonId = `approval-${request.id}-reason`;
+  const toggle = (key: string): void => {
+    setShowing((prev) =>
+      prev.has(key) ? prev.difference(new Set([key])) : prev.union(new Set([key])),
+    );
+    setSeen((prev) => prev.union(new Set([key])));
+  };
   return (
     <fieldset aria-label={`Approve ${request.tool}`} style={rowStyle}>
       <div style={headingStyle}>
         <strong>{request.tool}</strong>
       </div>
       <dl style={argsStyle}>
-        {approvalArgs(request.tool, request.input).map((arg) => (
-          <Fragment key={arg.label}>
+        {args.map((arg) => (
+          <Fragment key={arg.key}>
             <dt style={labelStyle}>{arg.label}</dt>
-            <ArgValue value={arg.value} />
+            <ArgValue arg={arg} showing={showing.has(arg.key)} onToggle={() => toggle(arg.key)} />
           </Fragment>
         ))}
       </dl>
+      {blocked && (
+        <p id={reasonId} style={reasonStyle}>
+          Allow is off until you have used Show All on every shortened value (
+          {unseen.map((arg) => arg.label).join(", ")}).
+        </p>
+      )}
       <div style={actionsStyle}>
-        <Button size="sm" variant="primary" onClick={() => resolveToolApproval(request.id, "once")}>
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={blocked}
+          aria-describedby={blocked ? reasonId : undefined}
+          onClick={() => resolveToolApproval(request.id, "once")}
+        >
           Allow Once
         </Button>
         {request.sessionAllowed && (
           <Button
             size="sm"
             variant="secondary"
+            disabled={blocked}
+            aria-describedby={blocked ? reasonId : undefined}
             onClick={() => resolveToolApproval(request.id, "session")}
           >
             Allow For Session
@@ -187,8 +265,11 @@ function ApprovalRow({ request }: { readonly request: ToolApprovalRequest }): Re
  * The approval prompt for the AI tools that act on the user's machine
  * (`run_command`, `spawn_worker`, `kill_worker`, `write_file`,
  * `read_file`): one row per call waiting for an answer, oldest first,
- * each showing the tool and its exact arguments as escaped data (never
- * prose built from model strings). Shows the calls made by
+ * each showing the tool and every field of its validated input as
+ * escaped data (never prose built from model strings). A long value is
+ * cut with a count of what is hidden; commands and file paths never are.
+ * Allow Once and Allow For Session stay off until each cut value has been
+ * expanded once; Deny is always available. Shows the calls made by
  * `workerId`'s turn (and any whose worker is unknown). The tool loop
  * stays paused until each row is answered, so the region is an alert.
  * Renders nothing when no call is waiting.
