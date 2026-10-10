@@ -4,7 +4,7 @@
       "kind": "node",
       "name": "node",
       "pin": "27.0.0-nightly202610086d5e309871",
-      "reason": "The 2026-10-09 and 2026-10-10 Node nightlies publish no win-x64 build (only osx/linux/aix), so pnpm cannot provision devEngines.runtime on this repo's Windows host and CI leg (ERR_PNPM_PACKAGE_MANAGER_NO_MATCHING_PLATFORM_VARIANT). 2026-10-08 is the newest nightly with win-x64. Recheck every sweep; move as soon as a newer nightly ships win-x64.",
+      "reason": "The 2026-10-09 Node nightly publishes no Windows build and the 2026-10-10 one only win-arm64, so neither has win-x64 and pnpm cannot provision devEngines.runtime on this repo's Windows host and CI leg (ERR_PNPM_PACKAGE_MANAGER_NO_MATCHING_PLATFORM_VARIANT). 2026-10-08 is the newest nightly with win-x64. Recheck every sweep; move as soon as a newer nightly ships win-x64.",
       "evidence": "https://nodejs.org/download/nightly/index.json"
     }
   ]
