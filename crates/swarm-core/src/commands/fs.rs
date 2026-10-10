@@ -31,8 +31,9 @@
 //! (`.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
 //! `.config/gh`, `.claude`, `.codex`, `.git-credentials`, `.netrc`), plus
 //! `AppData/Roaming/GitHub CLI` (gh on Windows), `.npmrc`, `.pypirc`,
-//! `.cargo/credentials.toml`, `.cargo/credentials`, `.config/gcloud`. A
-//! hard link to a secret is not detected.
+//! `.cargo/credentials.toml`, `.cargo/credentials`, `.config/gcloud` and
+//! `AppData/Roaming/gcloud` (gcloud on Windows). A hard link to a secret
+//! is not detected.
 
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
@@ -65,10 +66,10 @@ const DENIED_WRITE_DATA_FILE_PREFIXES: [&str; 6] = [
 ];
 
 /// Home-relative directories and files that hold credentials: the
-/// fs:scope deny list in `src-tauri/capabilities/default.json` plus stores
-/// only these commands reach (gh's Windows config dir, npm, PyPI, Cargo,
-/// gcloud).
-const DENIED_HOME_ENTRIES: [&str; 17] = [
+/// fs:scope deny list in `src-tauri/capabilities/default.json` plus
+/// stores that list does not cover (gh's and gcloud's Windows config
+/// dirs, npm, PyPI, Cargo, gcloud on Linux and macOS).
+const DENIED_HOME_ENTRIES: [&str; 18] = [
     ".ssh",
     ".gnupg",
     ".aws",
@@ -86,6 +87,7 @@ const DENIED_HOME_ENTRIES: [&str; 17] = [
     ".cargo/credentials.toml",
     ".cargo/credentials",
     ".config/gcloud",
+    "AppData/Roaming/gcloud",
 ];
 
 const DENIED_MESSAGE: &str = "This Path Holds Credentials And Is Never Accessible.";
@@ -560,6 +562,7 @@ mod tests {
             ".cargo/credentials.toml",
             ".cargo/credentials",
             ".config/gcloud",
+            "AppData/Roaming/gcloud",
         ] {
             let entry = tree.scopes.home.join(entry);
             let secret = if matches!(
