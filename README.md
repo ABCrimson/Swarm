@@ -61,10 +61,10 @@ Parallel-agent orchestrators are a crowded idea. SWARM's wager is that the **sub
 - **🌳 Worktree-per-worker isolation** — each worker spawns in its own `git worktree` on a `swarm/*` branch; a dirty tree is preserved, never force-removed.
 - **🚢 Ship chain** — `commit → push → prefilled compare page`, with `Swarm-Seq-Range` trailers and the machine-generated Causal Record PR body.
 - **🔌 Multi-provider agents** — Claude Code and Codex today, behind a trait pair designed to absorb the next provider without touching the scheduler.
-- **🛰️ `swarmd` daemon** — no webview, no Tauri link-time dependency; WebSocket transport, reattach-by-seq-replay, token + Origin + Host auth, and per-user service units for all three OSes.
+- **🛰️ `swarmd` daemon** — no webview, no Tauri link-time dependency; WebSocket transport, reattach-by-seq-replay, token + Origin + Host auth, and per-user autostart units: systemd (Linux), launchd (macOS) and a logon Scheduled Task (Windows).
 - **🖥️ Integrated terminal per worker** — a real PTY (`portable-pty`) bridged to Tokio, rendered with `@xterm/xterm`'s WebGL2 renderer.
 - **📊 Real-time metrics** — CPU, memory, throughput, and scheduler depth via Recharts on a 500 ms loop, with a per-worker process breakdown.
-- **✨ WebGPU particle system** — GPU compute shaders with adaptive particle counts (2 K–50 K, auto-tuned to frame budget) and bloom / chromatic-aberration / vignette post-processing.
+- **✨ WebGPU particle system** — GPU compute shaders with adaptive particle counts (2 K–10 K, auto-tuned to GPU frame time) and bloom / chromatic-aberration / vignette post-processing.
 - **⌨️ Keyboard-first** — a frecency-ranked command palette powered by [`modern-cmdk`](https://github.com/ABCrimson/modern-cmdk).
 - **🎨 OKLCH design system** — every color derives from the OKLCH perceptual space.
 
@@ -128,8 +128,10 @@ pnpm tauri:dev      # builds the Rust core and launches the desktop app
 Production bundles:
 
 ```bash
-pnpm tauri:build    # installers land in target/release/bundle/
+pnpm tauri:build --no-sign    # local, unsigned; installers land in target/release/bundle/
 ```
+
+Without `--no-sign` the build also signs the updater artifacts and needs `TAURI_SIGNING_PRIVATE_KEY` (see [docs/updater-keys.md](docs/updater-keys.md)); the release workflow supplies it.
 
 Tagged releases (`v*`) build signed installers for **Windows, macOS (Intel + Apple Silicon), and Linux (`.deb` + `.AppImage`)** and attach the standalone `swarmd` binary for each target — see [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
