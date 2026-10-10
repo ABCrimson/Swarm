@@ -452,8 +452,8 @@ export async function validateRepoRoot(path: string): Promise<string> {
  * seconds and no `updatedAt` (Rust does not track one). Normalized into
  * a frontend `Session`: `createdAt` becomes an ISO string, `updatedAt`
  * starts equal to it, and the result must pass `SessionSchema`, so the
- * session store never holds an `updatedAt` that `date-fns` or a sort
- * cannot read.
+ * session store never holds an `updatedAt` that `Temporal.Instant.from`
+ * or a sort cannot read.
  */
 const SessionResponseSchema = z
   .object({

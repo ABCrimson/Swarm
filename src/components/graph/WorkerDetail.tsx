@@ -1,7 +1,6 @@
 import "./graph.css";
 
 import { openPath } from "@tauri-apps/plugin-opener";
-import { formatDistance } from "date-fns";
 import { useSetAtom } from "jotai";
 import { useEffect, useState } from "react";
 import { Badge, stateLabels } from "#components/ui/Badge";
@@ -10,6 +9,7 @@ import { toast } from "#components/ui/Toast";
 import { useWorker } from "#hooks/useWorker";
 import { stripAnsi } from "#lib/ansi";
 import { isTauri } from "#lib/tauri";
+import { formatElapsed } from "#lib/time";
 import { selectMostRecentSeqForWorker, useProvenanceStore } from "#store/provenance";
 import type { Worker } from "#store/types";
 import { causalityInspectorAtom, detailPanelOpenAtom } from "#store/ui";
@@ -90,7 +90,10 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
   const currentState = optimisticState ?? worker.state;
   const canPause = currentState === "running";
   const canResume = currentState === "paused";
-  const uptime = formatDistance(now, new Date(worker.startedAt));
+  const uptime = formatElapsed(
+    Temporal.Instant.from(worker.startedAt),
+    Temporal.Instant.fromEpochMilliseconds(now),
+  );
   const outputPreview = worker.output ? stripAnsi(worker.output).slice(-OUTPUT_PREVIEW_CHARS) : "";
 
   const handleOpenWorktree = async (path: string): Promise<void> => {

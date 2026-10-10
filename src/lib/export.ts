@@ -19,8 +19,8 @@
 
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
-import { format } from "date-fns";
 import * as z from "zod";
+import { formatClock, formatDateTime } from "#lib/time";
 import { useMessageHistoryStore } from "#store/message-history";
 import type { MetricPoint, Session } from "#store/types";
 import { SessionSchema } from "#store/types";
@@ -38,8 +38,8 @@ export function exportAsMarkdown(session: Session): string {
     `# Session: ${session.name}`,
     "",
     `- **ID:** \`${session.id}\``,
-    `- **Created:** ${format(new Date(session.createdAt), "PPpp")}`,
-    `- **Updated:** ${format(new Date(session.updatedAt), "PPpp")}`,
+    `- **Created:** ${formatDateTime(Temporal.Instant.from(session.createdAt))}`,
+    `- **Updated:** ${formatDateTime(Temporal.Instant.from(session.updatedAt))}`,
     `- **Workers:** ${session.workerIds.length}`,
   ];
 
@@ -76,7 +76,7 @@ export function exportAsMarkdown(session: Session): string {
       "",
       `- **ID:** \`${worker.id}\``,
       `- **State:** ${worker.state}`,
-      `- **Started:** ${format(new Date(worker.startedAt), "PPpp")}`,
+      `- **Started:** ${formatDateTime(Temporal.Instant.from(worker.startedAt))}`,
       "",
     );
 
@@ -85,7 +85,7 @@ export function exportAsMarkdown(session: Session): string {
 
     lines.push("#### Messages", "");
     for (const msg of messages) {
-      const timestamp = format(new Date(msg.timestamp), "HH:mm:ss");
+      const timestamp = formatClock(Temporal.Instant.from(msg.timestamp));
       const roleLabel = msg.role === "user" ? "User" : "Assistant";
       lines.push(`**[${timestamp}] ${roleLabel}:**`, "", msg.content, "");
 

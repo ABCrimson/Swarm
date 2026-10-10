@@ -18,6 +18,14 @@ function addSession(name: string, updatedAt: string, metadata?: Session["metadat
   return session;
 }
 
+/** A local wall-clock time as the ISO instant string the session store holds. */
+function localInstant(wallClock: string): string {
+  return Temporal.PlainDateTime.from(wallClock)
+    .toZonedDateTime(Temporal.Now.timeZoneId())
+    .toInstant()
+    .toString();
+}
+
 function resetStore(): void {
   for (const [id] of useSessionStore.getState().sessions) {
     useSessionStore.getState().removeSession(id);
@@ -92,10 +100,10 @@ describe("HistorySearch", () => {
 
   it("filters by an inclusive date range, including the whole 'to' day", async () => {
     const user = userEvent.setup();
-    addSession("Before", "2026-08-31T23:00:00");
-    addSession("First Day", "2026-09-01T00:00:00");
-    addSession("Last Day Late", "2026-09-03T23:59:00");
-    addSession("After", "2026-09-04T00:00:00");
+    addSession("Before", localInstant("2026-08-31T23:00:00"));
+    addSession("First Day", localInstant("2026-09-01T00:00:00"));
+    addSession("Last Day Late", localInstant("2026-09-03T23:59:00"));
+    addSession("After", localInstant("2026-09-04T00:00:00"));
     render(<HistorySearch onResultSelect={vi.fn()} />);
 
     await user.type(screen.getByLabelText("From"), "2026-09-01");

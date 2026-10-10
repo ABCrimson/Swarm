@@ -1,8 +1,8 @@
-import { formatDistanceToNow } from "date-fns";
 import { motion } from "motion/react";
 import { type CSSProperties, useId, useRef } from "react";
 import { Pill } from "#components/ui/Pill";
 import { pluralizeWorkers } from "#lib/format";
+import { formatRelativeTime } from "#lib/time";
 import type { Session } from "#store/types";
 import { useWorkerStore } from "#store/workers";
 
@@ -55,7 +55,7 @@ export function SessionCard({
     session.workerIds.reduce((count, id) => (s.workers.has(id) ? count + 1 : count), 0),
   );
 
-  const relativeTime = formatDistanceToNow(new Date(session.updatedAt), { addSuffix: true });
+  const relativeTime = formatRelativeTime(Temporal.Instant.from(session.updatedAt));
   const tags = session.metadata?.tags ?? [];
 
   const runMenuAction = (action: (id: string) => void) => {

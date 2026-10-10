@@ -1,4 +1,3 @@
-import { addDays, isBefore, parseISO, startOfDay } from "date-fns";
 import { useDeferredValue, useId, useState } from "react";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
@@ -29,11 +28,11 @@ function matchesQuery(session: Session, query: string): boolean {
 
 /** Whether `session` was last updated within the inclusive `range` (whole days, local time). */
 function withinRange(session: Session, range: DateRange): boolean {
-  const updated = parseISO(session.updatedAt);
-  if (range.from !== "" && isBefore(updated, startOfDay(parseISO(range.from)))) return false;
-  if (range.to !== "" && !isBefore(updated, addDays(startOfDay(parseISO(range.to)), 1))) {
-    return false;
-  }
+  const day = Temporal.Instant.from(session.updatedAt)
+    .toZonedDateTimeISO(Temporal.Now.timeZoneId())
+    .toPlainDate();
+  if (range.from !== "" && Temporal.PlainDate.compare(day, range.from) < 0) return false;
+  if (range.to !== "" && Temporal.PlainDate.compare(day, range.to) > 0) return false;
   return true;
 }
 
