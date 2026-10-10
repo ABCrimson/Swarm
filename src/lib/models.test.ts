@@ -6,6 +6,7 @@ import {
   formatContextLabel,
   formatMaxOutputLabel,
   getModelById,
+  hasPricing,
   MODEL_KEYS,
   warnIfModelGated,
 } from "#lib/models";
@@ -17,8 +18,8 @@ describe("model catalog", () => {
       "claude-fable-5-1",
       "claude-mythos-5-1",
       "claude-opus-5-5",
-      "claude-sonnet-5",
-      "claude-haiku-4-5",
+      "claude-sonnet-5-5",
+      "claude-haiku-5-5",
     ]);
   });
 
@@ -34,7 +35,7 @@ describe("model catalog", () => {
       ["mythos", 10, 50],
       ["opus", 4, 20],
       ["sonnet", 2, 10],
-      ["haiku", 1, 5],
+      ["haiku", 0.1, 0.5],
     ]);
   });
 
@@ -64,7 +65,7 @@ describe("estimateCostUsd", () => {
 
   it("treats absent cache fields as zero and unknown models as free rather than guessing", () => {
     expect(
-      estimateCostUsd("claude-sonnet-5", {
+      estimateCostUsd("claude-sonnet-5-5", {
         input_tokens: 500_000,
         output_tokens: 100_000,
         cache_creation_input_tokens: null,
@@ -72,6 +73,63 @@ describe("estimateCostUsd", () => {
       }),
     ).toBeCloseTo(2, 10);
     expect(estimateCostUsd("claude-unknown", { input_tokens: 1, output_tokens: 1 })).toBe(0);
+  });
+});
+
+describe("fallback-target pricing", () => {
+  it("prices claude-sonnet-5, Sonnet 5.5's fallback target, without listing it in the catalog", () => {
+    expect(hasPricing("claude-sonnet-5")).toBe(true);
+    expect(getModelById("claude-sonnet-5")).toBeUndefined();
+    expect(
+      estimateCostUsd("claude-sonnet-5", {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(0.2, 10);
+  });
+});
+
+describe("Haiku 5.5 long-prompt tier", () => {
+  const HAIKU = "claude-haiku-5-5";
+
+  it("prices a prompt at or under 100k tokens at the base rates", () => {
+    const cost = estimateCostUsd(HAIKU, {
+      input_tokens: 100_000,
+      output_tokens: 1_000_000,
+    });
+    // $0.10 * 0.1M input + $0.50 * 1M output.
+    expect(cost).toBeCloseTo(0.01 + 0.5, 10);
+  });
+
+  it("counts cache reads toward the threshold: 90k read + 20k fresh prices at the >100k rates", () => {
+    const cost = estimateCostUsd(HAIKU, {
+      input_tokens: 20_000,
+      cache_read_input_tokens: 90_000,
+      output_tokens: 10_000,
+    });
+    // $0.50 * 0.02M + $0.05 * 0.09M + $2.50 * 0.01M.
+    expect(cost).toBeCloseTo(0.01 + 0.0045 + 0.025, 10);
+  });
+
+  it("counts cache writes toward the threshold and bills them at 1.25x the long input rate", () => {
+    const cost = estimateCostUsd(HAIKU, {
+      input_tokens: 1,
+      cache_creation_input_tokens: 100_000,
+      output_tokens: 0,
+    });
+    // 100,001 prompt tokens: $0.50 * 1e-6 + $0.625 * 0.1M.
+    expect(cost).toBeCloseTo(0.0000005 + 0.0625, 10);
+  });
+
+  it("leaves models without a tier flat at any prompt length", () => {
+    const cost = estimateCostUsd("claude-sonnet-5-5", {
+      input_tokens: 900_000,
+      cache_read_input_tokens: 90_000,
+      output_tokens: 0,
+    });
+    // $2 * 0.9M + $0.10 * 0.09M.
+    expect(cost).toBeCloseTo(1.8 + 0.009, 10);
   });
 });
 

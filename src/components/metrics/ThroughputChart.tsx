@@ -41,7 +41,7 @@ const ALL_SERIES: readonly ThroughputSeries[] = [...MODEL_KEYS, "other"];
 
 /**
  * The series a usage record belongs to: the catalog family whose key its
- * model id names (`claude-sonnet-5`, a dated `claude-sonnet-5-2026…` or a
+ * model id names (`claude-sonnet-5-5`, a dated `claude-sonnet-5-5-2026…` or a
  * `…-latest` alias all resolve to `sonnet`), else `"other"`.
  */
 export function seriesOf(model: string): ThroughputSeries {
