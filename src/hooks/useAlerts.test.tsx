@@ -20,7 +20,6 @@ function tick(cpuPercent: number): void {
       memoryMb: 0,
       memoryTotalMb: 0,
       workerCount: 0,
-      aiReqPerSec: 0,
       tokensPerSec: 0,
     },
     Date.now(),

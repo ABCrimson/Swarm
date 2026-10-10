@@ -61,7 +61,6 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     memoryMb: z.number(),
     memoryTotalMb: z.number(),
     workerCount: Count,
-    aiReqPerSec: z.number(),
     timestamp: z.int(),
   }),
   system_log: z.looseObject({

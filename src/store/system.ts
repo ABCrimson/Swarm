@@ -44,7 +44,6 @@ export const useSystemStore = create<SystemStoreState & SystemStoreActions>()(
       memoryMb: 0,
       memoryTotalMb: 0,
       workerCount: 0,
-      aiReqPerSec: 0,
       tokensPerSec: 0,
       history: [],
     },
