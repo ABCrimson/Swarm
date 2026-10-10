@@ -139,6 +139,8 @@ pub struct OrchestrationEngine {
     closed: Arc<AtomicBool>,
     /// The writer thread, taken and joined by [`Self::shutdown`].
     writer: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// The first [`Self::shutdown`]'s outcome, returned to every later or concurrent call.
+    shutdown_outcome: Arc<Mutex<Option<Result<u64, String>>>>,
 }
 
 impl OrchestrationEngine {
@@ -198,6 +200,7 @@ impl OrchestrationEngine {
             head,
             closed,
             writer: Arc::new(Mutex::new(Some(handle))),
+            shutdown_outcome: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -274,8 +277,9 @@ impl OrchestrationEngine {
     ///
     /// Events recorded after shutdown begins are dropped (with a debug
     /// log), and [`EventSink::emit_awaiting_seq`] receivers for them
-    /// resolve to an error. Calling it again returns the head without
-    /// doing anything.
+    /// resolve to an error. A later or concurrent call waits for the
+    /// first and returns its outcome (the same head or the same error); a
+    /// failed drain is never reported as success.
     ///
     /// # Blocking
     ///
@@ -288,9 +292,22 @@ impl OrchestrationEngine {
     /// [`AppError::EventLog`] if the writer thread is already gone or
     /// does not drain within `timeout`.
     pub fn shutdown(&self, timeout: Duration) -> Result<u64, AppError> {
-        if self.closed.swap(true, Ordering::AcqRel) {
-            return Ok(self.head_seq());
+        let mut outcome = self.shutdown_outcome.lock();
+        if let Some(first) = outcome.as_ref() {
+            return first.clone().map_err(AppError::EventLog);
         }
+        self.closed.store(true, Ordering::Release);
+        let result = self.drain(timeout);
+        *outcome = Some(match &result {
+            Ok(head) => Ok(*head),
+            Err(AppError::EventLog(message)) => Err(message.clone()),
+            Err(other) => Err(other.to_string()),
+        });
+        result
+    }
+
+    /// Queues the barrier, waits for the drain, joins the writer thread.
+    fn drain(&self, timeout: Duration) -> Result<u64, AppError> {
         let (done_tx, done_rx) = mpsc::sync_channel(1);
         if !self.sink.send_command(WriterCmd::Shutdown(done_tx)) {
             return Err(writer_unavailable());
@@ -315,6 +332,9 @@ struct Fanout {
     tx: broadcast::Sender<Arc<DomainEvent>>,
     /// When the last "send failed" warning was logged.
     last_warn: Option<Instant>,
+    /// Test hook: a head every offered event must already be covered by.
+    #[cfg(test)]
+    head_probe: Option<Arc<AtomicU64>>,
 }
 
 impl Fanout {
@@ -322,12 +342,22 @@ impl Fanout {
         Self {
             tx,
             last_warn: None,
+            #[cfg(test)]
+            head_probe: None,
         }
     }
 
     /// Moves `envelope` into an `Arc` for every current subscriber.
     /// Costs nothing (no `Arc`) while nothing is subscribed.
     fn offer(&mut self, envelope: DomainEvent) {
+        #[cfg(test)]
+        if let Some(head) = &self.head_probe {
+            assert!(
+                head.load(Ordering::Acquire) >= envelope.seq,
+                "event {} offered to the fanout ahead of the head",
+                envelope.seq
+            );
+        }
         if self.tx.receiver_count() == 0 || self.tx.send(Arc::new(envelope)).is_ok() {
             return;
         }
@@ -1117,43 +1147,34 @@ mod tests {
         assert_eq!(engine.head_seq(), 2);
     }
 
-    /// A subscriber never sees an event before the head covers it — the
+    /// The writer publishes the head between the emit and the fanout, so
+    /// a subscriber never sees an event before the head covers it — the
     /// ordering that makes "subscribe, then read `head_seq`" gap-free.
-    /// A receiver spinning on its own thread checks each event the moment
-    /// the fanout publishes it, so a writer that offered an event before
-    /// storing its head would be caught mid-delivery.
+    /// The fanout probes the head on every offer and the emit closure
+    /// checks it is still the previous seq, so a swap fails on event 1.
     #[test]
-    fn test_head_seq_is_published_before_the_fanout_delivers() {
-        const EVENTS: usize = 20_000;
-        let (tx, mut rx) = broadcast::channel(EVENTS);
+    fn test_head_seq_is_published_between_the_emit_and_the_fanout() {
         let head = Arc::new(AtomicU64::new(0));
+        let mut fanout = Fanout::new(broadcast::channel(1).0);
+        fanout.head_probe = Some(Arc::clone(&head));
+        let at_emit = Arc::clone(&head);
         let mut writer = Writer::new(
             EventLog::open_in_memory().unwrap(),
             Arc::clone(&head),
-            |_: &DomainEvent| {},
-            Fanout::new(tx),
+            move |e: &DomainEvent| {
+                assert_eq!(
+                    at_emit.load(Ordering::Acquire),
+                    e.seq - 1,
+                    "head published before the emit"
+                );
+            },
+            fanout,
         )
         .unwrap();
-        let checker = std::thread::spawn(move || {
-            let mut stale = 0_u64;
-            loop {
-                match rx.try_recv() {
-                    Ok(event) => {
-                        if head.load(Ordering::Acquire) < event.seq {
-                            stale += 1;
-                        }
-                    }
-                    Err(broadcast::error::TryRecvError::Empty) => std::hint::spin_loop(),
-                    Err(broadcast::error::TryRecvError::Closed) => break stale,
-                    Err(e) => panic!("the checker fell behind: {e}"),
-                }
-            }
-        });
-        for _ in 0..EVENTS {
+        for _ in 0..3 {
             writer.record(bare(output()));
         }
-        drop(writer);
-        assert_eq!(checker.join().unwrap(), 0, "events seen ahead of the head");
+        assert_eq!(head.load(Ordering::Acquire), 3);
     }
 
     #[tokio::test]
