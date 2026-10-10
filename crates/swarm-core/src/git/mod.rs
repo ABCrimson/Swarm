@@ -210,7 +210,7 @@ pub fn slugify(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
     use super::*;
 
@@ -255,6 +255,11 @@ mod tests {
         assert!(slug.len() <= MAX_SLUG_LEN, "{slug}");
         assert!(!slug.ends_with('-'), "{slug}");
         assert!(slug.starts_with("word-word"));
+
+        // The 48-byte cut lands just after a separator; the dash it
+        // leaves at the end is trimmed.
+        let slug = slugify(&format!("{} b", "a".repeat(MAX_SLUG_LEN - 1)));
+        assert_eq!(slug, "a".repeat(MAX_SLUG_LEN - 1));
     }
 
     #[test]
@@ -290,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn test_repo_locks_serializes_and_retries_on_contention() {
+    fn test_repo_locks_retries_on_contention() {
         let locks = RepoLocks::new();
         let repo = PathBuf::from("/tmp/some-repo");
         let attempts = AtomicU32::new(0);
@@ -307,6 +312,32 @@ mod tests {
 
         assert_eq!(result.unwrap(), 42);
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn test_repo_locks_serializes_same_repo_ops() {
+        let locks = RepoLocks::new();
+        let repo = Path::new("/tmp/serialized-repo");
+        let inside = AtomicBool::new(false);
+        let start = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                scope.spawn(|| {
+                    start.wait();
+                    locks
+                        .run_serialized(repo, || {
+                            assert!(
+                                !inside.swap(true, Ordering::SeqCst),
+                                "two same-repo ops ran at once"
+                            );
+                            std::thread::sleep(Duration::from_millis(50));
+                            inside.store(false, Ordering::SeqCst);
+                            Ok::<_, AppError>(())
+                        })
+                        .unwrap();
+                });
+            }
+        });
     }
 
     #[test]

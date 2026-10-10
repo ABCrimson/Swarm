@@ -57,22 +57,42 @@ fn rev_parse_args(repo_root: &Path, rev: &str) -> Vec<String> {
     )
 }
 
+/// The error for a failed `git rev-parse` in `dir`. It says "is not
+/// inside a git repository" only when git said so; otherwise it gives
+/// git's own reason (a missing directory, dubious ownership).
+fn rev_parse_failure(dir: &Path, output: &cli::GitOutput) -> AppError {
+    let reason = if output.raw_stderr().contains("not a git repository") {
+        "is not inside a git repository"
+    } else {
+        "could not be resolved by git rev-parse"
+    };
+    AppError::Git(format!(
+        "{} {reason}: {}",
+        dir.display(),
+        output.stderr.trim()
+    ))
+}
+
 /// Resolves `dir`'s repository toplevel (the directory containing
 /// `.git`), following git's own rules (works from any subdirectory).
 ///
 /// # Errors
 ///
-/// * [`AppError::Git`] — `dir` is not inside a git repository, or `git`
-///   could not be spawned.
+/// * [`AppError::Git`] — `dir` is not absolute (an empty path included,
+///   which `git -C` would treat as the process's own cwd), is not inside
+///   a git repository or git could not resolve it (a missing directory,
+///   dubious ownership), or `git` could not be spawned.
 /// * [`AppError::GitTimeout`] — the query exceeded its budget.
 pub fn discover_toplevel(dir: &Path) -> Result<PathBuf, AppError> {
+    if !dir.is_absolute() {
+        return Err(AppError::Git(format!(
+            "repository path must be absolute: {:?}",
+            dir.display().to_string()
+        )));
+    }
     let output = cli::run(&rev_parse_toplevel_args(dir), READ_TIMEOUT)?;
     if !output.success() {
-        return Err(AppError::Git(format!(
-            "{} is not inside a git repository: {}",
-            dir.display(),
-            output.stderr.trim()
-        )));
+        return Err(rev_parse_failure(dir, &output));
     }
     let toplevel = output.stdout_trimmed();
     if toplevel.is_empty() {
@@ -128,8 +148,9 @@ fn canonical(path: &Path) -> PathBuf {
 ///
 /// # Errors
 ///
-/// * [`AppError::Git`] — `dir` is not inside a git repository, or the
-///   output did not have the expected three lines.
+/// * [`AppError::Git`] — `dir` is not inside a git repository or git
+///   could not resolve it (a missing directory, dubious ownership), or
+///   the output did not have the expected three lines.
 /// * [`AppError::GitTimeout`] — the query exceeded its budget.
 pub fn locate(dir: &Path) -> Result<Location, AppError> {
     let args = args_in(
@@ -144,11 +165,7 @@ pub fn locate(dir: &Path) -> Result<Location, AppError> {
     );
     let output = cli::run(&args, READ_TIMEOUT)?;
     if !output.success() {
-        return Err(AppError::Git(format!(
-            "{} is not inside a git repository: {}",
-            dir.display(),
-            output.stderr.trim()
-        )));
+        return Err(rev_parse_failure(dir, &output));
     }
     let text = String::from_utf8_lossy(&output.stdout);
     let mut lines = text.lines().map(PathBuf::from);
@@ -248,6 +265,31 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         assert!(discover_toplevel(&tmp).is_err());
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn test_discover_toplevel_names_the_rev_parse_failure_truthfully() {
+        let tmp = std::env::temp_dir().join(format!("swarm-not-a-repo-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let not_repo = discover_toplevel(&tmp).unwrap_err().to_string();
+        std::fs::remove_dir_all(&tmp).ok();
+        assert!(
+            not_repo.contains("is not inside a git repository"),
+            "{not_repo}"
+        );
+        let missing = std::env::temp_dir().join(format!("swarm-missing-{}", uuid::Uuid::new_v4()));
+        let err = discover_toplevel(&missing).unwrap_err().to_string();
+        assert!(
+            err.contains("could not be resolved by git rev-parse"),
+            "{err}"
+        );
+        assert!(!err.contains("is not inside a git repository"), "{err}");
+    }
+
+    #[test]
+    fn test_discover_toplevel_rejects_empty_and_relative_paths() {
+        assert!(discover_toplevel(Path::new("")).is_err());
+        assert!(discover_toplevel(Path::new("..")).is_err());
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! `git worktree` add/lock/unlock/remove/prune, plus the safe delete of
-//! a worker's isolation branch. `worker::lifecycle` drives all of it,
-//! one call per `RepoLocks::run_serialized`.
+//! a worker's isolation branch. `worker::lifecycle` drives add, lock,
+//! unlock, remove and the branch delete, one call per
+//! `RepoLocks::run_serialized`; `runtime` runs `prune` once at startup.
 //!
 //! # The no-`--force` guarantee
 //!
@@ -284,7 +285,7 @@ mod tests {
     use crate::git::repo::base_args;
     use crate::git::test_support::{TempRepo, write_file};
 
-    // ── Argv builders (DIRECTIVE: no-force proof) ────────────────────
+    // ── Argv builders (no-force proof) ───────────────────────────────
 
     #[test]
     fn test_remove_args_never_contains_force() {
@@ -325,7 +326,7 @@ mod tests {
         assert!(args.iter().any(|a| a == "-b"));
     }
 
-    /// DIRECTIVE (B3): -D is not constructible for branch deletion —
+    /// -D is not constructible for branch deletion —
     /// same style as `test_remove_args_never_contains_force`.
     #[test]
     fn test_branch_delete_args_never_contains_capital_d() {
@@ -340,16 +341,7 @@ mod tests {
 
     // ── remove() classification (no real git needed) ─────────────────
 
-    #[test]
-    fn test_remove_outcome_variants_are_distinguishable() {
-        let preserved = RemoveOutcome::Preserved {
-            reason: "contains modified or untracked files".to_owned(),
-        };
-        assert_ne!(RemoveOutcome::Removed, preserved);
-        assert_matches!(preserved, RemoveOutcome::Preserved { .. });
-    }
-
-    /// DIRECTIVE (B2): "preserved_dirty" is reserved strictly for
+    /// "preserved_dirty" is reserved strictly for
     /// git's dirty/untracked-files refusal.
     #[test]
     fn test_is_dirty_tree_refusal_matches_real_git_message() {
@@ -358,7 +350,7 @@ mod tests {
         ));
     }
 
-    /// DIRECTIVE (B2): a still-locked worktree is a genuine failure,
+    /// A still-locked worktree is a genuine failure,
     /// never "preserved_dirty".
     #[test]
     fn test_is_dirty_tree_refusal_false_for_locked_working_tree() {
@@ -367,7 +359,7 @@ mod tests {
         ));
     }
 
-    /// DIRECTIVE (B2): a permission error mid-delete (a process that
+    /// A permission error mid-delete (a process that
     /// outlived the worker holds the directory) may already have
     /// half-deleted the tree, so reporting "preserved" would be a lie.
     #[test]
@@ -377,7 +369,7 @@ mod tests {
         ));
     }
 
-    /// DIRECTIVE (B2): any unrecognized stderr is a genuine failure,
+    /// Any unrecognized stderr is a genuine failure,
     /// never a silent "preserved".
     #[test]
     fn test_is_dirty_tree_refusal_false_for_unrecognized_message() {
@@ -429,7 +421,7 @@ mod tests {
         assert!(!worktree.exists(), "a removed worktree is gone from disk");
     }
 
-    /// DIRECTIVE (B2), against real git: a still-locked worktree makes
+    /// Against real git: a still-locked worktree makes
     /// `remove()` return `Err`, never `Ok(Preserved)`.
     #[test]
     fn test_remove_returns_err_not_preserved_for_still_locked_worktree() {

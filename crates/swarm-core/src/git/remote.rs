@@ -160,9 +160,10 @@ fn percent_encode_query_value(s: &str) -> String {
 /// Hard cap on the final compare URL's length. GitHub itself tolerates
 /// much longer URLs, but browsers/OS "open URL" APIs have practical
 /// limits well under 8K; 6000 leaves headroom. When the full
-/// `title`+`body` would exceed it, the body (never the title, and
-/// never the branch/compare path) is truncated with a visible marker
-/// — see [`compare_url`].
+/// `title`+`body` would exceed it, the body is truncated first with a
+/// visible marker; the title is clamped only as a last resort, and the
+/// compare path (host/owner/repo/base/branch) is never truncated — see
+/// [`compare_url`].
 pub const MAX_COMPARE_URL_LEN: usize = 6000;
 
 /// Binary-searches the longest prefix of `text` for which `fits(prefix)`
@@ -176,17 +177,11 @@ fn largest_fitting_prefix(text: &str, fits: impl Fn(&str) -> bool) -> &str {
         .map(|(index, _)| index)
         .chain([text.len()])
         .collect();
-    // `boundaries[n]` is the byte length of the first `n` chars.
-    let (mut lo, mut hi) = (0, boundaries.len() - 1);
-    while lo < hi {
-        let mid = lo + (hi - lo).div_ceil(2);
-        if fits(&text[..boundaries[mid]]) {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
-    }
-    &text[..boundaries[lo]]
+    // `boundaries[n]` is the byte length of the first `n` chars, and
+    // `boundaries[0] == 0` is the empty prefix, so the search runs over
+    // the non-empty prefixes: `n` of them fit.
+    let n = boundaries[1..].partition_point(|&end| fits(&text[..end]));
+    &text[..boundaries[n]]
 }
 
 /// Builds a GitHub-style compare URL prefilled with a PR title/body
@@ -424,6 +419,10 @@ mod tests {
         assert!(url.contains("Truncated"));
         // Title must survive intact even though the body was cut.
         assert!(url.contains("title=Title"));
+        // Every 'x' encodes to one byte, so the largest fitting body
+        // prefix fills the cap exactly.
+        assert_eq!(url.len(), MAX_COMPARE_URL_LEN);
+        assert!(url.contains("&body=xxxxxxxxxx"), "{url}");
     }
 
     #[test]
@@ -437,11 +436,23 @@ mod tests {
         assert!(!url.contains("Truncated"));
     }
 
-    /// DIRECTIVE (nit): re-check the cap when the body-shrink binary
-    /// search bottoms out at `lo == 0` (even an empty body + marker
-    /// doesn't fit) — the title itself must then be clamped too, and
-    /// the *result* must actually respect the cap, not just "the
-    /// empty-body attempt was the best we found".
+    #[test]
+    fn test_compare_url_percent_encodes_reserved_and_non_ascii_query_bytes() {
+        let remote = ParsedRemote {
+            host: "github.com".to_string(),
+            owner: "o".to_string(),
+            repo: "r".to_string(),
+        };
+        let url = compare_url(&remote, "main", "b", "a&b#c%d/e+f", "l1\nl2 \u{e9}");
+        assert_eq!(
+            url,
+            "https://github.com/o/r/compare/main...b?quick_pull=1&title=a%26b%23c%25d%2Fe%2Bf&body=l1%0Al2+%C3%A9"
+        );
+    }
+
+    /// When even an empty body plus the truncation marker does not fit,
+    /// the title itself is clamped too, and the *result* respects the
+    /// cap, not just "the empty-body attempt was the best we found".
     #[test]
     fn test_compare_url_clamps_title_when_even_an_empty_body_does_not_fit() {
         let remote = ParsedRemote {
