@@ -109,12 +109,13 @@ mod tests {
         (app, main)
     }
 
-    /// `readTextFile(path)` from the webview.
-    fn read_text_file(webview: &WebviewWindow<MockRuntime>, path: &Path) -> Result<(), String> {
+    /// `readTextFile(path)` from the webview, which fs 3.0.0-alpha.2
+    /// serves through the `read_file` command.
+    fn read_file(webview: &WebviewWindow<MockRuntime>, path: &Path) -> Result<(), String> {
         get_ipc_response(
             webview,
             InvokeRequest {
-                cmd: "plugin:fs|read_text_file".into(),
+                cmd: "plugin:fs|read_file".into(),
                 callback: CallbackFn(0),
                 error: CallbackFn(1),
                 url: "tauri://localhost".parse().unwrap(),
@@ -158,10 +159,10 @@ mod tests {
             "README.md",
         ] {
             let path = workspace.join(file);
-            assert_eq!(read_text_file(&main, &path), Ok(()), "{}", path.display());
+            assert_eq!(read_file(&main, &path), Ok(()), "{}", path.display());
         }
         let outside = workspace.parent().unwrap().join("outside.txt");
-        assert!(read_text_file(&main, &outside).is_err());
+        assert!(read_file(&main, &outside).is_err());
     }
 
     /// A flat grant stays flat: its direct entries (dot files included)
@@ -179,8 +180,8 @@ mod tests {
 
         app.fs_scope().allow_directory(&folder, false).unwrap();
 
-        assert_eq!(read_text_file(&main, &folder.join(".env")), Ok(()));
-        assert!(read_text_file(&main, &folder.join("nested/file.txt")).is_err());
+        assert_eq!(read_file(&main, &folder.join(".env")), Ok(()));
+        assert!(read_file(&main, &folder.join("nested/file.txt")).is_err());
     }
 
     /// A file grant (a save dialog) needs and gets no mirror.

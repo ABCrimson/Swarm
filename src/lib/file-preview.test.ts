@@ -39,7 +39,7 @@ describe("loadFilePreview", () => {
     expect(readTextFile).not.toHaveBeenCalled();
   });
 
-  // The desktop capability grants read_text_file but not stat.
+  // If stat() is rejected, the decoded length still refuses an oversized file.
   it("still refuses an oversized file when stat is not permitted", async () => {
     vi.mocked(stat).mockRejectedValue("fs.stat not allowed");
     vi.mocked(readTextFile).mockResolvedValue("x".repeat(MAX_PREVIEW_BYTES + 5));

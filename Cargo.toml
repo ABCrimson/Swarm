@@ -18,9 +18,10 @@ resolver = "3"
 # it by swarm-desktop's `app_version_resolves_from_package_json` test.
 version      = "0.13.1"
 edition      = "2024"
-# The trim_prefix/trim_suffix and std::mem::DropGuard APIs the code uses
-# are new in 1.100; rust-toolchain.toml pins the matching nightly.
-rust-version = "1.100"
+# `[profile.release] trim-paths` is stable from 1.101 (cargo#17488), the
+# trim_prefix/trim_suffix and std::mem::DropGuard APIs the code uses from
+# 1.100; rust-toolchain.toml pins the matching 1.101 nightly.
+rust-version = "1.101"
 license      = "MIT"
 repository   = "https://github.com/ABCrimson/Swarm"
 publish      = false
@@ -46,32 +47,39 @@ todo                            = "deny"
 unimplemented                   = "deny"
 
 [workspace.lints.cargo]
-unused_dependencies           = "deny"
-unused_workspace_dependencies = "deny"
+unused_dependencies             = "deny"
+unused_workspace_dependencies   = "deny"
+# A member without `[lints] workspace = true` would silently skip every
+# lint table here.
+missing_lints_inheritance       = "deny"
+# A `[workspace.package]` key no member inherits is dead metadata.
+unused_workspace_package_fields = "deny"
+# A misspelled or retired lint name in these tables fails the build.
+unknown_lints                   = "deny"
 
 [workspace.dependencies]
 swarm-core                = { path = "crates/swarm-core" }
 # ── Tauri 3.0 alpha stack (desktop shell) ────────────────────────────
 # v3 selects the webview runtime by depending on a runtime crate and
 # passing its attributes to `Builder::runtime`; the runtime-wide
-# features (`devtools`, `macos-private-api`, `unstable`) moved onto
+# features (`devtools`, `unstable`, `tracing`, `x11`, `dbus`) moved onto
 # tauri-runtime-wry. swarm-desktop's own `devtools` feature forwards to
 # it; debug builds get the inspector regardless (tauri-runtime-wry and
 # wry gate it on `any(debug_assertions, feature = "devtools")`).
-tauri                     = { version = "=3.0.0-alpha.2", features = ["image-png"] }
-tauri-runtime-wry         = "=3.0.0-alpha.2"
-tauri-build               = "=3.0.0-alpha.1"
-tauri-plugin-fs           = "=3.0.0-alpha.1"
-tauri-plugin-dialog       = "=3.0.0-alpha.1"
-tauri-plugin-opener       = "=3.0.0-alpha.1"
-tauri-plugin-store        = "=3.0.0-alpha.1"
-tauri-plugin-updater      = "=3.0.0-alpha.1"
-tauri-plugin-notification = "=3.0.0-alpha.1"
+tauri                     = { version = "=3.0.0-alpha.4", features = ["image-png"] }
+tauri-runtime-wry         = "=3.0.0-alpha.4"
+tauri-build               = "=3.0.0-alpha.3"
+tauri-plugin-fs           = "=3.0.0-alpha.2"
+tauri-plugin-dialog       = "=3.0.0-alpha.3"
+tauri-plugin-opener       = "=3.0.0-alpha.2"
+tauri-plugin-store        = "=3.0.0-alpha.2"
+tauri-plugin-updater      = "=3.0.0-alpha.2"
+tauri-plugin-notification = "=3.0.0-alpha.2"
 # Dev-only, swarm-desktop's capability contract test: the matcher
 # tauri-plugin-opener evaluates URL scopes with (already in the tree
 # through it, at this exact version).
 glob                      = "=0.3.4"
-tokio                     = { version = "=1.53.1", features = ["full"] }
+tokio                     = { version = "=1.53.2", features = ["full"] }
 portable-pty              = "=0.9.0"
 serde                     = { version = "=1.0.229", features = ["derive"] }
 serde_json                = "=1.0.151"
@@ -79,13 +87,13 @@ anyhow                    = "=1.0.104"
 thiserror                 = "=2.0.21"
 tracing                   = "=0.1.44"
 tracing-subscriber        = { version = "=0.3.23", features = ["json", "env-filter"] }
-uuid                      = { version = "=1.26.1", features = ["v4", "serde"] }
+uuid                      = { version = "=1.28.0", features = ["v4", "serde"] }
 dashmap                   = "=7.0.0-rc2"
 parking_lot               = "=0.12.5"
 rusqlite                  = { version = "=0.40.2", features = ["bundled"] }
 regex                     = "=1.13.1"
 sysinfo                   = "=0.39.6"
-tokio-util                = { version = "=0.7.19", features = ["rt"] }
+tokio-util                = { version = "=0.7.20", features = ["rt"] }
 # ── swarmd (Phase 2 headless daemon) ─────────────────────────────────
 # axum is the one genuinely NEW dependency this workspace takes on for
 # swarmd — nothing else in the tree pulled in an HTTP/WS server stack.
@@ -122,6 +130,12 @@ opt-level     = 3
 lto           = "fat"
 codegen-units = 1
 strip         = "symbols"
+# Remap the build machine's absolute paths (workspace, registry, sysroot)
+# out of everything the binaries embed: panic messages, file!(), debug
+# info. Stable since cargo#17488, with no default for built-in profiles,
+# so without this a release names the CI runner's (or a developer's)
+# directories.
+trim-paths    = "all"
 # `panic` stays at its default, "unwind". A panic then ends only the
 # task or thread it happens on: swarm-core turns a panicked
 # `spawn_blocking` job into an error for that one command, and a

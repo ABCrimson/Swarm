@@ -103,7 +103,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
       return;
     }
     try {
-      // openPath (not revealItemInDir): the worktree folder itself
+      // openPath (not revealItemsInDir): the worktree folder itself
       // opens in the system file manager, which is what the link says.
       await openPath(path);
     } catch (err) {

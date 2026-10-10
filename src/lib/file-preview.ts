@@ -18,13 +18,10 @@ export type FilePreview =
  * Reads a file for the read-only viewer, refusing what it cannot show.
  *
  * It first asks `stat()` for the size, so an oversized file is refused
- * before it is read. **With the capabilities shipped today that check
- * never runs:** `src-tauri/capabilities/default.json` does not grant
- * `fs:allow-stat`, so `stat()` is rejected and the whole file is read
- * over IPC (memory and transfer cost included) before its decoded length
- * is checked. The viewer still never renders an oversized file; granting
- * `fs:allow-stat` (scoped like `read-dir`) makes the pre-read check
- * effective with no code change here.
+ * before it is read (`src-tauri/capabilities/default.json` grants
+ * `fs:allow-stat`, scoped like the reads). Should `stat()` fail anyway,
+ * the whole file is read and its decoded length checked, so the viewer
+ * still never renders an oversized file.
  *
  * A NUL byte near the start marks the file as binary. Never rejects:
  * failures resolve to `{ kind: "error" }`.

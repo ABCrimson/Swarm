@@ -167,6 +167,33 @@ fn fs_access_has_no_static_allow_scope() {
     }
 }
 
+/// The fs grants name the fs 3.0.0-alpha.2 commands: `readTextFile` and
+/// `writeTextFile` are served by `read_file` and `write_file` (the
+/// text-file commands and permissions are gone), and `stat` backs the
+/// file preview's size check before anything is read.
+#[test]
+fn fs_grants_are_the_v3_command_set() {
+    let mut granted: Vec<&str> = Vec::new();
+    let permissions = permissions();
+    for permission in &permissions {
+        let id = identifier(permission);
+        if id.starts_with("fs:allow-") {
+            granted.push(id);
+        }
+    }
+    granted.sort_unstable();
+    assert_eq!(
+        granted,
+        [
+            "fs:allow-exists",
+            "fs:allow-read-dir",
+            "fs:allow-read-file",
+            "fs:allow-stat",
+            "fs:allow-write-file",
+        ]
+    );
+}
+
 /// The app's own data directory (the API key in swarm-config.json, the
 /// event log, swarmd's token) and the usual credential stores stay out of
 /// reach even when a dialog grant covers them, e.g. when the user opens
