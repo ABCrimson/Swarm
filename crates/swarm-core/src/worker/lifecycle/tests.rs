@@ -440,6 +440,34 @@ fn test_worker_input_preview_redacts_credentials() {
     let preview = p.preview.expect("tool input carries a preview");
     assert!(preview.contains("[REDACTED]"), "got: {preview:?}");
     assert!(!preview.contains("sk-ant-api03"), "got: {preview:?}");
+
+    // Control characters are word boundaries only before stripping: a key
+    // between CR or LF must be redacted on the raw text.
+    for (input, leak) in [
+        (
+            &b"echo ok\rAKIAIOSFODNN7EXAMPLE\rls\r"[..],
+            "AKIAIOSFODNN7EXAMPLE",
+        ),
+        (
+            &b"cat <<EOF\nsk-proj-abcdefghijklmnopqrstuvwxyz\nEOF\n"[..],
+            "sk-proj-",
+        ),
+    ] {
+        do_worker_input(
+            &sink,
+            &registry,
+            id,
+            input,
+            InputSource::Tool,
+            Provenance::default(),
+        )
+        .unwrap();
+        let SwarmEvent::WorkerInput(p) = rx.recv().unwrap().event else {
+            panic!("expected WorkerInput");
+        };
+        let preview = p.preview.expect("tool input carries a preview");
+        assert!(!preview.contains(leak), "got: {preview:?}");
+    }
 }
 
 /// A writer that blocks until released, like a PTY whose

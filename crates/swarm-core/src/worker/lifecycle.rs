@@ -765,13 +765,16 @@ fn delete_isolation_branch_if_unchanged(
 }
 
 /// First 120 characters of `data`, control characters stripped and
-/// invalid UTF-8 replaced, and recognized credentials replaced with
-/// `[REDACTED]` by [`git::redact::redact`] on the full text before
-/// truncation, so no fragment survives the cut. Only for machine-issued
-/// input (`tool`, `automation`); `terminal` input never gets one (see
+/// invalid UTF-8 replaced. Recognized credentials become `[REDACTED]`
+/// via [`git::redact::redact`], run on the raw text (where control
+/// characters are still word boundaries, so a key between two `\r`
+/// is matched) and again after stripping, both before truncation so no
+/// fragment survives the cut. Only for machine-issued input (`tool`,
+/// `automation`); `terminal` input never gets one (see
 /// `WorkerInputPayload`'s "never carries raw keystrokes" note).
 fn stamped_preview(data: &[u8]) -> String {
-    let printable: String = String::from_utf8_lossy(data)
+    let raw = String::from_utf8_lossy(data);
+    let printable: String = git::redact::redact(&raw)
         .chars()
         .filter(|c| !c.is_control())
         .collect();
