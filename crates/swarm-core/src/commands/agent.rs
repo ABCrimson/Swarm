@@ -174,6 +174,16 @@ pub async fn agent_spawn(ctx: Ctx, args: Value) -> Result<Value, Value> {
         Ok(session) => {
             ctx.agent_session_registry
                 .insert(worker_id, std::sync::Arc::from(session));
+            // `kill_worker` removes the worker before it looks for a session,
+            // so a kill during the attach handshake is caught here.
+            if let Err(e) = ctx.registry.get_worker(&worker_id) {
+                if let Some(session) = ctx.agent_session_registry.remove(&worker_id)
+                    && let Err(err) = session.shutdown().await
+                {
+                    tracing::warn!(%worker_id, error = %err, "agent_spawn: session shutdown after a kill during attach failed");
+                }
+                return Err(agent_spawn_error(None, e.to_string()));
+            }
             ok_value(&worker_id.to_string())
         }
         Err(e) => {
