@@ -14,8 +14,7 @@ targets = [
 yanked = "deny"
 # Unmaintained notices only fail for direct dependencies. Tauri 3 alpha's
 # Linux GTK3 stack carries one transitively: proc-macro-error
-# (RUSTSEC-2024-0370, via glib-macros); the Tauri 2 stack's unic-* crates
-# are gone from the graph.
+# (RUSTSEC-2024-0370, via glib-macros).
 unmaintained = "workspace"
 
 [licenses]
