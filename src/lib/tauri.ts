@@ -351,7 +351,7 @@ export async function listWorkers(): Promise<Worker[]> {
  * when the input contains any control other than CR or LF; `terminal`
  * never gets one).
  */
-export type WorkerInputSource = "terminal" | "tool" | "automation";
+type WorkerInputSource = "terminal" | "tool" | "automation";
 
 /**
  * Writes `data` to a worker's PTY stdin. A string, not bytes: Rust's
@@ -525,7 +525,7 @@ const UpdateCheckResultSchema = z.object({
 });
 
 /** Result of a manual or on-launch update check. */
-export type UpdateCheckResult = z.output<typeof UpdateCheckResultSchema>;
+type UpdateCheckResult = z.output<typeof UpdateCheckResultSchema>;
 
 /**
  * Asks the configured update endpoint for a newer version.
