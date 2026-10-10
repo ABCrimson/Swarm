@@ -152,6 +152,7 @@ describe("evaluateThresholds", () => {
       expect(alerts[0].message).toContain("CPU Usage");
       expect(alerts[0].message).toContain("72.5%");
       expect(alerts[0].message).toContain("Elevated");
+      expect(alerts[0].message).toContain("(Threshold: 70%)");
     });
 
     it("includes 'Critically High' in critical messages", () => {
@@ -185,6 +186,12 @@ describe("alert cooldown (parametrized)", () => {
     const alerts = evaluateThresholds(hotSnapshot, thresholds, cooldowns, 75_000, 60_000);
     expect(alerts).toHaveLength(1);
     expect(alerts[0].severity).toBe("critical");
+  });
+
+  it("fires exactly when the cooldown has just elapsed", () => {
+    expect(
+      evaluateThresholds(hotSnapshot, thresholds, { cpu: 10_000 }, 70_000, 60_000),
+    ).toHaveLength(1);
   });
 
   it("applies the Settings default cooldown", () => {
