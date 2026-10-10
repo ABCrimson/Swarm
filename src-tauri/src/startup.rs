@@ -17,8 +17,7 @@ use swarm_core::runtime::{Runtime, RuntimeConfig, RuntimeStartError};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-/// Label of the window tauri.conf.json declares.
-const MAIN_WINDOW: &str = "main";
+use crate::MAIN_WINDOW;
 
 /// Why SWARM Orchestrator could not start. `Display` is the Title Case
 /// text the startup dialog shows.

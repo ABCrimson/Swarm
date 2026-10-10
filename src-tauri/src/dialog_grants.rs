@@ -23,12 +23,10 @@ use tauri::scope::fs::{Event, Scope};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_fs::FsExt;
 
+use crate::MAIN_WINDOW;
+
 /// Identifier of the runtime capabilities that carry mirrored grants.
 const CAPABILITY: &str = "dialog-grants";
-
-/// Label of the window the capability applies to, as in
-/// capabilities/default.json.
-const MAIN_WINDOW: &str = "main";
 
 /// Mirrors every folder the fs scope grants from now on (an open dialog,
 /// a drag and drop) into the global `fs:scope`. Called once, from the

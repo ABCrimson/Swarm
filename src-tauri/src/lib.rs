@@ -40,6 +40,10 @@ mod frontend_contract;
 #[cfg(test)]
 mod test_support;
 
+/// Label of the one window tauri.conf.json declares and
+/// capabilities/default.json grants.
+const MAIN_WINDOW: &str = "main";
+
 /// Builds the process's Tokio runtime and installs it as Tauri's async
 /// runtime.
 ///
