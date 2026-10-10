@@ -163,9 +163,10 @@ mod tests {
             app.manage(Ctx::from_runtime(&runtime));
             app.manage(Registry::new());
             app.manage(runtime);
-            let webview = WebviewWindowBuilder::new(&app, "main", WebviewUrl::default())
-                .build()
-                .unwrap();
+            let webview =
+                WebviewWindowBuilder::new(&app, crate::MAIN_WINDOW, WebviewUrl::default())
+                    .build()
+                    .unwrap();
 
             Self {
                 webview,
