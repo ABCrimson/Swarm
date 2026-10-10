@@ -1119,18 +1119,41 @@ mod tests {
 
     /// A subscriber never sees an event before the head covers it — the
     /// ordering that makes "subscribe, then read `head_seq`" gap-free.
-    #[tokio::test]
-    async fn test_head_seq_is_published_before_the_fanout_delivers() {
-        let engine = OrchestrationEngine::start(EventLog::open_in_memory().unwrap(), None, |_| {});
-        let mut rx = engine.subscribe();
-        let sink = engine.sink();
-        for _ in 0..200 {
-            sink.emit(output());
+    /// A receiver spinning on its own thread checks each event the moment
+    /// the fanout publishes it, so a writer that offered an event before
+    /// storing its head would be caught mid-delivery.
+    #[test]
+    fn test_head_seq_is_published_before_the_fanout_delivers() {
+        const EVENTS: usize = 20_000;
+        let (tx, mut rx) = broadcast::channel(EVENTS);
+        let head = Arc::new(AtomicU64::new(0));
+        let mut writer = Writer::new(
+            EventLog::open_in_memory().unwrap(),
+            Arc::clone(&head),
+            |_: &DomainEvent| {},
+            Fanout::new(tx),
+        )
+        .unwrap();
+        let checker = std::thread::spawn(move || {
+            let mut stale = 0_u64;
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => {
+                        if head.load(Ordering::Acquire) < event.seq {
+                            stale += 1;
+                        }
+                    }
+                    Err(broadcast::error::TryRecvError::Empty) => std::hint::spin_loop(),
+                    Err(broadcast::error::TryRecvError::Closed) => break stale,
+                    Err(e) => panic!("the checker fell behind: {e}"),
+                }
+            }
+        });
+        for _ in 0..EVENTS {
+            writer.record(bare(output()));
         }
-        for _ in 0..200 {
-            let event = rx.recv().await.unwrap();
-            assert!(engine.head_seq() >= event.seq);
-        }
+        drop(writer);
+        assert_eq!(checker.join().unwrap(), 0, "events seen ahead of the head");
     }
 
     #[tokio::test]
