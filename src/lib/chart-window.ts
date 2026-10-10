@@ -11,8 +11,8 @@
 export const MAX_CHART_POINTS = 20;
 
 /**
- * Returns the trailing `max` items of `items` — the sliding-window "drop
- * the tail" rule. Always a fresh mutable array, as chart `data` props want.
+ * Returns the trailing `max` items of `items` — the sliding-window rule:
+ * the oldest items drop first. Always a fresh mutable array, as chart `data` props want.
  * A `max` of 0 (or less) keeps nothing — never `slice(-0)`, which is the whole array.
  */
 export function lastN<T>(items: readonly T[], max: number = MAX_CHART_POINTS): T[] {
