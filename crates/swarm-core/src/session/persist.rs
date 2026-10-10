@@ -339,8 +339,15 @@ mod tests {
         let paths = paths(&dir);
         fs::create_dir(sessions_path(&paths)).unwrap();
 
-        assert!(load(&paths, &SessionManager::new()).is_err());
-        assert!(save(&paths, &SessionManager::new()).is_err());
+        let shown = sessions_path(&paths).display().to_string();
+        let err = load(&paths, &SessionManager::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(&shown), "{err}");
+        let err = save(&paths, &SessionManager::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(&shown), "{err}");
         assert!(sessions_path(&paths).is_dir());
     }
 }
