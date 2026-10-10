@@ -201,13 +201,13 @@ describe("useWorkerEvents", () => {
       expect(getDefaultStore().get(selectedWorkerIdAtom)).toBeNull();
     });
 
-    it("worker_killed cancels the worker's in-flight chat turn", () => {
+    it("worker_killed cancels the worker's in-flight chat turn", async () => {
       renderHook(() => useWorkerEvents());
       mockCancelChatTurn.mockClear();
 
       emit("worker_killed", { workerId: W1 });
 
-      expect(mockCancelChatTurn).toHaveBeenCalledExactlyOnceWith(W1);
+      await vi.waitFor(() => expect(mockCancelChatTurn).toHaveBeenCalledExactlyOnceWith(W1));
     });
 
     it("keeps the selection when another worker is killed", () => {
