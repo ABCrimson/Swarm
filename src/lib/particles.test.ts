@@ -42,6 +42,20 @@ describe("createParticleSystem", () => {
   });
 });
 
+describe("createParticleSystem failure", () => {
+  it("destroys its buffers when a pipeline fails to compile", async () => {
+    const { device, asGpu } = recordingDevice();
+    const failure = new Error("WGSL compile error");
+    device.createComputePipelineAsync.mockRejectedValueOnce(failure);
+
+    await expect(createParticleSystem(asGpu, "bgra8unorm", 64)).rejects.toBe(failure);
+
+    const buffers = device.createBuffer.mock.results.map((r) => r.value as { destroy: () => void });
+    expect(buffers).toHaveLength(3);
+    for (const buffer of buffers) expect(buffer.destroy).toHaveBeenCalledOnce();
+  });
+});
+
 describe("writeSimParams", () => {
   it("packs every field at its WGSL struct offset, integers as u32", async () => {
     const { device, asGpu } = recordingDevice();
