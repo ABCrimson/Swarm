@@ -38,7 +38,7 @@ const captionStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: 11,
   fontWeight: 400,
-  color: "oklch(0.55 0.03 220)",
+  color: "var(--color-fg-dim)",
 };
 
 /** Style for the Recharts chart element itself: fill the panel body. */

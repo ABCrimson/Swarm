@@ -50,7 +50,7 @@ export function Tools(): React.ReactElement {
         >
           Tools
         </h1>
-        <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "oklch(0.55 0.04 220)" }}>
+        <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "var(--color-fg-dim)" }}>
           Manage Built-In And Custom Tool Definitions
         </p>
       </div>

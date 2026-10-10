@@ -32,7 +32,7 @@ export function Logs(): React.ReactElement {
           style={{
             fontFamily: "var(--font-body)",
             fontSize: 13,
-            color: "oklch(0.55 0.04 220)",
+            color: "var(--color-fg-dim)",
           }}
         >
           Centralised Log Aggregation From All Sources
