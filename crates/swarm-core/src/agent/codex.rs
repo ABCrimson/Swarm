@@ -112,8 +112,9 @@ const CLIENT_NAME: &str = "swarm";
 /// `initialize.clientInfo.title`.
 const CLIENT_TITLE: &str = "Swarm Orchestrator";
 
-/// Synthesized-settlement error text (Condition B), shared verbatim with
-/// `ClaudeCodeAdapter`.
+/// Prefix of the synthesized-settlement error (Condition B), shared verbatim
+/// with `ClaudeCodeAdapter`; the known cause or the stderr tail follows in
+/// parentheses.
 const PROCESS_EXITED_WITHOUT_RECEIPT: &str = "Process Exited Without A Receipt";
 /// Settlement error for an interrupted turn that carries no message.
 const TURN_INTERRUPTED: &str = "Turn Interrupted";
@@ -613,6 +614,8 @@ struct Shared {
     /// Serializes [`teardown`] across callers.
     teardown_gate: tokio::sync::Mutex<()>,
     stderr_tail: Arc<parking_lot::Mutex<VecDeque<u8>>>,
+    /// Why the session is torn down, when SWARM knows it (a framer error).
+    teardown_cause: parking_lot::Mutex<Option<String>>,
 }
 
 impl Shared {
@@ -766,11 +769,13 @@ async fn teardown(shared: &Arc<Shared>) -> ExitSummary {
 
     if announced {
         if let Some(turn_id) = &running {
+            let cause = shared.teardown_cause.lock().take();
+            let detail = cause.unwrap_or_else(|| stderr_snippet(&shared.stderr_tail));
             shared.emit(SwarmEvent::AgentTurnSettled(AgentTurnSettledPayload {
                 worker_id: shared.worker_id,
                 turn_id: turn_id.clone(),
                 status: AgentTurnStatus::Error,
-                error: Some(PROCESS_EXITED_WITHOUT_RECEIPT.to_string()),
+                error: Some(format!("{PROCESS_EXITED_WITHOUT_RECEIPT} ({detail})")),
                 cost_usd: None,
                 usage: None,
                 duration_ms: 0,
@@ -837,6 +842,7 @@ async fn run_reader(
                         %error,
                         "codex adapter: ndjson framer error — tearing the session down"
                     );
+                    *shared.teardown_cause.lock() = Some(error.to_string());
                     while let Ok(line) = lines.try_recv() {
                         handle_line(&shared, &line);
                     }
@@ -1613,6 +1619,7 @@ impl AgentAdapter for CodexAdapter {
                 settled: watch::Sender::new(Settled::default()),
                 teardown_gate: tokio::sync::Mutex::new(()),
                 stderr_tail,
+                teardown_cause: parking_lot::Mutex::new(None),
             });
 
             // From here on the child must never outlive a failed spawn —

@@ -1382,9 +1382,11 @@ async fn a_server_death_mid_turn_synthesizes_the_settlement_then_exits() {
     assert_eq!(settled.len(), 1);
     assert_eq!(settled[0].turn_id, turn);
     assert_eq!(settled[0].status, AgentTurnStatus::Error);
-    assert_eq!(
-        settled[0].error.as_deref(),
-        Some(PROCESS_EXITED_WITHOUT_RECEIPT)
+    assert!(
+        settled[0]
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with(PROCESS_EXITED_WITHOUT_RECEIPT))
     );
     let settled_at = position(&events, |e| matches!(e, SwarmEvent::AgentTurnSettled(_)));
     let exited_at = position(&events, is_exit);
@@ -1511,9 +1513,11 @@ async fn nothing_is_emitted_once_teardown_began() {
     let settled = settlements(&events);
     assert_eq!(settled.len(), 1, "only the synthesized settlement");
     assert_eq!(settled[0].turn_id, turn);
-    assert_eq!(
-        settled[0].error.as_deref(),
-        Some(PROCESS_EXITED_WITHOUT_RECEIPT)
+    assert!(
+        settled[0]
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with(PROCESS_EXITED_WITHOUT_RECEIPT))
     );
     assert_eq!(position(&events, is_exit), events.len() - 1);
 }
