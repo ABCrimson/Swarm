@@ -20,7 +20,7 @@ import { useAtomValue } from "jotai";
 import { useEffect, useReducer, useRef } from "react";
 import { toast } from "sonner";
 import * as z from "zod";
-import { onEvent, waitFor } from "#lib/event-bus";
+import { type DomainEvent, onEvent, waitFor } from "#lib/event-bus";
 import { errorMessage } from "#lib/is-error";
 import { CLAUDE_MODELS } from "#lib/models";
 import { composeShipBody, generateCausalProse } from "#lib/ship-causal";
@@ -84,7 +84,7 @@ export interface ShipSnapshot {
 }
 
 /** Every transition `shipReducer` knows. */
-export type ShipAction =
+type ShipAction =
   | { readonly type: "preflightStarted" }
   | { readonly type: "preflightLoaded"; readonly preflight: ShipPreflight }
   | { readonly type: "preflightFailed"; readonly error: ShipError }
@@ -299,18 +299,19 @@ type ShipSteps = (workerId: string, shipId: string, draft: ShipDraft) => Promise
  */
 const inFlightWorkers = new Set<string>();
 
+/** The newest refetch per worker, so a superseded refetch's failure can stay silent. */
+const latestRefresh = new Map<string, symbol>();
+
 /**
- * DIRECTIVE (B1): how long the receipt wait (`ship_settled`) may stay
- * armed before the flow reports "failed". The wait is armed just before
- * the final step's invoke and so spans that whole call. It is a
- * frontend watchdog, not the backend's git budget: `git/cli.rs` bounds
- * the ship chain's `commit` (`MUTATE_TIMEOUT`) and `push`
- * (`PUSH_TIMEOUT`) at 600s each (`CREATE_TIMEOUT` is 120s, but that is
- * `git worktree add`, which the ship chain never runs). Known gap
- * (not yet fixed): 30s is shorter than those 600s budgets, so a commit
- * whose hooks, or a push, run past 30s is reported "failed" while the
- * backend still completes it. Always passed explicitly rather than
- * relying on `waitFor`'s 5s default.
+ * DIRECTIVE (B1): how long the receipt (`ship_settled`) may stay missing
+ * after the final step's invoke resolves before the flow reports
+ * "failed". The clock starts when that invoke resolves, not when the
+ * call starts, so a commit or push that the backend lets run for its
+ * full 600s budget (`git/cli.rs`: `MUTATE_TIMEOUT` for `commit`,
+ * `PUSH_TIMEOUT` for `push`) is never misreported as a timeout; a
+ * backend give-up rejects the invoke itself. The event and the invoke
+ * response travel separately, so 30s is the allowance for the receipt
+ * to land after the response. Always passed explicitly rather than relying on `waitFor`'s 5s default.
  */
 const SHIP_SETTLED_TIMEOUT_MS = 30_000;
 
@@ -345,19 +346,26 @@ async function loadPreflight(
 
 /**
  * Refetches preflight without leaving the current state — a failure
- * keeps the previous (still meaningful) preview rather than clobbering
- * the UI over a transient refetch error.
+ * keeps the previous preview rather than clobbering the UI over a
+ * transient refetch error, and says so in an error toast, because that
+ * preview may describe the other staging mode. A `quiet` refetch (after
+ * a failed action) leaves the action's error as the only message. A
+ * failure of a refetch that a later one superseded stays silent.
  */
 async function refreshPreflight(
   workerId: string,
   mode: StagingMode,
   dispatch: ShipDispatch,
+  { quiet = false } = {},
 ): Promise<void> {
+  const token = Symbol();
+  latestRefresh.set(workerId, token);
   try {
     const preflight = await gitShipPreflight(workerId, mode);
     dispatch({ type: "preflightRefreshed", preflight, mode });
-  } catch {
-    // Keep the previous preview.
+  } catch (err) {
+    if (!quiet && latestRefresh.get(workerId) === token)
+      toast.error(`Could Not Refresh The Preview: ${toShipError(err).message}`);
   }
 }
 
@@ -376,7 +384,8 @@ async function fetchContext(
   if (!silent) dispatch({ type: "contextRequested" });
   try {
     dispatch({ type: "contextLoaded", context: await shipContext(workerId) });
-  } catch {
+  } catch (err) {
+    console.error("useShip: ship_context failed", err);
     if (!silent) dispatch({ type: "contextFailed" });
   }
 }
@@ -437,7 +446,7 @@ async function runAction(
   } catch (err) {
     dispatch({ type: "actionFailed", error: toShipError(err) });
     await Promise.all([
-      refreshPreflight(workerId, draft.mode, dispatch),
+      refreshPreflight(workerId, draft.mode, dispatch, { quiet: true }),
       fetchContext(workerId, dispatch, { silent: true }),
     ]);
     return;
@@ -465,9 +474,14 @@ async function commitOnlySteps(
   shipId: string,
   { message, mode }: ShipDraft,
 ): Promise<ShipResult> {
-  const settled = armSettledWait(shipId);
-  const commit = await gitStageCommit(workerId, shipId, message, mode, true);
-  await settled;
+  const receipt = armSettledWait(shipId);
+  const commit = await gitStageCommit(workerId, shipId, message, mode, true).catch(
+    (err: unknown) => {
+      receipt.disarm();
+      throw err;
+    },
+  );
+  await receipt.settled();
   return { commitSha: commit.sha };
 }
 
@@ -487,9 +501,12 @@ async function commitAndPushSteps(
   // Armed *before* the call whose completion races the event: the
   // backend can emit ship_settled at any point during the push,
   // including before its invoke() promise resolves.
-  const settled = armSettledWait(shipId);
-  const push = await gitPush(workerId, shipId, true);
-  await settled;
+  const receipt = armSettledWait(shipId);
+  const push = await gitPush(workerId, shipId, true).catch((err: unknown) => {
+    receipt.disarm();
+    throw err;
+  });
+  await receipt.settled();
   return { commitSha: commitSha ?? push.sha, pushedRef: push.pushedRef };
 }
 
@@ -512,7 +529,7 @@ async function commitPushAndCompareSteps(
   // Record + optional AI prose) when it has loaded, else the commit
   // message's own trailing lines — shipping never waits on the record.
   const body = composedBody ?? bodyLines.join("\n").trim();
-  const settled = armSettledWait(shipId);
+  const receipt = armSettledWait(shipId);
   const prUrl = await shipCompareUrl(
     workerId,
     shipId,
@@ -520,8 +537,11 @@ async function commitPushAndCompareSteps(
     push.pushedRef,
     title,
     body,
-  );
-  await settled;
+  ).catch((err: unknown) => {
+    receipt.disarm();
+    throw err;
+  });
+  await receipt.settled();
   return { commitSha: commitSha ?? push.sha, pushedRef: push.pushedRef, prUrl };
 }
 
@@ -555,36 +575,53 @@ async function stageOrRecoverFromNothingToCommit(
   }
 }
 
+/** The receipt wait for one ship attempt, from {@link armSettledWait}. */
+interface SettledWait {
+  /** Resolves once the receipt has arrived (now or earlier); rejects with a `"timeout"` `ShipCommandError` if it is still missing `SHIP_SETTLED_TIMEOUT_MS` after this call. */
+  readonly settled: () => Promise<void>;
+  /** Drops the listener; called when the final invoke rejects, because no receipt will be awaited. */
+  readonly disarm: () => void;
+}
+
 /**
- * Arms a `waitFor("ship_settled", shipId)` listener and returns it
- * immediately, with a no-op `.catch()` already attached so an early
- * rejection (the 30s timeout firing before the caller gets around to
- * `await`ing the returned promise) can never surface as a transient
- * unhandled-rejection warning. The `.catch()` creates and discards a
- * *derived* promise — the returned promise still rejects normally when
- * awaited, propagating the real error to `runAction`'s `catch`. A
+ * Starts listening for this attempt's `ship_settled` receipt *before* the
+ * final step's invoke, because the backend can emit it before that
+ * invoke resolves. Arrival is only recorded here; the
+ * `SHIP_SETTLED_TIMEOUT_MS` clock starts in `settled()`, after the invoke
+ * resolved, so a slow but successful commit or push is never reported as
+ * a timeout. A backend give-up rejects the invoke, not this wait. The
  * timeout rejects as a `ShipCommandError` of kind `"timeout"` (the git
- * step may still complete, see `SHIP_SETTLED_TIMEOUT_MS`), with the
- * `waitFor` error as its cause.
+ * step may still have completed) with the `waitFor` error as its cause.
  */
-function armSettledWait(shipId: string): Promise<unknown> {
-  const settled = waitFor(
-    (e) =>
-      e.type === "ship_settled" &&
-      ShipSettledPayloadSchema.safeParse(e.payload).data?.shipId === shipId,
-    SHIP_SETTLED_TIMEOUT_MS,
-  ).catch((err: unknown) => {
-    throw new ShipCommandError(
-      {
-        kind: "timeout",
-        message: `No Confirmation Arrived Within ${SHIP_SETTLED_TIMEOUT_MS / 1000} Seconds — The Commit Or Push May Still Have Completed; Refresh The Preflight To Check.`,
-        remedy: null,
-      },
-      { cause: err },
-    );
+function armSettledWait(shipId: string): SettledWait {
+  const isReceipt = (e: DomainEvent): boolean =>
+    e.type === "ship_settled" &&
+    ShipSettledPayloadSchema.safeParse(e.payload).data?.shipId === shipId;
+  let arrived = false;
+  const disarm = onEvent("*", (e) => {
+    if (!isReceipt(e)) return;
+    arrived = true;
+    disarm();
   });
-  settled.catch(() => {});
-  return settled;
+  return {
+    disarm,
+    settled: async () => {
+      disarm();
+      if (arrived) return;
+      try {
+        await waitFor(isReceipt, SHIP_SETTLED_TIMEOUT_MS);
+      } catch (err) {
+        throw new ShipCommandError(
+          {
+            kind: "timeout",
+            message: `No Confirmation Arrived Within ${SHIP_SETTLED_TIMEOUT_MS / 1000} Seconds — The Commit Or Push May Still Have Completed; Refresh The Preflight To Check.`,
+            remedy: null,
+          },
+          { cause: err },
+        );
+      }
+    },
+  };
 }
 
 /** Extracts the typed `ShipError` from a thrown `ShipCommandError`, falling back to a generic `"unknown"` for anything else (a task panic, a network hiccup). */

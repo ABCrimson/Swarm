@@ -85,7 +85,7 @@ const ERROR_TITLES = {
   workerNotFound: "Worker Not Found",
   noWorktree: "No Worktree To Ship",
   primaryCheckout: "Primary Checkout Is Protected",
-  invalidBranch: "No Branch Checked Out",
+  invalidBranch: "Branch Cannot Be Shipped",
   noRemote: "No Remote Configured",
   nonGitHubHost: "Compare Links Need A GitHub Remote",
   nothingToCommit: "Nothing To Commit",

@@ -21,10 +21,9 @@ function emit(type: string, payload: unknown): void {
 }
 
 // DIRECTIVE (B1): this fake `waitFor` mirrors the real `#lib/event-bus`
-// timeout (a real `setTimeout` that rejects) rather than waiting
-// forever — a timer-less fake is exactly why the suite once missed
-// useShip arming the receipt wait with the library's 5000ms default
-// instead of an explicit 30000ms budget.
+// timeout (a real `setTimeout` that rejects) instead of waiting forever.
+// A timer-less fake cannot tell an explicit 30000ms receipt budget from
+// the library's 5000ms default.
 vi.mock(import("#lib/event-bus"), () => ({
   onEvent: (type: string, handler: Handler) => {
     const set = handlers.get(type) ?? new Set<Handler>();
@@ -550,6 +549,40 @@ describe("useShip", () => {
     expect(result.current.state).toBe("settled");
   });
 
+  it("DIRECTIVE (B1): a push slower than 30 s whose receipt arrives with its response settles success", async () => {
+    vi.useFakeTimers();
+    mockGitShipPreflight.mockResolvedValue(makePreflight());
+    mockGitStageCommit.mockResolvedValue(makeCommitOutcome());
+    const push = Promise.withResolvers<ReturnType<typeof makePushOutcome>>();
+    mockGitPush.mockReturnValue(push.promise);
+
+    const { result } = await renderPreviewing();
+
+    let actionPromise: Promise<void> = Promise.resolve();
+    act(() => {
+      actionPromise = result.current.commitAndPush();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    const shipId = mockGitPush.mock.calls[0]?.[1] as string;
+
+    // The receipt clock must not run while the invoke is still in flight.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45_000);
+    });
+    expect(result.current.state).toBe("running");
+
+    await act(async () => {
+      emit("ship_settled", { shipId, workerId: WORKER_ID });
+      push.resolve(makePushOutcome());
+      await vi.advanceTimersByTimeAsync(0);
+      await actionPromise;
+    });
+
+    expect(result.current.state).toBe("settled");
+  });
+
   it("reports a missing receipt after the 30 s budget as a timeout, not as an unknown failure", async () => {
     vi.useFakeTimers();
     mockGitShipPreflight.mockResolvedValue(makePreflight());
@@ -680,5 +713,40 @@ describe("useShip", () => {
     expect(mockGitShipPreflight).toHaveBeenNthCalledWith(2, WORKER_ID, "staged");
     expect(result.current.mode).toBe("staged");
     expect(result.current.preflight?.skipped).toHaveLength(1);
+  });
+
+  it("toasts and keeps the previous preview when a mode-switch refetch fails", async () => {
+    mockGitShipPreflight
+      .mockResolvedValueOnce(makePreflight())
+      .mockRejectedValueOnce(new Error("boom"));
+
+    const { result } = await renderPreviewing();
+    const before = result.current.preflight;
+
+    await act(async () => {
+      result.current.setMode("staged");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(toast.error).toHaveBeenCalledOnce();
+    expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toMatch(/^Could Not Refresh The Preview:/);
+    expect(result.current.preflight).toBe(before);
+  });
+
+  it("keeps the action's error as the only message when the refetch after a failed action also fails", async () => {
+    mockGitShipPreflight
+      .mockResolvedValueOnce(makePreflight())
+      .mockRejectedValueOnce(new Error("boom"));
+    mockGitStageCommit.mockResolvedValueOnce(makeCommitOutcome());
+    mockGitPush.mockRejectedValueOnce(pushRejectedError());
+
+    const { result } = await renderPreviewing();
+    await act(async () => {
+      await result.current.commitAndPush();
+    });
+
+    expect(result.current.state).toBe("failed");
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });

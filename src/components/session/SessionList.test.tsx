@@ -53,9 +53,9 @@ describe("SessionList", () => {
     );
   });
 
-  // Regression: rows used to be absolutely positioned every 80px, so a
-  // card with a (wrapping) tag row overflowed into the next card's
-  // clickable area. Rows are now in normal flow and size to their card.
+  // Rows must stay in normal flow and size to their card. An absolutely
+  // positioned row of fixed height would let a card with a wrapping tag
+  // row overflow into the next card's clickable area.
   it("lays rows out in normal flow, sized by their content", () => {
     addSession("Tagged", "2026-09-01T10:00:00.000Z", ["one", "two", "three", "four", "five"]);
     addSession("Plain", "2026-09-02T10:00:00.000Z");

@@ -73,7 +73,7 @@ function PreviewBody({
         </Notice>
       );
     case "text":
-      return <TextView text={preview.text} highlight={isJsonPath(path)} />;
+      return <TextView name={basename(path)} text={preview.text} highlight={isJsonPath(path)} />;
   }
 }
 
@@ -94,9 +94,11 @@ function isJsonPath(path: string): boolean {
 }
 
 function TextView({
+  name,
   text,
   highlight,
 }: {
+  readonly name: string;
   readonly text: string;
   readonly highlight: boolean;
 }): React.ReactElement {
@@ -106,7 +108,12 @@ function TextView({
   const faithful = tokens !== null && tokens.map((t) => t.value).join("") === text;
 
   return (
-    <div className="scroll-area flex flex-1 overflow-auto py-3 font-mono text-md leading-relaxed">
+    <section
+      aria-label={`Contents Of ${name}`}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1).
+      tabIndex={0}
+      className="scroll-area flex flex-1 overflow-auto py-3 font-mono text-md leading-relaxed"
+    >
       <pre
         aria-hidden="true"
         className="sticky left-0 shrink-0 select-none bg-surface-0 pr-4 pl-4 text-right text-fg-dim"
@@ -128,6 +135,6 @@ function TextView({
             )
           : text}
       </pre>
-    </div>
+    </section>
   );
 }

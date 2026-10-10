@@ -1,4 +1,4 @@
-import { useDeferredValue, useId, useState } from "react";
+import { useDeferredValue, useId, useRef, useState } from "react";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
 import { pluralize } from "#lib/format";
@@ -95,6 +95,8 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
   const fromId = useId();
   const toId = useId();
+  // Clear Dates unmounts once both dates are empty; focus moves to From first so it never drops to <body>.
+  const fromInputRef = useRef<HTMLInputElement>(null);
 
   const filtering = deferredQuery !== "" || dateRange.from !== "" || dateRange.to !== "";
   const results = sessions
@@ -122,6 +124,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
             From
           </label>
           <input
+            ref={fromInputRef}
             id={fromId}
             type="date"
             value={dateRange.from}
@@ -144,7 +147,10 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
           {(dateRange.from !== "" || dateRange.to !== "") && (
             <button
               type="button"
-              onClick={() => setDateRange({ from: "", to: "" })}
+              onClick={() => {
+                setDateRange({ from: "", to: "" });
+                fromInputRef.current?.focus();
+              }}
               className="cursor-pointer rounded bg-[oklch(0.22_0.03_220/0.5)] px-2 py-1 text-xs text-[oklch(0.65_0.06_220)] hover:bg-[oklch(0.26_0.04_220/0.6)] focus-visible:outline-2 focus-visible:outline-plasma"
             >
               Clear Dates
