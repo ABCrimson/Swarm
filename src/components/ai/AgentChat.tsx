@@ -295,11 +295,15 @@ function TranscriptRow({
       // The red tint is not the only sign of a failed send: it also says so in words.
       return item.failed ? (
         <div style={userBubbleFailedStyle}>
+          <span className="sr-only">You: </span>
           {item.text}
           <div style={settledErrorStyle}>Not Sent</div>
         </div>
       ) : (
-        <div style={userBubbleStyle}>{item.text}</div>
+        <div style={userBubbleStyle}>
+          <span className="sr-only">You: </span>
+          {item.text}
+        </div>
       );
     case "block": {
       // tool_use blocks render through their agent_tool_call event instead.
@@ -309,6 +313,7 @@ function TranscriptRow({
       if (item.payload.kind === "thinking") return <div style={thinkingBlockStyle}>{text}</div>;
       return (
         <div style={streamWrapStyle}>
+          <span className="sr-only">Assistant: </span>
           <AIMessageStream content={text} isStreaming={false} />
         </div>
       );
@@ -415,6 +420,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
               </div>
             ) : (
               <div key={key} style={streamWrapStyle}>
+                <span className="sr-only">Assistant: </span>
                 <AIMessageStream content={block.text} isStreaming />
               </div>
             ),

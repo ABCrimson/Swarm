@@ -184,6 +184,7 @@ function MessageBubble({ message }: { readonly message: ChatMessage }): React.Re
   if (message.role === "user") {
     return (
       <div style={userBubbleStyle}>
+        <span className="sr-only">You: </span>
         <div>{message.content}</div>
         <div style={{ ...metaStyle, textAlign: "right" }}>{time}</div>
       </div>
@@ -192,6 +193,7 @@ function MessageBubble({ message }: { readonly message: ChatMessage }): React.Re
 
   return (
     <div style={assistantBubbleStyle}>
+      <span className="sr-only">Assistant: </span>
       {message.thinking && <Thinking text={message.thinking} />}
       {message.content && <AIMessageStream content={message.content} isStreaming={false} />}
       {message.toolCalls && <ToolCalls calls={message.toolCalls} />}
@@ -212,6 +214,7 @@ function LiveBubble({ live }: { readonly live: LiveTurn }): React.ReactElement {
   const idle = !live.text && !live.thinking && live.toolCalls.length === 0;
   return (
     <div style={assistantBubbleStyle} aria-busy="true">
+      <span className="sr-only">Assistant: </span>
       {live.phase === "queued" && <div style={metaStyle}>Waiting For A Free Stream Slot…</div>}
       {live.thinking && <Thinking text={live.thinking} open={!live.text} />}
       {live.text && <AIMessageStream content={live.text} isStreaming />}
