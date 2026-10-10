@@ -268,7 +268,8 @@ fn codex_capabilities() -> Capabilities {
         partial_deltas: true,
         // thread/resume.
         resume: true,
-        // turn/completed carries token usage, never a dollar figure.
+        // Token usage arrives as thread/tokenUsage/updated and rides the turn's
+        // settlement; Codex never reports a dollar figure.
         native_cost: false,
         permission_modes: vec![
             "restricted".to_string(),
