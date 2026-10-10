@@ -377,9 +377,9 @@ async fn tool_turn_pairs_calls_with_results_and_emits_no_empty_deltas() {
     assert_eq!(settled_for(&harness.recorder, &turn)[0]["numTurns"], 3);
 }
 
-/// CONFIRMED regression: the CLI reports API failures with
-/// `subtype: "success"` and `is_error: true`; the turn must settle as an
-/// error carrying the provider's explanation and diagnostics.
+/// The CLI reports API failures with `subtype: "success"` and
+/// `is_error: true`; the turn must settle as an error carrying the
+/// provider's explanation and diagnostics.
 #[tokio::test]
 async fn api_error_reported_as_success_settles_as_an_error() {
     let harness = Harness::new();
@@ -1056,8 +1056,8 @@ async fn shutdown_is_idempotent() {
     assert_eq!(harness.recorder.count("agent_session_exited"), 1);
 }
 
-/// CONFIRMED regression: a turn racing teardown is either refused or
-/// settled exactly once, never accepted and then forgotten.
+/// A turn racing teardown is either refused or settled exactly once,
+/// never accepted and then forgotten.
 #[tokio::test]
 async fn send_turn_racing_shutdown_never_loses_a_settlement() {
     for _ in 0..8 {
@@ -1096,7 +1096,7 @@ fn assert_session_closed(sent: &Result<TurnId, AppError>) {
     );
 }
 
-/// CONFIRMED regression, the exact window: teardown has claimed the turn
+/// The exact window: teardown has claimed the turn
 /// slot and the child but not yet closed stdin. A `send_turn` there must
 /// be refused; without the `closing` flag its write would still succeed
 /// and the turn would be accepted with nothing left to settle it.
@@ -1126,7 +1126,7 @@ async fn send_turn_is_refused_once_teardown_has_claimed_the_session() {
     assert_eq!(harness.recorder.count("agent_turn_settled"), 0);
 }
 
-/// CONFIRMED regression, through the real teardown: a `send_turn` that
+/// Through the real teardown: a `send_turn` that
 /// runs while `shutdown` is under way is refused as closed, and nothing
 /// settles.
 #[tokio::test]
@@ -1197,7 +1197,7 @@ async fn await_turn_completion_resolves_on_settlement_and_on_teardown() {
 
 // ── Spawn failures ───────────────────────────────────────────────────
 
-/// CONFIRMED regression: a failed spawn kills and reaps its child.
+/// A failed spawn kills and reaps its child.
 #[tokio::test]
 async fn a_handshake_that_never_answers_fails_the_spawn_and_reaps_the_child() {
     let harness = Harness::new();
