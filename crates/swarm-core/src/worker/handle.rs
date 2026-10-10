@@ -76,11 +76,12 @@ impl std::fmt::Display for WorkerState {
 ///
 /// `snake_case` strings on the wire (`"worktree"`, `"none"`); `Display`
 /// renders the same strings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerIsolation {
     /// Spawn inside a fresh `git worktree` of [`WorkerConfig::repo_root`].
     /// The default; it only takes effect when `repo_root` is present.
+    #[default]
     Worktree,
     /// No isolation: spawn directly at [`WorkerConfig::cwd`].
     None,
@@ -93,11 +94,6 @@ impl std::fmt::Display for WorkerIsolation {
             Self::None => "none",
         })
     }
-}
-
-/// `#[serde(default)]` for [`WorkerConfig::isolation`].
-const fn default_isolation() -> WorkerIsolation {
-    WorkerIsolation::Worktree
 }
 
 /// Default PTY height (24 rows, the classic terminal size).
@@ -160,7 +156,7 @@ pub struct WorkerConfig {
     #[serde(default)]
     pub repo_root: Option<String>,
     /// Isolation mode, effective only when `repo_root` is present.
-    #[serde(default = "default_isolation")]
+    #[serde(default)]
     pub isolation: WorkerIsolation,
 }
 
@@ -174,7 +170,7 @@ impl Default for WorkerConfig {
             rows: default_rows(),
             cols: default_cols(),
             repo_root: None,
-            isolation: default_isolation(),
+            isolation: WorkerIsolation::default(),
         }
     }
 }
