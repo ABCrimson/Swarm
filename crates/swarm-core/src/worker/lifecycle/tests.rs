@@ -633,7 +633,9 @@ fn test_spawn_never_records_env_values_in_events_or_spans() {
     );
 }
 
-/// The failure path logs inside `spawn_pty`'s span: still no secret.
+/// A failed spawn logs `PTY spawn failed` in `do_spawn_worker`'s span,
+/// after `spawn_pty`'s span (printed with its redacted fields) has
+/// closed: still no secret.
 #[test]
 fn test_a_failed_spawn_never_records_env_values() {
     let (result, captured, registry) = spawn_under_capture("swarm-no-such-shell-xyz");
