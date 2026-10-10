@@ -42,7 +42,8 @@ impl Router {
     ///   engine is shut down, or the writer could not persist it); nothing
     ///   is delivered.
     /// * `Bus Send Timed Out.` when the event was not recorded within
-    ///   five seconds.
+    ///   five seconds. It stays queued and may still be recorded and
+    ///   delivered, so a retry can duplicate the hand-off.
     pub async fn send(
         &self,
         from: Uuid,
