@@ -380,7 +380,7 @@ cargo test --workspace --doc
 | `swarm-desktop`               | 36    | 35 unit tests (command list and per-command ACL, capability and config contracts, dialog grants, lifecycle teardown) and 1 integration test (the shared Tokio runtime) |
 | **Total**                     | **664** |                                                       |
 
-`cargo test --workspace --locked` ran 677 tests at that head (in WSL; one more is ignored: it drives the installed `claude` CLI): 558 in `swarm-core` (542 unit plus 16 doc-tests), 36 in `swarm-desktop` and 83 in `swarmd`. The attribute total is lower because it leaves out the doc-tests, and a few tests are gated to one platform (the Windows short-name and invalid-name tests in `commands/fs.rs` run only on Windows). The doc-tests run with `cargo test --workspace --doc`.
+`cargo test --workspace --locked` ran 677 tests at that head (in WSL; one more is ignored: it drives the installed `claude` CLI): 558 in `swarm-core` (542 unit plus 16 doc-tests), 36 in `swarm-desktop` and 83 in `swarmd`. The attribute total leaves out the 16 doc-tests but counts tests that did not run in WSL: the ignored one and the `#[cfg(windows)]` tests (for example the short-name and invalid-name tests in `commands/fs.rs`). The doc-tests run with `cargo test --workspace --doc`.
 
 ### Frontend Testing
 
