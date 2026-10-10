@@ -30,7 +30,8 @@ use serde::Serialize;
 /// | `EventLog`         | SQLite event-log operation failed, or the engine is down  |
 /// | `QueueFull`        | The agent-turn scheduler's queue is full (backpressure)   |
 /// | `Config`           | `swarm-config.json` could not be read, parsed or written  |
-/// | `Git`              | A `git` invocation failed, timed out, or `git` is missing |
+/// | `Git`              | A `git` invocation failed, or `git` is missing or too old |
+/// | `GitTimeout`       | A `git` invocation exceeded its wall-clock budget         |
 /// | `AgentSessionBusy` | A turn was sent while another was in flight               |
 /// | `LineTooLong`      | A provider's NDJSON line exceeded the framer's cap        |
 ///
@@ -117,10 +118,10 @@ pub enum AppError {
     #[error("Config error: {0}")]
     Config(String),
 
-    /// A `git` CLI invocation (worktree/repo discovery) failed, timed
-    /// out, or the installed `git` binary is missing/too old. Carries
-    /// only command/stderr context — never repo file contents — so it
-    /// is safe to log.
+    /// A `git` CLI invocation (worktree/repo discovery) failed, or the
+    /// installed `git` binary is missing/too old. A wall-clock timeout
+    /// is [`AppError::GitTimeout`] instead. Carries only command/stderr
+    /// context — never repo file contents — so it is safe to log.
     #[error("Git error: {0}")]
     Git(String),
 
