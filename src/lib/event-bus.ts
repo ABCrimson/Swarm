@@ -34,7 +34,7 @@ export const DomainEventSchema = z.object({
 export type DomainEvent = Readonly<z.output<typeof DomainEventSchema>>;
 
 /** An event of type `K` whose payload passed that type's schema (`#lib/event-payloads`). */
-export type TypedDomainEvent<K extends EventType> = Readonly<
+type TypedDomainEvent<K extends EventType> = Readonly<
   Omit<DomainEvent, "type" | "payload"> & { type: K; payload: EventPayload<K> }
 >;
 
