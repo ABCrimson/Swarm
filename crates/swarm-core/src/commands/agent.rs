@@ -95,8 +95,8 @@ pub async fn agent_turn_started(ctx: Ctx, args: Value) -> Result<Value, Value> {
 /// `agent_spawn`'s error: `{ workerId, message }`, where `workerId` is
 /// set when the PTY worker was created but the agent session failed to
 /// attach (the worker stays usable as a plain terminal), and `null` when
-/// no worker remains (none was created, or it was killed before its
-/// session attached).
+/// no worker remains (none was created, or it was killed before or
+/// during its session's attach).
 fn agent_spawn_error(worker_id: Option<String>, message: String) -> Value {
     serde_json::json!({ "workerId": worker_id, "message": message })
 }
