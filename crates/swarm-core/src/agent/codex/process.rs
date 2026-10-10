@@ -33,7 +33,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// `Command` only appends `.exe`, but an npm install of Codex puts
 /// `codex.cmd` on `PATH`. Names with an extension or a directory are left
 /// alone (`None`), and the current directory is never searched. Nor is it
-/// searched by the shim's own `node` lookup: [`child_env`] sets
+/// searched by the shim's own `node` lookup: [`super::tier::child_env`] sets
 /// `NoDefaultCurrentDirectoryInExePath`.
 #[cfg(any(windows, test))]
 pub(super) fn resolve_with_pathext(

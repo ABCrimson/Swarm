@@ -1496,6 +1496,29 @@ async fn an_oversized_line_tears_the_session_down() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_framer_error_before_the_ack_names_its_cause() {
+    let h = Harness::with_timeouts(
+        "oversized_before_turn_ack.script",
+        Timeouts {
+            graceful_exit: Duration::from_millis(200),
+            ..test_timeouts()
+        },
+    );
+    let session = h.spawn().await;
+    let error = session
+        .send_turn(TurnInput {
+            prompt: "go".to_string(),
+        })
+        .await
+        .expect_err("the framer error closes the session before the ack");
+    assert_matches!(
+        &error,
+        AppError::Ipc(m)
+            if m.starts_with("codex session closed before acknowledging the turn (NDJSON line exceeded ")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_framer_error_mid_turn_settles_with_its_cause() {
     let h = Harness::with_timeouts(
         "oversized_mid_turn.script",
