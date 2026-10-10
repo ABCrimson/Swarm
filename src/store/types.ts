@@ -417,9 +417,9 @@ export const ShipContextSchema = z.object({
   turns: z.array(CausalTurnSchema),
   commits: z.array(CausalCommitSchema),
   omittedTurnCount: z.int(),
-  /** `true` when the backend's row fetch for this range hit its own cap — older turns than `omittedTurnCount` alone can account for may exist (review FIX-1). Folded into the same honest disclosure `omittedTurnCount` renders. */
+  /** `true` when the backend's row fetch for this range hit its own cap — older turns than `omittedTurnCount` alone can account for may exist. Folded into the same honest disclosure `omittedTurnCount` renders. */
   eventsTruncated: z.boolean(),
-  /** `true` when this worker had `agent_turn_started` (webview chat) activity in range that produced no `CausalTurn` — distinguishes "genuinely no activity" from "activity the causal record structurally can't see" (review NIT-4). */
+  /** `true` when this worker had `agent_turn_started` (webview chat) activity in range that produced no `CausalTurn` — distinguishes "genuinely no activity" from "activity the causal record structurally can't see". */
   hasUncapturedWebviewActivity: z.boolean(),
 });
 
