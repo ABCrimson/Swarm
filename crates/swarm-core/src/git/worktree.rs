@@ -16,17 +16,12 @@
 
 use std::path::Path;
 
-use super::cli::{self, CREATE_TIMEOUT, READ_TIMEOUT, REMOVE_TIMEOUT};
-use super::repo::args_in;
+use super::cli::{self, CREATE_TIMEOUT, READ_TIMEOUT, REMOVE_TIMEOUT, args_in};
 use crate::error::AppError;
 
 // ── Argv builders ───────────────────────────────────────────────────
 //
-// Every builder starts from `args_in(repo_root, …)` — the shared
-// `-C <repo_root> -c core.longpaths=true` prefix — so every invocation
-// is scoped to the target repo without touching the calling process's
-// own cwd, and long checkout paths under `~/.swarm/worktrees/**`
-// survive Windows' legacy `MAX_PATH` limit.
+// Every builder starts from `cli::args_in` (see `cli::base_args`).
 
 fn add_args(repo_root: &Path, worktree_path: &Path, branch: &str, base_sha: &str) -> Vec<String> {
     let path = worktree_path.display().to_string();
@@ -282,7 +277,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::git::repo::base_args;
+    use crate::git::cli::base_args;
     use crate::git::test_support::{TempRepo, write_file};
 
     // ── Argv builders (no-force proof) ───────────────────────────────
