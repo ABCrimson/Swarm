@@ -4,6 +4,7 @@ import { useReactFlow } from "@xyflow/react";
 import { useAtomValue } from "jotai";
 import { useEffect, useEffectEvent } from "react";
 import { toast } from "#components/ui/Toast";
+import { errorMessage } from "#lib/is-error";
 import { isTauri } from "#lib/tauri";
 import type { WorkflowDefinition } from "#lib/workflow";
 import { parseWorkflow } from "#lib/workflow";
@@ -18,8 +19,6 @@ interface GraphControlsProps {
   /** Applies a validated workflow; returns a Title Case summary for the toast. */
   readonly onImport: (workflow: WorkflowDefinition) => string;
 }
-
-const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 function ControlButton({
   onClick,
@@ -83,7 +82,7 @@ export function GraphControls({
       await writeTextFile(filePath, JSON.stringify(getWorkflow(), null, 2));
       toast.success("Workflow Exported", { description: filePath });
     } catch (err) {
-      toast.error("Export Failed", { description: errorText(err) });
+      toast.error("Export Failed", { description: errorMessage(err) });
     }
   };
 
@@ -98,7 +97,7 @@ export function GraphControls({
       const workflow = parseWorkflow(await readTextFile(filePath));
       toast.success("Workflow Imported", { description: onImport(workflow) });
     } catch (err) {
-      toast.error("Import Failed", { description: errorText(err) });
+      toast.error("Import Failed", { description: errorMessage(err) });
     }
   };
 
