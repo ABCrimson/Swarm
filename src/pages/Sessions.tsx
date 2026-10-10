@@ -101,16 +101,19 @@ async function snapshotSession(session: Session): Promise<void> {
 async function applyTemplateWithReport(template: SessionTemplate): Promise<void> {
   const total = template.workerConfigs.length;
   try {
-    const { session, workerIds } = await applyTemplate(template);
+    const { session, workerIds, failures } = await applyTemplate(template);
     useSessionStore.getState().setActiveSession(session.id);
     const spawned = workerIds.length;
     if (total === 0) {
       toast.warning(`Template "${template.name}" Has No Workers — Created An Empty Session`);
     } else if (spawned === 0) {
-      toast.error(`Template "${template.name}" Failed — 0 Of ${total} Workers Spawned`);
+      toast.error(`Template "${template.name}" Failed — 0 Of ${total} Workers Spawned`, {
+        description: failures.join("; "),
+      });
     } else if (spawned < total) {
       toast.warning(
         `Template "${template.name}" Partially Applied — ${spawned} Of ${total} Workers Spawned`,
+        { description: failures.join("; ") },
       );
     } else {
       toast.success(`Template "${template.name}" Applied — ${pluralizeWorkers(spawned)} Spawned`);

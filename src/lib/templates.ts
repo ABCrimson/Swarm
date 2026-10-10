@@ -13,6 +13,7 @@
  */
 
 import type { LazyStore } from "@tauri-apps/plugin-store";
+import { errorMessage } from "#lib/is-error";
 import { templatesStore } from "#lib/lazy-store";
 import { createSession as createSessionIpc } from "#lib/tauri";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
@@ -311,22 +312,26 @@ export function createTemplateFromSession(
  * there for the full ordering analysis.
  *
  * A worker whose spawn fails (thrown error) or degrades to `null` (no
- * Tauri IPC bridge — see `spawnWorkerFromSpec`) is skipped, logged, and
- * does not stop the rest of the template from applying. Callers should
- * compare the returned `workerIds.length` against
- * `template.workerConfigs.length` to detect a partial or total failure
- * and report it honestly instead of always toasting success.
+ * Tauri IPC bridge — see `spawnWorkerFromSpec`) is skipped, logged, recorded
+ * in `failures` as "<worker name>: <reason>", and does not stop the rest of
+ * the template from applying. Callers should compare the returned
+ * `workerIds.length` against `template.workerConfigs.length` to detect a
+ * partial or total failure and report it, with `failures`, honestly instead
+ * of always toasting success.
  *
- * @returns The created session and the worker IDs that spawned
- * successfully, in template order.
+ * @returns The created session, the worker IDs that spawned successfully (in
+ * template order), and `failures`, one entry per worker that did not.
  */
-export async function applyTemplate(
-  template: SessionTemplate,
-): Promise<{ readonly session: Session; readonly workerIds: string[] }> {
+export async function applyTemplate(template: SessionTemplate): Promise<{
+  readonly session: Session;
+  readonly workerIds: string[];
+  readonly failures: string[];
+}> {
   const session = await createSessionIpc(template.name);
   useSessionStore.getState().addSession(session);
 
   const workerIds: string[] = [];
+  const failures: string[] = [];
   for (const spec of template.workerConfigs) {
     try {
       const workerId = await spawnWorkerFromSpec(spec, session.id);
@@ -334,6 +339,7 @@ export async function applyTemplate(
         console.error(
           `applyTemplate: spawnWorkerFromSpec returned null for worker "${spec.name}" from template "${template.name}" (no Tauri IPC bridge)`,
         );
+        failures.push(`${spec.name}: No Tauri IPC Bridge`);
         continue;
       }
       workerIds.push(workerId);
@@ -342,8 +348,9 @@ export async function applyTemplate(
         `applyTemplate: failed to spawn worker "${spec.name}" from template "${template.name}"`,
         err,
       );
+      failures.push(`${spec.name}: ${errorMessage(err)}`);
     }
   }
 
-  return { session, workerIds };
+  return { session, workerIds, failures };
 }
