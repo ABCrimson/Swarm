@@ -1739,6 +1739,7 @@ mod tests {
         });
 
         let registry = WorkerRegistry::new();
+        registry.set_max_workers(1).unwrap();
         let repo_locks = RepoLocks::new();
         let (sink, rx) = test_sink();
         let config = WorkerConfig {
@@ -1946,7 +1947,8 @@ mod tests {
 
     /// A worker that committed in its worktree keeps its branch: the
     /// commit leaves the tree clean (disposition `removed`), but the tip
-    /// has moved past the base commit.
+    /// has moved past the base commit. The commit is also merged into the
+    /// repo root's HEAD, so `git branch -d` alone would not keep it.
     #[test]
     fn test_kill_retains_diverged_isolation_branch() {
         let repo = temp_repo();
@@ -1969,6 +1971,10 @@ mod tests {
         std::fs::write(worktree.join("agent-output.txt"), "real work").unwrap();
         git_lines(&worktree, &["add", "-A"]);
         git_lines(&worktree, &["commit", "-m", "agent work"]);
+        // Fast-forward the repo root's HEAD onto the worker's commit:
+        // `git branch -d` would now delete the branch, so only the
+        // tip-vs-base check can keep it.
+        git_lines(&repo.root, &["merge", "--ff-only", branch.as_str()]);
 
         do_kill_worker(&sink, &registry, &repo_locks, id, Provenance::default()).unwrap();
 
