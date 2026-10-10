@@ -1,8 +1,10 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { Suspense, useId, useRef, useState, useTransition } from "react";
+import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { Spinner } from "#components/ui/Spinner";
 import { loadFilePreview } from "#lib/file-preview";
+import { errorMessage } from "#lib/is-error";
 import { FileTree } from "./FileTree.tsx";
 import { type FileSelection, FileViewer } from "./FileViewer.tsx";
 
@@ -40,12 +42,18 @@ export function WorkspacePanel(): React.ReactElement {
   const treePaneId = useId();
 
   const handleOpenProject = async (): Promise<void> => {
-    const selected = await open({
-      title: "Open Project Directory",
-      directory: true,
-      multiple: false,
-      recursive: true,
-    });
+    let selected: string | null;
+    try {
+      selected = await open({
+        title: "Open Project Directory",
+        directory: true,
+        multiple: false,
+        recursive: true,
+      });
+    } catch (err) {
+      toast.error(`Could Not Open The Folder Picker: ${errorMessage(err)}`);
+      return;
+    }
     if (selected) {
       setRootPath(selected);
       setSelection(null);
