@@ -1,4 +1,5 @@
 import { type CSSProperties, useId } from "react";
+import { escapeForDisplay } from "#components/ai/ApprovalArgs";
 import { Pill, type PillTone } from "#components/ui/Pill";
 import type { AiProseState, ShipContextState } from "#hooks/useShip";
 import { pluralize } from "#lib/format";
@@ -264,7 +265,9 @@ function CausalRecordSection({
   if (contextState === "failed") {
     return (
       <div className="flex items-center gap-2">
-        <span style={causalMutedStyle}>Causal Record Could Not Be Loaded.</span>
+        <span role="alert" style={causalMutedStyle}>
+          Causal Record Could Not Be Loaded.
+        </span>
         <Pill interactive tone="neutral" size="sm" onClick={onRetry}>
           Retry
         </Pill>
@@ -298,7 +301,12 @@ function CausalRecordSection({
       </div>
       {truncationNote != null && <span style={causalMutedStyle}>{truncationNote}</span>}
       {rows.length > 0 && (
-        <div style={causalTableWrapStyle}>
+        <section
+          aria-label="Causal Record Tool Calls"
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1).
+          tabIndex={0}
+          style={causalTableWrapStyle}
+        >
           <table style={causalTableStyle}>
             <thead>
               <tr>
@@ -325,7 +333,7 @@ function CausalRecordSection({
               ))}
             </tbody>
           </table>
-        </div>
+        </section>
       )}
     </>
   );
@@ -381,14 +389,16 @@ export function ShipPreview({
         <span style={labelStyle}>Branch</span>
         <div style={monoRowStyle}>
           <Pill tone="info" size="sm">
-            {preflight.branch}
+            {escapeForDisplay(preflight.branch)}
           </Pill>
           <span style={separatorStyle}>{"→"}</span>
-          <span>{preflight.baseBranch}</span>
+          <span>{escapeForDisplay(preflight.baseBranch)}</span>
           {preflight.remote != null && (
             <>
               <span style={separatorStyle}>{"·"}</span>
-              <span title={preflight.remote}>{preflight.host ?? preflight.remote}</span>
+              <span title={escapeForDisplay(preflight.remote)}>
+                {escapeForDisplay(preflight.host ?? preflight.remote)}
+              </span>
             </>
           )}
           {preflight.ahead > 0 && (
@@ -414,7 +424,12 @@ export function ShipPreview({
           <span style={{ color: "oklch(0.68 0.20 25)" }}>{`-${preflight.diffStat.deletions}`}</span>
         </div>
         {fileRows.length > 0 && (
-          <ul style={{ ...fileListStyle, listStyle: "none", margin: 0 }} aria-label="Changed Files">
+          <ul
+            style={{ ...fileListStyle, listStyle: "none", margin: 0 }}
+            aria-label="Changed Files"
+            // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1).
+            tabIndex={0}
+          >
             {fileRows.map((row) => (
               <li
                 key={row.path}
@@ -427,9 +442,9 @@ export function ShipPreview({
               >
                 <span
                   style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                  title={row.path}
+                  title={escapeForDisplay(row.path)}
                 >
-                  {row.path}
+                  {escapeForDisplay(row.path)}
                 </span>
                 {row.reason != null && <span>{row.reason}</span>}
               </li>
@@ -449,6 +464,7 @@ export function ShipPreview({
               onClick={() => onModeChange("all")}
               aria-pressed={mode === "all"}
             >
+              {mode === "all" && <span aria-hidden="true">✓ </span>}
               All Changes
             </Pill>
             <Pill
@@ -458,6 +474,7 @@ export function ShipPreview({
               onClick={() => onModeChange("staged")}
               aria-pressed={mode === "staged"}
             >
+              {mode === "staged" && <span aria-hidden="true">✓ </span>}
               Already Staged
             </Pill>
           </div>
@@ -500,8 +517,11 @@ export function ShipPreview({
             interactive
             tone="neutral"
             size="sm"
-            disabled={aiProseState === "generating" || context == null}
-            onClick={onRegenerateProse}
+            disabled={context == null}
+            aria-disabled={aiProseState === "generating" || undefined}
+            onClick={() => {
+              if (aiProseState !== "generating") onRegenerateProse();
+            }}
           >
             {aiProseState === "generating"
               ? "Generating…"
@@ -509,8 +529,15 @@ export function ShipPreview({
                 ? "Regenerate"
                 : "Generate"}
           </Pill>
+          <span role="status" className="sr-only">
+            {aiProseState === "generating"
+              ? "Generating Summary…"
+              : aiProseState === "ready"
+                ? "Summary Generated."
+                : ""}
+          </span>
           {aiProseState === "failed" && (
-            <span style={actionReasonStyle}>
+            <span role="alert" style={actionReasonStyle}>
               Generation Failed — Shipping With The Causal Record Alone Still Works.
               {aiProseError != null && ` ${aiProseError}.`}
             </span>

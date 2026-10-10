@@ -171,11 +171,16 @@ describe("ShipPreview — AI prose section", () => {
     expect(props.onRegenerateProse).toHaveBeenCalledOnce();
   });
 
-  it("disables the generate button and shows a generating label while in flight", () => {
-    renderPreview({ aiProseState: "generating" });
-    const button = screen.getByText("Generating…");
-    expect(button).toBeInTheDocument();
-    expect(button.closest("button")).toBeDisabled();
+  it("marks the generate button busy, keeps it focusable and ignores clicks while in flight", async () => {
+    const user = userEvent.setup();
+    const props = renderPreview({ aiProseState: "generating" });
+    const button = screen.getByRole("button", { name: "Generating…" });
+    expect(button).toBeEnabled();
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText("Generating Summary…")).toHaveAttribute("role", "status");
+
+    await user.click(button);
+    expect(props.onRegenerateProse).not.toHaveBeenCalled();
   });
 
   it("appends the reason a generation failed", () => {
@@ -327,5 +332,25 @@ describe("ShipPreview — preview details and editing", () => {
 
     await user.type(screen.getByLabelText("What Changed / Why (AI-Generated, Editable)"), "y");
     expect(props.onAiProseChange).toHaveBeenLastCalledWith("y");
+  });
+});
+
+describe("ShipPreview — agent-controlled names", () => {
+  it("escapes bidi controls and newlines in paths and the branch", () => {
+    renderPreview({
+      preflight: makePreflight({
+        branch: "swarm/agent-\u202Efdp",
+        staged: ["notes\u202Efdp.sh"],
+        unstaged: ["a\nb.rs"],
+        untracked: [],
+        skipped: [],
+      }),
+    });
+    const files = screen.getByRole("list", { name: "Changed Files" });
+    expect(files).toHaveTextContent("notes\\u202Efdp.sh");
+    expect(within(files).getByTitle("notes\\u202Efdp.sh")).toBeInTheDocument();
+    expect(files).toHaveTextContent("a\\nb.rs");
+    expect(files.textContent).not.toContain("\u202E");
+    expect(screen.getByText("swarm/agent-\\u202Efdp")).toBeInTheDocument();
   });
 });
