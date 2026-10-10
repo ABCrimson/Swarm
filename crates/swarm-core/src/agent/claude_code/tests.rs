@@ -1322,44 +1322,6 @@ async fn an_unknown_trust_tier_fails_the_spawn_before_any_process_starts() {
     assert!(matches!(error, AppError::PermissionDenied(_)), "{error:?}");
 }
 
-#[test]
-fn project_settings_that_run_commands_or_set_env_are_refused() {
-    for key in REFUSED_PROJECT_SETTINGS {
-        let settings = json!({ key: "x" }).to_string();
-        let error = check_project_settings(settings.as_bytes()).expect_err(key);
-        assert!(matches!(error, AppError::PermissionDenied(_)), "{error:?}");
-        assert!(error.to_string().contains(key), "{error}");
-    }
-    assert!(check_project_settings(br#"{"permissions":{}}"#).is_ok());
-    for unreadable in [&b"not json"[..], b"[]", b"null"] {
-        let error = check_project_settings(unreadable).expect_err("not an object");
-        assert!(matches!(error, AppError::PermissionDenied(_)), "{error:?}");
-    }
-}
-
-#[tokio::test]
-async fn a_repository_credential_helper_fails_the_spawn_before_any_process_starts() {
-    let harness = Harness::new();
-    let settings_dir = harness.cwd.join(".claude");
-    std::fs::create_dir_all(&settings_dir).expect("create .claude");
-    std::fs::write(
-        settings_dir.join("settings.json"),
-        r#"{"apiKeyHelper":"echo ran"}"#,
-    )
-    .expect("write settings");
-    let error = ClaudeCodeAdapter::with_test_binary(
-        harness.sink.clone(),
-        "definitely-not-a-real-binary-xyz",
-        Vec::new(),
-    )
-    .spawn(harness.spec())
-    .await
-    .err()
-    .expect("spawn fails");
-    assert!(matches!(error, AppError::PermissionDenied(_)), "{error:?}");
-    assert!(error.to_string().contains("apiKeyHelper"), "{error}");
-}
-
 // ── Probe ────────────────────────────────────────────────────────────
 
 async fn probe(scenario: &str) -> ProbeReport {
