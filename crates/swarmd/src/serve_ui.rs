@@ -45,8 +45,10 @@ use crate::AppState;
 ///   Workers may also be `blob:` URLs, as in the desktop policy.
 /// - Stylesheets load from this origin. `<style>` elements may be inline
 ///   (`style-src-elem`), because libraries inject them at runtime: sonner
-///   its toast styles, motion its `popLayout` positioning rules. Style
-///   attributes stay restricted. Without this, toasts render unstyled.
+///   its toast styles, xterm.js its scrollbar colours (and, under its DOM
+///   renderer, the theme and cell dimensions). Style attributes stay
+///   restricted. Without this, toasts render unstyled and the terminal
+///   loses its themed scrollbar.
 /// - Images and fonts may also be `data:` URIs (Vite inlines small assets,
 ///   a font among them).
 /// - `connect-src 'self'` covers the page's own `ws:`/`wss:` connection back

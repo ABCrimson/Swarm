@@ -18,7 +18,18 @@ esac
 uninstall_linux() {
     unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl --user disable --now swarmd.service 2>/dev/null || true
+        # A unit that is already gone is fine. Any other failure (no user
+        # bus, e.g. under sudo or su) means the daemon may still be running.
+        if ! err=$(systemctl --user disable --now swarmd.service 2>&1); then
+            case $err in
+                *'does not exist'*|*'not loaded'*) ;;
+                *)
+                    printf 'uninstall.sh: could not stop swarmd: %s\n' "$err" >&2
+                    printf 'uninstall.sh: nothing was removed; run it again from your own login session\n' >&2
+                    exit 1
+                    ;;
+            esac
+        fi
     fi
     rm -f -- "$unit_dir/swarmd.service" "$unit_dir/swarmd.service.d/install.conf"
     rmdir -- "$unit_dir/swarmd.service.d" 2>/dev/null || true

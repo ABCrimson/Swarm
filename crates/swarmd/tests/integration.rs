@@ -474,6 +474,21 @@ async fn test_cross_origin_upgrade_is_refused_with_403() {
     );
 }
 
+/// An `Origin` that is not visible ASCII is refused, not treated as absent.
+#[tokio::test]
+async fn test_unreadable_origin_is_refused_with_403() {
+    let server = TestServer::start().await;
+    let mut request = server.ws_url().into_client_request().unwrap();
+    request.headers_mut().insert(
+        "Origin",
+        tungstenite::http::HeaderValue::from_bytes(b"http://\xff").unwrap(),
+    );
+    assert_eq!(
+        upgrade_status(tokio_tungstenite::connect_async(request).await),
+        403
+    );
+}
+
 /// DNS rebinding: a foreign `Host` is refused even on a loopback socket.
 #[tokio::test]
 async fn test_foreign_host_header_is_refused_with_403() {
@@ -489,6 +504,27 @@ async fn test_foreign_host_header_is_refused_with_403() {
         upgrade_status(tokio_tungstenite::connect_async(request).await),
         403
     );
+}
+
+/// A `Host` that is not visible ASCII is malformed: the guard must not fall
+/// back to the absolute-form request target, which names this daemon.
+#[tokio::test]
+async fn test_non_ascii_host_header_is_refused_as_malformed() {
+    let server = TestServer::start().await;
+    let mut request = format!("GET http://{}/ws HTTP/1.1\r\nHost: ", server.addr).into_bytes();
+    request.push(0xff);
+    request.extend_from_slice(b"\r\nConnection: close\r\n\r\n");
+    let mut stream = TcpStream::connect(server.addr).await.unwrap();
+    stream.write_all(&request).await.unwrap();
+    let mut raw = Vec::new();
+    tokio::time::timeout(WAIT, stream.read_to_end(&mut raw))
+        .await
+        .unwrap()
+        .unwrap();
+    let raw = String::from_utf8_lossy(&raw);
+    let (head, body) = raw.split_once("\r\n\r\n").unwrap();
+    assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
+    assert_eq!(body, "Malformed Host Header.");
 }
 
 /// Loopback aliases of the bound address and `--allow-host` names (a
@@ -1014,7 +1050,7 @@ async fn test_ordinary_config_key_is_allowed_over_ws() {
 }
 
 /// `read_file`/`write_file` are denied outright over WS (`RemotePolicy::Denied`),
-/// whatever the path: the daemon token itself was the reproduced target.
+/// whatever the path, the daemon token's own file included.
 #[tokio::test]
 async fn test_file_commands_are_denied_over_ws() {
     let server = TestServer::start().await;
@@ -1203,9 +1239,23 @@ async fn test_serve_ui_security_headers_caching_and_fallbacks() {
         csp.contains("style-src 'self';"),
         "only <style> elements may be inline, not style attributes: {csp}"
     );
-    for (name, value) in swarmd::serve_ui::SECURITY_HEADERS {
-        assert_eq!(header(&headers, name.as_str()), Some(value), "{name}");
-    }
+    assert!(
+        csp.contains("object-src 'none'")
+            && csp.contains("base-uri 'none'")
+            && csp.contains("form-action 'self'"),
+        "plugins, <base> and form targets stay locked down: {csp}"
+    );
+    // Literal values, not the server's own constant, so a weakened header fails.
+    assert_eq!(header(&headers, "x-content-type-options"), Some("nosniff"));
+    assert_eq!(header(&headers, "referrer-policy"), Some("no-referrer"));
+    assert_eq!(
+        header(&headers, "cross-origin-opener-policy"),
+        Some("same-origin")
+    );
+    assert_eq!(
+        header(&headers, "cross-origin-resource-policy"),
+        Some("same-origin")
+    );
     assert_eq!(header(&headers, "cache-control"), Some("no-cache"));
 
     // Client-side routes fall back to index.html.
@@ -1220,11 +1270,14 @@ async fn test_serve_ui_security_headers_caching_and_fallbacks() {
         header(&headers, "cache-control"),
         Some("public, max-age=31536000, immutable")
     );
+    assert_eq!(header(&headers, "x-content-type-options"), Some("nosniff"));
     // A missing asset (say, requested while `pnpm build:web` rewrites the
     // bundle) must not be cached for a year.
     let (status, headers, _) = http_get(server.addr, "/assets/missing.js", &host).await;
     assert_eq!(status, 404);
     assert_eq!(header(&headers, "cache-control"), Some("no-store"));
+    // Error responses carry the security headers too.
+    assert_eq!(header(&headers, "x-content-type-options"), Some("nosniff"));
 
     // Hidden files are never served.
     for path in [
