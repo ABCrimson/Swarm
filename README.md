@@ -215,12 +215,14 @@ Swarm/
 ├── crates/
 │   ├── swarm-core/             # tauri-free domain core:
 │   │   └── src/{agent,bus,commands,events,git,orchestration,session,worker}/
-│   └── swarmd/                 # headless daemon: ws.rs, auth.rs, serve_ui.rs + service/ units
+│   └── swarmd/                 # headless daemon: cli.rs, auth.rs, serve_ui.rs, ws.rs + ws/{admission,feed,writer}.rs, service/ units
 ├── docs/                       # architecture · api · daemon · e2e · performance · contributing · updater-keys
 │   ├── adr/                    # architecture decision records (index: docs/adr/README.md)
 │   ├── history/                # the original build spec (SWARM_NEW.md), archived
 │   └── superpowers/plans/      # dated execution plans, archived
 ├── e2e/                        # Playwright specs
+├── scripts/                    # build-site.ts (pnpm build:site), check-react-compiler.ts (pnpm check:compiler), sync-reference-repos.ts (.repos/)
+├── site/                       # docs-site shell (_template.html), landing page, favicon; docs/*.md render into it
 ├── package.json                # frontend deps + scripts
 └── CHANGELOG.md
 ```
