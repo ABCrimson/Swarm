@@ -14,6 +14,7 @@ use super::{
     NOT_A_WORKTREE, PRIMARY_CHECKOUT, ShipError, git, is_protected_branch, remote_url,
     resolve_base_branch, single_value, worktree_info_for_worker,
 };
+use crate::error::AppError;
 use crate::git::cli::SCAN_TIMEOUT;
 use crate::git::{redact, remote, repo};
 use crate::worker::registry::{WorkerId, WorkerRegistry};
@@ -80,6 +81,9 @@ pub struct ShipPreflight {
 ///   [`super::worktree_info_for_worker`].
 /// * [`super::ShipErrorKind::Unknown`] / [`super::ShipErrorKind::Timeout`]
 ///   — `git status` itself failed (e.g. the worktree was deleted).
+/// * [`super::ShipErrorKind::Unknown`] / [`super::ShipErrorKind::Timeout`]
+///   — with no upstream, the commit count since the base commit failed
+///   (e.g. that commit no longer exists).
 pub fn preflight(
     registry: &WorkerRegistry,
     id: WorkerId,
@@ -135,9 +139,10 @@ pub fn preflight(
     // `branch.ab` is absent before the first push, and when the
     // upstream branch was deleted: count from the base commit then.
     let upstream = snapshot.upstream.clone();
-    let (ahead, behind) = snapshot
-        .ahead_behind
-        .unwrap_or_else(|| (ahead_since_base(wt, &info.base_commit), 0));
+    let (ahead, behind) = match snapshot.ahead_behind {
+        Some(counts) => counts,
+        None => (ahead_since_base(wt, &info.base_commit)?, 0),
+    };
 
     let conflicts = snapshot.unmerged().count();
     if conflicts > 0 {
@@ -186,15 +191,19 @@ pub fn preflight(
 }
 
 /// Commits reachable from `HEAD` but not from `base_commit` — the
-/// `ahead` count of a branch with no (live) upstream.
-fn ahead_since_base(worktree: &Path, base_commit: &str) -> u32 {
+/// `ahead` count of a branch with no (live) upstream. A failed count is
+/// an error, never a `0` that would claim "Nothing To Ship".
+fn ahead_since_base(worktree: &Path, base_commit: &str) -> Result<u32, AppError> {
     let range = format!("{base_commit}..HEAD");
-    git(worktree, &["rev-list", "--count", &range], SCAN_TIMEOUT)
-        .ok()
-        .as_ref()
-        .and_then(single_value)
+    let output = git(worktree, &["rev-list", "--count", &range], SCAN_TIMEOUT)?;
+    single_value(&output)
         .and_then(|count| count.parse().ok())
-        .unwrap_or(0)
+        .ok_or_else(|| {
+            AppError::Git(format!(
+                "`git rev-list --count {range}` failed: {}",
+                output.stderr.trim()
+            ))
+        })
 }
 
 /// The diff stat of what [`super::stage_and_commit`] would commit:
