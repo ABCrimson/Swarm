@@ -9,6 +9,15 @@
  * side effect, and a mismatch comes back to the model as an error
  * `tool_result` it can correct.
  *
+ * The five tools that act on the user's machine (`run_command`,
+ * `spawn_worker`, `kill_worker`, `write_file`, `read_file`) also need the
+ * user's approval (allow once, allow for the session, or deny) before
+ * they run. The gate sits inside each tool's own `execute`, so no caller
+ * (the registry included) can skip it; see "Tool Approval" below. A
+ * session grant covers one exact call (tool, worker and arguments), never
+ * a whole tool. The prompt is `ToolApprovalPrompt` in `#components/ai`.
+ * The Rust side still enforces its own file scope.
+ *
  * @module tools
  */
 
@@ -61,7 +70,11 @@ export interface SwarmTool {
   readonly uiDescription: string;
   readonly schema: z.ZodType;
   readonly anthropicTool: ChatTool;
-  /** Validates `input` against `schema`, then runs the tool. */
+  /**
+   * Validates `input` against `schema`, waits for the user's approval
+   * when the tool needs it (a denial comes back as an error result), then
+   * runs the tool.
+   */
   readonly execute: (input: unknown, prov?: ToolProvenance) => Promise<SwarmToolResult>;
 }
 
@@ -126,6 +139,142 @@ const MetricsSnapshotSchema = z.looseObject({
   perWorker: z.array(z.looseObject({ workerId: z.string() })).default([]),
 });
 
+// ── Tool Approval ───────────────────────────────────
+
+/** The user's answer to an approval prompt. */
+export type ApprovalChoice = "once" | "session" | "deny";
+
+/** A tool call waiting for the user's decision. */
+export interface ToolApprovalRequest {
+  readonly id: string;
+  readonly tool: string;
+  /** The call's validated input, shown to the user as structured data. */
+  readonly input: unknown;
+  /** Whether "Allow for session" is offered; it never is for `write_file`. */
+  readonly sessionAllowed: boolean;
+  /** The worker whose AI turn made the call, when it is known. */
+  readonly workerId?: string;
+}
+
+/** How a tool asks for approval: the exact-call key and whether a session grant is offered. */
+interface ApprovalSpec<I> {
+  /** Identifies the arguments of one call; equal keys are the same decision. */
+  readonly argKey: (input: I) => string;
+  /** `false` makes a "session" answer count as "once". Defaults to `true`. */
+  readonly sessionAllowed?: boolean;
+}
+
+/** Exact-call keys the user allowed for the rest of this app session. */
+const sessionGrants = new Set<string>();
+/** Per tool, the key of a parsed input (for {@link grantToolCallForSession}). */
+const argKeyers = new Map<string, (input: unknown) => string>();
+const grantKeys = new Map<string, string>();
+const resolvers = new Map<string, (choice: ApprovalChoice) => void>();
+const listeners = new Set<() => void>();
+let pending: readonly ToolApprovalRequest[] = [];
+
+/** One grant covers one tool, one worker and one argument set (NUL-separated). */
+function grantKey(tool: string, workerId: string | undefined, argKey: string): string {
+  return `${tool}\0${workerId ?? ""}\0${argKey}`;
+}
+
+function publish(next: readonly ToolApprovalRequest[]): void {
+  pending = next;
+  for (const listener of listeners) listener();
+}
+
+/** `useSyncExternalStore` subscription to the pending approval list. */
+export function subscribeToolApprovals(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => void listeners.delete(listener);
+}
+
+/** The pending approvals, oldest first; the same array until it changes. */
+export function getPendingToolApprovals(): readonly ToolApprovalRequest[] {
+  return pending;
+}
+
+function release(requests: readonly ToolApprovalRequest[], choice: ApprovalChoice): void {
+  if (requests.length === 0) return;
+  publish(pending.filter((request) => !requests.includes(request)));
+  for (const request of requests) {
+    resolvers.get(request.id)?.(choice);
+    resolvers.delete(request.id);
+    grantKeys.delete(request.id);
+  }
+}
+
+/**
+ * Records the user's answer to one call. "Allow for session" also lets
+ * later calls identical in tool, worker and arguments through without a
+ * prompt until the app reloads; it never releases any other pending
+ * call, whose arguments the user has not seen. For a tool that offers no
+ * session grant (`write_file`) it counts as "once".
+ */
+export function resolveToolApproval(id: string, choice: ApprovalChoice): void {
+  const request = pending.find((candidate) => candidate.id === id);
+  if (!request) return;
+  const key = grantKeys.get(id);
+  if (choice === "session" && request.sessionAllowed && key !== undefined) sessionGrants.add(key);
+  release([request], choice);
+}
+
+/**
+ * Denies the pending calls of one worker's turn (or all of them): the
+ * turn that made them was stopped, so nobody is left to answer. Calls
+ * with no known worker are denied too.
+ */
+export function denyPendingToolApprovals(workerId?: string): void {
+  release(
+    pending.filter(
+      (request) =>
+        workerId === undefined || request.workerId === undefined || request.workerId === workerId,
+    ),
+    "deny",
+  );
+}
+
+/**
+ * Allows exactly one call, as if the user had chosen "Allow for session"
+ * on it: the same tool, `workerId` and `input`. Throws when `tool` takes
+ * no approval or `input` is invalid. For tests and trusted callers.
+ */
+export function grantToolCallForSession(tool: string, input: unknown, workerId?: string): void {
+  const argKey = argKeyers.get(tool);
+  if (!argKey) throw new Error(`${tool} Needs No Approval.`);
+  sessionGrants.add(grantKey(tool, workerId, argKey(input)));
+}
+
+/** Forgets every session grant and denies every pending call. */
+export function resetToolApprovals(): void {
+  sessionGrants.clear();
+  denyPendingToolApprovals();
+}
+
+/** Resolves to whether the user lets this exact call run. */
+async function requestApproval(
+  tool: string,
+  input: unknown,
+  argKey: string,
+  sessionAllowed: boolean,
+  workerId?: string,
+): Promise<boolean> {
+  const key = grantKey(tool, workerId, argKey);
+  if (sessionGrants.has(key)) return true;
+  const request: ToolApprovalRequest = {
+    id: crypto.randomUUID(),
+    tool,
+    input,
+    sessionAllowed,
+    ...(workerId !== undefined && { workerId }),
+  };
+  const { promise, resolve } = Promise.withResolvers<ApprovalChoice>();
+  resolvers.set(request.id, resolve);
+  grantKeys.set(request.id, key);
+  publish([...pending, request]);
+  return (await promise) !== "deny";
+}
+
 // ── Tool Definitions ────────────────────────────────
 
 /**
@@ -139,7 +288,9 @@ function createTool<S extends z.ZodType>(
   uiDescription: string,
   schema: S,
   run: (input: z.output<S>, prov?: ToolProvenance) => Promise<SwarmToolResult>,
+  approval?: ApprovalSpec<z.output<S>>,
 ): SwarmTool {
+  if (approval) argKeyers.set(name, (input) => approval.argKey(schema.parse(input)));
   return {
     name,
     description,
@@ -149,6 +300,20 @@ function createTool<S extends z.ZodType>(
     async execute(input, prov) {
       const parsed = parseInput(name, schema, input);
       if (!parsed.ok) return parsed.result;
+      // The gate lives here, not in executeTool, so a direct call to a
+      // registry entry cannot act without the user's answer.
+      if (
+        approval &&
+        !(await requestApproval(
+          name,
+          parsed.data,
+          approval.argKey(parsed.data),
+          approval.sessionAllowed ?? true,
+          prov?.originWorker,
+        ))
+      ) {
+        return { success: false, error: `The User Denied ${name}. It Was Not Run.` };
+      }
       try {
         return await run(parsed.data, prov);
       } catch (error) {
@@ -174,6 +339,7 @@ const spawnWorkerTool = createTool(
     }
     return { success: true, data: { id: workerId } };
   },
+  { argKey: ({ name }) => name ?? "" },
 );
 
 const killWorkerTool = createTool(
@@ -185,6 +351,7 @@ const killWorkerTool = createTool(
     await killWorker(workerId, prov);
     return { success: true, data: { killed: workerId } };
   },
+  { argKey: ({ workerId }) => workerId },
 );
 
 const runCommandTool = createTool(
@@ -196,6 +363,7 @@ const runCommandTool = createTool(
     await workerInput(workerId, `${command}\n`, "tool", prov);
     return { success: true, data: { sent: command } };
   },
+  { argKey: ({ workerId, command }) => `${workerId}\0${command}` },
 );
 
 const readFileTool = createTool(
@@ -204,14 +372,16 @@ const readFileTool = createTool(
   "Read The Contents Of A File At The Given Absolute Path.",
   ReadFileInput,
   async ({ path, maxLines }) => {
-    // The real read_file Rust command (commands/fs.rs), scoped to the app
-    // data and home directories. The file is read in full and sliced in
+    // The real read_file Rust command (commands/fs.rs): canonicalized,
+    // scoped to the app data and home directories, with the app's
+    // credential files denied. The file is read in full and sliced in
     // memory — fine for the small text files an AI turn reads.
     const fullContent = z.string().parse(await invoke<unknown>("read_file", { path }));
     const content =
       maxLines === undefined ? fullContent : fullContent.split("\n").slice(0, maxLines).join("\n");
     return { success: true, data: { path, content } };
   },
+  { argKey: ({ path }) => path },
 );
 
 const writeFileTool = createTool(
@@ -230,6 +400,8 @@ const writeFileTool = createTool(
     });
     return { success: true, data: { path, written: true } };
   },
+  // A write is never granted for the session: each one is answered on its own.
+  { argKey: ({ path }) => path, sessionAllowed: false },
 );
 
 const getMetricsTool = createTool(
@@ -297,7 +469,9 @@ export function getAllAnthropicTools(): ChatTool[] {
 /**
  * Executes a tool call by name. Built-ins validate and run through the
  * registry, forwarding `prov` (the calling AI turn's attribution) to the
- * IPC command they call. Other names resolve to the active custom tools,
+ * IPC command they call. A built-in that needs approval waits for it
+ * inside its own `execute`, once its input has validated; a denial comes
+ * back to the model as an error result. Other names resolve to the active custom tools,
  * whose input is validated against their declared parameters and whose
  * scripts run in a sandboxed Blob Worker (see `#lib/custom-tools`) —
  * they have no backend side effects to stamp, so `prov` is not forwarded.
@@ -308,7 +482,9 @@ export async function executeTool(
   prov?: ToolProvenance,
 ): Promise<SwarmToolResult> {
   const tool = toolRegistry.get(name);
-  if (tool) return tool.execute(input, prov);
+  if (tool) {
+    return tool.execute(input, prov);
+  }
 
   const custom = activeCustomTools().find((candidate) => candidate.name === name);
   if (!custom) return { success: false, error: `Unknown Tool: ${name}` };

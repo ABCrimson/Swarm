@@ -5,7 +5,13 @@
 // scope-denial wording asserted below is exactly what FsScopes returns.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { toolRegistry } from "#lib/tools";
+import {
+  getPendingToolApprovals,
+  resetToolApprovals,
+  resolveToolApproval,
+  subscribeToolApprovals,
+  toolRegistry,
+} from "#lib/tools";
 
 const invokeMock = vi.fn();
 
@@ -22,6 +28,15 @@ const writeFileTool = toolRegistry.get("write_file");
 
 beforeEach(() => {
   invokeMock.mockReset();
+  // The approval step has its own tests (tools.approval.test.ts): answer
+  // every prompt with "once" so these tests exercise the file commands.
+  const unsubscribe = subscribeToolApprovals(() => {
+    for (const request of getPendingToolApprovals()) resolveToolApproval(request.id, "once");
+  });
+  return () => {
+    unsubscribe();
+    resetToolApprovals();
+  };
 });
 
 describe("read_file tool", () => {
