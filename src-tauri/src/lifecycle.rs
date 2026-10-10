@@ -86,8 +86,13 @@ fn cleanup<R: tauri::Runtime>(app: &AppHandle<R>, tokio: &tokio::runtime::Handle
         teardown.runs.fetch_add(1, Ordering::Relaxed);
         let drained =
             std::thread::scope(|scope| scope.spawn(|| tokio.block_on(shutdown(&runtime))).join());
-        if drained.is_err() {
-            tracing::error!("the shutdown panicked; exiting anyway");
+        if let Err(payload) = drained {
+            let reason = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("non-string panic payload");
+            tracing::error!(%reason, "the shutdown panicked; exiting anyway");
         }
     }
     // Last: Tauri exits the process right after the hook, and dropping
@@ -105,7 +110,7 @@ fn cleanup<R: tauri::Runtime>(app: &AppHandle<R>, tokio: &tokio::runtime::Handle
 /// otherwise never get. The drain persists everything recorded before it
 /// (those receipts, `worker_killed`, `ship_settled`, …) and records the
 /// exact head seq, so the next start continues without a seq gap.
-pub(crate) async fn shutdown(runtime: &Runtime) {
+async fn shutdown(runtime: &Runtime) {
     match runtime.shutdown(SHUTDOWN_PHASE_TIMEOUT).await {
         Ok(head_seq) => tracing::info!(head_seq, "SWARM shut down; the event log is final"),
         Err(error) => tracing::warn!(%error, "shutdown did not finish; exiting anyway"),
