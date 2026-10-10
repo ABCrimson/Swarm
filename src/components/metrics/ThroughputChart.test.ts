@@ -1,6 +1,5 @@
-// Regression: series were hard-coded substrings ("opus"/"sonnet"/"haiku"),
-// so usage from other catalogued models (Fable, Mythos) matched nothing
-// and vanished from the chart.
+// Every catalogued model, dated id or alias resolves to its own family series; a model outside
+// the catalog falls into 'other' instead of vanishing from the chart.
 
 import { describe, expect, it } from "vitest";
 import { sampleThroughput, seriesOf } from "#components/metrics/ThroughputChart";

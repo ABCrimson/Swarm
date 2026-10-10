@@ -1,6 +1,5 @@
-// Regression: memory (thousands of MB) and the worker count (single
-// digits) shared one Y axis, flattening the Workers line to ~0. Memory is
-// now a percentage on the CPU axis.
+// Memory is charted as a percentage of the total on the CPU (0-100) axis; the worker count
+// (single digits) keeps the right axis to itself, so raw MB (thousands) never flattens it.
 
 import { describe, expect, it } from "vitest";
 import { systemChartData } from "#components/metrics/MetricsChart";

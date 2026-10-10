@@ -85,8 +85,8 @@ afterEach(() => {
 });
 
 describe("Sessions — Save As Template", () => {
-  // Regression: the page saved templates with an empty workerConfigs, so
-  // applying one always reported "0 Of 0 Workers Spawned".
+  // A saved template carries the session's reproducible workers in workerConfigs; an empty
+  // list would make every apply report "0 Of 0 Workers Spawned".
   it("saves a template carrying the session's workers", async () => {
     const user = userEvent.setup();
     useWorkerStore.getState().addWorker({
