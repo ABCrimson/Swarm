@@ -125,6 +125,26 @@ describe("renderCausalRecordSection", () => {
     expect(section).toContain("**Diff:** 2 Files Changed, +10/-3");
   });
 
+  it("labels failed and unsettled turns and gives a turn with no tool calls its own row", () => {
+    const context = makeContext({
+      turns: [
+        makeTurn({ status: "error", toolCalls: [] }),
+        makeTurn({ status: null, toolCalls: [] }),
+      ],
+    });
+    const section = renderCausalRecordSection(context, diffStat);
+    expect(section).toContain("| 1 (Failed) | — | — | — |");
+    expect(section).toContain("| 2 (In Progress) | — | — | — |");
+    const { user } = buildCausalPromptInput({
+      context,
+      diffStat,
+      branch: "swarm/x",
+      baseBranch: "main",
+    });
+    expect(user).toContain("Turn 1 (Failed):\n  (No Tool Calls)");
+    expect(user).toContain("Turn 2 (In Progress):\n  (No Tool Calls)");
+  });
+
   it("escapes markdown table pipes and newlines in a tool name/target", () => {
     const context = makeContext({
       turns: [makeTurn({ toolCalls: [{ seq: 1, name: "Weird|Tool", target: "a\nb", ok: true }] })],
