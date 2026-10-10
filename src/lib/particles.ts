@@ -12,14 +12,20 @@
 /** Compute workgroup size — the WGSL `override` below is set from this. */
 export const WORKGROUP_SIZE = 64;
 
-/** WGSL compute shader for particle simulation (position, velocity, life, colour). */
-export const PARTICLE_COMPUTE_WGSL = /* wgsl */ `
-struct Particle {
+/**
+ * The WGSL particle layout shared by the compute and vertex shaders;
+ * {@link PARTICLE_BYTE_SIZE} is its 16-byte-aligned size.
+ */
+const PARTICLE_STRUCT_WGSL = /* wgsl */ `struct Particle {
   pos: vec2f,
   vel: vec2f,
   life: f32,
   color: vec4f,
-}
+}`;
+
+/** WGSL compute shader for particle simulation (position, velocity, life, colour). */
+export const PARTICLE_COMPUTE_WGSL = /* wgsl */ `
+${PARTICLE_STRUCT_WGSL}
 
 struct SimParams {
   dt: f32,
@@ -144,12 +150,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
 /** WGSL vertex shader for instanced billboard quad rendering. */
 const PARTICLE_VERTEX_WGSL = /* wgsl */ `
-struct Particle {
-  pos: vec2f,
-  vel: vec2f,
-  life: f32,
-  color: vec4f,
-}
+${PARTICLE_STRUCT_WGSL}
 
 struct VertexOutput {
   @builtin(position) position: vec4f,

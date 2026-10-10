@@ -32,6 +32,12 @@ describe("createParticleSystem", () => {
     // New buffers are zero-filled: no initial particle upload.
     expect(device.queue.writeBuffer).not.toHaveBeenCalled();
     expect(system.maxParticles).toBe(1000);
+    expect(device.createRenderPipelineAsync).toHaveBeenCalledOnce();
+    expect(device.createRenderPipelineAsync.mock.calls[0]?.[0].fragment?.targets).toEqual([
+      expect.objectContaining({ format: "bgra8unorm" }),
+    ]);
+    expect(system.computePipeline).toMatchObject({ kind: "compute-pipeline" });
+    expect(system.renderPipeline).toMatchObject({ kind: "render-pipeline" });
   });
 });
 
