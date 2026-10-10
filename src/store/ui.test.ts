@@ -1,5 +1,7 @@
-import { createStore } from "jotai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { createStore, Provider, useAtomValue } from "jotai";
+import { createElement } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("#lib/tauri", () => ({ isTauri: () => true }));
 vi.mock("#lib/lazy-store", () => ({
@@ -132,5 +134,81 @@ describe("frecencyAtom", () => {
 
     const store = createStore();
     expect([...store.get(frecencyAtom).keys()]).toStrictEqual(["palette.workers"]);
+  });
+});
+
+describe("reducedMotionAtom", () => {
+  /** A controllable `matchMedia` result: flip `matches`, then `emit` to notify listeners. */
+  function stubReducedMotion(initial: boolean) {
+    const listeners = new Set<(e: MediaQueryListEvent) => void>();
+    const query = {
+      matches: initial,
+      addEventListener: (_type: string, fn: (e: MediaQueryListEvent) => void) => listeners.add(fn),
+      removeEventListener: (_type: string, fn: (e: MediaQueryListEvent) => void) =>
+        listeners.delete(fn),
+    };
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => query),
+    );
+    return {
+      query,
+      listeners,
+      emit: (matches: boolean) => {
+        query.matches = matches;
+        for (const fn of listeners) fn({ matches } as MediaQueryListEvent);
+      },
+    };
+  }
+
+  async function freshAtom() {
+    vi.resetModules();
+    return (await import("#store/ui")).reducedMotionAtom;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("starts from the OS setting at module load", async () => {
+    stubReducedMotion(true);
+    expect(createStore().get(await freshAtom())).toBe(true);
+  });
+
+  it("every React subscriber sees the synchronous onMount correction (jotai 3.0.1 #3373)", async () => {
+    const media = stubReducedMotion(false);
+    const atom = await freshAtom();
+    media.query.matches = true;
+
+    const store = createStore();
+    const Probe = ({ name }: { name: string }) =>
+      createElement("output", { "aria-label": name }, String(useAtomValue(atom)));
+    render(
+      createElement(
+        Provider,
+        { store },
+        createElement(Probe, { name: "a" }),
+        createElement(Probe, { name: "b" }),
+      ),
+    );
+    await act(async () => {});
+
+    expect(screen.getByLabelText("a").textContent).toBe("true");
+    expect(screen.getByLabelText("b").textContent).toBe("true");
+  });
+
+  it("follows OS changes while subscribed and detaches its listener on unmount", async () => {
+    const media = stubReducedMotion(false);
+    const atom = await freshAtom();
+
+    const store = createStore();
+    const unsub = store.sub(atom, () => {});
+    expect(media.listeners.size).toBe(1);
+
+    media.emit(true);
+    expect(store.get(atom)).toBe(true);
+
+    unsub();
+    expect(media.listeners.size).toBe(0);
   });
 });

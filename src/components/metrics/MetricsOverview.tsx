@@ -35,14 +35,15 @@ export function trendOf(values: readonly number[]): Trend | undefined {
 }
 
 /**
- * The five live stat tiles. CPU and memory are banded by the user's own
+ * The four live stat tiles (no AI requests/s tile: the backend measures no
+ * provider request rate, so it would only ever show 0.0). CPU and memory are banded by the user's own
  * alert thresholds (the same `>=` rule as the alert toasts) and carry a
  * trend measured over the last few samples; the counters have neither.
  */
 export function MetricCards(): React.ReactElement {
   const metrics = useSystemStore((s) => s.metrics);
   const thresholds = useAtomValue(alertThresholdsAtom);
-  const { cpuPercent, memoryMb, memoryTotalMb, workerCount, aiReqPerSec, tokensPerSec } = metrics;
+  const { cpuPercent, memoryMb, memoryTotalMb, workerCount, tokensPerSec } = metrics;
 
   const recent = lastN(metrics.history, TREND_SAMPLES);
   const cpuTrend = trendOf(recent.map((p) => p.cpu));
@@ -70,7 +71,6 @@ export function MetricCards(): React.ReactElement {
         trend={memoryTrend}
       />
       <MetricCard label="Workers" value={`${workerCount}`} />
-      <MetricCard label="AI Req/s" value={aiReqPerSec.toFixed(1)} />
       <MetricCard label="Tokens/s" value={tokensPerSec.toFixed(0)} />
     </MetricCardList>
   );

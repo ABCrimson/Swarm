@@ -14,14 +14,17 @@ import pkg from "./package.json" with { type: "json" };
  * it ("An Application Control policy has blocked this file").
  * `NAPI_RS_FORCE_WASI=true pnpm check:compiler` exercises that path on
  * any host; `pnpm check:compiler` fails the build when the key UI
- * components ship uncompiled either way.
+ * components ship uncompiled either way. The dev server also surfaces
+ * the compiler's recoverable bail-out diagnostics (`reportDiagnostics`,
+ * which replaced the plugin's deprecated `logDiagnostics`).
  */
-const reactWithCompiler = (): PluginOption[] => react({ compiler: true });
+const reactWithCompiler = (dev: boolean): PluginOption[] =>
+  react({ compiler: dev ? { reportDiagnostics: true } : true });
 
 // `#components/*`, `#lib/*`, … resolve through package.json `imports` —
 // Vite, Vitest and TypeScript all read that map natively, so there is no
 // `resolve.alias` block to keep in sync.
-export default defineConfig(async ({ mode }): Promise<UserConfig> => {
+export default defineConfig(async ({ mode, command }): Promise<UserConfig> => {
   const analyzePlugins: PluginOption[] = [];
   if (mode === "analyze") {
     const { visualizer } = await import("rollup-plugin-visualizer");
@@ -35,7 +38,9 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => {
   }
 
   return {
-    plugins: [...reactWithCompiler(), tailwindcss(), ...analyzePlugins],
+    // Keep the terminal history visible: `tauri dev` prints Rust build output alongside Vite's.
+    clearScreen: false,
+    plugins: [...reactWithCompiler(command === "serve"), tailwindcss(), ...analyzePlugins],
 
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
@@ -50,7 +55,7 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => {
 
     build: {
       sourcemap: true,
-      // Tauri renders in Chromium 146+ (WebView2/WKWebView) — no downleveling needed;
+      // Tauri renders in WebView2 (Chromium, evergreen) on Windows, and in WKWebView (macOS) / WebKitGTK (Linux), whose WebKit version follows the OS. No syntax downleveling (target esnext). Runtime floor: Safari/WebKit 18.4 (iterator helpers, Error.isError, RegExp.escape); Temporal is polyfilled at boot (src/boot.ts).
       // `build:web`'s target is any modern evergreen browser, close enough not to warrant a second target.
       target: "esnext",
       // `build:web` writes to a separate directory so it never collides

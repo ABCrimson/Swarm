@@ -249,16 +249,6 @@ export async function agentCancel(workerId: string, turnId: string): Promise<voi
 }
 
 /**
- * Shuts down `workerId`'s attached agent session (Claude Code or Codex;
- * Rust's `agent_shutdown`) without killing the PTY worker, which
- * {@link killWorker} does. Idempotent; a worker with no attached session
- * is a benign no-op.
- */
-export async function agentShutdown(workerId: string): Promise<void> {
-  return invoke<void>("agent_shutdown", { workerId });
-}
-
-/**
  * Checks whether `provider`'s CLI is installed and answers `--version`
  * (Rust's `agent_probe`, bounded, never hangs). Resolves
  * `{ available: false, detail }` rather than throwing when the provider
@@ -490,12 +480,6 @@ export async function listSessions(): Promise<Session[]> {
   if (!hasTransport()) return [];
   const raw = await invoke("list_sessions");
   return parseResponse(z.array(SessionResponseSchema), raw, SESSION_SHAPE_ERROR);
-}
-
-/** One session by UUID. */
-export async function getSession(id: string): Promise<Session> {
-  const raw = await invoke("get_session", { id });
-  return parseResponse(SessionResponseSchema, raw, SESSION_SHAPE_ERROR);
 }
 
 /**

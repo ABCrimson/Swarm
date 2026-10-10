@@ -39,6 +39,17 @@ export default defineConfig({
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
     },
+    // Opt-in: pnpm exec playwright install webkit firefox, then --project=webkit|firefox. Known engine-specific failures are listed in reports/w1-b5.md.
+    {
+      name: "webkit",
+      use: { ...devices["Desktop Safari"] },
+      default: false,
+    },
+    {
+      name: "firefox",
+      use: { ...devices["Desktop Firefox"] },
+      default: false,
+    },
   ],
   webServer: {
     ...server,
