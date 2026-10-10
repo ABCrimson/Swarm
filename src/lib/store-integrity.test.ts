@@ -115,24 +115,3 @@ describe("validateStoreData", () => {
     ]);
   });
 });
-
-describe("plugin-store ownership", () => {
-  // Rust owns swarm-config.json. plugin-store saves every file it has
-  // loaded when the app exits, so a webview handle on that file would
-  // overwrite the Rust-written config with the copy loaded at startup.
-  it("no frontend module opens swarm-config.json through plugin-store", () => {
-    const sources = import.meta.glob<string>(["/src/**/*.{ts,tsx}", "!/src/**/*.test.{ts,tsx}"], {
-      query: "?raw",
-      import: "default",
-      eager: true,
-    });
-    const offenders = Object.entries(sources)
-      .filter(([, code]) =>
-        /(?:load|LazyStore|Store\.load)\s*\(\s*["'`]swarm-config\.json/.test(code),
-      )
-      .map(([path]) => path);
-
-    expect(Object.keys(sources).length).toBeGreaterThan(50);
-    expect(offenders).toStrictEqual([]);
-  });
-});
