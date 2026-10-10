@@ -201,7 +201,13 @@ const PRIMARY_CHECKOUT: &str =
 /// failing) blocks shipping rather than proceeding.
 fn guard_not_primary_checkout(worktree: &Path) -> Result<(), ShipError> {
     let refuse = |message: &str| ShipError::new(ShipErrorKind::PrimaryCheckout, message);
-    let location = repo::locate(worktree).map_err(|_| refuse(NOT_A_WORKTREE))?;
+    let location = match repo::locate(worktree) {
+        Ok(location) => location,
+        // A timeout says nothing about the path itself, so it surfaces as
+        // `Timeout`; any other failure leaves the path unverifiable.
+        Err(err @ AppError::GitTimeout { .. }) => return Err(err.into()),
+        Err(_) => return Err(refuse(NOT_A_WORKTREE)),
+    };
     if !location.is_toplevel(worktree) {
         return Err(refuse(NOT_A_WORKTREE));
     }
