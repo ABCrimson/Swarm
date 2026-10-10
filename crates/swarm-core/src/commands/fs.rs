@@ -393,6 +393,18 @@ mod tests {
         let sneaky = tree.scopes.home.join(".swarm/../../outside.txt");
         assert!(tree.scopes.check_read(&sneaky).is_err());
         assert!(tree.scopes.check_write(&sneaky).is_err());
+
+        // A missing target: canonicalize fails, so only the lexical
+        // normalization stops `..` from matching a scope by prefix.
+        let missing = tree.scopes.home.join(".swarm/../../elsewhere/nope.txt");
+        assert_eq!(
+            tree.scopes.check_read(&missing).unwrap_err().as_str(),
+            Some(READ_SCOPE_MESSAGE)
+        );
+        assert_eq!(
+            tree.scopes.check_write(&missing).unwrap_err().as_str(),
+            Some(WRITE_SCOPE_MESSAGE)
+        );
     }
 
     #[test]
