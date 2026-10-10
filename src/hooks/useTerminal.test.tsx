@@ -118,8 +118,8 @@ describe("useTerminal (via WorkerTerminal)", () => {
     }
   });
 
-  // Regression: remounting (worker switch, page switch) showed a blank
-  // terminal until the next chunk, and never the earlier history.
+  // A remount (worker switch, page switch) replays the store's buffered
+  // history at once, not a blank terminal until the next chunk.
   it("replays the buffered history on mount", () => {
     addWorker("w1", "$ npm install\nadded 1 package\n");
     render(<WorkerTerminal workerId="w1" />);
@@ -127,8 +127,8 @@ describe("useTerminal (via WorkerTerminal)", () => {
     expect(terminals[0]?.write).toHaveBeenCalledWith("$ npm install\nadded 1 package\n");
   });
 
-  // Regression: deltas were computed from the store's 10k-capped string;
-  // once full, old and new had equal length and nothing was ever written.
+  // Output is written per worker_output event, never diffed from the
+  // store's 10k-capped string, so streaming continues once it is full.
   it("keeps streaming after the 10k output buffer is full", () => {
     addWorker("w1", "x".repeat(10_000));
     render(<WorkerTerminal workerId="w1" />);
@@ -182,8 +182,8 @@ describe("useTerminal (via WorkerTerminal)", () => {
     expect(vi.mocked(workerInput).mock.calls).toEqual([["w1", "a", "terminal"]]);
   });
 
-  // Regression: `void workerInput(…)` left every refused keystroke as an
-  // unhandled rejection.
+  // A refused write is caught and logged once, never left as an
+  // unhandled rejection per keystroke.
   it("catches refused input and logs it once", async () => {
     addWorker("w1", "");
     const refused = new Error("Worker Is Not Running");
