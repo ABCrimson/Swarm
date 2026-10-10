@@ -58,56 +58,9 @@ macro_rules! commands {
     };
 }
 
-commands! {
-    registry: [
-        // Workers
-        spawn_worker,
-        pause_worker,
-        resume_worker,
-        kill_worker,
-        list_workers,
-        worker_input,
-        resize_worker,
-        set_max_workers,
-        // Git and the ship chain
-        validate_repo_root,
-        git_ship_preflight,
-        git_stage_commit,
-        git_push,
-        ship_context,
-        ship_compare_url,
-        // Sessions
-        create_session,
-        delete_session,
-        list_sessions,
-        get_session,
-        session_add_worker,
-        session_remove_worker,
-        // Provider agents
-        agent_turn_started,
-        agent_spawn,
-        agent_send_turn,
-        agent_cancel,
-        agent_shutdown,
-        agent_probe,
-        agent_permission_respond,
-        set_agent_concurrency,
-        // App config
-        read_config,
-        write_config,
-        // Files
-        read_file,
-        write_file,
-        // Metrics
-        get_metrics,
-        // Ordered event log
-        events_since,
-        // Message bus
-        bus_send,
-        bus_list_channels,
-    ],
-    native: [check_for_updates, send_notification],
-}
+include!("command_list.rs");
+
+command_list!(commands);
 
 /// Dispatches `command` with the invoke's JSON arguments, inside a
 /// debug-level `ipc` span that names the command and records none of its

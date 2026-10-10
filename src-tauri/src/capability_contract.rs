@@ -6,8 +6,27 @@
 //! `scope.rs`), against the URLs `swarm_core::git::remote::compare_url`
 //! really builds for the ship chain's "Open Compare Page".
 
+use std::collections::BTreeSet;
+
 use serde_json::Value;
 use swarm_core::git::remote::{compare_url, parse};
+
+/// The app's command names, from the file `build.rs` generates the ACL
+/// manifest from and `commands` declares its forwarders from.
+mod command_names {
+    include!("commands/command_list.rs");
+
+    macro_rules! names {
+        (
+            registry: [$($registry:ident),+ $(,)?],
+            native: [$($native:ident),+ $(,)?] $(,)?
+        ) => {
+            &[$(stringify!($registry),)+ $(stringify!($native)),+]
+        };
+    }
+
+    pub(super) const ALL: &[&str] = command_list!(names);
+}
 
 const CAPABILITY: &str = include_str!("../capabilities/default.json");
 
@@ -210,4 +229,28 @@ fn app_data_and_credential_stores_are_denied() {
     ] {
         assert!(denied.iter().any(|d| d == path), "{path} is not denied");
     }
+}
+
+/// The webview may invoke exactly the app commands: each one has an
+/// `allow-<command>` grant (the manifest in `build.rs` generates the
+/// permission), and no other bare app permission is granted, so a command
+/// added without a capability entry is not callable, and a stale entry
+/// fails the ACL build.
+#[test]
+fn app_commands_are_granted_one_by_one() {
+    let granted: BTreeSet<String> = permissions()
+        .iter()
+        .map(identifier)
+        .filter(|id| !id.contains(':'))
+        .filter_map(|id| id.strip_prefix("allow-"))
+        .map(|name| name.replace('-', "_"))
+        .collect();
+    let commands: BTreeSet<String> = command_names::ALL.iter().map(|&c| c.to_owned()).collect();
+    assert_eq!(granted, commands);
+    assert!(
+        !permissions()
+            .iter()
+            .any(|p| identifier(p).starts_with("deny-")),
+        "an app command is denied in the default capability"
+    );
 }
