@@ -557,7 +557,10 @@ async function stageOrRecoverFromNothingToCommit(
  * `await`ing the returned promise) can never surface as a transient
  * unhandled-rejection warning. The `.catch()` creates and discards a
  * *derived* promise — the returned promise still rejects normally when
- * awaited, propagating the real error to `runAction`'s `catch`.
+ * awaited, propagating the real error to `runAction`'s `catch`. A
+ * timeout rejects as a `ShipCommandError` of kind `"timeout"` (the git
+ * step may still complete, see `SHIP_SETTLED_TIMEOUT_MS`), with the
+ * `waitFor` error as its cause.
  */
 function armSettledWait(shipId: string): Promise<unknown> {
   const settled = waitFor(
@@ -565,7 +568,16 @@ function armSettledWait(shipId: string): Promise<unknown> {
       e.type === "ship_settled" &&
       ShipSettledPayloadSchema.safeParse(e.payload).data?.shipId === shipId,
     SHIP_SETTLED_TIMEOUT_MS,
-  );
+  ).catch((err: unknown) => {
+    throw new ShipCommandError(
+      {
+        kind: "timeout",
+        message: `No confirmation arrived within ${SHIP_SETTLED_TIMEOUT_MS / 1000} seconds. The commit or push may still have completed; refresh the preflight to check.`,
+        remedy: null,
+      },
+      { cause: err },
+    );
+  });
   settled.catch(() => {});
   return settled;
 }

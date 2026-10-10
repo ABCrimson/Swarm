@@ -548,6 +548,28 @@ describe("useShip", () => {
     expect(result.current.state).toBe("settled");
   });
 
+  it("reports a missing receipt after the 30 s budget as a timeout, not as an unknown failure", async () => {
+    vi.useFakeTimers();
+    mockGitShipPreflight.mockResolvedValue(makePreflight());
+    mockGitStageCommit.mockResolvedValue(makeCommitOutcome());
+    mockGitPush.mockResolvedValue(makePushOutcome());
+
+    const { result } = await renderPreviewing();
+
+    let actionPromise: Promise<void> = Promise.resolve();
+    act(() => {
+      actionPromise = result.current.commitAndPush();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await actionPromise;
+    });
+
+    expect(result.current.state).toBe("failed");
+    expect(result.current.error?.kind).toBe("timeout");
+    expect(result.current.error?.message).toContain("may still have completed");
+  });
+
   // ── B2: NothingToCommit recovery when there's already unpushed work ──
 
   it("DIRECTIVE (B2): commit-only, then commitAndPush on a clean tree with ahead=1 → push runs and settles success (no re-staging)", async () => {
