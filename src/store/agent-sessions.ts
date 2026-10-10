@@ -67,7 +67,7 @@ export type AgentTranscriptItem =
   | { readonly id: string; readonly kind: "settled"; readonly payload: AgentTurnSettledPayload };
 
 /** Live, not-yet-finalized text of one `(turnId, blockIndex)` block, from `agent_turn_delta`. */
-export interface StreamingBlock {
+interface StreamingBlock {
   readonly turnId: string;
   readonly kind: string;
   readonly text: string;
@@ -100,7 +100,7 @@ export interface AgentTranscript {
 }
 
 /** The empty transcript every session starts from. */
-export const EMPTY_TRANSCRIPT: AgentTranscript = {
+const EMPTY_TRANSCRIPT: AgentTranscript = {
   items: [],
   streaming: new Map(),
   pendingTurns: 0,

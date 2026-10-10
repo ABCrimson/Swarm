@@ -10,7 +10,7 @@ export const WorkerStateSchema = z.enum(["idle", "running", "paused", "error"]);
 export type WorkerState = z.infer<typeof WorkerStateSchema>;
 
 /** Zod schema for a SWARM worker entity. */
-export const WorkerSchema = z.object({
+const WorkerSchema = z.object({
   id: z.uuid(),
   state: WorkerStateSchema,
   name: z.string().optional(),
@@ -33,14 +33,11 @@ export type Worker = z.infer<typeof WorkerSchema>;
 // ── Session schemas ─────────────────────────────────
 
 /** Zod schema for session metadata (description, tags, template reference). */
-export const SessionMetadataSchema = z.object({
+const SessionMetadataSchema = z.object({
   description: z.string().optional(),
   tags: z.array(z.string()).optional(),
   templateId: z.string().optional(),
 });
-
-/** Metadata attached to a session for categorisation and filtering. */
-export type SessionMetadata = z.infer<typeof SessionMetadataSchema>;
 
 /** Zod schema for a SWARM orchestration session. */
 export const SessionSchema = z.object({
@@ -68,9 +65,6 @@ export const SessionWorkerRemovedPayloadSchema = z.object({
   workerId: z.uuid(),
 });
 
-/** Payload of the `session_worker_removed` event. */
-export type SessionWorkerRemovedPayload = z.infer<typeof SessionWorkerRemovedPayloadSchema>;
-
 /**
  * Zod schema for the `session_worker_added` event payload (mirrors
  * Rust's `SessionWorkerAddedPayload`), emitted by `session_add_worker`
@@ -97,24 +91,20 @@ export type Snapshot = z.infer<typeof SnapshotSchema>;
 // ── Template schemas ────────────────────────────────
 
 /** Zod schema for worktree isolation mode — mirrors Rust's `WorkerIsolation`. */
-export const WorkerIsolationSchema = z.enum(["worktree", "none"]);
-
-/** Worktree isolation mode for a spawned worker. */
-export type WorkerIsolation = z.infer<typeof WorkerIsolationSchema>;
+const WorkerIsolationSchema = z.enum(["worktree", "none"]);
 
 /**
  * Zod schema for the process options half of a worker spawn spec —
  * fields that map 1:1 onto Rust's `WorkerConfig`
  * (`crates/swarm-core/src/worker/handle.rs`) and are sent
  * over IPC to `spawn_worker`. Deliberately excludes `rows`/`cols` (PTY
- * dimensions, Rust-defaulted and not template-configurable today).
+ * dimensions, Rust-defaulted and not template-configurable).
  *
- * `repoRoot`/`isolation` are additive and optional — omitting both
- * reproduces exactly the pre-worktree-isolation spawn (no git
- * anywhere). When `repoRoot` is given, `isolation` defaults
- * server-side to `"worktree"`.
+ * `repoRoot` and `isolation` are optional. Without `repoRoot` the worker
+ * spawns at `cwd` without touching git; when `repoRoot` is given,
+ * `isolation` defaults server-side to `"worktree"`.
  */
-export const WorkerProcessOptionsSchema = z.object({
+const WorkerProcessOptionsSchema = z.object({
   name: z.string(),
   shell: z.string().optional(),
   cwd: z.string().optional(),
@@ -133,7 +123,7 @@ export type WorkerProcessOptions = z.infer<typeof WorkerProcessOptionsSchema>;
  * WorkerAIPanel/AIChat can preselect the model and inject the system
  * prompt for a worker spawned from a template.
  */
-export const WorkerAgentMetadataSchema = z.object({
+const WorkerAgentMetadataSchema = z.object({
   role: z.string().optional(),
   model: z.enum(MODEL_KEYS).optional(),
   systemPrompt: z.string().optional(),
@@ -145,10 +135,10 @@ export type WorkerAgentMetadata = z.infer<typeof WorkerAgentMetadataSchema>;
 /**
  * Zod schema for a full worker spawn spec within a session template:
  * process options (sent to Rust) plus agent metadata (kept client-side).
- * Replaces the old, single `WorkerConfig` type that conflated both with
- * Rust's unrelated `WorkerConfig` struct of the same name.
+ * Only the process-options half maps onto Rust's `WorkerConfig`
+ * (`crates/swarm-core/src/worker/handle.rs`).
  */
-export const WorkerSpawnSpecSchema = z.object({
+const WorkerSpawnSpecSchema = z.object({
   ...WorkerProcessOptionsSchema.shape,
   ...WorkerAgentMetadataSchema.shape,
 });
@@ -172,7 +162,7 @@ export type SessionTemplate = z.infer<typeof SessionTemplateSchema>;
 // ── System metrics schemas ──────────────────────────
 
 /** Zod schema for a single system metric data point. */
-export const MetricPointSchema = z.object({
+const MetricPointSchema = z.object({
   time: z.number(),
   cpu: z.number(),
   memory: z.number(),
@@ -183,7 +173,7 @@ export const MetricPointSchema = z.object({
 export type MetricPoint = z.infer<typeof MetricPointSchema>;
 
 /** Zod schema for aggregate system metrics with history. */
-export const SystemMetricsSchema = z.object({
+const SystemMetricsSchema = z.object({
   cpuPercent: z.number(),
   memoryMb: z.number(),
   memoryTotalMb: z.number(),
@@ -198,7 +188,7 @@ export type SystemMetrics = z.infer<typeof SystemMetricsSchema>;
 // ── AI schemas ──────────────────────────────────────
 
 /** Zod schema for an AI conversation message with optional tool calls. */
-export const AiMessageSchema = z.object({
+const AiMessageSchema = z.object({
   id: z.uuid(),
   role: z.enum(["user", "assistant"]),
   content: z.string(),
@@ -219,7 +209,7 @@ export const AiMessageSchema = z.object({
 export type AiMessage = z.infer<typeof AiMessageSchema>;
 
 /** Zod schema for a priority-queued AI request item. */
-export const AiQueueItemSchema = z.object({
+const AiQueueItemSchema = z.object({
   id: z.uuid(),
   priority: z.enum(["critical", "high", "normal", "low"]),
   workerId: z.uuid(),
@@ -230,19 +220,8 @@ export const AiQueueItemSchema = z.object({
 /** A queued AI request with priority, status, and associated worker. */
 export type AiQueueItem = z.infer<typeof AiQueueItemSchema>;
 
-// ── Provider schemas ───────────────────────────────
-
-/** Zod schema for the selected AI provider configuration. */
-export const ProviderConfigSchema = z.object({
-  providerId: z.string(),
-  modelId: z.string(),
-});
-
-/** The currently selected AI provider and model. */
-export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
-
 /** Zod schema for a single token usage record. */
-export const TokenUsageRecordSchema = z.object({
+const TokenUsageRecordSchema = z.object({
   inputTokens: z.number(),
   outputTokens: z.number(),
   model: z.string(),
@@ -255,7 +234,7 @@ export const TokenUsageRecordSchema = z.object({
 export type TokenUsageRecord = z.infer<typeof TokenUsageRecordSchema>;
 
 /** Zod schema for cumulative token usage statistics. */
-export const CumulativeUsageSchema = z.object({
+const CumulativeUsageSchema = z.object({
   totalInputTokens: z.number(),
   totalOutputTokens: z.number(),
   totalCostUsd: z.number(),
@@ -268,13 +247,15 @@ export type CumulativeUsage = z.infer<typeof CumulativeUsageSchema>;
 // ── Ship schemas ─────────────────────────────────────
 //
 // Mirror Rust's `swarm_core::git::ship` types
-// (`crates/swarm-core/src/git/ship.rs`) exactly: `ShipError`
+// (`crates/swarm-core/src/git/ship/`) and, for `ship_context`, the
+// `swarm_core::git::causal` types (`crates/swarm-core/src/git/causal.rs`)
+// exactly: `ShipError`
 // is a documented divergence from the rest of the IPC surface's
 // `Result<T, String>` convention — it serializes as a structured
 // `{ kind, message, remedy }` object so the UI can branch on `kind`.
 
 /** Zod schema mirroring Rust's `ShipErrorKind` (camelCased variant names). */
-export const ShipErrorKindSchema = z.enum([
+const ShipErrorKindSchema = z.enum([
   "workerNotFound",
   "noWorktree",
   "primaryCheckout",
@@ -294,7 +275,7 @@ export const ShipErrorKindSchema = z.enum([
 export type ShipErrorKind = z.infer<typeof ShipErrorKindSchema>;
 
 /** Zod schema mirroring Rust's `ShipRemedy`. */
-export const ShipRemedySchema = z.enum(["fetchAndRebase", "reAuthenticate", "configureIdentity"]);
+const ShipRemedySchema = z.enum(["fetchAndRebase", "reAuthenticate", "configureIdentity"]);
 
 /** A suggested next action for a `ShipError`. */
 export type ShipRemedy = z.infer<typeof ShipRemedySchema>;
@@ -317,16 +298,13 @@ export const ShipErrorSchema = z.object({
 export type ShipError = z.infer<typeof ShipErrorSchema>;
 
 /** Zod schema for one file the secret/size deny list caught. */
-export const SkippedFileSchema = z.object({
+const SkippedFileSchema = z.object({
   path: z.string(),
   reason: z.string(),
 });
 
-/** A file skipped from staging, with its Title Case skip reason. */
-export type SkippedFile = z.infer<typeof SkippedFileSchema>;
-
 /** Zod schema for a diff stat summary. */
-export const DiffStatSchema = z.object({
+const DiffStatSchema = z.object({
   filesChanged: z.int(),
   insertions: z.int(),
   deletions: z.int(),
@@ -360,7 +338,7 @@ export const ShipPreflightSchema = z.object({
 export type ShipPreflight = z.infer<typeof ShipPreflightSchema>;
 
 /** Zod schema for the staging strategy sent to `git_stage_commit`. */
-export const StagingModeSchema = z.enum(["all", "staged"]);
+const StagingModeSchema = z.enum(["all", "staged"]);
 
 /** Staging strategy: stage every changed file, or commit exactly what's already staged. */
 export type StagingMode = z.infer<typeof StagingModeSchema>;
@@ -397,22 +375,19 @@ export type PushOutcome = z.infer<typeof PushOutcomeSchema>;
  * fields on the Rust side (`git::causal::extract_target`) — never a raw
  * tool input, which can legitimately contain file contents.
  */
-export const CausalToolCallSchema = z.object({
+const CausalToolCallSchema = z.object({
   seq: z.int(),
   name: z.string(),
   target: z.string().nullable(),
   ok: z.boolean().nullable(),
 });
 
-/** A tool call row in a `ship_context` turn's Causal Record table. */
-export type CausalToolCall = z.infer<typeof CausalToolCallSchema>;
-
 /**
  * Zod schema for one AI/agent turn within a `ship_context` range,
  * identified by the `turnId` its `agent_block`/`agent_tool_call`/
  * `agent_tool_result`/`agent_turn_settled` events share.
  */
-export const CausalTurnSchema = z.object({
+const CausalTurnSchema = z.object({
   turnId: z.string(),
   status: z.string().nullable(),
   toolCalls: z.array(CausalToolCallSchema),
@@ -422,15 +397,12 @@ export const CausalTurnSchema = z.object({
 export type CausalTurn = z.infer<typeof CausalTurnSchema>;
 
 /** Zod schema for a commit made within a `ship_context` range. */
-export const CausalCommitSchema = z.object({
+const CausalCommitSchema = z.object({
   sha: z.string(),
   branch: z.string(),
   seqFrom: z.int(),
   seqTo: z.int(),
 });
-
-/** A commit made within a `ship_context` range. */
-export type CausalCommit = z.infer<typeof CausalCommitSchema>;
 
 /**
  * Zod schema for the full `ship_context` response — the evidence half of

@@ -33,9 +33,9 @@ export const MAX_HISTORY = 3600;
  * count, AI throughput) plus a capped sample history for charts and CSV
  * export.
  *
- * Plain immutable updates, deliberately without immer: drafting a
- * 3600-element history on every tick copied and re-froze the whole
- * array each time, where appending to a capped array is one shallow copy.
+ * Plain immutable updates, deliberately without immer: a draft would
+ * copy and re-freeze the 3600-element history on every tick, where
+ * appending to a capped array is one shallow copy.
  */
 export const useSystemStore = create<SystemStoreState & SystemStoreActions>()(
   subscribeWithSelector((set) => ({

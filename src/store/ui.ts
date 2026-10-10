@@ -74,13 +74,11 @@ interface ThemePrefs {
  * Persisted theme preferences (particle background toggle, GPU overlay),
  * stored under a v2 key.
  *
- * `gpuOverlay` defaults `true` to match the status bar's long-standing
- * visible-by-default GPU readout — the Settings toggle and the status
- * bar's Hide/Show GPU button both read/write this same field. Before
- * the v2 key existed `gpuOverlay` was a dead setting persisting `false`
- * for every install, so an install that only has the legacy
- * `swarm:ui:theme` key carries over `particlesEnabled` alone and takes
- * the new `gpuOverlay: true` default.
+ * `gpuOverlay` defaults `true`, so the status bar's GPU readout is visible
+ * by default; the Settings toggle and the status bar's Hide/Show GPU
+ * button both read and write this field. The legacy `swarm:ui:theme` key
+ * stored a `gpuOverlay` that was never honoured, so `migrate` carries
+ * over `particlesEnabled` alone and `gpuOverlay` takes the `true` default.
  */
 export const themeAtom = atomWithSettings<ThemePrefs>(
   "swarm:ui:theme2",
@@ -103,10 +101,11 @@ export const themeAtom = atomWithSettings<ThemePrefs>(
 // ── App settings (persisted) ────────────────────────
 
 /**
- * Tunable app behavior promoted from hardcoded constants. Every field is
- * consumed live — see useAlerts (cooldown), useAutoSnapshot (interval),
- * log-store (retention), ai store (concurrent limit), message-history
- * (LRU cap), and the update-on-launch check in useSettingsBridge.
+ * Tunable app behavior. Every field is consumed live — see useAlerts
+ * (cooldown, native notifications), useAutoSnapshot (interval), and
+ * useSettingsBridge, which pushes the rest into log-store (retention),
+ * the ai store and backend agent concurrency (concurrent limit), and
+ * message-history (LRU cap), and runs the update-on-launch check.
  */
 export interface AppSettings {
   /** Seconds between repeat alerts for the same metric. */

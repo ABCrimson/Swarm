@@ -178,13 +178,19 @@ describe("WorkerStore", () => {
     it("does nothing for a non-existent worker id", () => {
       const { setWorktreeInfo } = useWorkerStore.getState();
       expect(() => setWorktreeInfo("non-existent", "/wt", "swarm/x-1")).not.toThrow();
+      expect(useWorkerStore.getState().workers.size).toBe(0);
     });
 
     it("leaves worktreePath/branch undefined for a worker spawned without isolation", () => {
-      const worker = createWorker();
-      useWorkerStore.getState().addWorker(worker);
+      const isolated = createWorker();
+      const plain = createWorker();
+      const { addWorker, setWorktreeInfo } = useWorkerStore.getState();
+      addWorker(isolated);
+      addWorker(plain);
 
-      const stored = useWorkerStore.getState().workers.get(worker.id);
+      setWorktreeInfo(isolated.id, "/wt", "swarm/x-1");
+
+      const stored = useWorkerStore.getState().workers.get(plain.id);
       expect(stored?.worktreePath).toBeUndefined();
       expect(stored?.branch).toBeUndefined();
     });
