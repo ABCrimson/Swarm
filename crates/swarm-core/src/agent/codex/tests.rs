@@ -557,14 +557,6 @@ fn capabilities_promise_resume_graceful_cancel_and_interactive_approvals() {
     );
 }
 
-#[test]
-fn every_codex_child_turns_off_the_current_directory_exe_lookup() {
-    assert_eq!(
-        child_env().get(NO_CWD_EXE_LOOKUP_ENV).map(String::as_str),
-        Some("1")
-    );
-}
-
 #[cfg(unix)]
 #[test]
 fn signal_names_are_reported_on_unix() {
@@ -593,6 +585,11 @@ async fn handshake_is_initialize_then_initialized_then_thread_start_with_the_tie
             .spawn(h.spec(tier, None, None))
             .await
             .expect("spawn");
+        assert_eq!(
+            h.record()[0]["noCwdExeLookup"],
+            "1",
+            "the child runs with the current-directory exe lookup off"
+        );
         assert_eq!(session.session_key(), THREAD);
         let exit = session.shutdown().await.expect("shutdown");
         assert_eq!(
@@ -613,6 +610,12 @@ async fn handshake_is_initialize_then_initialized_then_thread_start_with_the_tie
             json!({ "name": "swarm", "title": "Swarm Orchestrator", "version": env!("CARGO_PKG_VERSION") })
         );
         assert_eq!(wire[0]["params"]["capabilities"]["experimentalApi"], false);
+        assert!(
+            wire[0]["params"]["capabilities"]["optOutNotificationMethods"]
+                .as_array()
+                .is_some_and(|m| m.contains(&json!("item/commandExecution/outputDelta"))),
+            "{wire:#?}"
+        );
         assert_eq!(wire[1], json!({ "method": "initialized" }));
         assert_eq!(wire[2]["method"], "thread/start");
         let params = &wire[2]["params"];
@@ -1390,11 +1393,9 @@ async fn a_server_death_mid_turn_synthesizes_the_settlement_then_exits() {
     assert_eq!(settled.len(), 1);
     assert_eq!(settled[0].turn_id, turn);
     assert_eq!(settled[0].status, AgentTurnStatus::Error);
-    assert!(
-        settled[0]
-            .error
-            .as_deref()
-            .is_some_and(|e| e.starts_with(PROCESS_EXITED_WITHOUT_RECEIPT))
+    assert_eq!(
+        settled[0].error.as_deref(),
+        Some(format!("{PROCESS_EXITED_WITHOUT_RECEIPT} (No Stderr Output)").as_str())
     );
     let settled_at = position(&events, |e| matches!(e, SwarmEvent::AgentTurnSettled(_)));
     let exited_at = position(&events, is_exit);
@@ -1468,6 +1469,40 @@ async fn an_oversized_line_tears_the_session_down() {
         })
         .await;
     assert!(after.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_framer_error_mid_turn_settles_with_its_cause() {
+    let h = Harness::with_timeouts(
+        "oversized_mid_turn.script",
+        Timeouts {
+            graceful_exit: Duration::from_millis(200),
+            ..test_timeouts()
+        },
+    );
+    let session = h.spawn().await;
+    let turn = session
+        .send_turn(TurnInput {
+            prompt: "go".to_string(),
+        })
+        .await
+        .expect("turn");
+    tokio::time::timeout(WAIT, session.await_turn_completion(turn.clone()))
+        .await
+        .expect("the framer error settles the turn")
+        .expect("await");
+    let events = h
+        .wait_until("agent_session_exited", |events| events.iter().any(is_exit))
+        .await;
+    let settled = settlements(&events);
+    assert_eq!(settled.len(), 1, "{settled:#?}");
+    assert_eq!(settled[0].turn_id, turn);
+    assert!(
+        settled[0].error.as_deref().is_some_and(|e| e.starts_with(
+            format!("{PROCESS_EXITED_WITHOUT_RECEIPT} (NDJSON line exceeded ").as_str()
+        )),
+        "{settled:#?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1580,6 +1615,41 @@ async fn probe_reports_version_and_sign_in_state() {
             .detail
             .as_deref()
             .is_some_and(|d| d.starts_with("Codex CLI Not Found On PATH")),
+        "{report:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_reports_a_non_executable_binary_as_not_startable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = Scratch::new();
+    let path = scratch.path().join("codex");
+    std::fs::write(
+        &path,
+        "#!/bin/sh
+",
+    )
+    .expect("write the stub");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+    let (events_tx, _events) = watch::channel(Vec::<SwarmEvent>::new());
+    let engine = OrchestrationEngine::start(EventLog::open_in_memory().unwrap(), None, move |e| {
+        events_tx.send_modify(|events| events.push(e.event.clone()));
+    });
+    let adapter = CodexAdapter::with_test_binary(
+        engine.sink(),
+        path.to_str().unwrap(),
+        Vec::new(),
+        test_timeouts(),
+    );
+    let report = adapter.probe().await.expect("probe");
+    assert!(!report.available);
+    assert!(
+        report
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.starts_with("Codex CLI Could Not Be Started")),
         "{report:?}"
     );
 }

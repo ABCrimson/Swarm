@@ -137,7 +137,11 @@ const state = {
 const inbox = [];
 const waiters = [];
 
-record({ fake: "started", pid: process.pid });
+record({
+  fake: "started",
+  pid: process.pid,
+  noCwdExeLookup: process.env.NoDefaultCurrentDirectoryInExePath ?? null,
+});
 const input = createInterface({ input: process.stdin, crlfDelay: Number.POSITIVE_INFINITY });
 input.on("line", (line) => {
   if (line.trim() === "") return;

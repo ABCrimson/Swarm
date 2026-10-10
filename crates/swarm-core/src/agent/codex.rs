@@ -729,6 +729,20 @@ async fn wait_settled(shared: &Shared, turn_id: &str) {
         .await;
 }
 
+/// The child's last stderr bytes, for a failure message. Waits up to 200 ms
+/// for the piped stderr drain thread, which can trail the child's exit:
+/// without the wait, a crash that wrote a panic message could settle as
+/// "No Stderr Output".
+async fn drained_stderr_snippet(tail: &parking_lot::Mutex<VecDeque<u8>>) -> String {
+    for _ in 0..10 {
+        if !tail.lock().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    stderr_snippet(tail)
+}
+
 /// Tears the session down exactly once; every later call returns the
 /// first call's [`ExitSummary`].
 ///
@@ -782,8 +796,13 @@ async fn teardown(shared: &Arc<Shared>) -> ExitSummary {
 
     if announced {
         if let Some(turn_id) = &running {
+            // Take the cause in its own statement: matching on the lock
+            // expression would keep its !Send guard alive across the await.
             let cause = shared.teardown_cause.lock().take();
-            let detail = cause.unwrap_or_else(|| stderr_snippet(&shared.stderr_tail));
+            let detail = match cause {
+                Some(cause) => cause,
+                None => drained_stderr_snippet(&shared.stderr_tail).await,
+            };
             shared.emit(SwarmEvent::AgentTurnSettled(AgentTurnSettledPayload {
                 worker_id: shared.worker_id,
                 turn_id: turn_id.clone(),
