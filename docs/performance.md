@@ -30,7 +30,7 @@
 
 ### React 19 + Compiler
 
-- `babel-plugin-react-compiler` 1.0.0 auto-memoizes all components and hooks
+- The React Compiler (the Oxc port, `oxc-transform-react`) auto-memoizes all components and hooks
 - No manual `useMemo`/`useCallback` -- the compiler handles dependency tracking
 - `useDeferredValue` for non-urgent streaming content updates (`AIMessageStream`)
 - `startTransition` for background state updates (`useStream`, `AIChat`)
@@ -144,7 +144,7 @@ When the `timestamp-query` device feature is available, the compute pass records
 
 ### Vite 8.2 + Rolldown
 
-The frontend builds with Vite 8.2.2 using the Rolldown bundler. React Compiler runs via `@rolldown/plugin-babel` (`reactCompilerPreset()` from `@vitejs/plugin-react` 6.1.0), since `@vitejs/plugin-react` itself is oxc-based and no longer runs Babel directly:
+The frontend builds with Vite 8.2.2 using the Rolldown bundler. The React Compiler runs inside `@vitejs/plugin-react` (`react({ compiler: true })`) as the Oxc port, `oxc-transform-react`: its native binding, or its WASI binding where the native one cannot load (Windows Smart App Control). No Babel is involved:
 
 ```ts
 build: {

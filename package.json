@@ -66,10 +66,9 @@
     "zustand": "5.0.15"
   },
   "devDependencies": {
-    "@babel/core": "7.29.7",
     "@biomejs/biome": "2.5.15",
+    "@oxc-transform-react/binding-wasm32-wasip1": "0.153.0",
     "@playwright/test": "1.65.0-alpha-2026-10-10",
-    "@rolldown/plugin-babel": "0.2.4",
     "@tailwindcss/vite": "0.0.0-insiders.de2255b",
     "@tauri-apps/cli": "3.0.0-alpha.4",
     "@testing-library/dom": "10.4.2",
@@ -82,7 +81,6 @@
     "@vitejs/plugin-react": "6.1.2",
     "@vitest/coverage-v8": "5.0.3",
     "@webgpu/types": "0.1.74",
-    "babel-plugin-react-compiler": "0.0.0-experimental-a1856f3-20260507",
     "jsdom": "30.1.2",
     "knip": "6.41.0",
     "marked": "18.1.0",

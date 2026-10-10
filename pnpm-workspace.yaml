@@ -10,15 +10,6 @@ engineStrict: true
 # to its earlier releases.
 minimumReleaseAge: 1440
 trustPolicy: no-downgrade
-trustPolicyExclude:
-  # Babel 7's semver range (^6.3.1) — a 2023 backport published without the
-  # provenance the 7.x line already had. Required by @babel/core 7.29.7, the
-  # React Compiler's Babel fallback (vite.config.ts): on Babel 8 every
-  # babel-plugin-react-compiler build silently skips destructured-default
-  # components (react#36868, still open on 2026-10-10 with its fix PRs
-  # unmerged and no compiler build since 2026-05-08; held in
-  # .peak-modern-holds.json).
-  - semver@6.3.1
 
 # Same-day pins that deliberately bypass the 24h gate. `pnpm add`,
 # `update` and `remove` prune entries the lockfile no longer resolves.

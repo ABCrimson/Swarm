@@ -166,7 +166,7 @@ Full operator guide: [`docs/daemon.md`](docs/daemon.md).
 | UI | React | 19.3.0-canary-d083ec1d-20260922 |
 | Language | TypeScript | 7.1.0-dev.20260925.1 (native compiler) |
 | Build | Vite (Rolldown) | 8.3.1 (oxc minify) |
-| Compiler | React Compiler: Oxc (`oxc-transform-react`), Babel fallback (`babel-plugin-react-compiler` on `@babel/core` 7) | 0.151.0 · 0.0.0-experimental-a1856f3-20260507 |
+| Compiler | React Compiler: Oxc (`oxc-transform-react`, native binding with a WASI fallback) | 0.153.0 |
 | Styling | Tailwind CSS (v4 insiders) | 0.0.0-insiders.fa81d69 |
 | State | Zustand / Jotai / Immer | 5.0.15 / 3.0.0 / 11.1.18 |
 | Validation | Zod | 4.6.5 |

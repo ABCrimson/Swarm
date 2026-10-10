@@ -14,11 +14,13 @@
  * Modules are matched by their source path in each chunk's module map,
  * so chunk names and hashes are irrelevant.
  *
- * `SWARM_REACT_COMPILER=babel pnpm check:compiler` checks the Babel
- * fallback pipeline instead of the native Oxc one.
+ * `NAPI_RS_FORCE_WASI=true pnpm check:compiler` checks the WASI binding
+ * (the fallback where the native one cannot load) instead of the native
+ * one; the report names the binding that ran.
  */
 import { relative, resolve } from "node:path";
 import { styleText } from "node:util";
+import { __napiBindingTarget } from "oxc-transform-react";
 import type { Plugin, Rolldown } from "vite";
 import { build } from "vite";
 
@@ -44,8 +46,7 @@ const detectPipeline: Plugin = {
   name: "swarm:detect-react-compiler",
   configResolved(config) {
     const names = new Set(config.plugins.map((p) => p.name));
-    if (names.has("vite:react-compiler")) pipeline = "oxc (native)";
-    else if ([...names].some((n) => n.includes("babel"))) pipeline = "babel (fallback)";
+    if (names.has("vite:react-compiler")) pipeline = `oxc (${__napiBindingTarget})`;
   },
 };
 

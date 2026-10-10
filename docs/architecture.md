@@ -525,7 +525,7 @@ Provenance is wired end-to-end (envelope, SQLite columns, IPC args), but only so
 
 ### React 19 + Compiler
 
-The frontend uses React 19 canary with the React Compiler (`babel-plugin-react-compiler`), enabling automatic memoization and eliminating the need for manual `useMemo`/`useCallback`.
+The frontend uses React 19 canary with the React Compiler (the Oxc port, `oxc-transform-react`, run by `@vitejs/plugin-react`), enabling automatic memoization and eliminating the need for manual `useMemo`/`useCallback`.
 
 ### Module Resolution
 
