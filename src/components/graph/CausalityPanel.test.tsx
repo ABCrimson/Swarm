@@ -118,8 +118,8 @@ describe("walkCausalityChain", () => {
   it("treats a backfill row whose seq doesn't match the requested seq as a miss (the row.seq !== seq guard)", async () => {
     // events_since is asked for seq 100 (afterSeq: 99) but the mocked
     // response comes back with a DIFFERENT seq -- a gap/skip in what's
-    // persisted, or a malformed response. The guard must null this out
-    // rather than trust the wrong row.
+    // persisted. The guard must null this out rather than trust the wrong
+    // row.
     const wrongSeqRow = ev({ seq: 101, type: "agent_turn_started", payload: { workerId: "w-a" } });
     invoke.mockResolvedValueOnce([wrongSeqRow]);
 
@@ -388,6 +388,29 @@ describe("CausalityPanel (component)", () => {
     );
     expect(screen.queryByText(/Ephemeral Or Pruned/)).not.toBeInTheDocument();
     expect(screen.getByText(/Killed Worker Beta/)).toBeInTheDocument();
+  });
+
+  it("reports a schema-invalid events_since page as a load failure, not a pruned cause", async () => {
+    act(() => {
+      useWorkerStore.getState().addWorker(createWorker({ id: "w-b", name: "Worker Beta" }));
+    });
+    seedRing(
+      ev({
+        seq: 50,
+        type: "worker_killed",
+        originWorker: "w-a",
+        causeSeq: 10,
+        payload: { workerId: "w-b" },
+      }),
+    );
+    invoke.mockResolvedValueOnce([{ seq: "not-a-number" }]);
+
+    renderPanel(50);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could Not Load The Causality Trace: Events Since Returned An Unexpected Shape.",
+    );
+    expect(screen.queryByText(/Ephemeral Or Pruned/)).not.toBeInTheDocument();
   });
 
   it("announces the walk through one persistent status region", async () => {

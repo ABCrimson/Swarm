@@ -27,7 +27,13 @@ vi.mock(import("#lib/tauri"), async (importOriginal) => ({
 }));
 
 import { SpawnWorkerDialog } from "#components/worker/SpawnWorkerDialog";
-import { agentProbe, agentSpawn, spawnWorker, validateRepoRoot } from "#lib/tauri";
+import {
+  AgentSpawnCommandError,
+  agentProbe,
+  agentSpawn,
+  spawnWorker,
+  validateRepoRoot,
+} from "#lib/tauri";
 
 const AVAILABLE: ProbeReport = { available: true, version: "1.0.0", detail: null };
 
@@ -318,6 +324,41 @@ describe("SpawnWorkerDialog", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Spawn Failed: boom");
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("reports a spawn without a transport inline instead of closing silently", async () => {
+    vi.mocked(spawnWorker).mockResolvedValue(null);
+    const onClose = vi.fn();
+    const onSpawned = vi.fn();
+    const user = userEvent.setup();
+    render(<SpawnWorkerDialog onClose={onClose} onSpawned={onSpawned} />);
+    await waitForProbeSettled();
+
+    await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Spawn Failed: No Backend Transport Available.",
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onSpawned).not.toHaveBeenCalled();
+  });
+
+  it("hands over the surviving PTY worker when only the agent session failed to attach", async () => {
+    vi.mocked(agentProbe).mockResolvedValue(AVAILABLE);
+    vi.mocked(agentSpawn).mockRejectedValue(
+      new AgentSpawnCommandError("w-survivor", "Not Signed In"),
+    );
+    const onClose = vi.fn();
+    const onSpawned = vi.fn();
+    const user = userEvent.setup();
+    render(<SpawnWorkerDialog onClose={onClose} onSpawned={onSpawned} />);
+    await waitForProbeSettled();
+    await user.click(screen.getByRole("radio", { name: "Claude Code" }));
+
+    await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
+
+    await waitFor(() => expect(onSpawned).toHaveBeenCalledWith("w-survivor"));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("calls onClose without spawning when Cancel is clicked", async () => {
