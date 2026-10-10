@@ -275,4 +275,65 @@ describe("WorkerDetail", () => {
     expect(openPath).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledWith("Refusing To Open A Path Containing '..'.");
   });
+
+  describe("closing the panel", () => {
+    // jsdom has no layout, so every element reports zero client rects;
+    // `visible` marks the ones standing in for a rendered view.
+    function stubLayout(...visible: HTMLElement[]): void {
+      vi.spyOn(Element.prototype, "getClientRects").mockImplementation(function (this: Element) {
+        return (visible.includes(this as HTMLElement) ? [new DOMRect()] : []) as never;
+      });
+    }
+
+    function mountViews(workerId: string) {
+      const node = document.createElement("div");
+      node.className = "react-flow__node";
+      node.dataset.id = workerId;
+      node.tabIndex = 0;
+      const row = document.createElement("button");
+      row.setAttribute("aria-current", "true");
+      const li = document.createElement("li");
+      li.append(row);
+      document.body.append(node, li);
+      return {
+        node,
+        row,
+        cleanup: () => {
+          node.remove();
+          li.remove();
+        },
+      };
+    }
+
+    afterEach(() => vi.restoreAllMocks());
+
+    it("returns focus to the worker's graph node when the graph is showing", async () => {
+      const user = userEvent.setup();
+      const worker = createWorker();
+      seedWorker(worker);
+      const { node, row, cleanup } = mountViews(worker.id);
+      stubLayout(node);
+      render(<WorkerDetail worker={worker} />);
+
+      await user.click(screen.getByRole("button", { name: "Close Detail Panel" }));
+
+      expect(node).toHaveFocus();
+      expect(row).not.toHaveFocus();
+      cleanup();
+    });
+
+    it("returns focus to the selected list row when the graph is hidden", async () => {
+      const user = userEvent.setup();
+      const worker = createWorker();
+      seedWorker(worker);
+      const { row, cleanup } = mountViews(worker.id);
+      stubLayout(row);
+      render(<WorkerDetail worker={worker} />);
+
+      await user.click(screen.getByRole("button", { name: "Close Detail Panel" }));
+
+      expect(row).toHaveFocus();
+      cleanup();
+    });
+  });
 });
