@@ -57,7 +57,7 @@ const cardStyle: CSSProperties = {
 const labelStyle: CSSProperties = {
   fontFamily: "var(--font-body)",
   fontSize: 11,
-  color: "oklch(0.55 0.04 220)",
+  color: "var(--color-fg-dim)",
   textTransform: "uppercase",
   letterSpacing: "0.05em",
 };
