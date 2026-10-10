@@ -176,7 +176,7 @@ export function WorkspacePanel(): React.ReactElement {
         onPointerMove={handlePointerMove}
         onLostPointerCapture={handleLostPointerCapture}
         onKeyDown={handleSeparatorKeyDown}
-        className="m-0 h-auto w-1 shrink-0 cursor-col-resize touch-none select-none border-0 bg-transparent transition-colors duration-150 hover:bg-plasma/20 data-dragging:bg-plasma/40"
+        className="m-0 h-auto w-1 shrink-0 relative z-10 before:absolute before:inset-y-0 before:left-0 before:-right-5 before:content-[''] cursor-col-resize touch-none select-none border-0 bg-transparent transition-colors duration-150 hover:bg-plasma/20 data-dragging:bg-plasma/40"
       />
 
       <div className="min-w-0 flex-1 overflow-hidden">
