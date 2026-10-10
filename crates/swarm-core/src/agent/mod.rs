@@ -32,21 +32,9 @@
 //! session through the registry by worker id.
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use parking_lot::Mutex;
-
-/// The tail of a child's stderr as one line for a failure message:
-/// `Stderr: <text>`, or `No Stderr Output` when it wrote nothing.
-/// Shared by both provider adapters, which keep the same bounded byte
-/// tail of their CLI's stderr.
-pub(crate) fn stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String {
-    let mut tail = tail.lock();
-    let text = String::from_utf8_lossy(tail.make_contiguous());
-    match text.trim() {
-        "" => "No Stderr Output".to_owned(),
-        text => format!("Stderr: {text}"),
-    }
-}
 
 pub mod adapter;
 pub mod claude_code;
@@ -66,3 +54,30 @@ pub use scheduler::{
     AgentScheduler, AgentSchedulerConfig, AgentTurnRequest, MAX_AGENT_CONCURRENCY,
     MIN_AGENT_CONCURRENCY, TurnPriority,
 };
+
+/// The tail of a child's stderr as one line for a failure message:
+/// `Stderr: <text>`, or `No Stderr Output` when it wrote nothing.
+/// Shared by both provider adapters, which keep the same bounded byte
+/// tail of their CLI's stderr.
+pub(crate) fn stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String {
+    let mut tail = tail.lock();
+    let text = String::from_utf8_lossy(tail.make_contiguous());
+    match text.trim() {
+        "" => "No Stderr Output".to_owned(),
+        text => format!("Stderr: {text}"),
+    }
+}
+
+/// The child's last stderr bytes as [`stderr_snippet`], after waiting up to
+/// 200 ms for the piped stderr drain thread, which can trail the child's
+/// exit: without the wait, a crash that wrote a panic message could settle
+/// as "No Stderr Output". Shared by both provider adapters.
+pub(crate) async fn drained_stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String {
+    for _ in 0..10 {
+        if !tail.lock().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    stderr_snippet(tail)
+}

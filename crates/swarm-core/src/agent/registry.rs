@@ -7,10 +7,11 @@
 //! process (send a turn, cancel, answer a permission request, shut
 //! down), never a copy of the conversation transcript — that lives in the
 //! provider's own session store and, normalized, in the event log.
-//! Nothing here is persisted: after a restart a session is re-attached by
-//! spawning with [`crate::agent::adapter::AgentSpawnSpec::resume`] set to
-//! its recorded session key, for adapters whose
-//! [`crate::agent::adapter::Capabilities::resume`] is `true`.
+//! Nothing here is persisted: after a restart the registry is empty. An
+//! adapter whose [`crate::agent::adapter::Capabilities::resume`] is `true`
+//! can rehydrate a conversation from a recorded session key through
+//! [`crate::agent::adapter::AgentSpawnSpec::resume`], but no command
+//! passes one today.
 
 use std::sync::Arc;
 
