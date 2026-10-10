@@ -755,6 +755,26 @@ async fn an_ask_that_needs_the_cli_dialog_is_denied_and_reported() {
     session.shutdown().await.expect("shutdown");
 }
 
+/// An ask raised while no SWARM turn is running is denied at once and
+/// never reaches the human.
+#[tokio::test]
+async fn an_ask_outside_a_swarm_turn_is_denied_at_once() {
+    let harness = Harness::new();
+    let session = harness.spawn("foreign_ask.mjs").await;
+    let turn = send(session.as_ref(), "Say hi.").await;
+    harness.recorder.wait_for("agent_turn_settled", 1).await;
+
+    assert_eq!(harness.recorder.count("agent_permission_request"), 0);
+    let echoed = echoed_reply(&harness.recorder);
+    assert_eq!(echoed["subtype"], "success");
+    assert_eq!(echoed["response"]["behavior"], "deny");
+    assert_eq!(echoed["response"]["message"], NO_SWARM_TURN);
+    assert_eq!(echoed["response"]["interrupt"], false);
+    assert_eq!(echoed["response"]["toolUseID"], "toolu_01BackgroundWrite");
+    assert_eq!(settled_for(&harness.recorder, &turn)[0]["status"], "ok");
+    session.shutdown().await.expect("shutdown");
+}
+
 /// A control request of a kind the host does not serve, and one it
 /// cannot parse, are both refused so the CLI never waits on them.
 #[tokio::test]
@@ -817,6 +837,39 @@ async fn cancel_interrupts_the_turn_and_keeps_the_session() {
     let settled = settled_for(&harness.recorder, &second);
     assert_eq!(settled[0]["status"], "ok");
     assert_close(&settled[0]["costUsd"], 0.0121);
+    session.shutdown().await.expect("shutdown");
+}
+
+/// Cancelling a turn denies its open asks, aborting the turn, before the
+/// interrupt goes out.
+#[tokio::test]
+async fn cancel_denies_the_open_ask_before_interrupting() {
+    let harness = Harness::new();
+    let session = harness.spawn("cancel_during_ask.mjs").await;
+    let turn = send(session.as_ref(), "Write cancelled.txt").await;
+    pending_ask(&harness.recorder).await;
+    tokio::time::timeout(WAIT, session.cancel(turn.clone()))
+        .await
+        .expect("cancel returns")
+        .expect("cancel");
+    harness.recorder.wait_for("agent_turn_settled", 1).await;
+
+    let result = harness
+        .recorder
+        .payloads("agent_tool_result")
+        .into_iter()
+        .find(|result| result["toolUseId"] == "toolu_01CancelledWrite")
+        .expect("the cancelled Write tool result");
+    let answer: Value = serde_json::from_str(result["content"].as_str().expect("the echoed deny"))
+        .expect("the deny is JSON");
+    assert_eq!(answer["response"]["behavior"], "deny");
+    assert_eq!(answer["response"]["interrupt"], true);
+    assert_eq!(answer["response"]["message"], TURN_CANCELLED);
+
+    let settled = settled_for(&harness.recorder, &turn);
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0]["error"], TURN_CANCELLED);
+    assert_eq!(harness.recorder.count("agent_session_exited"), 0);
     session.shutdown().await.expect("shutdown");
 }
 
