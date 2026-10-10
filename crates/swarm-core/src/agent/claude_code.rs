@@ -281,8 +281,8 @@ fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
 pub struct ClaudeCodeAdapter {
     sink: EventSink,
     binary: String,
-    /// Test-only argv prefix (empty in production) — see
-    /// [`ClaudeCodeAdapter::with_test_binary`].
+    /// Test-only argv prefix (empty in production), set by
+    /// `ClaudeCodeAdapter::with_test_binary`.
     prefix_args: Vec<String>,
 }
 
