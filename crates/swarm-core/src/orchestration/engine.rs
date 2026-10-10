@@ -292,7 +292,7 @@ impl OrchestrationEngine {
     /// [`AppError::EventLog`] if the writer thread is already gone, stops
     /// before draining, or does not drain within `timeout`, or if the log
     /// cannot be finalized (every drained event is saved, but the exact
-    /// head is not recorded).
+    /// head may not be recorded, or the WAL may not be checkpointed).
     pub fn shutdown(&self, timeout: Duration) -> Result<u64, AppError> {
         let mut outcome = self.shutdown_outcome.lock();
         if let Some(first) = outcome.as_ref() {
