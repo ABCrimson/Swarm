@@ -63,7 +63,11 @@ export function useWorkerEvents(): void {
         if (hydrating) killedWhileHydrating.add(workerId);
         // Its chat is gone with it: abort the turn so a call parked on approval is denied.
         // Imported on demand so the chat engine stays out of the startup chunk.
-        void import("#lib/ai-chat").then((m) => m.cancelChatTurn(workerId));
+        import("#lib/ai-chat")
+          .then((m) => m.cancelChatTurn(workerId))
+          .catch((err: unknown) =>
+            console.error("useWorkerEvents: could not load the chat engine", err),
+          );
         removeWorker(workerId);
         useWorkerAgentStore.getState().removeAgentMetadata(workerId);
         setSelectedWorkerId((selected) => (selected === workerId ? null : selected));
