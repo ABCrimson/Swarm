@@ -26,9 +26,9 @@
  *
  * Script format — one entry per line; blank lines and `#` comments are
  * skipped; any other line is written to stdout verbatim after these
- * substitutions: `@ID` -> the JSON id of the last expected request,
- * `@THREAD` -> the current thread id, `@TURN` -> the current turn id,
- * `@N` -> the REPEAT counter. Directives (`#DIRECTIVE <NAME> [args]`):
+ * substitutions: `@THREAD` -> the current thread id, `@TURN` -> the
+ * current turn id, `@N` -> the REPEAT counter. Directives
+ * (`#DIRECTIVE <NAME> [args]`):
  *
  *   EXPECT_REQUEST <method>       next client message must be that request
  *   EXPECT_NOTIFICATION <method>  next client message must be that notification
@@ -44,7 +44,6 @@
  *   RESPOND <json-result>         answer the last request with this result
  *   RESPOND_ERROR <code> <text>   answer the last request with an error
  *   REPEAT <n> <line>             write <line> n times
- *   SLEEP_MS <n>                  pause
  *   EMIT_OVERSIZED_LINE           write 11 MB with no newline, then hang
  *   IGNORE_STDIN_EOF              keep running after stdin closes (a hung server)
  *   ON_STDIN_EOF <line>           keep running after stdin closes and write
@@ -58,7 +57,6 @@
 
 import { appendFileSync, readFileSync, writeSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
 const VERSION = "0.156.1";
@@ -174,7 +172,6 @@ const nextMessage = () =>
 
 const fill = (line, n = 0) =>
   line
-    .replaceAll("@ID", JSON.stringify(state.lastRequest?.id ?? null))
     .replaceAll("@THREAD", state.thread)
     .replaceAll("@TURN", state.turn)
     .replaceAll("@N", String(n));
@@ -302,9 +299,6 @@ const directives = {
   REPEAT(args) {
     const [count, ...line] = args.split(" ");
     for (let n = 0; n < Number(count); n++) send(fill(line.join(" "), n));
-  },
-  async SLEEP_MS(ms) {
-    await sleep(Number(ms));
   },
   async EMIT_OVERSIZED_LINE() {
     writeAll("x".repeat(11 * 1024 * 1024));
