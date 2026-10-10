@@ -112,8 +112,10 @@ export function useParticleSync({ device, system }: ParticleSyncConfig): void {
     };
 
     let pending: number | null = null;
+    // Not `??=`: the installed React Compiler (oxc-transform-react) skips any module that uses a logical assignment.
     const schedule = (): void => {
-      pending ??= requestAnimationFrame(() => {
+      if (pending !== null) return;
+      pending = requestAnimationFrame(() => {
         pending = null;
         write();
       });
