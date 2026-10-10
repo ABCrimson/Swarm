@@ -187,13 +187,17 @@ fn recover_unreadable(shared: &Arc<Shared>, line: &str, error: &serde_json::Erro
                 },
             );
         }
-        Some("control_request") => {
-            if let Some(request_id) = value.get("request_id").and_then(Value::as_str) {
+        Some("control_request") => match value.get("request_id").and_then(Value::as_str) {
+            Some(request_id) => {
+                tracing::warn!(worker_id = %shared.worker_id, %error, request_id, "claude code: unreadable control_request; refusing it");
                 shared
                     .stdin
                     .send(wire::control_error(request_id, UNSUPPORTED_REQUEST));
             }
-        }
+            None => {
+                tracing::warn!(worker_id = %shared.worker_id, %error, "claude code: unreadable control_request without a request_id; it cannot be answered");
+            }
+        },
         _ => {
             tracing::warn!(worker_id = %shared.worker_id, %error, "claude code: unreadable ndjson line, skipping");
         }
