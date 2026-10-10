@@ -59,9 +59,11 @@ pub use scheduler::{
 /// `Stderr: <text>`, or `No Stderr Output` when it wrote nothing.
 /// Shared by both provider adapters, which keep the same bounded byte
 /// tail of their CLI's stderr.
+/// Recognized credentials are redacted ([`crate::git::redact::redact`])
+/// because the snippet lands in persisted settlement errors.
 pub(crate) fn stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String {
     let mut tail = tail.lock();
-    let text = String::from_utf8_lossy(tail.make_contiguous());
+    let text = crate::git::redact::redact(&String::from_utf8_lossy(tail.make_contiguous()));
     match text.trim() {
         "" => "No Stderr Output".to_owned(),
         text => format!("Stderr: {text}"),
@@ -80,4 +82,20 @@ pub(crate) async fn drained_stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     stderr_snippet(tail)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_stderr_snippet_redacts_credentials() {
+        let tail = Mutex::new(VecDeque::from(
+            b"proxy http://u:p@h failed sk-ant-abcdefghijk".to_vec(),
+        ));
+        let snippet = stderr_snippet(&tail);
+        assert!(snippet.contains("[REDACTED]"), "{snippet}");
+        assert!(!snippet.contains("u:p"), "{snippet}");
+        assert!(!snippet.contains("sk-ant-"), "{snippet}");
+    }
 }
