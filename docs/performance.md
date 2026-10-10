@@ -156,8 +156,9 @@ Minification is Vite's default (Oxc). `pnpm build` writes `dist/` for the deskto
 | `graph` | `@xyflow/react`, `elkjs` |
 | `terminal` | `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-webgl` |
 | `state` | `zustand`, `immer`, `jotai` |
-| `ai` | `@anthropic-ai/sdk` |
 | `charts` | `recharts`, `d3-*` |
+
+`@anthropic-ai/sdk` has no vendor group. Only `src/lib/anthropic.ts` imports it, and every runtime importer of that module loads on demand: the lazily loaded Workers, Settings and Tools pages, and the `import("#lib/ai-chat")` in `useWorkerEvents`. Rolldown therefore places the SDK in chunks those pages load, off the startup path.
 
 > [!NOTE]
 > `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 14.1.0, not `framer-motion`.
