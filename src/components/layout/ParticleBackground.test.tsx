@@ -295,9 +295,7 @@ describe("ParticleBackground canvas", () => {
     render(<ParticleBackground />);
     await act(async () => {});
 
-    expect(useParticleSync).toHaveBeenLastCalledWith(
-      expect.objectContaining({ device, system, canvasWidth: 800, canvasHeight: 600 }),
-    );
+    expect(useParticleSync).toHaveBeenLastCalledWith({ device, system });
 
     tick(20);
     // One seed write before the sync's first; the loop writes only the clock.

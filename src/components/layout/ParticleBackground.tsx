@@ -166,7 +166,7 @@ function ParticleCanvas(): React.ReactElement {
     if (failureReason) warnParticlesUnavailable(failureReason);
   }, [failureReason]);
 
-  useParticleSync({ device, system, canvasWidth, canvasHeight });
+  useParticleSync({ device, system });
 
   // ── Particle system: once per device/format ──
   useEffect(() => {
