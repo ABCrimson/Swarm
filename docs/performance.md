@@ -19,7 +19,7 @@
 | Metric | Target | Implementation |
 |--------|--------|---------------|
 | JS frame budget | < 5ms | React Compiler auto-memoization, `content-visibility` and windowed lists |
-| GPU frame time | < 4ms | Adaptive particle count, efficient WGSL shaders |
+| GPU frame latency | 2-8 ms | The adaptive particle count (min 2,000, max 10,000 = `PARTICLE_CAPACITY`) shrinks above 8 ms and grows below 2 ms, measured by `ParticleBackground` |
 | Cold start | < 1.5s | Lazy page loading, deferred WebGPU initialization, polyfills fetched only where the engine lacks them |
 | Memory (idle) | < 150 MB | Bounded log store (10k entries), bounded event and turn queues |
 | IPC latency | < 2ms | One shared command registry, JSON arguments, no per-command wrapper |
@@ -141,7 +141,7 @@ build: {
 }
 ```
 
-`esnext` is safe because WebView2 is Chromium and WKWebView/WebKitGTK are current WebKit; the one engine gap, Temporal, is polyfilled at boot (`src/boot.ts`).
+`esnext` is safe because WebView2 is Chromium and WKWebView/WebKitGTK are current WebKit; the one engine gap, Temporal, is polyfilled at boot (`src/boot.ts`). The code also calls iterator helpers, `Error.isError` and `RegExp.escape` unguarded, so the WebKit floor is Safari 18.4: `bundle.macOS.minimumSystemVersion` is `15.4`, the oldest macOS that guarantees it (`vite.config.ts` states the reasoning).
 
 Minification is Vite's default (Oxc). `pnpm build` writes `dist/` for the desktop bundle; `pnpm build:web` writes `dist-web/` for `swarmd --serve-ui`.
 
