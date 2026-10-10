@@ -130,9 +130,9 @@ install_macos() {
     # bootout returns before the job is fully gone, so retry the bootstrap.
     launchctl bootout "$domain/$LABEL" 2>/dev/null || true
     tries=0
-    until launchctl bootstrap "$domain" "$plist_dest" 2>/dev/null; do
+    until err=$(launchctl bootstrap "$domain" "$plist_dest" 2>&1); do
         tries=$((tries + 1))
-        [ "$tries" -lt 10 ] || die "launchctl bootstrap $domain $plist_dest failed"
+        [ "$tries" -lt 10 ] || die "launchctl bootstrap $domain $plist_dest failed: $err"
         sleep 1
     done
     echo "swarmd is running as a launchd LaunchAgent."
