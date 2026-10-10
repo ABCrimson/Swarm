@@ -42,6 +42,7 @@ pub async fn bus_send(ctx: Ctx, args: Value) -> Result<Value, Value> {
 
     ctx.router
         .send(from, to, topic, payload, cause_seq)
+        .await
         .map_err(Value::String)?;
     ok_value(&0_usize)
 }
