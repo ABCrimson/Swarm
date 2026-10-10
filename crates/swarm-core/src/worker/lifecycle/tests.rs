@@ -353,7 +353,7 @@ fn test_worker_input_writes_then_emits_stamped_event() {
     assert_eq!(p.worker_id, id);
     assert_eq!(p.bytes, 11);
     assert_eq!(p.source, InputSource::Tool);
-    // The trailing `\n` is a control character, so it is stripped.
+    // A line end reads as a space, then the trailing one is trimmed.
     assert_eq!(p.preview.as_deref(), Some("pnpm build"));
 }
 
@@ -383,7 +383,7 @@ fn test_worker_input_terminal_source_has_no_preview() {
     assert_eq!(p.bytes, 22);
 }
 
-/// The preview is control-stripped and capped at 120 characters.
+/// The preview is capped at 120 characters, line ends included.
 #[test]
 fn test_worker_input_preview_strips_control_chars_and_truncates() {
     let registry = WorkerRegistry::new();
@@ -391,8 +391,7 @@ fn test_worker_input_preview_strips_control_chars_and_truncates() {
     let id = registry.spawn_worker(handle).unwrap();
     let (sink, rx) = test_sink();
 
-    let mut data = format!("\x1b[31m{}", "a".repeat(200)).into_bytes();
-    data.push(0x07); // BEL, a control char
+    let data = format!("{}\r\n", "a".repeat(200)).into_bytes();
 
     do_worker_input(
         &sink,
@@ -411,7 +410,7 @@ fn test_worker_input_preview_strips_control_chars_and_truncates() {
     assert_eq!(preview.chars().count(), 120);
     assert!(
         !preview.chars().any(char::is_control),
-        "preview must strip control characters, got: {preview:?}"
+        "preview must hold no control characters, got: {preview:?}"
     );
 }
 
@@ -441,8 +440,8 @@ fn test_worker_input_preview_redacts_credentials() {
     assert!(preview.contains("[REDACTED]"), "got: {preview:?}");
     assert!(!preview.contains("sk-ant-api03"), "got: {preview:?}");
 
-    // Control characters are word boundaries only before stripping: a key
-    // between CR or LF must be redacted on the raw text.
+    // CR and LF are word breaks: a key between them must be redacted
+    // on the raw text.
     for (input, leak) in [
         (
             &b"echo ok\rAKIAIOSFODNN7EXAMPLE\rls\r"[..],
@@ -1253,5 +1252,146 @@ fn test_kill_preserves_dirty_worktree_instead_of_deleting_it() {
     assert!(
         worktree.join("scratch.txt").exists(),
         "SWARM never force-removes"
+    );
+}
+
+// -- stamped_preview: the redactor must read what the shell reads ---------
+
+/// Backspace edits the line the shell receives, so the preview is
+/// withheld rather than guessed.
+#[test]
+fn test_preview_withheld_when_credential_edited_with_backspace() {
+    for input in [
+        // Stripping BS leaves a redactable token; the shell sees a shorter one.
+        &b"echo sk-ant-XX\x08\x08api03-abcdefghijklmnopqrstuvwx\n"[..],
+        // A space-BS pair erases itself: the shell sees one whole key, the
+        // stripped text a space-split fragment no pattern matches.
+        b"echo sk-ant-api03 \x08-abcdefghijklmnopqrstuvwx\n",
+    ] {
+        assert_eq!(stamped_preview(input), "[preview withheld: line editing]");
+    }
+}
+
+/// DEL anywhere withholds the whole preview, even with no credential.
+#[test]
+fn test_preview_withheld_on_del() {
+    assert_eq!(
+        stamped_preview(b"ls -la\x7f\x7f"),
+        "[preview withheld: line editing]"
+    );
+}
+
+/// Any control other than CR or LF withholds the whole preview: the shell
+/// or terminal acts on it, so the stored text cannot show what arrives.
+#[test]
+fn test_preview_withheld_on_any_line_editing_control() {
+    let key = "api03-abcdefghijklmnopqrstuvwx";
+    let inputs = [
+        // readline Ctrl-A, then a key typed before the cursor jump
+        format!("{key}\x01echo sk-ant-\r"),
+        // left arrows and Ctrl-B walk the cursor back over the key
+        format!("{key}{}echo sk-ant-\r", "\x1b[D".repeat(24)),
+        format!("{key}{}echo sk-ant-\r", "\x02".repeat(24)),
+        // tab inside the key, and as the word break before a split AWS key
+        "echo sk-ant-api03\t-abcdefghijklmnopqrstuvwx\n".to_owned(),
+        "x\tAKIAIOSF\u{200B}ODNN7EXAMPLE".to_owned(),
+        // CSI, CSI cut off by ESC, CSI cut off by a non-ASCII char
+        "export K=sk-ant-api03\x1b[31m-abcdefghijklmnopqrstuvwx\n".to_owned(),
+        "export K=sk-ant-api03\x1b[\x1b]0;t\x07-abcdefghijklmnopqrstuvwx\n".to_owned(),
+        "export K=sk-ant-api03\x1b[é-abcdefghijklmnopqrstuvwx\n".to_owned(),
+        // three-character ESC sequence, DCS ended at BEL then ST
+        "export K=sk-ant-api03\x1b(=-abcdefghijklmnopqrstuvwx\n".to_owned(),
+        "export K=sk-ant-api03\x1bPq\x07;\x1b\\-abcdefghijklmnopqrstuvwx\n".to_owned(),
+        // 8-bit C1 forms: CSI with `;` parameters, OSC ended by ST
+        "export K=sk-ant-api03\u{9b}1;31m-abcdefghijklmnopqrstuvwx\n".to_owned(),
+        "export K=sk-ant-api03\u{9d}0;t\u{9c}-abcdefghijklmnopqrstuvwx\n".to_owned(),
+        // ESC directly before the key
+        "export K=\x1bsk-ant-api03-abcdefghijklmnopqrstuvwx\n".to_owned(),
+    ];
+    assert_eq!(inputs.len(), 13);
+    for input in &inputs {
+        assert_eq!(
+            stamped_preview(input.as_bytes()),
+            "[preview withheld: line editing]",
+            "input: {input:?}"
+        );
+    }
+}
+
+/// Every code point that renders as nothing can split a token the
+/// terminal shows whole, not just the common zero-width ones.
+#[test]
+fn test_preview_redacts_credential_split_by_any_invisible_code_point() {
+    for splitter in [
+        '\u{00AD}',
+        '\u{034F}',
+        '\u{061C}',
+        '\u{180E}',
+        '\u{206A}',
+        '\u{FE0F}',
+        '\u{E0041}',
+        '\u{E0100}',
+    ] {
+        let input = format!("echo ghp_abcdefghij{splitter}klmnopqrstuvwxyz0123\n");
+        assert_eq!(
+            stamped_preview(input.as_bytes()),
+            "echo [REDACTED]",
+            "splitter: U+{:04X}",
+            u32::from(splitter)
+        );
+    }
+    // The LF is the word break the AWS pattern needs; stripping it would
+    // glue `x` to the key and hide the match.
+    assert_eq!(
+        stamped_preview("echo x\nAKIAIOSF\u{200B}ODNN7EXAMPLE\n".as_bytes()),
+        "echo x [REDACTED]"
+    );
+}
+
+/// CR and LF read as spaces, so they stay word breaks, and the 120-char
+/// cut follows redaction: a key straddling it is masked whole.
+#[test]
+fn test_preview_line_ends_read_as_spaces_and_cut_follows_redaction() {
+    assert_eq!(
+        stamped_preview(b"cd web\rpnpm build\r\n"),
+        "cd web pnpm build"
+    );
+    for pad in [100, 110, 115, 119] {
+        let padding = "a".repeat(pad);
+        let input = format!("{padding}sk-ant-api03-abcdefghijklmnopqrstuvwx tail");
+        let want: String = format!("{padding}[REDACTED] tail")
+            .chars()
+            .take(120)
+            .collect();
+        assert_eq!(stamped_preview(input.as_bytes()), want, "pad: {pad}");
+    }
+}
+
+/// A zero-width or bidi format character is not `is_control`, yet it
+/// splits a token the terminal shows whole.
+#[test]
+fn test_preview_redacts_credential_split_by_format_character() {
+    for splitter in ['\u{200B}', '\u{202E}', '\u{2060}', '\u{2066}', '\u{FEFF}'] {
+        let input = format!("echo ghp_abcdefghij{splitter}klmnopqrstuvwxyz0123\n");
+        let preview = stamped_preview(input.as_bytes());
+        assert!(preview.contains("[REDACTED]"), "got: {preview:?}");
+        assert!(!preview.contains("ghp_"), "got: {preview:?}");
+        assert!(!preview.contains("klmnop"), "got: {preview:?}");
+    }
+}
+
+/// Positive control: a plain credential is redacted, plain text is
+/// untouched, and the cut is 120 characters after redaction.
+#[test]
+fn test_preview_plain_credential_redacted_and_plain_text_unchanged() {
+    let preview = stamped_preview(b"export K=sk-ant-api03-abcdefghijklmnopqrstuvwx");
+    assert_eq!(preview, "export K=[REDACTED]");
+    assert_eq!(
+        stamped_preview(b"pnpm build --filter web"),
+        "pnpm build --filter web"
+    );
+    assert_eq!(
+        stamped_preview("a".repeat(300).as_bytes()).chars().count(),
+        120
     );
 }

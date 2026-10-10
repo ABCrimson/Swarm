@@ -33,10 +33,11 @@ mod tests;
 
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use parking_lot::Mutex;
 use portable_pty::{Child, ExitStatus, PtySize};
+use regex::Regex;
 use uuid::Uuid;
 
 use super::handle::{PtyChild, WorkerConfig, WorkerHandle, WorkerIsolation, WorkerState};
@@ -764,21 +765,62 @@ fn delete_isolation_branch_if_unchanged(
     }
 }
 
-/// First 120 characters of `data`, control characters stripped and
-/// invalid UTF-8 replaced. Recognized credentials become `[REDACTED]`
-/// via [`git::redact::redact`], run on the raw text (where control
-/// characters are still word boundaries, so a key between two `\r`
-/// is matched) and again after stripping, both before truncation so no
-/// fragment survives the cut. Only for machine-issued input (`tool`,
+/// Preview text for input a line editor or terminal would act on instead
+/// of inserting: no static transform of the bytes can say what the shell
+/// saw, so the preview is withheld rather than guessed.
+const PREVIEW_WITHHELD: &str = "[preview withheld: line editing]";
+
+/// Characters of a preview kept after redaction.
+const PREVIEW_CHARS: usize = 120;
+
+/// Code points that render as nothing yet can split a token the terminal
+/// shows whole: every format character (Cf) and every default-ignorable
+/// code point (soft hyphen, combining grapheme joiner, variation
+/// selectors, tag characters, ...).
+static INVISIBLE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[\p{Cf}\p{Default_Ignorable_Code_Point}]").expect("valid regex"));
+
+/// `true` when `text` holds a control a line editor or terminal acts on
+/// instead of inserting: every C0 control except LF and CR, DEL, and every
+/// C1 control. BS, DEL and TAB edit or complete the line, ESC starts a
+/// sequence (readline's `ESC b`, a CSI cursor key, an OSC title), and the
+/// C1 range holds 8-bit forms of the same sequence introducers.
+fn is_line_edited(text: &str) -> bool {
+    text.chars()
+        .any(|c| c.is_control() && !matches!(c, '\n' | '\r'))
+}
+
+/// At most 120 characters of `data`, redacted, for the durable
+/// `worker_input` event.
+///
+/// The terminal and the shell read the bytes differently from a static
+/// reader, and the redactor must not be fooled by that gap. Input
+/// holding any control other than CR or LF is withheld outright
+/// ([`PREVIEW_WITHHELD`]): `sk-ant-XX\b\bapi03-…`, a CSI fragment, or
+/// readline's Ctrl-A and arrow keys all make the shell receive a key
+/// the stored text does not show, and emulating the line discipline is
+/// not this function's job. Otherwise [`git::redact::redact`] runs on the
+/// raw lossy text (CR and LF are still word breaks there), invisible
+/// code points are dropped (they can split a token the shell sees
+/// whole), line ends become spaces so they stay word breaks, and
+/// redaction runs again on the joined text. All of it precedes the
+/// 120-character cut so no fragment survives it. CR overwrite is not
+/// modelled: readline and the normal tty mode end the line at CR, so the
+/// shell receives two lines. Only for machine-issued input (`tool`,
 /// `automation`); `terminal` input never gets one (see
 /// `WorkerInputPayload`'s "never carries raw keystrokes" note).
 fn stamped_preview(data: &[u8]) -> String {
     let raw = String::from_utf8_lossy(data);
-    let printable: String = git::redact::redact(&raw)
+    if is_line_edited(&raw) {
+        return PREVIEW_WITHHELD.to_owned();
+    }
+    let first = git::redact::redact(&raw);
+    let visible = INVISIBLE.replace_all(&first, "");
+    let flat = visible.replace(['\r', '\n'], " ");
+    git::redact::redact(flat.trim_end())
         .chars()
-        .filter(|c| !c.is_control())
-        .collect();
-    git::redact::redact(&printable).chars().take(120).collect()
+        .take(PREVIEW_CHARS)
+        .collect()
 }
 
 /// Writes `data` to a worker's PTY, then emits a `worker_input` event
@@ -794,7 +836,8 @@ fn stamped_preview(data: &[u8]) -> String {
 /// `preview`, and never persisted, see
 /// [`crate::orchestration::is_persistent`]), [`InputSource::Tool`] or
 /// [`InputSource::Automation`] for machine-issued input (both get a
-/// control-stripped, credential-redacted `preview`). `provenance` is `Provenance::default()`
+/// credential-redacted `preview`, or a withheld notice when the input
+/// contains any control other than CR or LF). `provenance` is `Provenance::default()`
 /// for terminal input: its causer is a person, not a worker's turn.
 ///
 /// # Errors
