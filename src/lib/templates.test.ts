@@ -320,7 +320,10 @@ describe("createTemplateFromSession", () => {
       description: "Two Agents",
       builtIn: false,
     });
-    expect(template.workerConfigs).toHaveLength(2);
+    expect(template.workerConfigs).toEqual([
+      { name: "Researcher", role: "analyst", model: "opus", systemPrompt: "Research things." },
+      { name: "Worker 2", model: "haiku" },
+    ]);
   });
 
   it("yields no worker specs for a session whose workers are all gone", () => {

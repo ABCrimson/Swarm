@@ -198,6 +198,12 @@ describe("streamMessage", () => {
       expect(sentHeaders().get("anthropic-beta")).toBe("server-side-fallback-2026-07-01");
     });
 
+    it("offers no sampling parameters on StreamParams", () => {
+      expectTypeOf<StreamParams>().not.toHaveProperty("temperature");
+      expectTypeOf<StreamParams>().not.toHaveProperty("top_p");
+      expectTypeOf<StreamParams>().not.toHaveProperty("top_k");
+    });
+
     it("sends thinking and effort for Haiku 5.5, clamps max_tokens to its 128K output limit and sends no fallbacks", async () => {
       useFreshKey();
       fetchMock.mockResolvedValue(textResponse(CLAUDE_MODELS.haiku.id, "Hi"));
@@ -634,11 +640,5 @@ describe("zodToTool", () => {
         additionalProperties: false,
       },
     });
-  });
-
-  it("offers no sampling parameters on StreamParams", () => {
-    expectTypeOf<StreamParams>().not.toHaveProperty("temperature");
-    expectTypeOf<StreamParams>().not.toHaveProperty("top_p");
-    expectTypeOf<StreamParams>().not.toHaveProperty("top_k");
   });
 });
