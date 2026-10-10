@@ -1,6 +1,6 @@
 # The `swarmd` Daemon
 
-> Running SWARM Orchestrator headless — as a background service, reachable over an authenticated WebSocket instead of the desktop webview.
+> Running SWARM Orchestrator headless -- as a per-user background program, reachable over an authenticated WebSocket instead of the desktop webview.
 
 ---
 
@@ -9,49 +9,48 @@
 - [What `swarmd` Is](#what-swarmd-is)
 - [Getting the Binary](#getting-the-binary)
 - [Quick Start (Loopback)](#quick-start-loopback)
+- [Command Line](#command-line)
 - [Installing as a User Service](#installing-as-a-user-service)
   - [Linux (systemd)](#linux-systemd)
   - [macOS (launchd)](#macos-launchd)
   - [Windows (Scheduled Task)](#windows-scheduled-task)
-- [Retrieving the Connect Token](#retrieving-the-connect-token)
+- [Retrieving the Connect URL](#retrieving-the-connect-url)
 - [Reaching the Daemon Off-Box](#reaching-the-daemon-off-box)
 - [Security Model](#security-model)
+- [Running and Stopping](#running-and-stopping)
 - [Uninstalling](#uninstalling)
 
 ---
 
 ## What `swarmd` Is
 
-`swarmd` runs the exact same `swarm_core::runtime::Runtime` the desktop shell
-does — worker registry, session manager, the single ordered event log, the
-agent scheduler — with **no webview and no `tauri` link-time dependency**. It
-serves the command surface and the event stream over an authenticated
-WebSocket (see `crates/swarmd/src/ws.rs`) instead of Tauri IPC. A remote
-client reattaches by replaying the log from a sequence number, so a
-reconnect resumes exactly where it left off.
+`swarmd` runs the exact same `swarm_core::runtime::Runtime` the desktop shell does -- worker registry, session manager, the single ordered event log, the agent scheduler -- with **no webview and no `tauri` link-time dependency**. It serves the 36 registry commands and the event stream over an authenticated WebSocket (`crates/swarmd/src/ws.rs`) instead of Tauri IPC; the frame-by-frame contract is in [API Reference: Wire Protocol](api.md#wire-protocol-swarmd). A remote client reattaches by replaying the log from a sequence number, so a reconnect resumes exactly where it left off, even across a daemon restart.
 
-It is a **per-user** program, not a system daemon: it runs worker agents as
-you, reads and writes your app-data directory under your home, and shells
-out to `git` against your repositories and worktrees. Every install path
-below registers it as a **user** service (systemd `--user`, a launchd
-LaunchAgent, a per-user logon Scheduled Task) running **non-elevated**.
-Running it as root / SYSTEM would break that ownership model and needlessly
-widen its blast radius.
+It is a **per-user** program, not a system daemon: it runs worker agents as you, reads and writes your app-data directory under your home, and shells out to `git` against your repositories and worktrees. Every install path below registers it as a **user** service (systemd `--user`, a launchd LaunchAgent, a per-user logon Scheduled Task) running **non-elevated**. Running it as root / SYSTEM would break that ownership model and needlessly widen its blast radius.
+
+It uses the **same data directory as the desktop app** (`dev.crimson.swarm-orchestrator` under your platform's app-data location), so the two share one event log, config and session set. A single-instance lock (`daemon.lock`) lets only one of them run against that directory at a time: whichever starts second refuses to start (exit status 75) and says which shell holds it. Stop the desktop app before starting the daemon, or point one of them at another directory with `--data-dir`.
 
 ## Getting the Binary
 
-**From a release:** each tagged release attaches a `swarmd-<target>` binary
-(and a `.sha256` next to it) for all four platforms — Windows, macOS (Apple
-Silicon and Intel), and Linux. Download the one for your target, verify the
-checksum, and mark it executable (`chmod +x` on Unix).
+**From a release:** each tagged release attaches a `swarmd-<target>` binary (plus `.sha256` next to it) for four targets:
 
-**From source:**
+| Target | Asset |
+|---|---|
+| Windows (x86_64) | `swarmd-x86_64-pc-windows-msvc.exe` |
+| macOS, Apple Silicon | `swarmd-aarch64-apple-darwin` |
+| macOS, Intel | `swarmd-x86_64-apple-darwin` |
+| Linux (x86_64, glibc) | `swarmd-x86_64-unknown-linux-gnu` |
+
+Verify the checksum (`sha256sum -c swarmd-<target>.sha256`) and mark it executable (`chmod +x` on Unix). Each binary also carries a Sigstore build-provenance attestation; `gh attestation verify swarmd-<target> --repo ABCrimson/Swarm` checks it.
+
+**From source** (from the repository root; `swarmd` is a member of the Cargo workspace):
 
 ```sh
-cd src-tauri
 cargo build -p swarmd --release
-# binary at src-tauri/target/release/swarmd[.exe]
+# binary at target/release/swarmd[.exe]
 ```
+
+The toolchain is pinned by `rust-toolchain.toml`.
 
 ## Quick Start (Loopback)
 
@@ -61,35 +60,53 @@ Run it directly to confirm it works before installing a service:
 swarmd                      # binds 127.0.0.1:8787 by default
 ```
 
-On startup it prints the connect URL, with the token in the URL **fragment**
-(never sent to the server, never logged by an intermediary):
+On startup, **when stdout is a terminal**, it prints the connect URL, with the token in the URL **fragment** (never sent to the server, never logged by an intermediary):
 
-```
+```text
 SWARM Daemon Listening On http://127.0.0.1:8787/#t=<token>
 ```
 
-Open that URL in a browser build, or point a WebSocket client at it. `Ctrl-C`
-to stop. Flags: `--bind ADDR`, `--data-dir PATH`, `--serve-ui DIR`,
-`--version`.
+Anywhere else (a service manager, a redirect) it prints only the address and the command that produces the URL, so the token never reaches a log:
+
+```text
+SWARM Daemon Listening On http://127.0.0.1:8787/ (Run `swarmd connect-url` For The Connect URL)
+```
+
+To get a browser UI from the daemon itself, build the web bundle (`pnpm build:web`, output in `dist-web/`) and serve it with `--serve-ui dist-web`, then open the connect URL. Without `--serve-ui`, point any WebSocket client at `ws://127.0.0.1:8787/ws`. `Ctrl-C` stops it gracefully.
+
+## Command Line
+
+```text
+swarmd [OPTIONS]
+swarmd connect-url [--bind ADDR] [--data-dir PATH]
+```
+
+| Option | Meaning |
+|---|---|
+| `--bind ADDR` | Listen address, default `127.0.0.1:8787`. A non-loopback address needs a token minted by an earlier loopback run (see [Reaching the Daemon Off-Box](#reaching-the-daemon-off-box)). |
+| `--data-dir PATH` | Data directory, default the desktop app's: `%APPDATA%\dev.crimson.swarm-orchestrator` on Windows, `~/Library/Application Support/dev.crimson.swarm-orchestrator` on macOS, `$XDG_DATA_HOME/dev.crimson.swarm-orchestrator` (else `~/.local/share/...`) elsewhere. |
+| `--serve-ui DIR` | Serve the `pnpm build:web` bundle in `DIR` at `/` (refused at startup if there is none). |
+| `--allow-host NAME[:PORT]` | Also accept this name in the `Host` / `Origin` headers (a reverse proxy, a MagicDNS name). Repeatable. A name without a port matches any port. |
+| `--log-file PATH` | Append logs to `PATH` (created private to you on Unix) instead of stderr. |
+| `-h`, `--help` / `-V`, `--version` | Usage / version. |
+| `connect-url` | Print the connect URL (it carries the token) and exit; fails if no token exists yet. |
+
+Flags take their value as the next argument or inline (`--bind=ADDR`). `RUST_LOG` overrides the default log filter (`swarm_core=info,swarmd=info,warn`).
+
+**Exit status:** `0` clean stop, `2` bad command line, `75` (`EX_TEMPFAIL`) another SWARM instance holds the data directory, `1` any other startup failure.
 
 ## Installing as a User Service
 
-The `crates/swarmd/service/` directory holds ready-to-use unit files and
-install scripts. The scripts locate a `swarmd` binary (next to the script, in
-the repo `target/release`, on `PATH`, or via `$SWARMD_BIN`), install it to a
-per-user location, and register the service. All are **idempotent** — re-run
-to upgrade the binary or refresh the unit.
+The `crates/swarmd/service/` directory holds ready-to-use unit files and install scripts. The scripts locate a `swarmd` binary (`$SWARMD_BIN`, a release asset or `swarmd` next to the script, the repository's `target/release`, or `PATH`), install it to a per-user location, and register the service. All are **idempotent** -- re-run to upgrade the binary or refresh the unit. The service gets the `PATH` of the shell that runs the script, so agent CLIs such as `claude` and `codex` are found; re-run it after installing new ones.
 
 ### Linux (systemd)
 
 ```sh
-cd src-tauri/crates/swarmd/service
+cd crates/swarmd/service
 ./install.sh
 ```
 
-This copies `swarmd` to `~/.local/bin/`, installs `swarmd.service` to
-`~/.config/systemd/user/`, and runs `systemctl --user enable --now swarmd`.
-To keep it running after you log out (and start at boot):
+This copies `swarmd` to `~/.local/bin/` (`$SWARMD_BIN_DEST` overrides), installs `swarmd.service` to `~/.config/systemd/user/` with a drop-in (`swarmd.service.d/install.conf`) that sets `ExecStart` to the installed binary and `PATH` to yours, enables it and **restarts** it so a running daemon moves onto the new binary. The unit is `Type=exec`, restarts on failure after 5 s, gives up after 5 starts in 5 minutes, never restarts on exit status 75, and allows 30 s to stop. It deliberately has no sandboxing directives: every worker terminal would inherit them. To start it at boot and keep it running after you log out:
 
 ```sh
 sudo loginctl enable-linger "$USER"
@@ -98,69 +115,72 @@ sudo loginctl enable-linger "$USER"
 ### macOS (launchd)
 
 ```sh
-cd src-tauri/crates/swarmd/service
+cd crates/swarmd/service
 ./install.sh
 ```
 
-This installs the binary, fills the absolute paths into
-`dev.crimson.swarmd.plist`, writes it to `~/Library/LaunchAgents/`, and
-`launchctl bootstrap`s it. Logs (which carry the connect token) are written
-to `~/Library/Logs/` at mode `0700` — never `/tmp`.
+This installs the binary, fills the absolute binary path, log directory and your `PATH` into `dev.crimson.swarmd.plist`, writes it to `~/Library/LaunchAgents/`, and `launchctl bootstrap`s it into your `gui/<uid>` domain. It is a **LaunchAgent** (per user), not a LaunchDaemon. launchd restarts it after a crash but not after a clean exit (`KeepAlive` / `SuccessfulExit` false), spaces retries a minute apart (`ThrottleInterval` 60), and allows 30 s between `SIGTERM` and `SIGKILL`. Logs go to `~/Library/Logs/swarmd/swarmd.log`, a directory at mode `0700` -- never `/tmp`.
 
 ### Windows (Scheduled Task)
 
 ```powershell
-cd src-tauri\crates\swarmd\service
+cd crates\swarmd\service
 .\install.ps1
 ```
 
-This installs `swarmd.exe` under `%LOCALAPPDATA%\Programs\swarmd` and
-registers a logon Scheduled Task, *"SWARM Daemon (swarmd)"*, that runs in
-your interactive session, **non-elevated**, restarting up to 3× on failure.
-Output is redirected to a user-private log under `%APPDATA%`.
+**This is a per-user logon Scheduled Task, not a Windows service.** The script installs `swarmd.exe` under `%LOCALAPPDATA%\Programs\swarmd` and registers a task, *"SWARM Daemon (swarmd)"*, with an at-logon trigger for your account, the *Interactive* logon type and run level *Limited* (non-elevated). It runs hidden (through `conhost.exe --headless`) in your interactive session, with no execution time limit and normal priority, and the scheduler restarts it up to 3 times, one minute apart, if it fails. `swarmd` writes its own log, `%APPDATA%\dev.crimson.swarm-orchestrator\swarmd.log` (`--log-file`).
 
-## Retrieving the Connect Token
+What that means in practice:
 
-The token is minted on first run and stored in `<data-dir>/daemon-token`
-(permissions restricted to you). The connect URL — token included — is
-printed at every startup, so read it from the service log:
+- It **does not start before you log on**, and it runs only in your logon session. After a reboot, nothing runs until you sign in.
+- It has **no Service Control Manager integration**: no boot-time start, no SCM recovery actions, no service account.
+- It therefore **does not suit a headless Windows machine** that nobody logs on to interactively (for example one reached only over SSH): the daemon would never start there.
+
+A real Windows service is not implemented; `install.ps1` is the only Windows installer today. Stop and start the task with `Stop-ScheduledTask` / `Start-ScheduledTask -TaskName 'SWARM Daemon (swarmd)'`.
+
+## Retrieving the Connect URL
+
+The token is minted on first run and stored in `<data-dir>/daemon-token`, created already private (mode `0600` on Unix; on Windows a DACL reduced to your account's SID). It is never written to a service log. Ask the binary for the URL instead, as the same user:
 
 | Platform | Command |
 | --- | --- |
-| Linux | `journalctl --user -u swarmd \| grep 'Listening On'` |
-| macOS | `grep 'Listening On' ~/Library/Logs/swarmd.log` |
-| Windows | `Select-String -Path "$env:APPDATA\dev.crimson.swarm-orchestrator\swarmd.log" -Pattern 'Listening On'` |
+| Linux | `~/.local/bin/swarmd connect-url` |
+| macOS | `~/.local/bin/swarmd connect-url` |
+| Windows | `& "$env:LOCALAPPDATA\Programs\swarmd\swarmd.exe" connect-url` |
+
+Add `--bind ADDR` and `--data-dir PATH` if the daemon runs with non-default values. The install scripts print the exact command when they finish. The services' logs show the listen address and any warnings:
+
+| Platform | Logs |
+| --- | --- |
+| Linux | `journalctl --user -u swarmd -f` |
+| macOS | `tail -f ~/Library/Logs/swarmd/swarmd.log` |
+| Windows | `Get-Content -Wait "$env:APPDATA\dev.crimson.swarm-orchestrator\swarmd.log"` |
 
 ## Reaching the Daemon Off-Box
 
-By default every install binds **loopback only**, and swarmd **refuses** a
-non-loopback bind on a data directory that has never completed a loopback run
-— there is no token yet to authenticate with. So exposing it is a deliberate
-two-step:
+By default every install binds **loopback only**, and `swarmd` **refuses** a non-loopback bind on a data directory that has never completed a loopback run -- there is no token yet to authenticate with. The check runs before anything could mint a token, so a refused run does not create the file that would let an identical second run through. Exposing it is a deliberate two-step:
 
-1. **Establish the token.** Run once on loopback (any install above does
-   this). This mints `<data-dir>/daemon-token`.
-2. **Front it with transport security you control.** The token is the *only*
-   authentication and the WebSocket is plain `ws://`; do not put
-   `--bind 0.0.0.0:PORT` on the open internet. Reach it instead through an
-   SSH tunnel (`ssh -L 8787:127.0.0.1:8787 host`) or a reverse proxy that
-   terminates TLS and adds its own access control. Only bind non-loopback
-   when the daemon token file's permissions could be restricted to you
-   (swarmd hard-refuses otherwise, on exactly the runs that are reachable
-   off-box).
+1. **Establish the token.** Run once on loopback (any install above does this). This mints `<data-dir>/daemon-token`.
+2. **Front it with transport security you control.** The token is the *only* authentication and the WebSocket is plain `ws://`; do not put `--bind 0.0.0.0:PORT` on the open internet. Reach it instead through an SSH tunnel (`ssh -L 8787:127.0.0.1:8787 host`, keeping the local port equal to the daemon's, or adding `--allow-host 127.0.0.1:<port>` for another one) or a reverse proxy that terminates TLS, forwards WebSocket upgrades and adds its own access control, started with `--allow-host proxy.example.com` so its `Host` / `Origin` are accepted. Binding a wildcard address works for LAN and tailnet clients: a request whose `Host` names the interface address it actually reached is accepted automatically. A non-loopback bind also hard-fails unless the data directory and the token file could be restricted to you.
+
+The connect URL always shows `127.0.0.1`; replace the origin with the one your client reaches (`https://swarm.example.com/#t=<token>`).
 
 ## Security Model
 
-- **Token in the URL fragment**, never a query parameter — it is not sent to
-  the server on the initial request and not captured by intervening proxies.
-- **Origin + Host checks** on the WebSocket upgrade, plus a single-instance
-  advisory lock so two engines never share one data directory.
-- **`RemotePolicy` at the command boundary**: `read_file`/`write_file` are
-  `Denied` over the wire and `read_config`/`write_config` are
-  `SecretFiltered`, so a remote client cannot exfiltrate the daemon token,
-  API keys, or arbitrary files even though the command runs the same code
-  the desktop shell does.
-- **Loopback-first, user-scoped, non-elevated** — see above.
+- **Token in the URL fragment**, never a query parameter -- it is not sent to the server on the initial request and not captured by intervening proxies. The browser client moves it into `sessionStorage` and scrubs it from the address bar. A client that can send headers may use `Authorization: Bearer <token>` on the upgrade instead.
+- **256-bit token, constant-time comparison**, minted with `getrandom`, validated on load (exactly 64 hex characters; a malformed file is an error, never silently replaced), permissions re-applied on every start. No unauthenticated mode exists.
+- **Host and Origin checks on every request**, `/ws` and the static `--serve-ui` routes alike. WebSocket upgrades are exempt from CORS, and a DNS-rebinding page can reach a loopback daemon under an attacker's host name, so a `Host` (and `Origin`, when sent) that does not name the connection's own local address, a loopback spelling on a loopback connection, or an `--allow-host` entry gets a `403`.
+- **Bounded admission**: 32 authenticated connections, a separate pool of 16 pending handshakes (4 per client address), `hello` within 5 s, 2 MiB per message, 8 concurrent `rpc` calls per connection. Unauthenticated sockets cannot take an authenticated client's slot.
+- **`RemotePolicy` at the command boundary**: `read_file` / `write_file` are `Denied` over the wire and `read_config` / `write_config` are `SecretFiltered` (any key shaped like a credential is refused in both directions), so a remote client cannot exfiltrate the daemon token, API keys, or arbitrary files even though the command runs the same code the desktop shell does. See [API Reference: Who Can Call What](api.md#who-can-call-what).
+- **The trust boundary it does not close**: an authenticated client can `spawn_worker` and `worker_input`, which is a shell as the daemon's user. Treat the token like an SSH private key.
+- **Fail-closed event log**: an event the log could not save is delivered to no client and moves no head; clients see a `system_log` error and a one-seq gap instead of a state a later replay would contradict. See [API Reference: Failing Closed](api.md#failing-closed).
+- **Loopback-first, user-scoped, non-elevated** -- see above. The data directory is created (or tightened) to mode `0700` on Unix.
+
+## Running and Stopping
+
+`SIGINT` / `SIGTERM` (on Windows `Ctrl-C`, console close, logoff and shutdown) start a graceful shutdown: new connections stop, every client gets a `1001 Going Away` close, every worker is stopped the way `kill_worker` stops it (agent sessions shut down, worktrees get their usual disposition), the event writer drains and records the exact head seq so the next start continues with no gap, and the data-directory lock is released. Allow up to about 25 s; the service units wait 30 s before force-stopping.
+
+To upgrade, re-run the install script; it replaces the binary and restarts the service. Uninstalling or upgrading never touches the data directory.
 
 ## Uninstalling
 
@@ -172,5 +192,4 @@ two-step:
 .\uninstall.ps1                # add -PurgeBinary to also remove the binary
 ```
 
-Uninstalling removes the service and (optionally) the binary. It **never**
-touches your SWARM data directory or event log.
+Uninstalling removes the service (the systemd unit and drop-in, the LaunchAgent, or the Scheduled Task), stops the daemon, and (optionally) removes the binary. It **never** touches your SWARM data directory or event log.
