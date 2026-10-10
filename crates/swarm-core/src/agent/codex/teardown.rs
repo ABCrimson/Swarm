@@ -61,7 +61,27 @@ pub(super) fn teardown_on_drop(
 }
 
 /// Tears the session down exactly once; every later call returns the
-/// first call's [`ExitSummary`].
+/// first call's [`ExitSummary`]. The work runs in its own task, so a
+/// caller that stops waiting (a dropped `shutdown` future) cannot leave
+/// it half done.
+pub(super) async fn teardown(shared: &Arc<Shared>) -> ExitSummary {
+    match tokio::spawn(run_teardown(Arc::clone(shared))).await {
+        Ok(exit) => exit,
+        Err(error) => {
+            tracing::error!(
+                worker_id = %shared.worker_id,
+                %error,
+                "codex adapter: the teardown task failed"
+            );
+            ExitSummary {
+                exit_code: None,
+                signal: None,
+            }
+        }
+    }
+}
+
+/// The body of [`teardown`].
 ///
 /// Under the state lock it marks the session closing (from then on no
 /// event, request or answer is produced), claims a running turn, drops
@@ -71,7 +91,7 @@ pub(super) fn teardown_on_drop(
 /// blocking pool, and — only for a session whose start was announced —
 /// synthesizes the running turn's settlement (Condition B) and emits
 /// `agent_session_exited`.
-pub(super) async fn teardown(shared: &Arc<Shared>) -> ExitSummary {
+async fn run_teardown(shared: Arc<Shared>) -> ExitSummary {
     let _gate = shared.teardown_gate.lock().await;
 
     let (running, child, writer, announced) = {
