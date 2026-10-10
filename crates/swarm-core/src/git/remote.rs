@@ -478,5 +478,10 @@ mod tests {
         assert!(url.starts_with(
             "https://github.com/o/r/compare/main...swarm/agent-abcd1234?quick_pull=1"
         ));
+        // Every 'T' encodes to one byte, so the largest fitting title
+        // prefix fills the cap exactly, and the body is dropped.
+        assert_eq!(url.len(), MAX_COMPARE_URL_LEN);
+        assert!(url.contains("&title=TTTTTTTTTT"), "{url}");
+        assert!(url.ends_with("&body="), "{url}");
     }
 }
