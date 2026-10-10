@@ -10,7 +10,10 @@ use super::Ctx;
 pub async fn get_metrics(ctx: Ctx, _args: Value) -> Result<Value, Value> {
     let registry = ctx.registry.clone();
     let shared_system = ctx.shared_system.clone();
-    tokio::task::spawn_blocking(move || crate::metrics::snapshot(&registry, &shared_system))
-        .await
-        .map_err(|e| Value::String(e.to_string()))
+    let snapshot = tokio::task::spawn_blocking(move || {
+        crate::metrics::MetricsSnapshot::collect(&registry, &shared_system)
+    })
+    .await
+    .map_err(|e| Value::String(e.to_string()))?;
+    super::ok_value(&snapshot)
 }

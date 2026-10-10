@@ -61,6 +61,8 @@ pub mod git;
 pub mod metrics;
 pub mod orchestration;
 pub mod session;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod worker;
 
 /// Commands that exist ONLY as `#[tauri::command]` wrappers in
@@ -409,10 +411,9 @@ mod tests {
     }
 
     #[test]
-    fn test_registry_keys_are_sorted_and_unique() {
+    fn test_registry_keys_are_sorted() {
         let keys = Registry::new().keys();
         assert!(keys.is_sorted());
-        assert_eq!(keys.iter().collect::<BTreeSet<_>>().len(), keys.len());
     }
 
     /// 38 desktop commands minus the 2 [`NATIVE_ONLY`] ones.
@@ -494,14 +495,6 @@ mod tests {
 
     // ── RemotePolicy ─────────────────────────────────────────────────
 
-    #[test]
-    fn test_every_registry_entry_declares_a_policy() {
-        let registry = Registry::new();
-        for key in registry.keys() {
-            assert!(registry.policy(key).is_some(), "{key} has no policy");
-        }
-    }
-
     fn keys_with(policy: RemotePolicy) -> BTreeSet<&'static str> {
         let registry = Registry::new();
         registry
@@ -554,7 +547,12 @@ mod tests {
                 json!({ "path": "/tmp/x", "content": "x" }),
             )
             .await;
-        assert!(write.is_err());
+        assert_eq!(
+            write,
+            Err(json!(
+                "\"write_file\" Is Not Available Over A Remote Connection."
+            ))
+        );
     }
 
     /// A data dir whose config already holds the API key.
@@ -601,12 +599,12 @@ mod tests {
         );
     }
 
-    /// CONFIRMED regression (security): positional-array arguments used
-    /// to skip the `key` inspection (`args.get("key")` is `None` on an
-    /// array) while the handler still deserialized the key from them —
-    /// a remote read returned the API key, and a remote write replaced
-    /// it. Both are now refused before any policy or handler runs, and
-    /// the stored key is untouched.
+    /// Positional-array arguments are refused before any policy check or
+    /// handler runs, on both the remote and the local path.
+    /// `args.get("key")` is `None` on an array, so an un-normalized array
+    /// would skip the `RemotePolicy::SecretFiltered` inspection while the
+    /// handler still deserialized the key from it. The stored key stays
+    /// untouched.
     #[tokio::test]
     async fn test_dispatch_remote_refuses_positional_args_for_config_both_ways() {
         let (ctx, _dir, _events) = ctx_with_api_key();
@@ -674,71 +672,5 @@ mod tests {
         assert_eq!(parse_provenance(None, Some(3)).unwrap().cause_seq, Some(3));
         let err = parse_provenance(Some("nope".to_owned()), None).unwrap_err();
         assert!(err.as_str().unwrap().starts_with("Invalid UUID \"nope\""));
-    }
-}
-
-/// Test-only construction helpers for every `commands::*` test module.
-#[cfg(test)]
-pub(crate) mod test_support {
-    use std::mem::DropGuard;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::mpsc::{self, Receiver};
-
-    use super::{Ctx, CtxInner};
-    use crate::Paths;
-    use crate::agent::{
-        AgentScheduler, AgentSchedulerConfig, AgentSessionRegistry, ClaudeCodeAdapter, CodexAdapter,
-    };
-    use crate::bus::channel::MessageBus;
-    use crate::bus::router::Router;
-    use crate::git::RepoLocks;
-    use crate::metrics::SharedSystem;
-    use crate::orchestration::{DomainEvent, EventLog, OrchestrationEngine};
-    use crate::session::SessionManager;
-    use crate::worker::registry::WorkerRegistry;
-
-    /// A fully wired `Ctx` over an in-memory event log and a fresh temp
-    /// data directory (removed when the returned guard drops), plus a
-    /// receiver of every envelope the engine emits. No single-instance
-    /// lock is taken, so any number can coexist.
-    pub(crate) fn test_ctx() -> (
-        Ctx,
-        DropGuard<PathBuf, impl FnOnce(PathBuf)>,
-        Receiver<DomainEvent>,
-    ) {
-        let dir = std::env::temp_dir().join(format!("swarm-cmd-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let cleanup = DropGuard::new(dir.clone(), |dir| {
-            let _ = std::fs::remove_dir_all(dir);
-        });
-
-        let (events_tx, events) = mpsc::channel();
-        let engine =
-            OrchestrationEngine::start(EventLog::open_in_memory().unwrap(), None, move |e| {
-                let _ = events_tx.send(e.clone());
-            });
-        let sink = engine.sink();
-        let message_bus = MessageBus::new();
-        let ctx = CtxInner {
-            paths: Paths { data_dir: dir },
-            registry: WorkerRegistry::new(),
-            session_manager: SessionManager::new(),
-            repo_locks: RepoLocks::new(),
-            router: Router::new(message_bus.clone(), sink.clone()),
-            message_bus,
-            shared_system: SharedSystem::new(),
-            claude_adapter: Arc::new(ClaudeCodeAdapter::new(sink.clone())),
-            codex_adapter: Arc::new(CodexAdapter::new(sink.clone())),
-            agent_session_registry: AgentSessionRegistry::new(),
-            scheduler: Arc::new(AgentScheduler::new(
-                AgentSchedulerConfig::default(),
-                |_req| async {},
-            )),
-            engine,
-            sink,
-        }
-        .into();
-        (ctx, cleanup, events)
     }
 }

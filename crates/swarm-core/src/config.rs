@@ -164,10 +164,9 @@ mod tests {
         assert!(positions.is_sorted(), "{text}");
     }
 
-    /// CONFIRMED regression: a malformed file used to read as empty, so
-    /// the next write replaced it with a single key — silently dropping
-    /// the API key and every other setting. Now reads stay lenient, and
-    /// a write moves the damaged file aside (intact) before writing.
+    /// A malformed file reads as not configured, and a write moves it
+    /// aside intact (`swarm-config.json.corrupt-<unix ms>`) before
+    /// writing, so its keys are never silently dropped.
     #[test]
     fn test_writing_over_a_malformed_file_quarantines_it_instead_of_dropping_keys() {
         let (dir, _cleanup) = temp_dir("config");

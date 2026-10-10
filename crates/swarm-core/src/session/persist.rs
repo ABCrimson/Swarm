@@ -11,7 +11,9 @@
 //! array) is never treated as "no sessions" and overwritten: it is moved
 //! aside to `sessions.json.corrupt-<unix ms>` and the app starts with no
 //! sessions. A single entry that does not parse is skipped (and logged),
-//! keeping every other session. A file that exists but cannot be read is
+//! keeping every other session; the file as it was is first copied to
+//! `sessions.json.corrupt-<unix ms>`, since the next save rewrites the
+//! array without it. A file that exists but cannot be read is
 //! left untouched — loading fails and saving refuses — until it can be.
 //!
 //! # Concurrency and durability
@@ -73,23 +75,41 @@ fn read_root(path: &Path) -> Result<Option<Map<String, Value>>, AppError> {
 /// malformed file cannot be moved aside.
 pub fn load(paths: &Paths, manager: &SessionManager) -> Result<(), AppError> {
     let _guard = SESSIONS_LOCK.lock();
-    let Some(mut root) = read_root(&sessions_path(paths))? else {
+    let path = sessions_path(paths);
+    let Some(mut root) = read_root(&path)? else {
         tracing::debug!("no sessions.json yet; starting with no sessions");
         return Ok(());
     };
     let Some(Value::Array(entries)) = root.remove(SESSIONS_KEY) else {
         return Ok(());
     };
+    let mut skipped = 0_usize;
     let sessions = entries
         .into_iter()
         .filter_map(|entry| {
             serde_json::from_value::<Session>(entry)
                 .inspect_err(|e| {
+                    skipped += 1;
                     tracing::warn!(error = %e, "skipping a sessions.json entry that does not parse");
                 })
                 .ok()
         })
         .collect();
+    if skipped > 0 {
+        let aside = path.with_added_extension(format!("corrupt-{}", crate::clock::unix_millis()));
+        match std::fs::copy(&path, &aside) {
+            Ok(_) => tracing::warn!(
+                skipped,
+                copied_to = %aside.display(),
+                "kept a copy of sessions.json before skipping its unparseable entries"
+            ),
+            Err(e) => tracing::error!(
+                error = %e,
+                skipped,
+                "could not copy sessions.json aside; its unparseable entries will be lost on the next save"
+            ),
+        }
+    }
     manager.restore_sessions(sessions);
     Ok(())
 }
@@ -188,9 +208,9 @@ mod tests {
         assert_eq!(manager.get_session(&id).unwrap().name, "Legacy Session");
     }
 
-    /// CONFIRMED regression: a malformed file used to load as "no
-    /// sessions", and the next autosave overwrote it — losing every
-    /// session. Now it is moved aside intact first.
+    /// A malformed file is moved aside intact when it is loaded (the
+    /// manager starts with no sessions), so the next save never
+    /// overwrites it and no session is lost.
     #[test]
     fn test_a_malformed_file_is_quarantined_not_overwritten() {
         let (dir, _cleanup) = temp_dir("sessions");
@@ -239,6 +259,35 @@ mod tests {
         assert_eq!(manager.get_session(&good).unwrap().name, "Good");
     }
 
+    /// The next save rewrites the array without a skipped entry, so the
+    /// load keeps the file as it was in a `.corrupt-<ms>` copy.
+    #[test]
+    fn test_an_unparseable_entry_survives_the_next_save_in_a_copy() {
+        let (dir, _cleanup) = temp_dir("sessions");
+        let paths = paths(&dir);
+        let file = json!({
+            "sessions": [
+                {"id": "not-a-uuid", "name": "Bad", "workerIds": [], "createdAt": 0, "config": {}}
+            ]
+        });
+        fs::write(sessions_path(&paths), file.to_string()).unwrap();
+
+        let manager = SessionManager::new();
+        load(&paths, &manager).unwrap();
+        manager.create_session("New".to_owned(), json!({}));
+        save(&paths, &manager).unwrap();
+
+        let copies = corrupt_files(&dir);
+        assert_eq!(copies.len(), 1);
+        assert!(
+            fs::read_to_string(&copies[0])
+                .unwrap()
+                .contains("not-a-uuid")
+        );
+        let saved = fs::read_to_string(sessions_path(&paths)).unwrap();
+        assert!(!saved.contains("not-a-uuid"));
+    }
+
     #[test]
     fn test_save_preserves_other_top_level_keys() {
         let (dir, _cleanup) = temp_dir("sessions");
@@ -254,28 +303,27 @@ mod tests {
         assert_eq!(root["other"]["kept"], true);
     }
 
-    /// CONFIRMED regression: the snapshot used to be taken outside the
-    /// file lock, so a slower save could write an OLDER snapshot over a
-    /// newer one. With the snapshot inside the lock, the file always
-    /// ends at the state after the last mutation, however the
-    /// concurrent saves interleave.
+    /// `save` snapshots the manager inside the file lock, so a save that
+    /// waits on the lock writes the newest state, not a stale snapshot.
     #[test]
-    fn test_concurrent_saves_always_leave_the_newest_state() {
+    fn test_a_save_waiting_on_the_lock_writes_the_newest_state() {
         let (dir, _cleanup) = temp_dir("sessions");
         let paths = paths(&dir);
         let manager = SessionManager::new();
-
+        manager.create_session("Old".to_owned(), json!({}));
         std::thread::scope(|scope| {
-            for i in 0..16 {
-                manager.create_session(format!("S{i}"), json!({}));
-                let (paths, manager) = (&paths, &manager);
-                scope.spawn(move || save(paths, manager).unwrap());
-            }
+            let guard = SESSIONS_LOCK.lock();
+            let (p, m) = (&paths, &manager);
+            let saver = scope.spawn(move || save(p, m).unwrap());
+            // Lets the saver block on the lock first.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            manager.create_session("New".to_owned(), json!({}));
+            drop(guard);
+            saver.join().unwrap();
         });
-
         let restored = SessionManager::new();
         load(&paths, &restored).unwrap();
-        assert_eq!(restored.list_sessions().len(), 16);
+        assert_eq!(restored.list_sessions().len(), 2);
     }
 
     #[test]

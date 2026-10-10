@@ -26,11 +26,12 @@
 //! along with the backup files named after them (for example
 //! `swarm-config.json.corrupt-<ms>`, or the daemon's `.daemon-token.<rand>`
 //! mint-time temp file, compared with leading dots ignored), and the
-//! credential directories
-//! `~/.ssh`, `~/.gnupg` and `~/.aws`. A hard link to a secret is not
-//! detected.
+//! credential stores under `~` that the capability's fs:scope deny list
+//! covers: `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
+//! `.config/gh`, `.claude`, `.codex`, `.git-credentials`, `.netrc`. A
+//! hard link to a secret is not detected.
 
-use std::io;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
@@ -41,12 +42,29 @@ use crate::git;
 
 use super::{Ctx, ok_value, parse_args, parse_provenance};
 
+/// The most `read_file` loads: the whole file lands in memory (and in the
+/// model's context), so a larger one is refused.
+const MAX_READ_BYTES: u64 = 16 << 20;
+
 /// File-name prefixes (compared lower-case) of the data-directory files
 /// that hold credentials.
 const DENIED_DATA_FILE_PREFIXES: [&str; 2] = ["swarm-config.json", "daemon-token"];
 
-/// Home-relative directories that hold credentials.
-const DENIED_HOME_DIRS: [&str; 3] = [".ssh", ".gnupg", ".aws"];
+/// Home-relative directories and files that hold credentials (the
+/// fs:scope deny list in `src-tauri/capabilities/default.json`).
+const DENIED_HOME_ENTRIES: [&str; 11] = [
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".azure",
+    ".kube",
+    ".docker",
+    ".config/gh",
+    ".claude",
+    ".codex",
+    ".git-credentials",
+    ".netrc",
+];
 
 const DENIED_MESSAGE: &str = "This Path Holds Credentials And Is Never Accessible.";
 
@@ -115,9 +133,9 @@ impl FsScopes {
                     .any(|prefix| name.starts_with(prefix))
             });
         secret_in_data_dir
-            || DENIED_HOME_DIRS
+            || DENIED_HOME_ENTRIES
                 .iter()
-                .any(|dir| real.starts_with(home.join(dir)))
+                .any(|entry| real.starts_with(home.join(entry)))
     }
 
     /// Whether `normalized` sits under any of `roots` (as given or with
@@ -226,6 +244,36 @@ fn normalize_lexically(path: &Path) -> PathBuf {
     out
 }
 
+/// Reads `real` as UTF-8 if it is a regular file of at most
+/// [`MAX_READ_BYTES`]. A FIFO or device would block the thread forever,
+/// and an oversized file would exhaust memory. The length is checked
+/// again on the bytes read, since the file can grow after the stat.
+fn read_regular_file(real: &Path, path: &str) -> Result<String, Value> {
+    let read_error = |e: io::Error| Value::String(truthful_read_error(&e, path));
+    let too_large = || {
+        Value::String(format!(
+            "Cannot Read \"{path}\": The File Is Larger Than 16 MiB."
+        ))
+    };
+    let meta = std::fs::metadata(real).map_err(read_error)?;
+    if !meta.is_file() {
+        return Err(Value::String(format!(
+            "Cannot Read \"{path}\": Not A Regular File."
+        )));
+    }
+    if meta.len() > MAX_READ_BYTES {
+        return Err(too_large());
+    }
+    let mut contents = String::new();
+    std::fs::File::open(real)
+        .and_then(|file| file.take(MAX_READ_BYTES + 1).read_to_string(&mut contents))
+        .map_err(read_error)?;
+    if contents.len() as u64 > MAX_READ_BYTES {
+        return Err(too_large());
+    }
+    Ok(contents)
+}
+
 fn truthful_read_error(err: &io::Error, path: &str) -> String {
     match err.kind() {
         io::ErrorKind::NotFound => format!("File Not Found: \"{path}\"."),
@@ -253,7 +301,7 @@ struct ReadFileArgs {
     path: String,
 }
 
-/// Reads a UTF-8 file inside the read scope.
+/// Reads a UTF-8 regular file of at most 16 MiB inside the read scope.
 pub async fn read_file(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let ReadFileArgs { path } = parse_args(args)?;
     let candidate = PathBuf::from(&path);
@@ -264,8 +312,7 @@ pub async fn read_file(ctx: Ctx, args: Value) -> Result<Value, Value> {
 
     let contents = tokio::task::spawn_blocking(move || -> Result<String, Value> {
         let resolved = scopes.check_read(&candidate)?;
-        std::fs::read_to_string(&resolved)
-            .map_err(|e| Value::String(truthful_read_error(&e, &path)))
+        read_regular_file(&resolved, &path)
     })
     .await
     .map_err(|e| Value::String(e.to_string()))??;
@@ -393,6 +440,18 @@ mod tests {
         let sneaky = tree.scopes.home.join(".swarm/../../outside.txt");
         assert!(tree.scopes.check_read(&sneaky).is_err());
         assert!(tree.scopes.check_write(&sneaky).is_err());
+
+        // A missing target: canonicalize fails, so only the lexical
+        // normalization stops `..` from matching a scope by prefix.
+        let missing = tree.scopes.home.join(".swarm/../../elsewhere/nope.txt");
+        assert_eq!(
+            tree.scopes.check_read(&missing).unwrap_err().as_str(),
+            Some(READ_SCOPE_MESSAGE)
+        );
+        assert_eq!(
+            tree.scopes.check_write(&missing).unwrap_err().as_str(),
+            Some(WRITE_SCOPE_MESSAGE)
+        );
     }
 
     #[test]
@@ -424,15 +483,65 @@ mod tests {
     }
 
     #[test]
-    fn test_read_denies_credential_directories_under_home() {
+    fn test_read_denies_credential_stores_under_home() {
         let tree = Tree::new();
-        for dir in [".ssh", ".gnupg", ".aws"] {
-            let dir = tree.scopes.home.join(dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            let key = dir.join("id");
-            std::fs::write(&key, "k").unwrap();
-            assert_eq!(tree.scopes.check_read(&key), denied());
+        for entry in DENIED_HOME_ENTRIES {
+            let entry = tree.scopes.home.join(entry);
+            let secret = if matches!(
+                entry.file_name().and_then(|name| name.to_str()),
+                Some(".git-credentials" | ".netrc")
+            ) {
+                entry
+            } else {
+                std::fs::create_dir_all(&entry).unwrap();
+                entry.join("id")
+            };
+            std::fs::write(&secret, "k").unwrap();
+            assert_eq!(tree.scopes.check_read(&secret), denied(), "{secret:?}");
         }
+        let other = tree.scopes.home.join(".config/other.txt");
+        std::fs::write(&other, "o").unwrap();
+        assert!(tree.scopes.check_read(&other).is_ok());
+    }
+
+    #[test]
+    fn test_read_regular_file_refuses_non_files_and_oversized_files() {
+        let tree = Tree::new();
+        let dir = tree.scopes.home.join("a-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            read_regular_file(&dir, "a-dir").unwrap_err().as_str(),
+            Some("Cannot Read \"a-dir\": Not A Regular File.")
+        );
+
+        let big = tree.scopes.home.join("big.txt");
+        let file = std::fs::File::create(&big).unwrap();
+        file.set_len(MAX_READ_BYTES + 1).unwrap();
+        assert_eq!(
+            read_regular_file(&big, "big.txt").unwrap_err().as_str(),
+            Some("Cannot Read \"big.txt\": The File Is Larger Than 16 MiB.")
+        );
+        file.set_len(MAX_READ_BYTES).unwrap();
+        assert_eq!(
+            read_regular_file(&big, "big.txt").unwrap().len() as u64,
+            MAX_READ_BYTES
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_read_regular_file_refuses_a_fifo_without_blocking() {
+        let tree = Tree::new();
+        let fifo = tree.scopes.home.join("pipe");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        assert_eq!(
+            read_regular_file(&fifo, "pipe").unwrap_err().as_str(),
+            Some("Cannot Read \"pipe\": Not A Regular File.")
+        );
     }
 
     #[test]

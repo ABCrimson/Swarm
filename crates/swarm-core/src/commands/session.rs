@@ -6,23 +6,40 @@ use serde_json::Value;
 
 use crate::events::{
     SessionCreatedPayload, SessionDeletedPayload, SessionWorkerAddedPayload,
-    SessionWorkerRemovedPayload, SwarmEvent,
+    SessionWorkerRemovedPayload, SwarmEvent, SystemLogPayload,
 };
 
 use super::{Ctx, err_value, ok_value, parse_args, parse_provenance, parse_uuid};
 
 /// Persists the session set on a blocking thread, waiting for it. A
-/// failure is logged, never returned: it must not undo, or report as
-/// failed, a mutation that has already been applied and emitted.
+/// failure is logged and reported as an error-level `system_log` event,
+/// never returned: it must not undo, or report as failed, a mutation
+/// that has already been applied and emitted.
 async fn autosave(ctx: &Ctx) {
     let paths = ctx.paths.clone();
     let manager = ctx.session_manager.clone();
-    match tokio::task::spawn_blocking(move || crate::session::persist::save(&paths, &manager)).await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => tracing::error!(error = %e, "failed to auto-save sessions"),
-        Err(e) => tracing::error!(error = %e, "auto-save sessions task panicked"),
-    }
+    let failure =
+        match tokio::task::spawn_blocking(move || crate::session::persist::save(&paths, &manager))
+            .await
+        {
+            Ok(Ok(())) => return,
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, "failed to auto-save sessions");
+                e.to_string()
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "auto-save sessions task panicked");
+                e.to_string()
+            }
+        };
+    ctx.sink.emit(SwarmEvent::SystemLog(SystemLogPayload {
+        level: "error".to_owned(),
+        message: format!(
+            "Sessions Could Not Be Saved — Changes Will Be Lost On Restart: {failure}"
+        ),
+        target: "swarm_core::session".to_owned(),
+        timestamp: crate::clock::unix_millis(),
+    }));
 }
 
 #[derive(Deserialize)]
@@ -241,5 +258,29 @@ mod tests {
                 .worker_ids,
             vec![worker_id]
         );
+    }
+
+    /// A failed autosave reaches the UI as an error-level `system_log`
+    /// event while the command still succeeds.
+    #[tokio::test]
+    async fn test_a_failed_autosave_emits_an_error_system_log() {
+        let (ctx, _dir, events) = test_ctx();
+        // A directory where the file belongs makes every save fail.
+        std::fs::create_dir(ctx.paths.data_dir.join("sessions.json")).unwrap();
+        create_session(ctx.clone(), json!({"name": "S", "config": {}}))
+            .await
+            .unwrap();
+        ctx.engine.flush().await.unwrap();
+
+        let logs: Vec<DomainEvent> = events
+            .try_iter()
+            .filter(|e| e.event.type_tag() == "system_log")
+            .collect();
+        assert_eq!(logs.len(), 1);
+        let SwarmEvent::SystemLog(payload) = &logs[0].event else {
+            panic!("expected system_log");
+        };
+        assert_eq!(payload.level, "error");
+        assert!(payload.message.starts_with("Sessions Could Not Be Saved"));
     }
 }

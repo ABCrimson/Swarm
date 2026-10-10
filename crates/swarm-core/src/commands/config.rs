@@ -51,17 +51,33 @@ const SECRET_ANY_WORDS: &[&str] = &[
 /// spaces and camelCase boundaries — so `ANTHROPIC_API_KEY`,
 /// `settings:githubToken` and `api-key` are judged like
 /// `anthropic_api_key`, `settings_github_token` and `api_key`. It is
-/// secret-shaped when its LAST word is one of `SECRET_LAST_WORDS`, or
-/// ANY word is one of `SECRET_ANY_WORDS`. Ordinary settings such as
+/// secret-shaped when its last word, after skipping trailing version
+/// words such as `2` or `v2` and ignoring that word's trailing digits,
+/// is one of `SECRET_LAST_WORDS`, or when any word, trailing digits
+/// ignored, is one of `SECRET_ANY_WORDS`. Ordinary settings such as
 /// `max_workers`, `max_tokens` or `default_repo_root` are not.
 pub fn is_secret_key(key: &str) -> bool {
     let words = key_words(key);
     words
-        .last()
-        .is_some_and(|last| SECRET_LAST_WORDS.contains(&last.as_str()))
+        .iter()
+        .rev()
+        .find(|word| !is_version_word(word))
+        .is_some_and(|last| SECRET_LAST_WORDS.contains(&stem(last)))
         || words
             .iter()
-            .any(|word| SECRET_ANY_WORDS.contains(&word.as_str()))
+            .any(|word| SECRET_ANY_WORDS.contains(&stem(word)))
+}
+
+/// Whether `word` is a trailing version or counter (`2`, `v2`) naming a
+/// rotated copy of the setting.
+fn is_version_word(word: &str) -> bool {
+    let digits = word.strip_prefix('v').unwrap_or(word);
+    !digits.is_empty() && digits.chars().all(char::is_numeric)
+}
+
+/// `word` without trailing digits (`token2` -> `token`).
+fn stem(word: &str) -> &str {
+    word.trim_end_matches(char::is_numeric)
 }
 
 /// `key` as lowercase alphanumeric words (see [`is_secret_key`]).
@@ -150,9 +166,9 @@ mod tests {
         }
     }
 
-    /// UNVERIFIED-low finding, verified: the old suffix check was
-    /// case-sensitive and `_`-only, so every key below was remotely
-    /// readable and writable.
+    /// Secret shapes beyond `anthropic_api_key` are denied whatever their
+    /// case or separator: a last word such as `key`, `token`, `password`
+    /// or `pat`, or a word such as `secret` or `credentials` anywhere.
     #[test]
     fn test_is_secret_key_denies_other_secret_shapes() {
         for key in [
@@ -168,6 +184,10 @@ mod tests {
             "github_pat",
             "aws_credentials",
             "client_secret_id",
+            "anthropic_api_key_v2",
+            "github_token_2",
+            "githubToken2",
+            "api_key_v10",
         ] {
             assert!(is_secret_key(key), "{key}");
         }
@@ -183,6 +203,9 @@ mod tests {
             "shipCoAuthoredBy",
             "theme",
             "keyboard_layout",
+            "max_tokens_2",
+            "theme_v2",
+            "v2",
             "lazy-store:recent",
             "",
         ] {
