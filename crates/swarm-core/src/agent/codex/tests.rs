@@ -361,6 +361,9 @@ fn claude_model_names_and_blanks_fall_back_to_the_codex_default() {
         Some("  "),
         Some("sonnet"),
         Some("Opus"),
+        Some("haiku"),
+        Some("fable"),
+        Some("Mythos"),
         Some("claude-fable-5"),
     ] {
         assert_eq!(requested_model(model), None, "{model:?}");
@@ -429,6 +432,13 @@ fn applied_policy_may_be_stricter_but_never_looser() {
             OnRequest,
             WorkspaceWrite,
         ),
+        (
+            "dangerFullAccess",
+            json!("untrusted"),
+            Untrusted,
+            WorkspaceWrite,
+        ),
+        ("workspaceWrite", json!("never"), OnRequest, WorkspaceWrite),
     ];
     for (sandbox, approval, asked_approval, asked_sandbox) in refused {
         let error = verify_effective_policy(
