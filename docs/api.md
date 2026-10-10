@@ -157,7 +157,7 @@ Three independent layers decide whether a command call runs. Each is enforced in
 The webview chat's built-in tools in `src/lib/tools.ts` are a fourth gate in front of these commands. Every tool that acts on the machine (`run_command`, `spawn_worker`, `kill_worker`, `write_file`, `read_file`) waits for the user's answer inside its own `execute`, so no caller, the registry included, can run one unapproved; `get_metrics` and the user's custom tools (sandboxed Blob Workers with no backend side effect) are not gated. The prompt (`ToolApprovalPrompt`) offers **Allow Once**, **Allow For Session** and **Deny**:
 
 - A session grant covers exactly one call shape, keyed by tool, the worker whose turn made the call, and the exact argument (`run_command`: worker and command string; `read_file` and `write_file`: the path as given; `kill_worker`: the worker id; `spawn_worker`: the name). It lasts until the app reloads. Answering one pending call never releases another, and `write_file` never gets a session grant (the button is absent; each write is answered on its own).
-- The prompt renders the tool name and every field of the validated input, not a sentence built from model text. Each value is escaped for display: backslashes are doubled, newline, carriage return and tab are spelled `\n`, `\r` and `\t`, and any other control, bidi-override or zero-width character shows as `\uXXXX`. Non-string values print as canonical JSON, and `write_file` also shows the content size in bytes.
+- The prompt renders the tool name and every field of the validated input, not a sentence built from model text. Each value is escaped for display: backslashes are doubled, newline, carriage return and tab are spelled `\n`, `\r` and `\t`, and any other control, format, line/paragraph separator or default-ignorable character (bidi, zero-width, tag, variation selector, soft hyphen) shows as `\uXXXX`, or `\u{XXXXX}` above U+FFFF. Non-string values print as canonical JSON, and `write_file` also shows the content size in bytes.
 - A value over 500 characters is cut (on the raw value, before escaping) with a "N more characters" count, and Allow Once and Allow For Session stay disabled until each cut value has been expanded with Show All. Commands and file paths are never cut. Deny is always available.
 - Stopping a turn or killing its worker denies the turn's pending tool calls (aborting the turn is what denies them, so the Stop button, a queue Cancel and `worker_killed` all do), and a denial returns to the model as an error result (`The User Denied <tool>. It Was Not Run.`).
 
@@ -496,7 +496,7 @@ A still-locked worktree is not dirty, and a permission error can strike *after* 
 
 **Location:** worktrees live under `~/.swarm/worktrees/<repo>-<hash8>/w-<id8>` (`<repo>` a sanitized repo directory name, `<hash8>` an 8-hex-character tag derived from the repo's absolute path, `<id8>` the worker UUID's first 8 hex characters) -- already inside the [`write_file`](#write_file) scope (`~/.swarm`).
 
-**Startup probe:** on launch, `Runtime::start` (so the desktop app and `swarmd` alike) runs `git --version` off the startup path and requires >= 2.32 (`swarm_core::git::cli::MIN_GIT_VERSION`; the floor is the newest git feature the ship chain uses, `git commit --trailer`). A missing or too-old git is never silently degraded -- it logs a warning and emits a `system_log` envelope (`level: "warn"`, message "Git Unavailable -- Isolated Spawns Will Fail Until Git Is Installed Or Upgraded") consumed by `useSystemLogEvents` into the existing Logs page. It does not mean workers spawn unisolated -- a `repoRoot`-bearing spawn still hard-fails per the failure policy above; this only makes that fact visible before the user hits it as a spawn error.
+**Startup probe:** on launch, `Runtime::start` (so the desktop app and `swarmd` alike) runs `git --version` off the startup path and requires >= 2.32 (`swarm_core::git::cli::MIN_GIT_VERSION`; the floor is the newest git feature the ship chain uses, `git commit --trailer`). A missing or too-old git is never silently degraded -- it logs a warning and emits a `system_log` envelope (`level: "warn"`, message "Git Unavailable — Isolated Spawns Will Fail Until Git Is Installed Or Upgraded: <reason>") consumed by `useSystemLogEvents` into the existing Logs page. It does not mean workers spawn unisolated -- a `repoRoot`-bearing spawn still hard-fails per the failure policy above; this only makes that fact visible before the user hits it as a spawn error.
 
 **Startup prune:** the same task also runs `git worktree prune` against the persisted `default_repo_root` config key (see the Project Root picker on the Workers page), logging the pruned count.
 
@@ -665,7 +665,7 @@ console.log("Committed:", outcome.sha, "skipped:", outcome.skipped);
 
 ### `git_push`
 
-Pushes the worker's branch: `git push --set-upstream origin <branch>` -- **fixed argv**, no force token constructible anywhere in the argv builder (`--force`/`-f`/`--force-with-lease` cannot be reached). Both the branch and the sha pushed are resolved **live**, server-side, at push time -- this command takes **no** commit sha from the caller at all. On success, records `lastShippedSeq`/`lastShippedCommit` for the worker via `WorkerRegistry::set_last_shipped` -- the ship chain is the only writer of those two fields.
+Pushes the worker's branch: `git push --set-upstream --end-of-options origin refs/heads/<branch>:refs/heads/<branch>` -- **fixed argv** (`--end-of-options` keeps an option-shaped branch an operand, and the fully qualified refspec makes a leading `+` part of the literal ref name, so a branch named `+main` cannot force-update `main`), no force token constructible anywhere in the argv builder (`--force`/`-f`/`--force-with-lease` cannot be reached). Both the branch and the sha pushed are resolved **live**, server-side, at push time -- this command takes **no** commit sha from the caller at all. On success, records `lastShippedSeq`/`lastShippedCommit` for the worker via `WorkerRegistry::set_last_shipped` -- the ship chain is the only writer of those two fields.
 
 **This is what lets a worker with already-committed, unpushed work go straight to `git_push`.** If `git_stage_commit` fails with `nothingToCommit` but `ShipPreflight.ahead > 0` (e.g. an earlier "Commit Only" already committed real work that was never pushed), the frontend calls `git_push` directly -- no fresh commit is required, because this command resolves whatever `HEAD` already is, live, rather than trusting a value from a preceding `git_stage_commit` call.
 
@@ -739,9 +739,12 @@ Always the true final step of the "Commit + Push + Open Compare Page" action -- 
 
 | Error kind      | Condition                                                       |
 |------------------|--------------------------------------------------------------------|
+| `workerNotFound` / `noWorktree` | `workerId` is malformed or names no worker, or the worker was spawned without worktree isolation |
 | `invalidBranch`  | Detached `HEAD`                                                     |
 | `noRemote`       | No `origin` remote configured                                       |
 | `nonGitHubHost`  | The remote's host isn't one a GitHub-style compare URL applies to (e.g. GitLab, Bitbucket) |
+| `timeout` | Reading the live branch or the `origin` remote exceeded its timeout budget |
+| `unknown` | `shipId` is not a UUID, or any other failure, including reading the live branch or the `origin` remote |
 
 **Example:**
 
@@ -937,10 +940,12 @@ Registers a worker against a session's `workerIds` list.
 
 **Parameters:**
 
-| Name         | Type     | Required | Description                        |
-|--------------|----------|----------|-------------------------------------|
-| `sessionId`  | `string` | Yes      | UUID of the target session          |
-| `workerId`   | `string` | Yes      | UUID of the worker to add           |
+| Name           | Type     | Required | Description                        |
+|----------------|----------|----------|-------------------------------------|
+| `sessionId`    | `string` | Yes      | UUID of the target session          |
+| `workerId`     | `string` | Yes      | UUID of the worker to add           |
+| `originWorker` | `string` | No       | UUID of the causer                  |
+| `causeSeq`     | `number` | No       | `seq` this action is reacting to    |
 
 **Returns:** `void`
 
@@ -1236,7 +1241,7 @@ Sets how many agent turns may execute at the same time. Validated, persisted to 
 
 - A read canonicalizes the file itself. A write canonicalizes the parent directory and, when the target already exists (any entry type), the target too, so a symlink, a Windows 8.3 short name (`SWARM-~1.JSO`) or a case variant lands on the real file the write would replace. A dangling link inside a scope is refused.
 - The lexical form is only used to pick the error once canonicalization fails: a path outside every scope gets the scope error whether or not it exists, so a missing path elsewhere on disk cannot be told from an existing one.
-- **Deny list**, applied to the canonical path for reads and writes alike: in the app data directory, `swarm-config.json` (it holds the Anthropic API key) and `daemon-token`, plus anything named with those as a prefix (`swarm-config.json.corrupt-<ms>` backups, the daemon's `.daemon-token.<rand>` mint-time temp file; leading dots are ignored and case does not matter), and under the home directory `~/.ssh`, `~/.gnupg` and `~/.aws`. The error is ``This Path Holds Credentials And Is Never Accessible.`` A hard link to a secret is not detected.
+- **Deny list**, applied to the canonical path for reads and writes alike: in the app data directory, `swarm-config.json` (it holds the Anthropic API key) and `daemon-token`, plus anything named with those as a prefix (`swarm-config.json.corrupt-<ms>` backups, the daemon's `.daemon-token.<rand>` mint-time temp file; leading dots are ignored and case does not matter), and under the home directory the credential stores `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.config/gh`, `~/.claude`, `~/.codex`, `~/.git-credentials` and `~/.netrc` (the same set the webview's fs deny scope holds). The error is ``This Path Holds Credentials And Is Never Accessible.`` A hard link to a secret is not detected.
 - **Windows file names (writes).** A write is refused when the file name contains `:` (an NTFS alternate data stream such as `swarm-config.json:x` or `::$DATA`), ends in `.` or a space (Win32 strips them, aliasing the name without them), or has a reserved device stem (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, and the superscript forms `COM¹` `COM²` `COM³` `LPT¹` `LPT²` `LPT³`, with or without an extension): ``Cannot Write "<path>": The File Name Is Not Allowed.`` The helper is platform-independent and tested everywhere; only Windows applies it.
 
 ### `read_file`

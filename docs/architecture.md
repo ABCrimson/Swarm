@@ -302,7 +302,7 @@ the mechanics ([ADR-0009](adr/0009-ship-chain-structural-guarantees.md)). The lo
 | --- | --- |
 | `git_ship_preflight(workerId, mode?)` | Read-only. `mode` is `all` (default) or `staged`. Eight refusal conditions become Title Case `blockers` and `canShip = false`: not the worktree's toplevel, primary checkout, detached `HEAD`, branch equals the base branch, protected branch (`main`, `master`, `develop`, `release/*`), no `origin`, unresolved merge conflicts, nothing to ship. Also returns the deny-list preview, diff stat, ahead/behind and whether the host supports a compare URL. |
 | `git_stage_commit(workerId, shipId, message, mode, finalStep)` | Primary-checkout guard, then one `git status --porcelain=v2 -z` snapshot (conflicts refuse), the deny list, `git restore --staged` of denied paths, in `all` mode `git add` of an explicit `:(top,literal)` path list, an index re-check, then `git commit --file=- --trailer=…`. Emits `ship_progress` and `commit_created`. |
-| `git_push(workerId, shipId, finalStep)` | Primary-checkout guard, live branch (detached refuses), `HEAD` sha, `git push --set-upstream origin <branch>`. On success records `last_shipped_seq` and `last_shipped_commit` (the only writer). |
+| `git_push(workerId, shipId, finalStep)` | Primary-checkout guard, live branch (detached, protected `main`/`master`/`develop`/`release/*` and the base branch refuse), `HEAD` sha, `git push --set-upstream --end-of-options origin refs/heads/<branch>:refs/heads/<branch>`. On success records `last_shipped_seq` and `last_shipped_commit` (the only writer). |
 | `ship_compare_url(workerId, shipId, commitSha, pushedRef, title, body)` | `https://<host>/<owner>/<repo>/compare/<base>...<branch>?quick_pull=1&title=&body=`, capped at 6000 characters (the body is cut first, the title as a last resort, the path never). |
 
 - Each command ends an attempt with exactly one `ship_settled`, on failure or on the call marked
@@ -367,8 +367,9 @@ path); `ShipPreview.tsx` renders the table straight from `ShipContext`.
 Two provider adapters implement one trait pair ([ADR-0013](adr/0013-provider-adapter-trait-pair.md)):
 `AgentAdapter` (`provider`, `capabilities`, `probe`, `spawn`) and `AgentSession` (`session_key`,
 `send_turn`, `await_turn_completion`, `cancel`, `respond_permission`, `shutdown`). `ProviderId` also
-reserves `OpenCode` and `Gemini` with no adapter. `agent_spawn` and `agent_probe` pick the adapter by
-provider; every other agent command reaches the live `Arc<dyn AgentSession>` through the
+reserves `OpenCode`, `Gemini` and `WebviewAnthropic` (the TypeScript chat path) with no adapter.
+`agent_spawn` and `agent_probe` pick the adapter by provider; every other agent command reaches the
+live `Arc<dyn AgentSession>` through the
 `AgentSessionRegistry` by worker id. `AgentSpawnSpec` is `workerId, cwd, model, resume, permissionMode`.
 
 | | Claude Code ([ADR-0016](adr/0016-claude-code-control-protocol.md)) | Codex ([ADR-0017](adr/0017-codex-app-server-protocol.md)) |
@@ -388,7 +389,8 @@ provider; every other agent command reaches the live `Arc<dyn AgentSession>` thr
   inline `--settings` JSON with `--setting-sources project`, never as a file in the worktree; the Codex
   adapter refuses a session whose applied policy is looser than requested.
 - **Exactly one `agent_turn_settled` per acknowledged turn**, synthesised ("Process Exited Without A
-  Receipt") if the process ends first. `send_turn` on a busy session is `AgentSessionBusy`.
+  Receipt (<cause>)", the cause being the known teardown reason or the stderr tail) if the process
+  ends first. `send_turn` on a busy session is `AgentSessionBusy`.
 - **Session state has three owners:** the provider CLI owns the conversation (SWARM keeps an opaque
   `SessionKey` and the cwd), the event log owns normalised history, the registry owns the live process.
 - **Piped substrate** (`worker/proc.rs`, [ADR-0014](adr/0014-piped-stdio-for-json-providers.md)):
@@ -643,7 +645,7 @@ textures: bloom (threshold, dual Kawase blur, composite), chromatic aberration, 
 | --- | --- |
 | Remote clients of `swarmd` | Token, `Host`/`Origin` allow-list, non-loopback gate, `RemotePolicy` ([ADR-0021](adr/0021-command-registry-remote-policy.md), [ADR-0022](adr/0022-swarmd-authentication-and-exposure.md)). An authenticated client can run commands as the daemon's user. |
 | Webview to OS | Capability file (per-command `allow-*` ACL, no static fs scope, deny list, opener scopes) and CSP ([ADR-0030](adr/0030-tauri-3-alpha-capability-scoped-fs.md)). |
-| `read_file` / `write_file` commands | Absolute paths, canonicalized (symlinks, 8.3 short names) before the scope and deny checks; reads limited to the data directory and `$HOME`, writes to the data directory and `~/.swarm`; `swarm-config.json` (the API key), the daemon token and its temp form, and `~/.ssh`, `~/.gnupg`, `~/.aws` are never accessible; Windows writes refuse `:`, a trailing `.` or space and device names; `Denied` remotely ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)). |
+| `read_file` / `write_file` commands | Absolute paths, canonicalized (symlinks, 8.3 short names) before the scope and deny checks; reads limited to the data directory and `$HOME`, writes to the data directory and `~/.swarm`; `swarm-config.json` (the API key), the daemon token and its temp form, and eleven home credential stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.config/gh`, `~/.claude`, `~/.codex`, `~/.git-credentials`, `~/.netrc`) are never accessible; Windows writes refuse `:`, a trailing `.` or space and device names; `Denied` remotely ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)). |
 | Webview AI tools | Every tool that acts on the machine, `kill_worker` included, needs the user's per-call answer inside its own `execute`; session grants are exact to tool, worker and argument ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)). |
 | Provider permissions | Closed trust tiers, no bypass modes ([ADR-0015](adr/0015-trust-tiers-closed-vocabulary.md)). |
 | Git | No force push, no hook bypass, deny list, primary-checkout guard, secret redaction ([ADR-0009](adr/0009-ship-chain-structural-guarantees.md), [ADR-0012](adr/0012-single-git-runner.md)). |
@@ -663,6 +665,6 @@ True at this commit and deliberately not hidden:
 - Killing a worker signals only its shell; a detached process can keep a worktree busy
   (`disposition: "failed"`). Only the configured default repo is pruned at startup.
 - `swarmd` does not embed the UI, and a desktop window cannot attach to a running daemon.
-- `OpenCode` and `Gemini` provider ids have no adapter; `bus_send`, `bus_list_channels`, `get_session` and
+- `OpenCode`, `Gemini` and `WebviewAnthropic` provider ids have no adapter; `bus_send`, `bus_list_channels`, `get_session` and
   `agent_shutdown` have no frontend caller (`NOT_WIRED` in the desktop shell's contract test).
 - A hard link to a denied file inside a scope is not detected by `read_file`/`write_file`.
