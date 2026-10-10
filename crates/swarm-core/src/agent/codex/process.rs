@@ -241,13 +241,19 @@ pub(super) async fn open_thread(
         )
         .await
         .map_err(|failure| closed(failure, method::INITIALIZE))?;
-    if let Ok(response) = serde_json::from_value::<InitializeResponse>(initialized) {
-        tracing::info!(
+    match serde_json::from_value::<InitializeResponse>(initialized) {
+        Ok(response) => tracing::info!(
             worker_id = %shared.worker_id,
             user_agent = %response.user_agent,
             verified_against = VERIFIED_CODEX_VERSION,
             "codex app-server initialized"
-        );
+        ),
+        Err(error) => tracing::warn!(
+            worker_id = %shared.worker_id,
+            %error,
+            verified_against = VERIFIED_CODEX_VERSION,
+            "codex adapter: initialize response does not match the verified schema"
+        ),
     }
     shared.notify(method::INITIALIZED);
 
