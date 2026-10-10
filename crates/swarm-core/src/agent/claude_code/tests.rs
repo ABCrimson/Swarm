@@ -880,6 +880,22 @@ async fn a_framer_error_settles_the_turn_and_tears_the_session_down() {
 }
 
 #[tokio::test]
+async fn a_crash_settles_the_turn_with_the_stderr_tail() {
+    let harness = Harness::new();
+    let session = harness.spawn("crash_with_stderr.mjs").await;
+    let turn = send(session.as_ref(), "hi").await;
+    harness.recorder.wait_for("agent_turn_settled", 1).await;
+
+    let settled = settled_for(&harness.recorder, &turn);
+    assert_eq!(settled.len(), 1);
+    assert_eq!(
+        settled[0]["error"],
+        format!("{PROCESS_EXITED_WITHOUT_RECEIPT} (Stderr: fatal: model overloaded)")
+    );
+    session.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
 async fn send_turn_while_busy_is_rejected() {
     let harness = Harness::new();
     let session = harness.spawn("hang_mid_turn.mjs").await;

@@ -5,7 +5,7 @@
 //! Verified against `claude` 2.1.280 and 2.1.281 (live traces) and
 //! `@anthropic-ai/claude-agent-sdk` 0.3.280's protocol types; the oldest
 //! CLI it drives is `MIN_CLI_VERSION`. The wire types live in
-//! `wire`; the trust tiers and argv in `tier`, the child process and
+//! `wire`; the trust-tier mapping and argv in `tier`, the child process and
 //! handshake in `process`, the shared session state in `state`, teardown
 //! in `teardown` and the reader task's frame handlers in `reader`; this
 //! file holds the constants, the adapter and the session. The unit tests
@@ -105,6 +105,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, oneshot, watch};
 use uuid::Uuid;
 
@@ -112,7 +113,6 @@ use self::process::{HandshakeError, Process, handshake};
 use self::reader::{run_reader, watch_framer_errors};
 use self::state::{Inner, Shared, Status, Stop, TurnState};
 use self::teardown::teardown;
-pub use self::tier::ClaudeCodeTrustTier;
 use self::tier::{
     accepted_permission_modes, build_claude_flags, claude_code_capabilities, parse_trust_tier,
     probe_flags,
@@ -190,8 +190,9 @@ const DISABLE_BACKGROUND_TASKS_ENV: &str = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS
 
 /// Prefix of the synthesized settlement error for every ungraceful exit
 /// (child killed, crashed, or an NDJSON framer failure) — Condition B. In
-/// parentheses it is followed by the cause SWARM knows (a framer error)
-/// or else the tail of the child's stderr.
+/// parentheses it is followed by the cause SWARM knows (a framer error), else
+/// `crate::agent::stderr_snippet` of the child's stderr tail (`Stderr: …` or
+/// `No Stderr Output`).
 const PROCESS_EXITED_WITHOUT_RECEIPT: &str = "Process Exited Without A Receipt";
 
 /// Settlement error for a turn [`AgentSession::cancel`] interrupted.
@@ -217,6 +218,36 @@ const UNSUPPORTED_REQUEST: &str = "Not Supported By The SWARM Host";
 
 /// Error text for `send_turn` on a session that is shutting down.
 const SESSION_CLOSED: &str = "Claude Code Session Is Shut Down";
+
+/// SWARM's closed vocabulary for Claude Code's spawn-time trust dial.
+///
+/// Deliberately NOT the provider's raw `--permission-mode` strings.
+/// [`AgentSpawnSpec::permission_mode`] is parsed through
+/// `parse_trust_tier`, which recognizes ONLY the three wire tokens
+/// below and fails closed on anything else — including a raw provider
+/// mode (`"acceptEdits"`, `"dontAsk"`) and, above all,
+/// `"bypassPermissions"`. No variant maps to `bypassPermissions`, so the
+/// flag value is unconstructible by this adapter (see
+/// `tests::bypass_permissions_is_unconstructible`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaudeCodeTrustTier {
+    /// Read-only exploration: `--restricted` (no command-running tools,
+    /// no `WebFetch`, file tools confined to the working directory),
+    /// `--permission-mode dontAsk` (anything not pre-approved is denied
+    /// without asking), and a deny list for the writing tools.
+    Restricted,
+    /// `--permission-mode manual`, the CLI's default mode pinned against
+    /// project settings: reads run, anything that needs approval
+    /// (commands with side effects, file edits) is asked of the human,
+    /// and the destructive Bash patterns in `deny_list` are always
+    /// denied.
+    Standard,
+    /// `--permission-mode acceptEdits`: file edits in the working
+    /// directory run without asking, commands are asked of the human,
+    /// and the same destructive patterns stay denied.
+    WriteEnabled,
+}
 
 /// Display name of a third-party `apiProvider` value (the Agent SDK's
 /// `AccountInfo.apiProvider` union).
