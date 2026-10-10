@@ -87,7 +87,7 @@ const ENUMS: readonly [string, string, z.ZodEnum][] = [
   [adapter, "PermissionDecision", PermissionDecisionSchema],
   [adapter, "AgentTurnStatus", AgentTurnStatusSchema],
   [source("agent/claude_code.rs"), "ClaudeCodeTrustTier", TrustTierSchema],
-  [source("agent/codex.rs"), "CodexTrustTier", TrustTierSchema],
+  [source("agent/codex/tier.rs"), "CodexTrustTier", TrustTierSchema],
 ];
 
 describe("agent event contract (Rust source ↔ Zod)", () => {
