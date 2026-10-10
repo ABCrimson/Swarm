@@ -8,11 +8,12 @@
  *
  * - JSON-RPC without the `"jsonrpc"` member, one message per line.
  * - Any request before `initialize` is answered `-32600 Not initialized`.
- * - `thread/start` / `thread/resume` responses echo the `approvalPolicy`
- *   and `sandbox` the client sent — and, when a key is missing, report the
- *   user's configured default instead (here the most permissive one,
- *   `dangerFullAccess`), exactly as the live server answered a request that
- *   used the wrong `sandboxPolicy` key.
+ * - `thread/start` / `thread/resume` responses echo the `approvalPolicy`,
+ *   `approvalsReviewer` and `sandbox` the client sent — and, when a key is
+ *   missing, report the user's configured default instead (here the most
+ *   permissive one: `dangerFullAccess`, and `auto_review` approvals), exactly
+ *   as the live server answered a request that used the wrong
+ *   `sandboxPolicy` key.
  * - Stdin EOF ends the process (exit 0), unless IGNORE_STDIN_EOF or ON_STDIN_EOF was given.
  *
  * Every message the client writes is appended to the `--record` file as
@@ -74,8 +75,12 @@ const SANDBOX_POLICIES = {
   "danger-full-access": { type: "dangerFullAccess" },
 };
 
-/** What a request without an approval policy or sandbox falls back to. */
-const CONFIGURED_DEFAULT = { approvalPolicy: "on-request", sandbox: "danger-full-access" };
+/** What a request without an approval policy, reviewer or sandbox falls back to. */
+const CONFIGURED_DEFAULT = {
+  approvalPolicy: "on-request",
+  approvalsReviewer: "auto_review",
+  sandbox: "danger-full-access",
+};
 
 const { values: options, positionals } = parseArgs({
   allowPositionals: true,
@@ -230,7 +235,7 @@ const threadOpened = (threadId, params, forcedSandbox) => {
     cwd,
     instructionSources: [],
     approvalPolicy: params.approvalPolicy ?? CONFIGURED_DEFAULT.approvalPolicy,
-    approvalsReviewer: "user",
+    approvalsReviewer: params.approvalsReviewer ?? CONFIGURED_DEFAULT.approvalsReviewer,
     sandbox: SANDBOX_POLICIES[sandbox],
     reasoningEffort: "high",
   };

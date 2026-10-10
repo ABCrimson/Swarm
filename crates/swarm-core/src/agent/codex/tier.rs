@@ -88,8 +88,9 @@ pub(super) fn requested_model(model: Option<&str>) -> Option<&str> {
 /// requested. The server reports what it actually applied; a stricter
 /// result (for example a managed configuration forcing `readOnly`) is
 /// fine, a looser one — `dangerFullAccess`, `externalSandbox`, `never`,
-/// a granular policy — is not. This is what catches a request field the
-/// server silently ignored.
+/// a granular policy, or an `approvalsReviewer` other than `user` (Codex's
+/// own reviewer would approve escapes without SWARM) — is not. This is
+/// what catches a request field the server silently ignored.
 pub(super) fn verify_effective_policy(
     opened: &ThreadOpened,
     approval: AskForApproval,
@@ -105,12 +106,15 @@ pub(super) fn verify_effective_policy(
         AskForApproval::Untrusted => effective_approval == Some("untrusted"),
         AskForApproval::OnRequest => matches!(effective_approval, Some("untrusted" | "on-request")),
     };
-    if sandbox_ok && approval_ok {
+    let reviewer = opened.approvals_reviewer.as_deref();
+    let reviewer_ok = reviewer == Some("user");
+    if sandbox_ok && approval_ok && reviewer_ok {
         return Ok(());
     }
     Err(AppError::PermissionDenied(format!(
-        "codex opened the thread with sandbox {effective_sandbox:?} and approval policy {} \
-         instead of the requested {:?} / {:?} — refusing to run it",
+        "codex opened the thread with sandbox {effective_sandbox:?}, approval policy {} and \
+         approvals reviewer {reviewer:?} instead of the requested {:?} / {:?} / \"user\" — \
+         refusing to run it",
         opened.approval_policy,
         sandbox.effective_type(),
         approval.as_str(),

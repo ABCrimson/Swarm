@@ -281,6 +281,16 @@ impl SandboxMode {
     }
 }
 
+/// `approvalsReviewer` values this adapter sends. `auto_review` and
+/// `guardian_subagent` route approvals to Codex's own reviewer, bypassing
+/// SWARM, so they cannot be built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalsReviewer {
+    /// Approvals reach the client.
+    User,
+}
+
 /// `thread/start` parameters. The sandbox key is `sandbox` — a
 /// `sandboxPolicy` key here would be silently ignored by the server,
 /// leaving the user's configured default sandbox in force.
@@ -294,6 +304,8 @@ pub struct ThreadStartParams<'a> {
     pub model: Option<&'a str>,
     /// When to ask for approval.
     pub approval_policy: AskForApproval,
+    /// Who answers approvals: always the client.
+    pub approvals_reviewer: ApprovalsReviewer,
     /// Sandbox mode.
     pub sandbox: SandboxMode,
 }
@@ -313,6 +325,8 @@ pub struct ThreadResumeParams<'a> {
     pub model: Option<&'a str>,
     /// When to ask for approval.
     pub approval_policy: AskForApproval,
+    /// Who answers approvals: always the client.
+    pub approvals_reviewer: ApprovalsReviewer,
     /// Sandbox mode.
     pub sandbox: SandboxMode,
     /// Skip hydrating the thread's history into the response — the
@@ -331,6 +345,10 @@ pub struct ThreadOpened {
     /// The approval policy the server actually applied: a string token,
     /// or an object for the experimental `granular` policy.
     pub approval_policy: Value,
+    /// Who the server routes approvals to (`user`, `auto_review`,
+    /// `guardian_subagent`); absent on a server that predates the field.
+    #[serde(default)]
+    pub approvals_reviewer: Option<String>,
     /// The sandbox policy the server actually applied.
     pub sandbox: EffectiveSandbox,
 }

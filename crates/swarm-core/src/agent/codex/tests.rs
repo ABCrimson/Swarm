@@ -16,8 +16,8 @@ use uuid::Uuid;
 
 use super::process::resolve_with_pathext;
 use super::protocol::{
-    AskForApproval, Incoming, METHOD_NOT_FOUND, RequestId, SandboxMode, ThreadOpened,
-    ThreadStartParams,
+    ApprovalsReviewer, AskForApproval, Incoming, METHOD_NOT_FOUND, RequestId, SandboxMode,
+    ThreadOpened, ThreadStartParams,
 };
 use super::reader::permission_id;
 use super::state::{ApprovalKind, PendingApproval};
@@ -343,12 +343,18 @@ fn thread_start_serializes_the_sandbox_key_and_omits_a_missing_model() {
         cwd: "/work",
         model: None,
         approval_policy: AskForApproval::Untrusted,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox: SandboxMode::ReadOnly,
     })
     .expect("serialize");
     assert_eq!(
         params,
-        json!({ "cwd": "/work", "approvalPolicy": "untrusted", "sandbox": "read-only" })
+        json!({
+            "cwd": "/work",
+            "approvalPolicy": "untrusted",
+            "approvalsReviewer": "user",
+            "sandbox": "read-only",
+        })
     );
 }
 
@@ -394,9 +400,34 @@ fn opened(sandbox: &str, approval: Value) -> ThreadOpened {
         "thread": { "id": THREAD },
         "model": "gpt-6-astra",
         "approvalPolicy": approval,
+        "approvalsReviewer": "user",
         "sandbox": { "type": sandbox },
     }))
     .expect("a thread/start response")
+}
+
+#[test]
+fn a_thread_whose_approvals_bypass_swarm_is_refused() {
+    for reviewer in [Some("auto_review"), Some("guardian_subagent"), None] {
+        let mut response = json!({
+            "thread": { "id": THREAD },
+            "model": "gpt-6-astra",
+            "approvalPolicy": "on-request",
+            "sandbox": { "type": "workspaceWrite" },
+        });
+        if let Some(reviewer) = reviewer {
+            response["approvalsReviewer"] = json!(reviewer);
+        }
+        let opened: ThreadOpened =
+            serde_json::from_value(response).expect("a thread/start response");
+        let error = verify_effective_policy(
+            &opened,
+            AskForApproval::OnRequest,
+            SandboxMode::WorkspaceWrite,
+        )
+        .expect_err("approvals must reach SWARM");
+        assert_matches!(error, AppError::PermissionDenied(m) if m.contains("approvals reviewer"), "{reviewer:?}");
+    }
 }
 
 #[test]
@@ -646,6 +677,7 @@ async fn handshake_is_initialize_then_initialized_then_thread_start_with_the_tie
         let params = &wire[2]["params"];
         assert_eq!(params["sandbox"], sandbox, "{tier:?}");
         assert_eq!(params["approvalPolicy"], approval, "{tier:?}");
+        assert_eq!(params["approvalsReviewer"], "user", "{tier:?}");
         assert_eq!(params["cwd"], h.scratch.path().display().to_string());
         assert!(
             params.get("sandboxPolicy").is_none(),
@@ -704,6 +736,7 @@ async fn resume_opens_the_thread_with_thread_resume() {
     assert_eq!(params["threadId"], old_thread);
     assert_eq!(params["sandbox"], "read-only");
     assert_eq!(params["approvalPolicy"], "untrusted");
+    assert_eq!(params["approvalsReviewer"], "user");
     assert_eq!(params["excludeTurns"], true);
 }
 

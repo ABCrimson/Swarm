@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use super::protocol::{
-    ClientInfo, InitializeCapabilities, InitializeParams, InitializeResponse,
+    ApprovalsReviewer, ClientInfo, InitializeCapabilities, InitializeParams, InitializeResponse,
     OPTED_OUT_NOTIFICATIONS, ThreadOpened, ThreadResumeParams, ThreadStartParams,
     VERIFIED_CODEX_VERSION, method,
 };
@@ -267,6 +267,7 @@ pub(super) async fn open_thread(
                     cwd: &spec.cwd,
                     model,
                     approval_policy,
+                    approvals_reviewer: ApprovalsReviewer::User,
                     sandbox,
                     exclude_turns: true,
                 },
@@ -280,6 +281,7 @@ pub(super) async fn open_thread(
                     cwd: &spec.cwd,
                     model,
                     approval_policy,
+                    approvals_reviewer: ApprovalsReviewer::User,
                     sandbox,
                 },
             )

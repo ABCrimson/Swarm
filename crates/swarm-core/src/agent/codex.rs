@@ -23,9 +23,10 @@
 //!    notification.
 //! 2. **Thread.** `thread/start` (or `thread/resume` for
 //!    [`AgentSpawnSpec::resume`]) with `cwd`, the trust tier's
-//!    `approvalPolicy` and `sandbox`, and `model` only when one was asked
-//!    for. The response reports the policy the server actually applied;
-//!    anything more permissive than requested refuses the session (see
+//!    `approvalPolicy`, `approvalsReviewer` (always `user`) and `sandbox`,
+//!    and `model` only when one was asked for. The response reports the
+//!    policy the server actually applied; anything more permissive than
+//!    requested refuses the session (see
 //!    `verify_effective_policy`). The thread id is the [`SessionKey`].
 //!    Codex persists a thread only once it ran a turn: resuming a thread
 //!    that never did fails with the server's `no rollout found` error.
