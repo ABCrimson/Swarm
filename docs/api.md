@@ -1142,7 +1142,7 @@ Shuts down `workerId`'s attached agent session (idempotent) and removes it from 
 
 **Emits:** `agent_session_exited`, preceded by a synthesized `agent_turn_settled` (`status: "error"`, `costUsd` and `usage` `null`) if a turn was in flight.
 
-**Wiring:** `agentShutdown` in `src/lib/tauri.ts` wraps it; no UI calls it.
+**Wiring:** no frontend caller; `kill_worker` shuts a session's agent down (see [Built, Not Wired](#built-not-wired)).
 
 ---
 
@@ -1731,7 +1731,7 @@ Implemented and tested in Rust, but with no frontend caller in the shipped app (
 | Piece | Status |
 |-------|--------|
 | [`bus_send`](#bus_send), [`bus_list_channels`](#bus_list_channels) | Fully routed (`bus_message` reaches every client), but no UI surface invokes either. |
-| [`get_session`](#get_session), [`agent_shutdown`](#agent_shutdown) | Registry commands with typed wrappers in `src/lib/tauri.ts` (`getSession`, `agentShutdown`) but no UI caller: the app lists sessions with `list_sessions`, and `kill_worker` shuts a session's agent down. Because the wrappers name them, the contract test treats them as wired. |
+| [`get_session`](#get_session), [`agent_shutdown`](#agent_shutdown) | Registry commands with no frontend caller: the app lists sessions with `list_sessions`, and `kill_worker` shuts a session's agent down. The contract test lists both in `NOT_WIRED`. |
 | Provider ids `opencode`, `gemini`, `webview_anthropic` | Reserved wire names with no Rust adapter: `agent_spawn` and `agent_probe` refuse them. The webview chat path (`webview_anthropic`) lives in TypeScript and cannot implement the session trait. |
 | `WorkerState` `idle`, `worker_input` `source: "automation"`, `system_metrics.aiReqPerSec` | Wire values the backend accepts (or, for `aiReqPerSec`, always sends as `0`) but nothing produces or measures today. |
 

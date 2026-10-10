@@ -378,8 +378,14 @@ mod tests {
     }
 
     /// Registry commands with no frontend caller yet (docs/api.md,
-    /// "Built, Not Wired"): the message bus.
-    const NOT_WIRED: &[&str] = &["bus_send", "bus_list_channels"];
+    /// "Built, Not Wired"): the message bus, the single-session read and
+    /// agent-session shutdown.
+    const NOT_WIRED: &[&str] = &[
+        "bus_send",
+        "bus_list_channels",
+        "get_session",
+        "agent_shutdown",
+    ];
 
     /// Every command the frontend invokes is one the invoke handler
     /// routes; the native commands, whose arguments Tauri itself parses,
