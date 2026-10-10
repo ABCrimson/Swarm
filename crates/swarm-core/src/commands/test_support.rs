@@ -12,6 +12,7 @@ use crate::agent::{
 };
 use crate::bus::channel::MessageBus;
 use crate::bus::router::Router;
+use crate::events::EventSink;
 use crate::git::RepoLocks;
 use crate::metrics::SharedSystem;
 use crate::orchestration::{DomainEvent, EventLog, OrchestrationEngine};
@@ -23,6 +24,19 @@ use crate::worker::registry::WorkerRegistry;
 /// receiver of every envelope the engine emits. No single-instance
 /// lock is taken, so any number can coexist.
 pub(crate) fn test_ctx() -> (
+    Ctx,
+    DropGuard<PathBuf, impl FnOnce(PathBuf)>,
+    Receiver<DomainEvent>,
+) {
+    test_ctx_with_claude(ClaudeCodeAdapter::new)
+}
+
+/// [`test_ctx`] whose Claude Code adapter is built by `claude_adapter`
+/// from the engine's sink, e.g. a [`ClaudeCodeAdapter::with_test_binary`]
+/// stand-in for the CLI.
+pub(crate) fn test_ctx_with_claude(
+    claude_adapter: impl FnOnce(EventSink) -> ClaudeCodeAdapter,
+) -> (
     Ctx,
     DropGuard<PathBuf, impl FnOnce(PathBuf)>,
     Receiver<DomainEvent>,
@@ -43,7 +57,7 @@ pub(crate) fn test_ctx() -> (
         router: Router::new(message_bus.clone(), sink.clone()),
         message_bus,
         shared_system: SharedSystem::new(),
-        claude_adapter: Arc::new(ClaudeCodeAdapter::new(sink.clone())),
+        claude_adapter: Arc::new(claude_adapter(sink.clone())),
         codex_adapter: Arc::new(CodexAdapter::new(sink.clone())),
         agent_session_registry: AgentSessionRegistry::new(),
         scheduler: Arc::new(AgentScheduler::new(
