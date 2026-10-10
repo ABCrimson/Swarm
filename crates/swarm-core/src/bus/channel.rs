@@ -76,8 +76,8 @@ mod tests {
         assert_eq!(bus.list_channels(), ["a", "b", "c"]);
     }
 
-    /// Topics used to be unbounded, each pinning a 256-slot broadcast
-    /// buffer nothing ever read.
+    /// The registry refuses a new topic once it holds `MAX_TOPICS`; a topic
+    /// it already holds still registers.
     #[test]
     fn test_registry_is_bounded_but_known_topics_still_work() {
         let bus = MessageBus::new();
