@@ -86,7 +86,7 @@
     aside.toc ol{ list-style:none; margin:0; padding:0; border-left:1px solid var(--line); }
     aside.toc li a{ display:block; padding:.3rem 0 .3rem .9rem; margin-left:-1px; border-left:2px solid transparent; font-size:.85rem; color:var(--muted); text-decoration:none; line-height:1.4; }
     aside.toc li a:hover{ color:var(--ink); }
-    aside.toc li a.active{ color:var(--gold); border-left-color:var(--gold); }
+    aside.toc li a[aria-current]{ color:var(--gold); border-left-color:var(--gold); }
     aside.toc li.sub a{ padding-left:1.7rem; font-size:.8rem; }
   }
 
@@ -202,8 +202,8 @@
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
         if (!e.isIntersecting) continue;
-        for (const l of links.values()) l.classList.remove('active');
-        links.get(e.target.id)?.classList.add('active');
+        for (const l of links.values()) l.removeAttribute('aria-current');
+        links.get(e.target.id)?.setAttribute('aria-current', 'location');
       }
     }, { rootMargin: '-10% 0px -80% 0px' });
     for (const h of heads) io.observe(h);
