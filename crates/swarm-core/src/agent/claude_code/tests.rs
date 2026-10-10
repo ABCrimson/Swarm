@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::wire::{self, AccountInfo, Delta, Inbound, InitializeResponse, SignIn, StreamEvent};
+use super::wire::{
+    self, AccountInfo, Delta, Inbound, InitializeResponse, SignIn, StreamEvent, strip_ansi,
+};
 use super::*;
 use crate::orchestration::{EventLog, OrchestrationEngine};
 

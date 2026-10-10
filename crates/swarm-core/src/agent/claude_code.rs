@@ -95,11 +95,10 @@ mod tests;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::process::{Child, ExitStatus};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
@@ -439,16 +438,6 @@ fn classify_denial(decision_reason_type: Option<&str>, message: &str) -> Option<
         return Some("redirection_guard".to_owned());
     }
     None
-}
-
-/// Removes ANSI escape sequences, which the CLI may put in a
-/// `can_use_tool` request's text fields.
-fn strip_ansi(text: &str) -> String {
-    static ANSI: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
-            .expect("static ANSI pattern compiles")
-    });
-    ANSI.replace_all(text, "").into_owned()
 }
 
 /// Display name of a third-party `apiProvider` value (the Agent SDK's

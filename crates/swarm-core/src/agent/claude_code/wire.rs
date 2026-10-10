@@ -18,6 +18,9 @@
 //! that does not fit its field (a `u32` block index, say) fails the line
 //! instead of wrapping.
 
+use std::sync::LazyLock;
+
+use regex::Regex;
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 use serde_json::{Value, json};
@@ -381,6 +384,16 @@ pub(super) struct CanUseTool {
     pub agent_id: Option<String>,
 }
 
+/// Removes ANSI escape sequences, which the CLI may put in a
+/// `can_use_tool` request's text fields.
+pub(super) fn strip_ansi(text: &str) -> String {
+    static ANSI: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+            .expect("static ANSI pattern compiles")
+    });
+    ANSI.replace_all(text, "").into_owned()
+}
+
 impl CanUseTool {
     /// The text a host dialog shows: the escalation reason, else the
     /// title, else the description; ANSI styling stripped, blanks
@@ -389,7 +402,7 @@ impl CanUseTool {
         [&self.decision_reason, &self.title, &self.description]
             .into_iter()
             .flatten()
-            .map(|text| super::strip_ansi(text))
+            .map(|text| strip_ansi(text))
             .find(|text| !text.trim().is_empty())
     }
 }
