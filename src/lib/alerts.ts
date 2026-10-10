@@ -1,13 +1,11 @@
 // ── Alert Thresholds ────────────────────────────────
 // User-configurable warning/critical thresholds evaluated against system
-// metrics, persisted through the Tauri plugin-store.
+// metrics, persisted in swarm-settings.json via atomWithSettings.
 
-import { atomWithStorage } from "jotai/utils";
 import * as z from "zod";
-import { settingsStore } from "#lib/lazy-store";
 import type { Severity } from "#lib/severity";
 import { severityFor } from "#lib/severity";
-import { isTauri } from "#lib/tauri";
+import { atomWithSettings } from "#store/persisted";
 
 // ── Threshold configuration ────────────────────────
 
@@ -39,48 +37,24 @@ export const DEFAULT_THRESHOLDS: AlertThresholds = {
  */
 const PersistedThresholdsSchema = AlertThresholdsSchema.partial();
 
-const STORAGE_KEY = "swarm:alerts:thresholds";
-
 /**
- * Persisted thresholds via jotai's `atomWithStorage`, backed by the Tauri
- * plugin-store (a no-op outside Tauri). `getItem` answers synchronously
- * with the defaults so reads never suspend; the stored value hydrates
- * through `subscribe`, validated first — a malformed value keeps the
- * defaults instead of comparing metrics against `undefined` and silently
- * never alerting. Writes rely on the store's own debounced auto-save.
+ * Persisted thresholds, stored under `swarm:alerts:thresholds` by
+ * `atomWithSettings`. The value is read from the preloaded settings file
+ * on first use, so the first render already shows the saved thresholds.
+ * Fields missing from an older stored object take their defaults; a
+ * present but invalid field makes the whole stored value fall back to
+ * {@link DEFAULT_THRESHOLDS}, so metrics are never compared against
+ * `undefined`.
  */
-export const alertThresholdsAtom = atomWithStorage<AlertThresholds>(
-  STORAGE_KEY,
+export const alertThresholdsAtom = atomWithSettings<AlertThresholds>(
+  "swarm:alerts:thresholds",
   DEFAULT_THRESHOLDS,
   {
-    getItem: (_key, initialValue) => initialValue,
-    setItem(key, value) {
-      if (!isTauri()) return;
-      settingsStore.set(key, value).catch((err: unknown) => {
-        console.warn("[alerts] Failed to persist alert thresholds:", err);
-      });
-    },
-    removeItem(key) {
-      if (!isTauri()) return;
-      settingsStore.delete(key).catch((err: unknown) => {
-        console.warn("[alerts] Failed to reset alert thresholds:", err);
-      });
-    },
-    subscribe(key, callback) {
-      if (!isTauri()) return undefined;
-      settingsStore
-        .get<unknown>(key)
-        .then((stored) => {
-          if (stored == null) return;
-          const parsed = PersistedThresholdsSchema.safeParse(stored);
-          if (parsed.success) callback({ ...DEFAULT_THRESHOLDS, ...parsed.data });
-          else console.warn("[alerts] Ignoring invalid stored alert thresholds:", parsed.error);
-        })
-        .catch((err: unknown) => {
-          console.warn("[alerts] Failed to load alert thresholds:", err);
-        });
-      return undefined;
-    },
+    label: "Alert Thresholds",
+    schema: PersistedThresholdsSchema.transform((persisted) => ({
+      ...DEFAULT_THRESHOLDS,
+      ...persisted,
+    })),
   },
 );
 
