@@ -46,15 +46,15 @@ const templateStore = vi.hoisted(() => ({
 }));
 
 vi.mock("@tauri-apps/plugin-store", () => ({
-  load: async () => ({
+  LazyStore: class {
     async get(key: string) {
       if (templateStore.failReads) throw new Error("store unavailable");
       return structuredClone(templateStore.data.get(key));
-    },
+    }
     async set(key: string, value: unknown) {
       templateStore.data.set(key, structuredClone(value));
-    },
-  }),
+    }
+  },
 }));
 
 const STORE_KEY = "swarm:templates";

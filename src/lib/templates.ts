@@ -12,7 +12,8 @@
  * @module templates
  */
 
-import { load } from "@tauri-apps/plugin-store";
+import type { LazyStore } from "@tauri-apps/plugin-store";
+import { templatesStore } from "#lib/lazy-store";
 import { createSession as createSessionIpc } from "#lib/tauri";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
 import { useSessionStore } from "#store/sessions";
@@ -137,15 +138,8 @@ export const BUILT_IN_TEMPLATES: readonly SessionTemplate[] = [
   },
 ];
 
-/** The plugin-store instance backing user templates. */
-function getTemplateStore() {
-  return load("swarm-templates.json", { defaults: {}, autoSave: true });
-}
-
 /** The persisted list exactly as stored (anything but an array reads as empty). */
-async function readStoredEntries(
-  store: Awaited<ReturnType<typeof getTemplateStore>>,
-): Promise<unknown[]> {
+async function readStoredEntries(store: LazyStore): Promise<unknown[]> {
   const stored = await store.get<unknown>(USER_TEMPLATES_KEY);
   return Array.isArray(stored) ? stored : [];
 }
@@ -157,7 +151,7 @@ async function readStoredEntries(
  * they stay in the store untouched.
  */
 export async function loadUserTemplates(): Promise<SessionTemplate[]> {
-  const entries = await readStoredEntries(await getTemplateStore());
+  const entries = await readStoredEntries(templatesStore);
   return entries.flatMap((entry) => {
     const parsed = SessionTemplateSchema.safeParse(entry);
     return parsed.success ? [parsed.data] : [];
@@ -239,7 +233,7 @@ function serializeWrite(write: () => Promise<void>): Promise<void> {
 /** Appends a user template to plugin-store. */
 export function saveUserTemplate(template: SessionTemplate): Promise<void> {
   return serializeWrite(async () => {
-    const store = await getTemplateStore();
+    const store = templatesStore;
     await store.set(USER_TEMPLATES_KEY, [...(await readStoredEntries(store)), template]);
   });
 }
@@ -247,7 +241,7 @@ export function saveUserTemplate(template: SessionTemplate): Promise<void> {
 /** Deletes a user template from plugin-store by id; entries it cannot read an id from are kept. */
 export function deleteUserTemplate(templateId: string): Promise<void> {
   return serializeWrite(async () => {
-    const store = await getTemplateStore();
+    const store = templatesStore;
     const entries = await readStoredEntries(store);
     await store.set(
       USER_TEMPLATES_KEY,
