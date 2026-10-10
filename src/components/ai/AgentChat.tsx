@@ -227,9 +227,27 @@ function PermissionRow({
 }): React.ReactElement {
   const { payload, state } = item;
   const waiting = state === "pending" || state === "answering";
+  const { items } = useAgentTranscript(workerId);
+  // Codex's fileChange request names only its item: the paths and diff being approved are on that item's own tool call (same id, sent first).
+  const isPatch = payload.tool === "fileChange";
+  const request = toRecord(payload.input);
+  const patch = isPatch
+    ? items.find(
+        (row): row is Extract<AgentTranscriptItem, { kind: "tool_call" }> =>
+          row.kind === "tool_call" && row.payload.toolUseId === request.itemId,
+      )
+    : undefined;
   // The exact arguments are what the user approves; the provider's message
   // is only prose beside them (Codex sends none).
-  const review = useApprovalReview(payload.tool, payload.input);
+  const review = useApprovalReview(
+    payload.tool,
+    isPatch
+      ? {
+          ...request,
+          changes: patch ? toRecord(patch.payload.input).changes : "(not received yet)",
+        }
+      : payload.input,
+  );
 
   const answer = async (decision: PermissionDecision, button: HTMLButtonElement) => {
     const { setPermissionState } = useAgentSessionStore.getState();
@@ -273,7 +291,7 @@ function PermissionRow({
             size="sm"
             variant={payload.suggestedDecision === "deny" ? "secondary" : "primary"}
             loading={state === "answering"}
-            disabled={review.blocked}
+            disabled={review.blocked || (isPatch && !patch)}
             aria-describedby={review.blocked ? review.reasonId : undefined}
             onClick={(e) => void answer("allow", e.currentTarget)}
           >

@@ -264,11 +264,17 @@ describe("AgentChat", () => {
     const user = userEvent.setup();
     render(<Harness />);
     startSession("codex", { interactivePermissions: true });
+    fire("agent_tool_call", {
+      turnId: "t1",
+      toolUseId: "patch-f",
+      name: "fileChange",
+      input: { changes: [] },
+    });
     fire("agent_permission_request", {
       turnId: "t1",
       requestId: "req-focus",
       tool: "fileChange",
-      input: {},
+      input: { itemId: "patch-f" },
     });
 
     screen.getByRole("button", { name: "Allow" }).focus();
@@ -331,16 +337,48 @@ describe("AgentChat", () => {
     const user = userEvent.setup();
     render(<Harness />);
     startSession("codex", { interactivePermissions: true });
+    fire("agent_tool_call", {
+      turnId: "t1",
+      toolUseId: "patch-11",
+      name: "fileChange",
+      input: { changes: "x".repeat(600) },
+    });
 
     fire("agent_permission_request", {
       turnId: "t1",
       requestId: "req-11",
       tool: "fileChange",
-      input: { diff: "x".repeat(600) },
+      input: { itemId: "patch-11" },
     });
 
     expect(screen.getByRole("button", { name: "Allow" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Show All" }));
+    expect(screen.getByRole("button", { name: "Allow" })).toBeEnabled();
+  });
+
+  it("holds Allow on a Codex fileChange request until its tool call, with the paths, has arrived", () => {
+    render(<Harness />);
+    startSession("codex", { interactivePermissions: true });
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "req-patch",
+      tool: "fileChange",
+      input: { itemId: "patch-1" },
+    });
+
+    const request = screen.getByRole("group", { name: "Permission Request: fileChange" });
+    expect(request).toHaveTextContent("(not received yet)");
+    expect(screen.getByRole("button", { name: "Allow" })).toBeDisabled();
+
+    fire("agent_tool_call", {
+      turnId: "t1",
+      toolUseId: "patch-1",
+      name: "fileChange",
+      input: { changes: [{ path: "/work/.git/hooks/pre-commit", kind: "add" }] },
+    });
+
+    expect(request).toHaveTextContent("/work/.git/hooks/pre-commit");
+    expect(request).not.toHaveTextContent("(not received yet)");
     expect(screen.getByRole("button", { name: "Allow" })).toBeEnabled();
   });
 
@@ -372,11 +410,17 @@ describe("AgentChat", () => {
     const user = userEvent.setup();
     render(<Harness />);
     startSession("codex", { interactivePermissions: true });
+    fire("agent_tool_call", {
+      turnId: "t1",
+      toolUseId: "patch-r",
+      name: "fileChange",
+      input: { changes: [] },
+    });
     fire("agent_permission_request", {
       turnId: "t1",
       requestId: "r",
       tool: "fileChange",
-      input: {},
+      input: { itemId: "patch-r" },
     });
 
     await user.click(screen.getByRole("button", { name: "Allow" }));
