@@ -81,13 +81,20 @@ export function readPersistedRaw(key: string): unknown {
  * Deletes `key` from memory and from `swarm-settings.json`. An atom that
  * has not been read yet then starts from its initial value; one already
  * read keeps its current value until the next write.
+ *
+ * Rejects when the delete fails, so the caller can report that the key is
+ * still on disk; writes queued after it still run.
  */
-export function removePersistedSetting(key: string): void {
-  if (!isTauri()) return;
+export function removePersistedSetting(key: string): Promise<void> {
+  if (!isTauri()) return Promise.resolve();
   cache.delete(key);
-  enqueue(`delete ${key}`, async () => {
+  const deleted = writeQueue.then(async () => {
     await settingsStore.delete(key);
   });
+  writeQueue = deleted.catch(() => {
+    // The returned promise carries the failure to the caller.
+  });
+  return deleted;
 }
 
 /** Records `raw` as the persisted value of `key` and queues the plugin-store write. */

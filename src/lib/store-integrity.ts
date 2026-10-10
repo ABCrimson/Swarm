@@ -69,7 +69,7 @@ const TARGETS: readonly IntegrityTarget[] = [
           label,
           matches: (k) => k === key,
           schema,
-          reset: async (k) => removePersistedSetting(k),
+          reset: (k) => removePersistedSetting(k),
         }),
       ),
       {

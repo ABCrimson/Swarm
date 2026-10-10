@@ -12,7 +12,9 @@ const stores = vi.hoisted(() => {
     templatesStore: fakeStore(),
   };
 });
-const persisted = vi.hoisted(() => ({ removePersistedSetting: vi.fn() }));
+const persisted = vi.hoisted(() => ({
+  removePersistedSetting: vi.fn(async (_key: string) => {}),
+}));
 
 vi.mock("#lib/tauri", () => ({ isTauri: () => true }));
 vi.mock("#lib/lazy-store", () => stores);
@@ -84,6 +86,16 @@ describe("validateStoreData", () => {
       { description: "Pane Sizes, Alert Thresholds, Session Snapshots, Session Templates" },
     );
     expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("reports a settings key whose delete failed, and does not toast a reset", async () => {
+    stores.settingsStore.entries.mockResolvedValue([["swarm:ui:paneSizes", { main: "wide" }]]);
+    persisted.removePersistedSetting.mockRejectedValueOnce(new Error("locked"));
+
+    const results = await validateStoreData();
+
+    expect(results[0]?.error).toBe("Invalid data could not be deleted: locked");
+    expect(toast.warning).not.toHaveBeenCalled();
   });
 
   it("stays quiet when everything is valid", async () => {
