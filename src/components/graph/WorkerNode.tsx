@@ -8,7 +8,7 @@ import { useProvenanceStore } from "#store/provenance";
 import { useWorkerStore } from "#store/workers";
 
 /** Node data: which worker, and its colour slot. Everything live is read from the stores. */
-export interface WorkerNodeData extends Record<string, unknown> {
+interface WorkerNodeData extends Record<string, unknown> {
   readonly workerId: string;
   readonly index: number;
 }
@@ -85,7 +85,7 @@ export function WorkerNode({ data }: NodeProps<WorkerFlowNode>): React.ReactElem
           style={{
             fontFamily: "var(--font-mono)",
             fontSize: "0.6875rem",
-            color: "oklch(0.55 0.04 220)",
+            color: "var(--color-fg-dim)",
           }}
         >
           PID {pid}

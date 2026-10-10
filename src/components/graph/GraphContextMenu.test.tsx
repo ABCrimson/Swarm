@@ -1,5 +1,5 @@
 // The menu is a native popover (see the shim's header).
-import "./top-layer-shim";
+import "#test/top-layer-shim";
 
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

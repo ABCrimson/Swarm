@@ -1,12 +1,11 @@
 // ── WorkerGraph — measured edges replace fabricated ones ─────────────
 //
-// DIRECTIVE-IMPLEMENTED: the empty-state acceptance test. Three
-// hand-spawned workers with no measured causality must render as three
-// nodes with ZERO edges and the quiet "No Measured Causality Yet" hint
-// — never a fabricated "Spawn Order" chain (see the deleted
-// SpawnOrderEdge.tsx). This file also proves the manual-acceptance
-// parity case: worker A's AI spawning B + running a command yields
-// exactly A->B spawn + A->B command, no chain edges.
+// The empty-state acceptance test: three hand-spawned workers with no
+// measured causality must render as three nodes with ZERO edges and the
+// quiet "No Measured Causality Yet" hint — never a fabricated "Spawn Order"
+// chain. This file also proves the manual-acceptance parity case: worker
+// A's AI spawning B + running a command yields exactly A->B spawn + A->B
+// command, no chain edges.
 //
 // The interaction suite below covers the node context menu (its actions
 // reach the backend), the derived node list (a departed worker's node
@@ -14,7 +13,7 @@
 // import, and render isolation from PTY output.
 
 // The node context menu is a native popover (see the shim's header).
-import "./top-layer-shim";
+import "#test/top-layer-shim";
 
 import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
@@ -26,12 +25,12 @@ import { Profiler } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { reduceNodeUi, toFlowEdges, WorkerGraph } from "#components/graph/WorkerGraph";
-import { MockElkWorker as MockWorker } from "#hooks/elk-worker-fake";
 import type { DomainEvent } from "#lib/event-bus";
 import { useProvenanceStore } from "#store/provenance";
 import type { Worker } from "#store/types";
 import { detailPanelOpenAtom, selectedWorkerIdAtom } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
+import { MockElkWorker as MockWorker } from "#test/elk-worker-fake";
 
 // The worker lifecycle IPC the context menu must reach (via useWorker).
 const ipc = vi.hoisted(() => ({
@@ -107,7 +106,7 @@ describe("WorkerGraph — measured edges", () => {
     vi.clearAllMocks();
   });
 
-  it("DIRECTIVE-IMPLEMENTED: three hand-spawned workers with no measured causality render as three nodes, ZERO edges, and the quiet empty-causality hint — never a fabricated chain", async () => {
+  it("three hand-spawned workers with no measured causality render as three nodes, ZERO edges, and the quiet empty-causality hint — never a fabricated chain", async () => {
     act(() => {
       useWorkerStore.getState().addWorker(createWorker({ name: "Alpha" }));
       useWorkerStore.getState().addWorker(createWorker({ name: "Beta" }));
@@ -131,7 +130,7 @@ describe("WorkerGraph — measured edges", () => {
     }
   });
 
-  it("MANUAL-ACCEPTANCE PARITY (1): worker A's AI spawning B + running a command yields exactly A->B spawn + A->B command, no chain edges", async () => {
+  it("manual-acceptance parity: worker A's AI spawning B + running a command yields exactly A->B spawn + A->B command, no chain edges", async () => {
     const workerA = createWorker({ id: "w-a", name: "Worker A" });
     const workerB = createWorker({ id: "w-b", name: "Worker B" });
     act(() => {
@@ -204,7 +203,7 @@ describe("WorkerGraph — measured edges", () => {
     expect(useProvenanceStore.getState().edges.size).toBe(1);
   });
 
-  it("DIRECTIVE-IMPLEMENTED: a file_written ingest with NO topology change updates the rendered 'Wrote N Files' badge live, without waiting on a relayout", async () => {
+  it("a file_written ingest with NO topology change updates the rendered 'Wrote N Files' badge live, without waiting on a relayout", async () => {
     const workerA = createWorker({ id: "w-a", name: "Worker A" });
     act(() => {
       useWorkerStore.getState().addWorker(workerA);
@@ -351,6 +350,8 @@ describe("WorkerGraph — interactions", () => {
     fireEvent.click(nodeFor("w-a"));
     expect(nodeFor("w-a")).toHaveClass("selected");
     await user.keyboard("{Backspace}{Delete}");
+    // Nodes are derived from the worker store, so a delete reaches only nodeUi: a remove change would drop the selection.
+    expect(nodeFor("w-a")).toHaveClass("selected");
 
     expect(screen.getByText("Alpha")).toBeInTheDocument();
     expect(useWorkerStore.getState().workers.has("w-a")).toBe(true);

@@ -7,7 +7,7 @@ import { toast } from "#components/ui/Toast";
 import { isTauri } from "#lib/tauri";
 import type { WorkflowDefinition } from "#lib/workflow";
 import { parseWorkflow } from "#lib/workflow";
-import { causalityInspectorAtom } from "#store/ui";
+import { causalityInspectorAtom, reducedMotionAtom } from "#store/ui";
 
 interface GraphControlsProps {
   readonly onResetLayout: () => void;
@@ -50,9 +50,10 @@ function isTypingTarget(target: EventTarget | null): boolean {
  * layout, delete the selected annotation edge, and export/import of the
  * layout and annotations as a workflow file.
  *
- * Keyboard shortcuts: `+`/`=` zoom in, `-` zoom out, `0` fit view — ignored
- * while typing and while the causality inspector is open. Export/Import
- * use the Tauri dialog and fs plugins, so they only appear in the desktop
+ * Keyboard shortcuts: `+`/`=` zoom in, `-` zoom out, `0` fit view, active
+ * only while focus is inside the graph, never with Ctrl/Cmd/Alt (browser
+ * zoom), and ignored while typing or while the causality inspector is open.
+ * Export/Import use the Tauri dialog and fs plugins, so they only appear in the desktop
  * app (not under the remote `swarmd` web transport).
  */
 export function GraphControls({
@@ -63,11 +64,13 @@ export function GraphControls({
 }: GraphControlsProps): React.ReactElement {
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const causalityOpen = useAtomValue(causalityInspectorAtom) !== null;
+  const reducedMotion = useAtomValue(reducedMotionAtom);
   const filesAvailable = isTauri();
 
-  const handleZoomIn = (): void => void zoomIn({ duration: 200 });
-  const handleZoomOut = (): void => void zoomOut({ duration: 200 });
-  const handleFitView = (): void => void fitView({ duration: 300, padding: 0.2 });
+  const handleZoomIn = (): void => void zoomIn({ duration: reducedMotion ? 0 : 200 });
+  const handleZoomOut = (): void => void zoomOut({ duration: reducedMotion ? 0 : 200 });
+  const handleFitView = (): void =>
+    void fitView({ duration: reducedMotion ? 0 : 300, padding: 0.2 });
 
   const handleExport = async (): Promise<void> => {
     try {
@@ -101,10 +104,12 @@ export function GraphControls({
 
   // Registered once; the Effect Event always sees the latest inspector
   // state and viewport actions. The listener is document-level, so it is
-  // gated on the causality inspector (whose own keys must not zoom the
-  // canvas behind it).
+  // gated on focus inside `.react-flow` and on the causality inspector
+  // (whose own keys must not zoom the canvas behind it).
   const onShortcut = useEffectEvent((e: KeyboardEvent): void => {
     if (causalityOpen || isTypingTarget(e.target)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!(e.target instanceof Element) || !e.target.closest(".react-flow")) return;
     if (e.key === "+" || e.key === "=") {
       e.preventDefault();
       handleZoomIn();

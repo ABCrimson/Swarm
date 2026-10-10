@@ -6,6 +6,7 @@ import * as z from "zod";
 import { useShallow } from "zustand/react/shallow";
 import { Spinner } from "#components/ui/Spinner";
 import { type DomainEvent, DomainEventSchema } from "#lib/event-bus";
+import { errorMessage } from "#lib/is-error";
 import { invoke } from "#lib/tauri";
 import { useProvenanceStore } from "#store/provenance";
 import { detailPanelOpenAtom, selectedWorkerIdAtom } from "#store/ui";
@@ -37,7 +38,8 @@ const EventsSincePageSchema = z.array(DomainEventSchema);
  * to a single-row `events_since` backfill on a miss (`limit: 1` — see
  * `docs/api.md#events_since`). Returns `null` when nothing is found at
  * that exact seq (a malformed response, or a seq that was never
- * persisted).
+ * persisted). Rejects with the backfill's own error when `events_since`
+ * itself fails; that is not a miss.
  */
 async function resolveEvent(
   seq: number,
@@ -46,16 +48,12 @@ async function resolveEvent(
   const cached = ring.get(seq);
   if (cached) return cached;
 
-  try {
-    const raw = await invoke<unknown>("events_since", { afterSeq: seq - 1, limit: 1 });
-    const parsed = EventsSincePageSchema.safeParse(raw);
-    if (!parsed.success) return null;
-    const row = parsed.data[0];
-    if (!row || row.seq !== seq) return null;
-    return row;
-  } catch {
-    return null;
-  }
+  const raw = await invoke<unknown>("events_since", { afterSeq: seq - 1, limit: 1 });
+  const parsed = EventsSincePageSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const row = parsed.data[0];
+  if (!row || row.seq !== seq) return null;
+  return row;
 }
 
 export interface CausalityWalkResult {
@@ -75,6 +73,8 @@ export interface CausalityWalkResult {
    * cap is reached).
    */
   readonly incomplete: boolean;
+  /** Message of a backfill that rejected (not a miss); null otherwise. */
+  readonly failure: string | null;
 }
 
 /**
@@ -85,6 +85,8 @@ export interface CausalityWalkResult {
  * ends the walk early and sets {@link CausalityWalkResult.incomplete} —
  * the rows already collected are still true, just explicitly marked as
  * possibly short of the root rather than silently passed off as complete.
+ * A backfill that rejects (daemon down, transport error) also ends the walk,
+ * but is reported in {@link CausalityWalkResult.failure}, not as a miss.
  *
  * `signal` stops the walk between hops (no further `events_since` calls)
  * once aborted; the pending promise then rejects with the abort reason.
@@ -97,10 +99,18 @@ export async function walkCausalityChain(
   const chain: DomainEvent[] = []; // collected most-recent-first
   let currentSeq: number | undefined = startSeq;
   let incomplete = false;
+  let failure: string | null = null;
 
   while (currentSeq !== undefined && chain.length < MAX_CAUSALITY_HOPS) {
     signal?.throwIfAborted();
-    const event = await resolveEvent(currentSeq, ring);
+    let event: DomainEvent | null;
+    try {
+      event = await resolveEvent(currentSeq, ring);
+    } catch (err) {
+      signal?.throwIfAborted();
+      failure = errorMessage(err);
+      break;
+    }
     if (!event) {
       incomplete = true; // genuine lookup miss -- stop with whatever's already collected
       break;
@@ -110,7 +120,7 @@ export async function walkCausalityChain(
   }
 
   const truncated = !incomplete && currentSeq !== undefined && chain.length >= MAX_CAUSALITY_HOPS;
-  return { rows: chain.toReversed(), truncated, incomplete };
+  return { rows: chain.toReversed(), truncated, incomplete, failure };
 }
 
 /** Display name per live worker id. */
@@ -134,7 +144,7 @@ interface RowDescription {
   readonly workerId?: string;
 }
 
-/** Renders one causality row's chrome per event type — Title Case, matching the plan's "Worker A's Turn @412 -> Spawned B @418" example shape. */
+/** Describes one causality row per event type: Title Case text (e.g. "Worker A's Turn", "Spawned Worker B") plus the live worker a click opens; the row's `@seq` is rendered separately by `SeqLabel`. */
 function describeRow(event: DomainEvent, names: LiveNames): RowDescription {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
   const workerIdOf = (key: string): string | undefined =>
@@ -199,7 +209,7 @@ function SeqLabel({ seq }: { readonly seq: number }): React.ReactElement {
       style={{
         fontFamily: "var(--font-mono)",
         fontSize: "0.6875rem",
-        color: "oklch(0.55 0.04 220)",
+        color: "var(--color-fg-dim)",
         fontVariantNumeric: "tabular-nums",
         flexShrink: 0,
       }}
@@ -208,6 +218,19 @@ function SeqLabel({ seq }: { readonly seq: number }): React.ReactElement {
     </span>
   );
 }
+
+/** Terminal placeholder chrome shared by the "not available" and "could not load" notes. */
+const placeholderStyle: React.CSSProperties = {
+  margin: 0,
+  fontFamily: "var(--font-body)",
+  fontSize: "0.75rem",
+  fontStyle: "italic",
+  color: "var(--color-fg-dim)",
+  textAlign: "center",
+  padding: "10px 12px",
+  border: "1px dashed oklch(0.30 0.05 220)",
+  borderRadius: 8,
+};
 
 interface CausalityPanelProps {
   /** Seq of the measured event to walk backward from — an edge's `lastSeq`, or a worker's most recent inbound event. */
@@ -344,8 +367,16 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
           flexDirection: "column",
         }}
       >
+        <p role="status" className="sr-only">
+          {result === null
+            ? "Loading Causality Trace"
+            : `${result.rows.length} ${result.rows.length === 1 ? "Event" : "Events"} In Trace${result.incomplete ? ", Earlier Causes Unavailable" : ""}${result.truncated ? `, Truncated At ${MAX_CAUSALITY_HOPS} Hops` : ""}`}
+        </p>
         {result === null && (
-          <div role="status" style={{ display: "flex", justifyContent: "center", padding: 24 }}>
+          <div
+            aria-hidden="true"
+            style={{ display: "flex", justifyContent: "center", padding: 24 }}
+          >
             <Spinner size="md" />
           </div>
         )}
@@ -358,20 +389,13 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
             trail went cold here". Covers both "nothing at all" (zero
             rows) and "some rows, then a miss". */}
         {result?.incomplete && (
-          <p
-            style={{
-              margin: 0,
-              fontFamily: "var(--font-body)",
-              fontSize: "0.75rem",
-              fontStyle: "italic",
-              color: "oklch(0.55 0.04 220)",
-              textAlign: "center",
-              padding: "10px 12px",
-              border: "1px dashed oklch(0.30 0.05 220)",
-              borderRadius: 8,
-            }}
-          >
-            Cause Event Not Available (Ephemeral Or Pruned)
+          <p style={placeholderStyle}>Cause Event Not Available (Ephemeral Or Pruned)</p>
+        )}
+
+        {/* A rejected backfill is a failure to look, not a pruned cause. */}
+        {result?.failure != null && (
+          <p role="alert" style={placeholderStyle}>
+            Could Not Load The Causality Trace: {result.failure}
           </p>
         )}
 
@@ -383,7 +407,7 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
                 workerId != null && Object.hasOwn(names, workerId) ? workerId : null;
               return (
                 <li key={row.seq}>
-                  {(index > 0 || result.incomplete) && (
+                  {(index > 0 || result.incomplete || result.failure != null) && (
                     <span aria-hidden="true" className="causality-panel__arrow">
                       ↓
                     </span>
@@ -416,7 +440,7 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
               margin: "12px 0 0",
               fontFamily: "var(--font-mono)",
               fontSize: "0.6875rem",
-              color: "oklch(0.55 0.04 220)",
+              color: "var(--color-fg-dim)",
               textAlign: "center",
             }}
           >

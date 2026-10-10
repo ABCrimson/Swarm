@@ -8,7 +8,7 @@ import { DEFAULT_REPO_ROOT_KEY, getPersistedRepoRoot } from "#lib/project-root";
 import { agentProbe, agentSpawn, spawnWorker, validateRepoRoot, writeConfig } from "#lib/tauri";
 
 /** Where a new worker's chat runs: the webview's own Claude client, or an attached agent CLI. */
-export type SpawnProvider = "webview_anthropic" | "claude_code" | "codex";
+type SpawnProvider = "webview_anthropic" | "claude_code" | "codex";
 
 /** Providers that attach an agent session (and take a model alias and trust tier). */
 type AgentProvider = Extract<SpawnProvider, "claude_code" | "codex">;
@@ -327,6 +327,9 @@ export function SpawnWorkerDialog({
   });
   // undefined = loading, null = none, string = the validated repository root.
   const [projectRoot, setProjectRoot] = useState<string | null | undefined>(undefined);
+  // Project-root problems shown in the dialog itself: a modal's top layer
+  // paints over, and makes inert, the page-level toaster.
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -353,14 +356,16 @@ export function SpawnWorkerDialog({
       try {
         persisted = await getPersistedRepoRoot();
       } catch (err) {
-        toast.warning(`Could Not Read The Saved Project Root: ${errorText(err)}`);
+        if (!cancelled) setNotice(`Could Not Read The Saved Project Root: ${errorText(err)}`);
         return null;
       }
       if (!persisted) return null;
       try {
         return await validateRepoRoot(persisted);
-      } catch {
-        toast.warning(`Saved Project Root Is No Longer A Git Repository: ${persisted}`);
+      } catch (err) {
+        if (!cancelled) {
+          setNotice(`Could Not Validate The Saved Project Root ${persisted}: ${errorText(err)}`);
+        }
         return null;
       }
     };
@@ -405,15 +410,16 @@ export function SpawnWorkerDialog({
     let toplevel: string;
     try {
       toplevel = await validateRepoRoot(selected);
-    } catch {
-      toast.error(`Not A Git Repository: ${selected}`);
+    } catch (err) {
+      setNotice(`Could Not Use ${selected} As The Project Root: ${errorText(err)}`);
       return;
     }
     setProjectRoot(toplevel);
+    setNotice(null);
     try {
       await writeConfig(DEFAULT_REPO_ROOT_KEY, toplevel);
     } catch (err) {
-      toast.error(`Could Not Save Project Root: ${errorText(err)}`);
+      setNotice(`Could Not Save Project Root: ${errorText(err)}`);
     }
   };
 
@@ -553,6 +559,12 @@ export function SpawnWorkerDialog({
               </Button>
             </div>
           </div>
+
+          {notice && (
+            <div role="alert" style={errorBannerStyle}>
+              {notice}
+            </div>
+          )}
 
           {spawnError && (
             <div role="alert" style={errorBannerStyle}>

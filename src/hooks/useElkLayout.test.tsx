@@ -2,8 +2,8 @@ import { act, renderHook } from "@testing-library/react";
 import type { Edge, Node } from "@xyflow/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MockElkWorker as MockWorker } from "#hooks/elk-worker-fake";
 import { useElkLayout } from "#hooks/useElkLayout";
+import { MockElkWorker as MockWorker } from "#test/elk-worker-fake";
 
 const nodes: Node[] = [
   { id: "a", position: { x: 0, y: 0 }, data: {} },

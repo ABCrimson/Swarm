@@ -1,5 +1,5 @@
 // The native <dialog> needs jsdom stand-ins (see the shim's header).
-import "./top-layer-shim";
+import "#test/top-layer-shim";
 
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -366,21 +366,57 @@ describe("CausalityPanel (component)", () => {
     expect(screen.getByText(/Killed Worker Beta/)).toBeInTheDocument();
   });
 
-  it("aborts a walk still in flight when it closes", async () => {
-    let resolveLookup: (rows: DomainEvent[]) => void = () => {};
-    seedRing(ev({ seq: 30, type: "worker_input", causeSeq: 20, payload: { workerId: "w" } }));
-    invoke.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveLookup = resolve;
-        }),
+  it("reports a rejected events_since as a load failure, not a pruned cause", async () => {
+    act(() => {
+      useWorkerStore.getState().addWorker(createWorker({ id: "w-b", name: "Worker Beta" }));
+    });
+    seedRing(
+      ev({
+        seq: 50,
+        type: "worker_killed",
+        originWorker: "w-a",
+        causeSeq: 10,
+        payload: { workerId: "w-b" },
+      }),
     );
+    invoke.mockRejectedValueOnce("database is locked");
+
+    renderPanel(50);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could Not Load The Causality Trace: database is locked",
+    );
+    expect(screen.queryByText(/Ephemeral Or Pruned/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Killed Worker Beta/)).toBeInTheDocument();
+  });
+
+  it("announces the walk through one persistent status region", async () => {
+    const lookup = Promise.withResolvers<DomainEvent[]>();
+    invoke.mockImplementationOnce(() => lookup.promise);
+    seedRing(ev({ seq: 30, type: "worker_input", causeSeq: 25, payload: { workerId: "w" } }));
+
+    renderPanel(30);
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Loading Causality Trace");
+
+    await act(async () => {
+      lookup.resolve([]);
+    });
+    await waitFor(() =>
+      expect(status).toHaveTextContent("1 Event In Trace, Earlier Causes Unavailable"),
+    );
+  });
+
+  it("aborts a walk still in flight when it closes", async () => {
+    const lookup = Promise.withResolvers<DomainEvent[]>();
+    seedRing(ev({ seq: 30, type: "worker_input", causeSeq: 20, payload: { workerId: "w" } }));
+    invoke.mockImplementationOnce(() => lookup.promise);
 
     const { unmount } = renderPanel(30);
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
     unmount();
     await act(async () => {
-      resolveLookup([
+      lookup.resolve([
         ev({ seq: 20, type: "worker_input", causeSeq: 10, payload: { workerId: "w" } }),
       ]);
     });

@@ -46,7 +46,7 @@ function DetailRow({
         style={{
           fontFamily: "var(--font-mono)",
           fontSize: "0.6875rem",
-          color: "oklch(0.55 0.04 220)",
+          color: "var(--color-fg-dim)",
           textTransform: "uppercase",
           letterSpacing: "0.08em",
         }}
@@ -86,6 +86,19 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
   );
   const setCausalityTarget = useSetAtom(causalityInspectorAtom);
   const now = useNow(UPTIME_TICK_MS);
+
+  const closePanel = (): void => {
+    // Hand focus back to this worker's graph node or list row before the
+    // panel unmounts, so keyboard focus does not fall to <body>. Only the
+    // rendered one (the other view is hidden) can take it.
+    const target = [
+      ...document.querySelectorAll<HTMLElement>(
+        `.react-flow__node[data-id="${CSS.escape(worker.id)}"], li > button[aria-current="true"]`,
+      ),
+    ].find((el) => el.getClientRects().length > 0);
+    target?.focus();
+    setDetailOpen(false);
+  };
 
   const currentState = optimisticState ?? worker.state;
   const canPause = currentState === "running";
@@ -149,7 +162,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
         </h2>
         <button
           type="button"
-          onClick={() => setDetailOpen(false)}
+          onClick={closePanel}
           aria-label="Close Detail Panel"
           className="graph-icon-button"
         >
@@ -244,7 +257,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
               style={{
                 fontFamily: "var(--font-mono)",
                 fontSize: "0.6875rem",
-                color: "oklch(0.55 0.04 220)",
+                color: "var(--color-fg-dim)",
                 textTransform: "uppercase",
                 letterSpacing: "0.08em",
                 display: "block",

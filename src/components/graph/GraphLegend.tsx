@@ -94,7 +94,7 @@ export function GraphLegend({ presentKinds }: GraphLegendProps): React.ReactElem
               fontWeight: 600,
               letterSpacing: "0.06em",
               textTransform: "uppercase",
-              color: "oklch(0.45 0.04 220)",
+              color: "var(--color-fg-dim)",
             }}
           >
             {ANNOTATION_GROUP_LABEL}

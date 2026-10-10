@@ -21,7 +21,7 @@ import {
   ReactFlowProvider,
   useReactFlow,
 } from "@xyflow/react";
-import { useAtom, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -42,7 +42,12 @@ import { exportWorkflow } from "#lib/workflow";
 import type { ProvenanceEdgeRecord } from "#store/provenance";
 import { selectVisibleEdges, useProvenanceStore } from "#store/provenance";
 import type { Worker } from "#store/types";
-import { causalityInspectorAtom, detailPanelOpenAtom, selectedWorkerIdAtom } from "#store/ui";
+import {
+  causalityInspectorAtom,
+  detailPanelOpenAtom,
+  reducedMotionAtom,
+  selectedWorkerIdAtom,
+} from "#store/ui";
 import { useWorkerStore } from "#store/workers";
 
 const nodeTypes = { worker: WorkerNode } satisfies NodeTypes;
@@ -177,6 +182,9 @@ function WorkerGraphInner(): React.ReactElement {
   const provenanceEdges = useProvenanceStore((s) => s.edges);
   const setSelectedId = useSetAtom(selectedWorkerIdAtom);
   const setDetailOpen = useSetAtom(detailPanelOpenAtom);
+  // d3-zoom viewport transitions are JS-driven, so CSS prefers-reduced-motion
+  // cannot stop them; the animated duration is zeroed here instead.
+  const reducedMotion = useAtomValue(reducedMotionAtom);
   // Read, not just set: while the causality inspector is open, graph
   // shortcuts (xyflow's delete keys) must not act on the canvas behind it.
   const [causalityTarget, setCausalityTarget] = useAtom(causalityInspectorAtom);
@@ -241,10 +249,10 @@ function WorkerGraphInner(): React.ReactElement {
     if (isLayouting || positions.size === 0 || initialFitDone.current) return undefined;
     const raf = requestAnimationFrame(() => {
       initialFitDone.current = true;
-      void fitView({ duration: 300, padding: 0.2 });
+      void fitView({ duration: reducedMotion ? 0 : 300, padding: 0.2 });
     });
     return () => cancelAnimationFrame(raf);
-  }, [isLayouting, positions, fitView]);
+  }, [isLayouting, positions, fitView, reducedMotion]);
 
   const onNodesChange = (changes: NodeChange<WorkerFlowNode>[]): void => {
     setNodeUi((previous) => reduceNodeUi(previous, changes));
@@ -407,7 +415,7 @@ function WorkerGraphInner(): React.ReactElement {
           style={{
             fontFamily: "var(--font-body)",
             fontSize: "0.875rem",
-            color: "oklch(0.55 0.04 220)",
+            color: "var(--color-fg-dim)",
           }}
         >
           No Workers Running. Spawn A Worker To See The Topology Graph.
@@ -474,7 +482,7 @@ function WorkerGraphInner(): React.ReactElement {
                   style={{
                     fontFamily: "var(--font-body)",
                     fontSize: "0.75rem",
-                    color: "oklch(0.55 0.04 220)",
+                    color: "var(--color-fg-dim)",
                   }}
                 >
                   Computing Layout
@@ -522,7 +530,7 @@ function WorkerGraphInner(): React.ReactElement {
               border: "1px solid oklch(0.22 0.04 220)",
               fontFamily: "var(--font-body)",
               fontSize: "0.6875rem",
-              color: "oklch(0.50 0.04 220)",
+              color: "var(--color-fg-dim)",
             }}
           >
             No Measured Causality Yet

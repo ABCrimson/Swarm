@@ -4,6 +4,7 @@
 // submit calls the right IPC wrapper with the right shape per provider.
 
 import "#test/dom-polyfills";
+import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,7 +30,7 @@ vi.mock("#lib/tauri", async (importOriginal) => {
 });
 
 import { SpawnWorkerDialog } from "#components/worker/SpawnWorkerDialog";
-import { agentProbe, agentSpawn, spawnWorker } from "#lib/tauri";
+import { agentProbe, agentSpawn, spawnWorker, validateRepoRoot } from "#lib/tauri";
 
 const AVAILABLE: ProbeReport = { available: true, version: "1.0.0", detail: null };
 
@@ -87,6 +88,39 @@ describe("SpawnWorkerDialog", () => {
       await screen.findByText("No Project Root — Spawns Without Worktree Isolation"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Spawn Worker" })).toBeEnabled();
+    // In-dialog, not a toast: a modal dialog hides the page-level toaster.
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Could Not Read The Saved Project Root: config unreadable",
+    );
+  });
+
+  it("names the real cause when validating the saved project root fails", async () => {
+    getPersistedRepoRootMock.mockResolvedValue("/repo/root");
+    vi.mocked(validateRepoRoot).mockRejectedValue(new Error("git not found"));
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could Not Validate The Saved Project Root /repo/root: git not found",
+    );
+  });
+
+  it("shows a failed folder pick inside the dialog and clears it once a root is accepted", async () => {
+    const user = userEvent.setup();
+    vi.mocked(openFolderPicker).mockResolvedValue("/not/a/repo");
+    vi.mocked(validateRepoRoot).mockRejectedValueOnce("not inside a repository");
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await waitForProbeSettled();
+
+    await user.click(screen.getByRole("button", { name: "Choose…" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could Not Use /not/a/repo As The Project Root: not inside a repository",
+    );
+
+    vi.mocked(openFolderPicker).mockResolvedValue("/repo/root");
+    vi.mocked(validateRepoRoot).mockResolvedValueOnce("/repo/root");
+    await user.click(screen.getByRole("button", { name: "Choose…" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByText("/repo/root")).toBeInTheDocument();
   });
 
   it("hides the Claude Code fields until that provider is selected, then hides them again on switch-back", async () => {
@@ -126,13 +160,8 @@ describe("SpawnWorkerDialog", () => {
   });
 
   it("keeps the Claude Code option enabled while the probe is still in flight", async () => {
-    let resolveProbe: (report: ProbeReport) => void = () => {};
-    vi.mocked(agentProbe).mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveProbe = resolve;
-        }),
-    );
+    const probe = Promise.withResolvers<ProbeReport>();
+    vi.mocked(agentProbe).mockImplementation(() => probe.promise);
 
     render(<SpawnWorkerDialog onClose={vi.fn()} />);
 
@@ -142,7 +171,7 @@ describe("SpawnWorkerDialog", () => {
     await waitFor(() => expect(screen.queryByText("Loading…")).not.toBeInTheDocument());
     expect(screen.getByRole("radio", { name: "Claude Code" })).not.toBeDisabled();
 
-    resolveProbe(AVAILABLE);
+    probe.resolve(AVAILABLE);
   });
 
   it("submits via spawnWorker (not agentSpawn) for the default Webview Anthropic provider", async () => {
@@ -255,7 +284,6 @@ describe("SpawnWorkerDialog", () => {
 
   it("includes repoRoot in the spawn options once a project root has loaded", async () => {
     getPersistedRepoRootMock.mockResolvedValue("/repo/root");
-    const { validateRepoRoot } = await import("#lib/tauri");
     vi.mocked(validateRepoRoot).mockResolvedValue("/repo/root");
 
     const user = userEvent.setup();
