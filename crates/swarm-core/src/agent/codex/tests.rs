@@ -557,6 +557,14 @@ fn capabilities_promise_resume_graceful_cancel_and_interactive_approvals() {
     );
 }
 
+#[test]
+fn every_codex_child_turns_off_the_current_directory_exe_lookup() {
+    assert_eq!(
+        child_env().get(NO_CWD_EXE_LOOKUP_ENV).map(String::as_str),
+        Some("1")
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn signal_names_are_reported_on_unix() {

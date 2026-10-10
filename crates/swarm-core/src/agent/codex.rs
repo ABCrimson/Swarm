@@ -135,6 +135,17 @@ const CLAUDE_MODEL_ALIASES: [&str; 5] = ["sonnet", "opus", "haiku", "fable", "my
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// On Windows an npm install starts Codex through `codex.cmd`. `cmd.exe` looks
+/// up the shim's bare `node` in the worker's cwd before `PATH`, so a repo
+/// `node.cmd` would run unsandboxed. This variable turns that lookup off.
+/// Other platforms ignore it.
+const NO_CWD_EXE_LOOKUP_ENV: &str = "NoDefaultCurrentDirectoryInExePath";
+
+/// Environment additions for every Codex child.
+fn child_env() -> HashMap<String, String> {
+    HashMap::from([(NO_CWD_EXE_LOOKUP_ENV.to_owned(), "1".to_owned())])
+}
+
 /// Every bound this adapter puts on waiting for the child — no wait is
 /// unbounded.
 #[derive(Debug, Clone, Copy)]
@@ -295,7 +306,9 @@ fn codex_capabilities() -> Capabilities {
 /// `PATH` directory holding `program` + a `PATHEXT` extension. Rust's
 /// `Command` only appends `.exe`, but an npm install of Codex puts
 /// `codex.cmd` on `PATH`. Names with an extension or a directory are left
-/// alone (`None`), and the current directory is never searched.
+/// alone (`None`), and the current directory is never searched. Nor is it
+/// searched by the shim's own `node` lookup: [`child_env`] sets
+/// `NoDefaultCurrentDirectoryInExePath`.
 #[cfg(any(windows, test))]
 fn resolve_with_pathext(
     program: &str,
@@ -1459,6 +1472,7 @@ async fn run_cli(
     command
         .args(prefix)
         .args(args)
+        .env(NO_CWD_EXE_LOOKUP_ENV, "1")
         .stdin(Stdio::null())
         .kill_on_drop(true);
     #[cfg(windows)]
@@ -1591,7 +1605,7 @@ impl AgentAdapter for CodexAdapter {
                 framer_errors,
                 stderr_tail,
             } = tokio::task::spawn_blocking(move || {
-                spawn_piped(&program, &argv, &cwd, &HashMap::new())
+                spawn_piped(&program, &argv, &cwd, &child_env())
             })
             .await
             .map_err(|e| AppError::Ai(format!("the codex spawn task failed: {e}")))?
