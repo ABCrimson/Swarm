@@ -160,10 +160,14 @@ describe("ShipPreview — AI prose section", () => {
     expect(screen.getByText("Generate")).toBeInTheDocument();
   });
 
-  it("shows a Regenerate label once prose exists", () => {
-    renderPreview({ aiProse: "This change adds a helper.", aiProseState: "ready" });
+  it("shows a Regenerate label once prose exists and regenerates on click", async () => {
+    const user = userEvent.setup();
+    const props = renderPreview({ aiProse: "This change adds a helper.", aiProseState: "ready" });
     expect(screen.getByText("Regenerate")).toBeInTheDocument();
     expect(screen.getByDisplayValue("This change adds a helper.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Regenerate" }));
+    expect(props.onRegenerateProse).toHaveBeenCalledOnce();
   });
 
   it("disables the generate button and shows a generating label while in flight", () => {
