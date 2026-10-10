@@ -8,6 +8,7 @@ import "modern-cmdk/styles.css";
 import "#styles/global.css";
 import { type ReactNode, StrictMode, Suspense, use } from "react";
 import { createRoot } from "react-dom/client";
+import { errorMessage } from "#lib/is-error";
 import { isTauri } from "#lib/tauri";
 import { type LogLevel, useLogStore } from "#store/logs";
 import { preloadSettings } from "#store/persisted";
@@ -61,7 +62,7 @@ function reportRenderError(what: string, level: LogLevel) {
       timestamp: Date.now(),
       level,
       source: "react",
-      message: `${what}: ${Error.isError(error) ? error.message : String(error)}`,
+      message: `${what}: ${errorMessage(error)}`,
       metadata: info.componentStack ? { componentStack: info.componentStack } : undefined,
     });
   };
