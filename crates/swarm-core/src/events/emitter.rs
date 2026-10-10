@@ -409,8 +409,8 @@ pub struct WorktreeRemovedPayload {
 
 /// Payload for the `ship_progress` event.
 ///
-/// Emitted for each step of a ship operation (`preflight`, `staging`,
-/// `commit`, `push` — `step` is a free-form string, not a closed enum,
+/// Emitted for each step of a ship operation (`staging`, `commit`,
+/// `push`, `compare` — `step` is a free-form string, not a closed enum,
 /// so a future step can be added without a wire-format change).
 /// `shipId` correlates every progress row and the terminal
 /// [`ShipSettledPayload`] for one ship attempt; `waitFor` on the
@@ -422,7 +422,7 @@ pub struct ShipProgressPayload {
     pub ship_id: Uuid,
     /// UUID of the worker being shipped.
     pub worker_id: Uuid,
-    /// Free-form step name: `"preflight"`, `"staging"`, `"commit"`, `"push"`.
+    /// Free-form step name: `"staging"`, `"commit"`, `"push"`, `"compare"`.
     pub step: String,
     /// `"running"`, `"ok"`, or `"error"`.
     pub status: String,
@@ -447,9 +447,9 @@ pub struct ShipSettledPayload {
     pub commit_sha: Option<String>,
     /// `"origin/<branch>"`, if the push step completed.
     pub pushed_ref: Option<String>,
-    /// PR or compare-page URL, when the ship flow opened one. No ship
-    /// command sets it today (`ship_compare_url` returns its URL to the
-    /// caller directly), so it is currently always `null`.
+    /// PR or compare-page URL. Set only when the attempt settles at its
+    /// final `compare` step (`ship_compare_url`); `null` when it settles
+    /// at the commit or push step, or fails.
     pub pr_url: Option<String>,
     /// `"ok"` or `"error"`.
     pub status: String,
@@ -502,11 +502,10 @@ pub struct SystemLogPayload {
 /// typed-secrets-never-archived guarantee (see [`WorkerInputPayload`]'s
 /// doc and [`crate::orchestration::is_persistent`]'s carve-out) does
 /// not rest on the webview spelling `"terminal"` correctly. An unknown
-/// or misspelled source value now fails IPC *deserialization* outright
+/// or misspelled source value fails IPC *deserialization* outright
 /// — the command errors before any PTY write or event emission happens
-/// — rather than silently falling through a string-equality check as
-/// "not terminal" and persisting/previewing something that should have
-/// been treated as raw human keystrokes.
+/// — instead of reading as "not terminal" and persisting or previewing
+/// what are raw human keystrokes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InputSource {
@@ -532,8 +531,8 @@ impl InputSource {
 /// Emitted from [`crate::worker::lifecycle::do_worker_input`] AFTER a
 /// successful `write_to_pty`. Never carries raw keystrokes: `preview`
 /// is populated only for `source ∈ {tool, automation}` — human
-/// terminal keystrokes get a byte count only (see the module-level
-/// persistence carve-out on [`crate::orchestration::is_persistent`],
+/// terminal keystrokes get a byte count only (see the
+/// persistence carve-out in [`crate::orchestration::is_persistent`],
 /// which additionally keeps `source: "terminal"` rows out of the
 /// durable log entirely, so a typed secret is never archived).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1064,11 +1063,10 @@ mod tests {
         }
     }
 
-    /// Regression test for the "Memory usage: critically high: 216%" bug:
-    /// the frontend never learned the machine's real RAM total and fell
-    /// back to a hardcoded 16GB assumption. `memory_total_mb` closes that
-    /// gap — this test locks in its wire name (`memoryTotalMb`) and that
-    /// it survives a serialize/deserialize roundtrip untouched.
+    /// `memory_total_mb` carries the real RAM total so the frontend never
+    /// assumes 16GB (which showed usage above 100%). This locks in its
+    /// wire name (`memoryTotalMb`) and that it survives a
+    /// serialize/deserialize roundtrip untouched.
     #[test]
     fn test_system_metrics_memory_total_mb_roundtrip() {
         let event = SwarmEvent::SystemMetrics(SystemMetricsPayload {
@@ -1088,13 +1086,7 @@ mod tests {
         let deserialized: SwarmEvent = serde_json::from_str(&json).expect("deserialize");
         if let SwarmEvent::SystemMetrics(p) = deserialized {
             assert!((p.memory_total_mb - 262_144.0).abs() < f64::EPSILON);
-            // 35,389 / 262,144 ≈ 13.5%, not the inflated 216% from dividing
-            // by a hardcoded 16,384 MB assumption.
-            let pct = (p.memory_mb / p.memory_total_mb) * 100.0;
-            assert!(
-                (pct - 13.5).abs() < 0.1,
-                "expected ~13.5% memory usage on real hardware total, got {pct}"
-            );
+            assert!((p.memory_mb - 35_389.0).abs() < f64::EPSILON);
         } else {
             panic!("expected SystemMetrics variant");
         }

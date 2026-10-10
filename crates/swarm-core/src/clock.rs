@@ -1,9 +1,10 @@
 //! Wall-clock timestamps as signed Unix-epoch offsets.
 //!
 //! Every persisted or wire-visible timestamp in `swarm-core` (event
-//! envelopes, bus messages, metrics samples, lock info, session and
-//! worker start times) is an `i64` offset from the Unix epoch. These two
-//! helpers are the one place that conversion happens.
+//! envelopes, metrics samples, `system_log` events, lock info, session
+//! and worker start times, quarantined state-file names) is an `i64`
+//! offset from the Unix epoch. These two helpers are the one place that
+//! conversion happens.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

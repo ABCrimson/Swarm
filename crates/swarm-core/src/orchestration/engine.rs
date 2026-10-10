@@ -47,7 +47,7 @@ use crate::events::{EventSink, Provenance, SwarmEvent, SystemLogPayload, WriterC
 
 /// The single ordered channel name every backend event is logically
 /// pushed on. The desktop shell's `emit` closure (see
-/// [`OrchestrationEngine::start`]) emits each envelope under this name
+/// [`OrchestrationEngine::try_start`]) emits each envelope under this name
 /// on its webview event channel.
 pub const EVENT_CHANNEL: &str = "swarm://events";
 
@@ -129,7 +129,7 @@ pub struct OrchestrationEngine {
     sink: EventSink,
     db_path: Option<PathBuf>,
     /// Secondary fanout; lossy under lag by design. The primary path is
-    /// the synchronous `emit` closure passed to [`Self::start`], which
+    /// the synchronous `emit` closure passed to [`Self::try_start`], which
     /// never drops an event. `swarmd` gives each WebSocket client a
     /// receiver and heals lag by replaying from the log.
     broadcast_tx: broadcast::Sender<Arc<DomainEvent>>,
@@ -201,13 +201,13 @@ impl OrchestrationEngine {
         })
     }
 
-    /// [`Self::try_start`] for callers that cannot recover from a failed
-    /// start (tests, mostly).
+    /// Test helper: [`Self::try_start`] that panics on failure.
     ///
     /// # Panics
     ///
     /// When [`Self::try_start`] fails.
-    pub fn start(
+    #[cfg(test)]
+    pub(crate) fn start(
         log: EventLog,
         db_path: Option<PathBuf>,
         emit: impl FnMut(&DomainEvent) + Send + 'static,
@@ -325,10 +325,10 @@ impl Fanout {
         }
     }
 
-    /// Offers `envelope` to every current subscriber. Costs nothing (no
-    /// `Arc`, no clone) while nothing is subscribed.
-    fn offer(&mut self, envelope: &DomainEvent) {
-        if self.tx.receiver_count() == 0 || self.tx.send(Arc::new(envelope.clone())).is_ok() {
+    /// Moves `envelope` into an `Arc` for every current subscriber.
+    /// Costs nothing (no `Arc`) while nothing is subscribed.
+    fn offer(&mut self, envelope: DomainEvent) {
+        if self.tx.receiver_count() == 0 || self.tx.send(Arc::new(envelope)).is_ok() {
             return;
         }
         let now = Instant::now();
@@ -445,7 +445,7 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
             self.report_persist_failure(&envelope, &e);
             return;
         }
-        self.deliver(&envelope);
+        self.deliver(envelope);
 
         // Non-blocking by oneshot construction: a dropped receiver
         // (e.g. a cancelled IPC call) makes `send` return `Err`, which
@@ -502,8 +502,8 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
     /// Delivers a durable-or-ephemeral envelope: primary emit, then the
     /// head, then the fanout (the order [`OrchestrationEngine::head_seq`]
     /// documents).
-    fn deliver(&mut self, envelope: &DomainEvent) {
-        (self.emit)(envelope);
+    fn deliver(&mut self, envelope: DomainEvent) {
+        (self.emit)(&envelope);
         self.head.store(envelope.seq, Ordering::Release);
         self.fanout.offer(envelope);
     }
@@ -524,7 +524,7 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
             timestamp: ts,
         });
         if let Some(envelope) = self.issue(event, &Provenance::default()) {
-            self.deliver(&envelope);
+            self.deliver(envelope);
         }
     }
 
@@ -899,11 +899,9 @@ mod tests {
         assert_eq!(stored[0].event_type, "worker_spawned");
     }
 
-    /// CONFIRMED regression: seqs issued to ephemeral events after the
-    /// last persisted row must never be reissued after a crash. The old
-    /// writer resumed from the highest PERSISTED seq, so a reconnecting
-    /// client (holding `lastSeq` = 5 here) silently dropped every new
-    /// event up to seq 5.
+    /// Seqs issued to ephemeral events after the last persisted row are
+    /// never reissued after a crash: the writer resumes from `resume_seq()`,
+    /// not `max_seq()`, so a client holding `lastSeq` = 5 drops no event.
     #[test]
     fn test_restart_after_a_crash_never_reissues_an_ephemeral_seq() {
         let mut writer = Writer::new(
@@ -1028,7 +1026,7 @@ mod tests {
         (msg, rx)
     }
 
-    /// CRITIQUE F3: a persist failure emits nothing on EITHER channel,
+    /// A persist failure emits nothing on EITHER channel,
     /// leaves `head` where it was, and resolves the ack to `RecvError`;
     /// only one ephemeral `system_log` error takes the next seq.
     #[test]
@@ -1076,7 +1074,7 @@ mod tests {
         assert!(p.fanout.try_recv().is_err());
     }
 
-    /// CRITIQUE F3: when the seq reservation fails the event is dropped
+    /// When the seq reservation fails the event is dropped
     /// whole (no seq above `reserved` is handed out), the counter rolls
     /// back, and the next event retries and succeeds once the log heals.
     #[test]
@@ -1121,18 +1119,41 @@ mod tests {
 
     /// A subscriber never sees an event before the head covers it — the
     /// ordering that makes "subscribe, then read `head_seq`" gap-free.
-    #[tokio::test]
-    async fn test_head_seq_is_published_before_the_fanout_delivers() {
-        let engine = OrchestrationEngine::start(EventLog::open_in_memory().unwrap(), None, |_| {});
-        let mut rx = engine.subscribe();
-        let sink = engine.sink();
-        for _ in 0..200 {
-            sink.emit(output());
+    /// A receiver spinning on its own thread checks each event the moment
+    /// the fanout publishes it, so a writer that offered an event before
+    /// storing its head would be caught mid-delivery.
+    #[test]
+    fn test_head_seq_is_published_before_the_fanout_delivers() {
+        const EVENTS: usize = 20_000;
+        let (tx, mut rx) = broadcast::channel(EVENTS);
+        let head = Arc::new(AtomicU64::new(0));
+        let mut writer = Writer::new(
+            EventLog::open_in_memory().unwrap(),
+            Arc::clone(&head),
+            |_: &DomainEvent| {},
+            Fanout::new(tx),
+        )
+        .unwrap();
+        let checker = std::thread::spawn(move || {
+            let mut stale = 0_u64;
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => {
+                        if head.load(Ordering::Acquire) < event.seq {
+                            stale += 1;
+                        }
+                    }
+                    Err(broadcast::error::TryRecvError::Empty) => std::hint::spin_loop(),
+                    Err(broadcast::error::TryRecvError::Closed) => break stale,
+                    Err(e) => panic!("the checker fell behind: {e}"),
+                }
+            }
+        });
+        for _ in 0..EVENTS {
+            writer.record(bare(output()));
         }
-        for _ in 0..200 {
-            let event = rx.recv().await.unwrap();
-            assert!(engine.head_seq() >= event.seq);
-        }
+        drop(writer);
+        assert_eq!(checker.join().unwrap(), 0, "events seen ahead of the head");
     }
 
     #[tokio::test]
@@ -1160,7 +1181,7 @@ mod tests {
         (path, guard)
     }
 
-    /// CONFIRMED regression: shutdown drains everything queued before it
+    /// Shutdown drains everything queued before it
     /// (nothing lost on exit), later events are refused, and a restart
     /// on the same file continues exactly after the final head.
     #[tokio::test]

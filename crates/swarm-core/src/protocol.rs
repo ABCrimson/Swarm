@@ -200,6 +200,27 @@ mod tests {
         let json = serde_json::to_value(&frame).unwrap();
         assert_eq!(json["frame"], "rpc");
         assert_eq!(json["cmd"], "list_workers");
+
+        let back: ClientFrame = serde_json::from_value(json).unwrap();
+        assert_matches!(
+            back,
+            ClientFrame::Rpc { ref id, ref cmd, ref args }
+                if id == "r1" && cmd == "list_workers" && *args == serde_json::json!({})
+        );
+    }
+
+    /// `args` may be omitted for a command that takes none.
+    #[test]
+    fn test_rpc_args_omitted_deserializes_as_null() {
+        let frame: ClientFrame =
+            serde_json::from_str(r#"{"frame":"rpc","id":"1","cmd":"list_workers"}"#).unwrap();
+        assert_matches!(
+            frame,
+            ClientFrame::Rpc {
+                args: serde_json::Value::Null,
+                ..
+            }
+        );
     }
 
     #[test]
@@ -228,6 +249,7 @@ mod tests {
             error: None,
         };
         let json = serde_json::to_value(&ok).unwrap();
+        assert_eq!(json["frame"], "rpcResult");
         assert!(json.get("error").is_none());
         assert_eq!(json["result"]["a"], 1);
 
@@ -238,6 +260,7 @@ mod tests {
             error: Some(serde_json::json!("Worker Not Found")),
         };
         let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["frame"], "rpcResult");
         assert!(json.get("result").is_none());
         assert_eq!(json["error"], "Worker Not Found");
     }

@@ -96,6 +96,32 @@ impl StoredEvent {
     }
 }
 
+/// Creates `path` if missing and limits it, and its `-wal`/`-shm`
+/// siblings when present, to the owner. Done before SQLite opens the file
+/// so no window exists in which a fresh log is world-readable.
+#[cfg(unix)]
+fn restrict_to_owner(path: &Path) -> std::io::Result<()> {
+    use std::fs::{self, OpenOptions, Permissions};
+    use std::io::ErrorKind;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    OpenOptions::new()
+        .append(true)
+        .create(true)
+        .mode(0o600)
+        .open(path)?;
+    fs::set_permissions(path, Permissions::from_mode(0o600))?;
+    for suffix in ["-wal", "-shm"] {
+        let mut sibling = path.as_os_str().to_owned();
+        sibling.push(suffix);
+        match fs::set_permissions(&sibling, Permissions::from_mode(0o600)) {
+            Err(e) if e.kind() != ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// A stored TEXT column that does not parse as the type it must hold.
 fn conversion_error(
     column: usize,
@@ -115,12 +141,20 @@ impl EventLog {
     /// date. Used by the writer; readers should prefer
     /// [`Self::open_readonly`].
     ///
+    /// On Unix the file and any existing `-wal`/`-shm` siblings are
+    /// restricted to the owner (`0600`) first: the log stores agent tool
+    /// inputs and results verbatim, and SQLite would otherwise create it
+    /// `0644`, readable by any local account that can reach the data dir.
+    /// A new `-wal`/`-shm` inherits the main file's mode.
+    ///
     /// # Errors
     ///
-    /// [`AppError::EventLog`] if the file cannot be opened, a migration
-    /// fails, or the file was written by a newer build (a schema version
-    /// this build does not know).
+    /// [`AppError::EventLog`] if the file cannot be opened or restricted,
+    /// a migration fails, or the file was written by a newer build (a
+    /// schema version this build does not know).
     pub fn open(path: &Path) -> Result<Self, AppError> {
+        #[cfg(unix)]
+        restrict_to_owner(path).map_err(|e| AppError::EventLog(e.to_string()))?;
         Self::init(Connection::open(path)?)
     }
 
@@ -153,6 +187,7 @@ impl EventLog {
     /// # Errors
     ///
     /// [`AppError::EventLog`] if SQLite cannot allocate the database.
+    #[cfg(test)]
     pub fn open_in_memory() -> Result<Self, AppError> {
         Self::init(Connection::open_in_memory()?)
     }
@@ -792,6 +827,52 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    fn mode_of(path: &std::path::Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    fn sibling(path: &std::path::Path, suffix: &str) -> std::path::PathBuf {
+        let mut sibling = path.as_os_str().to_owned();
+        sibling.push(suffix);
+        sibling.into()
+    }
+
+    /// A fresh log is created owner-only, and so is its WAL.
+    #[cfg(unix)]
+    #[test]
+    fn test_open_creates_the_log_owner_only() {
+        let (path, _cleanup) = temp_db();
+        let mut log = EventLog::open(&path).unwrap();
+        append(&mut log, 1, "worker_spawned", "{}");
+        assert_eq!(mode_of(&path), 0o600);
+        assert_eq!(mode_of(&sibling(&path, "-wal")), 0o600);
+    }
+
+    /// A log an older build left at `0644` (with its WAL) is tightened on
+    /// the next open.
+    #[cfg(unix)]
+    #[test]
+    fn test_open_tightens_an_existing_world_readable_log() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (path, _cleanup) = temp_db();
+        // Held open so its WAL still exists when the second open runs.
+        let mut first = EventLog::open(&path).unwrap();
+        append(&mut first, 1, "worker_spawned", "{}");
+        for suffix in ["", "-wal"] {
+            let file = sibling(&path, suffix);
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        let mut log = EventLog::open(&path).unwrap();
+        append(&mut log, 2, "worker_spawned", "{}");
+        assert_eq!(mode_of(&path), 0o600);
+        assert_eq!(mode_of(&sibling(&path, "-wal")), 0o600);
+    }
+
     #[test]
     fn test_open_readonly_never_creates_a_missing_file() {
         let (path, _cleanup) = temp_db();
@@ -850,7 +931,11 @@ mod tests {
             Some(origin)
         );
 
-        EventLog::migrate(&mut log.conn).expect("a second migrate is a no-op");
+        // `query_only` fails any write with SQLITE_READONLY, so an `Ok`
+        // proves the up-to-date path performs no write at all.
+        log.conn.pragma_update(None, "query_only", true).unwrap();
+        EventLog::migrate(&mut log.conn).expect("a second migrate performs no write");
+        log.conn.pragma_update(None, "query_only", false).unwrap();
         assert_eq!(user_version(&log.conn), SCHEMA_VERSION);
     }
 
