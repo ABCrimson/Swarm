@@ -13,8 +13,8 @@
  *   trims it (context budget, rolled-back turns).
  *
  * Threads are LRU-evicted beyond `maxWorkers` (the Chat History Worker
- * Cap setting, default {@link MAX_WORKERS}); a thread with a turn in
- * flight is never evicted.
+ * Cap setting, default `DEFAULT_APP_SETTINGS.historyMaxWorkers`); a thread
+ * with a turn in flight is never evicted.
  *
  * @module message-history
  */
@@ -22,11 +22,10 @@
 import { create } from "zustand";
 import type { ChatMessageParam } from "#lib/anthropic";
 import type { AiMessage } from "#store/types";
+import { DEFAULT_APP_SETTINGS } from "#store/ui";
 
 /** Display messages kept per worker; older ones scroll out of the visible history. */
 const MAX_MESSAGES_PER_WORKER = 200;
-/** Default worker cap until the Chat History Worker Cap setting is applied. */
-const MAX_WORKERS = 50;
 
 /** One tool call as displayed: its input, and its result once it ran. */
 export interface ChatToolCall {
@@ -135,7 +134,7 @@ export const useMessageHistoryStore = create<MessageHistoryState & MessageHistor
   (set, get) => ({
     threads: new Map(),
     lruOrder: [],
-    maxWorkers: MAX_WORKERS,
+    maxWorkers: DEFAULT_APP_SETTINGS.historyMaxWorkers,
 
     getMessages(workerId) {
       return get().threads.get(workerId)?.messages ?? NO_MESSAGES;
