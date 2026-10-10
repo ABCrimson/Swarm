@@ -24,7 +24,7 @@ export function estimateTokens(text: string): number {
 }
 
 /** Estimates the tokens one message contributes (its serialized form, framing included). */
-export function estimateMessageTokens(message: ChatMessageParam): number {
+function estimateMessageTokens(message: ChatMessageParam): number {
   return estimateTokens(JSON.stringify(message));
 }
 

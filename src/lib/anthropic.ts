@@ -98,7 +98,7 @@ export interface StreamParams {
 }
 
 /** Streaming progress of one `tool_use` block. */
-export interface ToolUseDelta {
+interface ToolUseDelta {
   /** The API's `tool_use` block id — echoed back as `tool_use_id` in the `tool_result`. */
   readonly id: string;
   readonly toolName: string;
