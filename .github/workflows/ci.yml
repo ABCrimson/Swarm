@@ -57,6 +57,11 @@ jobs:
       - name: React Compiler coverage
         run: pnpm check:compiler
 
+      - name: React Compiler on the WASI binding
+        run: pnpm check:compiler
+        env:
+          NAPI_RS_FORCE_WASI: "true"
+
       - name: Docs site
         run: pnpm build:site
 

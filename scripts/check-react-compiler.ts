@@ -16,7 +16,10 @@
  *
  * `NAPI_RS_FORCE_WASI=true pnpm check:compiler` checks the WASI binding
  * (the fallback where the native one cannot load) instead of the native
- * one; the report names the binding that ran.
+ * one; the report names the binding that ran. The loader falls back to
+ * native without a word when WASI fails to load (e.g. a binding version
+ * that no longer matches oxc-transform-react), so a forced run fails
+ * unless the WASI binding is the one that ran.
  */
 import { relative, resolve } from "node:path";
 import { styleText } from "node:util";
@@ -61,6 +64,10 @@ if (!("output" in result) && !Array.isArray(result)) {
   throw new Error("Expected a one-shot build result, got a watcher.");
 }
 const outputs: Rolldown.RolldownOutput[] = Array.isArray(result) ? result : [result];
+if (process.env.NAPI_RS_FORCE_WASI === "true" && __napiBindingTarget !== "wasm32-wasip1") {
+  console.error("check:compiler: WASI forced but the native binding ran");
+  process.exit(1);
+}
 
 /** Rendered code of every emitted source module, keyed by repo-relative path. */
 const emitted = new Map<string, string>();
