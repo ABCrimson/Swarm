@@ -748,7 +748,9 @@ fn test_preflight_can_ship_true_for_a_healthy_isolated_worktree() {
 #[test]
 fn test_preview_diff_stat_matches_the_commit() {
     let (_repo, worktree, registry, id) = fixture("preview-vs-commit", "swarm/stat-abcd1234");
-    write_file(&worktree, "README.md", "rewritten\nentirely\n");
+    // Keeps over half of README's bytes so git would detect the rename;
+    // only `--no-renames` makes both sides count it as delete + add.
+    write_file(&worktree, "README.md", "hello\nmore\n");
     write_file(&worktree, "added.txt", "one\ntwo\nthree");
     write_file(&worktree, ".env", "SECRET=1\n");
     git_in(&worktree, &["mv", "README.md", "RENAMED.md"]);
@@ -768,6 +770,14 @@ fn test_preview_diff_stat_matches_the_commit() {
             files_changed: outcome.files_changed,
             insertions: outcome.insertions,
             deletions: outcome.deletions,
+        }
+    );
+    assert_eq!(
+        preview.diff_stat,
+        DiffStat {
+            files_changed: 3,
+            insertions: 5,
+            deletions: 1
         }
     );
     assert_eq!(skipped_paths(&preview.skipped), [".env"]);
