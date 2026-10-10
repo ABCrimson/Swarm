@@ -288,7 +288,11 @@ export function FileTree({
       className="scroll-area h-full overflow-y-auto px-1 py-2"
       onScroll={(e) => setFirstRow(Math.floor(e.currentTarget.scrollTop / ROW_HEIGHT))}
     >
-      {root.status === "loading" && <p className="p-4 text-fg-muted text-md">Loading…</p>}
+      {root.status === "loading" && (
+        <p role="status" className="p-4 text-fg-muted text-md">
+          Loading…
+        </p>
+      )}
       {root.status === "error" && (
         <p role="alert" className="p-4 text-md text-rose">
           Could Not Read This Folder: {root.message}

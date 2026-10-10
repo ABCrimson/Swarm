@@ -271,7 +271,11 @@ function CausalRecordSection({
   }
 
   if (context == null) {
-    return <span style={causalMutedStyle}>Loading Causal Record…</span>;
+    return (
+      <span role="status" style={causalMutedStyle}>
+        Loading Causal Record…
+      </span>
+    );
   }
 
   if (context.turns.length === 0) {

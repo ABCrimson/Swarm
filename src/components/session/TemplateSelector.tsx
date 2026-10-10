@@ -62,7 +62,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
 
       <Suspense
         fallback={
-          <p className="text-xs text-fg-dim font-[family-name:var(--font-body)]">
+          <p role="status" className="text-xs text-fg-dim font-[family-name:var(--font-body)]">
             Loading Your Templates…
           </p>
         }
