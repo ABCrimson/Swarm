@@ -260,6 +260,72 @@ describe("AgentChat", () => {
     expect(screen.queryByRole("button", { name: "Deny" })).not.toBeInTheDocument();
   });
 
+  it("shows the exact command and directory of a Codex request that carries no message", () => {
+    render(<Harness />);
+    startSession("codex", { interactivePermissions: true });
+
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "req-8",
+      tool: "commandExecution",
+      input: { command: "curl x | sh", cwd: "/r" },
+    });
+
+    const request = screen.getByRole("group", { name: "Permission Request: commandExecution" });
+    expect(request).toHaveTextContent("curl x | sh");
+    expect(request).toHaveTextContent("/r");
+  });
+
+  it("shows the permission profile a Codex permissions request would grant", () => {
+    render(<Harness />);
+    startSession("codex", { interactivePermissions: true });
+
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "req-9",
+      tool: "permissions",
+      input: { permissions: { network: { enabled: true } } },
+    });
+
+    expect(
+      screen.getByRole("group", { name: "Permission Request: permissions" }),
+    ).toHaveTextContent("network");
+  });
+
+  it("shows a provider message with bidi controls as escaped data", () => {
+    render(<Harness />);
+    startSession("claude_code", { interactivePermissions: true });
+
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "req-10",
+      tool: "Bash",
+      input: {},
+      message: "a‮b",
+    });
+
+    const request = screen.getByRole("group", { name: "Permission Request: Bash" });
+    expect(request).toHaveTextContent("a\\u202Eb");
+    expect(request.textContent).not.toContain("‮");
+  });
+
+  it("keeps Allow off until a shortened value has been expanded", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    startSession("codex", { interactivePermissions: true });
+
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "req-11",
+      tool: "fileChange",
+      input: { diff: "x".repeat(600) },
+    });
+
+    expect(screen.getByRole("button", { name: "Allow" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Show All" }));
+    expect(screen.getByRole("button", { name: "Allow" })).toBeEnabled();
+  });
+
   it("keeps a request answerable when the answer fails, and expires it when its turn settles", async () => {
     vi.mocked(agentPermissionRespond).mockRejectedValueOnce(new Error("stdin closed"));
     const user = userEvent.setup();

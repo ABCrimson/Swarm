@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { useState } from "react";
+import { Fragment, useId, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { Pill, type PillTone } from "#components/ui/Pill";
@@ -13,6 +13,15 @@ import {
   useAgentTranscript,
 } from "#store/agent-sessions";
 import { AIMessageStream } from "./AIMessageStream.tsx";
+import {
+  ArgValue,
+  approvalArgs,
+  argsStyle,
+  escapeForDisplay,
+  isTruncated,
+  labelStyle,
+  reasonStyle,
+} from "./ApprovalArgs.tsx";
 import { ToolCallDisplay } from "./ToolCallDisplay.tsx";
 
 interface AgentChatProps {
@@ -216,6 +225,20 @@ function PermissionRow({
 }): React.ReactElement {
   const { payload, state } = item;
   const waiting = state === "pending" || state === "answering";
+  const [showing, setShowing] = useState<ReadonlySet<string>>(new Set());
+  const [seen, setSeen] = useState<ReadonlySet<string>>(new Set());
+  const reasonId = useId();
+  // The exact arguments are what the user approves; the provider's message
+  // is only prose beside them (Codex sends none).
+  const args = approvalArgs(payload.tool, payload.input);
+  const unseen = args.filter((arg) => isTruncated(arg) && !seen.has(arg.key));
+  const blocked = unseen.length > 0;
+  const toggle = (key: string): void => {
+    setShowing((prev) =>
+      prev.has(key) ? prev.difference(new Set([key])) : prev.union(new Set([key])),
+    );
+    setSeen((prev) => prev.union(new Set([key])));
+  };
 
   const answer = async (decision: PermissionDecision) => {
     const { setPermissionState } = useAgentSessionStore.getState();
@@ -246,13 +269,33 @@ function PermissionRow({
         </Pill>
         <span style={permissionToolStyle}>{payload.tool}</span>
       </div>
-      {payload.message && <span style={permissionMessageStyle}>{payload.message}</span>}
+      {args.length > 0 && (
+        <dl style={argsStyle}>
+          {args.map((arg) => (
+            <Fragment key={arg.key}>
+              <dt style={labelStyle}>{arg.label}</dt>
+              <ArgValue arg={arg} showing={showing.has(arg.key)} onToggle={() => toggle(arg.key)} />
+            </Fragment>
+          ))}
+        </dl>
+      )}
+      {payload.message && (
+        <span style={permissionMessageStyle}>{escapeForDisplay(payload.message)}</span>
+      )}
+      {waiting && blocked && (
+        <p id={reasonId} style={reasonStyle}>
+          Allow is off until you have used Show All on every shortened value (
+          {unseen.map((arg) => arg.label).join(", ")}).
+        </p>
+      )}
       {waiting && (
         <div style={{ display: "flex", gap: 8 }}>
           <Button
             size="sm"
             variant={payload.suggestedDecision === "deny" ? "secondary" : "primary"}
             loading={state === "answering"}
+            disabled={blocked}
+            aria-describedby={blocked ? reasonId : undefined}
             onClick={() => void answer("allow")}
           >
             Allow
