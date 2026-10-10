@@ -549,17 +549,9 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
 export async function readConfig<S extends z.ZodType>(
   key: string,
   schema: S,
-): Promise<z.output<S> | null>;
-/**
- * Reads `key` from `swarm-config.json` without validation; `T` is not
- * checked.
- *
- * @deprecated Pass a zod schema as the second argument.
- */
-export async function readConfig<T = unknown>(key: string): Promise<T | null>;
-export async function readConfig(key: string, schema?: z.ZodType): Promise<unknown> {
+): Promise<z.output<S> | null> {
   const raw = (await invoke("read_config", { key })) ?? null;
-  if (schema === undefined || raw === null) return raw;
+  if (raw === null) return null;
   const parsed = schema.safeParse(raw);
   return parsed.success ? parsed.data : null;
 }

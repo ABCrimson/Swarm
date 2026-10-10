@@ -320,8 +320,8 @@ let cached: { readonly key: string; readonly client: Anthropic } | undefined;
  * itself is rebuilt only when the key changes.
  */
 async function getClient(): Promise<Anthropic> {
-  const raw = await readConfig<unknown>(ANTHROPIC_API_KEY_CONFIG_KEY);
-  const key = typeof raw === "string" ? raw.trim() : "";
+  const raw = await readConfig(ANTHROPIC_API_KEY_CONFIG_KEY, z.string());
+  const key = raw?.trim() ?? "";
   if (!key) {
     throw new AiRequestError("missing_key", "API Key Not Configured — Add It In Settings");
   }
