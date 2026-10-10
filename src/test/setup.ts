@@ -61,7 +61,7 @@ vi.mock("@tauri-apps/plugin-store", () => {
 });
 
 // ── sonner ──────────────────────────────────────────
-// Components toast through #components/ui/Toast, which re-exports sonner.
+// Most modules import sonner directly; #components/ui/Toast re-exports the same toast, so this one mock covers both.
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), {
     error: vi.fn(),
