@@ -1,5 +1,6 @@
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useEffect, useEffectEvent, useId, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { WorkerAIPanel } from "#components/ai/WorkerAIPanel";
 import { CausalityPanel } from "#components/graph/CausalityPanel";
 import { WorkerDetail } from "#components/graph/WorkerDetail";
@@ -43,14 +44,55 @@ const VIEW_TAB_CLASS =
 const DETAIL_TAB_CLASS =
   "flex-1 cursor-pointer px-3 py-2 text-sm font-medium text-fg-muted transition-colors hover:text-fg aria-selected:bg-plasma/12 aria-selected:text-plasma disabled:cursor-not-allowed disabled:text-fg-dim disabled:hover:text-fg-dim";
 
-function WorkerListView(): React.ReactElement {
-  const workers = useWorkerStore((s) => s.workers);
-  const agentSessions = useAgentSessionStore((s) => s.sessions);
+/**
+ * One list row. Selects only the fields it shows, so a worker's output
+ * chunks (which replace the whole `workers` Map) re-render no row.
+ */
+function WorkerRow({ id }: { readonly id: string }): React.ReactElement | null {
+  const name = useWorkerStore((s) => s.workers.get(id)?.name);
+  const branch = useWorkerStore((s) => s.workers.get(id)?.branch);
+  const state = useWorkerStore((s) => s.workers.get(id)?.state);
+  const agentSession = useAgentSessionStore((s) => s.sessions.get(id));
   const [selectedId, setSelectedId] = useAtom(selectedWorkerIdAtom);
   const setDetailOpen = useSetAtom(detailPanelOpenAtom);
+
+  if (state === undefined) return null;
+
+  return (
+    <li>
+      <button
+        type="button"
+        aria-current={selectedId === id || undefined}
+        onClick={() => {
+          setSelectedId(id);
+          setDetailOpen(true);
+        }}
+        className="glass-panel flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border border-border-2 px-4 py-3 text-left transition-colors hover:border-border-3 aria-current:border-plasma/30 aria-current:bg-plasma/8"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate font-display text-md font-semibold text-fg-bright">
+            {name ?? id.slice(0, 8)}
+          </span>
+          {branch != null && (
+            <Pill tone="info" size="sm" maxWidth={160} title={branch}>
+              {branch}
+            </Pill>
+          )}
+          {agentSession && (
+            <ProviderBadge provider={agentSession.provider} model={agentSession.model} />
+          )}
+        </span>
+        <Badge state={state}>{stateLabels[state]}</Badge>
+      </button>
+    </li>
+  );
+}
+
+function WorkerListView(): React.ReactElement {
+  const ids = useWorkerStore(useShallow((s) => [...s.workers.keys()]));
   const { commandPalette } = useAtomValue(keybindingsAtom);
 
-  if (workers.size === 0) {
+  if (ids.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3">
         <div
@@ -69,37 +111,9 @@ function WorkerListView(): React.ReactElement {
 
   return (
     <ul className="scroll-area flex h-full flex-col gap-2 overflow-y-auto p-4">
-      {[...workers].map(([id, worker]) => {
-        const agentSession = agentSessions.get(id);
-        return (
-          <li key={id}>
-            <button
-              type="button"
-              aria-current={selectedId === id || undefined}
-              onClick={() => {
-                setSelectedId(id);
-                setDetailOpen(true);
-              }}
-              className="glass-panel flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border border-border-2 px-4 py-3 text-left transition-colors hover:border-border-3 aria-current:border-plasma/30 aria-current:bg-plasma/8"
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                <span className="truncate font-display text-md font-semibold text-fg-bright">
-                  {worker.name ?? id.slice(0, 8)}
-                </span>
-                {worker.branch != null && (
-                  <Pill tone="info" size="sm" maxWidth={160} title={worker.branch}>
-                    {worker.branch}
-                  </Pill>
-                )}
-                {agentSession && (
-                  <ProviderBadge provider={agentSession.provider} model={agentSession.model} />
-                )}
-              </span>
-              <Badge state={worker.state}>{stateLabels[worker.state]}</Badge>
-            </button>
-          </li>
-        );
-      })}
+      {ids.map((id) => (
+        <WorkerRow key={id} id={id} />
+      ))}
     </ul>
   );
 }
@@ -122,8 +136,9 @@ export function Workers(): React.ReactElement {
   const [selectedId, setSelectedWorkerId] = useAtom(selectedWorkerIdAtom);
   const [causalityTarget, setCausalityTarget] = useAtom(causalityInspectorAtom);
   const { graphToggle } = useAtomValue(keybindingsAtom);
-  const workers = useWorkerStore((s) => s.workers);
-  const selectedWorker = selectedId ? workers.get(selectedId) : undefined;
+  const selectedWorker = useWorkerStore((s) =>
+    selectedId ? s.workers.get(selectedId) : undefined,
+  );
   const [detailTab, setDetailTab] = useState<DetailTab>("detail");
   /** Views and tabs shown at least once; only these stay mounted while hidden. */
   const [shown, setShown] = useState<ReadonlySet<string>>(() => new Set([viewMode, "detail"]));
