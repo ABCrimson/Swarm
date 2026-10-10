@@ -262,6 +262,13 @@ describe("ShipPanel", () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
+  it("moves focus to the receipt when the ship button that started the flow unmounts", async () => {
+    const user = userEvent.setup();
+    const receipt = await renderShipped(user);
+
+    expect(receipt).toHaveFocus();
+  });
+
   it("surfaces a receipt opener rejection as a Title Case error toast instead of an unhandled rejection", async () => {
     const user = userEvent.setup();
     const receipt = await renderShipped(user);

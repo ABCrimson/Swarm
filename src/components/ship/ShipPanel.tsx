@@ -143,6 +143,13 @@ async function openComparePage(url: string): Promise<void> {
   }
 }
 
+/** Focuses a flow step as it mounts, only when focus was lost (the ship button that started it just unmounted); a user who moved focus elsewhere keeps it. Module-level, so React calls it once per mount. */
+function focusIfLost(el: HTMLElement | null): void {
+  if (el != null && (document.activeElement == null || document.activeElement === document.body)) {
+    el.focus();
+  }
+}
+
 /**
  * Ship tab content for a worker's worktree: a preflight-driven
  * preview → confirm → progress → receipt flow, backed by `useShip`.
@@ -185,7 +192,9 @@ function WorkerShipFlow({ workerId }: ShipPanelProps): React.ReactElement {
   if (ship.state === "running") {
     return (
       <div style={containerStyle}>
-        <ShipProgress rows={ship.progress} />
+        <section ref={focusIfLost} tabIndex={-1} aria-label="Ship In Progress">
+          <ShipProgress rows={ship.progress} />
+        </section>
       </div>
     );
   }
@@ -275,7 +284,7 @@ function ShipReceipt({ ship }: { readonly ship: UseShipReturn }): React.ReactEle
   const prUrl = ship.result?.prUrl;
   return (
     <>
-      <div style={receiptStyle} role="status">
+      <div style={receiptStyle} role="status" ref={focusIfLost} tabIndex={-1}>
         <span style={{ ...messageStyle, color: "oklch(0.75 0.16 150)", textAlign: "left" }}>
           Shipped
         </span>
