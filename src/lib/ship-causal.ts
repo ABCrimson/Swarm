@@ -4,10 +4,10 @@
  * plus an OPTIONAL AI-generated "What Changed / Why" prose section
  * (`generateCausalProse`) that may cite `[seq N]` — any citation not
  * actually present in the fetched range is stripped before render
- * (`stripUnknownSeqCitations`). Provenance claims in a PR body are
- * machine-generated and unforgeable, so the Causal Record never comes
- * from the model. See `docs/architecture.md`'s Ship Chain section for
- * the full design and `crates/swarm-core/src/git/causal.rs` for where
+ * (`stripUnknownSeqCitations`). The model never writes the Causal Record, so
+ * its provenance claims are machine-generated and unforgeable; the AI prose
+ * can only cite `[seq N]` entries that exist in the fetched range. See
+ * `docs/architecture.md`'s Ship Chain section for the full design and `crates/swarm-core/src/git/causal.rs` for where
  * `ShipContext` itself comes from.
  *
  * The AI half degrades gracefully by construction: `generateCausalProse`
