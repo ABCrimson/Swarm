@@ -28,8 +28,8 @@ function DeferredAutoSnapshot(): null {
 
 /**
  * Root component: connects the event bus, starts the app-wide
- * subscriptions (theme, worker/session/provenance/log events, metrics,
- * alerts, settings), and renders the shell around the page host.
+ * subscriptions (reduced motion, worker/session/provenance/log events,
+ * metrics, alerts, settings), and renders the shell around the page host.
  *
  * Deferred until the first idle period: the auto-snapshot loop and the
  * persisted-store integrity check, so neither competes with startup.
