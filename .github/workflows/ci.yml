@@ -110,8 +110,9 @@ jobs:
 
       # With CI set, playwright.config.ts builds the production bundle and
       # serves it with `vite preview` (not the dev server).
+      # --shuffle randomizes spec order each run: the suite must not depend on it.
       - name: Playwright
-        run: pnpm test:e2e
+        run: pnpm test:e2e --shuffle
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
