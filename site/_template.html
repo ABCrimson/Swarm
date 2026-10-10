@@ -57,7 +57,8 @@
     backdrop-filter: blur(14px) saturate(1.4);
     border-bottom:1px solid var(--line);
   }
-  .brand{ display:flex; align-items:center; gap:.6rem; font-weight:800; letter-spacing:-.02em; font-size:1.05rem; }
+  @media (width < 960px){ header.top{ position:static; } }
+  .brand{ display:flex; align-items:center; gap:.6rem; font-weight:800; letter-spacing:-.02em; font-size:1.05rem; text-decoration:none; color:var(--ink); }
   .brand b{ background:linear-gradient(100deg,var(--ink),var(--gold)); -webkit-background-clip:text; background-clip:text; color:transparent; }
   .brand .dot{ width:9px; height:9px; border-radius:50%; background:var(--gold); box-shadow:0 0 12px var(--gold); }
   nav.nav{ display:flex; gap:.25rem; flex-wrap:wrap; margin-left:auto; }
