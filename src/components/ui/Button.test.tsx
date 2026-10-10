@@ -109,7 +109,6 @@ describe("Button", () => {
   it.for([
     ["md", undefined],
     ["sm", "sm"],
-    ["lg", "lg"],
   ] as const)("applies the %s size", ([expected, size]) => {
     render(<Button size={size}>Label</Button>);
 

@@ -59,12 +59,6 @@
     font-size: var(--text-md);
   }
 
-  .swarm-btn[data-size="lg"] {
-    height: 44px;
-    padding: 0 24px;
-    font-size: var(--text-lg);
-  }
-
   .swarm-btn[data-variant="primary"] {
     background: var(--color-plasma);
     color: var(--color-void);
@@ -239,6 +233,8 @@
      button affordance; label-only pills stay static. */
   .swarm-pill[data-interactive]:hover:not(:disabled) {
     background: oklch(from var(--pill-tone) l c h / 0.26);
+    /* The stronger hover tint pulls the tone text under 4.5:1 for fg-dim, so the text steps up with it. */
+    color: oklch(from var(--pill-tone) calc(l + 0.08) c h);
   }
 
   .swarm-pill[data-interactive]:active:not(:disabled) {
@@ -345,6 +341,7 @@
   .swarm-cmdk [data-command-item][aria-selected="true"] {
     background: oklch(from var(--color-plasma) l c h / 0.12);
     color: var(--color-fg-bright);
+    box-shadow: inset 3px 0 0 var(--color-plasma);
   }
 
   .swarm-cmdk [data-command-item]:active {
@@ -374,10 +371,4 @@
      modern-cmdk's <Command.Badge> (see CommandPalette.tsx) — it's a
      third-party component, so it can't render our <Pill>, but it does
      spread arbitrary className/data-* props onto its own <span>. */
-
-  .swarm-cmdk [data-command-separator] {
-    height: 1px;
-    margin: 4px 0;
-    background: var(--color-border);
-  }
 }

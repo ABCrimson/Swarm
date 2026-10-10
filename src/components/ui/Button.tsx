@@ -1,7 +1,7 @@
 import { Spinner } from "./Spinner.tsx";
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
-type ButtonSize = "sm" | "md" | "lg";
+type ButtonSize = "sm" | "md";
 
 interface ButtonProps extends React.ComponentPropsWithRef<"button"> {
   readonly variant?: ButtonVariant;
@@ -47,7 +47,7 @@ export function Button({
       }}
       {...props}
     >
-      {loading && <Spinner size={size === "lg" ? "md" : "sm"} decorative />}
+      {loading && <Spinner size="sm" decorative />}
       {children}
     </button>
   );
