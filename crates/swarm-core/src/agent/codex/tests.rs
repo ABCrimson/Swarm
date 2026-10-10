@@ -407,6 +407,50 @@ fn opened(sandbox: &str, approval: Value) -> ThreadOpened {
 }
 
 #[test]
+fn a_sandbox_widened_by_user_config_is_refused() {
+    let opened_with = |sandbox: Value| -> ThreadOpened {
+        serde_json::from_value(json!({
+            "thread": { "id": THREAD },
+            "model": "gpt-6-astra",
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "user",
+            "sandbox": sandbox,
+        }))
+        .expect("a thread/start response")
+    };
+    for (widened, asked) in [
+        (
+            json!({ "type": "workspaceWrite", "writableRoots": ["C:\\"] }),
+            SandboxMode::WorkspaceWrite,
+        ),
+        (
+            json!({ "type": "workspaceWrite", "networkAccess": true }),
+            SandboxMode::WorkspaceWrite,
+        ),
+        (
+            json!({ "type": "readOnly", "networkAccess": true }),
+            SandboxMode::ReadOnly,
+        ),
+    ] {
+        let error = verify_effective_policy(
+            &opened_with(widened.clone()),
+            AskForApproval::OnRequest,
+            asked,
+        )
+        .expect_err("a widened sandbox must be refused");
+        assert_matches!(error, AppError::PermissionDenied(_), "{widened}");
+    }
+    verify_effective_policy(
+        &opened_with(
+            json!({ "type": "workspaceWrite", "writableRoots": [], "networkAccess": false }),
+        ),
+        AskForApproval::OnRequest,
+        SandboxMode::WorkspaceWrite,
+    )
+    .expect("a confined workspace-write sandbox is accepted");
+}
+
+#[test]
 fn a_thread_whose_approvals_bypass_swarm_is_refused() {
     for reviewer in [Some("auto_review"), Some("guardian_subagent"), None] {
         let mut response = json!({

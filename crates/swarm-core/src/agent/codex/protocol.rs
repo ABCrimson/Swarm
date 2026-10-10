@@ -360,13 +360,19 @@ pub struct ThreadRef {
     pub id: String,
 }
 
-/// The applied sandbox policy's discriminant (`readOnly`,
-/// `workspaceWrite`, `externalSandbox`, `dangerFullAccess`).
+/// The applied sandbox policy (the fields checked).
 #[derive(Debug, Deserialize)]
 pub struct EffectiveSandbox {
-    /// The policy kind.
+    /// The policy kind (`readOnly`, `workspaceWrite`, `externalSandbox`,
+    /// `dangerFullAccess`).
     #[serde(rename = "type")]
     pub kind: String,
+    /// Network access for sandboxed commands; absent means none.
+    #[serde(default, rename = "networkAccess")]
+    pub network_access: Value,
+    /// Writable roots beyond cwd (`workspaceWrite` only).
+    #[serde(default, rename = "writableRoots")]
+    pub writable_roots: Vec<String>,
 }
 
 // ── Turns ────────────────────────────────────────────────────────────
