@@ -303,27 +303,27 @@ mod tests {
         assert_eq!(root["other"]["kept"], true);
     }
 
-    /// `save` snapshots the manager inside the file lock, so a slower
-    /// save never writes an older snapshot over a newer one: however the
-    /// concurrent saves interleave, the file ends at the state after the
-    /// last mutation.
+    /// `save` snapshots the manager inside the file lock, so a save that
+    /// waits on the lock writes the newest state, not a stale snapshot.
     #[test]
-    fn test_concurrent_saves_always_leave_the_newest_state() {
+    fn test_a_save_waiting_on_the_lock_writes_the_newest_state() {
         let (dir, _cleanup) = temp_dir("sessions");
         let paths = paths(&dir);
         let manager = SessionManager::new();
-
+        manager.create_session("Old".to_owned(), json!({}));
         std::thread::scope(|scope| {
-            for i in 0..16 {
-                manager.create_session(format!("S{i}"), json!({}));
-                let (paths, manager) = (&paths, &manager);
-                scope.spawn(move || save(paths, manager).unwrap());
-            }
+            let guard = SESSIONS_LOCK.lock();
+            let (p, m) = (&paths, &manager);
+            let saver = scope.spawn(move || save(p, m).unwrap());
+            // Lets the saver block on the lock first.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            manager.create_session("New".to_owned(), json!({}));
+            drop(guard);
+            saver.join().unwrap();
         });
-
         let restored = SessionManager::new();
         load(&paths, &restored).unwrap();
-        assert_eq!(restored.list_sessions().len(), 16);
+        assert_eq!(restored.list_sessions().len(), 2);
     }
 
     #[test]
