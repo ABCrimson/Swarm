@@ -254,11 +254,19 @@
 
   .graph-context-menu__item:is(:hover, :focus-visible):not([aria-disabled="true"]) {
     background: oklch(0.78 0.18 205 / 0.12);
-    outline: none;
+  }
+
+  .graph-context-menu__item:focus-visible:not([aria-disabled="true"]) {
+    outline: 2px solid var(--color-plasma);
+    outline-offset: -2px;
   }
 
   .graph-context-menu__item[data-variant="danger"]:is(:hover, :focus-visible) {
     background: oklch(0.72 0.2 10 / 0.12);
+  }
+
+  .graph-context-menu__item[data-variant="danger"]:focus-visible:not([aria-disabled="true"]) {
+    outline-color: var(--color-rose);
   }
 
   .graph-context-menu__item[aria-disabled="true"] {
