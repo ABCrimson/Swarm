@@ -1,8 +1,8 @@
 // The live log-retention cap behind the Settings catalog.
 
 import { beforeEach, describe, expect, it } from "vitest";
-import type { LogEntry } from "#lib/log-store";
-import { useLogStore } from "#lib/log-store";
+import type { LogEntry } from "#store/logs";
+import { useLogStore } from "#store/logs";
 
 function add(message: string, source = "system"): void {
   useLogStore.getState().addEntry({ timestamp: 0, level: "info", source, message });

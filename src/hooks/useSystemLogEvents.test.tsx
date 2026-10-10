@@ -6,7 +6,7 @@
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSystemLogEvents } from "#hooks/useSystemLogEvents";
-import { useLogStore } from "#lib/log-store";
+import { useLogStore } from "#store/logs";
 
 type Handler = (e: { ts?: number; payload: unknown }) => void;
 

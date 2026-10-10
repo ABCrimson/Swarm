@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import * as z from "zod";
 import { onEvent } from "#lib/event-bus";
-import { LOG_LEVELS, useLogStore } from "#lib/log-store";
+import { LOG_LEVELS, useLogStore } from "#store/logs";
 
 /** An unknown backend level is shown as `info` rather than dropped. */
 const LevelSchema = z.enum(LOG_LEVELS).catch("info");

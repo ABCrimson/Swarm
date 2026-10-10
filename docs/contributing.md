@@ -395,9 +395,9 @@ Tests are **colocated**: `X.test.ts(x)` sits next to the `X.ts(x)` it covers, an
 |-----------------------------------|-------|-----------------------------------------------------------------|
 | `src/components/**/*.test.{ts,tsx}` | 49  | UI primitives, the graph and causality surfaces, layout, logs, metrics charts, sessions, and the agent/ship surfaces |
 | `src/hooks/*.test.tsx`            | 15    | `useWorker`, `useElkLayout`, `useTerminal`, `useWebGPU`, `useSettingsBridge`, `useShip`, and the event-stream hooks |
-| `src/lib/*.test.ts`               | 44    | `anthropic`, `event-bus`, `export`, `keybindings`, `log-store`, `models`, `time`, the `tools*` suites, `transport` (the `wsTransport` client), `webgpu`, `worker-spawn`, ... |
+| `src/lib/*.test.ts`               | 43    | `anthropic`, `event-bus`, `export`, `keybindings`, `models`, `time`, the `tools*` suites, `transport` (the `wsTransport` client), `webgpu`, `worker-spawn`, ... |
 | `src/pages/*.test.tsx`            | 3     | The pages with their own control surface (e.g. `Settings`) |
-| `src/store/*.test.ts`             | 11    | The Zustand stores and persisted settings |
+| `src/store/*.test.ts`             | 12    | The Zustand stores and persisted settings |
 
 Tauri IPC is mocked globally in `src/test/setup.ts`: `vi.mock` stubs `@tauri-apps/api/core` (`invoke`, `isTauri`) and `@tauri-apps/api/event` (`listen`), plus the `dialog`, `fs`, `opener` and `store` plugins and `sonner`. Individual tests override the default rejected/no-op behavior with `vi.mocked(invoke).mockResolvedValueOnce(...)` as needed. `src/test/dom-polyfills.ts` fills the jsdom gaps.
 

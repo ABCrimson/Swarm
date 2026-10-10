@@ -103,7 +103,7 @@ export const themeAtom = atomWithSettings<ThemePrefs>(
 /**
  * Tunable app behavior. Every field is consumed live — see useAlerts
  * (cooldown, native notifications), useAutoSnapshot (interval), and
- * useSettingsBridge, which pushes the rest into log-store (retention),
+ * useSettingsBridge, which pushes the rest into the logs store (retention),
  * the ai store and backend agent concurrency (concurrent limit), and
  * message-history (LRU cap), and runs the update-on-launch check.
  */
