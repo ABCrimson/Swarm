@@ -483,6 +483,28 @@ async fn a_cli_without_lifecycle_frames_starts_the_turn_on_init() {
     );
 }
 
+/// A lifecycle frame that closes the live turn without a `result`
+/// settles it as an error: `completed` as "Turn Ended Without A Result",
+/// `cancelled` as "Turn Cancelled".
+#[tokio::test]
+async fn a_lifecycle_close_without_a_result_settles_the_turn() {
+    for (scenario, want) in [
+        ("lifecycle_closes_turn.mjs", TURN_ENDED_WITHOUT_RESULT),
+        ("lifecycle_cancels_turn.mjs", TURN_CANCELLED),
+    ] {
+        let harness = Harness::new();
+        let session = harness.spawn(scenario).await;
+        let turn = send(session.as_ref(), "hi").await;
+        harness.recorder.wait_for("agent_turn_settled", 1).await;
+        session.shutdown().await.expect("shutdown");
+
+        let settled = settled_for(&harness.recorder, &turn);
+        assert_eq!(settled.len(), 1, "{scenario}");
+        assert_eq!(settled[0]["status"], "error", "{scenario}");
+        assert_eq!(settled[0]["error"], want, "{scenario}");
+    }
+}
+
 // ── Permissions ──────────────────────────────────────────────────────
 
 /// Runs a denial scenario and returns its single permission report.
