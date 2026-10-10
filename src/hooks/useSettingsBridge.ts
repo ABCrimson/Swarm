@@ -52,8 +52,10 @@ export function useSettingsBridge(): void {
     useMessageHistoryStore.getState().setMaxWorkers(settings.historyMaxWorkers);
   }, [settings.historyMaxWorkers]);
 
-  // Once per app launch. Quiet on failure — a dev build has no update
-  // endpoint, and an offline launch shouldn't toast an error.
+  // Once per app launch. Quiet on failure: the check fails whenever
+  // the endpoint is unreachable or serves no valid manifest (offline,
+  // or no release has published latest.json yet), and a check the
+  // user did not ask for shouldn't toast an error.
   useEffect(() => {
     if (!settings.updateCheckOnLaunch || updateCheckRan.current || !isTauri()) return;
     updateCheckRan.current = true;
