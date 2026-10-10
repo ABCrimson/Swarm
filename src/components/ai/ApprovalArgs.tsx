@@ -32,7 +32,7 @@ const showAllStyle: CSSProperties = { marginLeft: 8 };
 /** Values longer than this are cut until the user asks for the rest. */
 const TRUNCATE_AT = 500;
 
-/** Control, format, separator and default-ignorable characters (bidi, zero-width, tag, variation selector) that must never reach the screen raw. */
+/** Control, format, line/paragraph separator and default-ignorable characters (bidi, zero-width, tag, variation selector) that must never reach the screen raw. */
 const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
 
 const NAMED_ESCAPES: Readonly<Record<string, string>> = {
@@ -46,7 +46,7 @@ const NAMED_ESCAPES: Readonly<Record<string, string>> = {
  * Makes a model-controlled string safe to show, in one pass so an escape
  * is never escaped again: a backslash becomes `\\`; newline, carriage
  * return and tab become `\n`, `\r`, `\t`; every other control,
- * format, separator or default-ignorable character becomes a visible
+ * format, line/paragraph separator or default-ignorable character becomes a visible
  * `\uXXXX` (`\u{XXXXX}` above U+FFFF).
  * Because backslashes are doubled, every escape in the output is
  * unambiguous: a real newline (`\n`) never looks like the two characters

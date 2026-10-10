@@ -104,6 +104,21 @@ describe("AIChat", () => {
     expect(useMessageHistoryStore.getState().getMessages(W)).toHaveLength(2);
   });
 
+  it("keeps keyboard focus on the button when Send becomes Stop", async () => {
+    scriptReply("Streaming…");
+    const user = userEvent.setup();
+    render(<AIChat workerId={W} />);
+
+    await user.type(screen.getByRole("textbox", { name: /Message/ }), "hi");
+    screen.getByRole("button", { name: "Send" }).focus();
+    await user.keyboard("{Enter}");
+
+    const stop = await screen.findByRole("button", { name: "Stop" });
+    expect(stop).toHaveFocus();
+    await user.click(stop);
+    await vi.waitFor(() => expect(isChatTurnRunning(W)).toBe(false));
+  });
+
   it("Stop cancels the running turn and clears the input on send", async () => {
     scriptReply("Streaming…");
     render(<AIChat workerId={W} />);
