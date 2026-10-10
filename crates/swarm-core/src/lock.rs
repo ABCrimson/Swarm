@@ -1,9 +1,9 @@
 //! Single-instance lock.
 //!
 //! Two engines opening the same `swarm-events.db` would both resume
-//! `seq` from `max_seq()` and collide on the `PRIMARY KEY`: appends
-//! would fail while live emission kept handing out duplicate `seq`
-//! values. Every shell that embeds `swarm-core` (`swarm-desktop` and
+//! `seq` from `EventLog::resume_seq()` and collide on the `PRIMARY KEY`:
+//! appends would fail while live emission kept handing out duplicate
+//! `seq` values. Every shell that embeds `swarm-core` (`swarm-desktop` and
 //! `swarmd` alike) therefore takes this lock first, before the event log
 //! is opened, and whichever starts second refuses to touch the data
 //! directory at all.
@@ -277,12 +277,12 @@ mod tests {
         assert!(second.is_ok(), "expected reacquire to succeed after drop");
     }
 
-    /// Regression (Unix): a child process that shares the lock's open
+    /// (Unix): a child process that shares the lock's open
     /// file description must not keep the lock alive past `drop`. Every
     /// process forked while the lock is held shares it (a PTY, git or
     /// agent CLI child, until its exec closes the `O_CLOEXEC` copy), and
     /// a `flock` belongs to the open file description, not to one fd, so
-    /// closing our fd alone left it held. Here the child's stdin IS the
+    /// closing our fd alone leaves it held. Here the child's stdin IS the
     /// lock file, which holds that window open for the child's lifetime
     /// and makes the race deterministic.
     #[cfg(unix)]
@@ -311,10 +311,8 @@ mod tests {
         );
     }
 
-    /// Regression (Unix): the info file's temp path was built from the
-    /// lossy `Display` of the data dir, so a non-UTF-8 directory name
-    /// became a different, nonexistent directory and the info file was
-    /// never written.
+    /// (Unix): the info file's temp path keeps the data dir's raw path
+    /// (not its lossy `Display`), so a non-UTF-8 dir still gets the file.
     #[cfg(unix)]
     #[test]
     fn test_info_file_is_written_under_a_non_utf8_data_dir() {

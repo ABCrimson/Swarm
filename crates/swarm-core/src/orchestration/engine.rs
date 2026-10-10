@@ -899,11 +899,9 @@ mod tests {
         assert_eq!(stored[0].event_type, "worker_spawned");
     }
 
-    /// CONFIRMED regression: seqs issued to ephemeral events after the
-    /// last persisted row must never be reissued after a crash. The old
-    /// writer resumed from the highest PERSISTED seq, so a reconnecting
-    /// client (holding `lastSeq` = 5 here) silently dropped every new
-    /// event up to seq 5.
+    /// Seqs issued to ephemeral events after the last persisted row are
+    /// never reissued after a crash: the writer resumes from `resume_seq()`,
+    /// not `max_seq()`, so a client holding `lastSeq` = 5 drops no event.
     #[test]
     fn test_restart_after_a_crash_never_reissues_an_ephemeral_seq() {
         let mut writer = Writer::new(
@@ -1028,7 +1026,7 @@ mod tests {
         (msg, rx)
     }
 
-    /// CRITIQUE F3: a persist failure emits nothing on EITHER channel,
+    /// A persist failure emits nothing on EITHER channel,
     /// leaves `head` where it was, and resolves the ack to `RecvError`;
     /// only one ephemeral `system_log` error takes the next seq.
     #[test]
@@ -1076,7 +1074,7 @@ mod tests {
         assert!(p.fanout.try_recv().is_err());
     }
 
-    /// CRITIQUE F3: when the seq reservation fails the event is dropped
+    /// When the seq reservation fails the event is dropped
     /// whole (no seq above `reserved` is handed out), the counter rolls
     /// back, and the next event retries and succeeds once the log heals.
     #[test]
@@ -1160,7 +1158,7 @@ mod tests {
         (path, guard)
     }
 
-    /// CONFIRMED regression: shutdown drains everything queued before it
+    /// Shutdown drains everything queued before it
     /// (nothing lost on exit), later events are refused, and a restart
     /// on the same file continues exactly after the final head.
     #[tokio::test]

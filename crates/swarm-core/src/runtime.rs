@@ -370,7 +370,7 @@ mod tests {
         drop(first);
     }
 
-    /// The error chain is preserved (it used to end at the wrapper).
+    /// The error chain is kept: `source()` reaches the wrapped `AppError`.
     #[test]
     fn test_runtime_start_error_keeps_its_source() {
         use std::error::Error;
@@ -383,9 +383,8 @@ mod tests {
         assert!(err.source().is_some());
     }
 
-    /// CONFIRMED regression: nothing drained the engine on exit, so
-    /// events still queued were lost. `shutdown` drains everything
-    /// recorded before it, and a restart continues after the final seq.
+    /// `shutdown` drains everything recorded before it (nothing queued is
+    /// lost on exit), and a restart continues after the final seq.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_shutdown_drains_the_engine_and_a_restart_continues_after_it() {
         let (dir, _cleanup) = temp_dir("runtime");
