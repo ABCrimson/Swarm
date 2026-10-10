@@ -25,9 +25,10 @@
 //!   unless a valid token file ALREADY exists, so a fresh install can never
 //!   be pointed at `0.0.0.0` blind: the operator first completes one
 //!   loopback run, which mints the token and prints the connect URL.
-//!   [`DaemonToken::exists`] is a pure check and must be evaluated BEFORE
-//!   [`DaemonToken::load_or_create`]; minting first would let a refused run
-//!   create the very file that lets an identical second run through.
+//!   [`DaemonToken::load`] (like [`DaemonToken::exists`]) is a pure check
+//!   and must be evaluated BEFORE [`DaemonToken::load_or_create`]; minting
+//!   first would let a refused run create the very file that lets an
+//!   identical second run through.
 //! - **Constant-time comparison** (`subtle`), so response timing does not
 //!   reveal how many leading bytes of a guess matched.
 //!
