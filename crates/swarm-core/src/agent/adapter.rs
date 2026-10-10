@@ -476,10 +476,8 @@ mod tests {
     /// An adapter/session pair proving the trait contract compiles and
     /// is object-safe (`spawn` returns a real `Box<dyn AgentSession>`),
     /// and driving a full session lifecycle — spawn → turn → deltas →
-    /// settled → shutdown — through a LIVE `OrchestrationEngine`, the
-    /// same integration depth `agent_turn_started`'s own live-engine
-    /// test uses (`orchestration::engine`'s
-    /// `test_agent_turn_started_mechanism_returns_a_real_seq_through_a_live_engine`).
+    /// settled → shutdown — through a LIVE `OrchestrationEngine` (a real
+    /// writer thread and a file-backed log).
     struct MockAdapter {
         sink: crate::events::EventSink,
     }
