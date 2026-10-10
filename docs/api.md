@@ -68,9 +68,8 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
 - [Bus Commands](#bus-commands)
   - [bus_send](#bus_send)
   - [bus_list_channels](#bus_list_channels)
-- [Updater Commands](#updater-commands)
+- [Native Commands (Desktop Only)](#native-commands-desktop-only)
   - [check_for_updates](#check_for_updates)
-- [Notification Commands](#notification-commands)
   - [send_notification](#send_notification)
 - [Events](#events)
   - [The Envelope](#the-envelope)
@@ -1444,9 +1443,9 @@ const topics = await invoke("bus_list_channels");
 
 ---
 
-## Updater Commands
+## Native Commands (Desktop Only)
 
-Native: desktop only, no registry entry, not reachable through `swarmd`.
+`swarm_core::commands::NATIVE_ONLY`: desktop only, no registry entry, not reachable through `swarmd`.
 
 ### `check_for_updates`
 
@@ -1477,8 +1476,6 @@ if (update.available) {
 The signing keypair, the `plugins.updater.pubkey` value and the release flow are described in [Updater Keys](updater-keys.md).
 
 ---
-
-## Notification Commands
 
 ### `send_notification`
 
@@ -1669,7 +1666,7 @@ Typed handlers receive the payload parsed by the schema for its event type (`EVE
 
 ## Wire Protocol (swarmd)
 
-Everything above describes the Tauri IPC transport (`invoke` / `listen` over `@tauri-apps/api`). `swarmd`, the headless daemon, exposes the SAME registry commands (every command in this document except [Updater Commands](#updater-commands) and [Notification Commands](#notification-commands) -- `swarm_core::commands::NATIVE_ONLY` -- so 36) and the SAME envelope shape, over one authenticated WebSocket at `/ws`. Frame types are defined once, serde-only, in `swarm_core::protocol` (`crates/swarm-core/src/protocol.rs`, `PROTOCOL_VERSION` 1); the browser-side client is `src/lib/transport.ts`'s `wsTransport`. The server side is `crates/swarmd/src/ws.rs`; running and installing the daemon is covered in [The swarmd Daemon](daemon.md).
+Everything above describes the Tauri IPC transport (`invoke` / `listen` over `@tauri-apps/api`). `swarmd`, the headless daemon, exposes the SAME registry commands (every command in this document except the [Native Commands](#native-commands-desktop-only) -- `swarm_core::commands::NATIVE_ONLY` -- so 36) and the SAME envelope shape, over one authenticated WebSocket at `/ws`. Frame types are defined once, serde-only, in `swarm_core::protocol` (`crates/swarm-core/src/protocol.rs`, `PROTOCOL_VERSION` 1); the browser-side client is `src/lib/transport.ts`'s `wsTransport`. The server side is `crates/swarmd/src/ws.rs`; running and installing the daemon is covered in [The swarmd Daemon](daemon.md).
 
 ### Connecting
 
