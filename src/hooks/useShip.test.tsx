@@ -21,10 +21,9 @@ function emit(type: string, payload: unknown): void {
 }
 
 // DIRECTIVE (B1): this fake `waitFor` mirrors the real `#lib/event-bus`
-// timeout (a real `setTimeout` that rejects) rather than waiting
-// forever — a timer-less fake is exactly why the suite once missed
-// useShip arming the receipt wait with the library's 5000ms default
-// instead of an explicit 30000ms budget.
+// timeout (a real `setTimeout` that rejects) instead of waiting forever.
+// A timer-less fake cannot tell an explicit 30000ms receipt budget from
+// the library's 5000ms default.
 vi.mock(import("#lib/event-bus"), () => ({
   onEvent: (type: string, handler: Handler) => {
     const set = handlers.get(type) ?? new Set<Handler>();
