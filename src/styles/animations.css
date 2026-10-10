@@ -1,36 +1,4 @@
-/* ── Typed custom properties ─────────────────────── */
-
-/*
- * Animated by `glow-breathe`. The initial value is the resting glow, so a
- * running worker still glows when the animation is off (reduced motion,
- * see below) instead of dropping to 0.
- */
-@property --glow-intensity {
-  syntax: "<number>";
-  initial-value: 0.3;
-  inherits: false;
-}
-
-/* ── @keyframes (referenced from component inline styles) ── */
-
-@keyframes glow-breathe {
-  0%,
-  100% {
-    --glow-intensity: 0.3;
-  }
-  50% {
-    --glow-intensity: 0.8;
-  }
-}
-
-@keyframes dash-flow {
-  from {
-    stroke-dashoffset: 24;
-  }
-  to {
-    stroke-dashoffset: 0;
-  }
-}
+/* ── @keyframes (used through Tailwind animate-[...] classes) ── */
 
 @keyframes cursor-blink {
   0%,
