@@ -950,7 +950,7 @@ async fn tool_items_become_tool_calls_and_results_with_honest_error_flags() {
 async fn failed_turns_settle_error_with_the_server_message() {
     let h = Harness::new("failed_turns.script");
     let session = h.spawn().await;
-    for prompt in ["one", "two"] {
+    for prompt in ["one", "two", "three"] {
         let turn = session
             .send_turn(TurnInput {
                 prompt: prompt.to_string(),
@@ -964,7 +964,7 @@ async fn failed_turns_settle_error_with_the_server_message() {
     let settled = settlements(&events);
     assert_eq!(
         settled.len(),
-        2,
+        3,
         "a retrying error notification settles nothing"
     );
     assert_eq!(settled[0].status, AgentTurnStatus::Error);
@@ -974,6 +974,12 @@ async fn failed_turns_settle_error_with_the_server_message() {
     );
     assert_eq!(settled[1].status, AgentTurnStatus::Error);
     assert_eq!(settled[1].error.as_deref(), Some("stream disconnected"));
+    assert_eq!(settled[2].status, AgentTurnStatus::Error);
+    assert_eq!(
+        settled[2].error.as_deref(),
+        Some(TURN_FAILED),
+        "a retrying error notification is not the turn's error"
+    );
     session.shutdown().await.expect("shutdown");
 }
 

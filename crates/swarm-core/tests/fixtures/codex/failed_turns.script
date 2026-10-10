@@ -1,6 +1,8 @@
-# Two failed turns. The first carries turn.error (after a retrying error
+# Three failed turns. The first carries turn.error (after a retrying error
 # notification that must not settle anything); the second has no
-# turn.error, so the non-retrying error notification's message is used.
+# turn.error, so the non-retrying error notification's message is used;
+# the third has no turn.error and only a retrying error notification, so
+# it settles with the generic failure message.
 #DIRECTIVE EXPECT_REQUEST initialize
 #DIRECTIVE RESPOND_INITIALIZE
 #DIRECTIVE EXPECT_NOTIFICATION initialized
@@ -14,3 +16,7 @@
 #DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000c2
 {"method":"error","params":{"error":{"message":"stream disconnected","codexErrorInfo":null,"additionalDetails":null,"misalignment":null},"willRetry":false,"threadId":"@THREAD","turnId":"@TURN"}}
 {"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"failed","error":null,"startedAt":1790201250,"completedAt":1790201252,"durationMs":200}}}
+#DIRECTIVE EXPECT_REQUEST turn/start
+#DIRECTIVE RESPOND_TURN_START 019a7c00-0000-7000-8000-0000000000c3
+{"method":"error","params":{"error":{"message":"Reconnecting 2/5","codexErrorInfo":null,"additionalDetails":null,"misalignment":null},"willRetry":true,"threadId":"@THREAD","turnId":"@TURN"}}
+{"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"failed","error":null,"startedAt":1790201250,"completedAt":1790201252,"durationMs":100}}}
