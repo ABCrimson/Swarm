@@ -10,7 +10,7 @@ The house rules (exact pins, pnpm only, no manual memoization, `parking_lot`, an
 
 - [Development Setup](#development-setup)
 - [Code Standards](#code-standards)
-- [Architecture Decisions](#architecture-decisions)
+- [Design Rationale](#design-rationale)
 - [Commit Conventions](#commit-conventions)
 - [Pull Request Process](#pull-request-process)
 - [Testing](#testing)
@@ -180,7 +180,9 @@ cargo deny check
 
 ---
 
-## Architecture Decisions
+## Design Rationale
+
+Binding decisions live in the [architecture decision records](adr/README.md); read the record that covers a part before you change it. The notes below are short background on a few library choices; where a record exists (Zustand + Jotai: [ADR-0027](adr/0027-three-tier-frontend-state.md)), the record is authoritative.
 
 ### Why Zustand + Jotai?
 
@@ -322,6 +324,7 @@ docs(api): document the ship_context causal record
    - Tauri IPC commands (update `docs/api.md`)
    - The daemon's wire protocol or flags (update `docs/daemon.md`)
    - Architecture (update `docs/architecture.md`)
+   - A recorded design decision (write a new record under `docs/adr/` and mark the old one superseded, per [its README](adr/README.md))
    - Public Rust APIs (update `///` doc comments)
 
 ### PR Guidelines
