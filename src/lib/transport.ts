@@ -76,7 +76,8 @@ export const tauriTransport: Transport = {
 // from every control frame by the absence of a `"frame"` key.
 
 const TOKEN_STORAGE_KEY = "swarmd.token";
-const EVENT_CHANNEL_NAME = "swarm://events";
+/** The one event channel; `#lib/event-bus` listens on it and `wsTransport.listen` serves only it. */
+export const EVENT_CHANNEL = "swarm://events";
 const BASE_RECONNECT_DELAY_MS = 500;
 const MAX_RECONNECT_DELAY_MS = 15_000;
 const JITTER_FRACTION = 0.3;
@@ -400,7 +401,7 @@ export class WsTransport implements Transport {
    * reconnect loop gets through. Any other channel is a no-op.
    */
   async listen<T>(event: string, handler: (payload: T) => void): Promise<UnlistenFn> {
-    if (event !== EVENT_CHANNEL_NAME) return noopUnlisten;
+    if (event !== EVENT_CHANNEL) return noopUnlisten;
     const listener = (payload: unknown): void => handler(payload as T);
     this.listeners.add(listener);
     this.connect().catch(() => {

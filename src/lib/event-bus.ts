@@ -6,6 +6,7 @@ import {
   isEventType,
 } from "#lib/event-payloads";
 import { invoke, listen } from "#lib/tauri";
+import { EVENT_CHANNEL } from "#lib/transport";
 
 export type { EventPayload, EventType } from "#lib/event-payloads";
 
@@ -38,7 +39,6 @@ type TypedDomainEvent<K extends EventType> = Readonly<
   Omit<DomainEvent, "type" | "payload"> & { type: K; payload: EventPayload<K> }
 >;
 
-const EVENT_CHANNEL = "swarm://events";
 /** Server page size for `events_since`: a full page means "ask again". */
 const PAGE_LIMIT = 5000;
 /** First retry delay after a failed backfill; doubles per consecutive failure. */
