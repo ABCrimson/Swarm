@@ -42,7 +42,6 @@ export const PROVIDER_LABELS: Readonly<Record<ProviderId, string>> = {
 
 /** Mirrors Rust's `CancelGranularity`. */
 export const CancelGranularitySchema = z.enum(["kill_only", "graceful"]);
-export type CancelGranularity = z.infer<typeof CancelGranularitySchema>;
 
 /** Mirrors Rust's `PermissionDecision`. */
 export const PermissionDecisionSchema = z.enum(["allow", "deny"]);
@@ -50,7 +49,6 @@ export type PermissionDecision = z.infer<typeof PermissionDecisionSchema>;
 
 /** Mirrors Rust's `AgentTurnStatus`. */
 export const AgentTurnStatusSchema = z.enum(["ok", "error"]);
-export type AgentTurnStatus = z.infer<typeof AgentTurnStatusSchema>;
 
 /**
  * The spawn-time trust dial, mirroring both Rust's `ClaudeCodeTrustTier`
@@ -212,4 +210,3 @@ export const AgentSessionExitedPayloadSchema = z.object({
   exitCode: z.int().nullish(),
   signal: z.string().nullish(),
 });
-export type AgentSessionExitedPayload = z.infer<typeof AgentSessionExitedPayloadSchema>;
