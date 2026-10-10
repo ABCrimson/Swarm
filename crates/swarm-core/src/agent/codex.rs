@@ -1518,10 +1518,15 @@ impl AgentAdapter for CodexAdapter {
                     });
                 }
                 Err(ProbeFailure::Spawn(error)) => {
+                    let detail = if error.kind() == std::io::ErrorKind::NotFound {
+                        format!("Codex CLI Not Found On PATH: {error}")
+                    } else {
+                        format!("Codex CLI Could Not Be Started: {error}")
+                    };
                     return Ok(ProbeReport {
                         available: false,
                         version: None,
-                        detail: Some(format!("Codex CLI Not Found On PATH: {error}")),
+                        detail: Some(detail),
                     });
                 }
                 Err(ProbeFailure::TimedOut) => {
