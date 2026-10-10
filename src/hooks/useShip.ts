@@ -79,6 +79,8 @@ export interface ShipSnapshot {
   /** The editable AI prose (the "What Changed / Why" section) — `null` until a successful `regenerateProse`. User edits land here via `setAiProse`, independent of `aiProseState`. */
   readonly aiProse: string | null;
   readonly aiProseState: AiProseState;
+  /** Why the last generation failed (e.g. a missing API key), shown with the failure; `null` unless `aiProseState` is `"failed"`. */
+  readonly aiProseError: string | null;
 }
 
 /** Every transition `shipReducer` knows. */
@@ -99,7 +101,7 @@ export type ShipAction =
   | { readonly type: "contextFailed" }
   | { readonly type: "proseStarted" }
   | { readonly type: "proseReady"; readonly prose: string }
-  | { readonly type: "proseFailed" }
+  | { readonly type: "proseFailed"; readonly reason: string }
   | { readonly type: "proseEdited"; readonly prose: string }
   | { readonly type: "actionStarted" }
   | { readonly type: "progressReported"; readonly row: ShipProgressRow }
@@ -122,6 +124,7 @@ export const INITIAL_SHIP_SNAPSHOT: ShipSnapshot = {
   contextState: "loading",
   aiProse: null,
   aiProseState: "idle",
+  aiProseError: null,
 };
 
 /**
@@ -164,13 +167,13 @@ export function shipReducer(snapshot: ShipSnapshot, action: ShipAction): ShipSna
     case "contextFailed":
       return { ...snapshot, context: null, contextState: "failed" };
     case "proseStarted":
-      return { ...snapshot, aiProseState: "generating" };
+      return { ...snapshot, aiProseState: "generating", aiProseError: null };
     case "proseReady":
-      return { ...snapshot, aiProse: action.prose, aiProseState: "ready" };
+      return { ...snapshot, aiProse: action.prose, aiProseState: "ready", aiProseError: null };
     case "proseFailed":
       // The previous prose (or `null`) stays: a failed regenerate never
       // wipes what the user already has.
-      return { ...snapshot, aiProseState: "failed" };
+      return { ...snapshot, aiProseState: "failed", aiProseError: action.reason };
     case "proseEdited":
       return { ...snapshot, aiProse: action.prose };
     case "actionStarted":
@@ -380,7 +383,9 @@ async function fetchContext(
 
 /**
  * Generates the AI prose. Failure (no API key, network, refusal) sets
- * `aiProseState: "failed"` and leaves `aiProse` as it was — the body
+ * `aiProseState: "failed"` (with the reason in `aiProseError`, so a
+ * missing API key reads differently from a network error) and leaves
+ * `aiProse` as it was — the body
  * then falls back to the deterministic Causal Record alone, never a
  * synthesized placeholder. `signal` aborts the stream when the flow
  * unmounts (see `useShip`).
@@ -394,8 +399,8 @@ async function generateProse(
   dispatch({ type: "proseStarted" });
   try {
     dispatch({ type: "proseReady", prose: await generateCausalProse(input, model, signal) });
-  } catch {
-    dispatch({ type: "proseFailed" });
+  } catch (err) {
+    dispatch({ type: "proseFailed", reason: errorMessage(err) });
   }
 }
 

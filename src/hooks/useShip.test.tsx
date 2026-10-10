@@ -215,9 +215,11 @@ describe("shipReducer", () => {
 
   it("keeps the previous prose when a regenerate fails", () => {
     const ready = shipReducer(INITIAL_SHIP_SNAPSHOT, { type: "proseReady", prose: "Kept." });
-    const failed = shipReducer(ready, { type: "proseFailed" });
+    const failed = shipReducer(ready, { type: "proseFailed", reason: "Network Connection Failed" });
     expect(failed.aiProse).toBe("Kept.");
     expect(failed.aiProseState).toBe("failed");
+    expect(failed.aiProseError).toBe("Network Connection Failed");
+    expect(shipReducer(failed, { type: "proseStarted" }).aiProseError).toBeNull();
   });
 
   it("reset returns to the initial snapshot but keeps message and mode", () => {

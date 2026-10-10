@@ -26,6 +26,8 @@ interface ShipPreviewProps {
   readonly aiProse: string | null;
   readonly onAiProseChange: (prose: string) => void;
   readonly aiProseState: AiProseState;
+  /** Why the last generation failed, appended to the failure line; `null` when unknown. */
+  readonly aiProseError: string | null;
   readonly onRegenerateProse: () => void;
 }
 
@@ -354,6 +356,7 @@ export function ShipPreview({
   aiProse,
   onAiProseChange,
   aiProseState,
+  aiProseError,
   onRegenerateProse,
 }: ShipPreviewProps): React.ReactElement {
   const messageId = useId();
@@ -509,6 +512,7 @@ export function ShipPreview({
           {aiProseState === "failed" && (
             <span style={actionReasonStyle}>
               Generation Failed — Shipping With The Causal Record Alone Still Works.
+              {aiProseError != null && ` ${aiProseError}.`}
             </span>
           )}
         </div>

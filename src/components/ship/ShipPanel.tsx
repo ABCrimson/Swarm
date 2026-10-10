@@ -223,6 +223,7 @@ function WorkerShipFlow({ workerId }: ShipPanelProps): React.ReactElement {
       aiProse={ship.aiProse}
       onAiProseChange={ship.setAiProse}
       aiProseState={ship.aiProseState}
+      aiProseError={ship.aiProseError}
       onRegenerateProse={() => void ship.regenerateProse()}
     />
   );

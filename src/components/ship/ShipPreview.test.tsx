@@ -65,6 +65,7 @@ function renderPreview(overrides: Partial<React.ComponentProps<typeof ShipPrevie
     aiProse: null,
     onAiProseChange: vi.fn(),
     aiProseState: "idle",
+    aiProseError: null,
     onRegenerateProse: vi.fn(),
     ...overrides,
   };
@@ -175,6 +176,16 @@ describe("ShipPreview — AI prose section", () => {
     const button = screen.getByText("Generating…");
     expect(button).toBeInTheDocument();
     expect(button.closest("button")).toBeDisabled();
+  });
+
+  it("appends the reason a generation failed", () => {
+    renderPreview({
+      aiProseState: "failed",
+      aiProseError: "API Key Not Configured — Add It In Settings",
+    });
+    expect(
+      screen.getByText(/Still Works\. API Key Not Configured — Add It In Settings\./),
+    ).toBeInTheDocument();
   });
 
   it("surfaces a failure message without blocking the rest of the preview from rendering", () => {
