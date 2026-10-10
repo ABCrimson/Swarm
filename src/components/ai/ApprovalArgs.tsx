@@ -6,7 +6,7 @@ import { Button } from "#components/ui/Button";
 
 export const argsStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "max-content minmax(0, 1fr)",
+  gridTemplateColumns: "fit-content(40%) minmax(0, 1fr)",
   gap: "2px 12px",
   margin: "4px 0 0",
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
@@ -107,7 +107,7 @@ function neverTruncated(tool: string, key: string): boolean {
 
 /**
  * Every field of the validated input that will execute, in parsed key
- * order, as raw labelled values (escaped at render time). Per-tool extras
+ * order: each label escaped here, each raw value escaped at render time. Per-tool extras
  * (the byte size of `write_file` content) are added beside the fields,
  * never in place of them.
  */
@@ -130,7 +130,7 @@ export function approvalArgs(tool: string, input: unknown): ReadonlyArray<Approv
     }
     args.push({
       key,
-      label: humanize(key),
+      label: escapeForDisplay(humanize(key)),
       value: typeof value === "string" ? value : canonicalJson(value),
       truncatable: !neverTruncated(tool, key),
     });
