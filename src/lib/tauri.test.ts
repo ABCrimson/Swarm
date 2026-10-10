@@ -151,10 +151,10 @@ describe("resizeWorker", () => {
 //
 // create_session requires its `config` argument (the registry rejects
 // the call with "Invalid Arguments: missing field `config`" without
-// it). Rust's Session
-// has no `updatedAt` field and represents `createdAt` as Unix seconds,
-// while the frontend's SessionSchema requires ISO-8601 strings for both,
-// so a raw pass-through would leave `updatedAt` undefined in the store.
+// it). Rust's Session has no `updatedAt` field and represents
+// `createdAt` as Unix seconds, while the frontend's SessionSchema
+// requires ISO-8601 strings for both, so a raw pass-through would
+// leave `updatedAt` undefined in the store.
 
 describe("createSession", () => {
   const RAW_SESSION = {

@@ -2,11 +2,10 @@
 //
 // spawnWorkerFromSpec is the one place a full WorkerSpawnSpec gets
 // split: process options (name/shell/cwd/env/repoRoot/isolation) go to
-// Rust via
-// spawnWorker; agent metadata (role/model/systemPrompt) is stored
-// client-side in useWorkerAgentStore, keyed by the new worker id, and
-// must never reach the IPC payload. This proves both halves of that
-// split, plus the session_add_worker wiring for template application.
+// Rust via spawnWorker; agent metadata (role/model/systemPrompt) is
+// stored client-side in useWorkerAgentStore, keyed by the new worker
+// id, and must never reach the IPC payload. This proves both halves of
+// that split, plus the session_add_worker wiring for template application.
 
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
