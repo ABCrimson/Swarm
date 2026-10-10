@@ -341,9 +341,10 @@ On expiry the process tree is terminated (Unix: `SIGTERM` to the group, `SIGKILL
 The frontend half is `useShip` (`src/hooks/useShip.ts`), a thin view over a pure `shipReducer`
 (`idle`, `preflighting`, `previewing`, `running`, `settled`, `failed`). A module-level in-flight set,
 checked synchronously, stops a double click starting two commits. The `ship_settled` listener is armed
-**before** the triggering call, because the event path and the IPC response have no ordering guarantee,
-and waits 30 s (`SHIP_SETTLED_TIMEOUT_MS`). Failing to open the compare page after a settled ship is a
-warning toast and never flips the outcome. The default commit message is deterministic
+**before** the triggering call, because the event path and the IPC response have no ordering guarantee;
+once that call has resolved, the flow waits up to 30 s more for a receipt that has not yet arrived
+(`SHIP_SETTLED_TIMEOUT_MS`). Failing to open the compare page after a settled ship is a warning toast
+and never flips the outcome. The default commit message is deterministic
 (`src/lib/ship-message.ts`: a Conventional Commit inferred from paths and the diff stat).
 
 ### The Causal Record
@@ -645,7 +646,7 @@ textures: bloom (threshold, dual Kawase blur, composite), chromatic aberration, 
 | --- | --- |
 | Remote clients of `swarmd` | Token, `Host`/`Origin` allow-list, non-loopback gate, `RemotePolicy` ([ADR-0021](adr/0021-command-registry-remote-policy.md), [ADR-0022](adr/0022-swarmd-authentication-and-exposure.md)). An authenticated client can run commands as the daemon's user. |
 | Webview to OS | Capability file (per-command `allow-*` ACL, no static fs scope, deny list, opener scopes) and CSP ([ADR-0030](adr/0030-tauri-3-alpha-capability-scoped-fs.md)). |
-| `read_file` / `write_file` commands | Absolute paths, canonicalized (symlinks, 8.3 short names) before the scope and deny checks; reads limited to the data directory and `$HOME`, writes to the data directory and `~/.swarm`; `swarm-config.json` (the API key), the daemon token and its temp form, and eleven home credential stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.config/gh`, `~/.claude`, `~/.codex`, `~/.git-credentials`, `~/.netrc`) are never accessible; Windows writes refuse `:`, a trailing `.` or space and device names; `Denied` remotely ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)). |
+| `read_file` / `write_file` commands | Absolute paths, canonicalized (symlinks, 8.3 short names) before the scope and deny checks; reads limited to the data directory and `$HOME`, writes to the data directory and `~/.swarm`; `swarm-config.json` (the API key), the daemon token and its temp form, and eighteen home credential stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.config/gh`, `~/.claude`, `~/.codex`, `~/.git-credentials`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials`, `~/.cargo/credentials.toml`, `~/.config/gcloud`, `~/AppData/Roaming/GitHub CLI`, `~/AppData/Roaming/gcloud`) are never accessible; the app's own state files in the data directory (`swarm-events.db`, `sessions.json`, `daemon.lock`, `swarm-settings.json`, `swarm-snapshots.json`, `swarm-templates.json`, and names with those prefixes) are never writable; Windows writes refuse `:`, a trailing `.` or space and device names; `Denied` remotely ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)). |
 | Webview AI tools | Every tool that acts on the machine, `kill_worker` included, needs the user's per-call answer inside its own `execute`; session grants are exact to tool, worker and argument ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)). |
 | Provider permissions | Closed trust tiers, no bypass modes ([ADR-0015](adr/0015-trust-tiers-closed-vocabulary.md)). |
 | Git | No force push, no hook bypass, deny list, primary-checkout guard, secret redaction ([ADR-0009](adr/0009-ship-chain-structural-guarantees.md), [ADR-0012](adr/0012-single-git-runner.md)). |
@@ -658,8 +659,6 @@ See [SECURITY.md](../SECURITY.md) for the reporting policy.
 True at this commit and deliberately not hidden:
 
 - Nothing counts provider requests, so `system_metrics` reports no request rate.
-- The frontend waits 30 s for `ship_settled`, but the backend allows 600 s for commit and push, so a slow
-  pre-commit or pre-push hook can be reported as failed by the UI while git is still running.
 - The provenance graph is session-scoped (never hydrated from the log) and a relayout overwrites manual
   node drags.
 - Killing a worker signals only its shell; a detached process can keep a worktree busy
