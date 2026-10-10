@@ -164,6 +164,25 @@ describe("Sessions — Save As Template", () => {
     });
     expect(mockSaveUserTemplate).toHaveBeenCalledOnce();
   });
+
+  it("returns focus to the menu trigger when the form closes", async () => {
+    const user = userEvent.setup();
+    addSession();
+    await renderPage();
+
+    const trigger = screen.getByRole("button", { name: 'Actions For Session "Research Sprint"' });
+    trigger.focus();
+    chooseMenuItem("Save As Template");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("form")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    trigger.focus();
+    chooseMenuItem("Save As Template");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("form")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
 });
 
 describe("Sessions — views", () => {
