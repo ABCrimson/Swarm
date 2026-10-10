@@ -1,15 +1,17 @@
 import { test as base, expect, type Locator, type Page } from "@playwright/test";
 
-/** Pages with an entry in the sidebar's "Page Navigation" landmark. */
-export type SidebarPage =
-  | "Dashboard"
-  | "Workers"
-  | "Sessions"
-  | "Metrics"
-  | "Logs"
-  | "Tools"
-  | "Workspace"
-  | "Settings";
+/** Pages in the sidebar's "Page Navigation" landmark, in sidebar order (NAV_ITEMS in Sidebar.tsx). */
+export const SIDEBAR_PAGES = [
+  "Dashboard",
+  "Workers",
+  "Sessions",
+  "Metrics",
+  "Logs",
+  "Tools",
+  "Workspace",
+  "Settings",
+] as const;
+export type SidebarPage = (typeof SIDEBAR_PAGES)[number];
 
 /**
  * The frontend shell as the specs drive it: landmarks, navigation and the
