@@ -69,7 +69,6 @@ export default defineConfig(async ({ mode, command }): Promise<UserConfig> => {
               { name: "graph", test: /node_modules[\\/](@xyflow|elkjs)[\\/]/ },
               { name: "terminal", test: /node_modules[\\/]@xterm[\\/]/ },
               { name: "state", test: /node_modules[\\/](zustand|immer|jotai)[\\/]/ },
-              { name: "ai", test: /node_modules[\\/]@anthropic-ai[\\/]/ },
               { name: "charts", test: /node_modules[\\/](recharts|d3-[a-z-]+)[\\/]/ },
             ],
           },
