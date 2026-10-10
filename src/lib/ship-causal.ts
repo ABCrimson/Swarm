@@ -2,12 +2,13 @@
  * The two-part ship PR body: a DETERMINISTIC, code-generated "Causal
  * Record" section (`renderCausalRecordSection`) the model never writes,
  * plus an OPTIONAL AI-generated "What Changed / Why" prose section
- * (`generateCausalProse`) that may cite `[seq N]` — any citation not
- * actually present in the fetched range is stripped before render
+ * (`generateCausalProse`) that may cite `[seq N]` — a citation survives
+ * only as exact `[seq N]` for a tool-call seq listed in the Turns section;
+ * every other `[seq ...]` is stripped before render
  * (`stripUnknownSeqCitations`). The model never writes the Causal Record, so
  * its provenance claims are machine-generated, and `escapeCell` renders the
  * agent-controlled tool names and targets in it as inert text; the AI prose
- * can only cite `[seq N]` entries that exist in the fetched range. See
+ * can only cite `[seq N]` tool calls it was shown. See
  * `docs/architecture.md`'s Ship Chain section for the full design and `crates/swarm-core/src/git/causal.rs` for where
  * `ShipContext` itself comes from.
  *
@@ -147,24 +148,23 @@ export function renderCausalRecordSection(context: ShipContext, diffStat: DiffSt
 // ── Citation validity + stripping (the honesty rule) ────────────────
 
 /**
- * One `[seq N]` citation plus at most one plain space on each side —
- * never a newline or tab, so removing a citation can never join two
- * lines or eat a list item's indentation.
+ * Any `[seq ...]` form — `[seq 9999 ]`, `[seq: 9999]`, `[seq 1, 2]` — with
+ * a bounded body and at most one plain space on each side, never a newline
+ * or tab, so removing a citation can never join two lines or eat a list
+ * item's indentation.
  */
-const SEQ_CITATION_RE = /( ?)\[seq\s+(\d+)\]( ?)/gi;
-
-function isSeqInRange(seq: number, context: ShipContext): boolean {
-  return seq > context.seqFrom && seq <= context.seqTo;
-}
+const SEQ_CITATION_RE = /( ?)\[[ \t]*seq\b([^\]\n]{0,32})\]( ?)/gi;
 
 /**
- * Strips every `[seq N]` citation in `prose` whose `N` does not fall
- * within `context`'s actual `(seqFrom, seqTo]` range — the honesty gate
- * between whatever the model wrote and what actually renders. A model
- * citing a seq it was never given (hallucination) or one outside the
- * fetched window is functionally indistinguishable from fabricated
- * provenance — both are removed the same way, unconditionally, never
- * surfaced as a "trust me" citation.
+ * Strips every `[seq ...]` citation in `prose` except an exact `[seq N]`
+ * whose `N` is the seq of a tool call listed in `context`'s turns — the
+ * same seqs `buildCausalPromptInput` shows the model. That is the honesty
+ * gate between whatever the model wrote and what actually renders. A seq
+ * the model was never given (hallucination), one that is only somewhere in
+ * the fetched range (another worker's event), and a malformed form are
+ * functionally indistinguishable from fabricated provenance — all are
+ * removed the same way, unconditionally, never surfaced as a "trust me"
+ * citation.
  *
  * Spacing is repaired only where a citation was removed: a citation
  * between two words collapses to the single space that separated them
@@ -174,10 +174,12 @@ function isSeqInRange(seq: number, context: ShipContext): boolean {
  * indented code and line breaks survive exactly as the model wrote them.
  */
 export function stripUnknownSeqCitations(prose: string, context: ShipContext): string {
+  const known = new Set(context.turns.flatMap((turn) => turn.toolCalls.map((call) => call.seq)));
   return prose.replaceAll(
     SEQ_CITATION_RE,
-    (match, before: string, seqStr: string, after: string) => {
-      if (isSeqInRange(Number(seqStr), context)) return match;
+    (match, before: string, inner: string, after: string) => {
+      const cited = /^\s+(\d+)$/.exec(inner);
+      if (cited && known.has(Number(cited[1]))) return match;
       return before && after ? " " : "";
     },
   );
@@ -193,13 +195,18 @@ export interface CausalProseInput {
   readonly baseBranch: string;
 }
 
+/** Folds control characters to a space so agent-controlled text cannot start a forged line in the prompt. */
+function oneLine(value: string): string {
+  return value.replaceAll(/\p{Cc}+/gu, " ");
+}
+
 function renderTurnForPrompt(turn: CausalTurn, index: number): string {
   const header = `Turn ${index + 1} (${turnStatusLabel(turn.status)}):`;
   if (turn.toolCalls.length === 0) return `${header}\n  (No Tool Calls)`;
   const calls = turn.toolCalls
     .map(
       (c) =>
-        `  - [seq ${c.seq}] ${c.name}${c.target != null ? ` (${c.target})` : ""} -> ${resultLabel(c.ok)}`,
+        `  - [seq ${c.seq}] ${oneLine(c.name)}${c.target != null ? ` (${oneLine(c.target)})` : ""} -> ${resultLabel(c.ok)}`,
     )
     .join("\n");
   return `${header}\n${calls}`;
