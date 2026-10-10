@@ -100,12 +100,13 @@ mod wire;
 #[cfg(test)]
 mod tests;
 
+pub use self::tier::ClaudeCodeTrustTier;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, oneshot, watch};
 use uuid::Uuid;
 
@@ -219,36 +220,6 @@ const UNSUPPORTED_REQUEST: &str = "Not Supported By The SWARM Host";
 
 /// Error text for `send_turn` on a session that is shutting down.
 const SESSION_CLOSED: &str = "Claude Code Session Is Shut Down";
-
-/// SWARM's closed vocabulary for Claude Code's spawn-time trust dial.
-///
-/// Deliberately NOT the provider's raw `--permission-mode` strings.
-/// [`AgentSpawnSpec::permission_mode`] is parsed through
-/// `parse_trust_tier`, which recognizes ONLY the three wire tokens
-/// below and fails closed on anything else — including a raw provider
-/// mode (`"acceptEdits"`, `"dontAsk"`) and, above all,
-/// `"bypassPermissions"`. No variant maps to `bypassPermissions`, so the
-/// flag value is unconstructible by this adapter (see
-/// `tests::bypass_permissions_is_unconstructible`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ClaudeCodeTrustTier {
-    /// Read-only exploration: `--restricted` (no command-running tools,
-    /// no `WebFetch`, file tools confined to the working directory),
-    /// `--permission-mode dontAsk` (anything not pre-approved is denied
-    /// without asking), and a deny list for the writing tools.
-    Restricted,
-    /// `--permission-mode manual`, the CLI's default mode pinned against
-    /// project settings: reads run, anything that needs approval
-    /// (commands with side effects, file edits) is asked of the human,
-    /// and the destructive Bash patterns in `deny_list` are always
-    /// denied.
-    Standard,
-    /// `--permission-mode acceptEdits`: file edits in the working
-    /// directory run without asking, commands are asked of the human,
-    /// and the same destructive patterns stay denied.
-    WriteEnabled,
-}
 
 /// Display name of a third-party `apiProvider` value (the Agent SDK's
 /// `AccountInfo.apiProvider` union).
