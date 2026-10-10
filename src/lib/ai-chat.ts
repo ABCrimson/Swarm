@@ -45,6 +45,7 @@ import {
   toAiRequestError,
   toolUseBlocks,
 } from "#lib/anthropic";
+import { turns } from "#lib/chat-turns";
 import { estimateTokens, fitTranscript, stripThinking } from "#lib/context-manager";
 import { CLAUDE_MODELS, getModelById, type ModelInfo } from "#lib/models";
 import { agentTurnStarted } from "#lib/tauri";
@@ -79,9 +80,6 @@ export const CHAT_MAX_TOKENS = 64_000;
 
 /** Tool rounds per turn before the loop stops handing results back to the model. */
 const MAX_TOOL_ROUNDS = 10;
-
-/** In-flight turns by worker id. */
-const turns = new Map<string, { readonly controller: AbortController; readonly itemId: string }>();
 
 // ── Thread helpers ───────────────────────────────────
 
@@ -631,15 +629,7 @@ export function injectInstruction(workerId: string, text: string): "sent" | "que
   return "queued";
 }
 
-/** Cancels `workerId`'s in-flight turn, whether it is queued, streaming or running tools. */
-export function cancelChatTurn(workerId: string): void {
-  turns.get(workerId)?.controller.abort();
-}
-
-/** Whether `workerId` has a turn in flight. */
-export function isChatTurnRunning(workerId: string): boolean {
-  return turns.has(workerId);
-}
+export { cancelChatTurn, isChatTurnRunning } from "#lib/chat-turns";
 
 /** Forgets an idle worker's conversation (starts a new chat). Returns `false` while a turn runs. */
 export function clearChat(workerId: string): boolean {

@@ -1,6 +1,6 @@
 import { useSetAtom } from "jotai";
 import { useEffect } from "react";
-import { cancelChatTurn } from "#lib/ai-chat";
+import { cancelChatTurn } from "#lib/chat-turns";
 import { onEvent } from "#lib/event-bus";
 import { listWorkers, sessionRemoveWorker } from "#lib/tauri";
 import { useSessionStore } from "#store/sessions";
