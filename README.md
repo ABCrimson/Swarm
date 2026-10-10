@@ -113,7 +113,7 @@ The Rust side is a **three-crate workspace**: `swarm-core` (tauri-free domain lo
 | Tool | Version | Notes |
 |---|---|---|
 | Node.js | 27.0.0-nightly202610086d5e309871 | pinned via `devEngines.runtime`; pnpm downloads it for the project |
-| pnpm | 12.11.2 | pinned via `packageManager`; pnpm switches itself to it |
+| pnpm | 12.12.0 | pinned via `packageManager`; pnpm switches itself to it |
 | Rust | nightly-2026-10-10 | auto-configured by `rust-toolchain.toml` |
 | macOS (running the app) | 15.4 or newer | the bundle calls iterator helpers, `Error.isError` and `RegExp.escape` unguarded, which needs a Safari 18.4-class WKWebView; `bundle.macOS.minimumSystemVersion` enforces it |
 
