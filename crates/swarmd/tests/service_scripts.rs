@@ -92,7 +92,7 @@ fn test_windows_upgrade_stops_the_daemon_then_stages_the_binary() {
     );
 }
 
-// ── Linux and macOS (executed) ──────────────────────────────────────────
+// ── Service units (static) ──────────────────────────────────────────────
 
 /// launchd's default `ExitTimeOut` (20 s) is shorter than swarmd's graceful
 /// shutdown can take; the plist matches the systemd unit's TimeoutStopSec.
@@ -103,6 +103,8 @@ fn test_service_units_wait_for_a_graceful_shutdown() {
     let unit = read_script("swarmd.service");
     position(&unit, "\nTimeoutStopSec=30\n");
 }
+
+// ── Linux and macOS (executed) ──────────────────────────────────────────
 
 #[cfg(target_os = "linux")]
 mod executed {
