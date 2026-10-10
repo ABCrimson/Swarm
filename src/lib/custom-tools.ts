@@ -108,11 +108,11 @@ export function hasNoIssues(issues: CustomToolIssues): boolean {
 
 // ── Persistence schema ──────────────────────────────
 
-// Parameter names are deliberately not pattern-checked here: the builder
-// once accepted free text ("file path"), and such a tool must survive
-// hydration — the next save rewrites the whole list, so a dropped tool
-// would be erased with its script. Invalid or duplicate names never reach
-// the API (sentParams filters them) and the builder flags them on edit.
+// Parameter names are deliberately not pattern-checked here: a tool
+// persisted with a free-text name ("file path") must survive hydration —
+// the next save rewrites the whole list, so a dropped tool would be erased
+// with its script. Invalid or duplicate names never reach the API
+// (sentParams filters them) and the builder flags them on edit.
 const ToolParamSchema = z.object({
   id: z.string(),
   name: z.string(),

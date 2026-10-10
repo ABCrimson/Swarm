@@ -212,7 +212,7 @@ type PricingOnly = Pick<ModelInfo, "inputPerMTok" | "cacheReadPerMTok" | "output
  * Rates from the pricing page
  * (https://platform.claude.com/docs/en/about-claude/pricing, 2026-10-10):
  * Opus 5 and Opus 4.8 are $5 input / $0.50 cache read / $25 output;
- * Sonnet 5 is $2 / $0.20 / $10 (its introductory price is now standard).
+ * Sonnet 5 is $2 / $0.20 / $10.
  */
 const FALLBACK_PRICING: ReadonlyMap<string, PricingOnly> = new Map([
   ["claude-opus-4-8", { inputPerMTok: 5, cacheReadPerMTok: 0.5, outputPerMTok: 25 }],
