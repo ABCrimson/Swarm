@@ -1,5 +1,5 @@
 // The native <dialog> needs jsdom stand-ins (see the shim's header).
-import "./top-layer-shim";
+import "#test/top-layer-shim";
 
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

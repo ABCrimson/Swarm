@@ -13,7 +13,7 @@
 // import, and render isolation from PTY output.
 
 // The node context menu is a native popover (see the shim's header).
-import "./top-layer-shim";
+import "#test/top-layer-shim";
 
 import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
@@ -25,12 +25,12 @@ import { Profiler } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { reduceNodeUi, toFlowEdges, WorkerGraph } from "#components/graph/WorkerGraph";
-import { MockElkWorker as MockWorker } from "#hooks/elk-worker-fake";
 import type { DomainEvent } from "#lib/event-bus";
 import { useProvenanceStore } from "#store/provenance";
 import type { Worker } from "#store/types";
 import { detailPanelOpenAtom, selectedWorkerIdAtom } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
+import { MockElkWorker as MockWorker } from "#test/elk-worker-fake";
 
 // The worker lifecycle IPC the context menu must reach (via useWorker).
 const ipc = vi.hoisted(() => ({
