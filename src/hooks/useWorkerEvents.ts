@@ -1,6 +1,5 @@
 import { useSetAtom } from "jotai";
 import { useEffect } from "react";
-import { cancelChatTurn } from "#lib/ai-chat";
 import { onEvent } from "#lib/event-bus";
 import { listWorkers, sessionRemoveWorker } from "#lib/tauri";
 import { useSessionStore } from "#store/sessions";
@@ -63,7 +62,12 @@ export function useWorkerEvents(): void {
       onEvent("worker_killed", ({ payload: { workerId } }) => {
         if (hydrating) killedWhileHydrating.add(workerId);
         // Its chat is gone with it: abort the turn so a call parked on approval is denied.
-        cancelChatTurn(workerId);
+        // Imported on demand so the chat engine stays out of the startup chunk.
+        import("#lib/ai-chat")
+          .then((m) => m.cancelChatTurn(workerId))
+          .catch((err: unknown) =>
+            console.error("useWorkerEvents: could not load the chat engine", err),
+          );
         removeWorker(workerId);
         useWorkerAgentStore.getState().removeAgentMetadata(workerId);
         setSelectedWorkerId((selected) => (selected === workerId ? null : selected));
