@@ -1,4 +1,4 @@
-import { expect, type SidebarPage, test } from "./fixtures.ts";
+import { expect, SIDEBAR_PAGES, test } from "./fixtures.ts";
 
 // ── Navigation ────────────────────────────────────────
 //
@@ -8,18 +8,6 @@ import { expect, type SidebarPage, test } from "./fixtures.ts";
 // backend-free empty states. It does NOT and cannot exercise worker
 // spawn/PTY/real IPC — see `docs/e2e.md` for the documented boundary and
 // the tauri-driver roadmap for closing it.
-
-// Every page, in sidebar order (see NAV_ITEMS in Sidebar.tsx).
-const SIDEBAR_PAGES = [
-  "Dashboard",
-  "Workers",
-  "Sessions",
-  "Metrics",
-  "Logs",
-  "Tools",
-  "Workspace",
-  "Settings",
-] as const satisfies readonly SidebarPage[];
 
 // Pages the command palette also navigates to (a sync, untransitioned
 // page change, which must still render <main>).
@@ -89,14 +77,16 @@ test.describe("Navigation", () => {
   }
 
   test("a visited page keeps its state when you navigate away and back", async ({ app, page }) => {
-    await app.goTo("Workers");
-    await page.getByRole("tab", { name: "List" }).click();
-    await expect(page.getByRole("tab", { name: "List" })).toHaveAttribute("aria-selected", "true");
+    // Settings keeps the threshold draft in component state: only a page
+    // kept mounted while hidden still shows it.
+    await app.goTo("Settings");
+    await page.getByRole("button", { name: "Edit Thresholds" }).click();
+    await page.getByLabel("CPU Warning").fill("55");
 
     await app.goTo("Metrics");
-    await app.goTo("Workers");
+    await app.goTo("Settings");
 
-    await expect(page.getByText("No Workers Running", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("CPU Warning")).toHaveValue("55");
   });
 
   test("Tab reaches the sidebar from any page", async ({ app }) => {

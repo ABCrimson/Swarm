@@ -67,7 +67,7 @@ vi.mock("#lib/postprocess", () => ({
 // stands in for the deeper useWebGPU()/initWebGPU() path (covered at the
 // unit level in `src/lib/webgpu.test.ts`) producing e.g.
 // "No Compatible GPU Adapter Found" on a retry, without needing a full
-// WebGPU adapter/device/ResizeObserver mock (see file header).
+// WebGPU adapter/device/ResizeObserver mock.
 vi.mock("#lib/webgpu", async (importOriginal) => {
   const actual = await importOriginal<typeof import("#lib/webgpu")>();
   return {
@@ -183,7 +183,7 @@ describe("ParticleBackground diagnostics", () => {
 
     first.unmount();
 
-    // Model the retry path from the finding: toggling `particlesEnabled`
+    // Model the retry path: toggling `particlesEnabled`
     // re-runs useWebGPU's init effect, which can produce a different
     // `failureReason` than the first attempt (e.g. "No Compatible GPU
     // Adapter Found" instead of "not exposed"). A same-session latch keyed
@@ -295,9 +295,7 @@ describe("ParticleBackground canvas", () => {
     render(<ParticleBackground />);
     await act(async () => {});
 
-    expect(useParticleSync).toHaveBeenLastCalledWith(
-      expect.objectContaining({ device, system, canvasWidth: 800, canvasHeight: 600 }),
-    );
+    expect(useParticleSync).toHaveBeenLastCalledWith({ device, system });
 
     tick(20);
     // One seed write before the sync's first; the loop writes only the clock.

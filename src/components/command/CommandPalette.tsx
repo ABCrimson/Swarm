@@ -1,9 +1,10 @@
-import { type ExtractAtomValue, useAtom, useAtomValue, useSetAtom, useStore } from "jotai";
+import { useAtom, useAtomValue, useSetAtom, useStore } from "jotai";
 import { computeFrecencyBonus } from "modern-cmdk";
 import { Command } from "modern-cmdk/react";
 import { useEffectEvent, useLayoutEffect, useState } from "react";
 import { toast } from "sonner";
 
+import type { PageId } from "#hooks/useNavigate";
 import { errorMessage } from "#lib/is-error";
 import { matchesBinding } from "#lib/keybindings";
 import { createSnapshot } from "#lib/snapshots";
@@ -205,11 +206,7 @@ function PaletteBody({
     }
   };
 
-  const navigate = (
-    page: ExtractAtomValue<typeof currentPageAtom>,
-    label: string,
-    keywords: readonly string[],
-  ): CommandDef => ({
+  const navigate = (page: PageId, label: string, keywords: readonly string[]): CommandDef => ({
     id: `nav:${page}`,
     label: `Go To ${label}`,
     group: "Navigation",
@@ -299,7 +296,12 @@ function PaletteBody({
               >
                 {cmd.label}
                 {frecency.has(cmd.id) && (
-                  <Command.Badge className="swarm-pill" data-tone="info" data-size="sm">
+                  <Command.Badge
+                    className="swarm-pill"
+                    data-tone="info"
+                    data-size="sm"
+                    aria-hidden="true"
+                  >
                     {frecency.get(cmd.id)?.uses}
                   </Command.Badge>
                 )}

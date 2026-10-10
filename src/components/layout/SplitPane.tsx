@@ -26,10 +26,10 @@ const KEYBOARD_STEP = 2;
  * The primary pane's size is persisted in `paneSizesAtom` (plugin-store
  * backed). A drag updates only local state and is committed once, when
  * the pointer is released or the capture is lost (pointer cancelled,
- * window blurred) — persisting on every pointermove rewrote the
- * settings file at pointer rate. A stored value is clamped to this
- * instance's [minPercent, maxPercent] before use, so a corrupt or
- * out-of-range value cannot break the layout.
+ * window blurred), because persisting on every pointermove would
+ * rewrite the settings file at pointer rate. A stored value is clamped
+ * to this instance's [minPercent, maxPercent] before use, so a corrupt
+ * or out-of-range value cannot break the layout.
  */
 export function SplitPane({
   primary,
@@ -129,7 +129,11 @@ export function SplitPane({
         onPointerMove={handlePointerMove}
         onLostPointerCapture={handleLostPointerCapture}
         onKeyDown={handleKeyDown}
-        className={`relative m-0 touch-none select-none border-0 bg-plasma-dim transition-[background-color,box-shadow] duration-200 [grid-area:handle] hover:bg-plasma/70 hover:shadow-[0_0_6px_oklch(from_var(--color-plasma)_l_c_h/0.25)] data-dragging:bg-plasma data-dragging:shadow-[0_0_8px_oklch(from_var(--color-plasma)_l_c_h/0.4)] ${isHorizontal ? "cursor-col-resize" : "cursor-row-resize"}`}
+        // Preflight sets `hr { height: 0 }` and Chromium's UA sheet sets
+        // `overflow: hidden`: h-auto lets the grid stretch the hr over its
+        // 4px track, and overflow-visible lets ::before widen the pointer
+        // target to 24px (WCAG 2.5.8) while the visible line stays 4px.
+        className={`relative m-0 h-auto overflow-visible touch-none select-none border-0 bg-plasma-dim transition-[background-color,box-shadow] duration-200 [grid-area:handle] before:absolute hover:bg-plasma/70 hover:shadow-[0_0_6px_oklch(from_var(--color-plasma)_l_c_h/0.25)] data-dragging:bg-plasma data-dragging:shadow-[0_0_8px_oklch(from_var(--color-plasma)_l_c_h/0.4)] ${isHorizontal ? "cursor-col-resize before:inset-y-0 before:-inset-x-2.5" : "cursor-row-resize before:inset-x-0 before:-inset-y-2.5"}`}
       />
       <div className="min-h-0 min-w-0 overflow-auto [grid-area:secondary]">{secondary}</div>
     </div>
