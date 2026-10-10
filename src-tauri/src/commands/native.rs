@@ -10,14 +10,15 @@ use tauri_plugin_updater::UpdaterExt;
 
 /// Shows a native OS notification.
 ///
-/// Fire-and-forget: the notification plugin delivers it on a background
-/// task and discards the outcome, so an `Ok` means it was handed to the
-/// OS, not that it was displayed (the user may have muted the app).
+/// Fire-and-forget: the notification plugin shows it on a background task
+/// and discards the outcome, so an `Ok` means the show was queued, not that
+/// the OS accepted or displayed it (the user may have muted the app).
 ///
 /// # Errors
 ///
-/// A message when the notification cannot be built, e.g. the executable
-/// path cannot be read to derive the Windows app id.
+/// A message when the notification cannot be prepared: on Windows the
+/// plugin reads the executable path to decide whether to set the app id,
+/// and fails when it cannot.
 #[tauri::command]
 #[tracing::instrument(level = "debug", skip_all)]
 pub async fn send_notification<R: tauri::Runtime>(
