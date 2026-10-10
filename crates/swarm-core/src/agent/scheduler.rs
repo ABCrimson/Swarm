@@ -938,6 +938,7 @@ mod tests {
         scheduler.set_concurrency(4);
         assert_eq!(scheduler.concurrency_limit.load(AtomicOrdering::SeqCst), 4);
         assert_eq!(scheduler.pending_forgets.load(AtomicOrdering::SeqCst), 0);
+        assert_eq!(scheduler.semaphore.available_permits(), 4);
     }
 
     // ── Wire shape ────────────────────────────────────────────────────
