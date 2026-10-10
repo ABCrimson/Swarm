@@ -12,22 +12,19 @@ import type { ProbeReport } from "#lib/agent-events";
 
 const getPersistedRepoRootMock = vi.fn<() => Promise<string | null>>();
 
-vi.mock("#lib/project-root", () => ({
-  DEFAULT_REPO_ROOT_KEY: "default_repo_root",
+vi.mock(import("#lib/project-root"), () => ({
+  DEFAULT_REPO_ROOT_KEY: "default_repo_root" as const,
   getPersistedRepoRoot: () => getPersistedRepoRootMock(),
 }));
 
-vi.mock("#lib/tauri", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("#lib/tauri")>();
-  return {
-    ...actual,
-    agentProbe: vi.fn(),
-    agentSpawn: vi.fn(),
-    spawnWorker: vi.fn(),
-    validateRepoRoot: vi.fn(),
-    writeConfig: vi.fn(),
-  };
-});
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  agentProbe: vi.fn(),
+  agentSpawn: vi.fn(),
+  spawnWorker: vi.fn(),
+  validateRepoRoot: vi.fn(),
+  writeConfig: vi.fn(),
+}));
 
 import { SpawnWorkerDialog } from "#components/worker/SpawnWorkerDialog";
 import { agentProbe, agentSpawn, spawnWorker, validateRepoRoot } from "#lib/tauri";
