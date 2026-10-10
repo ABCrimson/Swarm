@@ -107,12 +107,11 @@ export type WorkerIsolation = z.infer<typeof WorkerIsolationSchema>;
  * fields that map 1:1 onto Rust's `WorkerConfig`
  * (`crates/swarm-core/src/worker/handle.rs`) and are sent
  * over IPC to `spawn_worker`. Deliberately excludes `rows`/`cols` (PTY
- * dimensions, Rust-defaulted and not template-configurable today).
+ * dimensions, Rust-defaulted and not template-configurable).
  *
- * `repoRoot`/`isolation` are additive and optional — omitting both
- * reproduces exactly the pre-worktree-isolation spawn (no git
- * anywhere). When `repoRoot` is given, `isolation` defaults
- * server-side to `"worktree"`.
+ * `repoRoot` and `isolation` are optional. Without `repoRoot` the worker
+ * spawns at `cwd` without touching git; when `repoRoot` is given,
+ * `isolation` defaults server-side to `"worktree"`.
  */
 export const WorkerProcessOptionsSchema = z.object({
   name: z.string(),
@@ -145,8 +144,8 @@ export type WorkerAgentMetadata = z.infer<typeof WorkerAgentMetadataSchema>;
 /**
  * Zod schema for a full worker spawn spec within a session template:
  * process options (sent to Rust) plus agent metadata (kept client-side).
- * Replaces the old, single `WorkerConfig` type that conflated both with
- * Rust's unrelated `WorkerConfig` struct of the same name.
+ * Only the process-options half maps onto Rust's `WorkerConfig`
+ * (`crates/swarm-core/src/worker/handle.rs`).
  */
 export const WorkerSpawnSpecSchema = z.object({
   ...WorkerProcessOptionsSchema.shape,
@@ -268,7 +267,9 @@ export type CumulativeUsage = z.infer<typeof CumulativeUsageSchema>;
 // ── Ship schemas ─────────────────────────────────────
 //
 // Mirror Rust's `swarm_core::git::ship` types
-// (`crates/swarm-core/src/git/ship.rs`) exactly: `ShipError`
+// (`crates/swarm-core/src/git/ship/`) and, for `ship_context`, the
+// `swarm_core::git::causal` types (`crates/swarm-core/src/git/causal.rs`)
+// exactly: `ShipError`
 // is a documented divergence from the rest of the IPC surface's
 // `Result<T, String>` convention — it serializes as a structured
 // `{ kind, message, remedy }` object so the UI can branch on `kind`.
