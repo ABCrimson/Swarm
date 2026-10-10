@@ -32,13 +32,13 @@ Pass `-p <password>` to protect the private key with a password (see [Current St
 
 ## CI Signing
 
-Store the private key as a GitHub Actions secret:
+Store the private key as a secret of the `release` GitHub environment, which the build job of `.github/workflows/release.yml` runs in (the environment's deployment policy decides which refs may sign):
 
 ```bash
-gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/swarm-orchestrator.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY --env release < ~/.tauri/swarm-orchestrator.key
 ```
 
-`.github/workflows/release.yml` passes it to the build step, where `tauri-apps/tauri-action` runs the repo-pinned CLI through `pnpm tauri build`:
+The build job installs with `pnpm install --frozen-lockfile` and no caches, so nothing another workflow wrote can reach the signing key. It passes the secrets to the build step, where `tauri-apps/tauri-action` builds with the repo-pinned CLI:
 
 ```yaml
 env:
@@ -56,10 +56,10 @@ With `bundle.createUpdaterArtifacts` on, every updater artifact gets a `.sig` ne
 
 `tauri build` writes `version:<app version>` into the minisign trusted comment of every updater signature, and the trusted comment is covered by the signature. With `requireSignedVersion` on, the updater's `download()` step:
 
-- rejects a signature that carries no version at all with `MissingSignedVersion` (any artifact signed by hand without `--app-version`, or by a CLI older than 2.11.5);
+- rejects a signature that carries no version at all with `MissingSignedVersion` (any artifact signed by hand without `--app-version`);
 - rejects a signature whose version differs from the one `latest.json` announces with `SignedVersionMismatch` (the plugin does this even when the flag is off).
 
-The app's `check_for_updates` command only calls `Updater::check()` today, so this enforcement takes effect as soon as in-app download or install is wired up. `src-tauri/src/commands/updater.rs` has a contract test that keeps the flag on.
+The app's `check_for_updates` command (`src-tauri/src/commands/native.rs`) only calls `Updater::check()` today, so this enforcement takes effect as soon as in-app download or install is wired up. `src-tauri/src/config_contract.rs` has a contract test (`updater_requires_signed_versions`) that keeps the flag on and downgrades off.
 
 ## Re-Signing an Artifact by Hand
 
@@ -78,17 +78,17 @@ Without `--app-version`, the resulting `.sig` has no signed version, and every u
 
 **Keys are generated and wired up.**
 
-- **Private key:** generated at `~/.tauri/swarm-orchestrator.key` with no password. It is not committed to the repository; it exists only on the machine(s) that generated it and in the `TAURI_SIGNING_PRIVATE_KEY` GitHub Actions secret.
+- **Private key:** generated at `~/.tauri/swarm-orchestrator.key` with no password. It is not committed to the repository; it exists only on the machine(s) that generated it and in the `TAURI_SIGNING_PRIVATE_KEY` secret of the `release` environment.
 - **Public key:** populated in `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`.
 - **Update endpoint:** `plugins.updater.endpoints` in `tauri.conf.json` points at the `ABCrimson/Swarm` GitHub Releases `latest.json` asset:
   ```
   https://github.com/ABCrimson/Swarm/releases/latest/download/latest.json
   ```
-- **CI signing:** `.github/workflows/release.yml` runs on `v*` tag pushes (and manual `workflow_dispatch`), builds with `tauri-apps/tauri-action`, and passes `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (both GitHub Actions secrets) to the build step, so every tagged release is signed automatically across all four build matrix targets (`x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`).
-- **`verify-updater-manifest` job:** runs after `build` (`if: always()`) and asserts `latest.json` on the draft release carries all four platform keys (`windows-x86_64`, `darwin-aarch64`, `darwin-x86_64`, `linux-x86_64`) before a human publishes it. The four build jobs fetch-modify-upload the same release asset non-atomically, so a lost entry would otherwise go unnoticed.
+- **CI signing:** `.github/workflows/release.yml` runs the full CI gate on `v*` tag pushes (and, as a dry run that creates no release, on manual `workflow_dispatch`), builds with `tauri-apps/tauri-action`, and passes `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (both secrets of the `release` environment) to the build step, so every tagged release is signed automatically across all four build matrix targets (`x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`).
+- **`verify-updater-manifest` job:** runs after `build` on tag pushes and runs `.github/scripts/verify-updater-manifest.sh` against the `latest.json` of the draft release before a human publishes it. It asserts the announced version, all four platform keys (`windows-x86_64`, `darwin-aarch64`, `darwin-x86_64`, `linux-x86_64`), that every artifact verifies with `minisign` against the public key in `tauri.conf.json`, that every signed trusted comment ends in `version:<version>`, and that every artifact carries a build provenance attestation. The four build jobs fetch-modify-upload the same release asset non-atomically, so a lost entry would otherwise go unnoticed.
 
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` is in the workflow for forward compatibility, but the secret is currently unset/empty. If the key is ever rotated to a password-protected one, set that secret before the next tagged release.
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` is in the workflow for forward compatibility, but the secret is currently unset/empty. If the key is ever rotated to a password-protected one, set that secret in the `release` environment before the next tagged release.
 
 ## Linux Caveat: AppImage-Only Updates
 
-`tauri-plugin-updater` only supports self-applying updates via **AppImage** on Linux. The release workflow also produces a `.deb` bundle, but a `.deb` install has no in-place update mechanism through this plugin: `check_for_updates` still reports that a new version is available, but applying it fails. `.deb` users must uninstall and reinstall (or wait for a system-package-manager update path in a future release) rather than rely on the in-app updater.
+`tauri-plugin-updater` only supports self-applying updates via **AppImage** on Linux. The release workflow also produces a `.deb` bundle, but a `.deb` install has no in-place update mechanism through this plugin: `check_for_updates` still reports that a new version is available, but once in-app download and install are wired up they will not be able to replace a `.deb` install in place. `.deb` users must uninstall and reinstall (or wait for a system-package-manager update path in a future release) rather than rely on the in-app updater.
