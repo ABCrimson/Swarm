@@ -123,8 +123,7 @@ test.describe("Settings accessibility", () => {
 
     // The model radio is visually hidden; its card draws the ring.
     const selected = page.getByRole("radio", { name: "Claude Sonnet 5.5" });
-    // Reached by Tab, as above. Not by an arrow key: after the first arrow step
-    // WebKit moves focus to the next radio without :focus-visible on it.
+    // Reached by Tab. The arrow-key step is covered in its own test (fixme on WebKit).
     await selected.focus();
     await page.keyboard.press("Shift+Tab");
     await page.keyboard.press("Tab");
@@ -135,6 +134,24 @@ test.describe("Settings accessibility", () => {
     const streamLimit = page.getByLabel("AI Concurrent Stream Limit");
     await streamLimit.focus();
     await expect(streamLimit).toHaveCSS("outline-style", "solid");
+  });
+
+  test("a model card keeps the focus ring after an arrow-key step", async ({
+    page,
+    browserName,
+  }) => {
+    test.fixme(
+      browserName === "webkit",
+      "WebKit does not match :focus-visible on a radio reached by an arrow key",
+    );
+    const selected = page.getByRole("radio", { name: "Claude Sonnet 5.5" });
+    await selected.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await expect(selected).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    const card = page.locator("label[data-model-id]:has(input:focus-visible)");
+    await expect(card).toHaveCSS("outline-style", "solid");
   });
 
   test("the primary buttons use dark text on the accent", async ({ page }) => {
