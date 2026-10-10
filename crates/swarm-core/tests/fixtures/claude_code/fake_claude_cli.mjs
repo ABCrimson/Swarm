@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 /**
  * Stand-in for the `claude` CLI in ClaudeCodeAdapter's unit tests
- * (crates/swarm-core/src/agent/claude_code/tests.rs):
+ * (crates/swarm-core/src/agent/claude_code/tests.rs) and in the worker
+ * commands' handshake tests (crates/swarm-core/src/commands/agent.rs),
+ * which play the `"held"` initialize mode and repeat HELD_MARKER and
+ * RELEASE_MARKER as Rust constants, so the two change together:
  *
  *   node fake_claude_cli.mjs <scenario.mjs> <claude flags...>
  *
