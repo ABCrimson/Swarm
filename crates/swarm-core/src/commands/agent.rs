@@ -203,6 +203,10 @@ async fn attach_session(
             ok_value(&worker_id.to_string())
         }
         Err(e) => {
+            if let Err(gone) = ctx.registry.get_worker(&worker_id) {
+                tracing::error!(%worker_id, error = %e, "agent_spawn: session attach failed after the worker was killed");
+                return Err(agent_spawn_error(None, gone.to_string()));
+            }
             tracing::error!(%worker_id, error = %e, "agent_spawn: session attach failed; the worker remains usable as a plain terminal");
             Err(agent_spawn_error(
                 Some(worker_id.to_string()),
@@ -503,6 +507,22 @@ mod tests {
             )),
             "the attached session must have been shut down"
         );
+    }
+
+    /// A kill during the handshake followed by a failed handshake reports
+    /// no surviving worker, never a worker usable as a plain terminal.
+    #[tokio::test]
+    async fn test_agent_spawn_reports_no_worker_when_attach_fails_after_a_kill() {
+        let (ctx, dir, _events) =
+            test_ctx_with_claude(|sink| fake_claude(sink, "handshake_held_then_refused.mjs"));
+        let cwd = dir.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let (id, result) = kill_during_attach(&ctx, &cwd).await;
+
+        let err = result.unwrap_err();
+        assert_eq!(err["workerId"], Value::Null, "{err}");
+        assert!(ctx.agent_session_registry.get(&id).is_err());
     }
 
     /// A worker killed before its session attaches gets none: the lookup
