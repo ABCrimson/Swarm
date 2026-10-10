@@ -188,9 +188,9 @@ mod tests {
         assert_eq!(manager.get_session(&id).unwrap().name, "Legacy Session");
     }
 
-    /// CONFIRMED regression: a malformed file used to load as "no
-    /// sessions", and the next autosave overwrote it — losing every
-    /// session. Now it is moved aside intact first.
+    /// A malformed file is moved aside intact when it is loaded (the
+    /// manager starts with no sessions), so the next save never
+    /// overwrites it and no session is lost.
     #[test]
     fn test_a_malformed_file_is_quarantined_not_overwritten() {
         let (dir, _cleanup) = temp_dir("sessions");
@@ -254,11 +254,10 @@ mod tests {
         assert_eq!(root["other"]["kept"], true);
     }
 
-    /// CONFIRMED regression: the snapshot used to be taken outside the
-    /// file lock, so a slower save could write an OLDER snapshot over a
-    /// newer one. With the snapshot inside the lock, the file always
-    /// ends at the state after the last mutation, however the
-    /// concurrent saves interleave.
+    /// `save` snapshots the manager inside the file lock, so a slower
+    /// save never writes an older snapshot over a newer one: however the
+    /// concurrent saves interleave, the file ends at the state after the
+    /// last mutation.
     #[test]
     fn test_concurrent_saves_always_leave_the_newest_state() {
         let (dir, _cleanup) = temp_dir("sessions");

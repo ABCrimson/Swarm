@@ -316,9 +316,8 @@ mod tests {
             .expect("the test shell spawns")
     }
 
-    /// Regression: a worker's usage covered only its shell's PID, so the
-    /// programs it ran (builds, agents) never showed up. The whole
-    /// process tree is now summed.
+    /// A worker's usage is summed over its shell and every descendant
+    /// process, so the programs it runs (builds, agents) are counted.
     #[test]
     fn test_worker_usage_includes_the_shells_descendants() {
         let parent = std::mem::DropGuard::new(spawn_parent_with_child(), |mut parent: Child| {

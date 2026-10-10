@@ -601,12 +601,12 @@ mod tests {
         );
     }
 
-    /// CONFIRMED regression (security): positional-array arguments used
-    /// to skip the `key` inspection (`args.get("key")` is `None` on an
-    /// array) while the handler still deserialized the key from them —
-    /// a remote read returned the API key, and a remote write replaced
-    /// it. Both are now refused before any policy or handler runs, and
-    /// the stored key is untouched.
+    /// Positional-array arguments are refused before any policy check or
+    /// handler runs, on both the remote and the local path.
+    /// `args.get("key")` is `None` on an array, so an un-normalized array
+    /// would skip the `RemotePolicy::SecretFiltered` inspection while the
+    /// handler still deserialized the key from it. The stored key stays
+    /// untouched.
     #[tokio::test]
     async fn test_dispatch_remote_refuses_positional_args_for_config_both_ways() {
         let (ctx, _dir, _events) = ctx_with_api_key();

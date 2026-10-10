@@ -150,9 +150,9 @@ mod tests {
         }
     }
 
-    /// UNVERIFIED-low finding, verified: the old suffix check was
-    /// case-sensitive and `_`-only, so every key below was remotely
-    /// readable and writable.
+    /// Secret shapes beyond `anthropic_api_key` are denied whatever their
+    /// case or separator: a last word such as `key`, `token`, `password`
+    /// or `pat`, or a word such as `secret` or `credentials` anywhere.
     #[test]
     fn test_is_secret_key_denies_other_secret_shapes() {
         for key in [

@@ -208,7 +208,7 @@ mod tests {
         assert!(members(&manager, &id).is_empty());
     }
 
-    /// Re-adding a member used to push a duplicate id.
+    /// Re-adding a member leaves `worker_ids` unchanged (no duplicate id) and reports no change.
     #[test]
     fn test_add_is_idempotent_and_reports_no_change() {
         let (manager, id) = manager_with_session();
