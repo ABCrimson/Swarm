@@ -139,10 +139,10 @@ function ring(bySeq: Map<number, DomainEvent>, event: DomainEvent): void {
 
 /**
  * Zustand store for measured causal edges derived from the ordered event
- * bus — replaces the fabricated "Spawn Order" chain that used to connect
- * workers in Map insertion order. Plain copy-on-write updates (no immer:
- * drafting copied the 2000-entry ring on every event);
- * `subscribeWithSelector` for fine-grained subscriptions.
+ * bus. `edges` and `fileWriteCounts` update copy-on-write; the
+ * {@link RING_LIMIT}-entry `bySeq` ring mutates in place outside `set`.
+ * There is no immer, because a draft would copy that ring on every
+ * event. `subscribeWithSelector` gives fine-grained subscriptions.
  */
 export const useProvenanceStore = create<ProvenanceStoreState & ProvenanceStoreActions>()(
   subscribeWithSelector((set, get) => ({
