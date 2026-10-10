@@ -5,9 +5,9 @@
 //!
 //! # Why the `agent_*` canonical family, not `agent_turn_started`
 //!
-//! The first design for this record assumed a turn's root event was
-//! `agent_turn_started {workerId, model, requestId}`. The landed code has
-//! two independent AI paths with two *different* correlation id spaces:
+//! A turn's root event is not `agent_turn_started {workerId, model,
+//! requestId}`: two independent AI paths use two *different* correlation
+//! id spaces:
 //!
 //! - `src/components/ai/AIChat.tsx` (the webview-direct `@anthropic-ai/sdk`
 //!   path, still the shipped default) calls the `agent_turn_started`
@@ -86,10 +86,11 @@ pub const RELEVANT_EVENT_TYPES: &[&str] = &[
 /// that can legitimately contain file contents (a `Write` call's `content`
 /// field, an `Edit` call's `new_string`), and this table is the deterministic
 /// half of the PR body that later gets fed to a model (see
-/// `src/lib/ship-causal.ts`'s prompt assembly). Reading only these narrow,
-/// short, structurally-a-path-or-command fields is what makes "no secret
-/// can reach the model through this path" true by construction rather than
-/// by convention.
+/// `src/lib/ship-causal.ts`'s prompt assembly). The allowlist keeps file
+/// contents out by construction; a command/url/query value can still carry
+/// a credential, so [`extract_target`] runs it through
+/// [`super::redact::redact`], which strips recognized token shapes and URL
+/// userinfo. An opaque secret with no recognizable shape can still pass.
 const TARGET_FIELD_ALLOWLIST: &[&str] = &[
     "path",
     "file_path",
@@ -191,13 +192,10 @@ pub struct ShipContext {
     /// own cap (`SHIP_CONTEXT_EVENT_LIMIT`/`EventLog::events_for_worker_between`)
     /// — meaning turns older than what's visible in `turns` may exist
     /// beyond what `omitted_turn_count` can even count (that count is
-    /// only exact when this is `false`). Review FIX-1: a naive fetch that
-    /// applied this cap BEFORE filtering to `worker_id` could silently
-    /// drop the shipping worker's NEWEST, most ship-relevant turns while
-    /// leaving `omitted_turn_count` at `0` — `events_for_worker_between`
-    /// fetches newest-first specifically so that failure mode can't
-    /// happen, and reports here whenever the newest-first cap itself was
-    /// exhausted.
+    /// only exact when this is `false`). `events_for_worker_between`
+    /// filters to this worker in SQL and fetches newest-first, so the cap
+    /// only ever drops this worker's oldest rows, never its newest, most
+    /// ship-relevant turns.
     pub events_truncated: bool,
     /// `true` when an `agent_turn_started` row for this worker was
     /// observed in range. That event never becomes a `CausalTurn` (see the
@@ -206,7 +204,7 @@ pub struct ShipContext {
     /// "this worker genuinely had no recorded activity in this range"
     /// from "this worker's activity used the webview chat path
     /// (`AIChat.tsx`), which this query structurally cannot see
-    /// turn-level detail for." Review NIT-4.
+    /// turn-level detail for."
     pub has_uncaptured_webview_activity: bool,
 }
 
@@ -229,8 +227,9 @@ impl ShipContext {
 }
 
 /// Reads `input`'s first allowlisted field (see [`TARGET_FIELD_ALLOWLIST`]'s
-/// doc for why this is an allowlist, not a generic extractor), trimmed and
-/// capped at [`MAX_TARGET_LEN`] chars. `None` for a non-object `input`, an
+/// doc for why this is an allowlist, not a generic extractor), trimmed,
+/// redacted with [`super::redact::redact`], then capped at
+/// [`MAX_TARGET_LEN`] chars. `None` for a non-object `input`, an
 /// empty/whitespace-only match, or no allowlisted field present at all.
 fn extract_target(input: &serde_json::Value) -> Option<String> {
     let obj = input.as_object()?;
@@ -240,7 +239,12 @@ fn extract_target(input: &serde_json::Value) -> Option<String> {
             if trimmed.is_empty() {
                 continue;
             }
-            return Some(trimmed.chars().take(MAX_TARGET_LEN).collect());
+            return Some(
+                super::redact::redact(trimmed)
+                    .chars()
+                    .take(MAX_TARGET_LEN)
+                    .collect(),
+            );
         }
     }
     None
@@ -455,7 +459,7 @@ mod tests {
 
     #[test]
     fn test_extract_target_never_reads_content_or_body_fields() {
-        // DIRECTIVE: the no-secrets-in-prompt boundary starts here — a
+        // The no-secrets-in-prompt boundary starts here — a
         // Write-tool-shaped input with no allowlisted field at all must
         // extract nothing, never falling back to "the first string field
         // I could find" (which would be `content`).
@@ -469,6 +473,23 @@ mod tests {
         let input = serde_json::json!({ "command": long });
         let target = extract_target(&input).unwrap();
         assert_eq!(target.len(), MAX_TARGET_LEN);
+    }
+
+    #[test]
+    fn test_extract_target_redacts_credentials_in_command_values() {
+        let token = format!("ghp_{}", "a".repeat(36));
+        let push = serde_json::json!({
+            "command": format!("git push https://x-access-token:{token}@github.com/o/r HEAD")
+        });
+        let target = extract_target(&push).unwrap();
+        assert!(target.contains("[REDACTED]"), "{target}");
+        assert!(!target.contains("ghp_aaaa"), "{target}");
+
+        let curl = serde_json::json!({
+            "command": format!("curl -H 'Authorization: token {token}' https://x")
+        });
+        let target = extract_target(&curl).unwrap();
+        assert!(!target.contains("ghp_aaaa"), "{target}");
     }
 
     #[test]
@@ -529,7 +550,7 @@ mod tests {
 
     #[test]
     fn test_seeded_fixture_ship_context_returns_exactly_the_expected_seqs() {
-        // DIRECTIVE test: a realistic seeded fixture spanning one full
+        // A realistic seeded fixture spanning one full
         // turn (block, tool call, tool result, settled) plus a commit,
         // asserting every seq surfaces in the right place and nothing
         // extra leaks in.
@@ -576,6 +597,7 @@ mod tests {
         assert_eq!(ctx.commits.len(), 1);
         assert_eq!(ctx.commits[0].sha, "abc123");
         assert_eq!(ctx.commits[0].branch, "swarm/x");
+        assert_eq!((ctx.commits[0].seq_from, ctx.commits[0].seq_to), (9, 13));
         assert_eq!(ctx.omitted_turn_count, 0);
     }
 
@@ -612,6 +634,72 @@ mod tests {
         )];
         let ctx = build_ship_context(events, me, 0, 10, false);
         assert_eq!(ctx.turns[0].tool_calls[0].ok, None);
+    }
+
+    #[test]
+    fn test_tool_result_is_error_maps_to_ok_false_and_a_missing_flag_to_ok_true() {
+        let me = Uuid::new_v4();
+        let events = vec![
+            ev(
+                1,
+                "agent_tool_call",
+                serde_json::json!({ "workerId": me, "turnId": "t1", "toolUseId": "u1", "name": "Bash", "input": {} }),
+            ),
+            ev(
+                2,
+                "agent_tool_result",
+                serde_json::json!({ "workerId": me, "turnId": "t1", "toolUseId": "u1", "isError": true, "content": "exit 1" }),
+            ),
+            ev(
+                3,
+                "agent_tool_call",
+                serde_json::json!({ "workerId": me, "turnId": "t2", "toolUseId": "u2", "name": "Read", "input": {} }),
+            ),
+            ev(
+                4,
+                "agent_tool_result",
+                serde_json::json!({ "workerId": me, "turnId": "t2", "toolUseId": "u2", "content": "ok" }),
+            ),
+        ];
+        let ctx = build_ship_context(events, me, 0, 10, false);
+        assert_eq!(ctx.turns[0].tool_calls[0].ok, Some(false));
+        assert_eq!(ctx.turns[1].tool_calls[0].ok, Some(true));
+    }
+
+    /// Results attach by `toolUseId` to their own call, whatever their
+    /// arrival order, including a turn's second call.
+    #[test]
+    fn test_tool_results_attach_to_their_own_call_within_a_turn() {
+        let me = Uuid::new_v4();
+        let call = |seq: u64, turn: &str, id: &str| {
+            ev(
+                seq,
+                "agent_tool_call",
+                serde_json::json!({ "workerId": me, "turnId": turn, "toolUseId": id, "name": "Bash", "input": {} }),
+            )
+        };
+        let result = |seq: u64, turn: &str, id: &str, is_error: bool| {
+            ev(
+                seq,
+                "agent_tool_result",
+                serde_json::json!({ "workerId": me, "turnId": turn, "toolUseId": id, "isError": is_error, "content": "" }),
+            )
+        };
+        let events = vec![
+            call(1, "t1", "u1"),
+            call(2, "t1", "u2"),
+            call(3, "t2", "u3"),
+            result(4, "t1", "u2", true),
+            result(5, "t2", "u3", true),
+            result(6, "t1", "u1", false),
+        ];
+        let ctx = build_ship_context(events, me, 0, 10, false);
+        let oks: Vec<Vec<Option<bool>>> = ctx
+            .turns
+            .iter()
+            .map(|t| t.tool_calls.iter().map(|c| c.ok).collect())
+            .collect();
+        assert_eq!(oks, [vec![Some(true), Some(false)], vec![Some(false)]]);
     }
 
     #[test]
@@ -685,7 +773,7 @@ mod tests {
         assert!(!ctx.has_uncaptured_webview_activity);
     }
 
-    // ── events_truncated (review FIX-1) ─────────────────────────────────
+    // ── events_truncated ────────────────────────────────────────────────
 
     #[test]
     fn test_events_truncated_flag_flows_straight_through_from_the_caller() {
@@ -707,7 +795,7 @@ mod tests {
         assert!(!not_truncated_ctx.events_truncated);
     }
 
-    // ── has_uncaptured_webview_activity (review NIT-4) ───────────────────
+    // ── has_uncaptured_webview_activity ─────────────────────────────────
 
     #[test]
     fn test_agent_turn_started_sets_the_webview_activity_flag_without_fabricating_a_turn() {
