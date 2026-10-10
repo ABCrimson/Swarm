@@ -1486,9 +1486,12 @@ impl AgentAdapter for CodexAdapter {
         codex_capabilities()
     }
 
-    /// Runs `codex --version` and `codex login status` concurrently:
-    /// available only when both succeed. The login line (for example
-    /// `Logged in using ChatGPT`) is the detail; no credential is read.
+    /// Runs `codex --version` and `codex login status` concurrently.
+    /// Unavailable when `--version` fails or times out, or when `login status`
+    /// exits non-zero; when `login status` cannot run or times out, the CLI
+    /// counts as available with a "Sign-In State Unknown" detail. Otherwise the
+    /// login line (for example `Logged in using ChatGPT`) is the detail; no
+    /// credential is read.
     fn probe(&self) -> BoxFuture<'_, Result<ProbeReport, AppError>> {
         let binary = self.binary.clone();
         let prefix = self.extra_prefix_args.clone();
