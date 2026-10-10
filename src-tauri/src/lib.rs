@@ -18,12 +18,12 @@
 //! - [`commands`] exposes every [`swarm_core::commands::Registry`] command
 //!   under its own name (the same table `swarmd` serves as WebSocket `rpc`
 //!   frames), plus the two desktop-only commands that drive OS integrations.
-//! - [`lifecycle`] shuts the runtime down when the event loop exits, and
-//!   the release log is flushed after it.
+//! - [`lifecycle`] shuts the runtime down in a plugin cleanup hook that
+//!   every exit path runs, and the release log is flushed after it.
 
 use std::path::PathBuf;
 
-use tauri::{Manager, RunEvent};
+use tauri::Manager;
 use tracing_appender::non_blocking::WorkerGuard;
 
 mod commands;
@@ -93,9 +93,10 @@ pub fn run() {
                 .open_js_links_on_click(false)
                 .build(),
         )
-        .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        .plugin(lifecycle::plugin())
         .invoke_handler(commands::handler())
         .setup(|app| {
             dialog_grants::mirror_dialog_grants(app.handle());
@@ -105,17 +106,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build the SWARM Orchestrator app");
 
-    let mut log_writer = init_tracing(app.path().app_log_dir().ok());
-    app.run(move |app, event| {
-        let exiting = matches!(event, RunEvent::Exit);
-        lifecycle::on_run_event(app, event);
-        if exiting {
-            // Tauri exits the process right after this callback: flush
-            // what the log writer thread still holds, the shutdown's own
-            // lines included.
-            drop(log_writer.take());
-        }
-    });
+    // Managed before the loop starts, taken by the lifecycle plugin's
+    // exit hook.
+    app.manage(lifecycle::Teardown::new(init_tracing(
+        app.path().app_log_dir().ok(),
+    )));
+    app.run(|_, _| {});
 }
 
 /// Name of the release log file inside the app log directory.
@@ -139,8 +135,8 @@ const LOG_ROTATE_BYTES: u64 = 8 * 1024 * 1024;
 /// The release log file is written by a dedicated thread, so logging from
 /// a Tokio worker or the main thread never waits on the disk. The returned
 /// guard owns that thread: dropping it writes out every queued line, which
-/// [`run`] does after the exit teardown, because Tauri then exits the
-/// process without running destructors.
+/// the exit hook (see [`lifecycle`]) does after the shutdown, because
+/// Tauri then exits the process without running destructors.
 fn init_tracing(log_dir: Option<PathBuf>) -> Option<WorkerGuard> {
     use tracing_subscriber::EnvFilter;
 
