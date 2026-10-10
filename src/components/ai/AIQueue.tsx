@@ -126,8 +126,8 @@ function StatusLabel({
 // ── Component ───────────────────────────────────────
 
 interface AIQueueProps {
-  /** Shows only this worker's items; omitted, the whole queue. */
-  readonly workerId?: string;
+  /** Shows only this worker's items. */
+  readonly workerId: string;
 }
 
 /**
@@ -144,7 +144,7 @@ export function AIQueue({ workerId }: AIQueueProps): React.ReactElement {
   const concurrentLimit = useAiStore((s) => s.concurrentLimit);
   const cancelItem = useAiStore((s) => s.cancelItem);
 
-  const queue = workerId === undefined ? allItems : allItems.filter((q) => q.workerId === workerId);
+  const queue = allItems.filter((q) => q.workerId === workerId);
 
   // Place in line among waiting items across the WHOLE queue — other
   // workers' turns ahead of this one still delay it.
