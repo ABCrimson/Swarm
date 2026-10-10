@@ -890,6 +890,21 @@ async fn tool_items_become_tool_calls_and_results_with_honest_error_flags() {
                 "fileChange".to_string(),
                 json!({ "changes": [{ "path": "/work/a.txt", "kind": { "type": "add" }, "diff": "+a\n" }] })
             ),
+            (
+                "cmd-2".to_string(),
+                "commandExecution".to_string(),
+                json!({ "command": "false", "cwd": "/work" })
+            ),
+            (
+                "mcp-2".to_string(),
+                "docs.search".to_string(),
+                json!({ "q": "xterm" })
+            ),
+            (
+                "dyn-1".to_string(),
+                "lookup".to_string(),
+                json!({ "key": "a" })
+            ),
         ]
     );
     let results: Vec<(String, bool)> = events
@@ -905,6 +920,9 @@ async fn tool_items_become_tool_calls_and_results_with_honest_error_flags() {
             ("cmd-1".to_string(), false),
             ("mcp-1".to_string(), true),
             ("patch-1".to_string(), true),
+            ("cmd-2".to_string(), true),
+            ("mcp-2".to_string(), true),
+            ("dyn-1".to_string(), true),
         ]
     );
     // Command output streams are not forwarded (nothing would close
