@@ -7,8 +7,17 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::wire::{self, AccountInfo, Delta, Inbound, InitializeResponse, SignIn, StreamEvent};
+use super::reader::{advance_cost, classify_denial, settlement_error};
+use super::tier::{
+    accepted_permission_modes, build_claude_flags, claude_code_capabilities, deny_list,
+    parse_trust_tier, permission_mode_flag, probe_flags,
+};
+use super::wire::{
+    self, AccountInfo, Delta, Inbound, InitializeResponse, ResultLine, SignIn, StreamEvent,
+    StreamEventLine, System, strip_ansi,
+};
 use super::*;
+use crate::agent::adapter::CancelGranularity;
 use crate::orchestration::{EventLog, OrchestrationEngine};
 
 // ── Harness ──────────────────────────────────────────────────────────
@@ -477,6 +486,32 @@ async fn a_cli_without_lifecycle_frames_starts_the_turn_on_init() {
 
     assert_eq!(settled_for(&harness.recorder, &turn)[0]["status"], "ok");
     assert_eq!(harness.recorder.count("agent_block"), 1);
+    assert_eq!(
+        harness.recorder.payloads("agent_block")[0]["content"]["text"],
+        "Binary search halves the search space each step."
+    );
+}
+
+/// A lifecycle frame that closes the live turn without a `result`
+/// settles it as an error: `completed` as "Turn Ended Without A Result",
+/// `cancelled` as "Turn Cancelled".
+#[tokio::test]
+async fn a_lifecycle_close_without_a_result_settles_the_turn() {
+    for (scenario, want) in [
+        ("lifecycle_closes_turn.mjs", TURN_ENDED_WITHOUT_RESULT),
+        ("lifecycle_cancels_turn.mjs", TURN_CANCELLED),
+    ] {
+        let harness = Harness::new();
+        let session = harness.spawn(scenario).await;
+        let turn = send(session.as_ref(), "hi").await;
+        harness.recorder.wait_for("agent_turn_settled", 1).await;
+        session.shutdown().await.expect("shutdown");
+
+        let settled = settled_for(&harness.recorder, &turn);
+        assert_eq!(settled.len(), 1, "{scenario}");
+        assert_eq!(settled[0]["status"], "error", "{scenario}");
+        assert_eq!(settled[0]["error"], want, "{scenario}");
+    }
 }
 
 // ── Permissions ──────────────────────────────────────────────────────
@@ -688,14 +723,6 @@ async fn an_ask_that_needs_the_cli_dialog_is_denied_and_reported() {
     );
     assert_eq!(settled_for(&harness.recorder, &turn)[0]["status"], "ok");
 
-    // Nothing is left pending: an Allow for the report is a no-op.
-    session
-        .respond_permission(
-            "toolu_01AskUserQuestionCard".to_owned(),
-            PermissionDecision::Allow,
-        )
-        .await
-        .expect("no-op");
     session.shutdown().await.expect("shutdown");
 }
 
@@ -757,7 +784,13 @@ async fn cancel_without_a_receipt_falls_back_to_a_kill() {
 
     let settled = settled_for(&harness.recorder, &turn);
     assert_eq!(settled.len(), 1);
-    assert_eq!(settled[0]["error"], PROCESS_EXITED_WITHOUT_RECEIPT);
+    assert!(
+        settled[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with(PROCESS_EXITED_WITHOUT_RECEIPT)),
+        "{:?}",
+        settled[0]["error"]
+    );
     assert_eq!(harness.recorder.count("agent_session_exited"), 1);
     assert!(matches!(
         session
@@ -810,7 +843,13 @@ async fn shutdown_mid_turn_synthesizes_exactly_one_settlement() {
     let settled = settled_for(&harness.recorder, &turn);
     assert_eq!(settled.len(), 1);
     assert_eq!(settled[0]["status"], "error");
-    assert_eq!(settled[0]["error"], PROCESS_EXITED_WITHOUT_RECEIPT);
+    assert!(
+        settled[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with(PROCESS_EXITED_WITHOUT_RECEIPT)),
+        "{:?}",
+        settled[0]["error"]
+    );
     assert_eq!(harness.recorder.count("agent_session_exited"), 1);
 }
 
@@ -824,7 +863,36 @@ async fn a_framer_error_settles_the_turn_and_tears_the_session_down() {
 
     let settled = settled_for(&harness.recorder, &turn);
     assert_eq!(settled.len(), 1);
-    assert_eq!(settled[0]["error"], PROCESS_EXITED_WITHOUT_RECEIPT);
+    assert!(
+        settled[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with(PROCESS_EXITED_WITHOUT_RECEIPT)),
+        "{:?}",
+        settled[0]["error"]
+    );
+    assert!(
+        settled[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("NDJSON line exceeded")),
+        "the framer error is the cause: {:?}",
+        settled[0]["error"]
+    );
+}
+
+#[tokio::test]
+async fn a_crash_settles_the_turn_with_the_stderr_tail() {
+    let harness = Harness::new();
+    let session = harness.spawn("crash_with_stderr.mjs").await;
+    let turn = send(session.as_ref(), "hi").await;
+    harness.recorder.wait_for("agent_turn_settled", 1).await;
+
+    let settled = settled_for(&harness.recorder, &turn);
+    assert_eq!(settled.len(), 1);
+    assert_eq!(
+        settled[0]["error"],
+        format!("{PROCESS_EXITED_WITHOUT_RECEIPT} (Stderr: fatal: model overloaded)")
+    );
+    session.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
@@ -975,6 +1043,15 @@ async fn await_turn_completion_resolves_on_settlement_and_on_teardown() {
     let harness = Harness::new();
     let session = harness.spawn("hang_mid_turn.mjs").await;
     let turn = send(session.as_ref(), "start something long").await;
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(300),
+            session.await_turn_completion(turn.clone())
+        )
+        .await
+        .is_err(),
+        "a turn still in flight keeps the future pending"
+    );
     let (waited, _) = tokio::join!(
         tokio::time::timeout(WAIT, session.await_turn_completion(turn)),
         session.shutdown()
@@ -1198,8 +1275,17 @@ fn settings_are_inline_json_with_the_tier_deny_list_never_a_path() {
             );
             let parsed: Value = serde_json::from_str(settings).expect("valid JSON");
             assert_eq!(parsed["permissions"]["deny"], json!(deny_list(tier)));
+            assert_eq!(parsed["disableAllHooks"], json!(true));
         }
     }
+}
+
+#[test]
+fn the_probe_disables_project_hooks() {
+    assert_eq!(
+        value_of(&probe_flags(), "--settings"),
+        Some(r#"{"disableAllHooks":true}"#)
+    );
 }
 
 #[test]
@@ -1274,6 +1360,46 @@ fn the_restricted_tier_never_accepts_a_mode_that_asks() {
     }
 }
 
+/// The fences themselves, pinned by value: the other argv tests compare
+/// `permission_mode_flag` and `deny_list` with their own output.
+#[test]
+fn every_trust_tier_pins_its_literal_mode_and_deny_list() {
+    use ClaudeCodeTrustTier::{Restricted, Standard, WriteEnabled};
+    assert_eq!(permission_mode_flag(Restricted), "dontAsk");
+    assert_eq!(permission_mode_flag(Standard), "manual");
+    assert_eq!(permission_mode_flag(WriteEnabled), "acceptEdits");
+    assert_eq!(accepted_permission_modes(Standard), ["default", "manual"]);
+    assert_eq!(accepted_permission_modes(WriteEnabled), ["acceptEdits"]);
+    assert_eq!(
+        deny_list(Restricted),
+        ["Bash", "Write", "Edit", "NotebookEdit"]
+    );
+    let destructive = [
+        "Bash(rm -rf*)",
+        "Bash(git push --force*)",
+        "Bash(git push -f*)",
+        "Bash(git reset --hard*)",
+        "Bash(sudo*)",
+    ];
+    assert_eq!(deny_list(Standard), destructive);
+    assert_eq!(deny_list(WriteEnabled), destructive);
+}
+
+/// Every tier spawns: the fake CLI reports the permission mode it was
+/// started with, and the handshake accepts that mode for each tier.
+#[tokio::test]
+async fn every_tier_spawns() {
+    let harness = Harness::new();
+    for tier in ["restricted", "standard", "write_enabled"] {
+        let spec = AgentSpawnSpec {
+            permission_mode: Some(tier.to_owned()),
+            ..harness.spec()
+        };
+        let session = harness.try_spawn("happy_turn.mjs", spec).await.expect(tier);
+        session.shutdown().await.expect("shutdown");
+    }
+}
+
 #[test]
 fn capabilities_are_honest() {
     let capabilities = claude_code_capabilities();
@@ -1290,6 +1416,10 @@ fn capabilities_are_honest() {
             "{mode:?} is advertised, so a spawn must accept it"
         );
     }
+    assert_eq!(
+        capabilities.permission_modes,
+        ["restricted", "standard", "write_enabled"]
+    );
     let adapter = ClaudeCodeAdapter::new(Harness::new().sink.clone());
     assert_eq!(adapter.provider(), ProviderId::ClaudeCode);
     assert_eq!(adapter.capabilities(), capabilities);

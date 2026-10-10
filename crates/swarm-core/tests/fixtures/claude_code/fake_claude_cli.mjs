@@ -147,14 +147,6 @@ const frames = {
     session_id: sessionId,
     uuid: randomUUID(),
   }),
-  thinkingTokens: (estimated) => ({
-    type: "system",
-    subtype: "thinking_tokens",
-    estimated_tokens: estimated,
-    estimated_tokens_delta: estimated,
-    session_id: sessionId,
-    uuid: randomUUID(),
-  }),
   messageStart: (opts) =>
     streamEvent(
       {
@@ -481,7 +473,6 @@ const cli = {
   answer: (requestId) => answerOf(requestId).promise,
   /** Resolves on the next `interrupt` control request (already acknowledged). */
   interrupted: () => interrupts.next(),
-  stderr: (text) => writeSync(2, text),
   exit: (code) => process.exit(code),
   /** An 11MB line with no newline, past the adapter's 10MB NDJSON cap. */
   oversized: () => writeSync(1, "x".repeat(11 * 1024 * 1024)),
