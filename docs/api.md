@@ -1363,7 +1363,7 @@ for (const w of metrics.perWorker) {
 }
 ```
 
-**Note:** This is the pull-based complement to the push-based `system_metrics` event (emitted every 500 ms; ephemeral -- it consumes a seq but is never persisted). Both read from the same `SharedSystem` (one `sysinfo::System` behind a `parking_lot::Mutex`), so CPU deltas come from a single source of truth. `system_metrics` carries a field `aiReqPerSec` that is always `0`: nothing counts provider requests yet, the wire field is kept for compatibility, and the metrics page's 'AI Req/s' tile (`MetricsOverview.tsx`) therefore always reads 0.0.
+**Note:** This is the pull-based complement to the push-based `system_metrics` event (emitted every 500 ms; ephemeral -- it consumes a seq but is never persisted). Both read from the same `SharedSystem` (one `sysinfo::System` behind a `parking_lot::Mutex`), so CPU deltas come from a single source of truth. `system_metrics` carries only measured values: nothing counts provider requests, so there is no request-rate field and the metrics page (`MetricsOverview.tsx`) shows no request-rate tile.
 
 ---
 
@@ -1530,7 +1530,7 @@ A stamped envelope additionally carries `originWorker`/`causeSeq`:
 | `session_deleted`     | `{ sessionId }`                                                  | Yes       |
 | `session_worker_added` | `{ sessionId, workerId }` -- emitted by [`session_add_worker`](#session_add_worker) only when membership actually changed | Yes |
 | `session_worker_removed` | `{ sessionId, workerId }` -- emitted by [`session_remove_worker`](#session_remove_worker); persisted so a backfilling client reconstructs the same membership a live listener observed | Yes |
-| `system_metrics`      | `{ cpuPercent, memoryMb, memoryTotalMb, workerCount, aiReqPerSec, timestamp }` -- every 500 ms; `aiReqPerSec` is always `0` | No (ephemeral) |
+| `system_metrics`      | `{ cpuPercent, memoryMb, memoryTotalMb, workerCount, timestamp }` -- every 500 ms | No (ephemeral) |
 | `system_log`          | `{ level, message, target, timestamp }` -- backend notices such as the git startup probe | No (ephemeral) |
 | `bus_message`         | `{ messageId, fromWorker, toWorker, topic, payload }` -- `originWorker` on the envelope is stamped from `fromWorker` | Yes       |
 | `worktree_created`    | `{ workerId, sessionId, repoRoot, worktreePath, branch, baseCommit }` -- its own `seq` is the range start for "what changed" queries | Yes |
@@ -1733,6 +1733,6 @@ Implemented and tested in Rust, but with no frontend caller in the shipped app (
 | [`bus_send`](#bus_send), [`bus_list_channels`](#bus_list_channels) | Fully routed (`bus_message` reaches every client), but no UI surface invokes either. |
 | [`get_session`](#get_session), [`agent_shutdown`](#agent_shutdown) | Registry commands with no frontend caller: the app lists sessions with `list_sessions`, and `kill_worker` shuts a session's agent down. The contract test lists both in `NOT_WIRED`. |
 | Provider ids `opencode`, `gemini`, `webview_anthropic` | Reserved wire names with no Rust adapter: `agent_spawn` and `agent_probe` refuse them. The webview chat path (`webview_anthropic`) lives in TypeScript and cannot implement the session trait. |
-| `WorkerState` `idle`, `worker_input` `source: "automation"`, `system_metrics.aiReqPerSec` | Wire values the backend accepts (or, for `aiReqPerSec`, always sends as `0`) but nothing produces or measures today. |
+| `WorkerState` `idle`, `worker_input` `source: "automation"` | Wire values the backend accepts but nothing produces today. |
 
 Removed, not merely unwired: `ai_request` and the `ai_stream_delta` / `ai_stream_settled` events (the webview chat streams from the SDK directly), and `bus_subscribe` / `bus_create_pipeline` / `bus_list_pipelines`. They no longer exist.

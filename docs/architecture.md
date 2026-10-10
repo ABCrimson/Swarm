@@ -211,7 +211,7 @@ keeps the tag list exhaustive). Payload fields are `camelCase`; full shapes are 
 | `worker_input` | `workerId, bytes, source, preview` | not when `source` is `terminal` |
 | `session_created` / `session_deleted` | `sessionId, name` / `sessionId` | yes |
 | `session_worker_added` / `session_worker_removed` | `sessionId, workerId` | yes |
-| `system_metrics` | `cpuPercent, memoryMb, memoryTotalMb, workerCount, aiReqPerSec, timestamp` | no |
+| `system_metrics` | `cpuPercent, memoryMb, memoryTotalMb, workerCount, timestamp` | no |
 | `system_log` | `level, message, target, timestamp` | no |
 | `bus_message` | `messageId, fromWorker, toWorker, topic, payload` | yes |
 | `worktree_created` | `workerId, sessionId, repoRoot, worktreePath, branch, baseCommit` | yes |
@@ -229,7 +229,7 @@ keeps the tag list exhaustive). Payload fields are `camelCase`; full shapes are 
 | `agent_turn_settled` | `workerId, turnId, status, error, costUsd, usage, durationMs, numTurns` | yes |
 | `agent_session_exited` | `workerId, exitCode, signal` | yes |
 
-`aiReqPerSec` is always `0.0`: nothing counts provider requests yet.
+`system_metrics` carries only measured values; nothing counts provider requests, so it has no request-rate field.
 
 ### Workers and PTYs
 
@@ -627,7 +627,7 @@ See [SECURITY.md](../SECURITY.md) for the reporting policy.
 
 True at this commit and deliberately not hidden:
 
-- `aiReqPerSec` in `system_metrics` is always `0.0`; nothing counts provider requests.
+- Nothing counts provider requests, so `system_metrics` reports no request rate.
 - A failed event-log append is logged and the event is still emitted, so it exists live but not in the
   log.
 - The frontend waits 30 s for `ship_settled`, but the backend allows 600 s for commit and push, so a slow
