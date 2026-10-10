@@ -67,11 +67,9 @@ const legacySlug = (text: string): string =>
     .replace(/^-|-$/g, "");
 
 /**
- * Fails if `*` / `**` emphasis markers survive as literal text outside code.
- * marked 18.0.14 silently stops parsing emphasis for the rest of a paragraph
- * when a code span ends in a backslash and another code span follows; this
- * turns that (and any similar parse slip) into a build error. Intentionally
- * literal asterisks belong in a code span.
+ * Fails if `*` / `**` emphasis markers survive as literal text outside code,
+ * so any parse slip that leaves emphasis unrendered is a build error.
+ * Intentionally literal asterisks belong in a code span.
  */
 function checkEmphasis(html: string, file: string): void {
   const text = html
