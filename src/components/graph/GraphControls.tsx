@@ -50,9 +50,10 @@ function isTypingTarget(target: EventTarget | null): boolean {
  * layout, delete the selected annotation edge, and export/import of the
  * layout and annotations as a workflow file.
  *
- * Keyboard shortcuts: `+`/`=` zoom in, `-` zoom out, `0` fit view — ignored
- * while typing and while the causality inspector is open. Export/Import
- * use the Tauri dialog and fs plugins, so they only appear in the desktop
+ * Keyboard shortcuts: `+`/`=` zoom in, `-` zoom out, `0` fit view, active
+ * only while focus is inside the graph, never with Ctrl/Cmd/Alt (browser
+ * zoom), and ignored while typing or while the causality inspector is open.
+ * Export/Import use the Tauri dialog and fs plugins, so they only appear in the desktop
  * app (not under the remote `swarmd` web transport).
  */
 export function GraphControls({
@@ -101,10 +102,12 @@ export function GraphControls({
 
   // Registered once; the Effect Event always sees the latest inspector
   // state and viewport actions. The listener is document-level, so it is
-  // gated on the causality inspector (whose own keys must not zoom the
-  // canvas behind it).
+  // gated on focus inside `.react-flow` and on the causality inspector
+  // (whose own keys must not zoom the canvas behind it).
   const onShortcut = useEffectEvent((e: KeyboardEvent): void => {
     if (causalityOpen || isTypingTarget(e.target)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!(e.target instanceof Element) || !e.target.closest(".react-flow")) return;
     if (e.key === "+" || e.key === "=") {
       e.preventDefault();
       handleZoomIn();

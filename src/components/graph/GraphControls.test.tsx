@@ -2,7 +2,9 @@
 //
 // Zoom-key gating: GraphControls' document-level +/-/0 listener must stay
 // quiet while the causality inspector is open (its keys still bubble to
-// document), or typing "0" there would fit-view the canvas behind it.
+// document), or typing "0" there would fit-view the canvas behind it. It
+// also acts only while focus is inside the graph and never with
+// Ctrl/Cmd/Alt, which are the browser's page-zoom shortcuts.
 //
 // Workflow files: Export/Import need the Tauri dialog + fs plugins, so
 // they only render in the desktop app; the dialog awaits sit inside the
@@ -46,7 +48,9 @@ function renderControls(onImport = vi.fn(() => "Placed 1 Of 1 Nodes, Added 0 Ann
   render(
     <Provider store={store}>
       <ReactFlowProvider>
-        <GraphControls onResetLayout={vi.fn()} getWorkflow={() => WORKFLOW} onImport={onImport} />
+        <div className="react-flow">
+          <GraphControls onResetLayout={vi.fn()} getWorkflow={() => WORKFLOW} onImport={onImport} />
+        </div>
       </ReactFlowProvider>
     </Provider>,
   );
@@ -61,6 +65,7 @@ describe("GraphControls — zoom-key gating", () => {
   it("responds to +/-/0 when the causality inspector is closed", async () => {
     const user = userEvent.setup();
     renderControls();
+    screen.getByRole("button", { name: "Fit View (0)" }).focus();
 
     await user.keyboard("+-0");
 
@@ -73,6 +78,7 @@ describe("GraphControls — zoom-key gating", () => {
     const user = userEvent.setup();
     const { store } = renderControls();
     act(() => store.set(causalityInspectorAtom, { startSeq: 1 }));
+    screen.getByRole("button", { name: "Fit View (0)" }).focus();
 
     await user.keyboard("+-0");
 
@@ -86,10 +92,37 @@ describe("GraphControls — zoom-key gating", () => {
     const { store } = renderControls();
     act(() => store.set(causalityInspectorAtom, { startSeq: 1 }));
     act(() => store.set(causalityInspectorAtom, null));
+    screen.getByRole("button", { name: "Fit View (0)" }).focus();
 
     await user.keyboard("+");
 
     expect(zoomIn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("GraphControls — zoom-key scope", () => {
+  it("ignores zoom keys pressed while focus is outside the graph", async () => {
+    const user = userEvent.setup();
+    renderControls();
+    expect(document.body).toHaveFocus();
+
+    await user.keyboard("+-0");
+
+    expect(zoomIn).not.toHaveBeenCalled();
+    expect(zoomOut).not.toHaveBeenCalled();
+    expect(fitView).not.toHaveBeenCalled();
+  });
+
+  it("leaves Ctrl/Cmd/Alt chords to the browser (page zoom)", async () => {
+    const user = userEvent.setup();
+    renderControls();
+    screen.getByRole("button", { name: "Fit View (0)" }).focus();
+
+    await user.keyboard("{Control>}={/Control}{Meta>}-{/Meta}{Alt>}0{/Alt}");
+
+    expect(zoomIn).not.toHaveBeenCalled();
+    expect(zoomOut).not.toHaveBeenCalled();
+    expect(fitView).not.toHaveBeenCalled();
   });
 });
 
