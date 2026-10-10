@@ -26,7 +26,7 @@ export const KIND_STYLE: Readonly<
   kill: { stroke: "oklch(0.72 0.20 10 / 0.8)", dash: "3 3" },
   command: { stroke: "oklch(0.75 0.19 145 / 0.8)", dash: "7 3" },
   message: { stroke: "oklch(0.80 0.15 85 / 0.8)", dash: "1.5 3" },
-  manual: { stroke: "oklch(0.60 0.02 220 / 0.6)", dash: "8 4" },
+  manual: { stroke: "oklch(0.72 0.02 220 / 0.8)", dash: "8 4" },
 };
 
 /** Title Case display name per kind (legend rows, edge accessible names). */
@@ -110,8 +110,7 @@ export function ProvenanceEdge({
           {
             ...style,
             "--edge-stroke": stroke,
-            stroke,
-            strokeWidth: strokeWidthForCount(count),
+            "--edge-width": `${strokeWidthForCount(count)}px`,
             strokeDasharray: kindStyle.dash,
           } as CSSProperties
         }
@@ -119,6 +118,7 @@ export function ProvenanceEdge({
       {count > 1 && (
         <EdgeLabelRenderer>
           <div
+            aria-hidden="true"
             className="provenance-edge__count"
             style={
               { left: labelX, top: labelY, "--edge-stroke": kindStyle.stroke } as CSSProperties

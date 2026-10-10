@@ -19,9 +19,9 @@
   .worker-graph .react-flow {
     --xy-background-color: oklch(0.08 0.02 220);
     --xy-background-pattern-dots-color: oklch(0.14 0.03 220);
-    --xy-edge-stroke: oklch(0.6 0.02 220 / 0.6);
+    --xy-edge-stroke: oklch(0.72 0.02 220 / 0.8);
     --xy-edge-stroke-selected: oklch(0.85 0.2 205);
-    --xy-connectionline-stroke: oklch(0.6 0.02 220 / 0.8);
+    --xy-connectionline-stroke: oklch(0.72 0.02 220 / 0.8);
     --xy-connectionline-stroke-width: 2;
     --xy-minimap-background-color: oklch(0.1 0.03 220);
     --xy-minimap-mask-background-color: oklch(0.06 0.02 220 / 0.8);
@@ -43,8 +43,16 @@
     border-radius: 12px;
   }
 
+  /* Colour and width arrive as custom properties so the focus rule below can override them. */
+  .provenance-edge__path {
+    stroke: var(--edge-stroke);
+    stroke-width: var(--edge-width);
+  }
+
   .worker-graph .react-flow__edge:focus-visible .provenance-edge__path {
-    stroke: oklch(0.85 0.2 205);
+    stroke: oklch(0.95 0.1 205);
+    stroke-width: calc(var(--edge-width) + 2px);
+    filter: drop-shadow(0 0 4px oklch(0.85 0.2 205));
   }
 
   /* ── Worker node ───────────────────────────────────────────────── */
