@@ -15,8 +15,8 @@ interface SpinnerProps {
 }
 
 /**
- * SVG loading spinner. By default it is a "Loading" status (`<output>`)
- * drawn in the plasma accent.
+ * SVG loading spinner. By default it is a "Loading" status (`<output>` with
+ * visually hidden text) drawn in the plasma accent.
  *
  * The rotation is Tailwind's `animate-spin` (a stylesheet animation), so
  * the global reduced-motion override in animations.css stops it.
@@ -58,7 +58,8 @@ export function Spinner({
       {svg}
     </span>
   ) : (
-    <output aria-label="Loading" className={frame}>
+    <output className={frame}>
+      <span className="sr-only">Loading</span>
       {svg}
     </output>
   );
