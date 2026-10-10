@@ -26,13 +26,33 @@ function matchesQuery(session: Session, query: string): boolean {
   );
 }
 
-/** Whether `session` was last updated within the inclusive `range` (whole days, local time). */
+/**
+ * A date input's value as a day, or `undefined` when it is empty or not a
+ * day Temporal can read. A native date input accepts a 5+-digit year such as
+ * `20261-01-01`, which Temporal rejects (it wants `+020261-01-01`).
+ */
+function toDay(value: string): Temporal.PlainDate | undefined {
+  if (value === "") return undefined;
+  try {
+    return Temporal.PlainDate.from(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether `session` was last updated within the inclusive `range` (whole
+ * days, local time). An empty or unreadable bound is ignored.
+ */
 function withinRange(session: Session, range: DateRange): boolean {
+  const from = toDay(range.from);
+  const to = toDay(range.to);
+  if (from === undefined && to === undefined) return true;
   const day = Temporal.Instant.from(session.updatedAt)
     .toZonedDateTimeISO(Temporal.Now.timeZoneId())
     .toPlainDate();
-  if (range.from !== "" && Temporal.PlainDate.compare(day, range.from) < 0) return false;
-  if (range.to !== "" && Temporal.PlainDate.compare(day, range.to) > 0) return false;
+  if (from !== undefined && Temporal.PlainDate.compare(day, from) < 0) return false;
+  if (to !== undefined && Temporal.PlainDate.compare(day, to) > 0) return false;
   return true;
 }
 
@@ -106,7 +126,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
             id={fromId}
             type="date"
             value={dateRange.from}
-            max={dateRange.to || undefined}
+            max={dateRange.to || "9999-12-31"}
             onChange={(e) => setDateRange((prev) => ({ ...prev, from: e.target.value }))}
             className="swarm-input flex-1 text-xs [color-scheme:dark]"
           />
@@ -118,6 +138,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
             type="date"
             value={dateRange.to}
             min={dateRange.from || undefined}
+            max="9999-12-31"
             onChange={(e) => setDateRange((prev) => ({ ...prev, to: e.target.value }))}
             className="swarm-input flex-1 text-xs [color-scheme:dark]"
           />

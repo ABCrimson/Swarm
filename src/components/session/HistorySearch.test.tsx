@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HistorySearch } from "#components/session/HistorySearch";
@@ -113,6 +113,16 @@ describe("HistorySearch", () => {
 
     await user.click(screen.getByRole("button", { name: "Clear Dates" }));
     expect(screen.queryByRole("region", { name: "Search Results" })).not.toBeInTheDocument();
+  });
+
+  it("ignores a bound Temporal cannot read, such as a five-digit year", () => {
+    addSession("Kept", "2026-09-01T10:00:00.000Z");
+    render(<HistorySearch onResultSelect={vi.fn()} />);
+
+    // A native date input accepts this value; Temporal.PlainDate rejects it.
+    fireEvent.change(screen.getByLabelText("From"), { target: { value: "20261-01-01" } });
+
+    expect(resultNames()).toEqual(["Kept"]);
   });
 
   it("reports the chosen result", async () => {
