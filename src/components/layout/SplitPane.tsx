@@ -129,7 +129,7 @@ export function SplitPane({
         onPointerMove={handlePointerMove}
         onLostPointerCapture={handleLostPointerCapture}
         onKeyDown={handleKeyDown}
-        className={`relative m-0 touch-none select-none border-0 bg-plasma/15 transition-[background-color,box-shadow] duration-200 [grid-area:handle] hover:bg-plasma/30 hover:shadow-[0_0_6px_oklch(from_var(--color-plasma)_l_c_h/0.25)] data-dragging:bg-plasma/50 data-dragging:shadow-[0_0_8px_oklch(from_var(--color-plasma)_l_c_h/0.4)] ${isHorizontal ? "cursor-col-resize" : "cursor-row-resize"}`}
+        className={`relative m-0 touch-none select-none border-0 bg-plasma-dim transition-[background-color,box-shadow] duration-200 [grid-area:handle] hover:bg-plasma/70 hover:shadow-[0_0_6px_oklch(from_var(--color-plasma)_l_c_h/0.25)] data-dragging:bg-plasma data-dragging:shadow-[0_0_8px_oklch(from_var(--color-plasma)_l_c_h/0.4)] ${isHorizontal ? "cursor-col-resize" : "cursor-row-resize"}`}
       />
       <div className="min-h-0 min-w-0 overflow-auto [grid-area:secondary]">{secondary}</div>
     </div>

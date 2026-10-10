@@ -23,8 +23,6 @@
   --color-rose: oklch(0.72 0.2 10);
   --color-rose-bright: oklch(0.78 0.18 10);
   --color-lime: oklch(0.82 0.18 140);
-  --color-violet: oklch(0.72 0.2 290);
-  --color-cyan: oklch(0.8 0.14 195);
 
   /* ── Surfaces, darkest to lightest ─────────────── */
   --color-void: oklch(0.06 0.02 220);
@@ -35,6 +33,8 @@
   --color-border: oklch(0.22 0.04 220);
   --color-border-2: oklch(0.28 0.05 220);
   --color-border-3: oklch(0.35 0.06 220);
+  /* Form-control boundary: 3:1+ (WCAG 1.4.11) against every surface, void … surface-3. */
+  --color-border-control: oklch(0.52 0.06 220);
 
   /*
    * ── Foreground ───────────────────────────────────
@@ -75,7 +75,7 @@
   --radius-xl: 16px;
 
   /* ── Easing ──────────────────────────────────── */
-  /* The shell's entrance curve (a cubic ease-out; GSAP calls it power3.out). */
+  /* The shell's entrance curve (easeOutCubic). */
   --ease-out-cubic: cubic-bezier(0.215, 0.61, 0.355, 1);
 }
 
