@@ -5,6 +5,7 @@ import { Button } from "#components/ui/Button";
 import { Pill, type PillTone } from "#components/ui/Pill";
 import type { PermissionDecision } from "#lib/agent-events";
 import { PROVIDER_LABELS } from "#lib/agent-events";
+import { errorMessage } from "#lib/is-error";
 import { agentCancel, agentPermissionRespond, agentSendTurn } from "#lib/tauri";
 import {
   type AgentTranscriptItem,
@@ -244,7 +245,7 @@ function PermissionRow({
       }
     } catch (err) {
       if (setPermissionState(workerId, payload.requestId, "pending", "answering")) {
-        toast.error(`Permission Answer Failed: ${Error.isError(err) ? err.message : String(err)}`);
+        toast.error(`Permission Answer Failed: ${errorMessage(err)}`);
       }
     }
   };
@@ -400,7 +401,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
       // Never admitted (e.g. the scheduler queue is full): no settle
       // will arrive for it, so the bubble fails here.
       useAgentSessionStore.getState().failUserTurn(workerId, bubbleId);
-      toast.error(`Send Turn Failed: ${Error.isError(err) ? err.message : String(err)}`);
+      toast.error(`Send Turn Failed: ${errorMessage(err)}`);
     });
   };
 
@@ -410,7 +411,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
     const turnId = transcript.currentTurnId;
     if (!turnId) return;
     agentCancel(workerId, turnId).catch((err: unknown) => {
-      toast.error(`Cancel Failed: ${Error.isError(err) ? err.message : String(err)}`);
+      toast.error(`Cancel Failed: ${errorMessage(err)}`);
     });
   };
 
