@@ -22,6 +22,9 @@
         "visible": false,
         "decorations": true,
         "transparent": false,
+        "backgroundThrottling": "disabled",
+        "scrollBarStyle": "fluentOverlay",
+        "preventOverflow": true,
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=WebGPU"
       }
     ],

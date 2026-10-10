@@ -1,28 +1,37 @@
 //! Orderly shutdown when the app quits.
 //!
-//! The ways the app quits (closing the last window, Cmd+Q,
-//! `AppHandle::exit`, `AppHandle::request_restart`) end the event loop
-//! with [`RunEvent::Exit`], after which Tauri exits the process without
-//! running the destructors of managed state. The run-event callback
-//! therefore shuts the runtime down itself, on the main thread, while
-//! handling that event.
+//! Every way the app quits (closing the last window, Cmd+Q,
+//! `AppHandle::exit`, `restart`, `request_restart`) ends in
+//! [`tauri::App::cleanup_before_exit`], which runs the plugins'
+//! cleanup hooks, and Tauri then exits the process without running the
+//! destructors of managed state. [`plugin`] registers the app's hook:
+//! it shuts the runtime down, then flushes the release log. Unlike
+//! `RunEvent::Exit`, the hook also runs on the exits that skip the event
+//! loop (`restart` on the main thread).
 //!
-//! Two exits skip that event, and with it this teardown:
-//! `AppHandle::restart` called on the main thread restarts the process
-//! directly (off the main thread it goes through the event), and `exit`
-//! falls back to `std::process::exit` when the event loop cannot be
-//! asked to stop. The app calls neither `restart` nor `request_restart`;
-//! a future restart must use `request_restart`.
+//! The hook runs on the main thread when the event loop ends. `exit`,
+//! `restart` (off the main thread) and `request_restart` run it on the
+//! calling thread instead when they cannot ask the event loop to stop;
+//! from an async command that is a Tokio worker, where `Handle::block_on`
+//! panics. So the shutdown runs on a scoped helper thread through a handle
+//! captured at registration. The caller waits for it (at most two
+//! `SHUTDOWN_PHASE_TIMEOUT`s), acceptable only because the process exits
+//! right after. The hook runs its teardown once, however often it is
+//! called.
 //!
 //! Terminal workers are left to the operating system: their PTYs close
 //! with the process, which ends the shells they run. Killing them through
 //! `kill_worker` instead would also remove their worktrees, which a quit
 //! must never do.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use swarm_core::runtime::Runtime;
-use tauri::{AppHandle, Manager, RunEvent};
+use tauri::plugin::{Builder, TauriPlugin};
+use tauri::{AppHandle, Manager};
+use tokio::sync::Mutex;
+use tracing_appender::non_blocking::WorkerGuard;
 
 /// Budget for each of the exit teardown's two phases (agent sessions,
 /// then the event writer's drain), so the whole teardown takes at most
@@ -30,13 +39,65 @@ use tauri::{AppHandle, Manager, RunEvent};
 /// delay the process exit, never freeze the UI.
 const SHUTDOWN_PHASE_TIMEOUT: Duration = Duration::from_millis(2500);
 
-/// The app's run-event callback.
-pub(crate) fn on_run_event<R: tauri::Runtime>(app: &AppHandle<R>, event: RunEvent) {
-    if let RunEvent::Exit = event
-        // Absent when the start failed, which left nothing to shut down.
-        && let Some(runtime) = app.try_state::<Runtime>()
-    {
-        tauri::async_runtime::block_on(shutdown(&runtime));
+/// Managed state of the exit teardown: whether it has run, and the release
+/// log's writer guard, which is taken last so the teardown's own lines
+/// are flushed.
+pub(crate) struct Teardown {
+    done: AtomicBool,
+    // tokio's Mutex only until swarm-desktop depends on parking_lot (a Cargo.lock change outside this lane); never contended, see cleanup.
+    log_guard: Mutex<Option<WorkerGuard>>,
+    /// How many times the shutdown actually ran.
+    #[cfg(test)]
+    runs: std::sync::atomic::AtomicUsize,
+}
+
+impl Teardown {
+    pub(crate) fn new(log_guard: Option<WorkerGuard>) -> Self {
+        Self {
+            done: AtomicBool::new(false),
+            log_guard: Mutex::new(log_guard),
+            #[cfg(test)]
+            runs: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+/// The plugin whose `cleanup_before_exit` hook shuts the app down.
+///
+/// Must be called inside the Tokio runtime's context (see
+/// [`crate::run`]): it captures that runtime's handle for the hook.
+pub(crate) fn plugin<R: tauri::Runtime>() -> TauriPlugin<R> {
+    let tokio = tokio::runtime::Handle::current();
+    Builder::new("swarm-lifecycle")
+        .on_cleanup_before_exit(move |app| cleanup(app, &tokio))
+        .build()
+}
+
+/// Shuts the managed runtime down (absent when the start failed, which
+/// left nothing to shut down), then drops the log guard, once.
+fn cleanup<R: tauri::Runtime>(app: &AppHandle<R>, tokio: &tokio::runtime::Handle) {
+    let Some(teardown) = app.try_state::<Teardown>() else {
+        return;
+    };
+    if teardown.done.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    if let Some(runtime) = app.try_state::<Runtime>() {
+        #[cfg(test)]
+        teardown.runs.fetch_add(1, Ordering::Relaxed);
+        let drained =
+            std::thread::scope(|scope| scope.spawn(|| tokio.block_on(shutdown(&runtime))).join());
+        if drained.is_err() {
+            tracing::error!("the shutdown panicked; exiting anyway");
+        }
+    }
+    // Last: Tauri exits the process right after the hook, and dropping
+    // the guard writes out every line the log thread still holds.
+    // Never contended (the `done` flag admits one caller), so `try_lock`
+    // always succeeds and nothing here can block or panic on a Tokio
+    // thread.
+    if let Ok(mut guard) = teardown.log_guard.try_lock() {
+        drop(guard.take());
     }
 }
 
@@ -100,29 +161,74 @@ mod tests {
         assert_eq!(killed, RECORDED);
     }
 
-    /// The app's run-event callback shuts the managed runtime down when
-    /// the event loop exits, and on no other event.
+    /// A mock app with the lifecycle plugin, a started runtime and the
+    /// teardown state, built inside the current Tokio context.
+    fn app_with_runtime(name: &str) -> tauri::App<tauri::test::MockRuntime> {
+        let data_dir = temp_dir(name);
+        let runtime = start_runtime(&data_dir, |_| {});
+        let app = mock_builder()
+            .plugin(plugin())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        app.manage(runtime);
+        let (_writer, guard) = tracing_appender::non_blocking(std::io::sink());
+        app.manage(Teardown::new(Some(guard)));
+        app
+    }
+
+    /// Cleaning up shuts the managed runtime down, and does it once:
+    /// a second call (the exit paths can reach the hook twice) drains
+    /// nothing again.
     #[test]
-    fn the_exit_event_shuts_the_managed_runtime_down() {
+    fn cleanup_shuts_the_runtime_down_once() {
         let tokio = tokio::runtime::Runtime::new().unwrap();
         let _context = tokio.enter();
-        let data_dir = temp_dir("lifecycle-exit");
-        let runtime = start_runtime(&data_dir, |_| {});
-        let app = mock_builder().build(mock_context(noop_assets())).unwrap();
-        app.manage(runtime);
+        let app = app_with_runtime("lifecycle-exit");
         let stopped = || app.state::<Runtime>().metrics_cancel.is_cancelled();
-
-        on_run_event(app.handle(), RunEvent::Ready);
+        let runs = || app.state::<Teardown>().runs.load(Ordering::Relaxed);
         assert!(!stopped());
 
-        on_run_event(app.handle(), RunEvent::Exit);
+        app.cleanup_before_exit();
+        assert!(
+            app.state::<Teardown>()
+                .log_guard
+                .try_lock()
+                .expect("uncontended")
+                .is_none(),
+            "the hook did not take the log guard"
+        );
         assert!(stopped());
+        assert_eq!(runs(), 1);
+
+        app.cleanup_before_exit();
+        assert_eq!(runs(), 1);
+    }
+
+    /// Safe on a thread inside a Tokio runtime, where `block_on` would
+    /// panic: exit/restart/request_restart from an async command run the
+    /// hook there when the event loop cannot be asked to stop.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cleanup_is_safe_on_a_tokio_worker() {
+        let app = app_with_runtime("lifecycle-worker");
+
+        app.cleanup_before_exit();
+        app.cleanup_before_exit();
+
+        assert!(app.state::<Runtime>().metrics_cancel.is_cancelled());
+        assert_eq!(app.state::<Teardown>().runs.load(Ordering::Relaxed), 1);
     }
 
     /// Exiting after a failed start, with no runtime managed, is a no-op.
     #[test]
-    fn the_exit_event_without_a_runtime_does_nothing() {
-        let app = mock_builder().build(mock_context(noop_assets())).unwrap();
-        on_run_event(app.handle(), RunEvent::Exit);
+    fn cleanup_without_a_runtime_does_nothing() {
+        let tokio = tokio::runtime::Runtime::new().unwrap();
+        let _context = tokio.enter();
+        let app = mock_builder()
+            .plugin(plugin())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        app.manage(Teardown::new(None));
+        app.cleanup_before_exit();
+        assert_eq!(app.state::<Teardown>().runs.load(Ordering::Relaxed), 0);
     }
 }
