@@ -219,6 +219,10 @@ async fn connection(socket: WebSocket, state: AppState, peer: SocketAddr, admiss
             tracing::debug!(%peer, "WebSocket client left before sending `hello`");
             return;
         }
+        Ok(Err(HelloError::Failed(error))) => {
+            tracing::debug!(%peer, %error, "WebSocket receive failed before `hello`");
+            return;
+        }
         Err(_elapsed) => {
             tracing::warn!(%peer, "WebSocket closed: no `hello` within the handshake deadline");
             close_now(
@@ -353,8 +357,10 @@ async fn connection(socket: WebSocket, state: AppState, peer: SocketAddr, admiss
 enum HelloError {
     /// The first data message was something else; names what.
     Invalid(&'static str),
-    /// The client closed the connection, or it failed.
+    /// The client closed the connection.
     Gone,
+    /// Receiving failed (an oversized message, a protocol violation, a reset).
+    Failed(axum::Error),
 }
 
 /// Reads messages until the first data message, which must be `hello`, and
@@ -373,7 +379,8 @@ async fn read_hello(
             }
             Some(Ok(Message::Binary(_))) => return Err(HelloError::Invalid("a binary message")),
             Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
-            Some(Ok(Message::Close(_)) | Err(_)) | None => return Err(HelloError::Gone),
+            Some(Ok(Message::Close(_))) | None => return Err(HelloError::Gone),
+            Some(Err(error)) => return Err(HelloError::Failed(error)),
         }
     }
 }
