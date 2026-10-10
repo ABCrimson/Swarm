@@ -49,4 +49,4 @@ blocks on the prose.
 - `ship_context` is `RemotePolicy::Allowed`: it is read-only and exposes only what preflight already
   does about the same worker.
 
-See [Phase 2 — The Causal Record](../architecture.md#phase-2--the-causal-record).
+See [The Causal Record](../architecture.md#the-causal-record).

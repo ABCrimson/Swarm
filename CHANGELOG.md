@@ -13,7 +13,7 @@ The `modernize/2026-09-23` branch: 169 commits on top of `main` as of Wave 1 Ste
 
 ### Breaking
 
-- **Tauri 3.0 (alpha) replaces Tauri 2.** The whole stack moves together: `tauri` and `tauri-runtime-wry` `3.0.0-alpha.4`, `tauri-build` `3.0.0-alpha.3`, the fs/opener/store/updater/notification plugins `3.0.0-alpha.2`, `tauri-plugin-dialog` `3.0.0-alpha.3`, and the matching `@tauri-apps/*` JS packages. The webview runtime is chosen explicitly (`Builder::default().runtime(Wry::default())`). Anything built against the Tauri 2 API, capability files or `tauri.conf.json` shape must be ported. `tauri-plugin-shell` is gone, replaced by `tauri-plugin-opener`.
+- **Tauri 3.0 (alpha) replaces Tauri v2.** The whole stack moves together: `tauri` and `tauri-runtime-wry` `3.0.0-alpha.4`, `tauri-build` `3.0.0-alpha.3`, the fs/opener/store/updater/notification plugins `3.0.0-alpha.2`, `tauri-plugin-dialog` `3.0.0-alpha.3`, and the matching `@tauri-apps/*` JS packages. The webview runtime is chosen explicitly (`Builder::default().runtime(Wry::default())`). Anything built against the Tauri v2 API, capability files or `tauri.conf.json` shape must be ported. `tauri-plugin-shell` is gone, replaced by `tauri-plugin-opener`.
 - **fs permission rename.** `tauri-plugin-fs` 3.0.0-alpha.2 removed the `read_text_file` and `write_text_file` commands. The capability identifiers `fs:allow-read-text-file` and `fs:allow-write-text-file` are now `fs:allow-read-file` and `fs:allow-write-file` (`readTextFile`/`writeTextFile` call `read_file`/`write_file`), and `fs:allow-stat` is granted for the workspace size pre-check. Custom capability files and any code naming the old identifiers need the rename.
 - **Per-command ACL for the app commands.** `src-tauri/build.rs` generates `allow-<command>`/`deny-<command>` for each of the 38 app commands (`AppManifest::commands`, fed by `src/commands/command_list.rs`, the list the `commands!` macro forwards). `capabilities/default.json` grants each one, and an ungranted command is callable by no webview. Custom capability files must list the `allow-*` entries they need.
 - **Dialog-grant-only filesystem access.** The webview no longer holds a static fs scope on `$HOME/**` or `$APPDATA/**`. Only paths the user picked in an open or save dialog are reachable, with a deny scope over the app data directory (API key, event log, daemon token) and common credential stores. Browsing a workspace's subdirectories needs the folder picker's `recursive: true`, and exports to a dialog-picked path are written in place. The unused `fs:allow-mkdir`, remove and rename grants are dropped.
@@ -72,7 +72,7 @@ All pins are exact. The single hold is `node` (the 2026-10-09 and 2026-10-10 nig
 - **Frontend.** OKLCH design tokens with Tailwind utilities last in the cascade; accessible shell, workspace, settings and workers (real tablist/tabpanel, ARIA tree, switch/radio semantics, AA contrast, focus rings); layout-independent keyboard shortcuts that ignore IME composition; Zod 4 idioms; `withAlpha` via CSS relative color syntax; validated command wrappers with error causes; reducer-driven ship flow with honest failure states; stable WebGPU particles with prebuilt post-process bind groups.
 - **Dependencies.** Every pin moved to the newest build on any channel (see the table above), refreshed on 2026-09-25 and 2026-10-10: Tauri 3 alpha.4, Node nightly 2026-10-08, pnpm 12.11.2, Rust `nightly-2026-10-10`, tokio 1.53.2, hyper 1.12.0 (Content-Length/Transfer-Encoding and keep-alive fixes for `swarmd`), jsdom 30.1.2, marked 18.1.0, knip 6.41.0 as a devDependency.
 - **Repository.** `AGENTS.md` is canonical, tests are colocated, the docs site is generated from `docs/*.md`, the root is a virtual workspace, LF line endings on every OS, and README badges, prerequisites and tech stack match the pins.
-- **Docs.** Comments and docs follow the post-rewrite sources (chat engine, exit teardown, native.rs, git rustdoc links); the Pages job uses an explicit `ubuntu-26.04` runner.
+- **Docs.** Comments and docs follow the post-rewrite sources (chat engine, exit teardown, native.rs, git rustdoc links); the Pages job uses an explicit `ubuntu-26.04` runner. The phase history of `docs/architecture.md` moved into 33 decision records under `docs/adr/`, and the architecture doc is now a current-state reference; `docs/api.md` and `docs/daemon.md` were rewritten against the registry (36 commands plus 2 desktop-only), the event stream and the wire protocol, and describe the Windows daemon as a per-user logon Scheduled Task; README and the docs site describe Tauri 3.
 
 ### Deprecated
 
@@ -723,7 +723,7 @@ Full dependency refresh to July-2026 latest across the entire stack, plus a batc
 
 ### Added
 
-- Initial project scaffold with Tauri 2.10, React 19 canary, TypeScript 6.0-dev
+- Initial project scaffold with Tauri v2.10, React 19 canary, TypeScript 6.0-dev
 - Complete dependency manifest with exact pinned versions
 - Vite 8.0.0 stable build configuration with Rolldown bundler
 - Biome 2.4.6 linting and formatting configuration

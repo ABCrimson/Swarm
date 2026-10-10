@@ -6,7 +6,7 @@
 
 **Architecture:** A new Rust `orchestration` module owns a single writer thread that assigns monotonic sequence numbers, persists domain events to SQLite (WAL), and emits every event as an envelope on the single Tauri channel `swarm://events`. The existing `emit_event()` becomes a thin router into the engine, so all current call sites keep working unchanged. The frontend replaces its nine per-channel listeners with one `event-bus.ts` consumer that validates with zod, detects seq gaps, backfills via an `events_since` command, and offers a `waitFor()` receipt helper. High-frequency telemetry (PTY output, metrics ticks, logs) flows through the ordered stream but is not persisted.
 
-**Tech Stack:** Rust 1.98.0-beta (edition 2024), rusqlite 0.40.1 (bundled), Tauri 2.11.5, tokio 1.52.3, React 19.3 canary + React Compiler, zod 4.5 canary, Vitest 4.1.10.
+**Tech Stack:** Rust 1.98.0-beta (edition 2024), rusqlite 0.40.1 (bundled), Tauri v2.11.5, tokio 1.52.3, React 19.3 canary + React Compiler, zod 4.5 canary, Vitest 4.1.10.
 
 ## Global Constraints
 

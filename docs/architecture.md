@@ -18,7 +18,7 @@
   - [Workers and PTYs](#workers-and-ptys)
   - [Worktree Isolation](#worktree-isolation)
   - [Ship Chain](#ship-chain)
-  - [Phase 2 — The Causal Record](#phase-2--the-causal-record)
+  - [The Causal Record](#the-causal-record)
   - [Adapter Layer](#adapter-layer)
   - [Message Bus](#message-bus)
   - [Sessions, config and the data directory](#sessions-config-and-the-data-directory)
@@ -337,7 +337,7 @@ and waits 30 s (`SHIP_SETTLED_TIMEOUT_MS`). Failing to open the compare page aft
 warning toast and never flips the outcome. The default commit message is deterministic
 (`src/lib/ship-message.ts`: a Conventional Commit inferred from paths and the diff stat).
 
-### Phase 2 — The Causal Record
+### The Causal Record
 
 `ship_context(workerId)` ([ADR-0011](adr/0011-pr-body-evidence-before-prose.md)) is read-only and
 `Allowed` remotely. It resolves the commit's `(seqFrom, seqTo]` range, reads the log with

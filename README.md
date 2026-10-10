@@ -215,6 +215,7 @@ Swarm/
 │   │   └── src/{agent,bus,commands,events,git,orchestration,session,worker}/
 │   └── swarmd/                 # headless daemon: ws.rs, auth.rs, serve_ui.rs + service/ units
 ├── docs/                       # architecture · api · daemon · e2e · performance · contributing
+│   ├── adr/                    # architecture decision records (ADR-0001 to ADR-0033)
 │   ├── history/                # the original build spec (SWARM_NEW.md), archived
 │   └── superpowers/plans/      # dated execution plans, archived
 ├── e2e/                        # Playwright specs

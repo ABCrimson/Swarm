@@ -1967,7 +1967,7 @@ Data:      JetBrains Mono Variable 300
 ```markdown
 # SWARM Orchestrator
 
-> Multi-agent AI orchestration — Tauri 2.10 · WebGPU · Rust 1.95 beta · React 19 Canary
+> Multi-agent AI orchestration — Tauri v2.10 · WebGPU · Rust 1.95 beta · React 19 Canary
 
 [![CI](badge)](link) [![Rust](badge)](link) [![Node](badge)](link) [![Biome](badge)](link)
 
