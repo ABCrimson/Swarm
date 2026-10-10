@@ -35,6 +35,7 @@ beforeEach(() => {
   vi.mocked(spawnWorkerFromSpec).mockReset().mockResolvedValue("new-id");
   vi.mocked(killWorker).mockReset().mockResolvedValue(undefined);
   vi.mocked(toast.warning).mockClear();
+  vi.mocked(toast.error).mockClear();
 });
 
 function palette() {
@@ -147,7 +148,10 @@ describe("CommandPalette", () => {
 
     await killFromPalette("Keeper");
 
-    await vi.waitFor(() => expect(killWorker).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(toast.error).toHaveBeenCalledExactlyOnceWith("Kill Failed: no such worker"),
+    );
+    expect(killWorker).toHaveBeenCalledExactlyOnceWith("w-2");
     expect(useWorkerStore.getState().workers.has("w-2")).toBe(true);
   });
 
