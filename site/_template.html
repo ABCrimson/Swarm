@@ -9,25 +9,21 @@
   :root{
     color-scheme: dark;
     --bg: oklch(0.145 0.014 265);
-    --deep: oklch(0.12 0.012 265);
     --card: oklch(0.185 0.016 265);
     --ink: oklch(0.93 0.01 265);
     --muted: oklch(from var(--ink) l c h / .60);
-    --faint: oklch(from var(--ink) l c h / .38);
+    --faint: oklch(from var(--ink) l c h / .55);
     --line: oklch(0.96 0.008 265 / .09);
     --gold: oklch(0.8 0.14 85);
     --gold-dim: oklch(from var(--gold) l c h / .5);
     --violet: oklch(0.7 0.15 295);
-    --ok: oklch(0.75 0.15 150);
-    --bad: oklch(0.7 0.17 25);
     --code-bg: oklch(0.16 0.014 265);
-    --sp: 1rem;
     --r: 14px;
     --maxw: 82ch;
   }
-  @property --glow{ syntax:'<percentage>'; inherits:false; initial-value:0%; }
   *{ box-sizing:border-box; }
-  html{ scroll-behavior:smooth; scrollbar-color: var(--gold-dim) transparent; }
+  html{ scroll-padding-top:5rem; scrollbar-color: var(--gold-dim) transparent; }
+  @media (prefers-reduced-motion: no-preference){ html{ scroll-behavior:smooth; } }
   body{
     margin:0; background:var(--bg); color:var(--ink);
     font: clamp(0.95rem,0.9rem + 0.25vw,1.0625rem)/1.65 system-ui, -apple-system, Inter, sans-serif;
@@ -103,13 +99,12 @@
   .dek{ color:var(--muted); font-size:1.1rem; max-width:70ch; text-wrap:pretty; margin:0; }
 
   /* ---- prose ---- */
-  h2{ font-size:1.5rem; letter-spacing:-.015em; margin:2.75rem 0 .85rem; padding-top:.6rem; scroll-margin-top:5rem; }
-  h3{ font-size:1.15rem; margin:2rem 0 .6rem; color: oklch(from var(--ink) l c h / .92); scroll-margin-top:5rem; }
+  h2{ font-size:1.5rem; letter-spacing:-.015em; margin:2.75rem 0 .85rem; padding-top:.6rem; }
+  h3{ font-size:1.15rem; margin:2rem 0 .6rem; color: oklch(from var(--ink) l c h / .92); }
   h2 + p, h3 + p{ margin-top:0; }
-  .legacy-anchor{ scroll-margin-top:5rem; }
   p, li{ text-wrap:pretty; }
   main :is(h2,h3) a.anchor{ color:var(--faint); text-decoration:none; margin-left:.4rem; opacity:0; font-weight:400; }
-  main :is(h2,h3):hover a.anchor{ opacity:1; }
+  main :is(h2,h3):hover a.anchor, main :is(h2,h3) a.anchor:focus-visible{ opacity:1; }
   ul, ol{ padding-left:1.3rem; }
   li{ margin:.35rem 0; }
   li::marker{ color: var(--gold-dim); }
@@ -133,7 +128,7 @@
   tbody tr:hover{ background: oklch(from var(--gold) l c h / .05); }
   td:has(code), th{ font-variant-numeric: tabular-nums; }
 
-  /* ---- callout (blockquote starting with NOTE-ish) reused as .note ---- */
+  /* ---- callout: every body blockquote renders as .note (scripts/build-site.ts); the lead one under the H1 becomes the hero dek ---- */
   .note{ background: oklch(from var(--gold) l c h / .06); border:1px solid var(--gold-dim); border-radius:var(--r); padding:.9rem 1.15rem; margin:1.25rem 0; color: oklch(0.9 0.02 90); }
 
   /* ---- footer ---- */
@@ -141,7 +136,7 @@
   footer.foot a{ color:var(--muted); text-decoration:none; }
   footer.foot a:hover{ color:var(--gold); }
 
-  @media (prefers-reduced-motion: reduce){ *{ animation:none !important; transition:none !important; scroll-behavior:auto; } }
+  @media (prefers-reduced-motion: reduce){ *{ animation:none !important; transition:none !important; } }
   @media print{ header.top,aside.toc,.progress,body::before,body::after{ display:none } a{ color:inherit } pre,table{ border-color:oklch(0.68 0 0) } }
 </style>
 </head>
@@ -179,24 +174,39 @@
   <span><a href="https://github.com/ABCrimson/Swarm">ABCrimson/Swarm</a></span>
 </footer>
 
-<script>
-  // Build scroll-spy TOC from h2/h3 in <main>, no deps.
-  (function(){
-    var main=document.getElementById('content'), toc=document.getElementById('toc');
-    if(!main||!toc) return;
-    var heads=[].slice.call(main.querySelectorAll('h2, h3'));
-    heads.forEach(function(h){
-      if(!h.id){ h.id=h.textContent.trim().toLowerCase().replace(/[^\w]+/g,'-').replace(/^-|-$/g,''); }
-      var a=document.createElement('a'); a.href='#'+h.id; a.textContent=h.textContent.replace(/#$/,'').trim();
-      var li=document.createElement('li'); if(h.tagName==='H3') li.className='sub'; li.appendChild(a); toc.appendChild(li);
-      var anc=document.createElement('a'); anc.className='anchor'; anc.href='#'+h.id; anc.textContent='#'; anc.setAttribute('aria-hidden','true'); h.appendChild(anc);
-    });
-    var links={}; [].slice.call(toc.querySelectorAll('a')).forEach(function(a){ links[a.getAttribute('href').slice(1)]=a; });
-    var io=new IntersectionObserver(function(es){
-      es.forEach(function(e){ if(e.isIntersecting){ for(var k in links) links[k].classList.remove('active'); var l=links[e.target.id]; if(l) l.classList.add('active'); } });
-    },{ rootMargin:'-10% 0px -80% 0px' });
-    heads.forEach(function(h){ io.observe(h); });
-  })();
+<script type="module">
+  // Builds the scroll-spy TOC from the h2/h3 headings in <main>, no deps.
+  const main = document.getElementById('content');
+  const toc = document.getElementById('toc');
+  if (main && toc) {
+    const heads = main.querySelectorAll('h2, h3');
+    for (const h of heads) {
+      h.id ||= h.textContent.trim().toLowerCase().replace(/[^\w]+/g, '-').replace(/^-|-$/g, '');
+      const a = document.createElement('a');
+      a.href = `#${h.id}`;
+      a.textContent = h.textContent.replace(/#$/, '').trim();
+      const li = document.createElement('li');
+      if (h.tagName === 'H3') li.className = 'sub';
+      li.append(a);
+      toc.append(li);
+      const anc = document.createElement('a');
+      anc.className = 'anchor';
+      anc.href = `#${h.id}`;
+      anc.textContent = '#';
+      anc.setAttribute('aria-label', 'Permalink');
+      h.append(anc);
+    }
+    for (const el of main.querySelectorAll('pre, .tablewrap')) el.tabIndex = 0;
+    const links = new Map(Array.from(toc.querySelectorAll('a'), (a) => [a.getAttribute('href').slice(1), a]));
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        for (const l of links.values()) l.classList.remove('active');
+        links.get(e.target.id)?.classList.add('active');
+      }
+    }, { rootMargin: '-10% 0px -80% 0px' });
+    for (const h of heads) io.observe(h);
+  }
 </script>
 </body>
 </html>
