@@ -26,9 +26,10 @@
 //! along with the backup files named after them (for example
 //! `swarm-config.json.corrupt-<ms>`, or the daemon's `.daemon-token.<rand>`
 //! mint-time temp file, compared with leading dots ignored), and the
-//! credential directories
-//! `~/.ssh`, `~/.gnupg` and `~/.aws`. A hard link to a secret is not
-//! detected.
+//! credential stores under `~` that the capability's fs:scope deny list
+//! covers: `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
+//! `.config/gh`, `.claude`, `.codex`, `.git-credentials`, `.netrc`. A
+//! hard link to a secret is not detected.
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -45,8 +46,21 @@ use super::{Ctx, ok_value, parse_args, parse_provenance};
 /// that hold credentials.
 const DENIED_DATA_FILE_PREFIXES: [&str; 2] = ["swarm-config.json", "daemon-token"];
 
-/// Home-relative directories that hold credentials.
-const DENIED_HOME_DIRS: [&str; 3] = [".ssh", ".gnupg", ".aws"];
+/// Home-relative directories and files that hold credentials (the
+/// fs:scope deny list in `src-tauri/capabilities/default.json`).
+const DENIED_HOME_ENTRIES: [&str; 11] = [
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".azure",
+    ".kube",
+    ".docker",
+    ".config/gh",
+    ".claude",
+    ".codex",
+    ".git-credentials",
+    ".netrc",
+];
 
 const DENIED_MESSAGE: &str = "This Path Holds Credentials And Is Never Accessible.";
 
@@ -115,9 +129,9 @@ impl FsScopes {
                     .any(|prefix| name.starts_with(prefix))
             });
         secret_in_data_dir
-            || DENIED_HOME_DIRS
+            || DENIED_HOME_ENTRIES
                 .iter()
-                .any(|dir| real.starts_with(home.join(dir)))
+                .any(|entry| real.starts_with(home.join(entry)))
     }
 
     /// Whether `normalized` sits under any of `roots` (as given or with
@@ -436,15 +450,25 @@ mod tests {
     }
 
     #[test]
-    fn test_read_denies_credential_directories_under_home() {
+    fn test_read_denies_credential_stores_under_home() {
         let tree = Tree::new();
-        for dir in [".ssh", ".gnupg", ".aws"] {
-            let dir = tree.scopes.home.join(dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            let key = dir.join("id");
-            std::fs::write(&key, "k").unwrap();
-            assert_eq!(tree.scopes.check_read(&key), denied());
+        for entry in DENIED_HOME_ENTRIES {
+            let entry = tree.scopes.home.join(entry);
+            let secret = if matches!(
+                entry.file_name().and_then(|name| name.to_str()),
+                Some(".git-credentials" | ".netrc")
+            ) {
+                entry
+            } else {
+                std::fs::create_dir_all(&entry).unwrap();
+                entry.join("id")
+            };
+            std::fs::write(&secret, "k").unwrap();
+            assert_eq!(tree.scopes.check_read(&secret), denied(), "{secret:?}");
         }
+        let other = tree.scopes.home.join(".config/other.txt");
+        std::fs::write(&other, "o").unwrap();
+        assert!(tree.scopes.check_read(&other).is_ok());
     }
 
     #[test]
