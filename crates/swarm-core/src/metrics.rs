@@ -1,7 +1,7 @@
 //! Host and per-worker resource metrics.
 //!
 //! [`start_metrics_loop`] pushes a `system_metrics` event every
-//! [`METRICS_INTERVAL`] (host CPU and RAM plus the worker count);
+//! `METRICS_INTERVAL` (host CPU and RAM plus the worker count);
 //! [`MetricsSnapshot::collect`] answers `get_metrics` on demand with the same host
 //! figures, the worker count per state, and each worker's CPU and memory
 //! summed over its whole process tree.
@@ -24,7 +24,7 @@ use crate::events::{EventSink, SwarmEvent, SystemMetricsPayload};
 use crate::worker::registry::{AggregateMetrics, WorkerRegistry};
 
 /// How often [`start_metrics_loop`] samples the host.
-pub const METRICS_INTERVAL: Duration = Duration::from_millis(500);
+const METRICS_INTERVAL: Duration = Duration::from_millis(500);
 
 const BYTES_PER_MIB: f64 = 1024.0 * 1024.0;
 
@@ -75,7 +75,7 @@ impl HostUsage {
 }
 
 /// Starts the background loop that emits a `system_metrics` event every
-/// [`METRICS_INTERVAL`] until `cancel` fires.
+/// `METRICS_INTERVAL` until `cancel` fires.
 ///
 /// After a stall (a busy blocking pool, a suspended machine) the next
 /// sample waits a full interval rather than catching up with
@@ -167,7 +167,9 @@ impl MetricsSnapshot {
         let host = HostUsage::refresh(&mut sys);
         // Every process, not only the workers' shells: their
         // descendants are only found through the parent links of the
-        // whole table. CPU and memory only, no command lines or tasks.
+        // whole table. CPU and memory only, no command lines; tasks stay
+        // on (the sysinfo default), so ProcessTree::new skips the thread
+        // entries.
         sys.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
@@ -375,27 +377,37 @@ mod tests {
         );
     }
 
+    /// A worker without a PID, or whose PID is not in the process table
+    /// (its shell has exited), reports zeros and keeps its PID.
     #[test]
-    fn test_a_worker_whose_shell_is_gone_reports_zeros() {
-        let registry = WorkerRegistry::new();
-        registry
-            .spawn_worker(WorkerHandle {
-                id: Uuid::new_v4(),
-                state: WorkerState::Error,
-                name: "gone".to_owned(),
-                pid: None,
-                started_at: 0,
-                pty_writer: None,
-                child: None,
-                worktree_path: None,
-                repo_root: None,
-                branch: None,
-                base_commit: None,
-                last_shipped_seq: None,
-                last_shipped_commit: None,
-            })
-            .unwrap();
-        let metrics = collect_per_worker_metrics(&registry, &System::new());
-        assert_eq!((metrics[0].cpu_percent, metrics[0].memory_bytes), (0.0, 0));
+    fn test_a_worker_without_a_live_shell_reports_zeros() {
+        for pid in [None, Some(u32::MAX - 1)] {
+            let registry = WorkerRegistry::new();
+            registry
+                .spawn_worker(WorkerHandle {
+                    id: Uuid::new_v4(),
+                    state: WorkerState::Error,
+                    name: "gone".to_owned(),
+                    pid,
+                    started_at: 0,
+                    pty_writer: None,
+                    child: None,
+                    worktree_path: None,
+                    repo_root: None,
+                    branch: None,
+                    base_commit: None,
+                    last_shipped_seq: None,
+                    last_shipped_commit: None,
+                })
+                .unwrap();
+            let metrics = collect_per_worker_metrics(&registry, &System::new());
+            assert_eq!(metrics.len(), 1);
+            assert_eq!(metrics[0].pid, pid);
+            assert_eq!(
+                (metrics[0].cpu_percent, metrics[0].memory_bytes),
+                (0.0, 0),
+                "{pid:?}"
+            );
+        }
     }
 }
