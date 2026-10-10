@@ -8,6 +8,8 @@
 // happens in the context of a session (template application) — wiring
 // the new worker into that session via `session_add_worker`.
 
+import { toast } from "sonner";
+import { errorMessage } from "#lib/is-error";
 import { getPersistedRepoRoot } from "#lib/project-root";
 import type { ProvenanceArgs } from "#lib/tauri";
 import { sessionAddWorker, spawnWorker } from "#lib/tauri";
@@ -23,9 +25,10 @@ import { useWorkerStore } from "#store/workers";
  *   `spawnWorker` (`#lib/tauri`).
  * - Agent metadata (`role`/`model`/`systemPrompt`) is stored
  *   client-side in `useWorkerAgentStore`, keyed by the new worker id —
- *   `AIChat` reads it from there to resolve this worker's effective
- *   model and inject its system prompt, which is what makes a
- *   template's agent config real instead of decorative.
+ *   `#lib/ai-chat` reads it from there to resolve this worker's
+ *   effective model (`resolveChatModel`) and inject its system prompt
+ *   (`runTurn`), which is what makes a template's agent config real
+ *   instead of decorative.
  * - Adds a placeholder to `useWorkerStore` once `spawnWorker`
  *   resolves, unless the store already holds the worker: the
  *   `worker_spawned` event (see `useWorkerEvents`) can arrive before
@@ -37,6 +40,9 @@ import { useWorkerStore } from "#store/workers";
  *   `useSessionStore`. The backend's `session_worker_added` event (see
  *   `useSessionEvents`) may land first; both go through the idempotent
  *   `addWorkerToSession`.
+ * - If `session_add_worker` fails, the worker keeps running outside the
+ *   session: the failure is logged and shown as a warning toast, and the
+ *   worker id is still returned, since the worker did spawn.
  * - When `spec` doesn't specify its own `repoRoot`, falls back to the
  *   persisted `default_repo_root` (the Project Root picker in the Spawn
  *   Worker dialog), so template and tool-driven spawns get worktree
@@ -91,6 +97,9 @@ export async function spawnWorkerFromSpec(
         `spawnWorkerFromSpec: failed to register worker with session "${sessionId}"`,
         err,
       );
+      toast.warning(`Worker "${processOptions.name}" Spawned But Could Not Join The Session`, {
+        description: errorMessage(err),
+      });
     }
   }
 
