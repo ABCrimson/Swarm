@@ -11,8 +11,9 @@
 //! - Any other path serves the file under `DIR`, falling back to
 //!   `index.html` for client-side routes, with `Cache-Control: no-cache` so
 //!   an upgraded bundle is picked up on the next load.
-//! - A path with a hidden segment (`.git`, `.env`, ...), or with an encoded
-//!   separator (`%2f`, `%5c`) that would smuggle one past that check, is a 404.
+//! - A path with a hidden segment (`.git`, `.env`, ...), with an encoded
+//!   separator (`%2f`, `%5c`) that would smuggle one past that check, or with
+//!   a `~` or `:` (an 8.3 short name or an NTFS stream on Windows), is a 404.
 //! - Every response carries [`CSP`] and the other headers in
 //!   [`SECURITY_HEADERS`].
 //!
@@ -142,11 +143,18 @@ fn asset_cache_control<B>(response: &Response<B>) -> Option<HeaderValue> {
 /// path with an encoded separator (`%2f`, or `%5c`, which Windows splits
 /// on): `ServeDir` decodes it into a real one, so `/assets%2f.env` would
 /// otherwise reach `assets/.env` without any segment here starting with a dot.
+/// Also 404s any `~` or `:`, raw or encoded, because Windows resolves an 8.3
+/// short name (`/GIT~1/config`) or an NTFS stream (`/index.html:x`) without a
+/// dot-led segment.
 async fn deny_hidden(request: Request, next: Next) -> Response<Body> {
     let path = request.uri().path().to_ascii_lowercase();
     let hidden = path.contains("%2f")
         || path.contains("%5c")
         || path.contains('\\')
+        || path.contains('~')
+        || path.contains("%7e")
+        || path.contains(':')
+        || path.contains("%3a")
         || path
             .split('/')
             .any(|segment| segment.starts_with('.') || segment.starts_with("%2e"));
