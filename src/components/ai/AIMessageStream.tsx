@@ -164,11 +164,12 @@ const HASH_COMMENT_LANGUAGES = new Set([
  */
 function highlightCodeLine(line: string, language: string | undefined): React.ReactNode[] {
   const hashComments = language !== undefined && HASH_COMMENT_LANGUAGES.has(language);
-  // The trailing `.` alternative guarantees every character lands in some
-  // token (an unterminated quote would otherwise be skipped by matchAll).
+  // An unterminated quote runs to the end of the line as one token, so no
+  // match is retried from every quote; the trailing `.` alternative still
+  // guarantees every other character (a lone backtick) lands in some token.
   const tokenPattern = hashComments
-    ? /(\/\/.*$|(?:^|(?<=\s))#.*$|"(?:[^"\\]|\\.)*"|'[A-Za-z_]\w*\b(?!')|'(?:[^'\\]|\\.)*'|`[^`]*`|\b\w+\b|\d+\.?\d*|[^\w\s"'`]+|\s+|.)/g
-    : /(\/\/.*$|"(?:[^"\\]|\\.)*"|'[A-Za-z_]\w*\b(?!')|'(?:[^'\\]|\\.)*'|`[^`]*`|\b\w+\b|\d+\.?\d*|[^\w\s"'`]+|\s+|.)/g;
+    ? /(\/\/.*$|(?:^|(?<=\s))#.*$|"(?:[^"\\]|\\.)*"?|'[A-Za-z_]\w*\b(?!')|'(?:[^'\\]|\\.)*'?|`[^`]*`|\b\w+\b|\d+\.?\d*|[^\w\s"'`]+|\s+|.)/g
+    : /(\/\/.*$|"(?:[^"\\]|\\.)*"?|'[A-Za-z_]\w*\b(?!')|'(?:[^'\\]|\\.)*'?|`[^`]*`|\b\w+\b|\d+\.?\d*|[^\w\s"'`]+|\s+|.)/g;
   const tokens: React.ReactNode[] = [];
   let index = 0;
 
