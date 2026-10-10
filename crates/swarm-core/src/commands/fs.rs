@@ -446,6 +446,29 @@ mod tests {
         Err(Value::String(DENIED_MESSAGE.to_owned()))
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_an_in_scope_link_that_cannot_resolve_says_why() {
+        let tree = Tree::new();
+        let data = &tree.scopes.app_data;
+        let dangling = data.join("dangling.txt");
+        std::os::unix::fs::symlink(data.join("nowhere"), &dangling).unwrap();
+        let msg = tree.scopes.check_write(&dangling).unwrap_err();
+        assert!(
+            msg.as_str().unwrap().ends_with("Dangling Symbolic Link."),
+            "{msg}"
+        );
+        let (a, b) = (data.join("loop-a"), data.join("loop-b"));
+        std::os::unix::fs::symlink(&b, &a).unwrap();
+        std::os::unix::fs::symlink(&a, &b).unwrap();
+        let msg = tree.scopes.check_write(&a).unwrap_err();
+        let msg = msg.as_str().unwrap();
+        assert!(
+            msg.starts_with("Failed To Write") && !msg.contains("Dangling"),
+            "{msg}"
+        );
+    }
+
     #[test]
     fn test_normalize_lexically_resolves_parent_dir_segments() {
         let normalized = normalize_lexically(Path::new("/home/user/../user/notes.txt"));
