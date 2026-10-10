@@ -485,7 +485,21 @@ mod tests {
     #[test]
     fn test_read_denies_credential_stores_under_home() {
         let tree = Tree::new();
-        for entry in DENIED_HOME_ENTRIES {
+        // A literal list, not DENIED_HOME_ENTRIES: an entry dropped from the
+        // production list must fail here instead of leaving the test.
+        for entry in [
+            ".ssh",
+            ".gnupg",
+            ".aws",
+            ".azure",
+            ".kube",
+            ".docker",
+            ".config/gh",
+            ".claude",
+            ".codex",
+            ".git-credentials",
+            ".netrc",
+        ] {
             let entry = tree.scopes.home.join(entry);
             let secret = if matches!(
                 entry.file_name().and_then(|name| name.to_str()),
