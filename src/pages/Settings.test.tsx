@@ -115,7 +115,11 @@ describe("Settings — API key", () => {
     await user.type(screen.getByLabelText("API Key"), "sk-ant-x");
     await user.keyboard("{Enter}");
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Failed To Save API Key"));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("Failed To Save API Key", {
+        description: "disk full",
+      }),
+    );
     expect(screen.getByRole("button", { name: "Save API Key" })).toBeEnabled();
   });
 });
@@ -225,7 +229,9 @@ describe("Settings — worker registry cap", () => {
     await user.type(cap, "12{Enter}");
 
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith("Failed To Update Worker Registry Cap"),
+      expect(toast.error).toHaveBeenCalledWith("Failed To Update Worker Registry Cap", {
+        description: "refused",
+      }),
     );
     await waitFor(() => expect(cap).toHaveValue(64));
   });

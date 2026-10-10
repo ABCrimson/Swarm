@@ -552,8 +552,8 @@ export function Settings(): React.ReactElement {
     });
 
   // ── API key (read on mount, written on Save via #lib/tauri) ──
-  // The key itself is never logged, traced, or included in a toast —
-  // only the static "saved"/"failed" messages below are shown.
+  // The key itself is never logged, traced, or included in a toast; a failed
+  // save shows the backend's error text, which never contains the value.
   const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [apiKeySaved, setApiKeySaved] = useState("");
 
@@ -584,8 +584,8 @@ export function Settings(): React.ReactElement {
         await writeConfig(ANTHROPIC_API_KEY_CONFIG_KEY, key);
         setApiKeySaved(key);
         toast.success("API Key Saved");
-      } catch {
-        toast.error("Failed To Save API Key");
+      } catch (err) {
+        toast.error("Failed To Save API Key", { description: errorMessage(err) });
       }
     });
   };
@@ -616,8 +616,8 @@ export function Settings(): React.ReactElement {
         await setMaxWorkers(v);
         startMaxWorkersUpdate(() => setMaxWorkersState(v));
         toast.success(`Worker Registry Cap Set To ${v}`);
-      } catch {
-        toast.error("Failed To Update Worker Registry Cap");
+      } catch (err) {
+        toast.error("Failed To Update Worker Registry Cap", { description: errorMessage(err) });
       }
     });
 
