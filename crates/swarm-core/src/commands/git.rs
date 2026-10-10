@@ -503,8 +503,14 @@ pub async fn ship_context(ctx: Ctx, args: Value) -> Result<Value, Value> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc::Receiver;
+
     use super::*;
+    use crate::commands::test_support::test_ctx;
     use crate::events::Provenance;
+    use crate::git::test_support::{TempRepo, git_in, write_file};
+    use crate::orchestration::DomainEvent;
+    use crate::worker::handle::{WorkerHandle, WorkerState};
 
     fn append(log: &mut EventLog, seq: u64, event_type: &str, payload: &Value) {
         log.append(
@@ -668,5 +674,167 @@ mod tests {
             context.turns[0].tool_calls[0].target.as_deref(),
             Some("pnpm build")
         );
+    }
+
+    // ── Ship handlers: receipts and last_shipped ─────────────────────────
+
+    /// Registers a worker on `worktree` (a linked worktree of `repo` on
+    /// `branch`), forked from `repo`'s current `HEAD`.
+    fn register_worker(ctx: &Ctx, repo: &TempRepo, worktree: &Path, branch: &str) -> Uuid {
+        let id = Uuid::new_v4();
+        ctx.registry
+            .spawn_worker(WorkerHandle {
+                id,
+                state: WorkerState::Running,
+                name: "ship".to_owned(),
+                pid: None,
+                started_at: 0,
+                pty_writer: None,
+                child: None,
+                worktree_path: Some(worktree.display().to_string()),
+                repo_root: Some(repo.root().display().to_string()),
+                branch: Some(branch.to_owned()),
+                base_commit: Some(git::repo::head_sha(repo.root()).unwrap()),
+                last_shipped_seq: None,
+                last_shipped_commit: None,
+            })
+            .unwrap();
+        id
+    }
+
+    /// Every `ship_progress` / `ship_settled` event emitted since the
+    /// last call.
+    async fn ship_events(ctx: &Ctx, events: &Receiver<DomainEvent>) -> Vec<SwarmEvent> {
+        ctx.engine.flush().await.unwrap();
+        events
+            .try_iter()
+            .map(|envelope| envelope.event)
+            .filter(|event| {
+                matches!(
+                    event,
+                    SwarmEvent::ShipProgress(_) | SwarmEvent::ShipSettled(_)
+                )
+            })
+            .collect()
+    }
+
+    fn receipts(events: &[SwarmEvent]) -> Vec<&ShipSettledPayload> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                SwarmEvent::ShipSettled(payload) => Some(payload),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn has_progress(events: &[SwarmEvent], step: &str, status: &str) -> bool {
+        events.iter().any(|event| {
+            matches!(event, SwarmEvent::ShipProgress(p) if p.step == step && p.status == status)
+        })
+    }
+
+    /// A successful push settles exactly once when it is the final step
+    /// and not at all otherwise, and records the pushed sha as the
+    /// worker's last shipped commit.
+    #[tokio::test]
+    async fn test_git_push_settles_once_only_on_the_final_step_and_records_last_shipped() {
+        let (ctx, _dir, events) = test_ctx();
+        let repo = TempRepo::new("cmd-push");
+        repo.add_bare_origin();
+        let branch = "swarm/cmd-push-abcd1234";
+        let worktree = repo.add_worktree("wt", branch);
+        let id = register_worker(&ctx, &repo, &worktree, branch);
+        write_file(&worktree, "a.txt", "a");
+        git_in(&worktree, &["add", "a.txt"]);
+        git_in(&worktree, &["commit", "-m", "a"]);
+        let sha = git::repo::head_sha(&worktree).unwrap();
+
+        for final_step in [false, true] {
+            let ship_id = Uuid::new_v4();
+            git_push(
+                ctx.clone(),
+                serde_json::json!({
+                    "workerId": id.to_string(), "shipId": ship_id.to_string(), "finalStep": final_step
+                }),
+            )
+            .await
+            .unwrap();
+
+            let emitted = ship_events(&ctx, &events).await;
+            assert!(has_progress(&emitted, "push", "ok"), "{final_step}");
+            let settled = receipts(&emitted);
+            if final_step {
+                assert_eq!(settled.len(), 1, "exactly one receipt per attempt");
+                assert_eq!(settled[0].ship_id, ship_id);
+                assert_eq!(settled[0].status, "ok");
+                assert_eq!(settled[0].commit_sha.as_deref(), Some(sha.as_str()));
+                assert_eq!(
+                    settled[0].pushed_ref.as_deref(),
+                    Some("origin/swarm/cmd-push-abcd1234")
+                );
+            } else {
+                assert!(settled.is_empty(), "a non-final push must not settle");
+            }
+        }
+
+        let info = ctx.registry.get_worker(&id).unwrap();
+        assert_eq!(info.last_shipped_commit.as_deref(), Some(sha.as_str()));
+        // The in-memory engine has no database, so the max seq read is 0.
+        assert_eq!(info.last_shipped_seq, Some(0));
+    }
+
+    /// A failed step settles the attempt with its error even when the
+    /// client did not mark it final.
+    #[tokio::test]
+    async fn test_git_push_failure_settles_once_with_the_error() {
+        let (ctx, _dir, events) = test_ctx();
+        let ship_id = Uuid::new_v4();
+        let err = git_push(
+            ctx.clone(),
+            serde_json::json!({
+                "workerId": Uuid::new_v4().to_string(), "shipId": ship_id.to_string(), "finalStep": false
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err["kind"], "workerNotFound");
+
+        let emitted = ship_events(&ctx, &events).await;
+        assert!(has_progress(&emitted, "push", "error"));
+        let settled = receipts(&emitted);
+        assert_eq!(settled.len(), 1, "exactly one receipt per attempt");
+        assert_eq!(settled[0].ship_id, ship_id);
+        assert_eq!(settled[0].status, "error");
+        assert_eq!(
+            settled[0].error.as_ref().map(|error| error.kind),
+            Some(ShipErrorKind::WorkerNotFound)
+        );
+    }
+
+    /// `nothingToCommit` is the one failure that settles nothing: the
+    /// client recovers by pushing commits that already exist.
+    #[tokio::test]
+    async fn test_git_stage_commit_nothing_to_commit_settles_nothing() {
+        let (ctx, _dir, events) = test_ctx();
+        let repo = TempRepo::new("cmd-nothing");
+        let branch = "swarm/cmd-nothing-abcd1234";
+        let worktree = repo.add_worktree("wt", branch);
+        let id = register_worker(&ctx, &repo, &worktree, branch);
+
+        let err = git_stage_commit(
+            ctx.clone(),
+            serde_json::json!({
+                "workerId": id.to_string(), "shipId": Uuid::new_v4().to_string(),
+                "message": "feat: nothing", "mode": "all", "finalStep": true
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err["kind"], "nothingToCommit");
+
+        let emitted = ship_events(&ctx, &events).await;
+        assert!(has_progress(&emitted, "commit", "error"));
+        assert!(receipts(&emitted).is_empty(), "{emitted:?}");
     }
 }

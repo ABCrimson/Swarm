@@ -7,10 +7,10 @@
 //! The worktree feature ([`super::worktree`], driven by
 //! `worker::lifecycle`) owns worktree **creation**, **branch naming**
 //! and **removal**: every field of [`ShipWorktreeInfo`] except
-//! `last_shipped_seq`/`last_shipped_commit` is set exactly once, at
-//! spawn, by `worker::lifecycle::do_spawn_worker`. Ship owns **commit**
-//! and **push**, and its `git_push` handler (`commands::git`) is the
-//! only writer of `last_shipped_seq`/`last_shipped_commit` (through
+//! `last_shipped_seq` is set exactly once, at spawn, by
+//! `worker::lifecycle::do_spawn_worker`. Ship owns **commit** and
+//! **push**, and its `git_push` handler (`commands::git`) is the only
+//! writer of the worker's `last_shipped_seq`/`last_shipped_commit` (through
 //! [`WorkerRegistry::set_last_shipped`]). Ship never runs `git worktree
 //! add`/`remove`; the worktree feature never runs `git add`/`commit`/
 //! `push`.
@@ -62,8 +62,6 @@ mod tests;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use uuid::Uuid;
-
 pub use self::commit::{CommitOutcome, CommitRequest, StagingMode, stage_and_commit};
 pub use self::deny::SkippedFile;
 pub use self::error::{ShipError, ShipErrorKind, ShipRemedy};
@@ -80,8 +78,6 @@ use crate::worker::registry::{WorkerId, WorkerRegistry};
 /// ownership split.
 #[derive(Debug, Clone)]
 pub struct ShipWorktreeInfo {
-    /// The worker.
-    pub worker_id: Uuid,
     /// The repository toplevel the worktree belongs to, as recorded at
     /// spawn — the canonical [`RepoLocks`] key.
     pub repo_root: PathBuf,
@@ -94,8 +90,6 @@ pub struct ShipWorktreeInfo {
     pub base_commit: String,
     /// The event-log seq recorded by the last successful push.
     pub last_shipped_seq: Option<u64>,
-    /// The commit sha recorded by the last successful push.
-    pub last_shipped_commit: Option<String>,
 }
 
 /// Resolves [`ShipWorktreeInfo`] for `id` from `registry`. A pure
@@ -113,7 +107,7 @@ pub fn worktree_info_for_worker(
     id: WorkerId,
 ) -> Result<ShipWorktreeInfo, ShipError> {
     // Clone the fields out in a block so the shard guard drops here.
-    let (worktree_path, repo_root, branch, base_commit, last_shipped_seq, last_shipped_commit) = {
+    let (worktree_path, repo_root, branch, base_commit, last_shipped_seq) = {
         let handle = registry
             .workers
             .get(&id)
@@ -124,7 +118,6 @@ pub fn worktree_info_for_worker(
             handle.branch.clone(),
             handle.base_commit.clone(),
             handle.last_shipped_seq,
-            handle.last_shipped_commit.clone(),
         )
     };
     let (Some(worktree_path), Some(repo_root), Some(branch), Some(base_commit)) =
@@ -133,13 +126,11 @@ pub fn worktree_info_for_worker(
         return Err(ShipError::no_worktree(id));
     };
     Ok(ShipWorktreeInfo {
-        worker_id: id,
         repo_root: repo_root.into(),
         worktree_path: worktree_path.into(),
         branch,
         base_commit,
         last_shipped_seq,
-        last_shipped_commit,
     })
 }
 
@@ -210,7 +201,13 @@ const PRIMARY_CHECKOUT: &str =
 /// failing) blocks shipping rather than proceeding.
 fn guard_not_primary_checkout(worktree: &Path) -> Result<(), ShipError> {
     let refuse = |message: &str| ShipError::new(ShipErrorKind::PrimaryCheckout, message);
-    let location = repo::locate(worktree).map_err(|_| refuse(NOT_A_WORKTREE))?;
+    let location = match repo::locate(worktree) {
+        Ok(location) => location,
+        // A timeout says nothing about the path itself, so it surfaces as
+        // `Timeout`; any other failure leaves the path unverifiable.
+        Err(err @ AppError::GitTimeout { .. }) => return Err(err.into()),
+        Err(_) => return Err(refuse(NOT_A_WORKTREE)),
+    };
     if !location.is_toplevel(worktree) {
         return Err(refuse(NOT_A_WORKTREE));
     }

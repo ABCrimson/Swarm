@@ -45,10 +45,10 @@ fn is_claude_settings_json(rel_path: &str) -> bool {
 ///
 /// # The untracked `.claude/settings.json` rule
 ///
-/// SWARM no longer writes a `.claude/settings.json` into a worktree
-/// (the Claude Code adapter passes its settings inline), so an
-/// untracked copy is a leftover of an older build or an out-of-band
-/// write, never something anyone meant to ship. A **tracked** copy is
+/// SWARM never writes a `.claude/settings.json` into a worktree (the
+/// Claude Code adapter passes its settings inline), so an untracked
+/// copy is an out-of-band write, never something anyone meant to
+/// ship. A **tracked** copy is
 /// the user's own file, and whether to ship it is their call, like any
 /// other tracked file — so a copy that is already staged (a human's or
 /// the agent's own `git add`) counts as tracked and is never denied on

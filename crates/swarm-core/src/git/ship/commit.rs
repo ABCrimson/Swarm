@@ -46,10 +46,10 @@ pub struct CommitRequest {
     pub co_authored_by: Option<String>,
 }
 
-/// A commit [`stage_and_commit`] made. Serialized over IPC and read
-/// back by the desktop shell's thin command wrapper, hence
-/// `Deserialize` too.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A commit [`stage_and_commit`] made — `git_stage_commit`'s IPC result,
+/// which the frontend validates with `CommitOutcomeSchema`
+/// (`src/store/types.ts`).
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitOutcome {
     /// The new commit.
