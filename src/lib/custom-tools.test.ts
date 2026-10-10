@@ -333,6 +333,14 @@ describe("custom tools in the shared registry pipeline", () => {
     await executeTool("dup_tool", { query: "q" });
 
     expect(MockSandboxWorker.instances).toHaveLength(1);
+    // The mock ignores the script, so read the Worker source to prove the first definition ran.
+    const createObjectURL = vi.mocked(URL.createObjectURL);
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    const blob = createObjectURL.mock.lastCall?.[0];
+    expect(blob).toBeInstanceOf(Blob);
+    const source = await (blob as Blob).text();
+    expect(source).toContain("return 1;");
+    expect(source).not.toContain("return 2;");
   });
 
   it("executeTool still reports unknown names when no custom tool matches", async () => {
