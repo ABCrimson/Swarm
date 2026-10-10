@@ -54,3 +54,7 @@ Each record is `NNNN-<slug>.md` with a status, a date, then Context, Decision an
 | [0031](0031-temporal-polyfill-boot-entry.md) | Temporal is polyfilled by a boot entry module | Accepted |
 | [0032](0032-react-compiler-oxc-wasi.md) | The React Compiler runs through the Oxc WASI binding | Accepted |
 | [0033](0033-cleanup-hook-teardown-and-command-acl.md) | Exit teardown in a cleanup hook; a per-command ACL | Accepted |
+| [0034](0034-persist-before-emit-fails-closed.md) | A persistent event is saved before anyone sees it, and fails closed | Accepted |
+| [0035](0035-ai-tool-approval-and-fs-scope.md) | Webview AI tools need per-call approval; the file commands canonicalize and deny secrets | Accepted |
+| [0036](0036-model-catalogue-and-per-attempt-pricing.md) | One model catalogue, priced per attempt | Accepted |
+| [0037](0037-webkit-floor-and-macos-15-4.md) | The webview floor is WebKit 18.4, so macOS 15.4 | Accepted |

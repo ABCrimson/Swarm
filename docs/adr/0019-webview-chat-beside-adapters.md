@@ -42,5 +42,5 @@ why the causal record keys off the `agent_*` family ([ADR-0011](0011-pr-body-evi
   is unreadable. Remote AI goes through the adapter RPC surface.
   `TransportCapabilities.localAiChat` is `false` for the WebSocket transport, but no call site reads it
   yet.
-- Webview tools that act on the machine are an unattended-execution surface; their approval and scope
-  are tracked separately from this decision.
+- Webview tools that act on the machine wait for the user's approval, and the file commands behind
+  them are scoped and deny-listed ([ADR-0035](0035-ai-tool-approval-and-fs-scope.md)).

@@ -149,13 +149,18 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
 
 ### Who Can Call What
 
-Three independent layers decide whether a call runs. Each is enforced in code and pinned by a test.
+Three independent layers decide whether a command call runs. Each is enforced in code and pinned by a test; the webview chat's tools add a fourth, described below.
 
 1. **The Tauri ACL (desktop webview).** `src-tauri/build.rs` hands the command-name list to `tauri_build::AppManifest::commands`, which generates an `allow-<name>` / `deny-<name>` permission for every one of the 38 commands. `src-tauri/capabilities/default.json` grants exactly those `allow-*` entries to the `main` window (plus `core:default`, the `fs`, `dialog`, `opener` and `store` plugin permissions it needs). A command with no `allow-*` entry cannot be invoked by the webview at all. `capability_contract.rs` fails the build when the capability names a command that does not exist, omits one that does, or grants a bare non-`allow-` app permission.
 2. **`RemotePolicy` (swarmd).** Every registry entry declares a policy, and `swarmd` dispatches every `rpc` through `Registry::dispatch_remote`, never `dispatch`. `Allowed` commands are reachable by any authenticated client (including `spawn_worker` and `worker_input`: running commands as the daemon's user is the product). `SecretFiltered` commands (`read_config`, `write_config`) are refused when the `key` argument looks like a credential (`is_secret_key`: split into words at `_`, `-`, `:`, `.`, spaces and camelCase; secret-shaped when the last word is `key`, `apikey`, `token`, `secret`, `password`, `passwd`, `pat`, `credential` or `credentials`, or any word is `apikey`, `secret`, `password`, `passwd`, `credential` or `credentials`) with ``Remote Access To Secret-Shaped Config Keys Is Denied.``. `Denied` commands (`read_file`, `write_file`) never reach their handler: `"read_file" Is Not Available Over A Remote Connection.` The local `dispatch` path ignores the policy, because the desktop user is not the boundary it defends.
-3. **The file scope (`read_file` / `write_file`).** Both commands normalize the path lexically and confine it to fixed scopes; no deny list. See [File System Commands](#file-system-commands).
+3. **The file scope (`read_file` / `write_file`).** Both commands canonicalize the path against the real filesystem (symlinks resolved), confine it to fixed scopes and refuse a deny list of credential files for every caller that reaches them (a remote call never does: layer 2 denies it first). See [File System Commands](#file-system-commands).
 
-The webview chat's built-in tools in `src/lib/tools.ts` (`run_command`, `spawn_worker`, `kill_worker`, `write_file`, `read_file`) call these commands as soon as the model requests them. There is no per-call user approval today.
+The webview chat's built-in tools in `src/lib/tools.ts` are a fourth gate in front of these commands. Every tool that acts on the machine (`run_command`, `spawn_worker`, `kill_worker`, `write_file`, `read_file`) waits for the user's answer inside its own `execute`, so no caller, the registry included, can run one unapproved; `get_metrics` and the user's custom tools (sandboxed Blob Workers with no backend side effect) are not gated. The prompt (`ToolApprovalPrompt`) offers **Allow Once**, **Allow For Session** and **Deny**:
+
+- A session grant covers exactly one call shape, keyed by tool, the worker whose turn made the call, and the exact argument (`run_command`: worker and command string; `read_file` and `write_file`: the path as given; `kill_worker`: the worker id; `spawn_worker`: the name). It lasts until the app reloads. Answering one pending call never releases another, and `write_file` never gets a session grant (the button is absent; each write is answered on its own).
+- The prompt renders the tool name and every field of the validated input, not a sentence built from model text. Each value is escaped for display: backslashes are doubled, newline, carriage return and tab are spelled `\n`, `\r` and `\t`, and any other control, bidi-override or zero-width character shows as `\uXXXX`. Non-string values print as canonical JSON, and `write_file` also shows the content size in bytes.
+- A value over 500 characters is cut (on the raw value, before escaping) with a "N more characters" count, and Allow Once and Allow For Session stay disabled until each cut value has been expanded with Show All. Commands and file paths are never cut. Deny is always available.
+- Stopping the turn that made a call denies its pending calls, and a denial returns to the model as an error result (`The User Denied <tool>. It Was Not Run.`).
 
 ---
 
@@ -305,7 +310,7 @@ Terminates a worker process and removes it from the registry.
 
 Removes the worker, kills its shell (unless the shell already exited) and waits for it to exit to prevent zombie processes (and, on Windows, to release any OS handle the shell held on the worktree directory as its cwd), then releases the PTY, and emits a killed event. A worker whose shell exited on its own (state `"error"`) is killed the same way.
 
-Before killing, `try_wait` checks whether the shell already exited, so a reaped pid is never signalled. Otherwise it is killed (a failure is only logged; `portable-pty` 0.9.0's Windows `kill` always reports success) and `wait` reaps it. Only the shell is killed; a grandchild it started is not, because the PTY layer uses no job object or process group.
+Before killing, `try_wait` checks whether the shell already exited, so a reaped pid is never signalled. Otherwise `kill` is called, but its result is advisory: `portable-pty` 0.9.0's Windows `kill` always reports success and its Unix `kill` errors only when a signal cannot be delivered, so a failure is only logged and `try_wait` (polled for about 200 ms) decides whether the shell is gone; `wait` then reaps it either way. Only the shell is killed; a grandchild it started is not, because the PTY layer uses no job object or process group.
 
 If the worker was isolated into a git worktree, also unlocks and `git worktree remove`s it -- **never** with `--force`. git's own refusal on a dirty/untracked worktree is treated as a successful preserve, not an error: SWARM never deletes uncommitted work.
 
@@ -921,6 +926,8 @@ Gets a single session by ID.
 const session = await invoke("get_session", { id: "550e8400-..." });
 ```
 
+**Wiring:** no frontend caller; the app lists sessions with `list_sessions` (see [Built, Not Wired](#built-not-wired)).
+
 ---
 
 ### `session_add_worker`
@@ -1013,7 +1020,7 @@ This is how the "the engine records provenance, it never infers it" invariant ho
 | Error (string)                  | Condition                                  |
 |---------------------------------|---------------------------------------------|
 | ``Invalid UUID "<id>": ...``    | `workerId` is not a valid UUID string      |
-| `Event Writer Unavailable.`     | The acknowledgement channel closed without a seq: the engine is shutting down, or the writer thread is gone |
+| `Event Writer Unavailable.`     | The acknowledgement channel closed without a seq: the engine is shutting down, the writer thread is gone, or the event could not be saved ([Failing Closed](#failing-closed)) |
 | `Agent Turn Started Timed Out.` | No acknowledgement within 5 seconds        |
 
 **Example:**
@@ -1219,11 +1226,16 @@ Sets how many agent turns may execute at the same time. Validated, persisted to 
 
 ## File System Commands
 
-`read_file` and `write_file` are the Rust commands behind the `read_file` / `write_file` AI tools (`src/lib/tools.ts`). They are **`Denied` over `swarmd`** (never reachable remotely) and, on the desktop, still confined to fixed scopes, enforced by `FsScopes` in `crates/swarm-core/src/commands/fs.rs`. The webview's own `fs` plugin permission is a separate mechanism with no allow-list path scope: it reads, lists, stats and writes only what the user picks in an open or save dialog, minus a static deny scope that holds even inside a dialog grant: the app data directory (`$APPDATA/**`) and the usual credential stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.config/gh`, `~/.claude`, `~/.codex`, `~/.git-credentials`, `~/.netrc`) (`src-tauri/capabilities/default.json`).
+`read_file` and `write_file` are the Rust commands behind the `read_file` / `write_file` AI tools (`src/lib/tools.ts`, which ask the user first; see [Who Can Call What](#who-can-call-what)). They are **`Denied` over `swarmd`** (never reachable remotely) and, on the desktop, confined to fixed scopes by `FsScopes` in `crates/swarm-core/src/commands/fs.rs`. The webview's own `fs` plugin permission is a separate mechanism with no allow-list path scope: it reads, lists, stats and writes only what the user picks in an open or save dialog, minus a static deny scope that holds even inside a dialog grant: the app data directory (`$APPDATA/**`) and the usual credential stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.config/gh`, `~/.claude`, `~/.codex`, `~/.git-credentials`, `~/.netrc`) (`src-tauri/capabilities/default.json`).
 
 **Scopes.** Every path must be absolute. Reads may touch the app data directory and the home directory; writes only the app data directory and `~/.swarm`.
 
-**How a path is checked.** The path is normalized lexically (`.` and `..` resolved without touching disk) and must start with a scope directory (`FsScopes::check_read` / `check_write`). Nothing is canonicalized (a symlink inside a scope is followed) and there is no deny list: a local caller can read `<data-dir>/swarm-config.json` (the API key) and `<data-dir>/daemon-token`.
+**How a path is checked.** The path is normalized lexically (`.` and `..` resolved without touching disk), then canonicalized against the real filesystem, and the scope and deny checks run on the real path:
+
+- A read canonicalizes the file itself. A write canonicalizes the parent directory and, when the target already exists (any entry type), the target too, so a symlink, a Windows 8.3 short name (`SWARM-~1.JSO`) or a case variant lands on the real file the write would replace. A dangling link inside a scope is refused.
+- The lexical form is only used to pick the error once canonicalization fails: a path outside every scope gets the scope error whether or not it exists, so a missing path elsewhere on disk cannot be told from an existing one.
+- **Deny list**, applied to the canonical path for reads and writes alike: in the app data directory, `swarm-config.json` (it holds the Anthropic API key) and `daemon-token`, plus anything named with those as a prefix (`swarm-config.json.corrupt-<ms>` backups, the daemon's `.daemon-token.<rand>` mint-time temp file; leading dots are ignored and case does not matter), and under the home directory `~/.ssh`, `~/.gnupg` and `~/.aws`. The error is ``This Path Holds Credentials And Is Never Accessible.`` A hard link to a secret is not detected.
+- **Windows file names (writes).** A write is refused when the file name contains `:` (an NTFS alternate data stream such as `swarm-config.json:x` or `::$DATA`), ends in `.` or a space (Win32 strips them, aliasing the name without them), or has a reserved device stem (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, with or without an extension): ``Cannot Write "<path>": The File Name Is Not Allowed.`` The helper is platform-independent and tested everywhere; only Windows applies it.
 
 ### `read_file`
 
@@ -1242,8 +1254,9 @@ Reads a UTF-8 file at an absolute path.
 | Error                        | Condition                                    |
 |-------------------------------|-----------------------------------------------|
 | `Read Requires An Absolute Path.` | `path` is not absolute                    |
-| `Read Access Is Limited To The App Data And Home Directories.` | The normalized path falls outside both scopes |
+| `Read Access Is Limited To The App Data And Home Directories.` | The canonical path falls outside both scopes |
 | ``File Not Found: "<path>".`` | The file does not exist (reported only for in-scope paths) |
+| `This Path Holds Credentials And Is Never Accessible.` | The canonical path is on the deny list |
 | ``The Operating System Denied Access To "<path>".`` | The OS itself refused (in-scope path, OS-level permission error) |
 | ``Failed To Read "<path>": ...`` | Any other I/O failure, including a file that is not UTF-8 |
 | ``"read_file" Is Not Available Over A Remote Connection.`` | The call arrived through `swarmd` |
@@ -1260,7 +1273,7 @@ const content = await invoke<string>("read_file", { path: "/home/user/notes.txt"
 
 ### `write_file`
 
-Writes a file at an absolute path, creating or overwriting it, then emits a stamped, persisted `file_written` event. The file is written to the normalized path; the event carries it.
+Writes a file at an absolute path, creating or overwriting it, then emits a stamped, persisted `file_written` event. The file is written to the canonical path it resolves to; the event carries the normalized path as given.
 
 **Parameters:**
 
@@ -1278,9 +1291,14 @@ Writes a file at an absolute path, creating or overwriting it, then emits a stam
 | Error                         | Condition                                    |
 |--------------------------------|-----------------------------------------------|
 | `Write Requires An Absolute Path.` | `path` is not absolute                   |
-| `Write Access Is Limited To The App Data And .swarm Directories.` | The normalized path falls outside both scopes |
+| `Write Requires A File Path.` | The normalized path has no file name (for example `/` or `C:\`) |
+| `Write Access Is Limited To The App Data And .swarm Directories.` | The canonical path falls outside both scopes |
+| `This Path Holds Credentials And Is Never Accessible.` | The canonical target is on the deny list |
+| ``Cannot Write "<path>": The File Name Is Not Allowed.`` | Windows only: an alternate data stream, a trailing dot or space, or a device name |
+| ``Cannot Write "<path>": Dangling Symbolic Link.`` | The target is a symbolic link whose destination does not exist |
 | ``Cannot Write "<path>": Parent Directory Does Not Exist.`` | The parent directory doesn't exist (nothing is created) |
 | ``The Operating System Denied Access To "<path>".`` | The OS itself refused the write |
+| ``Failed To Write "<path>": ...`` | Any other I/O failure |
 | ``Invalid UUID "<id>": ...``   | `originWorker` is present but not a valid UUID |
 
 **Example:**
@@ -1559,11 +1577,16 @@ A stamped envelope additionally carries `originWorker`/`causeSeq`:
 
 **`worker_input` has a field-level carve-out on top of the variant-level rule above:** `source == "terminal"` rows (raw human keystrokes) are also excluded from persistence, even though the `worker_input` type itself persists for `source ∈ {tool, automation}`. A per-keystroke durable row would both flood the log and archive whatever the user typed into a shell -- including secrets -- so terminal input is deliberately ephemeral: it reaches the wire (and consumes a `seq`) but is never written to `swarm-events.db`.
 
-Every other type persists to the SQLite event log (`<data-dir>/swarm-events.db`, WAL mode), so it survives a gap or a restart and can be replayed via `events_since`. Persisted rows carry nullable `origin_worker` / `cause_seq` columns added by a `PRAGMA user_version` migration ladder; rows written before that migration have both `NULL`, the truthful historical value.
+Every other type persists to the SQLite event log (`<data-dir>/swarm-events.db`, WAL mode) before it is emitted ([Failing Closed](#failing-closed)), so it survives a gap or a restart and can be replayed via `events_since`. Persisted rows carry nullable `origin_worker` / `cause_seq` columns added by a `PRAGMA user_version` migration ladder; rows written before that migration have both `NULL`, the truthful historical value.
 
 ### Failing Closed
 
-Today a failed append is logged (`failed to persist event`) and the event is still emitted, published as the new head and offered to the swarmd fanout. A client can therefore see a persistent event that a later `events_since` or replay will not return. A failed seq reservation is logged, and the event is still delivered.
+A persistent event is appended to the log before anything is delivered, and a seq nobody can prove durable is never shown. The writer (`crates/swarm-core/src/orchestration/engine.rs`) fails closed on both write failures:
+
+- **Seq reservation fails** (the writer reserves seqs in blocks; it retries once). The event is dropped whole: no delivery, no head move, and the seq counter is rolled back so the next event retries the reservation. One error line is logged per outage.
+- **The append fails.** Nothing is emitted on either delivery path (not the shell's `emit` closure, not the swarmd fanout), `head_seq` does not move, and the event's `emit_awaiting_seq` receiver (what [`agent_turn_started`](#agent_turn_started) waits on for its seq) resolves to an error, the same signal as a shut-down engine. The failed seq stays a gap, and one ephemeral `system_log` error event (`Event <seq> (<type>) Could Not Be Saved And Was Dropped: ...`) takes the next seq so a client sees the gap explained. A client treats a gap as ephemeral and backfills an empty page from [`events_since`](#events_since).
+
+So every persistent event a client has seen live is readable from the log. Ephemeral events are not appended, so they cannot fail this way. If even the explanatory `system_log` cannot get a seq, only the tracing line remains and the head is unchanged.
 
 ### Receipts
 
@@ -1626,8 +1649,8 @@ onEvent("worker_output", (e) => {
 
 // System metrics (every 500ms)
 onEvent("system_metrics", (e) => {
-  const { cpuPercent, memoryMb, workerCount, timestamp } = e.payload;
-  updateMetricsChart({ cpuPercent, memoryMb, workerCount, timestamp });
+  const { cpuPercent, memoryMb, memoryTotalMb, workerCount, timestamp } = e.payload;
+  updateMetricsChart({ cpuPercent, memoryMb, memoryTotalMb, workerCount, timestamp });
 });
 
 // Bus messages -- delivered unconditionally, no subscription call needed

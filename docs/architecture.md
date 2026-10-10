@@ -88,7 +88,7 @@ Principles that hold throughout:
 | `crates/swarmd/` | The headless daemon: `auth`, `cli`, `ws`, `serve_ui`, and per-user service units in `service/`. |
 | `src-tauri/` | `swarm-desktop`, the Tauri shell: `lib.rs`, `startup.rs`, `lifecycle.rs`, `dialog_grants.rs`, `build.rs` (ACL manifest), `commands/{mod,native,command_list}.rs`, `capabilities/default.json`, `tauri.conf.json`. |
 | `src/` | The frontend. `boot.ts` → `main.tsx` → `App.tsx`; `components/`, `hooks/`, `lib/`, `store/`, `pages/`, `workers/elk.worker.ts`, `styles/`, `test/`. |
-| `e2e/` | Playwright specs against the web build; no Tauri backend ([e2e.md](e2e.md)). |
+| `e2e/` | Playwright specs against the web build; no Tauri backend. Chromium by default, WebKit and Firefox as opt-in projects; CI runs the suite with `--shuffle` ([e2e.md](e2e.md)). |
 | `scripts/`, `site/` | The React Compiler gate (`check-react-compiler.ts`), `sync-reference-repos.ts` (pinned upstream sources into the gitignored `.repos/`) and the documentation site build. |
 | `docs/` | This file, [api.md](api.md), [daemon.md](daemon.md), [adr/](adr/README.md), and the rest. |
 
@@ -157,9 +157,12 @@ any thread/task ──EventSink::emit / emit_with / emit_awaiting_seq──▶ o
                                                                           │
                                          swarm-event-writer thread (the only seq writer)
                                           seq += 1; ts = now
+                                          reserve seq block (past the reservation) ── fails ─▶ drop, no emit
                                           is_persistent(event)? ── yes ─▶ EventLog::append  (SQLite WAL)
+                                                                            └─ fails ─▶ drop, no emit, system_log
                                           emit(DomainEvent)  ──▶ shell's closure ──▶ "swarm://events"
-                                                              └─▶ broadcast fanout (4096, lossy under lag)
+                                          head_seq = seq
+                                          broadcast fanout (4096, lossy under lag)
                                           ack.send(seq)            (emit_awaiting_seq only)
 ```
 
@@ -175,8 +178,14 @@ any thread/task ──EventSink::emit / emit_with / emit_awaiting_seq──▶ o
   refused. The writer owns the only read-write connection; readers open their own read-only.
 - **Persistence by exclusion** ([ADR-0004](adr/0004-persistence-by-exclusion.md)): never persisted are
   `worker_output`, `system_metrics`, `system_log`, `agent_turn_delta`, and `worker_input` whose
-  `source` is `terminal`. Everything else is appended before it is emitted. If an append fails the
-  writer logs it at error level and still emits the event, which is then live-only.
+  `source` is `terminal`. Everything else is appended before it is emitted.
+- **Fails closed** ([ADR-0034](adr/0034-persist-before-emit-fails-closed.md); `engine.rs`, "Failing closed"): an event whose seq cannot be reserved, or whose
+  append fails, reaches no delivery path (neither the shell's `emit` closure nor the fanout), does not
+  move `head_seq`, and drops its `emit_awaiting_seq` ack so the awaiting caller sees an error. A failed
+  reservation rolls the seq counter back and the next event retries. A failed append leaves a one-seq
+  gap that one ephemeral `system_log` error event explains, and clients backfill an empty page and
+  skip it. So an event a client saw live is always readable from the log
+  (`test_failed_persist_emits_nothing_and_holds_the_head`).
 - **Replay:** `events_since(afterSeq, limit?)` returns persisted rows after a seq, ascending, capped at
   (and defaulting to) 5000 per call. Clients use it for gap backfill; `swarmd` for connection replay.
 - **Receipts:** a terminal outcome is its own event (`ship_settled`, `agent_turn_settled`), never a flag
@@ -508,6 +517,12 @@ React 19 canary with the React Compiler (Oxc port, WASI fallback binding,
 [ADR-0032](adr/0032-react-compiler-oxc-wasi.md)), Vite, Tailwind, Zustand + immer, Jotai, XYFlow + ELK,
 xterm.js (WebGL), Recharts, `modern-cmdk`, Sonner, `motion`. Versions are in `package.json`.
 
+The bundle targets `esnext` and calls recent APIs (iterator helpers, `Error.isError`, `RegExp.escape`)
+unguarded, so the webview must be WebKit 18.4 class or newer: WebView2 (Chromium) on Windows, WKWebView
+on macOS, WebKitGTK on Linux ([ADR-0037](adr/0037-webkit-floor-and-macos-15-4.md)). macOS 15.4 is the
+minimum system version (`bundle.macOS.minimumSystemVersion`); `Temporal` is the one API WebKit lacks and
+is polyfilled at boot.
+
 ### Boot
 
 `index.html` loads `src/boot.ts`, which awaits `ensureTemporal()` and only then imports `main.tsx`
@@ -591,10 +606,21 @@ whose endpoint is gone without deleting them.
   fallbacks, no sampling parameters). The tool loop lives outside React in `ai-chat.ts`, writing into
   `message-history`, so a turn survives tab switches. Built-in tools are `spawn_worker`, `kill_worker`,
   `run_command`, `read_file`, `write_file`, `get_metrics`, plus user-defined ones (`src/lib/tools.ts`,
-  `custom-tools.ts`); input is validated against zod schemas before any side effect. Each turn calls
+  `custom-tools.ts`); input is validated against zod schemas before any side effect. The five tools that
+  act on the machine (`spawn_worker`, `kill_worker`, `run_command`, `read_file`, `write_file`) also wait
+  for the user's answer inside their own `execute` ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)):
+  Allow Once, Allow For Session (one grant per tool, worker and exact argument; never offered for
+  `write_file`) or Deny, in a prompt that shows every validated field escaped, with a cut value
+  expanded before Allow is enabled. Each turn calls
   `agent_turn_started` and passes the seq as `causeSeq` on side-effecting tools. Queueing and
-  concurrency are `store/ai.ts`, independent of the Rust scheduler. The model catalogue is
-  `src/lib/models.ts`.
+  concurrency are `store/ai.ts`, independent of the Rust scheduler.
+- **Model catalogue** (`src/lib/models.ts`, [ADR-0036](adr/0036-model-catalogue-and-per-attempt-pricing.md)): Fable 5.1,
+  Mythos 5.1 (gated behind Anthropic's verification programs), Opus 5.5, Sonnet 5.5 and Haiku 5.5, each with
+  a 1M-token context window and 128K output. Haiku 5.5 alone has a long-prompt price tier (prompts over
+  100K input tokens, counting cache reads and writes, bill the whole request at the higher rates); the
+  others bill the full window at one rate. Cost is estimated per attempt: with server-side refusal fallbacks
+  each `usage.iterations` entry is priced by the model that served it, using a pricing-only table for
+  fallback targets the picker never offers; an attempt served by a model with no rates is priced at the requested model's rates, and only a requested model with no rates at all costs 0.
 - **Agent chat** (`AgentChat`): shown when `agent-sessions` holds a live session for the worker
   (`agent_spawn`); renders the `agent_*` stream and answers permission requests (Allow/Deny only for
   requests with no `suggestedDecision`, gated on `interactive_permissions`).
@@ -616,7 +642,8 @@ textures: bloom (threshold, dual Kawase blur, composite), chromatic aberration, 
 | --- | --- |
 | Remote clients of `swarmd` | Token, `Host`/`Origin` allow-list, non-loopback gate, `RemotePolicy` ([ADR-0021](adr/0021-command-registry-remote-policy.md), [ADR-0022](adr/0022-swarmd-authentication-and-exposure.md)). An authenticated client can run commands as the daemon's user. |
 | Webview to OS | Capability file (per-command `allow-*` ACL, no static fs scope, deny list, opener scopes) and CSP ([ADR-0030](adr/0030-tauri-3-alpha-capability-scoped-fs.md)). |
-| `read_file` / `write_file` commands | Absolute paths, lexically normalised; reads limited to the data directory and `$HOME`, writes to the data directory and `~/.swarm`; `Denied` remotely. The webview AI tools `read_file` and `write_file` use them, and webview AI tools run without an approval step. |
+| `read_file` / `write_file` commands | Absolute paths, canonicalized (symlinks, 8.3 short names) before the scope and deny checks; reads limited to the data directory and `$HOME`, writes to the data directory and `~/.swarm`; `swarm-config.json` (the API key), the daemon token and its temp form, and `~/.ssh`, `~/.gnupg`, `~/.aws` are never accessible; Windows writes refuse `:`, a trailing `.` or space and device names; `Denied` remotely ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)). |
+| Webview AI tools | Every tool that acts on the machine, `kill_worker` included, needs the user's per-call answer inside its own `execute`; session grants are exact to tool, worker and argument ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)). |
 | Provider permissions | Closed trust tiers, no bypass modes ([ADR-0015](adr/0015-trust-tiers-closed-vocabulary.md)). |
 | Git | No force push, no hook bypass, deny list, primary-checkout guard, secret redaction ([ADR-0009](adr/0009-ship-chain-structural-guarantees.md), [ADR-0012](adr/0012-single-git-runner.md)). |
 | Data files | Atomic writes, quarantine of damaged files, owner-only config and token ([ADR-0026](adr/0026-rust-owns-config-and-sessions.md)). |
@@ -628,8 +655,6 @@ See [SECURITY.md](../SECURITY.md) for the reporting policy.
 True at this commit and deliberately not hidden:
 
 - Nothing counts provider requests, so `system_metrics` reports no request rate.
-- A failed event-log append is logged and the event is still emitted, so it exists live but not in the
-  log.
 - The frontend waits 30 s for `ship_settled`, but the backend allows 600 s for commit and push, so a slow
   pre-commit or pre-push hook can be reported as failed by the UI while git is still running.
 - The provenance graph is session-scoped (never hydrated from the log) and a relayout overwrites manual
@@ -637,6 +662,6 @@ True at this commit and deliberately not hidden:
 - Killing a worker signals only its shell; a detached process can keep a worktree busy
   (`disposition: "failed"`). Only the configured default repo is pruned at startup.
 - `swarmd` does not embed the UI, and a desktop window cannot attach to a running daemon.
-- `OpenCode` and `Gemini` provider ids have no adapter; `bus_send` has no UI caller.
-- Webview AI tools (`run_command`, `spawn_worker`, `write_file`, `read_file`) execute without user
-  approval.
+- `OpenCode` and `Gemini` provider ids have no adapter; `bus_send`, `bus_list_channels`, `get_session` and
+  `agent_shutdown` have no frontend caller (`NOT_WIRED` in the desktop shell's contract test).
+- A hard link to a denied file inside a scope is not detected by `read_file`/`write_file`.
