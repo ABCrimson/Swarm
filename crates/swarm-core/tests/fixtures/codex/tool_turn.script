@@ -1,6 +1,7 @@
 # Tool items: a command (exit 0; its outputDelta must be ignored, the
 # output arrives whole in the completed item), a failed MCP call and a
-# declined patch.
+# declined patch, plus three items that fail with status "completed" (a
+# non-zero exit code, an MCP error, a dynamic tool's success: false).
 #DIRECTIVE EXPECT_REQUEST initialize
 #DIRECTIVE RESPOND_INITIALIZE
 #DIRECTIVE EXPECT_NOTIFICATION initialized
@@ -15,4 +16,10 @@
 {"method":"item/completed","params":{"item":{"type":"mcpToolCall","id":"mcp-1","server":"docs","tool":"search","status":"failed","arguments":{"q":"tauri"},"appContext":null,"pluginId":null,"readOnlyHint":true,"result":null,"error":{"message":"server unavailable"},"durationMs":30},"threadId":"@THREAD","turnId":"@TURN","completedAtMs":1790201250300}}
 {"method":"item/started","params":{"item":{"type":"fileChange","id":"patch-1","changes":[{"path":"/work/a.txt","kind":{"type":"add"},"diff":"+a\n"}],"status":"inProgress"},"threadId":"@THREAD","turnId":"@TURN","startedAtMs":1790201250400}}
 {"method":"item/completed","params":{"item":{"type":"fileChange","id":"patch-1","changes":[{"path":"/work/a.txt","kind":{"type":"add"},"diff":"+a\n"}],"status":"declined"},"threadId":"@THREAD","turnId":"@TURN","completedAtMs":1790201250500}}
+{"method":"item/started","params":{"item":{"type":"commandExecution","id":"cmd-2","pluginId":null,"scriptPath":null,"command":"false","cwd":"/work","processId":null,"source":"agent","status":"inProgress","commandActions":[],"aggregatedOutput":null,"exitCode":null,"durationMs":null},"threadId":"@THREAD","turnId":"@TURN","startedAtMs":1790201250600}}
+{"method":"item/completed","params":{"item":{"type":"commandExecution","id":"cmd-2","pluginId":null,"scriptPath":null,"command":"false","cwd":"/work","processId":null,"source":"agent","status":"completed","commandActions":[],"aggregatedOutput":"total 0\n","exitCode":2,"durationMs":12},"threadId":"@THREAD","turnId":"@TURN","completedAtMs":1790201250650}}
+{"method":"item/started","params":{"item":{"type":"mcpToolCall","id":"mcp-2","server":"docs","tool":"search","status":"inProgress","arguments":{"q":"xterm"},"appContext":null,"pluginId":null,"readOnlyHint":true,"result":null,"error":null,"durationMs":null},"threadId":"@THREAD","turnId":"@TURN","startedAtMs":1790201250700}}
+{"method":"item/completed","params":{"item":{"type":"mcpToolCall","id":"mcp-2","server":"docs","tool":"search","status":"completed","arguments":{"q":"xterm"},"appContext":null,"pluginId":null,"readOnlyHint":true,"result":null,"error":{"message":"x"},"durationMs":30},"threadId":"@THREAD","turnId":"@TURN","completedAtMs":1790201250750}}
+{"method":"item/started","params":{"item":{"type":"dynamicToolCall","id":"dyn-1","tool":"lookup","arguments":{"key":"a"},"status":"inProgress","contentItems":null,"success":null,"durationMs":null},"threadId":"@THREAD","turnId":"@TURN","startedAtMs":1790201250800}}
+{"method":"item/completed","params":{"item":{"type":"dynamicToolCall","id":"dyn-1","tool":"lookup","arguments":{"key":"a"},"status":"completed","contentItems":[],"success":false,"durationMs":3},"threadId":"@THREAD","turnId":"@TURN","completedAtMs":1790201250850}}
 {"method":"turn/completed","params":{"threadId":"@THREAD","turn":{"id":"@TURN","items":[],"itemsView":"notLoaded","status":"completed","error":null,"startedAt":1790201250,"completedAt":1790201252,"durationMs":900}}}

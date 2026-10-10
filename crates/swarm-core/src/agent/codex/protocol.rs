@@ -57,8 +57,8 @@ pub mod method {
     pub const REASONING_SUMMARY_TEXT_DELTA: &str = "item/reasoning/summaryTextDelta";
     /// Streamed text of a `reasoning` item's raw content.
     pub const REASONING_TEXT_DELTA: &str = "item/reasoning/textDelta";
-    /// Streamed stdout/stderr of a `commandExecution` item (ignored: the
-    /// completed item's `aggregatedOutput` carries it whole).
+    /// Streamed stdout/stderr of a `commandExecution` item (opted out of at
+    /// `initialize`; the completed item's `aggregatedOutput` carries it whole).
     pub const COMMAND_EXECUTION_OUTPUT_DELTA: &str = "item/commandExecution/outputDelta";
     /// Token usage for a thread's turn.
     pub const THREAD_TOKEN_USAGE_UPDATED: &str = "thread/tokenUsage/updated";
@@ -86,6 +86,7 @@ pub const OPTED_OUT_NOTIFICATIONS: &[&str] = &[
     "mcpServer/startupStatus/updated",
     "item/reasoning/summaryPartAdded",
     "item/plan/delta",
+    "item/commandExecution/outputDelta",
     "turn/diff/updated",
     "turn/plan/updated",
     "skills/changed",

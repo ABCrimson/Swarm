@@ -112,8 +112,9 @@ const CLIENT_NAME: &str = "swarm";
 /// `initialize.clientInfo.title`.
 const CLIENT_TITLE: &str = "Swarm Orchestrator";
 
-/// Synthesized-settlement error text (Condition B), shared verbatim with
-/// `ClaudeCodeAdapter`.
+/// Prefix of the synthesized-settlement error (Condition B), shared verbatim
+/// with `ClaudeCodeAdapter`; the known cause or the stderr tail follows in
+/// parentheses.
 const PROCESS_EXITED_WITHOUT_RECEIPT: &str = "Process Exited Without A Receipt";
 /// Settlement error for an interrupted turn that carries no message.
 const TURN_INTERRUPTED: &str = "Turn Interrupted";
@@ -133,6 +134,17 @@ const CLAUDE_MODEL_ALIASES: [&str; 5] = ["sonnet", "opus", "haiku", "fable", "my
 /// flashing a window from the GUI app.
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// On Windows an npm install starts Codex through `codex.cmd`. `cmd.exe` looks
+/// up the shim's bare `node` in the worker's cwd before `PATH`, so a repo
+/// `node.cmd` would run unsandboxed. This variable turns that lookup off.
+/// Other platforms ignore it.
+const NO_CWD_EXE_LOOKUP_ENV: &str = "NoDefaultCurrentDirectoryInExePath";
+
+/// Environment additions for every Codex child.
+fn child_env() -> HashMap<String, String> {
+    HashMap::from([(NO_CWD_EXE_LOOKUP_ENV.to_owned(), "1".to_owned())])
+}
 
 /// Every bound this adapter puts on waiting for the child — no wait is
 /// unbounded.
@@ -268,7 +280,8 @@ fn codex_capabilities() -> Capabilities {
         partial_deltas: true,
         // thread/resume.
         resume: true,
-        // turn/completed carries token usage, never a dollar figure.
+        // Token usage arrives as thread/tokenUsage/updated and rides the turn's
+        // settlement; Codex never reports a dollar figure.
         native_cost: false,
         permission_modes: vec![
             "restricted".to_string(),
@@ -293,7 +306,9 @@ fn codex_capabilities() -> Capabilities {
 /// `PATH` directory holding `program` + a `PATHEXT` extension. Rust's
 /// `Command` only appends `.exe`, but an npm install of Codex puts
 /// `codex.cmd` on `PATH`. Names with an extension or a directory are left
-/// alone (`None`), and the current directory is never searched.
+/// alone (`None`), and the current directory is never searched. Nor is it
+/// searched by the shim's own `node` lookup: [`child_env`] sets
+/// `NoDefaultCurrentDirectoryInExePath`.
 #[cfg(any(windows, test))]
 fn resolve_with_pathext(
     program: &str,
@@ -612,6 +627,8 @@ struct Shared {
     /// Serializes [`teardown`] across callers.
     teardown_gate: tokio::sync::Mutex<()>,
     stderr_tail: Arc<parking_lot::Mutex<VecDeque<u8>>>,
+    /// Why the session is torn down, when SWARM knows it (a framer error).
+    teardown_cause: parking_lot::Mutex<Option<String>>,
 }
 
 impl Shared {
@@ -712,6 +729,20 @@ async fn wait_settled(shared: &Shared, turn_id: &str) {
         .await;
 }
 
+/// The child's last stderr bytes, for a failure message. Waits up to 200 ms
+/// for the piped stderr drain thread, which can trail the child's exit:
+/// without the wait, a crash that wrote a panic message could settle as
+/// "No Stderr Output".
+async fn drained_stderr_snippet(tail: &parking_lot::Mutex<VecDeque<u8>>) -> String {
+    for _ in 0..10 {
+        if !tail.lock().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    stderr_snippet(tail)
+}
+
 /// Tears the session down exactly once; every later call returns the
 /// first call's [`ExitSummary`].
 ///
@@ -765,11 +796,18 @@ async fn teardown(shared: &Arc<Shared>) -> ExitSummary {
 
     if announced {
         if let Some(turn_id) = &running {
+            // Take the cause in its own statement: matching on the lock
+            // expression would keep its !Send guard alive across the await.
+            let cause = shared.teardown_cause.lock().take();
+            let detail = match cause {
+                Some(cause) => cause,
+                None => drained_stderr_snippet(&shared.stderr_tail).await,
+            };
             shared.emit(SwarmEvent::AgentTurnSettled(AgentTurnSettledPayload {
                 worker_id: shared.worker_id,
                 turn_id: turn_id.clone(),
                 status: AgentTurnStatus::Error,
-                error: Some(PROCESS_EXITED_WITHOUT_RECEIPT.to_string()),
+                error: Some(format!("{PROCESS_EXITED_WITHOUT_RECEIPT} ({detail})")),
                 cost_usd: None,
                 usage: None,
                 duration_ms: 0,
@@ -836,6 +874,7 @@ async fn run_reader(
                         %error,
                         "codex adapter: ndjson framer error — tearing the session down"
                     );
+                    *shared.teardown_cause.lock() = Some(error.to_string());
                     while let Ok(line) = lines.try_recv() {
                         handle_line(&shared, &line);
                     }
@@ -1452,6 +1491,7 @@ async fn run_cli(
     command
         .args(prefix)
         .args(args)
+        .env(NO_CWD_EXE_LOOKUP_ENV, "1")
         .stdin(Stdio::null())
         .kill_on_drop(true);
     #[cfg(windows)]
@@ -1485,9 +1525,12 @@ impl AgentAdapter for CodexAdapter {
         codex_capabilities()
     }
 
-    /// Runs `codex --version` and `codex login status` concurrently:
-    /// available only when both succeed. The login line (for example
-    /// `Logged in using ChatGPT`) is the detail; no credential is read.
+    /// Runs `codex --version` and `codex login status` concurrently.
+    /// Unavailable when `--version` fails or times out, or when `login status`
+    /// exits non-zero; when `login status` cannot run or times out, the CLI
+    /// counts as available with a "Sign-In State Unknown" detail. Otherwise the
+    /// login line (for example `Logged in using ChatGPT`) is the detail; no
+    /// credential is read.
     fn probe(&self) -> BoxFuture<'_, Result<ProbeReport, AppError>> {
         let binary = self.binary.clone();
         let prefix = self.extra_prefix_args.clone();
@@ -1514,10 +1557,15 @@ impl AgentAdapter for CodexAdapter {
                     });
                 }
                 Err(ProbeFailure::Spawn(error)) => {
+                    let detail = if error.kind() == std::io::ErrorKind::NotFound {
+                        format!("Codex CLI Not Found On PATH: {error}")
+                    } else {
+                        format!("Codex CLI Could Not Be Started: {error}")
+                    };
                     return Ok(ProbeReport {
                         available: false,
                         version: None,
-                        detail: Some(format!("Codex CLI Not Found On PATH: {error}")),
+                        detail: Some(detail),
                     });
                 }
                 Err(ProbeFailure::TimedOut) => {
@@ -1576,7 +1624,7 @@ impl AgentAdapter for CodexAdapter {
                 framer_errors,
                 stderr_tail,
             } = tokio::task::spawn_blocking(move || {
-                spawn_piped(&program, &argv, &cwd, &HashMap::new())
+                spawn_piped(&program, &argv, &cwd, &child_env())
             })
             .await
             .map_err(|e| AppError::Ai(format!("the codex spawn task failed: {e}")))?
@@ -1604,6 +1652,7 @@ impl AgentAdapter for CodexAdapter {
                 settled: watch::Sender::new(Settled::default()),
                 teardown_gate: tokio::sync::Mutex::new(()),
                 stderr_tail,
+                teardown_cause: parking_lot::Mutex::new(None),
             });
 
             // From here on the child must never outlive a failed spawn —

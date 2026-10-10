@@ -7,6 +7,7 @@
 //! adapter writes. Events go through a real in-memory
 //! [`OrchestrationEngine`] and are captured in emission order.
 
+use std::assert_matches;
 use std::path::{Path, PathBuf};
 
 use super::*;
@@ -314,10 +315,7 @@ fn unknown_trust_tiers_are_refused() {
         "",
     ] {
         let error = parse_trust_tier(Some(token)).expect_err(token);
-        assert!(
-            matches!(error, AppError::PermissionDenied(_)),
-            "{token:?}: {error:?}"
-        );
+        assert_matches!(error, AppError::PermissionDenied(_), "{token:?}");
     }
 }
 
@@ -363,6 +361,9 @@ fn claude_model_names_and_blanks_fall_back_to_the_codex_default() {
         Some("  "),
         Some("sonnet"),
         Some("Opus"),
+        Some("haiku"),
+        Some("fable"),
+        Some("Mythos"),
         Some("claude-fable-5"),
     ] {
         assert_eq!(requested_model(model), None, "{model:?}");
@@ -431,6 +432,13 @@ fn applied_policy_may_be_stricter_but_never_looser() {
             OnRequest,
             WorkspaceWrite,
         ),
+        (
+            "dangerFullAccess",
+            json!("untrusted"),
+            Untrusted,
+            WorkspaceWrite,
+        ),
+        ("workspaceWrite", json!("never"), OnRequest, WorkspaceWrite),
     ];
     for (sandbox, approval, asked_approval, asked_sandbox) in refused {
         let error = verify_effective_policy(
@@ -439,8 +447,9 @@ fn applied_policy_may_be_stricter_but_never_looser() {
             asked_sandbox,
         )
         .expect_err(sandbox);
-        assert!(
-            matches!(error, AppError::PermissionDenied(_)),
+        assert_matches!(
+            error,
+            AppError::PermissionDenied(_),
             "{sandbox} / {approval}"
         );
     }
@@ -576,6 +585,11 @@ async fn handshake_is_initialize_then_initialized_then_thread_start_with_the_tie
             .spawn(h.spec(tier, None, None))
             .await
             .expect("spawn");
+        assert_eq!(
+            h.record()[0]["noCwdExeLookup"],
+            "1",
+            "the child runs with the current-directory exe lookup off"
+        );
         assert_eq!(session.session_key(), THREAD);
         let exit = session.shutdown().await.expect("shutdown");
         assert_eq!(
@@ -596,6 +610,12 @@ async fn handshake_is_initialize_then_initialized_then_thread_start_with_the_tie
             json!({ "name": "swarm", "title": "Swarm Orchestrator", "version": env!("CARGO_PKG_VERSION") })
         );
         assert_eq!(wire[0]["params"]["capabilities"]["experimentalApi"], false);
+        assert!(
+            wire[0]["params"]["capabilities"]["optOutNotificationMethods"]
+                .as_array()
+                .is_some_and(|m| m.contains(&json!("item/commandExecution/outputDelta"))),
+            "{wire:#?}"
+        );
         assert_eq!(wire[1], json!({ "method": "initialized" }));
         assert_eq!(wire[2]["method"], "thread/start");
         let params = &wire[2]["params"];
@@ -724,10 +744,7 @@ async fn a_handshake_timeout_kills_and_reaps_the_child() {
         .await
         .err()
         .expect("spawn must time out");
-    assert!(
-        matches!(&error, AppError::Ai(m) if m.contains("handshake")),
-        "{error:?}"
-    );
+    assert_matches!(&error, AppError::Ai(m) if m.contains("handshake"));
     let pid = h.record()[0]["pid"]
         .as_u64()
         .expect("the fake records its pid");
@@ -750,7 +767,7 @@ async fn an_unknown_trust_tier_never_starts_a_process() {
         .await
         .err()
         .expect("refused");
-    assert!(matches!(error, AppError::PermissionDenied(_)), "{error:?}");
+    assert_matches!(error, AppError::PermissionDenied(_));
     assert!(h.record().is_empty(), "the fake never ran");
 }
 
@@ -884,6 +901,21 @@ async fn tool_items_become_tool_calls_and_results_with_honest_error_flags() {
                 "fileChange".to_string(),
                 json!({ "changes": [{ "path": "/work/a.txt", "kind": { "type": "add" }, "diff": "+a\n" }] })
             ),
+            (
+                "cmd-2".to_string(),
+                "commandExecution".to_string(),
+                json!({ "command": "false", "cwd": "/work" })
+            ),
+            (
+                "mcp-2".to_string(),
+                "docs.search".to_string(),
+                json!({ "q": "xterm" })
+            ),
+            (
+                "dyn-1".to_string(),
+                "lookup".to_string(),
+                json!({ "key": "a" })
+            ),
         ]
     );
     let results: Vec<(String, bool)> = events
@@ -899,6 +931,9 @@ async fn tool_items_become_tool_calls_and_results_with_honest_error_flags() {
             ("cmd-1".to_string(), false),
             ("mcp-1".to_string(), true),
             ("patch-1".to_string(), true),
+            ("cmd-2".to_string(), true),
+            ("mcp-2".to_string(), true),
+            ("dyn-1".to_string(), true),
         ]
     );
     // Command output streams are not forwarded (nothing would close
@@ -926,7 +961,7 @@ async fn tool_items_become_tool_calls_and_results_with_honest_error_flags() {
 async fn failed_turns_settle_error_with_the_server_message() {
     let h = Harness::new("failed_turns.script");
     let session = h.spawn().await;
-    for prompt in ["one", "two"] {
+    for prompt in ["one", "two", "three"] {
         let turn = session
             .send_turn(TurnInput {
                 prompt: prompt.to_string(),
@@ -940,7 +975,7 @@ async fn failed_turns_settle_error_with_the_server_message() {
     let settled = settlements(&events);
     assert_eq!(
         settled.len(),
-        2,
+        3,
         "a retrying error notification settles nothing"
     );
     assert_eq!(settled[0].status, AgentTurnStatus::Error);
@@ -950,6 +985,84 @@ async fn failed_turns_settle_error_with_the_server_message() {
     );
     assert_eq!(settled[1].status, AgentTurnStatus::Error);
     assert_eq!(settled[1].error.as_deref(), Some("stream disconnected"));
+    assert_eq!(settled[2].status, AgentTurnStatus::Error);
+    assert_eq!(
+        settled[2].error.as_deref(),
+        Some(TURN_FAILED),
+        "a retrying error notification is not the turn's error"
+    );
+    session.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn raw_reasoning_and_unmapped_items_become_blocks() {
+    let h = Harness::new("reasoning_raw.script");
+    let session = h.spawn().await;
+    let turn = session
+        .send_turn(TurnInput {
+            prompt: "think".to_string(),
+        })
+        .await
+        .expect("turn");
+    session.await_turn_completion(turn).await.expect("await");
+    h.flush().await;
+    let events = h.events();
+
+    let deltas: Vec<&AgentTurnDeltaPayload> = events
+        .iter()
+        .filter_map(|e| match e {
+            SwarmEvent::AgentTurnDelta(p) => Some(p),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        deltas
+            .iter()
+            .map(|d| (d.kind.as_str(), d.text.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("thinking", "a"),
+            (
+                "thinking", "
+
+b"
+            ),
+            ("thinking", "partial")
+        ],
+        "a new contentIndex starts a paragraph"
+    );
+    assert_eq!(deltas[0].block_index, deltas[1].block_index);
+    assert_ne!(deltas[0].block_index, deltas[2].block_index);
+
+    let blocks: Vec<&AgentBlockPayload> = events
+        .iter()
+        .filter_map(|e| match e {
+            SwarmEvent::AgentBlock(p) => Some(p),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(blocks.len(), 3, "{blocks:#?}");
+    assert_eq!(blocks[0].kind, "thinking");
+    assert_eq!(
+        blocks[0].content,
+        json!({ "thinking": "a
+
+b" })
+    );
+    assert_eq!(blocks[0].block_index, deltas[0].block_index);
+    assert_eq!(blocks[1].kind, "thinking");
+    assert_eq!(
+        blocks[1].content,
+        json!({ "thinking": "" }),
+        "a streamed item that completes empty still closes its stream"
+    );
+    assert_eq!(blocks[1].block_index, deltas[2].block_index);
+    assert_eq!(blocks[2].kind, "webSearch");
+    assert_eq!(
+        blocks[2].content,
+        json!({ "type": "webSearch", "id": "ws-1", "query": "tauri", "action": null })
+    );
+    assert_every_stream_is_closed(&events);
     session.shutdown().await.expect("shutdown");
 }
 
@@ -1150,7 +1263,7 @@ async fn a_second_turn_while_one_is_running_is_busy() {
             prompt: "b".to_string(),
         })
         .await;
-    assert!(matches!(busy, Err(AppError::AgentSessionBusy)), "{busy:?}");
+    assert_matches!(busy, Err(AppError::AgentSessionBusy));
     session.shutdown().await.expect("shutdown");
     let first = first.await.expect("join");
     assert!(
@@ -1282,7 +1395,7 @@ async fn a_server_death_mid_turn_synthesizes_the_settlement_then_exits() {
     assert_eq!(settled[0].status, AgentTurnStatus::Error);
     assert_eq!(
         settled[0].error.as_deref(),
-        Some(PROCESS_EXITED_WITHOUT_RECEIPT)
+        Some(format!("{PROCESS_EXITED_WITHOUT_RECEIPT} (No Stderr Output)").as_str())
     );
     let settled_at = position(&events, |e| matches!(e, SwarmEvent::AgentTurnSettled(_)));
     let exited_at = position(&events, is_exit);
@@ -1297,7 +1410,7 @@ async fn a_server_death_mid_turn_synthesizes_the_settlement_then_exits() {
             prompt: "again".to_string(),
         })
         .await;
-    assert!(matches!(after, Err(AppError::Ipc(_))), "{after:?}");
+    assert_matches!(after, Err(AppError::Ipc(_)));
     let exit = session.shutdown().await.expect("shutdown is idempotent");
     assert_eq!(exit.exit_code, Some(1));
 }
@@ -1319,10 +1432,7 @@ async fn an_unacknowledged_turn_shuts_the_session_down_and_kills_the_child() {
         })
         .await
         .expect_err("no acknowledgement");
-    assert!(
-        matches!(&error, AppError::Ai(m) if m.contains("did not acknowledge")),
-        "{error:?}"
-    );
+    assert_matches!(&error, AppError::Ai(m) if m.contains("did not acknowledge"));
     h.flush().await;
     let events = h.events();
     assert!(
@@ -1359,6 +1469,40 @@ async fn an_oversized_line_tears_the_session_down() {
         })
         .await;
     assert!(after.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_framer_error_mid_turn_settles_with_its_cause() {
+    let h = Harness::with_timeouts(
+        "oversized_mid_turn.script",
+        Timeouts {
+            graceful_exit: Duration::from_millis(200),
+            ..test_timeouts()
+        },
+    );
+    let session = h.spawn().await;
+    let turn = session
+        .send_turn(TurnInput {
+            prompt: "go".to_string(),
+        })
+        .await
+        .expect("turn");
+    tokio::time::timeout(WAIT, session.await_turn_completion(turn.clone()))
+        .await
+        .expect("the framer error settles the turn")
+        .expect("await");
+    let events = h
+        .wait_until("agent_session_exited", |events| events.iter().any(is_exit))
+        .await;
+    let settled = settlements(&events);
+    assert_eq!(settled.len(), 1, "{settled:#?}");
+    assert_eq!(settled[0].turn_id, turn);
+    assert!(
+        settled[0].error.as_deref().is_some_and(|e| e.starts_with(
+            format!("{PROCESS_EXITED_WITHOUT_RECEIPT} (NDJSON line exceeded ").as_str()
+        )),
+        "{settled:#?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1412,9 +1556,11 @@ async fn nothing_is_emitted_once_teardown_began() {
     let settled = settlements(&events);
     assert_eq!(settled.len(), 1, "only the synthesized settlement");
     assert_eq!(settled[0].turn_id, turn);
-    assert_eq!(
-        settled[0].error.as_deref(),
-        Some(PROCESS_EXITED_WITHOUT_RECEIPT)
+    assert!(
+        settled[0]
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with(PROCESS_EXITED_WITHOUT_RECEIPT))
     );
     assert_eq!(position(&events, is_exit), events.len() - 1);
 }
@@ -1469,6 +1615,41 @@ async fn probe_reports_version_and_sign_in_state() {
             .detail
             .as_deref()
             .is_some_and(|d| d.starts_with("Codex CLI Not Found On PATH")),
+        "{report:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_reports_a_non_executable_binary_as_not_startable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = Scratch::new();
+    let path = scratch.path().join("codex");
+    std::fs::write(
+        &path,
+        "#!/bin/sh
+",
+    )
+    .expect("write the stub");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+    let (events_tx, _events) = watch::channel(Vec::<SwarmEvent>::new());
+    let engine = OrchestrationEngine::start(EventLog::open_in_memory().unwrap(), None, move |e| {
+        events_tx.send_modify(|events| events.push(e.event.clone()));
+    });
+    let adapter = CodexAdapter::with_test_binary(
+        engine.sink(),
+        path.to_str().unwrap(),
+        Vec::new(),
+        test_timeouts(),
+    );
+    let report = adapter.probe().await.expect("probe");
+    assert!(!report.available);
+    assert!(
+        report
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.starts_with("Codex CLI Could Not Be Started")),
         "{report:?}"
     );
 }
