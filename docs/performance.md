@@ -131,7 +131,7 @@ The frontend builds with Vite 8.3.4 using the Rolldown bundler. The React Compil
 ```ts
 build: {
   sourcemap: true,
-  target: "esnext",                     // WebView2 is Chromium; WKWebView/WebKitGTK are current WebKit (ES2022+, top-level await). The one engine gap, Temporal, is polyfilled at boot (src/boot.ts)
+  target: "esnext",
   modulePreload: { polyfill: false },
   rolldownOptions: {
     output: {
@@ -140,6 +140,8 @@ build: {
   },
 }
 ```
+
+`esnext` is safe because WebView2 is Chromium and WKWebView/WebKitGTK are current WebKit; the one engine gap, Temporal, is polyfilled at boot (`src/boot.ts`).
 
 Minification is Vite's default (Oxc). `pnpm build` writes `dist/` for the desktop bundle; `pnpm build:web` writes `dist-web/` for `swarmd --serve-ui`.
 

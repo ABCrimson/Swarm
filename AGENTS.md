@@ -8,7 +8,7 @@ file is canonical; `CLAUDE.md` only imports it.
 - **Newest on any channel.** Every dependency, toolchain and runtime pins the
   newest version on any channel (latest/next/canary/alpha/beta/rc/nightly).
   The only exception is a newest build that is verifiably broken for this repo:
-  pin the newest working build and record the evidence (CHANGELOG).
+  pin the newest working build and record it, with the reason and an evidence URL, in `.peak-modern-holds.json` (the freshness sweep reads it).
 - **Exact pins only.** Zero `^`, `~` or ranges in `package.json`; Rust crates
   use `=x.y.z` in the root `[workspace.dependencies]`; Rust is pinned to a
   dated nightly in `rust-toolchain.toml`.
@@ -25,6 +25,10 @@ file is canonical; `CLAUDE.md` only imports it.
   version is in `package.json`, held back only when a newer nightly lacks a
   win-x64 build — see `.peak-modern-holds.json`). No Corepack (it is not
   bundled with Node 25+).
+- Ground API use in the installed version: `node scripts/sync-reference-repos.ts` checks
+  out Tauri, xterm.js and React at the exact pinned versions into the gitignored
+  `.repos/` (read-only; never edit it). Read those sources and `node_modules/<pkg>`
+  types instead of recalling an API.
 
 ## TypeScript / React
 
@@ -168,6 +172,7 @@ pnpm exec biome ci .
 pnpm test:coverage      # Vitest plus the coverage floor in vitest.config.ts
 pnpm build              # also: pnpm build:web
 pnpm check:compiler     # also: NAPI_RS_FORCE_WASI=true pnpm check:compiler
+pnpm exec knip --treat-config-hints-as-errors   # dead code / unused deps (knip.jsonc)
 pnpm test:e2e           # Playwright
 pnpm build:site         # docs site
 ```
@@ -179,6 +184,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cargo deny check
+# plus: cargo tree -p swarm-core / -p swarmd must contain no tauri crate (ci.yml rust-policy)
 ```
 
 Run the desktop app with `pnpm tauri:dev`; package it with `pnpm tauri:build`.

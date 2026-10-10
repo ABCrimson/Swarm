@@ -292,7 +292,8 @@ docs(api): document the ship_context causal record
    pnpm exec biome ci .
    pnpm test:coverage
    pnpm build && pnpm build:web
-   pnpm check:compiler
+   pnpm check:compiler && NAPI_RS_FORCE_WASI=true pnpm check:compiler
+   pnpm exec knip --treat-config-hints-as-errors
    pnpm test:e2e
    pnpm build:site
 
@@ -365,9 +366,9 @@ cargo test --workspace --doc
 | `swarm-core` `session`        | 15    | Session manager CRUD and atomic persistence |
 | `swarm-core` `bus`            | 6     | Channels and the router |
 | `swarm-core` top-level modules | 51   | `error`, `config`, `lock`, `metrics`, `protocol`, `runtime`, `state_file`, `clock` |
-| `swarmd`                      | 83    | 41 unit tests (CLI, auth, host policy, static UI) and 42 integration tests that drive a real daemon over WebSocket |
-| `swarm-desktop`               | 34    | 33 unit tests (command and capability contracts, config contract, dialog grants, lifecycle) and 1 integration test (the shared Tokio runtime) |
-| **Total**                     | **646** |                                                       |
+| `swarmd`                      | 83    | 41 unit tests (CLI parsing, the daemon token and Host/Origin policy, the WebSocket writer, per-peer caps and replay) and 42 integration tests: 35 drive a real daemon over WebSocket and HTTP (the static UI included), 7 run the service install scripts |
+| `swarm-desktop`               | 36    | 35 unit tests (command list and per-command ACL, capability and config contracts, dialog grants, lifecycle teardown) and 1 integration test (the shared Tokio runtime) |
+| **Total**                     | **648** |                                                       |
 
 The doc-tests run with `cargo test --workspace --doc`.
 
@@ -375,7 +376,7 @@ The doc-tests run with `cargo test --workspace --doc`.
 
 Frontend tests run via Vitest (`pnpm test`): **116 test files, 1193 tests** _(all green at the 2026-10-10 head)_, covering components, hooks, stores, and `lib/` utilities. `pnpm test:coverage` adds the coverage floor from `vitest.config.ts`.
 
-Tests are **colocated**: `X.test.ts(x)` sits next to the `X.ts(x)` it covers, and a suite that covers one facet of a larger module takes a dotted suffix (`src/lib/tools.file-io.test.ts`, `src/lib/tauri.worker-spawn.test.ts`). Import the module under test through its `#` alias like any other code. Vitest collects `src/**/*.test.{ts,tsx}` only, so the Playwright `e2e/*.spec.ts` suites are never picked up.
+Tests are **colocated**: `X.test.ts(x)` sits next to the `X.ts(x)` it covers, and a suite that covers one facet of a larger module takes a dotted suffix (`src/lib/tools.file-io.test.ts`, `src/lib/tools.spawn-worker.test.ts`). Import the module under test through its `#` alias like any other code. Vitest collects `src/**/*.test.{ts,tsx}` only, so the Playwright `e2e/*.spec.ts` suites are never picked up.
 
 | Location                          | Files | Focus                                                          |
 |-----------------------------------|-------|-----------------------------------------------------------------|

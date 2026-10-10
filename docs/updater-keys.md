@@ -91,4 +91,4 @@ Without `--app-version`, the resulting `.sig` has no signed version, and every u
 
 ## Linux Caveat: AppImage-Only Updates
 
-`tauri-plugin-updater` only supports self-applying updates via **AppImage** on Linux. The release workflow also produces a `.deb` bundle, but a `.deb` install has no in-place update mechanism through this plugin: `check_for_updates` still reports that a new version is available, but applying it fails. `.deb` users must uninstall and reinstall (or wait for a system-package-manager update path in a future release) rather than rely on the in-app updater.
+`tauri-plugin-updater` only supports self-applying updates via **AppImage** on Linux. The release workflow also produces a `.deb` bundle, but a `.deb` install has no in-place update mechanism through this plugin: `check_for_updates` still reports that a new version is available, but once in-app download and install are wired up they will not be able to replace a `.deb` install in place. `.deb` users must uninstall and reinstall (or wait for a system-package-manager update path in a future release) rather than rely on the in-app updater.
