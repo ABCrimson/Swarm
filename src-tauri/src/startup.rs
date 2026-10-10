@@ -71,7 +71,8 @@ fn data_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, StartupErr
         .path()
         .app_data_dir()
         .map_err(|e| StartupError::DataDir(e.to_string()))?;
-    std::fs::create_dir_all(&dir).map_err(|e| StartupError::DataDir(e.to_string()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| StartupError::DataDir(format!("{}: {e}", dir.display())))?;
     Ok(dir)
 }
 
@@ -217,10 +218,11 @@ mod tests {
         assert!(app.try_state::<Runtime>().is_none());
     }
 
-    /// A failed start hands the reporter the main window, shown, as the
-    /// dialog's parent, so the dialog is never attached to a hidden window.
+    /// A failed start hands the reporter the main window as the dialog's
+    /// parent. The mock runtime's `show` always succeeds, so this test
+    /// does not observe that the window is shown first.
     #[test]
-    fn a_failed_start_reports_over_the_shown_main_window() {
+    fn a_failed_start_hands_the_reporter_the_main_window() {
         let app = mock_app();
         WebviewWindowBuilder::new(&app, MAIN_WINDOW, WebviewUrl::default())
             .visible(false)
