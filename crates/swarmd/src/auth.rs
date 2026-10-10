@@ -25,10 +25,9 @@
 //!   unless a valid token file ALREADY exists, so a fresh install can never
 //!   be pointed at `0.0.0.0` blind: the operator first completes one
 //!   loopback run, which mints the token and prints the connect URL.
-//!   [`DaemonToken::load`] (like [`DaemonToken::exists`]) is a pure check
-//!   and must be evaluated BEFORE [`DaemonToken::load_or_create`]; minting
-//!   first would let a refused run create the very file that lets an
-//!   identical second run through.
+//!   [`DaemonToken::load`] is a pure check and must be evaluated BEFORE
+//!   [`DaemonToken::load_or_create`]; minting first would let a refused run
+//!   create the very file that lets an identical second run through.
 //! - **Constant-time comparison** (`subtle`), so response timing does not
 //!   reveal how many leading bytes of a guess matched.
 //!
@@ -103,13 +102,6 @@ impl DaemonToken {
     /// token length is fixed and public.
     pub fn matches(&self, candidate: &str) -> bool {
         self.0.len() == candidate.len() && bool::from(self.0.as_bytes().ct_eq(candidate.as_bytes()))
-    }
-
-    /// `true` if `<data_dir>/daemon-token` holds a valid token. A pure check,
-    /// like [`Self::load`]: it never creates, rewrites or re-permissions
-    /// anything.
-    pub fn exists(data_dir: &Path) -> bool {
-        matches!(Self::load(data_dir), Ok(Some(_)))
     }
 
     /// Reads the token at `<data_dir>/daemon-token` without ever creating
@@ -493,14 +485,17 @@ mod tests {
     #[test]
     fn test_token_is_minted_once_and_stable_across_loads() {
         let dir = temp_dir();
-        assert!(!DaemonToken::exists(dir.path()), "fresh dir has no token");
+        assert!(
+            !matches!(DaemonToken::load(dir.path()), Ok(Some(_))),
+            "fresh dir has no token"
+        );
 
         let first = DaemonToken::load_or_create(dir.path()).unwrap();
         assert!(first.minted);
         first.permissions.unwrap();
         assert_eq!(first.token.as_str().len(), TOKEN_HEX_LEN);
         assert!(first.token.matches(first.token.as_str()));
-        assert!(DaemonToken::exists(dir.path()));
+        assert!(matches!(DaemonToken::load(dir.path()), Ok(Some(_))));
 
         let second = DaemonToken::load_or_create(dir.path()).unwrap();
         assert!(!second.minted, "second load finds the persisted token");
@@ -530,8 +525,8 @@ mod tests {
 
     /// Losing the mint race: when another process linked its token into
     /// place between our read and our rename, `mint` keeps that file
-    /// byte-for-byte and returns its token. The old write-then-chmod code
-    /// overwrote it, invalidating the winner's connect URL.
+    /// byte-for-byte and returns its token. Overwriting it would invalidate
+    /// the winner's saved connect URL.
     #[test]
     fn test_mint_never_clobbers_a_token_that_landed_first() {
         let dir = temp_dir();
@@ -601,12 +596,12 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600);
     }
 
-    /// `exists()` is the non-loopback gate's only input and must never mint.
+    /// `load()` is the non-loopback gate's only input and must never mint.
     #[test]
-    fn test_exists_never_creates_a_token_file() {
+    fn test_load_never_creates_a_token_file() {
         let dir = temp_dir();
         for _ in 0..3 {
-            assert!(!DaemonToken::exists(dir.path()));
+            assert!(!matches!(DaemonToken::load(dir.path()), Ok(Some(_))));
         }
         assert!(!token_path(dir.path()).exists());
     }
@@ -620,7 +615,7 @@ mod tests {
             let path = token_path(dir.path());
             std::fs::write(&path, contents).unwrap();
             assert!(
-                !DaemonToken::exists(dir.path()),
+                !matches!(DaemonToken::load(dir.path()), Ok(Some(_))),
                 "{contents:?} is not a token"
             );
             let err = DaemonToken::load_or_create(dir.path()).unwrap_err();
