@@ -40,9 +40,12 @@ export function turnStatusLabel(status: string | null): "Completed" | "Failed" |
   return "In Progress";
 }
 
-/** Markdown-table-cell-safe: escapes `|` and collapses embedded newlines — a tool's `target` is a short path/command string, never expected to need more than this. */
+/** Markdown-table-cell-safe. A tool's name and target are free-form text the agent controls, so backslashes are escaped first, then `|`, then every run of control characters (a lone CR included, which GFM reads as a line ending) folds to one space, so no input adds a row or a cell. */
 function escapeCell(value: string): string {
-  return value.replaceAll("|", String.raw`\|`).replaceAll(/\r?\n/g, " ");
+  return value
+    .replaceAll("\\", String.raw`\\`)
+    .replaceAll("|", String.raw`\|`)
+    .replaceAll(/\p{Cc}+/gu, " ");
 }
 
 function renderToolCallRows(turns: readonly CausalTurn[]): string[] {
