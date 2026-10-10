@@ -840,10 +840,10 @@ async fn cancel_interrupts_the_turn_and_keeps_the_session() {
     session.shutdown().await.expect("shutdown");
 }
 
-/// Cancelling a turn denies its open asks, aborting the turn, before the
-/// interrupt goes out.
+/// Cancelling a turn denies its open asks with `interrupt: true` (the CLI
+/// aborts the turn) alongside the interrupt request.
 #[tokio::test]
-async fn cancel_denies_the_open_ask_before_interrupting() {
+async fn cancel_denies_the_open_ask_with_interrupt() {
     let harness = Harness::new();
     let session = harness.spawn("cancel_during_ask.mjs").await;
     let turn = send(session.as_ref(), "Write cancelled.txt").await;
@@ -1380,6 +1380,32 @@ async fn probe_reports_a_missing_binary_as_unavailable() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_reports_a_non_executable_binary_as_not_startable() {
+    use std::os::unix::fs::PermissionsExt;
+    let harness = Harness::new();
+    let path = harness.cwd.join("claude");
+    std::fs::write(&path, "#!/bin/sh\n").expect("write the stub");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+    let report = ClaudeCodeAdapter::with_test_binary(
+        harness.sink.clone(),
+        path.to_str().unwrap(),
+        Vec::new(),
+    )
+    .probe()
+    .await
+    .expect("probe never errors");
+    assert!(!report.available);
+    assert!(
+        report
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.starts_with("Claude Code CLI Could Not Be Started")),
+        "{report:?}"
+    );
+}
+
 // ── Argv (Conditions A and C) ────────────────────────────────────────
 
 const TIERS: [ClaudeCodeTrustTier; 3] = [
@@ -1420,8 +1446,9 @@ fn the_probe_disables_project_hooks() {
     );
 }
 
-/// The promise in the `probe()` doc: no session on disk, no user or
-/// local settings, no MCP servers.
+/// The probe's throwaway process persists no session (`probe()` doc: "no
+/// session on disk"), loads project settings only, and starts no MCP server
+/// outside the strict, empty config.
 #[test]
 fn the_probe_never_persists_a_session_or_loads_user_config() {
     let argv = probe_flags();

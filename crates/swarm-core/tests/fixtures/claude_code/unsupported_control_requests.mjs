@@ -11,7 +11,11 @@ export default async function unsupportedControlRequests(cli) {
     f.init(),
     f.status(),
     f.messageStart({ turn }),
-    { type: "control_request", request_id: "dialog-1", request: { subtype: "request_user_dialog" } },
+    {
+      type: "control_request",
+      request_id: "dialog-1",
+      request: { subtype: "request_user_dialog" },
+    },
     { type: "control_request", request_id: "malformed-1", request: { subtype: "can_use_tool" } },
   );
   const first = await cli.answer("dialog-1");

@@ -13,7 +13,7 @@ export default async function foreignAsk(cli) {
   cli.emit(
     f.canUseTool(askId, {
       toolName: "Write",
-      input: { file_path: "C:\probe\bg.txt", content: "x" },
+      input: { file_path: "C:\\probe\\bg.txt", content: "x" },
       toolUseId: "toolu_01BackgroundWrite",
     }),
   );
