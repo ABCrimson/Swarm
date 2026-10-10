@@ -63,7 +63,7 @@ describe("validateStoreData", () => {
       ["swarm:snapshots:broken", [{ id: "nope" }]],
     ]);
     stores.templatesStore.entries.mockResolvedValue([["swarm:templates", "not-an-array"]]);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const results = await validateStoreData();
 
@@ -84,7 +84,6 @@ describe("validateStoreData", () => {
       { description: "Pane Sizes, Alert Thresholds, Session Snapshots, Session Templates" },
     );
     expect(warn).toHaveBeenCalledOnce();
-    warn.mockRestore();
   });
 
   it("stays quiet when everything is valid", async () => {
@@ -101,7 +100,7 @@ describe("validateStoreData", () => {
   it("reports an unreadable file and still checks the others", async () => {
     stores.settingsStore.entries.mockRejectedValue(new Error("EACCES"));
     stores.templatesStore.entries.mockResolvedValue([["swarm:templates", []]]);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    using _warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const results = await validateStoreData();
 
@@ -114,7 +113,6 @@ describe("validateStoreData", () => {
       },
       { file: "swarm-templates.json", key: "swarm:templates", valid: true },
     ]);
-    warn.mockRestore();
   });
 });
 

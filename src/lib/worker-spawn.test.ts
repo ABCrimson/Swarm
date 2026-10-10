@@ -158,12 +158,11 @@ describe("spawnWorkerFromSpec", () => {
   it("still returns the worker id when session_add_worker fails", async () => {
     spawnWorkerMock.mockResolvedValueOnce("worker-5");
     sessionAddWorkerMock.mockRejectedValueOnce(new Error("boom"));
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const workerId = await spawnWorkerFromSpec({ name: "Agent" }, "missing-session");
 
     expect(workerId).toBe("worker-5");
-    consoleError.mockRestore();
   });
 
   it("returns null and skips all store writes when spawnWorker degrades to null (no Tauri IPC bridge)", async () => {
