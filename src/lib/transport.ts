@@ -1,6 +1,7 @@
 import { isTauri, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getLastSeq } from "#lib/event-bus";
+import { isError } from "#lib/is-error";
 
 /**
  * What a transport can honestly promise. `hasTransport()` in
@@ -271,7 +272,7 @@ export class WsTransport implements Transport {
       ws = new WebSocket(this.wsUrl());
     } catch (err) {
       this.armReconnect();
-      return Promise.reject(Error.isError(err) ? err : new Error(String(err)));
+      return Promise.reject(isError(err) ? err : new Error(String(err), { cause: err }));
     }
     const conn: Connection = { ws, pending: new Map(), framesReceived: 0 };
     this.connection = conn;

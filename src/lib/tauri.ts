@@ -3,6 +3,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import * as z from "zod";
 import type { PermissionDecision, ProbeReport, ProviderId, TrustTier } from "#lib/agent-events";
 import { ProbeReportSchema } from "#lib/agent-events";
+import { isError } from "#lib/is-error";
 import { transport } from "#lib/transport";
 import type {
   CommitOutcome,
@@ -85,7 +86,7 @@ function parseResponse<S extends z.ZodType>(schema: S, raw: unknown, message: st
 
 /** Wraps a rejection value that is not already an `Error`, keeping it as the `cause`. */
 function asError(err: unknown): Error {
-  return Error.isError(err) ? err : new Error(String(err), { cause: err });
+  return isError(err) ? err : new Error(String(err), { cause: err });
 }
 
 // ── Worker commands ──────────────────────────────────
