@@ -7,7 +7,7 @@ import { toast } from "#components/ui/Toast";
 import { isTauri } from "#lib/tauri";
 import type { WorkflowDefinition } from "#lib/workflow";
 import { parseWorkflow } from "#lib/workflow";
-import { causalityInspectorAtom } from "#store/ui";
+import { causalityInspectorAtom, reducedMotionAtom } from "#store/ui";
 
 interface GraphControlsProps {
   readonly onResetLayout: () => void;
@@ -64,11 +64,13 @@ export function GraphControls({
 }: GraphControlsProps): React.ReactElement {
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const causalityOpen = useAtomValue(causalityInspectorAtom) !== null;
+  const reducedMotion = useAtomValue(reducedMotionAtom);
   const filesAvailable = isTauri();
 
-  const handleZoomIn = (): void => void zoomIn({ duration: 200 });
-  const handleZoomOut = (): void => void zoomOut({ duration: 200 });
-  const handleFitView = (): void => void fitView({ duration: 300, padding: 0.2 });
+  const handleZoomIn = (): void => void zoomIn({ duration: reducedMotion ? 0 : 200 });
+  const handleZoomOut = (): void => void zoomOut({ duration: reducedMotion ? 0 : 200 });
+  const handleFitView = (): void =>
+    void fitView({ duration: reducedMotion ? 0 : 300, padding: 0.2 });
 
   const handleExport = async (): Promise<void> => {
     try {
