@@ -13,10 +13,6 @@ import { useWorkerStore } from "#store/workers";
 interface ParticleSyncConfig {
   readonly device: GPUDevice | null;
   readonly system: ParticleSystem | null;
-  /** @deprecated Ignored — the simulation runs in clip space. */
-  readonly canvasWidth?: number;
-  /** @deprecated Ignored — the simulation runs in clip space. */
-  readonly canvasHeight?: number;
 }
 
 /** What the simulation reads from the worker store: counts by state. */
