@@ -12,7 +12,7 @@ test("a failed app module load shows the start-failure message", async ({ page }
   await page.route(MAIN_MODULE, (route) => route.fulfill({ status: 500, body: "" }));
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { level: 1, name: "SWARM Could Not Start" }),
+    page.getByRole("heading", { level: 1, name: "SWARM Could Not Start", exact: true }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Reload" })).toBeVisible();
 });

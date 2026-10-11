@@ -237,13 +237,15 @@ impl FsScopes {
         // file the write would really replace. Outside the scopes the
         // failure stays the scope error, so no entry's existence leaks.
         if std::fs::symlink_metadata(&real).is_ok() {
-            real = std::fs::canonicalize(&real).map_err(|_| {
-                if in_scope(&real_parent) {
+            real = std::fs::canonicalize(&real).map_err(|e| {
+                if !in_scope(&real_parent) {
+                    Value::String(WRITE_SCOPE_MESSAGE.to_owned())
+                } else if e.kind() == io::ErrorKind::NotFound {
                     Value::String(format!(
                         "Cannot Write \"{display}\": Dangling Symbolic Link."
                     ))
                 } else {
-                    Value::String(WRITE_SCOPE_MESSAGE.to_owned())
+                    Value::String(truthful_write_error(&e, &display))
                 }
             })?;
         }
@@ -442,6 +444,29 @@ mod tests {
 
     fn denied() -> Result<PathBuf, Value> {
         Err(Value::String(DENIED_MESSAGE.to_owned()))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_an_in_scope_link_that_cannot_resolve_says_why() {
+        let tree = Tree::new();
+        let data = &tree.scopes.app_data;
+        let dangling = data.join("dangling.txt");
+        std::os::unix::fs::symlink(data.join("nowhere"), &dangling).unwrap();
+        let msg = tree.scopes.check_write(&dangling).unwrap_err();
+        assert!(
+            msg.as_str().unwrap().ends_with("Dangling Symbolic Link."),
+            "{msg}"
+        );
+        let (a, b) = (data.join("loop-a"), data.join("loop-b"));
+        std::os::unix::fs::symlink(&b, &a).unwrap();
+        std::os::unix::fs::symlink(&a, &b).unwrap();
+        let msg = tree.scopes.check_write(&a).unwrap_err();
+        let msg = msg.as_str().unwrap();
+        assert!(
+            msg.starts_with("Failed To Write") && !msg.contains("Dangling"),
+            "{msg}"
+        );
     }
 
     #[test]
@@ -780,5 +805,46 @@ mod tests {
                 "{name}: {message}"
             );
         }
+    }
+
+    /// The handlers wire the scope check, the write, the lexically
+    /// normalized `file_written` event and the absolute-path guards.
+    #[tokio::test]
+    async fn test_write_file_then_read_file_round_trips_and_records_file_written() {
+        use serde_json::json;
+        let (ctx, _dir, events) = crate::commands::test_support::test_ctx();
+        let target = ctx.paths.data_dir.join("note.txt");
+        let via = ctx.paths.data_dir.join("a").join("..").join("note.txt");
+        write_file(
+            ctx.clone(),
+            json!({"path": via.display().to_string(), "content": "hi"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hi");
+        ctx.engine.flush().await.unwrap();
+        let written: Vec<FileWrittenPayload> = events
+            .try_iter()
+            .filter_map(|e| match e.event {
+                SwarmEvent::FileWritten(payload) => Some(payload),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].path, target.display().to_string());
+        assert_eq!(written[0].bytes, 2);
+        assert_eq!(
+            read_file(ctx.clone(), json!({"path": target.display().to_string()})).await,
+            Ok(json!("hi"))
+        );
+        let relative = json!({"path": "note.txt", "content": "x"});
+        assert_eq!(
+            write_file(ctx.clone(), relative.clone()).await,
+            Err(Value::String("Write Requires An Absolute Path.".to_owned()))
+        );
+        assert_eq!(
+            read_file(ctx, relative).await,
+            Err(Value::String("Read Requires An Absolute Path.".to_owned()))
+        );
     }
 }
