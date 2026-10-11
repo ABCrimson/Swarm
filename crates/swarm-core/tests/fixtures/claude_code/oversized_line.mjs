@@ -1,4 +1,4 @@
-// Starts a turn, then writes a line past the adapter's 10MB NDJSON cap
+// Starts a turn, then writes a line past the adapter's 10 MiB NDJSON cap
 // with no terminator (a framer failure), then hangs.
 export default async function oversizedLine(cli) {
   const f = cli.frames;
