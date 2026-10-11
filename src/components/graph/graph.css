@@ -43,6 +43,15 @@
     border-radius: 12px;
   }
 
+  /* The armed annotation-link source: dashed, so it stays distinct from the
+     solid focus ring even while the armed node holds focus. */
+  .worker-graph .worker-graph__node--link-source,
+  .worker-graph .react-flow__node.worker-graph__node--link-source:focus-visible {
+    outline: 2px dashed var(--color-plasma);
+    outline-offset: 3px;
+    border-radius: 12px;
+  }
+
   /* Colour and width arrive as custom properties so the focus rule below can override them. */
   .provenance-edge__path {
     stroke: var(--edge-stroke);

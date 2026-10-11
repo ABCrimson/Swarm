@@ -227,6 +227,7 @@ function WorkerGraphInner(): React.ReactElement {
       position: ui?.position ?? positions.get(id) ?? ORIGIN,
       data: { workerId: id, index },
       ariaLabel: nodeLabels[id],
+      className: linkSource === id ? "worker-graph__node--link-source" : undefined,
       domAttributes: { "aria-keyshortcuts": "L" },
       deletable: false,
       selected: ui?.selected ?? false,
@@ -314,6 +315,7 @@ function WorkerGraphInner(): React.ReactElement {
   };
 
   const handleNodeClick: NodeMouseHandler<WorkerFlowNode> = (_event, node) => {
+    setLinkSource(null);
     openDetail(node.id);
   };
 
@@ -542,6 +544,11 @@ function WorkerGraphInner(): React.ReactElement {
         onNodeContextMenu={handleNodeContextMenu}
         onEdgeClick={handleEdgeClick}
         onKeyDown={handleKeyDown}
+        // Focus leaving the graph disarms a pending link. (On the flow
+        // wrapper, not the outer div: Biome rejects handlers on static elements.)
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setLinkSource(null);
+        }}
         deleteKeyCode={causalityTarget ? null : ["Backspace", "Delete"]}
         proOptions={{ hideAttribution: true }}
       >

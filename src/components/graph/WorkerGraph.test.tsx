@@ -423,6 +423,28 @@ describe("WorkerGraph — interactions", () => {
     expect(getDefaultStore().get(selectedWorkerIdAtom)).toBe("w-b");
   });
 
+  it("disarms an armed link when focus leaves the graph", async () => {
+    const user = userEvent.setup();
+    await renderWith(
+      createWorker({ id: "w-a", name: "Alpha" }),
+      createWorker({ id: "w-b", name: "Beta" }),
+    );
+    const outside = document.body.appendChild(document.createElement("button"));
+
+    nodeFor("w-a").focus();
+    await user.keyboard("l");
+    expect(screen.getByText(/Linking From Alpha/)).toBeInTheDocument();
+    fireEvent.blur(nodeFor("w-a"), { relatedTarget: outside });
+    expect(screen.queryByText(/Linking From/)).not.toBeInTheDocument();
+    nodeFor("w-b").focus();
+    await user.keyboard("{Enter}");
+
+    expect(screen.queryByText("Manual")).not.toBeInTheDocument();
+    expect(getDefaultStore().get(selectedWorkerIdAtom)).toBe("w-b");
+    expect(getDefaultStore().get(detailPanelOpenAtom)).toBe(true);
+    outside.remove();
+  });
+
   it("a PTY output chunk re-renders nothing in the graph", async () => {
     const commits = vi.fn();
     act(() => useWorkerStore.getState().addWorker(createWorker({ id: "w-a", name: "Alpha" })));
