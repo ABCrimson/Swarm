@@ -76,7 +76,7 @@ export interface CausalityWalkResult {
    * cap is reached).
    */
   readonly incomplete: boolean;
-  /** Message of a backfill that rejected (not a miss); null otherwise. */
+  /** Message of a backfill that rejected or returned a malformed page (not a miss); null otherwise. */
   readonly failure: string | null;
 }
 
@@ -88,8 +88,9 @@ export interface CausalityWalkResult {
  * ends the walk early and sets {@link CausalityWalkResult.incomplete} —
  * the rows already collected are still true, just explicitly marked as
  * possibly short of the root rather than silently passed off as complete.
- * A backfill that rejects (daemon down, transport error) or returns a malformed page also ends the walk,
- * but is reported in {@link CausalityWalkResult.failure}, not as a miss.
+ * A backfill that rejects (daemon down, transport error) or returns a
+ * malformed page also ends the walk, but is reported in
+ * {@link CausalityWalkResult.failure}, not as a miss.
  *
  * `signal` stops the walk between hops (no further `events_since` calls)
  * once aborted; the pending promise then rejects with the abort reason.
@@ -395,7 +396,7 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
           <p style={placeholderStyle}>Cause Event Not Available (Ephemeral Or Pruned)</p>
         )}
 
-        {/* A rejected backfill is a failure to look, not a pruned cause. */}
+        {/* A rejected or malformed backfill is a failure to look, not a pruned cause. */}
         {result?.failure != null && (
           <p role="alert" style={placeholderStyle}>
             Could Not Load The Causality Trace: {result.failure}
