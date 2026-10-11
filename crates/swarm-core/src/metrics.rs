@@ -410,4 +410,123 @@ mod tests {
             );
         }
     }
+
+    /// A worker running as this process.
+    fn registry_with_self(name: &str) -> WorkerRegistry {
+        let registry = WorkerRegistry::new();
+        registry
+            .spawn_worker(WorkerHandle {
+                id: Uuid::new_v4(),
+                state: WorkerState::Running,
+                name: name.to_owned(),
+                pid: Some(std::process::id()),
+                started_at: 0,
+                pty_writer: None,
+                child: None,
+                worktree_path: None,
+                repo_root: None,
+                branch: None,
+                base_commit: None,
+                last_shipped_seq: None,
+                last_shipped_commit: None,
+            })
+            .unwrap();
+        registry
+    }
+
+    /// `collect` refreshes the process table and counts workers per state.
+    #[test]
+    fn test_snapshot_measures_a_registered_worker() {
+        let registry = registry_with_self("self");
+        let snap = MetricsSnapshot::collect(&registry, &SharedSystem::new());
+        assert_eq!(snap.workers.total_workers, 1);
+        assert_eq!(snap.workers.running, 1);
+        assert_eq!(snap.per_worker.len(), 1);
+        assert_eq!(snap.per_worker[0].pid, Some(std::process::id()));
+        assert!(
+            snap.per_worker[0].memory_bytes > 0,
+            "the test process has resident memory"
+        );
+    }
+
+    /// CPU is summed into the tree too.
+    #[test]
+    fn test_worker_usage_includes_cpu() {
+        let registry = registry_with_self("busy");
+        let refresh = |sys: &mut System| {
+            sys.refresh_processes_specifics(
+                ProcessesToUpdate::All,
+                true,
+                ProcessRefreshKind::nothing().with_cpu(),
+            );
+        };
+        // Spinning before the first refresh too gives this process a
+        // nonzero CPU time to diff against (sysinfo skips a process whose
+        // previous sample read zero).
+        let busy = || {
+            let until = Instant::now() + sysinfo::MINIMUM_CPU_UPDATE_INTERVAL * 2;
+            let mut spins = 0_u64;
+            while Instant::now() < until {
+                spins = std::hint::black_box(spins.wrapping_add(1));
+            }
+        };
+        let mut sys = System::new();
+        busy();
+        refresh(&mut sys);
+        busy();
+        refresh(&mut sys);
+        let metrics = collect_per_worker_metrics(&registry, &sys);
+        assert_eq!(metrics.len(), 1);
+        assert!(
+            metrics[0].cpu_percent > 0.0,
+            "got {}",
+            metrics[0].cpu_percent
+        );
+    }
+
+    /// The loop emits `system_metrics` ticks and stops when cancelled.
+    #[tokio::test]
+    async fn test_metrics_loop_emits_system_metrics_until_cancelled() {
+        use crate::orchestration::{DomainEvent, EventLog, OrchestrationEngine};
+
+        let (tx, rx) = std::sync::mpsc::channel::<DomainEvent>();
+        let engine =
+            OrchestrationEngine::start(EventLog::open_in_memory().unwrap(), None, move |e| {
+                let _ = tx.send(e.clone());
+            });
+        let cancel = CancellationToken::new();
+        start_metrics_loop(
+            engine.sink(),
+            WorkerRegistry::new(),
+            SharedSystem::new(),
+            cancel.clone(),
+        );
+        let ticks = || {
+            rx.try_iter()
+                .filter_map(|e| match e.event {
+                    SwarmEvent::SystemMetrics(payload) => Some(payload),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let first = loop {
+            engine.flush().await.unwrap();
+            if let Some(payload) = ticks().into_iter().next() {
+                break payload;
+            }
+            assert!(Instant::now() < deadline, "no system_metrics tick");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert!(first.memory_total_mb > 0.0);
+        assert_eq!(first.worker_count, 0);
+
+        cancel.cancel();
+        tokio::time::sleep(METRICS_INTERVAL * 2).await;
+        engine.flush().await.unwrap();
+        let _ = ticks();
+        tokio::time::sleep(METRICS_INTERVAL * 3).await;
+        engine.flush().await.unwrap();
+        assert!(ticks().is_empty(), "the loop kept emitting after cancel");
+    }
 }
