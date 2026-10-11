@@ -23,9 +23,9 @@ minimumReleaseAgeExclude:
   - '@typescript/typescript-linux-x64@7.1.0-dev.20261010.1'
   - '@typescript/typescript-win32-arm64@7.1.0-dev.20261010.1'
   - '@typescript/typescript-win32-x64@7.1.0-dev.20261010.1'
-  - '@playwright/test@1.65.0-alpha-2026-10-10'
-  - playwright@1.65.0-alpha-2026-10-10
-  - playwright-core@1.65.0-alpha-2026-10-10
+  - '@playwright/test@1.65.0-alpha-2026-10-11'
+  - playwright@1.65.0-alpha-2026-10-11
+  - playwright-core@1.65.0-alpha-2026-10-11
   - motion@14.1.0
   - framer-motion@14.1.0
   - motion-dom@14.1.0

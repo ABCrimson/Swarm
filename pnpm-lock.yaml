@@ -265,8 +265,8 @@ importers:
         specifier: 0.153.0
         version: 0.153.0
       '@playwright/test':
-        specifier: 1.65.0-alpha-2026-10-10
-        version: 1.65.0-alpha-2026-10-10
+        specifier: 1.65.0-alpha-2026-10-11
+        version: 1.65.0-alpha-2026-10-11
       '@tailwindcss/vite':
         specifier: 0.0.0-insiders.de2255b
         version: 0.0.0-insiders.de2255b(vite@8.3.4(@types/node@26.6.5)(jiti@2.7.0)(yaml@2.9.1))
@@ -913,8 +913,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@playwright/test@1.65.0-alpha-2026-10-10':
-    resolution: {integrity: sha512-uT8rPzT/AHnzaQ3lEinDdVMq9FzmYDBfMUjFD2LDCaAvdzF5GjkZzCmJ4dYgdHu9zgZ7DzSKdbwucCO1oT25Fw==}
+  '@playwright/test@1.65.0-alpha-2026-10-11':
+    resolution: {integrity: sha512-D9xhv+BFgg9bdTHdHnFepuAM0F2YDCJFEzi+w24cAGKjzjp+xoaoGLEH657BP9xLu75Vtx4UdG+nyR8icUVxMg==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -2743,13 +2743,13 @@ packages:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
 
-  playwright-core@1.65.0-alpha-2026-10-10:
-    resolution: {integrity: sha512-rtfGHJR6XUZIVQvQnw+d2rxBFJjlLgzuzKy48hdiPQAVmIhFbgzJjSCNWjDgYfXWtKp6akNiq5+OVN70EttYNQ==}
+  playwright-core@1.65.0-alpha-2026-10-11:
+    resolution: {integrity: sha512-z5ayi3uCQ/FpbpEJhbFZP6LcSjitL4Jtl+LFkCXRF8wBgewG6WHVzKeTs6OBH0N2KUJqf88WIYeus/PIpzPY+g==}
     engines: {node: '>=20'}
     hasBin: true
 
-  playwright@1.65.0-alpha-2026-10-10:
-    resolution: {integrity: sha512-TYjOKRB6HEJwz7fPfYlvmUh5cL0elrrd24O+FMLIDYmYgVg9Z59m61LmAGPFibqlCBxgTsvjWNPTjWdGwKd75w==}
+  playwright@1.65.0-alpha-2026-10-11:
+    resolution: {integrity: sha512-jL/WirH6G7p4Sc4ZTpF5QDLHDyQaGinfFyaF74T2cb+kxNlT6JtT0ldyPAbhHuRzzqWdNncXqn2pCDt9hfiL+A==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -3628,9 +3628,9 @@ snapshots:
   '@oxc-transform-react/binding-win32-x64-msvc@0.153.0':
     optional: true
 
-  '@playwright/test@1.65.0-alpha-2026-10-10':
+  '@playwright/test@1.65.0-alpha-2026-10-11':
     dependencies:
-      playwright: 1.65.0-alpha-2026-10-10
+      playwright: 1.65.0-alpha-2026-10-11
 
   '@radix-ui/number@1.1.3': {}
 
@@ -5263,11 +5263,11 @@ snapshots:
 
   picomatch@4.0.7: {}
 
-  playwright-core@1.65.0-alpha-2026-10-10: {}
+  playwright-core@1.65.0-alpha-2026-10-11: {}
 
-  playwright@1.65.0-alpha-2026-10-10:
+  playwright@1.65.0-alpha-2026-10-11:
     dependencies:
-      playwright-core: 1.65.0-alpha-2026-10-10
+      playwright-core: 1.65.0-alpha-2026-10-11
 
   postcss@8.5.29:
     dependencies:

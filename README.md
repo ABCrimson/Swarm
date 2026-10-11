@@ -114,7 +114,7 @@ The Rust side is a **three-crate workspace**: `swarm-core` (tauri-free domain lo
 |---|---|---|
 | Node.js | 27.0.0-nightly202610086d5e309871 | pinned via `devEngines.runtime`; pnpm downloads it for the project |
 | pnpm | 12.12.0 | pinned via `packageManager`; pnpm switches itself to it |
-| Rust | nightly-2026-10-10 | auto-configured by `rust-toolchain.toml` |
+| Rust | nightly-2026-10-11 | auto-configured by `rust-toolchain.toml` |
 | macOS (running the app) | 15.4 or newer | the bundle calls iterator helpers, `Error.isError` and `RegExp.escape` unguarded, which needs a Safari 18.4-class WKWebView; `bundle.macOS.minimumSystemVersion` enforces it |
 
 ### Desktop
@@ -177,7 +177,7 @@ Full operator guide: [`docs/daemon.md`](docs/daemon.md).
 | Graph | @xyflow/react + elkjs | 12.12.0 / 0.12.0 |
 | Terminal | @xterm/xterm | 6.1.0-beta.304 |
 | Charts / Motion | Recharts / motion | 3.11.0-canary.5 / 14.1.0 |
-| Lint · Test · E2E | Biome / Vitest / Playwright | 2.5.15 / 5.0.3 / 1.65.0-alpha-2026-10-10 |
+| Lint · Test · E2E | Biome / Vitest / Playwright | 2.5.15 / 5.0.3 / 1.65.0-alpha-2026-10-11 |
 
 </details>
 
@@ -186,7 +186,7 @@ Full operator guide: [`docs/daemon.md`](docs/daemon.md).
 
 | Layer | Technology | Version |
 |---|---|---|
-| Language | Rust | nightly-2026-10-10 (rustc 1.101.0-nightly) |
+| Language | Rust | nightly-2026-10-11 (rustc 1.101.0-nightly) |
 | Async runtime | Tokio | 1.53.2 |
 | Daemon transport | axum (WebSocket) | 0.8.9 |
 | Event log | rusqlite (bundled, WAL) | 0.40.2 |

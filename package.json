@@ -68,7 +68,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
     "@oxc-transform-react/binding-wasm32-wasip1": "0.153.0",
-    "@playwright/test": "1.65.0-alpha-2026-10-10",
+    "@playwright/test": "1.65.0-alpha-2026-10-11",
     "@tailwindcss/vite": "0.0.0-insiders.de2255b",
     "@tauri-apps/cli": "3.0.0-alpha.4",
     "@testing-library/dom": "10.4.2",
