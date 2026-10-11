@@ -25,7 +25,7 @@ The house rules (exact pins, pnpm only, no manual memoization, `parking_lot`, an
 |---------|------------------------------------------|----------------------------------------------|
 | Node.js | 27.0.0-nightly202610086d5e309871 (`devEngines.runtime`) | Frontend build and dev server (pnpm downloads it; do not install it separately) |
 | pnpm    | 12.12.0 (`packageManager`)               | Package management; npm and yarn are not used |
-| Rust    | nightly-2026-10-10 (`rust-toolchain.toml`) | Backend compilation (`rust-version` 1.101)   |
+| Rust    | nightly-2026-10-11 (`rust-toolchain.toml`) | Backend compilation (`rust-version` 1.101)   |
 
 Every version is pinned exactly: `package.json`, `pnpm-workspace.yaml`, the root `Cargo.toml` and `rust-toolchain.toml` are the source of truth, and this table follows them. The Node nightly can trail the newest one when that build has no Windows x64 binary; `.peak-modern-holds.json` records the reason.
 
@@ -35,7 +35,7 @@ Every version is pinned exactly: `package.json`, `pnpm-workspace.yaml`, the root
 
 ```toml
 [toolchain]
-channel    = "nightly-2026-10-10"
+channel    = "nightly-2026-10-11"
 profile    = "minimal"
 components = ["rustfmt", "clippy", "rust-src", "rust-analyzer"]
 targets    = [
