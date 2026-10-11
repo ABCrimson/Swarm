@@ -2,6 +2,7 @@
 // Bounded, immutable in-memory log (newest last) for the Logs page.
 
 import { create } from "zustand";
+import { DEFAULT_APP_SETTINGS } from "#store/ui";
 
 /** Severity level for a log entry. */
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -27,9 +28,6 @@ export interface LogEntry {
   readonly message: string;
   readonly metadata?: Record<string, unknown>;
 }
-
-/** Default retention cap; the live value comes from the Log Retention setting. */
-const MAX_ENTRIES = 10_000;
 
 /** State slice for the log store. */
 interface LogStoreState {
@@ -68,7 +66,7 @@ function keepLast(entries: readonly LogEntry[], max: number): readonly LogEntry[
 export const useLogStore = create<LogStoreState & LogStoreActions>()((set) => ({
   entries: [],
   sources: new Set<string>(),
-  maxEntries: MAX_ENTRIES,
+  maxEntries: DEFAULT_APP_SETTINGS.logMaxEntries,
 
   addEntry(entry) {
     set((state) => ({
