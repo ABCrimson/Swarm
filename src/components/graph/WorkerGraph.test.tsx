@@ -51,7 +51,8 @@ vi.mock(import("#lib/tauri"), async (importOriginal) => ({ ...(await importOrigi
  * considers a node "measured" and never paints an edge `<path>` at all —
  * so this file asserts on OUR OWN render-time computations (the legend's
  * kind rows, the empty-causality hint, the provenance store's edge
- * count) rather than XYFlow's internal `.react-flow__edge` DOM output,
+ * count, the edges posted to the ELK layout worker) rather than XYFlow's
+ * internal `.react-flow__edge` DOM output,
  * which would be vacuously zero here regardless of what WorkerGraph
  * computed.
  */
@@ -162,16 +163,27 @@ describe("WorkerGraph — measured edges", () => {
     render(<WorkerGraph />);
     await waitForLayoutSettled();
 
-    // Exactly these two kinds render (the legend gates on presence) --
-    // never a synthesized A->B->... chain. Cardinality itself (exactly
-    // one record per kind, no duplicate/merged entries) is pinned down
-    // at the store level in provenance.test.ts's collapse/count suite.
+    // Exactly these two kinds render (the legend gates on presence).
     expect(screen.getByText("Spawn")).toBeInTheDocument();
     expect(screen.getByText("Command")).toBeInTheDocument();
     expect(screen.queryByText("Kill")).not.toBeInTheDocument();
     expect(screen.queryByText("Message")).not.toBeInTheDocument();
     expect(screen.queryByText("Manual")).not.toBeInTheDocument();
     expect(screen.queryByText("No Measured Causality Yet")).not.toBeInTheDocument();
+
+    // The edges WorkerGraph computed reach ELK as its layout input: exactly
+    // the two A->B records, in direction -- no duplicate, no chain.
+    const layoutCalls = MockWorker.instances
+      .flatMap((w) => w.postMessage.mock.calls)
+      .filter(([msg]) => msg.cmd === "layout");
+    expect(layoutCalls.at(-1)?.[0]).toMatchObject({
+      graph: {
+        edges: [
+          { id: "prov-w-a-w-b-spawn", sources: ["w-a"], targets: ["w-b"] },
+          { id: "prov-w-a-w-b-command", sources: ["w-a"], targets: ["w-b"] },
+        ],
+      },
+    });
   });
 
   it("drops an edge whose endpoint left the worker store (endpoint-drop), without deleting it from the provenance store", async () => {
@@ -369,6 +381,68 @@ describe("WorkerGraph — interactions", () => {
     // Selection landed in the ui atoms — the Workers page renders the panel.
     expect(getDefaultStore().get(selectedWorkerIdAtom)).toBe("w-a");
     expect(getDefaultStore().get(detailPanelOpenAtom)).toBe(true);
+  });
+
+  it("draws a manual annotation edge from the keyboard: L arms a source, Enter on another node connects", async () => {
+    const user = userEvent.setup();
+    await renderWith(
+      createWorker({ id: "w-a", name: "Alpha" }),
+      createWorker({ id: "w-b", name: "Beta" }),
+    );
+
+    nodeFor("w-a").focus();
+    await user.keyboard("l");
+    expect(
+      screen.getByText(
+        "Linking From Alpha: Focus Another Worker And Press Enter, Or Escape To Cancel",
+      ),
+    ).toBeInTheDocument();
+    nodeFor("w-b").focus();
+    await user.keyboard("{Enter}");
+
+    expect(await screen.findByText("Manual")).toBeInTheDocument();
+    expect(screen.queryByText(/Linking From/)).not.toBeInTheDocument();
+    // Connecting selected nothing: Enter drew the edge instead of opening w-b.
+    expect(getDefaultStore().get(selectedWorkerIdAtom)).not.toBe("w-b");
+  });
+
+  it("cancels an armed link on Escape and draws nothing", async () => {
+    const user = userEvent.setup();
+    await renderWith(
+      createWorker({ id: "w-a", name: "Alpha" }),
+      createWorker({ id: "w-b", name: "Beta" }),
+    );
+
+    nodeFor("w-a").focus();
+    await user.keyboard("l{Escape}");
+    expect(screen.queryByText(/Linking From/)).not.toBeInTheDocument();
+    nodeFor("w-b").focus();
+    await user.keyboard("{Enter}");
+
+    expect(screen.queryByText("Manual")).not.toBeInTheDocument();
+    expect(getDefaultStore().get(selectedWorkerIdAtom)).toBe("w-b");
+  });
+
+  it("disarms an armed link when focus leaves the graph", async () => {
+    const user = userEvent.setup();
+    await renderWith(
+      createWorker({ id: "w-a", name: "Alpha" }),
+      createWorker({ id: "w-b", name: "Beta" }),
+    );
+    const outside = document.body.appendChild(document.createElement("button"));
+
+    nodeFor("w-a").focus();
+    await user.keyboard("l");
+    expect(screen.getByText(/Linking From Alpha/)).toBeInTheDocument();
+    fireEvent.blur(nodeFor("w-a"), { relatedTarget: outside });
+    expect(screen.queryByText(/Linking From/)).not.toBeInTheDocument();
+    nodeFor("w-b").focus();
+    await user.keyboard("{Enter}");
+
+    expect(screen.queryByText("Manual")).not.toBeInTheDocument();
+    expect(getDefaultStore().get(selectedWorkerIdAtom)).toBe("w-b");
+    expect(getDefaultStore().get(detailPanelOpenAtom)).toBe(true);
+    outside.remove();
   });
 
   it("a PTY output chunk re-renders nothing in the graph", async () => {

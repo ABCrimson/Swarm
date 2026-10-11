@@ -6,7 +6,14 @@ import { Button } from "#components/ui/Button";
 import { PROVIDER_LABELS, type TrustTier, TrustTierSchema } from "#lib/agent-events";
 import { errorMessage } from "#lib/is-error";
 import { DEFAULT_REPO_ROOT_KEY, getPersistedRepoRoot } from "#lib/project-root";
-import { agentProbe, agentSpawn, spawnWorker, validateRepoRoot, writeConfig } from "#lib/tauri";
+import {
+  AgentSpawnCommandError,
+  agentProbe,
+  agentSpawn,
+  spawnWorker,
+  validateRepoRoot,
+  writeConfig,
+} from "#lib/tauri";
 
 /** Where a new worker's chat runs: the webview's own Claude client, or an attached agent CLI. */
 type SpawnProvider = "webview_anthropic" | "claude_code" | "codex";
@@ -24,7 +31,7 @@ interface SpawnWorkerDialogProps {
 
 /**
  * Plain-language trust tiers, restating what each adapter configures
- * (`crates/swarm-core/src/agent/claude_code.rs`, `agent/codex.rs`).
+ * (`crates/swarm-core/src/agent/claude_code/tier.rs`, `agent/codex/tier.rs`).
  *
  * - Claude Code: Restricted = `--restricted` + `--permission-mode
  *   dontAsk` plus a deny list for the writing tools; Standard =
@@ -382,13 +389,24 @@ export function SpawnWorkerDialog({
       const id = isAgentProvider(provider)
         ? await agentSpawn(options, provider, modelAliases[provider].trim() || undefined, trustTier)
         : await spawnWorker(options);
-      if (id) {
-        toast.success(`Worker Spawned: ${id.slice(0, 8)}`);
-        onSpawned?.(id);
+      // `null`: no backend transport (a plain `pnpm dev` browser preview), so nothing spawned.
+      if (!id) {
+        const message = "Spawn Failed: No Backend Transport Available.";
+        toast.error(message);
+        return message;
       }
+      toast.success(`Worker Spawned: ${id.slice(0, 8)}`);
+      onSpawned?.(id);
       closeDialog();
       return null;
     } catch (err) {
+      // The PTY worker exists as a plain terminal; only the agent session failed to attach.
+      if (err instanceof AgentSpawnCommandError && err.workerId) {
+        toast.error(`Worker Spawned Without An Agent Session: ${err.message}`);
+        onSpawned?.(err.workerId);
+        closeDialog();
+        return null;
+      }
       // The adapter's own report (an init timeout, a non-zero exit…),
       // never a guessed cause.
       const message = `Spawn Failed: ${errorMessage(err)}`;

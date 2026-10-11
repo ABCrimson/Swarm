@@ -195,6 +195,8 @@ function WorkerGraphInner(): React.ReactElement {
   // state. Measured edges are recomputed every render from the provenance
   // store, so a repeat occurrence's count never waits on a relayout.
   const [manualEdges, setManualEdges] = useState<readonly ProvenanceFlowEdge[]>([]);
+  // L arms a focused node as annotation source; Enter/Space on another node draws the edge; Escape cancels.
+  const [linkSource, setLinkSource] = useState<string | null>(null);
   const initialFitDone = useRef(false);
 
   const { fitView } = useReactFlow<WorkerFlowNode, ProvenanceFlowEdge>();
@@ -225,6 +227,8 @@ function WorkerGraphInner(): React.ReactElement {
       position: ui?.position ?? positions.get(id) ?? ORIGIN,
       data: { workerId: id, index },
       ariaLabel: nodeLabels[id],
+      className: linkSource === id ? "worker-graph__node--link-source" : undefined,
+      domAttributes: { "aria-keyshortcuts": "L" },
       deletable: false,
       selected: ui?.selected ?? false,
       dragging: ui?.dragging ?? false,
@@ -311,6 +315,7 @@ function WorkerGraphInner(): React.ReactElement {
   };
 
   const handleNodeClick: NodeMouseHandler<WorkerFlowNode> = (_event, node) => {
+    setLinkSource(null);
     openDetail(node.id);
   };
 
@@ -326,18 +331,44 @@ function WorkerGraphInner(): React.ReactElement {
 
   // Keyboard activation for the focusable node and edge wrappers xyflow
   // renders (Enter/Space only select them natively): a node opens its
-  // detail panel, a measured edge its causality trace.
+  // detail panel, a measured edge its causality trace. L arms a focused
+  // node as an annotation source, and Enter/Space on another node then
+  // draws the manual edge: xyflow's connection handles are not focusable,
+  // so this is the keyboard route to onConnect.
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key !== "Enter" && event.key !== " ") return;
     if (!(event.target instanceof Element)) return;
     const element = event.target.closest<HTMLElement | SVGElement>(
       ".react-flow__node, .react-flow__edge",
     );
     const id = element?.dataset.id;
     if (!element || element !== event.target || !id) return;
-    if (element.classList.contains("react-flow__node")) {
+    const isNode = element.classList.contains("react-flow__node");
+    if (
+      isNode &&
+      event.key.toLowerCase() === "l" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
       event.preventDefault();
-      openDetail(id);
+      setLinkSource(id);
+      return;
+    }
+    if (event.key === "Escape") {
+      setLinkSource(null);
+      return;
+    }
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (isNode) {
+      event.preventDefault();
+      if (linkSource === null) {
+        openDetail(id);
+        return;
+      }
+      if (linkSource !== id && workerIds.includes(linkSource)) {
+        onConnect({ source: linkSource, target: id, sourceHandle: null, targetHandle: null });
+      }
+      setLinkSource(null);
     } else if (openCausality(id)) {
       event.preventDefault();
     }
@@ -427,7 +458,11 @@ function WorkerGraphInner(): React.ReactElement {
   return (
     <div className="worker-graph" style={{ width: "100%", height: "100%", position: "relative" }}>
       <p role="status" className="sr-only">
-        {isLayouting ? "Computing Layout" : ""}
+        {linkSource !== null
+          ? `Linking From ${names[linkSource] ?? linkSource}: Focus Another Worker And Press Enter, Or Escape To Cancel`
+          : isLayouting
+            ? "Computing Layout"
+            : ""}
       </p>
       <AnimatePresence>
         {(isLayouting || layoutError) && (
@@ -509,6 +544,11 @@ function WorkerGraphInner(): React.ReactElement {
         onNodeContextMenu={handleNodeContextMenu}
         onEdgeClick={handleEdgeClick}
         onKeyDown={handleKeyDown}
+        // Focus leaving the graph disarms a pending link. (On the flow
+        // wrapper, not the outer div: Biome rejects handlers on static elements.)
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setLinkSource(null);
+        }}
         deleteKeyCode={causalityTarget ? null : ["Backspace", "Delete"]}
         proOptions={{ hideAttribution: true }}
       >

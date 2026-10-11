@@ -268,6 +268,8 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
               Output
             </span>
             <pre
+              // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1); WebKit (WKWebView, WebKitGTK) does not focus scroll containers natively.
+              tabIndex={0}
               style={{
                 fontFamily: "var(--font-mono)",
                 fontSize: "0.6875rem",

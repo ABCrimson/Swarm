@@ -24,10 +24,10 @@ import { useWorkerStore } from "#store/workers";
 export const MAX_CAUSALITY_HOPS = 50;
 
 /**
- * Validates one `events_since` page at this seam — reused from
- * `event-bus.ts`'s canonical envelope shape so a malformed backfill
- * response degrades to "lookup failed" (the walk just stops early)
- * instead of throwing into render.
+ * Validates one `events_since` page at this seam, reusing
+ * `event-bus.ts`'s canonical envelope shape. A malformed page is a
+ * contract fault, not a miss: {@link resolveEvent} throws, and the walk
+ * reports it in `failure` instead of throwing into render.
  */
 const EventsSincePageSchema = z.array(DomainEventSchema);
 
@@ -37,9 +37,10 @@ const EventsSincePageSchema = z.array(DomainEventSchema);
  * flowed through this session, see `#store/provenance`), falling back
  * to a single-row `events_since` backfill on a miss (`limit: 1` — see
  * `docs/api.md#events_since`). Returns `null` when nothing is found at
- * that exact seq (a malformed response, or a seq that was never
- * persisted). Rejects with the backfill's own error when `events_since`
- * itself fails; that is not a miss.
+ * that exact seq (a seq that was never persisted, or was pruned).
+ * Rejects with the backfill's own error when `events_since` itself
+ * fails, and with an "Unexpected Shape" error when its page fails
+ * {@link EventsSincePageSchema}; neither is a miss.
  */
 async function resolveEvent(
   seq: number,
@@ -50,7 +51,9 @@ async function resolveEvent(
 
   const raw = await invoke<unknown>("events_since", { afterSeq: seq - 1, limit: 1 });
   const parsed = EventsSincePageSchema.safeParse(raw);
-  if (!parsed.success) return null;
+  if (!parsed.success) {
+    throw new Error("Events Since Returned An Unexpected Shape.", { cause: parsed.error });
+  }
   const row = parsed.data[0];
   if (!row || row.seq !== seq) return null;
   return row;
@@ -73,7 +76,7 @@ export interface CausalityWalkResult {
    * cap is reached).
    */
   readonly incomplete: boolean;
-  /** Message of a backfill that rejected (not a miss); null otherwise. */
+  /** Message of a backfill that rejected or returned a malformed page (not a miss); null otherwise. */
   readonly failure: string | null;
 }
 
@@ -85,8 +88,9 @@ export interface CausalityWalkResult {
  * ends the walk early and sets {@link CausalityWalkResult.incomplete} —
  * the rows already collected are still true, just explicitly marked as
  * possibly short of the root rather than silently passed off as complete.
- * A backfill that rejects (daemon down, transport error) also ends the walk,
- * but is reported in {@link CausalityWalkResult.failure}, not as a miss.
+ * A backfill that rejects (daemon down, transport error) or returns a
+ * malformed page also ends the walk, but is reported in
+ * {@link CausalityWalkResult.failure}, not as a miss.
  *
  * `signal` stops the walk between hops (no further `events_since` calls)
  * once aborted; the pending promise then rejects with the abort reason.
@@ -392,7 +396,7 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
           <p style={placeholderStyle}>Cause Event Not Available (Ephemeral Or Pruned)</p>
         )}
 
-        {/* A rejected backfill is a failure to look, not a pruned cause. */}
+        {/* A rejected or malformed backfill is a failure to look, not a pruned cause. */}
         {result?.failure != null && (
           <p role="alert" style={placeholderStyle}>
             Could Not Load The Causality Trace: {result.failure}
