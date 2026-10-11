@@ -47,7 +47,13 @@ fn test_powershell_scripts_are_ascii_only() {
 fn test_scheduled_task_has_no_execution_time_limit() {
     let install = read_script("install.ps1");
     position(&install, "-ExecutionTimeLimit ([TimeSpan]::Zero)");
-    position(&install, "$registered.ExecutionTimeLimit -ne 'PT0S'");
+    // The read-back guard throws from inside the if body, so a limit that
+    // did not stick fails the install.
+    position(
+        &install,
+        "if ($registered.ExecutionTimeLimit -ne 'PT0S') {
+    throw \"The task's ExecutionTimeLimit is",
+    );
     // Normal priority: the default (7) is below normal, and every worker
     // the daemon spawns inherits it.
     position(&install, "-Priority 5 -MultipleInstances IgnoreNew");
@@ -178,9 +184,10 @@ mod executed {
             format!("{}:/usr/local/bin:/usr/bin:/bin", self.shims.display())
         }
 
-        /// Runs `script` with `args` and asserts it succeeds.
-        fn run(&self, script: &str, args: &[&str]) -> String {
-            let output = Command::new("sh")
+        /// `sh <script> <args>` under the sandbox's isolated environment, not yet run.
+        fn command(&self, script: &str, args: &[&str]) -> Command {
+            let mut command = Command::new("sh");
+            command
                 .arg(service_dir().join(script))
                 .args(args)
                 .env_clear()
@@ -190,9 +197,13 @@ mod executed {
                 .env("USER", "tester")
                 .env("SWARMD_BIN", &self.source)
                 .env("SWARMD_BIN_DEST", &self.dest)
-                .env("SHIM_LOG", &self.log)
-                .output()
-                .unwrap();
+                .env("SHIM_LOG", &self.log);
+            command
+        }
+
+        /// Runs `script` with `args` and asserts it succeeds.
+        fn run(&self, script: &str, args: &[&str]) -> String {
+            let output = self.command(script, args).output().unwrap();
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             assert!(
                 output.status.success(),
@@ -315,17 +326,8 @@ mod executed {
             "systemctl",
             "echo 'Failed to connect to user scope bus' >&2; exit 1",
         );
-        let output = Command::new("sh")
-            .arg(service_dir().join("uninstall.sh"))
-            .arg("--purge-binary")
-            .env_clear()
-            .env("HOME", sandbox.home())
-            .env("XDG_CONFIG_HOME", sandbox.config())
-            .env("PATH", sandbox.path_var())
-            .env("USER", "tester")
-            .env("SWARMD_BIN", &sandbox.source)
-            .env("SWARMD_BIN_DEST", &sandbox.dest)
-            .env("SHIM_LOG", &sandbox.log)
+        let output = sandbox
+            .command("uninstall.sh", &["--purge-binary"])
             .output()
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);

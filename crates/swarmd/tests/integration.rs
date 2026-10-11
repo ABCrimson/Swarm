@@ -1287,6 +1287,10 @@ async fn test_serve_ui_security_headers_caching_and_fallbacks() {
         "/assets%2f.hidden",
         "/assets%2F.hidden",
         "/assets%5c.hidden",
+        "/ENV~1",
+        "/env%7e1",
+        "/index.html:x",
+        "/index.html%3ax",
     ] {
         let (status, _, _) = http_get(server.addr, path, &host).await;
         assert_eq!(status, 404, "{path}");
