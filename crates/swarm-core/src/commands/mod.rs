@@ -166,13 +166,10 @@ pub enum RemotePolicy {
     /// product's actual trust model for an authenticated client (see
     /// `docs/architecture.md`'s Runtime Modes section).
     Allowed,
-    /// Never reachable remotely, whatever the arguments: a remote client
-    /// gets no file access at all. `read_file`/`write_file` reach the
-    /// daemon host's filesystem (the data directory and all of `$HOME` for
-    /// reads, the data directory and `~/.swarm` for writes); their deny list
-    /// keeps out the daemon token, the API key file and the home credential
-    /// stores, but it misses a hard link to a secret, so it is no network
-    /// boundary.
+    /// Never reachable remotely, whatever the arguments:
+    /// `read_file`/`write_file` touch the daemon host's filesystem
+    /// (all of `$HOME` for reads), including the daemon token and the
+    /// API key file.
     Denied,
     /// Reachable, but denied when the `key` argument names a secret (see
     /// [`config::is_secret_key`]): reading one would exfiltrate a
