@@ -543,12 +543,14 @@ mod tests {
     /// possible with a `&self`-only trait surface.
     #[derive(Default)]
     struct MockSessionState {
-        /// `Some` once a turn is in flight — `send_turn` while `Some`
-        /// returns [`AppError::AgentSessionBusy`]. Whichever of
-        /// `send_turn`'s natural completion or `shutdown`'s Condition-B
-        /// synthesis gets here first clears it and owns emitting that
-        /// turn's ONE `agent_turn_settled` — see both methods' bodies
-        /// below for the ownership handshake.
+        /// `Some` while a turn is in flight; `send_turn` while `Some`
+        /// returns [`AppError::AgentSessionBusy`]. This mock settles a
+        /// turn inside `send_turn` with no `.await`, so `shutdown` never
+        /// sees one in flight; Condition B is proven by the real
+        /// adapters' tests (`claude_code/tests.rs`
+        /// `shutdown_mid_turn_synthesizes_exactly_one_settlement`,
+        /// `codex/tests.rs`
+        /// `a_server_death_mid_turn_synthesizes_the_settlement_then_exits`).
         in_flight_turn: Option<TurnId>,
         /// Cached exit summary once `shutdown` has run its teardown
         /// once — every subsequent call returns this without redoing
@@ -583,8 +585,7 @@ mod tests {
             Box::pin(async move {
                 let turn_id: TurnId = Uuid::new_v4().to_string();
                 {
-                    // Lock scope ends before any `.await` below — the
-                    // trait's "no lock across an await" rule.
+                    // Lock scope ends before the emits below.
                     let mut state = self.state.lock();
                     if state.in_flight_turn.is_some() {
                         return Err(AppError::AgentSessionBusy);
@@ -609,36 +610,19 @@ mod tests {
                     content: serde_json::json!({ "text": turn.prompt }),
                 }));
 
-                // Ownership handshake with `shutdown`: only whichever
-                // of the two still finds itself holding `turn_id`
-                // clears the slot and emits the ONE settled event —
-                // Condition B's "never two" half. If `shutdown` ran
-                // concurrently and already synthesized this turn's
-                // settlement, `in_flight_turn` no longer matches and
-                // this natural-completion path emits nothing further.
-                let still_owner = {
-                    let mut state = self.state.lock();
-                    if state.in_flight_turn.as_deref() == Some(turn_id.as_str()) {
-                        state.in_flight_turn = None;
-                        true
-                    } else {
-                        false
-                    }
-                };
-                if still_owner {
-                    self.sink.emit(SwarmEvent::AgentTurnSettled(
-                        crate::events::AgentTurnSettledPayload {
-                            worker_id: self.worker_id,
-                            turn_id: turn_id.clone(),
-                            status: AgentTurnStatus::Ok,
-                            error: None,
-                            cost_usd: Some(0.001),
-                            usage: None,
-                            duration_ms: 12,
-                            num_turns: Some(1),
-                        },
-                    ));
-                }
+                self.state.lock().in_flight_turn = None;
+                self.sink.emit(SwarmEvent::AgentTurnSettled(
+                    crate::events::AgentTurnSettledPayload {
+                        worker_id: self.worker_id,
+                        turn_id: turn_id.clone(),
+                        status: AgentTurnStatus::Ok,
+                        error: None,
+                        cost_usd: Some(0.001),
+                        usage: None,
+                        duration_ms: 12,
+                        num_turns: Some(1),
+                    },
+                ));
 
                 Ok(turn_id)
             })
@@ -646,7 +630,7 @@ mod tests {
 
         fn await_turn_completion(&self, _turn: TurnId) -> BoxFuture<'_, Result<(), AppError>> {
             // `send_turn` above already runs the turn to full settlement
-            // (including the ownership handshake) before ever returning
+            // (including its `agent_turn_settled`) before ever returning
             // `Ok(turn_id)` — by construction, any turn id a caller could
             // hold has already completed. Nothing to wait for.
             Box::pin(async { Ok(()) })
@@ -673,31 +657,6 @@ mod tests {
                     if let Some(existing) = &state.shutdown_result {
                         return Ok(existing.clone());
                     }
-                }
-
-                // Condition B: synthesize settlement for any turn still
-                // owned at shutdown time. Lock scope kept tight and
-                // never held across the `sink.emit` calls below (they
-                // are synchronous in this mock, but the discipline
-                // matters for any real implementation whose sink work
-                // genuinely awaits).
-                let in_flight = {
-                    let mut state = self.state.lock();
-                    state.in_flight_turn.take()
-                };
-                if let Some(turn_id) = in_flight {
-                    self.sink.emit(SwarmEvent::AgentTurnSettled(
-                        crate::events::AgentTurnSettledPayload {
-                            worker_id: self.worker_id,
-                            turn_id,
-                            status: AgentTurnStatus::Error,
-                            error: Some("session shut down mid-turn".to_string()),
-                            cost_usd: None,
-                            usage: None,
-                            duration_ms: 0,
-                            num_turns: None,
-                        },
-                    ));
                 }
 
                 // Awaiting the ack here (rather than a bare `emit`) is
@@ -795,12 +754,12 @@ mod tests {
 
     // ── ProviderId wire values ───────────────────────────────────────
 
-    /// Pins ALL FIVE `ProviderId` wire
-    /// values. `src/lib/agent-events.ts`'s `ProviderIdSchema` hardcodes
-    /// this same list on the TypeScript side with no automated
-    /// cross-language check; this test is the Rust-side half of that
-    /// manual contract. If this test ever needs to change,
-    /// `agent-events.ts` needs the identical edit.
+    /// Pins the five `ProviderId` wire values as serde writes them.
+    /// `src/lib/agent-events.contract.test.ts` reads this enum's variants
+    /// from this file and compares their `snake_case` forms against
+    /// `ProviderIdSchema`, so a variant added here fails that test until
+    /// `agent-events.ts` follows; this test proves that
+    /// `#[serde(rename_all = "snake_case")]` produces those same forms.
     #[test]
     fn test_provider_id_wire_values_pinned_for_the_typescript_schema() {
         let cases = [
