@@ -1,37 +1,13 @@
 //! Repo discovery: toplevel and admin-directory resolution, and
-//! revision → commit sha lookup.
-//!
-//! Every argv here starts with the shared `-C <dir> -c
-//! core.longpaths=true` prefix (`base_args`): `-C` scopes the
-//! invocation to the target directory without ever touching the
-//! calling process's working directory, and `core.longpaths=true` is
-//! set per invocation (never written to the user's global or repo
-//! config) so long checkout paths under `~/.swarm/worktrees/**` survive
-//! Windows' legacy `MAX_PATH` limit.
+//! revision → commit sha lookup. Every argv here starts with `cli::args_in`.
 
 use std::path::{Path, PathBuf};
 
 use super::cli::{self, READ_TIMEOUT};
+// Re-exported so the `ship` submodules keep importing `repo::args_in`; the
+// builder itself lives in `cli`.
+pub(crate) use super::cli::args_in;
 use crate::error::AppError;
-
-/// Shared argv prefix for every `-C`-scoped invocation: `-C <dir> -c
-/// core.longpaths=true`. Kept as its own function so tests can assert
-/// every builder's output starts with it.
-pub(crate) fn base_args(dir: &Path) -> Vec<String> {
-    vec![
-        "-C".to_owned(),
-        dir.display().to_string(),
-        "-c".to_owned(),
-        "core.longpaths=true".to_owned(),
-    ]
-}
-
-/// `base_args(dir)` followed by `args`.
-pub(crate) fn args_in(dir: &Path, args: &[&str]) -> Vec<String> {
-    let mut full = base_args(dir);
-    full.extend(args.iter().map(|&arg| arg.to_owned()));
-    full
-}
 
 /// Argv for `git rev-parse --show-toplevel`.
 fn rev_parse_toplevel_args(dir: &Path) -> Vec<String> {
@@ -224,16 +200,8 @@ pub fn head_sha(repo_root: &Path) -> Result<String, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::cli::base_args;
     use crate::git::test_support::TempRepo;
-
-    #[test]
-    fn test_base_args_shape() {
-        let args = base_args(Path::new("/tmp/repo"));
-        assert_eq!(args[0], "-C");
-        assert!(args[1].contains("repo"));
-        assert_eq!(args[2], "-c");
-        assert_eq!(args[3], "core.longpaths=true");
-    }
 
     #[test]
     fn test_rev_parse_toplevel_args_carries_shared_prefix() {

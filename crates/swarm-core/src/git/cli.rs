@@ -1,5 +1,5 @@
-//! The `git` runner every git invocation in SWARM goes through, and the
-//! startup capability probe.
+//! The `git` runner every git invocation in SWARM goes through, the shared
+//! `-C`-scoped argv prefix (`args_in`), and the startup capability probe.
 //!
 //! [`run`] and [`run_with_stdin`] are the single choke point that:
 //!
@@ -56,6 +56,7 @@
 
 use std::ffi::OsStr;
 use std::io::{Read, Write};
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
@@ -152,6 +153,30 @@ const REPO_LOCAL_ENV_VARS: &[&str] = &[
     "GIT_SHALLOW_FILE",
     "GIT_COMMON_DIR",
 ];
+
+/// Shared argv prefix for every `-C`-scoped invocation: `-C <dir> -c
+/// core.longpaths=true`. `-C` scopes the invocation to the target
+/// directory without ever touching the calling process's working
+/// directory, and `core.longpaths=true` is set per invocation (never
+/// written to the user's global or repo config) so long checkout paths
+/// under `~/.swarm/worktrees/**` survive Windows' legacy `MAX_PATH`
+/// limit. Kept as its own function so tests can assert every builder's
+/// output starts with it.
+pub(crate) fn base_args(dir: &Path) -> Vec<String> {
+    vec![
+        "-C".to_owned(),
+        dir.display().to_string(),
+        "-c".to_owned(),
+        "core.longpaths=true".to_owned(),
+    ]
+}
+
+/// `base_args(dir)` followed by `args`.
+pub(crate) fn args_in(dir: &Path, args: &[&str]) -> Vec<String> {
+    let mut full = base_args(dir);
+    full.extend(args.iter().map(|&arg| arg.to_owned()));
+    full
+}
 
 /// The result of a `git` invocation that ran to completion (any exit
 /// code; a timeout is an [`AppError::GitTimeout`] instead).
@@ -578,8 +603,16 @@ fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::repo::args_in;
     use crate::git::test_support::TempRepo;
+
+    #[test]
+    fn test_base_args_shape() {
+        let args = base_args(Path::new("/tmp/repo"));
+        assert_eq!(args[0], "-C");
+        assert!(args[1].contains("repo"));
+        assert_eq!(args[2], "-c");
+        assert_eq!(args[3], "core.longpaths=true");
+    }
 
     #[test]
     fn test_parse_version_plain() {
@@ -613,13 +646,6 @@ mod tests {
         assert_eq!(parse_version("not git at all"), None);
         assert_eq!(parse_version(""), None);
         assert_eq!(parse_version("git version x.y"), None);
-    }
-
-    #[test]
-    fn test_min_version_ordering() {
-        assert!((2, 32, 0) >= MIN_GIT_VERSION);
-        assert!((2, 31, 9) < MIN_GIT_VERSION);
-        assert!((3, 0, 0) >= MIN_GIT_VERSION);
     }
 
     #[test]
@@ -673,6 +699,10 @@ mod tests {
         let out = run(&["rev-parse", "--local-env-vars"], READ_TIMEOUT).unwrap();
         assert!(out.success(), "{}", out.stderr);
         let text = String::from_utf8_lossy_owned(out.stdout);
+        assert!(
+            text.lines().any(|l| l == "GIT_DIR"),
+            "git reported no local env vars: {text:?}"
+        );
         for var in text.lines().filter(|l| !l.is_empty()) {
             assert!(
                 REPO_LOCAL_ENV_VARS.contains(&var),

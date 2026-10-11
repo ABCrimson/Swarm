@@ -9,10 +9,13 @@
 //! owns commit and push, and they meet at
 //! [`ship::worktree_info_for_worker`], the one accessor between them.
 //!
-//! `swarm-core` stays Tauri-free here too: everything shells out to the
-//! system `git` binary through [`cli::run`] (argument vectors only,
-//! never a shell string), and the only filesystem root this module
-//! assumes is the user's home directory ([`home_dir`]).
+//! `swarm-core` stays Tauri-free here too. Every module that runs git
+//! ([`repo`], [`worktree`], [`ship`]) shells out to the system `git`
+//! binary through [`cli::run`] (argument vectors only, never a shell
+//! string), and the only filesystem root this module assumes is the
+//! user's home directory ([`home_dir`]). [`redact`] and [`remote`] are
+//! pure text functions; [`causal`] works on the event-log rows
+//! (`orchestration::log::StoredEvent`) it is handed and never runs git.
 //!
 //! ## Why shell out to `git` instead of a Rust git library
 //!

@@ -6,8 +6,8 @@
 //! # Why the `agent_*` canonical family, not `agent_turn_started`
 //!
 //! A turn's root event is not `agent_turn_started {workerId, model,
-//! requestId}`: two independent AI paths use two *different* correlation
-//! id spaces:
+//! requestId}`: the three AI paths use *different* correlation id
+//! spaces:
 //!
 //! - `src/components/ai/AIChat.tsx` (the webview-direct `@anthropic-ai/sdk`
 //!   path, still the shipped default) calls the `agent_turn_started`
@@ -22,10 +22,16 @@
 //!   its turns is `agent_block`/`agent_tool_call` (its streamed
 //!   `agent_turn_delta` chunks arrive earlier but are ephemeral and never
 //!   reach the log).
+//! - `crates/swarm-core/src/agent/codex.rs` (`CodexAdapter`, driving the
+//!   same `AgentChat.tsx`) takes its `TurnId` from Codex's own `turn/start`
+//!   acknowledgement and likewise never emits `AgentTurnStarted` — the
+//!   first persisted event for one of its turns is
+//!   `agent_tool_call`/`agent_block`.
 //!
 //! These are not the same `turnId`. A causal record keyed off
 //! `agent_turn_started` would silently show ZERO turns for every
-//! `ClaudeCodeAdapter`-driven worker — exactly the fabricated-emptiness
+//! provider-adapter-driven worker (`ClaudeCodeAdapter` or `CodexAdapter`)
+//! — exactly the fabricated-emptiness
 //! failure mode the honesty rule exists to prevent. [`build_ship_context`]
 //! instead derives turn existence from the `agent_block`/`agent_tool_call`/
 //! `agent_tool_result`/`agent_turn_settled` family directly, grouped by

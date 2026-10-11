@@ -7,8 +7,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use super::cli::{self, CREATE_TIMEOUT, GitOutput};
-use super::repo::args_in;
+use super::cli::{self, CREATE_TIMEOUT, GitOutput, args_in};
 
 /// Runs `git -C <dir> args…` and asserts it succeeded.
 #[track_caller]
