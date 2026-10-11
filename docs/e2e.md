@@ -16,7 +16,7 @@
 
 ## Current Suite
 
-Playwright drives the real app headless in Chromium — no mocking, no component harness. CI runs it against the production bundle (`vite build` + `vite preview`), local runs against the dev server. 40 tests across six spec files, all built on the shared fixture in `e2e/fixtures.ts`. Chromium is the default project; WebKit and Firefox are opt-in (see [Running It](#running-it)):
+Playwright drives the real app headless in Chromium — no mocking, no component harness. CI runs it against the production bundle (`vite build` + `vite preview`), local runs against the dev server. 41 tests across seven spec files, all built on the shared fixture in `e2e/fixtures.ts`. Chromium is the default project; WebKit and Firefox are opt-in (see [Running It](#running-it)):
 
 | File                    | Tests | Covers                                                                 |
 |--------------------------|-------|------------------------------------------------------------------------|
@@ -26,6 +26,7 @@ Playwright drives the real app headless in Chromium — no mocking, no component
 | `e2e/settings.spec.ts`   | 11 | Every settings section renders, the AI model catalog (switching selection, the gated-model warning toast), keybinding capture (accepting a new binding, rejecting a binding already in use), number-field min/max clamping on commit, keyboard focus rings (a model card keeps its ring after an arrow-key step; `test.fixme` on WebKit, which does not match `:focus-visible` there) and button contrast, the inverted-threshold inline error |
 | `e2e/dialogs.spec.ts`    | 6 | The Spawn Worker dialog: opens from the Workers toolbar, provider radios render, Claude Code is deterministically disabled with the real `agentProbe()`-sourced reason, Escape/click-outside close it and restore focus |
 | `e2e/styles.spec.ts`     | 3 | The stylesheet cascade: Tailwind's `utilities` layer is the last cascade layer and component/utility padding really applies, so no custom reset can zero it; under `prefers-reduced-motion` the staggered entrance has no delays |
+| `e2e/boot.spec.ts`       | 1 | The start-failure path: with the app's main module failing to load (`/src/main.tsx` on the dev server, the hashed `assets/main-<hash>.js` chunk on the preview build) `src/boot.ts` shows the "SWARM Could Not Start" heading and a Reload button instead of a blank window |
 | `e2e/temporal.spec.ts`   | 2 | The Temporal polyfill path: with `Temporal` deleted before load (standing in for WKWebView/WebKitGTK) `src/boot.ts` installs the polyfill and the palette, chart and log paths run on it; with a native `Temporal` it is left alone |
 
 **The app-ready signal.** The global shortcuts (Ctrl+K, the graph/list toggle) attach their `keydown` listeners in effects of the shell's first commit; a key pressed before then is silently lost, which is what made the palette specs flaky. The fixture therefore waits for the current page's `<h1>` inside `<main>` — pages are lazy chunks that commit after the shell, and React flushes the shell's pending effects before rendering anything else — followed by one macrotask yield. No spec sleeps on the clock.
