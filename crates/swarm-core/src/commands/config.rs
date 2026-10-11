@@ -106,14 +106,16 @@ struct KeyArgs {
     key: String,
 }
 
-/// Reads one config value (`null` when unset); see
-/// [`crate::config::read_value`].
+/// Reads one config value (`null` when unset or malformed; an unreadable
+/// file is an error); see [`crate::config::read_value_checked`].
 pub async fn read_config(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let KeyArgs { key } = parse_args(args)?;
     let paths = ctx.paths.clone();
-    let value = tokio::task::spawn_blocking(move || crate::config::read_value(&paths, &key))
-        .await
-        .map_err(|e| Value::String(e.to_string()))?;
+    let value =
+        tokio::task::spawn_blocking(move || crate::config::read_value_checked(&paths, &key))
+            .await
+            .map_err(|e| Value::String(e.to_string()))?
+            .map_err(|e| err_value(&e))?;
     ok_value(&value)
 }
 

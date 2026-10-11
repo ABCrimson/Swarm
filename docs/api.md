@@ -1337,7 +1337,9 @@ Over the `swarmd` WebSocket both commands are **`SecretFiltered`**: a secret-sha
 
 **Parameters:** `{ key: string }`
 
-**Returns:** the stored value (any JSON value), or `null` if the key is unset. A missing, malformed or unreadable config file also reads as `null` (logged without its contents), not as an error.
+**Returns:** the stored value (any JSON value), or `null` if the key is unset. A missing config file, or a malformed one (logged without its contents), also reads as `null`.
+
+**Errors:** `Config error: Failed To Read <path>: ...` when the file exists but cannot be read (locked, permission denied). The message carries path and I/O context, never a value.
 
 ---
 

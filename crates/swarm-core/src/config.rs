@@ -16,7 +16,8 @@
 //!
 //! A missing file is an empty config. [`read_value`] is lenient: a file
 //! that cannot be read or parsed reads as "not configured" (and is
-//! logged). [`write_value`] rewrites the whole file, so it is strict: it
+//! logged). [`read_value_checked`] (`read_config`) reports an unreadable file as
+//! an error. [`write_value`] rewrites the whole file, so it is strict: it
 //! refuses when the file exists but cannot be read, and it moves a
 //! malformed file aside (`swarm-config.json.corrupt-<unix ms>`) before
 //! writing, so a hand-edit typo can never silently cost every other key.
@@ -63,6 +64,32 @@ pub fn read_value(paths: &Paths, key: &str) -> Option<Value> {
             tracing::warn!(error = %e, "swarm-config.json is unreadable; reading it as not configured");
             None
         }
+    }
+}
+
+/// Like [`read_value`], for the `read_config` command.
+///
+/// A malformed file reads as `None` (logged), exactly as in
+/// [`read_value`]; an unreadable one is an error, so the caller does not
+/// take a locked or permission-denied file for an unset key.
+///
+/// # Errors
+///
+/// [`AppError::Config`] when the file exists but cannot be read.
+pub fn read_value_checked(paths: &Paths, key: &str) -> Result<Option<Value>, AppError> {
+    let _guard = CONFIG_LOCK.lock();
+    let path = config_path(paths);
+    match state_file::read_object(&path) {
+        Ok(StoredObject::Object(mut map)) => Ok(map.remove(key)),
+        Ok(StoredObject::Missing) => Ok(None),
+        Ok(StoredObject::Malformed) => {
+            tracing::warn!("swarm-config.json is malformed; reading it as not configured");
+            Ok(None)
+        }
+        Err(e) => Err(AppError::Config(format!(
+            "Failed To Read {}: {e}",
+            path.display()
+        ))),
     }
 }
 
@@ -216,6 +243,10 @@ mod tests {
         fs::create_dir(config_path(&paths)).unwrap();
 
         assert_eq!(read_value(&paths, "k"), None);
+        assert_matches!(
+            read_value_checked(&paths, "k"),
+            Err(AppError::Config(msg)) if msg.contains("Failed To Read")
+        );
         assert_matches!(
             write_value(&paths, "k", json!(1)),
             Err(AppError::Config(msg)) if msg.contains("Not Overwriting")
