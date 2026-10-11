@@ -15,11 +15,7 @@ import {
   useAgentTranscript,
 } from "#store/agent-sessions";
 import { AIMessageStream } from "./AIMessageStream.tsx";
-import {
-  ApprovalArgList,
-  ApprovalBlockedReason,
-  useApprovalReview,
-} from "./ApprovalArgs.tsx";
+import { ApprovalArgList, ApprovalBlockedReason, useApprovalReview } from "./ApprovalArgs.tsx";
 import { ToolCallDisplay } from "./ToolCallDisplay.tsx";
 
 interface AgentChatProps {
