@@ -23,9 +23,6 @@ import { SessionTemplateSchema } from "#store/types";
 import { useWorkerAgentStore } from "#store/worker-agents";
 import { useWorkerStore } from "#store/workers";
 
-/** Just enough of a stored entry to match it by id, whatever else it holds. */
-const TemplateIdSchema = SessionTemplateSchema.pick({ id: true });
-
 /** plugin-store key for user templates. */
 const USER_TEMPLATES_KEY = "swarm:templates";
 
@@ -175,7 +172,7 @@ const invalidationListeners = new Set<() => void>();
 /**
  * The user templates as one cached promise, for a render-time `use()`
  * (`TemplateSelector`). Every call returns the same promise until
- * `saveUserTemplate`/`deleteUserTemplate` (or `invalidateUserTemplates`)
+ * `saveUserTemplate` (or `invalidateUserTemplates`)
  * drops it, so re-rendering or re-mounting never refetches, while the
  * first read after a write sees that write. A store failure resolves to
  * `{ failed: true }` instead of rejecting, so the UI can say so in place
@@ -222,7 +219,7 @@ let writeQueue: Promise<unknown> = Promise.resolve();
 /**
  * Runs `write` after every earlier template write has finished. Each
  * write is a read-modify-write of one array, so two overlapping writes
- * (a double-clicked Save, a delete during a save) would otherwise both
+ * (a double-clicked Save) would otherwise both
  * read the old list and the second would drop the first's change.
  */
 function serializeWrite(write: () => Promise<void>): Promise<void> {
@@ -236,18 +233,6 @@ export function saveUserTemplate(template: SessionTemplate): Promise<void> {
   return serializeWrite(async () => {
     const store = templatesStore;
     await store.set(USER_TEMPLATES_KEY, [...(await readStoredEntries(store)), template]);
-  });
-}
-
-/** Deletes a user template from plugin-store by id; entries it cannot read an id from are kept. */
-export function deleteUserTemplate(templateId: string): Promise<void> {
-  return serializeWrite(async () => {
-    const store = templatesStore;
-    const entries = await readStoredEntries(store);
-    await store.set(
-      USER_TEMPLATES_KEY,
-      entries.filter((entry) => TemplateIdSchema.safeParse(entry).data?.id !== templateId),
-    );
   });
 }
 

@@ -11,7 +11,6 @@ import {
   applyTemplate,
   BUILT_IN_TEMPLATES,
   createTemplateFromSession,
-  deleteUserTemplate,
   invalidateUserTemplates,
   loadUserTemplates,
   saveUserTemplate,
@@ -230,16 +229,6 @@ describe("user template persistence", () => {
     expect(await loadUserTemplates()).toEqual([first, second]);
   });
 
-  it("deletes by id and keeps entries it cannot read an id from", async () => {
-    const keep = userTemplate({ name: "Keep" });
-    const drop = userTemplate({ name: "Drop" });
-    templateStore.data.set(STORE_KEY, [keep, "junk", drop]);
-
-    await deleteUserTemplate(drop.id);
-
-    expect(templateStore.data.get(STORE_KEY)).toEqual([keep, "junk"]);
-  });
-
   it("caches the user-template read until a write invalidates it", async () => {
     const first = userTemplatesResource();
     expect(userTemplatesResource()).toBe(first);
@@ -260,7 +249,7 @@ describe("user template persistence", () => {
 
     await saveUserTemplate(saved);
     expect(listener).toHaveBeenCalledOnce();
-    await deleteUserTemplate(saved.id);
+    await saveUserTemplate(userTemplate());
     expect(listener).toHaveBeenCalledTimes(2);
 
     unsubscribe();
