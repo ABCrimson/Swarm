@@ -33,13 +33,13 @@ function disableTauri(): void {
   vi.unstubAllGlobals();
 }
 
-describe("spawnWorker", () => {
-  beforeEach(() => {
-    vi.mocked(tauriInvoke).mockReset();
-    enableTauri();
-  });
-  afterEach(disableTauri);
+beforeEach(() => {
+  vi.mocked(tauriInvoke).mockReset();
+  enableTauri();
+});
+afterEach(disableTauri);
 
+describe("spawnWorker", () => {
   it("sends only name when shell/cwd/env are omitted", async () => {
     vi.mocked(tauriInvoke).mockResolvedValueOnce(WORKER_UUID);
 
@@ -121,12 +121,6 @@ describe("spawnWorker", () => {
 });
 
 describe("sessionAddWorker", () => {
-  beforeEach(() => {
-    vi.mocked(tauriInvoke).mockReset();
-    enableTauri();
-  });
-  afterEach(disableTauri);
-
   it("invokes session_add_worker with camelCase sessionId/workerId", async () => {
     vi.mocked(tauriInvoke).mockResolvedValueOnce(undefined);
 
@@ -140,12 +134,6 @@ describe("sessionAddWorker", () => {
 });
 
 describe("resizeWorker", () => {
-  beforeEach(() => {
-    vi.mocked(tauriInvoke).mockReset();
-    enableTauri();
-  });
-  afterEach(disableTauri);
-
   it("invokes resize_worker with the id and size", async () => {
     vi.mocked(tauriInvoke).mockResolvedValueOnce(null);
 
@@ -161,11 +149,12 @@ describe("resizeWorker", () => {
 
 // ── createSession normalization ──────────────────────
 //
-// create_session requires its `config` argument (IPC deserialization
-// fails with "missing required key config" without it). Rust's Session
-// has no `updatedAt` field and represents `createdAt` as Unix seconds,
-// while the frontend's SessionSchema requires ISO-8601 strings for both,
-// so a raw pass-through would leave `updatedAt` undefined in the store.
+// create_session requires its `config` argument (the registry rejects
+// the call with "Invalid Arguments: missing field `config`" without
+// it). Rust's Session has no `updatedAt` field and represents
+// `createdAt` as Unix seconds, while the frontend's SessionSchema
+// requires ISO-8601 strings for both, so a raw pass-through would
+// leave `updatedAt` undefined in the store.
 
 describe("createSession", () => {
   const RAW_SESSION = {
@@ -175,12 +164,6 @@ describe("createSession", () => {
     createdAt: 1_700_000_000, // unix seconds
     config: {},
   };
-
-  beforeEach(() => {
-    vi.mocked(tauriInvoke).mockReset();
-    enableTauri();
-  });
-  afterEach(disableTauri);
 
   it("sends config: {} alongside name — create_session requires it with no default", async () => {
     vi.mocked(tauriInvoke).mockResolvedValueOnce(RAW_SESSION);
@@ -236,12 +219,6 @@ describe("listSessions", () => {
     createdAt: 1_700_000_100,
   };
 
-  beforeEach(() => {
-    vi.mocked(tauriInvoke).mockReset();
-    enableTauri();
-  });
-  afterEach(disableTauri);
-
   it("normalizes every session in the list the same way createSession does", async () => {
     vi.mocked(tauriInvoke).mockResolvedValueOnce([RAW_SESSION_A, RAW_SESSION_B]);
 
@@ -278,12 +255,6 @@ describe("listSessions", () => {
 // subsequent isolated spawn hard-fails with a raw git error.
 
 describe("validateRepoRoot", () => {
-  beforeEach(() => {
-    vi.mocked(tauriInvoke).mockReset();
-    enableTauri();
-  });
-  afterEach(disableTauri);
-
   it("returns the toplevel path on success", async () => {
     vi.mocked(tauriInvoke).mockResolvedValueOnce("C:/Projects/swarm-orchestrator");
 
@@ -320,12 +291,6 @@ describe("validateRepoRoot", () => {
 });
 
 describe("listWorkers", () => {
-  beforeEach(() => {
-    vi.mocked(tauriInvoke).mockReset();
-    enableTauri();
-  });
-  afterEach(disableTauri);
-
   it("maps Rust WorkerInfo rows onto Worker, seconds to ISO, nulls omitted", async () => {
     vi.mocked(tauriInvoke).mockResolvedValueOnce([
       {
@@ -376,12 +341,6 @@ describe("listWorkers", () => {
 });
 
 describe("readConfig", () => {
-  beforeEach(() => {
-    vi.mocked(tauriInvoke).mockReset();
-    enableTauri();
-  });
-  afterEach(disableTauri);
-
   it("returns the value when it matches the schema", async () => {
     vi.mocked(tauriInvoke).mockResolvedValueOnce(8);
 
@@ -389,10 +348,16 @@ describe("readConfig", () => {
     expect(tauriInvoke).toHaveBeenCalledExactlyOnceWith("read_config", { key: "max_workers" });
   });
 
-  it("returns null for a value that does not match the schema", async () => {
+  it("returns null and logs the issues for a value that does not match the schema", async () => {
+    using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.mocked(tauriInvoke).mockResolvedValueOnce("eight");
 
     await expect(readConfig("max_workers", z.int())).resolves.toBeNull();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("max_workers"),
+      expect.arrayContaining([expect.objectContaining({ code: "invalid_type" })]),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("eight");
   });
 
   it("returns null without a backend (invoke resolves undefined)", async () => {
@@ -404,12 +369,6 @@ describe("readConfig", () => {
 });
 
 describe("typed command errors", () => {
-  beforeEach(() => {
-    vi.mocked(tauriInvoke).mockReset();
-    enableTauri();
-  });
-  afterEach(disableTauri);
-
   it("turns a structured ship rejection into a ShipCommandError with the raw value as cause", async () => {
     const shipError = { kind: "pushRejected", message: "Rejected.", remedy: "fetchAndRebase" };
     vi.mocked(tauriInvoke).mockRejectedValueOnce(shipError);
@@ -448,12 +407,6 @@ describe("typed command errors", () => {
 });
 
 describe("checkForUpdates", () => {
-  beforeEach(() => {
-    vi.mocked(tauriInvoke).mockReset();
-    enableTauri();
-  });
-  afterEach(disableTauri);
-
   it("accepts the updater's null body/date", async () => {
     vi.mocked(tauriInvoke).mockResolvedValueOnce({
       available: true,

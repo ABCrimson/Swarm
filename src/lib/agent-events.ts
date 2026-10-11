@@ -54,7 +54,7 @@ export const AgentTurnStatusSchema = z.enum(["ok", "error"]);
 
 /**
  * The spawn-time trust dial, mirroring both Rust's `ClaudeCodeTrustTier`
- * (`agent/claude_code.rs`) and `CodexTrustTier` (`agent/codex.rs`) —
+ * (`agent/claude_code.rs`) and `CodexTrustTier` (`agent/codex/tier.rs`) —
  * the same three wire tokens, each mapped by its adapter onto that
  * provider's own permission vocabulary. Neither mapping can express a
  * bypass-everything mode.
