@@ -64,10 +64,6 @@ describe("validateStoreData", () => {
   it("deletes only the invalid keys, leaves valid and unknown keys alone, and toasts once", async () => {
     stores.settingsStore.entries.mockResolvedValue([
       ["swarm:ui:paneSizes", { main: "wide" }],
-      [
-        "swarm:alerts:thresholds",
-        { cpuWarning: 70, cpuCritical: 80, memoryWarning: 80, memoryCritical: 900 },
-      ],
       ["swarm:tools:custom", []],
       ["swarm:ui:theme", { legacy: true }],
     ]);
@@ -82,19 +78,18 @@ describe("validateStoreData", () => {
 
     expect(results.map(({ file, key, valid }) => [file, key, valid])).toStrictEqual([
       ["swarm-settings.json", "swarm:ui:paneSizes", false],
-      ["swarm-settings.json", "swarm:alerts:thresholds", false],
       ["swarm-settings.json", "swarm:tools:custom", true],
       ["swarm-snapshots.json", `swarm:snapshots:${SESSION}`, true],
       ["swarm-snapshots.json", "swarm:snapshots:broken", false],
       ["swarm-templates.json", "swarm:templates", false],
     ]);
     expect(persisted.removePersistedSetting).toHaveBeenCalledExactlyOnceWith("swarm:ui:paneSizes");
-    expect(stores.settingsStore.delete).toHaveBeenCalledExactlyOnceWith("swarm:alerts:thresholds");
+    expect(stores.settingsStore.delete).not.toHaveBeenCalled();
     expect(stores.snapshotsStore.delete).toHaveBeenCalledExactlyOnceWith("swarm:snapshots:broken");
     expect(stores.templatesStore.delete).toHaveBeenCalledExactlyOnceWith("swarm:templates");
     expect(toast.warning).toHaveBeenCalledExactlyOnceWith(
       "Some Saved Data Was Corrupted And Has Been Reset.",
-      { description: "Pane Sizes, Alert Thresholds, Session Snapshots, Session Templates" },
+      { description: "Pane Sizes, Session Snapshots, Session Templates" },
     );
     expect(warn).toHaveBeenCalledOnce();
   });

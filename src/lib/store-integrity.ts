@@ -10,7 +10,6 @@
 import type { LazyStore } from "@tauri-apps/plugin-store";
 import { toast } from "sonner";
 import * as z from "zod";
-import type { AlertThresholds } from "#lib/alerts";
 import { errorMessage } from "#lib/is-error";
 import { settingsStore, snapshotsStore, templatesStore } from "#lib/lazy-store";
 import { isTauri } from "#lib/tauri";
@@ -41,16 +40,6 @@ interface IntegrityTarget {
   readonly rules: () => readonly IntegrityRule[];
 }
 
-const Percent = z.number().min(0).max(100);
-
-/** `swarm:alerts:thresholds` (`alertThresholdsAtom`, `#lib/alerts`). */
-const AlertThresholdsSchema = z.object({
-  cpuWarning: Percent,
-  cpuCritical: Percent,
-  memoryWarning: Percent,
-  memoryCritical: Percent,
-}) satisfies z.ZodType<AlertThresholds>;
-
 const deleteFrom =
   (store: LazyStore) =>
   async (key: string): Promise<void> => {
@@ -72,12 +61,6 @@ const TARGETS: readonly IntegrityTarget[] = [
           reset: (k) => removePersistedSetting(k),
         }),
       ),
-      {
-        label: "Alert Thresholds",
-        matches: (k) => k === "swarm:alerts:thresholds",
-        schema: AlertThresholdsSchema,
-        reset: deleteFrom(settingsStore),
-      },
       {
         // `useCustomToolsStore` (#store/custom-tools) validates each
         // entry on load; only a non-array value is unrecoverable.

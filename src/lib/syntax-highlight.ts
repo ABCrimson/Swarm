@@ -10,11 +10,11 @@ const TOKEN_COLORS = {
   number: "oklch(0.82 0.19 70)",
   boolean: "oklch(0.72 0.20 290)",
   null: "oklch(0.72 0.20 290)",
-  brace: "oklch(0.55 0.03 220)",
-  colon: "oklch(0.45 0.03 220)",
-  comma: "oklch(0.45 0.03 220)",
+  brace: "oklch(0.66 0.04 220)",
+  colon: "oklch(0.62 0.04 220)",
+  comma: "oklch(0.62 0.04 220)",
   /** `//` and `/* *\/` comments (JSONC: tsconfig.json, biome.jsonc). */
-  comment: "oklch(0.55 0.02 220)",
+  comment: "oklch(0.62 0.02 220)",
   whitespace: "oklch(0 0 0 / 0)",
   /** Anything that is not JSON, e.g. `NaN` or trailing garbage: shown as is. */
   plain: "oklch(0.82 0.04 220)",

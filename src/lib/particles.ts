@@ -298,7 +298,8 @@ export interface ParticleSystem {
  * Creates the full particle system: compute pipeline for simulation,
  * render pipeline for instanced billboard drawing.
  *
- * Both pipelines compile concurrently (`create*PipelineAsync`). New
+ * Both pipelines compile concurrently (`create*PipelineAsync`). If either
+ * one rejects, the buffers are destroyed before the error propagates. New
  * WebGPU buffers are zero-filled, so every particle starts with zero life
  * and respawns on the first step.
  */
@@ -410,10 +411,20 @@ export async function createParticleSystem(
     ],
   });
 
-  const [computePipeline, renderPipeline] = await Promise.all([
-    computePipelinePromise,
-    renderPipelinePromise,
-  ]);
+  let computePipeline: GPUComputePipeline;
+  let renderPipeline: GPURenderPipeline;
+  try {
+    [computePipeline, renderPipeline] = await Promise.all([
+      computePipelinePromise,
+      renderPipelinePromise,
+    ]);
+  } catch (err) {
+    // The caller gets no handle on failure, so free the buffers here.
+    particleBuffer.destroy();
+    simUniformBuffer.destroy();
+    renderUniformBuffer.destroy();
+    throw err;
+  }
 
   return {
     computePipeline,

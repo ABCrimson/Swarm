@@ -2,11 +2,15 @@
  * The two-part ship PR body: a DETERMINISTIC, code-generated "Causal
  * Record" section (`renderCausalRecordSection`) the model never writes,
  * plus an OPTIONAL AI-generated "What Changed / Why" prose section
- * (`generateCausalProse`) that may cite `[seq N]` — any citation not
- * actually present in the fetched range is stripped before render
+ * (`generateCausalProse`) that may cite `[seq N]` — a citation survives
+ * only as a single-number `[seq N]` (keyword in any case, no space after the bracket, one plain space before the
+ * number, no leading zero) for a tool-call seq listed in the Turns section;
+ * every other `[seq ...]` is stripped before render, repeated to a fixed point
+ * so removing a nested citation cannot expose one for an unlisted seq
  * (`stripUnknownSeqCitations`). The model never writes the Causal Record, so
- * its provenance claims are machine-generated and unforgeable; the AI prose
- * can only cite `[seq N]` entries that exist in the fetched range. See
+ * its provenance claims are machine-generated, and `escapeCell` renders the
+ * agent-controlled tool names and targets in it as inert text; the AI prose
+ * can only cite `[seq N]` tool calls it was shown. See
  * `docs/architecture.md`'s Ship Chain section for the full design and `crates/swarm-core/src/git/causal.rs` for where
  * `ShipContext` itself comes from.
  *
@@ -40,12 +44,9 @@ export function turnStatusLabel(status: string | null): "Completed" | "Failed" |
   return "In Progress";
 }
 
-/** Markdown-table-cell-safe. A tool's name and target are free-form text the agent controls, so backslashes are escaped first, then `|`, then every run of control characters (a lone CR included, which GFM reads as a line ending) folds to one space, so no input adds a row or a cell. */
+/** Markdown-table-cell-safe and inert. A tool's name and target are free-form text the agent controls: every run of control characters (a lone CR included, which GFM reads as a line ending) folds to one space, then backslash, `|`, `<`, `[` and `]` are backslash-escaped (CommonMark escapes any ASCII punctuation; GFM honours `\|` in a cell), so no input adds a row or a cell, opens raw HTML, or forms a link or an image. GitHub's text filters (@-mentions, #-references, bare-URL autolinks) still act on the literal text. */
 function escapeCell(value: string): string {
-  return value
-    .replaceAll("\\", String.raw`\\`)
-    .replaceAll("|", String.raw`\|`)
-    .replaceAll(/\p{Cc}+/gu, " ");
+  return value.replaceAll(/\p{Cc}+/gu, " ").replaceAll(/[\\|<[\]]/g, String.raw`\$&`);
 }
 
 function renderToolCallRows(turns: readonly CausalTurn[]): string[] {
@@ -149,24 +150,28 @@ export function renderCausalRecordSection(context: ShipContext, diffStat: DiffSt
 // ── Citation validity + stripping (the honesty rule) ────────────────
 
 /**
- * One `[seq N]` citation plus at most one plain space on each side —
- * never a newline or tab, so removing a citation can never join two
- * lines or eat a list item's indentation.
+ * Any `[seq ...]` form — `[seq 9999 ]`, `[seq: 9999]`, `[seq 1, 2]`, `[ seq 11]` — with
+ * a body that holds no bracket or newline (so it matches the innermost of a nested pair), with at most one plain space
+ * on each side (never a newline or tab), so removing a citation can never join two lines or eat a list
+ * item's indentation.
  */
-const SEQ_CITATION_RE = /( ?)\[seq\s+(\d+)\]( ?)/gi;
-
-function isSeqInRange(seq: number, context: ShipContext): boolean {
-  return seq > context.seqFrom && seq <= context.seqTo;
-}
+const SEQ_CITATION_RE = /( ?)\[([ \t]*)seq\b([^[\]\n]*)\]( ?)/gi;
 
 /**
- * Strips every `[seq N]` citation in `prose` whose `N` does not fall
- * within `context`'s actual `(seqFrom, seqTo]` range — the honesty gate
- * between whatever the model wrote and what actually renders. A model
- * citing a seq it was never given (hallucination) or one outside the
- * fetched window is functionally indistinguishable from fabricated
- * provenance — both are removed the same way, unconditionally, never
- * surfaced as a "trust me" citation.
+ * Strips every `[seq ...]` citation in `prose` except the exact form `[seq N]` (keyword in any case; one plain space,
+ * decimal `N` without a leading zero, nothing inside the bracket before
+ * `seq`) whose `N` is the seq of a tool call listed in `context`'s turns — the
+ * same seqs `buildCausalPromptInput` shows the model. That is the honesty
+ * gate between whatever the model wrote and what actually renders. A seq
+ * the model was never given (hallucination), one that is only somewhere in
+ * the fetched range (another worker's event), and a malformed form are
+ * functionally indistinguishable from fabricated provenance — all are
+ * removed the same way, unconditionally, never surfaced as a "trust me"
+ * citation.
+ *
+ * Stripping repeats until the text stops changing (each pass shortens it, so
+ * it terminates): removing a nested citation such as `[seq [seq 1] 9999]`
+ * leaves `[seq 9999]`, which the next pass removes too.
  *
  * Spacing is repaired only where a citation was removed: a citation
  * between two words collapses to the single space that separated them
@@ -176,13 +181,21 @@ function isSeqInRange(seq: number, context: ShipContext): boolean {
  * indented code and line breaks survive exactly as the model wrote them.
  */
 export function stripUnknownSeqCitations(prose: string, context: ShipContext): string {
-  return prose.replaceAll(
-    SEQ_CITATION_RE,
-    (match, before: string, seqStr: string, after: string) => {
-      if (isSeqInRange(Number(seqStr), context)) return match;
-      return before && after ? " " : "";
-    },
-  );
+  const known = new Set(context.turns.flatMap((turn) => turn.toolCalls.map((call) => call.seq)));
+  const replacer = (match: string, before: string, lead: string, inner: string, after: string) => {
+    const cited = lead === "" ? /^ (0|[1-9]\d*)$/.exec(inner) : null;
+    if (cited && known.has(Number(cited[1]))) return match;
+    return before && after ? " " : "";
+  };
+  // Removing a nested citation can expose an outer one, so repeat to a fixed
+  // point; it terminates because every replacement shortens the string.
+  let current = prose;
+  let previous: string;
+  do {
+    previous = current;
+    current = previous.replaceAll(SEQ_CITATION_RE, replacer);
+  } while (current !== previous);
+  return current;
 }
 
 // ── AI prose (optional, degrades gracefully) ─────────────────────────
@@ -195,13 +208,18 @@ export interface CausalProseInput {
   readonly baseBranch: string;
 }
 
+/** Folds control characters to a space so agent-controlled text cannot start a forged line in the prompt. */
+function oneLine(value: string): string {
+  return value.replaceAll(/\p{Cc}+/gu, " ");
+}
+
 function renderTurnForPrompt(turn: CausalTurn, index: number): string {
   const header = `Turn ${index + 1} (${turnStatusLabel(turn.status)}):`;
   if (turn.toolCalls.length === 0) return `${header}\n  (No Tool Calls)`;
   const calls = turn.toolCalls
     .map(
       (c) =>
-        `  - [seq ${c.seq}] ${c.name}${c.target != null ? ` (${c.target})` : ""} -> ${resultLabel(c.ok)}`,
+        `  - [seq ${c.seq}] ${oneLine(c.name)}${c.target != null ? ` (${oneLine(c.target)})` : ""} -> ${resultLabel(c.ok)}`,
     )
     .join("\n");
   return `${header}\n${calls}`;
@@ -288,8 +306,7 @@ export async function generateCausalProse(
  * this is specifically the `ship_compare_url` `body` (see `useShip.ts`).
  *
  * **Deterministic-first is a deliberate ordering, not
- * cosmetic.** `stripUnknownSeqCitations` removes an out-of-range `[seq
- * N]` citation, but nothing stops a model from writing its OWN `##
+ * cosmetic.** `stripUnknownSeqCitations` removes every `[seq ...]` citation that is not a listed tool call, but nothing stops a model from writing its OWN `##
  * Causal Record` heading (plus a fabricated table) inside its prose —
  * which, if the prose rendered first, would appear ABOVE the real
  * section and read as the authoritative one to anyone skimming the PR
