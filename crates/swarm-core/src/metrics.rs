@@ -324,7 +324,7 @@ mod tests {
 
         let registry = WorkerRegistry::new();
         let worker_id = registry
-            .spawn_worker(WorkerHandle {
+            .register(WorkerHandle {
                 id: Uuid::new_v4(),
                 state: WorkerState::Running,
                 name: "tree".to_owned(),
@@ -384,7 +384,7 @@ mod tests {
         for pid in [None, Some(u32::MAX - 1)] {
             let registry = WorkerRegistry::new();
             registry
-                .spawn_worker(WorkerHandle {
+                .register(WorkerHandle {
                     id: Uuid::new_v4(),
                     state: WorkerState::Error,
                     name: "gone".to_owned(),

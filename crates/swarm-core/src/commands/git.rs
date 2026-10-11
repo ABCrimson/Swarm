@@ -683,7 +683,7 @@ mod tests {
     fn register_worker(ctx: &Ctx, repo: &TempRepo, worktree: &Path, branch: &str) -> Uuid {
         let id = Uuid::new_v4();
         ctx.registry
-            .spawn_worker(WorkerHandle {
+            .register(WorkerHandle {
                 id,
                 state: WorkerState::Running,
                 name: "ship".to_owned(),
