@@ -2,12 +2,13 @@ import { expect, SIDEBAR_PAGES, test } from "./fixtures.ts";
 
 // ── Navigation ────────────────────────────────────────
 //
-// Frontend-shell coverage only: this suite runs the real Vite build with
-// NO Tauri backend (`isTauri()` is false, `invoke()` degrades gracefully —
-// see `src/lib/tauri.ts`). It exercises routing, the sidebar, and
-// backend-free empty states. It does NOT and cannot exercise worker
-// spawn/PTY/real IPC — see `docs/e2e.md` for the documented boundary and
-// the tauri-driver roadmap for closing it.
+// Frontend-shell coverage only: this suite runs the Vite app (the dev
+// server locally, the production preview build in CI; see
+// playwright.config.ts) with NO Tauri backend (`isTauri()` is false,
+// `invoke()` degrades gracefully — see `src/lib/tauri.ts`). It exercises
+// routing, the sidebar, and backend-free empty states. It does NOT and
+// cannot exercise worker spawn/PTY/real IPC — see `docs/e2e.md` for the
+// documented boundary and the tauri-driver roadmap for closing it.
 
 // Pages the command palette also navigates to (a sync, untransitioned
 // page change, which must still render <main>).
