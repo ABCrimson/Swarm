@@ -34,7 +34,8 @@ fn is_claude_settings_json(rel_path: &str) -> bool {
 /// Why `rel_path` must be kept out of a commit, or `None` to allow it:
 ///
 /// - a credential-shaped name — a basename (case-insensitive) starting
-///   with `.env` or `id_rsa` or ending in `.pem` or `.key`, or `secret`
+///   with `.env` or an SSH key name (`id_rsa`, `id_ed25519`, `id_ecdsa`,
+///   `id_dsa`) or ending in `.pem`, `.key`, `.p12` or `.pfx`, or `secret`
 ///   anywhere in the full relative path (so `config/secrets/api.yaml`
 ///   is caught although its basename looks innocuous);
 /// - larger than [`MAX_STAGED_FILE_BYTES`], measured on the working-tree
@@ -65,9 +66,12 @@ pub(super) fn deny_reason(worktree: &Path, rel_path: &str, is_untracked: bool) -
         .unwrap_or(rel_path)
         .to_ascii_lowercase();
     let looks_like_credential = basename.starts_with(".env")
-        || basename.ends_with(".pem")
-        || basename.ends_with(".key")
-        || basename.starts_with("id_rsa")
+        || [".pem", ".key", ".p12", ".pfx"]
+            .iter()
+            .any(|&suffix| basename.ends_with(suffix))
+        || ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"]
+            .iter()
+            .any(|&prefix| basename.starts_with(prefix))
         || rel_path.to_ascii_lowercase().contains("secret");
     if looks_like_credential {
         return Some("Skipped — Looks Like A Credential".to_owned());
@@ -117,6 +121,9 @@ mod tests {
             "tls/server.KEY",
             "id_rsa",
             "id_rsa.pub",
+            "id_ed25519",
+            "id_ecdsa_sk",
+            "cert.p12",
             "MY_SECRET.txt",
             "config/secrets/api.yaml",
         ] {

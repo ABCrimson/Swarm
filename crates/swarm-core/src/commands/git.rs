@@ -38,7 +38,6 @@ use crate::events::{
 };
 use crate::git::{self, CommitRequest, ShipContext, ShipError, ShipErrorKind, StagingMode};
 use crate::orchestration::{EventLog, OrchestrationEngine};
-use crate::worker::registry::WorkerRegistry;
 
 /// Cap on rows fetched per `ship_context` call — deliberately generous
 /// (well above `commands::orchestration::events_since`'s IPC-facing
@@ -55,6 +54,29 @@ const SHIP_CONTEXT_EVENT_LIMIT: u32 = 50_000;
 /// The config key holding the `Co-Authored-By` identity for ship
 /// commits (see `docs/api.md`).
 const CO_AUTHOR_CONFIG_KEY: &str = "shipCoAuthoredBy";
+
+/// The configured `Co-Authored-By` identity (`null` counts as unset). A
+/// value `stage_and_commit` drops (not a string, or multi-line) is
+/// logged, so a config mistake does not silently cost the commit its
+/// trailer. Blocks on the config file.
+fn configured_co_author(paths: &crate::Paths) -> Option<String> {
+    let value =
+        crate::config::read_value(paths, CO_AUTHOR_CONFIG_KEY).filter(|value| !value.is_null())?;
+    let Some(co_author) = value.as_str() else {
+        tracing::warn!(
+            key = CO_AUTHOR_CONFIG_KEY,
+            "ship: config value is not a string; committing without a Co-Authored-By trailer"
+        );
+        return None;
+    };
+    if co_author.trim().contains(['\n', '\r']) {
+        tracing::warn!(
+            key = CO_AUTHOR_CONFIG_KEY,
+            "ship: config value spans several lines; committing without a Co-Authored-By trailer"
+        );
+    }
+    Some(co_author.to_owned())
+}
 
 fn parse_worker_id(raw: &str) -> Result<Uuid, ShipError> {
     Uuid::parse_str(raw).map_err(|_| ShipError {
@@ -173,16 +195,13 @@ fn seq_range_from_log(
 }
 
 /// Resolves the worker's ship range (see the module doc) on a blocking
-/// thread. An engine without a database (an in-memory test engine) has
+/// thread, from `last_shipped` as the caller read it from the registry. An engine without a database (an in-memory test engine) has
 /// no range: `(0, 0)`, which the commit trailer treats as unknown.
 async fn resolve_seq_range(
     engine: &OrchestrationEngine,
-    registry: &WorkerRegistry,
     worker_id: Uuid,
+    last_shipped: Option<u64>,
 ) -> Result<(u64, u64), AppError> {
-    let last_shipped = git::ship::worktree_info_for_worker(registry, worker_id)
-        .ok()
-        .and_then(|info| info.last_shipped_seq);
     let Some(db_path) = engine.db_path().map(Path::to_path_buf) else {
         return Ok((0, 0));
     };
@@ -279,14 +298,14 @@ pub async fn git_stage_commit(ctx: Ctx, args: Value) -> Result<Value, Value> {
     };
     reporter.progress("staging", "running", None);
 
-    let branch = match git::ship::worktree_info_for_worker(&ctx.registry, id) {
-        Ok(info) => info.branch,
+    let (branch, last_shipped) = match git::ship::worktree_info_for_worker(&ctx.registry, id) {
+        Ok(info) => (info.branch, info.last_shipped_seq),
         Err(error) => return Err(reporter.fail("staging", error)),
     };
 
     // An unreadable log must not block shipping: the commit goes ahead
     // with the trailer omitted (`0..0` is "unknown").
-    let (seq_from, seq_to) = resolve_seq_range(&ctx.engine, &ctx.registry, id)
+    let (seq_from, seq_to) = resolve_seq_range(&ctx.engine, id, last_shipped)
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(worker_id = %id, %error, "ship: seq range unavailable; committing without a Swarm-Seq-Range trailer");
@@ -302,8 +321,7 @@ pub async fn git_stage_commit(ctx: Ctx, args: Value) -> Result<Value, Value> {
             mode,
             seq_from,
             seq_to,
-            co_authored_by: crate::config::read_value(&paths, CO_AUTHOR_CONFIG_KEY)
-                .and_then(|value| value.as_str().map(str::to_owned)),
+            co_authored_by: configured_co_author(&paths),
         };
         git::ship::stage_and_commit(&registry, &repo_locks, id, &request)
     })
@@ -457,6 +475,27 @@ struct ShipContextArgs {
     worker_id: String,
 }
 
+/// The blocking read behind [`ship_context`]: the worker's relevant
+/// rows between `seq_from` and `seq_to`, capped at `limit`.
+fn ship_context_from_log(
+    log: &EventLog,
+    id: Uuid,
+    seq_from: u64,
+    seq_to: u64,
+    limit: u32,
+) -> Result<ShipContext, AppError> {
+    let (events, truncated) = log.events_for_worker_between(
+        git::causal::RELEVANT_EVENT_TYPES,
+        &id.to_string(),
+        seq_from,
+        seq_to,
+        limit,
+    )?;
+    Ok(git::build_ship_context(
+        events, id, seq_from, seq_to, truncated,
+    ))
+}
+
 /// `ship_context { workerId }` → the `ShipContext` causal record for the
 /// worker's pending ship range. Read-only; emits no events.
 ///
@@ -468,13 +507,20 @@ struct ShipContextArgs {
 /// [`EventLog::events_for_worker_between`], which filters to this worker
 /// and the relevant types in SQL and keeps the newest rows when capped,
 /// and threads its truncation flag into
-/// [`ShipContext::events_truncated`]. Errors are strings: an unreadable
-/// event log is reported, never papered over with an empty record.
+/// [`ShipContext::events_truncated`]. A malformed id or a worker that
+/// cannot ship (unknown, or without a worktree) rejects with a
+/// `ShipError` object, as preflight does; other errors are strings, and
+/// an unreadable event log is reported, never papered over with an empty
+/// record.
 pub async fn ship_context(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let ShipContextArgs { worker_id } = parse_args(args)?;
     let id = parse_worker_id(&worker_id).map_err(|e| err_value(&e))?;
 
-    let (seq_from, seq_to) = resolve_seq_range(&ctx.engine, &ctx.registry, id)
+    let last_shipped = git::ship::worktree_info_for_worker(&ctx.registry, id)
+        .map_err(|e| err_value(&e))?
+        .last_shipped_seq;
+
+    let (seq_from, seq_to) = resolve_seq_range(&ctx.engine, id, last_shipped)
         .await
         .map_err(|e| Value::String(e.to_string()))?;
     let Some(db_path) = ctx.engine.db_path().map(PathBuf::from) else {
@@ -483,16 +529,7 @@ pub async fn ship_context(ctx: Ctx, args: Value) -> Result<Value, Value> {
 
     let context = tokio::task::spawn_blocking(move || -> Result<ShipContext, AppError> {
         let log = EventLog::open_readonly(&db_path)?;
-        let (events, truncated) = log.events_for_worker_between(
-            git::causal::RELEVANT_EVENT_TYPES,
-            &id.to_string(),
-            seq_from,
-            seq_to,
-            SHIP_CONTEXT_EVENT_LIMIT,
-        )?;
-        Ok(git::build_ship_context(
-            events, id, seq_from, seq_to, truncated,
-        ))
+        ship_context_from_log(&log, id, seq_from, seq_to, SHIP_CONTEXT_EVENT_LIMIT)
     })
     .await
     .map_err(|e| task_panicked("ship_context", &e))?
@@ -582,9 +619,9 @@ mod tests {
         );
     }
 
-    /// DIRECTIVE: exercises the exact two-step composition `ship_context`
-    /// performs — `EventLog::events_for_worker_between` then
-    /// `git::build_ship_context` — against a real (in-memory) `EventLog`,
+    /// DIRECTIVE: runs `ship_context_from_log`, the composition the
+    /// `ship_context` handler runs (`EventLog::events_for_worker_between`
+    /// then `git::build_ship_context`), against a real (in-memory) `EventLog`,
     /// proving the seam between the data layer and the pure builder works
     /// end to end, not just each half in isolation (the data-layer half is
     /// covered in `orchestration::log`'s own tests, the builder half in
@@ -604,18 +641,9 @@ mod tests {
         append_agent_tool_call(&mut log, 2, other, "npm test");
         append_agent_tool_call(&mut log, 3, me, "pnpm build");
 
-        let (events, truncated) = log
-            .events_for_worker_between(
-                git::causal::RELEVANT_EVENT_TYPES,
-                &me.to_string(),
-                0,
-                3,
-                SHIP_CONTEXT_EVENT_LIMIT,
-            )
-            .unwrap();
-        let context = git::build_ship_context(events, me, 0, 3, truncated);
+        let context = ship_context_from_log(&log, me, 0, 3, SHIP_CONTEXT_EVENT_LIMIT).unwrap();
 
-        assert!(!truncated);
+        assert!(!context.events_truncated);
         assert_eq!(context.turns.len(), 1);
         assert_eq!(context.turns[0].turn_id, "t3");
         assert_eq!(context.turns[0].tool_calls[0].name, "Bash");
@@ -627,8 +655,12 @@ mod tests {
 
     #[test]
     fn test_ship_context_empty_range_has_no_turns() {
-        let log = EventLog::open_in_memory().unwrap();
+        let mut log = EventLog::open_in_memory().unwrap();
         let me = Uuid::new_v4();
+        // Rows on both edges of the empty `(5, 5]` range: an inclusive
+        // lower bound would pull seq 5 in, a dropped upper bound seq 6.
+        append_agent_tool_call(&mut log, 5, me, "pnpm build");
+        append_agent_tool_call(&mut log, 6, me, "pnpm test");
         let (events, truncated) = log
             .events_for_worker_between(
                 git::causal::RELEVANT_EVENT_TYPES,
@@ -638,6 +670,7 @@ mod tests {
                 SHIP_CONTEXT_EVENT_LIMIT,
             )
             .unwrap();
+        assert!(events.is_empty(), "(5, 5] holds no seq: {events:?}");
         let context = git::build_ship_context(events, me, 5, 5, truncated);
         assert!(context.turns.is_empty());
         assert!(context.commits.is_empty());
@@ -660,13 +693,10 @@ mod tests {
         }
         append_agent_tool_call(&mut log, 21, me, "pnpm build");
 
-        let (events, truncated) = log
-            .events_for_worker_between(git::causal::RELEVANT_EVENT_TYPES, &me.to_string(), 0, 21, 3)
-            .unwrap();
-        let context = git::build_ship_context(events, me, 0, 21, truncated);
+        let context = ship_context_from_log(&log, me, 0, 21, 3).unwrap();
 
         assert!(
-            !truncated,
+            !context.events_truncated,
             "only one matching row for `me` — never truncated"
         );
         assert_eq!(context.turns.len(), 1);
@@ -836,5 +866,18 @@ mod tests {
         let emitted = ship_events(&ctx, &events).await;
         assert!(has_progress(&emitted, "commit", "error"));
         assert!(receipts(&emitted).is_empty(), "{emitted:?}");
+    }
+
+    /// A worker that cannot ship is a `ShipError`, never a guessed range.
+    #[tokio::test]
+    async fn test_ship_context_rejects_an_unknown_worker_with_a_ship_error() {
+        let (ctx, _dir, _events) = test_ctx();
+        let err = ship_context(
+            ctx,
+            serde_json::json!({ "workerId": Uuid::new_v4().to_string() }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err["kind"], "workerNotFound");
     }
 }
