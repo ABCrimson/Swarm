@@ -6,11 +6,12 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { getDefaultStore } from "jotai";
 import { StrictMode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AIChat } from "#components/ai/AIChat";
 import { cancelChatTurn, isChatTurnRunning } from "#lib/ai-chat";
 import { type ChatResponse, streamMessage } from "#lib/anthropic";
 import { agentTurnStarted } from "#lib/tauri";
+import { executeTool, resetToolApprovals } from "#lib/tools";
 import { useAiStore } from "#store/ai";
 import { useMessageHistoryStore } from "#store/message-history";
 import { selectedModelAtom } from "#store/ui";
@@ -66,6 +67,10 @@ beforeEach(() => {
   getDefaultStore().set(selectedModelAtom, "opus");
   vi.mocked(agentTurnStarted).mockResolvedValue(1);
   vi.mocked(streamMessage).mockReset();
+});
+
+afterEach(() => {
+  resetToolApprovals();
 });
 
 describe("AIChat", () => {
@@ -155,5 +160,21 @@ describe("AIChat", () => {
 
     expect(screen.queryByText("Answer")).not.toBeInTheDocument();
     expect(screen.getByText("Send A Message To Start Chatting")).toBeInTheDocument();
+  });
+
+  it("returns focus to the message box after a tool approval is answered from the keyboard", async () => {
+    const user = userEvent.setup();
+    render(<AIChat workerId={W} />);
+    const call = executeTool(
+      "read_file",
+      { path: "/home/u/a.txt" },
+      { originWorker: W, causeSeq: 1 },
+    );
+
+    (await screen.findByRole("button", { name: "Deny" })).focus();
+    await user.keyboard("{Enter}");
+
+    expect((await call).success).toBe(false);
+    expect(screen.getByRole("textbox", { name: /^Message Claude/ })).toHaveFocus();
   });
 });

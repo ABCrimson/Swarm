@@ -5,6 +5,7 @@ import { Button } from "#components/ui/Button";
 import { Pill, type PillTone } from "#components/ui/Pill";
 import type { PermissionDecision } from "#lib/agent-events";
 import { PROVIDER_LABELS } from "#lib/agent-events";
+import { errorMessage } from "#lib/is-error";
 import { agentCancel, agentPermissionRespond, agentSendTurn } from "#lib/tauri";
 import {
   type AgentTranscriptItem,
@@ -226,9 +227,27 @@ function PermissionRow({
 }): React.ReactElement {
   const { payload, state } = item;
   const waiting = state === "pending" || state === "answering";
+  const { items } = useAgentTranscript(workerId);
+  // Codex's fileChange request names only its item: the paths and diff being approved are on that item's own tool call (same id, sent first).
+  const isPatch = payload.tool === "fileChange";
+  const request = toRecord(payload.input);
+  const patch = isPatch
+    ? items.find(
+        (row): row is Extract<AgentTranscriptItem, { kind: "tool_call" }> =>
+          row.kind === "tool_call" && row.payload.toolUseId === request.itemId,
+      )
+    : undefined;
   // The exact arguments are what the user approves; the provider's message
   // is only prose beside them (Codex sends none).
-  const review = useApprovalReview(payload.tool, payload.input);
+  const review = useApprovalReview(
+    payload.tool,
+    isPatch
+      ? {
+          ...request,
+          changes: patch ? toRecord(patch.payload.input).changes : "(not received yet)",
+        }
+      : payload.input,
+  );
 
   const answer = async (decision: PermissionDecision, button: HTMLButtonElement) => {
     const { setPermissionState } = useAgentSessionStore.getState();
@@ -244,7 +263,7 @@ function PermissionRow({
       }
     } catch (err) {
       if (setPermissionState(workerId, payload.requestId, "pending", "answering")) {
-        toast.error(`Permission Answer Failed: ${Error.isError(err) ? err.message : String(err)}`);
+        toast.error(`Permission Answer Failed: ${errorMessage(err)}`);
       }
     }
   };
@@ -272,7 +291,7 @@ function PermissionRow({
             size="sm"
             variant={payload.suggestedDecision === "deny" ? "secondary" : "primary"}
             loading={state === "answering"}
-            disabled={review.blocked}
+            disabled={review.blocked || (isPatch && !patch)}
             aria-describedby={review.blocked ? review.reasonId : undefined}
             onClick={(e) => void answer("allow", e.currentTarget)}
           >
@@ -400,7 +419,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
       // Never admitted (e.g. the scheduler queue is full): no settle
       // will arrive for it, so the bubble fails here.
       useAgentSessionStore.getState().failUserTurn(workerId, bubbleId);
-      toast.error(`Send Turn Failed: ${Error.isError(err) ? err.message : String(err)}`);
+      toast.error(`Send Turn Failed: ${errorMessage(err)}`);
     });
   };
 
@@ -410,7 +429,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
     const turnId = transcript.currentTurnId;
     if (!turnId) return;
     agentCancel(workerId, turnId).catch((err: unknown) => {
-      toast.error(`Cancel Failed: ${Error.isError(err) ? err.message : String(err)}`);
+      toast.error(`Cancel Failed: ${errorMessage(err)}`);
     });
   };
 

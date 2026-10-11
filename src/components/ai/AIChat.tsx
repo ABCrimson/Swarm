@@ -1,6 +1,6 @@
 import { useAtomValue } from "jotai";
 import type { CSSProperties } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "#components/ui/Button";
 import { cancelChatTurn, clearChat, sendChatMessage } from "#lib/ai-chat";
 import { CLAUDE_MODELS } from "#lib/models";
@@ -249,6 +249,7 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
   const pinnedModel = useWorkerAgentStore((s) => s.metadata.get(workerId)?.model);
   const model = CLAUDE_MODELS[pinnedModel ?? selectedModel];
   const [draftEmpty, setDraftEmpty] = useState(true);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const busy = thread.live !== null;
 
   const send = (formData: FormData) => {
@@ -291,10 +292,11 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
         </div>
       </div>
 
-      <ToolApprovalPrompt workerId={workerId} />
+      <ToolApprovalPrompt workerId={workerId} onResolved={() => inputRef.current?.focus()} />
 
       <form action={send} style={inputAreaStyle}>
         <textarea
+          ref={inputRef}
           name="message"
           className="swarm-input"
           aria-label={`Message ${model.label}`}
