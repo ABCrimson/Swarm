@@ -91,6 +91,25 @@ export default defineConfig(async ({ mode, command }): Promise<UserConfig> => {
     server: {
       port: 1420,
       strictPort: true,
+      // boot.ts loads the app through `import("./main.tsx")` and PageHost
+      // lazy-loads every page; Vite pre-transforms only static imports, so a
+      // cold server would transform each of these on first request. Pages are
+      // named one by one: a `*.tsx` glob also matches the colocated
+      // `*.test.tsx` files and pulls vitest and Testing Library into the dev
+      // dep optimizer, which re-bundles and reloads the page.
+      warmup: {
+        clientFiles: [
+          "./src/main.tsx",
+          "./src/pages/Dashboard.tsx",
+          "./src/pages/Workers.tsx",
+          "./src/pages/Sessions.tsx",
+          "./src/pages/Metrics.tsx",
+          "./src/pages/Logs.tsx",
+          "./src/pages/Tools.tsx",
+          "./src/pages/Workspace.tsx",
+          "./src/pages/Settings.tsx",
+        ],
+      },
       watch: {
         // Vite already ignores .git, node_modules, test-results and its cache
         // dir. Cargo's target/ may live under src-tauri/ or at the repo root.
