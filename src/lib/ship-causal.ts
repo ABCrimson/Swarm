@@ -3,8 +3,10 @@
  * Record" section (`renderCausalRecordSection`) the model never writes,
  * plus an OPTIONAL AI-generated "What Changed / Why" prose section
  * (`generateCausalProse`) that may cite `[seq N]` — a citation survives
- * only as a single-number `[seq N]` (keyword in any case) for a tool-call seq listed in the Turns section;
- * every other `[seq ...]` is stripped before render
+ * only as a single-number `[seq N]` (keyword in any case, no space after the bracket, one plain space before the
+ * number, no leading zero) for a tool-call seq listed in the Turns section;
+ * every other `[seq ...]` is stripped before render, repeated to a fixed point
+ * so removing a nested citation cannot expose one for an unlisted seq
  * (`stripUnknownSeqCitations`). The model never writes the Causal Record, so
  * its provenance claims are machine-generated, and `escapeCell` renders the
  * agent-controlled tool names and targets in it as inert text; the AI prose
@@ -148,16 +150,17 @@ export function renderCausalRecordSection(context: ShipContext, diffStat: DiffSt
 // ── Citation validity + stripping (the honesty rule) ────────────────
 
 /**
- * Any `[seq ...]` form — `[seq 9999 ]`, `[seq: 9999]`, `[seq 1, 2]` — with
- * a body that holds no bracket or newline, with at most one plain space
+ * Any `[seq ...]` form — `[seq 9999 ]`, `[seq: 9999]`, `[seq 1, 2]`, `[ seq 11]` — with
+ * a body that holds no bracket or newline (so it matches the innermost of a nested pair), with at most one plain space
  * on each side (never a newline or tab), so removing a citation can never join two lines or eat a list
  * item's indentation.
  */
-const SEQ_CITATION_RE = /( ?)\[[ \t]*seq\b([^[\]\n]*)\]( ?)/gi;
+const SEQ_CITATION_RE = /( ?)\[([ \t]*)seq\b([^[\]\n]*)\]( ?)/gi;
 
 /**
- * Strips every `[seq ...]` citation in `prose` except a single-number `[seq N]` (keyword in any case)
- * whose `N` is the seq of a tool call listed in `context`'s turns — the
+ * Strips every `[seq ...]` citation in `prose` except the exact form `[seq N]` (keyword in any case; one plain space,
+ * decimal `N` without a leading zero, nothing inside the bracket before
+ * `seq`) whose `N` is the seq of a tool call listed in `context`'s turns — the
  * same seqs `buildCausalPromptInput` shows the model. That is the honesty
  * gate between whatever the model wrote and what actually renders. A seq
  * the model was never given (hallucination), one that is only somewhere in
@@ -165,6 +168,10 @@ const SEQ_CITATION_RE = /( ?)\[[ \t]*seq\b([^[\]\n]*)\]( ?)/gi;
  * functionally indistinguishable from fabricated provenance — all are
  * removed the same way, unconditionally, never surfaced as a "trust me"
  * citation.
+ *
+ * Stripping repeats until the text stops changing (each pass shortens it, so
+ * it terminates): removing a nested citation such as `[seq [seq 1] 9999]`
+ * leaves `[seq 9999]`, which the next pass removes too.
  *
  * Spacing is repaired only where a citation was removed: a citation
  * between two words collapses to the single space that separated them
@@ -175,14 +182,20 @@ const SEQ_CITATION_RE = /( ?)\[[ \t]*seq\b([^[\]\n]*)\]( ?)/gi;
  */
 export function stripUnknownSeqCitations(prose: string, context: ShipContext): string {
   const known = new Set(context.turns.flatMap((turn) => turn.toolCalls.map((call) => call.seq)));
-  return prose.replaceAll(
-    SEQ_CITATION_RE,
-    (match, before: string, inner: string, after: string) => {
-      const cited = /^\s+(\d+)$/.exec(inner);
-      if (cited && known.has(Number(cited[1]))) return match;
-      return before && after ? " " : "";
-    },
-  );
+  const replacer = (match: string, before: string, lead: string, inner: string, after: string) => {
+    const cited = lead === "" ? /^ (0|[1-9]\d*)$/.exec(inner) : null;
+    if (cited && known.has(Number(cited[1]))) return match;
+    return before && after ? " " : "";
+  };
+  // Removing a nested citation can expose an outer one, so repeat to a fixed
+  // point; it terminates because every replacement shortens the string.
+  let current = prose;
+  let previous: string;
+  do {
+    previous = current;
+    current = previous.replaceAll(SEQ_CITATION_RE, replacer);
+  } while (current !== previous);
+  return current;
 }
 
 // ── AI prose (optional, degrades gracefully) ─────────────────────────
