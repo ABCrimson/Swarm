@@ -16,8 +16,8 @@ use uuid::Uuid;
 
 use super::process::resolve_with_pathext;
 use super::protocol::{
-    AskForApproval, Incoming, METHOD_NOT_FOUND, RequestId, SandboxMode, ThreadOpened,
-    ThreadStartParams,
+    ApprovalsReviewer, AskForApproval, Incoming, METHOD_NOT_FOUND, RequestId, SandboxMode,
+    ThreadOpened, ThreadStartParams,
 };
 use super::reader::permission_id;
 use super::state::{ApprovalKind, PendingApproval};
@@ -343,12 +343,18 @@ fn thread_start_serializes_the_sandbox_key_and_omits_a_missing_model() {
         cwd: "/work",
         model: None,
         approval_policy: AskForApproval::Untrusted,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox: SandboxMode::ReadOnly,
     })
     .expect("serialize");
     assert_eq!(
         params,
-        json!({ "cwd": "/work", "approvalPolicy": "untrusted", "sandbox": "read-only" })
+        json!({
+            "cwd": "/work",
+            "approvalPolicy": "untrusted",
+            "approvalsReviewer": "user",
+            "sandbox": "read-only",
+        })
     );
 }
 
@@ -394,9 +400,78 @@ fn opened(sandbox: &str, approval: Value) -> ThreadOpened {
         "thread": { "id": THREAD },
         "model": "gpt-6-astra",
         "approvalPolicy": approval,
+        "approvalsReviewer": "user",
         "sandbox": { "type": sandbox },
     }))
     .expect("a thread/start response")
+}
+
+#[test]
+fn a_sandbox_widened_by_user_config_is_refused() {
+    let opened_with = |sandbox: Value| -> ThreadOpened {
+        serde_json::from_value(json!({
+            "thread": { "id": THREAD },
+            "model": "gpt-6-astra",
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "user",
+            "sandbox": sandbox,
+        }))
+        .expect("a thread/start response")
+    };
+    for (widened, asked) in [
+        (
+            json!({ "type": "workspaceWrite", "writableRoots": ["C:\\"] }),
+            SandboxMode::WorkspaceWrite,
+        ),
+        (
+            json!({ "type": "workspaceWrite", "networkAccess": true }),
+            SandboxMode::WorkspaceWrite,
+        ),
+        (
+            json!({ "type": "readOnly", "networkAccess": true }),
+            SandboxMode::ReadOnly,
+        ),
+    ] {
+        let error = verify_effective_policy(
+            &opened_with(widened.clone()),
+            AskForApproval::OnRequest,
+            asked,
+        )
+        .expect_err("a widened sandbox must be refused");
+        assert_matches!(error, AppError::PermissionDenied(_), "{widened}");
+    }
+    verify_effective_policy(
+        &opened_with(
+            json!({ "type": "workspaceWrite", "writableRoots": [], "networkAccess": false }),
+        ),
+        AskForApproval::OnRequest,
+        SandboxMode::WorkspaceWrite,
+    )
+    .expect("a confined workspace-write sandbox is accepted");
+}
+
+#[test]
+fn a_thread_whose_approvals_bypass_swarm_is_refused() {
+    for reviewer in [Some("auto_review"), Some("guardian_subagent"), None] {
+        let mut response = json!({
+            "thread": { "id": THREAD },
+            "model": "gpt-6-astra",
+            "approvalPolicy": "on-request",
+            "sandbox": { "type": "workspaceWrite" },
+        });
+        if let Some(reviewer) = reviewer {
+            response["approvalsReviewer"] = json!(reviewer);
+        }
+        let opened: ThreadOpened =
+            serde_json::from_value(response).expect("a thread/start response");
+        let error = verify_effective_policy(
+            &opened,
+            AskForApproval::OnRequest,
+            SandboxMode::WorkspaceWrite,
+        )
+        .expect_err("approvals must reach SWARM");
+        assert_matches!(error, AppError::PermissionDenied(m) if m.contains("approvals reviewer"), "{reviewer:?}");
+    }
 }
 
 #[test]
@@ -548,6 +623,13 @@ fn pathext_resolution_finds_the_npm_cmd_shim() {
         resolve_with_pathext("codex", Some(&path), pathext),
         Some(scratch.path().join("codex.CMD"))
     );
+    // Decoys that a missing guard would resolve: `codex.exe` + `.CMD` and
+    // `bin/codex` + `.CMD` both exist, so only the guard keeps these `None`.
+    std::fs::write(scratch.path().join("codex.exe.CMD"), "@echo off\n")
+        .expect("write the extension decoy");
+    std::fs::create_dir_all(scratch.path().join("bin")).expect("create the decoy dir");
+    std::fs::write(scratch.path().join("bin").join("codex.CMD"), "@echo off\n")
+        .expect("write the directory decoy");
     // A name that already has an extension or a directory is left alone.
     assert_eq!(
         resolve_with_pathext("codex.exe", Some(&path), pathext),
@@ -639,6 +721,7 @@ async fn handshake_is_initialize_then_initialized_then_thread_start_with_the_tie
         let params = &wire[2]["params"];
         assert_eq!(params["sandbox"], sandbox, "{tier:?}");
         assert_eq!(params["approvalPolicy"], approval, "{tier:?}");
+        assert_eq!(params["approvalsReviewer"], "user", "{tier:?}");
         assert_eq!(params["cwd"], h.scratch.path().display().to_string());
         assert!(
             params.get("sandboxPolicy").is_none(),
@@ -697,6 +780,7 @@ async fn resume_opens_the_thread_with_thread_resume() {
     assert_eq!(params["threadId"], old_thread);
     assert_eq!(params["sandbox"], "read-only");
     assert_eq!(params["approvalPolicy"], "untrusted");
+    assert_eq!(params["approvalsReviewer"], "user");
     assert_eq!(params["excludeTurns"], true);
 }
 
@@ -763,6 +847,10 @@ async fn a_handshake_timeout_kills_and_reaps_the_child() {
         .err()
         .expect("spawn must time out");
     assert_matches!(&error, AppError::Ai(m) if m.contains("handshake"));
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(unused_variables, reason = "read only by the Linux /proc reap check")
+    )]
     let pid = h.record()[0]["pid"]
         .as_u64()
         .expect("the fake records its pid");
@@ -771,7 +859,6 @@ async fn a_handshake_timeout_kills_and_reaps_the_child() {
         !Path::new(&format!("/proc/{pid}")).exists(),
         "the hung child {pid} must be killed and reaped before spawn returns"
     );
-    let _ = pid;
     h.flush().await;
     assert!(h.events().is_empty());
 }
@@ -1014,6 +1101,36 @@ async fn failed_turns_settle_error_with_the_server_message() {
         settled[2].error.as_deref(),
         Some(TURN_FAILED),
         "a retrying error notification is not the turn's error"
+    );
+    session.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unreadable_turn_completion_settles_the_turn_as_an_error() {
+    let h = Harness::new("unreadable_completion.script");
+    let session = h.spawn().await;
+    let turn = session
+        .send_turn(TurnInput {
+            prompt: "go".to_string(),
+        })
+        .await
+        .expect("turn");
+    tokio::time::timeout(Duration::from_secs(5), session.await_turn_completion(turn))
+        .await
+        .expect("an unreadable completion must not leave the turn running")
+        .expect("await");
+    h.flush().await;
+    let events = h.events();
+    let settled = settlements(&events);
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0].status, AgentTurnStatus::Error);
+    assert!(
+        settled[0]
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("Codex Sent A Turn Completion That Could Not Be Read (")),
+        "got {:?}",
+        settled[0].error
     );
     session.shutdown().await.expect("shutdown");
 }
@@ -1463,6 +1580,10 @@ async fn an_unacknowledged_turn_shuts_the_session_down_and_kills_the_child() {
         settlements(&events).is_empty(),
         "a turn without an id has nothing to settle"
     );
+    #[cfg_attr(
+        not(unix),
+        expect(unused_variables, reason = "read only by the Unix signal check")
+    )]
     let SwarmEvent::AgentSessionExited(exited) = events.last().expect("exit") else {
         panic!("expected agent_session_exited last: {events:#?}");
     };
@@ -1472,7 +1593,43 @@ async fn an_unacknowledged_turn_shuts_the_session_down_and_kills_the_child() {
         (None, Some("SIGKILL")),
         "the hung child ignores stdin EOF and is killed"
     );
-    let _ = exited;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_shutdown_future_still_finishes_teardown() {
+    let h = Harness::with_timeouts(
+        "turn_silent_after_ack.script",
+        Timeouts {
+            graceful_exit: Duration::from_millis(500),
+            ..test_timeouts()
+        },
+    );
+    let session = h.spawn().await;
+    session
+        .send_turn(TurnInput {
+            prompt: "go".to_string(),
+        })
+        .await
+        .expect("turn");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), session.shutdown())
+            .await
+            .is_err(),
+        "the child ignores stdin EOF, so shutdown outlasts 50 ms"
+    );
+    let events = h
+        .wait_until("agent_session_exited", |events| events.iter().any(is_exit))
+        .await;
+    let settled = settlements(&events);
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0].status, AgentTurnStatus::Error);
+    assert!(
+        settled[0]
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with(PROCESS_EXITED_WITHOUT_RECEIPT))
+    );
+    assert_eq!(position(&events, is_exit), events.len() - 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

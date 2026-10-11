@@ -1,9 +1,11 @@
-//! Trust-tier mapping, requested-model filtering, effective-policy verification and
-//! capabilities.
+//! Trust-tier mapping, the child's environment (current-directory exe
+//! lookup off), requested-model filtering, effective-policy verification
+//! and capabilities.
 
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::CLAUDE_MODEL_ALIASES;
 use super::protocol::{AskForApproval, SandboxMode, ThreadOpened};
@@ -87,8 +89,11 @@ pub(super) fn requested_model(model: Option<&str>) -> Option<&str> {
 /// requested. The server reports what it actually applied; a stricter
 /// result (for example a managed configuration forcing `readOnly`) is
 /// fine, a looser one — `dangerFullAccess`, `externalSandbox`, `never`,
-/// a granular policy — is not. This is what catches a request field the
-/// server silently ignored.
+/// a granular policy, a sandbox with `networkAccess` or writable roots
+/// beyond the working directory (user config can add both), or an
+/// `approvalsReviewer` other than `user` (Codex's own reviewer would
+/// approve escapes without SWARM) — is not. This is what catches a request
+/// field the server silently ignored.
 pub(super) fn verify_effective_policy(
     opened: &ThreadOpened,
     approval: AskForApproval,
@@ -99,17 +104,27 @@ pub(super) fn verify_effective_policy(
         SandboxMode::ReadOnly => effective_sandbox == "readOnly",
         SandboxMode::WorkspaceWrite => matches!(effective_sandbox, "readOnly" | "workspaceWrite"),
     };
+    let confined = matches!(
+        opened.sandbox.network_access,
+        Value::Null | Value::Bool(false)
+    ) && opened.sandbox.writable_roots.is_empty();
     let effective_approval = opened.approval_policy.as_str();
     let approval_ok = match approval {
         AskForApproval::Untrusted => effective_approval == Some("untrusted"),
         AskForApproval::OnRequest => matches!(effective_approval, Some("untrusted" | "on-request")),
     };
-    if sandbox_ok && approval_ok {
+    let reviewer = opened.approvals_reviewer.as_deref();
+    let reviewer_ok = reviewer == Some("user");
+    if sandbox_ok && confined && approval_ok && reviewer_ok {
         return Ok(());
     }
     Err(AppError::PermissionDenied(format!(
-        "codex opened the thread with sandbox {effective_sandbox:?} and approval policy {} \
-         instead of the requested {:?} / {:?} — refusing to run it",
+        "codex opened the thread with sandbox {effective_sandbox:?} (network {:?}, writable \
+         roots {:?}), approval policy {} and approvals reviewer {reviewer:?} instead of the \
+         requested {:?} / {:?} / \"user\" with no network and no extra writable roots — \
+         refusing to run it",
+        opened.sandbox.network_access,
+        opened.sandbox.writable_roots,
         opened.approval_policy,
         sandbox.effective_type(),
         approval.as_str(),

@@ -18,7 +18,7 @@ use super::protocol::{
     TurnStartResponse, TurnStatus, method,
 };
 use super::state::{ApprovalKind, BlockStream, Inner, PendingApproval, Shared, TurnSlot};
-use super::teardown::teardown;
+use super::teardown::{teardown, teardown_on_drop};
 use super::{RECENTLY_SETTLED, TURN_FAILED, TURN_INTERRUPTED};
 
 use crate::agent::adapter::{AgentTurnStatus, PermissionDecision, PermissionId, TurnId};
@@ -41,13 +41,7 @@ pub(super) async fn run_reader(
     // A panic while mapping a line must still tear the session down
     // (Condition B, the child's reaping), so teardown is armed as a drop
     // guard and disarmed on the normal path.
-    let teardown_on_unwind = DropGuard::new(Arc::clone(&shared), |shared| {
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                teardown(&shared).await;
-            });
-        }
-    });
+    let teardown_on_unwind = teardown_on_drop(&shared);
 
     let mut framer_open = true;
     loop {
@@ -195,13 +189,41 @@ fn handle_notification(shared: &Shared, method: &str, params: Value) {
                 promote(shared, &mut shared.state.lock(), turn.id);
             }
         }
-        method::TURN_COMPLETED => {
-            if let Some(TurnNotification { thread_id, turn }) = parse(method, params)
-                && shared.is_own_thread(&thread_id)
-            {
-                settle(shared, turn);
+        // A completion that cannot be read still settles the turn: skipping it
+        // would leave the slot running until the process exits (Condition B).
+        method::TURN_COMPLETED => match TurnNotification::deserialize(&params) {
+            Ok(TurnNotification { thread_id, turn }) => {
+                if shared.is_own_thread(&thread_id) {
+                    settle(shared, turn);
+                }
             }
-        }
+            Err(error) => {
+                tracing::warn!(
+                    method,
+                    %error,
+                    "codex adapter: notification does not match the codex 0.156.1 schema, settling the turn as an error"
+                );
+                if let (Some(thread_id), Some(turn_id)) = (
+                    params.get("threadId").and_then(Value::as_str),
+                    params.pointer("/turn/id").and_then(Value::as_str),
+                ) && shared.is_own_thread(thread_id)
+                {
+                    settle(
+                        shared,
+                        Turn {
+                            id: turn_id.to_owned(),
+                            status: TurnStatus::Unknown,
+                            error: Some(TurnError {
+                                message: "Codex Sent A Turn Completion That Could Not Be Read"
+                                    .to_owned(),
+                                additional_details: Some(error.to_string()),
+                            }),
+                            duration_ms: None,
+                        },
+                    );
+                }
+            }
+        },
         method::ERROR => {
             if let Some(notification) = parse::<ErrorNotification>(method, params)
                 && shared.is_own_thread(&notification.thread_id)
@@ -331,6 +353,12 @@ fn on_item_completed(shared: &Shared, notification: ItemNotification) {
         }
         Item::Other => {
             let Some(item_id) = raw.get("id").and_then(Value::as_str).map(str::to_owned) else {
+                let item_type = raw.get("type").and_then(Value::as_str);
+                tracing::warn!(
+                    worker_id = %shared.worker_id,
+                    item_type = item_type.unwrap_or("unknown"),
+                    "codex adapter: completed item without a string id, dropped"
+                );
                 return;
             };
             let kind = raw
