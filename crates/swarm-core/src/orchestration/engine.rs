@@ -32,7 +32,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -289,8 +289,10 @@ impl OrchestrationEngine {
     ///
     /// # Errors
     ///
-    /// [`AppError::EventLog`] if the writer thread is already gone or
-    /// does not drain within `timeout`.
+    /// [`AppError::EventLog`] if the writer thread is already gone, stops
+    /// before draining, or does not drain within `timeout`, or if the log
+    /// cannot be finalized (every drained event is saved, but the exact
+    /// head may not be recorded, or the WAL may not be checkpointed).
     pub fn shutdown(&self, timeout: Duration) -> Result<u64, AppError> {
         let mut outcome = self.shutdown_outcome.lock();
         if let Some(first) = outcome.as_ref() {
@@ -312,18 +314,25 @@ impl OrchestrationEngine {
         if !self.sink.send_command(WriterCmd::Shutdown(done_tx)) {
             return Err(writer_unavailable());
         }
-        let head = done_rx.recv_timeout(timeout).map_err(|_| {
-            AppError::EventLog(format!(
-                "The Event Writer Did Not Drain Within {} ms.",
-                timeout.as_millis()
-            ))
-        })?;
+        let outcome = match done_rx.recv_timeout(timeout) {
+            Ok(outcome) => outcome,
+            Err(RecvTimeoutError::Timeout) => {
+                return Err(AppError::EventLog(format!(
+                    "The Event Writer Did Not Drain Within {} ms.",
+                    timeout.as_millis()
+                )));
+            }
+            // The writer thread unwound with the barrier still queued.
+            Err(RecvTimeoutError::Disconnected) => {
+                Err("The Event Writer Thread Stopped Before Draining.".to_owned())
+            }
+        };
         if let Some(handle) = self.writer.lock().take()
             && handle.join().is_err()
         {
             tracing::error!("the event writer thread panicked while shutting down");
         }
-        Ok(head)
+        outcome.map_err(AppError::EventLog)
     }
 }
 
@@ -420,13 +429,18 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
                     let _ = done.send(self.seq);
                 }
                 WriterCmd::Shutdown(done) => {
-                    self.finalize();
-                    let _ = done.send(self.seq);
+                    let outcome = self
+                        .finalize()
+                        .map(|()| self.seq)
+                        .map_err(|e| format!("The Event Log Could Not Be Finalized: {e}"));
+                    let _ = done.send(outcome);
                     return self.log;
                 }
             }
         }
-        self.finalize();
+        if let Err(e) = self.finalize() {
+            tracing::warn!(error = %e, "failed to finalize the event log");
+        }
         self.log
     }
 
@@ -569,10 +583,8 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
         )
     }
 
-    fn finalize(&mut self) {
-        if let Err(e) = self.log.finalize(self.seq) {
-            tracing::warn!(error = %e, "failed to finalize the event log");
-        }
+    fn finalize(&mut self) -> Result<(), AppError> {
+        self.log.finalize(self.seq)
     }
 }
 
@@ -1054,6 +1066,20 @@ mod tests {
             ack: Some(tx),
         };
         (msg, rx)
+    }
+
+    /// A log that cannot be finalized is reported on the shutdown barrier,
+    /// not swallowed as a clean head.
+    #[test]
+    fn test_shutdown_reports_a_failed_finalize() {
+        let p = probe();
+        p.writer.log.break_table("meta");
+        let (tx, rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        tx.send(WriterCmd::Shutdown(done_tx)).unwrap();
+        drop(tx);
+        let _log = p.writer.run(&rx);
+        assert_matches!(done_rx.recv().unwrap(), Err(_));
     }
 
     /// A persist failure emits nothing on EITHER channel,

@@ -223,7 +223,8 @@ impl Runtime {
     /// # Errors
     ///
     /// [`AppError::EventLog`] if the engine did not drain in time, its
-    /// writer thread is gone, or an earlier shutdown failed; a repeat call
+    /// writer thread is gone, the event log could not be finalized, or an
+    /// earlier shutdown failed; a repeat call
     /// after a clean shutdown returns the same head (see
     /// [`OrchestrationEngine::shutdown`]).
     pub async fn shutdown(&self, timeout: Duration) -> Result<u64, AppError> {
@@ -435,5 +436,161 @@ mod tests {
             .await
             .unwrap();
         assert!(seq > head, "seq {seq} reused (final head was {head})");
+    }
+
+    /// A persisted `max_workers` is restored at start, and one outside the
+    /// accepted range is ignored with the default kept.
+    #[tokio::test]
+    async fn test_start_restores_a_persisted_worker_cap_and_ignores_an_out_of_range_one() {
+        let (dir, _cleanup) = temp_dir("runtime");
+        let paths = Paths {
+            data_dir: dir.to_path_buf(),
+        };
+        crate::config::write_value(&paths, "max_workers", serde_json::json!(3)).unwrap();
+        let runtime = Runtime::start(config(&dir, "swarmd"), |_| {}).unwrap();
+        assert_eq!(runtime.registry.config.read().max_workers, 3);
+        drop(runtime);
+
+        crate::config::write_value(&paths, "max_workers", serde_json::json!(0)).unwrap();
+        let runtime = Runtime::start(config(&dir, "swarmd"), |_| {}).unwrap();
+        assert_eq!(
+            runtime.registry.config.read().max_workers,
+            crate::worker::registry::SystemConfig::default().max_workers
+        );
+    }
+
+    /// An `AgentSession` whose `send_turn` accepts or rejects on demand
+    /// and which records that its turn was awaited.
+    struct StubSession {
+        key: crate::agent::SessionKey,
+        reject: bool,
+        completed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl StubSession {
+        fn new(reject: bool) -> (Arc<Self>, Arc<std::sync::atomic::AtomicBool>) {
+            let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let session = Arc::new(Self {
+                key: "stub".to_owned(),
+                reject,
+                completed: Arc::clone(&completed),
+            });
+            (session, completed)
+        }
+    }
+
+    impl crate::agent::AgentSession for StubSession {
+        fn session_key(&self) -> &crate::agent::SessionKey {
+            &self.key
+        }
+        fn send_turn(
+            &self,
+            _turn: crate::agent::TurnInput,
+        ) -> crate::agent::BoxFuture<'_, Result<crate::agent::TurnId, AppError>> {
+            let reject = self.reject;
+            Box::pin(async move {
+                if reject {
+                    Err(AppError::AgentSessionBusy)
+                } else {
+                    Ok("t".to_owned())
+                }
+            })
+        }
+        fn await_turn_completion(
+            &self,
+            _turn: crate::agent::TurnId,
+        ) -> crate::agent::BoxFuture<'_, Result<(), AppError>> {
+            self.completed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+        fn cancel(
+            &self,
+            _turn: crate::agent::TurnId,
+        ) -> crate::agent::BoxFuture<'_, Result<(), AppError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn respond_permission(
+            &self,
+            _req: crate::agent::PermissionId,
+            _decision: crate::agent::PermissionDecision,
+        ) -> crate::agent::BoxFuture<'_, Result<(), AppError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn shutdown(
+            &self,
+        ) -> crate::agent::BoxFuture<'_, Result<crate::agent::ExitSummary, AppError>> {
+            Box::pin(async {
+                Ok(crate::agent::ExitSummary {
+                    exit_code: Some(0),
+                    signal: None,
+                })
+            })
+        }
+    }
+
+    fn request(worker_id: uuid::Uuid) -> AgentTurnRequest {
+        AgentTurnRequest {
+            worker_id,
+            turn: crate::agent::TurnInput {
+                prompt: "p".to_owned(),
+            },
+            priority: crate::agent::TurnPriority::Normal,
+        }
+    }
+
+    /// The terminal receipt `execute_turn` synthesized, if any.
+    fn synthesized_receipt(
+        rx: &std::sync::mpsc::Receiver<crate::events::WriterMsg>,
+    ) -> AgentTurnSettledPayload {
+        let SwarmEvent::AgentTurnSettled(payload) = rx.try_recv().unwrap().event else {
+            panic!("expected an agent_turn_settled receipt");
+        };
+        payload
+    }
+
+    #[tokio::test]
+    async fn test_execute_turn_without_a_live_session_synthesizes_an_error_receipt() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        execute_turn(
+            AgentSessionRegistry::new(),
+            EventSink::new(tx),
+            request(uuid::Uuid::new_v4()),
+        )
+        .await;
+        let receipt = synthesized_receipt(&rx);
+        assert_eq!(receipt.status, AgentTurnStatus::Error);
+        assert!(
+            receipt
+                .error
+                .unwrap()
+                .starts_with("No Live Session For This Worker")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_turn_rejected_by_the_session_synthesizes_an_error_receipt() {
+        let worker_id = uuid::Uuid::new_v4();
+        let sessions = AgentSessionRegistry::new();
+        let (session, completed) = StubSession::new(true);
+        sessions.insert(worker_id, session);
+        let (tx, rx) = std::sync::mpsc::channel();
+        execute_turn(sessions, EventSink::new(tx), request(worker_id)).await;
+        let receipt = synthesized_receipt(&rx);
+        assert_eq!(receipt.status, AgentTurnStatus::Error);
+        assert!(receipt.error.unwrap().starts_with("Turn Rejected"));
+        assert!(!completed.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_execute_turn_accepted_by_the_session_awaits_it_and_emits_no_receipt() {
+        let worker_id = uuid::Uuid::new_v4();
+        let sessions = AgentSessionRegistry::new();
+        let (session, completed) = StubSession::new(false);
+        sessions.insert(worker_id, session);
+        let (tx, rx) = std::sync::mpsc::channel();
+        execute_turn(sessions, EventSink::new(tx), request(worker_id)).await;
+        assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(rx.try_recv().is_err());
     }
 }
