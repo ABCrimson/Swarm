@@ -305,11 +305,10 @@ const footerStyle: CSSProperties = {
  * `showModal()` (top layer, inert page, native focus handling and focus
  * return; Escape and backdrop clicks close it via `closedby="any"`).
  *
- * - Provider: Webview Anthropic (default), Claude Code or Codex. The
- *   desktop-only Webview Anthropic is disabled with the reason shown, and
- *   Claude Code is the default, where the build lacks the `localAiChat`
- *   capability (the swarmd web page). Each
- *   agent CLI is probed every time the dialog opens, so an install or
+ * - Provider: Webview Anthropic, Claude Code or Codex. Webview Anthropic
+ *   is the default where the build has the `localAiChat` capability;
+ *   elsewhere (the swarmd web page) it is disabled with the reason shown
+ *   and Claude Code is the default. Each agent CLI is probed every time the dialog opens, so an install or
  *   sign-in done while the app runs is picked up; an unavailable (or
  *   unprobeable) provider is disabled with the reason shown, never
  *   silently accepted. A provider stays enabled while its probe is in
@@ -331,6 +330,10 @@ export function SpawnWorkerDialog({
   const formRef = useRef<HTMLFormElement>(null);
   const closeDialog = () => formRef.current?.closest("dialog")?.close();
   const titleId = useId();
+  // A disabled button is out of the tab order and may show no tooltip, so the
+  // reason is visible text that the button references.
+  const canPickFolder = hasCapability("workspaceBrowsing");
+  const folderReasonId = useId();
   // The webview's own Claude client exists only in the desktop app, so a
   // build without `localAiChat` (the swarmd web page) starts on an agent CLI.
   const webviewReason = hasCapability("localAiChat") ? null : DESKTOP_ONLY_REASON;
@@ -611,12 +614,17 @@ export function SpawnWorkerDialog({
                 variant="secondary"
                 size="sm"
                 onClick={() => void pickProjectRoot()}
-                disabled={!hasCapability("workspaceBrowsing")}
-                title={hasCapability("workspaceBrowsing") ? undefined : DESKTOP_ONLY_REASON}
+                disabled={!canPickFolder}
+                aria-describedby={canPickFolder ? undefined : folderReasonId}
               >
                 Choose…
               </Button>
             </div>
+            {!canPickFolder && (
+              <span id={folderReasonId} style={unavailableNoteStyle}>
+                {DESKTOP_ONLY_REASON}
+              </span>
+            )}
           </div>
 
           {notice && (

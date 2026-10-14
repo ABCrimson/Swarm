@@ -454,7 +454,9 @@ describe("SpawnWorkerDialog", () => {
     expect(await screen.findByText("/repo/root")).toBeInTheDocument();
     const choose = screen.getByRole("button", { name: "Choose…" });
     expect(choose).toBeDisabled();
-    expect(choose).toHaveAttribute("title", "Available In The Desktop App Only");
+    expect(choose).toHaveAccessibleDescription("Available In The Desktop App Only");
+    expect(choose).not.toHaveAttribute("title");
+    expect(screen.getByText("Available In The Desktop App Only")).toBeVisible();
   });
 
   it("on desktop keeps Webview Anthropic selected by default and the folder picker enabled", async () => {
