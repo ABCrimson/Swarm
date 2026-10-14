@@ -89,6 +89,9 @@ anyhow                    = "=1.0.104"
 thiserror                 = "=2.0.21"
 tracing                   = "=0.1.44"
 tracing-subscriber        = { version = "=0.3.23", features = ["json", "env-filter"] }
+# The release log's writer thread (`tracing_appender::non_blocking`), used
+# by swarm-desktop.
+tracing-appender          = "=0.2.5"
 uuid                      = { version = "=1.28.0", features = ["v4", "serde"] }
 dashmap                   = "=7.0.0-rc2"
 parking_lot               = "=0.12.5"
