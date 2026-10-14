@@ -70,8 +70,10 @@ type Store = ReturnType<typeof getDefaultStore>;
  *   run before", keeps StrictMode's extra effect run from pushing.
  * - A rejected or timed-out push rolls the field back to the last
  *   acknowledged value without pushing the rollback, and offers Retry.
- * - Pushes are sequenced: the result of a push that is no longer the
- *   newest is ignored, so a stale outcome never overrides a newer one.
+ * - Pushes are sequenced: an older push's outcome never changes a newer
+ *   push's pending or failed state, but an older push the backend
+ *   acknowledged becomes the rollback target, and is shown at once if the
+ *   newest push has already failed.
  */
 function createAgentConcurrencySync(store: Store) {
   /** The value the backend last confirmed (or reported at launch). */
@@ -79,6 +81,8 @@ function createAgentConcurrencySync(store: Store) {
   /** The value last pushed or adopted; the field equalling it is not a change. */
   let pushed = acknowledged;
   let newestPush = 0;
+  /** The newest push the backend has acknowledged (0: none this launch). */
+  let acknowledgedPush = 0;
   let reconciling = false;
   const timers = new Set<ReturnType<typeof setTimeout>>();
 
@@ -132,13 +136,24 @@ function createAgentConcurrencySync(store: Store) {
     // user did not directly make, and the console keeps the raw error.
     setAgentConcurrency(requested).then(
       () => {
-        if (!settle()) return;
+        const newest = settle();
+        // Any push the backend applied is the newest acknowledgement unless a
+        // later push was already acknowledged, newest or not.
+        if (push > acknowledgedPush) {
+          acknowledgedPush = push;
+          acknowledged = requested;
+          // A newer push already failed and rolled the field back to an
+          // older acknowledgement: show what the backend now holds instead.
+          if (!newest && store.get(agentConcurrencySyncAtom).status === "failed") {
+            pushed = requested;
+            showLimit(requested);
+          }
+        }
+        if (!newest) return;
         if (timedOut) {
           // The backend did apply it after all; undo the rollback.
           toast.dismiss(AGENT_CONCURRENCY_TOAST_ID);
           adopt(requested);
-        } else {
-          acknowledged = requested;
         }
         store.set(agentConcurrencySyncAtom, { status: "idle" });
       },

@@ -237,6 +237,41 @@ describe("useSettingsBridge — agent concurrency acknowledgement", () => {
   });
 });
 
+describe("useSettingsBridge — older push acknowledged after the newest", () => {
+  it("rolls a failed push back to an older push the backend acknowledged", async () => {
+    using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const first = Promise.withResolvers<void>();
+    const second = Promise.withResolvers<void>();
+    mockSetAgentConcurrency.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    renderHook(() => useSettingsBridge());
+
+    setLimit(8);
+    setLimit(9);
+    await act(async () => first.resolve());
+    await act(async () => second.reject(new Error("disk full")));
+
+    expect(limit()).toBe(8);
+    expect(store.get(agentConcurrencySyncAtom).status).toBe("failed");
+  });
+
+  it("shows an older push's late acknowledgement after the newest failed", async () => {
+    using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const first = Promise.withResolvers<void>();
+    const second = Promise.withResolvers<void>();
+    mockSetAgentConcurrency.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    renderHook(() => useSettingsBridge());
+
+    setLimit(8);
+    setLimit(9);
+    await act(async () => second.reject(new Error("disk full")));
+    expect(limit()).toBe(DEFAULT_LIMIT);
+    await act(async () => first.resolve());
+
+    expect(limit()).toBe(8);
+    expect(mockSetAgentConcurrency).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("useSettingsBridge — launch reconciliation", () => {
   it("adopts the backend's persisted cap without pushing it back", async () => {
     mockHasTransport.mockReturnValue(true);
