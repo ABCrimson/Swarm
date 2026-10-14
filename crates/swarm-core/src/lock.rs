@@ -315,7 +315,9 @@ mod tests {
 
     /// (Unix): the info file's temp path keeps the data dir's raw path
     /// (not its lossy `Display`), so a non-UTF-8 dir still gets the file.
-    #[cfg(unix)]
+    /// Not on macOS: APFS refuses a non-UTF-8 directory name (`EILSEQ`),
+    /// so such a data dir cannot exist there.
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn test_info_file_is_written_under_a_non_utf8_data_dir() {
         use std::os::unix::ffi::OsStrExt;

@@ -1654,7 +1654,10 @@ impl Daemon {
         panic!("swarmd did not print its Listening line: {}", self.stderr());
     }
 
-    /// Waits for the process to exit and returns its exit code.
+    /// Waits for the process to exit and returns its exit code. Unix
+    /// only, like its one caller: the graceful-shutdown test signals the
+    /// daemon with SIGTERM, which Windows does not have.
+    #[cfg(unix)]
     fn wait(&mut self) -> Option<i32> {
         let deadline = Instant::now() + WAIT;
         while Instant::now() < deadline {

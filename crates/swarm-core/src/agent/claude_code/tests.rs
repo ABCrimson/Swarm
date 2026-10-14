@@ -1923,8 +1923,18 @@ async fn the_probe_runs_in_a_private_directory_and_removes_it() {
     let launched = launch_report(&detail);
     assert_eq!(launched["settingSources"], json!(""));
     let cwd = PathBuf::from(launched["cwd"].as_str().expect("the reported cwd"));
-    assert_ne!(cwd, std::env::temp_dir());
-    assert_eq!(cwd.parent(), Some(std::env::temp_dir().as_path()));
+    // The child reports its cwd with symlinks resolved, and the temp dir
+    // may sit behind one (macOS's `/var` is `/private/var`), so both sides
+    // are compared canonical. `canonicalize` also drops the trailing
+    // separator `temp_dir()` carries there. The probe dir itself is gone
+    // by now, so its parent is what gets resolved.
+    let temp = std::fs::canonicalize(std::env::temp_dir()).expect("the temp dir resolves");
+    let parent = cwd.parent().expect("the probe dir has a parent");
+    assert_eq!(
+        std::fs::canonicalize(parent).expect("the probe dir's parent resolves"),
+        temp
+    );
+    assert_ne!(cwd, temp);
     let name = cwd
         .file_name()
         .and_then(|name| name.to_str())

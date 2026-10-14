@@ -115,6 +115,47 @@ impl Drop for TempRepo {
     }
 }
 
+/// Stages `contents` in the repository at `dir` under the raw byte name
+/// `name`, through the index alone: `hash-object` stores the blob and
+/// `update-index --index-info` records the entry, so nothing with that
+/// name touches the filesystem. A name the filesystem cannot hold (APFS
+/// refuses a non-UTF-8 one with `EILSEQ`) still reaches the index this
+/// way, as it does when such a name arrives in a fetched commit.
+///
+/// Unix only, like its callers: git for Windows converts every path to
+/// UTF-16 to reach the filesystem, and its handling of an index path that
+/// does not convert is not what those tests cover.
+#[cfg(unix)]
+#[track_caller]
+pub(crate) fn stage_raw_name(dir: &Path, name: &[u8], contents: &[u8]) {
+    let hashed = cli::run_with_stdin(
+        &args_in(dir, &["hash-object", "-w", "--stdin"]),
+        contents,
+        CREATE_TIMEOUT,
+    )
+    .expect("git should run");
+    assert!(
+        hashed.success(),
+        "git hash-object failed: {}",
+        hashed.stderr
+    );
+    // `-z`: the record is NUL-terminated, so the path is taken verbatim.
+    let mut record = format!("100644 {}\t", hashed.stdout_trimmed()).into_bytes();
+    record.extend_from_slice(name);
+    record.push(0);
+    let staged = cli::run_with_stdin(
+        &args_in(dir, &["update-index", "-z", "--index-info"]),
+        &record,
+        CREATE_TIMEOUT,
+    )
+    .expect("git should run");
+    assert!(
+        staged.success(),
+        "git update-index failed: {}",
+        staged.stderr
+    );
+}
+
 /// Writes `contents` to `dir/rel`, creating parent directories.
 #[track_caller]
 pub(crate) fn write_file(dir: &Path, rel: &str, contents: &str) {
