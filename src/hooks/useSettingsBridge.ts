@@ -4,25 +4,227 @@
 // check. Called once at the app root. `appSettingsAtom` is preloaded
 // before the first render (#store/persisted), so every value seen here
 // is the user's real setting — never a pre-hydration default.
+//
+// The backend's agent concurrency cap is the one setting whose push can
+// fail or hang, so its state is acknowledged: see
+// `createAgentConcurrencySync` and `agentConcurrencySyncAtom`.
 
-import { useAtomValue } from "jotai";
-import { useEffect, useRef } from "react";
+import { type getDefaultStore, useAtomValue, useStore } from "jotai";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { checkForUpdates, isTauri, setAgentConcurrency } from "#lib/tauri";
+import * as z from "zod";
+import { errorMessage } from "#lib/is-error";
+import {
+  checkForUpdates,
+  hasCapability,
+  hasTransport,
+  isTauri,
+  readConfig,
+  setAgentConcurrency,
+} from "#lib/tauri";
 import { useAiStore } from "#store/ai";
 import { useLogStore } from "#store/logs";
 import { useMessageHistoryStore } from "#store/message-history";
-import { appSettingsAtom } from "#store/ui";
+import {
+  AI_CONCURRENT_LIMIT_MAX,
+  AI_CONCURRENT_LIMIT_MIN,
+  agentConcurrencySyncAtom,
+  appSettingsAtom,
+} from "#store/ui";
+
+/**
+ * How long a push may stay unacknowledged before it counts as failed.
+ * Tauri `invoke` has no timeout, so a wedged backend would otherwise
+ * leave the field "applying" forever; the ws transport gives up on an RPC
+ * on its own schedule. The call is a config write plus a semaphore
+ * resize, so a healthy backend answers in milliseconds: ten seconds
+ * tolerates a loaded disk or a reconnecting socket without leaving the
+ * user staring at a spinner. A resolve that arrives later is still adopted.
+ */
+export const AGENT_CONCURRENCY_ACK_TIMEOUT_MS = 10_000;
+
+/**
+ * What the backend runs with while the `agent_concurrency` config key is
+ * unset: `AgentSchedulerConfig::default().concurrent_limit` in
+ * `crates/swarm-core/src/agent/scheduler.rs`.
+ */
+const BACKEND_DEFAULT_AGENT_CONCURRENCY = 3;
+
+/** The backend's accepted range (`set_agent_concurrency`), wider than the Settings field's. */
+const BackendAgentConcurrency = z.int().min(1).max(16);
+
+/** Identifies the failure toast, so a later push or a late resolve can dismiss it. */
+const AGENT_CONCURRENCY_TOAST_ID = "agent-concurrency-sync";
+
+type Store = ReturnType<typeof getDefaultStore>;
+
+/**
+ * Owns the acknowledged push of the agent concurrency cap. Kept outside
+ * React state because its bookkeeping (what the backend last confirmed,
+ * which push is newest) is read from timers and promise callbacks, not
+ * from render.
+ *
+ * - The backend persists its own copy of the cap and restores it at
+ *   startup, so only a CHANGE made during this launch is pushed (the one
+ *   exception: a launch value the field cannot show, see `reconcile`).
+ *   Comparing against the last pushed value, rather than "has the effect
+ *   run before", keeps StrictMode's extra effect run from pushing.
+ * - A rejected or timed-out push rolls the field back to the last
+ *   acknowledged value without pushing the rollback, and offers Retry.
+ * - Pushes are sequenced: an older push's outcome never changes a newer
+ *   push's pending or failed state, but an older push the backend
+ *   acknowledged becomes the rollback target, and is shown at once if the
+ *   newest push has already failed.
+ */
+function createAgentConcurrencySync(store: Store) {
+  /** The value the backend last confirmed (or reported at launch). */
+  let acknowledged = store.get(appSettingsAtom).aiConcurrentLimit;
+  /** The value last pushed or adopted; the field equalling it is not a change. */
+  let pushed = acknowledged;
+  let newestPush = 0;
+  /** The newest push the backend has acknowledged (0: none this launch). */
+  let acknowledgedPush = 0;
+  let reconciling = false;
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+
+  const showLimit = (limit: number): void =>
+    store.set(appSettingsAtom, (prev) =>
+      prev.aiConcurrentLimit === limit ? prev : { ...prev, aiConcurrentLimit: limit },
+    );
+
+  /** Makes `limit` both the field value and the acknowledged one, without a push. */
+  const adopt = (limit: number): void => {
+    acknowledged = limit;
+    pushed = limit;
+    showLimit(limit);
+  };
+
+  const fail = (requested: number, message: string): void => {
+    pushed = acknowledged;
+    showLimit(acknowledged);
+    const retry = (): void => {
+      pushed = requested;
+      start(requested);
+      showLimit(requested);
+    };
+    store.set(agentConcurrencySyncAtom, { status: "failed", requested, message, retry });
+    toast.error("Agent Concurrency Not Applied", {
+      id: AGENT_CONCURRENCY_TOAST_ID,
+      description: message,
+      action: { label: "Retry", onClick: retry },
+    });
+  };
+
+  const start = (requested: number): void => {
+    const push = ++newestPush;
+    if (store.get(agentConcurrencySyncAtom).status === "failed") {
+      toast.dismiss(AGENT_CONCURRENCY_TOAST_ID);
+    }
+    store.set(agentConcurrencySyncAtom, { status: "pending", requested });
+
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      if (push !== newestPush) return;
+      timedOut = true;
+      console.error("useSettingsBridge: setAgentConcurrency timed out", requested);
+      fail(requested, "The Backend Did Not Respond In Time");
+    }, AGENT_CONCURRENCY_ACK_TIMEOUT_MS);
+    timers.add(timer);
+
+    const settle = (): boolean => {
+      clearTimeout(timer);
+      timers.delete(timer);
+      return push === newestPush;
+    };
+
+    // Logged as well as surfaced: this effect also runs for changes the
+    // user did not directly make, and the console keeps the raw error.
+    setAgentConcurrency(requested).then(
+      () => {
+        const newest = settle();
+        // Any push the backend applied is the newest acknowledgement unless a
+        // later push was already acknowledged, newest or not.
+        if (push > acknowledgedPush) {
+          acknowledgedPush = push;
+          acknowledged = requested;
+          // A newer push already failed and rolled the field back to an
+          // older acknowledgement: show what the backend now holds instead.
+          if (!newest && store.get(agentConcurrencySyncAtom).status === "failed") {
+            pushed = requested;
+            showLimit(requested);
+          }
+        }
+        if (!newest) return;
+        if (timedOut) {
+          // The backend did apply it after all; undo the rollback.
+          toast.dismiss(AGENT_CONCURRENCY_TOAST_ID);
+          adopt(requested);
+        }
+        store.set(agentConcurrencySyncAtom, { status: "idle" });
+      },
+      (err: unknown) => {
+        if (!settle()) return;
+        console.error("useSettingsBridge: setAgentConcurrency failed", err);
+        if (!timedOut) fail(requested, errorMessage(err));
+      },
+    );
+  };
+
+  return {
+    /** Pushes `limit` unless it is the value already pushed or adopted. */
+    apply(limit: number): void {
+      if (limit === pushed) return;
+      pushed = limit;
+      start(limit);
+    },
+
+    /**
+     * Once per launch, when a backend is reachable: shows the cap the
+     * backend actually runs with (the disk copy outlives the webview's
+     * settings, and a swarmd page starts from defaults every load). A
+     * backend value the field cannot show (11 to 16) is overwritten by
+     * pushing the field's value, so the two never silently disagree.
+     */
+    async reconcile(): Promise<void> {
+      if (reconciling || !hasTransport()) return;
+      reconciling = true;
+      let backend: number;
+      try {
+        backend =
+          (await readConfig("agent_concurrency", BackendAgentConcurrency)) ??
+          BACKEND_DEFAULT_AGENT_CONCURRENCY;
+      } catch (err) {
+        console.warn("useSettingsBridge: could not read agent_concurrency", err);
+        return;
+      }
+      // The user already changed the cap while the read was in flight.
+      if (newestPush > 0) return;
+      if (backend === store.get(appSettingsAtom).aiConcurrentLimit) {
+        acknowledged = backend;
+      } else if (backend >= AI_CONCURRENT_LIMIT_MIN && backend <= AI_CONCURRENT_LIMIT_MAX) {
+        adopt(backend);
+      } else {
+        console.warn(
+          `useSettingsBridge: backend agent_concurrency ${backend} is outside the Settings range ${AI_CONCURRENT_LIMIT_MIN}-${AI_CONCURRENT_LIMIT_MAX}; pushing the field's value`,
+        );
+        pushed = store.get(appSettingsAtom).aiConcurrentLimit;
+        start(pushed);
+      }
+    },
+
+    cancelTimers(): void {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+    },
+  };
+}
 
 export function useSettingsBridge(): void {
   const settings = useAtomValue(appSettingsAtom);
+  const store = useStore();
   const updateCheckRan = useRef(false);
-  // The backend persists its own copy of the agent concurrency cap
-  // (config key `agent_concurrency`) and restores it at startup, so
-  // only a CHANGE made during this launch is pushed. Comparing against
-  // the last pushed value, rather than "has the effect run before",
-  // keeps StrictMode's extra effect run from pushing anything.
-  const pushedAgentConcurrency = useRef(settings.aiConcurrentLimit);
+  const [agentConcurrency] = useState(() => createAgentConcurrencySync(store));
 
   useEffect(() => {
     useLogStore.getState().setMaxEntries(settings.logMaxEntries);
@@ -37,16 +239,13 @@ export function useSettingsBridge(): void {
     // Backend agent-turn scheduler cap for the provider-adapter path
     // (`agent_spawn`/`agent_send_turn`). Each push resizes the live
     // scheduler and writes `agent_concurrency` to disk.
-    if (settings.aiConcurrentLimit === pushedAgentConcurrency.current) return;
-    pushedAgentConcurrency.current = settings.aiConcurrentLimit;
+    agentConcurrency.apply(settings.aiConcurrentLimit);
+  }, [settings.aiConcurrentLimit, agentConcurrency]);
 
-    // Logged, not toasted: a rejection (e.g. the Rust side's 1..=16
-    // range check) must be visible somewhere, but this effect also
-    // runs for changes the user did not directly make.
-    setAgentConcurrency(settings.aiConcurrentLimit).catch((err: unknown) => {
-      console.error("useSettingsBridge: setAgentConcurrency failed", err);
-    });
-  }, [settings.aiConcurrentLimit]);
+  useEffect(() => {
+    void agentConcurrency.reconcile();
+    return agentConcurrency.cancelTimers;
+  }, [agentConcurrency]);
 
   useEffect(() => {
     useMessageHistoryStore.getState().setMaxWorkers(settings.historyMaxWorkers);
@@ -55,9 +254,17 @@ export function useSettingsBridge(): void {
   // Once per app launch. Quiet on failure: the check fails whenever
   // the endpoint is unreachable or serves no valid manifest (offline,
   // or no release has published latest.json yet), and a check the
-  // user did not ask for shouldn't toast an error.
+  // user did not ask for shouldn't toast an error. Skipped outright
+  // where the build or shell cannot update (the swarmd browser page).
   useEffect(() => {
-    if (!settings.updateCheckOnLaunch || updateCheckRan.current || !isTauri()) return;
+    if (
+      !settings.updateCheckOnLaunch ||
+      updateCheckRan.current ||
+      !hasCapability("autoUpdate") ||
+      !isTauri()
+    ) {
+      return;
+    }
     updateCheckRan.current = true;
 
     checkForUpdates()

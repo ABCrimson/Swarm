@@ -5,6 +5,7 @@ import { Button } from "#components/ui/Button";
 import { Spinner } from "#components/ui/Spinner";
 import { loadFilePreview } from "#lib/file-preview";
 import { errorMessage } from "#lib/is-error";
+import { DESKTOP_ONLY_REASON, hasCapability } from "#lib/tauri";
 import { FileTree } from "./FileTree.tsx";
 import { type FileSelection, FileViewer } from "./FileViewer.tsx";
 
@@ -28,6 +29,10 @@ const clampWidth = (px: number): number =>
  * survives page switches because the page host keeps visited pages
  * mounted.
  *
+ * The folder picker and the file reads are native (plugin-dialog and
+ * plugin-fs), so a transport without workspace browsing (the
+ * `pnpm build:web` page) gets a disabled Open Project button that says why.
+ *
  * Opening a file starts its read in a transition: the current file stays
  * on screen (dimmed) until the next one is ready.
  */
@@ -40,6 +45,8 @@ export function WorkspacePanel(): React.ReactElement {
   const dragStartRef = useRef<{ readonly x: number; readonly width: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   const treePaneId = useId();
+  const reasonId = useId();
+  const canBrowse = hasCapability("workspaceBrowsing");
 
   const handleOpenProject = async (): Promise<void> => {
     let selected: string | null;
@@ -118,9 +125,20 @@ export function WorkspacePanel(): React.ReactElement {
           />
         </svg>
         <p className="text-fg-muted text-lg">No Project Directory Open</p>
-        <Button variant="secondary" size="sm" onClick={() => void handleOpenProject()}>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={!canBrowse}
+          aria-describedby={canBrowse ? undefined : reasonId}
+          onClick={() => void handleOpenProject()}
+        >
           Open Project
         </Button>
+        {!canBrowse && (
+          <p id={reasonId} className="text-fg-dim text-sm">
+            {DESKTOP_ONLY_REASON}
+          </p>
+        )}
       </div>
     );
   }

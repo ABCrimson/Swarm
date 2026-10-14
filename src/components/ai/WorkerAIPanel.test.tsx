@@ -18,12 +18,19 @@ vi.mock("#components/layout/SplitPane", () => ({
     </>
   ),
 }));
+/** `true` makes the active transport report no webview AI chat (the `build:web` page). */
+const web = vi.hoisted(() => ({ on: false }));
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  hasCapability: () => !web.on,
+}));
 vi.mock("#lib/ai-chat", async (importOriginal) => ({
   ...(await importOriginal<typeof import("#lib/ai-chat")>()),
   injectInstruction: vi.fn(() => "sent"),
 }));
 
 beforeEach(() => {
+  web.on = false;
   vi.mocked(injectInstruction).mockClear();
 });
 
@@ -52,5 +59,18 @@ describe("WorkerAIPanel inject dialog", () => {
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(injectInstruction).not.toHaveBeenCalled();
+  });
+});
+
+describe("WorkerAIPanel without the webview AI chat (the browser build)", () => {
+  it("replaces the webview chat controls with the desktop-only notice", () => {
+    web.on = true;
+    render(<WorkerAIPanel workerId="w1" />);
+
+    expect(screen.getByText("Available In The Desktop App Only")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Inject Instruction" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Queue" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^AI Model:/ })).not.toBeInTheDocument();
   });
 });

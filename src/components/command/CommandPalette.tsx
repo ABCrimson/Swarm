@@ -8,7 +8,7 @@ import type { PageId } from "#hooks/useNavigate";
 import { errorMessage } from "#lib/is-error";
 import { matchesBinding } from "#lib/keybindings";
 import { createSnapshot } from "#lib/snapshots";
-import { killWorker } from "#lib/tauri";
+import { isTauri, killWorker } from "#lib/tauri";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
 import { type FrecencyEntry, frecencyAtom } from "#store/frecency";
 import { useSessionStore } from "#store/sessions";
@@ -254,13 +254,18 @@ function PaletteBody({
       keywords: ["toggle", "view", "graph", "list", "switch"],
       action: () => setGraphView((prev) => (prev === "graph" ? "list" : "graph")),
     },
-    {
-      id: "session:snapshot",
-      label: "Snapshot Session",
-      group: "Sessions",
-      keywords: ["snapshot", "save", "backup", "state"],
-      action: () => void snapshot(),
-    },
+    // Snapshots are plugin-store files, which need the Tauri bridge.
+    ...(isTauri()
+      ? [
+          {
+            id: "session:snapshot",
+            label: "Snapshot Session",
+            group: "Sessions",
+            keywords: ["snapshot", "save", "backup", "state"],
+            action: () => void snapshot(),
+          } satisfies CommandDef,
+        ]
+      : []),
   ];
 
   const [openedAt] = useState(Date.now);

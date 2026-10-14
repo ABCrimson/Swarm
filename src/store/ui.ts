@@ -54,6 +54,30 @@ export const graphViewAtom = atom<"graph" | "list">("graph");
  */
 export const causalityInspectorAtom = atom<{ readonly startSeq: number } | null>(null);
 
+// ── Agent concurrency sync (ephemeral) ──────────────
+
+/**
+ * Where the backend's copy of the agent concurrency cap stands relative
+ * to the Settings field: `pending` while a push awaits the backend's
+ * acknowledgement, `failed` once it is rejected or times out (the field
+ * has then been rolled back to the last acknowledged value, and
+ * `requested` is what the user asked for, kept for Retry). Written by
+ * `useSettingsBridge`, read by the Settings page. Not persisted: it only
+ * describes pushes made during this launch.
+ */
+export type AgentConcurrencySync =
+  | { readonly status: "idle" }
+  | { readonly status: "pending"; readonly requested: number }
+  | {
+      readonly status: "failed";
+      readonly requested: number;
+      readonly message: string;
+      /** Pushes `requested` again, even when the field already shows it. */
+      readonly retry: () => void;
+    };
+
+export const agentConcurrencySyncAtom = atom<AgentConcurrencySync>({ status: "idle" });
+
 // ── Persisted (swarm-settings.json, see #store/persisted) ──
 
 const Percent = z.number().min(0).max(100);
@@ -134,6 +158,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   nativeAlertNotifications: false,
 };
 
+/** Bounds of the Settings page's AI Concurrent Stream Limit field; the persisted value is clamped to them. */
+export const AI_CONCURRENT_LIMIT_MIN = 1;
+export const AI_CONCURRENT_LIMIT_MAX = 10;
+
 /** A whole number clamped to the Settings page's `[min, max]`; anything that is not a finite number becomes `fallback`. */
 function boundedInt(min: number, max: number, fallback: number) {
   return z
@@ -152,7 +180,11 @@ const AppSettingsSchema = z.object({
   alertCooldownSec: boundedInt(5, 600, DEFAULT_APP_SETTINGS.alertCooldownSec),
   snapshotIntervalMin: boundedInt(1, 120, DEFAULT_APP_SETTINGS.snapshotIntervalMin),
   logMaxEntries: boundedInt(100, 100_000, DEFAULT_APP_SETTINGS.logMaxEntries),
-  aiConcurrentLimit: boundedInt(1, 10, DEFAULT_APP_SETTINGS.aiConcurrentLimit),
+  aiConcurrentLimit: boundedInt(
+    AI_CONCURRENT_LIMIT_MIN,
+    AI_CONCURRENT_LIMIT_MAX,
+    DEFAULT_APP_SETTINGS.aiConcurrentLimit,
+  ),
   historyMaxWorkers: boundedInt(5, 200, DEFAULT_APP_SETTINGS.historyMaxWorkers),
   updateCheckOnLaunch: z.boolean().catch(DEFAULT_APP_SETTINGS.updateCheckOnLaunch),
   nativeAlertNotifications: z.boolean().catch(DEFAULT_APP_SETTINGS.nativeAlertNotifications),

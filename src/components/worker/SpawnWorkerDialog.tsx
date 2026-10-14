@@ -10,6 +10,8 @@ import {
   AgentSpawnCommandError,
   agentProbe,
   agentSpawn,
+  DESKTOP_ONLY_REASON,
+  hasCapability,
   spawnWorker,
   validateRepoRoot,
   writeConfig,
@@ -22,6 +24,8 @@ type SpawnProvider = "webview_anthropic" | "claude_code" | "codex";
 type AgentProvider = Extract<SpawnProvider, "claude_code" | "codex">;
 
 const AGENT_PROVIDERS: readonly AgentProvider[] = ["claude_code", "codex"];
+
+const ALL_PROVIDERS = ["webview_anthropic", ...AGENT_PROVIDERS] as const;
 
 interface SpawnWorkerDialogProps {
   readonly onClose: () => void;
@@ -161,6 +165,9 @@ const closeButtonStyle: CSSProperties = {
   cursor: "pointer",
 };
 
+/** Matches `.swarm-btn:disabled`, the look of the footer Cancel button while disabled. */
+const closeButtonDisabledStyle: CSSProperties = { opacity: 0.5, cursor: "not-allowed" };
+
 const bodyStyle: CSSProperties = {
   flex: 1,
   overflowY: "auto",
@@ -298,8 +305,10 @@ const footerStyle: CSSProperties = {
  * `showModal()` (top layer, inert page, native focus handling and focus
  * return; Escape and backdrop clicks close it via `closedby="any"`).
  *
- * - Provider: Webview Anthropic (default), Claude Code or Codex. Each
- *   agent CLI is probed every time the dialog opens, so an install or
+ * - Provider: Webview Anthropic, Claude Code or Codex. Webview Anthropic
+ *   is the default where the build has the `localAiChat` capability;
+ *   elsewhere (the swarmd web page) it is disabled with the reason shown
+ *   and Claude Code is the default. Each agent CLI is probed every time the dialog opens, so an install or
  *   sign-in done while the app runs is picked up; an unavailable (or
  *   unprobeable) provider is disabled with the reason shown, never
  *   silently accepted. A provider stays enabled while its probe is in
@@ -307,7 +316,9 @@ const footerStyle: CSSProperties = {
  * - Model alias and trust tier for agent providers, each tier explained
  *   per provider.
  * - Working directory: the persisted project root (revalidated as a git
- *   repository), changeable with the native folder picker.
+ *   repository), changeable with the native folder picker, which is
+ *   disabled with the reason shown where the build lacks the
+ *   `workspaceBrowsing` capability.
  *
  * The caller mounts it only while open, so every field, probe and error
  * starts fresh on each open.
@@ -319,7 +330,16 @@ export function SpawnWorkerDialog({
   const formRef = useRef<HTMLFormElement>(null);
   const closeDialog = () => formRef.current?.closest("dialog")?.close();
   const titleId = useId();
-  const [provider, setProvider] = useState<SpawnProvider>("webview_anthropic");
+  // A disabled button is out of the tab order and may show no tooltip, so the
+  // reason is visible text that the button references.
+  const canPickFolder = hasCapability("workspaceBrowsing");
+  const folderReasonId = useId();
+  // The webview's own Claude client exists only in the desktop app, so a
+  // build without `localAiChat` (the swarmd web page) starts on an agent CLI.
+  const webviewReason = hasCapability("localAiChat") ? null : DESKTOP_ONLY_REASON;
+  const [provider, setProvider] = useState<SpawnProvider>(
+    webviewReason === null ? "webview_anthropic" : "claude_code",
+  );
   const [modelAliases, setModelAliases] = useState<Record<AgentProvider, string>>({
     ...DEFAULT_MODEL_ALIAS,
   });
@@ -381,8 +401,13 @@ export function SpawnWorkerDialog({
     };
   }, []);
 
+  /** Why `p` cannot be used: undefined = probing, null = available, string = the reason. */
+  function providerReason(p: SpawnProvider): string | null | undefined {
+    return isAgentProvider(p) ? unavailable[p] : webviewReason;
+  }
+
   const [spawnError, spawn, isSpawning] = useActionState(async (): Promise<string | null> => {
-    const reason = isAgentProvider(provider) ? unavailable[provider] : null;
+    const reason = providerReason(provider);
     if (reason != null) return `${PROVIDER_LABELS[provider]} Unavailable: ${reason}`;
     const options = { name: "Worker", ...(projectRoot ? { repoRoot: projectRoot } : {}) };
     try {
@@ -414,6 +439,15 @@ export function SpawnWorkerDialog({
       return message;
     }
   }, null);
+
+  // The one user-dismissal path for the close and Cancel buttons (Escape and
+  // backdrop go through `onCancel`, which applies the same rule): a dialog
+  // dismissed mid-spawn leaves the result nowhere to go. The `spawn` action
+  // calls `closeDialog` directly because it closes while `isSpawning` is
+  // still true.
+  const requestDismiss = () => {
+    if (!isSpawning) closeDialog();
+  };
 
   const pickProjectRoot = async () => {
     let selected: string | null;
@@ -453,7 +487,7 @@ export function SpawnWorkerDialog({
       aria-labelledby={titleId}
       onClose={onClose}
       onCancel={(e) => {
-        // Never dismiss mid-spawn: the result has nowhere to go.
+        // Escape and backdrop light-dismiss; never mid-spawn (see `requestDismiss`).
         if (isSpawning) e.preventDefault();
       }}
       style={dialogStyle}
@@ -466,9 +500,10 @@ export function SpawnWorkerDialog({
           </h2>
           <button
             type="button"
-            onClick={closeDialog}
+            onClick={requestDismiss}
+            disabled={isSpawning}
             aria-label="Close Spawn Worker Dialog"
-            style={closeButtonStyle}
+            style={{ ...closeButtonStyle, ...(isSpawning ? closeButtonDisabledStyle : null) }}
           >
             <svg width={14} height={14} viewBox="0 0 14 14" fill="none" aria-hidden="true">
               <path
@@ -485,8 +520,8 @@ export function SpawnWorkerDialog({
           <fieldset style={fieldsetStyle}>
             <legend style={fieldLabelStyle}>Provider</legend>
             <div style={segmentedGroupStyle}>
-              {(["webview_anthropic", ...AGENT_PROVIDERS] as const).map((p) => {
-                const reason = isAgentProvider(p) ? unavailable[p] : null;
+              {ALL_PROVIDERS.map((p) => {
+                const reason = providerReason(p);
                 const disabled = reason != null;
                 return (
                   <label
@@ -508,9 +543,9 @@ export function SpawnWorkerDialog({
                 );
               })}
             </div>
-            {AGENT_PROVIDERS.filter((p) => unavailable[p] != null).map((p) => (
+            {ALL_PROVIDERS.filter((p) => providerReason(p) != null).map((p) => (
               <span key={p} style={unavailableNoteStyle}>
-                {PROVIDER_LABELS[p]} Unavailable — {unavailable[p]}
+                {PROVIDER_LABELS[p]} Unavailable — {providerReason(p)}
               </span>
             ))}
           </fieldset>
@@ -575,10 +610,21 @@ export function SpawnWorkerDialog({
                   ? "Loading…"
                   : (projectRoot ?? "No Project Root — Spawns Without Worktree Isolation")}
               </span>
-              <Button variant="secondary" size="sm" onClick={() => void pickProjectRoot()}>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => void pickProjectRoot()}
+                disabled={!canPickFolder}
+                aria-describedby={canPickFolder ? undefined : folderReasonId}
+              >
                 Choose…
               </Button>
             </div>
+            {!canPickFolder && (
+              <span id={folderReasonId} style={unavailableNoteStyle}>
+                {DESKTOP_ONLY_REASON}
+              </span>
+            )}
           </div>
 
           {notice && (
@@ -595,7 +641,7 @@ export function SpawnWorkerDialog({
         </div>
 
         <div style={footerStyle}>
-          <Button variant="ghost" size="sm" onClick={closeDialog} disabled={isSpawning}>
+          <Button variant="ghost" size="sm" onClick={requestDismiss} disabled={isSpawning}>
             Cancel
           </Button>
           <Button
@@ -603,7 +649,7 @@ export function SpawnWorkerDialog({
             variant="primary"
             size="sm"
             loading={isSpawning}
-            disabled={projectRoot === undefined || (agent !== null && unavailable[agent] != null)}
+            disabled={projectRoot === undefined || providerReason(provider) != null}
           >
             Spawn Worker
           </Button>

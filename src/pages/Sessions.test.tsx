@@ -21,6 +21,13 @@ vi.mock(import("#lib/templates"), async (importOriginal) => ({
   userTemplatesResource: () => userTemplates,
 }));
 
+/** `true` makes the active transport report no workspace browsing (the `build:web` page). */
+const web = vi.hoisted(() => ({ on: false }));
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  hasCapability: () => !web.on,
+}));
+
 const mockSaveToFile = vi.fn<(...args: unknown[]) => Promise<string | null>>();
 vi.mock(import("#lib/export"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -72,6 +79,8 @@ function chooseMenuItem(name: string): void {
 }
 
 beforeEach(() => {
+  web.on = false;
+  vi.stubGlobal("isTauri", true);
   resetStores();
   vi.clearAllMocks();
   mockSaveUserTemplate.mockReset().mockResolvedValue(undefined);
@@ -82,6 +91,34 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetStores();
+  vi.unstubAllGlobals();
+});
+
+describe("Sessions — local stores need the Tauri bridge", () => {
+  it("describes nothing on Export Metrics while no session is active and file export is available", async () => {
+    vi.unstubAllGlobals();
+    await renderPage();
+
+    // (The template picker, when open, carries its own reason elsewhere on the page.)
+    const exportMetrics = screen.getByRole("button", { name: "Export Metrics" });
+    expect(exportMetrics).toBeEnabled();
+    expect(exportMetrics).not.toHaveAttribute("aria-describedby");
+  });
+
+  it("disables Snapshot and Save As Template, with the reason, without the bridge", async () => {
+    vi.unstubAllGlobals();
+    const session = addSession();
+    useSessionStore.getState().setActiveSession(session.id);
+    await renderPage();
+
+    const snapshot = screen.getByRole("button", { name: "Snapshot" });
+    expect(snapshot).toBeDisabled();
+    expect(snapshot).toHaveAccessibleDescription("Available In The Desktop App Only");
+    const item = screen.getAllByRole("menuitem", { name: "Save As Template", hidden: true })[0];
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    chooseMenuItem("Save As Template");
+    expect(screen.queryByRole("form")).not.toBeInTheDocument();
+  });
 });
 
 describe("Sessions — Save As Template", () => {
@@ -210,6 +247,26 @@ describe("Sessions — views", () => {
 });
 
 describe("Sessions — export and templates", () => {
+  it("disables every file export and says why when the transport cannot browse files", async () => {
+    web.on = true;
+    const user = userEvent.setup();
+    const session = addSession();
+    useSessionStore.getState().setActiveSession(session.id);
+    await renderPage();
+
+    for (const name of ["Export MD", "Export JSON", "Export Metrics"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription("Available In The Desktop App Only");
+      await user.click(button);
+    }
+    chooseMenuItem("Export As JSON");
+    expect(
+      screen.getAllByRole("menuitem", { name: "Export As JSON", hidden: true })[0],
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(mockSaveToFile).not.toHaveBeenCalled();
+  });
+
   it("exports the metrics history as CSV", async () => {
     const user = userEvent.setup();
     await renderPage();

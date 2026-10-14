@@ -5,6 +5,12 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspacePanel } from "#components/workspace/WorkspacePanel";
 
+/** `true` makes the active transport report no workspace browsing (the `build:web` page). */
+const web = vi.hoisted(() => ({ on: false }));
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  hasCapability: () => !web.on,
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("@tauri-apps/plugin-fs", () => ({
   readDir: vi.fn(),
@@ -13,6 +19,7 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
 }));
 
 beforeEach(() => {
+  web.on = false;
   vi.mocked(open).mockResolvedValue("D:\\code\\app");
   vi.mocked(readDir).mockResolvedValue([
     { name: "README.md", isFile: true, isDirectory: false, isSymlink: false },
@@ -40,6 +47,18 @@ async function openProject() {
 }
 
 describe("WorkspacePanel", () => {
+  it("disables Open Project and says why when the transport cannot browse files", async () => {
+    web.on = true;
+    const user = userEvent.setup();
+    render(<WorkspacePanel />);
+
+    const button = screen.getByRole("button", { name: "Open Project" });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription("Available In The Desktop App Only");
+    await user.click(button);
+    expect(open).not.toHaveBeenCalled();
+  });
+
   // Regression: without `recursive`, only the picked folder entered the fs
   // scope, so subfolders of a project outside $HOME could not be listed.
   it("opens the project directory recursively", async () => {

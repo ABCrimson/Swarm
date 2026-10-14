@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import type { Alert, AlertCooldowns } from "#lib/alerts";
 import { alertThresholdsAtom, evaluateThresholds } from "#lib/alerts";
 import { memPercent } from "#lib/memory";
-import { isTauri, sendNotification } from "#lib/tauri";
+import { hasCapability, isTauri, sendNotification } from "#lib/tauri";
 import { useSystemStore } from "#store/system";
 import type { SystemMetrics } from "#store/types";
 import { appSettingsAtom } from "#store/ui";
@@ -31,9 +31,9 @@ const TOAST_STYLE = {
   },
 } as const;
 
-/** Toasts one alert, and mirrors it as a fire-and-forget native notification when enabled. */
+/** Toasts one alert, and mirrors it as a fire-and-forget native notification when enabled and the transport can show one. */
 function announce(alert: Alert, nativeNotifications: boolean): void {
-  if (nativeNotifications && isTauri()) {
+  if (nativeNotifications && hasCapability("nativeNotifications") && isTauri()) {
     const title = alert.severity === "critical" ? "SWARM Critical Alert" : "SWARM Warning";
     // A notification failure must never break alert handling.
     sendNotification(title, alert.message).catch(() => {});

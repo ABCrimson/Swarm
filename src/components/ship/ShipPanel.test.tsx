@@ -2,7 +2,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ShipPanel } from "#components/ship/ShipPanel";
 import type { DomainEvent } from "#lib/event-bus";
 import { ShipCommandError } from "#lib/tauri";
@@ -96,10 +96,16 @@ function makeContext(workerId: string): ShipContext {
   };
 }
 
+// The opener plugin needs the Tauri bridge; the flag opts the suite into it.
 beforeEach(() => {
+  vi.stubGlobal("isTauri", true);
   handlers.clear();
   vi.clearAllMocks();
   mockShipContext.mockImplementation(async (workerId) => makeContext(workerId));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 async function renderShipped(user: ReturnType<typeof userEvent.setup>) {
@@ -259,6 +265,21 @@ describe("ShipPanel", () => {
 
     await user.click(within(receipt).getByRole("button", { name: "Open Compare Page" }));
     expect(openUrl).toHaveBeenCalledTimes(2);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("opens the compare page in a browser tab, not the opener plugin, without the Tauri bridge", async () => {
+    vi.unstubAllGlobals();
+    using open = vi.spyOn(window, "open").mockReturnValue(null);
+    const user = userEvent.setup();
+    const receipt = await renderShipped(user);
+    // useShip's post-ship auto-open still calls the plugin (and catches its failure).
+    const autoOpenCalls = vi.mocked(openUrl).mock.calls.length;
+
+    await user.click(within(receipt).getByRole("button", { name: "Open Compare Page" }));
+
+    expect(open).toHaveBeenCalledWith(COMPARE_URL, "_blank", "noopener,noreferrer");
+    expect(openUrl).toHaveBeenCalledTimes(autoOpenCalls);
     expect(toast.error).not.toHaveBeenCalled();
   });
 

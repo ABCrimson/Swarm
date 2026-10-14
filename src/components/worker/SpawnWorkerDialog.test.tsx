@@ -17,8 +17,11 @@ vi.mock(import("#lib/project-root"), () => ({
   getPersistedRepoRoot: () => getPersistedRepoRootMock(),
 }));
 
+const web = vi.hoisted(() => ({ on: false }));
+
 vi.mock(import("#lib/tauri"), async (importOriginal) => ({
   ...(await importOriginal()),
+  hasCapability: () => !web.on,
   agentProbe: vi.fn(),
   agentSpawn: vi.fn(),
   spawnWorker: vi.fn(),
@@ -50,6 +53,7 @@ async function waitForProbeSettled(): Promise<void> {
 
 describe("SpawnWorkerDialog", () => {
   beforeEach(() => {
+    web.on = false;
     getPersistedRepoRootMock.mockReset().mockResolvedValue(null);
     vi.mocked(agentProbe).mockReset().mockResolvedValue(AVAILABLE);
     vi.mocked(agentSpawn).mockReset().mockResolvedValue("11111111-2222-3333-8444-555555555555");
@@ -372,6 +376,95 @@ describe("SpawnWorkerDialog", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(spawnWorker).not.toHaveBeenCalled();
     expect(agentSpawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses every dismissal while a spawn is in flight, then closes when it succeeds", async () => {
+    const pending = Promise.withResolvers<string | null>();
+    vi.mocked(spawnWorker).mockImplementation(() => pending.promise);
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<SpawnWorkerDialog onClose={onClose} />);
+    await waitForProbeSettled();
+
+    await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
+
+    const closeButton = screen.getByRole("button", { name: "Close Spawn Worker Dialog" });
+    await waitFor(() => expect(closeButton).toBeDisabled());
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await user.click(closeButton);
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Spawn Worker" })).toHaveAttribute("open");
+
+    await act(async () => pending.resolve("22222222-3333-4444-8555-666666666666"));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("closes from the header close button when no spawn is in flight", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<SpawnWorkerDialog onClose={onClose} />);
+    await waitForProbeSettled();
+
+    await user.click(screen.getByRole("button", { name: "Close Spawn Worker Dialog" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("in web mode disables Webview Anthropic with the desktop-only reason and defaults to Claude Code", async () => {
+    web.on = true;
+    const user = userEvent.setup();
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await waitForProbeSettled();
+
+    const webview = screen.getByRole("radio", { name: "Webview Anthropic" });
+    expect(webview).toBeDisabled();
+    expect(webview).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: "Claude Code" })).toBeChecked();
+    expect(screen.getByText(/Webview Anthropic Unavailable/)).toHaveTextContent(
+      "Webview Anthropic Unavailable — Available In The Desktop App Only",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
+    await waitFor(() => expect(agentSpawn).toHaveBeenCalledTimes(1));
+    expect(spawnWorker).not.toHaveBeenCalled();
+  });
+
+  it("in web mode refuses a webview spawn when the default is unusable too", async () => {
+    web.on = true;
+    vi.mocked(agentProbe).mockResolvedValue({ available: false, version: null, detail: "Missing" });
+    const user = userEvent.setup();
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await waitForProbeSettled();
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Claude Code" })).toBeDisabled());
+
+    expect(screen.getByRole("button", { name: "Spawn Worker" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
+    expect(spawnWorker).not.toHaveBeenCalled();
+  });
+
+  it("in web mode disables the folder picker with the desktop-only reason but still shows the saved root", async () => {
+    web.on = true;
+    getPersistedRepoRootMock.mockResolvedValue("/repo/root");
+    vi.mocked(validateRepoRoot).mockResolvedValue("/repo/root");
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+
+    expect(await screen.findByText("/repo/root")).toBeInTheDocument();
+    const choose = screen.getByRole("button", { name: "Choose…" });
+    expect(choose).toBeDisabled();
+    expect(choose).toHaveAccessibleDescription("Available In The Desktop App Only");
+    expect(choose).not.toHaveAttribute("title");
+    expect(screen.getByText("Available In The Desktop App Only")).toBeVisible();
+  });
+
+  it("on desktop keeps Webview Anthropic selected by default and the folder picker enabled", async () => {
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await waitForProbeSettled();
+
+    expect(screen.getByRole("radio", { name: "Webview Anthropic" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Choose…" })).toBeEnabled();
   });
 
   it("closes on Escape", async () => {

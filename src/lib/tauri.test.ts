@@ -10,7 +10,9 @@ import {
   agentSpawn,
   checkForUpdates,
   createSession,
+  DESKTOP_ONLY_REASON,
   gitPush,
+  hasCapability,
   listSessions,
   listWorkers,
   readConfig,
@@ -20,6 +22,29 @@ import {
   spawnWorker,
   validateRepoRoot,
 } from "#lib/tauri";
+
+/** `true` swaps the active transport's capabilities for `wsTransport`'s (the `build:web` page: nothing desktop-only). */
+const web = vi.hoisted(() => ({ on: false }));
+vi.mock(import("#lib/transport"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    transport: {
+      ...actual.transport,
+      get capabilities() {
+        return web.on
+          ? ({
+              kind: "ws",
+              workspaceBrowsing: false,
+              nativeNotifications: false,
+              autoUpdate: false,
+              localAiChat: false,
+            } as const)
+          : actual.transport.capabilities;
+      },
+    },
+  };
+});
 
 const WORKER_UUID = "550e8400-e29b-41d4-a716-446655440000";
 const SESSION_UUID = "6ba7b810-9dad-41d1-80b4-00c04fd430c8";
@@ -35,6 +60,7 @@ function disableTauri(): void {
 
 beforeEach(() => {
   vi.mocked(tauriInvoke).mockReset();
+  web.on = false;
   enableTauri();
 });
 afterEach(disableTauri);
@@ -429,10 +455,39 @@ describe("checkForUpdates", () => {
     await expect(checkForUpdates()).rejects.toThrow("Update Check Returned An Unexpected Shape.");
   });
 
-  it("resolves { available: false } outside the desktop shell", async () => {
+  it("rejects instead of reporting up to date without a Tauri bridge", async () => {
     disableTauri();
 
-    await expect(checkForUpdates()).resolves.toStrictEqual({ available: false });
+    await expect(checkForUpdates()).rejects.toThrow("Update Checks Need The Desktop App");
     expect(tauriInvoke).not.toHaveBeenCalled();
+  });
+
+  it("rejects instead of reporting up to date when the transport has no updater", async () => {
+    web.on = true;
+
+    await expect(checkForUpdates()).rejects.toThrow("Update Checks Need The Desktop App");
+    expect(tauriInvoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("hasCapability", () => {
+  it("offers every desktop feature on the desktop transport", () => {
+    expect(hasCapability("workspaceBrowsing")).toBe(true);
+    expect(hasCapability("nativeNotifications")).toBe(true);
+    expect(hasCapability("autoUpdate")).toBe(true);
+    expect(hasCapability("localAiChat")).toBe(true);
+  });
+
+  it("offers none of them on the ws transport (the build:web page)", () => {
+    web.on = true;
+
+    expect(hasCapability("workspaceBrowsing")).toBe(false);
+    expect(hasCapability("nativeNotifications")).toBe(false);
+    expect(hasCapability("autoUpdate")).toBe(false);
+    expect(hasCapability("localAiChat")).toBe(false);
+  });
+
+  it("names the reason a gated control shows", () => {
+    expect(DESKTOP_ONLY_REASON).toBe("Available In The Desktop App Only");
   });
 });

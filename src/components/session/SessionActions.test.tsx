@@ -6,6 +6,13 @@ import { SessionActions } from "#components/session/SessionActions";
 import { useSessionStore } from "#store/sessions";
 import type { Session } from "#store/types";
 
+/** `true` makes the active transport report no workspace browsing (the `build:web` page). */
+const web = vi.hoisted(() => ({ on: false }));
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  hasCapability: () => !web.on,
+}));
+
 const mockCreateAndActivate = vi.fn<(name: string) => Promise<Session>>();
 const mockImport = vi.fn<() => Promise<Session | null>>();
 vi.mock(import("#lib/session-lifecycle"), async (importOriginal) => ({
@@ -25,6 +32,7 @@ function makeSession(name: string): Session {
 }
 
 beforeEach(() => {
+  web.on = false;
   vi.clearAllMocks();
   mockCreateAndActivate.mockReset().mockImplementation(async (name) => makeSession(name));
   mockImport.mockReset();
@@ -41,6 +49,20 @@ async function openForm(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "New Session" }));
   return screen.getByRole("textbox", { name: "Session Name" });
 }
+
+describe("SessionActions — import", () => {
+  it("disables Import and says why when the transport cannot browse files", async () => {
+    web.on = true;
+    const user = userEvent.setup();
+    render(<SessionActions />);
+
+    const button = screen.getByRole("button", { name: "Import" });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription("Available In The Desktop App Only");
+    await user.click(button);
+    expect(mockImport).not.toHaveBeenCalled();
+  });
+});
 
 describe("SessionActions — new session", () => {
   it("opens a labelled, focused name field and creates the session on Enter", async () => {

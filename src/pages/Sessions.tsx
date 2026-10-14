@@ -12,6 +12,7 @@ import { pluralizeWorkers } from "#lib/format";
 import { errorMessage } from "#lib/is-error";
 import { deleteSessionAfterConfirm, exportSessionToFile } from "#lib/session-lifecycle";
 import { createSnapshot } from "#lib/snapshots";
+import { DESKTOP_ONLY_REASON, hasCapability, isTauri } from "#lib/tauri";
 import { applyTemplate, createTemplateFromSession, saveUserTemplate } from "#lib/templates";
 import { useSessionStore } from "#store/sessions";
 import { useSystemStore } from "#store/system";
@@ -175,6 +176,13 @@ export function Sessions(): React.ReactElement {
   const [view, setView] = useState<SessionView>("list");
   const [templateSourceId, setTemplateSourceId] = useState<string | null>(null);
   const templateOpenerRef = useRef<HTMLElement | null>(null);
+  // Every export goes through a native save dialog; without one the buttons
+  // stay visible but disabled, described by the reason.
+  const canExportFiles = hasCapability("workspaceBrowsing");
+  const exportReasonId = useId();
+  // Snapshots and templates live in tauri-plugin-store files, which need the
+  // Tauri bridge itself; no transport capability covers them.
+  const canUseLocalStores = isTauri();
 
   // The session menu has already returned focus to its trigger; remember it
   // so closing the form hands focus back instead of dropping it to <body>.
@@ -246,6 +254,8 @@ export function Sessions(): React.ReactElement {
                 <Button
                   variant="ghost"
                   size="sm"
+                  disabled={!canUseLocalStores}
+                  aria-describedby={canUseLocalStores ? undefined : exportReasonId}
                   onClick={() => void snapshotSession(activeSession)}
                 >
                   Snapshot
@@ -253,6 +263,8 @@ export function Sessions(): React.ReactElement {
                 <Button
                   variant="ghost"
                   size="sm"
+                  disabled={!canExportFiles}
+                  aria-describedby={canExportFiles ? undefined : exportReasonId}
                   onClick={() => void exportSessionMarkdown(activeSession)}
                 >
                   Export MD
@@ -260,15 +272,28 @@ export function Sessions(): React.ReactElement {
                 <Button
                   variant="ghost"
                   size="sm"
+                  disabled={!canExportFiles}
+                  aria-describedby={canExportFiles ? undefined : exportReasonId}
                   onClick={() => void exportSessionJson(activeSession.id)}
                 >
                   Export JSON
                 </Button>
               </div>
             )}
-            <Button variant="ghost" size="sm" onClick={() => void exportMetrics()}>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!canExportFiles}
+              aria-describedby={canExportFiles ? undefined : exportReasonId}
+              onClick={() => void exportMetrics()}
+            >
               Export Metrics
             </Button>
+            {(!canExportFiles || (activeSession != null && !canUseLocalStores)) && (
+              <span id={exportReasonId} className="text-fg-dim text-xs">
+                {DESKTOP_ONLY_REASON}
+              </span>
+            )}
           </div>
         </div>
 

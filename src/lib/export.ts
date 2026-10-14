@@ -12,7 +12,9 @@
  * the user picked (`allow_file` on that one path), so `saveToFile` /
  * `readFromFile` read or write that path directly, in place. The app has
  * no static fs scope and no rename grant, so a `.tmp` sibling plus rename
- * would be refused as a forbidden path.
+ * would be refused as a forbidden path. A transport without workspace
+ * browsing (the `pnpm build:web` page) has no such dialogs, so both
+ * functions reject there instead of failing inside the plugin.
  *
  * @module export
  */
@@ -20,6 +22,7 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import * as z from "zod";
+import { hasCapability } from "#lib/tauri";
 import { formatClock, formatDateTime } from "#lib/time";
 import { useMessageHistoryStore } from "#store/message-history";
 import type { MetricPoint, Session } from "#store/types";
@@ -187,12 +190,18 @@ export function sessionFileSlug(name: string): string {
   return WINDOWS_DEVICE_NAME.test(slug) ? `session-${slug}` : slug;
 }
 
+/** Rejects the file round-trip on a transport without the dialog and fs plugins. */
+function requireFileDialogs(): void {
+  if (!hasCapability("workspaceBrowsing")) throw new Error("File Dialogs Need The Desktop App");
+}
+
 /**
  * Asks for a destination with the native save dialog and writes
  * `content` to exactly that path (see the module doc for why the write is
  * direct).
  *
  * @returns The chosen path, or `null` when the dialog was cancelled.
+ * @throws When the transport has no native file dialogs.
  */
 export async function saveToFile(
   content: string,
@@ -200,6 +209,7 @@ export async function saveToFile(
   filterName: string,
   extension: string,
 ): Promise<string | null> {
+  requireFileDialogs();
   const filePath = await save({
     title: `Export As ${filterName}`,
     defaultPath: defaultName,
@@ -215,12 +225,14 @@ export async function saveToFile(
  * Asks for one file with the native open dialog and reads it as text.
  *
  * @returns The file's contents, or `null` when the dialog was cancelled.
+ * @throws When the transport has no native file dialogs.
  */
 export async function readFromFile(
   title: string,
   filterName: string,
   extension: string,
 ): Promise<string | null> {
+  requireFileDialogs();
   const filePath = await open({
     title,
     multiple: false,

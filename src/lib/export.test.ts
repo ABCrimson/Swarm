@@ -14,6 +14,13 @@ import { type ChatMessage, useMessageHistoryStore } from "#store/message-history
 import type { MetricPoint, Session } from "#store/types";
 import { useWorkerStore } from "#store/workers";
 
+/** `true` makes the active transport report no workspace browsing (the `build:web` page). */
+const web = vi.hoisted(() => ({ on: false }));
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  hasCapability: () => !web.on,
+}));
+
 const SESSION_ID = "0b6f7a52-5c3e-4d1a-9f0e-2a8b3c4d5e6f";
 const WORKER_ID = "11111111-2222-4333-8444-555555555555";
 
@@ -232,6 +239,25 @@ describe("sessionFileSlug", () => {
 });
 
 describe("saveToFile / readFromFile", () => {
+  afterEach(() => {
+    web.on = false;
+  });
+
+  it("rejects without opening a native dialog when the transport cannot browse files", async () => {
+    web.on = true;
+    vi.mocked(save).mockClear();
+    vi.mocked(open).mockClear();
+
+    await expect(saveToFile("{}", "session.json", "JSON", "json")).rejects.toThrow(
+      "File Dialogs Need The Desktop App",
+    );
+    await expect(readFromFile("Import Session", "JSON", "json")).rejects.toThrow(
+      "File Dialogs Need The Desktop App",
+    );
+    expect(save).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it("writes straight to the dialog-chosen absolute path — no .tmp sibling outside the dialog grant", async () => {
     vi.mocked(save).mockResolvedValueOnce("D:\\Exports\\session.json");
 

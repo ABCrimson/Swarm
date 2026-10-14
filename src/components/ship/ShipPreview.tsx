@@ -9,6 +9,7 @@ import {
   resultLabel,
   turnStatusLabel,
 } from "#lib/ship-causal";
+import { DESKTOP_ONLY_REASON, hasCapability } from "#lib/tauri";
 import type { CausalTurn, ShipContext, ShipPreflight, StagingMode } from "#store/types";
 
 interface ShipPreviewProps {
@@ -372,6 +373,9 @@ export function ShipPreview({
 }: ShipPreviewProps): React.ReactElement {
   const messageId = useId();
   const proseId = useId();
+  const proseReasonId = useId();
+  // The summary streams from the webview straight to Anthropic.
+  const canGenerateProse = hasCapability("localAiChat");
   const stagingId = useId();
   const fileRows = buildFileRows(preflight);
   const disabled = !preflight.canShip || message.trim() === "";
@@ -519,14 +523,19 @@ export function ShipPreview({
           onChange={(e) => onAiProseChange(e.target.value)}
           style={textareaStyle}
           spellCheck={true}
-          placeholder="Click Generate To Draft A Summary From The Causal Record Below — Optional, Editable, Never Required To Ship."
+          placeholder={
+            canGenerateProse
+              ? "Click Generate To Draft A Summary From The Causal Record Below — Optional, Editable, Never Required To Ship."
+              : "Write A Summary Here — Optional, Editable, Never Required To Ship."
+          }
         />
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Pill
             interactive
             tone="neutral"
             size="sm"
-            disabled={context == null}
+            disabled={context == null || !canGenerateProse}
+            aria-describedby={canGenerateProse ? undefined : proseReasonId}
             aria-disabled={aiProseState === "generating" || undefined}
             style={aiProseState === "generating" ? { opacity: 0.5, cursor: "progress" } : undefined}
             onClick={() => {
@@ -539,6 +548,11 @@ export function ShipPreview({
                 ? "Regenerate"
                 : "Generate"}
           </Pill>
+          {!canGenerateProse && (
+            <span id={proseReasonId} style={actionReasonStyle}>
+              {DESKTOP_ONLY_REASON}
+            </span>
+          )}
           <span role="status" className="sr-only">
             {aiProseState === "generating"
               ? "Generating Summary…"
@@ -549,7 +563,7 @@ export function ShipPreview({
           {aiProseState === "failed" && (
             <span role="alert" style={actionReasonStyle}>
               Generation Failed — Shipping With The Causal Record Alone Still Works.
-              {aiProseError != null && ` ${aiProseError}.`}
+              {aiProseError != null && ` ${aiProseError.replace(/\.+$/, "")}.`}
             </span>
           )}
         </div>

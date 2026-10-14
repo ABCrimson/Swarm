@@ -536,6 +536,14 @@ first render already shows persisted settings, then renders `App`. `App` connect
 the app-wide subscriptions once (`useTheme`, `useWorkerEvents`, `useAgentSessionEvents`,
 `useProvenanceEvents`, `useSystemLogEvents`, `useSessionEvents`, `useMetrics`, `useAlerts`,
 `useSettingsBridge`); the auto-snapshot loop and the store integrity check wait for the first idle period.
+`useSessionEvents` restores sessions from a `listSessions` snapshot at startup, recording `session_deleted` and
+worker-membership events that arrive while it is in flight and replaying them over the snapshot before
+`hydrateSessions`, so a late snapshot never undoes them; unmounting discards it. `useSettingsBridge` pushes the
+agent concurrency cap ("AI Concurrent Stream Limit") to the backend and waits for the acknowledgement: Settings
+shows "Applying…", and a failure or a 10 s timeout rolls the field back to the last acknowledged value with an
+alert and Retry (a late acknowledgement is adopted, and an older push the backend acknowledges becomes the
+rollback target). At launch, with a backend reachable, the field adopts the backend's `agent_concurrency`
+(unset is 3); a backend value the field cannot show (11 to 16) is overwritten by pushing the field's value.
 Dates and durations use `src/lib/time.ts` on `Temporal` and `Intl`; there is no date library.
 
 ### Event bus and transport
@@ -544,7 +552,14 @@ Dates and durations use `src/lib/time.ts` on `Temporal` and `Intl`; there is no 
 load by the Vite define `__SWARM_TRANSPORT__` (`"ws"` only for `pnpm build:web`)
 ([ADR-0024](adr/0024-transport-chosen-at-build-time.md)). `src/lib/tauri.ts` wraps every command with typed,
 zod-validated functions on top; `isTauri()` means the Tauri bridge specifically, `hasTransport()` means
-some backend is reachable. The remote surface is Dashboard, Workers, terminals, Metrics and agent chat.
+some backend is reachable, and `hasCapability(feature)` reads the transport's capability flags
+(`workspaceBrowsing`, `nativeNotifications`, `autoUpdate`, `localAiChat`; all on for `tauriTransport`, all off for
+`wsTransport`). Desktop-only controls gate on it: the remote build hides Graph Export / Import Workflow and
+disables Open Project, session file export and import, the update check and native-notification toggles, the
+Settings API key field and Save API Key, the Ship preview's summary Generate / Regenerate (its text area stays
+editable), and the spawn dialog's Webview Anthropic provider (the dialog starts on Claude Code) and folder picker, each showing
+`DESKTOP_ONLY_REASON` ("Available In The Desktop App Only"). `checkForUpdates()` rejects with "Update Checks Need
+The Desktop App" when it cannot run. The table is in [daemon.md](daemon.md#what-the-browser-build-offers).
 
 `src/lib/event-bus.ts` subscribes to `swarm://events`, validates the envelope, dedupes by seq, and on a
 seq gap buffers live events and backfills from `events_since` (pages of 5000), retrying with doubling

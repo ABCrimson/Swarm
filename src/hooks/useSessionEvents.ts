@@ -2,6 +2,43 @@ import { useEffect } from "react";
 import { onEvent } from "#lib/event-bus";
 import { listSessions } from "#lib/tauri";
 import { useSessionStore } from "#store/sessions";
+import type { Session } from "#store/types";
+
+/** The session events that can contradict a not-yet-applied startup snapshot. */
+type SnapshotEdit =
+  | { readonly kind: "deleted"; readonly sessionId: string }
+  | { readonly kind: "worker_added"; readonly sessionId: string; readonly workerId: string }
+  | { readonly kind: "worker_removed"; readonly sessionId: string; readonly workerId: string };
+
+/**
+ * Applies `edits`, in arrival order, to the sessions of a startup snapshot.
+ * A session the store does not hold yet cannot take the live event, so the
+ * snapshot copy takes it instead; sessions the store already holds are left
+ * alone by `hydrateSessions`, so edits to them are harmless.
+ */
+function applyEditsToSnapshot(
+  snapshot: readonly Session[],
+  edits: readonly SnapshotEdit[],
+): Session[] {
+  const byId = new Map(snapshot.map((session) => [session.id, session]));
+  for (const edit of edits) {
+    const session = byId.get(edit.sessionId);
+    if (!session) continue;
+    if (edit.kind === "deleted") {
+      byId.delete(edit.sessionId);
+    } else if (edit.kind === "worker_added") {
+      if (!session.workerIds.includes(edit.workerId)) {
+        byId.set(session.id, { ...session, workerIds: [...session.workerIds, edit.workerId] });
+      }
+    } else {
+      byId.set(session.id, {
+        ...session,
+        workerIds: session.workerIds.filter((id) => id !== edit.workerId),
+      });
+    }
+  }
+  return [...byId.values()];
+}
 
 /**
  * Global session sync. Must be called once, at the app root.
@@ -16,6 +53,16 @@ import { useSessionStore } from "#store/sessions";
  * - `session_worker_added`   -> store.addWorkerToSession() (idempotent)
  * - `session_worker_removed` -> store.removeWorkerFromSession()
  *
+ * The snapshot is sequenced against the deletion and membership events:
+ * those that land before it resolves are applied to the store immediately
+ * and also recorded, then replayed over the snapshot before it is hydrated
+ * (a `session_created` needs no record, because `hydrateSessions` keeps the
+ * store's copy). A session deleted, or a
+ * worker added or removed, in that window therefore wins over the stale
+ * snapshot instead of being undone by it. Events after hydration, and every
+ * event when the restore fails, are applied immediately and recorded nowhere.
+ * Unmounting before the snapshot resolves discards it.
+ *
  * Payloads arrive already validated by `#lib/event-bus`. All listeners
  * are removed on unmount.
  */
@@ -29,9 +76,22 @@ export function useSessionEvents(): void {
       removeWorkerFromSession,
     } = useSessionStore.getState();
 
-    void listSessions().then(hydrateSessions, (err: unknown) => {
-      console.error("useSessionEvents: could not restore persisted sessions", err);
-    });
+    // Non-null while the snapshot is in flight; null once it settled or the
+    // hook unmounted.
+    let pendingEdits: SnapshotEdit[] | null = [];
+
+    void listSessions().then(
+      (snapshot) => {
+        if (pendingEdits === null) return;
+        const edits = pendingEdits;
+        pendingEdits = null;
+        hydrateSessions(applyEditsToSnapshot(snapshot, edits));
+      },
+      (err: unknown) => {
+        pendingEdits = null;
+        console.error("useSessionEvents: could not restore persisted sessions", err);
+      },
+    );
 
     const offs = [
       onEvent("session_created", ({ payload: { sessionId, name } }) => {
@@ -59,16 +119,30 @@ export function useSessionEvents(): void {
           updatedAt: existing?.updatedAt ?? now,
         });
       }),
-      onEvent("session_deleted", ({ payload }) => removeSession(payload.sessionId)),
-      onEvent("session_worker_added", ({ payload }) =>
-        addWorkerToSession(payload.sessionId, payload.workerId),
-      ),
-      onEvent("session_worker_removed", ({ payload }) =>
-        removeWorkerFromSession(payload.sessionId, payload.workerId),
-      ),
+      onEvent("session_deleted", ({ payload }) => {
+        pendingEdits?.push({ kind: "deleted", sessionId: payload.sessionId });
+        removeSession(payload.sessionId);
+      }),
+      onEvent("session_worker_added", ({ payload }) => {
+        pendingEdits?.push({
+          kind: "worker_added",
+          sessionId: payload.sessionId,
+          workerId: payload.workerId,
+        });
+        addWorkerToSession(payload.sessionId, payload.workerId);
+      }),
+      onEvent("session_worker_removed", ({ payload }) => {
+        pendingEdits?.push({
+          kind: "worker_removed",
+          sessionId: payload.sessionId,
+          workerId: payload.workerId,
+        });
+        removeWorkerFromSession(payload.sessionId, payload.workerId);
+      }),
     ];
 
     return () => {
+      pendingEdits = null;
       for (const off of offs) off();
     };
   }, []);

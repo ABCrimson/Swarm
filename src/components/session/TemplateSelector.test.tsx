@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TemplateSelector } from "#components/session/TemplateSelector";
 import type { UserTemplatesResult } from "#lib/templates";
 import { BUILT_IN_TEMPLATES, invalidateUserTemplates } from "#lib/templates";
@@ -20,7 +20,15 @@ const USER_TEMPLATE: SessionTemplate = {
   builtIn: false,
 };
 
-afterEach(cleanup);
+// User templates are plugin-store files, which need the Tauri bridge.
+beforeEach(() => {
+  vi.stubGlobal("isTauri", true);
+  mockResource.mockReset();
+});
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 /** Renders with the user-template read resolving to `result`, inside act() so the suspended section can reveal. */
 async function renderSelector(result: UserTemplatesResult) {
@@ -35,6 +43,20 @@ async function renderSelector(result: UserTemplatesResult) {
 }
 
 describe("TemplateSelector", () => {
+  it("shows the desktop-only reason and never reads the store without the Tauri bridge", async () => {
+    vi.unstubAllGlobals();
+    const onSelect = vi.fn();
+    await act(async () => {
+      render(<TemplateSelector onSelect={onSelect} onClose={vi.fn()} />);
+    });
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const yours = screen.getByRole("region", { name: "Your Templates" });
+    expect(within(yours).getByText("Available In The Desktop App Only")).toBeVisible();
+    expect(mockResource).not.toHaveBeenCalled();
+    expect(screen.getByRole("region", { name: "Built-In Templates" })).toBeInTheDocument();
+  });
+
   it("lists the built-in templates and the user's own, each selectable", async () => {
     const user = userEvent.setup();
     const { onSelect } = await renderSelector({ templates: [USER_TEMPLATE], failed: false });

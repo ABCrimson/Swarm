@@ -1,7 +1,15 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ShipPreview } from "#components/ship/ShipPreview";
+
+/** `true` makes the active transport report no webview AI chat (the `build:web` page). */
+const web = vi.hoisted(() => ({ on: false }));
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  hasCapability: () => !web.on,
+}));
+
 import type { CausalTurn, ShipContext, ShipPreflight } from "#store/types";
 
 function makePreflight(overrides: Partial<ShipPreflight> = {}): ShipPreflight {
@@ -170,6 +178,34 @@ describe("ShipPreview — Causal Record section", () => {
 });
 
 describe("ShipPreview — AI prose section", () => {
+  afterEach(() => {
+    web.on = false;
+  });
+
+  it("disables Generate with the reason when the transport has no webview AI chat", async () => {
+    web.on = true;
+    const user = userEvent.setup();
+    const props = renderPreview({ aiProse: null, aiProseState: "idle" });
+
+    const button = screen.getByRole("button", { name: "Generate" });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription("Available In The Desktop App Only");
+    expect(
+      screen.getByLabelText("What Changed / Why (AI-Generated, Editable)"),
+    ).not.toHaveAttribute("placeholder", expect.stringContaining("Click Generate"));
+    await user.click(button);
+    expect(props.onRegenerateProse).not.toHaveBeenCalled();
+  });
+
+  it("ends a failure reason that already ends in a period with a single period", () => {
+    renderPreview({
+      aiProseState: "failed",
+      aiProseError: "Remote Access To Secret-Shaped Config Keys Is Denied.",
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(/Is Denied\.$/);
+    expect(screen.getByRole("alert")).not.toHaveTextContent("..");
+  });
+
   it("shows a Generate label before any prose has been produced", () => {
     renderPreview({ aiProse: null, aiProseState: "idle" });
     expect(screen.getByText("Generate")).toBeInTheDocument();

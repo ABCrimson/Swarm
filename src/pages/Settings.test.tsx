@@ -3,19 +3,49 @@ import userEvent from "@testing-library/user-event";
 import { getDefaultStore } from "jotai";
 import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useSettingsBridge } from "#hooks/useSettingsBridge";
 import { alertThresholdsAtom } from "#lib/alerts";
 import { CLAUDE_MODELS } from "#lib/models";
-import { checkForUpdates, readConfig, setMaxWorkers, writeConfig } from "#lib/tauri";
+import {
+  checkForUpdates,
+  DESKTOP_ONLY_REASON,
+  hasCapability,
+  isTauri,
+  readConfig,
+  setAgentConcurrency,
+  setMaxWorkers,
+  writeConfig,
+} from "#lib/tauri";
 import { clampNumberInput, Settings, thresholdsError } from "#pages/Settings";
-import { appSettingsAtom, DEFAULT_APP_SETTINGS, selectedModelAtom } from "#store/ui";
+import {
+  agentConcurrencySyncAtom,
+  appSettingsAtom,
+  DEFAULT_APP_SETTINGS,
+  selectedModelAtom,
+} from "#store/ui";
 
 vi.mock(import("#lib/tauri"), async (importOriginal) => ({
   ...(await importOriginal()),
-  isTauri: () => false,
+  isTauri: vi.fn(),
+  hasCapability: vi.fn(),
+  setAgentConcurrency: vi.fn(),
   readConfig: vi.fn(),
   writeConfig: vi.fn(),
   setMaxWorkers: vi.fn(),
   checkForUpdates: vi.fn(),
+}));
+
+// The shared sonner mock (src/test/setup.ts) has no `dismiss`, which the
+// settings bridge uses to clear a stale failure toast.
+vi.mock("sonner", () => ({
+  toast: Object.assign(vi.fn(), {
+    error: vi.fn(),
+    success: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+    dismiss: vi.fn(),
+  }),
+  Toaster: () => null,
 }));
 
 const store = getDefaultStore();
@@ -27,6 +57,10 @@ beforeEach(() => {
   vi.mocked(writeConfig).mockResolvedValue(undefined);
   vi.mocked(setMaxWorkers).mockResolvedValue(undefined);
   vi.mocked(checkForUpdates).mockResolvedValue({ available: false });
+  vi.mocked(hasCapability).mockReturnValue(true);
+  vi.mocked(isTauri).mockReturnValue(false);
+  vi.mocked(setAgentConcurrency).mockResolvedValue(undefined);
+  store.set(agentConcurrencySyncAtom, { status: "idle" });
   store.set(alertThresholdsAtom, DEFAULT_THRESHOLDS);
   store.set(appSettingsAtom, DEFAULT_APP_SETTINGS);
   store.set(selectedModelAtom, "sonnet");
@@ -375,5 +409,125 @@ describe("Settings — updates", () => {
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith("Update Check Failed", { description: "offline" }),
     );
+  });
+});
+
+/** The page with the app-root bridge that applies and acknowledges its backend pushes. */
+function SettingsWithBridge(): React.ReactElement {
+  useSettingsBridge();
+  return <Settings />;
+}
+
+describe("Settings — AI concurrent stream limit acknowledgement", () => {
+  it("rolls the field back to the last acknowledged value and offers Retry when the push is rejected", async () => {
+    const user = userEvent.setup();
+    using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(setAgentConcurrency).mockRejectedValueOnce(new Error("limit out of range"));
+    render(<SettingsWithBridge />);
+
+    const field = screen.getByLabelText("AI Concurrent Stream Limit");
+    await user.clear(field);
+    await user.type(field, "8{Enter}");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Could Not Apply 8 Streams");
+    expect(alert).toHaveTextContent("limit out of range");
+    expect(field).toHaveValue(DEFAULT_APP_SETTINGS.aiConcurrentLimit);
+    expect(field).toHaveAccessibleDescription(/limit out of range/);
+
+    await user.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(vi.mocked(setAgentConcurrency).mock.calls).toStrictEqual([[8], [8]]);
+    expect(field).toHaveValue(8);
+  });
+
+  it("marks the field busy and says it is applying until the backend answers", async () => {
+    const user = userEvent.setup();
+    let acknowledge: () => void = () => {};
+    vi.mocked(setAgentConcurrency).mockReturnValueOnce(new Promise<void>((r) => (acknowledge = r)));
+    render(<SettingsWithBridge />);
+
+    const field = screen.getByLabelText("AI Concurrent Stream Limit");
+    await user.clear(field);
+    await user.type(field, "6{Enter}");
+
+    expect(field).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByText("Applying…")).toHaveAttribute("role", "status");
+
+    acknowledge();
+    await waitFor(() => expect(field).not.toHaveAttribute("aria-busy"));
+    expect(screen.queryByText("Applying…")).not.toBeInTheDocument();
+  });
+});
+
+describe("Settings — in the browser build", () => {
+  beforeEach(() => {
+    vi.mocked(hasCapability).mockReturnValue(false);
+  });
+
+  it("disables Check For Updates with the desktop-only reason, so the check cannot report up to date", async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    const button = screen.getByRole("button", { name: "Check For Updates" });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription(DESKTOP_ONLY_REASON);
+
+    await user.click(button);
+
+    expect(checkForUpdates).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalledWith("You Are On The Latest Version");
+  });
+
+  it("disables the API key field and Save with the desktop-only reason, and never touches the key", async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    const input = screen.getByLabelText("API Key");
+    expect(input).toBeDisabled();
+    expect(input).toHaveAccessibleDescription(new RegExp(DESKTOP_ONLY_REASON));
+    expect(screen.getByRole("button", { name: "Save API Key" })).toBeDisabled();
+
+    await user.click(input);
+    await user.keyboard("{Enter}");
+
+    expect(readConfig).not.toHaveBeenCalledWith("anthropic_api_key", expect.anything());
+    expect(writeConfig).not.toHaveBeenCalled();
+  });
+
+  it.for(["Check For Updates On Launch", "Native Alert Notifications"] as const)(
+    "disables the %s switch with the desktop-only reason",
+    async (name) => {
+      const user = userEvent.setup();
+      render(<Settings />);
+
+      const toggle = screen.getByRole("switch", { name });
+      expect(toggle).toBeDisabled();
+      expect(toggle).toHaveAccessibleDescription(new RegExp(DESKTOP_ONLY_REASON));
+
+      await user.click(toggle);
+
+      expect(toggle).toHaveAttribute("aria-checked", "false");
+    },
+  );
+});
+
+describe("Settings — auto-snapshot interval", () => {
+  it("is disabled with the desktop-only reason without the Tauri bridge", () => {
+    render(<Settings />);
+
+    const field = screen.getByLabelText("Auto-Snapshot Interval");
+    expect(field).toBeDisabled();
+    expect(field).toHaveAccessibleDescription(new RegExp(DESKTOP_ONLY_REASON));
+  });
+
+  it("is editable in the desktop shell", () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    render(<Settings />);
+
+    const field = screen.getByLabelText("Auto-Snapshot Interval");
+    expect(field).toBeEnabled();
+    expect(field).not.toHaveAccessibleDescription(new RegExp(DESKTOP_ONLY_REASON));
   });
 });

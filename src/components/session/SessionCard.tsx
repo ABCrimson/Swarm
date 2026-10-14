@@ -2,6 +2,7 @@ import { motion } from "motion/react";
 import { type CSSProperties, useId, useRef } from "react";
 import { Pill } from "#components/ui/Pill";
 import { pluralizeWorkers } from "#lib/format";
+import { DESKTOP_ONLY_REASON, hasCapability, isTauri } from "#lib/tauri";
 import { formatRelativeTime } from "#lib/time";
 import type { Session } from "#store/types";
 import { useWorkerStore } from "#store/workers";
@@ -228,36 +229,61 @@ function SessionMenu({
         }
       }}
     >
-      <SessionMenuItem label="Export As JSON" onSelect={onExport} />
-      <SessionMenuItem label="Save As Template" onSelect={onCreateTemplate} />
+      <SessionMenuItem
+        label="Export As JSON"
+        unavailableReason={hasCapability("workspaceBrowsing") ? undefined : DESKTOP_ONLY_REASON}
+        onSelect={onExport}
+      />
+      <SessionMenuItem
+        label="Save As Template"
+        unavailableReason={isTauri() ? undefined : DESKTOP_ONLY_REASON}
+        onSelect={onCreateTemplate}
+      />
       <hr className="my-1 h-px border-0 bg-[oklch(0.28_0.04_220)]" />
       <SessionMenuItem label="Delete Session" danger onSelect={onDelete} />
     </div>
   );
 }
 
+/**
+ * One menu item. With `unavailableReason` it is `aria-disabled` and shows the
+ * reason beneath the label: it stays focusable (arrow-key navigation and the
+ * focus-first-item-on-open rule need that) but selecting it does nothing.
+ */
 function SessionMenuItem({
   label,
   danger = false,
+  unavailableReason,
   onSelect,
 }: {
   readonly label: string;
   readonly danger?: boolean;
+  readonly unavailableReason?: string | undefined;
   readonly onSelect: () => void;
 }): React.ReactElement {
+  const labelId = useId();
+  const reasonId = useId();
   return (
     <button
       type="button"
       role="menuitem"
       tabIndex={-1}
-      onClick={onSelect}
+      aria-disabled={unavailableReason != null || undefined}
+      aria-labelledby={unavailableReason != null ? labelId : undefined}
+      aria-describedby={unavailableReason != null ? reasonId : undefined}
+      onClick={unavailableReason != null ? undefined : onSelect}
       className={`block w-full cursor-pointer px-3 py-1.5 text-left text-sm transition-colors font-[family-name:var(--font-body)] focus-visible:outline-2 focus-visible:-outline-offset-2 ${
         danger
           ? "text-rose hover:bg-[oklch(0.20_0.06_10/0.3)] focus:bg-[oklch(0.20_0.06_10/0.3)] focus-visible:outline-rose"
           : "hover:bg-[oklch(0.22_0.04_220/0.5)] focus:bg-[oklch(0.22_0.04_220/0.5)] focus-visible:outline-plasma"
       }`}
     >
-      {label}
+      <span id={labelId}>{label}</span>
+      {unavailableReason != null && (
+        <span id={reasonId} className="block text-fg-dim text-xs">
+          {unavailableReason}
+        </span>
+      )}
     </button>
   );
 }

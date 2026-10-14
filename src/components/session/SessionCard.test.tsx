@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionCard } from "#components/session/SessionCard";
 import type { Session } from "#store/types";
 import { useWorkerStore } from "#store/workers";
@@ -86,12 +86,54 @@ function resetWorkerStore(): void {
   for (const [id] of useWorkerStore.getState().workers) useWorkerStore.getState().removeWorker(id);
 }
 
+/** `true` makes the active transport report no workspace browsing (the `build:web` page). */
+const web = vi.hoisted(() => ({ on: false }));
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  hasCapability: () => !web.on,
+}));
+
 describe("SessionCard", () => {
+  // Save As Template writes a plugin-store file, which needs the Tauri bridge.
+  beforeEach(() => {
+    vi.stubGlobal("isTauri", true);
+  });
   // Unmount before the store reset, so the reset never re-renders a
   // still-mounted card outside act().
   afterEach(() => {
     cleanup();
     resetWorkerStore();
+    web.on = false;
+    vi.unstubAllGlobals();
+  });
+
+  it("marks Save As Template unavailable, with the reason, without the Tauri bridge", async () => {
+    vi.unstubAllGlobals();
+    const user = userEvent.setup();
+    const props = renderCard();
+
+    await user.click(screen.getByRole("button", { name: 'Actions For Session "Test Session"' }));
+    const item = screen.getByRole("menuitem", { name: "Save As Template" });
+
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveAccessibleDescription("Available In The Desktop App Only");
+    await user.click(item);
+    expect(props.onCreateTemplate).not.toHaveBeenCalled();
+  });
+
+  it("marks Export As JSON unavailable, with the reason, when the transport cannot browse files", async () => {
+    web.on = true;
+    const user = userEvent.setup();
+    const props = renderCard();
+
+    await user.click(screen.getByRole("button", { name: 'Actions For Session "Test Session"' }));
+    const item = screen.getByRole("menuitem", { name: "Export As JSON" });
+
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveAccessibleDescription("Available In The Desktop App Only");
+    expect(item).toHaveFocus();
+    await user.click(item);
+    expect(props.onExport).not.toHaveBeenCalled();
   });
 
   // ── live worker count ──

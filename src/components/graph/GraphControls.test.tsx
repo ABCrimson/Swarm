@@ -36,6 +36,13 @@ vi.mock(import("@xyflow/react"), async (importOriginal) => ({
   useReactFlow: (() => ({ zoomIn, zoomOut, fitView })) as never,
 }));
 
+/** `true` makes the active transport report no workspace browsing (the `build:web` page). */
+const web = vi.hoisted(() => ({ on: false }));
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  hasCapability: () => !web.on,
+}));
+
 const WORKFLOW: WorkflowDefinition = {
   id: "wf-1",
   name: "Saved",
@@ -128,7 +135,17 @@ describe("GraphControls — zoom-key scope", () => {
 
 describe("GraphControls — workflow files", () => {
   afterEach(() => {
+    web.on = false;
     vi.unstubAllGlobals();
+  });
+
+  it("hides Export/Import when the transport cannot browse files, even with a Tauri bridge", () => {
+    web.on = true;
+    vi.stubGlobal("isTauri", true);
+    renderControls();
+
+    expect(screen.queryByRole("button", { name: "Export Workflow" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Import Workflow" })).not.toBeInTheDocument();
   });
 
   it("hides Export/Import outside the desktop app (no Tauri dialog/fs plugins)", () => {

@@ -46,6 +46,7 @@ function resetStore(): void {
 
 const SESSION_ID = "11111111-2222-4333-8444-555555555555";
 const WORKER_ID = "66666666-7777-4888-8999-aaaaaaaaaaaa";
+const OTHER_SESSION_ID = "99999999-aaaa-4bbb-8ccc-dddddddddddd";
 const OTHER_WORKER_ID = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
 
 describe("useSessionEvents", () => {
@@ -168,6 +169,146 @@ describe("useSessionEvents", () => {
     });
 
     expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([WORKER_ID]);
+  });
+
+  // ── startup restore sequenced against live events ──
+  // The snapshot is requested at mount but resolves later; events delivered
+  // meanwhile hit a store that does not hold the restored sessions yet.
+
+  function deferSnapshot(): (sessions: Session[]) => void {
+    const snapshot = Promise.withResolvers<Session[]>();
+    mockListSessions.mockReturnValue(snapshot.promise);
+    return snapshot.resolve;
+  }
+
+  it("does not resurrect a session deleted before the snapshot resolves", async () => {
+    const resolveSnapshot = deferSnapshot();
+    const other = makeSession({ id: OTHER_SESSION_ID });
+    renderHook(() => useSessionEvents());
+
+    deliver("session_deleted", { sessionId: SESSION_ID });
+    resolveSnapshot([makeSession({ id: SESSION_ID }), other]);
+
+    await waitFor(() => {
+      expect(useSessionStore.getState().sessions.get(OTHER_SESSION_ID)).toEqual(other);
+    });
+    expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(false);
+  });
+
+  it("does not restore a worker removed before the snapshot resolves", async () => {
+    const resolveSnapshot = deferSnapshot();
+    renderHook(() => useSessionEvents());
+
+    deliver("session_worker_removed", { sessionId: SESSION_ID, workerId: WORKER_ID });
+    resolveSnapshot([makeSession({ id: SESSION_ID, workerIds: [WORKER_ID, OTHER_WORKER_ID] })]);
+
+    await waitFor(() => {
+      expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(true);
+    });
+    expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([
+      OTHER_WORKER_ID,
+    ]);
+  });
+
+  it("keeps a worker added before the snapshot resolves", async () => {
+    const resolveSnapshot = deferSnapshot();
+    renderHook(() => useSessionEvents());
+
+    deliver("session_worker_added", { sessionId: SESSION_ID, workerId: OTHER_WORKER_ID });
+    resolveSnapshot([makeSession({ id: SESSION_ID, workerIds: [WORKER_ID] })]);
+
+    await waitFor(() => {
+      expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(true);
+    });
+    expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([
+      WORKER_ID,
+      OTHER_WORKER_ID,
+    ]);
+  });
+
+  it("applies pre-snapshot events in arrival order (remove then re-add keeps the worker)", async () => {
+    const resolveSnapshot = deferSnapshot();
+    renderHook(() => useSessionEvents());
+
+    deliver("session_worker_removed", { sessionId: SESSION_ID, workerId: WORKER_ID });
+    deliver("session_worker_added", { sessionId: SESSION_ID, workerId: WORKER_ID });
+    resolveSnapshot([makeSession({ id: SESSION_ID, workerIds: [WORKER_ID] })]);
+
+    await waitFor(() => {
+      expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(true);
+    });
+    expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([WORKER_ID]);
+  });
+
+  it("keeps a session created this run over its persisted copy", async () => {
+    const resolveSnapshot = deferSnapshot();
+    const other = makeSession({ id: OTHER_SESSION_ID });
+    renderHook(() => useSessionEvents());
+
+    deliver("session_created", { sessionId: SESSION_ID, name: "Live" });
+    resolveSnapshot([makeSession({ id: SESSION_ID, name: "Persisted" }), other]);
+
+    await waitFor(() => {
+      expect(useSessionStore.getState().sessions.has(OTHER_SESSION_ID)).toBe(true);
+    });
+    expect(useSessionStore.getState().sessions.get(SESSION_ID)?.name).toBe("Live");
+  });
+
+  it("applies events immediately once the snapshot has resolved", async () => {
+    mockListSessions.mockResolvedValue([makeSession({ id: SESSION_ID, workerIds: [WORKER_ID] })]);
+    renderHook(() => useSessionEvents());
+    await waitFor(() => {
+      expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(true);
+    });
+
+    deliver("session_worker_removed", { sessionId: SESSION_ID, workerId: WORKER_ID });
+    expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([]);
+    deliver("session_deleted", { sessionId: SESSION_ID });
+    expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(false);
+  });
+
+  it("does not hydrate when unmounted before the snapshot resolves", async () => {
+    const resolveSnapshot = deferSnapshot();
+    const { unmount } = renderHook(() => useSessionEvents());
+
+    unmount();
+    resolveSnapshot([makeSession({ id: SESSION_ID })]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(false);
+  });
+
+  it("applies events straight to the store after a failed restore", async () => {
+    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockListSessions.mockRejectedValue(new Error("backend not ready"));
+    useSessionStore.getState().addSession(makeSession({ id: SESSION_ID, workerIds: [WORKER_ID] }));
+    renderHook(() => useSessionEvents());
+    await waitFor(() => {
+      expect(consoleError).toHaveBeenCalled();
+    });
+
+    deliver("session_worker_added", { sessionId: SESSION_ID, workerId: OTHER_WORKER_ID });
+    expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([
+      WORKER_ID,
+      OTHER_WORKER_ID,
+    ]);
+    deliver("session_deleted", { sessionId: SESSION_ID });
+    expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(false);
+  });
+
+  it("keeps a pre-snapshot deletion under StrictMode's double mount", async () => {
+    const resolveSnapshot = deferSnapshot();
+    const other = makeSession({ id: OTHER_SESSION_ID });
+    renderHook(() => useSessionEvents(), { reactStrictMode: true });
+
+    deliver("session_deleted", { sessionId: SESSION_ID });
+    resolveSnapshot([makeSession({ id: SESSION_ID }), other]);
+
+    await waitFor(() => {
+      expect(useSessionStore.getState().sessions.has(OTHER_SESSION_ID)).toBe(true);
+    });
+    expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(false);
   });
 
   it("unsubscribes every listener on unmount", () => {

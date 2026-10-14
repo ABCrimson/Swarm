@@ -9,6 +9,7 @@
 - [What `swarmd` Is](#what-swarmd-is)
 - [Getting the Binary](#getting-the-binary)
 - [Quick Start (Loopback)](#quick-start-loopback)
+- [What the Browser Build Offers](#what-the-browser-build-offers)
 - [Command Line](#command-line)
 - [Installing as a User Service](#installing-as-a-user-service)
   - [Linux (systemd)](#linux-systemd)
@@ -73,6 +74,29 @@ SWARM Daemon Listening On http://127.0.0.1:8787/ (Run `swarmd connect-url` For T
 ```
 
 To get a browser UI from the daemon itself, build the web bundle (`pnpm build:web`, output in `dist-web/`) and serve it with `--serve-ui dist-web`, then open the connect URL. Without `--serve-ui`, point any WebSocket client at `ws://127.0.0.1:8787/ws`. `Ctrl-C` stops it gracefully.
+
+## What the Browser Build Offers
+
+The page `--serve-ui` serves talks to the daemon over the WebSocket (`wsTransport`), not Tauri IPC, so it has no native dialogs, no filesystem plugin, no OS notifications and no updater, and no webview-direct Anthropic chat. The frontend reads that from the transport's capability flags (`hasCapability()` in `src/lib/tauri.ts`, fixed per build), or, for plugin-store files and the opener, from `isTauri()`, and either hides a control or disables it with "Available In The Desktop App Only", rather than offering it and failing.
+
+| Control | Desktop app | `--serve-ui` browser build |
+| --- | --- | --- |
+| Workspace page, Open Project (folder picker, file tree, file viewer) | Works | Button disabled, "Available In The Desktop App Only" |
+| Graph Export / Import Workflow | Works | Hidden |
+| Sessions: export (JSON, Markdown, metrics CSV), the card menu's Export As JSON, and Import | Work (native save and open dialogs) | Disabled, with "Available In The Desktop App Only" beside or under them |
+| Sessions: delete | Native confirmation dialog | The browser's own confirmation dialog |
+| Sessions: Snapshot button, the card menu's Save As Template, the palette's Snapshot Session | Work (plugin-store files) | Snapshot and Save As Template are disabled, with "Available In The Desktop App Only"; Snapshot Session is absent from the command palette |
+| Sessions: the template picker's saved templates; automatic snapshots | Saved templates load from a plugin-store file; a snapshot of the active session is taken every Auto-Snapshot Interval | The picker shows "Available In The Desktop App Only" in place of saved templates (the built-in ones stay); automatic snapshots do not run, and Settings' Auto-Snapshot Interval is disabled with the same reason |
+| Ship: Open Compare Page (receipt) | Opens the default browser through the opener plugin | Opens the compare page in a new browser tab; the "Commit + Push + Open Compare Page" action's own auto-open of that page still fails there and shows the warning toast "Shipped, But Could Not Open The Compare Page: …" |
+| Worker AI panel: webview chat, model selector, Inject Instruction, Queue | Works for workers without an agent session | Replaced by a notice, "Available In The Desktop App Only"; Claude Code and Codex workers chat as usual |
+| Alert thresholds: OS notification mirror | Works when enabled in Settings | The in-app toast only |
+| Settings: Check For Updates | Works | Button disabled, "Available In The Desktop App Only" beside it |
+| Settings: Check For Updates On Launch, Native Alert Notifications toggles | Work | Toggles disabled, with "Available In The Desktop App Only" |
+| Spawn dialog: Webview Anthropic provider, folder picker | Work; Webview Anthropic is the default provider | Both disabled, with "Available In The Desktop App Only"; the dialog starts on Claude Code |
+| Settings, AI Connectivity: API Key field, Save API Key | Work | Both disabled, with "Available In The Desktop App Only"; the key is never read, because `swarmd` denies secret-shaped config keys to remote clients |
+| Ship preview: summary Generate / Regenerate | Streams a draft from the webview to Anthropic | Disabled, with "Available In The Desktop App Only"; the summary text area stays editable |
+
+The disabled Check For Updates button is what a browser-build user sees. `checkForUpdates()` itself rejects with "Update Checks Need The Desktop App" when the transport has no updater or there is no Tauri bridge (for example a plain-browser preview of the desktop build, where the button stays enabled and the failure toast, "Update Check Failed", carries that text), so a check that did not run never reads as "up to date".
 
 ## Command Line
 
