@@ -10,6 +10,7 @@ import {
   checkForUpdates,
   DESKTOP_ONLY_REASON,
   hasCapability,
+  isTauri,
   readConfig,
   setAgentConcurrency,
   setMaxWorkers,
@@ -25,7 +26,7 @@ import {
 
 vi.mock(import("#lib/tauri"), async (importOriginal) => ({
   ...(await importOriginal()),
-  isTauri: () => false,
+  isTauri: vi.fn(),
   hasCapability: vi.fn(),
   setAgentConcurrency: vi.fn(),
   readConfig: vi.fn(),
@@ -57,6 +58,7 @@ beforeEach(() => {
   vi.mocked(setMaxWorkers).mockResolvedValue(undefined);
   vi.mocked(checkForUpdates).mockResolvedValue({ available: false });
   vi.mocked(hasCapability).mockReturnValue(true);
+  vi.mocked(isTauri).mockReturnValue(false);
   vi.mocked(setAgentConcurrency).mockResolvedValue(undefined);
   store.set(agentConcurrencySyncAtom, { status: "idle" });
   store.set(alertThresholdsAtom, DEFAULT_THRESHOLDS);
@@ -509,4 +511,23 @@ describe("Settings — in the browser build", () => {
       expect(toggle).toHaveAttribute("aria-checked", "false");
     },
   );
+});
+
+describe("Settings — auto-snapshot interval", () => {
+  it("is disabled with the desktop-only reason without the Tauri bridge", () => {
+    render(<Settings />);
+
+    const field = screen.getByLabelText("Auto-Snapshot Interval");
+    expect(field).toBeDisabled();
+    expect(field).toHaveAccessibleDescription(new RegExp(DESKTOP_ONLY_REASON));
+  });
+
+  it("is editable in the desktop shell", () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    render(<Settings />);
+
+    const field = screen.getByLabelText("Auto-Snapshot Interval");
+    expect(field).toBeEnabled();
+    expect(field).not.toHaveAccessibleDescription(new RegExp(DESKTOP_ONLY_REASON));
+  });
 });

@@ -29,6 +29,7 @@ import {
   checkForUpdates,
   DESKTOP_ONLY_REASON,
   hasCapability,
+  isTauri,
   readConfig,
   setMaxWorkers,
   writeConfig,
@@ -235,7 +236,8 @@ function NumberField({
   value,
   onChange,
   busy = false,
-  feedback,
+  feedback: feedbackProp,
+  unavailableReason,
 }: {
   readonly label: string;
   readonly description: string;
@@ -248,8 +250,16 @@ function NumberField({
   readonly busy?: boolean;
   /** A state message shown under the description and announced with it. */
   readonly feedback?: React.ReactNode;
+  /** Why the field cannot be used in this build; when set it is disabled and the reason replaces `feedback`. */
+  readonly unavailableReason?: string;
 }): React.ReactElement {
   const id = useId();
+  const feedback =
+    unavailableReason === undefined ? (
+      feedbackProp
+    ) : (
+      <p className="mt-1 text-xs text-fg-dim">{unavailableReason}</p>
+    );
   /** The text being typed; `null` while the field shows `value`. */
   const [draft, setDraft] = useState<string | null>(null);
 
@@ -277,6 +287,7 @@ function NumberField({
           feedback === undefined ? `${id}-description` : `${id}-description ${id}-feedback`
         }
         aria-busy={busy || undefined}
+        disabled={unavailableReason !== undefined}
         value={draft ?? String(value)}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={(e) => commit(e.target.value)}
@@ -847,6 +858,8 @@ export function Settings(): React.ReactElement {
             max={120}
             value={appSettings.snapshotIntervalMin}
             onChange={(v) => patchSettings({ snapshotIntervalMin: v })}
+            // Snapshots are plugin-store files, which need the Tauri bridge.
+            unavailableReason={isTauri() ? undefined : DESKTOP_ONLY_REASON}
           />
           <NumberField
             label="Log Retention"
