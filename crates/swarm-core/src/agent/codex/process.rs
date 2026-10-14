@@ -225,7 +225,10 @@ pub(super) async fn run_cli(
     }
 }
 
-/// The first non-empty output line (stdout, else stderr).
+/// The first non-empty output line (stdout, else stderr), with recognized
+/// credentials redacted: it becomes `ProbeReport::version` or `detail`,
+/// which every `agent_probe` caller receives, remote `swarmd` clients
+/// included.
 pub(super) fn first_line(output: &std::process::Output) -> Option<String> {
     [&output.stdout, &output.stderr]
         .into_iter()
@@ -234,7 +237,7 @@ pub(super) fn first_line(output: &std::process::Output) -> Option<String> {
                 .lines()
                 .map(str::trim)
                 .find(|line| !line.is_empty())
-                .map(str::to_owned)
+                .map(crate::git::redact::redact)
         })
 }
 

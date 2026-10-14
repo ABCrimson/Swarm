@@ -14,7 +14,7 @@ use std::time::Instant;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::process::{find_program, resolve_program, resolve_with_pathext};
+use super::process::{find_program, first_line, resolve_program, resolve_with_pathext};
 use super::protocol::{
     ApprovalsReviewer, AskForApproval, Incoming, METHOD_NOT_FOUND, RequestId, SandboxMode,
     ThreadOpened, ThreadStartParams,
@@ -655,6 +655,22 @@ fn capabilities_promise_resume_graceful_cancel_and_interactive_approvals() {
         capabilities.permission_modes,
         ["restricted", "standard", "write_enabled"]
     );
+}
+
+#[test]
+fn first_line_redacts_credentials_from_probe_output() {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
+    let output = std::process::Output {
+        status: std::process::ExitStatus::from_raw(0),
+        stdout: Vec::new(),
+        stderr: b"key sk-ant-api03-SECRETSECRET\n".to_vec(),
+    };
+    let line = first_line(&output).expect("stderr has a line");
+    assert!(!line.contains("SECRET"), "{line}");
+    assert!(line.starts_with("key "), "{line}");
 }
 
 // ── Handshake ────────────────────────────────────────────────────────
