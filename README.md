@@ -80,7 +80,6 @@ Also on `main`:
 ## Architecture
 
 ```mermaid
-%%{init: {"flowchart": {"rankSpacing": 90}}}%%
 flowchart TB
     FE["React 19 Frontend (src/)"]
     subgraph shells["Two Shells"]
@@ -93,6 +92,7 @@ flowchart TB
         PROV["ClaudeCodeAdapter and CodexAdapter"]
         ENG["OrchestrationEngine"]
         LOG[("EventLog (SQLite)")]
+        DISK["Stable Storage (Synced Every Commit)"]
         GIT["Worktrees and Ship Chain (git/)"]
     end
     FE -->|"Tauri IPC"| DESK
@@ -103,6 +103,7 @@ flowchart TB
     RT --> PROV
     RT --> ENG
     ENG --> LOG
+    LOG --> DISK
     RT --> GIT
 ```
 
