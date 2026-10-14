@@ -130,7 +130,7 @@ cd crates/swarmd/service
 ./install.sh
 ```
 
-This copies `swarmd` to `~/.local/bin/` (`$SWARMD_BIN_DEST` overrides), installs `swarmd.service` to `~/.config/systemd/user/` with a drop-in (`swarmd.service.d/install.conf`) that sets `ExecStart` to the installed binary and `PATH` to yours, enables it and **restarts** it so a running daemon moves onto the new binary. The unit is `Type=exec`, restarts on failure after 5 s, gives up after 5 starts in 5 minutes, never restarts on exit status 75, and allows 30 s to stop. It deliberately has no sandboxing directives: every worker terminal would inherit them. To start it at boot and keep it running after you log out:
+This copies `swarmd` to `~/.local/bin/` (`$SWARMD_BIN_DEST` overrides), installs `swarmd.service` to `~/.config/systemd/user/` with a drop-in (`swarmd.service.d/install.conf`) that sets `ExecStart` to the installed binary and `PATH` to yours, enables it and **restarts** it so a running daemon moves onto the new binary. The unit is `Type=exec`, restarts on failure after 5 s, gives up after 5 starts in 5 minutes, never restarts on exit status 75, and allows 60 s to stop (the worst-case graceful shutdown is about 55 s; see [Running and Stopping](#running-and-stopping)). It deliberately has no sandboxing directives: every worker terminal would inherit them. To start it at boot and keep it running after you log out:
 
 ```sh
 sudo loginctl enable-linger "$USER"
@@ -143,7 +143,7 @@ cd crates/swarmd/service
 ./install.sh
 ```
 
-This installs the binary, fills the absolute binary path, log directory and your `PATH` into `dev.crimson.swarmd.plist`, writes it to `~/Library/LaunchAgents/`, and `launchctl bootstrap`s it into your `gui/<uid>` domain. It is a **LaunchAgent** (per user), not a LaunchDaemon. launchd restarts it after a crash but not after a clean exit (`KeepAlive` / `SuccessfulExit` false), spaces retries a minute apart (`ThrottleInterval` 60), and allows 30 s between `SIGTERM` and `SIGKILL`. Logs go to `~/Library/Logs/swarmd/swarmd.log`, a directory at mode `0700` -- never `/tmp`.
+This installs the binary, fills the absolute binary path, log directory and your `PATH` into `dev.crimson.swarmd.plist`, writes it to `~/Library/LaunchAgents/`, and `launchctl bootstrap`s it into your `gui/<uid>` domain. It is a **LaunchAgent** (per user), not a LaunchDaemon. launchd restarts it after a crash but not after a clean exit (`KeepAlive` / `SuccessfulExit` false), spaces retries a minute apart (`ThrottleInterval` 60), and allows 60 s between `SIGTERM` and `SIGKILL` (`ExitTimeOut`). Logs go to `~/Library/Logs/swarmd/swarmd.log`, a directory at mode `0700` -- never `/tmp`.
 
 ### Windows (Scheduled Task)
 
@@ -202,7 +202,7 @@ The connect URL shows the bind address, or the loopback address (`127.0.0.1` / `
 
 ## Running and Stopping
 
-`SIGINT` / `SIGTERM` (on Windows `Ctrl-C`, console close, logoff and shutdown) start a graceful shutdown: new connections stop, every client gets a `1001 Going Away` close, every worker is stopped the way `kill_worker` stops it (agent sessions shut down, worktrees get their usual disposition, except that a kill still waiting on an agent session's in-flight attach when the 10 s `STOP_WORKERS_TIMEOUT` expires is abandoned, leaving that worker and its worktree unreconciled; see [ADR-0040](adr/0040-kill-stops-the-session-first.md)), the event writer drains and records the exact head seq so the next start continues with no gap, and the data-directory lock is released. Allow up to about 25 s; the service units wait 30 s before force-stopping.
+`SIGINT` / `SIGTERM` (on Windows `Ctrl-C`, console close, logoff and shutdown) start a graceful shutdown: new connections stop, every client gets a `1001 Going Away` close, every worker is stopped the way `kill_worker` stops it (agent sessions shut down, worktrees get their usual disposition, except that a kill still waiting on an agent session's in-flight attach when the 40 s `STOP_WORKERS_TIMEOUT` expires is abandoned, leaving that worker and its worktree unreconciled; see [ADR-0040](adr/0040-kill-stops-the-session-first.md)), the event writer drains and records the exact head seq so the next start continues with no gap, and the data-directory lock is released. The worst case is about 55 s: up to 5 s each for the HTTP and the WebSocket drain (`Limits::drain_timeout`), 40 s for the workers (the 30 s an agent adapter's handshake may still take, plus the session's teardown), and 5 s for the runtime shutdown (two 2.5 s phases). The systemd unit and the launchd plist wait 60 s before force-stopping. The Windows Scheduled Task has no such window: `Stop-ScheduledTask` and `Stop-Process -Force` (what `install.ps1` and `uninstall.ps1` use) end the process without a graceful window (neither script waits for one: `install.ps1` and `uninstall.ps1` follow a hard stop with `WaitForExit(10000)`), so stopping the task is not a graceful shutdown.
 
 To upgrade, re-run the install script; it replaces the binary and restarts the service. Uninstalling or upgrading never touches the data directory.
 

@@ -60,8 +60,11 @@ const EXIT_LOCKED: u8 = 75;
 /// Log filter when `RUST_LOG` is unset or invalid.
 const DEFAULT_LOG_FILTER: &str = "swarm_core=info,swarmd=info,warn";
 
-/// How long shutdown waits for workers to stop.
-const STOP_WORKERS_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long shutdown waits for workers to stop: the 30 s handshake an
+/// in-flight agent attach may still be in when a kill arrives, plus that
+/// session's teardown (ADR-0040). `swarmd.service` and the launchd plist
+/// size their stop timeouts from it.
+const STOP_WORKERS_TIMEOUT: Duration = Duration::from_secs(40);
 /// Budget for each phase of [`Runtime::shutdown`] (agent sessions still
 /// registered, then the event writer's drain), so it takes at most 5 s.
 const SHUTDOWN_PHASE_TIMEOUT: Duration = Duration::from_millis(2500);
@@ -514,4 +517,23 @@ async fn stop_runtime(state: &AppState, runtime: Runtime) {
         Err(error) => tracing::warn!(%error, "the runtime did not shut down cleanly"),
     }
     drop(runtime);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A kill can still be inside an agent adapter's 30 s handshake when
+    /// shutdown starts (`HANDSHAKE_TIMEOUT` in `claude_code.rs`, `handshake`
+    /// in `codex.rs`; neither is public), and it then tears that session
+    /// down. A budget at or under the handshake would abandon the kill and
+    /// leave the worker's worktree unreconciled (ADR-0040).
+    #[test]
+    fn test_stop_workers_timeout_outlasts_the_adapter_handshake() {
+        const ADAPTER_HANDSHAKE: Duration = Duration::from_secs(30);
+        assert!(
+            STOP_WORKERS_TIMEOUT > ADAPTER_HANDSHAKE,
+            "{STOP_WORKERS_TIMEOUT:?} leaves no room to tear a session down"
+        );
+    }
 }

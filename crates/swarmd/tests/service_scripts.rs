@@ -105,9 +105,9 @@ fn test_windows_upgrade_stops_the_daemon_then_stages_the_binary() {
 #[test]
 fn test_service_units_wait_for_a_graceful_shutdown() {
     let plist = read_script("dev.crimson.swarmd.plist");
-    position(&plist, "<key>ExitTimeOut</key>\n    <integer>30</integer>");
+    position(&plist, "<key>ExitTimeOut</key>\n    <integer>60</integer>");
     let unit = read_script("swarmd.service");
-    position(&unit, "\nTimeoutStopSec=30\n");
+    position(&unit, "\nTimeoutStopSec=60\n");
 }
 
 // ── Linux and macOS (executed) ──────────────────────────────────────────
