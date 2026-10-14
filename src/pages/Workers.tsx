@@ -12,6 +12,7 @@ import { Pill } from "#components/ui/Pill";
 import { type TabItem, TabList, TabPanel } from "#components/ui/Tabs";
 import { ProviderBadge } from "#components/worker/ProviderBadge";
 import { SpawnWorkerDialog } from "#components/worker/SpawnWorkerDialog";
+import { escapeForDisplay } from "#lib/display-escape";
 import { formatBinding, matchesBinding } from "#lib/keybindings";
 import { useAgentSessionStore } from "#store/agent-sessions";
 import {
@@ -71,11 +72,11 @@ function WorkerRow({ id }: { readonly id: string }): React.ReactElement | null {
       >
         <span className="flex min-w-0 items-center gap-2">
           <span className="truncate font-display text-md font-semibold text-fg-bright">
-            {name ?? id.slice(0, 8)}
+            {escapeForDisplay(name ?? id.slice(0, 8))}
           </span>
           {branch != null && (
-            <Pill tone="info" size="sm" maxWidth={160} title={branch}>
-              {branch}
+            <Pill tone="info" size="sm" maxWidth={160} title={escapeForDisplay(branch)}>
+              {escapeForDisplay(branch)}
             </Pill>
           )}
           {agentSession && (

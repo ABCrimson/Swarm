@@ -447,3 +447,37 @@ describe("CausalityPanel (component)", () => {
     expect(invoke).toHaveBeenCalledTimes(1); // seq 10 is never fetched after close
   });
 });
+
+describe("CausalityPanel — Trojan Source", () => {
+  it("shows worker names, input previews, topics and paths with bidi overrides as escaped data", async () => {
+    act(() => {
+      useWorkerStore.getState().addWorker(createWorker({ id: "w-a", name: "Al\u202Epha" }));
+      useWorkerStore.getState().addWorker(createWorker({ id: "w-b", name: "Beta" }));
+    });
+    seedRing(
+      ev({ seq: 1, type: "agent_turn_started", payload: { workerId: "w-a" } }),
+      ev({
+        seq: 2,
+        type: "worker_input",
+        causeSeq: 1,
+        payload: { workerId: "w-b", preview: "rm \u202Egnp.exe" },
+      }),
+      ev({
+        seq: 3,
+        type: "bus_message",
+        causeSeq: 2,
+        payload: { fromWorker: "w-a", toWorker: "w-b", topic: "t\u202Ex" },
+      }),
+      ev({ seq: 4, type: "file_written", causeSeq: 3, payload: { path: "/p/a\u202Eb" } }),
+    );
+
+    const { dialog } = renderPanel(4);
+
+    const trace = await screen.findByRole("list", { name: "Causes, Earliest First" });
+    expect(trace).toHaveTextContent(String.raw`Al\u202Epha's Turn`);
+    expect(trace).toHaveTextContent(String.raw`Beta Ran rm \u202Egnp.exe`);
+    expect(trace).toHaveTextContent(String.raw`Sent "t\u202Ex" To Beta`);
+    expect(trace).toHaveTextContent(String.raw`Wrote /p/a\u202Eb`);
+    expect(dialog.textContent).not.toContain("\u202E");
+  });
+});

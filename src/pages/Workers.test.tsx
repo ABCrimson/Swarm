@@ -169,3 +169,17 @@ describe("Workers — list and detail panel", () => {
     expect(screen.getByRole("tabpanel", { name: "Ship" })).toHaveTextContent("Ship View");
   });
 });
+
+describe("Workers — Trojan Source", () => {
+  it("shows a list row's name and branch with bidi overrides as escaped data", async () => {
+    addWorker({ name: "a\u202Eb", branch: "swarm/c\u202Ed" });
+    store.set(graphViewAtom, "list");
+    render(<Workers />);
+
+    const panel = screen.getByRole("tabpanel", { name: "List" });
+    expect(within(panel).getByText(String.raw`a\u202Eb`)).toBeInTheDocument();
+    const branch = within(panel).getByText(String.raw`swarm/c\u202Ed`);
+    expect(branch.closest("[title]")).toHaveAttribute("title", String.raw`swarm/c\u202Ed`);
+    expect(panel.textContent).not.toContain("\u202E");
+  });
+});

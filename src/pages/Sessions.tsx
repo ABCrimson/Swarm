@@ -7,6 +7,7 @@ import { SessionActions } from "#components/session/SessionActions";
 import { SessionList } from "#components/session/SessionList";
 import { TemplateSelector } from "#components/session/TemplateSelector";
 import { Button } from "#components/ui/Button";
+import { escapeForDisplay } from "#lib/display-escape";
 import { exportAsMarkdown, exportMetricsCSV, saveToFile, sessionFileSlug } from "#lib/export";
 import { pluralizeWorkers } from "#lib/format";
 import { errorMessage } from "#lib/is-error";
@@ -39,7 +40,7 @@ async function deleteSession(id: string): Promise<void> {
   if (session == null) return;
   try {
     if (await deleteSessionAfterConfirm(session))
-      toast.success(`Session "${session.name}" Deleted`);
+      toast.success(`Session "${escapeForDisplay(session.name)}" Deleted`);
   } catch (err) {
     toast.error(`Failed To Delete Session: ${errorMessage(err)}`);
   }
@@ -103,21 +104,30 @@ async function applyTemplateWithReport(template: SessionTemplate): Promise<void>
     useSessionStore.getState().setActiveSession(session.id);
     const spawned = workerIds.length;
     if (total === 0) {
-      toast.warning(`Template "${template.name}" Has No Workers — Created An Empty Session`);
+      toast.warning(
+        `Template "${escapeForDisplay(template.name)}" Has No Workers — Created An Empty Session`,
+      );
     } else if (spawned === 0) {
-      toast.error(`Template "${template.name}" Failed — 0 Of ${total} Workers Spawned`, {
-        description: failures.join("; "),
-      });
+      toast.error(
+        `Template "${escapeForDisplay(template.name)}" Failed — 0 Of ${total} Workers Spawned`,
+        {
+          description: failures.join("; "),
+        },
+      );
     } else if (spawned < total) {
       toast.warning(
-        `Template "${template.name}" Partially Applied — ${spawned} Of ${total} Workers Spawned`,
+        `Template "${escapeForDisplay(template.name)}" Partially Applied — ${spawned} Of ${total} Workers Spawned`,
         { description: failures.join("; ") },
       );
     } else {
-      toast.success(`Template "${template.name}" Applied — ${pluralizeWorkers(spawned)} Spawned`);
+      toast.success(
+        `Template "${escapeForDisplay(template.name)}" Applied — ${pluralizeWorkers(spawned)} Spawned`,
+      );
     }
   } catch (err) {
-    toast.error(`Failed To Apply Template "${template.name}": ${errorMessage(err)}`);
+    toast.error(
+      `Failed To Apply Template "${escapeForDisplay(template.name)}": ${errorMessage(err)}`,
+    );
   }
 }
 
@@ -157,7 +167,7 @@ async function saveSessionAsTemplate(session: Session, form: FormData): Promise<
   } catch (err) {
     return failure(`Failed To Save Template: ${errorMessage(err)}`);
   }
-  toast.success(`Template "${name}" Saved`);
+  toast.success(`Template "${escapeForDisplay(name)}" Saved`);
   return { ...INITIAL_TEMPLATE_FORM, saved: true };
 }
 
@@ -358,7 +368,7 @@ function TemplateForm({
   return (
     <form
       action={saveAction}
-      aria-label={`Save "${session.name}" As A Template`}
+      aria-label={`Save "${escapeForDisplay(session.name)}" As A Template`}
       className="flex flex-wrap items-center gap-3 rounded-xl border border-[oklch(0.35_0.08_290/0.5)] bg-[oklch(0.14_0.03_290/0.4)] p-3"
       onKeyDown={(e) => {
         if (e.key === "Escape") onDone();

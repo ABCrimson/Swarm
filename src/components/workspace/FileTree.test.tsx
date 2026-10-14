@@ -177,3 +177,17 @@ describe("FileTree", () => {
     await waitFor(() => expect(onSelectFile).toHaveBeenCalledWith("/proj/latest.log"));
   });
 });
+
+describe("FileTree — Trojan Source", () => {
+  it("shows a file name with a bidi override as escaped data", async () => {
+    vi.mocked(readDir).mockResolvedValue([file("evil\u202Etxt.exe")]);
+    const { onSelectFile } = renderTree();
+
+    const row = await screen.findByRole("treeitem");
+    expect(screen.getByText(String.raw`evil\u202Etxt.exe`)).toBeInTheDocument();
+    expect(row.textContent).not.toContain("\u202E");
+    // The raw name still reaches the callback: escaping is display only.
+    fireEvent.click(row);
+    expect(onSelectFile).toHaveBeenCalledWith(expect.stringContaining("evil\u202Etxt.exe"));
+  });
+});

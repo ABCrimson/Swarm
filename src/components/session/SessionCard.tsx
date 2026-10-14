@@ -1,6 +1,7 @@
 import { motion } from "motion/react";
 import { type CSSProperties, useId, useRef } from "react";
 import { Pill } from "#components/ui/Pill";
+import { escapeForDisplay } from "#lib/display-escape";
 import { pluralizeWorkers } from "#lib/format";
 import { DESKTOP_ONLY_REASON, hasCapability } from "#lib/tauri";
 import { formatRelativeTime } from "#lib/time";
@@ -94,7 +95,7 @@ export function SessionCard({
             className="truncate text-sm font-semibold font-[family-name:var(--font-display)]"
             style={{ color: isActive ? "oklch(0.92 0.08 290)" : "oklch(0.88 0.02 220)" }}
           >
-            {session.name}
+            {escapeForDisplay(session.name)}
           </span>
           <Pill tone="info" size="sm" className="shrink-0">
             {pluralizeWorkers(liveWorkerCount)}
@@ -109,7 +110,7 @@ export function SessionCard({
           <span className="mt-2 flex flex-wrap gap-1">
             {tags.map((tag) => (
               <Pill key={tag} tone="neutral" size="sm" maxWidth={120}>
-                {tag}
+                {escapeForDisplay(tag)}
               </Pill>
             ))}
           </span>
@@ -121,7 +122,7 @@ export function SessionCard({
         type="button"
         popoverTarget={menuId}
         aria-haspopup="menu"
-        aria-label={`Actions For Session "${session.name}"`}
+        aria-label={`Actions For Session "${escapeForDisplay(session.name)}"`}
         className="absolute top-3 right-3 grid size-7 cursor-pointer place-items-center rounded-md text-[oklch(0.65_0.04_220)] transition-colors hover:bg-[oklch(0.22_0.04_220/0.5)] hover:text-[oklch(0.88_0.02_220)] focus-visible:outline-2 focus-visible:outline-plasma"
         style={{ anchorName }}
       >
@@ -136,7 +137,7 @@ export function SessionCard({
         ref={menuRef}
         id={menuId}
         anchorName={anchorName}
-        sessionName={session.name}
+        sessionName={escapeForDisplay(session.name)}
         onExport={() => runMenuAction(onExport)}
         onCreateTemplate={() => runMenuAction(onCreateTemplate)}
         onDelete={() => runMenuAction(onDelete)}

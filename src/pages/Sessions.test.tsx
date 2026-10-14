@@ -360,3 +360,56 @@ describe("Sessions — export and templates", () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 });
+
+describe("Sessions — Trojan Source", () => {
+  it("shows a template's name with a bidi override as escaped data in its apply toast", async () => {
+    const user = userEvent.setup();
+    const rlo: SessionTemplate = {
+      id: "7f6e5d4c-3b2a-4918-8a7f-6e5d4c3b2a19",
+      name: "a\u202Eb",
+      description: "Crew",
+      workerConfigs: [],
+      builtIn: false,
+    };
+    userTemplates = Promise.resolve({ templates: [rlo], failed: false });
+    mockApplyTemplate.mockResolvedValue({ session: addSession(), workerIds: [], failures: [] });
+    await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Templates" }));
+    await user.click(await screen.findByText(String.raw`a\u202Eb`));
+
+    await vi.waitFor(() => {
+      expect(toast.warning).toHaveBeenCalledWith(
+        String.raw`Template "a\u202Eb" Has No Workers — Created An Empty Session`,
+      );
+    });
+  });
+
+  it("shows the session name in the Save As Template form's label as escaped data", async () => {
+    addSession({ name: "a\u202Eb" });
+    await renderPage();
+
+    chooseMenuItem("Save As Template");
+
+    expect(
+      screen.getByRole("form", { name: String.raw`Save "a\u202Eb" As A Template` }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("Sessions — templates in the browser build", () => {
+  it("disables template cards with the reason and applies nothing", async () => {
+    web.on = true;
+    const user = userEvent.setup();
+    await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Templates" }));
+    const template = BUILT_IN_TEMPLATES[0] as SessionTemplate;
+    const card = screen.getByRole("button", { name: new RegExp(`^${template.name}`) });
+    expect(card).toBeDisabled();
+    expect(card).toHaveAccessibleDescription("Available In The Desktop App Only");
+    await user.click(card);
+
+    expect(mockApplyTemplate).not.toHaveBeenCalled();
+  });
+});

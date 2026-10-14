@@ -8,6 +8,7 @@ import { Pill } from "#components/ui/Pill";
 import { toast } from "#components/ui/Toast";
 import { useWorker } from "#hooks/useWorker";
 import { stripAnsi } from "#lib/ansi";
+import { escapeForDisplay } from "#lib/display-escape";
 import { errorMessage } from "#lib/is-error";
 import { isTauri } from "#lib/tauri";
 import { formatElapsed } from "#lib/time";
@@ -198,7 +199,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
             color: "oklch(0.95 0.02 220)",
           }}
         >
-          {worker.name ?? worker.id.slice(0, 8)}
+          {escapeForDisplay(worker.name ?? worker.id.slice(0, 8))}
         </span>
 
         <dl style={{ display: "flex", flexDirection: "column", gap: 10, margin: 0 }}>
@@ -214,22 +215,24 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
           <DetailRow label="Uptime">
             <time dateTime={worker.startedAt}>{uptime}</time>
           </DetailRow>
-          {worker.branch != null && <DetailRow label="Branch">{worker.branch}</DetailRow>}
+          {worker.branch != null && (
+            <DetailRow label="Branch">{escapeForDisplay(worker.branch)}</DetailRow>
+          )}
           {worker.worktreePath != null && (
             <DetailRow label="Worktree">
               {isTauri() ? (
                 <button
                   type="button"
                   onClick={() => void handleOpenWorktree(worker.worktreePath ?? "")}
-                  title={worker.worktreePath}
+                  title={escapeForDisplay(worker.worktreePath)}
                   className="worker-detail__path"
                 >
-                  {worker.worktreePath}
+                  {escapeForDisplay(worker.worktreePath)}
                 </button>
               ) : (
                 // Opening a folder needs the desktop app's opener plugin.
-                <span className="worker-detail__path" title={worker.worktreePath}>
-                  {worker.worktreePath}
+                <span className="worker-detail__path" title={escapeForDisplay(worker.worktreePath)}>
+                  {escapeForDisplay(worker.worktreePath)}
                 </span>
               )}
             </DetailRow>

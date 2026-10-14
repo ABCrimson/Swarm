@@ -1,6 +1,7 @@
 import { motion } from "motion/react";
-import { Suspense, use, useSyncExternalStore } from "react";
+import { Suspense, use, useId, useSyncExternalStore } from "react";
 import { Pill } from "#components/ui/Pill";
+import { escapeForDisplay } from "#lib/display-escape";
 import { pluralizeWorkers } from "#lib/format";
 import { DESKTOP_ONLY_REASON, hasCapability, isTauri } from "#lib/tauri";
 import { BUILT_IN_TEMPLATES, subscribeUserTemplates, userTemplatesResource } from "#lib/templates";
@@ -24,9 +25,13 @@ const sectionHeadingClass =
  * read through `use()`, re-read after every template write), and a store
  * that cannot be read says so instead of silently showing the built-ins
  * alone. User templates are plugin-store files, so without the Tauri bridge
- * the store is never read and that section says why instead.
+ * the store is never read and that section says why instead. A template's workers are webview
+ * workers, so a build without `localAiChat` (the swarmd web page) shows every template that has
+ * workers disabled, with the reason.
  */
 export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): React.ReactElement {
+  const spawnReasonId = useId();
+  const unavailableReasonId = hasCapability("localAiChat") ? undefined : spawnReasonId;
   return (
     <div
       className="rounded-xl border border-[oklch(0.28_0.04_220)] bg-[oklch(0.12_0.02_220/0.8)] p-6"
@@ -55,9 +60,23 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
 
       <section aria-label="Built-In Templates" className="mb-5">
         <h3 className={sectionHeadingClass}>Built-In</h3>
+        {unavailableReasonId != null && (
+          <p
+            id={unavailableReasonId}
+            className="mb-3 text-xs text-fg-dim font-[family-name:var(--font-body)]"
+          >
+            {DESKTOP_ONLY_REASON}
+          </p>
+        )}
         <div className="grid grid-cols-2 gap-3">
           {BUILT_IN_TEMPLATES.map((template, index) => (
-            <TemplateCard key={template.id} template={template} index={index} onSelect={onSelect} />
+            <TemplateCard
+              key={template.id}
+              template={template}
+              index={index}
+              onSelect={onSelect}
+              unavailableReasonId={unavailableReasonId}
+            />
           ))}
         </div>
       </section>
@@ -70,7 +89,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
             </p>
           }
         >
-          <UserTemplates onSelect={onSelect} />
+          <UserTemplates onSelect={onSelect} unavailableReasonId={unavailableReasonId} />
         </Suspense>
       ) : (
         <section aria-label="Your Templates">
@@ -86,8 +105,10 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
 
 function UserTemplates({
   onSelect,
+  unavailableReasonId,
 }: {
   readonly onSelect: (template: SessionTemplate) => void;
+  readonly unavailableReasonId: string | undefined;
 }): React.ReactElement | null {
   // The cached read, swapped for a fresh one whenever a template is saved
   // or deleted — this stays mounted inside a hidden <Activity> on the
@@ -118,6 +139,7 @@ function UserTemplates({
             template={template}
             index={index + BUILT_IN_TEMPLATES.length}
             onSelect={onSelect}
+            unavailableReasonId={unavailableReasonId}
           />
         ))}
       </div>
@@ -129,25 +151,31 @@ function TemplateCard({
   template,
   index,
   onSelect,
+  unavailableReasonId,
 }: {
   readonly template: SessionTemplate;
   readonly index: number;
   readonly onSelect: (template: SessionTemplate) => void;
+  /** Set when applying cannot work here; the element with this id says why. */
+  readonly unavailableReasonId: string | undefined;
 }): React.ReactElement {
+  const unavailable = unavailableReasonId != null && template.workerConfigs.length > 0;
   return (
     <motion.button
       type="button"
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: Math.min(index, MAX_STAGGERED) * STAGGER_S, duration: 0.2 }}
-      whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.98 }}
+      whileHover={unavailable ? undefined : { scale: 1.02 }}
+      whileTap={unavailable ? undefined : { scale: 0.98 }}
+      disabled={unavailable}
+      aria-describedby={unavailable ? unavailableReasonId : undefined}
       onClick={() => onSelect(template)}
-      className="cursor-pointer rounded-lg border border-[oklch(0.26_0.04_220/0.5)] bg-[oklch(0.16_0.03_220/0.6)] p-4 text-left transition-colors hover:border-[oklch(0.50_0.18_290/0.5)] hover:bg-[oklch(0.18_0.05_290/0.3)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-plasma"
+      className="cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 rounded-lg border border-[oklch(0.26_0.04_220/0.5)] bg-[oklch(0.16_0.03_220/0.6)] p-4 text-left transition-colors hover:border-[oklch(0.50_0.18_290/0.5)] hover:bg-[oklch(0.18_0.05_290/0.3)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-plasma"
       style={{ backdropFilter: "blur(8px)" }}
     >
       <span className="mb-1 block text-sm font-semibold text-[oklch(0.88_0.04_220)] font-[family-name:var(--font-display)]">
-        {template.name}
+        {escapeForDisplay(template.name)}
       </span>
       <span className="mb-2 line-clamp-2 text-xs text-fg-dim font-[family-name:var(--font-body)]">
         {template.description}

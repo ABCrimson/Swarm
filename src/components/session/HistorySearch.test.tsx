@@ -149,3 +149,17 @@ describe("HistorySearch", () => {
     expect(await screen.findByText("No Matching Sessions Found.")).toBeInTheDocument();
   });
 });
+
+describe("HistorySearch — Trojan Source", () => {
+  it("shows a session name with a bidi override as escaped data, still highlighting a match", async () => {
+    addSession("a\u202Eb plan", "2026-09-01T12:00:00.000Z");
+    render(<HistorySearch onResultSelect={vi.fn()} />);
+
+    await userEvent.setup().type(screen.getByRole("searchbox"), "plan");
+
+    const results = screen.getByRole("region", { name: "Search Results" });
+    expect(results).toHaveTextContent(String.raw`a\u202Eb plan`);
+    expect(results.textContent).not.toContain("\u202E");
+    expect(within(results).getByText("plan").tagName).toBe("MARK");
+  });
+});

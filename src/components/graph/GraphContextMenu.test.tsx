@@ -122,3 +122,21 @@ describe("GraphContextMenu", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("GraphContextMenu — Trojan Source", () => {
+  it("names the menu with the worker name's bidi override escaped", async () => {
+    act(() =>
+      useWorkerStore.getState().addWorker({
+        id: "w-rlo",
+        name: "a\u202Eb",
+        state: "paused",
+        startedAt: new Date(0).toISOString(),
+      }),
+    );
+    render(<GraphContextMenu x={1} y={2} workerId="w-rlo" onInspect={vi.fn()} onClose={vi.fn()} />);
+    await tick();
+
+    expect(screen.getByRole("menu", { name: String.raw`a\u202Eb` })).toBeVisible();
+    act(() => useWorkerStore.getState().removeWorker("w-rlo"));
+  });
+});

@@ -2,6 +2,7 @@ import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import type { CSSProperties } from "react";
 import { useState } from "react";
 import { Pill } from "#components/ui/Pill";
+import { escapeForDisplay } from "#lib/display-escape";
 import { HighlightedJson } from "./HighlightedJson.tsx";
 
 // ── Types ───────────────────────────────────────────
@@ -249,7 +250,7 @@ export function ToolCallDisplay({
         }}
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
-        aria-label={`Tool Call: ${name}, ${STATUS_LABEL[status]}`}
+        aria-label={`Tool Call: ${escapeForDisplay(name)}, ${STATUS_LABEL[status]}`}
       >
         <StatusIndicator status={status} />
         <Pill
@@ -261,7 +262,7 @@ export function ToolCallDisplay({
             borderColor: badgeColors.border,
           }}
         >
-          {name}
+          {escapeForDisplay(name)}
         </Pill>
         <span
           style={{ marginLeft: "auto", color: "oklch(0.55 0.03 220)", fontSize: 14 }}

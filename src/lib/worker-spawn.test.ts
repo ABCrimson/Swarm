@@ -18,8 +18,12 @@ import { useWorkerStore } from "#store/workers";
 const spawnWorkerMock = vi.fn();
 const sessionAddWorkerMock = vi.fn();
 const readConfigMock = vi.fn();
+/** `true` makes the active transport report no capabilities (the swarmd `--serve-ui` page). */
+const web = vi.hoisted(() => ({ on: false }));
 
 vi.mock("#lib/tauri", () => ({
+  DESKTOP_ONLY_REASON: "Available In The Desktop App Only",
+  hasCapability: () => !web.on,
   spawnWorker: (...args: unknown[]) => spawnWorkerMock(...args),
   sessionAddWorker: (...args: unknown[]) => sessionAddWorkerMock(...args),
   readConfig: (...args: unknown[]) => readConfigMock(...args),
@@ -47,6 +51,7 @@ function resetStores(): void {
 
 describe("spawnWorkerFromSpec", () => {
   beforeEach(() => {
+    web.on = false;
     resetStores();
     spawnWorkerMock.mockReset();
     sessionAddWorkerMock.mockReset();
@@ -218,5 +223,50 @@ describe("spawnWorkerFromSpec", () => {
 
     const [payload] = spawnWorkerMock.mock.calls[0] as [Record<string, unknown>];
     expect(payload).not.toHaveProperty("repoRoot");
+  });
+});
+
+describe("spawnWorkerFromSpec — browser build", () => {
+  beforeEach(() => {
+    web.on = true;
+    resetStores();
+    spawnWorkerMock.mockReset();
+    readConfigMock.mockReset().mockResolvedValue(null);
+  });
+  afterEach(() => {
+    web.on = false;
+    resetStores();
+  });
+
+  it("refuses with the desktop-only reason and never calls spawnWorker", async () => {
+    await expect(spawnWorkerFromSpec({ name: "Worker 1" })).rejects.toThrow(
+      "Available In The Desktop App Only",
+    );
+    expect(spawnWorkerMock).not.toHaveBeenCalled();
+    expect(useWorkerStore.getState().workers.size).toBe(0);
+  });
+});
+
+describe("spawnWorkerFromSpec — Trojan Source", () => {
+  beforeEach(() => {
+    web.on = false;
+    resetStores();
+    spawnWorkerMock.mockReset().mockResolvedValue("worker-9");
+    sessionAddWorkerMock.mockReset().mockRejectedValue(new Error("nope"));
+    readConfigMock.mockReset().mockResolvedValue(null);
+  });
+  afterEach(resetStores);
+
+  it("escapes the worker name in the could-not-join warning", async () => {
+    using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const session = createSession();
+    useSessionStore.getState().addSession(session);
+
+    await spawnWorkerFromSpec({ name: "a\u202Eb" }, session.id);
+
+    expect(toast.warning).toHaveBeenCalledWith(
+      String.raw`Worker "a\u202Eb" Spawned But Could Not Join The Session`,
+      expect.anything(),
+    );
   });
 });

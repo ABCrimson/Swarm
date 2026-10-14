@@ -366,6 +366,16 @@ describe("WorkerGraph — interactions", () => {
     expect(nodeFor("w-a")).toHaveClass("selected");
   });
 
+  it("escapes a bidi override in a node wrapper's accessible name and visible name", async () => {
+    await renderWith(createWorker({ id: "w-rlo", name: "Al\u202Epha", pid: 7 }));
+
+    expect(nodeFor("w-rlo")).toHaveAttribute(
+      "aria-label",
+      String.raw`Worker Al\u202Epha, Status: Running, PID 7`,
+    );
+    expect(nodeFor("w-rlo")).toHaveTextContent(String.raw`Al\u202Epha`);
+  });
+
   it("gives each node wrapper an accessible name and opens the detail panel on Enter", async () => {
     const user = userEvent.setup();
     await renderWith(createWorker({ id: "w-a", name: "Alpha", pid: 42 }));

@@ -28,7 +28,12 @@ const spawnWorkerMock = vi.fn();
 const sessionAddWorkerMock = vi.fn();
 const readConfigMock = vi.fn();
 
+/** `true` makes the active transport report no capabilities (the swarmd `--serve-ui` page). */
+const web = vi.hoisted(() => ({ on: false }));
+
 vi.mock(import("#lib/tauri"), () => ({
+  DESKTOP_ONLY_REASON: "Available In The Desktop App Only" as const,
+  hasCapability: () => !web.on,
   createSession: (...args: unknown[]) => createSessionMock(...args),
   spawnWorker: (...args: unknown[]) => spawnWorkerMock(...args),
   sessionAddWorker: (...args: unknown[]) => sessionAddWorkerMock(...args),
@@ -322,5 +327,38 @@ describe("createTemplateFromSession", () => {
     expect(
       createTemplateFromSession(session, { name: "X", description: "" }).workerConfigs,
     ).toEqual([]);
+  });
+});
+
+describe("applyTemplate — Trojan Source", () => {
+  it("records a failed worker's name with bidi controls escaped", async () => {
+    const template: SessionTemplate = {
+      ...builtIn("Single Agent"),
+      workerConfigs: [{ name: "a\u202Eb" }],
+    };
+    createSessionMock.mockResolvedValueOnce(mockSession(crypto.randomUUID(), template.name));
+    spawnWorkerMock.mockRejectedValueOnce(new Error("no"));
+    using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { failures } = await applyTemplate(template);
+
+    expect(failures).toEqual([String.raw`a\u202Eb: no`]);
+  });
+});
+
+describe("applyTemplate — browser build", () => {
+  beforeEach(() => {
+    web.on = true;
+  });
+  afterEach(() => {
+    web.on = false;
+  });
+
+  it("refuses a template with workers before creating a session or spawning", async () => {
+    await expect(applyTemplate(builtIn("Pipeline"))).rejects.toThrow(
+      "Available In The Desktop App Only",
+    );
+    expect(createSessionMock).not.toHaveBeenCalled();
+    expect(spawnWorkerMock).not.toHaveBeenCalled();
   });
 });

@@ -36,6 +36,7 @@ import { stateLabels } from "#components/ui/Badge";
 import { Button } from "#components/ui/Button";
 import { Spinner } from "#components/ui/Spinner";
 import { useElkLayout } from "#hooks/useElkLayout";
+import { escapeForDisplay } from "#lib/display-escape";
 import { workerColor } from "#lib/theme";
 import type { WorkflowDefinition } from "#lib/workflow";
 import { exportWorkflow } from "#lib/workflow";
@@ -118,14 +119,16 @@ export function reduceNodeUi(
 
 /** Accessible name of a worker node's (focusable) xyflow wrapper. */
 function nodeAriaLabel(worker: Worker): string {
-  const name = worker.name ?? worker.id.slice(0, 8);
+  const name = escapeForDisplay(worker.name ?? worker.id.slice(0, 8));
   const pid = worker.pid != null ? `, PID ${worker.pid}` : "";
   return `Worker ${name}, Status: ${stateLabels[worker.state]}${pid}`;
 }
 
 /** Display name per worker id. */
 const selectNames = (s: { workers: ReadonlyMap<string, Worker> }): Record<string, string> =>
-  Object.fromEntries(s.workers.values().map((w) => [w.id, w.name ?? w.id.slice(0, 8)]));
+  Object.fromEntries(
+    s.workers.values().map((w) => [w.id, escapeForDisplay(w.name ?? w.id.slice(0, 8))]),
+  );
 
 /** Node accessible name per worker id (changes with state and PID). */
 const selectNodeLabels = (s: { workers: ReadonlyMap<string, Worker> }): Record<string, string> =>

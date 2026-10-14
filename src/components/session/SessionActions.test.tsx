@@ -186,3 +186,14 @@ describe("SessionActions — import", () => {
     });
   });
 });
+
+describe("SessionActions — Trojan Source", () => {
+  it("toasts a created session's name with a bidi override as escaped data", async () => {
+    const user = userEvent.setup();
+    const input = await openForm(user);
+
+    await user.type(input, "a\u202Eb{Enter}");
+
+    expect(toast.success).toHaveBeenCalledWith(String.raw`Session "a\u202Eb" Created`);
+  });
+});

@@ -480,3 +480,28 @@ describe("SpawnWorkerDialog", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("SpawnWorkerDialog — Trojan Source", () => {
+  beforeEach(() => {
+    web.on = false;
+    getPersistedRepoRootMock.mockReset();
+    vi.mocked(agentProbe).mockReset().mockResolvedValue(AVAILABLE);
+  });
+
+  it("shows the project root with a bidi override as escaped data, and in its notice", async () => {
+    const user = userEvent.setup();
+    getPersistedRepoRootMock.mockResolvedValue("/repo/a\u202Eb");
+    vi.mocked(validateRepoRoot).mockResolvedValue("/repo/a\u202Eb");
+    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+
+    const root = await screen.findByText(String.raw`/repo/a\u202Eb`);
+    expect(root).toHaveAttribute("title", String.raw`/repo/a\u202Eb`);
+
+    vi.mocked(openFolderPicker).mockResolvedValue("/not/c\u202Ed");
+    vi.mocked(validateRepoRoot).mockRejectedValueOnce(new Error("no repo"));
+    await user.click(screen.getByRole("button", { name: "Choose…" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      String.raw`Could Not Use /not/c\u202Ed As The Project Root: no repo`,
+    );
+  });
+});

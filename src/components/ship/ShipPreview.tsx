@@ -321,7 +321,7 @@ function CausalRecordSection({
               {rows.map((row) => (
                 <tr key={row.key}>
                   <td style={causalCellStyle}>{row.turnLabel}</td>
-                  <td style={causalCellStyle}>{row.name}</td>
+                  <td style={causalCellStyle}>{escapeForDisplay(row.name)}</td>
                   <td
                     style={{ ...causalCellStyle, maxWidth: 260 }}
                     title={escapeForDisplay(row.target)}

@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { useEffect, useId, useRef } from "react";
 import { useWorker } from "#hooks/useWorker";
+import { escapeForDisplay } from "#lib/display-escape";
 
 interface GraphContextMenuProps {
   /** Viewport coordinates of the right-click. */
@@ -144,7 +145,7 @@ export function GraphContextMenu({
         }}
       >
         <div id={titleId} className="graph-context-menu__title">
-          {worker?.name ?? workerId.slice(0, 8)}
+          {escapeForDisplay(worker?.name ?? workerId.slice(0, 8))}
         </div>
         <div
           role="menu"

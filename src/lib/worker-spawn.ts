@@ -9,10 +9,11 @@
 // the new worker into that session via `session_add_worker`.
 
 import { toast } from "sonner";
+import { escapeForDisplay } from "#lib/display-escape";
 import { errorMessage } from "#lib/is-error";
 import { getPersistedRepoRoot } from "#lib/project-root";
 import type { ProvenanceArgs } from "#lib/tauri";
-import { sessionAddWorker, spawnWorker } from "#lib/tauri";
+import { DESKTOP_ONLY_REASON, hasCapability, sessionAddWorker, spawnWorker } from "#lib/tauri";
 import { useSessionStore } from "#store/sessions";
 import type { WorkerSpawnSpec } from "#store/types";
 import { useWorkerAgentStore } from "#store/worker-agents";
@@ -48,6 +49,11 @@ import { useWorkerStore } from "#store/workers";
  *   Worker dialog), so template and tool-driven spawns get worktree
  *   isolation too, not only spawns started from that dialog.
  *
+ * @throws {Error} With `DESKTOP_ONLY_REASON` when the transport lacks `localAiChat` (the swarmd
+ * `--serve-ui` page): a worker spawned here is a webview worker, which that build cannot chat with,
+ * so the refusal comes before `spawnWorker` and every caller shows the reason. Agent CLI workers
+ * spawn through `agentSpawn` instead.
+ *
  * @returns The new worker's UUID, or `null` when `spawnWorker` degraded
  * gracefully because there is no backend transport (neither Tauri IPC
  * nor a swarmd connection, e.g. `pnpm dev` in a plain browser). No
@@ -62,6 +68,7 @@ export async function spawnWorkerFromSpec(
   sessionId?: string,
   prov?: ProvenanceArgs,
 ): Promise<string | null> {
+  if (!hasCapability("localAiChat")) throw new Error(DESKTOP_ONLY_REASON);
   const { role, model, systemPrompt, ...processOptions } = spec;
   if (processOptions.repoRoot === undefined) {
     const persistedRoot = await getPersistedRepoRoot();
@@ -97,9 +104,12 @@ export async function spawnWorkerFromSpec(
         `spawnWorkerFromSpec: failed to register worker with session "${sessionId}"`,
         err,
       );
-      toast.warning(`Worker "${processOptions.name}" Spawned But Could Not Join The Session`, {
-        description: errorMessage(err),
-      });
+      toast.warning(
+        `Worker "${escapeForDisplay(processOptions.name)}" Spawned But Could Not Join The Session`,
+        {
+          description: errorMessage(err),
+        },
+      );
     }
   }
 
