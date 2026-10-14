@@ -232,12 +232,23 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
-        with:
-          tool: actionlint@1.7.12
+      # install-action ships no actionlint manifest (its fallback to cargo-binstall
+      # fails: actionlint is a Go binary, not a crate), so the release tarball is
+      # fetched from rhysd/actionlint and checked against the published sha256.
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o actionlint.tar.gz "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          install -m 0755 actionlint "${RUNNER_TEMP}/actionlint"
+          rm actionlint actionlint.tar.gz
 
       - name: actionlint
-        run: actionlint
+        run: "${RUNNER_TEMP}/actionlint"
 
       # Annotations instead of a SARIF upload: no security-events grant, and
       # findings still fail the job. Online audits check every pinned SHA
