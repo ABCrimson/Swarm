@@ -231,7 +231,7 @@ fn restrict_permissions(path: &Path) -> io::Result<()> {
 /// is the `S-` prefix followed by digits and dashes. Platform-independent so
 /// the parsing is tested everywhere, although only the Windows ACL path calls it.
 #[cfg_attr(
-    not(windows),
+    all(not(windows), not(test)),
     expect(
         dead_code,
         reason = "only the Windows ACL path calls it; the parser is tested on every platform"
