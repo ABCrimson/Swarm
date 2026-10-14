@@ -12,15 +12,110 @@
 //! can rehydrate a conversation from a recorded session key through
 //! [`crate::agent::adapter::AgentSpawnSpec::resume`], but no command
 //! passes one today.
+//!
+//! The registry also owns each worker's lifecycle fence, which keeps a
+//! kill and a session attach from interleaving: an attach holds an
+//! [`AttachPermit`] from before its handshake until it has registered
+//! (or abandoned) its session, and a kill
+//! ([`AgentSessionRegistry::begin_close`]) marks the worker closing,
+//! then waits for every permit to drop. While a worker is closing, a new
+//! attach, a registration and a session lookup (so turn admission and
+//! dispatch) fail with [`AppError::WorkerClosing`].
 
 use std::sync::Arc;
 
 use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use super::adapter::AgentSession;
 use crate::error::AppError;
+
+/// One worker's attach/close fence. Exists only while a kill is closing
+/// the worker or an attach is in flight; idle fences are removed.
+#[derive(Default)]
+struct Fence {
+    /// Kills in progress. A count, so of two overlapping kills of one
+    /// worker, the first to finish does not reopen it under the other.
+    closing: usize,
+    /// Live [`AttachPermit`]s. A closer subscribes and waits for zero.
+    attaches: watch::Sender<usize>,
+}
+
+impl Fence {
+    fn is_idle(&self) -> bool {
+        self.closing == 0 && *self.attaches.borrow() == 0
+    }
+}
+
+/// The refusal for an attach, registration or lookup on a closing worker.
+fn worker_closing(worker_id: Uuid) -> AppError {
+    AppError::WorkerClosing {
+        id: worker_id.to_string(),
+    }
+}
+
+/// An attach in flight for one worker, from
+/// [`AgentSessionRegistry::begin_attach`]. Held across the provider
+/// handshake and the registration, it makes
+/// [`AgentSessionRegistry::begin_close`] wait; dropping it lets the
+/// close proceed.
+#[must_use = "an attach permit fences the worker only while it is held"]
+pub struct AttachPermit {
+    registry: AgentSessionRegistry,
+    worker_id: Uuid,
+}
+
+impl AttachPermit {
+    /// Registers the attached `session` for the permit's worker (see
+    /// [`AgentSessionRegistry`] for what replacing a live one does).
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::WorkerClosing`] — a kill began while the handshake ran.
+    /// The session is not registered; the caller still owns it and must
+    /// shut it down.
+    pub fn insert(&self, session: Arc<dyn AgentSession>) -> Result<(), AppError> {
+        // The fence's shard guard is held across the registration, so a
+        // concurrent `begin_close` either sees the session registered (and
+        // its kill removes it) or this check sees the worker closing.
+        let fence = self.registry.fences.get(&self.worker_id);
+        if fence.as_ref().is_some_and(|fence| fence.closing > 0) {
+            return Err(worker_closing(self.worker_id));
+        }
+        self.registry.register(self.worker_id, session);
+        drop(fence);
+        Ok(())
+    }
+}
+
+impl Drop for AttachPermit {
+    fn drop(&mut self) {
+        if let Some(fence) = self.registry.fences.get(&self.worker_id) {
+            fence.attaches.send_modify(|attaches| *attaches -= 1);
+        }
+        self.registry.remove_fence_if_idle(self.worker_id);
+    }
+}
+
+/// A kill's closing mark on one worker, from
+/// [`AgentSessionRegistry::begin_close`]. The worker stays closing until
+/// every guard for it drops.
+#[must_use = "the worker is closing only while the guard is held"]
+pub struct ClosingGuard {
+    registry: AgentSessionRegistry,
+    worker_id: Uuid,
+}
+
+impl Drop for ClosingGuard {
+    fn drop(&mut self) {
+        if let Some(mut fence) = self.registry.fences.get_mut(&self.worker_id) {
+            fence.closing -= 1;
+        }
+        self.registry.remove_fence_if_idle(self.worker_id);
+    }
+}
 
 /// Per-worker turn lock type — see [`AgentSessionRegistry::turn_lock`].
 pub type TurnLock = Arc<tokio::sync::Mutex<()>>;
@@ -32,7 +127,8 @@ struct SessionEntry {
     turn_lock: TurnLock,
 }
 
-/// Thread-safe map of worker id -> live agent session handle.
+/// Thread-safe map of worker id -> live agent session handle, plus each
+/// worker's attach/close fence (see the module docs).
 ///
 /// One entry per worker that currently has an attached provider session.
 /// The value is the trait object, so every adapter (Claude Code, Codex,
@@ -40,12 +136,81 @@ struct SessionEntry {
 #[derive(Clone, Default)]
 pub struct AgentSessionRegistry {
     entries: Arc<DashMap<Uuid, SessionEntry>>,
+    fences: Arc<DashMap<Uuid, Fence>>,
 }
 
 impl AgentSessionRegistry {
     /// Creates an empty registry.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Starts an attach for `worker_id`: the returned permit is held
+    /// across the provider handshake and [`AttachPermit::insert`], and
+    /// [`Self::begin_close`] waits for it to drop.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::WorkerClosing`] — a kill is closing the worker.
+    pub fn begin_attach(&self, worker_id: Uuid) -> Result<AttachPermit, AppError> {
+        let fence = self.fences.entry(worker_id).or_default();
+        if fence.closing > 0 {
+            return Err(worker_closing(worker_id));
+        }
+        fence.attaches.send_modify(|attaches| *attaches += 1);
+        drop(fence);
+        Ok(AttachPermit {
+            registry: self.clone(),
+            worker_id,
+        })
+    }
+
+    /// Marks `worker_id` closing, then waits until every in-flight
+    /// [`AttachPermit`] for it has dropped. From the mark on,
+    /// [`Self::begin_attach`], [`AttachPermit::insert`] and [`Self::get`]
+    /// refuse the worker with [`AppError::WorkerClosing`]; the mark lasts
+    /// until the returned guard drops (also when this future is dropped
+    /// mid-wait).
+    ///
+    /// The wait is bounded by the attaches themselves: each runs one
+    /// adapter handshake, which the adapter bounds (30 s for Claude Code
+    /// and Codex), then shuts down the session it can no longer register.
+    /// Once this returns, every session attached to the worker is in the
+    /// registry, where [`Self::remove`] finds it.
+    pub async fn begin_close(&self, worker_id: Uuid) -> ClosingGuard {
+        let mut attaches = {
+            let mut fence = self.fences.entry(worker_id).or_default();
+            fence.closing += 1;
+            fence.attaches.subscribe()
+        };
+        let guard = ClosingGuard {
+            registry: self.clone(),
+            worker_id,
+        };
+        // The sender lives in the fence, which `guard`'s closing count
+        // keeps in the map, so the channel cannot close under this wait.
+        let drained = attaches.wait_for(|in_flight| *in_flight == 0).await.is_ok();
+        debug_assert!(drained, "a closing worker's fence outlives its closers");
+        guard
+    }
+
+    /// Whether a kill is closing `worker_id`.
+    pub fn is_closing(&self, worker_id: &Uuid) -> bool {
+        self.fences
+            .get(worker_id)
+            .is_some_and(|fence| fence.closing > 0)
+    }
+
+    /// Refuses work for a worker a kill is closing.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::WorkerClosing`] — see [`Self::begin_close`].
+    pub fn ensure_open(&self, worker_id: &Uuid) -> Result<(), AppError> {
+        if self.is_closing(worker_id) {
+            return Err(worker_closing(*worker_id));
+        }
+        Ok(())
     }
 
     /// Returns `worker_id`'s turn lock, which a turn executor holds
@@ -72,14 +237,15 @@ impl AgentSessionRegistry {
             .unwrap_or_default()
     }
 
-    /// Registers a newly spawned session for `worker_id`.
+    /// Registers a newly spawned session for `worker_id`; only
+    /// [`AttachPermit::insert`] calls it, after the closing check.
     ///
     /// Replacing a live session must never orphan its child process: a
     /// replaced session is shut down in the background (its turn lock is
     /// kept for the new session, so a turn still running against the old
     /// one serializes with the next). Without a Tokio runtime to run that
     /// shutdown on, the replaced session is dropped with an error log.
-    pub fn insert(&self, worker_id: Uuid, session: Arc<dyn AgentSession>) {
+    fn register(&self, worker_id: Uuid, session: Arc<dyn AgentSession>) {
         let replaced = match self.entries.entry(worker_id) {
             Entry::Occupied(mut occupied) => {
                 Some(std::mem::replace(&mut occupied.get_mut().session, session))
@@ -114,9 +280,12 @@ impl AgentSessionRegistry {
     ///
     /// # Errors
     ///
-    /// [`AppError::WorkerNotFound`] — no session is registered for this
-    /// worker (never spawned, or already removed after shutdown).
+    /// * [`AppError::WorkerClosing`] — a kill is closing the worker; its
+    ///   session is about to be shut down, so nothing new may reach it.
+    /// * [`AppError::WorkerNotFound`] — no session is registered for this
+    ///   worker (never spawned, or already removed after shutdown).
     pub fn get(&self, worker_id: &Uuid) -> Result<Arc<dyn AgentSession>, AppError> {
+        self.ensure_open(worker_id)?;
         self.entries
             .get(worker_id)
             .map(|entry| entry.session.clone())
@@ -125,15 +294,21 @@ impl AgentSessionRegistry {
             })
     }
 
-    /// Removes and returns `worker_id`'s session, if any. The caller is
-    /// responsible for calling `shutdown()` on it (this registry never
-    /// tears a removed session down on its own, matching
+    /// Removes and returns `worker_id`'s session, if any, closing or not.
+    /// The caller is responsible for calling `shutdown()` on it (this
+    /// registry never tears a removed session down on its own, matching
     /// [`crate::worker::registry::WorkerRegistry::remove_worker`]'s
     /// "caller cleans up" contract). The worker's turn lock goes with it.
     pub fn remove(&self, worker_id: &Uuid) -> Option<Arc<dyn AgentSession>> {
         self.entries
             .remove(worker_id)
             .map(|(_, entry)| entry.session)
+    }
+
+    /// Drops `worker_id`'s fence once no kill or attach holds it.
+    fn remove_fence_if_idle(&self, worker_id: Uuid) {
+        self.fences
+            .remove_if(&worker_id, |_, fence| fence.is_idle());
     }
 }
 
@@ -198,17 +373,132 @@ mod tests {
         }
     }
 
+    /// Registers `session` for `worker_id` through an attach permit, as
+    /// `commands::agent::attach_session` does.
+    fn attach(registry: &AgentSessionRegistry, worker_id: Uuid, session: Arc<dyn AgentSession>) {
+        registry
+            .begin_attach(worker_id)
+            .unwrap()
+            .insert(session)
+            .unwrap();
+    }
+
     #[test]
     fn test_insert_get_remove_roundtrip() {
         let registry = AgentSessionRegistry::new();
         let worker_id = Uuid::new_v4();
-        registry.insert(worker_id, Arc::new(NoopSession::new("key-1")));
+        attach(&registry, worker_id, Arc::new(NoopSession::new("key-1")));
 
         let fetched = registry.get(&worker_id).expect("session should exist");
         assert_eq!(fetched.session_key(), "key-1");
 
         assert!(registry.remove(&worker_id).is_some());
         assert!(registry.get(&worker_id).is_err());
+    }
+
+    /// While a kill holds a worker closing, a new attach and a lookup are
+    /// refused as closing, other workers are untouched, and the worker
+    /// reopens once the guard drops, its fence gone.
+    #[tokio::test]
+    async fn test_a_closing_worker_refuses_attach_and_lookup_until_the_guard_drops() {
+        let registry = AgentSessionRegistry::new();
+        let (closing_id, other_id) = (Uuid::new_v4(), Uuid::new_v4());
+        attach(&registry, closing_id, Arc::new(NoopSession::new("a")));
+
+        let guard = registry.begin_close(closing_id).await;
+
+        assert!(registry.is_closing(&closing_id));
+        assert_matches!(
+            registry.begin_attach(closing_id).err(),
+            Some(AppError::WorkerClosing { id }) if id == closing_id.to_string()
+        );
+        assert_matches!(
+            registry.get(&closing_id).err(),
+            Some(AppError::WorkerClosing { .. })
+        );
+        assert_matches!(
+            registry.ensure_open(&closing_id),
+            Err(AppError::WorkerClosing { .. })
+        );
+        assert!(
+            registry.remove(&closing_id).is_some(),
+            "the kill still reaches the session it must stop"
+        );
+        assert!(registry.ensure_open(&other_id).is_ok());
+
+        drop(guard);
+        assert!(!registry.is_closing(&closing_id));
+        assert!(registry.begin_attach(closing_id).is_ok());
+        assert!(registry.fences.is_empty(), "idle fences are removed");
+    }
+
+    /// `begin_close` waits for an attach already holding a permit, and
+    /// that attach can no longer register its session.
+    #[tokio::test]
+    async fn test_begin_close_waits_for_an_in_flight_attach_that_may_not_register() {
+        let registry = AgentSessionRegistry::new();
+        let worker_id = Uuid::new_v4();
+        let permit = registry.begin_attach(worker_id).unwrap();
+
+        let close = tokio::spawn({
+            let registry = registry.clone();
+            async move { registry.begin_close(worker_id).await }
+        });
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !registry.is_closing(&worker_id) {
+            assert!(tokio::time::Instant::now() < deadline, "never closed");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!close.is_finished(), "the close must wait for the permit");
+
+        assert_matches!(
+            permit.insert(Arc::new(NoopSession::new("late"))),
+            Err(AppError::WorkerClosing { .. })
+        );
+        assert!(registry.remove(&worker_id).is_none(), "nothing registered");
+        drop(permit);
+
+        let guard = tokio::time::timeout(Duration::from_secs(5), close)
+            .await
+            .expect("the close finishes once the permit drops")
+            .unwrap();
+        assert!(registry.is_closing(&worker_id));
+        drop(guard);
+        assert!(registry.fences.is_empty());
+    }
+
+    /// Of two overlapping kills, the first to finish leaves the worker
+    /// closing for the second.
+    #[tokio::test]
+    async fn test_overlapping_closes_keep_the_worker_closing_until_the_last_ends() {
+        let registry = AgentSessionRegistry::new();
+        let worker_id = Uuid::new_v4();
+        let first = registry.begin_close(worker_id).await;
+        let second = registry.begin_close(worker_id).await;
+
+        drop(first);
+        assert!(registry.is_closing(&worker_id));
+        drop(second);
+        assert!(!registry.is_closing(&worker_id));
+        assert!(registry.fences.is_empty());
+    }
+
+    /// A close whose wait is abandoned (its kill future dropped) still
+    /// clears its mark.
+    #[tokio::test]
+    async fn test_an_abandoned_close_clears_its_mark() {
+        let registry = AgentSessionRegistry::new();
+        let worker_id = Uuid::new_v4();
+        let permit = registry.begin_attach(worker_id).unwrap();
+
+        let abandoned =
+            tokio::time::timeout(Duration::from_millis(20), registry.begin_close(worker_id)).await;
+
+        assert!(abandoned.is_err(), "the close waits on the permit");
+        assert!(!registry.is_closing(&worker_id));
+        drop(permit);
+        assert!(registry.fences.is_empty());
     }
 
     #[test]
@@ -226,7 +516,7 @@ mod tests {
     fn test_turn_lock_is_shared_per_session_and_dropped_with_it() {
         let registry = AgentSessionRegistry::new();
         let worker_id = Uuid::new_v4();
-        registry.insert(worker_id, Arc::new(NoopSession::new("k")));
+        attach(&registry, worker_id, Arc::new(NoopSession::new("k")));
 
         let a = registry.turn_lock(&worker_id);
         let b = registry.turn_lock(&worker_id);
@@ -253,10 +543,10 @@ mod tests {
         let worker_id = Uuid::new_v4();
         let first = NoopSession::new("first");
         let first_shutdowns = first.shutdowns.clone();
-        registry.insert(worker_id, Arc::new(first));
+        attach(&registry, worker_id, Arc::new(first));
         let lock_before = registry.turn_lock(&worker_id);
 
-        registry.insert(worker_id, Arc::new(NoopSession::new("second")));
+        attach(&registry, worker_id, Arc::new(NoopSession::new("second")));
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while first_shutdowns.load(Ordering::SeqCst) == 0 {
@@ -441,7 +731,8 @@ mod tests {
         let worker_id = Uuid::new_v4();
         let exec_log = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let tracker = Arc::new(ConcurrencyTracker::default());
-        registry.insert(
+        attach(
+            &registry,
             worker_id,
             Arc::new(GatedSession::new(
                 worker_id.to_string(),
@@ -494,7 +785,8 @@ mod tests {
             .iter()
             .map(|&label| {
                 let worker_id = Uuid::new_v4();
-                registry.insert(
+                attach(
+                    &registry,
                     worker_id,
                     Arc::new(GatedSession::new(
                         worker_id.to_string(),

@@ -95,8 +95,25 @@ pub async fn resume_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     ok_value(&())
 }
 
-/// Kills a worker, removes it (and its worktree, per its isolation
-/// policy), then shuts down its agent session if it has one.
+/// Kills a worker: stops its provider session first, then the worker and
+/// its worktree, so no provider ever runs against a checkout being
+/// removed.
+///
+/// 1. Marks the worker closing — from here a new attach or turn for it
+///    fails with [`crate::error::AppError::WorkerClosing`] — and waits for
+///    attaches already in flight to finish (see
+///    [`crate::agent::AgentSessionRegistry::begin_close`] for the bound).
+/// 2. Removes and shuts down its agent session, if it has one (one an
+///    in-flight attach registered included), so the provider process is
+///    stopped and reaped. Best-effort: a failed shutdown is logged and
+///    never changes the kill's own result.
+/// 3. Kills the worker and reconciles its worktree per its isolation
+///    policy ([`lifecycle::do_kill_worker`]).
+/// 4. Clears the closing mark; the worker is gone, so later calls get
+///    [`crate::error::AppError::WorkerNotFound`].
+///
+/// Once this returns, no session of the worker is registered or still
+/// handshaking.
 pub async fn kill_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let WorkerIdArgs {
         id,
@@ -105,6 +122,14 @@ pub async fn kill_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     } = parse_args(args)?;
     let uuid = parse_uuid(&id)?;
     let provenance = parse_provenance(origin_worker, cause_seq)?;
+
+    let closing = ctx.agent_session_registry.begin_close(uuid).await;
+    if let Some(session) = ctx.agent_session_registry.remove(&uuid)
+        && let Err(e) = session.shutdown().await
+    {
+        tracing::warn!(worker_id = %uuid, error = %e, "agent session shutdown failed during kill_worker");
+    }
+
     let sink = ctx.sink.clone();
     let registry = ctx.registry.clone();
     let repo_locks = ctx.repo_locks.clone();
@@ -113,14 +138,7 @@ pub async fn kill_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     })
     .await
     .map_err(|e| Value::String(e.to_string()))?;
-
-    // Best-effort: a failed agent-session shutdown is logged and never
-    // changes the kill's own result.
-    if let Some(session) = ctx.agent_session_registry.remove(&uuid)
-        && let Err(e) = session.shutdown().await
-    {
-        tracing::warn!(worker_id = %uuid, error = %e, "agent session shutdown failed during kill_worker");
-    }
+    drop(closing);
 
     kill_result.map_err(|e| err_value(&e))?;
     ok_value(&())
@@ -290,6 +308,178 @@ mod tests {
                 && captured.contains("env_key_count=1"),
             "the handler's own log line must have been captured: {captured}"
         );
+    }
+
+    /// What [`RecordingSession::shutdown`] saw when it ran.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct AtShutdown {
+        worktree_existed: bool,
+        worker_registered: bool,
+    }
+
+    /// A provider session whose `shutdown` records whether its worker's
+    /// worktree directory and registry entry still existed at that
+    /// moment.
+    struct RecordingSession {
+        key: crate::agent::SessionKey,
+        worker_id: uuid::Uuid,
+        worktree: std::path::PathBuf,
+        registry: crate::worker::registry::WorkerRegistry,
+        seen: Arc<parking_lot::Mutex<Option<AtShutdown>>>,
+    }
+
+    impl crate::agent::AgentSession for RecordingSession {
+        fn session_key(&self) -> &crate::agent::SessionKey {
+            &self.key
+        }
+        fn send_turn(
+            &self,
+            _turn: crate::agent::TurnInput,
+        ) -> crate::agent::BoxFuture<'_, Result<crate::agent::TurnId, crate::error::AppError>>
+        {
+            Box::pin(async { Ok("t".to_owned()) })
+        }
+        fn await_turn_completion(
+            &self,
+            _turn: crate::agent::TurnId,
+        ) -> crate::agent::BoxFuture<'_, Result<(), crate::error::AppError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn cancel(
+            &self,
+            _turn: crate::agent::TurnId,
+        ) -> crate::agent::BoxFuture<'_, Result<(), crate::error::AppError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn respond_permission(
+            &self,
+            _req: crate::agent::PermissionId,
+            _decision: crate::agent::PermissionDecision,
+        ) -> crate::agent::BoxFuture<'_, Result<(), crate::error::AppError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn shutdown(
+            &self,
+        ) -> crate::agent::BoxFuture<'_, Result<crate::agent::ExitSummary, crate::error::AppError>>
+        {
+            *self.seen.lock() = Some(AtShutdown {
+                worktree_existed: self.worktree.exists(),
+                worker_registered: self.registry.get_worker(&self.worker_id).is_ok(),
+            });
+            Box::pin(async {
+                Ok(crate::agent::ExitSummary {
+                    exit_code: Some(0),
+                    signal: None,
+                })
+            })
+        }
+    }
+
+    /// Spawns an isolated worker of `repo` through the real handler, with
+    /// worktrees under the repo's temp base, and attaches a
+    /// [`RecordingSession`] to it. Resolves to the worker id, its
+    /// worktree, and what the session's shutdown will record.
+    async fn isolated_worker_with_session(
+        ctx: &Ctx,
+        repo: &crate::git::test_support::TempRepo,
+    ) -> (
+        uuid::Uuid,
+        std::path::PathBuf,
+        Arc<parking_lot::Mutex<Option<AtShutdown>>>,
+    ) {
+        ctx.registry.config.write().worktrees_root = Some(repo.base().join("worktrees"));
+        let id = spawn_worker(
+            ctx.clone(),
+            json!({"config": {"name": "w", "repoRoot": repo.root()}}),
+        )
+        .await
+        .unwrap();
+        let id: uuid::Uuid = id.as_str().unwrap().parse().unwrap();
+        let worktree =
+            std::path::PathBuf::from(ctx.registry.get_worker(&id).unwrap().worktree_path.unwrap());
+        let seen = Arc::default();
+        ctx.agent_session_registry
+            .begin_attach(id)
+            .unwrap()
+            .insert(Arc::new(RecordingSession {
+                key: "recording".to_owned(),
+                worker_id: id,
+                worktree: worktree.clone(),
+                registry: ctx.registry.clone(),
+                seen: Arc::clone(&seen),
+            }))
+            .unwrap();
+        (id, worktree, seen)
+    }
+
+    /// Every event the engine has emitted so far.
+    async fn emitted(
+        ctx: &Ctx,
+        events: &std::sync::mpsc::Receiver<crate::orchestration::DomainEvent>,
+    ) -> Vec<crate::events::SwarmEvent> {
+        ctx.engine.flush().await.unwrap();
+        events.try_iter().map(|envelope| envelope.event).collect()
+    }
+
+    /// The provider is stopped while its checkout still exists: kill
+    /// shuts the session down before it touches the worker or its
+    /// worktree, and only then removes both.
+    #[tokio::test]
+    async fn test_kill_worker_stops_the_provider_session_before_removing_the_worktree() {
+        let repo = crate::git::test_support::TempRepo::new("kill-order");
+        let (ctx, _dir, _events) = test_ctx();
+        let (id, worktree, seen) = isolated_worker_with_session(&ctx, &repo).await;
+
+        kill_worker(ctx.clone(), json!({"id": id.to_string()}))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *seen.lock(),
+            Some(AtShutdown {
+                worktree_existed: true,
+                worker_registered: true,
+            }),
+            "the session must be shut down before the worker and its worktree go"
+        );
+        assert!(!worktree.exists(), "a clean worktree is removed after");
+        assert!(ctx.registry.get_worker(&id).is_err());
+        assert!(ctx.agent_session_registry.get(&id).is_err());
+    }
+
+    /// Preserve-on-dirty through the session-aware kill path: the
+    /// session is shut down, and a worktree with uncommitted work
+    /// survives as `preserved_dirty`, work included.
+    #[tokio::test]
+    async fn test_kill_worker_preserves_a_dirty_worktree_with_a_session_attached() {
+        let repo = crate::git::test_support::TempRepo::new("kill-dirty");
+        let (ctx, _dir, events) = test_ctx();
+        let (id, worktree, seen) = isolated_worker_with_session(&ctx, &repo).await;
+        std::fs::write(worktree.join("scratch.txt"), "uncommitted agent output").unwrap();
+
+        kill_worker(ctx.clone(), json!({"id": id.to_string()}))
+            .await
+            .unwrap();
+
+        assert!(seen.lock().is_some(), "the session must be shut down");
+        let removed = emitted(&ctx, &events)
+            .await
+            .into_iter()
+            .find_map(|event| match event {
+                crate::events::SwarmEvent::WorktreeRemoved(p) if p.worker_id == id => Some(p),
+                _ => None,
+            })
+            .expect("worktree_removed is emitted");
+        assert_eq!(removed.disposition, "preserved_dirty");
+        assert!(
+            removed.reason.is_some(),
+            "preserved_dirty carries git's refusal"
+        );
+        assert!(
+            worktree.join("scratch.txt").exists(),
+            "SWARM never force-removes"
+        );
+        assert!(ctx.agent_session_registry.get(&id).is_err());
     }
 
     #[tokio::test]

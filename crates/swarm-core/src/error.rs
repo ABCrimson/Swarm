@@ -18,7 +18,8 @@ use serde::Serialize;
 /// | Variant            | Trigger                                                   |
 /// |--------------------|-----------------------------------------------------------|
 /// | `WorkerNotFound`   | Worker ID does not exist in the registry                  |
-/// | `PtySpawn`         | PTY process creation failed                               |
+/// | `WorkerClosing`    | An attach or turn reached a worker that is being killed   |
+/// | `PtySpawn`        | PTY process creation failed                               |
 /// | `Ipc`              | Process I/O plumbing failed (write, flush, parse)         |
 /// | `Ai`               | A provider-agent CLI failed to start or rejected a request |
 /// | `Io`               | Underlying `std::io::Error`                               |
@@ -53,6 +54,17 @@ pub enum AppError {
     #[error("Worker `{id}` not found")]
     WorkerNotFound {
         /// The UUID string of the missing worker.
+        id: String,
+    },
+
+    /// The worker is being killed: its provider session is being torn
+    /// down, so a new session attach or turn for it is refused. Its own
+    /// variant rather than [`AppError::WorkerNotFound`] because the
+    /// worker still exists until the kill finishes — a caller can tell
+    /// "being killed" from "never existed" without sniffing message text.
+    #[error("Worker `{id}` Is Closing")]
+    WorkerClosing {
+        /// The UUID string of the closing worker.
         id: String,
     },
 
@@ -197,6 +209,18 @@ mod tests {
     fn test_pty_spawn_display() {
         let err = AppError::PtySpawn("no such file".to_string());
         assert_eq!(err.to_string(), "PTY spawn failed: no such file");
+    }
+
+    #[test]
+    fn test_worker_closing_display_and_serialize() {
+        let err = AppError::WorkerClosing {
+            id: "abc".to_string(),
+        };
+        assert_eq!(err.to_string(), "Worker `abc` Is Closing");
+        assert_eq!(
+            serde_json::to_string(&err).expect("serialize"),
+            r#""Worker `abc` Is Closing""#
+        );
     }
 
     #[test]
