@@ -44,9 +44,11 @@ RestartPreventExitStatus=75
 # still wait on, plus the session teardown) and 2.5 s for agent sessions
 # still registered. The event-log drain has no timer: it waits until every
 # event accepted before the shutdown is committed (about 2 ms per event on
-# ext4). The 60 s below leaves headroom for it; ExitTimeOut in
-# dev.crimson.swarmd.plist matches it.
-TimeoutStopSec=60
+# ext4), and only its 120 s DRAIN_CEILING ends it early, with an error line
+# counting the events left unpersisted. The 180 s below covers 52.5 s plus
+# that ceiling with margin, so systemd never kills swarmd before it can log
+# an overrun; ExitTimeOut in dev.crimson.swarmd.plist matches it.
+TimeoutStopSec=180
 
 # Loopback only: no --bind. swarmd refuses a non-loopback bind until a
 # loopback run has minted its token, and the token is the only

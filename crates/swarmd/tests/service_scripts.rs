@@ -102,12 +102,26 @@ fn test_windows_upgrade_stops_the_daemon_then_stages_the_binary() {
 
 /// launchd's default `ExitTimeOut` (20 s) is shorter than swarmd's graceful
 /// shutdown can take; the plist matches the systemd unit's TimeoutStopSec.
+/// Both cover the worst case before the event drain (about 52.5 s: two 5 s
+/// connection drains, the 40 s `STOP_WORKERS_TIMEOUT`, 2.5 s of agent
+/// sessions) plus the drain's `DRAIN_CEILING`, so a service manager never
+/// kills swarmd before it can log a drain that overran its ceiling.
 #[test]
 fn test_service_units_wait_for_a_graceful_shutdown() {
+    const BEFORE_THE_DRAIN_SECS: u64 = 53;
+    const STOP_WINDOW_SECS: u64 = 180;
+    let ceiling = swarm_core::orchestration::engine::DRAIN_CEILING.as_secs();
+    assert!(
+        STOP_WINDOW_SECS > BEFORE_THE_DRAIN_SECS + ceiling,
+        "a {STOP_WINDOW_SECS} s stop window does not cover {BEFORE_THE_DRAIN_SECS} s plus the {ceiling} s drain ceiling"
+    );
     let plist = read_script("dev.crimson.swarmd.plist");
-    position(&plist, "<key>ExitTimeOut</key>\n    <integer>60</integer>");
+    position(
+        &plist,
+        &format!("<key>ExitTimeOut</key>\n    <integer>{STOP_WINDOW_SECS}</integer>"),
+    );
     let unit = read_script("swarmd.service");
-    position(&unit, "\nTimeoutStopSec=60\n");
+    position(&unit, &format!("\nTimeoutStopSec={STOP_WINDOW_SECS}\n"));
 }
 
 // ── Linux and macOS (executed) ──────────────────────────────────────────

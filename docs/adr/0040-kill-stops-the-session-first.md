@@ -80,7 +80,8 @@ See [Workers and PTYs](../architecture.md#workers-and-ptys).
 
 `swarmd`'s `STOP_WORKERS_TIMEOUT` is 40 s (`crates/swarmd/src/main.rs`), no longer the 10 s the
 Consequences above compare against, and `TimeoutStopSec` in `swarmd.service` and `ExitTimeOut` in the
-launchd plist are 60 s. A daemon stop now abandons a kill only when its attach's session teardown outlasts
+launchd plist are 180 s, which also covers the event drain's 120 s ceiling (see the 2026-10-14 amendment
+to [ADR-0039](0039-event-log-flushes-every-commit.md)). A daemon stop now abandons a kill only when its attach's session teardown outlasts
 what is left of the 40 s after the 30 s handshake, about 10 s. The Windows Scheduled Task still stops without
 a graceful window. The kill-on-drop guard around the Claude Code handshake, and the reaping of a process whose
 kill was dropped mid-teardown, remain open follow-ups.
