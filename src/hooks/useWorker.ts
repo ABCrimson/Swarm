@@ -1,5 +1,5 @@
 import { useOptimistic, useTransition } from "react";
-import { toast } from "#components/ui/Toast";
+import { toast } from "sonner";
 import { errorMessage } from "#lib/is-error";
 import { killWorker, pauseWorker, resumeWorker } from "#lib/tauri";
 import type { Worker, WorkerState } from "#store/types";
