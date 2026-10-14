@@ -6,7 +6,12 @@ import * as z from "zod";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
-import { type AlertThresholds, alertThresholdsAtom } from "#lib/alerts";
+import {
+  type AlertThresholds,
+  alertThresholdsAtom,
+  type ThresholdsProblem,
+  thresholdsError,
+} from "#lib/alerts";
 import { ANTHROPIC_API_KEY_CONFIG_KEY } from "#lib/anthropic-config";
 import { errorMessage } from "#lib/is-error";
 import { bindingFromEvent, formatBinding, type Keybindings } from "#lib/keybindings";
@@ -17,6 +22,7 @@ import {
   type ModelKey,
   warnIfModelGated,
 } from "#lib/models";
+import { clampNumberInput } from "#lib/number-input";
 import {
   checkForUpdates,
   DESKTOP_ONLY_REASON,
@@ -37,44 +43,7 @@ import {
   themeAtom,
 } from "#store/ui";
 
-/**
- * Parses typed numeric input and clamps it to `[min, max]`. Blank or
- * non-numeric input keeps `fallback`: `Number("")` is 0, which must never
- * be committed as if the user had typed it.
- */
-export function clampNumberInput(raw: string, min: number, max: number, fallback: number): number {
-  const n = raw.trim() === "" ? Number.NaN : Number(raw);
-  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
-}
-
 type ThresholdKey = keyof AlertThresholds;
-
-/** An unusable pair of alert thresholds: what is wrong, and which fields. */
-export interface ThresholdsProblem {
-  readonly message: string;
-  /** The fields to mark invalid (the offending warning/critical pair). */
-  readonly keys: ReadonlySet<ThresholdKey>;
-}
-
-/**
- * The first warning/critical pair whose warning level is not below its
- * critical level, or `null` when every pair is valid.
- */
-export function thresholdsError(thresholds: AlertThresholds): ThresholdsProblem | null {
-  if (thresholds.cpuWarning >= thresholds.cpuCritical) {
-    return {
-      message: "CPU Warning Must Be Below CPU Critical",
-      keys: new Set(["cpuWarning", "cpuCritical"]),
-    };
-  }
-  if (thresholds.memoryWarning >= thresholds.memoryCritical) {
-    return {
-      message: "Memory Warning Must Be Below Memory Critical",
-      keys: new Set(["memoryWarning", "memoryCritical"]),
-    };
-  }
-  return null;
-}
 
 // ── Layout primitives ────────────────────────────────
 
