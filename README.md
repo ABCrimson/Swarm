@@ -80,6 +80,7 @@ Also on `main`:
 ## Architecture
 
 ```mermaid
+%%{init: {"flowchart": {"rankSpacing": 90}}}%%
 flowchart TB
     FE["React 19 Frontend (src/)"]
     subgraph shells["Two Shells"]
@@ -97,12 +98,12 @@ flowchart TB
     FE -->|"Tauri IPC"| DESK
     FE -->|"WebSocket /ws"| DAEMON
     shells --> core
-    RT --> GIT
     RT --> SCHED
     SCHED --> PROV
     RT --> PROV
     RT --> ENG
     ENG --> LOG
+    RT --> GIT
 ```
 
 One Rust core, two shells. `swarm-desktop` forwards Tauri IPC calls to the core; `swarmd` serves the same 36 registry commands and the event stream over an authenticated WebSocket (the desktop app has 39: three native commands, `NATIVE_ONLY`, need the webview or the OS), and the frontend reaches it with the `pnpm build:web` bundle. CI checks that `cargo tree -p swarm-core` and `cargo tree -p swarmd` contain no `tauri` crate. Full reference: [docs/architecture.md](docs/architecture.md).
