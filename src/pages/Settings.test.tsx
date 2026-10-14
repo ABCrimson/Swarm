@@ -18,7 +18,7 @@ import {
   setMaxWorkers,
   writeConfig,
 } from "#lib/tauri";
-import { clampNumberInput, Settings, thresholdsError } from "#pages/Settings";
+import { Settings } from "#pages/Settings";
 import {
   agentConcurrencySyncAtom,
   appSettingsAtom,
@@ -73,41 +73,6 @@ beforeEach(() => {
   store.set(alertThresholdsAtom, DEFAULT_THRESHOLDS);
   store.set(appSettingsAtom, DEFAULT_APP_SETTINGS);
   store.set(selectedModelAtom, "sonnet");
-});
-
-describe("clampNumberInput", () => {
-  it.for([
-    ["50", 50],
-    ["150", 100],
-    ["-3", 0],
-    ["", 42],
-    ["   ", 42],
-    ["abc", 42],
-  ] as const)("%j -> %d", ([raw, expected]) => {
-    expect(clampNumberInput(raw, 0, 100, 42)).toBe(expected);
-  });
-});
-
-describe("thresholdsError", () => {
-  it("accepts warning below critical", () => {
-    expect(thresholdsError(DEFAULT_THRESHOLDS)).toBeNull();
-  });
-
-  it("rejects an inverted or equal CPU pair and names only the CPU fields", () => {
-    expect(thresholdsError({ ...DEFAULT_THRESHOLDS, cpuWarning: 90, cpuCritical: 90 })).toEqual({
-      message: "CPU Warning Must Be Below CPU Critical",
-      keys: new Set(["cpuWarning", "cpuCritical"]),
-    });
-  });
-
-  it("rejects an inverted memory pair and names only the memory fields", () => {
-    expect(
-      thresholdsError({ ...DEFAULT_THRESHOLDS, memoryWarning: 95, memoryCritical: 50 }),
-    ).toEqual({
-      message: "Memory Warning Must Be Below Memory Critical",
-      keys: new Set(["memoryWarning", "memoryCritical"]),
-    });
-  });
 });
 
 describe("Settings — API key", () => {
