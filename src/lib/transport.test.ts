@@ -99,7 +99,16 @@ vi.mock("#lib/event-bus", () => ({
 }));
 let mockLastSeq = 0;
 
-import { DaemonAuthError, initTokenFromLocationHash, WsTransport } from "#lib/transport";
+import {
+  DaemonAuthError,
+  DEFAULT_RPC_DEADLINE_MS,
+  initTokenFromLocationHash,
+  isOutcomeUnknown,
+  RpcConnectionLostError,
+  RpcTimeoutError,
+  rpcDeadlineMs,
+  WsTransport,
+} from "#lib/transport";
 
 function latestSocket(): FakeWebSocket {
   const s = FakeWebSocket.instances.at(-1);
@@ -119,6 +128,19 @@ function openAndReady(serverSeq = 0): FakeWebSocket {
 function lastRpc(socket: FakeWebSocket): { frame: string; id: string; cmd: string; args: unknown } {
   return socket.lastSentFrame() as { frame: string; id: string; cmd: string; args: unknown };
 }
+
+/**
+ * Advances fake time by `ms` while the daemon keeps talking (its
+ * `system_metrics` heartbeat), so the link watchdog sees a live socket.
+ */
+async function advanceWithTraffic(socket: FakeWebSocket, ms: number): Promise<void> {
+  const STEP_MS = 10_000;
+  for (let elapsed = 0; elapsed < ms; elapsed += STEP_MS) {
+    await vi.advanceTimersByTimeAsync(Math.min(STEP_MS, ms - elapsed));
+    socket.simulateServerFrame(event(++heartbeatSeq));
+  }
+}
+let heartbeatSeq = 0;
 
 const event = (seq: number) => ({ seq, ts: seq, type: "worker_spawned", payload: {} });
 
@@ -554,9 +576,9 @@ describe("wsTransport", () => {
 
     it("keeps a socket that is still receiving frames when one RPC times out", async () => {
       vi.useFakeTimers();
-      const invokePromise = transport.invoke("git_push");
+      const invokePromise = transport.invoke("list_workers");
       const assertion = expect(invokePromise).rejects.toThrow(
-        'RPC "git_push" Timed Out After 30000ms.',
+        'RPC "list_workers" Timed Out After 30000ms.',
       );
       const socket = openAndReady(0);
       await vi.advanceTimersByTimeAsync(10_000);
@@ -566,6 +588,143 @@ describe("wsTransport", () => {
       await assertion;
       expect(socket.readyState).toBe(FakeWebSocket.OPEN);
       expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it("keeps a git_push rpc pending past 30 s and accepts its late rpcResult", async () => {
+      vi.useFakeTimers();
+      const invokePromise = transport.invoke<{ pushedRef: string }>("git_push", { shipId: "s" });
+      const settled = vi.fn();
+      invokePromise.then(settled, settled);
+      const socket = openAndReady(0);
+      await advanceWithTraffic(socket, 45_000);
+      expect(settled).not.toHaveBeenCalled();
+
+      socket.simulateServerFrame({
+        frame: "rpcResult",
+        id: lastRpc(socket).id,
+        ok: true,
+        result: { pushedRef: "origin/x" },
+      });
+      await expect(invokePromise).resolves.toStrictEqual({ pushedRef: "origin/x" });
+      expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+    });
+
+    it("rejects git_stage_commit with RpcTimeoutError only at its own deadline", async () => {
+      vi.useFakeTimers();
+      const deadline = rpcDeadlineMs("git_stage_commit");
+      const outcome = transport.invoke("git_stage_commit").then(
+        () => null,
+        (err: unknown) => err,
+      );
+      const settled = vi.fn();
+      void outcome.then(settled);
+      const socket = openAndReady(0);
+
+      await advanceWithTraffic(socket, deadline - 1);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      const err = await outcome;
+      expect(err).toBeInstanceOf(RpcTimeoutError);
+      expect(err).toMatchObject({ cmd: "git_stage_commit", deadlineMs: deadline });
+      expect(isOutcomeUnknown(err)).toBe(true);
+    });
+
+    it("rejects a pending rpc with RpcConnectionLostError when the socket closes", async () => {
+      vi.useFakeTimers();
+      const outcome = transport.invoke("git_push").then(
+        () => null,
+        (err: unknown) => err,
+      );
+      const socket = openAndReady(0);
+      await vi.advanceTimersByTimeAsync(0);
+      socket.simulateAbruptClose();
+
+      const err = await outcome;
+      expect(err).toBeInstanceOf(RpcConnectionLostError);
+      expect(err).toMatchObject({ cmd: "git_push", message: "WebSocket Connection Closed." });
+      expect(isOutcomeUnknown(err)).toBe(true);
+    });
+
+    it("treats a failure before the frame is sent as a definite failure, not an unknown outcome", async () => {
+      const notConnected = transport.invoke("git_push");
+      const socket = openAndReady(0);
+      socket.simulateAbruptClose();
+      const notConnectedErr = await notConnected.catch((err: unknown) => err);
+      expect(notConnectedErr).toMatchObject({ message: "Not Connected To The SWARM Daemon." });
+      expect(isOutcomeUnknown(notConnectedErr)).toBe(false);
+
+      expect(isOutcomeUnknown(new DaemonAuthError())).toBe(false);
+      expect(isOutcomeUnknown({ kind: "pushRejected" })).toBe(false);
+      expect(isOutcomeUnknown(new Error("WebSocket Closed Before The Handshake Completed."))).toBe(
+        false,
+      );
+    });
+
+    describe("link watchdog", () => {
+      it("closes a socket that goes silent under a long git_push and rejects it as connection lost", async () => {
+        vi.useFakeTimers();
+        vi.spyOn(Math, "random").mockReturnValue(0);
+        const outcome = transport.invoke("git_push").then(
+          () => null,
+          (err: unknown) => err,
+        );
+        const socket = openAndReady(0);
+        await vi.advanceTimersByTimeAsync(DEFAULT_RPC_DEADLINE_MS * 2);
+
+        expect(await outcome).toBeInstanceOf(RpcConnectionLostError);
+        expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+        await vi.advanceTimersByTimeAsync(500);
+        expect(FakeWebSocket.instances).toHaveLength(2);
+      });
+
+      it("abandons a half-open socket whose close event never fires, rejecting pending calls and reconnecting", async () => {
+        vi.useFakeTimers();
+        vi.spyOn(Math, "random").mockReturnValue(0);
+        const outcome = transport.invoke("git_push").then(
+          () => null,
+          (err: unknown) => err,
+        );
+        const socket = openAndReady(0);
+        // A dead link: close() only starts the closing handshake, and the
+        // `close` event never arrives.
+        socket.close = () => socket.simulateClosing();
+        await vi.advanceTimersByTimeAsync(DEFAULT_RPC_DEADLINE_MS * 2);
+
+        expect(await outcome).toBeInstanceOf(RpcConnectionLostError);
+        await vi.advanceTimersByTimeAsync(500);
+        expect(FakeWebSocket.instances).toHaveLength(2);
+      });
+
+      it("leaves a long git_push pending while the socket keeps receiving frames", async () => {
+        vi.useFakeTimers();
+        const settled = vi.fn();
+        transport.invoke("git_push").then(settled, settled);
+        const socket = openAndReady(0);
+        for (let seq = 1; seq <= 8; seq++) {
+          await vi.advanceTimersByTimeAsync(10_000);
+          socket.simulateServerFrame(event(seq));
+        }
+
+        expect(settled).not.toHaveBeenCalled();
+        expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+        expect(FakeWebSocket.instances).toHaveLength(1);
+      });
+
+      it("leaves no timer behind once the last pending rpc has settled", async () => {
+        vi.useFakeTimers();
+        const invokePromise = transport.invoke("git_push");
+        const socket = openAndReady(0);
+        await vi.advanceTimersByTimeAsync(0);
+        socket.simulateServerFrame({
+          frame: "rpcResult",
+          id: lastRpc(socket).id,
+          ok: true,
+          result: null,
+        });
+        await invokePromise;
+
+        expect(vi.getTimerCount()).toBe(0);
+      });
     });
 
     it("fails fast when the socket drops between the handshake and the send", async () => {

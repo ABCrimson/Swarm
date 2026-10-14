@@ -28,7 +28,10 @@ export interface Transport {
    * Runs one backend command. Rejects with the command's own error
    * value (a string, or a structured object such as a ship error) on
    * failure, exactly as Tauri IPC does, and with an `Error` for a
-   * transport failure.
+   * transport failure. Over the daemon a sent command whose reply never
+   * arrives rejects with a {@link RpcTimeoutError} (after
+   * {@link rpcDeadlineMs}) or {@link RpcConnectionLostError}; see
+   * {@link isOutcomeUnknown}. Tauri IPC has no deadline.
    */
   invoke<T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T>;
   /** Subscribes to a backend event channel. Never rejects for a transport that reconnects on its own. */
@@ -83,25 +86,155 @@ const BASE_RECONNECT_DELAY_MS = 500;
 const MAX_RECONNECT_DELAY_MS = 15_000;
 const JITTER_FRACTION = 0.3;
 /**
- * Bound on every wait for the daemon: the `hello` → `ready` handshake
- * and each `rpc` → `rpcResult` round trip. A
- * hung daemon, a lost response or a proxy that holds the upgrade open
- * rejects the caller instead of leaving it pending forever.
+ * Bound on the `hello` → `ready` handshake, the deadline of every `rpc`
+ * that runs no budgeted git call (see {@link rpcDeadlineMs}), and the
+ * period of the link watchdog (see `WsTransport`). A hung daemon, a
+ * lost response or a proxy that holds the upgrade open rejects the
+ * caller instead of leaving it pending forever.
  */
-const RPC_TIMEOUT_MS = 30_000;
+export const DEFAULT_RPC_DEADLINE_MS = 30_000;
+/**
+ * The daemon's budget for one ship index mutation (`add`, `restore
+ * --staged`, `commit`, which runs the user's pre-commit hooks):
+ * `MUTATE_TIMEOUT` in `crates/swarm-core/src/git/cli.rs`.
+ * `transport.deadlines.test.ts` reads that file and fails when the two
+ * drift.
+ */
+export const GIT_MUTATE_BUDGET_MS = 600_000;
+/**
+ * The daemon's budget for a ship `git push`: `PUSH_TIMEOUT` in
+ * `crates/swarm-core/src/git/cli.rs`, pinned by
+ * `transport.deadlines.test.ts`.
+ */
+export const GIT_PUSH_BUDGET_MS = 600_000;
+/**
+ * The daemon's budget for one whole-tree or whole-history git query
+ * (`status`, `diff --numstat`, `rev-list --count`): `SCAN_TIMEOUT` in
+ * `crates/swarm-core/src/git/cli.rs`, pinned by
+ * `transport.deadlines.test.ts`.
+ */
+export const GIT_SCAN_BUDGET_MS = 60_000;
+/**
+ * The daemon's budget for one cheap git query (`rev-parse`,
+ * `symbolic-ref`, `remote get-url`, `config`): `READ_TIMEOUT` in
+ * `crates/swarm-core/src/git/cli.rs`, pinned by
+ * `transport.deadlines.test.ts`.
+ */
+export const GIT_READ_BUDGET_MS = 15_000;
+/**
+ * Slack added to the summed git budgets of a command: the daemon's
+ * `rpcResult` crosses the socket, and the daemon's own scheduling
+ * (task spawn, event-log reads, JSON) sits outside every git budget. It
+ * does not cover the wait for the per-repo ship lock (`RepoLocks`):
+ * a mutation queued behind another worker's ship in the same repository
+ * can outlast this margin, so an expiry always means "outcome unknown",
+ * never "failed".
+ */
+export const RPC_DEADLINE_MARGIN_MS = 30_000;
+
+/**
+ * How long a client waits for the `rpcResult` of `cmd`. The daemon sets
+ * no deadline on an rpc, so this is the one place a per-command wait is
+ * decided. A command that runs budgeted git calls is bounded as an
+ * operation: the sum of the budgets of every git call its worst-case
+ * path runs, plus {@link RPC_DEADLINE_MARGIN_MS}. Counted from the
+ * daemon source (`crates/swarm-core/src`), each call once:
+ *
+ * - `git_stage_commit` (`stage_and_commit` in `git/ship/commit.rs`):
+ *   3 scans (`StatusSnapshot::read` twice, then `commit_diff_stat`'s
+ *   `show --numstat`; all `SCAN_TIMEOUT`), 3 mutations (the `restore
+ *   --staged`, `add` and `commit` `mutate` calls; `MUTATE_TIMEOUT` each)
+ *   and 2 reads (`repo::locate` in `guard_not_primary_checkout`, then
+ *   `repo::head_sha`; `READ_TIMEOUT` each) = 3 × 60 s + 3 × 600 s +
+ *   2 × 15 s, plus the margin.
+ * - `git_push` (`push` in `git/ship/push.rs`): the push (`mutate` with
+ *   `PUSH_TIMEOUT`) and 6 reads (`repo::locate`; `resolve_live_branch`'s
+ *   `symbolic-ref`; `resolve_base_branch`'s `origin_head_branch` and
+ *   `configured_default_branch`; `remote_url`'s `remote get-url`;
+ *   `repo::head_sha`; `READ_TIMEOUT` each) = 600 s + 6 × 15 s.
+ * - `git_ship_preflight` (`preflight` in `git/ship/preflight.rs`): 3 scans
+ *   (`StatusSnapshot::read`, `ahead_since_base`'s `rev-list --count`,
+ *   `preview_diff_stat`'s `diff --numstat`; `SCAN_TIMEOUT` each) and 4
+ *   reads (`repo::locate`, `resolve_base_branch`'s two queries,
+ *   `remote_url`; `READ_TIMEOUT` each) = 3 × 60 s + 4 × 15 s.
+ * - `ship_compare_url` (`compare_url` in `git/ship/push.rs`): 4 reads
+ *   (`resolve_live_branch`, `remote_url`, `resolve_base_branch`'s two
+ *   queries; `READ_TIMEOUT` each) = 4 × 15 s.
+ *
+ * Every other command gets {@link DEFAULT_RPC_DEADLINE_MS}. The ship
+ * flow reuses this as the window in which a lost reply may still be
+ * reconciled. The wait for the per-repo ship lock is in none of these
+ * sums (see {@link RPC_DEADLINE_MARGIN_MS}). A mutation that fails on
+ * lock contention is retried once (`RepoLocks::run_serialized`), which can
+ * spend its budget twice; like the ship-lock wait, that overrun lands in
+ * the reconcile window.
+ */
+export function rpcDeadlineMs(cmd: string): number {
+  switch (cmd) {
+    case "git_stage_commit":
+      return (
+        3 * GIT_SCAN_BUDGET_MS +
+        3 * GIT_MUTATE_BUDGET_MS +
+        2 * GIT_READ_BUDGET_MS +
+        RPC_DEADLINE_MARGIN_MS
+      );
+    case "git_push":
+      return GIT_PUSH_BUDGET_MS + 6 * GIT_READ_BUDGET_MS + RPC_DEADLINE_MARGIN_MS;
+    case "git_ship_preflight":
+      return 3 * GIT_SCAN_BUDGET_MS + 4 * GIT_READ_BUDGET_MS + RPC_DEADLINE_MARGIN_MS;
+    case "ship_compare_url":
+      return 4 * GIT_READ_BUDGET_MS + RPC_DEADLINE_MARGIN_MS;
+    default:
+      return DEFAULT_RPC_DEADLINE_MS;
+  }
+}
+
 /** Close code `swarmd` sends when the `hello` token is missing or wrong (`crates/swarmd/src/ws.rs`). */
 const UNAUTHORIZED_CLOSE_CODE = 4401;
 
 /**
  * Thrown by {@link WsTransport.invoke} when no `rpcResult` arrives within
- * {@link RPC_TIMEOUT_MS}. When nothing at all arrived on the socket in
+ * {@link rpcDeadlineMs} of the command. The frame was sent, so the
+ * command may still be running on the daemon: the outcome is unknown
+ * ({@link isOutcomeUnknown}). When nothing at all arrived on the socket in
  * that window, the socket is also closed so the reconnect loop replaces it.
  */
-class RpcTimeoutError extends Error {
-  constructor(cmd: string) {
-    super(`RPC "${cmd}" Timed Out After ${RPC_TIMEOUT_MS}ms.`);
+export class RpcTimeoutError extends Error {
+  readonly cmd: string;
+  readonly deadlineMs: number;
+
+  constructor(cmd: string, deadlineMs: number) {
+    super(`RPC "${cmd}" Timed Out After ${deadlineMs}ms.`);
     this.name = "RpcTimeoutError";
+    this.cmd = cmd;
+    this.deadlineMs = deadlineMs;
   }
+}
+
+/**
+ * Thrown to every rpc still pending when its socket closes. The frame
+ * was sent, and the daemon finishes a command even after its connection
+ * drops, so the outcome is unknown ({@link isOutcomeUnknown}).
+ */
+export class RpcConnectionLostError extends Error {
+  readonly cmd: string;
+
+  constructor(cmd: string) {
+    super("WebSocket Connection Closed.");
+    this.name = "RpcConnectionLostError";
+    this.cmd = cmd;
+  }
+}
+
+/**
+ * True when `err` says an rpc was sent but its reply never arrived (a
+ * {@link RpcTimeoutError} or {@link RpcConnectionLostError}), so the
+ * command may have run. A command's own error value, and a failure
+ * before the frame was sent (not connected, handshake, auth), are
+ * definite and return false.
+ */
+export function isOutcomeUnknown(err: unknown): err is RpcTimeoutError | RpcConnectionLostError {
+  return err instanceof RpcTimeoutError || err instanceof RpcConnectionLostError;
 }
 
 /**
@@ -171,6 +304,8 @@ function readToken(): string | null {
 }
 
 interface PendingRpc {
+  /** The command, so a close can name what was in flight. */
+  readonly cmd: string;
   readonly resolve: (value: unknown) => void;
   /** A command error value (as the daemon sent it) or a transport `Error`. */
   readonly reject: (error: unknown) => void;
@@ -182,6 +317,8 @@ interface Connection {
   readonly pending: Map<string, PendingRpc>;
   /** Frames received so far; an RPC timeout with no change since its send means the link is dead. */
   framesReceived: number;
+  /** The link watchdog's interval while any rpc is pending; see {@link WsTransport.armWatchdog}. */
+  watchdog: ReturnType<typeof setInterval> | null;
 }
 
 interface ReadyFrame {
@@ -274,13 +411,13 @@ export class WsTransport implements Transport {
       this.armReconnect();
       return Promise.reject(isError(err) ? err : new Error(String(err), { cause: err }));
     }
-    const conn: Connection = { ws, pending: new Map(), framesReceived: 0 };
+    const conn: Connection = { ws, pending: new Map(), framesReceived: 0, watchdog: null };
     this.connection = conn;
 
     const handshakeTimer = setTimeout(() => {
       settle(() => reject(new Error("The SWARM Daemon Did Not Complete The Handshake In Time.")));
       ws.close();
-    }, RPC_TIMEOUT_MS);
+    }, DEFAULT_RPC_DEADLINE_MS);
 
     ws.addEventListener("open", () => {
       const lastSeq = getLastSeq();
@@ -310,7 +447,7 @@ export class WsTransport implements Transport {
         } else if (raw.frame === "rpcResult") {
           const pending = conn.pending.get(raw.id);
           if (pending) {
-            conn.pending.delete(raw.id);
+            this.releasePending(conn, raw.id);
             if (raw.ok) pending.resolve(raw.result);
             else pending.reject(raw.error);
           }
@@ -326,8 +463,9 @@ export class WsTransport implements Transport {
     });
 
     ws.addEventListener("close", (ev) => {
+      this.clearWatchdog(conn);
       for (const pending of conn.pending.values()) {
-        pending.reject(new Error("WebSocket Connection Closed."));
+        pending.reject(new RpcConnectionLostError(pending.cmd));
       }
       conn.pending.clear();
       const unauthorized = !settled && ev.code === UNAUTHORIZED_CLOSE_CODE;
@@ -348,6 +486,56 @@ export class WsTransport implements Transport {
     });
 
     return promise;
+  }
+
+  private clearWatchdog(conn: Connection): void {
+    if (conn.watchdog === null) return;
+    clearInterval(conn.watchdog);
+    conn.watchdog = null;
+  }
+
+  /** Closes `conn` and, without waiting for its `close` event (a half-open socket's closing handshake can stall until the browser gives up on TCP), rejects its pending calls and starts the reconnect. Idempotent with the `close` listener. */
+  private abandon(conn: Connection): void {
+    conn.ws.close();
+    this.clearWatchdog(conn);
+    for (const pending of conn.pending.values())
+      pending.reject(new RpcConnectionLostError(pending.cmd));
+    conn.pending.clear();
+    if (this.connection !== conn) return;
+    this.connection = null;
+    if (!this.disposed) this.armReconnect();
+  }
+
+  /** Forgets a settled rpc; the watchdog stops with the last one. */
+  private releasePending(conn: Connection, id: string): void {
+    conn.pending.delete(id);
+    if (conn.pending.size === 0) this.clearWatchdog(conn);
+  }
+
+  /**
+   * While any rpc is pending, checks every {@link DEFAULT_RPC_DEADLINE_MS}
+   * that the socket delivered at least one frame since the previous
+   * check, and abandons it when none did (see `abandon`). That rejects
+   * the pending calls with {@link RpcConnectionLostError} and starts the
+   * reconnect at once, without waiting for the `close` event a half-open
+   * socket may never deliver in time. The reconnect's `hello` replays the log from `lastSeq`, so the ship flow can
+   * learn the outcome of a call it lost. Sound because the daemon sends
+   * an ephemeral `system_metrics` event every 500 ms
+   * (`METRICS_INTERVAL`, `crates/swarm-core/src/metrics.rs`): thirty
+   * seconds without any frame means the link is dead, not that a command
+   * is slow. That keeps dead-link detection at one period even for a
+   * ship call whose deadline is minutes long.
+   */
+  private armWatchdog(conn: Connection): void {
+    if (conn.watchdog !== null) return;
+    let framesAtLastCheck = conn.framesReceived;
+    conn.watchdog = setInterval(() => {
+      if (conn.framesReceived === framesAtLastCheck) {
+        this.abandon(conn);
+        return;
+      }
+      framesAtLastCheck = conn.framesReceived;
+    }, DEFAULT_RPC_DEADLINE_MS);
   }
 
   private armReconnect(): void {
@@ -372,17 +560,18 @@ export class WsTransport implements Transport {
     const id = `r${++this.lastRpcId}`;
     const { promise, resolve, reject } = Promise.withResolvers<T>();
     const framesAtSend = conn.framesReceived;
-    // Bounded: see RPC_TIMEOUT_MS's doc.
+    const deadlineMs = rpcDeadlineMs(cmd);
     const timer = setTimeout(() => {
-      conn.pending.delete(id);
-      reject(new RpcTimeoutError(cmd));
+      this.releasePending(conn, id);
+      reject(new RpcTimeoutError(cmd, deadlineMs));
       // Not one frame (no result, no event) in the whole window: the
       // socket is half-open (laptop sleep, a NAT timeout) even though
       // `readyState` still says OPEN. Closing it starts a reconnect now
       // instead of whenever the browser notices the dead TCP link.
-      if (conn.framesReceived === framesAtSend && this.connection === conn) conn.ws.close();
-    }, RPC_TIMEOUT_MS);
+      if (conn.framesReceived === framesAtSend && this.connection === conn) this.abandon(conn);
+    }, deadlineMs);
     conn.pending.set(id, {
+      cmd,
       resolve: (value) => {
         clearTimeout(timer);
         resolve(value as T);
@@ -392,6 +581,7 @@ export class WsTransport implements Transport {
         reject(error);
       },
     });
+    this.armWatchdog(conn);
     conn.ws.send(JSON.stringify({ frame: "rpc", id, cmd, args }));
     return promise;
   }
@@ -419,6 +609,7 @@ export class WsTransport implements Transport {
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
     const conn = this.connection;
     this.connection = null;
+    if (conn) this.clearWatchdog(conn);
     conn?.pending.clear();
     conn?.ws.close();
     this.listeners.clear();
