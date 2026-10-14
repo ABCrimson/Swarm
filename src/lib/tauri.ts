@@ -4,7 +4,7 @@ import * as z from "zod";
 import type { PermissionDecision, ProbeReport, ProviderId, TrustTier } from "#lib/agent-events";
 import { ProbeReportSchema } from "#lib/agent-events";
 import { isError } from "#lib/is-error";
-import { transport } from "#lib/transport";
+import { type TransportCapabilities, transport } from "#lib/transport";
 import type {
   CommitOutcome,
   PushOutcome,
@@ -58,6 +58,24 @@ export { isTauri };
 export function hasTransport(): boolean {
   return transport.capabilities.kind === "ws" || isTauri();
 }
+
+/** A desktop-only feature a transport may or may not offer: `TransportCapabilities` minus `kind`. */
+export type TransportFeature = Exclude<keyof TransportCapabilities, "kind">;
+
+/**
+ * Whether the active transport offers `feature`, read from its capability
+ * metadata. The flags are fixed per build (the desktop build offers all
+ * four, the `pnpm build:web` page none), so a control gated on this keeps
+ * its UI in a plain-browser preview of the desktop build; the runtime
+ * bridge checks ({@link isTauri}) stay in addition where a plugin call
+ * needs the bridge itself.
+ */
+export function hasCapability(feature: TransportFeature): boolean {
+  return transport.capabilities[feature];
+}
+
+/** Shown beside (or as the reason for) a control the active transport cannot serve. */
+export const DESKTOP_ONLY_REASON = "Available In The Desktop App Only";
 
 /**
  * Runs one backend command on the active transport. `T` is not checked:
@@ -530,11 +548,15 @@ type UpdateCheckResult = z.output<typeof UpdateCheckResultSchema>;
 
 /**
  * Asks the configured update endpoint for a newer version.
- * Desktop-only, like {@link sendNotification}: resolves
- * `{ available: false }` outside the Tauri shell.
+ * Desktop-only, like {@link sendNotification}: rejects with an `Error`
+ * ("Update Checks Need The Desktop App") when the transport has no
+ * updater or there is no Tauri bridge, because a check that never ran
+ * must not read as "up to date".
  */
 export async function checkForUpdates(): Promise<UpdateCheckResult> {
-  if (!isTauri()) return { available: false };
+  if (!hasCapability("autoUpdate") || !isTauri()) {
+    throw new Error("Update Checks Need The Desktop App");
+  }
   const raw = await invoke("check_for_updates");
   return parseResponse(UpdateCheckResultSchema, raw, "Update Check Returned An Unexpected Shape.");
 }
