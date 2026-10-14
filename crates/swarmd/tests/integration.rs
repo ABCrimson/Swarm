@@ -335,31 +335,45 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
 
 // ── Handshake and authentication ───────────────────────────────────────
 
-/// Cold attach: `ready` at the log head, then `replayEnd` with no events
-/// between them.
+/// Cold attach: `ready` at the log head, then `replayEnd` at that same head
+/// with no events between them. `serverSeq` is the head, which counts
+/// ephemeral events too (the metrics loop may already have emitted a
+/// `system_metrics`), so a fresh data directory is shown empty by its
+/// persisted log, not by `serverSeq == 0`.
 #[tokio::test]
 async fn test_cold_attach_yields_ready_then_replay_end() {
     let server = TestServer::start().await;
     let mut ws = connect(&server).await;
     hello(&mut ws, None, Some(&server.token)).await;
 
-    match next_frame(&mut ws).await {
+    let head = match next_frame(&mut ws).await {
         Inbound::Control(ServerFrame::Ready {
             server_seq,
             version,
             caps,
         }) => {
-            assert_eq!(server_seq, 0, "a fresh data dir has no persisted events");
             assert_eq!(version, PROTOCOL_VERSION);
             assert_eq!(caps.max_frame_bytes, Limits::default().max_message_bytes);
             assert_eq!(caps.max_connections, Limits::default().max_connections);
+            server_seq
         }
         _ => panic!("expected ready first"),
-    }
+    };
     match next_frame(&mut ws).await {
-        Inbound::Control(ServerFrame::ReplayEnd { seq }) => assert_eq!(seq, 0),
+        Inbound::Control(ServerFrame::ReplayEnd { seq }) => {
+            assert_eq!(seq, head, "a cold attach starts at the head");
+        }
         _ => panic!("expected replayEnd second"),
     }
+
+    let (ok, result, error) =
+        rpc(&mut ws, "persisted", "events_since", json!({"afterSeq": 0})).await;
+    assert!(ok, "events_since failed: {error:?}");
+    assert_eq!(
+        result,
+        Some(json!([])),
+        "a fresh data directory has no persisted events"
+    );
 }
 
 /// A valid `Authorization: Bearer` header authenticates the connection;
