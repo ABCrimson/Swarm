@@ -1,7 +1,7 @@
 # ADR-0030: Tauri 3 alpha with a capability-scoped filesystem
 
 - **Status:** Accepted
-- **Date:** 2026-09-23 (moved to the alpha.4 set 2026-10-10)
+- **Date:** 2026-09-23 (moved to the alpha.5 set 2026-10-14)
 
 ## Context
 
@@ -14,7 +14,7 @@ every `https` URL, so "Open Compare Page" always failed.
 ## Decision
 
 Adopt the Tauri 3 alpha stack end to end, pinned exactly (`tauri` and `tauri-runtime-wry`
-`3.0.0-alpha.4`; the plugins and the JS packages at their own newest alpha), with the runtime chosen
+`3.0.0-alpha.5`; the plugins and the JS packages at their own newest alpha), with the runtime chosen
 explicitly: `tauri::Builder::default().runtime(tauri_runtime_wry::Wry::default())`. The webview
 runtime features (`devtools` and friends) live on `tauri-runtime-wry`; `devtools` is an opt-in
 `swarm-desktop` feature so signed release builds do not ship the inspector (debug builds keep it).
