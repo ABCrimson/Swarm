@@ -87,8 +87,11 @@ type Store = ReturnType<typeof getDefaultStore>;
  *   replaces it, so intermediate values are never sent) and goes out when
  *   the in-flight call settles or its ack timeout fires, whichever is
  *   first. Releasing on the timeout keeps a wedged invoke from stalling
- *   the queue: by then the earlier request has long since reached the
- *   server's lock, ahead of the next one.
+ *   the queue, but the timed-out request may still be unsent (a
+ *   reconnecting socket holds it) and can then reach the server's lock
+ *   after the next one. So a call that settles late, after a newer push,
+ *   with a value other than the latest one re-sends the latest value
+ *   (through the same slot), and the server ends on it.
  * - Outcomes are sequenced: an older push's outcome never changes a newer
  *   push's pending or failed state, but an older push the backend
  *   acknowledged becomes the rollback target, and is shown at once if the
@@ -216,6 +219,16 @@ function createAgentConcurrencySync(store: Store) {
             adopt(applied);
           }
           store.set(agentConcurrencySyncAtom, { status: "idle" });
+        }
+        // A call released by its timeout may have been applied after a newer
+        // one: put the user's latest value back on the server.
+        if (
+          timedOut &&
+          push < newestPush &&
+          applied !== pushed &&
+          store.get(agentConcurrencySyncAtom).status !== "failed"
+        ) {
+          start(pushed);
         }
         release();
       },

@@ -591,7 +591,9 @@ rollback target). The reply is the cap in force and wins: if it differs from the
 and it is the acknowledged value. Only one `set_agent_concurrency` call is in flight, because the daemon
 orders calls only from the moment each reaches its lock; a value requested meanwhile waits in a one-slot
 queue (a newer request replaces it, so intermediate values are never sent) and goes out when the call
-settles or its 10 s ack timeout fires, whichever comes first. At launch, with a backend reachable, the field adopts the backend's `agent_concurrency`
+settles or its 10 s ack timeout fires, whichever comes first. A call released by its timeout can still reach
+the daemon after a newer one (a reconnecting socket holds its frame), so when it settles late with a value other
+than the latest, the bridge sends the latest value again and the daemon ends on it. At launch, with a backend reachable, the field adopts the backend's `agent_concurrency`
 (unset is 3); a backend value the field cannot show (11 to 16) is overwritten by pushing the field's value.
 Dates and durations use `src/lib/time.ts` on `Temporal` and `Intl`; there is no date library.
 

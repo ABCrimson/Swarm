@@ -534,3 +534,55 @@ describe("useSettingsBridge — one call in flight", () => {
     expect(store.get(agentConcurrencySyncAtom).status).not.toBe("failed");
   });
 });
+
+describe("useSettingsBridge — a call that settles after its timeout", () => {
+  it("re-sends the latest value when a late reply disagrees with it", async () => {
+    vi.useFakeTimers();
+    using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const a = Promise.withResolvers<number | null>();
+    const b = Promise.withResolvers<number | null>();
+    mockSetAgentConcurrency.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+    renderHook(() => useSettingsBridge());
+
+    setLimit(5);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AGENT_CONCURRENCY_ACK_TIMEOUT_MS);
+    });
+    expect(store.get(agentConcurrencySyncAtom).status).toBe("failed");
+    setLimit(7);
+    expect(mockSetAgentConcurrency.mock.calls).toStrictEqual([[5], [7]]);
+
+    await act(async () => b.resolve(7));
+    // The older call reaches the server after the newer one and applies 5 last.
+    await act(async () => a.resolve(5));
+
+    expect(mockSetAgentConcurrency.mock.calls).toStrictEqual([[5], [7], [7]]);
+    await vi.waitFor(() =>
+      expect(store.get(agentConcurrencySyncAtom)).toStrictEqual({ status: "idle" }),
+    );
+    expect(limit()).toBe(7);
+  });
+
+  it("keeps a further edit queued until the call in flight settles", async () => {
+    vi.useFakeTimers();
+    const a = Promise.withResolvers<number | null>();
+    const b = Promise.withResolvers<number | null>();
+    mockSetAgentConcurrency.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+    renderHook(() => useSettingsBridge());
+
+    setLimit(8);
+    setLimit(9);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AGENT_CONCURRENCY_ACK_TIMEOUT_MS);
+    });
+    expect(mockSetAgentConcurrency.mock.calls).toStrictEqual([[8], [9]]);
+
+    // The stale call settling must not free the slot B holds.
+    await act(async () => a.resolve(8));
+    setLimit(10);
+    expect(mockSetAgentConcurrency.mock.calls).toStrictEqual([[8], [9]]);
+
+    await act(async () => b.resolve(9));
+    expect(mockSetAgentConcurrency.mock.calls).toStrictEqual([[8], [9], [10]]);
+  });
+});
