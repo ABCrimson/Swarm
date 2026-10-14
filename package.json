@@ -68,7 +68,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
     "@oxc-transform-react/binding-wasm32-wasip1": "0.154.0",
-    "@playwright/test": "1.65.0-alpha-2026-10-13",
+    "@playwright/test": "1.65.0-alpha-2026-10-14",
     "@tailwindcss/vite": "0.0.0-insiders.1a38f84",
     "@tauri-apps/cli": "3.0.0-alpha.4",
     "@testing-library/dom": "10.4.2",
@@ -86,7 +86,7 @@
     "marked": "18.1.1",
     "oxc-transform-react": "0.154.0",
     "rollup-plugin-visualizer": "7.1.1",
-    "typescript": "7.1.0-dev.20261013.1",
+    "typescript": "7.1.0-dev.20261014.1",
     "vite": "8.3.4",
     "vitest": "5.0.4"
   },

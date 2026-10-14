@@ -33,10 +33,10 @@ The work since v0.13.1 (proposed as 0.14.0): a Tauri 3 desktop shell, a rewritte
 | Tauri (npm) | `@tauri-apps/cli` `3.0.0-alpha.4`, `@tauri-apps/api` `3.0.0-alpha.2`, plugin-dialog `3.0.0-alpha.3`, plugin-fs/opener/store `3.0.0-alpha.2` |
 | tokio / tokio-util / uuid | `1.53.3` / `0.7.20` / `1.28.0` |
 | React / React DOM | `19.3.0-canary-07dde64d-20261013` |
-| TypeScript | `7.1.0-dev.20261013.1` |
+| TypeScript | `7.1.0-dev.20261014.1` |
 | Vite / `@vitejs/plugin-react` | `8.3.4` / `6.1.2` |
 | Vitest | `5.0.4` |
-| Playwright | `1.65.0-alpha-2026-10-13` |
+| Playwright | `1.65.0-alpha-2026-10-14` |
 | Biome | `2.5.15` |
 | Tailwind CSS | `0.0.0-insiders.1a38f84` |
 | Zod / jotai / immer | `4.6.7` / `3.0.1` / `11.1.21` |

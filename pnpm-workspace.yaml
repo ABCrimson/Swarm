@@ -15,17 +15,17 @@ trustPolicy: no-downgrade
 # `update` and `remove` prune entries the lockfile no longer resolves.
 minimumReleaseAgeExcludePrune: true
 minimumReleaseAgeExclude:
-  - typescript@7.1.0-dev.20261013.1
-  - '@typescript/typescript-darwin-arm64@7.1.0-dev.20261013.1'
-  - '@typescript/typescript-darwin-x64@7.1.0-dev.20261013.1'
-  - '@typescript/typescript-linux-arm@7.1.0-dev.20261013.1'
-  - '@typescript/typescript-linux-arm64@7.1.0-dev.20261013.1'
-  - '@typescript/typescript-linux-x64@7.1.0-dev.20261013.1'
-  - '@typescript/typescript-win32-arm64@7.1.0-dev.20261013.1'
-  - '@typescript/typescript-win32-x64@7.1.0-dev.20261013.1'
-  - '@playwright/test@1.65.0-alpha-2026-10-13'
-  - playwright-core@1.65.0-alpha-2026-10-13
-  - playwright@1.65.0-alpha-2026-10-13
+  - typescript@7.1.0-dev.20261014.1
+  - '@typescript/typescript-darwin-arm64@7.1.0-dev.20261014.1'
+  - '@typescript/typescript-darwin-x64@7.1.0-dev.20261014.1'
+  - '@typescript/typescript-linux-arm@7.1.0-dev.20261014.1'
+  - '@typescript/typescript-linux-arm64@7.1.0-dev.20261014.1'
+  - '@typescript/typescript-linux-x64@7.1.0-dev.20261014.1'
+  - '@typescript/typescript-win32-arm64@7.1.0-dev.20261014.1'
+  - '@typescript/typescript-win32-x64@7.1.0-dev.20261014.1'
+  - '@playwright/test@1.65.0-alpha-2026-10-14'
+  - playwright-core@1.65.0-alpha-2026-10-14
+  - playwright@1.65.0-alpha-2026-10-14
   - framer-motion@14.2.0
   - motion-dom@14.2.0
   - motion-utils@14.1.1
