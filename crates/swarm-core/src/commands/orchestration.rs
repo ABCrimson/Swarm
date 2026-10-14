@@ -76,7 +76,7 @@ mod tests {
         use crate::events::{Provenance, SwarmEvent, WorkerKilledPayload};
         use crate::runtime::{Runtime, RuntimeConfig};
 
-        let (dir, _cleanup) = crate::state_file::tests::temp_dir("events-since");
+        let (dir, _cleanup) = crate::test_support::temp_dir("events-since");
         let rt = Runtime::start(
             RuntimeConfig {
                 paths: crate::Paths { data_dir: dir },

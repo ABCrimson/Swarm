@@ -147,7 +147,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::state_file::tests::temp_dir;
+    use crate::test_support::temp_dir;
 
     fn paths(dir: &Path) -> Paths {
         Paths {

@@ -135,7 +135,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::state_file::tests::temp_dir;
+    use crate::test_support::temp_dir;
 
     fn paths(dir: &std::path::Path) -> Paths {
         Paths {
