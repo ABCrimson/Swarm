@@ -1,4 +1,4 @@
-import { useAtom } from "jotai";
+import { useAtom, useAtomValue } from "jotai";
 import {
   useEffect,
   useEffectEvent,
@@ -25,9 +25,19 @@ import {
   type ModelKey,
   warnIfModelGated,
 } from "#lib/models";
-import { checkForUpdates, readConfig, setMaxWorkers, writeConfig } from "#lib/tauri";
 import {
+  checkForUpdates,
+  DESKTOP_ONLY_REASON,
+  hasCapability,
+  readConfig,
+  setMaxWorkers,
+  writeConfig,
+} from "#lib/tauri";
+import {
+  AI_CONCURRENT_LIMIT_MAX,
+  AI_CONCURRENT_LIMIT_MIN,
   type AppSettings,
+  agentConcurrencySyncAtom,
   appSettingsAtom,
   keybindingsAtom,
   selectedModelAtom,
@@ -109,18 +119,22 @@ function SettingsSection({
  * One setting: its name and description on the left, the control on the
  * right. The description is a block paragraph the control references via
  * `aria-describedby` (`${id}-description`), so it is announced as the
- * description, not merged into the control's name.
+ * description, not merged into the control's name. `feedback` is a
+ * state message (applying, failed, unavailable) shown under the
+ * description.
  */
 function SettingRow({
   id,
   label,
   description,
   controlId,
+  feedback,
   children,
 }: {
   readonly id: string;
   readonly label: string;
   readonly description?: string;
+  readonly feedback?: React.ReactNode;
   /** The labelled control's id; without it the name is plain text (the control names itself). */
   readonly controlId?: string;
   readonly children: React.ReactNode;
@@ -143,6 +157,7 @@ function SettingRow({
             {description}
           </p>
         )}
+        {feedback !== undefined && <div id={`${id}-feedback`}>{feedback}</div>}
       </div>
       <div className="mt-0.5 flex shrink-0 items-center gap-1.5">{children}</div>
     </div>
@@ -156,24 +171,42 @@ function Toggle({
   onChange,
   label,
   description,
+  unavailableReason,
 }: {
   readonly checked: boolean;
   readonly onChange: (checked: boolean) => void;
   readonly label: string;
   readonly description?: string;
+  /** Why the switch cannot be used in this build; when set it is disabled and the reason describes it. */
+  readonly unavailableReason?: string;
 }): React.ReactElement {
   const id = useId();
+  const describedBy =
+    [description && `${id}-description`, unavailableReason && `${id}-feedback`]
+      .filter(Boolean)
+      .join(" ") || undefined;
   return (
-    <SettingRow id={id} label={label} description={description} controlId={`${id}-switch`}>
+    <SettingRow
+      id={id}
+      label={label}
+      description={description}
+      controlId={`${id}-switch`}
+      feedback={
+        unavailableReason === undefined ? undefined : (
+          <p className="mt-1 text-xs text-fg-dim">{unavailableReason}</p>
+        )
+      }
+    >
       <button
         id={`${id}-switch`}
         type="button"
         role="switch"
         aria-checked={checked}
         aria-labelledby={`${id}-label`}
-        aria-describedby={description ? `${id}-description` : undefined}
+        aria-describedby={describedBy}
+        disabled={unavailableReason !== undefined}
         onClick={() => onChange(!checked)}
-        className="group relative h-6 w-11 cursor-pointer rounded-full border border-border-control bg-surface-3 transition-colors aria-checked:border-plasma aria-checked:bg-plasma"
+        className="group relative h-6 w-11 cursor-pointer rounded-full disabled:cursor-not-allowed disabled:opacity-50 border border-border-control bg-surface-3 transition-colors aria-checked:border-plasma aria-checked:bg-plasma"
       >
         <span
           aria-hidden="true"
@@ -201,6 +234,8 @@ function NumberField({
   max,
   value,
   onChange,
+  busy = false,
+  feedback,
 }: {
   readonly label: string;
   readonly description: string;
@@ -209,6 +244,10 @@ function NumberField({
   readonly max: number;
   readonly value: number;
   readonly onChange: (value: number) => void;
+  /** Marks the field busy while a change is being applied. */
+  readonly busy?: boolean;
+  /** A state message shown under the description and announced with it. */
+  readonly feedback?: React.ReactNode;
 }): React.ReactElement {
   const id = useId();
   /** The text being typed; `null` while the field shows `value`. */
@@ -221,14 +260,23 @@ function NumberField({
   };
 
   return (
-    <SettingRow id={id} label={label} description={description} controlId={`${id}-input`}>
+    <SettingRow
+      id={id}
+      label={label}
+      description={description}
+      controlId={`${id}-input`}
+      feedback={feedback}
+    >
       <Input
         id={`${id}-input`}
         type="number"
         inputMode="numeric"
         min={min}
         max={max}
-        aria-describedby={`${id}-description`}
+        aria-describedby={
+          feedback === undefined ? `${id}-description` : `${id}-description ${id}-feedback`
+        }
+        aria-busy={busy || undefined}
         value={draft ?? String(value)}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={(e) => commit(e.target.value)}
@@ -542,6 +590,8 @@ export function Settings(): React.ReactElement {
   const modelHeadingId = useId();
   const [theme, setTheme] = useAtom(themeAtom);
   const [appSettings, setAppSettings] = useAtom(appSettingsAtom);
+  const agentConcurrencySync = useAtomValue(agentConcurrencySyncAtom);
+  const canCheckForUpdates = hasCapability("autoUpdate");
   const [keybindings, setKeybindings] = useAtom(keybindingsAtom);
   const [checkingUpdates, startUpdateCheck] = useTransition();
   const [savingApiKey, startSavingApiKey] = useTransition();
@@ -575,6 +625,26 @@ export function Settings(): React.ReactElement {
         toast.error("Update Check Failed", { description: errorMessage(err) });
       }
     });
+
+  // The bridge (#hooks/useSettingsBridge) pushes the cap to the backend and
+  // rolls the field back when the push fails; Retry re-applies the request.
+  const agentConcurrencyFeedback =
+    agentConcurrencySync.status === "pending" ? (
+      <p role="status" className="mt-1 text-xs text-fg-dim">
+        Applying…
+      </p>
+    ) : agentConcurrencySync.status === "failed" ? (
+      <div role="alert" className="mt-1 flex items-center gap-2 text-xs text-rose">
+        <span>{`Could Not Apply ${agentConcurrencySync.requested} Streams — ${agentConcurrencySync.message}`}</span>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => patchSettings({ aiConcurrentLimit: agentConcurrencySync.requested })}
+        >
+          Retry
+        </Button>
+      </div>
+    ) : undefined;
 
   // ── API key (read on mount, written on Save via #lib/tauri) ──
   // The key itself is never logged, traced, or included in a toast; a failed
@@ -722,10 +792,12 @@ export function Settings(): React.ReactElement {
             label="AI Concurrent Stream Limit"
             description="Maximum Simultaneous AI Streams Across All Workers."
             unit="Streams"
-            min={1}
-            max={10}
+            min={AI_CONCURRENT_LIMIT_MIN}
+            max={AI_CONCURRENT_LIMIT_MAX}
             value={appSettings.aiConcurrentLimit}
             onChange={(v) => patchSettings({ aiConcurrentLimit: v })}
+            busy={agentConcurrencySync.status === "pending"}
+            feedback={agentConcurrencyFeedback}
           />
           <NumberField
             label="Chat History Worker Cap"
@@ -809,6 +881,7 @@ export function Settings(): React.ReactElement {
           onChange={(v) => patchSettings({ nativeAlertNotifications: v })}
           label="Native Alert Notifications"
           description="Also Send An OS Notification When An Alert Fires — Visible Even When The App Is In The Background."
+          unavailableReason={hasCapability("nativeNotifications") ? undefined : DESKTOP_ONLY_REASON}
         />
       </AlertThresholdsSection>
 
@@ -831,10 +904,22 @@ export function Settings(): React.ReactElement {
             onChange={(v) => patchSettings({ updateCheckOnLaunch: v })}
             label="Check For Updates On Launch"
             description="Query The Update Endpoint Once Each Time The App Starts."
+            unavailableReason={canCheckForUpdates ? undefined : DESKTOP_ONLY_REASON}
           />
         </div>
-        <div className="flex justify-end">
-          <Button size="sm" loading={checkingUpdates} onClick={handleCheckForUpdates}>
+        <div className="flex items-center justify-end gap-3">
+          {!canCheckForUpdates && (
+            <span id="check-updates-reason" className="text-xs text-fg-dim">
+              {DESKTOP_ONLY_REASON}
+            </span>
+          )}
+          <Button
+            size="sm"
+            loading={checkingUpdates}
+            disabled={!canCheckForUpdates}
+            aria-describedby={canCheckForUpdates ? undefined : "check-updates-reason"}
+            onClick={handleCheckForUpdates}
+          >
             Check For Updates
           </Button>
         </div>
