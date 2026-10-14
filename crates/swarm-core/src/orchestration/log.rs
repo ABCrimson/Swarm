@@ -30,6 +30,10 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 /// checkpoint, so one large burst does not leave a large file behind.
 const WAL_SIZE_LIMIT_BYTES: i64 = 4 * 1024 * 1024;
 
+/// `PRAGMA synchronous` value SQLite reports for FULL (0 OFF, 1 NORMAL, 2 FULL,
+/// 3 EXTRA).
+const SYNCHRONOUS_FULL: i64 = 2;
+
 /// `meta` key holding the highest seq the writer may have handed out.
 const SEQ_RESERVED_KEY: &str = "seq_reserved";
 
@@ -201,7 +205,23 @@ impl EventLog {
         if !mode.eq_ignore_ascii_case("wal") && !mode.eq_ignore_ascii_case("memory") {
             tracing::warn!(journal_mode = %mode, "event log could not switch to WAL mode");
         }
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // FULL, not NORMAL: in WAL mode only FULL syncs the WAL on every
+        // commit, so a committed append (already emitted: persist before
+        // emit) and a committed seq reservation survive an OS crash or
+        // power loss, not just a process crash (ADR-0039). NORMAL would let
+        // the log roll back to an earlier checkpoint and reissue seqs.
+        // `synchronous` is per connection and the read-only connections
+        // never commit, so only this writer connection sets it.
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        // `PRAGMA synchronous = x` does not echo the value, so read it
+        // back: running weaker than documented must fail the open.
+        let synchronous: i64 = conn.pragma_query_value(None, "synchronous", |row| row.get(0))?;
+        if synchronous != SYNCHRONOUS_FULL {
+            return Err(AppError::EventLog(format!(
+                "SQLite reports synchronous={synchronous}, not FULL ({SYNCHRONOUS_FULL}); \
+                 the event log refuses to run with weaker durability."
+            )));
+        }
         conn.pragma_update(None, "journal_size_limit", WAL_SIZE_LIMIT_BYTES)?;
         conn.busy_timeout(BUSY_TIMEOUT)?;
         Self::migrate(&mut conn)?;
@@ -811,6 +831,30 @@ mod tests {
         (path, guard)
     }
 
+    /// `PRAGMA synchronous` as SQLite reports it: 0 OFF, 1 NORMAL, 2 FULL,
+    /// 3 EXTRA.
+    fn synchronous(log: &EventLog) -> i64 {
+        log.conn
+            .pragma_query_value(None, "synchronous", |r| r.get(0))
+            .unwrap()
+    }
+
+    /// In WAL mode only FULL syncs the WAL on every commit, so only FULL
+    /// keeps an emitted event and an acknowledged seq reservation across
+    /// an OS crash or power loss (ADR-0039).
+    #[test]
+    fn test_open_syncs_the_wal_on_every_commit() {
+        let (path, _cleanup) = temp_db();
+        let log = EventLog::open(&path).unwrap();
+        assert_eq!(synchronous(&log), 2, "synchronous must be FULL");
+    }
+
+    #[test]
+    fn test_open_in_memory_still_initializes() {
+        let log = EventLog::open_in_memory().unwrap();
+        assert_eq!(log.max_seq().unwrap(), 0);
+    }
+
     #[test]
     fn test_open_readonly_reads_but_rejects_writes() {
         let (path, _cleanup) = temp_db();
@@ -1040,5 +1084,63 @@ mod tests {
             !columns.iter().any(|(name, ..)| name == "probe_column"),
             "a failed rung must roll back its earlier statements too, got columns: {columns:?}"
         );
+    }
+
+    /// Throughput of the engine's real write shape under each
+    /// `synchronous` level: one autocommit `INSERT` per persistent event
+    /// (`OrchestrationEngine::persist`) plus one seq-block reservation
+    /// per 1024 seqs (`SEQ_RESERVATION_BLOCK`). Prints, never asserts.
+    /// Set `TMPDIR` to pick the filesystem under test, and see
+    /// `docs/performance.md` for the recorded numbers.
+    #[test]
+    #[ignore = "throughput measurement; run explicitly"]
+    fn measure_append_throughput_by_synchronous_level() {
+        const APPENDS: u64 = 3000;
+        const RESERVATION_BLOCK: u64 = 1024;
+
+        for (level, name) in [("NORMAL", "NORMAL"), ("FULL", "FULL")] {
+            let (path, _cleanup) = temp_db();
+            let mut log = EventLog::open(&path).unwrap();
+            log.conn.pragma_update(None, "synchronous", level).unwrap();
+            let payload = serde_json::json!({
+                "workerId": Uuid::new_v4(),
+                "toolName": "Bash",
+                "input": { "command": "x".repeat(300) },
+            })
+            .to_string();
+            let mut latencies = Vec::with_capacity(usize::try_from(APPENDS).unwrap());
+            let mut reserved = 0;
+            let started = std::time::Instant::now();
+            for seq in 1..=APPENDS {
+                let t = std::time::Instant::now();
+                if seq > reserved {
+                    reserved = seq + RESERVATION_BLOCK - 1;
+                    log.reserve_seqs(reserved).unwrap();
+                }
+                log.append(
+                    seq,
+                    seq.cast_signed(),
+                    "agent_tool_call",
+                    &payload,
+                    &Provenance::default(),
+                )
+                .unwrap();
+                latencies.push(t.elapsed());
+            }
+            let total = started.elapsed();
+            latencies.sort_unstable();
+            let pct = |p: usize| latencies[(latencies.len() * p / 100).min(latencies.len() - 1)];
+            #[expect(clippy::cast_precision_loss, reason = "a printed rate")]
+            let rate = APPENDS as f64 / total.as_secs_f64();
+            println!(
+                "synchronous={name} dir={} appends={APPENDS} payload_bytes={} \
+                 events_per_s={rate:.0} p50={:?} p99={:?} max={:?}",
+                path.parent().unwrap().display(),
+                payload.len(),
+                pct(50),
+                pct(99),
+                latencies[latencies.len() - 1],
+            );
+        }
     }
 }
