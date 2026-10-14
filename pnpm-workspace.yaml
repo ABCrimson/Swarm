@@ -111,5 +111,3 @@ minimumReleaseAgeExclude:
   - react@19.3.0-canary-07dde64d-20261013
   - scheduler@0.28.0-canary-07dde64d-20261013
   - temporal-polyfill@1.0.6
-  - '@types/node@26.6.5'
-  - '@anthropic-ai/sdk@0.133.0'
