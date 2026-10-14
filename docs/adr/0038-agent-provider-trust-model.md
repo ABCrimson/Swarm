@@ -88,9 +88,9 @@ resolution: a probe resolves afresh, a spawn reuses it.
   probe or the handshake, which is closed.
 - A repo agent's `permissionMode` could raise a subagent's mode (read in the CLI source, not verified
   at runtime); with no repo agents loaded this cannot arise from the repo.
-- The probe directory is removed after the probe returns. If the probe future is dropped first, the
-  directory stays: a synchronous drop guard would block a Tokio thread, and the only caller sets no
-  timeout. Its contents are empty, since nothing is configured to write there.
+- The probe directory is removed before `probe()` returns. If the probe future is dropped first, a drop
+  guard removes it on the blocking pool, after the probe's `claude` child has been killed and reaped
+  (see the amendment below).
 - A same-user process could swap `.claude/settings.json` for a FIFO between the metadata check and the
   open, and the read would then block on that spawned task; this is accepted because it needs same-user
   write access to the worktree.
@@ -103,3 +103,14 @@ resolution: a probe resolves afresh, a spawn reuses it.
 - Probe and spawn can still resolve different binaries if a `PATH` directory changes between them; the
   cache narrows that for Claude, and changing a `PATH` directory already needs the user's own write
   access.
+
+## Amended 2026-10-14
+
+The Claude adapter's `spawn` and `probe` futures are drop-safe. A `Process` holds its child in a drop
+guard that kills and reaps it on the blocking pool, and `spawn` dismisses the guard only when the child
+moves into the session's state, so a spawn future dropped mid-handshake leaves no running `claude`, no
+registered session and no `agent_session_started` event. The probe directory has its own drop guard that
+removes it on the blocking pool, retrying while the dying child may still hold it as its working
+directory (Windows refuses to remove a directory that is a live process's cwd). This removes the leak the
+bullet above used to accept. A caller that drops a spawn future during the process-creation syscall itself
+is covered too: the blocking task kills the child it created when nobody is left to receive it.
