@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Component } from "react";
+import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
-import { toast } from "#components/ui/Toast";
 import { isError } from "#lib/is-error";
 
 /** Retries allowed before the fallback offers only a full reload. */

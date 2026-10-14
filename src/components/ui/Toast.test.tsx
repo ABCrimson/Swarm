@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // The global setup stubs sonner out; this suite exercises the real toaster.
 vi.unmock("sonner");
 
-const { SwarmToaster, toast } = await import("#components/ui/Toast");
+const { SwarmToaster } = await import("#components/ui/Toast");
+const { toast } = await import("sonner");
 
 /** The `<li data-sonner-toast>` that renders the toast titled `title`. */
 async function findToast(title: string): Promise<HTMLElement> {

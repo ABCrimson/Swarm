@@ -1,7 +1,4 @@
-import { Toaster as SonnerToaster, toast } from "sonner";
-
-/** Re-exported Sonner `toast` for imperative toast creation. */
-export { toast };
+import { Toaster as SonnerToaster } from "sonner";
 
 /**
  * Sonner's color variables, set to the house OKLCH palette. Sonner reads

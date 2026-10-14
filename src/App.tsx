@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { CommandPalette } from "#components/command/CommandPalette";
 import { AppShell } from "#components/layout/AppShell";
 import { PageHost } from "#components/layout/PageHost";
 import { PerformanceOverlay } from "#components/metrics/PerformanceOverlay";
 import { ErrorBoundary } from "#components/ui/ErrorBoundary";
-import { SwarmToaster, toast } from "#components/ui/Toast";
+import { SwarmToaster } from "#components/ui/Toast";
 import { useAgentSessionEvents } from "#hooks/useAgentSessionEvents";
 import { useAlerts } from "#hooks/useAlerts";
 import { useAutoSnapshot } from "#hooks/useAutoSnapshot";
