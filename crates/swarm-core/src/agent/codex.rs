@@ -334,7 +334,6 @@ impl AgentAdapter for CodexAdapter {
             let PipedHandle {
                 stdin,
                 child,
-                pid: _,
                 lines,
                 framer_errors,
                 stderr_tail,
