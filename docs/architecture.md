@@ -293,8 +293,9 @@ against a checkout being removed:
 2. It removes the worker's session, one a drained attach registered included, and shuts it down, so
    the provider process is stopped and reaped. A failed shutdown is logged and never fails the kill.
    It then waits for any other shutdown of that session still running (an overlapping kill's, or
-   `agent_shutdown`'s): every removal goes through `take_session`, which counts a `SessionStop` until
-   the shutdown ends.
+   `agent_shutdown`'s): a session leaves the registry only through `take_session`, which removes it
+   and counts a `SessionStop`, or by being replaced in `AttachPermit::insert`, which counts a
+   `SessionStop` for the replaced session and drops it when that session's background shutdown ends.
 3. It removes the worker from the registry, kills and reaps the shell, **then** releases the writer
    and master (on Windows dropping the master closes the pseudoconsole under the shell), then removes
    the worktree and emits `worktree_removed` and `worker_killed`. Only the shell is signalled.

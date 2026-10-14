@@ -179,11 +179,13 @@ impl WorkerRegistry {
     }
 
     /// Locks the `max_workers` setting for one change: hold the guard
-    /// across persisting the new cap and [`Self::set_max_workers`], so the
-    /// file and the live cap never disagree and overlapping changes apply
-    /// in the order they asked for the lock — tokio's `Mutex` hands the lock out in the order it was
-    /// requested ("Tokio's Mutex operates on a guaranteed FIFO basis",
-    /// tokio 1.53 `sync/mutex.rs`).
+    /// across persisting the new cap and [`Self::set_max_workers`].
+    /// Changes made through `set_max_workers` then never leave the file
+    /// and the live cap disagreeing (`write_config` can still write the
+    /// key without applying it), and they apply in the order they reach
+    /// this lock: tokio's `Mutex` hands it out in request order ("Tokio's
+    /// Mutex operates on a guaranteed FIFO basis", tokio 1.53
+    /// `sync/mutex.rs`).
     pub async fn lock_max_workers_setting(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.max_workers_setting.lock().await
     }

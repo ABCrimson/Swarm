@@ -453,7 +453,7 @@ await invoke("resize_worker", { id: workerId, rows: 40, cols: 120 });
 
 ### `set_max_workers`
 
-Sets how many workers may exist at once. The value is validated, persisted to `swarm-config.json` as `max_workers` (re-applied at startup), then applied to the live registry. Lowering it below the current worker count does not kill anyone; it only refuses further spawns. Overlapping calls are serialized: each holds the setting's lock across the write and the apply, and calls take the lock in the order they started, so the last call to start is the one in force, in the file and in the registry.
+Sets how many workers may exist at once. The value is validated, persisted to `swarm-config.json` as `max_workers` (re-applied at startup), then applied to the live registry. Lowering it below the current worker count does not kill anyone; it only refuses further spawns. Overlapping calls are serialized: each holds the setting's lock across the write and the apply. Calls apply in the order they reach the setting's lock, and the file and the live cap always end on the same value. Each request runs as its own task, so two requests sent without waiting for the first reply can reach the lock in either order; wait for a reply before sending the next value to order them.
 
 **Parameters:**
 
@@ -1085,7 +1085,7 @@ Permission gating never rests on `allowedTools` (it widens what runs unasked rat
 |---|---|---|
 | `null` | `Provider Not Supported By The Backend: <name>.` | `provider` is a reserved name with no adapter. Nothing was spawned |
 | `null` | the `spawn_worker` error text | The PTY worker spawn itself failed (registry full, worktree creation failed, ...) |
-| `null` | ``Worker `<id>` not found`` | The worker was killed before its session's attach. A session that did attach is shut down, and no worker remains |
+| `null` | ``Worker `<id>` not found`` | The worker was killed before its session's attach, so no session started and no worker remains |
 | `null` | ``Worker `<id>` is closing`` | A [`kill_worker`](#kill_worker) was in progress when the attach started or finished its handshake. A session that did attach is shut down before the kill proceeds, and no worker remains |
 | the new worker's id | the adapter's own error, verbatim | The session failed to attach (binary missing, handshake timeout, an unknown `trustTier`, Codex refusing a policy more permissive than requested, ...). **The PTY worker still exists and is usable as a plain terminal**; it is not rolled back |
 
@@ -1219,7 +1219,7 @@ await invoke("agent_permission_respond", {
 
 ### `set_agent_concurrency`
 
-Sets how many agent turns may execute at the same time. Validated, persisted to `swarm-config.json` as `agent_concurrency` (re-applied at startup), then applied to the live scheduler, in that order, so a failed write never leaves the scheduler enforcing a cap the file disagrees with. Overlapping calls are serialized: each holds the setting's lock across the write and the apply, and calls take the lock in the order they started, so the last call to start is the one in force, in the file and in the scheduler.
+Sets how many agent turns may execute at the same time. Validated, persisted to `swarm-config.json` as `agent_concurrency` (re-applied at startup), then applied to the live scheduler, in that order, so a failed write never leaves the scheduler enforcing a cap the file disagrees with. Overlapping calls are serialized: each holds the setting's lock across the write and the apply. Calls apply in the order they reach the setting's lock, and the file and the live cap always end on the same value. Each request runs as its own task, so two requests sent without waiting for the first reply can reach the lock in either order; wait for a reply before sending the next value to order them.
 
 **Parameters:**
 

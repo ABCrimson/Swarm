@@ -224,8 +224,10 @@ struct MaxWorkersArgs {
 ///
 /// Overlapping calls are serialized (see
 /// [`crate::worker::registry::WorkerRegistry::lock_max_workers_setting`]):
-/// the last call to start is the last applied, to the file and the
-/// registry.
+/// calls apply in the order they reach the setting's lock, and the file
+/// and the registry always end on the same value. Each request runs as
+/// its own task, so two requests sent without waiting for the first
+/// reply can reach the lock in either order.
 pub async fn set_max_workers(ctx: Ctx, args: Value) -> Result<Value, Value> {
     use crate::worker::registry::{MAX_MAX_WORKERS, MIN_MAX_WORKERS};
 

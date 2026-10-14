@@ -263,11 +263,13 @@ impl AgentScheduler {
     }
 
     /// Locks the concurrency setting for one change: hold the guard
-    /// across persisting the new limit and [`Self::set_concurrency`], so
-    /// the file and the live cap never disagree and overlapping changes
-    /// apply in the order they asked for the lock — tokio's `Mutex` hands the lock out in the order it was
-    /// requested ("Tokio's Mutex operates on a guaranteed FIFO basis",
-    /// tokio 1.53 `sync/mutex.rs`).
+    /// across persisting the new limit and [`Self::set_concurrency`].
+    /// Changes made through `set_agent_concurrency` then never leave the
+    /// file and the live cap disagreeing (`write_config` can still write
+    /// the key without applying it), and they apply in the order they
+    /// reach this lock: tokio's `Mutex` hands it out in request order
+    /// ("Tokio's Mutex operates on a guaranteed FIFO basis", tokio 1.53
+    /// `sync/mutex.rs`).
     pub async fn lock_concurrency_setting(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.concurrency_setting.lock().await
     }

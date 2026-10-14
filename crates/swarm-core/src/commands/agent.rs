@@ -368,8 +368,11 @@ struct SetAgentConcurrencyArgs {
 /// Validate, persist, then apply: a failed write must not leave the
 /// scheduler enforcing a cap neither the UI nor the file agrees with.
 /// Overlapping calls are serialized (see
-/// [`crate::agent::AgentScheduler::lock_concurrency_setting`]): the last
-/// call to start is the last applied, to the file and the scheduler.
+/// [`crate::agent::AgentScheduler::lock_concurrency_setting`]): calls
+/// apply in the order they reach the setting's lock, and the file and the
+/// scheduler always end on the same value. Each request runs as its own
+/// task, so two requests sent without waiting for the first reply can
+/// reach the lock in either order.
 pub async fn set_agent_concurrency(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let SetAgentConcurrencyArgs { limit } = parse_args(args)?;
 

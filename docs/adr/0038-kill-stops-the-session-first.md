@@ -26,8 +26,10 @@ in that window was accepted.
   that clears the mark on drop, also when the kill is cancelled. A closing count, not a flag, lets
   overlapping kills of one worker each clear only their own mark.
 - **Every session stop is counted.** A session leaves the registry only through `take_session`,
-  which removes it and counts a `SessionStop` under the worker's fence; the stop derefs to the
-  session and is dropped once its shutdown ends. `wait_stopped` waits for the count to reach zero,
+  which removes it and counts a `SessionStop` under the worker's fence, or by being replaced in
+  `AttachPermit::insert`, which counts a `SessionStop` for the replaced session and drops it when
+  that session's background shutdown ends. A stop derefs to its session and is dropped once its
+  shutdown ends. `wait_stopped` waits for the count to reach zero,
   so a second kill, or a kill racing `agent_shutdown`, never touches the worker while the first
   shutdown is still running.
 - **Closing is a typed refusal.** While closing, `begin_attach`, `AttachPermit::insert`, `get` and
