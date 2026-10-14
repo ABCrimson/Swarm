@@ -66,3 +66,10 @@ hold because the code cannot express the unsafe thing:
   [architecture.md, Known gaps](../architecture.md#known-gaps)).
 
 See [Ship Chain](../architecture.md#ship-chain).
+
+## Limitation (2026-10-13)
+
+The 5 MiB size guard is not absolute. The final check measures the index before `git commit` runs, and
+a pre-commit hook runs inside `git commit`, so a hook can `git add` a file the guard never measured.
+The guard holds for what SWARM stages, before hooks run. The statement above that a process staging a
+file between the final check and `git commit` is not seen includes such hooks.

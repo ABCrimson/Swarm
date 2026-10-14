@@ -354,7 +354,7 @@ the mechanics ([ADR-0009](adr/0009-ship-chain-structural-guarantees.md)). The lo
   **B3**; `setMode` refetches). The base branch is `origin/HEAD`, else `init.defaultBranch`, else
   `main`, never the primary checkout's current branch.
 - **Deny list:** basename (case-insensitive) starting `.env` or `id_rsa`, ending `.pem` or `.key`;
-  `secret` anywhere in the path; a file over 5 MiB, measured on the bytes the commit would contain (the index blob in `staged` mode, via `git ls-files --stage` and `git cat-file --batch-check`; the working-tree file `all` mode is about to stage; the index blob again in the final pre-commit check); an untracked `.claude/settings.json`. Denied paths
+  `secret` anywhere in the path; a file over 5 MiB, measured on the bytes the commit would contain (the index blob in `staged` mode, via `git ls-files --stage` and `git cat-file --batch-check`; the working-tree file `all` mode is about to stage; the index blob again in the final check before `git commit`; the guard holds for what SWARM stages, before hooks run, because a pre-commit hook runs inside `git commit` and can stage a file it never measured); an untracked `.claude/settings.json`. Denied paths
   are returned as `skipped[]` with a Title Case reason and never committed.
 - **Trailers:** `Swarm-Seq-Range: <from>..<to>` (omitted when unknown or degenerate) and the configured
   `Co-Authored-By` (`shipCoAuthoredBy`; dropped if it contains a newline). The range `(seqFrom, seqTo]`
