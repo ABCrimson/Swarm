@@ -61,3 +61,4 @@ Each record is `NNNN-<slug>.md` with a status, a date, then Context, Decision an
 | [0036](0036-model-catalogue-and-per-attempt-pricing.md) | One model catalogue, priced per attempt | Accepted |
 | [0037](0037-webkit-floor-and-macos-15-4.md) | The webview floor is WebKit 18.4, so macOS 15.4 | Accepted |
 | [0038](0038-kill-stops-the-session-first.md) | A kill stops the provider session first, behind a closing fence | Accepted |
+| [0039](0039-event-log-synchronous-full.md) | The event log commits with synchronous=FULL | Accepted |

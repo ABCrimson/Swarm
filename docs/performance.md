@@ -78,6 +78,30 @@ The desktop process builds one multi-threaded Tokio runtime (`install_async_runt
 
 `parking_lot` replaces `std::sync::Mutex`/`RwLock` everywhere (`clippy.toml` bans the std types): no poisoning and better behavior under contention. Worker metrics aggregate sequentially inside `spawn_blocking`; with a default registry cap of 64 workers, parallel dispatch would cost more than it saves.
 
+### Event Log Persistence
+
+The ordered-event writer commits each persistent event as its own autocommit `INSERT` (`OrchestrationEngine::persist` -> `EventLog::append`) plus one seq-block reservation per 1024 seqs, all on the single `swarm-event-writer` thread. The log runs `synchronous=FULL` in WAL mode ([ADR-0039](adr/0039-event-log-synchronous-full.md)), so every commit waits for an fsync of the `-wal` file; that wait, not SQLite's CPU work, bounds the writer's persistent-event rate and sets the latency of a persistent event. Ephemeral events never touch the log.
+
+Measured 2026-10-13 with `measure_append_throughput_by_synchronous_level` (3000 appends of a 392-byte `agent_tool_call` payload, one per transaction, reservations every 1024 seqs; `NORMAL` is set on the connection after `open` only for the comparison). Three runs per row; events/s is the per-run rate, latencies are per-append p50 / p99.
+
+| Directory (filesystem) | `synchronous` | events/s (3 runs) | p50 | p99 |
+|------------------------|---------------|-------------------|-----|-----|
+| `/root/swarm-bench` (ext4 on a WSL2 VHD) | NORMAL | 27578, 31606, 23219 | 6.6-7.2 µs | 48-69 µs |
+| `/root/swarm-bench` (ext4 on a WSL2 VHD) | FULL | 499, 469, 514 | 1.97-2.19 ms | 4.8-6.3 ms |
+| `C:\` through WSL2 9p (`/mnt/c`) | NORMAL | 247, 174, 381 | 2.3-3.1 ms | 6.2-48.5 ms |
+| `C:\` through WSL2 9p (`/mnt/c`) | FULL | 230, 229, 260 | 3.4-4.1 ms | 9.0-13.8 ms |
+
+Reading the numbers: on the ext4 VHD, FULL costs about 2 ms per persistent event (a ceiling near 500 events/s, roughly 60x below NORMAL). Through 9p the per-operation cost already dominates, so FULL adds about 1 ms at p50 and the rates overlap. A `tmpfs` control (`/tmp`) showed no difference (about 150-178k events/s for both), so a sync-level comparison needs a real disk. WSL numbers are a proxy: the shipped app runs on native Windows NTFS, where the fsync cost is the drive's flush latency, so re-run the command below there once native `cargo test` works (host fact `sac-enforce-flag`).
+
+Machine: Intel Core Ultra 9 290HX Plus, 24 CPUs, 70 GiB RAM visible to WSL (`free -g`), WSL2 kernel `6.18.54.1-microsoft-standard-WSL2`, Ubuntu-26.04, bundled SQLite from `libsqlite3-sys` 0.38.2 (`rusqlite` 0.40.2).
+
+Reproduce (the test prints, it asserts nothing; point `TMPDIR` at the filesystem under test):
+
+```bash
+TMPDIR=/path/on/the/disk/under/test \
+  cargo test -p swarm-core measure_append_throughput_by_synchronous_level -- --ignored --nocapture
+```
+
 ### Memory
 
 - **Log store:** Bounded at 10,000 entries (`MAX_ENTRIES` in `src/store/logs.ts`), oldest entries evicted on overflow

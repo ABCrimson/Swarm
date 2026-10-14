@@ -21,9 +21,9 @@ For each event it assigns `seq` and a timestamp, persists the event if the persi
 
 Persisted events go to a SQLite database (`swarm-events.db`, WAL, `rusqlite` bundled) with a
 `PRAGMA user_version` migration ladder in which each rung runs in a transaction. Seqs are reserved in
-blocks of 1024 in a `meta` table before they are issued, so a crash never reuses a seq and costs at
-most one unused block; a clean shutdown records the exact head. `events_since(afterSeq, limit?)`
-returns persisted rows after a seq and is the basis for gap backfill and replay. Terminal outcomes are
+blocks of 1024 in a `meta` table before they are issued, so a crash never reuses a seq (since
+[ADR-0039](0039-event-log-synchronous-full.md), also an OS crash or power loss) and costs at most one
+unused block; a clean shutdown records the exact head. `events_since(afterSeq, limit?)` returns persisted rows after a seq and is the basis for gap backfill and replay. Terminal outcomes are
 separate receipt events (`ship_settled`, `agent_turn_settled`), never a flag on a stream event, and
 the frontend awaits them with `waitFor`.
 

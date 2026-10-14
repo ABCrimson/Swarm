@@ -169,10 +169,12 @@ any thread/task ──EventSink::emit / emit_with / emit_awaiting_seq──▶ o
 - **Envelope:** `{ seq, ts, originWorker?, causeSeq?, type, payload }`; the optional fields are absent,
   not `null`.
 - **Seqs** are unique and strictly increasing for the life of the data directory. The writer reserves
-  them in blocks of 1024 in the log's `meta` table before issuing them, so a crash skips at most one
-  block and never reuses a seq; a clean shutdown records the exact head. Persisted seqs therefore have
+  them in blocks of 1024 in the log's `meta` table before issuing them, and that reservation is
+  committed (fsynced, see Durability below) before the first seq of the block is issued, so a process
+  crash, an OS crash or a power loss skips at most one block and never reuses a seq; a clean shutdown
+  records the exact head. Persisted seqs therefore have
   gaps (ephemeral events consume seqs too).
-- **Log:** `<data dir>/swarm-events.db`, SQLite in WAL mode, schema version 2 on a `PRAGMA user_version`
+- **Log:** `<data dir>/swarm-events.db`, SQLite in WAL mode with `synchronous=FULL`, schema version 2 on a `PRAGMA user_version`
   ladder whose rungs each run in a transaction: `events(seq PK, ts, type, payload, origin_worker,
   cause_seq) STRICT` with an index on `(type, seq)`, and `meta`. A database newer than the build is
   refused. The writer owns the only read-write connection; readers open their own read-only.
@@ -186,6 +188,18 @@ any thread/task ──EventSink::emit / emit_with / emit_awaiting_seq──▶ o
   gap that one ephemeral `system_log` error event explains, and clients backfill an empty page and
   skip it. So an event a client saw live is always readable from the log
   (`test_failed_persist_emits_nothing_and_holds_the_head`).
+- **Durability** ([ADR-0039](adr/0039-event-log-synchronous-full.md)): the writer connection runs
+  `synchronous=FULL`, which in WAL mode syncs the `-wal` file on every commit, and `EventLog::open`
+  fails if SQLite reports a weaker level. A committed event append and a committed seq reservation
+  therefore survive a process crash, an OS crash and a power loss, provided the storage honours
+  fsync/flush. Not guaranteed: a drive or filesystem that acknowledges a flush it has not performed;
+  an event whose append had not committed when the process died (it was never emitted either);
+  ephemeral events, which are never stored. Persist-before-emit orders the log write before the
+  emit; it is not one atomic transaction with the effect the event describes. A PTY write, a git
+  push or a provider turn can happen with no event recorded if the process dies between the effect
+  and the append, and an event can be recorded for an effect that then fails. Consumers must treat
+  the log as the record of what was announced, not proof the effect completed. The cost is one
+  fsync per persistent event on the writer thread ([Event Log Persistence](performance.md#event-log-persistence)).
 - **Replay:** `events_since(afterSeq, limit?)` returns persisted rows after a seq, ascending, capped at
   (and defaulting to) 5000 per call. Clients use it for gap backfill; `swarmd` for connection replay.
 - **Receipts:** a terminal outcome is its own event (`ship_settled`, `agent_turn_settled`), never a flag
