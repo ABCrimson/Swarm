@@ -36,6 +36,8 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
+use crate::worker::proc::STDERR_TAIL_CAP;
+
 pub mod adapter;
 pub mod claude_code;
 pub mod codex;
@@ -102,11 +104,29 @@ pub(crate) fn signal_name(_status: &std::process::ExitStatus) -> Option<String> 
 /// `Stderr: <text>`, or `No Stderr Output` when it wrote nothing.
 /// Shared by both provider adapters, which keep the same bounded byte
 /// tail of their CLI's stderr.
+///
 /// Recognized credentials are redacted ([`crate::git::redact::redact`])
-/// because the snippet lands in persisted settlement errors.
+/// because the snippet lands in persisted settlement errors. A full tail
+/// (`STDERR_TAIL_CAP` bytes) had its front cut off by the ring, possibly
+/// inside a token, and a token's tail alone matches no redaction pattern
+/// (`ant-api03-…`, `//u:tok@h`). Every pattern excludes whitespace, so the
+/// leading run of non-whitespace bytes is dropped before redacting; a full
+/// tail without any whitespace yields `Stderr: [Truncated]`.
 pub(crate) fn stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String {
     let mut tail = tail.lock();
-    let text = crate::git::redact::redact(&String::from_utf8_lossy(tail.make_contiguous()));
+    let full = tail.len() >= STDERR_TAIL_CAP;
+    let mut bytes: &[u8] = tail.make_contiguous();
+    if full {
+        let partial = bytes
+            .iter()
+            .position(u8::is_ascii_whitespace)
+            .unwrap_or(bytes.len());
+        bytes = &bytes[partial..];
+        if bytes.is_empty() {
+            return "Stderr: [Truncated]".to_owned();
+        }
+    }
+    let text = crate::git::redact::redact(&String::from_utf8_lossy(bytes));
     match text.trim() {
         "" => "No Stderr Output".to_owned(),
         text => format!("Stderr: {text}"),
@@ -153,6 +173,55 @@ mod tests {
         assert!(!snippet.contains("SECRET"), "{snippet}");
     }
 
+    #[test]
+    fn test_stderr_snippet_redacts_a_bare_github_token_outside_any_url() {
+        let token = format!("ghp_{}", "a".repeat(36));
+        let tail = Mutex::new(VecDeque::from(
+            format!("push rejected, token {token} expired").into_bytes(),
+        ));
+        let snippet = stderr_snippet(&tail);
+        assert!(snippet.contains("[REDACTED]"), "{snippet}");
+        assert!(!snippet.contains(&token), "{snippet}");
+    }
+
+    /// A tail as the stderr ring leaves it when full: exactly the cap,
+    /// starting with `head` and padded with whitespace-separated filler.
+    fn full_tail(head: &str) -> Mutex<VecDeque<u8>> {
+        let mut bytes = head.as_bytes().to_vec();
+        while bytes.len() < STDERR_TAIL_CAP {
+            bytes.extend_from_slice(b"x ");
+        }
+        bytes.truncate(STDERR_TAIL_CAP);
+        Mutex::new(VecDeque::from(bytes))
+    }
+
+    #[test]
+    fn test_stderr_snippet_drops_a_partial_api_key_at_the_front_of_a_full_tail() {
+        let snippet = stderr_snippet(&full_tail("ant-api03-SECRETSECRETSECRET rest"));
+        assert!(!snippet.contains("SECRET"), "{snippet}");
+        assert!(snippet.contains("rest"), "{snippet}");
+    }
+
+    #[test]
+    fn test_stderr_snippet_drops_a_partial_url_userinfo_at_the_front_of_a_full_tail() {
+        let snippet = stderr_snippet(&full_tail("//u:tok3n@host/x rest"));
+        assert!(!snippet.contains("tok3n"), "{snippet}");
+        assert!(snippet.contains("rest"), "{snippet}");
+    }
+
+    #[test]
+    fn test_stderr_snippet_keeps_a_short_tail_whole() {
+        let tail = Mutex::new(VecDeque::from(b"fatal: boom".to_vec()));
+        assert_eq!(stderr_snippet(&tail), "Stderr: fatal: boom");
+    }
+
+    #[test]
+    fn test_stderr_snippet_of_a_full_tail_without_whitespace_is_not_empty() {
+        let tail = Mutex::new(VecDeque::from(vec![b'a'; STDERR_TAIL_CAP]));
+        let snippet = stderr_snippet(&tail);
+        assert_ne!(snippet, "No Stderr Output");
+        assert!(!snippet.contains("aaaa"), "{snippet}");
+    }
     #[cfg(unix)]
     #[test]
     fn test_signal_name_maps_signals_and_ignores_normal_exits() {
