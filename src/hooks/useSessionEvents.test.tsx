@@ -176,13 +176,9 @@ describe("useSessionEvents", () => {
   // meanwhile hit a store that does not hold the restored sessions yet.
 
   function deferSnapshot(): (sessions: Session[]) => void {
-    let resolve: (sessions: Session[]) => void = () => {};
-    mockListSessions.mockReturnValue(
-      new Promise<Session[]>((r) => {
-        resolve = r;
-      }),
-    );
-    return resolve;
+    const snapshot = Promise.withResolvers<Session[]>();
+    mockListSessions.mockReturnValue(snapshot.promise);
+    return snapshot.resolve;
   }
 
   it("does not resurrect a session deleted before the snapshot resolves", async () => {
@@ -280,6 +276,38 @@ describe("useSessionEvents", () => {
     await Promise.resolve();
     await Promise.resolve();
 
+    expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(false);
+  });
+
+  it("applies events straight to the store after a failed restore", async () => {
+    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockListSessions.mockRejectedValue(new Error("backend not ready"));
+    useSessionStore.getState().addSession(makeSession({ id: SESSION_ID, workerIds: [WORKER_ID] }));
+    renderHook(() => useSessionEvents());
+    await waitFor(() => {
+      expect(consoleError).toHaveBeenCalled();
+    });
+
+    deliver("session_worker_added", { sessionId: SESSION_ID, workerId: OTHER_WORKER_ID });
+    expect(useSessionStore.getState().sessions.get(SESSION_ID)?.workerIds).toEqual([
+      WORKER_ID,
+      OTHER_WORKER_ID,
+    ]);
+    deliver("session_deleted", { sessionId: SESSION_ID });
+    expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(false);
+  });
+
+  it("keeps a pre-snapshot deletion under StrictMode's double mount", async () => {
+    const resolveSnapshot = deferSnapshot();
+    const other = makeSession({ id: OTHER_SESSION_ID });
+    renderHook(() => useSessionEvents(), { reactStrictMode: true });
+
+    deliver("session_deleted", { sessionId: SESSION_ID });
+    resolveSnapshot([makeSession({ id: SESSION_ID }), other]);
+
+    await waitFor(() => {
+      expect(useSessionStore.getState().sessions.has(OTHER_SESSION_ID)).toBe(true);
+    });
     expect(useSessionStore.getState().sessions.has(SESSION_ID)).toBe(false);
   });
 

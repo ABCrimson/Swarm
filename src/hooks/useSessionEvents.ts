@@ -53,9 +53,11 @@ function applyEditsToSnapshot(
  * - `session_worker_added`   -> store.addWorkerToSession() (idempotent)
  * - `session_worker_removed` -> store.removeWorkerFromSession()
  *
- * The snapshot is sequenced against those events: the ones that land before
- * it resolves are applied to the store immediately and also recorded, then
- * replayed over the snapshot before it is hydrated. A session deleted, or a
+ * The snapshot is sequenced against the deletion and membership events:
+ * those that land before it resolves are applied to the store immediately
+ * and also recorded, then replayed over the snapshot before it is hydrated
+ * (a `session_created` needs no record, because `hydrateSessions` keeps the
+ * store's copy). A session deleted, or a
  * worker added or removed, in that window therefore wins over the stale
  * snapshot instead of being undone by it. Events after hydration, and every
  * event when the restore fails, are applied immediately and recorded nowhere.
@@ -122,11 +124,19 @@ export function useSessionEvents(): void {
         removeSession(payload.sessionId);
       }),
       onEvent("session_worker_added", ({ payload }) => {
-        pendingEdits?.push({ kind: "worker_added", ...payload });
+        pendingEdits?.push({
+          kind: "worker_added",
+          sessionId: payload.sessionId,
+          workerId: payload.workerId,
+        });
         addWorkerToSession(payload.sessionId, payload.workerId);
       }),
       onEvent("session_worker_removed", ({ payload }) => {
-        pendingEdits?.push({ kind: "worker_removed", ...payload });
+        pendingEdits?.push({
+          kind: "worker_removed",
+          sessionId: payload.sessionId,
+          workerId: payload.workerId,
+        });
         removeWorkerFromSession(payload.sessionId, payload.workerId);
       }),
     ];
