@@ -1,5 +1,6 @@
 import { atom } from "jotai";
 import * as z from "zod";
+import type { CapSync } from "#lib/acknowledged-sync";
 import { DEFAULT_KEYBINDINGS, type Keybindings } from "#lib/keybindings";
 import { MODEL_KEYS, type ModelKey } from "#lib/models";
 import { atomWithSettings } from "#store/persisted";
@@ -54,29 +55,25 @@ export const graphViewAtom = atom<"graph" | "list">("graph");
  */
 export const causalityInspectorAtom = atom<{ readonly startSeq: number } | null>(null);
 
-// ── Agent concurrency sync (ephemeral) ──────────────
+// ── Backend cap sync (ephemeral) ────────────────────
 
 /**
  * Where the backend's copy of the agent concurrency cap stands relative
- * to the Settings field: `pending` while a push awaits the backend's
- * acknowledgement, `failed` once it is rejected or times out (the field
- * has then been rolled back to the last acknowledged value, and
- * `requested` is what the user asked for, kept for Retry). Written by
- * `useSettingsBridge`, read by the Settings page. Not persisted: it only
- * describes pushes made during this launch.
+ * to the Settings field (`CapSync` in #lib/acknowledged-sync describes
+ * the states). Written by `useSettingsBridge`, read by the Settings page.
  */
-export type AgentConcurrencySync =
-  | { readonly status: "idle" }
-  | { readonly status: "pending"; readonly requested: number }
-  | {
-      readonly status: "failed";
-      readonly requested: number;
-      readonly message: string;
-      /** Pushes `requested` again, even when the field already shows it. */
-      readonly retry: () => void;
-    };
+export type AgentConcurrencySync = CapSync;
 
 export const agentConcurrencySyncAtom = atom<AgentConcurrencySync>({ status: "idle" });
+
+/** The Worker Registry Cap field's sync state, written by `useMaxWorkersSync`. */
+export const maxWorkersSyncAtom = atom<CapSync>({ status: "idle" });
+
+/** What the backend allows for the worker registry until `max_workers` is set. */
+export const DEFAULT_MAX_WORKERS = 64;
+
+/** The Worker Registry Cap the Settings field shows (the last value the backend acknowledged). */
+export const maxWorkersAtom = atom(DEFAULT_MAX_WORKERS);
 
 // ── Persisted (swarm-settings.json, see #store/persisted) ──
 
