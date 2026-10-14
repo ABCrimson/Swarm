@@ -3,7 +3,7 @@ import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { useReactFlow } from "@xyflow/react";
 import { useAtomValue } from "jotai";
 import { useEffect, useEffectEvent } from "react";
-import { toast } from "#components/ui/Toast";
+import { toast } from "sonner";
 import { errorMessage } from "#lib/is-error";
 import { hasCapability, isTauri } from "#lib/tauri";
 import type { WorkflowDefinition } from "#lib/workflow";
