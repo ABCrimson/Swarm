@@ -551,6 +551,7 @@ mod tests {
     use std::assert_matches;
 
     use super::*;
+    use crate::test_support::temp_db;
 
     fn append(log: &mut EventLog, seq: u64, event_type: &str, payload: &str) {
         log.append(
@@ -833,24 +834,6 @@ mod tests {
     }
 
     // ── File-backed readers ──────────────────────────────────────────
-
-    /// A temp database file plus a guard that removes it (and its WAL
-    /// siblings) on drop, so a failing assertion still cleans up.
-    fn temp_db() -> (
-        std::path::PathBuf,
-        std::mem::DropGuard<std::path::PathBuf, impl FnOnce(std::path::PathBuf)>,
-    ) {
-        let path = std::env::temp_dir().join(format!("swarm-log-test-{}.db", Uuid::new_v4()));
-        let guard = std::mem::DropGuard::new(path.clone(), |path: std::path::PathBuf| {
-            for suffix in ["-wal", "-shm"] {
-                let mut sibling = path.clone().into_os_string();
-                sibling.push(suffix);
-                let _ = std::fs::remove_file(sibling);
-            }
-            let _ = std::fs::remove_file(&path);
-        });
-        (path, guard)
-    }
 
     /// An integer pragma as SQLite reports it.
     fn pragma(log: &EventLog, name: &str) -> i64 {

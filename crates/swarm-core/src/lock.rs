@@ -228,7 +228,9 @@ mod tests {
     use super::*;
 
     /// Recursively removes `dir` when the guard drops, so a failing
-    /// assertion still cleans up.
+    /// assertion still cleans up. Unlike `crate::test_support::temp_dir`,
+    /// `dir` is chosen by the caller and not created here: the tests
+    /// need `acquire` itself to create it (and one needs a non-UTF-8 name).
     fn remove_on_drop(dir: PathBuf) -> DropGuard<PathBuf, impl FnOnce(PathBuf)> {
         DropGuard::new(dir, |dir| {
             let _ = std::fs::remove_dir_all(dir);

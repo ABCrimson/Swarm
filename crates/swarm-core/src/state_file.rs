@@ -100,20 +100,11 @@ fn sync_parent_dir(path: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::assert_matches;
-    use std::mem::DropGuard;
-
     use super::*;
+    use std::assert_matches;
 
-    /// A fresh, empty directory removed (with everything in it) on drop.
-    pub(crate) fn temp_dir(label: &str) -> (PathBuf, DropGuard<PathBuf, impl FnOnce(PathBuf)>) {
-        let dir = std::env::temp_dir().join(format!("swarm-{label}-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).unwrap();
-        let guard = DropGuard::new(dir.clone(), |dir| {
-            let _ = fs::remove_dir_all(dir);
-        });
-        (dir, guard)
-    }
+    // Re-exported until the remaining importers move to `crate::test_support`.
+    pub(crate) use crate::test_support::temp_dir;
 
     #[test]
     fn test_read_object_distinguishes_missing_empty_object_and_malformed() {

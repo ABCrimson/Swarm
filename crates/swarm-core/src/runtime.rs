@@ -321,7 +321,7 @@ mod tests {
     use std::assert_matches;
 
     use super::*;
-    use crate::state_file::tests::temp_dir;
+    use crate::test_support::temp_dir;
 
     fn config(dir: &std::path::Path, shell_name: &'static str) -> RuntimeConfig {
         RuntimeConfig {
