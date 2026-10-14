@@ -107,8 +107,6 @@ interface MessageHistoryActions {
   readonly updateThread: (workerId: string, recipe: (thread: ChatThread) => ChatThread) => void;
   /** Drops one worker's thread. */
   readonly clearWorker: (workerId: string) => void;
-  /** Drops every thread. */
-  readonly clearAll: () => void;
   /** Updates the LRU cap, evicting least-recently-used idle threads if it shrank. */
   readonly setMaxWorkers: (max: number) => void;
 }
@@ -161,10 +159,6 @@ export const useMessageHistoryStore = create<MessageHistoryState & MessageHistor
         threads.delete(workerId);
         return { threads, lruOrder: s.lruOrder.filter((id) => id !== workerId) };
       });
-    },
-
-    clearAll() {
-      set({ threads: new Map(), lruOrder: [] });
     },
 
     setMaxWorkers(max) {
