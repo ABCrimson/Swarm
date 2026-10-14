@@ -4,8 +4,10 @@ import {
   DEFAULT_SIM_PARAMS,
   dispatchCompute,
   PARTICLE_COMPUTE_WGSL,
+  SIM_TIME_OFFSET,
   WORKGROUP_SIZE,
   writeSimParams,
+  writeSimTime,
 } from "#lib/particles";
 import { recordingDevice, stubGpuGlobals } from "#test/gpu-device";
 
@@ -110,6 +112,34 @@ describe("writeSimParams", () => {
     const at = (name: string): number => wgslSimParamsFields().indexOf(name);
     expect(f32[at("throughput")]).toBe(DEFAULT_SIM_PARAMS.throughput);
     expect(f32[at("errorRate")]).toBe(DEFAULT_SIM_PARAMS.errorRate);
+  });
+});
+
+describe("writeSimTime", () => {
+  it("locates `time` at byte 8 of the SimParams struct", () => {
+    expect(SIM_TIME_OFFSET).toBe(8);
+  });
+
+  it("agrees with writeSimParams about where `time` lives", async () => {
+    const { device, asGpu } = recordingDevice();
+    const system = await createParticleSystem(asGpu, "bgra8unorm", 64);
+    writeSimParams(asGpu, system, { ...DEFAULT_SIM_PARAMS, time: 12.5 });
+    const packed = new Float32Array(device.queue.writeBuffer.mock.calls[0]?.[2] as ArrayBuffer);
+
+    expect(packed[(SIM_TIME_OFFSET ?? Number.NaN) / 4]).toBe(12.5);
+  });
+
+  it("writes only the clock, as one f32 at the time offset", async () => {
+    const { device, asGpu } = recordingDevice();
+    const system = await createParticleSystem(asGpu, "bgra8unorm", 64);
+
+    writeSimTime(asGpu, system, 3.25);
+
+    expect(device.queue.writeBuffer).toHaveBeenCalledOnce();
+    const [buffer, offset, data] = device.queue.writeBuffer.mock.calls[0] ?? [];
+    expect(buffer).toBe(system.simUniformBuffer);
+    expect(offset).toBe(SIM_TIME_OFFSET);
+    expect(data).toEqual(Float32Array.of(3.25));
   });
 });
 

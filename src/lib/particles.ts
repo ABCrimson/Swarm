@@ -460,6 +460,38 @@ export function writeSimParams(device: GPUDevice, system: ParticleSystem, params
   device.queue.writeBuffer(system.simUniformBuffer, 0, simParamsBytes);
 }
 
+/**
+ * Byte offset of `time` in the WGSL `SimParams` uniform, read from the
+ * shader source itself so a reordered struct cannot silently break the
+ * per-frame write. Every field before it must be a 4-byte scalar;
+ * otherwise this is `null` and {@link writeSimTime} does nothing, leaving
+ * the clock to the parameter sync.
+ */
+export const SIM_TIME_OFFSET: number | null = (() => {
+  const body = /struct\s+SimParams\s*\{([^}]*)\}/.exec(PARTICLE_COMPUTE_WGSL)?.[1];
+  if (!body) return null;
+  const fields = body
+    .split(",")
+    .map((field) => field.trim())
+    .filter(Boolean)
+    .map((field) => field.split(":").map((part) => part.trim()));
+  const index = fields.findIndex(([name]) => name === "time");
+  if (index === -1) return null;
+  const scalar = fields.slice(0, index).every(([, type]) => type === "f32" || type === "u32");
+  return scalar ? index * 4 : null;
+})();
+
+/**
+ * Writes only the simulation clock (seconds) into the uniform, leaving
+ * every other `SimParams` field as {@link writeSimParams} last set it.
+ * The render loop calls this once per simulation step, so callers never
+ * handle the struct's byte offsets.
+ */
+export function writeSimTime(device: GPUDevice, system: ParticleSystem, time: number): void {
+  if (SIM_TIME_OFFSET === null) return;
+  device.queue.writeBuffer(system.simUniformBuffer, SIM_TIME_OFFSET, Float32Array.of(time));
+}
+
 /** Write render parameters (aspect ratio + particle size). */
 export function writeRenderParams(
   device: GPUDevice,
