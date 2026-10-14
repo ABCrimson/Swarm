@@ -42,7 +42,6 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::events::{FileWrittenPayload, SwarmEvent};
-use crate::git;
 
 use super::{Ctx, ok_value, parse_args, parse_provenance};
 
@@ -139,7 +138,7 @@ fn canonical_root(root: &Path) -> PathBuf {
 
 impl FsScopes {
     fn resolve(ctx: &Ctx) -> Result<Self, Value> {
-        let home = git::home_dir().map_err(|e| Value::String(e.to_string()))?;
+        let home = crate::paths::home_dir().map_err(|e| Value::String(e.to_string()))?;
         Ok(Self {
             app_data: ctx.paths.data_dir.clone(),
             home,

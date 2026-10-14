@@ -333,7 +333,7 @@ fn worktrees_root(registry: &WorkerRegistry) -> Result<PathBuf, AppError> {
     let configured = registry.config.read().worktrees_root.clone();
     match configured {
         Some(root) => Ok(root),
-        None => Ok(git::home_dir()?.join(".swarm").join("worktrees")),
+        None => Ok(crate::paths::home_dir()?.join(".swarm").join("worktrees")),
     }
 }
 
@@ -368,6 +368,9 @@ fn worktrees_root(registry: &WorkerRegistry) -> Result<PathBuf, AppError> {
 ///   was created.
 /// - [`AppError::Git`]: repo discovery, `HEAD` resolution, or `worktree
 ///   add`/`lock` failed (only with `repo_root`).
+/// - [`AppError::Io`]: worktree isolation with no configured
+///   `worktrees_root` on a host with no resolvable home directory
+///   ([`std::io::ErrorKind::NotFound`]); nothing was created.
 /// - [`AppError::PtySpawn`]: the shell could not be started; the
 ///   worktree, if any, was rolled back.
 #[tracing::instrument(skip_all)]
