@@ -63,7 +63,7 @@ const DEFAULT_LOG_FILTER: &str = "swarm_core=info,swarmd=info,warn";
 /// How long shutdown waits for workers to stop: the 30 s handshake an
 /// in-flight agent attach may still be in when a kill arrives, plus that
 /// session's teardown (ADR-0040). `swarmd.service` and the launchd plist
-/// size their stop timeouts from it.
+/// size their stop timeouts from it and the event drain's `DRAIN_CEILING`.
 const STOP_WORKERS_TIMEOUT: Duration = Duration::from_secs(40);
 /// Budget for the agent sessions [`Runtime::shutdown`] still finds
 /// registered. Its event-writer drain has no budget of its own, because a

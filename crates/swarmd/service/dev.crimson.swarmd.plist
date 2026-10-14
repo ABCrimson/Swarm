@@ -47,10 +47,13 @@
          (STOP_WORKERS_TIMEOUT in main.rs: the 30 s adapter handshake a kill
          may still wait on, plus the session teardown) and 2.5 s for agent
          sessions still registered. The event-log drain has no timer: it
-         waits until every event accepted before the shutdown is committed.
-         Keep it equal to TimeoutStopSec in swarmd.service. -->
+         waits until every event accepted before the shutdown is committed,
+         and only its 120 s DRAIN_CEILING ends it early, with an error line
+         counting the events left unpersisted. 180 covers 52.5 plus that
+         ceiling with margin, so launchd never kills swarmd before it can
+         log an overrun. Keep it equal to TimeoutStopSec in swarmd.service. -->
     <key>ExitTimeOut</key>
-    <integer>60</integer>
+    <integer>180</integer>
     <!-- Adaptive, not Background: workers inherit the daemon's resource
          policy, and Background would throttle every agent turn and build. -->
     <key>ProcessType</key>
