@@ -10,6 +10,7 @@ vi.mock("#lib/lazy-store", () => ({
 
 import { resetPersistedSettingsCache } from "#store/persisted";
 import {
+  agentConcurrencySyncAtom,
   appSettingsAtom,
   DEFAULT_APP_SETTINGS,
   keybindingsAtom,
@@ -114,6 +115,12 @@ describe("persisted UI settings", () => {
 
     expect(createStore().get(paneSizesAtom)).toStrictEqual({ main: 60, detail: 40 });
     warn.mockRestore();
+  });
+});
+
+describe("agentConcurrencySyncAtom", () => {
+  it("starts idle in every store, since it only describes this launch's pushes", () => {
+    expect(createStore().get(agentConcurrencySyncAtom)).toStrictEqual({ status: "idle" });
   });
 });
 
