@@ -39,12 +39,12 @@ import {
 /**
  * `true` inside the Tauri desktop webview: `@tauri-apps/api/core`'s
  * `isTauri()`, which reads the `globalThis.isTauri` flag the shell
- * injects. Call sites that need something only the desktop shell
- * provides (`tauri-plugin-fs`/`-dialog`/`-opener`/`-notification`/
- * `-updater`, the webview-direct AI chat path) gate on this. A
- * `wsTransport` connection is a real backend but not a Tauri bridge, so
- * this is `false` there; see {@link hasTransport} and
- * `#lib/transport`'s `TransportCapabilities`.
+ * injects. Desktop-only controls (`tauri-plugin-fs`/`-dialog`/
+ * `-opener`/`-notification`/`-updater`, the webview-direct AI chat path)
+ * decide whether to offer themselves with {@link hasCapability}; this is
+ * the runtime check for call sites that invoke a plugin and need the
+ * bridge itself. A `wsTransport` connection is a real backend but not a
+ * Tauri bridge, so this is `false` there; see {@link hasTransport}.
  */
 export { isTauri };
 
