@@ -251,8 +251,11 @@ export async function agentSpawn(
  * Sends one turn to `workerId`'s attached agent session (Claude Code or
  * Codex; Rust's `agent_send_turn`). Resolves once the backend scheduler
  * admits the turn, not when it completes: the transcript renders from
- * the `agent_*` event stream. Rejects when `workerId` has no attached
- * session or the admission queue is full.
+ * the `agent_*` event stream. Rejects when `workerId` is not a UUID, the
+ * admission queue is full, or a kill is closing the worker. A worker with
+ * no attached session is not rejected: the turn is admitted and settles as
+ * an error `agent_turn_settled` receipt (`No Live Session For This
+ * Worker: ...`).
  */
 export async function agentSendTurn(workerId: string, prompt: string): Promise<void> {
   return invoke<void>("agent_send_turn", { workerId, prompt });

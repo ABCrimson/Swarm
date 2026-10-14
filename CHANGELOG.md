@@ -87,6 +87,7 @@ All pins are exact. The single hold is `@xyflow/react` at `12.12.0`: `13.0.0-nex
 
 ### Removed
 
+- **`useTheme` hook.** Reduced-motion readers subscribe to the atom directly, which carries its own media-query listener; `App` no longer mounts a theme subscription.
 - `tauri-plugin-shell` (replaced by `tauri-plugin-opener`), the Babel React Compiler fallback (`@babel/core`, `@rolldown/plugin-babel`, `babel-plugin-react-compiler`), `date-fns`, the unused `fs:allow-mkdir`/remove/rename grants, `updater:default` from the webview capability, the dead `ParticleCanvas` duplicate, and `#lib/fs` (its calls conflict with the narrowed grants).
 
 ### Fixed
