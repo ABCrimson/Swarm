@@ -22,9 +22,8 @@ file is canonical; `CLAUDE.md` only imports it.
   `pnpm dlx`.
 - pnpm switches itself to the `packageManager` version, and
   `devEngines.runtime` provisions the pinned Node nightly for scripts (the
-  version is in `package.json`, held back only when a newer nightly lacks a
-  win-x64 build — see `.peak-modern-holds.json`). No Corepack (it is not
-  bundled with Node 25+).
+  version is in `package.json`; it is the newest nightly that has a win-x64
+  build). No Corepack (it is not bundled with Node 25+).
 - Ground API use in the installed version: `node scripts/sync-reference-repos.ts` checks
   out Tauri, xterm.js and React at the exact pinned versions into the gitignored
   `.repos/` (read-only; never edit it). Read those sources and `node_modules/<pkg>`
@@ -97,8 +96,8 @@ silently or misleadingly; know them before you debug anything else.
   check:compiler` is a gate.
 - **A pin younger than 24 hours does not install** until it has a
   `minimumReleaseAgeExclude` entry, and the Node nightly must have a win-x64
-  build or `devEngines.runtime` cannot provision it (see
-  `.peak-modern-holds.json`). Let `pnpm install` name what it rejects; add
+  build or `devEngines.runtime` cannot provision it, so a newer nightly
+  without one is skipped. Let `pnpm install` name what it rejects; add
   exactly that, nothing broader.
 - **Temporal is missing in WKWebView and WebKitGTK.** `src/boot.ts` loads
   `temporal-polyfill` before the app and only then imports `main.tsx`. Do not

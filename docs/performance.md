@@ -72,9 +72,9 @@ The desktop process builds one multi-threaded Tokio runtime (`install_async_runt
 | `DashMap` | 7.0.0-rc2 | Sharded concurrent map: worker registry, session manager, agent session registry, per-repository git locks |
 | `parking_lot::Mutex` | 0.12.5 | PTY child wrapping, the shared sysinfo `System`, the config file lock |
 | `parking_lot::RwLock` | 0.12.5 | System configuration (max workers, default shell), the message bus topic registry (bounded at 1024 topics) |
-| `tokio::sync::Semaphore` | tokio 1.53.2 | Agent-turn concurrency limit (`AgentScheduler`, default 3, resizable at runtime) |
-| `tokio::sync::mpsc` | tokio 1.53.2 | The scheduler's intake and the piped-process output channel (4096 capacity) |
-| `tokio::sync::broadcast` | tokio 1.53.2 | The orchestration engine's secondary fan-out of ordered events to subscribers (`OrchestrationEngine::subscribe`) |
+| `tokio::sync::Semaphore` | tokio 1.53.3 | Agent-turn concurrency limit (`AgentScheduler`, default 3, resizable at runtime) |
+| `tokio::sync::mpsc` | tokio 1.53.3 | The scheduler's intake and the piped-process output channel (4096 capacity) |
+| `tokio::sync::broadcast` | tokio 1.53.3 | The orchestration engine's secondary fan-out of ordered events to subscribers (`OrchestrationEngine::subscribe`) |
 
 `parking_lot` replaces `std::sync::Mutex`/`RwLock` everywhere (`clippy.toml` bans the std types): no poisoning and better behavior under contention. Worker metrics aggregate sequentially inside `spawn_blocking`; with a default registry cap of 64 workers, parallel dispatch would cost more than it saves.
 
@@ -161,7 +161,7 @@ Minification is Vite's default (Oxc). `pnpm build` writes `dist/` for the deskto
 `@anthropic-ai/sdk` has no vendor group. Only `src/lib/anthropic.ts` imports it, and every runtime importer of that module loads on demand: the lazily loaded Workers, Settings and Tools pages, and the `import("#lib/ai-chat")` in `useWorkerEvents`. Rolldown therefore places the SDK in chunks those pages load, off the startup path.
 
 > [!NOTE]
-> `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 14.1.0, not `framer-motion`.
+> `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 14.2.0, not `framer-motion`.
 
 ### Rust Release Profile
 
