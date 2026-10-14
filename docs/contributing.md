@@ -27,7 +27,7 @@ The house rules (exact pins, pnpm only, no manual memoization, `parking_lot`, an
 | pnpm    | 12.13.0 (`packageManager`)               | Package management; npm and yarn are not used |
 | Rust    | nightly-2026-10-14 (`rust-toolchain.toml`) | Backend compilation (`rust-version` 1.101)   |
 
-Every version is pinned exactly: `package.json`, `pnpm-workspace.yaml`, the root `Cargo.toml` and `rust-toolchain.toml` are the source of truth, and this table follows them. The Node pin is the newest nightly that has a Windows x64 build, because `devEngines.runtime` cannot provision one without it; a pin held back for any other reason is recorded in `.peak-modern-holds.json`.
+Every version is pinned exactly: `package.json`, `pnpm-workspace.yaml`, the root `Cargo.toml` and `rust-toolchain.toml` are the source of truth, and this table follows them. The Node pin is the newest nightly whose `index.json` and `SHASUMS256.txt` list a Windows x64 build, because `devEngines.runtime` provisioning needs that checksum; a pin held back for any other reason is recorded in `.peak-modern-holds.json`.
 
 ### Rust Toolchain
 
