@@ -20,9 +20,12 @@ vi.mock("#lib/anthropic", async (importOriginal) => ({
   ...(await importOriginal<typeof import("#lib/anthropic")>()),
   streamMessage: vi.fn(),
 }));
+/** `true` makes the active transport report no webview AI chat (the `build:web` page). */
+const web = vi.hoisted(() => ({ on: false }));
 vi.mock("#lib/tauri", async (importOriginal) => ({
   ...(await importOriginal<typeof import("#lib/tauri")>()),
   agentTurnStarted: vi.fn(),
+  hasCapability: () => !web.on,
 }));
 
 const W = "worker-1";
@@ -61,6 +64,7 @@ async function send(text: string): Promise<void> {
 }
 
 beforeEach(() => {
+  web.on = false;
   cancelChatTurn(W);
   useMessageHistoryStore.setState(useMessageHistoryStore.getInitialState(), true);
   useAiStore.setState(useAiStore.getInitialState(), true);
@@ -74,6 +78,15 @@ afterEach(() => {
 });
 
 describe("AIChat", () => {
+  it("offers no message box when the transport has no webview AI chat", () => {
+    web.on = true;
+    render(<AIChat workerId={W} />);
+
+    expect(screen.getByText("Available In The Desktop App Only")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
+  });
+
   it("keeps the transcript and the running turn across an unmount (tab switch)", async () => {
     const release = scriptReply("Hello there");
     const { unmount } = render(<AIChat workerId={W} />);

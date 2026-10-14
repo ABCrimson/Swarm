@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { Button } from "#components/ui/Button";
 import { cancelChatTurn, clearChat, sendChatMessage } from "#lib/ai-chat";
 import { CLAUDE_MODELS } from "#lib/models";
+import { DESKTOP_ONLY_REASON, hasCapability } from "#lib/tauri";
 import {
   type ChatMessage,
   type ChatNotice,
@@ -242,6 +243,10 @@ interface AIChatProps {
  * conversation nor cancels a running turn. The transcript is a polite
  * live region (`role="log"`); the streaming bubble is `aria-busy` until
  * it commits.
+ *
+ * The chat streams straight from the webview to Anthropic, which only
+ * the desktop shell offers; a transport without `localAiChat` (the
+ * `pnpm build:web` page) gets a notice instead of a message box.
  */
 export function AIChat({ workerId }: AIChatProps): React.ReactElement {
   const thread = useChatThread(workerId);
@@ -263,6 +268,17 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
     e.preventDefault();
     if (!busy && !draftEmpty) e.currentTarget.form?.requestSubmit();
   };
+
+  if (!hasCapability("localAiChat")) {
+    return (
+      <div style={chatContainerStyle}>
+        <div role="status" style={emptyStateStyle}>
+          <span>{DESKTOP_ONLY_REASON}</span>
+          <span>Use A Claude Code Or Codex Worker For AI Chat Here</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={chatContainerStyle}>

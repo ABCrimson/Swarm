@@ -5,7 +5,7 @@ import { useAtomValue } from "jotai";
 import { useEffect, useEffectEvent } from "react";
 import { toast } from "#components/ui/Toast";
 import { errorMessage } from "#lib/is-error";
-import { isTauri } from "#lib/tauri";
+import { hasCapability, isTauri } from "#lib/tauri";
 import type { WorkflowDefinition } from "#lib/workflow";
 import { parseWorkflow } from "#lib/workflow";
 import { causalityInspectorAtom, reducedMotionAtom } from "#store/ui";
@@ -52,8 +52,9 @@ function isTypingTarget(target: EventTarget | null): boolean {
  * Keyboard shortcuts: `+`/`=` zoom in, `-` zoom out, `0` fit view, active
  * only while focus is inside the graph, never with Ctrl/Cmd/Alt (browser
  * zoom), and ignored while typing or while the causality inspector is open.
- * Export/Import use the Tauri dialog and fs plugins, so they only appear in the desktop
- * app (not under the remote `swarmd` web transport).
+ * Export/Import use the Tauri dialog and fs plugins, so they only appear when the
+ * transport offers workspace browsing and the Tauri bridge is present (not on the
+ * `swarmd`-served browser page).
  */
 export function GraphControls({
   onResetLayout,
@@ -64,7 +65,7 @@ export function GraphControls({
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const causalityOpen = useAtomValue(causalityInspectorAtom) !== null;
   const reducedMotion = useAtomValue(reducedMotionAtom);
-  const filesAvailable = isTauri();
+  const filesAvailable = hasCapability("workspaceBrowsing") && isTauri();
 
   const handleZoomIn = (): void => void zoomIn({ duration: reducedMotion ? 0 : 200 });
   const handleZoomOut = (): void => void zoomOut({ duration: reducedMotion ? 0 : 200 });

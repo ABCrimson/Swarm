@@ -7,6 +7,7 @@ import { ProviderBadge } from "#components/worker/ProviderBadge";
 import { WorkerTerminal } from "#components/worker/WorkerTerminal";
 import { PROVIDER_LABELS } from "#lib/agent-events";
 import { injectInstruction } from "#lib/ai-chat";
+import { hasCapability } from "#lib/tauri";
 import { useAgentSessionStore } from "#store/agent-sessions";
 import { AgentChat } from "./AgentChat.tsx";
 import { AIChat } from "./AIChat.tsx";
@@ -199,7 +200,9 @@ function InjectDialog({
  * A worker's terminal (top) and chat (bottom) in a resizable split, with
  * a toolbar: the model selector (webview chat) or the attached agent
  * session's provider badge, an instruction-injection dialog, the Ship
- * shortcut and this worker's slice of the AI queue.
+ * shortcut and this worker's slice of the AI queue. The model selector,
+ * injection and queue belong to the webview chat, so a transport without
+ * `localAiChat` (the `pnpm build:web` page) omits them.
  *
  * A worker with a live provider-adapter session (`#store/agent-sessions`)
  * gets `AgentChat` (turns routed to that session); every other worker
@@ -215,6 +218,7 @@ export function WorkerAIPanel({
   const [showInject, setShowInject] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
   const agentSession = useAgentSessionStore((s) => s.sessions.get(workerId));
+  const webviewChat = !agentSession && hasCapability("localAiChat");
 
   const handleInject = (instruction: string) => {
     const outcome = injectInstruction(workerId, instruction);
@@ -227,7 +231,7 @@ export function WorkerAIPanel({
         {agentSession ? (
           <ProviderBadge provider={agentSession.provider} model={agentSession.model} />
         ) : (
-          <ModelSelector workerId={workerId} />
+          webviewChat && <ModelSelector workerId={workerId} />
         )}
 
         <div style={flowIndicatorStyle}>
@@ -235,7 +239,7 @@ export function WorkerAIPanel({
           <span>AI ↔ PTY</span>
         </div>
 
-        {!agentSession && (
+        {webviewChat && (
           <button type="button" onClick={() => setShowInject(true)} style={toolbarButtonStyle}>
             Inject Instruction
           </button>
@@ -259,7 +263,7 @@ export function WorkerAIPanel({
           </button>
         )}
 
-        {!agentSession && (
+        {webviewChat && (
           <button
             type="button"
             onClick={() => setShowQueue(!showQueue)}
@@ -277,7 +281,7 @@ export function WorkerAIPanel({
         )}
       </div>
 
-      {showQueue && !agentSession && (
+      {showQueue && webviewChat && (
         <div style={{ padding: "8px 12px", borderBottom: "1px solid oklch(0.18 0.03 220)" }}>
           <AIQueue workerId={workerId} />
         </div>
