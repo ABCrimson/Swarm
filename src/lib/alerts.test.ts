@@ -1,7 +1,12 @@
 import { createStore } from "jotai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AlertThresholds, MetricsSnapshot } from "#lib/alerts";
-import { alertThresholdsAtom, DEFAULT_THRESHOLDS, evaluateThresholds } from "#lib/alerts";
+import {
+  alertThresholdsAtom,
+  DEFAULT_THRESHOLDS,
+  evaluateThresholds,
+  thresholdsError,
+} from "#lib/alerts";
 import { settingsStore } from "#lib/lazy-store";
 import { resetPersistedSettingsCache, settingsWritesSettled } from "#store/persisted";
 import { DEFAULT_APP_SETTINGS } from "#store/ui";
@@ -208,6 +213,28 @@ describe("alert cooldown (parametrized)", () => {
 
 // Stored thresholds are validated on read: a malformed or partial object
 // must never leave a field undefined, which would silently disable alerts.
+describe("thresholdsError", () => {
+  it("accepts warning below critical", () => {
+    expect(thresholdsError(DEFAULT_THRESHOLDS)).toBeNull();
+  });
+
+  it("rejects an inverted or equal CPU pair and names only the CPU fields", () => {
+    expect(thresholdsError({ ...DEFAULT_THRESHOLDS, cpuWarning: 90, cpuCritical: 90 })).toEqual({
+      message: "CPU Warning Must Be Below CPU Critical",
+      keys: new Set(["cpuWarning", "cpuCritical"]),
+    });
+  });
+
+  it("rejects an inverted memory pair and names only the memory fields", () => {
+    expect(
+      thresholdsError({ ...DEFAULT_THRESHOLDS, memoryWarning: 95, memoryCritical: 50 }),
+    ).toEqual({
+      message: "Memory Warning Must Be Below Memory Critical",
+      keys: new Set(["memoryWarning", "memoryCritical"]),
+    });
+  });
+});
+
 describe("alertThresholdsAtom hydration", () => {
   afterEach(() => {
     resetPersistedSettingsCache();
