@@ -1,7 +1,8 @@
 // Builds the GitHub Pages docs site into dist-site/.
 //
-// docs/*.md is the only content source (docs/history and docs/superpowers
-// are internal and never published). Each page is rendered with marked into
+// docs/*.md is the only content source (subdirectories such as docs/adr,
+// docs/history and docs/superpowers are not published; links into them point
+// at GitHub). Each page is rendered with marked into
 // the site/_template.html shell and written to dist-site/<name>.html, so the
 // published URLs (./architecture.html, ./api.html, ...) stay stable. Each page
 // gets a contents list built from its h2/h3 headings, a permalink per h2/h3,
@@ -13,8 +14,10 @@
 // is missing or repeated, a nav that does not list every page, a heading link
 // to an anchor that does not exist, unrendered emphasis, a landing-page doc
 // card whose title is not its page's H1, a "proposed next version" that is
-// already released, a missing asset, or any resource loaded from another
-// origin.
+// already released, a missing asset, an element, url(), image-set() or
+// @import that would load from an absolute or protocol-relative URL (see
+// checkNoExternalResources), or site script that opens a connection (see
+// checkNoExternalScript).
 //
 // Run with `pnpm build:site` (Node runs this erasable TypeScript natively).
 
@@ -62,6 +65,24 @@ const escapeHtml = (text: string): string =>
     .replaceAll('"', "&quot;");
 
 const stripTags = (html: string): string => html.replace(/<[^>]*>/g, "");
+
+/** The comment a GitHub alert marker is rewritten to before lexing. */
+const ALERT = "swarm-alert:";
+const ALERT_LABELS = {
+  note: "Note",
+  tip: "Tip",
+  important: "Important",
+  warning: "Warning",
+  caution: "Caution",
+} as const;
+type AlertKind = keyof typeof ALERT_LABELS;
+
+/** The alert kind a blockquote's first token carries, if it is an alert. */
+function alertKind(token: Token | undefined): AlertKind | undefined {
+  if (token?.type !== "html") return undefined;
+  const kind = token.raw.trim().match(new RegExp(`^<!--${ALERT}([a-z]+)-->$`))?.[1];
+  return kind !== undefined && Object.hasOwn(ALERT_LABELS, kind) ? (kind as AlertKind) : undefined;
+}
 
 /** GitHub's heading-anchor algorithm, so `file.md#anchor` links keep working. */
 function createSlugger(): (text: string) => string {
@@ -151,17 +172,58 @@ function markCurrent(html: string, name: string, file: string): string {
   return html.replace(nav, () => marked);
 }
 
-/** Fails if the page would load anything (script, style, image, frame) from another origin. */
+/** An absolute URL with any scheme (`https://`, `ftp://`) or a protocol-relative one (`//`). */
+const ABSOLUTE = String.raw`(?:[a-z][a-z\d+.-]*:)?\/\/`;
+
+/** The elements that fetch what an attribute names, and those attributes. */
+const LOADING_TAG =
+  /<(?:script|img|iframe|source|track|video|audio|embed|object|link|image|use)\b[^>]*>/gi;
+const LOADING_ATTR =
+  /\s(?:src|href|xlink:href|data|srcset|imagesrcset|poster)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
+
+/**
+ * Fails if HTML or CSS would fetch from another origin. In HTML: a script,
+ * img, iframe, source, track, video, audio, embed, object, link, image or use
+ * element whose src, href, xlink:href, data, srcset, imagesrcset or poster
+ * (double-quoted, single-quoted or unquoted; each srcset candidate) is an
+ * absolute or protocol-relative URL. In HTML and CSS: a url(), image-set() or
+ * @import naming one. `<a href>` is a link, not a load, and is not checked.
+ */
 function checkNoExternalResources(text: string, file: string): void {
-  const tag =
-    /<(?:script|img|iframe|source|video|audio|embed|object|link)\b[^>]*\s(?:src|href|data|srcset)="(?:https?:)?\/\/[^"]*"/i.exec(
-      text,
-    );
-  const cssUrl = /url\(\s*['"]?(?:https?:)?\/\//i.exec(text);
-  const cssImport = /@import\s+(?:url\()?\s*['"]?(?:https?:)?\/\//i.exec(text);
-  const hit = tag ?? cssUrl ?? cssImport;
-  if (hit) throw new Error(`${file}: loads a resource from another origin: ${hit[0]}`);
+  const absolute = new RegExp(`^\\s*${ABSOLUTE}`, "i");
+  for (const [tag] of text.matchAll(LOADING_TAG)) {
+    for (const [, dq, sq, bare] of tag.matchAll(LOADING_ATTR)) {
+      const urls = (dq ?? sq ?? bare ?? "").split(",").map((candidate) => candidate.trim());
+      if (urls.some((url) => absolute.test(url))) {
+        throw new Error(`${file}: loads a resource from another origin: ${tag}`);
+      }
+    }
+  }
+  const css = new RegExp(
+    `url\\(\\s*['"]?\\s*${ABSOLUTE}|image-set\\([^)]*['"]\\s*${ABSOLUTE}|@import\\s+(?:url\\()?\\s*['"]?\\s*${ABSOLUTE}`,
+    "i",
+  ).exec(text);
+  if (css) throw new Error(`${file}: loads a resource from another origin: ${css[0]}`);
 }
+
+/**
+ * Fails if script would open a connection to another origin or any
+ * connection at all: fetch(), import(), importScripts() or sendBeacon() given
+ * an absolute or protocol-relative URL literal, a static `import … from` one,
+ * or any `new WebSocket`, `EventSource`, `Worker` or `SharedWorker`.
+ */
+function checkNoExternalScript(text: string, file: string): void {
+  const hit =
+    new RegExp(
+      `\\b(?:fetch|import|importScripts|sendBeacon)\\s*\\(\\s*[\`'"]\\s*${ABSOLUTE}|\\bimport\\b[^;]*?\\bfrom\\s*['"]\\s*${ABSOLUTE}|\\bimport\\s*['"]\\s*${ABSOLUTE}`,
+      "i",
+    ).exec(text) ?? /\bnew\s+(?:WebSocket|EventSource|Worker|SharedWorker)\s*\(/.exec(text);
+  if (hit) throw new Error(`${file}: opens a connection from script: ${hit[0]}`);
+}
+
+/** The bodies of the inline `<script>` elements in a hand-written page. */
+const inlineScripts = (html: string): string[] =>
+  [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1] ?? "");
 
 /** The first sentence of a paragraph, as plain text, cut to a search-snippet length. */
 function describe(text: string): string {
@@ -200,10 +262,12 @@ interface RenderedPage {
 
 function renderPage(name: string, pages: readonly string[]): RenderedPage {
   const file = `docs/${name}.md`;
-  // GitHub alert markers (`> [!NOTE]`) — the blockquote itself becomes the callout.
+  // A GitHub alert marker (`> [!WARNING]`) becomes a comment that marked
+  // lexes as the blockquote's first token; the blockquote renderer turns it
+  // into the callout's kind and label.
   const source = read(join(docsDir, `${name}.md`)).replace(
-    /^>\s*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*\n/gm,
-    "",
+    /^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*\n/gm,
+    (_, kind: string) => `> <!--${ALERT}${kind.toLowerCase()}-->\n`,
   );
 
   const slug = createSlugger();
@@ -251,18 +315,24 @@ function renderPage(name: string, pages: readonly string[]): RenderedPage {
           `<a class="anchor" href="#${id}" aria-label="Link To This Section: ${escapeHtml(text)}">#</a></div>\n`
         );
       },
-      // GFM task items render as the static glyph the site has always shown,
-      // not as a disabled native checkbox.
+      // GFM task items render as a static ☑/☐ glyph, not as a disabled native
+      // checkbox.
       checkbox({ checked }) {
         return checked ? "☑ " : "☐ ";
       },
+      // Every body blockquote is a callout. An alert keeps its kind as a
+      // class and a visible label, so a warning never reads as a plain note.
       blockquote({ tokens }) {
-        const [first] = tokens;
+        const kind = alertKind(tokens[0]);
+        const rest = kind ? tokens.slice(1).filter((t) => t.type !== "space") : tokens;
+        const [first] = rest;
         const inner =
-          tokens.length === 1 && first?.type === "paragraph"
+          rest.length === 1 && first?.type === "paragraph"
             ? this.parser.parseInline((first as Tokens.Paragraph).tokens)
-            : this.parser.parse(tokens);
-        return `<div class="note">${inner}</div>\n`;
+            : this.parser.parse(rest);
+        if (kind === undefined) return `<div class="note">${inner}</div>\n`;
+        const label = `<span class="alert-label">${ALERT_LABELS[kind]}</span>`;
+        return `<div class="note alert-${kind}">${label}${inner}</div>\n`;
       },
       link(token) {
         // Rewrite in place, then fall through to marked's own link renderer.
@@ -459,9 +529,16 @@ if (missingAssets.length > 0) throw new Error(`site/: missing ${missingAssets.jo
 for (const asset of ["site.css", "site.js", "favicon.svg"]) {
   checkNoExternalResources(read(join(siteDir, asset)), `site/${asset}`);
 }
+checkNoExternalScript(read(join(siteDir, "site.js")), "site/site.js");
 
 const template = read(join(siteDir, "_template.html"));
 const index = read(join(siteDir, "index.html"));
+for (const [file, html] of [
+  ["site/_template.html", template],
+  ["site/index.html", index],
+] as const) {
+  for (const script of inlineScripts(html)) checkNoExternalScript(script, file);
+}
 const order = checkNav(template, pages, "site/_template.html");
 checkNav(index, pages, "site/index.html");
 

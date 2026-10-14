@@ -12,7 +12,11 @@ if (navigator.clipboard?.writeText && status) {
     button.type = "button";
     button.className = "copy";
     button.textContent = "Copy";
+    // One reset timer per button, so a second click restarts the 2 s label
+    // instead of an earlier timer cutting it short.
+    let reset;
     button.addEventListener("click", async () => {
+      clearTimeout(reset);
       try {
         await navigator.clipboard.writeText(code.textContent ?? "");
         button.textContent = "Copied";
@@ -21,7 +25,7 @@ if (navigator.clipboard?.writeText && status) {
         button.textContent = "Copy Failed";
         announce("Copy Failed");
       }
-      setTimeout(() => {
+      reset = setTimeout(() => {
         button.textContent = "Copy";
       }, 2000);
     });
@@ -38,29 +42,39 @@ function announce(message) {
   });
 }
 
-// The contents list marks the section being read. Headings are observed in a
-// band near the top of the viewport, the place a reader's eye returns to.
+// The contents list marks the section being read: the last heading whose top
+// is in the upper quarter of the viewport or above it. It is computed from
+// positions on every scroll (at most once a frame), not from headings
+// crossing a line, so it is right after Home, End, Page Up or a jump.
 const links = new Map(
   Array.from(document.querySelectorAll('.toc a[href^="#"]'), (a) => [
     decodeURIComponent(a.hash.slice(1)),
     a,
   ]),
 );
-if (links.size > 0) {
+const headings = Array.from(links.keys(), (id) => document.getElementById(id)).filter(
+  (heading) => heading !== null,
+);
+if (headings.length > 0) {
   let current;
-  const observer = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        current?.removeAttribute("aria-current");
-        current = links.get(entry.target.id);
-        current?.setAttribute("aria-current", "true");
-      }
+  let queued = false;
+  const mark = () => {
+    queued = false;
+    const heading = headings.findLast((h) => h.getBoundingClientRect().top <= innerHeight / 4);
+    const link = heading ? links.get(heading.id) : undefined;
+    if (link === current) return;
+    current?.removeAttribute("aria-current");
+    link?.setAttribute("aria-current", "true");
+    current = link;
+  };
+  addEventListener(
+    "scroll",
+    () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(mark);
     },
-    { rootMargin: "0px 0px -75% 0px" },
+    { passive: true },
   );
-  for (const id of links.keys()) {
-    const heading = document.getElementById(id);
-    if (heading) observer.observe(heading);
-  }
+  mark();
 }

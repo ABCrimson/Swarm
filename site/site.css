@@ -1,8 +1,7 @@
 /*
  * The one stylesheet for the landing page and every docs page.
  * scripts/build-site.ts copies it into dist-site/ and fails if it is missing.
- * Colors are OKLCH only; light-dark() themes every token from one place, so
- * the contrast table in the site's change notes covers both schemes.
+ * Colors are OKLCH only; light-dark() themes every token from one place.
  */
 
 @layer reset, tokens, base, layout, components, diagram, motion, print;
@@ -65,6 +64,15 @@
     --on-amber: light-dark(oklch(0.99 0.004 85), oklch(0.2 0.04 266));
     --focus: var(--amber);
     --selection: light-dark(oklch(0.88 0.08 82), oklch(0.42 0.08 82));
+    --header-bg: light-dark(oklch(0.975 0.007 266 / 0.9), oklch(0.165 0.028 266 / 0.88));
+
+    /* GitHub alert kinds, one accent each, used for the callout's edge and
+       its label text. */
+    --alert-note: light-dark(oklch(0.48 0.12 255), oklch(0.78 0.11 255));
+    --alert-tip: light-dark(oklch(0.48 0.1 150), oklch(0.8 0.13 150));
+    --alert-important: light-dark(oklch(0.48 0.15 300), oklch(0.78 0.12 300));
+    --alert-warning: light-dark(oklch(0.5 0.105 65), oklch(0.83 0.13 82));
+    --alert-caution: light-dark(oklch(0.5 0.16 25), oklch(0.75 0.14 25));
 
     --sans: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
     --mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
@@ -79,6 +87,33 @@
     --gutter: clamp(1rem, 0.6rem + 2vw, 2rem);
     --radius: 0.625rem;
     --page: 72rem;
+  }
+
+  /* light-dark() is newer than the rest of this sheet. Where it is missing,
+     every token above is invalid and the page would lose its colors (an
+     unlit diagram, no focus ring), so those browsers get the light scheme
+     outright. Keep these values identical to the light branches above. */
+  @supports not (color: light-dark(oklch(0 0 0), oklch(1 0 0))) {
+    :root {
+      color-scheme: light;
+      --bg: oklch(0.975 0.007 266);
+      --surface: oklch(0.995 0.002 266);
+      --sunken: oklch(0.945 0.01 266);
+      --ink: oklch(0.24 0.035 266);
+      --ink-2: oklch(0.43 0.035 266);
+      --line: oklch(0.88 0.015 266);
+      --line-strong: oklch(0.58 0.03 266);
+      --amber: oklch(0.5 0.105 65);
+      --cyan: oklch(0.47 0.08 215);
+      --on-amber: oklch(0.99 0.004 85);
+      --selection: oklch(0.88 0.08 82);
+      --header-bg: oklch(0.975 0.007 266 / 0.9);
+      --alert-note: oklch(0.48 0.12 255);
+      --alert-tip: oklch(0.48 0.1 150);
+      --alert-important: oklch(0.48 0.15 300);
+      --alert-warning: oklch(0.5 0.105 65);
+      --alert-caution: oklch(0.5 0.16 25);
+    }
   }
 }
 
@@ -173,12 +208,20 @@
     align-items: center;
     gap: 0.5rem 1.5rem;
     padding: 0.75rem var(--gutter);
-    background: light-dark(oklch(0.975 0.007 266 / 0.9), oklch(0.165 0.028 266 / 0.88));
+    background: var(--header-bg);
     backdrop-filter: blur(12px);
     border-block-end: 1px solid var(--line);
     view-transition-name: site-header;
 
-    /* A wrapped header would cover a third of a phone screen. */
+    /* While sticky, the header is one row whatever the font: the nav scrolls
+       sideways instead of wrapping. One row is about 3.6rem tall, so the
+       5rem scroll padding keeps every anchor target below it. */
+    @media (width >= 48rem) {
+      flex-wrap: nowrap;
+    }
+
+    /* On a phone the nav wraps, and a sticky wrapped header would cover a
+       third of the screen, so it scrolls away with the page. */
     @media (width < 48rem) {
       position: static;
     }
@@ -188,9 +231,11 @@
     display: inline-flex;
     align-items: center;
     gap: 0.6rem;
+    flex-shrink: 0;
     color: var(--ink);
     font-weight: 760;
     letter-spacing: -0.02em;
+    white-space: nowrap;
     text-decoration: none;
 
     & img {
@@ -205,12 +250,27 @@
     gap: 0.125rem 0.25rem;
     margin-inline-start: auto;
 
+    @media (width >= 48rem) {
+      flex-wrap: nowrap;
+      min-inline-size: 0;
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
+      scrollbar-width: thin;
+    }
+
     & a {
       padding: 0.3rem 0.6rem;
       border-radius: 0.4rem;
       color: var(--ink-2);
       font-size: 0.9rem;
+      white-space: nowrap;
       text-decoration: none;
+
+      /* The scrolling nav clips anything drawn outside it, so the ring sits
+         inside the link. */
+      &:focus-visible {
+        outline-offset: -3px;
+      }
 
       &:hover {
         color: var(--ink);
@@ -508,11 +568,6 @@
       border-inline-start: 1px solid var(--line);
     }
 
-    & ol ol {
-      margin: 0;
-      border: 0;
-    }
-
     & a {
       display: block;
       padding: 0.25rem 0 0.25rem 0.9rem;
@@ -530,8 +585,20 @@
         color: var(--ink);
         border-inline-start-color: var(--amber);
       }
+
+      /* The list scrolls on a wide page and would clip an outer ring. */
+      &:focus-visible {
+        outline-offset: -3px;
+      }
     }
 
+    /* biome-ignore lint/style/noDescendingSpecificity: this is .toc ol ol (0,1,2), above .toc ol (0,1,1); Biome scores the nested form without .toc. */
+    & ol ol {
+      margin: 0;
+      border: 0;
+    }
+
+    /* biome-ignore lint/style/noDescendingSpecificity: .toc ol ol a and .actions a never match one element (doc pages vs the landing page). */
     & ol ol a {
       padding-inline-start: 1.8rem;
       font-size: 0.85rem;
@@ -622,6 +689,7 @@
       overflow-wrap: anywhere;
     }
 
+    /* biome-ignore lint/style/noDescendingSpecificity: .prose strong and .doc-list a:hover strong never match one element (doc pages vs the landing page). */
     & strong {
       font-weight: 680;
     }
@@ -654,7 +722,11 @@
     text-decoration: none;
     opacity: 0;
 
-    .heading:hover &,
+    .heading:hover & {
+      opacity: 1;
+    }
+
+    /* biome-ignore lint/style/noDescendingSpecificity: .anchor and .toc a are different links, so neither focus rule can override the other. */
     &:focus-visible {
       opacity: 1;
     }
@@ -683,6 +755,12 @@
       line-height: 1.55;
       tab-size: 2;
     }
+
+    /* Room above the first line for the Copy button, which is always shown
+       on touch screens and on hover elsewhere. */
+    &:has(.copy) pre {
+      padding-block-start: 2.9rem;
+    }
   }
 
   .copy {
@@ -700,7 +778,11 @@
     opacity: 0;
 
     .code:hover &,
-    .code:focus-within &,
+    .code:focus-within & {
+      opacity: 1;
+    }
+
+    /* biome-ignore lint/style/noDescendingSpecificity: .copy is a button and .toc a a link, so neither focus rule can override the other. */
     &:focus-visible {
       opacity: 1;
     }
@@ -740,12 +822,42 @@
     }
   }
 
+  /* A body blockquote is a callout. A GitHub alert (`> [!WARNING]`) keeps its
+     kind as a class and a visible label, so a warning never reads as a note. */
   .note {
+    --accent: var(--line-strong);
     padding: 0.85rem 1.1rem;
     border: 1px solid var(--line);
-    border-inline-start: 3px solid var(--cyan);
+    border-inline-start: 3px solid var(--accent);
     border-radius: var(--radius);
     background: var(--surface);
+
+    &.alert-note {
+      --accent: var(--alert-note);
+    }
+
+    &.alert-tip {
+      --accent: var(--alert-tip);
+    }
+
+    &.alert-important {
+      --accent: var(--alert-important);
+    }
+
+    &.alert-warning {
+      --accent: var(--alert-warning);
+    }
+
+    &.alert-caution {
+      --accent: var(--alert-caution);
+    }
+
+    & > .alert-label {
+      display: block;
+      margin-block-end: 0.35rem;
+      color: var(--accent);
+      font-weight: 700;
+    }
   }
 
   .doc-foot {
@@ -828,11 +940,23 @@
     }
   }
 
-  /* One diagram per width: the wide one needs about 56rem to keep its
-     smallest text near 12px; below that the stacked one is shown. */
+  /* One diagram per width: the wide one (viewBox 960 wide, smallest text
+     13 units) needs 56rem to keep that text at 12px or more; below that the
+     stacked one (viewBox 320 wide, smallest text 12 units) is shown. */
   .arch-tall {
     inline-size: 100%;
     max-inline-size: 26rem;
+  }
+
+  /* Narrower than its 320-unit viewBox, the stacked diagram would shrink its
+     12-unit text below 12px, so it runs into the page gutters instead: on a
+     320px screen it is exactly 320px wide. */
+  @container arch (width < 20rem) {
+    .arch-tall {
+      inline-size: calc(100% + 2 * var(--gutter));
+      max-inline-size: none;
+      margin-inline: calc(-1 * var(--gutter));
+    }
   }
 
   .arch-wide {
@@ -878,9 +1002,11 @@
       stroke-width: 1.25;
     }
 
+    /* The core's boundary is dashed and neutral: cyan is kept for the event
+       log alone, as the caption says. */
     & .core {
       fill: var(--sunken);
-      stroke: var(--cyan);
+      stroke: var(--ink-2);
       stroke-width: 1.5;
       stroke-dasharray: 6 5;
     }
@@ -975,6 +1101,7 @@
         }
 
         to {
+          /* biome-ignore lint/suspicious/noDuplicateCustomProperties: `from` and `to` are separate keyframe blocks, so --flow is set once in each. */
           --flow: 1;
         }
       }
@@ -1014,6 +1141,12 @@
 
     a {
       color: inherit;
+    }
+
+    /* Paper has no scroll position, so a half-run draw-in would print a
+       faint diagram; print it fully drawn. */
+    .arch svg {
+      animation: none;
     }
   }
 }

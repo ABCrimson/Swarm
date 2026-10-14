@@ -108,7 +108,7 @@
         <text class="s" x="48" y="482">Codex: app-server JSON-RPC</text>
         <rect class="box ext" x="258" y="420" width="218" height="72" rx="8"/>
         <text class="t" x="274" y="444">Git Worktrees</text>
-        <text class="s" x="274" y="464">One per worker, own branch</text>
+        <text class="s" x="274" y="464">At most one per worker</text>
         <text class="s" x="274" y="482">Removal never forces</text>
         <rect class="box ext" x="484" y="420" width="218" height="72" rx="8"/>
         <text class="t" x="500" y="444">origin</text>
@@ -183,8 +183,8 @@
         <text class="s" x="194" y="381">Codex</text>
         <rect class="box ext" x="184" y="400" width="128" height="64" rx="8"/>
         <text class="t" x="194" y="422">Git Worktrees</text>
-        <text class="s" x="194" y="440">One per worker,</text>
-        <text class="s" x="194" y="455">own branch</text>
+        <text class="s" x="194" y="440">At most one</text>
+        <text class="s" x="194" y="455">per worker</text>
         <rect class="box ext" x="184" y="474" width="128" height="64" rx="8"/>
         <text class="t" x="194" y="496">origin</text>
         <text class="s" x="194" y="514">Push by sha,</text>
@@ -195,7 +195,7 @@
         <text class="s" x="194" y="603">every commit</text>
       </svg>
 
-      <figcaption><span class="key cyan"></span>Cyan marks the ordered event log. <span class="key amber"></span>Amber marks what runs outside SWARM's own process: the provider CLIs, git and the remote. Names follow <a href="./architecture.html#system-overview">Architecture</a>, which has the full picture.</figcaption>
+      <figcaption><span class="key cyan"></span>Cyan marks the ordered event log. <span class="key amber"></span>Amber marks what runs outside SWARM's own process: the provider CLIs, git and the remote. The dashed outline is swarm-core. Names follow <a href="./architecture.html#system-overview">Architecture</a>, which has the full picture.</figcaption>
     </figure>
   </section>
 
@@ -231,7 +231,7 @@
       <li class="claim">
         <h3>The Event Log Flushes Every Commit</h3>
         <blockquote cite="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0039-event-log-flushes-every-commit.md"><p><code>EventLog::init</code> sets <code>PRAGMA synchronous = EXTRA</code> and <code>PRAGMA fullfsync = 1</code> on the writer connection, reads both back (neither pragma echoes its value) and fails the open with <code>AppError::EventLog</code> unless they read 3 and 1.</p></blockquote>
-        <p>The measured cost on an ext4 WSL2 disk is about 2 ms per persistent event; native Windows NTFS and macOS are unmeasured.</p>
+        <p>The cost measured on 2026-10-13 on an ext4 WSL2 disk is about 2 ms per persistent event; native Windows NTFS and macOS are unmeasured.</p>
         <p class="source"><span class="tag">Unreleased</span><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0039-event-log-flushes-every-commit.md">ADR-0039</a><a href="./performance.html#event-log-persistence">Event Log Persistence</a></p>
       </li>
       <li class="claim">
