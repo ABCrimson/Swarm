@@ -7,7 +7,7 @@ use std::path::Path;
 use serde::Serialize;
 use uuid::Uuid;
 
-use super::commit::{StagingMode, staging_candidates};
+use super::commit::{StagingMode, size_basis, staging_candidates};
 use super::deny::{self, SkippedFile};
 use super::status::{self, DiffStat, NUMSTAT_ARGS, StatusSnapshot};
 use super::{
@@ -169,7 +169,7 @@ pub fn preflight(
     // previews only the index.
     let untracked: HashSet<&str> = classified.untracked.iter().map(String::as_str).collect();
     let candidates = staging_candidates(&classified, mode);
-    let (survivors, skipped) = deny::partition(wt, candidates, &untracked);
+    let (survivors, skipped) = deny::partition(wt, candidates, &untracked, size_basis(mode))?;
     let diff_stat = preview_diff_stat(wt, mode, &snapshot, &survivors, &untracked);
 
     Ok(ShipPreflight {

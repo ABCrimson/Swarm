@@ -11,6 +11,7 @@ use uuid::Uuid;
 use super::*;
 use crate::git::test_support::{TempRepo, git_in, write_file};
 use crate::worker::handle::{WorkerHandle, WorkerState};
+use crate::worker::registry::PushRecord;
 
 /// Registers a worker whose worktree is `worktree`, forked from
 /// `repo`'s current `HEAD`.
@@ -350,6 +351,99 @@ fn test_secret_and_size_guard_neither_file_is_committed() {
     skipped.sort_unstable();
     assert_eq!(skipped, ["blob.bin", "id_rsa"]);
     assert_eq!(committed_paths(&worktree, &outcome.sha), ["safe.txt"]);
+}
+
+/// The audit's blob size: 1,024 bytes over [`deny::MAX_STAGED_FILE_BYTES`].
+const AUDIT_BLOB_BYTES: usize = 5_243_904;
+
+/// B1: the size guard measures the blob the commit would contain. A
+/// 5,243,904-byte blob is staged, then the working copy is shrunk
+/// without re-adding: staged-only mode commits the index, so the oversized
+/// blob must be denied, unstaged and left out.
+#[test]
+fn test_staged_mode_denies_an_oversized_index_blob_whose_working_copy_shrank() {
+    let (_repo, worktree, registry, id) = fixture("b1-shrunk", "swarm/b1-shrunk-abcd1234");
+    std::fs::write(worktree.join("blob.bin"), vec![0_u8; AUDIT_BLOB_BYTES]).unwrap();
+    write_file(&worktree, "safe.txt", "fine");
+    git_in(&worktree, &["add", "blob.bin", "safe.txt"]);
+    std::fs::write(worktree.join("blob.bin"), b"tiny").unwrap();
+
+    let outcome = stage_and_commit(
+        &registry,
+        &RepoLocks::new(),
+        id,
+        &request(StagingMode::Staged, "feat: staged"),
+    )
+    .unwrap();
+
+    assert_eq!(committed_paths(&worktree, &outcome.sha), ["safe.txt"]);
+    assert_eq!(
+        outcome.skipped,
+        [SkippedFile {
+            path: "blob.bin".to_owned(),
+            reason: "Skipped — Larger Than 5 MB".to_owned(),
+        }]
+    );
+    // Unstaged, never deleted: the (tiny) working copy is untouched.
+    let after = status::StatusSnapshot::read(&worktree).unwrap().classify();
+    assert_eq!(after.untracked, ["blob.bin"]);
+    assert_eq!(std::fs::read(worktree.join("blob.bin")).unwrap(), b"tiny");
+}
+
+/// B1, the other direction: staged-only mode never reads the working
+/// copy to decide what is committed, so a small staged blob ships even
+/// though the file on disk has since grown past the limit.
+#[test]
+fn test_staged_mode_commits_a_small_index_blob_whose_working_copy_grew() {
+    let (_repo, worktree, registry, id) = fixture("b1-grew", "swarm/b1-grew-abcd1234");
+    write_file(&worktree, "blob.bin", "small");
+    git_in(&worktree, &["add", "blob.bin"]);
+    std::fs::write(worktree.join("blob.bin"), vec![0_u8; AUDIT_BLOB_BYTES]).unwrap();
+
+    let outcome = stage_and_commit(
+        &registry,
+        &RepoLocks::new(),
+        id,
+        &request(StagingMode::Staged, "feat: staged"),
+    )
+    .unwrap();
+
+    assert_eq!(committed_paths(&worktree, &outcome.sha), ["blob.bin"]);
+    assert!(outcome.skipped.is_empty(), "{:?}", outcome.skipped);
+    let blob = git_in(
+        &worktree,
+        &["cat-file", "-s", &format!("{}:blob.bin", outcome.sha)],
+    );
+    assert_eq!(blob.stdout_trimmed(), "5");
+}
+
+/// S3: a staged 6 MB file with a non-UTF-8 name never reaches a commit
+/// in staged-only mode: the ship is refused (it cannot be unstaged).
+#[cfg(unix)]
+#[test]
+fn test_staged_mode_never_commits_an_oversized_non_utf8_name() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let (_repo, worktree, registry, id) = fixture("s3-non-utf8", "swarm/s3-abcd1234");
+    let name = std::ffi::OsStr::from_bytes(b"big\xff.bin");
+    std::fs::write(worktree.join(name), vec![0_u8; 6 * 1024 * 1024]).unwrap();
+    write_file(&worktree, "safe.txt", "fine");
+    git_in(&worktree, &["add", "."]);
+
+    // Fail closed: the lossy name cannot be unstaged by pathspec, so the
+    // ship is refused rather than committing or silently skipping.
+    let err = stage_and_commit(
+        &registry,
+        &RepoLocks::new(),
+        id,
+        &request(StagingMode::Staged, "feat: staged"),
+    )
+    .unwrap_err();
+    assert!(err.message.contains("Refusing To Ship"), "{}", err.message);
+
+    let tree = git_in(&worktree, &["ls-tree", "-r", "--name-only", "HEAD"]);
+    let tree = String::from_utf8_lossy(&tree.stdout).into_owned();
+    assert!(!tree.contains("big"), "oversized blob committed: {tree}");
 }
 
 /// Security: "all" mode unstages a pre-staged `.env`, reports it
@@ -992,6 +1086,221 @@ fn test_push_resolves_and_pushes_existing_head_with_no_prior_stage_and_commit_ca
     assert_eq!(
         repo::rev_parse(&bare, "swarm/stranded-abcd1234").unwrap(),
         expected
+    );
+}
+
+/// A worker on `branch` with a bare `origin` and one commit of work,
+/// not yet pushed.
+fn push_fixture(
+    tag: &str,
+    branch: &str,
+) -> (
+    TempRepo,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    WorkerRegistry,
+    WorkerId,
+) {
+    let repo = TempRepo::new(tag);
+    let bare = repo.add_bare_origin();
+    let worktree = repo.add_worktree("wt", branch);
+    let registry = WorkerRegistry::new();
+    let id = register(&registry, &repo, &worktree, branch);
+    write_file(&worktree, "feature.txt", "work");
+    git_in(&worktree, &["add", "feature.txt"]);
+    git_in(&worktree, &["commit", "-m", "feat: work"]);
+    (repo, worktree, bare, registry, id)
+}
+
+/// B2: the push carries the sha that was read. A commit that lands on
+/// the branch between the sha read and the push (the agent keeps
+/// committing) must not ride along, and the outcome must report what was
+/// pushed.
+#[test]
+fn test_push_commit_pushes_the_read_sha_when_a_racing_commit_lands_first() {
+    let (_repo, worktree, bare, registry, id) = push_fixture("b2-race", "swarm/race-abcd1234");
+    let info = worktree_info_for_worker(&registry, id).unwrap();
+    let read_sha = repo::head_sha(&worktree).unwrap();
+
+    // The race: another commit lands on the branch after the sha read.
+    git_in(
+        &worktree,
+        &["commit", "--allow-empty", "-m", "racing commit"],
+    );
+    let racing_sha = repo::head_sha(&worktree).unwrap();
+    assert_ne!(racing_sha, read_sha);
+
+    let outcome = push::push_commit(
+        &registry,
+        id,
+        &RepoLocks::new(),
+        &info.repo_root,
+        &worktree,
+        "swarm/race-abcd1234",
+        &read_sha,
+    )
+    .unwrap();
+
+    let remote_tip = repo::rev_parse(&bare, "swarm/race-abcd1234").unwrap();
+    assert_eq!(remote_tip, read_sha, "the remote must hold the read sha");
+    assert_ne!(remote_tip, racing_sha);
+    assert_eq!(outcome.sha, remote_tip);
+}
+
+/// B2: a remote that moved on is a non-fast-forward rejection, never a
+/// forced overwrite.
+#[test]
+fn test_push_rejects_a_non_fast_forward_and_leaves_the_remote_unchanged() {
+    let (repo, worktree, bare, registry, id) = push_fixture("b2-nff", "swarm/nff-abcd1234");
+    let repo_locks = RepoLocks::new();
+    push(&registry, &repo_locks, id).unwrap();
+
+    // Someone else advances the remote branch.
+    let other = repo.base().join("other");
+    let bare_arg = bare.display().to_string();
+    let other_arg = other.display().to_string();
+    git_in(repo.base(), &["clone", &bare_arg, &other_arg]);
+    for (key, value) in [("user.email", "o@example.com"), ("user.name", "Other")] {
+        git_in(&other, &["config", key, value]);
+    }
+    git_in(&other, &["checkout", "swarm/nff-abcd1234"]);
+    git_in(&other, &["commit", "--allow-empty", "-m", "someone else"]);
+    git_in(&other, &["push", "origin", "swarm/nff-abcd1234"]);
+    let remote_before = repo::rev_parse(&bare, "swarm/nff-abcd1234").unwrap();
+
+    git_in(&worktree, &["commit", "--allow-empty", "-m", "local work"]);
+    let err = push(&registry, &repo_locks, id).unwrap_err();
+    assert_eq!(err.kind, ShipErrorKind::PushRejected);
+    assert_eq!(
+        repo::rev_parse(&bare, "swarm/nff-abcd1234").unwrap(),
+        remote_before
+    );
+}
+
+/// B2, the happy path: the outcome's sha is the remote tip and the local
+/// `HEAD`, and the branch tracks `origin/<branch>` afterwards (a push of
+/// a sha does not record an upstream by itself).
+#[test]
+fn test_push_outcome_sha_is_the_remote_tip_and_records_the_upstream() {
+    let (_repo, worktree, bare, registry, id) = push_fixture("b2-happy", "swarm/happy-abcd1234");
+
+    let outcome = push(&registry, &RepoLocks::new(), id).unwrap();
+
+    let head = repo::head_sha(&worktree).unwrap();
+    assert_eq!(outcome.sha, head);
+    assert_eq!(
+        repo::rev_parse(&bare, "swarm/happy-abcd1234").unwrap(),
+        head
+    );
+    assert_eq!(outcome.pushed_ref, "origin/swarm/happy-abcd1234");
+    assert_eq!(outcome.remote, "origin");
+    assert_eq!(outcome.remote_ref, "refs/heads/swarm/happy-abcd1234");
+    let upstream = git_in(
+        &worktree,
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+    );
+    assert_eq!(upstream.stdout_trimmed(), "origin/swarm/happy-abcd1234");
+}
+
+/// B-1: the receipt is the push record, written by the push itself — no
+/// `set_last_shipped` (so no event-log seq) is needed, and a branch
+/// rename afterwards changes nothing.
+#[test]
+fn test_push_records_the_receipt_and_a_rename_does_not_change_it() {
+    let (_repo, worktree, _bare, registry, id) = push_fixture("b2-recorded", "swarm/rec-abcd1234");
+    assert_eq!(recorded_push(&registry, id), None);
+
+    let outcome = push(&registry, &RepoLocks::new(), id).unwrap();
+    assert_eq!(registry.get_worker(&id).unwrap().last_shipped_seq, None);
+    git_in(&worktree, &["branch", "-m", "swarm/rec-renamed"]);
+
+    assert_eq!(
+        recorded_push(&registry, id),
+        Some(PushRecord {
+            sha: outcome.sha,
+            remote: "origin".to_owned(),
+            remote_ref: "refs/heads/swarm/rec-abcd1234".to_owned(),
+            pushed_ref: "origin/swarm/rec-abcd1234".to_owned(),
+        })
+    );
+}
+
+/// B-1: with a push record the compare page targets the pushed branch,
+/// even after a rename; without one it falls back to the live branch.
+#[test]
+fn test_compare_url_uses_the_recorded_branch_after_a_rename() {
+    let (repo, worktree, _bare, registry, id) = push_fixture("b2-compare", "swarm/cmp-abcd1234");
+    push(&registry, &RepoLocks::new(), id).unwrap();
+    repo.git(&[
+        "remote",
+        "set-url",
+        "origin",
+        "git@github.com:example/repo.git",
+    ]);
+    git_in(&worktree, &["branch", "-m", "swarm/cmp-renamed"]);
+
+    let url = compare_url(&registry, id, "t", "b").unwrap();
+    assert!(
+        url.starts_with("https://github.com/example/repo/compare/main...swarm/cmp-abcd1234?"),
+        "{url}"
+    );
+}
+
+/// The record that built the compare URL comes back with it: the pushed
+/// branch after a rename, `None` before any push (live branch).
+#[test]
+fn test_compare_url_with_record_returns_the_record_that_built_the_url() {
+    let (repo, worktree, bare, registry, id) = push_fixture("b2-cmp-rec", "swarm/cr-abcd1234");
+    repo.git(&[
+        "remote",
+        "set-url",
+        "origin",
+        "git@github.com:example/repo.git",
+    ]);
+    let (url, record) = compare_url_with_record(&registry, id, "t", "b").unwrap();
+    assert!(url.contains("main...swarm/cr-abcd1234?"), "{url}");
+    assert_eq!(record, None);
+
+    repo.git(&["remote", "set-url", "origin", &bare.display().to_string()]);
+    let outcome = push(&registry, &RepoLocks::new(), id).unwrap();
+    repo.git(&[
+        "remote",
+        "set-url",
+        "origin",
+        "git@github.com:example/repo.git",
+    ]);
+    git_in(&worktree, &["branch", "-m", "swarm/cr-renamed"]);
+    let (url, record) = compare_url_with_record(&registry, id, "t", "b").unwrap();
+    let record = record.expect("a push is on record");
+    assert_eq!(record.sha, outcome.sha);
+    assert!(
+        url.contains(&format!(
+            "main...{}?",
+            record.remote_ref.trim_start_matches("refs/heads/")
+        )),
+        "{url}"
+    );
+}
+
+/// S1: the pushed commit is the tip of the branch being pushed, not
+/// whatever `HEAD` is by then (an agent may switch branches between the
+/// branch read and the sha read).
+#[test]
+fn test_resolve_push_sha_is_the_branch_tip_not_head() {
+    let (_repo, worktree, _bare, _registry, _id) = push_fixture("s1-tip", "swarm/tip-abcd1234");
+    let tip = repo::head_sha(&worktree).unwrap();
+    git_in(&worktree, &["switch", "-c", "swarm/elsewhere"]);
+    git_in(&worktree, &["commit", "--allow-empty", "-m", "elsewhere"]);
+    assert_ne!(repo::head_sha(&worktree).unwrap(), tip);
+
+    assert_eq!(
+        push::resolve_push_sha(&worktree, "swarm/tip-abcd1234").unwrap(),
+        tip
     );
 }
 

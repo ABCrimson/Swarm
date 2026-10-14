@@ -344,7 +344,7 @@ the mechanics ([ADR-0009](adr/0009-ship-chain-structural-guarantees.md)). The lo
 | --- | --- |
 | `git_ship_preflight(workerId, mode?)` | Read-only. `mode` is `all` (default) or `staged`. Eight refusal conditions become Title Case `blockers` and `canShip = false`: not the worktree's toplevel, primary checkout, detached `HEAD`, branch equals the base branch, protected branch (`main`, `master`, `develop`, `release/*`), no `origin`, unresolved merge conflicts, nothing to ship. Also returns the deny-list preview, diff stat, ahead/behind and whether the host supports a compare URL. |
 | `git_stage_commit(workerId, shipId, message, mode, finalStep)` | Primary-checkout guard, then one `git status --porcelain=v2 -z` snapshot (conflicts refuse), the deny list, `git restore --staged` of denied paths, in `all` mode `git add` of an explicit `:(top,literal)` path list, an index re-check, then `git commit --file=- --trailer=…`. Emits `ship_progress` and `commit_created`. |
-| `git_push(workerId, shipId, finalStep)` | Primary-checkout guard, live branch (detached, protected `main`/`master`/`develop`/`release/*` and the base branch refuse), `HEAD` sha, `git push --set-upstream --end-of-options origin refs/heads/<branch>:refs/heads/<branch>`. On success records `last_shipped_seq` and `last_shipped_commit` (the only writer). |
+| `git_push(workerId, shipId, finalStep)` | Primary-checkout guard, live branch (detached, protected `main`/`master`/`develop`/`release/*` and the base branch refuse), sha of the branch tip, `git push --end-of-options origin <sha>:refs/heads/<branch>` (the exact commit, non-force), then `git branch --set-upstream-to=refs/remotes/origin/<branch>`. Every successful push is recorded as the worker's push record (sha, remote ref, `origin/<branch>`), which the compare URL's branch is read from (`ship_compare_url`'s receipt still carries the caller's `commitSha` and `pushedRef`). When the event-log seq read succeeds it also records `last_shipped_seq` and `last_shipped_commit` (the only writer). |
 | `ship_compare_url(workerId, shipId, commitSha, pushedRef, title, body)` | `https://<host>/<owner>/<repo>/compare/<base>...<branch>?quick_pull=1&title=&body=`, capped at 6000 characters (the body is cut first, the title as a last resort, the path never). |
 
 - Each command ends an attempt with exactly one `ship_settled`, on failure or on the call marked
@@ -354,7 +354,7 @@ the mechanics ([ADR-0009](adr/0009-ship-chain-structural-guarantees.md)). The lo
   **B3**; `setMode` refetches). The base branch is `origin/HEAD`, else `init.defaultBranch`, else
   `main`, never the primary checkout's current branch.
 - **Deny list:** basename (case-insensitive) starting `.env` or `id_rsa`, ending `.pem` or `.key`;
-  `secret` anywhere in the path; a file over 5 MiB; an untracked `.claude/settings.json`. Denied paths
+  `secret` anywhere in the path; a file over 5 MiB, measured on the bytes the commit would contain (the index blob in `staged` mode, via `git ls-files --stage` and `git cat-file --batch-check`; the working-tree file `all` mode is about to stage; the index blob again in the final pre-commit check); an untracked `.claude/settings.json`. Denied paths
   are returned as `skipped[]` with a Title Case reason and never committed.
 - **Trailers:** `Swarm-Seq-Range: <from>..<to>` (omitted when unknown or degenerate) and the configured
   `Co-Authored-By` (`shipCoAuthoredBy`; dropped if it contains a newline). The range `(seqFrom, seqTo]`

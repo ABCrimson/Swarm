@@ -17,6 +17,24 @@ use uuid::Uuid;
 use super::handle::{WorkerHandle, WorkerInfo, WorkerState};
 use crate::error::AppError;
 
+/// The latest successful push of a worker's branch — the receipt data a
+/// compare page reports. Written by `git::ship::push` on every
+/// successful push, independent of the event log, and read without
+/// touching git (see [`WorkerRegistry::push_record`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushRecord {
+    /// The commit the push carried; the remote ref pointed at it when
+    /// the push succeeded.
+    pub sha: String,
+    /// The remote pushed to (`origin`).
+    pub remote: String,
+    /// The ref updated on that remote (`refs/heads/<branch>`).
+    pub remote_ref: String,
+    /// The remote-tracking ref (`origin/<branch>`) as the receipt
+    /// reports it.
+    pub pushed_ref: String,
+}
+
 /// Unique identifier of a worker (a UUID v4).
 pub type WorkerId = Uuid;
 
@@ -114,6 +132,10 @@ pub struct WorkerRegistry {
     /// Serializes changes to the persisted `max_workers` setting; see
     /// [`Self::lock_max_workers_setting`].
     max_workers_setting: Arc<tokio::sync::Mutex<()>>,
+    /// Latest [`PushRecord`] per worker, dropped with the worker. Kept
+    /// beside the handles, not in them, so it does not widen
+    /// `WorkerHandle`'s literal constructors.
+    pushes: Arc<DashMap<WorkerId, PushRecord>>,
 }
 
 /// A capacity slot reserved by [`WorkerRegistry::reserve`].
@@ -175,6 +197,7 @@ impl WorkerRegistry {
             config: Arc::new(RwLock::new(SystemConfig::default())),
             pending: Arc::new(Mutex::new(0)),
             max_workers_setting: Arc::new(tokio::sync::Mutex::new(())),
+            pushes: Arc::new(DashMap::new()),
         }
     }
 
@@ -324,6 +347,7 @@ impl WorkerRegistry {
     ///
     /// [`AppError::WorkerNotFound`] if no worker has this id.
     pub fn remove_worker(&self, id: &WorkerId) -> Result<WorkerHandle, AppError> {
+        self.pushes.remove(id);
         self.workers
             .remove(id)
             .map(|(_, handle)| handle)
@@ -486,6 +510,30 @@ impl WorkerRegistry {
         entry.last_shipped_commit = Some(commit.to_owned());
         tracing::info!(worker_id = %id, seq, commit, "ship: last_shipped recorded");
         Ok(())
+    }
+
+    /// Records `record` as `id`'s latest push, replacing the previous
+    /// one. Written only by the ship chain, on every successful push and
+    /// regardless of whether the event-log seq behind
+    /// [`Self::set_last_shipped`] could be read. The record is per worker,
+    /// not per ship attempt: interleaved attempts on one worker share the
+    /// latest push.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::WorkerNotFound`] if no worker has this id.
+    pub fn record_push(&self, id: &WorkerId, record: PushRecord) -> Result<(), AppError> {
+        if !self.workers.contains_key(id) {
+            return Err(not_found(id));
+        }
+        self.pushes.insert(*id, record);
+        Ok(())
+    }
+
+    /// `id`'s latest [`PushRecord`], or `None` when it has not pushed
+    /// since it was spawned (in memory only). Reads no git state.
+    pub fn push_record(&self, id: &WorkerId) -> Option<PushRecord> {
+        self.pushes.get(id).map(|record| record.clone())
     }
 }
 
@@ -730,6 +778,32 @@ mod tests {
             reg.set_last_shipped(&Uuid::new_v4(), 1, "sha"),
             Err(AppError::WorkerNotFound { .. })
         );
+    }
+
+    #[test]
+    fn test_record_push_is_per_worker_replaced_and_dropped_with_the_worker() {
+        let reg = WorkerRegistry::new();
+        let id = reg.register(make_handle("a")).unwrap();
+        let other = reg.register(make_handle("b")).unwrap();
+        let record = |sha: &str| PushRecord {
+            sha: sha.to_owned(),
+            remote: "origin".to_owned(),
+            remote_ref: "refs/heads/x".to_owned(),
+            pushed_ref: "origin/x".to_owned(),
+        };
+        assert_eq!(reg.push_record(&id), None);
+
+        reg.record_push(&id, record("one")).unwrap();
+        reg.record_push(&id, record("two")).unwrap();
+        assert_eq!(reg.push_record(&id), Some(record("two")));
+        assert_eq!(reg.push_record(&other), None);
+        assert_matches!(
+            reg.record_push(&Uuid::new_v4(), record("x")),
+            Err(AppError::WorkerNotFound { .. })
+        );
+
+        reg.remove_worker(&id).unwrap();
+        assert_eq!(reg.push_record(&id), None);
     }
 
     #[test]

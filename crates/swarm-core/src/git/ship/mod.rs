@@ -67,7 +67,7 @@ pub use self::commit::{CommitOutcome, CommitRequest, StagingMode, stage_and_comm
 pub use self::deny::SkippedFile;
 pub use self::error::{ShipError, ShipErrorKind, ShipRemedy};
 pub use self::preflight::{ShipPreflight, preflight};
-pub use self::push::{PushOutcome, compare_url, push};
+pub use self::push::{PushOutcome, compare_url, compare_url_with_record, push, recorded_push};
 pub use self::status::DiffStat;
 use super::cli::{self, GitOutput, READ_TIMEOUT};
 use super::repo::{self, args_in};
@@ -91,6 +91,9 @@ pub struct ShipWorktreeInfo {
     pub base_commit: String,
     /// The event-log seq recorded by the last successful push.
     pub last_shipped_seq: Option<u64>,
+    /// The commit sha recorded by that same push — the pushed commit, as
+    /// [`PushOutcome::sha`] reported it.
+    pub last_shipped_commit: Option<String>,
 }
 
 /// Resolves [`ShipWorktreeInfo`] for `id` from `registry`. A pure
@@ -108,7 +111,7 @@ pub fn worktree_info_for_worker(
     id: WorkerId,
 ) -> Result<ShipWorktreeInfo, ShipError> {
     // Clone the fields out in a block so the shard guard drops here.
-    let (worktree_path, repo_root, branch, base_commit, last_shipped_seq) = {
+    let (worktree_path, repo_root, branch, base_commit, last_shipped_seq, last_shipped_commit) = {
         let handle = registry
             .workers
             .get(&id)
@@ -119,6 +122,7 @@ pub fn worktree_info_for_worker(
             handle.branch.clone(),
             handle.base_commit.clone(),
             handle.last_shipped_seq,
+            handle.last_shipped_commit.clone(),
         )
     };
     let (Some(worktree_path), Some(repo_root), Some(branch), Some(base_commit)) =
@@ -132,6 +136,7 @@ pub fn worktree_info_for_worker(
         branch,
         base_commit,
         last_shipped_seq,
+        last_shipped_commit,
     })
 }
 

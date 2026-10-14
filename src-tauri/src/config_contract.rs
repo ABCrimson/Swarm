@@ -87,6 +87,39 @@ fn main_window_starts_hidden() {
     assert!(main.create);
 }
 
+/// `additionalBrowserArgs` replaces wry's Windows default
+/// (`--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection`)
+/// rather than extending it, so the string restates what is kept:
+///
+/// - `msWebOOUI` and `msPdfOOUI` stay disabled: they are WebView2's
+///   in-page Office and PDF viewer UI, which an app shell has no use for.
+/// - `msSmartScreenProtection` is NOT disabled. wry turns it off to keep
+///   a webview from reporting to Microsoft (tauri-apps/tauri#1345), but
+///   SmartScreen also vets downloads and navigations, which the app has
+///   no reason to give up. SmartScreen stays on.
+/// - `WebGPU` is enabled for the particle background (`useWebGPU`), which
+///   renders only where `navigator.gpu` exists.
+#[test]
+fn browser_args_keep_smartscreen_on_and_enable_webgpu() {
+    let config = config();
+    let main = config
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == crate::MAIN_WINDOW)
+        .expect("a main window is declared");
+    let args = main
+        .additional_browser_args
+        .as_deref()
+        .expect("the main window sets additionalBrowserArgs");
+    assert!(!args.contains("msSmartScreenProtection"), "{args}");
+    assert!(
+        args.contains("--disable-features=msWebOOUI,msPdfOOUI"),
+        "{args}"
+    );
+    assert!(args.contains("--enable-features=WebGPU"), "{args}");
+}
+
 /// tauri-codegen uses the first PNG in `bundle.icon` as the window icon
 /// on macOS and Linux (Windows uses the `.ico` resource), so the
 /// full-size icon comes first.

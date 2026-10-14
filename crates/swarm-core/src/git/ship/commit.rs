@@ -6,7 +6,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::deny::{self, SkippedFile};
+use super::deny::{self, SizeBasis, SkippedFile};
 use super::status::{self, DiffStat, NUMSTAT_ARGS, StatusSnapshot};
 use super::{
     RepoLocks, ShipError, ShipErrorKind, ShipRemedy, guard_not_primary_checkout, literal_pathspecs,
@@ -95,6 +95,17 @@ pub(super) fn staging_candidates(
             &classified.untracked,
         ]),
         StagingMode::Staged => classified.staged.clone(),
+    }
+}
+
+/// What the deny list's size limit measures for `mode`'s candidates:
+/// staged-only commits the index as it stands, so the index blob is the
+/// committed content; "all" screens before `git add` has replaced the
+/// index entries with the working-tree files, so it measures those.
+pub(super) fn size_basis(mode: StagingMode) -> SizeBasis {
+    match mode {
+        StagingMode::All => SizeBasis::WorkingCopy,
+        StagingMode::Staged => SizeBasis::Index,
     }
 }
 
@@ -255,7 +266,8 @@ pub fn stage_and_commit(
     let classified = before.classify();
     let untracked: HashSet<&str> = classified.untracked.iter().map(String::as_str).collect();
     let candidates = staging_candidates(&classified, request.mode);
-    let (survivors, skipped) = deny::partition(wt, candidates, &untracked);
+    let (survivors, skipped) =
+        deny::partition(wt, candidates, &untracked, size_basis(request.mode))?;
 
     // DIRECTIVE (B3), in both modes: a denied path already in the index
     // (a human's or the agent's own `git add`) is unstaged — the
@@ -308,17 +320,16 @@ pub fn stage_and_commit(
             "Nothing To Commit — Every Changed File Was Skipped Or There Are No Changes.",
         ));
     }
-    let still_denied: Vec<&str> = staged_now
-        .iter()
-        .map(String::as_str)
-        .filter(|path| deny::deny_reason(wt, path, false).is_some())
-        .collect();
+    // The commit is the index, so this last check measures index blobs in
+    // both modes (see `SizeBasis`).
+    let (_, still_denied) = deny::partition(wt, staged_now, &HashSet::new(), SizeBasis::Index)?;
     if !still_denied.is_empty() {
+        let paths: Vec<&str> = still_denied.iter().map(|file| file.path.as_str()).collect();
         return Err(ShipError::new(
             ShipErrorKind::Unknown,
             format!(
                 "Refusing To Commit — Denied Files Are Still Staged: {}",
-                still_denied.join(", ")
+                paths.join(", ")
             ),
         ));
     }
