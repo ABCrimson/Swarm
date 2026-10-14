@@ -1,14 +1,12 @@
 //! Session teardown: runs exactly once, in its own task.
 
-use std::process::ExitStatus;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use super::PROCESS_EXITED_WITHOUT_RECEIPT;
 use super::process::reap;
 use super::state::{Shared, Stop};
 use crate::agent::adapter::{AgentTurnStatus, ExitSummary};
-use crate::agent::drained_stderr_snippet;
+use crate::agent::{PROCESS_EXITED_WITHOUT_RECEIPT, drained_stderr_snippet, signal_name};
 use crate::events::{AgentSessionExitedPayload, AgentTurnSettledPayload, Provenance, SwarmEvent};
 
 // ── Teardown ─────────────────────────────────────────────────────────
@@ -62,7 +60,7 @@ async fn run_teardown(shared: Arc<Shared>, stop: Stop) {
     };
     let summary = ExitSummary {
         exit_code: status.and_then(|status| status.code()),
-        signal: status.and_then(signal_name),
+        signal: status.as_ref().and_then(signal_name),
     };
 
     if let Some(turn) = in_flight {
@@ -103,30 +101,4 @@ async fn run_teardown(shared: Arc<Shared>, stop: Stop) {
     shared
         .status
         .send_modify(|status| status.exit = Some(summary));
-}
-
-/// `"SIGKILL"` for a Unix exit status that ended on signal 9, and so on.
-#[cfg(unix)]
-fn signal_name(status: ExitStatus) -> Option<String> {
-    use std::os::unix::process::ExitStatusExt;
-    status.signal().map(|signal| {
-        match signal {
-            1 => "SIGHUP",
-            2 => "SIGINT",
-            3 => "SIGQUIT",
-            6 => "SIGABRT",
-            9 => "SIGKILL",
-            11 => "SIGSEGV",
-            13 => "SIGPIPE",
-            15 => "SIGTERM",
-            other => return format!("SIG{other}"),
-        }
-        .to_owned()
-    })
-}
-
-/// Windows has no signals: `TerminateProcess` sets an exit code.
-#[cfg(not(unix))]
-fn signal_name(_status: ExitStatus) -> Option<String> {
-    None
 }
