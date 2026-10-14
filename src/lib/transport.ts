@@ -164,7 +164,10 @@ export const RPC_DEADLINE_MARGIN_MS = 30_000;
  * Every other command gets {@link DEFAULT_RPC_DEADLINE_MS}. The ship
  * flow reuses this as the window in which a lost reply may still be
  * reconciled. The wait for the per-repo ship lock is in none of these
- * sums (see {@link RPC_DEADLINE_MARGIN_MS}).
+ * sums (see {@link RPC_DEADLINE_MARGIN_MS}). A mutation that fails on
+ * lock contention is retried once (`RepoLocks::run_serialized`), which can
+ * spend its budget twice; like the ship-lock wait, that overrun lands in
+ * the reconcile window.
  */
 export function rpcDeadlineMs(cmd: string): number {
   switch (cmd) {
@@ -491,6 +494,18 @@ export class WsTransport implements Transport {
     conn.watchdog = null;
   }
 
+  /** Closes `conn` and, without waiting for its `close` event (a half-open socket's closing handshake can stall until the browser gives up on TCP), rejects its pending calls and starts the reconnect. Idempotent with the `close` listener. */
+  private abandon(conn: Connection): void {
+    conn.ws.close();
+    this.clearWatchdog(conn);
+    for (const pending of conn.pending.values())
+      pending.reject(new RpcConnectionLostError(pending.cmd));
+    conn.pending.clear();
+    if (this.connection !== conn) return;
+    this.connection = null;
+    if (!this.disposed) this.armReconnect();
+  }
+
   /** Forgets a settled rpc; the watchdog stops with the last one. */
   private releasePending(conn: Connection, id: string): void {
     conn.pending.delete(id);
@@ -500,9 +515,10 @@ export class WsTransport implements Transport {
   /**
    * While any rpc is pending, checks every {@link DEFAULT_RPC_DEADLINE_MS}
    * that the socket delivered at least one frame since the previous
-   * check, and closes it when none did. The close rejects the pending
-   * calls with {@link RpcConnectionLostError} and starts the reconnect,
-   * whose `hello` replays the log from `lastSeq`, so the ship flow can
+   * check, and abandons it when none did (see `abandon`). That rejects
+   * the pending calls with {@link RpcConnectionLostError} and starts the
+   * reconnect at once, without waiting for the `close` event a half-open
+   * socket may never deliver in time. The reconnect's `hello` replays the log from `lastSeq`, so the ship flow can
    * learn the outcome of a call it lost. Sound because the daemon sends
    * an ephemeral `system_metrics` event every 500 ms
    * (`METRICS_INTERVAL`, `crates/swarm-core/src/metrics.rs`): thirty
@@ -515,7 +531,7 @@ export class WsTransport implements Transport {
     let framesAtLastCheck = conn.framesReceived;
     conn.watchdog = setInterval(() => {
       if (conn.framesReceived === framesAtLastCheck) {
-        conn.ws.close();
+        this.abandon(conn);
         return;
       }
       framesAtLastCheck = conn.framesReceived;
@@ -552,7 +568,7 @@ export class WsTransport implements Transport {
       // socket is half-open (laptop sleep, a NAT timeout) even though
       // `readyState` still says OPEN. Closing it starts a reconnect now
       // instead of whenever the browser notices the dead TCP link.
-      if (conn.framesReceived === framesAtSend && this.connection === conn) conn.ws.close();
+      if (conn.framesReceived === framesAtSend && this.connection === conn) this.abandon(conn);
     }, deadlineMs);
     conn.pending.set(id, {
       cmd,

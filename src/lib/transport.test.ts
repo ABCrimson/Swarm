@@ -677,6 +677,24 @@ describe("wsTransport", () => {
         expect(FakeWebSocket.instances).toHaveLength(2);
       });
 
+      it("abandons a half-open socket whose close event never fires, rejecting pending calls and reconnecting", async () => {
+        vi.useFakeTimers();
+        vi.spyOn(Math, "random").mockReturnValue(0);
+        const outcome = transport.invoke("git_push").then(
+          () => null,
+          (err: unknown) => err,
+        );
+        const socket = openAndReady(0);
+        // A dead link: close() only starts the closing handshake, and the
+        // `close` event never arrives.
+        socket.close = () => socket.simulateClosing();
+        await vi.advanceTimersByTimeAsync(DEFAULT_RPC_DEADLINE_MS * 2);
+
+        expect(await outcome).toBeInstanceOf(RpcConnectionLostError);
+        await vi.advanceTimersByTimeAsync(500);
+        expect(FakeWebSocket.instances).toHaveLength(2);
+      });
+
       it("leaves a long git_push pending while the socket keeps receiving frames", async () => {
         vi.useFakeTimers();
         const settled = vi.fn();
