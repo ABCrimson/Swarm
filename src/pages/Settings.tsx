@@ -723,9 +723,11 @@ export function Settings(): React.ReactElement {
     startMaxWorkersUpdate(async () => {
       showMaxWorkers(v);
       try {
-        await setMaxWorkers(v);
-        startMaxWorkersUpdate(() => setMaxWorkersState(v));
-        toast.success(`Worker Registry Cap Set To ${v}`);
+        // The reply is the cap in force; `null` means no value came back.
+        const applied = (await setMaxWorkers(v)) ?? v;
+        if (applied !== v) showMaxWorkers(applied);
+        startMaxWorkersUpdate(() => setMaxWorkersState(applied));
+        toast.success(`Worker Registry Cap Set To ${applied}`);
       } catch (err) {
         toast.error("Failed To Update Worker Registry Cap", { description: errorMessage(err) });
       }

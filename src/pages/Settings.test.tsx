@@ -253,6 +253,21 @@ describe("Settings — worker registry cap", () => {
     expect(cap).toHaveValue(12);
   });
 
+  it("shows and announces the cap the backend reports when it differs from the request", async () => {
+    vi.mocked(setMaxWorkers).mockResolvedValue(10);
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    const cap = screen.getByLabelText("Worker Registry Cap");
+    await user.clear(cap);
+    await user.type(cap, "12{Enter}");
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith("Worker Registry Cap Set To 10"),
+    );
+    expect(cap).toHaveValue(10);
+  });
+
   it("rolls the shown cap back when the backend refuses it", async () => {
     const user = userEvent.setup();
     vi.mocked(setMaxWorkers).mockRejectedValue(new Error("refused"));
