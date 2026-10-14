@@ -6,7 +6,6 @@ import * as z from "zod";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
-import { useMaxWorkersSync } from "#hooks/useMaxWorkersSync";
 import { type AlertThresholds, alertThresholdsAtom } from "#lib/alerts";
 import { ANTHROPIC_API_KEY_CONFIG_KEY } from "#lib/anthropic-config";
 import { errorMessage } from "#lib/is-error";
@@ -32,6 +31,8 @@ import {
   agentConcurrencySyncAtom,
   appSettingsAtom,
   keybindingsAtom,
+  maxWorkersAtom,
+  maxWorkersSyncAtom,
   selectedModelAtom,
   themeAtom,
 } from "#store/ui";
@@ -688,16 +689,17 @@ export function Settings(): React.ReactElement {
   };
 
   // ── Worker registry cap (backend-persisted via set_max_workers) ──
-  const maxWorkers = useMaxWorkersSync();
+  const [shownMaxWorkers, setShownMaxWorkers] = useAtom(maxWorkersAtom);
+  const maxWorkersSync = useAtomValue(maxWorkersSyncAtom);
   const maxWorkersFeedback =
-    maxWorkers.sync.status === "pending" ? (
+    maxWorkersSync.status === "pending" ? (
       <p role="status" className="mt-1 text-xs text-fg-dim">
         Applying…
       </p>
-    ) : maxWorkers.sync.status === "failed" ? (
+    ) : maxWorkersSync.status === "failed" ? (
       <div role="alert" className="mt-1 flex items-center gap-2 text-xs text-rose">
-        <span>{`Could Not Apply ${maxWorkers.sync.requested} Workers — ${maxWorkers.sync.message}`}</span>
-        <Button variant="ghost" size="sm" onClick={maxWorkers.sync.retry}>
+        <span>{`Could Not Apply ${maxWorkersSync.requested} Workers — ${maxWorkersSync.message}`}</span>
+        <Button variant="ghost" size="sm" onClick={maxWorkersSync.retry}>
           Retry
         </Button>
       </div>
@@ -813,9 +815,9 @@ export function Settings(): React.ReactElement {
             unit="Workers"
             min={1}
             max={256}
-            value={maxWorkers.shown}
-            onChange={maxWorkers.commit}
-            busy={maxWorkers.sync.status === "pending"}
+            value={shownMaxWorkers}
+            onChange={setShownMaxWorkers}
+            busy={maxWorkersSync.status === "pending"}
             feedback={maxWorkersFeedback}
           />
         </div>

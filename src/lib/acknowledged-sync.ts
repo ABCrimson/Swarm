@@ -67,9 +67,9 @@ export interface AcknowledgedSyncOptions {
  *   startup, so `apply` pushes only a CHANGE made during this launch.
  *   Comparing against the last pushed value, rather than "has the effect
  *   run before", keeps StrictMode's extra effect run from pushing.
- *   `push` also shows the value and sends unconditionally, for a field
- *   that holds no value of its own (the Worker Registry Cap) or whose shown
- *   value may not be what the backend holds.
+ *   `push` also shows the value and sends unconditionally, for a push the
+ *   field did not make (launch reconciliation overwriting a backend value
+ *   the field cannot show).
  * - A rejected or timed-out push rolls the field back to the last
  *   acknowledged value without pushing the rollback, and offers Retry.
  * - The backend's reply is authoritative: a push resolves to the cap in
