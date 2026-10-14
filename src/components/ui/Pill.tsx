@@ -1,5 +1,5 @@
 export type PillTone = "neutral" | "info" | "success" | "warning" | "danger";
-export type PillSize = "sm" | "md";
+type PillSize = "sm" | "md";
 
 interface PillOwnProps {
   /** Semantic color — distinct from decorative/categorical accent colors, which stay as an inline `style` override. */
