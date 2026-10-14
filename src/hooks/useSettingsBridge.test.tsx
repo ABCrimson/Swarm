@@ -161,6 +161,7 @@ describe("useSettingsBridge — agent concurrency acknowledgement", () => {
         status: "failed",
         requested: 9,
         message: "limit out of range",
+        retry: expect.any(Function),
       }),
     );
     expect(limit()).toBe(DEFAULT_LIMIT);
@@ -234,6 +235,32 @@ describe("useSettingsBridge — agent concurrency acknowledgement", () => {
     expect(store.get(agentConcurrencySyncAtom)).toStrictEqual({ status: "idle" });
     expect(limit()).toBe(9);
     expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+describe("useSettingsBridge — Retry of the acknowledged value", () => {
+  it("pushes again even when the failed value is the one the field already shows", async () => {
+    using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const hung = Promise.withResolvers<void>();
+    mockSetAgentConcurrency
+      .mockReturnValueOnce(hung.promise)
+      .mockRejectedValueOnce(new Error("disk full"));
+    renderHook(() => useSettingsBridge());
+
+    setLimit(8);
+    setLimit(DEFAULT_LIMIT);
+    await vi.waitFor(() => expect(store.get(agentConcurrencySyncAtom).status).toBe("failed"));
+    expect(limit()).toBe(DEFAULT_LIMIT);
+
+    const sync = store.get(agentConcurrencySyncAtom);
+    if (sync.status !== "failed") throw new Error("expected a failed sync");
+    await act(async () => sync.retry());
+
+    expect(mockSetAgentConcurrency.mock.calls).toStrictEqual([
+      [8],
+      [DEFAULT_LIMIT],
+      [DEFAULT_LIMIT],
+    ]);
   });
 });
 

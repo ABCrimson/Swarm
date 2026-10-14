@@ -101,11 +101,16 @@ function createAgentConcurrencySync(store: Store) {
   const fail = (requested: number, message: string): void => {
     pushed = acknowledged;
     showLimit(acknowledged);
-    store.set(agentConcurrencySyncAtom, { status: "failed", requested, message });
+    const retry = (): void => {
+      pushed = requested;
+      start(requested);
+      showLimit(requested);
+    };
+    store.set(agentConcurrencySyncAtom, { status: "failed", requested, message, retry });
     toast.error("Agent Concurrency Not Applied", {
       id: AGENT_CONCURRENCY_TOAST_ID,
       description: message,
-      action: { label: "Retry", onClick: () => showLimit(requested) },
+      action: { label: "Retry", onClick: retry },
     });
   };
 

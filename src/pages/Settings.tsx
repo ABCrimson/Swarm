@@ -641,11 +641,7 @@ export function Settings(): React.ReactElement {
     ) : agentConcurrencySync.status === "failed" ? (
       <div role="alert" className="mt-1 flex items-center gap-2 text-xs text-rose">
         <span>{`Could Not Apply ${agentConcurrencySync.requested} Streams — ${agentConcurrencySync.message}`}</span>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => patchSettings({ aiConcurrentLimit: agentConcurrencySync.requested })}
-        >
+        <Button variant="ghost" size="sm" onClick={agentConcurrencySync.retry}>
           Retry
         </Button>
       </div>

@@ -68,7 +68,13 @@ export const causalityInspectorAtom = atom<{ readonly startSeq: number } | null>
 export type AgentConcurrencySync =
   | { readonly status: "idle" }
   | { readonly status: "pending"; readonly requested: number }
-  | { readonly status: "failed"; readonly requested: number; readonly message: string };
+  | {
+      readonly status: "failed";
+      readonly requested: number;
+      readonly message: string;
+      /** Pushes `requested` again, even when the field already shows it. */
+      readonly retry: () => void;
+    };
 
 export const agentConcurrencySyncAtom = atom<AgentConcurrencySync>({ status: "idle" });
 
