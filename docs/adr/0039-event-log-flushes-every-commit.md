@@ -38,7 +38,7 @@ reproduction command in [Event Log Persistence](../performance.md#event-log-pers
 | ext4 on the WSL2 VHD | 23-32k events/s, p50 about 7 µs | about 470-510 events/s, p50 about 2 ms, p99 5-6 ms, max up to 72 ms |
 | `C:\` through 9p | 174-381 events/s, p50 2.3-3.1 ms | 229-260 events/s, p50 3.4-4.1 ms |
 
-Native Windows NTFS and macOS (`F_FULLFSYNC`) are unmeasured; expect macOS well above the ext4 figure.
+The native filesystems were measured on GitHub-hosted runners on 2026-10-14 (see the amendment at the end): APFS p50 0.75 ms and NTFS p50 3.37 ms at EXTRA.
 
 ## Decision
 
@@ -63,10 +63,9 @@ Alternatives:
 - **EXTRA with `fullfsync`.** Chosen. The measured cost equals FULL's in WAL mode.
 - **Group commit under FULL/EXTRA.** The writer drains every queued command, appends its persistent
   events in one transaction (one flush), then emits them in seq order: the same guarantee, and a burst of
-  N costs one flush. Not done here. Open follow-up: measure
-  `measure_append_throughput_by_synchronous_level` on macOS (APFS, `F_FULLFSYNC`) and on native Windows
-  NTFS before the next release that contains this change. If either shows a p50 per commit above 5 ms,
-  group commit blocks that release.
+  N costs one flush. Not done here. The gate for adding it: a p50 per
+  commit above 5 ms on macOS (APFS, `F_FULLFSYNC`) or native Windows NTFS. It was not reached (see the
+  last amendment).
 
 ## Consequences
 
@@ -119,3 +118,19 @@ test above, and `test_sigterm_shuts_down_gracefully_and_releases_the_lock` in `s
 tests, which counts every `session_created` a `SIGTERM` interrupted.
 
 See [Ordered Event Core](../architecture.md#ordered-event-core).
+
+## Amendment (2026-10-14): the flush cost on APFS and NTFS is under the 5 ms gate
+
+`measure_append_throughput_by_synchronous_level` (3000 appends of a 392-byte payload, test profile) ran on
+GitHub-hosted runners on 2026-10-14, one run per platform. At the shipped `synchronous=EXTRA` the p50 per
+commit is 749 µs on APFS (`macos-26`, macOS 26.6.2, 1217 events/s, p99 2.61 ms) and 3.37 ms on NTFS
+(`windows-2025`, Windows 10.0.26100.33438, 259 events/s, p99 10.0 ms). Both are under the 5 ms gate, so
+group commit is not required by this decision. FULL measured 816 µs on APFS and 3.45 ms on NTFS; on macOS
+EXTRA measured faster than FULL, which is run-to-run noise. The table and method are in
+[docs/performance.md](../performance.md#event-log-persistence).
+
+These are virtual machines, not the maintainer's hardware. The Linux control runner measured about 9 µs
+at every level, so its virtual disk does not honor fsync as a physical disk does; the macOS and Windows
+figures therefore bound the platform's caching behavior and are not guarantees for a given laptop. The NTFS
+figure leaves 1.6 ms of headroom under the gate, and the earlier indirect CI estimate (about 6 ms per
+event, a mean over a shutdown drain) was a mean on a loaded VM, not a p50.

@@ -13,8 +13,9 @@
 // The build fails rather than publish a page that drifted: a placeholder that
 // is missing or repeated, a nav that does not list every page, a heading link
 // to an anchor that does not exist, unrendered emphasis, a landing-page doc
-// card whose title is not its page's H1, a "proposed next version" that is
-// already released, a missing asset, an element, url(), image-set() or
+// card whose title is not its page's H1, a CHANGELOG.md with no [Unreleased]
+// section, a "proposed next version" that is repeated, not newer than the
+// release or already released, a missing asset, an element, url(), image-set() or
 // @import that would load from an absolute or protocol-relative URL (see
 // checkNoExternalResources, a best-effort drift scan; the page's
 // Content-Security-Policy is what blocks a cross-origin load), a page whose
@@ -526,8 +527,10 @@ function checkDocCards(index: string, titles: Map<string, string>, file: string)
 
 /**
  * The latest release: package.json's version, dated by its CHANGELOG.md
- * heading. Also checks the landing page's proposed next version (its one
- * `<data value>`) is newer than that release and not yet a CHANGELOG release.
+ * heading. CHANGELOG.md must keep an `## [Unreleased]` section, which the hero
+ * links to. The landing page may carry one `<data value>` naming a proposed
+ * next version: it is optional, more than one is an error, and a present one
+ * must be newer than the release and not yet a CHANGELOG release.
  */
 function latestRelease(index: string, file: string): string {
   const changelog = read(join(root, "CHANGELOG.md"));
@@ -539,29 +542,31 @@ function latestRelease(index: string, file: string): string {
       `CHANGELOG.md: no "## [${version}] - YYYY-MM-DD" heading for package.json's version`,
     );
   }
+  if (!/^## \[Unreleased\](?:\([^)]*\))?[ \t]*$/m.test(changelog)) {
+    throw new Error(`CHANGELOG.md: no [Unreleased] section, which ${file} links to`);
+  }
   const proposed = [...index.matchAll(/<data value="(\d+\.\d+\.\d+)">/g)].map(
     (m) => m[1] as string,
   );
-  if (proposed.length !== 1) {
+  if (proposed.length > 1) {
     throw new Error(
-      `${file}: expected exactly one <data value="x.y.z"> next version, found ${proposed.length}`,
+      `${file}: expected at most one <data value="x.y.z"> next version, found ${proposed.length}`,
     );
   }
-  const [nextVersion = ""] = proposed;
-  if (compareVersions(nextVersion, version) <= 0) {
-    throw new Error(
-      `${file}: proposed version ${nextVersion} is not newer than the release ${version}`,
-    );
-  }
-  // Any release heading counts, with or without a leading v or a date.
-  const released = [...changelog.matchAll(/^## \[?v?(\d+\.\d+\.\d+)\b/gm)].map((m) => m[1]);
-  if (
-    !/^## \[Unreleased\](?:\([^)]*\))?[ \t]*$/m.test(changelog) ||
-    released.includes(nextVersion)
-  ) {
-    throw new Error(
-      `${file}: the hero says ${nextVersion} is unreleased work, but CHANGELOG.md has no [Unreleased] section or already releases it`,
-    );
+  const [nextVersion] = proposed;
+  if (nextVersion !== undefined) {
+    if (compareVersions(nextVersion, version) <= 0) {
+      throw new Error(
+        `${file}: proposed version ${nextVersion} is not newer than the release ${version}`,
+      );
+    }
+    // Any release heading counts, with or without a leading v or a date.
+    const released = [...changelog.matchAll(/^## \[?v?(\d+\.\d+\.\d+)\b/gm)].map((m) => m[1]);
+    if (released.includes(nextVersion)) {
+      throw new Error(
+        `${file}: the hero says ${nextVersion} is unreleased work, but CHANGELOG.md already releases it`,
+      );
+    }
   }
   const tag = `v${escapeHtml(version)}`;
   return `<a href="${REPO}/releases/tag/${tag}">${tag}</a>, published <time datetime="${date}">${date}</time>`;

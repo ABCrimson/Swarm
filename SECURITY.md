@@ -4,8 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.13.x  | :white_check_mark: |
-| < 0.13  | :x:                |
+| 0.14.x  | :white_check_mark: |
+| < 0.14  | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -52,5 +52,5 @@ We will acknowledge receipt within 48 hours and provide a detailed response with
 
 ## Known Gaps / In Progress
 
-- **The in-app updater only checks.** `check_for_updates` asks the endpoint whether a newer release exists and never downloads or installs it, so the signature and signed-version checks on download have not yet been exercised by a real in-app update. Releases (v0.13.0, v0.13.1) are signed and their `latest.json` is verified per release in CI; installing a new version means downloading it from the release page.
+- **The in-app updater only checks.** `check_for_updates` asks the endpoint whether a newer release exists and never downloads or installs it, so the signature and signed-version checks on download have not yet been exercised by a real in-app update. Each release is signed, and the release workflow verifies its `latest.json` (signatures, versions and provenance) on the draft release; installing a new version means downloading it from the release page.
 - **An approved `run_command` runs with your privileges.** Approval shows the exact command, but the command is not sandboxed: Allow For Session lets the same command on the same worker run again without a prompt.

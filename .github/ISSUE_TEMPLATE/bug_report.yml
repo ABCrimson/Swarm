@@ -9,7 +9,7 @@ body:
       description: >-
         The desktop app shows it under Settings → About; the daemon prints it
         with `swarmd --version`.
-      placeholder: "0.13.1"
+      placeholder: "0.14.0"
     validations:
       required: true
   - type: dropdown

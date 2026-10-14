@@ -82,7 +82,7 @@ The desktop process builds one multi-threaded Tokio runtime (`install_async_runt
 
 The ordered-event writer commits each persistent event as its own autocommit `INSERT` (`OrchestrationEngine::persist` -> `EventLog::append`) plus one seq-block reservation per 1024 seqs, all on the single `swarm-event-writer` thread. The log runs `synchronous=EXTRA` with `fullfsync=1` in WAL mode ([ADR-0039](adr/0039-event-log-flushes-every-commit.md)); in WAL mode EXTRA is FULL, so every commit waits for a sync of the `-wal` file (on macOS an `F_FULLFSYNC`). That wait, not SQLite's CPU work, bounds the writer's persistent-event rate and sets the latency of a persistent event. Ephemeral events are not stored, but they share the writer's FIFO, so a terminal-output or delta event queued behind a persistent one waits for that event's flush (about 2 ms on the measured disk; a burst of N persistent events delays them about N x 2 ms, more when a commit triggers a WAL checkpoint).
 
-Measured 2026-10-13 with `measure_append_throughput_by_synchronous_level` (3000 appends of a 392-byte `agent_tool_call` payload, one per transaction, reservations every 1024 seqs; `agent_tool_result` content is unbounded, so larger events cost more; `open` sets EXTRA, and the test lowers or raises the level on the connection only for the comparison). Three runs per row (EXTRA: two, within run-to-run noise of FULL); events/s is the per-run rate, latencies are per-append p50 / p99.
+The first three row groups were measured 2026-10-13 with `measure_append_throughput_by_synchronous_level` (3000 appends of a 392-byte `agent_tool_call` payload, one per transaction, reservations every 1024 seqs; `agent_tool_result` content is unbounded, so larger events cost more; `open` sets EXTRA, and the test lowers or raises the level on the connection only for the comparison). Three runs per row (EXTRA: two, within run-to-run noise of FULL); events/s is the per-run rate, latencies are per-append p50 / p99. The macOS, Windows and Linux rows are one run each on 2026-10-14, the ignored test run on GitHub-hosted runners (test profile, the command under Reproduce, `TMPDIR` left at the runner default), with all three levels measured in that run.
 
 | Directory (filesystem) | `synchronous` | events/s (3 runs) | p50 | p99 |
 |------------------------|---------------|-------------------|-----|-----|
@@ -91,14 +91,21 @@ Measured 2026-10-13 with `measure_append_throughput_by_synchronous_level` (3000 
 | `/root/swarm-bench` (ext4 on a WSL2 VHD) | EXTRA (parity check, 2 runs) | 463, 492 | 2.2-2.4 ms | 5.4-5.6 ms |
 | `C:\` through WSL2 9p (`/mnt/c`) | NORMAL | 247, 174, 381 | 2.3-3.1 ms | 6.2-48.5 ms |
 | `C:\` through WSL2 9p (`/mnt/c`) | FULL | 230, 229, 260 | 3.4-4.1 ms | 9.0-13.8 ms |
+| `TMPDIR` under `/var/folders` (APFS, GitHub-hosted `macos-26`, macOS 26.6.2) | NORMAL | 39657 | 11.75 µs | 50.3 µs |
+| `TMPDIR` under `/var/folders` (APFS, GitHub-hosted `macos-26`, macOS 26.6.2) | FULL | 933 | 816 µs | 8.17 ms |
+| `TMPDIR` under `/var/folders` (APFS, GitHub-hosted `macos-26`, macOS 26.6.2) | EXTRA | 1217 | 749 µs | 2.61 ms |
+| `C:\Users\RUNNER~1\AppData\Local\Temp` (NTFS, GitHub-hosted `windows-2025`, Windows 10.0.26100.33438) | NORMAL | 2823 | 19.5 µs | 122 µs |
+| `C:\Users\RUNNER~1\AppData\Local\Temp` (NTFS, GitHub-hosted `windows-2025`, Windows 10.0.26100.33438) | FULL | 251 | 3.45 ms | 12.1 ms |
+| `C:\Users\RUNNER~1\AppData\Local\Temp` (NTFS, GitHub-hosted `windows-2025`, Windows 10.0.26100.33438) | EXTRA | 259 | 3.37 ms | 10.0 ms |
+| `/tmp` (GitHub-hosted `ubuntu-26.04`, Ubuntu 26.04.1 LTS; control) | NORMAL / FULL / EXTRA | 91143 / 91067 / 91443 | 9.0 / 9.2 / 9.2 µs | 24.2 / 22.2 / 22.3 µs |
 
-The slowest single append (`max`) was 8-72 ms on ext4 and up to 976 ms through 9p, so a flush occasionally stalls the writer far beyond the median.
+The slowest single append (`max`) was 8-72 ms on ext4 and up to 976 ms through 9p, so a flush occasionally stalls the writer far beyond the median. On the runners it was 13.7-38.2 ms on APFS and 25.1-35.8 ms on NTFS at FULL and EXTRA.
 
-Reading the numbers: on the ext4 VHD, FULL (EXTRA measured the same, as SQLite documents for WAL) costs about 2 ms per persistent event (a ceiling near 500 events/s, roughly 60x below NORMAL). Through 9p the per-operation cost already dominates, so FULL adds about 1 ms at p50 and the rates overlap. A `tmpfs` control (`/tmp`) showed no difference (about 150-178k events/s for both), so a sync-level comparison needs a real disk. WSL numbers are a proxy: the shipped app runs on native Windows NTFS, where the fsync cost is the drive's flush latency, so native Windows NTFS and macOS (`F_FULLFSYNC`; expect well above the ext4 figure) are unmeasured. Re-run the command below there (on Windows once native `cargo test` works, host fact `sac-enforce-flag`).
+Reading the numbers: on the ext4 VHD, FULL (EXTRA measured the same, as SQLite documents for WAL) costs about 2 ms per persistent event (a ceiling near 500 events/s, roughly 60x below NORMAL). Through 9p the per-operation cost already dominates, so FULL adds about 1 ms at p50 and the rates overlap. A `tmpfs` control (`/tmp`) showed no difference (about 150-178k events/s for both), so a sync-level comparison needs a real disk. WSL numbers are a proxy for the shipped app, which runs on native Windows NTFS and macOS. The runner rows measure those filesystems: at the shipped `EXTRA` the p50 per commit is 0.75 ms on APFS (`F_FULLFSYNC`) and 3.37 ms on NTFS, both under the 5 ms gate of [ADR-0039](adr/0039-event-log-flushes-every-commit.md). Read them as upper bounds on the platform's caching behavior, not as guarantees for a given machine: they are GitHub-hosted virtual machines, and the Linux control's flat 9 µs at every level shows that runner's virtual disk does not honor fsync as a physical disk does. On macOS EXTRA measured faster than FULL, which is run-to-run noise. A burst of N persistent events delays queued ephemeral events by about N x 3.4 ms on NTFS.
 
-Machine: Intel Core Ultra 9 290HX Plus, 24 CPUs, 70 GiB RAM visible to WSL (`free -g`), WSL2 kernel `6.18.54.1-microsoft-standard-WSL2`, Ubuntu-26.04, bundled SQLite from `libsqlite3-sys` 0.38.2 (`rusqlite` 0.40.2).
+The WSL2 rows ran on this machine: Intel Core Ultra 9 290HX Plus, 24 CPUs, 70 GiB RAM visible to WSL (`free -g`), WSL2 kernel `6.18.54.1-microsoft-standard-WSL2`, Ubuntu-26.04, bundled SQLite from `libsqlite3-sys` 0.38.2 (`rusqlite` 0.40.2).
 
-Reproduce (the test prints, it asserts nothing; point `TMPDIR` at the filesystem under test):
+Reproduce (the test prints, it asserts nothing; point `TMPDIR` at the filesystem under test; the runner rows used the runner's default temp directory):
 
 ```bash
 TMPDIR=/path/on/the/disk/under/test \
