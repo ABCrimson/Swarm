@@ -1,6 +1,7 @@
 // @vitest-environment node
-// WebKit's `Error.isError` returns false for a DOMException (WebKit bug
-// 292727); the error mapper must keep its message. Node environment:
+// WebKit before 318930@main (https://webkit.org/b/321064), which includes the
+// WebKit 18.4 floor (ADR-0037), returns false from `Error.isError` for a
+// DOMException; the error mapper must keep its message. Node environment:
 // jsdom's DOMException belongs to a different realm than `Error`.
 
 import { describe, expect, it, vi } from "vitest";
