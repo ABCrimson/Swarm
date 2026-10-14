@@ -233,6 +233,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends minisign
 
+      # The manifest is data the token must not follow: prove the URL
+      # allowlist holds before the script runs with the token.
+      - name: Test the manifest verifier
+        run: bash .github/scripts/verify-updater-manifest.test.sh
+
       - name: Verify latest.json signatures, versions and provenance
         env:
           GH_TOKEN: ${{ github.token }}
