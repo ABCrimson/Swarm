@@ -1,0 +1,1152 @@
+/*
+ * The one stylesheet for the landing page and every docs page.
+ * scripts/build-site.ts copies it into dist-site/ and fails if it is missing.
+ * Colors are OKLCH only; light-dark() themes every token from one place.
+ */
+
+@layer reset, tokens, base, layout, components, diagram, motion, print;
+
+/* --flow drives every connector in the diagram at once. Its initial value is
+   1 (fully drawn), so a browser that never runs the scroll animation shows the
+   finished diagram. */
+@property --flow {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+
+@layer reset {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  body,
+  h1,
+  h2,
+  h3,
+  h4,
+  p,
+  figure,
+  dl,
+  dd,
+  blockquote,
+  pre {
+    margin: 0;
+  }
+
+  img,
+  svg {
+    display: block;
+    max-inline-size: 100%;
+  }
+}
+
+@layer tokens {
+  :root {
+    color-scheme: light dark;
+
+    /* Ground and surfaces: the indigo-navy of the favicon tile in dark mode,
+       a cool paper in light mode. */
+    --bg: light-dark(oklch(0.975 0.007 266), oklch(0.165 0.028 266));
+    --surface: light-dark(oklch(0.995 0.002 266), oklch(0.215 0.03 266));
+    --sunken: light-dark(oklch(0.945 0.01 266), oklch(0.135 0.024 266));
+    --ink: light-dark(oklch(0.24 0.035 266), oklch(0.95 0.012 266));
+    --ink-2: light-dark(oklch(0.43 0.035 266), oklch(0.8 0.025 266));
+    --line: light-dark(oklch(0.88 0.015 266), oklch(0.34 0.03 266));
+    --line-strong: light-dark(oklch(0.58 0.03 266), oklch(0.6 0.03 266));
+
+    /* Amber marks what runs outside SWARM's own process and doubles as the
+       link color; cyan marks the ordered event log. */
+    --amber: light-dark(oklch(0.5 0.105 65), oklch(0.83 0.13 82));
+    --cyan: light-dark(oklch(0.47 0.08 215), oklch(0.82 0.1 205));
+    --on-amber: light-dark(oklch(0.99 0.004 85), oklch(0.2 0.04 266));
+    --focus: var(--amber);
+    --selection: light-dark(oklch(0.88 0.08 82), oklch(0.42 0.08 82));
+    --header-bg: light-dark(oklch(0.975 0.007 266 / 0.9), oklch(0.165 0.028 266 / 0.88));
+
+    /* GitHub alert kinds, one accent each, used for the callout's edge and
+       its label text. */
+    --alert-note: light-dark(oklch(0.48 0.12 255), oklch(0.78 0.11 255));
+    --alert-tip: light-dark(oklch(0.48 0.1 150), oklch(0.8 0.13 150));
+    --alert-important: light-dark(oklch(0.48 0.15 300), oklch(0.78 0.12 300));
+    --alert-warning: light-dark(oklch(0.5 0.105 65), oklch(0.83 0.13 82));
+    --alert-caution: light-dark(oklch(0.5 0.16 25), oklch(0.75 0.14 25));
+
+    --sans: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+
+    /* A major-third scale on a 17px body. */
+    --step-0: 1.0625rem;
+    --step-1: 1.25rem;
+    --step-2: 1.5625rem;
+    --step-3: clamp(1.75rem, 1.4rem + 1.6vw, 2.4rem);
+    --step-4: clamp(2.25rem, 1.5rem + 3.6vw, 4rem);
+
+    --gutter: clamp(1rem, 0.6rem + 2vw, 2rem);
+    --radius: 0.625rem;
+    --page: 72rem;
+  }
+
+  /* light-dark() is newer than the rest of this sheet. Where it is missing,
+     every token above is invalid and the page would lose its colors (an
+     unlit diagram, no focus ring), so those browsers get the light scheme
+     outright. Keep these values identical to the light branches above. */
+  @supports not (color: light-dark(oklch(0 0 0), oklch(1 0 0))) {
+    :root {
+      color-scheme: light;
+      --bg: oklch(0.975 0.007 266);
+      --surface: oklch(0.995 0.002 266);
+      --sunken: oklch(0.945 0.01 266);
+      --ink: oklch(0.24 0.035 266);
+      --ink-2: oklch(0.43 0.035 266);
+      --line: oklch(0.88 0.015 266);
+      --line-strong: oklch(0.58 0.03 266);
+      --amber: oklch(0.5 0.105 65);
+      --cyan: oklch(0.47 0.08 215);
+      --on-amber: oklch(0.99 0.004 85);
+      --selection: oklch(0.88 0.08 82);
+      --header-bg: oklch(0.975 0.007 266 / 0.9);
+      --alert-note: oklch(0.48 0.12 255);
+      --alert-tip: oklch(0.48 0.1 150);
+      --alert-important: oklch(0.48 0.15 300);
+      --alert-warning: oklch(0.5 0.105 65);
+      --alert-caution: oklch(0.5 0.16 25);
+    }
+  }
+}
+
+@layer base {
+  html {
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 var(--step-0) / 1.6 var(--sans);
+    -webkit-text-size-adjust: none;
+    text-size-adjust: none;
+    scroll-padding-block-start: 5rem;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+
+  body {
+    min-block-size: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow-wrap: break-word;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    line-height: 1.15;
+    text-wrap: balance;
+    font-weight: 720;
+    letter-spacing: -0.015em;
+  }
+
+  p,
+  li,
+  dd,
+  figcaption {
+    text-wrap: pretty;
+  }
+
+  a {
+    color: var(--amber);
+    text-decoration-thickness: 0.08em;
+    text-underline-offset: 0.2em;
+
+    &:hover {
+      text-decoration-thickness: 0.14em;
+    }
+  }
+
+  :focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 3px;
+    border-radius: 0.25rem;
+  }
+
+  code,
+  kbd,
+  pre {
+    font-family: var(--mono);
+    font-size: 0.875em;
+  }
+
+  ::selection {
+    background: var(--selection);
+    color: var(--ink);
+  }
+}
+
+@layer layout {
+  .skip {
+    position: absolute;
+    inset-inline-start: var(--gutter);
+    inset-block-start: 0.5rem;
+    z-index: 100;
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius);
+    background: var(--amber);
+    color: var(--on-amber);
+    font-weight: 650;
+    translate: 0 -200%;
+
+    &:focus-visible {
+      translate: 0 0;
+    }
+  }
+
+  .site-header {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 50;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1.5rem;
+    padding: 0.75rem var(--gutter);
+    background: var(--header-bg);
+    backdrop-filter: blur(12px);
+    border-block-end: 1px solid var(--line);
+    view-transition-name: site-header;
+
+    /* While sticky, the header is one row whatever the font: the nav scrolls
+       sideways instead of wrapping. One row is about 3.6rem tall, so the
+       5rem scroll padding keeps every anchor target below it. */
+    @media (width >= 48rem) {
+      flex-wrap: nowrap;
+    }
+
+    /* On a phone the nav wraps, and a sticky wrapped header would cover a
+       third of the screen, so it scrolls away with the page. */
+    @media (width < 48rem) {
+      position: static;
+    }
+  }
+
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-shrink: 0;
+    color: var(--ink);
+    font-weight: 760;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    text-decoration: none;
+
+    & img {
+      inline-size: 1.75rem;
+      block-size: 1.75rem;
+    }
+  }
+
+  .nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.125rem 0.25rem;
+    margin-inline-start: auto;
+
+    @media (width >= 48rem) {
+      flex-wrap: nowrap;
+      min-inline-size: 0;
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
+      scrollbar-width: thin;
+    }
+
+    & a {
+      padding: 0.3rem 0.6rem;
+      border-radius: 0.4rem;
+      color: var(--ink-2);
+      font-size: 0.9rem;
+      white-space: nowrap;
+      text-decoration: none;
+
+      /* The scrolling nav clips anything drawn outside it, so the ring sits
+         inside the link. */
+      &:focus-visible {
+        outline-offset: -3px;
+      }
+
+      &:hover {
+        color: var(--ink);
+        background: var(--sunken);
+      }
+
+      &[aria-current="page"] {
+        color: var(--ink);
+        background: var(--surface);
+        box-shadow: inset 0 -2px 0 var(--amber);
+      }
+    }
+  }
+
+  main {
+    flex: 1;
+    inline-size: 100%;
+    max-inline-size: var(--page);
+    margin-inline: auto;
+    padding: clamp(2rem, 1rem + 4vw, 4.5rem) var(--gutter) 4rem;
+  }
+
+  .site-footer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.5rem 2rem;
+    padding: 1.5rem var(--gutter) 2rem;
+    border-block-start: 1px solid var(--line);
+    color: var(--ink-2);
+    font-size: 0.9rem;
+
+    & a {
+      color: inherit;
+    }
+  }
+}
+
+@layer components {
+  /* ---- Landing page ---- */
+
+  .hero {
+    display: grid;
+    gap: 1.5rem;
+    padding-block-end: clamp(2rem, 1rem + 4vw, 4rem);
+
+    & h1 {
+      font-size: var(--step-4);
+      font-weight: 780;
+      letter-spacing: -0.035em;
+      line-height: 1.02;
+    }
+  }
+
+  .lede {
+    max-inline-size: 62ch;
+    color: var(--ink-2);
+    font-size: var(--step-1);
+    line-height: 1.5;
+  }
+
+  /* The release line: what is published, and what main holds beyond it. */
+  .release {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 0.6rem 1.25rem;
+    max-inline-size: 48rem;
+    padding: 1rem 1.25rem;
+    border: 1px solid var(--line);
+    border-inline-start: 3px solid var(--amber);
+    border-radius: var(--radius);
+    background: var(--surface);
+
+    & dt {
+      color: var(--ink-2);
+      font-weight: 600;
+    }
+
+    & dd {
+      color: var(--ink);
+    }
+
+    @media (width < 30rem) {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0.15rem;
+
+      & dd + dt {
+        margin-block-start: 0.6rem;
+      }
+    }
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+
+    & a {
+      display: inline-flex;
+      align-items: center;
+      min-block-size: 2.75rem;
+      padding: 0.5rem 1.1rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--line-strong);
+      color: var(--ink);
+      font-weight: 600;
+      text-decoration: none;
+
+      &:hover {
+        background: var(--surface);
+      }
+
+      &.primary {
+        border-color: var(--amber);
+        background: var(--amber);
+        color: var(--on-amber);
+      }
+    }
+  }
+
+  .section {
+    padding-block: clamp(2rem, 1rem + 3vw, 3.5rem);
+    border-block-start: 1px solid var(--line);
+
+    & > h2 {
+      font-size: var(--step-3);
+      letter-spacing: -0.025em;
+      margin-block-end: 0.75rem;
+    }
+
+    & > p {
+      max-inline-size: 68ch;
+      color: var(--ink-2);
+      margin-block-end: 1.75rem;
+    }
+  }
+
+  .claims,
+  .doc-list {
+    container: claims / inline-size;
+  }
+
+  .claims > ul,
+  .doc-list > ul {
+    display: grid;
+    gap: 1rem;
+    padding: 0;
+    margin: 0;
+    list-style: none;
+  }
+
+  @container claims (width >= 36rem) {
+    .claims > ul,
+    .doc-list > ul {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @container claims (width >= 60rem) {
+    .claims > ul {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  .claim {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 1.15rem 1.25rem 1rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+
+    & h3 {
+      font-size: var(--step-1);
+    }
+
+    & p {
+      color: var(--ink-2);
+    }
+
+    & .source {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.35rem 0.75rem;
+      margin-block-start: auto;
+      padding-block-start: 0.4rem;
+      font-size: 0.9rem;
+    }
+  }
+
+  .tag {
+    padding: 0.05rem 0.5rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    color: var(--ink-2);
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .doc-list a {
+    display: block;
+    block-size: 100%;
+    padding: 1rem 1.25rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    color: var(--ink);
+    text-decoration: none;
+
+    & strong {
+      display: block;
+      font-size: var(--step-1);
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: var(--amber);
+      text-decoration: underline;
+      text-decoration-color: transparent;
+      text-underline-offset: 0.2em;
+    }
+
+    & span {
+      display: block;
+      margin-block-start: 0.35rem;
+      color: var(--ink-2);
+    }
+
+    &:hover {
+      background: var(--surface);
+
+      & strong {
+        text-decoration-color: currentColor;
+      }
+    }
+  }
+
+  .project-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.75rem;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* ---- Docs pages ---- */
+
+  .page {
+    container: page / inline-size;
+  }
+
+  /* minmax(0, 1fr), not the implicit auto track, so a long code line
+     scrolls inside its block instead of widening the page. */
+  .doc-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2rem;
+  }
+
+  @container page (width >= 64rem) {
+    .doc-layout {
+      grid-template-columns: 15rem minmax(0, 1fr);
+      gap: 3.5rem;
+
+      /* A page without h2/h3 has no contents list; the article still takes
+         the reading column. */
+      & > article {
+        grid-column: -2;
+      }
+    }
+
+    .toc {
+      position: sticky;
+      inset-block-start: 5rem;
+      align-self: start;
+      max-block-size: calc(100dvh - 6rem);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+  }
+
+  .toc {
+    font-size: 0.9rem;
+
+    & summary {
+      cursor: pointer;
+      color: var(--ink);
+      font-weight: 650;
+      padding-block: 0.25rem;
+    }
+
+    & ol {
+      list-style: none;
+      margin: 0.5rem 0 0;
+      padding: 0;
+      border-inline-start: 1px solid var(--line);
+    }
+
+    & a {
+      display: block;
+      padding: 0.25rem 0 0.25rem 0.9rem;
+      margin-inline-start: -1px;
+      border-inline-start: 2px solid transparent;
+      color: var(--ink-2);
+      line-height: 1.35;
+      text-decoration: none;
+
+      &:hover {
+        color: var(--ink);
+      }
+
+      &[aria-current="true"] {
+        color: var(--ink);
+        border-inline-start-color: var(--amber);
+      }
+
+      /* The list scrolls on a wide page and would clip an outer ring. */
+      &:focus-visible {
+        outline-offset: -3px;
+      }
+    }
+
+    /* biome-ignore lint/style/noDescendingSpecificity: this is .toc ol ol (0,1,2), above .toc ol (0,1,1); Biome scores the nested form without .toc. */
+    & ol ol {
+      margin: 0;
+      border: 0;
+    }
+
+    /* biome-ignore lint/style/noDescendingSpecificity: .toc ol ol a and .actions a never match one element (doc pages vs the landing page). */
+    & ol ol a {
+      padding-inline-start: 1.8rem;
+      font-size: 0.85rem;
+    }
+  }
+
+  /* On a wide page the contents list is always open, so its toggle goes.
+     Only where ::details-content exists can CSS show a closed <details>, so
+     elsewhere the summary stays and the reader opens it. */
+  @supports selector(::details-content) {
+    @container page (width >= 64rem) {
+      .toc details::details-content {
+        content-visibility: visible;
+        block-size: auto;
+      }
+
+      .toc summary {
+        display: none;
+      }
+    }
+  }
+
+  .doc-hero {
+    display: grid;
+    gap: 0.9rem;
+    margin-block-end: 2.5rem;
+
+    & h1 {
+      font-size: var(--step-3);
+      font-weight: 760;
+      letter-spacing: -0.03em;
+    }
+
+    & .dek {
+      max-inline-size: 68ch;
+      color: var(--ink-2);
+      font-size: var(--step-1);
+      line-height: 1.5;
+    }
+  }
+
+  .prose {
+    max-inline-size: 76ch;
+
+    & > * + * {
+      margin-block-start: 1rem;
+    }
+
+    & h2 {
+      font-size: var(--step-2);
+      margin-block-start: 2.75rem;
+    }
+
+    & h3 {
+      font-size: var(--step-1);
+      margin-block-start: 2rem;
+    }
+
+    & h4 {
+      font-size: var(--step-0);
+      margin-block-start: 1.5rem;
+    }
+
+    & ul,
+    & ol {
+      padding-inline-start: 1.4rem;
+    }
+
+    & li + li {
+      margin-block-start: 0.35rem;
+    }
+
+    & li::marker {
+      color: var(--ink-2);
+    }
+
+    & hr {
+      border: 0;
+      border-block-start: 1px solid var(--line);
+      margin-block: 2.5rem;
+    }
+
+    & :not(pre) > code {
+      padding: 0.1em 0.35em;
+      border: 1px solid var(--line);
+      border-radius: 0.3rem;
+      background: var(--sunken);
+      overflow-wrap: anywhere;
+    }
+
+    /* biome-ignore lint/style/noDescendingSpecificity: .prose strong and .doc-list a:hover strong never match one element (doc pages vs the landing page). */
+    & strong {
+      font-weight: 680;
+    }
+  }
+
+  /* A heading and its permalink sit in one row; the link stays outside the
+     heading so the heading's accessible name is only its own text. */
+  .heading {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-block-start: 2.75rem;
+
+    &:has(h3) {
+      margin-block-start: 2rem;
+    }
+
+    & > :is(h2, h3) {
+      margin-block-start: 0;
+    }
+
+    & + * {
+      margin-block-start: 0.75rem;
+    }
+  }
+
+  .anchor {
+    color: var(--ink-2);
+    font-weight: 500;
+    text-decoration: none;
+    opacity: 0;
+
+    .heading:hover & {
+      opacity: 1;
+    }
+
+    /* biome-ignore lint/style/noDescendingSpecificity: .anchor and .toc a are different links, so neither focus rule can override the other. */
+    &:focus-visible {
+      opacity: 1;
+    }
+
+    /* Touch screens have no hover, so the link is always shown there. */
+    @media (hover: none) {
+      opacity: 1;
+    }
+  }
+
+  .legacy-anchor {
+    display: block;
+    block-size: 0;
+  }
+
+  .code {
+    position: relative;
+
+    & pre {
+      padding: 1rem 1.15rem;
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--sunken);
+      line-height: 1.55;
+      tab-size: 2;
+    }
+
+    /* Room above the first line for the Copy button, which is always shown
+       on touch screens and on hover elsewhere. */
+    &:has(.copy) pre {
+      padding-block-start: 2.9rem;
+    }
+  }
+
+  .copy {
+    position: absolute;
+    inset-block-start: 0.45rem;
+    inset-inline-end: 0.45rem;
+    min-block-size: 2rem;
+    padding: 0.2rem 0.65rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 0.4rem;
+    background: var(--surface);
+    color: var(--ink);
+    font: 600 0.8rem / 1 var(--sans);
+    cursor: pointer;
+    opacity: 0;
+
+    .code:hover &,
+    .code:focus-within & {
+      opacity: 1;
+    }
+
+    /* biome-ignore lint/style/noDescendingSpecificity: .copy is a button and .toc a a link, so neither focus rule can override the other. */
+    &:focus-visible {
+      opacity: 1;
+    }
+
+    @media (hover: none) {
+      opacity: 1;
+    }
+  }
+
+  .tablewrap {
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+  }
+
+  table {
+    inline-size: 100%;
+    border-collapse: collapse;
+    font-size: 0.925rem;
+
+    & th {
+      background: var(--surface);
+      text-align: start;
+      font-weight: 650;
+    }
+
+    & th,
+    & td {
+      padding: 0.55rem 0.85rem;
+      border-block-end: 1px solid var(--line);
+      vertical-align: top;
+    }
+
+    & tbody tr:last-child td {
+      border-block-end: 0;
+    }
+  }
+
+  /* A body blockquote is a callout. A GitHub alert (`> [!WARNING]`) keeps its
+     kind as a class and a visible label, so a warning never reads as a note. */
+  .note {
+    --accent: var(--line-strong);
+    padding: 0.85rem 1.1rem;
+    border: 1px solid var(--line);
+    border-inline-start: 3px solid var(--accent);
+    border-radius: var(--radius);
+    background: var(--surface);
+
+    &.alert-note {
+      --accent: var(--alert-note);
+    }
+
+    &.alert-tip {
+      --accent: var(--alert-tip);
+    }
+
+    &.alert-important {
+      --accent: var(--alert-important);
+    }
+
+    &.alert-warning {
+      --accent: var(--alert-warning);
+    }
+
+    &.alert-caution {
+      --accent: var(--alert-caution);
+    }
+
+    & > .alert-label {
+      display: block;
+      margin-block-end: 0.35rem;
+      color: var(--accent);
+      font-weight: 700;
+    }
+  }
+
+  .doc-foot {
+    display: grid;
+    gap: 1.5rem;
+    margin-block-start: 3.5rem;
+    padding-block-start: 1.5rem;
+    border-block-start: 1px solid var(--line);
+    max-inline-size: 76ch;
+  }
+
+  .pager {
+    display: grid;
+    gap: 0.75rem;
+
+    @container page (width >= 40rem) {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    & a {
+      display: grid;
+      gap: 0.15rem;
+      padding: 0.85rem 1.1rem;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      text-decoration: none;
+
+      &:hover {
+        background: var(--surface);
+      }
+    }
+
+    & [rel="next"] {
+      grid-column: -2;
+      text-align: end;
+    }
+
+    & .dir {
+      color: var(--ink-2);
+      font-size: 0.85rem;
+    }
+
+    & .title {
+      font-weight: 650;
+    }
+  }
+
+  .sr-only {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .progress {
+    position: fixed;
+    inset-block-start: 0;
+    inset-inline: 0;
+    z-index: 60;
+    block-size: 3px;
+    background: var(--amber);
+    transform-origin: 0 50%;
+    scale: 0 1;
+    display: none;
+  }
+}
+
+@layer diagram {
+  .arch {
+    container: arch / inline-size;
+    display: grid;
+    gap: 1rem;
+
+    & figcaption {
+      max-inline-size: 68ch;
+      color: var(--ink-2);
+      font-size: 0.95rem;
+    }
+  }
+
+  /* One diagram per width: the wide one (viewBox 960 wide, smallest text
+     13 units) needs 56rem to keep that text at 12px or more; below that the
+     stacked one (viewBox 320 wide, smallest text 12 units) is shown. */
+  .arch-tall {
+    inline-size: 100%;
+    max-inline-size: 26rem;
+  }
+
+  /* Narrower than its 320-unit viewBox, the stacked diagram would shrink its
+     12-unit text below 12px, so it runs into the page gutters instead: on a
+     320px screen it is exactly 320px wide. */
+  @container arch (width < 20rem) {
+    .arch-tall {
+      inline-size: calc(100% + 2 * var(--gutter));
+      max-inline-size: none;
+      margin-inline: calc(-1 * var(--gutter));
+    }
+  }
+
+  .arch-wide {
+    display: none;
+    inline-size: 100%;
+  }
+
+  @container arch (width >= 56rem) {
+    .arch-tall {
+      display: none;
+    }
+
+    .arch-wide {
+      display: block;
+    }
+  }
+
+  .dg {
+    font-family: var(--sans);
+
+    & text {
+      fill: var(--ink);
+    }
+
+    & .t {
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    & .s {
+      fill: var(--ink-2);
+      font-size: 13.5px;
+    }
+
+    & .lbl {
+      fill: var(--ink-2);
+      font-size: 13px;
+    }
+
+    & .box {
+      fill: var(--surface);
+      stroke: var(--line-strong);
+      stroke-width: 1.25;
+    }
+
+    /* The core's boundary is dashed and neutral: cyan is kept for the event
+       log alone, as the caption says. */
+    & .core {
+      fill: var(--sunken);
+      stroke: var(--ink-2);
+      stroke-width: 1.5;
+      stroke-dasharray: 6 5;
+    }
+
+    & .log {
+      stroke: var(--cyan);
+      stroke-width: 2;
+    }
+
+    & .ext {
+      stroke: var(--amber);
+      stroke-width: 2;
+    }
+
+    & .edge {
+      fill: none;
+      stroke: var(--ink-2);
+      stroke-width: 1.5;
+      stroke-dasharray: 1;
+      stroke-dashoffset: calc(1 - var(--flow));
+    }
+
+    & .dot {
+      fill: var(--ink-2);
+      opacity: var(--flow);
+    }
+  }
+
+  .dg-tall {
+    & .t {
+      font-size: 14px;
+    }
+
+    & .s,
+    & .lbl {
+      font-size: 12px;
+    }
+  }
+
+  .key {
+    display: inline-block;
+    inline-size: 0.8em;
+    block-size: 0.8em;
+    margin-inline-end: 0.3em;
+    border: 2px solid;
+    border-radius: 0.15em;
+    vertical-align: -0.05em;
+
+    &.cyan {
+      border-color: var(--cyan);
+    }
+
+    &.amber {
+      border-color: var(--amber);
+    }
+  }
+}
+
+@layer motion {
+  @media (prefers-reduced-motion: no-preference) {
+    @view-transition {
+      navigation: auto;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    .nav a,
+    .actions a,
+    .doc-list a,
+    .pager a,
+    .anchor,
+    .copy {
+      transition:
+        background-color 0.15s,
+        color 0.15s,
+        opacity 0.15s;
+    }
+
+    /* The diagram's connectors draw in as it scrolls into view. */
+    @supports (animation-timeline: view()) {
+      .arch svg {
+        animation: draw linear both;
+        animation-timeline: view();
+        animation-range: entry 10% cover 45%;
+      }
+
+      @keyframes draw {
+        from {
+          --flow: 0;
+        }
+
+        to {
+          /* biome-ignore lint/suspicious/noDuplicateCustomProperties: `from` and `to` are separate keyframe blocks, so --flow is set once in each. */
+          --flow: 1;
+        }
+      }
+    }
+
+    /* The reading progress bar exists only where scroll() can drive it. */
+    @supports (animation-timeline: scroll()) {
+      .progress {
+        display: block;
+        animation: progress linear both;
+        animation-timeline: scroll(root);
+      }
+
+      @keyframes progress {
+        to {
+          scale: 1 1;
+        }
+      }
+    }
+  }
+}
+
+@layer print {
+  @media print {
+    .site-header,
+    .toc,
+    .pager,
+    .copy,
+    .progress,
+    .skip {
+      display: none;
+    }
+
+    .doc-layout {
+      display: block;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    /* Paper has no scroll position, so a half-run draw-in would print a
+       faint diagram; print it fully drawn. */
+    .arch svg {
+      animation: none;
+    }
+  }
+}

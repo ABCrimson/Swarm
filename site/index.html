@@ -1,165 +1,296 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" type="image/svg+xml" href="./favicon.svg">
-<title>SWARM Orchestrator · Documentation</title>
-<meta name="description" content="Documentation for SWARM Orchestrator — multi-agent AI orchestration with isolated worktrees, a single ordered event log, a causal ship chain, and a headless daemon.">
-<style>
-  :root{
-    color-scheme: dark;
-    --bg: oklch(0.145 0.014 265);
-    --card: oklch(0.185 0.016 265);
-    --ink: oklch(0.93 0.01 265);
-    --muted: oklch(from var(--ink) l c h / .60);
-    --faint: oklch(from var(--ink) l c h / .55);
-    --line: oklch(0.96 0.008 265 / .09);
-    --gold: oklch(0.8 0.14 85);
-    --gold-dim: oklch(from var(--gold) l c h / .5);
-    --violet: oklch(0.7 0.15 295);
-    --r: 16px;
-  }
-  *{ box-sizing:border-box; }
-  html{ scrollbar-color: var(--gold-dim) transparent; }
-  @media (prefers-reduced-motion: no-preference){ html{ scroll-behavior:smooth; } }
-  body{ margin:0; background:var(--bg); color:var(--ink);
-    font: clamp(0.95rem,0.9rem + 0.25vw,1.0625rem)/1.65 system-ui,-apple-system,Inter,sans-serif;
-    -webkit-font-smoothing:antialiased; }
-  body::before{ content:""; position:fixed; inset:-30% -10% auto auto; width:70vw; height:70vw; z-index:-1;
-    background: radial-gradient(closest-side, oklch(from var(--gold) l c h / .08), transparent 70%); pointer-events:none; }
-  body::after{ content:""; position:fixed; inset:auto auto -25% -20%; width:60vw; height:60vw; z-index:-1;
-    background: radial-gradient(closest-side, oklch(from var(--violet) l c h / .06), transparent 70%); pointer-events:none; }
-  a{ color:var(--gold); text-underline-offset:3px; }
-  ::selection{ background: oklch(from var(--gold) l c h / .25); }
-  .skip{ position:absolute; left:-999px; top:0; background:var(--gold); color:oklch(0.15 0.02 265); padding:.5rem 1rem; }
-  .skip:focus{ left:0; }
-
-  header.top{ position:sticky; top:0; z-index:50; display:flex; align-items:center; gap:1.25rem; flex-wrap:wrap;
-    padding:.75rem clamp(1rem,3vw,2rem); background: oklch(0.14 0.014 265 / .72);
-    backdrop-filter: blur(14px) saturate(1.4); border-bottom:1px solid var(--line); }
-  .brand{ display:flex; align-items:center; gap:.6rem; font-weight:800; letter-spacing:-.02em; font-size:1.05rem; text-decoration:none; color:var(--ink); }
-  .brand b{ background:linear-gradient(100deg,var(--ink),var(--gold)); -webkit-background-clip:text; background-clip:text; color:transparent; }
-  .brand .dot{ width:9px; height:9px; border-radius:50%; background:var(--gold); box-shadow:0 0 12px var(--gold); }
-  nav.nav{ display:flex; gap:.25rem; flex-wrap:wrap; margin-left:auto; }
-  nav.nav a{ font-size:.85rem; padding:.35rem .7rem; border-radius:999px; text-decoration:none; color:var(--muted); transition:background .15s,color .15s; }
-  nav.nav a:hover{ color:var(--ink); background:var(--line); }
-
-  main{ max-width:1080px; margin-inline:auto; padding: clamp(3rem,8vw,6rem) clamp(1rem,3vw,2rem) 4rem; }
-  .eyebrow{ font-size:.8rem; text-transform:uppercase; letter-spacing:.16em; color:var(--gold); font-weight:600; }
-  h1{ font-size:clamp(2.4rem,7vw,4.2rem); line-height:1.04; letter-spacing:-.03em; margin:.6rem 0 .75rem; text-wrap:balance;
-    background:linear-gradient(120deg,var(--ink) 35%,var(--gold)); -webkit-background-clip:text; background-clip:text; color:transparent; }
-  .dek{ color:var(--muted); font-size:clamp(1.05rem,2.5vw,1.3rem); max-width:64ch; text-wrap:pretty; margin:0 0 1.5rem; }
-  .chips{ display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:1rem; }
-  .chip{ font-size:.8rem; padding:.3rem .8rem; border:1px solid var(--line); border-radius:999px; background:var(--card); color:var(--muted); font-variant-numeric:tabular-nums; }
-  .chip b{ color:var(--gold); font-weight:600; }
-
-  .cards{ display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:1.15rem; margin-top:3rem; }
-  .card{ position:relative; display:block; text-decoration:none; color:inherit; background:var(--card);
-    border:1px solid var(--line); border-radius:var(--r); padding:1.4rem 1.5rem;
-    box-shadow: 0 1px 2px oklch(0 0 0 / .3), 0 12px 40px -20px oklch(0 0 0 / .5), inset 0 1px 0 oklch(1 0 0 / .05);
-    transition: transform .18s cubic-bezier(.2,.7,.3,1), border-color .18s, box-shadow .18s; }
-  .card:hover{ transform: translateY(-3px); border-color: var(--gold-dim);
-    box-shadow: 0 1px 2px oklch(0 0 0 / .3), 0 22px 50px -18px oklch(0 0 0 / .6), inset 0 1px 0 oklch(1 0 0 / .07); }
-  .card .n{ font-size:.75rem; color:var(--faint); font-variant-numeric:tabular-nums; }
-  .card h2{ font-size:1.25rem; letter-spacing:-.01em; margin:.3rem 0 .5rem; }
-  .card p{ color:var(--muted); font-size:.92rem; margin:0; text-wrap:pretty; }
-  .card .go{ color:var(--gold); font-size:.85rem; font-weight:600; margin-top:.9rem; display:inline-flex; align-items:center; gap:.3rem; }
-  .card:hover .go{ gap:.5rem; }
-
-  .quick{ display:flex; gap:1.5rem; flex-wrap:wrap; margin-top:3rem; padding-top:2rem; border-top:1px solid var(--line); }
-  .quick a{ color:var(--muted); text-decoration:none; font-size:.9rem; }
-  .quick a:hover{ color:var(--gold); }
-
-  footer.foot{ border-top:1px solid var(--line); padding:2rem clamp(1rem,3vw,2rem); color:var(--faint); font-size:.85rem;
-    display:flex; gap:1rem; flex-wrap:wrap; justify-content:space-between; max-width:1080px; margin-inline:auto; }
-  footer.foot a{ color:var(--muted); text-decoration:none; }
-  footer.foot a:hover{ color:var(--gold); }
-  @media (prefers-reduced-motion: reduce){ *{ transition:none !important; } }
-</style>
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="SWARM Orchestrator supervises many coding agents at once: each worker is a shell on its own pseudo-terminal, optionally in its own git worktree and driving Claude Code or Codex, and everything that happens is an event on one ordered stream.">
+<title>SWARM Orchestrator</title>
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="./site.css">
 </head>
 <body>
-<a class="skip" href="#content">Skip to content</a>
-<header class="top">
-  <a class="brand" href="./index.html"><span class="dot"></span><span>SWARM <b>Docs</b></span></a>
+<a class="skip" href="#content">Skip To Content</a>
+
+<header class="site-header">
+  <a class="brand" href="./index.html" aria-current="page"><img src="./favicon.svg" alt="" width="28" height="28">SWARM Orchestrator</a>
   <nav class="nav" aria-label="Documentation">
     <a href="./architecture.html">Architecture</a>
     <a href="./api.html">API</a>
     <a href="./daemon.html">Daemon</a>
     <a href="./performance.html">Performance</a>
-    <a href="./e2e.html">E2E</a>
+    <a href="./e2e.html">E2E Testing</a>
     <a href="./contributing.html">Contributing</a>
     <a href="./updater-keys.html">Updater Keys</a>
     <a href="./roadmap.html">Roadmap</a>
-    <a href="https://github.com/ABCrimson/Swarm">GitHub ↗</a>
+    <a href="https://github.com/ABCrimson/Swarm">GitHub</a>
   </nav>
 </header>
 
 <main id="content">
-  <p class="eyebrow">Documentation</p>
-  <h1>SWARM Orchestrator</h1>
-  <p class="dek">Many AI coding agents in parallel — each in an isolated git worktree, on its own PTY, feeding a single ordered event log. A Rust core on Tauri 3, a React 19 frontend, and a headless daemon you reattach to remotely.</p>
-  <div class="chips">
-    <span class="chip"><b>APP_VERSION</b></span>
-    <span class="chip">Windows · macOS · Linux</span>
-    <span class="chip">Tauri 3 · Rust · React 19</span>
-    <span class="chip">MIT</span>
-  </div>
+  <section class="hero" aria-labelledby="title">
+    <h1 id="title">SWARM Orchestrator</h1>
+    <p class="lede">Supervises many coding agents at once. Each worker is a shell on its own pseudo-terminal, optionally in its own git worktree and driving Claude Code or Codex, and everything that happens is an event on one ordered stream backed by a SQLite log.</p>
+    <dl class="release">
+      <dt>Latest Release</dt>
+      <dd><!-- LATEST_RELEASE --></dd>
+      <dt>On <code>main</code></dt>
+      <dd>Unreleased work proposed as <data value="0.14.0">0.14.0</data>, including breaking changes: the desktop shell moves to Tauri 3 (alpha). <a href="https://github.com/ABCrimson/Swarm/blob/main/CHANGELOG.md#unreleased">Read The Changelog</a></dd>
+    </dl>
+    <p class="actions">
+      <a class="primary" href="./architecture.html">Read The Architecture</a>
+      <a href="https://github.com/ABCrimson/Swarm">View The Source On GitHub</a>
+    </p>
+  </section>
 
-  <div class="cards">
-    <a class="card" href="./architecture.html">
-      <div class="n">01</div><h2>Architecture</h2>
-      <p>The single ordered event spine, the three-crate workspace, the agent adapter layer, ship chain, and runtime modes.</p>
-      <span class="go">Read →</span>
-    </a>
-    <a class="card" href="./api.html">
-      <div class="n">02</div><h2>API Reference</h2>
-      <p>Every command in the drift-proof Registry — workers, sessions, agents, ship, config, bus — plus the swarmd wire protocol.</p>
-      <span class="go">Read →</span>
-    </a>
-    <a class="card" href="./daemon.html">
-      <div class="n">03</div><h2>The Daemon</h2>
-      <p>Running <code>swarmd</code> headless: CLI flags, the token model, reaching it off-box, and per-user autostart (systemd, launchd, a Windows logon Scheduled Task).</p>
-      <span class="go">Read →</span>
-    </a>
-    <a class="card" href="./performance.html">
-      <div class="n">04</div><h2>Performance</h2>
-      <p>Frame budgets, virtualization, the WebGPU particle pipeline, chunk-splitting, and the concurrency model.</p>
-      <span class="go">Read →</span>
-    </a>
-    <a class="card" href="./e2e.html">
-      <div class="n">05</div><h2>End-to-End Testing</h2>
-      <p>The Playwright suite (Chromium, with opt-in WebKit and Firefox), its hard no-Tauri-backend boundary, and the roadmap past it.</p>
-      <span class="go">Read →</span>
-    </a>
-    <a class="card" href="./contributing.html">
-      <div class="n">06</div><h2>Contributing</h2>
-      <p>Development setup, the toolchain, code standards, commit conventions, and the review process.</p>
-      <span class="go">Read →</span>
-    </a>
-    <a class="card" href="./updater-keys.html">
-      <div class="n">07</div><h2>Updater Keys</h2>
-      <p>How updates are signed: the Ed25519 keypair, CI signing, signed-version enforcement, manual re-signing, and how the AppImage and .deb bundles update.</p>
-      <span class="go">Read →</span>
-    </a>
-    <a class="card" href="./roadmap.html">
-      <div class="n">08</div><h2>Roadmap</h2>
-      <p>The next ten major releases and the minor releases between them: outcomes, scope, acceptance evidence, and open decisions.</p>
-      <span class="go">Read →</span>
-    </a>
-  </div>
+  <section class="section" aria-labelledby="fit">
+    <h2 id="fit">How It Fits Together</h2>
+    <figure class="arch">
+      <svg class="dg arch-wide" viewBox="0 0 960 504" role="img" aria-labelledby="wide-title wide-desc">
+        <title id="wide-title">SWARM Orchestrator Architecture</title>
+        <desc id="wide-desc">The React 19 frontend reaches two shells: swarm-desktop, the Tauri 3 alpha shell, over Tauri IPC, and swarmd, the headless daemon, over a WebSocket at /ws. Both shells run swarm-core, the Tauri-free Rust core, through one command registry of 36 commands: the desktop calls Registry::dispatch and swarmd calls dispatch_remote. Inside the core, the agent adapters drive the Claude Code CLI over stream-json and the Codex CLI over app-server JSON-RPC; workers each run a shell on a pseudo-terminal, optionally in their own git worktree on their own branch; the ship chain commits, pushes the exact commit sha to origin and prefills a compare page; and the ordered event core, the one writer that issues every seq, appends each persisted event to swarm-events.db, a SQLite log in WAL mode flushed on every commit.</desc>
 
-  <div class="quick">
-    <a href="https://github.com/ABCrimson/Swarm">Source ↗</a>
-    <a href="https://github.com/ABCrimson/Swarm/blob/main/CHANGELOG.md">Changelog ↗</a>
-    <a href="https://github.com/ABCrimson/Swarm/releases">Releases ↗</a>
-    <a href="https://github.com/ABCrimson/Swarm/blob/main/README.md">README ↗</a>
-  </div>
+        <rect class="box" x="16" y="12" width="928" height="52" rx="8"/>
+        <text class="t" x="32" y="34">React 19 Frontend</text>
+        <text class="s" x="32" y="54">src/: the desktop webview, or the browser build that swarmd serves</text>
+
+        <path class="edge" pathLength="1" d="M250 64V104"/>
+        <path class="edge" pathLength="1" d="M710 64V104"/>
+        <circle class="dot" cx="250" cy="64" r="3"/><circle class="dot" cx="250" cy="104" r="3"/>
+        <circle class="dot" cx="710" cy="64" r="3"/><circle class="dot" cx="710" cy="104" r="3"/>
+        <text class="lbl" x="262" y="89">Tauri IPC</text>
+        <text class="lbl" x="722" y="89">WebSocket /ws</text>
+
+        <rect class="box" x="130" y="104" width="240" height="56" rx="8"/>
+        <text class="t" x="146" y="128">swarm-desktop</text>
+        <text class="s" x="146" y="148">Tauri 3 alpha shell</text>
+        <rect class="box" x="590" y="104" width="240" height="56" rx="8"/>
+        <text class="t" x="606" y="128">swarmd</text>
+        <text class="s" x="606" y="148">Headless daemon</text>
+
+        <path class="edge" pathLength="1" d="M250 160V200"/>
+        <path class="edge" pathLength="1" d="M710 160V200"/>
+        <circle class="dot" cx="250" cy="160" r="3"/><circle class="dot" cx="710" cy="160" r="3"/>
+        <text class="lbl" x="262" y="185">Registry::dispatch</text>
+        <text class="lbl" x="722" y="185">dispatch_remote</text>
+
+        <rect class="core" x="16" y="200" width="928" height="180" rx="12"/>
+        <text class="t" x="32" y="226">swarm-core</text>
+        <text class="s" x="136" y="226">The Tauri-free Rust core both shells run</text>
+
+        <rect class="box" x="32" y="240" width="896" height="40" rx="6"/>
+        <text class="t" x="48" y="265">Command Registry</text>
+        <text class="s" x="204" y="265">36 commands, each with a remote policy</text>
+
+        <rect class="box" x="32" y="296" width="218" height="64" rx="8"/>
+        <text class="t" x="48" y="323">Agent Adapters</text>
+        <text class="s" x="48" y="344">Trait pair, three trust tiers</text>
+        <rect class="box" x="258" y="296" width="218" height="64" rx="8"/>
+        <text class="t" x="274" y="323">Workers</text>
+        <text class="s" x="274" y="344">Each a shell on its own PTY</text>
+        <rect class="box" x="484" y="296" width="218" height="64" rx="8"/>
+        <text class="t" x="500" y="323">Ship Chain</text>
+        <text class="s" x="500" y="344">Commit, push, compare page</text>
+        <rect class="box log" x="710" y="296" width="218" height="64" rx="8"/>
+        <text class="t" x="726" y="323">Ordered Event Core</text>
+        <text class="s" x="726" y="344">One writer issues every seq</text>
+
+        <path class="edge" pathLength="1" d="M141 360V420"/>
+        <path class="edge" pathLength="1" d="M367 360V420"/>
+        <path class="edge" pathLength="1" d="M593 360V420"/>
+        <path class="edge" pathLength="1" d="M819 360V420"/>
+        <circle class="dot" cx="141" cy="420" r="3"/><circle class="dot" cx="367" cy="420" r="3"/>
+        <circle class="dot" cx="593" cy="420" r="3"/><circle class="dot" cx="819" cy="420" r="3"/>
+
+        <rect class="box ext" x="32" y="420" width="218" height="72" rx="8"/>
+        <text class="t" x="48" y="444">Provider CLIs</text>
+        <text class="s" x="48" y="464">Claude Code: stream-json</text>
+        <text class="s" x="48" y="482">Codex: app-server JSON-RPC</text>
+        <rect class="box ext" x="258" y="420" width="218" height="72" rx="8"/>
+        <text class="t" x="274" y="444">Git Worktrees</text>
+        <text class="s" x="274" y="464">At most one per worker</text>
+        <text class="s" x="274" y="482">Removal never forces</text>
+        <rect class="box ext" x="484" y="420" width="218" height="72" rx="8"/>
+        <text class="t" x="500" y="444">origin</text>
+        <text class="s" x="500" y="464">Push of the exact commit sha</text>
+        <text class="s" x="500" y="482">Prefilled compare page</text>
+        <rect class="box log" x="710" y="420" width="218" height="72" rx="8"/>
+        <text class="t" x="726" y="444">swarm-events.db</text>
+        <text class="s" x="726" y="464">SQLite in WAL mode</text>
+        <text class="s" x="726" y="482">Flushed on every commit</text>
+      </svg>
+
+      <svg class="dg dg-tall arch-tall" viewBox="0 0 320 636" role="img" aria-labelledby="tall-title tall-desc">
+        <title id="tall-title">SWARM Orchestrator Architecture</title>
+        <desc id="tall-desc">The React 19 frontend reaches two shells: swarm-desktop, the Tauri 3 alpha shell, over Tauri IPC, and swarmd, the headless daemon, over a WebSocket at /ws. Both shells run swarm-core, the Tauri-free Rust core, through one command registry of 36 commands. Inside the core, the agent adapters drive the Claude Code and Codex CLIs; workers each run a shell on a pseudo-terminal, optionally in their own git worktree on their own branch; the ship chain commits, pushes the exact commit sha to origin and prefills a compare page; and the event core, the one writer that issues every seq, appends each persisted event to swarm-events.db, a SQLite log flushed on every commit.</desc>
+
+        <rect class="box" x="8" y="8" width="304" height="56" rx="8"/>
+        <text class="t" x="20" y="31">React 19 Frontend</text>
+        <text class="s" x="20" y="51">Webview UI or browser build</text>
+
+        <path class="edge" pathLength="1" d="M82 64V100"/>
+        <path class="edge" pathLength="1" d="M238 64V100"/>
+        <circle class="dot" cx="82" cy="64" r="3"/><circle class="dot" cx="82" cy="100" r="3"/>
+        <circle class="dot" cx="238" cy="64" r="3"/><circle class="dot" cx="238" cy="100" r="3"/>
+        <text class="lbl" x="90" y="87">Tauri IPC</text>
+        <text class="lbl" x="230" y="87" text-anchor="end">WebSocket /ws</text>
+
+        <rect class="box" x="8" y="100" width="148" height="56" rx="8"/>
+        <text class="t" x="18" y="123">swarm-desktop</text>
+        <text class="s" x="18" y="143">Tauri 3 alpha shell</text>
+        <rect class="box" x="164" y="100" width="148" height="56" rx="8"/>
+        <text class="t" x="174" y="123">swarmd</text>
+        <text class="s" x="174" y="143">Headless daemon</text>
+
+        <path class="edge" pathLength="1" d="M82 156V196"/>
+        <path class="edge" pathLength="1" d="M238 156V176H128V196"/>
+        <circle class="dot" cx="82" cy="156" r="3"/><circle class="dot" cx="238" cy="156" r="3"/>
+
+        <rect class="core" x="8" y="196" width="160" height="428" rx="12"/>
+        <text class="t" x="20" y="220">swarm-core</text>
+        <text class="s" x="20" y="238">Tauri-free Rust core</text>
+
+        <rect class="box" x="20" y="250" width="136" height="64" rx="6"/>
+        <text class="t" x="30" y="272">Registry</text>
+        <text class="s" x="30" y="290">36 commands, each</text>
+        <text class="s" x="30" y="305">with a remote policy</text>
+
+        <rect class="box" x="20" y="326" width="136" height="64" rx="8"/>
+        <text class="t" x="30" y="348">Agent Adapters</text>
+        <text class="s" x="30" y="366">Trait pair, three</text>
+        <text class="s" x="30" y="381">trust tiers</text>
+        <rect class="box" x="20" y="400" width="136" height="64" rx="8"/>
+        <text class="t" x="30" y="422">Workers</text>
+        <text class="s" x="30" y="440">Each a shell on</text>
+        <text class="s" x="30" y="455">its own PTY</text>
+        <rect class="box" x="20" y="474" width="136" height="64" rx="8"/>
+        <text class="t" x="30" y="496">Ship Chain</text>
+        <text class="s" x="30" y="514">Commit, push,</text>
+        <text class="s" x="30" y="529">compare page</text>
+        <rect class="box log" x="20" y="548" width="136" height="64" rx="8"/>
+        <text class="t" x="30" y="570">Event Core</text>
+        <text class="s" x="30" y="588">One writer issues</text>
+        <text class="s" x="30" y="603">every seq</text>
+
+        <path class="edge" pathLength="1" d="M156 358H184"/>
+        <path class="edge" pathLength="1" d="M156 432H184"/>
+        <path class="edge" pathLength="1" d="M156 506H184"/>
+        <path class="edge" pathLength="1" d="M156 580H184"/>
+
+        <rect class="box ext" x="184" y="326" width="128" height="64" rx="8"/>
+        <text class="t" x="194" y="348">Provider CLIs</text>
+        <text class="s" x="194" y="366">Claude Code,</text>
+        <text class="s" x="194" y="381">Codex</text>
+        <rect class="box ext" x="184" y="400" width="128" height="64" rx="8"/>
+        <text class="t" x="194" y="422">Git Worktrees</text>
+        <text class="s" x="194" y="440">At most one</text>
+        <text class="s" x="194" y="455">per worker</text>
+        <rect class="box ext" x="184" y="474" width="128" height="64" rx="8"/>
+        <text class="t" x="194" y="496">origin</text>
+        <text class="s" x="194" y="514">Push by sha,</text>
+        <text class="s" x="194" y="529">compare page</text>
+        <rect class="box log" x="184" y="548" width="128" height="64" rx="8"/>
+        <text class="t" x="194" y="570">swarm-events.db</text>
+        <text class="s" x="194" y="588">SQLite, flushed</text>
+        <text class="s" x="194" y="603">every commit</text>
+      </svg>
+
+      <figcaption><span class="key cyan"></span>Cyan marks the ordered event log. <span class="key amber"></span>Amber marks what runs outside SWARM's own process: the provider CLIs, git and the remote. The dashed outline is swarm-core. Names follow <a href="./architecture.html#system-overview">Architecture</a>, which has the full picture.</figcaption>
+    </figure>
+  </section>
+
+  <section class="section claims" aria-labelledby="today">
+    <h2 id="today">What The Code Does Today</h2>
+    <p>Each item is true of the code this site was built from and links to the record that pins it. An item tagged Unreleased describes changes made after v0.13.1 and listed under Unreleased in the changelog; the untagged items already held in v0.13.1.</p>
+    <ul>
+      <li class="claim">
+        <h3>One Core, Two Shells</h3>
+        <p>The Tauri 3 (alpha) desktop app and the headless <code>swarmd</code> daemon both run <code>swarm-core</code>, a Rust library with no Tauri dependency, and dispatch through the same command registry: 36 commands, plus 2 native ones only the desktop has.</p>
+        <p class="source"><span class="tag">Unreleased</span><a href="./architecture.html#runtime-modes">Runtime Modes</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0001-tauri-free-core-two-shells.md">ADR-0001</a></p>
+      </li>
+      <li class="claim">
+        <h3>A Daemon You Reattach To</h3>
+        <p><code>swarmd</code> serves the registry and the event stream over one WebSocket at <code>/ws</code>, bound to <code>127.0.0.1:8787</code> by default and gated by a 64-hex-character token. A client that reconnects replays the log from the last seq it saw, and <code>--serve-ui</code> serves the browser build from disk.</p>
+        <p class="source"><a href="./daemon.html">Daemon</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0022-swarmd-authentication-and-exposure.md">ADR-0022</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0023-swarmd-one-ordered-lane.md">ADR-0023</a></p>
+      </li>
+      <li class="claim">
+        <h3>Two Providers Behind One Trait Pair</h3>
+        <p>Claude Code runs over its stream-json control protocol and Codex over <code>codex app-server</code> JSON-RPC, both behind the <code>AgentAdapter</code> and <code>AgentSession</code> traits. A session runs in one of three trust tiers, <code>restricted</code>, <code>standard</code> or <code>write_enabled</code>, and bypass modes cannot be constructed.</p>
+        <p class="source"><span class="tag">Unreleased</span><a href="./architecture.html#adapter-layer">Adapter Layer</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0013-provider-adapter-trait-pair.md">ADR-0013</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0015-trust-tiers-closed-vocabulary.md">ADR-0015</a></p>
+      </li>
+      <li class="claim">
+        <h3>Agent Sessions Trust No Repo Configuration</h3>
+        <p>Claude Code sessions start with <code>--setting-sources ""</code>, so a repo's <code>.claude/settings.json</code> cannot run an <code>apiKeyHelper</code> or redirect the CLI. SWARM appends only the repo's <code>permissions.deny</code> entries: a repo can narrow a session and nothing else. Both adapters look for the CLI on absolute <code>PATH</code> entries only.</p>
+        <p class="source"><span class="tag">Unreleased</span><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0038-agent-provider-trust-model.md">ADR-0038</a></p>
+      </li>
+      <li class="claim">
+        <h3>A Kill Stops The Session First</h3>
+        <p><code>kill_worker</code> marks the worker closing, waits for attaches in flight and shuts the provider session down before it touches the shell or the worktree. When it returns, no session of that worker is registered, still handshaking or still shutting down.</p>
+        <p class="source"><span class="tag">Unreleased</span><a href="./architecture.html#workers-and-ptys">Workers And PTYs</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0040-kill-stops-the-session-first.md">ADR-0040</a></p>
+      </li>
+      <li class="claim">
+        <h3>The Event Log Flushes Every Commit</h3>
+        <blockquote cite="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0039-event-log-flushes-every-commit.md"><p><code>EventLog::init</code> sets <code>PRAGMA synchronous = EXTRA</code> and <code>PRAGMA fullfsync = 1</code> on the writer connection, reads both back (neither pragma echoes its value) and fails the open with <code>AppError::EventLog</code> unless they read 3 and 1.</p></blockquote>
+        <p>The cost measured on 2026-10-13 on an ext4 WSL2 disk is about 2 ms per persistent event; native Windows NTFS and macOS are unmeasured.</p>
+        <p class="source"><span class="tag">Unreleased</span><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0039-event-log-flushes-every-commit.md">ADR-0039</a><a href="./performance.html#event-log-persistence">Event Log Persistence</a></p>
+      </li>
+      <li class="claim">
+        <h3>A Git Worktree Per Worker</h3>
+        <p>A worker spawned with a repo root runs in its own locked git worktree on a fresh <code>swarm/</code> branch. Removal never forces: a dirty worktree is preserved, and the branch is deleted with <code>git branch -d</code> only when its tip is still the commit it started from.</p>
+        <p class="source"><a href="./architecture.html#worktree-isolation">Worktree Isolation</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0007-worktree-per-worker-system-git.md">ADR-0007</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0008-worktree-removal-never-forces.md">ADR-0008</a></p>
+      </li>
+      <li class="claim">
+        <h3>A Ship Chain With Receipts</h3>
+        <p>A finished worker becomes a real commit, a push of that exact commit (<code>&lt;sha&gt;:refs/heads/&lt;branch&gt;</code>, never forced) and a prefilled compare page. Each attempt ends with exactly one <code>ship_settled</code> receipt, and the compare page is built from the worker's recorded push.</p>
+        <p class="source"><span class="tag">Unreleased</span><a href="./architecture.html#ship-chain">Ship Chain</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0009-ship-chain-structural-guarantees.md">ADR-0009</a></p>
+      </li>
+      <li class="claim">
+        <h3>The Browser Build Says What It Cannot Do</h3>
+        <p>Over <code>swarmd</code>, the browser build reads capability flags from its transport. Desktop-only controls are hidden or disabled with “Available In The Desktop App Only” instead of failing.</p>
+        <p class="source"><span class="tag">Unreleased</span><a href="./daemon.html#what-the-browser-build-offers">What The Browser Build Offers</a></p>
+      </li>
+      <li class="claim">
+        <h3>React Compiler Through Oxc</h3>
+        <p>Memoization is left to the React Compiler, run as the Oxc port with a WASI fallback binding. <code>pnpm check:compiler</code> fails the build when key components ship uncompiled.</p>
+        <p class="source"><span class="tag">Unreleased</span><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0032-react-compiler-oxc-wasi.md">ADR-0032</a></p>
+      </li>
+      <li class="claim">
+        <h3>Temporal For Dates And Times</h3>
+        <p>Dates and durations use <code>Temporal</code> and <code>Intl</code>, with no date library. WebKit webviews ship without <code>Temporal</code>, so <code>src/boot.ts</code> installs <code>temporal-polyfill</code> before the app loads.</p>
+        <p class="source"><span class="tag">Unreleased</span><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0031-temporal-polyfill-boot-entry.md">ADR-0031</a></p>
+      </li>
+    </ul>
+  </section>
+
+  <section class="section doc-list" aria-labelledby="docs">
+    <h2 id="docs">Documentation</h2>
+    <ul>
+      <li><a href="./architecture.html"><strong>Architecture</strong><span>How the system is put together at this commit: the core, the ordered event log, workers, the ship chain, the adapters, both shells and the frontend.</span></a></li>
+      <li><a href="./api.html"><strong>API Reference</strong><span>The command, event and wire-protocol contract: 38 commands, one ordered event stream, two transports.</span></a></li>
+      <li><a href="./daemon.html"><strong>The <code>swarmd</code> Daemon</strong><span>Running SWARM headless as a per-user program reachable over an authenticated WebSocket: install, connect URL and security model.</span></a></li>
+      <li><a href="./performance.html"><strong>Performance Architecture</strong><span>Targets, budgets and implementation details for the frontend, the backend and the GPU, including the measured cost of the event log.</span></a></li>
+      <li><a href="./e2e.html"><strong>End-to-End Testing</strong><span>The Playwright suite for the frontend shell, its hard boundary (no Tauri backend), and the documented path past it, not yet built.</span></a></li>
+      <li><a href="./contributing.html"><strong>Contributing</strong><span>Development setup, code standards and the contribution process; the house rules live in <code>AGENTS.md</code>.</span></a></li>
+      <li><a href="./updater-keys.html"><strong>Updater Keys</strong><span>How the in-app updater is signed: the Ed25519 keypair, CI signing, signed-version enforcement and how each Linux bundle would update.</span></a></li>
+      <li><a href="./roadmap.html"><strong>Roadmap</strong><span>The next ten major releases and the minor releases between them, as planned on 2026-10-13.</span></a></li>
+    </ul>
+  </section>
+
+  <section class="section" aria-labelledby="project">
+    <h2 id="project">Project</h2>
+    <ul class="project-links">
+      <li><a href="https://github.com/ABCrimson/Swarm">Repository</a></li>
+      <li><a href="https://github.com/ABCrimson/Swarm/releases">Releases</a></li>
+      <li><a href="https://github.com/ABCrimson/Swarm/blob/main/CHANGELOG.md">Changelog</a></li>
+      <li><a href="https://github.com/ABCrimson/Swarm/blob/main/SECURITY.md">Security Policy</a></li>
+      <li><a href="https://github.com/ABCrimson/Swarm/blob/main/LICENSE">MIT License</a></li>
+    </ul>
+  </section>
 </main>
 
-<footer class="foot">
-  <span>SWARM Orchestrator · MIT · built with the OKLCH design system</span>
-  <span><a href="https://github.com/ABCrimson/Swarm">ABCrimson/Swarm</a></span>
+<footer class="site-footer">
+  <span>SWARM Orchestrator is released under the <a href="https://github.com/ABCrimson/Swarm/blob/main/LICENSE">MIT License</a>.</span>
+  <span>Generated from <code>site/</code> and <code>docs/</code> by <code>scripts/build-site.ts</code>.</span>
 </footer>
 </body>
 </html>
