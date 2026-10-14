@@ -1,6 +1,5 @@
 import "./graph.css";
 
-import { openPath } from "@tauri-apps/plugin-opener";
 import { useSetAtom } from "jotai";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -10,7 +9,7 @@ import { useWorker } from "#hooks/useWorker";
 import { stripAnsi } from "#lib/ansi";
 import { escapeForDisplay } from "#lib/display-escape";
 import { errorMessage } from "#lib/is-error";
-import { isTauri } from "#lib/tauri";
+import { isTauri, openWorkerDirectory } from "#lib/tauri";
 import { formatElapsed } from "#lib/time";
 import { selectMostRecentSeqForWorker, useProvenanceStore } from "#store/provenance";
 import type { Worker } from "#store/types";
@@ -111,19 +110,13 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
   );
   const outputPreview = worker.output ? stripAnsi(worker.output).slice(-OUTPUT_PREVIEW_CHARS) : "";
 
-  const handleOpenWorktree = async (path: string): Promise<void> => {
-    // Defense in depth: never hand a path with a ".." segment to the
-    // opener. The capability's `opener:allow-open-path` scope is the
-    // authoritative allowlist for the worktree root; this check keeps a
-    // traversal-shaped path from even being attempted.
-    if (path.includes("..")) {
-      toast.error("Refusing To Open A Path Containing '..'.");
-      return;
-    }
+  const handleOpenWorktree = async (): Promise<void> => {
     try {
-      // openPath (not revealItemsInDir): the worktree folder itself
-      // opens in the system file manager, which is what the link says.
-      await openPath(path);
+      // By worker id, never by path: the shell opens the worktree folder
+      // its registry recorded for this worker, and only while it is a
+      // directory. The webview has no opener path grant at all, so no
+      // path it holds (the displayed one included) can be opened.
+      await openWorkerDirectory(worker.id);
     } catch (err) {
       toast.error(`Could Not Open Worktree: ${errorMessage(err)}`);
     }
@@ -223,14 +216,14 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
               {isTauri() ? (
                 <button
                   type="button"
-                  onClick={() => void handleOpenWorktree(worker.worktreePath ?? "")}
+                  onClick={() => void handleOpenWorktree()}
                   title={escapeForDisplay(worker.worktreePath)}
                   className="worker-detail__path"
                 >
                   {escapeForDisplay(worker.worktreePath)}
                 </button>
               ) : (
-                // Opening a folder needs the desktop app's opener plugin.
+                // Opening a folder needs the desktop shell.
                 <span className="worker-detail__path" title={escapeForDisplay(worker.worktreePath)}>
                   {escapeForDisplay(worker.worktreePath)}
                 </span>

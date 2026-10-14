@@ -11,8 +11,8 @@ use super::commit::{StagingMode, size_basis, staging_candidates};
 use super::deny::{self, SkippedFile};
 use super::status::{self, DiffStat, NUMSTAT_ARGS, StatusSnapshot};
 use super::{
-    NOT_A_WORKTREE, PRIMARY_CHECKOUT, ShipError, git, is_protected_branch, remote_url,
-    resolve_base_branch, single_value, worktree_info_for_worker,
+    NOT_A_WORKTREE, PRIMARY_CHECKOUT, ShipError, git, is_protected_branch, many_push_urls,
+    push_urls, resolve_base_branch, single_value, worktree_info_for_worker,
 };
 use crate::error::AppError;
 use crate::git::cli::SCAN_TIMEOUT;
@@ -32,9 +32,11 @@ pub struct ShipPreflight {
     pub branch: String,
     /// The branch a compare page targets — see `resolve_base_branch`.
     pub base_branch: String,
-    /// `origin`'s URL, credentials redacted.
+    /// `origin`'s push URL — where `git push origin` sends, which can
+    /// differ from the fetch URL — credentials redacted. Every push URL,
+    /// comma-separated, when there are several (a blocker then).
     pub remote: Option<String>,
-    /// `origin`'s host.
+    /// The push URL's host; `None` unless there is exactly one push URL.
     pub host: Option<String>,
     /// `true` when `host` looks like GitHub/GHES, so
     /// [`super::compare_url`] can succeed. The UI disables *only* the
@@ -67,12 +69,13 @@ pub struct ShipPreflight {
 /// Computes the ship preflight for `id`, evaluated for staging `mode`
 /// (the deny-list preview and diff stat mirror what [`super::stage_and_commit`]
 /// would commit in that mode): branch, remote and tracking state,
-/// working-tree status, and eight refusal conditions as Title Case
+/// working-tree status, and nine refusal conditions as Title Case
 /// `blockers` — the path is not the worktree's toplevel, the primary
 /// checkout, a detached `HEAD`, `branch == baseBranch`, a protected
-/// branch, no `origin` remote, unresolved merge conflicts, and nothing
-/// to ship at all. None of them makes this function fail; `canShip` is
-/// `true` only when `blockers` is empty.
+/// branch, no `origin` remote, an `origin` with more than one push URL,
+/// unresolved merge conflicts, and nothing to ship at all. None of them
+/// makes this function fail; `canShip` is `true` only when `blockers` is
+/// empty.
 ///
 /// # Errors
 ///
@@ -85,7 +88,8 @@ pub struct ShipPreflight {
 ///   — with no upstream, the commit count since the base commit failed
 ///   (e.g. that commit no longer exists).
 /// * [`super::ShipErrorKind::Unknown`] / [`super::ShipErrorKind::Timeout`]
-///   — `git remote get-url origin` failed other than for a missing remote.
+///   — `git remote get-url --push --all origin` failed other than for a
+///   missing remote.
 pub fn preflight(
     registry: &WorkerRegistry,
     id: WorkerId,
@@ -127,15 +131,26 @@ pub fn preflight(
         ));
     }
 
-    let remote_raw = remote_url(wt, "origin")?;
-    if remote_raw.is_none() {
-        blockers.push("No `origin` Remote Configured — Add One Before Shipping.".to_owned());
-    }
-    let remote = remote_raw.as_deref().map(redact::redact);
-    let host = remote_raw
-        .as_deref()
-        .and_then(remote::parse)
-        .map(|parsed| parsed.host);
+    let push_urls = push_urls(wt, "origin")?;
+    let push_url = match push_urls.as_slice() {
+        [] => {
+            blockers.push("No `origin` Remote Configured — Add One Before Shipping.".to_owned());
+            None
+        }
+        [url] => Some(url.as_str()),
+        many => {
+            blockers.push(many_push_urls(many.len()));
+            None
+        }
+    };
+    let remote = (!push_urls.is_empty()).then(|| {
+        push_urls
+            .iter()
+            .map(|url| redact::redact(url))
+            .collect::<Vec<_>>()
+            .join(", ")
+    });
+    let host = push_url.and_then(remote::parse).map(|parsed| parsed.host);
     let host_supports_compare = host.as_deref().is_some_and(remote::looks_like_github_host);
 
     // `branch.ab` is absent before the first push, and when the

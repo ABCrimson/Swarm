@@ -29,7 +29,7 @@
 //!
 //! # Defense in depth: the primary-checkout guard
 //!
-//! [`preflight`] reports "primary checkout" (and seven other
+//! [`preflight`] reports "primary checkout" (and eight other
 //! conditions) as non-fatal `blockers` so the UI can explain *why*
 //! shipping is disabled. [`stage_and_commit`] and [`push`] do **not**
 //! trust that a caller checked `canShip` first: each runs the
@@ -268,21 +268,41 @@ fn is_protected_branch(branch: &str) -> bool {
     matches!(branch, "main" | "master" | "develop") || branch.starts_with("release/")
 }
 
-/// `git remote get-url <remote_name>`, raw (credentials included — the
-/// caller redacts). `Ok(None)` only for "no such remote" (exit 2) or
-/// empty output; a timeout or any other failure is an error.
-fn remote_url(worktree: &Path, remote_name: &str) -> Result<Option<String>, AppError> {
-    let output = git(worktree, &["remote", "get-url", remote_name], READ_TIMEOUT)?;
+/// Every URL `git push <remote_name>` sends to, raw (credentials
+/// included — the caller redacts): `git remote get-url --push --all`,
+/// which applies `remote.<name>.pushurl` and `url.<base>.pushInsteadOf`
+/// as the push itself does. The fetch URL (`get-url` without `--push`)
+/// can name a different host than the one the push reaches. Empty only
+/// for "no such remote" (exit 2) or empty output; a timeout or any other
+/// failure is an error.
+fn push_urls(worktree: &Path, remote_name: &str) -> Result<Vec<String>, AppError> {
+    let output = git(
+        worktree,
+        &["remote", "get-url", "--push", "--all", remote_name],
+        READ_TIMEOUT,
+    )?;
     if output.status.code() == Some(2) {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     if !output.success() {
         return Err(AppError::Git(format!(
-            "`git remote get-url {remote_name}` failed: {}",
+            "`git remote get-url --push --all {remote_name}` failed: {}",
             output.stderr.trim()
         )));
     }
-    Ok(single_value(&output))
+    Ok(output
+        .stdout_trimmed()
+        .lines()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
+/// The blocker (and compare-page refusal) for an `origin` that pushes to
+/// more than one URL: no single host can show where the push goes.
+fn many_push_urls(count: usize) -> String {
+    format!("Remote `origin` Has {count} Push URLs — Git Pushes To All Of Them.")
 }
 
 /// The branch a worker's isolation branch is compared against. Only the

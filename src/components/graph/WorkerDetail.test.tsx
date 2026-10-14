@@ -5,7 +5,6 @@
 // optimistic state holding while that IPC is in flight, the worktree
 // opener (desktop only) and the escape-stripped output preview.
 
-import { openPath } from "@tauri-apps/plugin-opener";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
@@ -14,12 +13,13 @@ import { WorkerDetail } from "#components/graph/WorkerDetail";
 import type { Worker } from "#store/types";
 import { useWorkerStore } from "#store/workers";
 
-// The IPC wrappers useWorker calls, plus the transport check that gates
-// the worktree opener.
+// The IPC wrappers useWorker calls, the worktree opener, and the
+// transport check that gates it.
 const tauri = vi.hoisted(() => ({
   pauseWorker: vi.fn(async (_id: string) => {}),
   resumeWorker: vi.fn(async (_id: string) => {}),
   killWorker: vi.fn(async (_id: string) => {}),
+  openWorkerDirectory: vi.fn(async (_workerId: string) => {}),
   isTauri: vi.fn(() => true),
 }));
 vi.mock(import("#lib/tauri"), () => tauri as never);
@@ -223,7 +223,7 @@ describe("WorkerDetail", () => {
     ).toBeInTheDocument();
   });
 
-  it("opens the worktree folder via the opener plugin when clicked", async () => {
+  it("opens the worker's own worktree folder by worker id when clicked", async () => {
     const user = userEvent.setup();
     const worker = createWorker({
       branch: "swarm/agent-11112222",
@@ -234,12 +234,14 @@ describe("WorkerDetail", () => {
 
     await user.click(screen.getByText("/home/user/.swarm/worktrees/repo-abcd1234/w-11112222"));
 
-    expect(openPath).toHaveBeenCalledWith("/home/user/.swarm/worktrees/repo-abcd1234/w-11112222");
+    expect(tauri.openWorkerDirectory).toHaveBeenCalledExactlyOnceWith(worker.id);
   });
 
   it("surfaces an opener rejection as a Title Case error toast", async () => {
     const user = userEvent.setup();
-    vi.mocked(openPath).mockRejectedValueOnce(new Error("not allowed by scope"));
+    tauri.openWorkerDirectory.mockRejectedValueOnce(
+      new Error("Refusing To Open The Worktree: It Is Not A Directory."),
+    );
     const worker = createWorker({
       worktreePath: "/home/user/.swarm/worktrees/repo-abcd1234/w-33334444",
     });
@@ -248,7 +250,9 @@ describe("WorkerDetail", () => {
 
     await user.click(screen.getByText("/home/user/.swarm/worktrees/repo-abcd1234/w-33334444"));
 
-    expect(toast.error).toHaveBeenCalledWith("Could Not Open Worktree: not allowed by scope");
+    expect(toast.error).toHaveBeenCalledWith(
+      "Could Not Open Worktree: Refusing To Open The Worktree: It Is Not A Directory.",
+    );
   });
 
   it("shows the worktree as plain text outside the desktop app (no opener plugin)", () => {
@@ -262,7 +266,7 @@ describe("WorkerDetail", () => {
     tauri.isTauri.mockReturnValue(true);
   });
 
-  it("refuses a '..' traversal path without calling the opener", async () => {
+  it("never sends the displayed path, so a traversal-shaped one opens nothing it names", async () => {
     const user = userEvent.setup();
     const worker = createWorker({
       worktreePath: "/home/user/.swarm/worktrees/../../etc",
@@ -272,8 +276,9 @@ describe("WorkerDetail", () => {
 
     await user.click(screen.getByText("/home/user/.swarm/worktrees/../../etc"));
 
-    expect(openPath).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith("Refusing To Open A Path Containing '..'.");
+    // Only the id crosses IPC; the shell opens the path its registry
+    // recorded, never one the webview supplies.
+    expect(tauri.openWorkerDirectory).toHaveBeenCalledExactlyOnceWith(worker.id);
   });
 
   describe("closing the panel", () => {
@@ -373,13 +378,13 @@ describe("WorkerDetail — Trojan Source", () => {
     tauri.isTauri.mockReturnValue(true);
   });
 
-  it("still opens the raw worktree path", async () => {
+  it("opens by worker id, never by the escaped display text", async () => {
     const worker = createWorker({ worktreePath: "/wt/e\u202Ef" });
     seedWorker(worker);
     render(<WorkerDetail worker={worker} />);
 
     await userEvent.setup().click(screen.getByTitle(String.raw`/wt/e\u202Ef`));
 
-    expect(vi.mocked(openPath)).toHaveBeenCalledWith("/wt/e\u202Ef");
+    expect(tauri.openWorkerDirectory).toHaveBeenCalledExactlyOnceWith(worker.id);
   });
 });

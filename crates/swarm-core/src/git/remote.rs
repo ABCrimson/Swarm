@@ -1,7 +1,7 @@
 //! Remote URL parsing (`https`/`ssh`/GHES) and GitHub-style compare
 //! URL construction.
 //!
-//! `git remote get-url origin` can return any of several shapes for
+//! `git remote get-url --push origin` can return any of several shapes for
 //! the same logical remote:
 //!
 //! - `https://github.com/owner/repo.git`
@@ -41,15 +41,27 @@ pub struct ParsedRemote {
 /// `https://` and `ssh://` URL-form remotes. Userinfo (if any) is
 /// matched but discarded; keeping credentials out of logs and events is
 /// [`super::redact`]'s job.
+///
+/// The host shown must be the host git reaches, so neither part may hold
+/// `@`, `?` or `#`. RFC 3986 userinfo cannot contain `@`, and curl (https)
+/// rejects a URL whose first and last `@` differ, so such a URL never
+/// pushes anywhere, and over `ssh://` OpenSSH would connect to the host
+/// after the last `@`. curl ends the authority at `?` and `#`, so git
+/// pushes `https://evil.example?@github.com/o/r` to `evil.example`. For
+/// `ssh://` git ends the host at `/` instead (the same URL reaches
+/// github.com), but one rule for both schemes errs on showing no host.
 static URL_FORM: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/]+@)?([^/:]+)(?::\d+)?/([^/]+)/(.+?)$")
+    Regex::new(r"^[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^/?#@]+@)?([^/:?#@]+)(?::\d+)?/([^/]+)/(.+?)$")
         .expect("valid regex")
 });
 
 /// `[user@]host:owner/repo[.git]` — SSH "scp-like" syntax (no `ssh://`
-/// scheme, a bare `:` before the path instead of `/`).
+/// scheme, a bare `:` before the path instead of `/`). Git hands
+/// everything before the `:` to OpenSSH, which splits user from host at
+/// the last `@`, so the host is what follows it:
+/// `a@github.com@evil.example:o/r` connects to `evil.example`.
 static SCP_FORM: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:[^@/:]+@)?([^/:]+):([^/]+)/(.+?)$").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"^(?:[^/:]+@)?([^/:@]+):([^/]+)/(.+?)$").expect("valid regex"));
 
 /// The repository name: trailing `/` and then `.git` removed.
 fn repo_name(raw: &str) -> &str {
@@ -316,6 +328,54 @@ mod tests {
         assert_eq!((r.host.as_str(), r.owner.as_str()), ("github.com", "o"));
         let r = parse("https://alice:hunter2@ghes.example.com:8443/team/repo").unwrap();
         assert_eq!(r.host, "ghes.example.com");
+    }
+
+    /// curl (https) ends the authority at `?` and `#`, so git pushes these
+    /// to evil.example: they must never parse as github.com.
+    #[test]
+    fn test_parse_https_authority_ends_at_a_query_or_fragment() {
+        for url in [
+            "https://evil.example?@github.com/o/r",
+            "https://evil.example#@github.com/o/r",
+            "https://evil.example:443?x@github.com/o/r",
+        ] {
+            assert!(parse(url).is_none(), "{url}");
+        }
+        // An `@` after the authority belongs to the path.
+        let r = parse("https://evil.example/o/r@github.com/x").unwrap();
+        assert_eq!(r.host, "evil.example");
+    }
+
+    /// For `ssh://` git ends the host at `/` and OpenSSH connects to
+    /// github.com as user `evil.example?`; the parser still refuses it,
+    /// because the same text reaches evil.example over https.
+    #[test]
+    fn test_parse_ssh_url_with_a_query_shaped_userinfo_is_none() {
+        assert!(parse("ssh://evil.example?@github.com/o/r").is_none());
+    }
+
+    /// A URL with two `@` in its authority is never shown as the host
+    /// after the last one: curl rejects it, and OpenSSH connects to the
+    /// host after the last `@`, which is not github.com here.
+    #[test]
+    fn test_parse_two_ats_in_a_url_authority_is_none() {
+        assert!(parse("https://a@b:c@github.com/o/r").is_none());
+        assert!(parse("ssh://a@github.com@evil.example/o/r").is_none());
+    }
+
+    /// OpenSSH splits `user@host` at the last `@`, so the host of an
+    /// scp-like remote is what follows it.
+    #[test]
+    fn test_parse_scp_host_is_after_the_last_at() {
+        let r = parse("a@github.com@evil.example:o/r").unwrap();
+        assert_eq!(r.host, "evil.example");
+        let r = parse("evil.example?@github.com:o/r").unwrap();
+        assert_eq!(r.host, "github.com");
+        let r = parse("git@github.com:o/r.git").unwrap();
+        assert_eq!(
+            (r.host.as_str(), r.owner.as_str(), r.repo.as_str()),
+            ("github.com", "o", "r")
+        );
     }
 
     #[test]

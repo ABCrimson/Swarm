@@ -10,7 +10,7 @@
 //! `causeSeq` provenance pair reach the handler however they are sent,
 //! with no per-command wrapper that could drop them.
 //!
-//! [`native`] holds the two commands with no registry entry
+//! [`native`] holds the three commands with no registry entry
 //! ([`swarm_core::commands::NATIVE_ONLY`]).
 
 pub mod native;
@@ -30,7 +30,7 @@ use tracing::Instrument;
 /// `#[macro_export]`s the two hidden helper macros `generate_handler!`
 /// expands to (`__cmd__<name>` and `__tauri_command_name_<name>`), which
 /// would put 72 macros at the crate root. The [`native`] commands are
-/// `pub`, and export their four, because the handler names them from this
+/// `pub`, and export their six, because the handler names them from this
 /// module and a private command's helpers are re-exported only inside its
 /// own module.
 macro_rules! commands {
@@ -269,6 +269,29 @@ mod tests {
             Some(origin_worker)
         );
         assert_eq!(removed.cause_seq, Some(7));
+    }
+
+    /// `open_worker_directory` is routed with its camelCase `workerId`,
+    /// and an id the registry does not hold opens nothing.
+    #[test]
+    fn open_worker_directory_takes_a_worker_id() {
+        let harness = Harness::new("open-dir");
+        let unknown = "7d1f0c2e-3b4a-4c5d-8e9f-0a1b2c3d4e5f";
+        assert_eq!(
+            harness.invoke(
+                "open_worker_directory",
+                serde_json::json!({ "workerId": unknown })
+            ),
+            Err(Value::String(format!("Worker `{unknown}` not found")))
+        );
+        assert!(
+            harness
+                .invoke(
+                    "open_worker_directory",
+                    serde_json::json!({ "workerId": "../../etc" })
+                )
+                .is_err()
+        );
     }
 
     /// Results and errors are the registry's own JSON, the same values

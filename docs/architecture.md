@@ -133,8 +133,8 @@ Every handler's logic exists once, in `swarm_core::commands::*`, keyed by name i
 declared `RemotePolicy` ([ADR-0021](adr/0021-command-registry-remote-policy.md)). The desktop shell
 calls `Registry::dispatch`; `swarmd` calls `Registry::dispatch_remote`, which enforces the policy.
 Arguments are one JSON object (omitted or `null` becomes `{}`; anything else is refused). There are
-**36** registry commands, plus **2** native ones that exist only in the desktop shell
-(`check_for_updates`, `send_notification`; `NATIVE_ONLY`).
+**36** registry commands, plus **3** native ones that exist only in the desktop shell
+(`check_for_updates`, `open_worker_directory`, `send_notification`; `NATIVE_ONLY`).
 
 | Area | Commands | Remote policy |
 | --- | --- | --- |
@@ -345,7 +345,7 @@ the mechanics ([ADR-0009](adr/0009-ship-chain-structural-guarantees.md)). The lo
 
 | Command | What it does |
 | --- | --- |
-| `git_ship_preflight(workerId, mode?)` | Read-only. `mode` is `all` (default) or `staged`. Eight refusal conditions become Title Case `blockers` and `canShip = false`: not the worktree's toplevel, primary checkout, detached `HEAD`, branch equals the base branch, protected branch (`main`, `master`, `develop`, `release/*`), no `origin`, unresolved merge conflicts, nothing to ship. Also returns the deny-list preview, diff stat, ahead/behind and whether the host supports a compare URL. |
+| `git_ship_preflight(workerId, mode?)` | Read-only. `mode` is `all` (default) or `staged`. Nine refusal conditions become Title Case `blockers` and `canShip = false`: not the worktree's toplevel, primary checkout, detached `HEAD`, branch equals the base branch, protected branch (`main`, `master`, `develop`, `release/*`), no `origin`, an `origin` with more than one push URL, unresolved merge conflicts, nothing to ship. The remote and host it shows are `origin`'s push URL (`git remote get-url --push --all`), the one `git push origin` reaches. Also returns the deny-list preview, diff stat, ahead/behind and whether the host supports a compare URL. |
 | `git_stage_commit(workerId, shipId, message, mode, finalStep)` | Primary-checkout guard, then one `git status --porcelain=v2 -z` snapshot (conflicts refuse), the deny list, `git restore --staged` of denied paths, in `all` mode `git add` of an explicit `:(top,literal)` path list, an index re-check, then `git commit --file=- --trailer=…`. Emits `ship_progress` and `commit_created`. |
 | `git_push(workerId, shipId, finalStep)` | Primary-checkout guard, live branch (detached, protected `main`/`master`/`develop`/`release/*` and the base branch refuse), sha of the branch tip, `git push --end-of-options origin <sha>:refs/heads/<branch>` (the exact commit, non-force), then `git branch --set-upstream-to=refs/remotes/origin/<branch>`. Every successful push is recorded as the worker's push record (sha, remote ref, `origin/<branch>`), which `ship_compare_url` reads. When the event-log seq read succeeds it also records `last_shipped_seq` and `last_shipped_commit` (the only writer). |
 | `ship_compare_url(workerId, shipId, title, body)` | `https://<host>/<owner>/<repo>/compare/<base>...<branch>?quick_pull=1&title=&body=`, capped at 6000 characters (the body is cut first, the title as a last resort, the path never). |
@@ -511,17 +511,18 @@ shells return the registry's value untouched, so desktop and daemon report ident
   forwards each envelope to the webview on `swarm://events` from the writer thread (a slow webview backs
   up the writer instead of losing events), manage `Ctx`, `Registry` and the runtime, then show the main
   window (created hidden). A start failure is shown in a non-blocking dialog and the app exits.
-- `commands/command_list.rs` is the one list of app command names (registry, then native). `commands/mod.rs` expands it through `commands!` into one forwarder per registry command (arguments in, registry JSON out, untouched); `build.rs` hands the same names to `tauri_build::AppManifest::commands`, which generates `allow-<command>`/`deny-<command>` for each. `commands/native.rs` holds `check_for_updates` and `send_notification`.
+- `commands/command_list.rs` is the one list of app command names (registry, then native). `commands/mod.rs` expands it through `commands!` into one forwarder per registry command (arguments in, registry JSON out, untouched); `build.rs` hands the same names to `tauri_build::AppManifest::commands`, which generates `allow-<command>`/`deny-<command>` for each. `commands/native.rs` holds `check_for_updates`, `open_worker_directory` and `send_notification`.
 - `lifecycle.rs`: the app's `swarm-lifecycle` plugin. Its `on_cleanup_before_exit` hook, which every exit path reaches (including `restart` on the main thread, which skips `RunEvent::Exit`), runs `Runtime::shutdown` once (2.5 s for agent sessions, then the event drain, which waits for the writer's backlog) on a scoped helper thread through the Tokio handle captured at registration, so it is safe when `exit` runs it on a Tokio worker; then it drops the release-log guard so the teardown's own lines are flushed. See [ADR-0033](adr/0033-cleanup-hook-teardown-and-command-acl.md).
 - `dialog_grants.rs`: mirrors dialog folder grants into the global fs scope so dot-entries are readable
   on macOS and Linux.
 
 **Capabilities** (`capabilities/default.json`, [ADR-0030](adr/0030-tauri-3-alpha-capability-scoped-fs.md)):
-`core:default`, one `allow-<command>` grant per app command (38; nothing else is invocable; pinned by `app_commands_are_granted_one_by_one`), `dialog:default`, `store:default`; fs `read-file`, `read-dir`, `stat` and
+`core:default`, one `allow-<command>` grant per app command (39; nothing else is invocable; pinned by `app_commands_are_granted_one_by_one`), `dialog:default`, `store:default`; fs `read-file`, `read-dir`, `stat` and
 `write-file` with **no static path scope** (only what the user picks in a dialog), `fs:deny-default` and
 a deny list (app data, `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`, `.config/gh`, `.claude`,
-`.codex`, `.git-credentials`, `.netrc`); opener `openUrl` for `https://*/*/*/compare/*` and `openPath`
-for `$HOME/.swarm/worktrees/**`. **CSP:** `default-src 'self'; script-src 'self'; style-src 'self'
+`.codex`, `.git-credentials`, `.netrc`); opener `openUrl` for `https://*/*/*/compare/*` and no
+`openPath` grant: a worker's worktree folder opens through the native `open_worker_directory`, by
+worker id, so no file an agent writes under the worktrees can be opened from the webview. **CSP:** `default-src 'self'; script-src 'self'; style-src 'self'
 'unsafe-inline'; img-src 'self'; connect-src ipc: http://ipc.localhost https://api.anthropic.com;
 font-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'`. Updates
 come from the GitHub releases `latest.json`, verified against the public key embedded in
@@ -716,7 +717,7 @@ textures: bloom (threshold, dual Kawase blur, composite), chromatic aberration, 
 | Boundary | Enforcement |
 | --- | --- |
 | Remote clients of `swarmd` | Token, `Host`/`Origin` allow-list, non-loopback gate, `RemotePolicy` ([ADR-0021](adr/0021-command-registry-remote-policy.md), [ADR-0022](adr/0022-swarmd-authentication-and-exposure.md)). An authenticated client can run commands as the daemon's user. |
-| Webview to OS | Capability file (per-command `allow-*` ACL, no static fs scope, deny list, opener scopes) and CSP ([ADR-0030](adr/0030-tauri-3-alpha-capability-scoped-fs.md)). |
+| Webview to OS | Capability file (per-command `allow-*` ACL, no static fs scope, deny list, opener URL scope) and CSP ([ADR-0030](adr/0030-tauri-3-alpha-capability-scoped-fs.md)). |
 | `read_file` / `write_file` commands | Absolute paths, canonicalized (symlinks, 8.3 short names) before the scope and deny checks; reads limited to the data directory and `$HOME`, writes to the data directory and `~/.swarm`; `swarm-config.json` (the API key), the daemon token and its temp form, and eighteen home credential stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.config/gh`, `~/.claude`, `~/.codex`, `~/.git-credentials`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials`, `~/.cargo/credentials.toml`, `~/.config/gcloud`, `~/AppData/Roaming/GitHub CLI`, `~/AppData/Roaming/gcloud`) are never accessible; the app's own state files in the data directory (`swarm-events.db`, `sessions.json`, `daemon.lock`, `swarm-settings.json`, `swarm-snapshots.json`, `swarm-templates.json`, and names with those prefixes) are never writable; Windows writes refuse `:`, a trailing `.` or space and device names; `Denied` remotely ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)). |
 | Webview AI tools | Every tool that acts on the machine, `kill_worker` included, needs the user's per-call answer inside its own `execute`; session grants are exact to tool, worker and argument ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)). |
 | Provider permissions | Closed trust tiers, no bypass modes ([ADR-0015](adr/0015-trust-tiers-closed-vocabulary.md)). |

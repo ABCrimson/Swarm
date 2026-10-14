@@ -67,11 +67,16 @@ pub mod worker;
 
 /// Commands that exist ONLY as `#[tauri::command]` wrappers in
 /// `swarm-desktop`: they need a live webview or OS integration
-/// (`tauri-plugin-updater`, `tauri-plugin-notification`) that means
-/// nothing over a network, so they have no registry entry. The desktop
-/// shell's contract tests check that its native commands are exactly
-/// this list and that none of them is a [`Registry::keys`] entry.
-pub const NATIVE_ONLY: &[&str] = &["check_for_updates", "send_notification"];
+/// (`tauri-plugin-updater`, `tauri-plugin-opener`,
+/// `tauri-plugin-notification`) that means nothing over a network, so
+/// they have no registry entry. The desktop shell's contract tests check
+/// that its native commands are exactly this list and that none of them
+/// is a [`Registry::keys`] entry.
+pub const NATIVE_ONLY: &[&str] = &[
+    "check_for_updates",
+    "open_worker_directory",
+    "send_notification",
+];
 
 /// Shared state for every registry handler. Cloning is one `Arc` bump —
 /// cheap per WebSocket connection and per IPC call.
@@ -419,7 +424,7 @@ mod tests {
         assert!(keys.is_sorted());
     }
 
-    /// 38 desktop commands minus the 2 [`NATIVE_ONLY`] ones.
+    /// 39 desktop commands minus the 3 [`NATIVE_ONLY`] ones.
     #[test]
     fn test_registry_has_36_entries() {
         assert_eq!(Registry::new().keys().len(), 36);

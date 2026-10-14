@@ -45,7 +45,7 @@ import {
  * themselves with {@link hasCapability};
  * this is the runtime check for call sites that invoke a plugin and need
  * the bridge itself (there is no opener capability: WorkerDetail checks
- * this before `openPath`, ShipPanel's compare button opens a tab with
+ * this before `openWorkerDirectory`, ShipPanel's compare button opens a tab with
  * `window.open` without it, and useShip's post-ship `openUrl` runs only
  * inside it, where a failure becomes the warning toast). A
  * `wsTransport` connection is a real backend but not a Tauri bridge, so
@@ -541,6 +541,21 @@ export async function sessionAddWorker(sessionId: string, workerId: string): Pro
  */
 export async function sessionRemoveWorker(sessionId: string, workerId: string): Promise<void> {
   return invoke<void>("session_remove_worker", { sessionId, workerId });
+}
+
+// ── Worktree Folder ──────────────────────────────────
+
+/**
+ * Opens worker `workerId`'s worktree folder in the system file manager
+ * (`open_worker_directory`, `src-tauri/src/commands/native.rs`). The shell
+ * looks the path up in its own registry and opens it only while it is a
+ * real directory: the webview names a worker, never a path, and holds no
+ * opener path scope, because an agent can write a `run.bat` into its
+ * worktree and a path grant would let the webview have the OS run it.
+ * Desktop-only like `send_notification`, so callers gate on {@link isTauri}.
+ */
+export async function openWorkerDirectory(workerId: string): Promise<void> {
+  return invoke<void>("open_worker_directory", { workerId });
 }
 
 // ── Notifications ────────────────────────────────────

@@ -7,8 +7,8 @@ use serde::Serialize;
 
 use super::{
     RepoLocks, ShipError, ShipErrorKind, ShipRemedy, guard_not_primary_checkout,
-    is_protected_branch, mutate, remote_url, resolve_base_branch, resolve_live_branch,
-    worktree_info_for_worker,
+    is_protected_branch, many_push_urls, mutate, push_urls, resolve_base_branch,
+    resolve_live_branch, worktree_info_for_worker,
 };
 use crate::error::AppError;
 use crate::git::cli::{PUSH_TIMEOUT, READ_TIMEOUT};
@@ -179,7 +179,7 @@ pub fn push(
             format!("Branch `{branch}` Is The Base Branch — Ship Refuses To Push Directly To It."),
         ));
     }
-    if remote_url(wt, "origin")?.is_none() {
+    if push_urls(wt, "origin")?.is_empty() {
         return Err(ShipError::new(
             ShipErrorKind::NoRemote,
             "No `origin` Remote Configured.",
@@ -299,8 +299,9 @@ pub fn recorded_push(registry: &WorkerRegistry, id: WorkerId) -> Option<PushReco
 ///   as [`super::worktree_info_for_worker`].
 /// * [`ShipErrorKind::InvalidBranch`] — detached `HEAD`.
 /// * [`ShipErrorKind::NoRemote`] — no `origin` remote configured.
-/// * [`ShipErrorKind::NonGitHubHost`] — the remote's host isn't one a
-///   GitHub-style compare URL applies to.
+/// * [`ShipErrorKind::NonGitHubHost`] — the push URL's host isn't one a
+///   GitHub-style compare URL applies to, or `origin` has more than one
+///   push URL.
 /// * [`ShipErrorKind::Timeout`] / [`ShipErrorKind::Unknown`] — reading the
 ///   live branch or the `origin` remote failed.
 pub fn compare_url(
@@ -339,8 +340,23 @@ pub fn compare_url_with_record(
         None => resolve_live_branch(wt)?,
     };
 
-    let raw_remote = remote_url(wt, "origin")?
-        .ok_or_else(|| ShipError::new(ShipErrorKind::NoRemote, "No `origin` Remote Configured."))?;
+    // The push URL, not the fetch URL: the branch is on the remote the
+    // push reached, so that is where its compare page is.
+    let raw_remote = match push_urls(wt, "origin")?.as_slice() {
+        [] => {
+            return Err(ShipError::new(
+                ShipErrorKind::NoRemote,
+                "No `origin` Remote Configured.",
+            ));
+        }
+        [url] => url.clone(),
+        many => {
+            return Err(ShipError::new(
+                ShipErrorKind::NonGitHubHost,
+                many_push_urls(many.len()),
+            ));
+        }
+    };
     let parsed = remote::parse(&raw_remote).ok_or_else(|| {
         ShipError::new(
             ShipErrorKind::NonGitHubHost,

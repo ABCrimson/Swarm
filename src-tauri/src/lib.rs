@@ -17,7 +17,7 @@
 //!   entries on macOS and Linux.
 //! - [`commands`] exposes every [`swarm_core::commands::Registry`] command
 //!   under its own name (the same table `swarmd` serves as WebSocket `rpc`
-//!   frames), plus the two desktop-only commands that drive OS integrations.
+//!   frames), plus the three desktop-only commands that drive OS integrations.
 //! - [`lifecycle`] shuts the runtime down in a plugin cleanup hook that
 //!   every exit path runs, and the release log is flushed after it.
 
@@ -88,12 +88,13 @@ pub fn run() {
         .runtime(tauri_runtime_wry::Wry::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        // The frontend opens exactly two things, both explicitly: the
-        // ship chain's GitHub compare page (`openUrl`) and a worker's
-        // worktree folder (`openPath`), each scoped in
-        // capabilities/default.json. The plugin's injected click handler
-        // (routing `target="_blank"` links to `open_url`) stays off: the
-        // app renders no such links.
+        // Two things open: the ship chain's GitHub compare page, from the
+        // webview (`openUrl`, scoped in capabilities/default.json), and a
+        // worker's worktree folder, from the shell itself
+        // (`commands::native::open_worker_directory`; the webview has no
+        // path grant). The plugin's injected click handler (routing
+        // `target="_blank"` links to `open_url`) stays off: the app
+        // renders no such links.
         .plugin(
             tauri_plugin_opener::Builder::new()
                 .open_js_links_on_click(false)

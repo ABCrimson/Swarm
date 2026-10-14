@@ -45,8 +45,9 @@ pub enum ShipErrorKind {
     InvalidBranch,
     /// No `origin` remote configured.
     NoRemote,
-    /// The `origin` remote's host isn't one a GitHub-style compare URL
-    /// can be built for.
+    /// The host of `origin`'s push URL isn't one a GitHub-style compare
+    /// URL can be built for, or `origin` has several push URLs and so no
+    /// one host.
     NonGitHubHost,
     /// Every candidate file was skipped by the deny list, or there were
     /// no changes at all.

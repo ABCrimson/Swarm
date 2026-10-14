@@ -43,6 +43,7 @@
     "allow-bus-list-channels",
     "allow-check-for-updates",
     "allow-send-notification",
+    "allow-open-worker-directory",
     "fs:allow-read-file",
     "fs:allow-read-dir",
     "fs:allow-stat",
@@ -69,10 +70,6 @@
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "https://*/*/*/compare/*" }]
-    },
-    {
-      "identifier": "opener:allow-open-path",
-      "allow": [{ "path": "$HOME/.swarm/worktrees/**" }]
     },
     "store:default"
   ]
