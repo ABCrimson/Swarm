@@ -202,7 +202,7 @@ Setup, standards and the pull request process are in [docs/contributing.md](docs
 | Node.js | 27.0.0-nightly202610123b639be3a4 | `package.json` `devEngines.runtime` |
 | Rust toolchain | nightly-2026-10-14 (`rust-version` 1.101, edition 2024) | `rust-toolchain.toml`, `Cargo.toml` |
 | Tauri | 3.0.0-alpha.4 (`tauri`, `tauri-runtime-wry`) | `Cargo.toml` |
-| React | 19.3.0-canary-07dde64d-20261013 | `package.json` |
+| React | 19.3.1 | `package.json` |
 | TypeScript | 7.1.0-dev.20261014.1 | `package.json` |
 | Vite | 8.3.4 | `package.json` |
 | Biome | 2.5.15 | `package.json` |
