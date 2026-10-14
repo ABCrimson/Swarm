@@ -140,24 +140,26 @@ export const RPC_DEADLINE_MARGIN_MS = 30_000;
  * path runs, plus {@link RPC_DEADLINE_MARGIN_MS}. Counted from the
  * daemon source (`crates/swarm-core/src`), each call once:
  *
- * - `git_stage_commit` (`commands/git.rs:284` → `git/ship/commit.rs:236`):
- *   3 scans (`status` before, `status` after staging, the new commit's
- *   `show --numstat`: `commit.rs:248`, `:304`, `:338`), 3 mutations
- *   (`restore --staged`, `add`, `commit`: `:275`, `:294`, `:331`) and 2
- *   reads (`repo::locate` in the primary-checkout guard, `:246`; `head_sha`,
- *   `:337`) = 3 × 60 s + 3 × 600 s + 2 × 15 s, plus the margin.
- * - `git_push` (`commands/git.rs:371` → `git/ship/push.rs:134`): the push
- *   (`:164`) and 6 reads (`repo::locate` `:142`, `symbolic-ref` `:143`,
- *   the base-branch lookup's two queries `:150` → `ship/mod.rs:313`,
- *   `:323`, `remote get-url` `:156`, `head_sha` `:162`) = 600 s + 6 × 15 s.
- * - `git_ship_preflight` (`commands/git.rs:258` → `git/ship/preflight.rs:89`):
- *   3 scans (`status` `:112`, `rev-list --count` `:146`, the preview's
- *   `diff --numstat` `:173`) and 4 reads (`repo::locate` `:99`, the
- *   base-branch lookup's two queries `:118`, `remote get-url` `:130`)
- *   = 3 × 60 s + 4 × 15 s.
- * - `ship_compare_url` (`commands/git.rs:438` → `git/ship/push.rs:200`):
- *   4 reads (`symbolic-ref` `:208`, `remote get-url` `:210`, the
- *   base-branch lookup's two queries `:228`) = 4 × 15 s.
+ * - `git_stage_commit` (`stage_and_commit` in `git/ship/commit.rs`):
+ *   3 scans (`StatusSnapshot::read` twice, then `commit_diff_stat`'s
+ *   `show --numstat`; all `SCAN_TIMEOUT`), 3 mutations (the `restore
+ *   --staged`, `add` and `commit` `mutate` calls; `MUTATE_TIMEOUT` each)
+ *   and 2 reads (`repo::locate` in `guard_not_primary_checkout`, then
+ *   `repo::head_sha`; `READ_TIMEOUT` each) = 3 × 60 s + 3 × 600 s +
+ *   2 × 15 s, plus the margin.
+ * - `git_push` (`push` in `git/ship/push.rs`): the push (`mutate` with
+ *   `PUSH_TIMEOUT`) and 6 reads (`repo::locate`; `resolve_live_branch`'s
+ *   `symbolic-ref`; `resolve_base_branch`'s `origin_head_branch` and
+ *   `configured_default_branch`; `remote_url`'s `remote get-url`;
+ *   `repo::head_sha`; `READ_TIMEOUT` each) = 600 s + 6 × 15 s.
+ * - `git_ship_preflight` (`preflight` in `git/ship/preflight.rs`): 3 scans
+ *   (`StatusSnapshot::read`, `ahead_since_base`'s `rev-list --count`,
+ *   `preview_diff_stat`'s `diff --numstat`; `SCAN_TIMEOUT` each) and 4
+ *   reads (`repo::locate`, `resolve_base_branch`'s two queries,
+ *   `remote_url`; `READ_TIMEOUT` each) = 3 × 60 s + 4 × 15 s.
+ * - `ship_compare_url` (`compare_url` in `git/ship/push.rs`): 4 reads
+ *   (`resolve_live_branch`, `remote_url`, `resolve_base_branch`'s two
+ *   queries; `READ_TIMEOUT` each) = 4 × 15 s.
  *
  * Every other command gets {@link DEFAULT_RPC_DEADLINE_MS}. The ship
  * flow reuses this as the window in which a lost reply may still be
