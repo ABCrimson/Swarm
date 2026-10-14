@@ -374,6 +374,41 @@ describe("SpawnWorkerDialog", () => {
     expect(agentSpawn).not.toHaveBeenCalled();
   });
 
+  it("refuses every dismissal while a spawn is in flight, then closes when it succeeds", async () => {
+    const pending = Promise.withResolvers<string | null>();
+    vi.mocked(spawnWorker).mockImplementation(() => pending.promise);
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<SpawnWorkerDialog onClose={onClose} />);
+    await waitForProbeSettled();
+
+    await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
+
+    const closeButton = screen.getByRole("button", { name: "Close Spawn Worker Dialog" });
+    await waitFor(() => expect(closeButton).toBeDisabled());
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await user.click(closeButton);
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Spawn Worker" })).toHaveAttribute("open");
+
+    await act(async () => pending.resolve("22222222-3333-4444-8555-666666666666"));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("closes from the header close button when no spawn is in flight", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<SpawnWorkerDialog onClose={onClose} />);
+    await waitForProbeSettled();
+
+    await user.click(screen.getByRole("button", { name: "Close Spawn Worker Dialog" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("closes on Escape", async () => {
     const onClose = vi.fn();
     render(<SpawnWorkerDialog onClose={onClose} />);

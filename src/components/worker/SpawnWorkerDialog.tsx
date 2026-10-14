@@ -161,6 +161,9 @@ const closeButtonStyle: CSSProperties = {
   cursor: "pointer",
 };
 
+/** Mirrors the disabled look of the footer Cancel button. */
+const closeButtonDisabledStyle: CSSProperties = { opacity: 0.4, cursor: "not-allowed" };
+
 const bodyStyle: CSSProperties = {
   flex: 1,
   overflowY: "auto",
@@ -415,6 +418,15 @@ export function SpawnWorkerDialog({
     }
   }, null);
 
+  // The one user-dismissal path for the close and Cancel buttons (Escape and
+  // backdrop go through `onCancel`, which applies the same rule): a dialog
+  // dismissed mid-spawn leaves the result nowhere to go. The `spawn` action
+  // calls `closeDialog` directly because it closes while `isSpawning` is
+  // still true.
+  const requestDismiss = () => {
+    if (!isSpawning) closeDialog();
+  };
+
   const pickProjectRoot = async () => {
     let selected: string | null;
     try {
@@ -453,7 +465,7 @@ export function SpawnWorkerDialog({
       aria-labelledby={titleId}
       onClose={onClose}
       onCancel={(e) => {
-        // Never dismiss mid-spawn: the result has nowhere to go.
+        // Escape and backdrop light-dismiss; never mid-spawn (see `requestDismiss`).
         if (isSpawning) e.preventDefault();
       }}
       style={dialogStyle}
@@ -466,9 +478,10 @@ export function SpawnWorkerDialog({
           </h2>
           <button
             type="button"
-            onClick={closeDialog}
+            onClick={requestDismiss}
+            disabled={isSpawning}
             aria-label="Close Spawn Worker Dialog"
-            style={closeButtonStyle}
+            style={{ ...closeButtonStyle, ...(isSpawning ? closeButtonDisabledStyle : null) }}
           >
             <svg width={14} height={14} viewBox="0 0 14 14" fill="none" aria-hidden="true">
               <path
@@ -595,7 +608,7 @@ export function SpawnWorkerDialog({
         </div>
 
         <div style={footerStyle}>
-          <Button variant="ghost" size="sm" onClick={closeDialog} disabled={isSpawning}>
+          <Button variant="ghost" size="sm" onClick={requestDismiss} disabled={isSpawning}>
             Cancel
           </Button>
           <Button
