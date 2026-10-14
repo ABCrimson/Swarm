@@ -199,6 +199,7 @@ Creates a new worker process with a PTY and registers it in the worker registry.
 | Error (string)                  | Condition                                |
 |---------------------------------|------------------------------------------|
 | `Git error: ...`                | `repoRoot` given and repo discovery, `HEAD` resolution, or `git worktree add`/`lock` failed, or `git` is missing or older than the supported floor |
+| `IO error: could not resolve the home directory` | `repoRoot` given with worktree isolation, no configured worktrees root, and no resolvable home directory (the default root is `~/.swarm/worktrees`) |
 | `PTY spawn failed: ...`         | Shell executable not found or PTY error  |
 | `Registry at capacity (N)`      | `max_workers` workers (default 64) already exist. Checked before anything is created: no worktree, branch or shell is left behind |
 

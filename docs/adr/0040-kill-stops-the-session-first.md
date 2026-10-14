@@ -53,7 +53,7 @@ Pinned by `test_kill_worker_stops_the_provider_session_before_removing_the_workt
 `test_a_second_kill_waits_for_the_first_kills_session_shutdown`,
 `test_kill_worker_waits_for_an_agent_shutdown_in_progress` (`commands/worker.rs`), the fence tests in
 `agent/registry.rs`, and
-`test_execute_turn_for_a_closing_worker_synthesizes_an_error_receipt` (`runtime.rs`).
+`test_execute_turn_for_a_closing_worker_synthesizes_an_error_receipt` (`agent/scheduler.rs`).
 
 ## Consequences
 
