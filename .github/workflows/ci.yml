@@ -248,7 +248,8 @@ jobs:
           rm actionlint actionlint.tar.gz
 
       - name: actionlint
-        run: "${RUNNER_TEMP}/actionlint"
+        # YAML single quotes keep the shell's double quotes (shellcheck SC2086).
+        run: '"$RUNNER_TEMP/actionlint"'
 
       # Annotations instead of a SARIF upload: no security-events grant, and
       # findings still fail the job. Online audits check every pinned SHA
