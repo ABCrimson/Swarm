@@ -35,7 +35,8 @@
 //! unknown session, an unknown flag) answers with a `result` line or
 //! exits instead; both fail the spawn and the child is reaped.
 //! [`ClaudeCodeAdapter::probe`] runs the same handshake plus
-//! `get_binary_version` in a throwaway process.
+//! `get_binary_version` in a throwaway process, in a fresh private
+//! directory it removes afterwards.
 //!
 //! ## Turn ownership
 //!
@@ -59,6 +60,12 @@
 //!
 //! ## Permissions: trust tier at spawn, human in the loop mid-turn
 //!
+//! A session loads no settings file (`--setting-sources ""`): its only
+//! settings are inline, and a repo's `.claude/settings.json` contributes
+//! nothing but its `permissions.deny` strings, appended to the tier's
+//! deny list. A spawn refuses a working directory that is not an
+//! absolute, existing directory, and starts the `claude` executable
+//! found in an absolute `PATH` entry, cached from the last probe.
 //! A [`ClaudeCodeTrustTier`] fixes the permission mode, the settings deny
 //! list, and (Restricted only) `--restricted` at spawn. Everything the
 //! tier neither allows nor denies is asked of the host:
@@ -102,6 +109,8 @@ mod wire;
 mod tests;
 
 use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -110,13 +119,13 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, oneshot, watch};
 use uuid::Uuid;
 
-use self::process::{HandshakeError, Process, handshake};
+use self::process::{HandshakeError, Process, handshake, resolve_program};
 use self::reader::{run_reader, watch_framer_errors};
 use self::state::{Inner, Shared, Status, Stop, TurnState};
 use self::teardown::teardown;
 use self::tier::{
-    accepted_permission_modes, build_claude_flags, claude_code_capabilities, parse_trust_tier,
-    probe_flags,
+    accepted_permission_modes, build_claude_flags, cap_repo_deny, claude_code_capabilities,
+    parse_trust_tier, probe_flags, repo_deny_entries,
 };
 use self::wire::{ControlResponse, SignIn};
 use crate::agent::adapter::{
@@ -236,17 +245,20 @@ pub enum ClaudeCodeTrustTier {
     /// Read-only exploration: `--restricted` (no command-running tools,
     /// no `WebFetch`, file tools confined to the working directory),
     /// `--permission-mode dontAsk` (anything not pre-approved is denied
-    /// without asking), and a deny list for the writing tools.
+    /// without asking), and a deny list for the tools that write
+    /// (`Write`, `Edit`, `NotebookEdit`, the worktree tools,
+    /// `DesignSync`) or send data out (`WebSearch`, `PushNotification`).
     Restricted,
-    /// `--permission-mode manual`, the CLI's default mode pinned against
-    /// project settings: reads run, anything that needs approval
-    /// (commands with side effects, file edits) is asked of the human,
-    /// and the destructive Bash patterns in `deny_list` are always
-    /// denied.
+    /// `--permission-mode manual`, the CLI's default mode, pinned by the
+    /// flag: reads run, anything that needs approval (commands with side
+    /// effects, file edits) is asked of the human, the worktree tools are
+    /// denied, and the destructive Bash patterns in `deny_list` are
+    /// denied as a convenience fence (other spellings reach the human).
     Standard,
-    /// `--permission-mode acceptEdits`: file edits in the working
-    /// directory run without asking, commands are asked of the human,
-    /// and the same destructive patterns stay denied.
+    /// `--permission-mode acceptEdits`: file edits and the filesystem
+    /// commands `mkdir`/`touch`/`rm`/`rmdir`/`mv`/`cp`/`sed` in the
+    /// working directory run without asking; other commands are asked of
+    /// the human, and the same deny list as Standard applies.
     WriteEnabled,
 }
 
@@ -285,15 +297,75 @@ pub struct ClaudeCodeAdapter {
     /// Test-only argv prefix (empty in production), set by
     /// `ClaudeCodeAdapter::with_test_binary`.
     prefix_args: Vec<String>,
+    /// The executable `binary` resolved to (`resolve_program`): set by
+    /// every probe, reused by every spawn that follows, and resolved by
+    /// the first spawn when no probe ran.
+    resolved: parking_lot::RwLock<Option<PathBuf>>,
+}
+
+/// Name of a probe's private working directory under the temp root: the
+/// prefix, then a fresh UUID.
+const PROBE_DIR_PREFIX: &str = "swarm-claude-probe-";
+
+/// Most bytes of a repo's `.claude/settings.json` SWARM reads for its
+/// deny entries; a larger file contributes none. What it contributes is
+/// capped again by [`tier::cap_repo_deny`].
+const REPO_SETTINGS_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Creates a fresh directory for one probe under the temp root, owner-only
+/// (`0700`) on Unix. Creation is not recursive, so it fails when the path
+/// already exists rather than reuse a directory someone else made.
+async fn private_probe_dir() -> std::io::Result<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("{PROBE_DIR_PREFIX}{}", Uuid::new_v4()));
+    #[cfg(unix)]
+    let builder = {
+        let mut builder = tokio::fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder
+    };
+    #[cfg(not(unix))]
+    let builder = tokio::fs::DirBuilder::new();
+    builder.create(&dir).await?;
+    Ok(dir)
+}
+
+/// The `permissions.deny` entries of `<cwd>/.claude/settings.json`
+/// ([`tier::repo_deny_entries`]), or none when the file is missing, not a
+/// regular file, larger than [`REPO_SETTINGS_MAX_BYTES`], unreadable, or
+/// not valid JSON. Nothing else in the file is used.
+async fn read_repo_deny(cwd: &Path) -> Vec<String> {
+    let file = cwd.join(".claude").join("settings.json");
+    match tokio::fs::metadata(&file).await {
+        Ok(meta) if meta.is_file() && meta.len() <= REPO_SETTINGS_MAX_BYTES => {}
+        Ok(_) => {
+            tracing::warn!(path = %file.display(), "claude code: repo settings are not a regular file within the size cap; ignoring their deny list");
+            return Vec::new();
+        }
+        Err(_) => return Vec::new(),
+    }
+    match tokio::fs::read_to_string(&file).await {
+        Ok(text) => {
+            let (kept, dropped) = cap_repo_deny(repo_deny_entries(&text));
+            if dropped > 0 {
+                tracing::warn!(path = %file.display(), dropped, "claude code: repo settings list more deny entries than fit; the rest are dropped");
+            }
+            kept
+        }
+        Err(error) => {
+            tracing::warn!(path = %file.display(), %error, "claude code: repo settings are unreadable; ignoring their deny list");
+            Vec::new()
+        }
+    }
 }
 
 impl ClaudeCodeAdapter {
-    /// Drives the `claude` binary found on `PATH`.
+    /// Drives the `claude` binary found in an absolute `PATH` entry.
     pub fn new(sink: EventSink) -> Self {
         Self {
             sink,
             binary: "claude".to_owned(),
             prefix_args: Vec::new(),
+            resolved: parking_lot::RwLock::new(None),
         }
     }
 
@@ -311,34 +383,88 @@ impl ClaudeCodeAdapter {
             sink,
             binary: binary.into(),
             prefix_args,
+            resolved: parking_lot::RwLock::new(None),
         }
     }
 
+    /// The executable to start: the cached resolution unless `refresh` or
+    /// none is cached, else a fresh [`resolve_program`] over `PATH`.
+    async fn program(&self, refresh: bool) -> Option<PathBuf> {
+        self.program_on(refresh, std::env::var_os("PATH")).await
+    }
+
+    /// [`Self::program`] over the given `PATH` value.
+    async fn program_on(&self, refresh: bool, path: Option<OsString>) -> Option<PathBuf> {
+        if !refresh && let Some(cached) = self.resolved.read().clone() {
+            return Some(cached);
+        }
+        let binary = self.binary.clone();
+        let found = tokio::task::spawn_blocking(move || {
+            resolve_program(&binary, path.as_deref(), cfg!(windows))
+        })
+        .await
+        .ok()
+        .flatten();
+        self.resolved.write().clone_from(&found);
+        found
+    }
+
+    /// Runs the probe in a fresh private directory (`private_probe_dir`)
+    /// and removes it on every return path.
     async fn run_probe(&self) -> ProbeReport {
+        let cwd = match private_probe_dir().await {
+            Ok(cwd) => cwd,
+            Err(error) => {
+                return ProbeReport {
+                    available: false,
+                    version: None,
+                    detail: Some(format!(
+                        "Claude Code Probe Directory Could Not Be Created: {error}"
+                    )),
+                };
+            }
+        };
+        let report = self.run_probe_in(&cwd).await;
+        if let Err(error) = tokio::fs::remove_dir_all(&cwd).await {
+            tracing::warn!(path = %cwd.display(), %error, "claude code: the probe directory could not be removed");
+        }
+        report
+    }
+
+    async fn run_probe_in(&self, cwd: &Path) -> ProbeReport {
         let unavailable = |version: Option<String>, detail: String| ProbeReport {
             available: false,
             version,
             detail: Some(detail),
         };
+        let Some(program) = self.program(true).await else {
+            return unavailable(
+                None,
+                format!(
+                    "Claude Code CLI Not Found On PATH: No Absolute PATH Entry Holds {:?}",
+                    self.binary
+                ),
+            );
+        };
         let mut argv = self.prefix_args.clone();
         argv.extend(probe_flags());
-        let cwd = std::env::temp_dir();
-        let mut process = match Process::start(&self.binary, &argv, &cwd.to_string_lossy()).await {
-            Ok(process) => process,
-            Err(error) => {
-                let not_found = error.chain().any(|cause| {
-                    cause
-                        .downcast_ref::<std::io::Error>()
-                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
-                });
-                let detail = if not_found {
-                    format!("Claude Code CLI Not Found On PATH: {error:#}")
-                } else {
-                    format!("Claude Code CLI Could Not Be Started: {error:#}")
-                };
-                return unavailable(None, detail);
-            }
-        };
+        let mut process =
+            match Process::start(&program.to_string_lossy(), &argv, &cwd.to_string_lossy()).await {
+                Ok(process) => process,
+                Err(error) => {
+                    let not_found = error.chain().any(|cause| {
+                        cause
+                            .downcast_ref::<std::io::Error>()
+                            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                    });
+                    let detail = if not_found {
+                        format!("Claude Code CLI Not Found On PATH: {error:#}")
+                    } else {
+                        format!("Claude Code CLI Could Not Be Started: {error:#}")
+                    };
+                    return unavailable(None, detail);
+                }
+            };
         let answer = tokio::time::timeout(PROBE_TIMEOUT, handshake(&mut process, true)).await;
         let stderr = process.finish(true).await;
         let (init, version) = match answer {
@@ -386,20 +512,42 @@ impl ClaudeCodeAdapter {
     }
 
     async fn spawn_session(&self, spec: AgentSpawnSpec) -> Result<ClaudeCodeSession, AppError> {
+        // An empty working directory would make the child inherit SWARM's
+        // own (`/` for a macOS app opened from the Finder), and the
+        // CLI's working-directory limits would then cover the whole disk.
+        let cwd = Path::new(&spec.cwd);
+        let cwd_ok = cwd.is_absolute()
+            && tokio::fs::metadata(cwd)
+                .await
+                .is_ok_and(|meta| meta.is_dir());
+        if !cwd_ok {
+            return Err(AppError::Ai(format!(
+                "Agent Session Needs An Absolute, Existing Working Directory (Got {:?})",
+                spec.cwd
+            )));
+        }
         let tier = parse_trust_tier(spec.permission_mode.as_deref())?;
         let requested_model = spec
             .model
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL_ALIAS.to_owned());
+        let repo_deny = read_repo_deny(cwd).await;
         let mut argv = self.prefix_args.clone();
         argv.extend(build_claude_flags(
             spec.worker_id,
             &requested_model,
             tier,
             spec.resume.as_deref(),
+            &repo_deny,
         ));
 
-        let mut process = Process::start(&self.binary, &argv, &spec.cwd)
+        let program = self.program(false).await.ok_or_else(|| {
+            AppError::Ai(format!(
+                "Failed To Start Claude Code: No Absolute PATH Entry Holds {:?}",
+                self.binary
+            ))
+        })?;
+        let mut process = Process::start(&program.to_string_lossy(), &argv, &spec.cwd)
             .await
             .map_err(|error| AppError::Ai(format!("Failed To Start Claude Code: {error:#}")))?;
 
