@@ -59,6 +59,26 @@ impl Fence {
     }
 }
 
+/// Shuts a replaced session down in the background, so replacing a live
+/// session never orphans its child process; the stop is released once
+/// the shutdown is done. Without a Tokio runtime to run it on, the
+/// session is dropped (and the stop released) with an error log.
+fn shut_down_replaced(stop: SessionStop) {
+    let worker_id = stop.worker_id;
+    match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => {
+            runtime.spawn(async move {
+                if let Err(e) = stop.shutdown().await {
+                    tracing::warn!(%worker_id, error = %e, "shutting down a replaced agent session failed");
+                }
+            });
+        }
+        Err(_) => {
+            tracing::error!(%worker_id, "no Tokio runtime to shut down a replaced agent session; dropping it");
+        }
+    }
+}
+
 /// A session taken out of the registry to be shut down, from
 /// [`AgentSessionRegistry::take_session`]. It derefs to the session; until
 /// it drops, [`AgentSessionRegistry::wait_stopped`] waits, so drop it
@@ -106,8 +126,9 @@ pub struct AttachPermit {
 }
 
 impl AttachPermit {
-    /// Registers the attached `session` for the permit's worker (see
-    /// [`AgentSessionRegistry`] for what replacing a live one does).
+    /// Registers the attached `session` for the permit's worker. A live
+    /// session it replaces is shut down in the background under a counted
+    /// [`SessionStop`], so [`AgentSessionRegistry::wait_stopped`] waits for it.
     ///
     /// # Errors
     ///
@@ -117,13 +138,31 @@ impl AttachPermit {
     pub fn insert(&self, session: Arc<dyn AgentSession>) -> Result<(), AppError> {
         // The fence's shard guard is held across the registration, so a
         // concurrent `begin_close` either sees the session registered (and
-        // its kill removes it) or this check sees the worker closing.
+        // its kill removes it) or this check sees the worker closing. The
+        // permit's attach count keeps the fence in the map.
         let fence = self.registry.fences.get(&self.worker_id);
         if fence.as_ref().is_some_and(|fence| fence.closing > 0) {
             return Err(worker_closing(self.worker_id));
         }
-        self.registry.register(self.worker_id, session);
+        let replaced = self.registry.register(self.worker_id, session);
+        // A replaced session leaves the registry like any other: counted
+        // as a stop under the fence (`send_modify` needs only `&self`, so
+        // the read guard suffices), released once its shutdown is done.
+        let stop = replaced.map(|stale| {
+            if let Some(fence) = &fence {
+                fence.stops.send_modify(|stops| *stops += 1);
+            }
+            SessionStop {
+                session: stale,
+                registry: self.registry.clone(),
+                worker_id: self.worker_id,
+            }
+        });
+        // Released before the stop can drop: its `Drop` writes this shard.
         drop(fence);
+        if let Some(stop) = stop {
+            shut_down_replaced(stop);
+        }
         Ok(())
     }
 }
@@ -279,15 +318,16 @@ impl AgentSessionRegistry {
             .unwrap_or_default()
     }
 
-    /// Registers a newly spawned session for `worker_id`; only
-    /// [`AttachPermit::insert`] calls it, after the closing check.
-    ///
-    /// Replacing a live session must never orphan its child process: a
-    /// replaced session is shut down in the background (its turn lock is
-    /// kept for the new session, so a turn still running against the old
-    /// one serializes with the next). Without a Tokio runtime to run that
-    /// shutdown on, the replaced session is dropped with an error log.
-    fn register(&self, worker_id: Uuid, session: Arc<dyn AgentSession>) {
+    /// Registers a newly spawned session for `worker_id` and returns the
+    /// live session it replaced, if any; only [`AttachPermit::insert`]
+    /// calls it, after the closing check, and shuts the replaced one down
+    /// (its turn lock is kept for the new session, so a turn still running
+    /// against the old one serializes with the next).
+    fn register(
+        &self,
+        worker_id: Uuid,
+        session: Arc<dyn AgentSession>,
+    ) -> Option<Arc<dyn AgentSession>> {
         let replaced = match self.entries.entry(worker_id) {
             Entry::Occupied(mut occupied) => {
                 Some(std::mem::replace(&mut occupied.get_mut().session, session))
@@ -300,22 +340,10 @@ impl AgentSessionRegistry {
                 None
             }
         };
-        let Some(stale) = replaced else {
-            return;
-        };
-        tracing::warn!(%worker_id, "agent session replaced while still registered — shutting the old one down");
-        match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => {
-                runtime.spawn(async move {
-                    if let Err(e) = stale.shutdown().await {
-                        tracing::warn!(%worker_id, error = %e, "shutting down a replaced agent session failed");
-                    }
-                });
-            }
-            Err(_) => {
-                tracing::error!(%worker_id, "no Tokio runtime to shut down a replaced agent session; dropping it");
-            }
+        if replaced.is_some() {
+            tracing::warn!(%worker_id, "agent session replaced while still registered — shutting the old one down");
         }
+        replaced
     }
 
     /// Looks up the live session for `worker_id`.
@@ -557,6 +585,83 @@ mod tests {
         assert!(registry.is_closing(&worker_id));
         drop(second);
         assert!(!registry.is_closing(&worker_id));
+        assert!(registry.fences.is_empty());
+    }
+
+    /// A session whose `shutdown` resolves only once `release` fires.
+    struct HeldShutdownSession {
+        key: SessionKey,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    impl AgentSession for HeldShutdownSession {
+        fn session_key(&self) -> &SessionKey {
+            &self.key
+        }
+        fn send_turn(&self, _turn: TurnInput) -> BoxFuture<'_, Result<TurnId, AppError>> {
+            Box::pin(async { Ok("t".to_string()) })
+        }
+        fn await_turn_completion(&self, _turn: TurnId) -> BoxFuture<'_, Result<(), AppError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn cancel(&self, _turn: TurnId) -> BoxFuture<'_, Result<(), AppError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn respond_permission(
+            &self,
+            _req: PermissionId,
+            _decision: PermissionDecision,
+        ) -> BoxFuture<'_, Result<(), AppError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn shutdown(&self) -> BoxFuture<'_, Result<ExitSummary, AppError>> {
+            Box::pin(async {
+                self.release.notified().await;
+                Ok(ExitSummary {
+                    exit_code: Some(0),
+                    signal: None,
+                })
+            })
+        }
+    }
+
+    /// A session replaced by a later attach is shut down under a counted
+    /// stop: a kill's `wait_stopped` waits for that background shutdown
+    /// as for any other.
+    #[tokio::test]
+    async fn test_wait_stopped_waits_for_a_replaced_sessions_shutdown() {
+        let registry = AgentSessionRegistry::new();
+        let worker_id = Uuid::new_v4();
+        let release = Arc::new(tokio::sync::Notify::new());
+        attach(
+            &registry,
+            worker_id,
+            Arc::new(HeldShutdownSession {
+                key: "stale".to_owned(),
+                release: Arc::clone(&release),
+            }),
+        );
+        attach(&registry, worker_id, Arc::new(NoopSession::new("fresh")));
+
+        let closing = registry.begin_close(worker_id).await;
+        drop(
+            registry
+                .take_session(&worker_id)
+                .expect("the fresh session"),
+        );
+        let waiting =
+            tokio::time::timeout(Duration::from_millis(100), registry.wait_stopped(worker_id))
+                .await;
+        assert!(
+            waiting.is_err(),
+            "the kill must wait for the replaced session's shutdown"
+        );
+
+        release.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), registry.wait_stopped(worker_id))
+            .await
+            .expect("the wait ends once the replaced session is shut down");
+        drop(closing);
         assert!(registry.fences.is_empty());
     }
 
