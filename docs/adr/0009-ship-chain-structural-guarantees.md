@@ -42,8 +42,8 @@ hold because the code cannot express the unsafe thing:
   is not pushed and the receipt's `sha` is what the remote received. It therefore also works with no
   preceding commit, for work that is committed but unpushed. Every successful push is recorded in
   the worker registry (`PushRecord`: sha, remote, remote ref, `origin/<branch>`) by the push itself,
-  independent of the event log; the compare page and its receipt read that record, never the caller or
-  a live branch. The record is per worker, so interleaved ship attempts share the latest push.
+  independent of the event log; the compare URL's branch is read from that record, not from a live
+  branch. The record is per worker, so interleaved ship attempts share the latest push.
 - **A push rejection never becomes a force-push.** The remedy for non-fast-forward is
   fetch-and-rebase and ship again, an explicit second click.
 - **Receipts.** Mutating commands emit `ship_progress` steps and end an attempt with exactly one
@@ -60,6 +60,8 @@ hold because the code cannot express the unsafe thing:
 
 - `last_shipped_*` is in memory only; after a restart the seq range falls back to the worker's
   `worktree_created` row.
+- `ship_compare_url` still settles its receipt with the `commitSha` and `pushedRef` the caller
+  sends; the pending `commands/git.rs` change (patch G3) makes it read the push record instead.
 - The deny list governs what SWARM commits. Commits the agent made itself are pushed as they are, and
   a process that stages a file between the final check and `git commit` is not seen.
 - The frontend's receipt wait is 30 s, shorter than the backend's 600 s commit and push budgets (see

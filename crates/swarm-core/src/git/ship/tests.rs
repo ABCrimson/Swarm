@@ -418,7 +418,7 @@ fn test_staged_mode_commits_a_small_index_blob_whose_working_copy_grew() {
 }
 
 /// S3: a staged 6 MB file with a non-UTF-8 name never reaches a commit
-/// in staged-only mode (the ship may fail closed instead of skipping).
+/// in staged-only mode: the ship is refused (it cannot be unstaged).
 #[cfg(unix)]
 #[test]
 fn test_staged_mode_never_commits_an_oversized_non_utf8_name() {
@@ -430,12 +430,16 @@ fn test_staged_mode_never_commits_an_oversized_non_utf8_name() {
     write_file(&worktree, "safe.txt", "fine");
     git_in(&worktree, &["add", "."]);
 
-    let _ = stage_and_commit(
+    // Fail closed: the lossy name cannot be unstaged by pathspec, so the
+    // ship is refused rather than committing or silently skipping.
+    let err = stage_and_commit(
         &registry,
         &RepoLocks::new(),
         id,
         &request(StagingMode::Staged, "feat: staged"),
-    );
+    )
+    .unwrap_err();
+    assert!(err.message.contains("Refusing To Ship"), "{}", err.message);
 
     let tree = git_in(&worktree, &["ls-tree", "-r", "--name-only", "HEAD"]);
     let tree = String::from_utf8_lossy(&tree.stdout).into_owned();
@@ -1243,6 +1247,42 @@ fn test_compare_url_uses_the_recorded_branch_after_a_rename() {
     let url = compare_url(&registry, id, "t", "b").unwrap();
     assert!(
         url.starts_with("https://github.com/example/repo/compare/main...swarm/cmp-abcd1234?"),
+        "{url}"
+    );
+}
+
+/// The record that built the compare URL comes back with it: the pushed
+/// branch after a rename, `None` before any push (live branch).
+#[test]
+fn test_compare_url_with_record_returns_the_record_that_built_the_url() {
+    let (repo, worktree, bare, registry, id) = push_fixture("b2-cmp-rec", "swarm/cr-abcd1234");
+    repo.git(&[
+        "remote",
+        "set-url",
+        "origin",
+        "git@github.com:example/repo.git",
+    ]);
+    let (url, record) = compare_url_with_record(&registry, id, "t", "b").unwrap();
+    assert!(url.contains("main...swarm/cr-abcd1234?"), "{url}");
+    assert_eq!(record, None);
+
+    repo.git(&["remote", "set-url", "origin", &bare.display().to_string()]);
+    let outcome = push(&registry, &RepoLocks::new(), id).unwrap();
+    repo.git(&[
+        "remote",
+        "set-url",
+        "origin",
+        "git@github.com:example/repo.git",
+    ]);
+    git_in(&worktree, &["branch", "-m", "swarm/cr-renamed"]);
+    let (url, record) = compare_url_with_record(&registry, id, "t", "b").unwrap();
+    let record = record.expect("a push is on record");
+    assert_eq!(record.sha, outcome.sha);
+    assert!(
+        url.contains(&format!(
+            "main...{}?",
+            record.remote_ref.trim_start_matches("refs/heads/")
+        )),
         "{url}"
     );
 }

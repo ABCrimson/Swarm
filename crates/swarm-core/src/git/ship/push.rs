@@ -27,9 +27,10 @@ pub struct PushOutcome {
     pub remote: String,
     /// The ref updated on that remote (`refs/heads/<branch>`).
     pub remote_ref: String,
-    /// The commit pushed: `HEAD`'s sha as [`push`] resolved it — never a
-    /// caller-supplied value — and, because the push carries exactly
-    /// this sha, the commit the remote ref now points at.
+    /// The commit pushed: the tip of the branch checked out when [`push`]
+    /// ran, as it resolved it — never a caller-supplied value — and,
+    /// because the push carries exactly this sha, the commit the remote
+    /// ref now points at.
     pub sha: String,
 }
 
@@ -129,14 +130,15 @@ fn classify_push_error(raw_stderr: &str, surfaced_stderr: &str) -> ShipError {
     )
 }
 
-/// Pushes the worker's current `HEAD` commit to `origin`'s branch of the
-/// same name — fixed argv (see [`push_args`]), never force, hooks always
+/// Pushes the tip of the worker's current branch to `origin`'s branch of
+/// the same name — fixed argv (see [`push_args`]), never force, hooks always
 /// run — and records the upstream. Runs the primary-checkout guard
 /// first; `branch` is the one checked out **now** (never the stored
 /// `WorkerHandle.branch`, which a rename makes stale). Each git call runs
 /// under `repo_locks`, like [`super::stage_and_commit`]'s mutations.
 ///
-/// Resolves `HEAD`'s sha itself and pushes that exact commit, so a commit
+/// Resolves the sha of `refs/heads/<branch>` itself and pushes that exact
+/// commit, so a commit
 /// that lands on the branch afterwards is not pushed and
 /// [`PushOutcome::sha`] is what the remote received. This also makes
 /// `push` safe to call with **no** fresh commit: a worker with unpushed
@@ -307,16 +309,32 @@ pub fn compare_url(
     title: &str,
     body: &str,
 ) -> Result<String, ShipError> {
+    compare_url_with_record(registry, id, title, body).map(|(url, _)| url)
+}
+
+/// [`compare_url`] plus the [`PushRecord`] its branch came from, read
+/// once: the returned record is exactly the one that built the URL, so a
+/// receipt made from it cannot disagree with the page (a push landing
+/// between two separate reads could). `None` means no push is on record
+/// and the URL used the live branch. Errors are [`compare_url`]'s.
+pub fn compare_url_with_record(
+    registry: &WorkerRegistry,
+    id: WorkerId,
+    title: &str,
+    body: &str,
+) -> Result<(String, Option<PushRecord>), ShipError> {
     let info = worktree_info_for_worker(registry, id)?;
     let wt = info.worktree_path.as_path();
     // The branch that was pushed, when a push is on record (a rename
     // since then must not retarget the page); else the one checked out now.
-    let branch = match registry.push_record(&id).and_then(|record| {
+    let record = registry.push_record(&id);
+    let recorded_branch = record.as_ref().and_then(|record| {
         record
             .remote_ref
             .strip_prefix("refs/heads/")
             .map(str::to_owned)
-    }) {
+    });
+    let branch = match recorded_branch {
         Some(pushed) => pushed,
         None => resolve_live_branch(wt)?,
     };
@@ -340,13 +358,8 @@ pub fn compare_url(
     }
 
     let base_branch = resolve_base_branch(&info.repo_root);
-    Ok(remote::compare_url(
-        &parsed,
-        &base_branch,
-        &branch,
-        title,
-        body,
-    ))
+    let url = remote::compare_url(&parsed, &base_branch, &branch, title, body);
+    Ok((url, record))
 }
 
 #[cfg(test)]

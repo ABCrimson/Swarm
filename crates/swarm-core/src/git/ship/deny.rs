@@ -205,6 +205,11 @@ fn index_blob_sizes(
     Ok(size_of_path)
 }
 
+/// A non-UTF-8 name that is oversized and staged is matched here (names
+/// decode lossily, like the status snapshot's), but `stage_and_commit`
+/// cannot unstage it by pathspec, so it refuses the ship rather than
+/// unstaging it.
+///
 /// Splits `candidates` into the paths that may be committed and the
 /// ones the deny list keeps out. A candidate counts as untracked when
 /// it is in `untracked`. Names are screened first (see
