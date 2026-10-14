@@ -85,6 +85,8 @@ The page `--serve-ui` serves talks to the daemon over the WebSocket (`wsTranspor
 | Graph Export / Import Workflow | Works | Hidden |
 | Sessions: export (JSON, Markdown, metrics CSV), the card menu's Export As JSON, and Import | Work (native save and open dialogs) | Disabled, with "Available In The Desktop App Only" beside or under them |
 | Sessions: delete | Native confirmation dialog | The browser's own confirmation dialog |
+| Sessions: Snapshot button, the card menu's Save As Template, the palette's Snapshot Session | Work (plugin-store files) | Snapshot and Save As Template are disabled, with "Available In The Desktop App Only"; Snapshot Session is absent from the command palette |
+| Ship: Open Compare Page (receipt) | Opens the default browser through the opener plugin | Opens the compare page in a new browser tab |
 | Worker AI panel: webview chat, model selector, Inject Instruction, Queue | Works for workers without an agent session | Replaced by a notice, "Available In The Desktop App Only"; Claude Code and Codex workers chat as usual |
 | Alert thresholds: OS notification mirror | Works when enabled in Settings | The in-app toast only |
 | Settings: Check For Updates | Works | Button disabled, "Available In The Desktop App Only" beside it |
