@@ -17,11 +17,9 @@ import { getDefaultStore } from "jotai";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  _resetParticlesUnavailableWarningForTests,
   MIN_PARTICLE_COUNT,
   PARTICLE_CAPACITY,
   ParticleBackground,
-  SIM_TIME_OFFSET,
 } from "#components/layout/ParticleBackground";
 import { useParticleSync } from "#hooks/useParticleSync";
 import { type UseWebGPUResult, useWebGPU } from "#hooks/useWebGPU";
@@ -30,8 +28,10 @@ import {
   dispatchCompute,
   type ParticleSystem,
   renderParticles,
+  SIM_TIME_OFFSET,
   writeSimParams,
 } from "#lib/particles";
+import { resetParticlesUnavailableWarning } from "#lib/particles-diagnostics";
 import {
   createPostProcessPipeline,
   type PostProcessPipeline,
@@ -93,7 +93,7 @@ describe("ParticleBackground diagnostics", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    _resetParticlesUnavailableWarningForTests();
+    resetParticlesUnavailableWarning();
     store.set(reducedMotionAtom, false);
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   });
@@ -300,7 +300,6 @@ describe("ParticleBackground canvas", () => {
     tick(20);
     // One seed write before the sync's first; the loop writes only the clock.
     expect(writeSimParams).toHaveBeenCalledTimes(1);
-    expect(SIM_TIME_OFFSET).toBe(8);
     expect(writeBuffer).toHaveBeenCalled();
     for (const [buffer, offset, data] of writeBuffer.mock.calls) {
       expect(buffer).toBe(system.simUniformBuffer);
