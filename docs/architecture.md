@@ -375,8 +375,8 @@ live `Arc<dyn AgentSession>` through the
 
 | | Claude Code ([ADR-0016](adr/0016-claude-code-control-protocol.md)) | Codex ([ADR-0017](adr/0017-codex-app-server-protocol.md)) |
 | --- | --- | --- |
-| Process | `claude -p --input-format stream-json --output-format stream-json`, one child per session | `codex app-server`, JSON-RPC 2.0 without the `jsonrpc` member, one child per session (on Windows the `codex.cmd` npm shim is resolved through `PATHEXT`) |
-| Verified against | `claude` 2.1.280 and 2.1.281; oldest accepted CLI 2.1.259 | codex-cli 0.156.1 |
+| Process | `claude -p --input-format stream-json --output-format stream-json`, one child per session | `codex app-server`, JSON-RPC 2.0 without the `jsonrpc` member, one child per session (the binary is found on absolute `PATH` entries only; on Windows the `codex.cmd` npm shim is resolved through `PATHEXT`) |
+| Verified against | `claude` 2.1.280 and 2.1.281 (the protocol); 2.1.296 (the settings sources, deny lists and permission-mode flags of [ADR-0038](adr/0038-agent-provider-trust-model.md)); oldest accepted CLI 2.1.259, untested below 2.1.296 for those flags | codex-cli 0.156.1 |
 | Handshake | `initialize` control request (30 s) opens every session | `initialize`, `initialized`, then `thread/start` or `thread/resume` (30 s) |
 | A turn | user line stamped with the turn id as `uuid`; the `result` line settles it | `turn/start` (acknowledged within 30 s); `turn/completed` settles it |
 | Permissions | `can_use_tool` over `--permission-prompt-tool stdio`; an unanswered ask is denied after 10 min | server requests `…/requestApproval`, answered by `respond_permission`; any other server request is answered `-32601` |
@@ -387,8 +387,9 @@ live `Arc<dyn AgentSession>` through the
 - **Trust tiers** `restricted`, `standard` (default) and `write_enabled` are the only accepted
   `permissionMode` values ([ADR-0015](adr/0015-trust-tiers-closed-vocabulary.md)); `bypassPermissions`,
   `approvalPolicy: never` and `danger-full-access` cannot be constructed. Claude's deny list travels as
-  inline `--settings` JSON with `--setting-sources project`, never as a file in the worktree; the Codex
-  adapter refuses a session whose applied policy is looser than requested.
+  inline `--settings` JSON with `--setting-sources ""` (no settings file loads; only the repo's
+  `permissions.deny` strings are appended, [ADR-0038](adr/0038-agent-provider-trust-model.md)), never as a
+  file in the worktree; the Codex adapter refuses a session whose applied policy is looser than requested.
 - **Exactly one `agent_turn_settled` per acknowledged turn**, synthesised ("Process Exited Without A
   Receipt (<cause>)", the cause being the known teardown reason or the stderr tail) if the process
   ends first. `send_turn` on a busy session is `AgentSessionBusy`.

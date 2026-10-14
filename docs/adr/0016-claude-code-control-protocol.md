@@ -1,6 +1,6 @@
 # ADR-0016: Claude Code is driven over the stream-json control protocol
 
-- **Status:** Accepted (supersedes the 2026-08-14 spawn-time-only design)
+- **Status:** Accepted (supersedes the 2026-08-14 spawn-time-only design); the `--setting-sources project` part is superseded by [0038](0038-agent-provider-trust-model.md)
 - **Date:** 2026-09-23
 
 ## Context

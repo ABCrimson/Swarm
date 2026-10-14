@@ -1,6 +1,6 @@
 # ADR-0015: Trust tiers are a closed vocabulary
 
-- **Status:** Accepted
+- **Status:** Accepted; the `--setting-sources project` part is superseded by [0038](0038-agent-provider-trust-model.md)
 - **Date:** 2026-08-14 (Claude Code), 2026-08-15 (Codex); the Codex mapping was corrected 2026-09-23
 
 ## Context
