@@ -111,3 +111,9 @@ minimumReleaseAgeExclude:
   - react@19.3.0-canary-07dde64d-20261013
   - scheduler@0.28.0-canary-07dde64d-20261013
   - temporal-polyfill@1.0.6
+
+# css-tree (via jsdom) resolves source-map-js below 1.2.2, which GHSA-68fv-2mgg-jv7q
+# flags (event-loop denial of service through indexed source-map section offsets);
+# `pnpm audit` in CI fails on it. Pin the patched release until css-tree moves.
+overrides:
+  source-map-js: 1.2.2
