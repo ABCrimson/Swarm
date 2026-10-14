@@ -719,14 +719,7 @@ async function commitPushAndCompareSteps(
   // Record + optional AI prose) when it has loaded, else the commit
   // message's own trailing lines — shipping never waits on the record.
   const body = composedBody ?? bodyLines.join("\n").trim();
-  const prUrl = await shipCompareUrl(
-    workerId,
-    shipId,
-    commitSha ?? push.sha,
-    push.pushedRef,
-    title,
-    body,
-  );
+  const prUrl = await shipCompareUrl(workerId, shipId, title, body);
   known.prUrl = prUrl;
   await requireReceipt(recorder, "ship_compare_url");
   return { commitSha: commitSha ?? push.sha, pushedRef: push.pushedRef, prUrl };

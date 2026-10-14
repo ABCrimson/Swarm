@@ -439,8 +439,6 @@ describe("useShip", () => {
     expect(mockShipCompareUrl).toHaveBeenCalledWith(
       WORKER_ID,
       expect.any(String),
-      "deadbeefcafef00d",
-      "origin/swarm/agent-abcd1234",
       "feat: title line",
       expect.stringContaining("## Causal Record"),
     );

@@ -677,10 +677,12 @@ export async function gitStageCommit(
 
 /**
  * Pushes `workerId`'s branch (`origin <branch> --set-upstream`, fixed
- * argv, never forced). The backend resolves `HEAD` itself at push time
+ * argv, never forced). The backend resolves the tip of the checked-out
+ * branch itself and pushes that commit as `<sha>:refs/heads/<branch>`
  * (see `swarm_core::git::ship::push`), so already-committed, unpushed
  * work (`ShipPreflight.ahead > 0`) can be pushed without a
- * `gitStageCommit` in the same attempt. On success the backend records
+ * `gitStageCommit` in the same attempt. On success it records the
+ * worker's push (`PushRecord`: sha and refs) and
  * `lastShippedSeq`/`lastShippedCommit`. `finalStep` is `true` for
  * "Commit + Push" and `false` when a {@link shipCompareUrl} call follows.
  */
@@ -700,21 +702,21 @@ export async function gitPush(
 /**
  * Builds the GitHub compare URL for `workerId`'s worktree, prefilled
  * with `title`/`body` through `quick_pull=1` (capped server-side at 6000
- * characters, `body` truncated first). Always the final step of "Commit
+ * characters, `body` truncated first). The receipt carries the sha and
+ * ref of the worker's latest recorded push (its `PushRecord`), never
+ * values from the caller. Always the final step of "Commit
  * + Push + Open Compare Page": emits the terminal `ship_settled` receipt
  * on success and failure.
  */
 export async function shipCompareUrl(
   workerId: string,
   shipId: string,
-  commitSha: string,
-  pushedRef: string,
   title: string,
   body: string,
 ): Promise<string> {
   return shipCommand(
     "ship_compare_url",
-    { workerId, shipId, commitSha, pushedRef, title, body },
+    { workerId, shipId, title, body },
     z.string().min(1),
     "Ship Compare URL Returned An Unexpected Shape.",
   );
