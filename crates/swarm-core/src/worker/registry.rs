@@ -98,8 +98,8 @@ pub struct AggregateMetrics {
 /// Thread-safe registry of every live worker: the single source of
 /// truth for worker state in the backend.
 ///
-/// Cloning is cheap (three `Arc` bumps) and every clone shares the same
-/// map, config and admission state.
+/// Cloning is cheap (five `Arc` bumps) and every clone shares the same
+/// map, config, admission state, setting lock and push records.
 ///
 /// # Concurrency
 ///
