@@ -99,12 +99,10 @@ fn sync_parent_dir(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
+    use crate::test_support::temp_dir;
     use std::assert_matches;
-
-    // Re-exported until the remaining importers move to `crate::test_support`.
-    pub(crate) use crate::test_support::temp_dir;
 
     #[test]
     fn test_read_object_distinguishes_missing_empty_object_and_malformed() {
