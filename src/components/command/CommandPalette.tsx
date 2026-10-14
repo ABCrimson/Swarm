@@ -3,7 +3,7 @@ import { computeFrecencyBonus } from "modern-cmdk";
 import { Command } from "modern-cmdk/react";
 import { useEffectEvent, useLayoutEffect, useState } from "react";
 import { toast } from "sonner";
-
+import { useShallow } from "zustand/react/shallow";
 import type { PageId } from "#hooks/useNavigate";
 import { errorMessage } from "#lib/is-error";
 import { matchesBinding } from "#lib/keybindings";
@@ -154,14 +154,22 @@ function PaletteBody({
   const setPage = useSetAtom(currentPageAtom);
   const setSidebarCollapsed = useSetAtom(sidebarCollapsedAtom);
   const [graphView, setGraphView] = useAtom(graphViewAtom);
-  const workers = useWorkerStore((s) => s.workers);
+  // Only what the list renders: ids and names are plain values, so `useShallow`
+  // keeps the palette still while `worker_output` chunks replace the Map.
+  const workerIds = useWorkerStore(useShallow((s) => [...s.workers.keys()]));
+  const workerNames = useWorkerStore(useShallow((s) => [...s.workers.values()].map((w) => w.name)));
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
 
   const spawn = async () => {
     try {
       const id = await spawnWorkerFromSpec({
-        name: nextWorkerName(workers.values().map((worker) => worker.name)),
+        name: nextWorkerName(
+          useWorkerStore
+            .getState()
+            .workers.values()
+            .map((worker) => worker.name),
+        ),
       });
       if (id === null) toast.error("Spawning Workers Needs The Desktop App");
     } catch (err) {
@@ -237,8 +245,8 @@ function PaletteBody({
       keywords: ["create", "new", "add", "agent"],
       action: () => void spawn(),
     },
-    ...workers.entries().map(([id, worker]): CommandDef => {
-      const name = worker.name ?? id.slice(0, 8);
+    ...workerIds.map((id, index): CommandDef => {
+      const name = workerNames[index] ?? id.slice(0, 8);
       return {
         id: `worker:kill:${id}`,
         label: `Kill ${name}`,

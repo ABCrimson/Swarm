@@ -8,7 +8,7 @@ import "#test/dom-polyfills";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { getDefaultStore } from "jotai";
-import { useLayoutEffect } from "react";
+import { Profiler, useLayoutEffect } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandPalette } from "#components/command/CommandPalette";
@@ -196,5 +196,31 @@ describe("CommandPalette", () => {
     const [first] = await within(reopened).findAllByRole("option");
     expect(first).toHaveTextContent(/^Go To Workers1$/);
     expect(first).toHaveAccessibleName("Go To Workers");
+  });
+
+  it("does not re-render per worker_output chunk while open", () => {
+    addWorker("w-1", "Alpha");
+    let commits = 0;
+    render(
+      <Profiler id="palette" onRender={() => commits++}>
+        <CommandPalette />
+      </Profiler>,
+    );
+    act(() => store.set(commandPaletteOpenAtom, true));
+    commits = 0;
+
+    act(() => useWorkerStore.getState().appendOutput("w-1", "chunk"));
+
+    expect(commits).toBe(0);
+  });
+
+  it("still lists a Kill entry for a worker that appears while open", async () => {
+    render(<CommandPalette />);
+    act(() => store.set(commandPaletteOpenAtom, true));
+    await palette();
+
+    act(() => addWorker("w-9", "Late"));
+
+    expect(await screen.findByRole("option", { name: "Kill Late" })).toBeInTheDocument();
   });
 });
