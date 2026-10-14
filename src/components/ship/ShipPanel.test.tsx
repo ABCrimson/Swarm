@@ -273,11 +273,13 @@ describe("ShipPanel", () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     const user = userEvent.setup();
     const receipt = await renderShipped(user);
+    // useShip's post-ship auto-open still calls the plugin (and catches its failure).
+    const autoOpenCalls = vi.mocked(openUrl).mock.calls.length;
 
     await user.click(within(receipt).getByRole("button", { name: "Open Compare Page" }));
 
     expect(open).toHaveBeenCalledWith(COMPARE_URL, "_blank", "noopener,noreferrer");
-    expect(openUrl).not.toHaveBeenCalled();
+    expect(openUrl).toHaveBeenCalledTimes(autoOpenCalls);
     expect(toast.error).not.toHaveBeenCalled();
   });
 
