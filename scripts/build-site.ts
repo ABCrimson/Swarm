@@ -16,8 +16,10 @@
 // card whose title is not its page's H1, a "proposed next version" that is
 // already released, a missing asset, an element, url(), image-set() or
 // @import that would load from an absolute or protocol-relative URL (see
-// checkNoExternalResources), or site script that opens a connection (see
-// checkNoExternalScript).
+// checkNoExternalResources, a best-effort drift scan; the page's
+// Content-Security-Policy is what blocks a cross-origin load), a page whose
+// Content-Security-Policy tag is missing, repeated or after the first link, or
+// site script that opens a connection (see checkNoExternalScript).
 //
 // Run with `pnpm build:site` (Node runs this erasable TypeScript natively).
 
@@ -66,8 +68,6 @@ const escapeHtml = (text: string): string =>
 
 const stripTags = (html: string): string => html.replace(/<[^>]*>/g, "");
 
-/** The comment a GitHub alert marker is rewritten to before lexing. */
-const ALERT = "swarm-alert:";
 const ALERT_LABELS = {
   note: "Note",
   tip: "Tip",
@@ -77,11 +77,28 @@ const ALERT_LABELS = {
 } as const;
 type AlertKind = keyof typeof ALERT_LABELS;
 
-/** The alert kind a blockquote's first token carries, if it is an alert. */
-function alertKind(token: Token | undefined): AlertKind | undefined {
-  if (token?.type !== "html") return undefined;
-  const kind = token.raw.trim().match(new RegExp(`^<!--${ALERT}([a-z]+)-->$`))?.[1];
-  return kind !== undefined && Object.hasOwn(ALERT_LABELS, kind) ? (kind as AlertKind) : undefined;
+/** A GitHub alert marker: the first line of a blockquote's first paragraph. */
+const ALERT_MARKER = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*(?:\n|$)/;
+
+/**
+ * If a blockquote opens with an alert marker (`> [!WARNING]`), removes the
+ * marker from its tokens and returns the kind. It reads lexed tokens, not the
+ * source text, so the same characters in a code block stay literal.
+ */
+function takeAlert(quote: Tokens.Blockquote): AlertKind | undefined {
+  const [para] = quote.tokens;
+  if (para?.type !== "paragraph") return undefined;
+  const inline = (para as Tokens.Paragraph).tokens;
+  const first = inline[0];
+  if (first?.type !== "text") return undefined;
+  const text = first as Tokens.Text;
+  const marker = ALERT_MARKER.exec(text.raw);
+  if (!marker) return undefined;
+  text.raw = text.raw.slice(marker[0].length);
+  text.text = text.text.slice(marker[0].length);
+  if (text.raw === "") inline.shift();
+  if (inline.length === 0) quote.tokens.shift();
+  return (marker[1] ?? "").toLowerCase() as AlertKind;
 }
 
 /** GitHub's heading-anchor algorithm, so `file.md#anchor` links keep working. */
@@ -172,6 +189,21 @@ function markCurrent(html: string, name: string, file: string): string {
   return html.replace(nav, () => marked);
 }
 
+/**
+ * The policy tag every page carries right after the charset: the browser, not
+ * the scans below, refuses any load from another origin.
+ */
+const CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">`;
+
+/** Fails unless the page has the policy exactly once, before its first link. */
+function checkCsp(html: string, file: string): void {
+  if (html.split(CSP).length !== 2 || html.indexOf(CSP) > html.indexOf("<link")) {
+    throw new Error(
+      `${file}: the Content-Security-Policy tag must appear once, before the first <link>`,
+    );
+  }
+}
+
 /** An absolute URL with any scheme (`https://`, `ftp://`) or a protocol-relative one (`//`). */
 const ABSOLUTE = String.raw`(?:[a-z][a-z\d+.-]*:)?\/\/`;
 
@@ -182,7 +214,8 @@ const LOADING_ATTR =
   /\s(?:src|href|xlink:href|data|srcset|imagesrcset|poster)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
 
 /**
- * Fails if HTML or CSS would fetch from another origin. In HTML: a script,
+ * A best-effort drift scan; the page's Content-Security-Policy is what blocks
+ * a cross-origin load. Fails if HTML or CSS would fetch from another origin. In HTML: a script,
  * img, iframe, source, track, video, audio, embed, object, link, image or use
  * element whose src, href, xlink:href, data, srcset, imagesrcset or poster
  * (double-quoted, single-quoted or unquoted; each srcset candidate) is an
@@ -207,10 +240,11 @@ function checkNoExternalResources(text: string, file: string): void {
 }
 
 /**
- * Fails if script would open a connection to another origin or any
- * connection at all: fetch(), import(), importScripts() or sendBeacon() given
- * an absolute or protocol-relative URL literal, a static `import … from` one,
- * or any `new WebSocket`, `EventSource`, `Worker` or `SharedWorker`.
+ * A best-effort drift scan; the page's Content-Security-Policy is what blocks
+ * a cross-origin load. Fails if script names another origin: fetch(),
+ * import(), importScripts() or sendBeacon() given an absolute or
+ * protocol-relative URL literal, a static `import … from` one, or any
+ * `new WebSocket`, `EventSource`, `Worker` or `SharedWorker`.
  */
 function checkNoExternalScript(text: string, file: string): void {
   const hit =
@@ -262,13 +296,9 @@ interface RenderedPage {
 
 function renderPage(name: string, pages: readonly string[]): RenderedPage {
   const file = `docs/${name}.md`;
-  // A GitHub alert marker (`> [!WARNING]`) becomes a comment that marked
-  // lexes as the blockquote's first token; the blockquote renderer turns it
-  // into the callout's kind and label.
-  const source = read(join(docsDir, `${name}.md`)).replace(
-    /^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*\n/gm,
-    (_, kind: string) => `> <!--${ALERT}${kind.toLowerCase()}-->\n`,
-  );
+  const source = read(join(docsDir, `${name}.md`));
+  /** Top-level blockquotes that are GitHub alerts, and their kind. */
+  const alerts = new WeakMap<Token, AlertKind>();
 
   const slug = createSlugger();
   const ids = new Set<string>();
@@ -322,9 +352,9 @@ function renderPage(name: string, pages: readonly string[]): RenderedPage {
       },
       // Every body blockquote is a callout. An alert keeps its kind as a
       // class and a visible label, so a warning never reads as a plain note.
-      blockquote({ tokens }) {
-        const kind = alertKind(tokens[0]);
-        const rest = kind ? tokens.slice(1).filter((t) => t.type !== "space") : tokens;
+      blockquote(quote) {
+        const kind = alerts.get(quote);
+        const rest = kind ? quote.tokens.filter((t) => t.type !== "space") : quote.tokens;
         const [first] = rest;
         const inner =
           rest.length === 1 && first?.type === "paragraph"
@@ -343,6 +373,13 @@ function renderPage(name: string, pages: readonly string[]): RenderedPage {
   });
 
   const tokens = marked.lexer(source);
+  // Alerts are found among top-level blockquotes only: GitHub renders none
+  // inside a list or another quote.
+  for (const token of tokens) {
+    if (token.type !== "blockquote") continue;
+    const kind = takeAlert(token as Tokens.Blockquote);
+    if (kind) alerts.set(token, kind);
+  }
   const next = (from: number): number => {
     let i = from;
     while (tokens[i]?.type === "space") i++;
@@ -360,7 +397,7 @@ function renderPage(name: string, pages: readonly string[]): RenderedPage {
   let dekText = "";
   let bodyAt = next(h1At + 1);
   const lead = tokens[bodyAt] as Tokens.Blockquote | undefined;
-  if (lead?.type === "blockquote") {
+  if (lead?.type === "blockquote" && !alerts.has(lead)) {
     const [para] = lead.tokens;
     if (para?.type === "paragraph") {
       const { tokens: inline } = para as Tokens.Paragraph;
@@ -467,11 +504,18 @@ function renderPager(name: string, order: readonly string[], titles: Map<string,
  * every page has exactly one card and each card's title is that H1.
  */
 function checkDocCards(index: string, titles: Map<string, string>, file: string): void {
-  const cards = [...index.matchAll(/<a href="\.\/([\w-]+)\.html"><strong>([\s\S]*?)<\/strong>/g)];
+  // Every link in the Documentation section is a card, whatever its attributes.
+  const list = index.match(/<section class="section doc-list"[\s\S]*?<\/section>/)?.[0] ?? "";
+  const cards = [
+    ...list.matchAll(/<a\b[^>]*\shref="\.\/([\w-]+)\.html"[^>]*>([\s\S]*?)<\/a>/g),
+  ].map(
+    ([, page = "", inner = ""]) =>
+      [page, inner.match(/<strong>([\s\S]*?)<\/strong>/)?.[1] ?? ""] as const,
+  );
   const problems: string[] = [];
   for (const [page, title] of titles) {
-    const mine = cards.filter((card) => card[1] === page);
-    const shown = mine[0] ? stripTags(mine[0][2] ?? "").trim() : "";
+    const mine = cards.filter((card) => card[0] === page);
+    const shown = mine[0] ? stripTags(mine[0][1]).trim() : "";
     if (mine.length !== 1) problems.push(`${page}: ${mine.length} cards`);
     else if (shown !== escapeHtml(title))
       problems.push(`${page}: card says "${shown}", H1 is "${title}"`);
@@ -509,7 +553,12 @@ function latestRelease(index: string, file: string): string {
       `${file}: proposed version ${nextVersion} is not newer than the release ${version}`,
     );
   }
-  if (!/^## \[Unreleased\]$/m.test(changelog) || changelog.includes(`## [${nextVersion}]`)) {
+  // Any release heading counts, with or without a leading v or a date.
+  const released = [...changelog.matchAll(/^## \[?v?(\d+\.\d+\.\d+)\b/gm)].map((m) => m[1]);
+  if (
+    !/^## \[Unreleased\](?:\([^)]*\))?[ \t]*$/m.test(changelog) ||
+    released.includes(nextVersion)
+  ) {
     throw new Error(
       `${file}: the hero says ${nextVersion} is unreleased work, but CHANGELOG.md has no [Unreleased] section or already releases it`,
     );
@@ -562,6 +611,7 @@ const indexHtml = fillOnce(
   latestRelease(index, "site/index.html"),
   "site/index.html",
 );
+checkCsp(indexHtml, "site/index.html");
 checkNoExternalResources(indexHtml, "site/index.html");
 
 // The content goes in last, so text in a doc can never be mistaken for a
@@ -576,6 +626,7 @@ const output = new Map(
     html = fillOnce(html, PAGER, renderPager(page, order, titles), file);
     html = markCurrent(html, page, file);
     html = fillOnce(html, CONTENT, content, file);
+    checkCsp(html, `dist-site/${page}.html`);
     checkNoExternalResources(html, `dist-site/${page}.html`);
     return [page, html];
   }),
