@@ -30,6 +30,33 @@ export const DEFAULT_THRESHOLDS: AlertThresholds = {
   memoryCritical: 90,
 };
 
+/** An unusable pair of alert thresholds: what is wrong, and which fields. */
+export interface ThresholdsProblem {
+  readonly message: string;
+  /** The fields to mark invalid (the offending warning/critical pair). */
+  readonly keys: ReadonlySet<keyof AlertThresholds>;
+}
+
+/**
+ * The first warning/critical pair whose warning level is not below its
+ * critical level, or `null` when every pair is valid.
+ */
+export function thresholdsError(thresholds: AlertThresholds): ThresholdsProblem | null {
+  if (thresholds.cpuWarning >= thresholds.cpuCritical) {
+    return {
+      message: "CPU Warning Must Be Below CPU Critical",
+      keys: new Set(["cpuWarning", "cpuCritical"]),
+    };
+  }
+  if (thresholds.memoryWarning >= thresholds.memoryCritical) {
+    return {
+      message: "Memory Warning Must Be Below Memory Critical",
+      keys: new Set(["memoryWarning", "memoryCritical"]),
+    };
+  }
+  return null;
+}
+
 /**
  * Shape accepted from disk: every field optional, so an older object that
  * lacks a field still hydrates the fields it has over the defaults. Any
