@@ -1412,22 +1412,31 @@ async fn test_ship_outcome_replays_to_a_client_that_reconnects_mid_commit() {
         panic!("expected ready");
     };
     send_frame(&mut first, &fixture.commit_frame("lost", ship_id)).await;
-    // Gone before the hook finishes: the reply has nobody to go to.
-    drop(first);
 
-    // The receipt reaching a connection that stayed open proves the commit
+    // The observer sees the daemon dispatch the rpc (its first progress
+    // row) before `first` goes away, so closing cannot race the daemon
+    // reading the frame. Dropping `first` leaves the reply nobody to go to;
+    // the receipt reaching a connection that stayed open proves the commit
     // ran to completion after its sender left.
+    let mut first = Some(first);
     let live = tokio::time::timeout(WAIT + HOOK_SLEEP, async {
         loop {
-            if let Inbound::Event(event) = next_frame(&mut observer).await
-                && let Some(receipt) = ship_payload(&event, "ship_settled", ship_id)
-            {
-                return receipt.clone();
+            if let Inbound::Event(event) = next_frame(&mut observer).await {
+                if let Some(row) = ship_payload(&event, "ship_progress", ship_id)
+                    && row["step"] == "staging"
+                    && row["status"] == "running"
+                {
+                    first.take();
+                }
+                if let Some(receipt) = ship_payload(&event, "ship_settled", ship_id) {
+                    return receipt.clone();
+                }
             }
         }
     })
     .await
     .expect("the commit should finish and settle without its sender");
+    assert!(first.is_none(), "the sender was dropped mid-commit");
     assert_eq!(live["status"], "ok", "live receipt: {live}");
 
     // Only now does the second client connect: everything it learns comes
