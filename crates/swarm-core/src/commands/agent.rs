@@ -252,7 +252,7 @@ struct AgentSendTurnArgs {
 /// refusing it with [`crate::error::AppError::WorkerClosing`] while a
 /// kill is closing the worker. A turn queued before the kill began finds
 /// no session when it is dispatched and settles as an error (see
-/// `crate::runtime`'s turn executor).
+/// [`crate::agent::scheduler::execute_turn`]).
 pub async fn agent_send_turn(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let AgentSendTurnArgs { worker_id, prompt } = parse_args(args)?;
     let uuid = parse_uuid(&worker_id)?;
