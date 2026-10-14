@@ -592,6 +592,11 @@ export function Settings(): React.ReactElement {
   const [appSettings, setAppSettings] = useAtom(appSettingsAtom);
   const agentConcurrencySync = useAtomValue(agentConcurrencySyncAtom);
   const canCheckForUpdates = hasCapability("autoUpdate");
+  // Only the webview-direct Anthropic client reads the API key, and a swarmd
+  // page is denied secret-shaped config keys, so there it can be neither read nor saved.
+  const canUseWebviewChat = hasCapability("localAiChat");
+  const apiKeyReasonId = useId();
+  const updatesReasonId = useId();
   const [keybindings, setKeybindings] = useAtom(keybindingsAtom);
   const [checkingUpdates, startUpdateCheck] = useTransition();
   const [savingApiKey, startSavingApiKey] = useTransition();
@@ -653,6 +658,7 @@ export function Settings(): React.ReactElement {
   const [apiKeySaved, setApiKeySaved] = useState("");
 
   useEffect(() => {
+    if (!canUseWebviewChat) return;
     let cancelled = false;
     readConfig(ANTHROPIC_API_KEY_CONFIG_KEY, z.string().min(1))
       .then((key) => {
@@ -668,7 +674,7 @@ export function Settings(): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [canUseWebviewChat]);
 
   const apiKeyDirty = apiKeyDraft !== apiKeySaved;
 
@@ -741,15 +747,30 @@ export function Settings(): React.ReactElement {
             value={apiKeyDraft}
             onChange={(e) => setApiKeyDraft(e.target.value)}
             placeholder="Enter Your Anthropic API Key"
-            aria-describedby="anthropic-api-key-description"
+            disabled={!canUseWebviewChat}
+            aria-describedby={
+              canUseWebviewChat
+                ? "anthropic-api-key-description"
+                : `anthropic-api-key-description ${apiKeyReasonId}`
+            }
             className="font-mono"
           />
           <p id="anthropic-api-key-description" className="mt-1 text-xs text-fg-dim">
-            Your Anthropic API Key. Required To Use AI Chat. Stored Locally In Plaintext At App Data
-            — Never Logged Or Displayed In Clear Text.
+            Your Anthropic API Key. Required To Use Webview AI Chat. Stored Locally In Plaintext At
+            App Data — Never Logged Or Displayed In Clear Text.
           </p>
+          {!canUseWebviewChat && (
+            <p id={apiKeyReasonId} className="mt-1 text-xs text-fg-dim">
+              {DESKTOP_ONLY_REASON}
+            </p>
+          )}
           <div className="mt-3 flex justify-end">
-            <Button type="submit" size="sm" disabled={!apiKeyDirty} loading={savingApiKey}>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={!canUseWebviewChat || !apiKeyDirty}
+              loading={savingApiKey}
+            >
               Save API Key
             </Button>
           </div>
@@ -909,7 +930,7 @@ export function Settings(): React.ReactElement {
         </div>
         <div className="flex items-center justify-end gap-3">
           {!canCheckForUpdates && (
-            <span id="check-updates-reason" className="text-xs text-fg-dim">
+            <span id={updatesReasonId} className="text-xs text-fg-dim">
               {DESKTOP_ONLY_REASON}
             </span>
           )}
@@ -917,7 +938,7 @@ export function Settings(): React.ReactElement {
             size="sm"
             loading={checkingUpdates}
             disabled={!canCheckForUpdates}
-            aria-describedby={canCheckForUpdates ? undefined : "check-updates-reason"}
+            aria-describedby={canCheckForUpdates ? undefined : updatesReasonId}
             onClick={handleCheckForUpdates}
           >
             Check For Updates

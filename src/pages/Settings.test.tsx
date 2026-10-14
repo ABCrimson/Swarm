@@ -478,6 +478,22 @@ describe("Settings — in the browser build", () => {
     expect(toast.success).not.toHaveBeenCalledWith("You Are On The Latest Version");
   });
 
+  it("disables the API key field and Save with the desktop-only reason, and never touches the key", async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    const input = screen.getByLabelText("API Key");
+    expect(input).toBeDisabled();
+    expect(input).toHaveAccessibleDescription(new RegExp(DESKTOP_ONLY_REASON));
+    expect(screen.getByRole("button", { name: "Save API Key" })).toBeDisabled();
+
+    await user.click(input);
+    await user.keyboard("{Enter}");
+
+    expect(readConfig).not.toHaveBeenCalledWith("anthropic_api_key", expect.anything());
+    expect(writeConfig).not.toHaveBeenCalled();
+  });
+
   it.for(["Check For Updates On Launch", "Native Alert Notifications"] as const)(
     "disables the %s switch with the desktop-only reason",
     async (name) => {
