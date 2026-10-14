@@ -35,10 +35,12 @@ inline `--settings` JSON is the session's only settings. SWARM itself reads
 `<cwd>/.claude/settings.json` and takes only the `permissions.deny` string entries from it, appended
 after the tier's deny list: a repo can narrow a session and nothing else. The appended entries are kept
 in file order up to 8 KiB of JSON in total and the rest are dropped with a warning, because the
-settings travel as one argv element and Windows caps one at about 32K characters. SWARM uses at most
+settings travel on the command line and Windows caps the whole command line at 32,767 characters; 8 KiB
+still fits (about 13 KiB in the worst case). SWARM uses at most
 1 MiB of the file: the read stops one byte past the cap to tell a file of exactly 1 MiB from a longer
 one, because the reported length cannot be trusted (a symlink to `/proc/self/pagemap` reports a
-regular file of length 0 and then yields zeros without end). A longer, unreadable, non-UTF-8 or non-object file contributes no entries and is logged.
+regular file of length 0 and then yields zeros without end). A longer, unreadable, non-UTF-8 or
+non-object file contributes no entries and is logged.
 
 **Deny lists.** Every tier denies `EnterWorktree` and `ExitWorktree`. Restricted also denies
 `PowerShell` (the flag removes it; the entry is a second fence, like `Bash`), `DesignSync` (writes to
@@ -73,11 +75,13 @@ resolution: a probe resolves afresh, a spawn reuses it.
 
 ## Consequences
 
-- **A Standard or WriteEnabled worker no longer receives the repo's `CLAUDE.md`, `.claude/rules`,
-  `.claude/skills` or the `AGENTS.md` walk.** The 2.1.296 CLI gates project memory on the
-  `projectSettings` source; this is read from the CLI source, not verified at runtime. Feeding that text
-  back (for example in the first prompt) is the owner's decision and is not done here. Repo
-  `.claude/agents` and the repo's `permissions.ask` no longer load either.
+- **A Standard or WriteEnabled worker no longer receives the repo's `CLAUDE.md`, `.claude/rules` or
+  `.claude/skills`.** The 2.1.296 CLI gates them on the `projectSettings` source: verified at runtime on
+  Claude Code 2.1.296 (2026-10-13), where the exact Standard argv loaded none of them, planted agents or
+  an `apiKeyHelper`, while `--setting-sources project` loaded all of them. `AGENTS.md` did not load under
+  either setting, and its gating remains source-only. Feeding that text back (for example in the first
+  prompt) is the owner's decision and is not done here. Repo `.claude/agents` and the repo's
+  `permissions.ask` no longer load either.
 - The Agent tool's `isolation: "worktree"` creates a worktree too, and no deny rule short of denying
   `Agent` blocks it. It is a known gap.
 - Not tested on a CLI older than 2.1.296. An older CLI that rejects `--setting-sources ""` fails the
@@ -87,6 +91,9 @@ resolution: a probe resolves afresh, a spawn reuses it.
 - The probe directory is removed after the probe returns. If the probe future is dropped first, the
   directory stays: a synchronous drop guard would block a Tokio thread, and the only caller sets no
   timeout. Its contents are empty, since nothing is configured to write there.
+- A same-user process could swap `.claude/settings.json` for a FIFO between the metadata check and the
+  open, and the read would then block on that spawned task; this is accepted because it needs same-user
+  write access to the worktree.
 - Codex repo-config trust, measured on codex-cli 0.163.0-alpha.5 via `config/read`: with a fresh
   `CODEX_HOME` and no trust entry, the project layer (`.codex/config.toml`) is listed but disabled
   ("To load project-local config, hooks, and exec policies, add <dir> as a trusted project in

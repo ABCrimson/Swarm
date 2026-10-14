@@ -53,10 +53,12 @@
 //!   the inline deny list, and nothing else the repo's `.claude/` holds
 //!   loads (`env`, `apiKeyHelper`, hooks, `allow`, `ask`,
 //!   `defaultMode`, `.claude/agents`). The repo's `CLAUDE.md`,
-//!   `.claude/rules`, `.claude/skills` and the `AGENTS.md` walk do not
-//!   reach Standard or WriteEnabled workers either: the 2.1.296 CLI
-//!   gates project memory on the `projectSettings` source (read from its
-//!   source, not verified at runtime). Feeding that text back to a worker
+//!   `.claude/rules` and `.claude/skills` do not reach Standard or
+//!   WriteEnabled workers either: the 2.1.296 CLI gates them on the
+//!   `projectSettings` source (verified at runtime on Claude Code 2.1.296,
+//!   2026-10-13: they load under `--setting-sources project`, not under
+//!   `""`). The `AGENTS.md` walk did not load under either setting, and
+//!   its gating remains source-only. Feeding that text back to a worker
 //!   is the owner's decision (ADR-0038).
 //! - **Condition B** (synthesize the terminal receipt on ungraceful
 //!   exit): see [`AgentSession::shutdown`]'s doc.

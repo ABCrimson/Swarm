@@ -376,7 +376,7 @@ live `Arc<dyn AgentSession>` through the
 | | Claude Code ([ADR-0016](adr/0016-claude-code-control-protocol.md)) | Codex ([ADR-0017](adr/0017-codex-app-server-protocol.md)) |
 | --- | --- | --- |
 | Process | `claude -p --input-format stream-json --output-format stream-json`, one child per session | `codex app-server`, JSON-RPC 2.0 without the `jsonrpc` member, one child per session (the binary is found on absolute `PATH` entries only; on Windows the `codex.cmd` npm shim is resolved through `PATHEXT`) |
-| Verified against | `claude` 2.1.280 and 2.1.281 (the protocol); 2.1.296 (the settings sources, deny lists and `disable*Mode` settings keys of [ADR-0038](adr/0038-agent-provider-trust-model.md)); oldest accepted CLI 2.1.259, untested below 2.1.296 for those flags | codex-cli 0.156.1 |
+| Verified against | `claude` 2.1.280 and 2.1.281 (the protocol); 2.1.296 (the settings sources, deny lists and `disable*Mode` settings keys of [ADR-0038](adr/0038-agent-provider-trust-model.md)); oldest accepted CLI 2.1.259, untested below 2.1.296 for those flags | codex-cli 0.156.1 (the protocol); 0.163.0-alpha.5 (schema compared, additive only; repo-config trust measured, [ADR-0038](adr/0038-agent-provider-trust-model.md)) |
 | Handshake | `initialize` control request (30 s) opens every session | `initialize`, `initialized`, then `thread/start` or `thread/resume` (30 s) |
 | A turn | user line stamped with the turn id as `uuid`; the `result` line settles it | `turn/start` (acknowledged within 30 s); `turn/completed` settles it |
 | Permissions | `can_use_tool` over `--permission-prompt-tool stdio`; an unanswered ask is denied after 10 min | server requests `…/requestApproval`, answered by `respond_permission`; any other server request is answered `-32601` |

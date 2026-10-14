@@ -175,10 +175,10 @@ pub(super) fn repo_deny_entries(settings: &str) -> Option<Vec<String>> {
 }
 
 /// Most bytes of JSON the entries appended to the inline deny list may
-/// take together. The settings travel as ONE argv element
-/// (`--settings`), and a platform caps that (about 32K characters on
-/// Windows), so a repo's own list must not be able to push the spawn over
-/// it.
+/// take together. The settings travel on the command line
+/// (`--settings`), and Windows caps the whole command line at 32,767
+/// characters, so a repo's own list must not be able to push the spawn
+/// over it; 8 KiB still fits (about 13 KiB in the worst case).
 pub(super) const REPO_DENY_MAX_JSON_BYTES: usize = 8 * 1024;
 
 /// The longest prefix of `entries`, in file order, whose JSON array form
@@ -267,11 +267,12 @@ pub(super) fn build_claude_flags(
         // and apply its `env` during the handshake, before any approval
         // (2.1.296), and its `.claude/agents` would load. The inline
         // settings below are the only settings the session has. The same
-        // gate also keeps the repo's `CLAUDE.md`, `.claude/rules`,
-        // `.claude/skills` and the `AGENTS.md` walk out of a worker's
-        // context: the 2.1.296 CLI loads project memory only when the
-        // `projectSettings` source is on (read from its source, not
-        // verified at runtime).
+        // gate also keeps the repo's `CLAUDE.md`, `.claude/rules` and
+        // `.claude/skills` out of a worker's context: the 2.1.296 CLI
+        // loads them only when the `projectSettings` source is on
+        // (verified at runtime on Claude Code 2.1.296, 2026-10-13).
+        // `AGENTS.md` did not load under either setting (its gating
+        // remains source-only).
         "--setting-sources",
         "",
         "--strict-mcp-config",
