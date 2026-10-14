@@ -17,6 +17,7 @@ vi.mock("#lib/tauri", () => ({
     return () => listeners.delete(event);
   },
   invoke: vi.fn(),
+  isTauri: () => Boolean(Reflect.get(globalThis, "isTauri")),
 }));
 
 vi.mock("#lib/snapshots", () => ({
@@ -28,7 +29,9 @@ const SESSION = "6ba7b810-9dad-41d1-80b4-00c04fd430c8";
 const INTERVAL_MS = DEFAULT_APP_SETTINGS.snapshotIntervalMin * 60_000;
 
 describe("useAutoSnapshot", () => {
+  // Snapshots are plugin-store files, which need the Tauri bridge.
   beforeEach(async () => {
+    vi.stubGlobal("isTauri", true);
     vi.useFakeTimers();
     listeners.clear();
     resetEventBus();
@@ -53,6 +56,27 @@ describe("useAutoSnapshot", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("schedules nothing without the Tauri bridge", () => {
+    vi.unstubAllGlobals();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    useSessionStore.setState({ activeSessionId: SESSION });
+    renderHook(() => useAutoSnapshot());
+
+    vi.advanceTimersByTime(INTERVAL_MS * 5);
+    listeners.get("swarm://events")?.({
+      seq: 1,
+      ts: 1,
+      type: "session_deleted",
+      payload: { sessionId: SESSION },
+    });
+
+    expect(createSnapshot).not.toHaveBeenCalled();
+    expect(clearSnapshots).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it("snapshots the active session once per interval", () => {
