@@ -30,9 +30,9 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 /// checkpoint, so one large burst does not leave a large file behind.
 const WAL_SIZE_LIMIT_BYTES: i64 = 4 * 1024 * 1024;
 
-/// `PRAGMA synchronous` value SQLite reports for FULL (0 OFF, 1 NORMAL, 2 FULL,
-/// 3 EXTRA).
-const SYNCHRONOUS_FULL: i64 = 2;
+/// `PRAGMA synchronous` value SQLite reports for EXTRA (0 OFF, 1 NORMAL,
+/// 2 FULL, 3 EXTRA).
+const SYNCHRONOUS_EXTRA: i64 = 3;
 
 /// `meta` key holding the highest seq the writer may have handed out.
 const SEQ_RESERVED_KEY: &str = "seq_reserved";
@@ -205,21 +205,28 @@ impl EventLog {
         if !mode.eq_ignore_ascii_case("wal") && !mode.eq_ignore_ascii_case("memory") {
             tracing::warn!(journal_mode = %mode, "event log could not switch to WAL mode");
         }
-        // FULL, not NORMAL: in WAL mode only FULL syncs the WAL on every
-        // commit, so a committed append (already emitted: persist before
-        // emit) and a committed seq reservation survive an OS crash or
-        // power loss, not just a process crash (ADR-0039). NORMAL would let
-        // the log roll back to an earlier checkpoint and reissue seqs.
-        // `synchronous` is per connection and the read-only connections
-        // never commit, so only this writer connection sets it.
-        conn.pragma_update(None, "synchronous", "FULL")?;
-        // `PRAGMA synchronous = x` does not echo the value, so read it
-        // back: running weaker than documented must fail the open.
+        // Flush on every commit (ADR-0039), so a committed append (already
+        // emitted: persist before emit) and a committed seq reservation
+        // survive an OS crash or power loss, not just a process crash:
+        // - EXTRA, not NORMAL or FULL: in WAL mode EXTRA is FULL (the WAL
+        //   is synced after every commit), and if the filesystem refuses
+        //   WAL above, EXTRA is the level SQLite documents as durable in
+        //   rollback mode, where FULL is not necessarily.
+        // - fullfsync: on macOS SQLite calls a plain fsync(), which leaves
+        //   the data in the drive cache, unless this is on (F_FULLFSYNC);
+        //   it is a no-op elsewhere.
+        // Both are per connection. The read-only connections never commit;
+        // the last connection to close may run the final checkpoint, which
+        // syncs at its own default level.
+        conn.pragma_update(None, "synchronous", "EXTRA")?;
+        conn.pragma_update(None, "fullfsync", true)?;
+        // These pragmas do not echo their value, so read them back:
+        // running weaker than documented must fail the open.
         let synchronous: i64 = conn.pragma_query_value(None, "synchronous", |row| row.get(0))?;
-        if synchronous != SYNCHRONOUS_FULL {
+        let fullfsync: i64 = conn.pragma_query_value(None, "fullfsync", |row| row.get(0))?;
+        if synchronous != SYNCHRONOUS_EXTRA || fullfsync != 1 {
             return Err(AppError::EventLog(format!(
-                "SQLite reports synchronous={synchronous}, not FULL ({SYNCHRONOUS_FULL}); \
-                 the event log refuses to run with weaker durability."
+                "SQLite reports synchronous={synchronous} (need EXTRA, {SYNCHRONOUS_EXTRA}) and                  fullfsync={fullfsync} (need 1); the event log refuses to run with weaker durability."
             )));
         }
         conn.pragma_update(None, "journal_size_limit", WAL_SIZE_LIMIT_BYTES)?;
@@ -831,22 +838,29 @@ mod tests {
         (path, guard)
     }
 
-    /// `PRAGMA synchronous` as SQLite reports it: 0 OFF, 1 NORMAL, 2 FULL,
-    /// 3 EXTRA.
-    fn synchronous(log: &EventLog) -> i64 {
+    /// An integer pragma as SQLite reports it.
+    fn pragma(log: &EventLog, name: &str) -> i64 {
         log.conn
-            .pragma_query_value(None, "synchronous", |r| r.get(0))
+            .pragma_query_value(None, name, |r| r.get(0))
             .unwrap()
     }
 
-    /// In WAL mode only FULL syncs the WAL on every commit, so only FULL
-    /// keeps an emitted event and an acknowledged seq reservation across
-    /// an OS crash or power loss (ADR-0039).
+    /// The log must flush on every commit (ADR-0039): WAL mode, so a
+    /// commit syncs the WAL; `synchronous=EXTRA`, which equals FULL in WAL
+    /// mode and is the level SQLite documents as durable if WAL is ever
+    /// refused; and `fullfsync=1`, so macOS issues F_FULLFSYNC instead of
+    /// a plain fsync that leaves the data in the drive cache.
     #[test]
-    fn test_open_syncs_the_wal_on_every_commit() {
+    fn test_open_flushes_every_commit_to_stable_storage() {
         let (path, _cleanup) = temp_db();
         let log = EventLog::open(&path).unwrap();
-        assert_eq!(synchronous(&log), 2, "synchronous must be FULL");
+        let mode: String = log
+            .conn
+            .pragma_query_value(None, "journal_mode", |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        assert_eq!(pragma(&log, "fullfsync"), 1, "fullfsync must be on");
+        assert_eq!(pragma(&log, "synchronous"), 3, "synchronous must be EXTRA");
     }
 
     #[test]
@@ -1098,7 +1112,7 @@ mod tests {
         const APPENDS: u64 = 3000;
         const RESERVATION_BLOCK: u64 = 1024;
 
-        for (level, name) in [("NORMAL", "NORMAL"), ("FULL", "FULL")] {
+        for (level, name) in [("NORMAL", "NORMAL"), ("FULL", "FULL"), ("EXTRA", "EXTRA")] {
             let (path, _cleanup) = temp_db();
             let mut log = EventLog::open(&path).unwrap();
             log.conn.pragma_update(None, "synchronous", level).unwrap();
