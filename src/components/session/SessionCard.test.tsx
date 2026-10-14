@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionCard } from "#components/session/SessionCard";
 import type { Session } from "#store/types";
 import { useWorkerStore } from "#store/workers";
@@ -96,10 +96,29 @@ vi.mock(import("#lib/tauri"), async (importOriginal) => ({
 describe("SessionCard", () => {
   // Unmount before the store reset, so the reset never re-renders a
   // still-mounted card outside act().
+  // Save As Template writes a plugin-store file, which needs the Tauri bridge.
+  beforeEach(() => {
+    vi.stubGlobal("isTauri", true);
+  });
   afterEach(() => {
     cleanup();
     resetWorkerStore();
     web.on = false;
+    vi.unstubAllGlobals();
+  });
+
+  it("marks Save As Template unavailable, with the reason, without the Tauri bridge", async () => {
+    vi.unstubAllGlobals();
+    const user = userEvent.setup();
+    const props = renderCard();
+
+    await user.click(screen.getByRole("button", { name: 'Actions For Session "Test Session"' }));
+    const item = screen.getByRole("menuitem", { name: "Save As Template" });
+
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveAccessibleDescription("Available In The Desktop App Only");
+    await user.click(item);
+    expect(props.onCreateTemplate).not.toHaveBeenCalled();
   });
 
   it("marks Export As JSON unavailable, with the reason, when the transport cannot browse files", async () => {

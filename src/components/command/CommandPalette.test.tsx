@@ -10,7 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { getDefaultStore } from "jotai";
 import { useLayoutEffect } from "react";
 import { toast } from "sonner";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandPalette } from "#components/command/CommandPalette";
 import { killWorker } from "#lib/tauri";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
@@ -36,6 +36,10 @@ beforeEach(() => {
   vi.mocked(killWorker).mockReset().mockResolvedValue(undefined);
   vi.mocked(toast.warning).mockClear();
   vi.mocked(toast.error).mockClear();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 function palette() {
@@ -74,6 +78,24 @@ async function killFromPalette(name: string): Promise<void> {
   const action = options?.action as { onClick: () => void } | undefined;
   action?.onClick();
 }
+
+describe("CommandPalette — snapshots", () => {
+  it("lists Snapshot Session when the Tauri bridge is present", async () => {
+    vi.stubGlobal("isTauri", true);
+    render(<CommandPalette />);
+    act(() => store.set(commandPaletteOpenAtom, true));
+
+    expect(await screen.findByRole("option", { name: "Snapshot Session" })).toBeInTheDocument();
+  });
+
+  it("omits Snapshot Session without the Tauri bridge (snapshots are plugin-store files)", async () => {
+    render(<CommandPalette />);
+    act(() => store.set(commandPaletteOpenAtom, true));
+
+    await screen.findByRole("option", { name: "Spawn Worker" });
+    expect(screen.queryByRole("option", { name: "Snapshot Session" })).not.toBeInTheDocument();
+  });
+});
 
 describe("CommandPalette", () => {
   it("handles a Ctrl+K pressed in the first commit's layout phase, before passive effects or paint", () => {

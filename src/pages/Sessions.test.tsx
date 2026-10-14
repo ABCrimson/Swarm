@@ -80,6 +80,7 @@ function chooseMenuItem(name: string): void {
 
 beforeEach(() => {
   web.on = false;
+  vi.stubGlobal("isTauri", true);
   resetStores();
   vi.clearAllMocks();
   mockSaveUserTemplate.mockReset().mockResolvedValue(undefined);
@@ -90,6 +91,24 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetStores();
+  vi.unstubAllGlobals();
+});
+
+describe("Sessions — local stores need the Tauri bridge", () => {
+  it("disables Snapshot and Save As Template, with the reason, without the bridge", async () => {
+    vi.unstubAllGlobals();
+    const session = addSession();
+    useSessionStore.getState().setActiveSession(session.id);
+    await renderPage();
+
+    const snapshot = screen.getByRole("button", { name: "Snapshot" });
+    expect(snapshot).toBeDisabled();
+    expect(snapshot).toHaveAccessibleDescription("Available In The Desktop App Only");
+    const item = screen.getAllByRole("menuitem", { name: "Save As Template", hidden: true })[0];
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    chooseMenuItem("Save As Template");
+    expect(screen.queryByRole("form")).not.toBeInTheDocument();
+  });
 });
 
 describe("Sessions — Save As Template", () => {
