@@ -37,3 +37,31 @@ describe("escapeForDisplay", () => {
     expect(escapeForDisplay("\\\n")).toBe("\\\\\\n");
   });
 });
+
+// Every non-test source module, as text (Vite's raw import).
+const sources = import.meta.glob<string>(["/src/**/*.{ts,tsx}", "!/src/**/*.test.{ts,tsx}"], {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+
+describe("escapeForDisplay's home", () => {
+  // knip's `exports` rule only warns, so nothing else stops a second copy.
+  it("is defined only in #lib/display-escape and imported only from there", () => {
+    const entries = Object.entries(sources);
+    const definers = entries
+      .filter(([, text]) => /\b(?:function\s+escapeForDisplay|escapeForDisplay\s*=)/.test(text))
+      .map(([path]) => path);
+    const strays = entries
+      .filter(([, text]) =>
+        /import\s*\{[^}]*\bescapeForDisplay\b[^}]*\}\s*from\s*["'](?!#lib\/display-escape["'])/.test(
+          text,
+        ),
+      )
+      .map(([path]) => path);
+
+    expect(entries.length).toBeGreaterThan(50);
+    expect(definers).toStrictEqual(["/src/lib/display-escape.ts"]);
+    expect(strays).toStrictEqual([]);
+  });
+});
