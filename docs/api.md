@@ -1085,7 +1085,7 @@ Permission gating never rests on `allowedTools` (it widens what runs unasked rat
 |---|---|---|
 | `null` | `Provider Not Supported By The Backend: <name>.` | `provider` is a reserved name with no adapter. Nothing was spawned |
 | `null` | the `spawn_worker` error text | The PTY worker spawn itself failed (registry full, worktree creation failed, ...) |
-| `null` | ``Worker `<id>` not found`` | The worker was killed before or during its session's attach. A session that did attach is shut down, and no worker remains |
+| `null` | ``Worker `<id>` not found`` | The worker was killed before its session's attach. A session that did attach is shut down, and no worker remains |
 | `null` | ``Worker `<id>` is closing`` | A [`kill_worker`](#kill_worker) was in progress when the attach started or finished its handshake. A session that did attach is shut down before the kill proceeds, and no worker remains |
 | the new worker's id | the adapter's own error, verbatim | The session failed to attach (binary missing, handshake timeout, an unknown `trustTier`, Codex refusing a policy more permissive than requested, ...). **The PTY worker still exists and is usable as a plain terminal**; it is not rolled back |
 

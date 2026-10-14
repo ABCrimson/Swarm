@@ -62,6 +62,10 @@ Pinned by `test_kill_worker_stops_the_provider_session_before_removing_the_workt
   `STOP_WORKERS_TIMEOUT`, so a daemon stop can give up on a kill still waiting on an attach and exit
   with that attach's provider process alive; raising that timeout, and a kill-on-drop guard around the
   Claude Code handshake so the attach can be abandoned, are open follow-ups outside this decision.
+- A kill dropped mid-shutdown (its future cancelled, as a `swarmd` stop that times out does) releases
+  its `SessionStop` at once, while the Claude Code teardown may still be reaping the process, so a
+  second kill's `wait_stopped` can return before that process is gone. This belongs to the same open
+  follow-ups.
 - During a kill, cancelling a turn or answering a permission request for that worker fails with
   `WorkerClosing`; the kill's session shutdown settles any turn in flight. A turn still queued settles
   as an error receipt when dispatched.
