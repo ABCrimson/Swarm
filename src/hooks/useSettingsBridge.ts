@@ -181,7 +181,9 @@ function createAgentConcurrencySync(store: Store) {
     /**
      * Once per launch, when a backend is reachable: shows the cap the
      * backend actually runs with (the disk copy outlives the webview's
-     * settings, and a swarmd page starts from defaults every load).
+     * settings, and a swarmd page starts from defaults every load). A
+     * backend value the field cannot show (11 to 16) is overwritten by
+     * pushing the field's value, so the two never silently disagree.
      */
     async reconcile(): Promise<void> {
       if (reconciling || !hasTransport()) return;
@@ -203,8 +205,10 @@ function createAgentConcurrencySync(store: Store) {
         adopt(backend);
       } else {
         console.warn(
-          `useSettingsBridge: backend agent_concurrency ${backend} is outside the Settings range ${AI_CONCURRENT_LIMIT_MIN}-${AI_CONCURRENT_LIMIT_MAX}; keeping the field as is`,
+          `useSettingsBridge: backend agent_concurrency ${backend} is outside the Settings range ${AI_CONCURRENT_LIMIT_MIN}-${AI_CONCURRENT_LIMIT_MAX}; pushing the field's value`,
         );
+        pushed = store.get(appSettingsAtom).aiConcurrentLimit;
+        start(pushed);
       }
     },
 

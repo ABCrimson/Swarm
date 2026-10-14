@@ -320,7 +320,7 @@ describe("useSettingsBridge — launch reconciliation", () => {
     expect(mockSetAgentConcurrency).not.toHaveBeenCalled();
   });
 
-  it("keeps the field and logs when the backend value is outside the UI range", async () => {
+  it("keeps the field, logs and pushes its value when the backend value is outside the UI range", async () => {
     mockHasTransport.mockReturnValue(true);
     mockReadConfig.mockResolvedValue(14);
     using consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -328,6 +328,7 @@ describe("useSettingsBridge — launch reconciliation", () => {
 
     await vi.waitFor(() => expect(consoleWarn).toHaveBeenCalled());
     expect(limit()).toBe(DEFAULT_LIMIT);
+    expect(mockSetAgentConcurrency.mock.calls).toStrictEqual([[DEFAULT_LIMIT]]);
   });
 
   it("leaves the field alone and logs when the read fails", async () => {
