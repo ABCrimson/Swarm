@@ -21,7 +21,11 @@ import {
   saveToFile,
   sessionFileSlug,
 } from "#lib/export";
-import { createSession as createSessionIpc, deleteSession as deleteSessionIpc } from "#lib/tauri";
+import {
+  createSession as createSessionIpc,
+  deleteSession as deleteSessionIpc,
+  isTauri,
+} from "#lib/tauri";
 import { useSessionStore } from "#store/sessions";
 import type { Session } from "#store/types";
 
@@ -68,17 +72,20 @@ export function exportSessionToFile(session: Session): Promise<string | null> {
 
 /**
  * Asks for confirmation, then deletes the session from the backend and
- * the store.
+ * the store. The confirmation is the native dialog in the desktop shell
+ * and `window.confirm` elsewhere: the dialog plugin's `ask` needs the
+ * Tauri bridge and throws without it, and deleting a session is not a
+ * desktop-only feature.
  *
  * @returns `false` when the user declined.
  */
 export async function deleteSessionAfterConfirm(
   session: Pick<Session, "id" | "name">,
 ): Promise<boolean> {
-  const confirmed = await ask(
-    `Are You Sure You Want To Delete Session "${session.name}"? This Action Cannot Be Undone.`,
-    { title: "Delete Session", kind: "warning" },
-  );
+  const message = `Are You Sure You Want To Delete Session "${session.name}"? This Action Cannot Be Undone.`;
+  const confirmed = isTauri()
+    ? await ask(message, { title: "Delete Session", kind: "warning" })
+    : window.confirm(message);
   if (!confirmed) return false;
 
   await deleteSessionIpc(session.id);

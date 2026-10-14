@@ -148,6 +148,15 @@ describe("importSessionFromFile", () => {
 });
 
 describe("deleteSessionAfterConfirm", () => {
+  // The Tauri dialog plugin needs the desktop bridge; the flag opts these
+  // tests into that path.
+  beforeEach(() => {
+    vi.stubGlobal("isTauri", true);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("does nothing when the user declines", async () => {
     vi.mocked(ask).mockResolvedValue(false);
     const session = makeSession();
@@ -180,5 +189,35 @@ describe("deleteSessionAfterConfirm", () => {
 
     await expect(deleteSessionAfterConfirm(session)).rejects.toThrow("Session not found");
     expect(useSessionStore.getState().sessions.has(session.id)).toBe(true);
+  });
+
+  describe("without the Tauri bridge (the browser build)", () => {
+    // `ask` throws there, so the confirmation falls back to the browser's
+    // own dialog instead of making delete impossible.
+    beforeEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("confirms with window.confirm and deletes when accepted", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      const session = makeSession();
+      useSessionStore.getState().addSession(session);
+
+      expect(await deleteSessionAfterConfirm(session)).toBe(true);
+      expect(ask).not.toHaveBeenCalled();
+      expect(confirm).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('"Research Sprint"'));
+      expect(mockDeleteSession).toHaveBeenCalledExactlyOnceWith(session.id);
+      expect(useSessionStore.getState().sessions.has(session.id)).toBe(false);
+    });
+
+    it("keeps the session when window.confirm is declined", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(false);
+      const session = makeSession();
+      useSessionStore.getState().addSession(session);
+
+      expect(await deleteSessionAfterConfirm(session)).toBe(false);
+      expect(mockDeleteSession).not.toHaveBeenCalled();
+      expect(useSessionStore.getState().sessions.has(session.id)).toBe(true);
+    });
   });
 });
