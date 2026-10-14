@@ -38,19 +38,19 @@ describe("rpc deadlines", () => {
     // Worst-case call counts, derived in `rpcDeadlineMs`'s doc.
     const margin = RPC_DEADLINE_MARGIN_MS;
     expect(rpcDeadlineMs("git_stage_commit")).toBe(
-      3 * GIT_SCAN_BUDGET_MS + 3 * GIT_MUTATE_BUDGET_MS + 2 * GIT_READ_BUDGET_MS + margin,
+      7 * GIT_SCAN_BUDGET_MS + 3 * GIT_MUTATE_BUDGET_MS + 2 * GIT_READ_BUDGET_MS + margin,
     );
-    expect(rpcDeadlineMs("git_push")).toBe(GIT_PUSH_BUDGET_MS + 6 * GIT_READ_BUDGET_MS + margin);
+    expect(rpcDeadlineMs("git_push")).toBe(GIT_PUSH_BUDGET_MS + 7 * GIT_READ_BUDGET_MS + margin);
     expect(rpcDeadlineMs("git_ship_preflight")).toBe(
-      3 * GIT_SCAN_BUDGET_MS + 4 * GIT_READ_BUDGET_MS + margin,
+      5 * GIT_SCAN_BUDGET_MS + 4 * GIT_READ_BUDGET_MS + margin,
     );
     expect(rpcDeadlineMs("ship_compare_url")).toBe(4 * GIT_READ_BUDGET_MS + margin);
   });
 
   it("gives the documented totals while the Rust budgets stand", () => {
-    expect(rpcDeadlineMs("git_stage_commit")).toBe(2_040_000);
-    expect(rpcDeadlineMs("git_push")).toBe(720_000);
-    expect(rpcDeadlineMs("git_ship_preflight")).toBe(270_000);
+    expect(rpcDeadlineMs("git_stage_commit")).toBe(2_280_000);
+    expect(rpcDeadlineMs("git_push")).toBe(735_000);
+    expect(rpcDeadlineMs("git_ship_preflight")).toBe(390_000);
     expect(rpcDeadlineMs("ship_compare_url")).toBe(90_000);
   });
 

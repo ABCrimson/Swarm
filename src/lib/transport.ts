@@ -109,14 +109,16 @@ export const GIT_MUTATE_BUDGET_MS = 600_000;
 export const GIT_PUSH_BUDGET_MS = 600_000;
 /**
  * The daemon's budget for one whole-tree or whole-history git query
- * (`status`, `diff --numstat`, `rev-list --count`): `SCAN_TIMEOUT` in
+ * (`status`, `diff --numstat`, `show --numstat`, `rev-list --count`,
+ * `ls-files --stage`, `cat-file --batch-check`): `SCAN_TIMEOUT` in
  * `crates/swarm-core/src/git/cli.rs`, pinned by
  * `transport.deadlines.test.ts`.
  */
 export const GIT_SCAN_BUDGET_MS = 60_000;
 /**
  * The daemon's budget for one cheap git query (`rev-parse`,
- * `symbolic-ref`, `remote get-url`, `config`): `READ_TIMEOUT` in
+ * `symbolic-ref`, `remote get-url`, `config`; also the bookkeeping
+ * `branch --set-upstream-to` after a push): `READ_TIMEOUT` in
  * `crates/swarm-core/src/git/cli.rs`, pinned by
  * `transport.deadlines.test.ts`.
  */
@@ -141,25 +143,34 @@ export const RPC_DEADLINE_MARGIN_MS = 30_000;
  * daemon source (`crates/swarm-core/src`), each call once:
  *
  * - `git_stage_commit` (`stage_and_commit` in `git/ship/commit.rs`):
- *   3 scans (`StatusSnapshot::read` twice, then `commit_diff_stat`'s
- *   `show --numstat`; all `SCAN_TIMEOUT`), 3 mutations (the `restore
- *   --staged`, `add` and `commit` `mutate` calls; `MUTATE_TIMEOUT` each)
- *   and 2 reads (`repo::locate` in `guard_not_primary_checkout`, then
- *   `repo::head_sha`; `READ_TIMEOUT` each) = 3 × 60 s + 3 × 600 s +
- *   2 × 15 s, plus the margin.
+ *   7 scans (`StatusSnapshot::read` twice; two `deny::partition` runs of
+ *   `index_blob_sizes`' `ls-files --stage` and `cat-file --batch-check`;
+ *   then `commit_diff_stat`'s `show --numstat`; all `SCAN_TIMEOUT`), 3
+ *   mutations (the `restore --staged`, `add` and `commit` `mutate` calls;
+ *   `MUTATE_TIMEOUT` each) and 2 reads (`repo::locate` in
+ *   `guard_not_primary_checkout`, then `repo::head_sha`; `READ_TIMEOUT`
+ *   each) = 7 × 60 s + 3 × 600 s + 2 × 15 s, plus the margin. The
+ *   first partition measures index blobs (2 scans) only for "staged" mode
+ *   and `add` runs only for "all", so no single mode runs every call; the
+ *   deadline takes the union because it does not see the mode.
  * - `git_push` (`push` in `git/ship/push.rs`): the push (`mutate` with
- *   `PUSH_TIMEOUT`) and 6 reads (`repo::locate`; `resolve_live_branch`'s
+ *   `PUSH_TIMEOUT`) and 7 reads (`repo::locate`; `resolve_live_branch`'s
  *   `symbolic-ref`; `resolve_base_branch`'s `origin_head_branch` and
  *   `configured_default_branch`; `remote_url`'s `remote get-url`;
- *   `repo::head_sha`; `READ_TIMEOUT` each) = 600 s + 6 × 15 s.
- * - `git_ship_preflight` (`preflight` in `git/ship/preflight.rs`): 3 scans
+ *   `resolve_push_sha`'s `rev-parse refs/heads/<branch>`; and, after the
+ *   push, `set_upstream_args`' `branch --set-upstream-to`, a `mutate` call
+ *   that runs under `READ_TIMEOUT`) = 600 s + 7 × 15 s.
+ * - `git_ship_preflight` (`preflight` in `git/ship/preflight.rs`): 5 scans
  *   (`StatusSnapshot::read`, `ahead_since_base`'s `rev-list --count`,
+ *   `deny::partition`'s `ls-files --stage` and `cat-file --batch-check`,
  *   `preview_diff_stat`'s `diff --numstat`; `SCAN_TIMEOUT` each) and 4
  *   reads (`repo::locate`, `resolve_base_branch`'s two queries,
- *   `remote_url`; `READ_TIMEOUT` each) = 3 × 60 s + 4 × 15 s.
- * - `ship_compare_url` (`compare_url` in `git/ship/push.rs`): 4 reads
- *   (`resolve_live_branch`, `remote_url`, `resolve_base_branch`'s two
- *   queries; `READ_TIMEOUT` each) = 4 × 15 s.
+ *   `remote_url`; `READ_TIMEOUT` each) = 5 × 60 s + 4 × 15 s. The two
+ *   index-blob scans run only in "staged" mode; the bound covers it.
+ * - `ship_compare_url` (`compare_url_with_record` in `git/ship/push.rs`):
+ *   4 reads (`resolve_live_branch`, which runs only when no push is on
+ *   record; `remote_url`; `resolve_base_branch`'s two queries;
+ *   `READ_TIMEOUT` each) = 4 × 15 s.
  *
  * Every other command gets {@link DEFAULT_RPC_DEADLINE_MS}. The ship
  * flow reuses this as the window in which a lost reply may still be
@@ -173,15 +184,15 @@ export function rpcDeadlineMs(cmd: string): number {
   switch (cmd) {
     case "git_stage_commit":
       return (
-        3 * GIT_SCAN_BUDGET_MS +
+        7 * GIT_SCAN_BUDGET_MS +
         3 * GIT_MUTATE_BUDGET_MS +
         2 * GIT_READ_BUDGET_MS +
         RPC_DEADLINE_MARGIN_MS
       );
     case "git_push":
-      return GIT_PUSH_BUDGET_MS + 6 * GIT_READ_BUDGET_MS + RPC_DEADLINE_MARGIN_MS;
+      return GIT_PUSH_BUDGET_MS + 7 * GIT_READ_BUDGET_MS + RPC_DEADLINE_MARGIN_MS;
     case "git_ship_preflight":
-      return 3 * GIT_SCAN_BUDGET_MS + 4 * GIT_READ_BUDGET_MS + RPC_DEADLINE_MARGIN_MS;
+      return 5 * GIT_SCAN_BUDGET_MS + 4 * GIT_READ_BUDGET_MS + RPC_DEADLINE_MARGIN_MS;
     case "ship_compare_url":
       return 4 * GIT_READ_BUDGET_MS + RPC_DEADLINE_MARGIN_MS;
     default:
