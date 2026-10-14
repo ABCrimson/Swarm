@@ -38,7 +38,7 @@ The work since v0.13.1 (proposed as 0.14.0): a Tauri 3 desktop shell, a rewritte
 | Vitest | `5.0.4` |
 | Playwright | `1.65.0-alpha-2026-10-14` |
 | Biome | `2.5.15` |
-| Tailwind CSS | `0.0.0-insiders.1a38f84` |
+| Tailwind CSS | `0.0.0-insiders.2ce6652` |
 | Zod / jotai / immer | `4.6.7` / `3.0.1` / `11.1.21` |
 | motion / recharts / `@xyflow/react` | `14.2.0` / `3.11.0-canary.6` / `12.12.0` |
 | `@anthropic-ai/sdk` | `0.133.0` |
