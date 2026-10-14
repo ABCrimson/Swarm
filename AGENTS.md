@@ -182,7 +182,8 @@ Rust (from the repo root):
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
+cargo test --workspace --locked --all-targets
+cargo test --locked --doc -p swarm-core -p swarmd   # doctests: Tauri-free crates only (ci.yml says why)
 cargo deny check
 # plus: cargo tree -p swarm-core / -p swarmd must contain no tauri crate (ci.yml rust-policy)
 ```

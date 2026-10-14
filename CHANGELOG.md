@@ -67,6 +67,7 @@ All pins are exact. The single hold is `@xyflow/react` at `12.12.0`: `13.0.0-nex
 
 ### Changed
 
+- **Doctests run for the Tauri-free crates only.** CI and the local gate run `cargo test --workspace --all-targets` and then `cargo test --doc -p swarm-core -p swarmd`: on Windows, tauri-build's static VC runtime support puts a stub `msvcrt.lib` on a link-search path that cargo hands to every workspace doctest, which cannot link against it.
 - **Agent exit signals.** Both provider adapters share one signal table: a Claude Code session killed by signal 14 now reports `SIGALRM` (was `SIG14`), and an unlisted signal reports `signal <n>` (was `SIG<n>`), matching Codex.
 - **Rust.** Release builds unwind panics and use `trim-paths = "all"`; workspace lints deny `missing_lints_inheritance`, `unused_workspace_package_fields` and `unknown_lints`; `LockError` derives `thiserror`; typed provider dispatch; the bus is a bounded topic registry with one send path; `swarmd` runs blocking startup work before the async runtime serves; desktop teardown runs once in Tauri 3's plugin cleanup hook (every exit path, including restart) on a helper thread, never on a Tokio worker; the log guard is a `parking_lot::Mutex`, dropped last; the store plugin uses `Builder::new()`.
 - **Main window.** `backgroundThrottling: "disabled"` (macOS 14+ would suspend the hidden webview while agents run), `scrollBarStyle: "fluentOverlay"`, `preventOverflow: true`.

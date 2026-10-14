@@ -166,7 +166,18 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Tests
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --all-targets
+
+      # Doctests run for the Tauri-free crates only. On Windows, tauri-build's
+      # static VC runtime support writes a stub msvcrt.lib into the desktop
+      # crate's OUT_DIR and adds that directory as a native link-search path;
+      # cargo hands the path to every workspace doctest, which then links the
+      # stub without the /NODEFAULTLIB flags that only the desktop crate's own
+      # executables get, and fails on __CxxFrameHandler3 (PR #40, run
+      # 38556067556). Scoping doctests to swarm-core and swarmd keeps the
+      # desktop build script out of their link plan.
+      - name: Doctests
+        run: cargo test --locked --doc -p swarm-core -p swarmd
 
   rust-policy:
     name: Rust Policy
