@@ -14,10 +14,13 @@
 //! calling thread instead when they cannot ask the event loop to stop;
 //! from an async command that is a Tokio worker, where `Handle::block_on`
 //! panics. So the shutdown runs on a scoped helper thread through a handle
-//! captured at registration. The caller waits for it (at most two
-//! `SHUTDOWN_PHASE_TIMEOUT`s), acceptable only because the process exits
-//! right after. The hook runs its teardown once, however often it is
-//! called.
+//! captured at registration. The caller waits for it: up to
+//! `SESSION_SHUTDOWN_TIMEOUT` for the agent sessions, then until the event
+//! writer has committed every event accepted before the shutdown, however
+//! slow the disk's flushes are (at most `DRAIN_CEILING`, 120 s). That is
+//! acceptable only because every window is already gone and the process
+//! exits right after. The hook runs its teardown once, however often it
+//! is called.
 //!
 //! Terminal workers are left to the operating system: their PTYs close
 //! with the process, which ends the shells they run. Killing them through
@@ -28,16 +31,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use swarm_core::error::AppError;
 use swarm_core::runtime::Runtime;
 use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{AppHandle, Manager};
 use tracing_appender::non_blocking::WorkerGuard;
 
-/// Budget for each of the exit teardown's two phases (agent sessions,
-/// then the event writer's drain), so the whole teardown takes at most
-/// about 5 s. Every window is already gone when it runs, so it can only
-/// delay the process exit, never freeze the UI.
-const SHUTDOWN_PHASE_TIMEOUT: Duration = Duration::from_millis(2500);
+/// Budget for the exit teardown's agent sessions. The event writer's
+/// drain that follows has no budget of its own, because a timer there
+/// would drop accepted events whenever the disk's flushes are slow: it
+/// waits for the writer's backlog, up to the engine's `DRAIN_CEILING`. Every window is
+/// already gone when the teardown runs, so it can only delay the process
+/// exit, never freeze the UI.
+const SESSION_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(2500);
 
 /// Managed state of the exit teardown: whether it has run, and the release
 /// log's writer guard, which is taken last so the teardown's own lines
@@ -103,18 +109,21 @@ fn cleanup<R: tauri::Runtime>(app: &AppHandle<R>, tokio: &tokio::runtime::Handle
 
 /// Shuts `runtime` down through [`Runtime::shutdown`]: stops the metrics
 /// loop, shuts every live agent session down, then drains and finalizes
-/// the event log.
+/// the event log. Logs the outcome and returns it.
 ///
 /// A session's shutdown kills its provider CLI and, for a turn still in
 /// flight, records the error `agent_turn_settled` receipt the turn would
 /// otherwise never get. The drain persists everything recorded before it
-/// (those receipts, `worker_killed`, `ship_settled`, …) and records the
-/// exact head seq, so the next start continues without a seq gap.
-async fn shutdown(runtime: &Runtime) {
-    match runtime.shutdown(SHUTDOWN_PHASE_TIMEOUT).await {
+/// (those receipts, `worker_killed`, `ship_settled`, …), waiting for the
+/// writer however slow its flushes are, and records the exact head seq,
+/// so the next start continues without a seq gap.
+async fn shutdown(runtime: &Runtime) -> Result<u64, AppError> {
+    let outcome = runtime.shutdown(SESSION_SHUTDOWN_TIMEOUT).await;
+    match &outcome {
         Ok(head_seq) => tracing::info!(head_seq, "SWARM shut down; the event log is final"),
-        Err(error) => tracing::warn!(%error, "shutdown did not finish; exiting anyway"),
+        Err(error) => tracing::error!(%error, "shutdown did not finish; exiting anyway"),
     }
+    outcome
 }
 
 #[cfg(test)]
@@ -127,7 +136,10 @@ mod tests {
     use crate::test_support::{start_runtime, temp_dir};
 
     /// Events recorded right before the shutdown are all in the event log
-    /// once `shutdown` returns, and the metrics loop is stopped.
+    /// once `shutdown` returns, and the metrics loop is stopped. The drain
+    /// waits for the writer's backlog, so this holds however slow the
+    /// disk's flushes are; a fixed drain budget does not (the Windows
+    /// runner's NTFS commits about 400 of the 500 in 2.5 s).
     #[tokio::test(flavor = "multi_thread")]
     async fn shutdown_persists_everything_recorded_before_it() {
         let data_dir = temp_dir("lifecycle-drain");
@@ -141,9 +153,15 @@ mod tests {
                     worker_id: Default::default(),
                 }));
         }
-        shutdown(&runtime).await;
+        let head = shutdown(&runtime)
+            .await
+            .expect("the drain waits until every accepted event is committed");
 
         assert!(runtime.metrics_cancel.is_cancelled());
+        assert!(
+            head >= RECORDED as u64,
+            "head {head} is behind the {RECORDED} recorded events"
+        );
         let persisted = Registry::new()
             .dispatch(
                 "events_since",

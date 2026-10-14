@@ -15,7 +15,7 @@
 //! - This matches the frontend's expected JSON format
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, SyncSender};
 
 use serde::{Deserialize, Serialize};
@@ -868,6 +868,36 @@ pub(crate) enum WriterCmd {
     Shutdown(SyncSender<Result<u64, String>>),
 }
 
+/// The persistent events the sinks have queued for the writer, and how
+/// many of them the writer has committed. Shutdown waits for the writer
+/// itself (the FIFO `Shutdown` barrier); this count exists so a shutdown
+/// that gives up at its safety ceiling can say how many accepted events it
+/// leaves unpersisted instead of dropping them silently.
+#[derive(Debug, Default)]
+pub(crate) struct Backlog {
+    accepted: AtomicU64,
+    committed: AtomicU64,
+}
+
+impl Backlog {
+    /// Called by the writer thread once a persistent event is committed.
+    pub(crate) fn commit_one(&self) {
+        self.committed.fetch_add(1, Ordering::Release);
+    }
+
+    /// Persistent events queued but not committed: still waiting in the
+    /// writer channel, or dropped fail-closed (their seq could not be
+    /// reserved or their append failed).
+    pub(crate) fn uncommitted(&self) -> u64 {
+        // `committed` first: an event is counted as accepted before it is
+        // queued, so `accepted` read second never trails it.
+        let committed = self.committed.load(Ordering::Acquire);
+        self.accepted
+            .load(Ordering::Acquire)
+            .saturating_sub(committed)
+    }
+}
+
 /// Where an [`EventSink`] delivers.
 #[derive(Clone)]
 enum Outlet {
@@ -891,16 +921,25 @@ pub struct EventSink {
     /// dropped with a debug log instead of queueing behind a writer
     /// that will never process them.
     closed: Arc<AtomicBool>,
+    /// Shared with the writer; counts the persistent events this sink
+    /// queues.
+    backlog: Arc<Backlog>,
 }
 
 impl EventSink {
     /// Wraps the writer channel. Called only by
     /// [`crate::orchestration::OrchestrationEngine::try_start`], which
-    /// keeps a clone of `closed` to flip at shutdown.
-    pub(crate) fn for_writer(tx: Sender<WriterCmd>, closed: Arc<AtomicBool>) -> Self {
+    /// keeps a clone of `closed` to flip at shutdown and of `backlog` to
+    /// report what a shutdown leaves unpersisted.
+    pub(crate) fn for_writer(
+        tx: Sender<WriterCmd>,
+        closed: Arc<AtomicBool>,
+        backlog: Arc<Backlog>,
+    ) -> Self {
         Self {
             outlet: Outlet::Writer(tx),
             closed,
+            backlog,
         }
     }
 
@@ -912,6 +951,7 @@ impl EventSink {
         Self {
             outlet: Outlet::Capture(tx),
             closed: Arc::default(),
+            backlog: Arc::default(),
         }
     }
 
@@ -936,7 +976,19 @@ impl EventSink {
             return;
         }
         let delivered = match &self.outlet {
-            Outlet::Writer(tx) => tx.send(WriterCmd::Record(msg)).is_ok(),
+            Outlet::Writer(tx) => {
+                // Counted before it is queued, so the writer can never
+                // commit an event the backlog has not counted yet.
+                let persistent = crate::orchestration::is_persistent(&msg.event);
+                if persistent {
+                    self.backlog.accepted.fetch_add(1, Ordering::AcqRel);
+                }
+                let sent = tx.send(WriterCmd::Record(msg)).is_ok();
+                if persistent && !sent {
+                    self.backlog.accepted.fetch_sub(1, Ordering::AcqRel);
+                }
+                sent
+            }
             #[cfg(test)]
             Outlet::Capture(tx) => tx.send(msg).is_ok(),
         };
@@ -2012,7 +2064,7 @@ mod tests {
     #[tokio::test]
     async fn test_a_closed_sink_drops_events_and_fails_acks() {
         let (tx, rx) = std::sync::mpsc::channel();
-        let sink = EventSink::for_writer(tx, Arc::new(AtomicBool::new(true)));
+        let sink = EventSink::for_writer(tx, Arc::new(AtomicBool::new(true)), Arc::default());
 
         sink.emit(killed());
         let ack = sink.emit_awaiting_seq(killed(), Provenance::default());

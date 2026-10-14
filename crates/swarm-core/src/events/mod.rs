@@ -63,4 +63,4 @@ pub use emitter::{
     WorkerOutputPayload, WorkerSpawnedPayload, WorkerStatePayload, WorktreeCreatedPayload,
     WorktreeRemovedPayload,
 };
-pub(crate) use emitter::{WriterCmd, WriterMsg};
+pub(crate) use emitter::{Backlog, WriterCmd, WriterMsg};

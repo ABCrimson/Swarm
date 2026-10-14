@@ -45,7 +45,9 @@ use uuid::Uuid;
 
 use super::log::EventLog;
 use crate::error::AppError;
-use crate::events::{EventSink, Provenance, SwarmEvent, SystemLogPayload, WriterCmd, WriterMsg};
+use crate::events::{
+    Backlog, EventSink, Provenance, SwarmEvent, SystemLogPayload, WriterCmd, WriterMsg,
+};
 
 /// The single ordered channel name every backend event is logically
 /// pushed on. The desktop shell's `emit` closure (see
@@ -62,6 +64,18 @@ const BROADCAST_CAPACITY: usize = 4096;
 /// `receiver_count() > 0` check and the send itself — rare and
 /// diagnostic, so it is rate-limited rather than logged every time.
 const BROADCAST_WARN_INTERVAL: Duration = Duration::from_secs(30);
+
+/// The longest [`OrchestrationEngine::shutdown`] waits for the writer to
+/// commit the events accepted before it. A safety ceiling, not a budget:
+/// the backlog is frozen once shutdown closes the sinks, so the wait is
+/// that backlog times the per-event flush, and it ends there however slow
+/// the disk is. Hitting the ceiling is logged at error level with the
+/// number of events left unpersisted and fails the shutdown.
+pub const DRAIN_CEILING: Duration = Duration::from_secs(120);
+
+/// How often a long drain logs how many accepted events are still
+/// uncommitted, so a slow exit shows progress instead of looking hung.
+const DRAIN_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 
 /// How many seqs one reservation write covers. A crash skips at most
 /// this many seqs; a busy writer pays one tiny `meta` write per block.
@@ -139,6 +153,9 @@ pub struct OrchestrationEngine {
     head: Arc<AtomicU64>,
     /// Shared with every [`EventSink`] clone; set by [`Self::shutdown`].
     closed: Arc<AtomicBool>,
+    /// Persistent events accepted and committed, shared with every sink and
+    /// the writer; what a drain that hits [`DRAIN_CEILING`] reports.
+    backlog: Arc<Backlog>,
     /// The writer thread, taken and joined by [`Self::shutdown`].
     writer: Arc<Mutex<Option<JoinHandle<()>>>>,
     /// The first [`Self::shutdown`]'s outcome, returned to every later or concurrent call.
@@ -178,9 +195,11 @@ impl OrchestrationEngine {
 
         let (broadcast_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let head = Arc::new(AtomicU64::new(0));
+        let backlog = Arc::new(Backlog::default());
         let writer = Writer::new(
             log,
             Arc::clone(&head),
+            Arc::clone(&backlog),
             emit,
             Fanout::new(broadcast_tx.clone()),
         )?;
@@ -196,11 +215,12 @@ impl OrchestrationEngine {
 
         let closed = Arc::new(AtomicBool::new(false));
         Ok(Self {
-            sink: EventSink::for_writer(tx, Arc::clone(&closed)),
+            sink: EventSink::for_writer(tx, Arc::clone(&closed), Arc::clone(&backlog)),
             db_path,
             broadcast_tx,
             head,
             closed,
+            backlog,
             writer: Arc::new(Mutex::new(Some(handle))),
             shutdown_outcome: Arc::new(Mutex::new(None)),
         })
@@ -277,6 +297,15 @@ impl OrchestrationEngine {
     /// optimize`, checkpoints the WAL), and stops the writer thread.
     /// Returns the final head seq.
     ///
+    /// The handshake: closing the sinks freezes the backlog, and the
+    /// `Shutdown` barrier queued behind it reaches the writer only after
+    /// the writer has committed (or failed closed on) every event accepted
+    /// before it, the last one included. So the call returns when the last
+    /// accepted seq is committed, however long its flushes take; only
+    /// [`DRAIN_CEILING`] ends the wait early, and that is logged at error
+    /// level with the count of accepted events left unpersisted and
+    /// returned as the error.
+    ///
     /// Events recorded after shutdown begins are dropped (with a debug
     /// log), and [`EventSink::emit_awaiting_seq`] receivers for them
     /// resolve to an error. A later or concurrent call waits for the
@@ -285,23 +314,31 @@ impl OrchestrationEngine {
     ///
     /// # Blocking
     ///
-    /// Waits up to `timeout` for the writer to drain. From async code,
-    /// call it through `tokio::task::spawn_blocking` (as
+    /// Waits for the writer to drain (at most [`DRAIN_CEILING`]). From
+    /// async code, call it through `tokio::task::spawn_blocking` (as
     /// [`crate::runtime::Runtime::shutdown`] does).
     ///
     /// # Errors
     ///
     /// [`AppError::EventLog`] if the writer thread is already gone, stops
-    /// before draining, or does not drain within `timeout`, or if the log
-    /// cannot be finalized (every drained event is saved, but the exact
-    /// head may not be recorded, or the WAL may not be checkpointed).
-    pub fn shutdown(&self, timeout: Duration) -> Result<u64, AppError> {
+    /// before draining, or does not drain within [`DRAIN_CEILING`] (the
+    /// message counts the accepted events left unpersisted), or if the
+    /// log cannot be finalized (every drained event is saved, but the
+    /// exact head may not be recorded, or the WAL may not be
+    /// checkpointed).
+    pub fn shutdown(&self) -> Result<u64, AppError> {
+        self.shutdown_within(DRAIN_CEILING)
+    }
+
+    /// [`Self::shutdown`] with its safety ceiling as a parameter, so a test
+    /// can reach the ceiling without waiting [`DRAIN_CEILING`].
+    fn shutdown_within(&self, ceiling: Duration) -> Result<u64, AppError> {
         let mut outcome = self.shutdown_outcome.lock();
         if let Some(first) = outcome.as_ref() {
             return first.clone().map_err(AppError::EventLog);
         }
         self.closed.store(true, Ordering::Release);
-        let result = self.drain(timeout);
+        let result = self.drain(ceiling);
         *outcome = Some(match &result {
             Ok(head) => Ok(*head),
             Err(AppError::EventLog(message)) => Err(message.clone()),
@@ -310,23 +347,44 @@ impl OrchestrationEngine {
         result
     }
 
-    /// Queues the barrier, waits for the drain, joins the writer thread.
-    fn drain(&self, timeout: Duration) -> Result<u64, AppError> {
+    /// Queues the barrier, waits for the writer to reach it (logging
+    /// progress meanwhile, giving up only at `ceiling`), joins the writer
+    /// thread.
+    fn drain(&self, ceiling: Duration) -> Result<u64, AppError> {
         let (done_tx, done_rx) = mpsc::sync_channel(1);
         if !self.sink.send_command(WriterCmd::Shutdown(done_tx)) {
             return Err(writer_unavailable());
         }
-        let outcome = match done_rx.recv_timeout(timeout) {
-            Ok(outcome) => outcome,
-            Err(RecvTimeoutError::Timeout) => {
-                return Err(AppError::EventLog(format!(
-                    "The Event Writer Did Not Drain Within {} ms.",
-                    timeout.as_millis()
-                )));
-            }
-            // The writer thread unwound with the barrier still queued.
-            Err(RecvTimeoutError::Disconnected) => {
-                Err("The Event Writer Thread Stopped Before Draining.".to_owned())
+        let started = Instant::now();
+        let outcome = loop {
+            let left = ceiling.saturating_sub(started.elapsed());
+            match done_rx.recv_timeout(left.min(DRAIN_PROGRESS_INTERVAL)) {
+                Ok(outcome) => break outcome,
+                Err(RecvTimeoutError::Timeout) if started.elapsed() < ceiling => {
+                    tracing::info!(
+                        uncommitted = self.backlog.uncommitted(),
+                        waited_ms = started.elapsed().as_millis(),
+                        "the event writer is still committing the events accepted before shutdown"
+                    );
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    let unpersisted = self.backlog.uncommitted();
+                    tracing::error!(
+                        unpersisted,
+                        ceiling_ms = ceiling.as_millis(),
+                        "the event writer did not drain within the shutdown ceiling; \
+                         accepted events are left unpersisted"
+                    );
+                    return Err(AppError::EventLog(format!(
+                        "The Event Writer Did Not Drain Within {} ms: {unpersisted} Accepted \
+                         Events Are Not Persisted.",
+                        ceiling.as_millis()
+                    )));
+                }
+                // The writer thread unwound with the barrier still queued.
+                Err(RecvTimeoutError::Disconnected) => {
+                    break Err("The Event Writer Thread Stopped Before Draining.".to_owned());
+                }
             }
         };
         if let Some(handle) = self.writer.lock().take()
@@ -397,6 +455,8 @@ struct Writer<E> {
     reserved: u64,
     /// Published copy of `seq` — see [`OrchestrationEngine::head_seq`].
     head: Arc<AtomicU64>,
+    /// Counts each committed persistent event for the shutdown drain.
+    backlog: Arc<Backlog>,
     /// The primary, lossless delivery path.
     emit: E,
     fanout: Fanout,
@@ -405,7 +465,13 @@ struct Writer<E> {
 }
 
 impl<E: FnMut(&DomainEvent)> Writer<E> {
-    fn new(log: EventLog, head: Arc<AtomicU64>, emit: E, fanout: Fanout) -> Result<Self, AppError> {
+    fn new(
+        log: EventLog,
+        head: Arc<AtomicU64>,
+        backlog: Arc<Backlog>,
+        emit: E,
+        fanout: Fanout,
+    ) -> Result<Self, AppError> {
         let seq = log.resume_seq()?;
         head.store(seq, Ordering::Release);
         Ok(Self {
@@ -413,6 +479,7 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
             seq,
             reserved: seq,
             head,
+            backlog,
             emit,
             fanout,
             reserve_failing: false,
@@ -478,18 +545,19 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
             // Dropping `ack` resolves its receiver to a `RecvError`.
             return;
         };
-        if is_persistent(&envelope.event)
-            && let Err(e) = self.persist(&envelope, &provenance)
-        {
-            tracing::error!(
-                seq = envelope.seq,
-                event_type = envelope.event.type_tag(),
-                error = %e,
-                "failed to persist event; it is not emitted"
-            );
-            drop(ack);
-            self.report_persist_failure(&envelope, &e);
-            return;
+        if is_persistent(&envelope.event) {
+            if let Err(e) = self.persist(&envelope, &provenance) {
+                tracing::error!(
+                    seq = envelope.seq,
+                    event_type = envelope.event.type_tag(),
+                    error = %e,
+                    "failed to persist event; it is not emitted"
+                );
+                drop(ack);
+                self.report_persist_failure(&envelope, &e);
+                return;
+            }
+            self.backlog.commit_one();
         }
         self.deliver(envelope);
 
@@ -643,6 +711,7 @@ mod tests {
         let mut seen = Vec::new();
         let log = Writer::new(
             log,
+            Arc::default(),
             Arc::default(),
             |e: &DomainEvent| seen.push(e.clone()),
             idle_fanout(),
@@ -918,6 +987,7 @@ mod tests {
             let log = Writer::new(
                 EventLog::open_in_memory().unwrap(),
                 Arc::default(),
+                Arc::default(),
                 |e: &DomainEvent| live.push(serde_json::to_value(e).unwrap()),
                 idle_fanout(),
             )
@@ -951,6 +1021,7 @@ mod tests {
     fn test_restart_after_a_crash_never_reissues_an_ephemeral_seq() {
         let mut writer = Writer::new(
             EventLog::open_in_memory().unwrap(),
+            Arc::default(),
             Arc::default(),
             |_: &DomainEvent| {},
             idle_fanout(),
@@ -1049,6 +1120,7 @@ mod tests {
         let writer = Writer::new(
             EventLog::open_in_memory().unwrap(),
             Arc::clone(&head),
+            Arc::default(),
             Box::new(move |e: &DomainEvent| sink.lock().push(e.clone())) as BoxedEmit,
             Fanout::new(tx),
         )
@@ -1190,6 +1262,7 @@ mod tests {
         let mut writer = Writer::new(
             EventLog::open_in_memory().unwrap(),
             Arc::clone(&head),
+            Arc::default(),
             move |e: &DomainEvent| {
                 assert_eq!(
                     at_emit.load(Ordering::Acquire),
@@ -1217,9 +1290,10 @@ mod tests {
         assert_eq!(engine.head_seq(), 50);
     }
 
-    /// A timed-out drain fails every later call. The emit blocks the first
-    /// event and FIFO keeps the barrier behind it, so the first call always
-    /// times out; a retry must not report an unfinalized log as final.
+    /// A drain that hits its ceiling fails every later call. The emit
+    /// blocks the first event and FIFO keeps the barrier behind it, so the
+    /// first call always reaches the ceiling; a retry must not report an
+    /// unfinalized log as final.
     #[test]
     fn test_a_timed_out_shutdown_fails_every_later_call() {
         let (release_tx, release_rx) = mpsc::channel::<()>();
@@ -1229,13 +1303,84 @@ mod tests {
             });
         engine.sink().emit(output());
         let first = engine
-            .shutdown(Duration::from_millis(50))
+            .shutdown_within(Duration::from_millis(50))
             .unwrap_err()
             .to_string();
-        let second = engine.shutdown(Duration::from_secs(5));
+        let second = engine.shutdown();
         assert_matches!(&second, Err(AppError::EventLog(_)));
         assert_eq!(second.unwrap_err().to_string(), first);
         drop(release_tx);
+    }
+
+    /// A drain that hits its ceiling says how many accepted events it
+    /// leaves unpersisted instead of dropping them silently. The emit
+    /// blocks after the first event is committed, so exactly the four
+    /// persistent events behind it are uncommitted; the ephemeral one is
+    /// never persisted and is not counted.
+    #[test]
+    fn test_a_drain_at_its_ceiling_reports_the_unpersisted_count() {
+        let (entered_tx, entered_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let engine =
+            OrchestrationEngine::start(EventLog::open_in_memory().unwrap(), None, move |_| {
+                let _ = entered_tx.send(());
+                let _ = release_rx.recv();
+            });
+        let sink = engine.sink();
+        for _ in 0..5 {
+            sink.emit(spawned());
+        }
+        sink.emit(output());
+        // The first event is committed (its emit runs after the append).
+        entered_rx.recv().unwrap();
+        let error = engine
+            .shutdown_within(Duration::from_millis(50))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(": 4 Accepted Events Are Not Persisted."),
+            "{error}"
+        );
+        drop(release_tx);
+    }
+
+    /// `shutdown` returns only once the last event accepted before it is
+    /// committed, however slow the writer: each delivery sleeps 20 ms,
+    /// standing in for a slow disk flush, so the 100-event backlog takes
+    /// about 2 s. The last event's ack resolves only when the writer has
+    /// committed it, so it must be resolved by the time `shutdown`
+    /// returns, and the log must hold every event.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_shutdown_returns_after_the_last_accepted_seq_is_committed() {
+        const RECORDED: usize = 100;
+        let (path, _cleanup) = temp_db();
+        let engine = OrchestrationEngine::try_start(
+            EventLog::open(&path).unwrap(),
+            Some(path.clone()),
+            |_| std::thread::sleep(Duration::from_millis(20)),
+        )
+        .unwrap();
+        let sink = engine.sink();
+        for _ in 1..RECORDED {
+            sink.emit(spawned());
+        }
+        let mut last = sink.emit_awaiting_seq(spawned(), Provenance::default());
+
+        let head = tokio::task::spawn_blocking({
+            let engine = engine.clone();
+            move || engine.shutdown()
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let last_seq = last
+            .try_recv()
+            .expect("shutdown returned before the writer committed the last accepted event");
+        assert_eq!(last_seq, RECORDED as u64);
+        assert_eq!(head, last_seq);
+        let reader = EventLog::open_readonly(&path).unwrap();
+        assert_eq!(reader.max_seq().unwrap(), last_seq);
+        assert_eq!(reader.events_since(0, 1000).unwrap().len(), RECORDED);
     }
 
     /// Shutdown drains everything queued before it
@@ -1258,7 +1403,7 @@ mod tests {
 
         let head = tokio::task::spawn_blocking({
             let engine = engine.clone();
-            move || engine.shutdown(Duration::from_secs(10))
+            move || engine.shutdown()
         })
         .await
         .unwrap()
@@ -1277,7 +1422,7 @@ mod tests {
                 .is_err()
         );
         assert_matches!(engine.flush().await, Err(AppError::EventLog(_)));
-        assert_eq!(engine.shutdown(Duration::from_secs(1)).unwrap(), 200);
+        assert_eq!(engine.shutdown().unwrap(), 200);
         assert_eq!(reader.max_seq().unwrap(), 199);
 
         let restarted = OrchestrationEngine::try_start(

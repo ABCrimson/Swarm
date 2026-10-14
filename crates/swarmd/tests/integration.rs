@@ -1898,14 +1898,49 @@ fn test_connect_url_prints_the_token_url() {
 }
 
 /// SIGTERM (what systemd and launchd send) shuts down gracefully: exit 0,
-/// and the lock is released for the next daemon.
+/// every event accepted before it is in the event log, and the lock is
+/// released for the next daemon.
+///
+/// `create_session` replies before its `session_created` is committed (the
+/// emit is fire-and-forget), so the last of them can still be queued in the
+/// event writer when the signal arrives; the shutdown drain must wait for
+/// them rather than drop them.
 #[cfg(unix)]
 #[test]
 fn test_sigterm_shuts_down_gracefully_and_releases_the_lock() {
+    const SESSIONS: usize = 50;
     let dir = tempfile::tempdir().unwrap();
     let args = ["--bind", "127.0.0.1:0", "--data-dir", path_str(dir.path())];
     let mut daemon = Daemon::spawn(&args);
-    daemon.listening_line();
+    let line = daemon.listening_line();
+    let addr = line
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("http://"))
+        .unwrap()
+        .trim_end_matches('/')
+        .to_owned();
+    let token = DaemonToken::load(dir.path()).unwrap().unwrap();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
+                .await
+                .unwrap();
+            hello(&mut ws, None, Some(token.as_str())).await;
+            // One at a time: the per-connection RPC cap would reject a burst.
+            for i in 0..SESSIONS {
+                let (ok, _, error) = rpc(
+                    &mut ws,
+                    &format!("r{i}"),
+                    "create_session",
+                    json!({"name": format!("s{i}"), "config": {}}),
+                )
+                .await;
+                assert!(ok, "create_session #{i} failed: {error:?}");
+            }
+        });
     let status = Command::new("kill")
         .args(["-TERM", &daemon.child.id().to_string()])
         .status()
@@ -1914,6 +1949,18 @@ fn test_sigterm_shuts_down_gracefully_and_releases_the_lock() {
     assert_eq!(daemon.wait(), Some(0));
     let stderr = daemon.stderr();
     assert!(stderr.contains("swarmd stopped"), "{stderr}");
+    let log = swarm_core::orchestration::EventLog::open_readonly(
+        &dir.path().join(swarm_core::runtime::EVENT_LOG_FILE),
+    )
+    .unwrap();
+    let created = log
+        .events_since(0, 10_000)
+        .unwrap()
+        .iter()
+        .filter(|event| event.event_type == "session_created")
+        .count();
+    assert_eq!(created, SESSIONS, "an accepted event was lost on shutdown");
+    drop(log);
 
     let mut next = Daemon::spawn(&args);
     next.listening_line();

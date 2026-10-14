@@ -27,7 +27,9 @@ named them in the capability file, so the webview's reach was not pinned.
 
 - A new command needs a `command_list.rs` entry and its `allow-*` line, or the contract test fails
   (and the webview `invoke` is rejected).
-- `exit` can block the calling thread for up to 5 s (two phases of 2.5 s).
+- `exit` blocks the calling thread for up to 2.5 s of agent-session shutdown, then until the event
+  writer has committed its backlog (at most 120 s; see the 2026-10-14 amendment to
+  [ADR-0039](0039-event-log-flushes-every-commit.md)).
 - ADR-0028's exit-teardown paragraph and its `restart` consequence no longer hold; the rest stands.
 
 See [Desktop shell](../architecture.md#desktop-shell).

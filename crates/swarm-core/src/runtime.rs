@@ -222,19 +222,22 @@ impl Runtime {
     /// removed and shut down, so one an attach registers meanwhile is
     /// stopped too, and any other shutdown of it in progress is awaited.
     /// Agent sessions, attaches and stops included, get up to
-    /// `timeout` in total; draining the engine gets up to `timeout`
-    /// more. Call it once, on exit — events
-    /// recorded afterwards are dropped. The runtime (and its lock) stays
-    /// alive until dropped.
+    /// `session_timeout` in total. The engine drain has no budget: it
+    /// waits until the writer has committed the last event accepted before
+    /// it, however slow the disk's flushes are, and gives up only at
+    /// [`crate::orchestration::engine::DRAIN_CEILING`] (logged at error
+    /// level with the count left unpersisted). Call it once, on exit —
+    /// events recorded afterwards are dropped. The runtime (and its lock)
+    /// stays alive until dropped.
     ///
     /// # Errors
     ///
-    /// [`AppError::EventLog`] if the engine did not drain in time, its
-    /// writer thread is gone, the event log could not be finalized, or an
-    /// earlier shutdown failed; a repeat call
-    /// after a clean shutdown returns the same head (see
-    /// [`OrchestrationEngine::shutdown`]).
-    pub async fn shutdown(&self, timeout: Duration) -> Result<u64, AppError> {
+    /// [`AppError::EventLog`] if the engine did not drain within its
+    /// ceiling (the message counts the accepted events left unpersisted),
+    /// its writer thread is gone, the event log could not be finalized, or
+    /// an earlier shutdown failed; a repeat call after a clean shutdown
+    /// returns the same head (see [`OrchestrationEngine::shutdown`]).
+    pub async fn shutdown(&self, session_timeout: Duration) -> Result<u64, AppError> {
         self.metrics_cancel.cancel();
 
         let mut sessions = JoinSet::new();
@@ -259,12 +262,12 @@ impl Runtime {
                 }
             }
         };
-        if tokio::time::timeout(timeout, drain).await.is_err() {
+        if tokio::time::timeout(session_timeout, drain).await.is_err() {
             tracing::warn!("agent sessions did not all shut down in time");
         }
 
         let engine = self.engine.clone();
-        tokio::task::spawn_blocking(move || engine.shutdown(timeout))
+        tokio::task::spawn_blocking(move || engine.shutdown())
             .await
             .map_err(|e| {
                 AppError::EventLog(format!("The Event Engine Shutdown Task Failed: {e}"))
@@ -406,6 +409,54 @@ mod tests {
             .await
             .unwrap();
         assert!(seq > head, "seq {seq} reused (final head was {head})");
+    }
+
+    /// A slow writer still has every event accepted before `shutdown`
+    /// committed when `shutdown` returns: each delivery sleeps 10 ms,
+    /// standing in for a disk whose flush is slow (the Windows CI runner's
+    /// NTFS), so the 400-event backlog takes about 4 s, far past the
+    /// 100 ms the agent sessions get. The last event's ack is the
+    /// handshake: it resolves only once the writer has committed that
+    /// seq, so it must be resolved by the time `shutdown` returns.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_shutdown_waits_for_a_slow_writer_to_commit_its_backlog() {
+        const RECORDED: usize = 400;
+        const PER_EVENT: Duration = Duration::from_millis(10);
+        let killed = || {
+            SwarmEvent::WorkerKilled(crate::events::WorkerKilledPayload {
+                worker_id: uuid::Uuid::nil(),
+            })
+        };
+        let (dir, _cleanup) = temp_dir("runtime-slow-drain");
+        let runtime = Runtime::start(config(&dir, "swarm-desktop"), |_| {
+            std::thread::sleep(PER_EVENT);
+        })
+        .unwrap();
+        for _ in 1..RECORDED {
+            runtime.sink.emit(killed());
+        }
+        let mut last = runtime
+            .sink
+            .emit_awaiting_seq(killed(), crate::events::Provenance::default());
+
+        let head = runtime.shutdown(Duration::from_millis(100)).await.unwrap();
+        let last_seq = last
+            .try_recv()
+            .expect("shutdown returned before the writer committed the last accepted event");
+        assert!(
+            head >= last_seq,
+            "head {head} is behind the last accepted seq {last_seq}"
+        );
+        let log = EventLog::open_readonly(&dir.join(EVENT_LOG_FILE)).unwrap();
+        assert!(log.max_seq().unwrap() >= last_seq);
+        let persisted = log.events_since(0, 1000).unwrap();
+        assert_eq!(
+            persisted
+                .iter()
+                .filter(|e| e.event_type == "worker_killed")
+                .count(),
+            RECORDED
+        );
     }
 
     /// A persisted `max_workers` is restored at start, and one outside the

@@ -41,12 +41,14 @@
     <key>ThrottleInterval</key>
     <integer>60</integer>
     <!-- Seconds between SIGTERM and SIGKILL on a stop (launchd's default is
-         20). swarmd's graceful shutdown can take about 55: up to 5 s each
-         to drain HTTP requests and WebSocket connections (Limits::drain_timeout),
-         40 s to stop workers (STOP_WORKERS_TIMEOUT in main.rs: the 30 s adapter
-         handshake a kill may still wait on, plus the session teardown) and 5 s
-         for the runtime shutdown that flushes the event log (two 2.5 s
-         phases). Keep it equal to TimeoutStopSec in swarmd.service. -->
+         20). Apart from the event-log drain, swarmd's graceful shutdown can
+         take about 52.5: up to 5 s each to drain HTTP requests and WebSocket
+         connections (Limits::drain_timeout), 40 s to stop workers
+         (STOP_WORKERS_TIMEOUT in main.rs: the 30 s adapter handshake a kill
+         may still wait on, plus the session teardown) and 2.5 s for agent
+         sessions still registered. The event-log drain has no timer: it
+         waits until every event accepted before the shutdown is committed.
+         Keep it equal to TimeoutStopSec in swarmd.service. -->
     <key>ExitTimeOut</key>
     <integer>60</integer>
     <!-- Adaptive, not Background: workers inherit the daemon's resource
