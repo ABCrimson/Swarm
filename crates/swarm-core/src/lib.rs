@@ -35,8 +35,8 @@
 //! - [`config`] — `swarm-config.json`.
 //! - [`metrics`] — system and per-worker resource sampling.
 //! - [`error`] — [`error::AppError`], the shared error type.
-//! - [`clock`] — the one conversion from wall-clock time to the `i64`
-//!   Unix-epoch timestamps every event and persisted record carries.
+//! - [`clock`] — wall-clock time as the `i64` Unix-epoch timestamps every
+//!   event and persisted record carries.
 
 pub mod agent;
 pub mod bus;
