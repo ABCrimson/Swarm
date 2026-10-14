@@ -10,7 +10,7 @@
 //! the [`crate::agent::adapter::AgentSession`], `send_turn`, awaiting the
 //! turn's settlement, emitting the `agent_*` family). The scheduler itself
 //! only answers "may this turn start now, and which one goes first?";
-//! [`execute_turn`] is the production executor that runtime hands it.
+//! `execute_turn` is the production executor that runtime hands it.
 //!
 //! ## Admission rules
 //!
@@ -484,7 +484,7 @@ pub(crate) async fn execute_turn(
         tracing::warn!(worker_id = %request.worker_id, %error, "agent turn dispatch failed; synthesizing a terminal receipt");
         sink.emit(SwarmEvent::AgentTurnSettled(AgentTurnSettledPayload {
             worker_id: request.worker_id,
-            turn_id: uuid::Uuid::new_v4().to_string(),
+            turn_id: Uuid::new_v4().to_string(),
             status: AgentTurnStatus::Error,
             error: Some(error),
             cost_usd: None,

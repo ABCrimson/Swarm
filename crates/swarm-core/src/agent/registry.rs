@@ -914,9 +914,15 @@ mod tests {
         tracker: &ConcurrencyTracker,
         total: usize,
         exec_log: &parking_lot::Mutex<Vec<String>>,
+        events: &std::sync::mpsc::Receiver<crate::events::WriterMsg>,
     ) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         while tracker.completed.load(Ordering::SeqCst) < total {
+            // A synthesized receipt means the executor failed a dispatch:
+            // fail now instead of at the deadline.
+            if let Ok(msg) = events.try_recv() {
+                panic!("synthesized receipt: {:?}", msg.event);
+            }
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "timed out: {}/{total} completed, log: {:?}",
@@ -967,7 +973,7 @@ mod tests {
                 .unwrap();
         }
 
-        wait_for_completed(&tracker, 2, &exec_log).await;
+        wait_for_completed(&tracker, 2, &exec_log, &events).await;
         assert!(
             events.try_recv().is_err(),
             "accepted turns settle through their session, never a synthesized receipt"
@@ -1028,7 +1034,13 @@ mod tests {
             }
         }
 
-        wait_for_completed(&tracker, labels.len() * TURNS_PER_SESSION, &exec_log).await;
+        wait_for_completed(
+            &tracker,
+            labels.len() * TURNS_PER_SESSION,
+            &exec_log,
+            &events,
+        )
+        .await;
         assert!(
             events.try_recv().is_err(),
             "accepted turns settle through their session, never a synthesized receipt"
