@@ -238,7 +238,7 @@ pub struct Registry {
 
 impl Registry {
     /// Builds the full registry: every command both shells expose (see
-    /// [`NATIVE_ONLY`] for the two that are deliberately absent), each
+    /// [`NATIVE_ONLY`] for the three that are deliberately absent), each
     /// with its [`RemotePolicy`].
     pub fn new() -> Self {
         use RemotePolicy::{Allowed, Denied, SecretFiltered};

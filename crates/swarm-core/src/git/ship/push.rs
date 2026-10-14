@@ -153,6 +153,8 @@ fn classify_push_error(raw_stderr: &str, surfaced_stderr: &str) -> ShipError {
 /// * [`ShipErrorKind::InvalidBranch`] — detached `HEAD`, a protected
 ///   branch, or the base branch.
 /// * [`ShipErrorKind::NoRemote`] — no `origin` remote configured.
+/// * [`ShipErrorKind::NonGitHubHost`] — `origin` has more than one push
+///   URL, so `git push origin` would send the branch to every one of them.
 /// * [`ShipErrorKind::PushRejected`] / [`ShipErrorKind::AuthExpired`] /
 ///   [`ShipErrorKind::Timeout`] / [`ShipErrorKind::Unknown`] — the push
 ///   itself failed, or reading the live branch or the `origin` remote
@@ -179,11 +181,20 @@ pub fn push(
             format!("Branch `{branch}` Is The Base Branch — Ship Refuses To Push Directly To It."),
         ));
     }
-    if push_urls(wt, "origin")?.is_empty() {
-        return Err(ShipError::new(
-            ShipErrorKind::NoRemote,
-            "No `origin` Remote Configured.",
-        ));
+    match push_urls(wt, "origin")?.as_slice() {
+        [] => {
+            return Err(ShipError::new(
+                ShipErrorKind::NoRemote,
+                "No `origin` Remote Configured.",
+            ));
+        }
+        [_] => {}
+        many => {
+            return Err(ShipError::new(
+                ShipErrorKind::NonGitHubHost,
+                many_push_urls(many.len()),
+            ));
+        }
     }
     let sha = resolve_push_sha(wt, &branch)?;
     push_commit(registry, id, repo_locks, &info.repo_root, wt, &branch, &sha)

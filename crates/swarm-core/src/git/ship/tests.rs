@@ -332,6 +332,46 @@ fn test_full_ship_cycle_advances_a_real_bare_remote() {
     );
 }
 
+/// `push` does not trust that its caller checked `canShip`: with two push
+/// URLs `git push origin` would send the branch to both, so it refuses
+/// before pushing, and neither remote receives the branch.
+#[test]
+fn test_push_refuses_more_than_one_push_url_and_pushes_nowhere() {
+    let repo = TempRepo::new("push-two-pushurls");
+    let first = repo.add_bare_origin();
+    let second = repo.base().join("second.git");
+    std::fs::create_dir_all(&second).unwrap();
+    git_in(&second, &["init", "--bare", "-b", "main"]);
+    for bare in [&first, &second] {
+        repo.git(&[
+            "remote",
+            "set-url",
+            "--add",
+            "--push",
+            "origin",
+            &bare.display().to_string(),
+        ]);
+    }
+    let branch = "swarm/two-urls-abcd1234";
+    let worktree = repo.add_worktree("wt", branch);
+    let registry = WorkerRegistry::new();
+    let id = register(&registry, &repo, &worktree, branch);
+    write_file(&worktree, "feature.txt", "real work");
+    git_in(&worktree, &["add", "feature.txt"]);
+    git_in(&worktree, &["commit", "-m", "feat: work"]);
+
+    let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
+    assert_eq!(err.kind, ShipErrorKind::NonGitHubHost);
+    assert_eq!(err.message, many_push_urls(2));
+    for bare in [&first, &second] {
+        assert!(
+            repo::rev_parse(bare, &format!("refs/heads/{branch}")).is_err(),
+            "{} received the branch",
+            bare.display()
+        );
+    }
+}
+
 /// DIRECTIVE: a secret-shaped file and an oversized blob are both
 /// skipped; neither is committed.
 #[test]

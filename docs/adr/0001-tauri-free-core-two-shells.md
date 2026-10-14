@@ -38,3 +38,8 @@ manifest would not show up under `swarm-core`.
 - The workspace has three members: `src-tauri`, `crates/swarm-core`, `crates/swarmd`.
 
 See [architecture.md](../architecture.md#backend) and [Runtime Modes](../architecture.md#runtime-modes).
+
+## Amendment (2026-10-14): `open_worker_directory` is a third `NATIVE_ONLY` command
+
+The webview's worktree link opens a worker's own worktree directory through it, by worker id,
+instead of through an opener path scope (see the 2026-10-14 amendment to [ADR-0030](0030-tauri-3-alpha-capability-scoped-fs.md)).
