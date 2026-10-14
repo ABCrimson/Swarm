@@ -425,22 +425,21 @@ pub async fn git_push(ctx: Ctx, args: Value) -> Result<Value, Value> {
 struct CompareUrlArgs {
     worker_id: String,
     ship_id: String,
-    commit_sha: String,
-    pushed_ref: String,
     title: String,
     body: String,
 }
 
-/// `ship_compare_url { workerId, shipId, commitSha, pushedRef, title,
-/// body }` → the prefilled GitHub compare URL. Always the ship
-/// attempt's final step: it settles with `commitSha`/`pushedRef`/the
-/// URL. Errors are `ShipError` objects.
+/// `ship_compare_url { workerId, shipId, title, body }` → the prefilled
+/// GitHub compare URL. Always the ship attempt's final step: it settles
+/// with the sha and ref of the worker's latest recorded push (the
+/// record `git::ship::compare_url_with_record` built the URL from,
+/// written by the push itself) and the URL, never with values the caller
+/// supplies. The record is per worker, so interleaved ship attempts on
+/// one worker share the latest push. Errors are `ShipError` objects.
 pub async fn ship_compare_url(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let CompareUrlArgs {
         worker_id,
         ship_id,
-        commit_sha,
-        pushed_ref,
         title,
         body,
     } = parse_args(args)?;
@@ -454,15 +453,18 @@ pub async fn ship_compare_url(ctx: Ctx, args: Value) -> Result<Value, Value> {
     reporter.progress("compare", "running", None);
 
     let registry = ctx.registry.clone();
-    let result =
-        tokio::task::spawn_blocking(move || git::ship::compare_url(&registry, id, &title, &body))
-            .await
-            .map_err(|e| task_panicked("ship_compare_url", &e))?;
+    let result = tokio::task::spawn_blocking(move || {
+        git::ship::compare_url_with_record(&registry, id, &title, &body)
+    })
+    .await
+    .map_err(|e| task_panicked("ship_compare_url", &e))?;
 
     match result {
-        Ok(url) => {
+        Ok((url, recorded)) => {
             reporter.progress("compare", "ok", Some(url.clone()));
-            reporter.settle_ok(Some(commit_sha), Some(pushed_ref), Some(url.clone()));
+            let (commit_sha, pushed_ref) =
+                recorded.map_or((None, None), |push| (Some(push.sha), Some(push.pushed_ref)));
+            reporter.settle_ok(commit_sha, pushed_ref, Some(url.clone()));
             ok_value(&url)
         }
         Err(error) => Err(reporter.fail("compare", error)),
@@ -812,6 +814,72 @@ mod tests {
         assert_eq!(info.last_shipped_commit.as_deref(), Some(sha.as_str()));
         // The in-memory engine has no database, so the max seq read is 0.
         assert_eq!(info.last_shipped_seq, Some(0));
+    }
+
+    /// The compare receipt carries the sha and ref of the push the server
+    /// recorded, whatever `commitSha`/`pushedRef` the caller sends, and
+    /// carries neither when no push is on record.
+    #[tokio::test]
+    async fn test_ship_compare_url_receipt_comes_from_the_recorded_push() {
+        const GITHUB: &str = "git@github.com:example/repo.git";
+        let (ctx, _dir, events) = test_ctx();
+        let repo = TempRepo::new("cmd-compare");
+        let bare = repo.add_bare_origin().display().to_string();
+        let branch = "swarm/cmd-compare-abcd1234";
+        let worktree = repo.add_worktree("wt", branch);
+        let id = register_worker(&ctx, &repo, &worktree, branch);
+        write_file(&worktree, "a.txt", "a");
+        git_in(&worktree, &["add", "a.txt"]);
+        git_in(&worktree, &["commit", "-m", "a"]);
+        let sha = git::repo::head_sha(&worktree).unwrap();
+        git_in(repo.root(), &["remote", "set-url", "origin", GITHUB]);
+
+        let compare_args = |ship_id: Uuid| {
+            serde_json::json!({
+                "workerId": id.to_string(), "shipId": ship_id.to_string(),
+                "commitSha": "ffffffffffffffffffffffffffffffffffffffff",
+                "pushedRef": "origin/not-what-was-pushed",
+                "title": "t", "body": "b"
+            })
+        };
+
+        // No push on record: the receipt names no commit or ref, even
+        // though the caller sent both.
+        ship_compare_url(ctx.clone(), compare_args(Uuid::new_v4()))
+            .await
+            .unwrap();
+        let emitted = ship_events(&ctx, &events).await;
+        let settled = receipts(&emitted);
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].commit_sha, None);
+        assert_eq!(settled[0].pushed_ref, None);
+
+        git_in(repo.root(), &["remote", "set-url", "origin", &bare]);
+        git_push(
+            ctx.clone(),
+            serde_json::json!({
+                "workerId": id.to_string(), "shipId": Uuid::new_v4().to_string(), "finalStep": false
+            }),
+        )
+        .await
+        .unwrap();
+        ship_events(&ctx, &events).await;
+        git_in(repo.root(), &["remote", "set-url", "origin", GITHUB]);
+
+        let ship_id = Uuid::new_v4();
+        let url = ship_compare_url(ctx.clone(), compare_args(ship_id))
+            .await
+            .unwrap();
+        let emitted = ship_events(&ctx, &events).await;
+        let settled = receipts(&emitted);
+        assert_eq!(settled.len(), 1, "exactly one receipt per attempt");
+        assert_eq!(settled[0].ship_id, ship_id);
+        assert_eq!(settled[0].commit_sha.as_deref(), Some(sha.as_str()));
+        assert_eq!(
+            settled[0].pushed_ref.as_deref(),
+            Some("origin/swarm/cmd-compare-abcd1234")
+        );
+        assert_eq!(settled[0].pr_url.as_deref(), url.as_str());
     }
 
     /// A failed step settles the attempt with its error even when the

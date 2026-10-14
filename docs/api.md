@@ -119,7 +119,7 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
 | [`git_ship_preflight`](#git_ship_preflight) | `workerId`, `mode?` | `ShipPreflight` | Allowed |
 | [`git_stage_commit`](#git_stage_commit) | `workerId`, `shipId`, `message`, `mode`, `finalStep` | `CommitOutcome` | Allowed |
 | [`git_push`](#git_push) | `workerId`, `shipId`, `finalStep` | `PushOutcome` | Allowed |
-| [`ship_compare_url`](#ship_compare_url) | `workerId`, `shipId`, `commitSha`, `pushedRef`, `title`, `body` | URL | Allowed |
+| [`ship_compare_url`](#ship_compare_url) | `workerId`, `shipId`, `title`, `body` | URL | Allowed |
 | [`ship_context`](#ship_context) | `workerId` | `ShipContext` | Allowed |
 | [`create_session`](#create_session) | `name`, `config`, provenance | `Session` | Allowed |
 | [`delete_session`](#delete_session) | `id`, provenance | `void` | Allowed |
@@ -665,7 +665,7 @@ console.log("Committed:", outcome.sha, "skipped:", outcome.skipped);
 
 ### `git_push`
 
-Pushes the worker's branch: `git push --end-of-options origin <sha>:refs/heads/<branch>` -- **fixed argv**. The source is the resolved commit id (the branch tip), so the push carries exactly the commit that was read even if the branch moves meanwhile, and an id never starts with `+`. `--end-of-options` keeps an option-shaped branch an operand, and the fully qualified destination makes a leading `+` part of the literal ref name, so a branch named `+main` cannot force-update `main`. No force token is constructible anywhere in the argv builder (`--force`/`-f`/`--force-with-lease` cannot be reached). The upstream is then recorded with `git branch --set-upstream-to=refs/remotes/origin/<branch>`, since git records one only for a branch source. Both the branch and the sha pushed are resolved **live**, server-side, at push time -- this command takes **no** commit sha from the caller at all. Every successful push is recorded in the worker registry (sha, remote, remote ref, `origin/<branch>`) by the push itself, independent of the event log, and `compare_url` takes its branch from that record. `ship_compare_url` settles its receipt with the `commitSha` and `pushedRef` the caller sends. When the event-log seq read also succeeds, the command records `lastShippedSeq`/`lastShippedCommit` via `WorkerRegistry::set_last_shipped` -- the ship chain is the only writer of those two fields; if the read fails they are left unchanged (a warning is logged) while the push record is still written. The push record is per worker, so interleaved ship attempts on one worker share the latest push.
+Pushes the worker's branch: `git push --end-of-options origin <sha>:refs/heads/<branch>` -- **fixed argv**. The source is the resolved commit id (the branch tip), so the push carries exactly the commit that was read even if the branch moves meanwhile, and an id never starts with `+`. `--end-of-options` keeps an option-shaped branch an operand, and the fully qualified destination makes a leading `+` part of the literal ref name, so a branch named `+main` cannot force-update `main`. No force token is constructible anywhere in the argv builder (`--force`/`-f`/`--force-with-lease` cannot be reached). The upstream is then recorded with `git branch --set-upstream-to=refs/remotes/origin/<branch>`, since git records one only for a branch source. Both the branch and the sha pushed are resolved **live**, server-side, at push time -- this command takes **no** commit sha from the caller at all. Every successful push is recorded in the worker registry (sha, remote, remote ref, `origin/<branch>`) by the push itself, independent of the event log, and the compare page and its receipt read that record, never the caller. When the event-log seq read also succeeds, the command records `lastShippedSeq`/`lastShippedCommit` via `WorkerRegistry::set_last_shipped` -- the ship chain is the only writer of those two fields; if the read fails they are left unchanged (a warning is logged) while the push record is still written. The push record is per worker, so interleaved ship attempts on one worker share the latest push.
 
 **This is what lets a worker with already-committed, unpushed work go straight to `git_push`.** If `git_stage_commit` fails with `nothingToCommit` but `ShipPreflight.ahead > 0` (e.g. an earlier "Commit Only" already committed real work that was never pushed), the frontend calls `git_push` directly -- no fresh commit is required, because this command resolves the tip of whatever branch is checked out, live, rather than trusting a value from a preceding `git_stage_commit` call.
 
@@ -716,7 +716,7 @@ try {
 
 ### `ship_compare_url`
 
-Builds the GitHub-style compare URL for a worker's worktree, prefilled with a PR title/body via `quick_pull=1` query parameters, capped at 6000 total characters. If the untruncated URL would exceed the cap, `body` is shortened first (with a visible truncation marker); if even an *empty* body still doesn't fit, `title` is clamped too as a last resort -- only the compare path itself (host/owner/repo/base/branch) is never truncated. The branch is resolved **live** (same as [`git_push`](#git_push), never a stale stored value). Supports `https`/`ssh`/GHES remote URL shapes; a non-GitHub-shaped host (`gitlab.com`, `bitbucket.org`, etc.) is rejected rather than producing a broken URL.
+Builds the GitHub-style compare URL for a worker's worktree, prefilled with a PR title/body via `quick_pull=1` query parameters, capped at 6000 total characters. If the untruncated URL would exceed the cap, `body` is shortened first (with a visible truncation marker); if even an *empty* body still doesn't fit, `title` is clamped too as a last resort -- only the compare path itself (host/owner/repo/base/branch) is never truncated. The branch is the one the worker's latest recorded push pushed (see [`git_push`](#git_push)), so a rename since then cannot retarget the page; a worker with no push on record falls back to the branch checked out now. Supports `https`/`ssh`/GHES remote URL shapes; a non-GitHub-shaped host (`gitlab.com`, `bitbucket.org`, etc.) is rejected rather than producing a broken URL.
 
 The frontend is expected to pre-check `ShipPreflight.hostSupportsCompare` and disable the "Open Compare Page" action entirely for a non-GitHub remote -- this command's own `nonGitHubHost` error is the defensive fallback for a stale preflight, not the primary UX.
 
@@ -728,8 +728,6 @@ Always the true final step of the "Commit + Push + Open Compare Page" action -- 
 |-------------|-----------|----------|-------------------------------------------------------------|
 | `workerId`  | `string`  | Yes      | UUID of the worker                                            |
 | `shipId`    | `string`  | Yes      | Correlation ID matching the preceding `git_stage_commit`/`git_push` calls |
-| `commitSha` | `string`  | Yes      | Carried through into the `ship_settled` receipt only          |
-| `pushedRef` | `string`  | Yes      | Carried through into the `ship_settled` receipt only          |
 | `title`     | `string`  | Yes      | PR title (URL query value; only clamped if even an empty body doesn't fit the cap) |
 | `body`      | `string`  | Yes      | PR body (URL query value, truncated first if the URL would exceed the cap) |
 
@@ -743,8 +741,8 @@ Always the true final step of the "Commit + Push + Open Compare Page" action -- 
 | `invalidBranch`  | Detached `HEAD`                                                     |
 | `noRemote`       | No `origin` remote configured                                       |
 | `nonGitHubHost`  | The remote's host isn't one a GitHub-style compare URL applies to (e.g. GitLab, Bitbucket) |
-| `timeout` | Reading the live branch or the `origin` remote exceeded its timeout budget |
-| `unknown` | `shipId` is not a UUID, or any other failure, including reading the live branch or the `origin` remote |
+| `timeout` | Reading the live branch (no push on record) or the `origin` remote exceeded its timeout budget |
+| `unknown` | `shipId` is not a UUID, or any other failure, including reading the live branch (no push on record) or the `origin` remote |
 
 **Example:**
 
@@ -752,15 +750,13 @@ Always the true final step of the "Commit + Push + Open Compare Page" action -- 
 const url = await invoke("ship_compare_url", {
   workerId,
   shipId,
-  commitSha: outcome.sha,
-  pushedRef: push.pushedRef,
   title: "Add Feature File",
   body: "Adds feature.txt.",
 });
 await openUrl(url); // import { openUrl } from "@tauri-apps/plugin-opener"
 ```
 
-**Emits:** `ship_progress` (`step: "compare"`), then `ship_settled` with `prUrl` set.
+**Emits:** `ship_progress` (`step: "compare"`), then `ship_settled` with `prUrl` set and `commitSha`/`pushedRef` taken from the same push record the URL was built from (both `null` when no push is on record). The command takes neither from the caller.
 
 ---
 
