@@ -19,6 +19,8 @@ import {
   resizeWorker,
   ShipCommandError,
   sessionAddWorker,
+  setAgentConcurrency,
+  setMaxWorkers,
   spawnWorker,
   validateRepoRoot,
 } from "#lib/tauri";
@@ -364,6 +366,43 @@ describe("listWorkers", () => {
     await expect(listWorkers()).resolves.toStrictEqual([]);
     expect(tauriInvoke).not.toHaveBeenCalled();
   });
+});
+
+describe.each([
+  ["setAgentConcurrency", setAgentConcurrency, "set_agent_concurrency", { limit: 4 }],
+  ["setMaxWorkers", setMaxWorkers, "set_max_workers", { max: 4 }],
+] as const)("%s", (_name, call, command, args) => {
+  it("resolves to the cap the backend reports", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce(3);
+
+    await expect(call(4)).resolves.toBe(3);
+    expect(tauriInvoke).toHaveBeenCalledExactlyOnceWith(command, args);
+  });
+
+  it("resolves to null for a null reply", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce(null);
+
+    await expect(call(4)).resolves.toBeNull();
+  });
+
+  it("resolves to null without a backend (invoke resolves undefined)", async () => {
+    disableTauri();
+
+    await expect(call(4)).resolves.toBeNull();
+    expect(tauriInvoke).not.toHaveBeenCalled();
+  });
+
+  it.each([["four"], [0], [2.5]])(
+    "rejects the unexpected reply %j with the parse error as cause",
+    async (reply) => {
+      vi.mocked(tauriInvoke).mockResolvedValueOnce(reply);
+
+      const caught = await call(4).catch((e: unknown) => e);
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toMatch(/Unexpected Shape/);
+      expect((caught as Error).cause).toBeInstanceOf(z.ZodError);
+    },
+  );
 });
 
 describe("readConfig", () => {

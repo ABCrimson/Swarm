@@ -419,11 +419,26 @@ export async function agentTurnStarted(
 }
 
 /**
- * Sets the backend worker-registry cap. Applies to new spawns at once
- * and persists across restarts (config key `max_workers`).
+ * The reply of a setting command: the cap in force once the call applied
+ * (a positive integer), normalized to `null` when no value came back.
+ * `undefined` is what `tauriTransport` resolves in a plain-browser
+ * preview with no bridge; `null` is "the backend did not report a value".
  */
-export async function setMaxWorkers(max: number): Promise<void> {
-  return invoke<void>("set_max_workers", { max });
+const AppliedCapReply = z
+  .int()
+  .positive()
+  .nullish()
+  .transform((cap) => cap ?? null);
+
+/**
+ * Sets the backend worker-registry cap. Applies to new spawns at once
+ * and persists across restarts (config key `max_workers`). Resolves to
+ * the cap in force once this call applied, or `null` when no value
+ * came back (no backend); a reply of any other shape rejects.
+ */
+export async function setMaxWorkers(max: number): Promise<number | null> {
+  const raw = await invoke("set_max_workers", { max });
+  return parseResponse(AppliedCapReply, raw, "Set Max Workers Returned An Unexpected Shape.");
 }
 
 /**
@@ -433,9 +448,12 @@ export async function setMaxWorkers(max: number): Promise<void> {
  * across restarts (config key `agent_concurrency`). The backend
  * counterpart of `useAiStore`'s `concurrentLimit`, which only bounds the
  * webview-direct chat path; `useSettingsBridge` keeps the two in step.
+ * Resolves to the cap in force once this call applied, or `null` when no
+ * value came back (no backend); a reply of any other shape rejects.
  */
-export async function setAgentConcurrency(limit: number): Promise<void> {
-  return invoke<void>("set_agent_concurrency", { limit });
+export async function setAgentConcurrency(limit: number): Promise<number | null> {
+  const raw = await invoke("set_agent_concurrency", { limit });
+  return parseResponse(AppliedCapReply, raw, "Set Agent Concurrency Returned An Unexpected Shape.");
 }
 
 /**
