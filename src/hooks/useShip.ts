@@ -38,6 +38,7 @@ import {
   gitPush,
   gitShipPreflight,
   gitStageCommit,
+  isTauri,
   ShipCommandError,
   shipCompareUrl,
   shipContext,
@@ -505,8 +506,10 @@ async function runAction(
 
   // The ship itself already succeeded; an opener failure (no default
   // browser, a URL outside the opener capability's scope) is a warning,
-  // never a reason to flip the flow back to "failed".
-  if (prUrl != null) {
+  // never a reason to flip the flow back to "failed". Only the desktop
+  // shell has an opener bridge: in the browser build `ShipPanel`'s
+  // receipt link is how the compare page is opened.
+  if (prUrl != null && isTauri()) {
     try {
       await openUrl(prUrl);
     } catch (err) {

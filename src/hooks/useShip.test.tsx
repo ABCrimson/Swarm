@@ -36,6 +36,8 @@ const mockGitStageCommit = vi.fn();
 const mockGitPush = vi.fn();
 const mockShipCompareUrl = vi.fn();
 const mockShipContext = vi.fn<(workerId: string) => Promise<ShipContext>>();
+/** Desktop (true, the default) or the browser build served by swarmd (false). */
+const mockIsTauri = vi.fn<() => boolean>();
 
 vi.mock(import("#lib/tauri"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -44,6 +46,7 @@ vi.mock(import("#lib/tauri"), async (importOriginal) => ({
   gitPush: (...args) => mockGitPush(...args),
   shipCompareUrl: (...args) => mockShipCompareUrl(...args),
   shipContext: (...args) => mockShipContext(...args),
+  isTauri: () => mockIsTauri(),
 }));
 
 const mockGenerateCausalProse =
@@ -148,6 +151,7 @@ beforeEach(() => {
   handlers.clear();
   vi.clearAllMocks();
   mockShipContext.mockResolvedValue(makeContext());
+  mockIsTauri.mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -384,6 +388,38 @@ describe("useShip", () => {
     expect(toast.warning).toHaveBeenCalledExactlyOnceWith(
       "Shipped, But Could Not Open The Compare Page: no default browser configured",
     );
+  });
+
+  it("does not open the compare page in the browser build, where the opener has no bridge", async () => {
+    mockIsTauri.mockReturnValue(false);
+    mockGitShipPreflight.mockResolvedValue(makePreflight());
+    mockGitStageCommit.mockResolvedValue(makeCommitOutcome());
+    mockGitPush.mockResolvedValue(makePushOutcome());
+    mockShipCompareUrl.mockImplementation(settlesWith(COMPARE_URL));
+
+    const { result } = await renderPreviewing();
+    await act(async () => {
+      await result.current.commitPushAndOpenCompare();
+    });
+
+    expect(result.current.state).toBe("settled");
+    expect(result.current.result?.prUrl).toBe(COMPARE_URL);
+    expect(openUrl).not.toHaveBeenCalled();
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it("opens the compare page once on the desktop", async () => {
+    mockGitShipPreflight.mockResolvedValue(makePreflight());
+    mockGitStageCommit.mockResolvedValue(makeCommitOutcome());
+    mockGitPush.mockResolvedValue(makePushOutcome());
+    mockShipCompareUrl.mockImplementation(settlesWith(COMPARE_URL));
+
+    const { result } = await renderPreviewing();
+    await act(async () => {
+      await result.current.commitPushAndOpenCompare();
+    });
+
+    expect(openUrl).toHaveBeenCalledExactlyOnceWith(COMPARE_URL);
   });
 
   it("sends the composed causal body (and the message title) to shipCompareUrl", async () => {
@@ -1039,6 +1075,26 @@ describe("useShip: a lost reply over the daemon", () => {
     expect(result.current.error).toBeNull();
     expect(mockGitShipPreflight.mock.calls.length).toBe(preflightCalls);
     expect(toast.warning).toHaveBeenCalledOnce();
+  });
+
+  it("opens the compare page from a receipt that settled a lost compare reply, only on the desktop", async () => {
+    const { RpcConnectionLostError } = await import("#lib/transport");
+    mockGitPush.mockResolvedValue(makePushOutcome());
+    mockShipCompareUrl.mockRejectedValue(new RpcConnectionLostError("ship_compare_url"));
+    const { result } = await renderPreviewing();
+    const { action, shipId } = await startShip(
+      () => result.current.commitPushAndOpenCompare(),
+      mockShipCompareUrl,
+    );
+
+    await act(async () => {
+      emit("ship_settled", receipt(shipId, { prUrl: COMPARE_URL }));
+      await vi.advanceTimersByTimeAsync(0);
+      await action;
+    });
+
+    expect(result.current.state).toBe("settled");
+    expect(openUrl).toHaveBeenCalledExactlyOnceWith(COMPARE_URL);
   });
 
   it("S5: a healthy 45-second push settles, so the hook imposes no 30 s limit of its own", async () => {
