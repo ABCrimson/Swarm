@@ -94,12 +94,12 @@ vi.mock(import("#lib/tauri"), async (importOriginal) => ({
 }));
 
 describe("SessionCard", () => {
-  // Unmount before the store reset, so the reset never re-renders a
-  // still-mounted card outside act().
   // Save As Template writes a plugin-store file, which needs the Tauri bridge.
   beforeEach(() => {
     vi.stubGlobal("isTauri", true);
   });
+  // Unmount before the store reset, so the reset never re-renders a
+  // still-mounted card outside act().
   afterEach(() => {
     cleanup();
     resetWorkerStore();

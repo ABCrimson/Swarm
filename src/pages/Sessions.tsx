@@ -289,7 +289,7 @@ export function Sessions(): React.ReactElement {
             >
               Export Metrics
             </Button>
-            {(!canExportFiles || !canUseLocalStores) && (
+            {(!canExportFiles || (activeSession != null && !canUseLocalStores)) && (
               <span id={exportReasonId} className="text-fg-dim text-xs">
                 {DESKTOP_ONLY_REASON}
               </span>

@@ -95,6 +95,14 @@ afterEach(() => {
 });
 
 describe("Sessions — local stores need the Tauri bridge", () => {
+  it("shows no reason while no session is active and file export is available", async () => {
+    vi.unstubAllGlobals();
+    await renderPage();
+
+    expect(screen.queryByText("Available In The Desktop App Only")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export Metrics" })).toBeEnabled();
+  });
+
   it("disables Snapshot and Save As Template, with the reason, without the bridge", async () => {
     vi.unstubAllGlobals();
     const session = addSession();

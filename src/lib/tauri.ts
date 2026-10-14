@@ -45,8 +45,9 @@ import {
  * this is the runtime check for call sites that invoke a plugin and need
  * the bridge itself (there is no opener capability: WorkerDetail checks
  * this before `openPath`, ShipPanel's compare link opens a browser tab
- * without it, and useShip's post-ship `openUrl` catches the failure). A `wsTransport` connection is a real backend but not
- * a Tauri bridge, so this is `false` there; see {@link hasTransport}.
+ * without it, and useShip's post-ship `openUrl` catches the failure). A
+ * `wsTransport` connection is a real backend but not a Tauri bridge, so
+ * this is `false` there; see {@link hasTransport}.
  */
 export { isTauri };
 

@@ -270,7 +270,7 @@ describe("ShipPanel", () => {
 
   it("opens the compare page in a browser tab, not the opener plugin, without the Tauri bridge", async () => {
     vi.unstubAllGlobals();
-    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    using open = vi.spyOn(window, "open").mockReturnValue(null);
     const user = userEvent.setup();
     const receipt = await renderShipped(user);
     // useShip's post-ship auto-open still calls the plugin (and catches its failure).
