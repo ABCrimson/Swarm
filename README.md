@@ -98,9 +98,10 @@ flowchart TB
     FE -->|"Tauri IPC"| DESK
     FE -->|"WebSocket /ws"| DAEMON
     shells --> core
+    DESK ~~~ RT
+    DAEMON ~~~ RT
     RT --> SCHED
     SCHED --> PROV
-    RT --> PROV
     RT --> ENG
     ENG --> LOG
     LOG --> DISK
