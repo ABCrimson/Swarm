@@ -83,7 +83,7 @@ The page `--serve-ui` serves talks to the daemon over the WebSocket (`wsTranspor
 | --- | --- | --- |
 | Workspace page, Open Project (folder picker, file tree, file viewer) | Works | Button disabled, "Available In The Desktop App Only" |
 | Graph Export / Import Workflow | Works | Hidden |
-| Sessions: export (JSON, Markdown, metrics CSV) and import | Works (native save and open dialogs) | The buttons are still shown and fail with the toast "File Dialogs Need The Desktop App" |
+| Sessions: export (JSON, Markdown, metrics CSV), the card menu's Export As JSON, and Import | Work (native save and open dialogs) | Disabled, with "Available In The Desktop App Only" beside or under them |
 | Sessions: delete | Native confirmation dialog | The browser's own confirmation dialog |
 | Worker AI panel: webview chat, model selector, Inject Instruction, Queue | Works for workers without an agent session | Replaced by a notice, "Available In The Desktop App Only"; Claude Code and Codex workers chat as usual |
 | Alert thresholds: OS notification mirror | Works when enabled in Settings | The in-app toast only |
