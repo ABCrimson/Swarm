@@ -629,11 +629,14 @@ mod tests {
         execute_turn(sessions, EventSink::new(tx), request(worker_id)).await;
         let receipt = synthesized_receipt(&rx);
         assert_eq!(receipt.status, AgentTurnStatus::Error);
-        assert!(
-            receipt
-                .error
-                .unwrap()
-                .starts_with("No Live Session For This Worker: Worker ")
+        assert_eq!(
+            receipt.error.unwrap(),
+            format!(
+                "No Live Session For This Worker: {}",
+                AppError::WorkerClosing {
+                    id: worker_id.to_string()
+                }
+            )
         );
         assert!(!completed.load(std::sync::atomic::Ordering::SeqCst));
     }

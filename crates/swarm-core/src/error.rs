@@ -19,7 +19,7 @@ use serde::Serialize;
 /// |--------------------|-----------------------------------------------------------|
 /// | `WorkerNotFound`   | Worker ID does not exist in the registry                  |
 /// | `WorkerClosing`    | An attach or turn reached a worker that is being killed   |
-/// | `PtySpawn`        | PTY process creation failed                               |
+/// | `PtySpawn`         | PTY process creation failed                               |
 /// | `Ipc`              | Process I/O plumbing failed (write, flush, parse)         |
 /// | `Ai`               | A provider-agent CLI failed to start or rejected a request |
 /// | `Io`               | Underlying `std::io::Error`                               |
@@ -62,7 +62,7 @@ pub enum AppError {
     /// variant rather than [`AppError::WorkerNotFound`] because the
     /// worker still exists until the kill finishes — a caller can tell
     /// "being killed" from "never existed" without sniffing message text.
-    #[error("Worker `{id}` Is Closing")]
+    #[error("Worker `{id}` is closing")]
     WorkerClosing {
         /// The UUID string of the closing worker.
         id: String,
@@ -216,10 +216,10 @@ mod tests {
         let err = AppError::WorkerClosing {
             id: "abc".to_string(),
         };
-        assert_eq!(err.to_string(), "Worker `abc` Is Closing");
+        assert_eq!(err.to_string(), "Worker `abc` is closing");
         assert_eq!(
             serde_json::to_string(&err).expect("serialize"),
-            r#""Worker `abc` Is Closing""#
+            r#""Worker `abc` is closing""#
         );
     }
 

@@ -16,16 +16,22 @@ in that window was accepted.
 
 - **The session goes before the worker.** `kill_worker` runs, in order: mark the worker closing and
   wait for attaches in flight; remove and shut down the session (the provider process is stopped and
-  reaped; a failed shutdown is logged and never changes the kill's result); `do_kill_worker` (shell,
-  then worktree, unchanged); clear the mark.
+  reaped; a failed shutdown is logged and never changes the kill's result); wait for any other
+  shutdown of that session still running; `do_kill_worker` (shell, then worktree, unchanged); clear
+  the mark, which travels into the blocking kill task so a cancelled kill cannot clear it early.
 - **A per-worker fence in `AgentSessionRegistry`.** An attach holds an `AttachPermit`
   (`begin_attach`) from before its handshake until it has registered its session through
   `AttachPermit::insert`, the only registration path. `begin_close` marks the worker closing, then
   waits on a `tokio::sync::watch` count until every permit has dropped, and returns a `ClosingGuard`
   that clears the mark on drop, also when the kill is cancelled. A closing count, not a flag, lets
   overlapping kills of one worker each clear only their own mark.
+- **Every session stop is counted.** A session leaves the registry only through `take_session`,
+  which removes it and counts a `SessionStop` under the worker's fence; the stop derefs to the
+  session and is dropped once its shutdown ends. `wait_stopped` waits for the count to reach zero,
+  so a second kill, or a kill racing `agent_shutdown`, never touches the worker while the first
+  shutdown is still running.
 - **Closing is a typed refusal.** While closing, `begin_attach`, `AttachPermit::insert`, `get` and
-  `ensure_open` fail with `AppError::WorkerClosing` (``Worker `<id>` Is Closing``), so a new attach,
+  `ensure_open` fail with `AppError::WorkerClosing` (``Worker `<id>` is closing``), so a new attach,
   `agent_send_turn` admission, turn dispatch, `agent_cancel` and `agent_permission_respond` are
   refused. An attach whose registration is refused shuts its own session down while still holding
   its permit, so its `agent_session_exited` precedes `worker_killed`.
@@ -41,15 +47,21 @@ Pinned by `test_kill_worker_stops_the_provider_session_before_removing_the_workt
 `test_attach_and_turn_admission_are_refused_while_the_worker_is_closing`,
 `test_kill_worker_returns_only_after_an_attaching_session_has_exited`,
 `test_agent_spawn_shuts_down_a_session_whose_worker_is_killed_during_attach`,
-`test_agent_spawn_reports_no_worker_when_attach_fails_after_a_kill` (`commands/agent.rs`), the fence
-tests in `agent/registry.rs`, and
+`test_agent_spawn_reports_no_worker_when_attach_fails_after_a_kill` (`commands/agent.rs`),
+`test_a_second_kill_waits_for_the_first_kills_session_shutdown`,
+`test_kill_worker_waits_for_an_agent_shutdown_in_progress` (`commands/worker.rs`), the fence tests in
+`agent/registry.rs`, and
 `test_execute_turn_for_a_closing_worker_synthesizes_an_error_receipt` (`runtime.rs`).
 
 ## Consequences
 
-- When `kill_worker` returns, no session of the worker is registered or still handshaking.
+- When `kill_worker` returns, no session of the worker is registered, still handshaking or still
+  shutting down.
 - A kill can take as long as an attach in flight: the adapter's handshake bound (30 s for Claude Code
-  and Codex) plus that attach's own session teardown.
+  and Codex) plus that attach's own session teardown. That is longer than `swarmd`'s 10 s
+  `STOP_WORKERS_TIMEOUT`, so a daemon stop can give up on a kill still waiting on an attach and exit
+  with that attach's provider process alive; raising that timeout, and a kill-on-drop guard around the
+  Claude Code handshake so the attach can be abandoned, are open follow-ups outside this decision.
 - During a kill, cancelling a turn or answering a permission request for that worker fails with
   `WorkerClosing`; the kill's session shutdown settles any turn in flight. A turn still queued settles
   as an error receipt when dispatched.

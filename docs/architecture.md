@@ -281,7 +281,7 @@ against a checkout being removed:
 
 1. It marks the worker closing in the `AgentSessionRegistry`. From then on a new session attach
    (`agent_spawn`), a new turn (`agent_send_turn`) and every session lookup for the worker (turn
-   dispatch, `agent_cancel`, `agent_permission_respond`) fail with ``Worker `<id>` Is Closing``
+   dispatch, `agent_cancel`, `agent_permission_respond`) fail with ``Worker `<id>` is closing``
    (`AppError::WorkerClosing`). It then waits for any attach still in its handshake; each attach
    holds a permit from before its handshake until it registers its session, so the wait is bounded by
    the adapter's 30 s handshake plus that attach's own session teardown. An attach that finishes after
@@ -289,12 +289,16 @@ against a checkout being removed:
    worker.
 2. It removes the worker's session, one a drained attach registered included, and shuts it down, so
    the provider process is stopped and reaped. A failed shutdown is logged and never fails the kill.
+   It then waits for any other shutdown of that session still running (an overlapping kill's, or
+   `agent_shutdown`'s): every removal goes through `take_session`, which counts a `SessionStop` until
+   the shutdown ends.
 3. It removes the worker from the registry, kills and reaps the shell, **then** releases the writer
    and master (on Windows dropping the master closes the pseudoconsole under the shell), then removes
    the worktree and emits `worktree_removed` and `worker_killed`. Only the shell is signalled.
 4. It clears the closing mark; later calls for the worker get ``Worker `<id>` not found``.
 
-When `kill_worker` returns, no provider session of the worker is registered or still handshaking. A
+When `kill_worker` returns, no provider session of the worker is registered, still handshaking or
+still shutting down. A
 turn still queued for the worker settles as an error when dispatched (no live session), and a turn in
 flight is settled by the session's shutdown. `Runtime::shutdown` stops each worker's session the same
 way (steps 1 and 2) without killing the worker.

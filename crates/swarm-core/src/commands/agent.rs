@@ -456,16 +456,14 @@ mod tests {
     }
 
     /// Starts `kill_worker` for `id` and waits, polling every 10 ms, until
-    /// it is underway: until the worker refuses a turn as closing, or the
-    /// kill has already returned. Resolves to the running kill and
-    /// whether the closing was observed; fails after 10 s.
+    /// it is underway: until the worker is closing, or the kill has
+    /// already returned. Resolves to the running kill and whether the
+    /// closing was observed; fails after 10 s. The probe queues nothing.
     async fn start_kill(ctx: &Ctx, id: Uuid) -> (JoinHandle<Result<Value, Value>>, bool) {
         let kill = tokio::spawn(kill_worker(ctx.clone(), json!({"id": id.to_string()})));
-        let closing = Value::String(AppError::WorkerClosing { id: id.to_string() }.to_string());
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            let turn = json!({"workerId": id.to_string(), "prompt": "p"});
-            if agent_send_turn(ctx.clone(), turn).await.err() == Some(closing.clone()) {
+            if ctx.agent_session_registry.is_closing(&id) {
                 return (kill, true);
             }
             if kill.is_finished() {
