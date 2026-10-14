@@ -1765,8 +1765,12 @@ fn harness_with_settings(write: impl FnOnce(&std::path::Path)) -> Harness {
 
 /// A symlink to `/proc/self/pagemap` reports a regular file of length 0
 /// and then streams zeros without end: the read must stop at the cap, not
-/// run to EOF. The timeout keeps a regression from running away.
+/// run to EOF. Ignored by default: a regression reads without bound in a
+/// blocking task that the timeout cannot cancel and the runtime's drop waits
+/// for, so it can exhaust memory; `read_capped_stops_one_byte_past_the_cap`
+/// covers the cap with a finite source.
 #[cfg(target_os = "linux")]
+#[ignore = "a regression reads /proc/self/pagemap without bound and the runtime drop waits for it; run by hand with --ignored"]
 #[tokio::test]
 async fn an_endless_repo_settings_file_is_not_read_to_the_end() {
     let harness = harness_with_settings(|file| {
@@ -1776,6 +1780,32 @@ async fn an_endless_repo_settings_file_is_not_read_to_the_end() {
         .await
         .expect("the read stops at the size cap");
     assert!(deny.is_empty(), "{deny:?}");
+}
+
+/// The cap is exact and the read stops one byte past it: a finite source
+/// longer than the cap is left unread beyond `max + 1`.
+#[tokio::test]
+async fn read_capped_stops_one_byte_past_the_cap() {
+    let data = vec![0u8; 4096];
+    let mut source = &data[..];
+    assert_eq!(read_capped(&mut source, 1024).await.expect("io"), None);
+    assert_eq!(
+        source.len(),
+        4096 - 1025,
+        "the read stops one byte past the cap"
+    );
+    let exact = vec![b'x'; 1024];
+    assert_eq!(
+        read_capped(&exact[..], 1024)
+            .await
+            .expect("io")
+            .map(|bytes| bytes.len()),
+        Some(1024)
+    );
+    assert_eq!(
+        read_capped(&b""[..], 1024).await.expect("io"),
+        Some(Vec::new())
+    );
 }
 
 #[tokio::test]

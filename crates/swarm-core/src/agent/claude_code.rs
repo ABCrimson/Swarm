@@ -330,6 +330,24 @@ async fn private_probe_dir() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Reads at most `max` bytes of `reader`: `None` when it holds more (the
+/// read stops one byte past `max`, so an endless source costs `max + 1`
+/// bytes of memory, never more).
+async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
+    reader: R,
+    max: u64,
+) -> std::io::Result<Option<Vec<u8>>> {
+    use tokio::io::AsyncReadExt;
+    let mut bytes = Vec::new();
+    reader
+        .take(max.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .await?;
+    Ok(u64::try_from(bytes.len())
+        .is_ok_and(|len| len <= max)
+        .then_some(bytes))
+}
+
 /// The `permissions.deny` entries of `<cwd>/.claude/settings.json`
 /// ([`tier::repo_deny_entries`], then [`tier::cap_repo_deny`]), or none
 /// when the file is missing, not a regular file, unreadable, not UTF-8,
@@ -342,8 +360,6 @@ async fn private_probe_dir() -> std::io::Result<PathBuf> {
 /// regular file of length 0 and then yields zeros without end. So the
 /// read itself stops one byte past the cap.
 async fn read_repo_deny(cwd: &Path) -> Vec<String> {
-    use tokio::io::AsyncReadExt;
-
     let file = cwd.join(".claude").join("settings.json");
     match tokio::fs::metadata(&file).await {
         Ok(meta) if meta.is_file() && meta.len() <= REPO_SETTINGS_MAX_BYTES => {}
@@ -353,22 +369,22 @@ async fn read_repo_deny(cwd: &Path) -> Vec<String> {
         }
         Err(_) => return Vec::new(),
     }
-    let mut bytes = Vec::new();
-    let read = async {
-        tokio::fs::File::open(&file)
-            .await?
-            .take(REPO_SETTINGS_MAX_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .await
+    let opened = tokio::fs::File::open(&file).await;
+    let bytes = match opened {
+        Ok(opened) => read_capped(opened, REPO_SETTINGS_MAX_BYTES).await,
+        Err(error) => Err(error),
     };
-    if let Err(error) = read.await {
-        tracing::warn!(path = %file.display(), %error, "claude code: repo settings are unreadable; ignoring their deny list");
-        return Vec::new();
-    }
-    if bytes.len() as u64 > REPO_SETTINGS_MAX_BYTES {
-        tracing::warn!(path = %file.display(), "claude code: repo settings are larger than the size cap; ignoring their deny list");
-        return Vec::new();
-    }
+    let bytes = match bytes {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => {
+            tracing::warn!(path = %file.display(), "claude code: repo settings are larger than the size cap; ignoring their deny list");
+            return Vec::new();
+        }
+        Err(error) => {
+            tracing::warn!(path = %file.display(), %error, "claude code: repo settings are unreadable; ignoring their deny list");
+            return Vec::new();
+        }
+    };
     let Ok(text) = String::from_utf8(bytes) else {
         tracing::warn!(path = %file.display(), "claude code: repo settings are not UTF-8; ignoring their deny list");
         return Vec::new();
