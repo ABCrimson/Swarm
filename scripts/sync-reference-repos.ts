@@ -9,8 +9,8 @@
  *   .repos/xterm.js  xtermjs/xterm.js at the commit the pinned `@xterm/xterm`
  *                    beta was published from (betas are not tagged; the npm
  *                    registry records the commit as `gitHead`)
- *   .repos/react     facebook/react at the commit named by the `react` canary
- *                    pin (`19.3.0-canary-<sha8>-<date>`)
+ *   .repos/react     facebook/react at the tag of a stable `react` pin, or the commit
+ *                    named by a canary pin (`19.3.0-canary-<sha8>-<date>`)
  *
  * Every version is read from package.json / Cargo.toml, so a pin bump needs
  * no edit here: rerun the script and the checkout moves. A checkout already at
