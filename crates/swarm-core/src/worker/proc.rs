@@ -40,7 +40,7 @@ pub const MAX_LINE_BYTES: usize = 10 * 1024 * 1024;
 /// Bytes of stderr kept for diagnostics (see
 /// [`PipedHandle::stderr_tail`]): enough for a provider's fatal startup
 /// message without buffering the whole stream.
-const STDERR_TAIL_CAP: usize = 4096;
+pub(crate) const STDERR_TAIL_CAP: usize = 4096;
 
 /// Size of each blocking read from the child's stdout and stderr.
 const READ_CHUNK: usize = 4096;
@@ -177,8 +177,6 @@ pub struct PipedHandle {
     pub stdin: Box<dyn Write + Send>,
     /// The child process, for `kill`/`wait`.
     pub child: Child,
-    /// OS process ID of the child.
-    pub pid: Option<u32>,
     /// Complete NDJSON lines framed from the child's stdout, in order.
     /// Bounded: a slow consumer backs the stream up, nothing is dropped.
     /// Closes once stdout reaches end of stream (the child exited or
@@ -272,7 +270,6 @@ pub fn spawn_piped(
     Ok(PipedHandle {
         stdin: Box::new(stdin),
         child,
-        pid: Some(pid),
         lines,
         framer_errors,
         stderr_tail,

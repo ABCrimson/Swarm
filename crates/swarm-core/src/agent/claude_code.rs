@@ -198,13 +198,6 @@ const MAX_TURNS_PER_TURN: &str = "50";
 /// launched it.
 const DISABLE_BACKGROUND_TASKS_ENV: &str = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS";
 
-/// Prefix of the synthesized settlement error for every ungraceful exit
-/// (child killed, crashed, or an NDJSON framer failure) — Condition B. In
-/// parentheses it is followed by the cause SWARM knows (a framer error), else
-/// `crate::agent::stderr_snippet` of the child's stderr tail (`Stderr: …` or
-/// `No Stderr Output`).
-const PROCESS_EXITED_WITHOUT_RECEIPT: &str = "Process Exited Without A Receipt";
-
 /// Settlement error for a turn [`AgentSession::cancel`] interrupted.
 const TURN_CANCELLED: &str = "Turn Cancelled";
 

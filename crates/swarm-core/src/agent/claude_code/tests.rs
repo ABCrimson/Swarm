@@ -18,6 +18,7 @@ use super::wire::{
     StreamEventLine, System, strip_ansi,
 };
 use super::*;
+use crate::agent::PROCESS_EXITED_WITHOUT_RECEIPT;
 use crate::agent::adapter::CancelGranularity;
 use crate::orchestration::{EventLog, OrchestrationEngine};
 

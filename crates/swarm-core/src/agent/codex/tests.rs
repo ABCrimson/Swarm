@@ -14,16 +14,16 @@ use std::time::Instant;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::process::{find_program, resolve_program, resolve_with_pathext};
+use super::process::{find_program, first_line, resolve_program, resolve_with_pathext};
 use super::protocol::{
     ApprovalsReviewer, AskForApproval, Incoming, METHOD_NOT_FOUND, RequestId, SandboxMode,
     ThreadOpened, ThreadStartParams,
 };
 use super::reader::permission_id;
 use super::state::{ApprovalKind, PendingApproval};
-use super::teardown::signal_name;
 use super::tier::verify_effective_policy;
 use super::*;
+use crate::agent::PROCESS_EXITED_WITHOUT_RECEIPT;
 use crate::agent::adapter::{AgentTurnStatus, CancelGranularity};
 use crate::events::{
     AgentBlockPayload, AgentPermissionRequestPayload, AgentSessionExitedPayload,
@@ -657,15 +657,20 @@ fn capabilities_promise_resume_graceful_cancel_and_interactive_approvals() {
     );
 }
 
-#[cfg(unix)]
 #[test]
-fn signal_names_are_reported_on_unix() {
+fn first_line_redacts_credentials_from_probe_output() {
+    #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt;
-    assert_eq!(
-        signal_name(&std::process::ExitStatus::from_raw(9)),
-        Some("SIGKILL".to_string())
-    );
-    assert_eq!(signal_name(&std::process::ExitStatus::from_raw(0)), None);
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
+    let output = std::process::Output {
+        status: std::process::ExitStatus::from_raw(0),
+        stdout: Vec::new(),
+        stderr: b"key sk-ant-api03-SECRETSECRET\n".to_vec(),
+    };
+    let line = first_line(&output).expect("stderr has a line");
+    assert!(!line.contains("SECRET"), "{line}");
+    assert!(line.starts_with("key "), "{line}");
 }
 
 // ── Handshake ────────────────────────────────────────────────────────

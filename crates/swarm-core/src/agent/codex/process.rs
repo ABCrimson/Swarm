@@ -5,7 +5,6 @@ use std::io::Write;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -168,13 +167,6 @@ pub(super) fn start_stdin_writer(
     Ok(jobs)
 }
 
-/// Serializes `message` as one newline-terminated JSON line.
-pub(super) fn encode_line(message: &impl Serialize) -> Result<String, String> {
-    let mut line = serde_json::to_string(message).map_err(|e| e.to_string())?;
-    line.push('\n');
-    Ok(line)
-}
-
 /// Waits up to `grace` for `child` to exit on its own (its stdin is
 /// already closed), then kills it; reaps it either way. Blocking — run it
 /// on the blocking pool.
@@ -233,7 +225,10 @@ pub(super) async fn run_cli(
     }
 }
 
-/// The first non-empty output line (stdout, else stderr).
+/// The first non-empty output line (stdout, else stderr), with recognized
+/// credentials redacted: it becomes `ProbeReport::version` or `detail`,
+/// which every `agent_probe` caller receives, remote `swarmd` clients
+/// included.
 pub(super) fn first_line(output: &std::process::Output) -> Option<String> {
     [&output.stdout, &output.stderr]
         .into_iter()
@@ -242,7 +237,7 @@ pub(super) fn first_line(output: &std::process::Output) -> Option<String> {
                 .lines()
                 .map(str::trim)
                 .find(|line| !line.is_empty())
-                .map(str::to_owned)
+                .map(crate::git::redact::redact)
         })
 }
 

@@ -286,7 +286,8 @@ pub enum PermissionDecision {
 pub struct ExitSummary {
     /// Process exit code, when the OS reports one.
     pub exit_code: Option<i32>,
-    /// Signal that terminated the process (`"SIGKILL"`, ...), on Unix.
+    /// Signal that terminated the process, on Unix: its name for a common
+    /// one (`"SIGKILL"`, `"SIGALRM"`, ...), else `"signal <n>"`.
     /// Never populated on Windows, where `TerminateProcess` sets an exit
     /// code instead.
     pub signal: Option<String>,

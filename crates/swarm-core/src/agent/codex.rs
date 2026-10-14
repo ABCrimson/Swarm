@@ -113,10 +113,6 @@ const CLIENT_NAME: &str = "swarm";
 /// `initialize.clientInfo.title`.
 const CLIENT_TITLE: &str = "Swarm Orchestrator";
 
-/// Prefix of the synthesized-settlement error (Condition B), shared verbatim
-/// with `ClaudeCodeAdapter`; the known cause or the stderr tail follows in
-/// parentheses.
-const PROCESS_EXITED_WITHOUT_RECEIPT: &str = "Process Exited Without A Receipt";
 /// Settlement error for an interrupted turn that carries no message.
 const TURN_INTERRUPTED: &str = "Turn Interrupted";
 /// Settlement error for a failed turn that carries no message.
@@ -338,7 +334,6 @@ impl AgentAdapter for CodexAdapter {
             let PipedHandle {
                 stdin,
                 child,
-                pid: _,
                 lines,
                 framer_errors,
                 stderr_tail,
