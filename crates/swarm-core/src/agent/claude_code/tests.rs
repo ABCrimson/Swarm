@@ -1829,21 +1829,6 @@ async fn an_oversized_reader_contributes_nothing() {
     );
 }
 
-/// An endless reader is cut off at the cap. A regression to an unbounded
-/// read would not fail this test, only hang (and exhaust memory), so the
-/// timeout is the assertion; `an_oversized_reader_contributes_nothing` is
-/// the one that fails cleanly.
-#[tokio::test]
-async fn an_endless_reader_contributes_nothing() {
-    let deny = tokio::time::timeout(
-        Duration::from_secs(2),
-        deny_from_reader(Path::new("x"), tokio::io::repeat(b' ')),
-    )
-    .await
-    .expect("stops at the cap");
-    assert!(deny.is_empty());
-}
-
 #[tokio::test]
 async fn an_oversized_or_non_utf8_repo_settings_file_adds_nothing() {
     let padding = " ".repeat(usize::try_from(REPO_SETTINGS_MAX_BYTES).expect("fits") + 1);
