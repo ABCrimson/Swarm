@@ -262,9 +262,28 @@ is emitted: `pty-<id8>` (blocking 8 KiB reads, UTF-8 decoded across chunk bounda
 to `error`). On Windows the first output is a cursor-position query (`ESC [ 6 n`) that the terminal
 must answer before the shell renders, which xterm.js does once attached.
 
-`kill_worker` removes the worker from the registry, kills and reaps the shell, **then** releases the
-writer and master (on Windows dropping the master closes the pseudoconsole under the shell), then
-removes the worktree and emits `worktree_removed` and `worker_killed`. Only the shell is signalled.
+`kill_worker` stops the worker's provider session before it touches the worker, so no provider runs
+against a checkout being removed:
+
+1. It marks the worker closing in the `AgentSessionRegistry`. From then on a new session attach
+   (`agent_spawn`), a new turn (`agent_send_turn`) and every session lookup for the worker (turn
+   dispatch, `agent_cancel`, `agent_permission_respond`) fail with ``Worker `<id>` Is Closing``
+   (`AppError::WorkerClosing`). It then waits for any attach still in its handshake; each attach
+   holds a permit from before its handshake until it registers its session, so the wait is bounded by
+   the adapter's 30 s handshake plus that attach's own session teardown. An attach that finishes after
+   the mark cannot register its session: it shuts the session down itself and reports no surviving
+   worker.
+2. It removes the worker's session, one a drained attach registered included, and shuts it down, so
+   the provider process is stopped and reaped. A failed shutdown is logged and never fails the kill.
+3. It removes the worker from the registry, kills and reaps the shell, **then** releases the writer
+   and master (on Windows dropping the master closes the pseudoconsole under the shell), then removes
+   the worktree and emits `worktree_removed` and `worker_killed`. Only the shell is signalled.
+4. It clears the closing mark; later calls for the worker get ``Worker `<id>` not found``.
+
+When `kill_worker` returns, no provider session of the worker is registered or still handshaking. A
+turn still queued for the worker settles as an error when dispatched (no live session), and a turn in
+flight is settled by the session's shutdown. `Runtime::shutdown` stops each worker's session the same
+way (steps 1 and 2) without killing the worker.
 
 ### Worktree Isolation
 
@@ -280,7 +299,8 @@ spawn_worker(config)
   any step failing ─▶ roll back the shell, worktree and unchanged branch; the spawn fails (no fallback cwd)
 
 kill_worker(id)
-  kill + reap shell ─▶ git worktree unlock ─▶ git worktree remove   (never --force; REMOVE_TIMEOUT)
+  mark closing + wait for attaches ─▶ shut the provider session down
+  ─▶ kill + reap shell ─▶ git worktree unlock ─▶ git worktree remove   (never --force; REMOVE_TIMEOUT)
   disposition: removed | preserved_dirty (git refused: modified or untracked files) | failed (anything else)
   removed and the branch tip == base_commit ─▶ git branch -d   (never -D)   else the branch stays
   emit worktree_removed, worker_killed
