@@ -43,8 +43,10 @@ import {
  * native alert notifications, the update check, the webview-direct AI
  * chat) decide whether to offer themselves with {@link hasCapability};
  * this is the runtime check for call sites that invoke a plugin and need
- * the bridge itself (the opener calls gate on it alone). A `wsTransport` connection is a real backend but not a
- * Tauri bridge, so this is `false` there; see {@link hasTransport}.
+ * the bridge itself (there is no opener capability: WorkerDetail checks
+ * this before `openPath`, and the ship flow's `openUrl` calls catch the
+ * failure instead). A `wsTransport` connection is a real backend but not
+ * a Tauri bridge, so this is `false` there; see {@link hasTransport}.
  */
 export { isTauri };
 
@@ -549,9 +551,9 @@ type UpdateCheckResult = z.output<typeof UpdateCheckResultSchema>;
 /**
  * Asks the configured update endpoint for a newer version.
  * Desktop-only. Unlike {@link sendNotification}, which is a silent no-op
- * there, it rejects with an `Error` ("Update Checks Need The Desktop App") when the transport has no
- * updater or there is no Tauri bridge, because a check that never ran
- * must not read as "up to date".
+ * there, it rejects with an `Error` ("Update Checks Need The Desktop
+ * App") when the transport has no updater or there is no Tauri bridge,
+ * because a check that never ran must not read as "up to date".
  */
 export async function checkForUpdates(): Promise<UpdateCheckResult> {
   if (!hasCapability("autoUpdate") || !isTauri()) {
