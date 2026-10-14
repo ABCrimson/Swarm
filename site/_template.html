@@ -1,214 +1,51 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" type="image/svg+xml" href="./favicon.svg">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="PAGE_DESCRIPTION">
 <title>PAGE_TITLE · SWARM Orchestrator</title>
-<style>
-  :root{
-    color-scheme: dark;
-    --bg: oklch(0.145 0.014 265);
-    --card: oklch(0.185 0.016 265);
-    --ink: oklch(0.93 0.01 265);
-    --muted: oklch(from var(--ink) l c h / .60);
-    --faint: oklch(from var(--ink) l c h / .55);
-    --line: oklch(0.96 0.008 265 / .09);
-    --gold: oklch(0.8 0.14 85);
-    --gold-dim: oklch(from var(--gold) l c h / .5);
-    --violet: oklch(0.7 0.15 295);
-    --code-bg: oklch(0.16 0.014 265);
-    --r: 14px;
-    --maxw: 82ch;
-  }
-  *{ box-sizing:border-box; }
-  html{ scroll-padding-top:5rem; scrollbar-color: var(--gold-dim) transparent; }
-  @media (prefers-reduced-motion: no-preference){ html{ scroll-behavior:smooth; } }
-  body{
-    margin:0; background:var(--bg); color:var(--ink);
-    font: clamp(0.95rem,0.9rem + 0.25vw,1.0625rem)/1.65 system-ui, -apple-system, Inter, sans-serif;
-    text-rendering:optimizeLegibility; -webkit-font-smoothing:antialiased;
-    scrollbar-gutter: stable;
-  }
-  body::before{
-    content:""; position:fixed; inset:-25% -15% auto auto; width:60vw; height:60vw; z-index:-1;
-    background: radial-gradient(closest-side, oklch(from var(--gold) l c h / .06), transparent 70%);
-    pointer-events:none;
-  }
-  body::after{
-    content:""; position:fixed; inset:auto auto -25% -15%; width:55vw; height:55vw; z-index:-1;
-    background: radial-gradient(closest-side, oklch(from var(--violet) l c h / .05), transparent 70%);
-    pointer-events:none;
-  }
-  a{ color:var(--gold); text-underline-offset:3px; text-decoration-color: var(--gold-dim); }
-  a:hover{ text-decoration-color: var(--gold); }
-  ::selection{ background: oklch(from var(--gold) l c h / .25); }
-
-  /* ---- skip link ---- */
-  .skip{ position:absolute; left:-999px; top:0; background:var(--gold); color:oklch(0.15 0.02 265); padding:.5rem 1rem; border-radius:0 0 8px 0; z-index:100; }
-  .skip:focus{ left:0; }
-
-  /* ---- sticky header ---- */
-  header.top{
-    position:sticky; top:0; z-index:50;
-    display:flex; align-items:center; gap:1.25rem; flex-wrap:wrap;
-    padding:.75rem clamp(1rem,3vw,2rem);
-    background: oklch(0.14 0.014 265 / .72);
-    backdrop-filter: blur(14px) saturate(1.4);
-    border-bottom:1px solid var(--line);
-  }
-  @media (width < 960px){ header.top{ position:static; } }
-  .brand{ display:flex; align-items:center; gap:.6rem; font-weight:800; letter-spacing:-.02em; font-size:1.05rem; text-decoration:none; color:var(--ink); }
-  .brand b{ background:linear-gradient(100deg,var(--ink),var(--gold)); -webkit-background-clip:text; background-clip:text; color:transparent; }
-  .brand .dot{ width:9px; height:9px; border-radius:50%; background:var(--gold); box-shadow:0 0 12px var(--gold); }
-  nav.nav{ display:flex; gap:.25rem; flex-wrap:wrap; margin-left:auto; }
-  nav.nav a{
-    font-size:.85rem; padding:.35rem .7rem; border-radius:999px; text-decoration:none; color:var(--muted);
-    transition: background .15s, color .15s;
-  }
-  nav.nav a:hover{ color:var(--ink); background:var(--line); }
-  nav.nav a[aria-current="page"]{ color:oklch(0.15 0.02 265); background:var(--gold); font-weight:600; }
-
-  /* ---- reading progress ---- */
-  .progress{ position:fixed; top:0; left:0; height:2px; width:100%; transform-origin:0 50%; background:var(--gold); z-index:60; transform:scaleX(0); }
-  @supports (animation-timeline: scroll()){
-    .progress{ animation: grow linear both; animation-timeline: scroll(root); }
-    @keyframes grow{ from{transform:scaleX(0)} to{transform:scaleX(1)} }
-  }
-
-  /* ---- layout ---- */
-  .wrap{ display:grid; grid-template-columns: minmax(0,1fr); max-width:1200px; margin-inline:auto; padding:0 clamp(1rem,3vw,2rem); }
-  @media (min-width: 960px){ .wrap{ grid-template-columns: 220px minmax(0,1fr); gap:3rem; } }
-  aside.toc{ display:none; }
-  @media (min-width: 960px){
-    aside.toc{ display:block; position:sticky; top:5rem; align-self:start; max-height:calc(100vh - 6rem); overflow-y:auto; padding-top:2.5rem; }
-    aside.toc .lbl{ font-size:.72rem; text-transform:uppercase; letter-spacing:.12em; color:var(--faint); margin:0 0 .75rem; }
-    aside.toc ol{ list-style:none; margin:0; padding:0; border-left:1px solid var(--line); }
-    aside.toc li a{ display:block; padding:.3rem 0 .3rem .9rem; margin-left:-1px; border-left:2px solid transparent; font-size:.85rem; color:var(--muted); text-decoration:none; line-height:1.4; }
-    aside.toc li a:hover{ color:var(--ink); }
-    aside.toc li a[aria-current]{ color:var(--gold); border-left-color:var(--gold); }
-    aside.toc li.sub a{ padding-left:1.7rem; font-size:.8rem; }
-  }
-
-  main{ min-width:0; padding: 2.5rem 0 5rem; max-width: var(--maxw); }
-
-  /* ---- hero ---- */
-  .hero{ margin-bottom:2.5rem; }
-  .eyebrow{ font-size:.78rem; text-transform:uppercase; letter-spacing:.14em; color:var(--gold); font-weight:600; }
-  h1{ font-size:clamp(2rem,5vw,3rem); line-height:1.08; letter-spacing:-.025em; margin:.5rem 0 .5rem; text-wrap:balance;
-      background:linear-gradient(120deg,var(--ink) 30%,var(--gold)); -webkit-background-clip:text; background-clip:text; color:transparent; }
-  .dek{ color:var(--muted); font-size:1.1rem; max-width:70ch; text-wrap:pretty; margin:0; }
-
-  /* ---- prose ---- */
-  h2{ font-size:1.5rem; letter-spacing:-.015em; margin:2.75rem 0 .85rem; padding-top:.6rem; }
-  h3{ font-size:1.15rem; margin:2rem 0 .6rem; color: oklch(from var(--ink) l c h / .92); }
-  h2 + p, h3 + p{ margin-top:0; }
-  p, li{ text-wrap:pretty; }
-  main :is(h2,h3) a.anchor{ color:var(--faint); text-decoration:none; margin-left:.4rem; opacity:0; font-weight:400; }
-  main :is(h2,h3):hover a.anchor, main :is(h2,h3) a.anchor:focus-visible{ opacity:1; }
-  ul, ol{ padding-left:1.3rem; }
-  li{ margin:.35rem 0; }
-  li::marker{ color: var(--gold-dim); }
-  hr{ border:none; border-top:1px solid var(--line); margin:2.5rem 0; }
-  blockquote{ margin:1.25rem 0; padding:.5rem 0 .5rem 1.15rem; border-left:3px solid var(--gold-dim); color:var(--muted); }
-  strong{ color: oklch(0.97 0.02 90); font-weight:650; }
-
-  /* ---- code ---- */
-  code{ font-family: ui-monospace,'JetBrains Mono','Cascadia Code',Menlo,Consolas,monospace; font-size:.86em; }
-  :not(pre) > code{ background:var(--code-bg); border:1px solid var(--line); border-radius:6px; padding:.12em .4em; color: oklch(0.9 0.03 90); overflow-wrap:anywhere; }
-  pre{ background:var(--code-bg); border:1px solid var(--line); border-radius:var(--r); padding:1.1rem 1.25rem; overflow-x:auto; max-width:100%; overscroll-behavior:contain; line-height:1.6;
-       box-shadow: 0 1px 2px oklch(0 0 0 / .3), inset 0 1px 0 oklch(1 0 0 / .04); }
-  pre code{ color: oklch(0.88 0.02 265); background:none; border:none; padding:0; }
-
-  /* ---- tables ---- */
-  .tablewrap{ overflow-x:auto; max-width:100%; overscroll-behavior:contain; margin:1.25rem 0; border:1px solid var(--line); border-radius:var(--r); }
-  table{ border-collapse:collapse; width:100%; font-size:.92rem; }
-  thead th{ position:sticky; top:0; background:var(--card); text-align:left; font-weight:650; color:var(--ink); padding:.7rem .95rem; border-bottom:1px solid var(--line); white-space:nowrap; }
-  td{ padding:.6rem .95rem; border-bottom:1px solid var(--line); vertical-align:top; }
-  tbody tr:nth-child(even){ background: oklch(from var(--ink) l c h / .02); }
-  tbody tr:hover{ background: oklch(from var(--gold) l c h / .05); }
-  td:has(code), th{ font-variant-numeric: tabular-nums; }
-
-  /* ---- callout: every body blockquote renders as .note (scripts/build-site.ts); the lead one under the H1 becomes the hero dek ---- */
-  .note{ background: oklch(from var(--gold) l c h / .06); border:1px solid var(--gold-dim); border-radius:var(--r); padding:.9rem 1.15rem; margin:1.25rem 0; color: oklch(0.9 0.02 90); }
-
-  /* ---- footer ---- */
-  footer.foot{ border-top:1px solid var(--line); margin-top:4rem; padding:2rem clamp(1rem,3vw,2rem); color:var(--faint); font-size:.85rem; display:flex; gap:1rem; flex-wrap:wrap; justify-content:space-between; max-width:1200px; margin-inline:auto; }
-  footer.foot a{ color:var(--muted); text-decoration:none; }
-  footer.foot a:hover{ color:var(--gold); }
-
-  @media (prefers-reduced-motion: reduce){ *{ animation:none !important; transition:none !important; } }
-  @media print{ header.top,aside.toc,.progress,body::before,body::after{ display:none } a{ color:inherit } pre,table{ border-color:oklch(0.68 0 0) } }
-</style>
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="./site.css">
+<script type="module" src="./site.js"></script>
 </head>
 <body>
-<a class="skip" href="#content">Skip to content</a>
+<a class="skip" href="#content">Skip To Content</a>
 <div class="progress" aria-hidden="true"></div>
 
-<header class="top">
-  <a class="brand" href="./index.html"><span class="dot"></span><span>SWARM <b>Docs</b></span></a>
+<header class="site-header">
+  <a class="brand" href="./index.html"><img src="./favicon.svg" alt="" width="28" height="28">SWARM Orchestrator</a>
   <nav class="nav" aria-label="Documentation">
     <a href="./architecture.html">Architecture</a>
     <a href="./api.html">API</a>
     <a href="./daemon.html">Daemon</a>
     <a href="./performance.html">Performance</a>
-    <a href="./e2e.html">E2E</a>
+    <a href="./e2e.html">E2E Testing</a>
     <a href="./contributing.html">Contributing</a>
     <a href="./updater-keys.html">Updater Keys</a>
     <a href="./roadmap.html">Roadmap</a>
-    <a href="https://github.com/ABCrimson/Swarm">GitHub ↗</a>
+    <a href="https://github.com/ABCrimson/Swarm">GitHub</a>
   </nav>
 </header>
 
-<div class="wrap">
-  <aside class="toc" aria-label="On this page">
-    <p class="lbl">On this page</p>
-    <ol id="toc"><!-- TOC --></ol>
-  </aside>
+<main id="content" class="page">
+  <div class="doc-layout">
+    <!-- TOC -->
+    <article>
+      <!-- CONTENT -->
+      <footer class="doc-foot">
+        <p><a href="EDIT_URL">Edit This Page On GitHub</a></p>
+        <!-- PAGER -->
+      </footer>
+    </article>
+  </div>
+</main>
 
-  <main id="content">
-    <!-- CONTENT -->
-  </main>
-</div>
-
-<footer class="foot">
-  <span>SWARM Orchestrator · MIT · built with the OKLCH design system</span>
-  <span><a href="https://github.com/ABCrimson/Swarm">ABCrimson/Swarm</a></span>
+<footer class="site-footer">
+  <span>SWARM Orchestrator is released under the <a href="https://github.com/ABCrimson/Swarm/blob/main/LICENSE">MIT License</a>.</span>
+  <span>Generated from <code>docs/</code> by <code>scripts/build-site.ts</code>.</span>
 </footer>
-
-<script type="module">
-  // Builds the scroll-spy TOC from the h2/h3 headings in <main>, no deps.
-  const main = document.getElementById('content');
-  const toc = document.getElementById('toc');
-  if (main && toc) {
-    const heads = main.querySelectorAll('h2, h3');
-    for (const h of heads) {
-      h.id ||= h.textContent.trim().toLowerCase().replace(/[^\w]+/g, '-').replace(/^-|-$/g, '');
-      const a = document.createElement('a');
-      a.href = `#${h.id}`;
-      a.textContent = h.textContent.replace(/#$/, '').trim();
-      const li = document.createElement('li');
-      if (h.tagName === 'H3') li.className = 'sub';
-      li.append(a);
-      toc.append(li);
-      const anc = document.createElement('a');
-      anc.className = 'anchor';
-      anc.href = `#${h.id}`;
-      anc.textContent = '#';
-      anc.setAttribute('aria-label', 'Permalink');
-      h.append(anc);
-    }
-    for (const el of main.querySelectorAll('pre, .tablewrap')) el.tabIndex = 0;
-    const links = new Map(Array.from(toc.querySelectorAll('a'), (a) => [a.getAttribute('href').slice(1), a]));
-    const io = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        if (!e.isIntersecting) continue;
-        for (const l of links.values()) l.removeAttribute('aria-current');
-        links.get(e.target.id)?.setAttribute('aria-current', 'location');
-      }
-    }, { rootMargin: '-10% 0px -80% 0px' });
-    for (const h of heads) io.observe(h);
-  }
-</script>
+<p id="copy-status" class="sr-only" role="status" aria-live="polite"></p>
 </body>
 </html>
