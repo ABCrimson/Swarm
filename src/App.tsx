@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { CommandPalette } from "#components/command/CommandPalette";
 import { AppShell } from "#components/layout/AppShell";
 import { PageHost } from "#components/layout/PageHost";
 import { PerformanceOverlay } from "#components/metrics/PerformanceOverlay";
 import { ErrorBoundary } from "#components/ui/ErrorBoundary";
-import { SwarmToaster, toast } from "#components/ui/Toast";
+import { SwarmToaster } from "#components/ui/Toast";
 import { useAgentSessionEvents } from "#hooks/useAgentSessionEvents";
 import { useAlerts } from "#hooks/useAlerts";
 import { useAutoSnapshot } from "#hooks/useAutoSnapshot";
@@ -13,7 +14,6 @@ import { useProvenanceEvents } from "#hooks/useProvenanceEvents";
 import { useSessionEvents } from "#hooks/useSessionEvents";
 import { useSettingsBridge } from "#hooks/useSettingsBridge";
 import { useSystemLogEvents } from "#hooks/useSystemLogEvents";
-import { useTheme } from "#hooks/useTheme";
 import { useWorkerEvents } from "#hooks/useWorkerEvents";
 import { connectEventBus } from "#lib/event-bus";
 import { onIdle } from "#lib/idle";
@@ -28,8 +28,8 @@ function DeferredAutoSnapshot(): null {
 
 /**
  * Root component: connects the event bus, starts the app-wide
- * subscriptions (reduced motion, worker/session/provenance/log events,
- * metrics, alerts, settings), and renders the shell around the page host.
+ * subscriptions (worker/session/provenance/log events, metrics, alerts,
+ * settings), and renders the shell around the page host.
  *
  * Deferred until the first idle period: the auto-snapshot loop and the
  * persisted-store integrity check, so neither competes with startup.
@@ -59,7 +59,6 @@ export function App(): React.ReactElement {
     };
   }, []);
 
-  useTheme();
   useWorkerEvents();
   useAgentSessionEvents();
   useProvenanceEvents();

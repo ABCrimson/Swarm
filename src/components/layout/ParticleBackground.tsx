@@ -1,6 +1,5 @@
 import { useAtomValue, useSetAtom } from "jotai";
 import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 import { useParticleSync } from "#hooks/useParticleSync";
 import { useWebGPU } from "#hooks/useWebGPU";
 import type { ParticleSystem } from "#lib/particles";
@@ -9,44 +8,20 @@ import {
   DEFAULT_SIM_PARAMS,
   destroyParticleSystem,
   dispatchCompute,
-  PARTICLE_COMPUTE_WGSL,
   renderParticles,
   writeRenderParams,
   writeSimParams,
+  writeSimTime,
 } from "#lib/particles";
+import { warnParticlesUnavailable } from "#lib/particles-diagnostics";
 import type { PostProcessPipeline } from "#lib/postprocess";
 import {
   createPostProcessPipeline,
   destroyPostProcessPipeline,
   renderPostProcess,
 } from "#lib/postprocess";
-import type { WebGPUUnavailableReason } from "#lib/webgpu";
 import { getWebGPUUnavailableReason, isWebGPUSupported } from "#lib/webgpu";
 import { gpuFrameTimeAtom, particleCountAtom, reducedMotionAtom, themeAtom } from "#store/ui";
-
-// ── One-time-per-reason "pipeline can't start" diagnostics ──
-//
-// Module-level (not component state) so the warning/toast fires at most
-// once per *distinct reason* per app session, however often the
-// component re-renders, remounts (StrictMode) or retries after a device
-// loss. Keyed on the reason, not a boolean: a retry (e.g. toggling
-// particles in Settings) can surface a different, more current reason,
-// which should still be reported once.
-
-let lastWarnedParticlesUnavailableReason: WebGPUUnavailableReason | null = null;
-
-/** Resets the one-time-per-reason guard. Test-only — production code never calls this. */
-export function _resetParticlesUnavailableWarningForTests(): void {
-  lastWarnedParticlesUnavailableReason = null;
-}
-
-function warnParticlesUnavailable(reason: WebGPUUnavailableReason): void {
-  if (lastWarnedParticlesUnavailableReason === reason) return;
-  lastWarnedParticlesUnavailableReason = reason;
-
-  console.warn(`[particles] Particle Background Unavailable: ${reason}`);
-  toast.warning("Particle Background Unavailable", { description: reason });
-}
 
 // ── Simulation constants ─────────────────────────────
 
@@ -69,26 +44,6 @@ const SAMPLE_WINDOW = 30;
 const STEP_MS = DEFAULT_SIM_PARAMS.dt * 1000;
 /** At most this many simulation steps per frame (after a stall, time is dropped). */
 const MAX_STEPS_PER_FRAME = 3;
-
-/**
- * Byte offset of `time` in the WGSL `SimParams` uniform, read from the
- * shader source itself so a reordered struct cannot silently break the
- * per-frame write. Every field before it must be a 4-byte scalar;
- * otherwise this is `null` and the clock is left to the parameter sync.
- */
-export const SIM_TIME_OFFSET: number | null = (() => {
-  const body = /struct\s+SimParams\s*\{([^}]*)\}/.exec(PARTICLE_COMPUTE_WGSL)?.[1];
-  if (!body) return null;
-  const fields = body
-    .split(",")
-    .map((field) => field.trim())
-    .filter(Boolean)
-    .map((field) => field.split(":").map((part) => part.trim()));
-  const index = fields.findIndex(([name]) => name === "time");
-  if (index === -1) return null;
-  const scalar = fields.slice(0, index).every(([, type]) => type === "f32" || type === "u32");
-  return scalar ? index * 4 : null;
-})();
 
 /**
  * Full-viewport WebGPU particle background.
@@ -273,14 +228,7 @@ function ParticleCanvas(): React.ReactElement {
       try {
         const submitted = performance.now();
         for (let step = 0; step < steps; step++) {
-          if (SIM_TIME_OFFSET !== null) {
-            const time = (now - (steps - 1 - step) * STEP_MS) / 1000;
-            device.queue.writeBuffer(
-              system.simUniformBuffer,
-              SIM_TIME_OFFSET,
-              Float32Array.of(time),
-            );
-          }
+          writeSimTime(device, system, (now - (steps - 1 - step) * STEP_MS) / 1000);
           const encoder = device.createCommandEncoder({ label: "particles-simulate" });
           dispatchCompute(encoder, system);
           device.queue.submit([encoder.finish()]);
