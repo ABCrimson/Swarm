@@ -29,13 +29,14 @@ use crate::worker::proc::write_to_piped;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Resolves a bare program name the way a Windows shell would: the first
-/// `PATH` directory holding `program` + a `PATHEXT` extension. Rust's
-/// `Command` only appends `.exe`, but an npm install of Codex puts
+/// absolute `PATH` directory holding `program` + a `PATHEXT` extension.
+/// Rust's `Command` only appends `.exe`, but an npm install of Codex puts
 /// `codex.cmd` on `PATH`. Names with an extension or a directory are left
-/// alone (`None`), and the current directory is never searched. Nor is it
-/// searched by the shim's own `node` lookup: [`super::tier::child_env`] sets
+/// alone (`None`). Relative and empty `PATH` entries are skipped, since
+/// they name whatever directory the lookup happens to run in, and the
+/// current directory is never searched. Nor is it searched by the shim's
+/// own `node` lookup: [`super::tier::child_env`] sets
 /// `NoDefaultCurrentDirectoryInExePath`.
-#[cfg(any(windows, test))]
 pub(super) fn resolve_with_pathext(
     program: &str,
     path: Option<&std::ffi::OsStr>,
@@ -52,36 +53,75 @@ pub(super) fn resolve_with_pathext(
         .map(str::trim)
         .filter(|ext| !ext.is_empty())
         .collect();
-    std::env::split_paths(path?).find_map(|dir| {
-        extensions
-            .iter()
-            .map(|ext| dir.join(format!("{program}{ext}")))
-            .find(|candidate| candidate.is_file())
-    })
+    std::env::split_paths(path?)
+        .filter(|dir| dir.is_absolute())
+        .find_map(|dir| {
+            extensions
+                .iter()
+                .map(|ext| dir.join(format!("{program}{ext}")))
+                .find(|candidate| candidate.is_file())
+        })
 }
 
-/// The program to run for `binary` — see [`resolve_with_pathext`]. The
-/// `PATH` scan touches the file system, so it runs on the blocking pool.
-#[cfg(windows)]
-pub(super) async fn resolve_program(binary: String) -> String {
-    let fallback = binary.clone();
+/// The executable to start for `program`, looked up in the ABSOLUTE
+/// entries of `path` only, on every OS: a relative or empty entry names the
+/// child's working directory, the worktree, once the spawn changes into it
+/// (Unix changes directory before its `PATH` search), so it could resolve a
+/// binary the repo planted. An absolute `program` is used as given. With
+/// `windows`, a directory matches through `PATHEXT`
+/// ([`resolve_with_pathext`]); otherwise on an executable file named
+/// `program`. Nothing found is `None`, never the bare name. Touches the file
+/// system: call it off the async threads.
+pub(super) fn find_program(
+    program: &str,
+    path: Option<&std::ffi::OsStr>,
+    pathext: Option<&str>,
+    windows: bool,
+) -> Option<std::path::PathBuf> {
+    let given = std::path::Path::new(program);
+    if given.is_absolute() {
+        return Some(given.to_path_buf());
+    }
+    if windows {
+        return resolve_with_pathext(program, path, pathext);
+    }
+    if given.components().count() != 1 {
+        return None;
+    }
+    std::env::split_paths(path?)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(program))
+        .find(|candidate| is_executable_file(candidate))
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    path.is_file()
+}
+
+/// The program to run for `binary` — see [`find_program`] — or `None` when
+/// no absolute `PATH` entry holds it. The `PATH` scan touches the file
+/// system, so it runs on the blocking pool.
+pub(super) async fn resolve_program(binary: String) -> Option<String> {
     tokio::task::spawn_blocking(move || {
-        resolve_with_pathext(
+        find_program(
             &binary,
             std::env::var_os("PATH").as_deref(),
             std::env::var("PATHEXT").ok().as_deref(),
+            cfg!(windows),
         )
-        .map_or(binary, |path| path.to_string_lossy().into_owned())
+        .map(|path| path.to_string_lossy().into_owned())
     })
     .await
-    .unwrap_or(fallback)
-}
-
-/// The program to run for `binary`: outside Windows, `Command`'s own
-/// `PATH` search already finds it.
-#[cfg(not(windows))]
-pub(super) async fn resolve_program(binary: String) -> String {
-    binary
+    .ok()
+    .flatten()
 }
 
 /// One line for the child's stdin. `done`, when present, receives the
