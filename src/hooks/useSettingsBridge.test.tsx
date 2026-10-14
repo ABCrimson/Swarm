@@ -298,6 +298,34 @@ describe("useSettingsBridge — older push acknowledged after the newest", () =>
     expect(limit()).toBe(8);
     expect(mockSetAgentConcurrency).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps the older push's value when a Retry of it fails after the late acknowledgement", async () => {
+    vi.useFakeTimers();
+    using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const first = Promise.withResolvers<void>();
+    const retried = Promise.withResolvers<void>();
+    mockSetAgentConcurrency.mockReturnValueOnce(first.promise).mockReturnValueOnce(retried.promise);
+    renderHook(() => useSettingsBridge());
+    setLimit(8);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AGENT_CONCURRENCY_ACK_TIMEOUT_MS);
+    });
+    const failed = store.get(agentConcurrencySyncAtom);
+    if (failed.status !== "failed") throw new Error("expected a failed sync");
+    act(() => failed.retry());
+    await act(async () => first.resolve());
+    await act(async () => retried.reject(new Error("disk full")));
+
+    expect(limit()).toBe(8);
+    expect(store.get(agentConcurrencySyncAtom)).toStrictEqual({
+      status: "failed",
+      requested: 8,
+      message: "disk full",
+      retry: expect.any(Function),
+    });
+    expect(mockSetAgentConcurrency.mock.calls).toStrictEqual([[8], [8]]);
+  });
 });
 
 describe("useSettingsBridge — launch reconciliation", () => {
