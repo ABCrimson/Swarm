@@ -16,22 +16,22 @@ trustPolicy: no-downgrade
 minimumReleaseAgeExcludePrune: true
 minimumReleaseAgeExclude:
   # Published 2026-10-14; pruned automatically once mature (minimumReleaseAgeExcludePrune).
-  - tailwindcss
-  - "@tailwindcss/vite"
-  - "@tailwindcss/node"
-  - "@tailwindcss/oxide"
-  - "@tailwindcss/oxide-android-arm64"
-  - "@tailwindcss/oxide-darwin-arm64"
-  - "@tailwindcss/oxide-darwin-x64"
-  - "@tailwindcss/oxide-freebsd-x64"
-  - "@tailwindcss/oxide-linux-arm-gnueabihf"
-  - "@tailwindcss/oxide-linux-arm64-gnu"
-  - "@tailwindcss/oxide-linux-arm64-musl"
-  - "@tailwindcss/oxide-linux-x64-gnu"
-  - "@tailwindcss/oxide-linux-x64-musl"
-  - "@tailwindcss/oxide-wasm32-wasi"
-  - "@tailwindcss/oxide-win32-arm64-msvc"
-  - "@tailwindcss/oxide-win32-x64-msvc"
+  - tailwindcss@0.0.0-insiders.2ce6652
+  - '@tailwindcss/vite@0.0.0-insiders.2ce6652'
+  - '@tailwindcss/node@0.0.0-insiders.2ce6652'
+  - '@tailwindcss/oxide@0.0.0-insiders.2ce6652'
+  - '@tailwindcss/oxide-android-arm64@0.0.0-insiders.2ce6652'
+  - '@tailwindcss/oxide-darwin-arm64@0.0.0-insiders.2ce6652'
+  - '@tailwindcss/oxide-darwin-x64@0.0.0-insiders.2ce6652'
+  - '@tailwindcss/oxide-freebsd-x64@0.0.0-insiders.2ce6652'
+  - '@tailwindcss/oxide-linux-arm-gnueabihf@0.0.0-insiders.2ce6652'
+  - '@tailwindcss/oxide-linux-arm64-gnu@0.0.0-insiders.2ce6652'
+  - '@tailwindcss/oxide-linux-arm64-musl@0.0.0-insiders.2ce6652'
+  - '@tailwindcss/oxide-linux-x64-gnu@0.0.0-insiders.2ce6652'
+  - '@tailwindcss/oxide-linux-x64-musl@0.0.0-insiders.2ce6652'
+  - '@tailwindcss/oxide-wasm32-wasi@0.0.0-insiders.2ce6652'
+  - '@tailwindcss/oxide-win32-arm64-msvc@0.0.0-insiders.2ce6652'
+  - '@tailwindcss/oxide-win32-x64-msvc@0.0.0-insiders.2ce6652'
   - typescript@7.1.0-dev.20261014.1
   - '@typescript/typescript-darwin-arm64@7.1.0-dev.20261014.1'
   - '@typescript/typescript-darwin-x64@7.1.0-dev.20261014.1'
