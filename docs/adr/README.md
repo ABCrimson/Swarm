@@ -60,3 +60,5 @@ Each record is `NNNN-<slug>.md` with a status, a date, then Context, Decision an
 | [0035](0035-ai-tool-approval-and-fs-scope.md) | Webview AI tools need per-call approval; the file commands canonicalize and deny secrets | Accepted |
 | [0036](0036-model-catalogue-and-per-attempt-pricing.md) | One model catalogue, priced per attempt | Accepted |
 | [0037](0037-webkit-floor-and-macos-15-4.md) | The webview floor is WebKit 18.4, so macOS 15.4 | Accepted |
+| [0039](0039-event-log-flushes-every-commit.md) | The event log flushes every commit | Accepted |
+| [0040](0040-kill-stops-the-session-first.md) | A kill stops the provider session first, behind a closing fence | Accepted |

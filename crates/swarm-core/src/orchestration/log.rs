@@ -30,6 +30,10 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 /// checkpoint, so one large burst does not leave a large file behind.
 const WAL_SIZE_LIMIT_BYTES: i64 = 4 * 1024 * 1024;
 
+/// `PRAGMA synchronous` value SQLite reports for EXTRA (0 OFF, 1 NORMAL,
+/// 2 FULL, 3 EXTRA).
+const SYNCHRONOUS_EXTRA: i64 = 3;
+
 /// `meta` key holding the highest seq the writer may have handed out.
 const SEQ_RESERVED_KEY: &str = "seq_reserved";
 
@@ -179,6 +183,10 @@ impl EventLog {
         )?;
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.pragma_update(None, "query_only", true)?;
+        // A reader never commits, but whichever connection closes last runs
+        // the final checkpoint and deletes the WAL, so it must flush like
+        // the writer (`fullfsync` is a connection flag `query_only` allows).
+        conn.pragma_update(None, "fullfsync", true)?;
         Ok(Self { conn })
     }
 
@@ -201,7 +209,30 @@ impl EventLog {
         if !mode.eq_ignore_ascii_case("wal") && !mode.eq_ignore_ascii_case("memory") {
             tracing::warn!(journal_mode = %mode, "event log could not switch to WAL mode");
         }
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // Flush on every commit (ADR-0039), so a committed append (already
+        // emitted: persist before emit) and a committed seq reservation
+        // survive an OS crash or power loss, not just a process crash:
+        // - EXTRA, not NORMAL or FULL: in WAL mode EXTRA is FULL (the WAL
+        //   is synced after every commit), and if the filesystem refuses
+        //   WAL above, EXTRA is the level SQLite documents as durable in
+        //   rollback mode, where FULL is not necessarily.
+        // - fullfsync: on macOS SQLite calls a plain fsync(), which leaves
+        //   the data in the drive cache, unless this is on (F_FULLFSYNC);
+        //   it is a no-op elsewhere.
+        // Both are per connection; `open_readonly` sets `fullfsync` too, for
+        // the final checkpoint it may run when it closes last.
+        conn.pragma_update(None, "synchronous", "EXTRA")?;
+        conn.pragma_update(None, "fullfsync", true)?;
+        // These pragmas do not echo their value, so read them back:
+        // running weaker than documented must fail the open.
+        let synchronous: i64 = conn.pragma_query_value(None, "synchronous", |row| row.get(0))?;
+        let fullfsync: i64 = conn.pragma_query_value(None, "fullfsync", |row| row.get(0))?;
+        if synchronous != SYNCHRONOUS_EXTRA || fullfsync != 1 {
+            return Err(AppError::EventLog(format!(
+                "SQLite reports synchronous={synchronous} (need EXTRA, {SYNCHRONOUS_EXTRA}) and \
+                 fullfsync={fullfsync} (need 1); the event log refuses to run with weaker durability."
+            )));
+        }
         conn.pragma_update(None, "journal_size_limit", WAL_SIZE_LIMIT_BYTES)?;
         conn.busy_timeout(BUSY_TIMEOUT)?;
         Self::migrate(&mut conn)?;
@@ -357,12 +388,22 @@ impl EventLog {
 
     /// Clean-shutdown bookkeeping for the writer: records `head` as the
     /// exact seq reservation, refreshes planner statistics, and
-    /// checkpoints the WAL back into the main file.
+    /// checkpoints the WAL back into the main file. A checkpoint a reader
+    /// blocks (`busy != 0`) is logged, not an error: the WAL stays and the
+    /// next open recovers it, and the head is already recorded.
     pub(super) fn finalize(&mut self, head: u64) -> Result<(), AppError> {
         self.reserve_seqs(head)?;
         self.conn.execute_batch("PRAGMA optimize;")?;
-        self.conn
-            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        let (busy, wal_frames, checkpointed): (i64, i64, i64) =
+            self.conn
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.try_into())?;
+        if busy != 0 {
+            tracing::warn!(
+                wal_frames,
+                checkpointed,
+                "event log checkpoint was blocked; the WAL stays until the next open"
+            );
+        }
         Ok(())
     }
 
@@ -811,6 +852,48 @@ mod tests {
         (path, guard)
     }
 
+    /// An integer pragma as SQLite reports it.
+    fn pragma(log: &EventLog, name: &str) -> i64 {
+        log.conn
+            .pragma_query_value(None, name, |r| r.get(0))
+            .unwrap()
+    }
+
+    /// The log must flush on every commit (ADR-0039): WAL mode, so a
+    /// commit syncs the WAL; `synchronous=EXTRA`, which equals FULL in WAL
+    /// mode and is the level SQLite documents as durable if WAL is ever
+    /// refused; and `fullfsync=1`, so macOS issues F_FULLFSYNC instead of
+    /// a plain fsync that leaves the data in the drive cache.
+    #[test]
+    fn test_open_flushes_every_commit_to_stable_storage() {
+        let (path, _cleanup) = temp_db();
+        let log = EventLog::open(&path).unwrap();
+        let mode: String = log
+            .conn
+            .pragma_query_value(None, "journal_mode", |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        assert_eq!(pragma(&log, "fullfsync"), 1, "fullfsync must be on");
+        assert_eq!(pragma(&log, "synchronous"), 3, "synchronous must be EXTRA");
+    }
+
+    #[test]
+    fn test_open_in_memory_still_initializes() {
+        let log = EventLog::open_in_memory().unwrap();
+        assert_eq!(log.max_seq().unwrap(), 0);
+    }
+
+    /// Whichever connection closes last runs the final checkpoint, so a
+    /// reader must flush exactly like the writer (ADR-0039): `fullfsync`
+    /// is a connection flag that `query_only` does not forbid.
+    #[test]
+    fn test_open_readonly_flushes_like_the_writer() {
+        let (path, _cleanup) = temp_db();
+        let _writer = EventLog::open(&path).unwrap();
+        let reader = EventLog::open_readonly(&path).unwrap();
+        assert_eq!(pragma(&reader, "fullfsync"), 1, "fullfsync must be on");
+    }
+
     #[test]
     fn test_open_readonly_reads_but_rejects_writes() {
         let (path, _cleanup) = temp_db();
@@ -1040,5 +1123,63 @@ mod tests {
             !columns.iter().any(|(name, ..)| name == "probe_column"),
             "a failed rung must roll back its earlier statements too, got columns: {columns:?}"
         );
+    }
+
+    /// Throughput of the engine's real write shape under each
+    /// `synchronous` level: one autocommit `INSERT` per persistent event
+    /// (`OrchestrationEngine::persist`) plus one seq-block reservation
+    /// per 1024 seqs (`SEQ_RESERVATION_BLOCK`). Prints, never asserts.
+    /// Set `TMPDIR` to pick the filesystem under test, and see
+    /// `docs/performance.md` for the recorded numbers.
+    #[test]
+    #[ignore = "throughput measurement; run explicitly"]
+    fn measure_append_throughput_by_synchronous_level() {
+        const APPENDS: u64 = 3000;
+        const RESERVATION_BLOCK: u64 = 1024;
+
+        for (level, name) in [("NORMAL", "NORMAL"), ("FULL", "FULL"), ("EXTRA", "EXTRA")] {
+            let (path, _cleanup) = temp_db();
+            let mut log = EventLog::open(&path).unwrap();
+            log.conn.pragma_update(None, "synchronous", level).unwrap();
+            let payload = serde_json::json!({
+                "workerId": Uuid::new_v4(),
+                "toolName": "Bash",
+                "input": { "command": "x".repeat(300) },
+            })
+            .to_string();
+            let mut latencies = Vec::with_capacity(usize::try_from(APPENDS).unwrap());
+            let mut reserved = 0;
+            let started = std::time::Instant::now();
+            for seq in 1..=APPENDS {
+                let t = std::time::Instant::now();
+                if seq > reserved {
+                    reserved = seq + RESERVATION_BLOCK - 1;
+                    log.reserve_seqs(reserved).unwrap();
+                }
+                log.append(
+                    seq,
+                    seq.cast_signed(),
+                    "agent_tool_call",
+                    &payload,
+                    &Provenance::default(),
+                )
+                .unwrap();
+                latencies.push(t.elapsed());
+            }
+            let total = started.elapsed();
+            latencies.sort_unstable();
+            let pct = |p: usize| latencies[(latencies.len() * p / 100).min(latencies.len() - 1)];
+            #[expect(clippy::cast_precision_loss, reason = "a printed rate")]
+            let rate = APPENDS as f64 / total.as_secs_f64();
+            println!(
+                "synchronous={name} dir={} appends={APPENDS} payload_bytes={} \
+                 events_per_s={rate:.0} p50={:?} p99={:?} max={:?}",
+                path.parent().unwrap().display(),
+                payload.len(),
+                pct(50),
+                pct(99),
+                latencies[latencies.len() - 1],
+            );
+        }
     }
 }

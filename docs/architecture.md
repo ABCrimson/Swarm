@@ -169,13 +169,16 @@ any thread/task ──EventSink::emit / emit_with / emit_awaiting_seq──▶ o
 - **Envelope:** `{ seq, ts, originWorker?, causeSeq?, type, payload }`; the optional fields are absent,
   not `null`.
 - **Seqs** are unique and strictly increasing for the life of the data directory. The writer reserves
-  them in blocks of 1024 in the log's `meta` table before issuing them, so a crash skips at most one
-  block and never reuses a seq; a clean shutdown records the exact head. Persisted seqs therefore have
-  gaps (ephemeral events consume seqs too).
-- **Log:** `<data dir>/swarm-events.db`, SQLite in WAL mode, schema version 2 on a `PRAGMA user_version`
-  ladder whose rungs each run in a transaction: `events(seq PK, ts, type, payload, origin_worker,
-  cause_seq) STRICT` with an index on `(type, seq)`, and `meta`. A database newer than the build is
-  refused. The writer owns the only read-write connection; readers open their own read-only.
+  them in blocks of 1024 in the log's `meta` table before issuing them, and that reservation is
+  committed (flushed, see Durability below) before the first seq of the block is issued, so a process
+  crash, an OS crash or a power loss (on storage that honours flushes) skips at most one block and
+  never reuses a seq; a clean shutdown records the exact head. Persisted seqs therefore have gaps
+  (ephemeral events consume seqs too).
+- **Log:** `<data dir>/swarm-events.db`, SQLite in WAL mode with `synchronous=EXTRA` and `fullfsync`,
+  schema version 2 on a `PRAGMA user_version` ladder whose rungs each run in a transaction:
+  `events(seq PK, ts, type, payload, origin_worker, cause_seq) STRICT` with an index on `(type, seq)`,
+  and `meta`. A database newer than the build is refused. The writer owns the only read-write
+  connection; readers open their own read-only.
 - **Persistence by exclusion** ([ADR-0004](adr/0004-persistence-by-exclusion.md)): never persisted are
   `worker_output`, `system_metrics`, `system_log`, `agent_turn_delta`, and `worker_input` whose
   `source` is `terminal`. Everything else is appended before it is emitted.
@@ -186,6 +189,20 @@ any thread/task ──EventSink::emit / emit_with / emit_awaiting_seq──▶ o
   gap that one ephemeral `system_log` error event explains, and clients backfill an empty page and
   skip it. So an event a client saw live is always readable from the log
   (`test_failed_persist_emits_nothing_and_holds_the_head`).
+- **Durability** ([ADR-0039](adr/0039-event-log-flushes-every-commit.md)): the writer connection runs
+  `synchronous=EXTRA` (FULL's WAL sync after every commit, and the level SQLite documents as durable if
+  WAL is ever refused) and `fullfsync=1` (macOS otherwise calls a plain fsync that leaves data in the
+  drive cache), and `EventLog::open` fails if SQLite reports anything weaker. A committed event append
+  and a committed seq reservation therefore survive a process crash, an OS crash and a power loss, on
+  storage that honours fsync/flush. Not guaranteed: a drive or filesystem that acknowledges a flush it
+  has not performed; an event whose append had not committed when the process died (it was never
+  emitted either); ephemeral events, which are never stored. Persist-before-emit orders the log write
+  before the emit; it is not one atomic transaction with the effect the event describes. A PTY write, a
+  git push or a provider turn can happen with no event recorded if the process dies between the effect
+  and the append, and an event can be recorded for an effect that then fails. Consumers must treat the
+  log as the record of what was announced, not proof the effect completed. The cost is one flush per
+  persistent event on the writer thread, and ephemeral events queued behind it wait too
+  ([Event Log Persistence](performance.md#event-log-persistence)).
 - **Replay:** `events_since(afterSeq, limit?)` returns persisted rows after a seq, ascending, capped at
   (and defaulting to) 5000 per call. Clients use it for gap backfill; `swarmd` for connection replay.
 - **Receipts:** a terminal outcome is its own event (`ship_settled`, `agent_turn_settled`), never a flag
@@ -262,9 +279,33 @@ is emitted: `pty-<id8>` (blocking 8 KiB reads, UTF-8 decoded across chunk bounda
 to `error`). On Windows the first output is a cursor-position query (`ESC [ 6 n`) that the terminal
 must answer before the shell renders, which xterm.js does once attached.
 
-`kill_worker` removes the worker from the registry, kills and reaps the shell, **then** releases the
-writer and master (on Windows dropping the master closes the pseudoconsole under the shell), then
-removes the worktree and emits `worktree_removed` and `worker_killed`. Only the shell is signalled.
+`kill_worker` stops the worker's provider session before it touches the worker, so no provider runs
+against a checkout being removed:
+
+1. It marks the worker closing in the `AgentSessionRegistry`. From then on a new session attach
+   (`agent_spawn`), a new turn (`agent_send_turn`) and every session lookup for the worker (turn
+   dispatch, `agent_cancel`, `agent_permission_respond`) fail with ``Worker `<id>` is closing``
+   (`AppError::WorkerClosing`). It then waits for any attach still in its handshake; each attach
+   holds a permit from before its handshake until it registers its session, so the wait is bounded by
+   the adapter's 30 s handshake plus that attach's own session teardown. An attach that finishes after
+   the mark cannot register its session: it shuts the session down itself and reports no surviving
+   worker.
+2. It removes the worker's session, one a drained attach registered included, and shuts it down, so
+   the provider process is stopped and reaped. A failed shutdown is logged and never fails the kill.
+   It then waits for any other shutdown of that session still running (an overlapping kill's, or
+   `agent_shutdown`'s): a session leaves the registry only through `take_session`, which removes it
+   and counts a `SessionStop`, or by being replaced in `AttachPermit::insert`, which counts a
+   `SessionStop` for the replaced session and drops it when that session's background shutdown ends.
+3. It removes the worker from the registry, kills and reaps the shell, **then** releases the writer
+   and master (on Windows dropping the master closes the pseudoconsole under the shell), then removes
+   the worktree and emits `worktree_removed` and `worker_killed`. Only the shell is signalled.
+4. It clears the closing mark; later calls for the worker get ``Worker `<id>` not found``.
+
+When `kill_worker` returns, no provider session of the worker is registered, still handshaking or
+still shutting down. A
+turn still queued for the worker settles as an error when dispatched (no live session), and a turn in
+flight is settled by the session's shutdown. `Runtime::shutdown` stops each worker's session the same
+way (steps 1 and 2) without killing the worker.
 
 ### Worktree Isolation
 
@@ -280,7 +321,8 @@ spawn_worker(config)
   any step failing ─▶ roll back the shell, worktree and unchanged branch; the spawn fails (no fallback cwd)
 
 kill_worker(id)
-  kill + reap shell ─▶ git worktree unlock ─▶ git worktree remove   (never --force; REMOVE_TIMEOUT)
+  mark closing + wait for attaches ─▶ shut the provider session down
+  ─▶ kill + reap shell ─▶ git worktree unlock ─▶ git worktree remove   (never --force; REMOVE_TIMEOUT)
   disposition: removed | preserved_dirty (git refused: modified or untracked files) | failed (anything else)
   removed and the branch tip == base_commit ─▶ git branch -d   (never -D)   else the branch stays
   emit worktree_removed, worker_killed
@@ -509,7 +551,7 @@ and [api.md](api.md#wire-protocol-swarmd)):
   512 watermark); `rpcResult` rides a separate 256-slot lane; at most 8 `rpc` calls run per connection.
 - **Policy:** every `rpc` goes through `Registry::dispatch_remote`. An authenticated client can run
   commands as the daemon's user, so treat the token like an SSH key.
-- **Shutdown:** SIGINT/SIGTERM closes clients with `1001`, stops every worker through `kill_worker` (each worktree gets its usual disposition; 10 s budget, `STOP_WORKERS_TIMEOUT`), then runs `Runtime::shutdown`. The desktop app instead leaves workers to the OS on quit.
+- **Shutdown:** SIGINT/SIGTERM closes clients with `1001`, stops every worker through `kill_worker` (each worktree gets its usual disposition; 10 s budget, `STOP_WORKERS_TIMEOUT`; a kill still waiting on an in-flight attach when it expires is abandoned, leaving that worker and its worktree unreconciled, see [ADR-0040](adr/0040-kill-stops-the-session-first.md)), then runs `Runtime::shutdown`. The desktop app instead leaves workers to the OS on quit.
 - **Service units** (`crates/swarmd/service/`): `systemd --user`, a launchd LaunchAgent, and on Windows a
   per-user **logon Scheduled Task**, not a Windows service ([ADR-0029](adr/0029-windows-daemon-logon-task.md)).
 - CI checks that neither `swarm-core` nor `swarmd` depends on `tauri*`.

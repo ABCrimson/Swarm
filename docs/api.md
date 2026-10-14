@@ -114,7 +114,7 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
 | [`list_workers`](#list_workers) | none | `WorkerInfo[]` | Allowed |
 | [`worker_input`](#worker_input) | `id`, `data`, `source`, provenance | `void` | Allowed |
 | [`resize_worker`](#resize_worker) | `id`, `rows`, `cols` | `void` | Allowed |
-| [`set_max_workers`](#set_max_workers) | `max` | `void` | Allowed |
+| [`set_max_workers`](#set_max_workers) | `max` | `number` | Allowed |
 | [`validate_repo_root`](#validate_repo_root) | `path` | toplevel path | Allowed |
 | [`git_ship_preflight`](#git_ship_preflight) | `workerId`, `mode?` | `ShipPreflight` | Allowed |
 | [`git_stage_commit`](#git_stage_commit) | `workerId`, `shipId`, `message`, `mode`, `finalStep` | `CommitOutcome` | Allowed |
@@ -134,7 +134,7 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
 | [`agent_shutdown`](#agent_shutdown) | `workerId` | `void` | Allowed |
 | [`agent_probe`](#agent_probe) | `provider?` | `ProbeReport` | Allowed |
 | [`agent_permission_respond`](#agent_permission_respond) | `workerId`, `requestId`, `decision` | `void` | Allowed |
-| [`set_agent_concurrency`](#set_agent_concurrency) | `limit` | `void` | Allowed |
+| [`set_agent_concurrency`](#set_agent_concurrency) | `limit` | `number` | Allowed |
 | [`read_config`](#read_config) | `key` | value or `null` | SecretFiltered |
 | [`write_config`](#write_config) | `key`, `value` | `void` | SecretFiltered |
 | [`read_file`](#read_file) | `path` | text | **Denied** |
@@ -313,7 +313,7 @@ Before killing, `try_wait` checks whether the shell already exited, so a reaped 
 
 If the worker was isolated into a git worktree, also unlocks and `git worktree remove`s it -- **never** with `--force`. git's own refusal on a dirty/untracked worktree is treated as a successful preserve, not an error: SWARM never deletes uncommitted work.
 
-**Agent sessions:** if this worker also has a live agent session attached ([`agent_spawn`](#agent_spawn)), it is removed from the `AgentSessionRegistry` and shut down too -- best-effort: a failure here is logged, not propagated, so an agent-session teardown hiccup never blocks the PTY worker's own kill.
+**Agent sessions come first:** before the worker is touched, it is marked closing in the `AgentSessionRegistry` -- from then on a new attach ([`agent_spawn`](#agent_spawn)), [`agent_send_turn`](#agent_send_turn), [`agent_cancel`](#agent_cancel) and [`agent_permission_respond`](#agent_permission_respond) for it fail with ``Worker `<id>` is closing`` -- and any attach still in its handshake is awaited (bounded by the adapter's 30 s handshake plus that attach's own session teardown). Then any attached session, including one such an attach registered, is removed and shut down, so the provider process is stopped and reaped. That shutdown is best-effort: a failure is logged, not propagated, so an agent-session teardown hiccup never blocks the PTY worker's own kill. The kill then waits for any other shutdown of the worker's session still in progress (an overlapping `kill_worker`'s, or [`agent_shutdown`](#agent_shutdown)'s). Only then are the shell and worktree torn down as above, and the closing mark is cleared (later calls get ``Worker `<id>` not found``). When the command resolves, no agent session of the worker is registered, still handshaking or still shutting down ([ADR-0040](adr/0040-kill-stops-the-session-first.md)).
 
 **Parameters:**
 
@@ -453,7 +453,7 @@ await invoke("resize_worker", { id: workerId, rows: 40, cols: 120 });
 
 ### `set_max_workers`
 
-Sets how many workers may exist at once. The value is validated, persisted to `swarm-config.json` as `max_workers` (re-applied at startup), then applied to the live registry. Lowering it below the current worker count does not kill anyone; it only refuses further spawns.
+Sets how many workers may exist at once. The value is validated, persisted to `swarm-config.json` as `max_workers` (re-applied at startup), then applied to the live registry. Lowering it below the current worker count does not kill anyone; it only refuses further spawns. Overlapping calls are serialized: each holds the setting's lock across the write and the apply. Calls apply in the order they reach the setting's lock, and the file and the live cap always end on the same value. Each request runs as its own task, so two requests sent without waiting for the first reply can reach the lock in either order; wait for a reply before sending the next value to order them.
 
 **Parameters:**
 
@@ -461,7 +461,7 @@ Sets how many workers may exist at once. The value is validated, persisted to `s
 |-------|----------|----------|--------------------------------------------|
 | `max` | `number` | Yes      | New ceiling, `1..=256` (the default is 64) |
 
-**Returns:** `void`
+**Returns:** `number` -- the cap in force once this call has applied (read back from the registry under the lock).
 
 **Errors:** ``Max Workers Must Be Between 1 And 256, Got <n>.`` for an out-of-range value (nothing is persisted), or `Config error: ...` when the config file cannot be written.
 
@@ -1085,7 +1085,8 @@ Permission gating never rests on `allowedTools` (it widens what runs unasked rat
 |---|---|---|
 | `null` | `Provider Not Supported By The Backend: <name>.` | `provider` is a reserved name with no adapter. Nothing was spawned |
 | `null` | the `spawn_worker` error text | The PTY worker spawn itself failed (registry full, worktree creation failed, ...) |
-| `null` | ``Worker `<id>` not found`` | The worker was killed before or during its session's attach. A session that did attach is shut down, and no worker remains |
+| `null` | ``Worker `<id>` not found`` | The worker was killed before its session's attach, so no session started and no worker remains |
+| `null` | ``Worker `<id>` is closing`` | A [`kill_worker`](#kill_worker) was in progress when the attach started or finished its handshake. A session that did attach is shut down before the kill proceeds, and no worker remains |
 | the new worker's id | the adapter's own error, verbatim | The session failed to attach (binary missing, handshake timeout, an unknown `trustTier`, Codex refusing a policy more permissive than requested, ...). **The PTY worker still exists and is usable as a plain terminal**; it is not rolled back |
 
 **Emits:** `worker_spawned` (and `worktree_created` if isolated) from the underlying spawn, then `agent_session_started` once the adapter's `spawn()` resolves. `payload.capabilities` tells the frontend what the session can honestly do (see [`agent_permission_respond`](#agent_permission_respond) and [`agent_cancel`](#agent_cancel)).
@@ -1111,8 +1112,9 @@ Enqueues one turn for `workerId`'s attached session through the `AgentScheduler`
 |---------------------------------|-----------|
 | ``Invalid UUID "<id>": ...``    | `workerId` is not a valid UUID string |
 | `AI queue full (256 capacity)`  | The scheduler's bounded admission queue (`AGENT_TURN_QUEUE_CAPACITY`) is full |
+| ``Worker `<id>` is closing``    | A [`kill_worker`](#kill_worker) for this worker is in progress; nothing is queued |
 
-A worker with no attached session is **not** an error here: the turn is admitted, and when it runs it settles at once with a synthesized `agent_turn_settled` (`status: "error"`, `error: "No Live Session For This Worker: ..."`); a session that rejects the turn settles the same way with `Turn Rejected: ...`. The scheduler runs at most one turn per worker at a time, so a second turn for a busy worker waits in the queue instead of reaching the session.
+A worker with no attached session is **not** an error here: the turn is admitted, and when it runs it settles at once with a synthesized `agent_turn_settled` (`status: "error"`, `error: "No Live Session For This Worker: ..."`) -- which is also how a turn queued before a kill settles, since by dispatch its worker is closing or its session is gone; a session that rejects the turn settles the same way with `Turn Rejected: ...`. The scheduler runs at most one turn per worker at a time, so a second turn for a busy worker waits in the queue instead of reaching the session.
 
 ---
 
@@ -1134,7 +1136,7 @@ A stale, already-settled or already-cancelling `turnId` is a benign no-op.
 
 **Returns:** `void`
 
-**Errors:** an invalid UUID, or no attached agent session for `workerId`.
+**Errors:** an invalid UUID, no attached agent session for `workerId`, or ``Worker `<id>` is closing`` while a [`kill_worker`](#kill_worker) for it is in progress (the kill's session shutdown settles the turn).
 
 **Emits:** exactly one `agent_turn_settled` for the turn (`status: "error"`), and `agent_session_exited` only if the session itself had to be torn down.
 
@@ -1142,7 +1144,7 @@ A stale, already-settled or already-cancelling `turnId` is a benign no-op.
 
 ### `agent_shutdown`
 
-Shuts down `workerId`'s attached agent session (idempotent) and removes it from the registry. An idle Claude Code session closes stdin and lets the CLI exit (killed after a 3 s grace); a busy one is killed. Does **not** kill the PTY worker; [`kill_worker`](#kill_worker) does the reverse and also tears down any attached session. A worker with no attached session is a benign no-op.
+Shuts down `workerId`'s attached agent session (idempotent) and removes it from the registry. A [`kill_worker`](#kill_worker) racing it waits for this shutdown to finish before it touches the worker. An idle Claude Code session closes stdin and lets the CLI exit (killed after a 3 s grace); a busy one is killed. Does **not** kill the PTY worker; [`kill_worker`](#kill_worker) does the reverse and also tears down any attached session. A worker with no attached session is a benign no-op.
 
 **Parameters:**
 
@@ -1201,7 +1203,7 @@ Not every `agent_permission_request` is a question. One with `suggestedDecision:
 
 **Returns:** `void`
 
-**Errors:** an invalid UUID, or no attached agent session for `workerId`. An unknown, already-answered, expired or report-only `requestId` is a benign no-op, so a double click or a late answer cannot fail.
+**Errors:** an invalid UUID, no attached agent session for `workerId`, or ``Worker `<id>` is closing`` while a [`kill_worker`](#kill_worker) for it is in progress. An unknown, already-answered, expired or report-only `requestId` is a benign no-op, so a double click or a late answer cannot fail.
 
 **Example:**
 
@@ -1217,7 +1219,7 @@ await invoke("agent_permission_respond", {
 
 ### `set_agent_concurrency`
 
-Sets how many agent turns may execute at the same time. Validated, persisted to `swarm-config.json` as `agent_concurrency` (re-applied at startup), then applied to the live scheduler, in that order, so a failed write never leaves the scheduler enforcing a cap the file disagrees with.
+Sets how many agent turns may execute at the same time. Validated, persisted to `swarm-config.json` as `agent_concurrency` (re-applied at startup), then applied to the live scheduler, in that order, so a failed write never leaves the scheduler enforcing a cap the file disagrees with. Overlapping calls are serialized: each holds the setting's lock across the write and the apply. Calls apply in the order they reach the setting's lock, and the file and the live cap always end on the same value. Each request runs as its own task, so two requests sent without waiting for the first reply can reach the lock in either order; wait for a reply before sending the next value to order them.
 
 **Parameters:**
 
@@ -1225,7 +1227,7 @@ Sets how many agent turns may execute at the same time. Validated, persisted to 
 |---------|----------|----------|--------------|
 | `limit` | `number` | Yes      | `1..=16` (`MIN_AGENT_CONCURRENCY..=MAX_AGENT_CONCURRENCY`) |
 
-**Returns:** `void`
+**Returns:** `number` -- the cap in force once this call has applied (read back from the scheduler under the lock).
 
 **Errors:** ``Agent Concurrency Must Be Between 1 And 16, Got <n>.`` (nothing is persisted), or `Config error: ...`.
 
@@ -1537,7 +1539,7 @@ A stamped envelope additionally carries `originWorker`/`causeSeq`:
 
 | Field          | Type                | Description                                                          |
 |----------------|---------------------|------------------------------------------------------------------------|
-| `seq`          | `number`            | Monotonic sequence number assigned by the single-writer engine. Wire order == seq order; never reused (not even across restarts: the engine reserves blocks of seqs in the log), never reordered. |
+| `seq`          | `number`            | Monotonic sequence number assigned by the single-writer engine. Wire order == seq order; never reused (not even across restarts, crashes or power loss, on storage that honours flushes: the engine reserves blocks of seqs in the log and flushes each reservation before issuing from it), never reordered. |
 | `ts`           | `number`            | Unix timestamp in milliseconds, assigned by the writer thread.        |
 | `originWorker` | `string` (optional) | UUID of the worker whose action **caused** this event, when known. Absent (not `null`) when unattributed -- present only when the engine was given an explicit causer to record. |
 | `causeSeq`     | `number` (optional) | `seq` of the event this one is causally reacting to, when known. Typically an `agent_turn_started` seq. |
@@ -1695,7 +1697,7 @@ Everything above describes the Tauri IPC transport (`invoke` / `listen` over `@t
 5. Live: event frames continue arriving; send  rpc  at any time, receive matching  rpcResult
 ```
 
-Reconnects are just a new socket, from step 1 -- the client's own gap detection (`event-bus.ts`) treats every reattach identically to the original connection. `lastSeq` stays valid across a daemon restart, because seqs never repeat.
+Reconnects are just a new socket, from step 1 -- the client's own gap detection (`event-bus.ts`) treats every reattach identically to the original connection. `lastSeq` stays valid across a daemon restart, because seqs never repeat (on storage that honours flushes, [ADR-0039](adr/0039-event-log-flushes-every-commit.md)).
 
 The same listener serves nothing but `/ws`, plus the optional static web bundle at `/` when the daemon runs with `--serve-ui DIR` (`pnpm build:web` builds it with `__SWARM_TRANSPORT__` set to `"ws"`; responses carry a strict CSP with `connect-src 'self'` and `frame-ancestors 'none'`, and hidden path segments are 404).
 

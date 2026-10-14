@@ -202,7 +202,7 @@ The connect URL shows the bind address, or the loopback address (`127.0.0.1` / `
 
 ## Running and Stopping
 
-`SIGINT` / `SIGTERM` (on Windows `Ctrl-C`, console close, logoff and shutdown) start a graceful shutdown: new connections stop, every client gets a `1001 Going Away` close, every worker is stopped the way `kill_worker` stops it (agent sessions shut down, worktrees get their usual disposition), the event writer drains and records the exact head seq so the next start continues with no gap, and the data-directory lock is released. Allow up to about 25 s; the service units wait 30 s before force-stopping.
+`SIGINT` / `SIGTERM` (on Windows `Ctrl-C`, console close, logoff and shutdown) start a graceful shutdown: new connections stop, every client gets a `1001 Going Away` close, every worker is stopped the way `kill_worker` stops it (agent sessions shut down, worktrees get their usual disposition, except that a kill still waiting on an agent session's in-flight attach when the 10 s `STOP_WORKERS_TIMEOUT` expires is abandoned, leaving that worker and its worktree unreconciled; see [ADR-0040](adr/0040-kill-stops-the-session-first.md)), the event writer drains and records the exact head seq so the next start continues with no gap, and the data-directory lock is released. Allow up to about 25 s; the service units wait 30 s before force-stopping.
 
 To upgrade, re-run the install script; it replaces the binary and restarts the service. Uninstalling or upgrading never touches the data directory.
 

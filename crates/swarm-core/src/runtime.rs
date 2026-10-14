@@ -215,8 +215,14 @@ impl Runtime {
     /// [`OrchestrationEngine::shutdown`]) and returns its final head
     /// seq. PTY workers are not killed.
     ///
-    /// Agent sessions get up to `timeout` in total; draining the engine
-    /// gets up to `timeout` more. Call it once, on exit — events
+    /// Each worker's session is stopped in `kill_worker`'s order: the
+    /// worker is held closing while attaches in flight for it finish
+    /// (see [`AgentSessionRegistry::begin_close`]), then its session is
+    /// removed and shut down, so one an attach registers meanwhile is
+    /// stopped too, and any other shutdown of it in progress is awaited.
+    /// Agent sessions, attaches and stops included, get up to
+    /// `timeout` in total; draining the engine gets up to `timeout`
+    /// more. Call it once, on exit — events
     /// recorded afterwards are dropped. The runtime (and its lock) stays
     /// alive until dropped.
     ///
@@ -232,13 +238,16 @@ impl Runtime {
 
         let mut sessions = JoinSet::new();
         for worker in self.registry.list_workers() {
-            if let Some(session) = self.agent_session_registry.remove(&worker.id) {
-                sessions.spawn(async move {
-                    if let Err(e) = session.shutdown().await {
-                        tracing::warn!(worker_id = %worker.id, error = %e, "agent session shutdown failed");
-                    }
-                });
-            }
+            let registry = self.agent_session_registry.clone();
+            sessions.spawn(async move {
+                let _closing = registry.begin_close(worker.id).await;
+                if let Some(session) = registry.take_session(&worker.id)
+                    && let Err(e) = session.shutdown().await
+                {
+                    tracing::warn!(worker_id = %worker.id, error = %e, "agent session shutdown failed");
+                }
+                registry.wait_stopped(worker.id).await;
+            });
         }
         // `join_next`, not `join_all`: `join_all` re-raises a panicked
         // session task, which would skip the engine drain below.
@@ -573,7 +582,11 @@ mod tests {
         let worker_id = uuid::Uuid::new_v4();
         let sessions = AgentSessionRegistry::new();
         let (session, completed) = StubSession::new(true);
-        sessions.insert(worker_id, session);
+        sessions
+            .begin_attach(worker_id)
+            .unwrap()
+            .insert(session)
+            .unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         execute_turn(sessions, EventSink::new(tx), request(worker_id)).await;
         let receipt = synthesized_receipt(&rx);
@@ -587,10 +600,44 @@ mod tests {
         let worker_id = uuid::Uuid::new_v4();
         let sessions = AgentSessionRegistry::new();
         let (session, completed) = StubSession::new(false);
-        sessions.insert(worker_id, session);
+        sessions
+            .begin_attach(worker_id)
+            .unwrap()
+            .insert(session)
+            .unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         execute_turn(sessions, EventSink::new(tx), request(worker_id)).await;
         assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
         assert!(rx.try_recv().is_err());
+    }
+
+    /// A turn dispatched while a kill holds its worker closing never
+    /// reaches the session about to be shut down: it settles as an
+    /// error receipt instead.
+    #[tokio::test]
+    async fn test_execute_turn_for_a_closing_worker_synthesizes_an_error_receipt() {
+        let worker_id = uuid::Uuid::new_v4();
+        let sessions = AgentSessionRegistry::new();
+        let (session, completed) = StubSession::new(false);
+        sessions
+            .begin_attach(worker_id)
+            .unwrap()
+            .insert(session)
+            .unwrap();
+        let _closing = sessions.begin_close(worker_id).await;
+        let (tx, rx) = std::sync::mpsc::channel();
+        execute_turn(sessions, EventSink::new(tx), request(worker_id)).await;
+        let receipt = synthesized_receipt(&rx);
+        assert_eq!(receipt.status, AgentTurnStatus::Error);
+        assert_eq!(
+            receipt.error.unwrap(),
+            format!(
+                "No Live Session For This Worker: {}",
+                AppError::WorkerClosing {
+                    id: worker_id.to_string()
+                }
+            )
+        );
+        assert!(!completed.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

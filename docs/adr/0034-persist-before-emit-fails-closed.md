@@ -28,7 +28,8 @@ durable is never shown:
 
 ## Consequences
 
-- Anything a client saw live is in the log; a replay can never contradict a live view.
+- Anything a client saw live is in the log (since [ADR-0039](0039-event-log-flushes-every-commit.md), also
+  after an OS crash or power loss, on storage that honours flushes); a replay can never contradict a live view.
 - A failing disk now loses events instead of showing them live-only. The loss is visible as a
   `system_log` error and the awaiting commands' errors, not silent.
 - Ephemeral events never touch the log, so they cannot be dropped this way.

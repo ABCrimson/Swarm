@@ -14,8 +14,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::agent::{
-    AgentAdapter, AgentSpawnSpec, AgentTurnRequest, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY,
-    PermissionDecision, ProviderId, TurnInput, TurnPriority,
+    AgentAdapter, AgentSession, AgentSpawnSpec, AgentTurnRequest, MAX_AGENT_CONCURRENCY,
+    MIN_AGENT_CONCURRENCY, PermissionDecision, ProviderId, TurnInput, TurnPriority,
 };
 use crate::events::{AgentTurnStartedPayload, Provenance, SwarmEvent};
 use crate::worker::handle::WorkerConfig;
@@ -95,8 +95,8 @@ pub async fn agent_turn_started(ctx: Ctx, args: Value) -> Result<Value, Value> {
 /// `agent_spawn`'s error: `{ workerId, message }`, where `workerId` is
 /// set when the PTY worker was created but the agent session failed to
 /// attach (the worker stays usable as a plain terminal), and `null` when
-/// no worker remains (none was created, or it was killed before or
-/// during its session's attach).
+/// no worker remains (none was created, or it was killed, or was being
+/// killed, before or during its session's attach).
 fn agent_spawn_error(worker_id: Option<String>, message: String) -> Value {
     serde_json::json!({ "workerId": worker_id, "message": message })
 }
@@ -158,6 +158,11 @@ pub async fn agent_spawn(ctx: Ctx, args: Value) -> Result<Value, Value> {
 /// Attaches a `provider` agent session to the PTY worker `worker_id`
 /// and resolves to the worker id. The session runs in the worker's
 /// worktree when it has one, else in `fallback_cwd`.
+///
+/// The whole attach holds an [`crate::agent::registry::AttachPermit`],
+/// so a `kill_worker` racing it waits until this attach has registered
+/// its session (which the kill then stops) or has stopped the session
+/// itself; a kill never returns with this attach's provider still alive.
 async fn attach_session(
     ctx: &Ctx,
     worker_id: Uuid,
@@ -166,7 +171,12 @@ async fn attach_session(
     model: Option<String>,
     trust_tier: Option<String>,
 ) -> Result<Value, Value> {
-    // A worker already killed since its spawn returned gets no session.
+    // A worker being killed gets no session.
+    let permit = ctx
+        .agent_session_registry
+        .begin_attach(worker_id)
+        .map_err(|e| agent_spawn_error(None, e.to_string()))?;
+    // Nor does one already killed since its spawn returned.
     let info = ctx
         .registry
         .get_worker(&worker_id)
@@ -186,25 +196,40 @@ async fn attach_session(
             no_adapter(provider),
         ));
     };
-    // `kill_worker` removes the worker before it looks for a session, so
-    // a kill during the attach handshake shows up as a failed lookup here.
     match spawned {
         Ok(session) => {
-            ctx.agent_session_registry
-                .insert(worker_id, std::sync::Arc::from(session));
+            let session: std::sync::Arc<dyn AgentSession> = std::sync::Arc::from(session);
+            // A kill that began during the handshake refuses the
+            // registration; the session is stopped here, while the permit
+            // still holds that kill back.
+            if let Err(e) = permit.insert(session.clone()) {
+                if let Err(err) = session.shutdown().await {
+                    tracing::warn!(%worker_id, error = %err, "agent_spawn: session shutdown after a kill during attach failed");
+                }
+                return Err(agent_spawn_error(None, e.to_string()));
+            }
+            // Every removal runs through `kill_worker`, which the permit
+            // holds back, so the worker is still here; the lookup keeps a
+            // worker removed any other way from keeping a live session.
             if let Err(e) = ctx.registry.get_worker(&worker_id) {
-                if let Some(session) = ctx.agent_session_registry.remove(&worker_id)
+                if let Some(session) = ctx.agent_session_registry.take_session(&worker_id)
                     && let Err(err) = session.shutdown().await
                 {
-                    tracing::warn!(%worker_id, error = %err, "agent_spawn: session shutdown after a kill during attach failed");
+                    tracing::warn!(%worker_id, error = %err, "agent_spawn: session shutdown after the worker vanished during attach failed");
                 }
                 return Err(agent_spawn_error(None, e.to_string()));
             }
             ok_value(&worker_id.to_string())
         }
         Err(e) => {
-            if let Err(gone) = ctx.registry.get_worker(&worker_id) {
-                tracing::error!(%worker_id, error = %e, "agent_spawn: session attach failed after the worker was killed");
+            // A kill waiting on this attach removes the worker next, so
+            // it is reported gone, never usable as a plain terminal.
+            let gone = ctx
+                .agent_session_registry
+                .ensure_open(&worker_id)
+                .and_then(|()| ctx.registry.get_worker(&worker_id).map(drop));
+            if let Err(gone) = gone {
+                tracing::error!(%worker_id, error = %e, "agent_spawn: session attach failed while the worker was killed");
                 return Err(agent_spawn_error(None, gone.to_string()));
             }
             tracing::error!(%worker_id, error = %e, "agent_spawn: session attach failed; the worker remains usable as a plain terminal");
@@ -223,10 +248,17 @@ struct AgentSendTurnArgs {
     prompt: String,
 }
 
-/// Queues a turn on the scheduler for the worker's agent session.
+/// Queues a turn on the scheduler for the worker's agent session,
+/// refusing it with [`crate::error::AppError::WorkerClosing`] while a
+/// kill is closing the worker. A turn queued before the kill began finds
+/// no session when it is dispatched and settles as an error (see
+/// `crate::runtime`'s turn executor).
 pub async fn agent_send_turn(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let AgentSendTurnArgs { worker_id, prompt } = parse_args(args)?;
     let uuid = parse_uuid(&worker_id)?;
+    ctx.agent_session_registry
+        .ensure_open(&uuid)
+        .map_err(|e| err_value(&e))?;
     ctx.scheduler
         .enqueue(AgentTurnRequest {
             worker_id: uuid,
@@ -263,11 +295,12 @@ struct AgentShutdownArgs {
 }
 
 /// Shuts down the worker's agent session, if it has one. The PTY worker
-/// itself is untouched.
+/// itself is untouched. A `kill_worker` racing this waits for the
+/// shutdown to finish before it touches the worker.
 pub async fn agent_shutdown(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let AgentShutdownArgs { worker_id } = parse_args(args)?;
     let uuid = parse_uuid(&worker_id)?;
-    if let Some(session) = ctx.agent_session_registry.remove(&uuid) {
+    if let Some(session) = ctx.agent_session_registry.take_session(&uuid) {
         session.shutdown().await.map_err(|e| err_value(&e))?;
     }
     ok_value(&())
@@ -329,10 +362,17 @@ struct SetAgentConcurrencyArgs {
 
 /// Sets how many agent turns run at once: persisted to
 /// `swarm-config.json` (`agent_concurrency`, re-applied by
-/// [`crate::runtime::Runtime::start`]) and applied live.
+/// [`crate::runtime::Runtime::start`]) and applied live. Resolves to the
+/// cap in force once this call has applied.
 ///
 /// Validate, persist, then apply: a failed write must not leave the
 /// scheduler enforcing a cap neither the UI nor the file agrees with.
+/// Overlapping calls are serialized (see
+/// [`crate::agent::AgentScheduler::lock_concurrency_setting`]): calls
+/// apply in the order they reach the setting's lock, and the file and the
+/// scheduler always end on the same value. Each request runs as its own
+/// task, so two requests sent without waiting for the first reply can
+/// reach the lock in either order.
 pub async fn set_agent_concurrency(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let SetAgentConcurrencyArgs { limit } = parse_args(args)?;
 
@@ -342,16 +382,30 @@ pub async fn set_agent_concurrency(ctx: Ctx, args: Value) -> Result<Value, Value
         )));
     }
 
-    let paths = ctx.paths.clone();
-    tokio::task::spawn_blocking(move || {
-        crate::config::write_value(&paths, "agent_concurrency", serde_json::json!(limit))
+    apply_agent_concurrency(&ctx, limit, move |paths| {
+        crate::config::write_value(paths, "agent_concurrency", serde_json::json!(limit))
     })
     .await
-    .map_err(|e| Value::String(e.to_string()))?
-    .map_err(|e| err_value(&e))?;
+}
+
+/// Under the setting's lock, persists `limit` with `write` (on the
+/// blocking pool), applies it to the scheduler and resolves to the cap
+/// then in force. `write` is the config write, a parameter so tests can
+/// slow it down.
+async fn apply_agent_concurrency(
+    ctx: &Ctx,
+    limit: u32,
+    write: impl FnOnce(&crate::Paths) -> Result<(), crate::error::AppError> + Send + 'static,
+) -> Result<Value, Value> {
+    let _setting = ctx.scheduler.lock_concurrency_setting().await;
+    let paths = ctx.paths.clone();
+    tokio::task::spawn_blocking(move || write(&paths))
+        .await
+        .map_err(|e| Value::String(e.to_string()))?
+        .map_err(|e| err_value(&e))?;
 
     ctx.scheduler.set_concurrency(limit as usize);
-    ok_value(&())
+    ok_value(&ctx.scheduler.concurrency())
 }
 
 #[cfg(test)]
@@ -360,6 +414,7 @@ mod tests {
     use std::time::Instant;
 
     use serde_json::json;
+    use tokio::task::JoinHandle;
 
     use super::*;
     use crate::agent::ClaudeCodeAdapter;
@@ -402,10 +457,10 @@ mod tests {
         }
     }
 
-    /// Starts `agent_spawn` in `cwd`, waits until the fake CLI holds its
-    /// `initialize` reply, kills the worker, then releases the reply.
-    /// Resolves to the killed worker's id and `agent_spawn`'s result.
-    async fn kill_during_attach(ctx: &Ctx, cwd: &Path) -> (Uuid, Result<Value, Value>) {
+    /// Starts `agent_spawn` in `cwd` and waits until the fake CLI holds
+    /// its `initialize` reply. Resolves to the new worker's id and the
+    /// running `agent_spawn`.
+    async fn attach_held(ctx: &Ctx, cwd: &Path) -> (Uuid, JoinHandle<Result<Value, Value>>) {
         let spawn = tokio::spawn(agent_spawn(
             ctx.clone(),
             json!({"config": {"name": "w", "cwd": cwd}, "provider": "claude_code"}),
@@ -418,11 +473,54 @@ mod tests {
             cwd.join(HELD_MARKER).exists().then_some(())
         })
         .await;
-        kill_worker(ctx.clone(), json!({"id": id.to_string()}))
-            .await
-            .unwrap();
+        (id, spawn)
+    }
+
+    /// Starts `kill_worker` for `id` and waits, polling every 10 ms, until
+    /// it is underway: until the worker is closing, or the kill has
+    /// already returned. Resolves to the running kill and whether the
+    /// closing was observed; fails after 10 s. The probe queues nothing.
+    async fn start_kill(ctx: &Ctx, id: Uuid) -> (JoinHandle<Result<Value, Value>>, bool) {
+        let kill = tokio::spawn(kill_worker(ctx.clone(), json!({"id": id.to_string()})));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if ctx.agent_session_registry.is_closing(&id) {
+                return (kill, true);
+            }
+            if kill.is_finished() {
+                return (kill, false);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for the kill to begin"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Starts `agent_spawn` in `cwd`, waits until the fake CLI holds its
+    /// `initialize` reply, starts killing the worker, waits until the
+    /// worker is closing (the kill waits for the held attach), releases
+    /// the reply, then awaits both. Resolves to the killed worker's id,
+    /// `agent_spawn`'s result, and every event emitted by the time
+    /// `kill_worker` returned. Asserts that by then no session is
+    /// registered.
+    async fn kill_during_attach(
+        ctx: &Ctx,
+        cwd: &Path,
+        events: &std::sync::mpsc::Receiver<DomainEvent>,
+    ) -> (Uuid, Result<Value, Value>, Vec<SwarmEvent>) {
+        let (id, spawn) = attach_held(ctx, cwd).await;
+        let (kill, closing) = start_kill(ctx, id).await;
+        assert!(closing, "the kill must wait for the held attach");
         std::fs::write(cwd.join(RELEASE_MARKER), "").unwrap();
-        (id, spawn.await.unwrap())
+        kill.await.unwrap().unwrap();
+        assert!(
+            ctx.agent_session_registry.get(&id).is_err(),
+            "no session may be registered once kill_worker returns"
+        );
+        let at_kill = emitted(ctx, events).await;
+        (id, spawn.await.unwrap(), at_kill)
     }
 
     /// Every envelope the engine has emitted so far.
@@ -432,6 +530,47 @@ mod tests {
     ) -> Vec<SwarmEvent> {
         ctx.engine.flush().await.unwrap();
         events.try_iter().map(|envelope| envelope.event).collect()
+    }
+
+    /// Two overlapping calls, the first with a slow config write: the
+    /// later call is the one in force, in the file and in the scheduler,
+    /// and each reply names the cap in force when it was applied.
+    #[tokio::test]
+    async fn test_set_agent_concurrency_applies_the_last_call_to_start() {
+        let (ctx, _dir, _events) = test_ctx();
+        let (entered_tx, entered) = std::sync::mpsc::channel();
+        let first = tokio::spawn({
+            let ctx = ctx.clone();
+            async move {
+                apply_agent_concurrency(&ctx, 2, move |paths| {
+                    entered_tx.send(()).unwrap();
+                    std::thread::sleep(Duration::from_millis(300));
+                    crate::config::write_value(paths, "agent_concurrency", json!(2))
+                })
+                .await
+            }
+        });
+        wait_for("the first call's config write", || entered.try_recv().ok()).await;
+
+        let second = apply_agent_concurrency(&ctx, 5, |paths| {
+            crate::config::write_value(paths, "agent_concurrency", json!(5))
+        })
+        .await
+        .unwrap();
+        let first = first.await.unwrap().unwrap();
+
+        assert_eq!(
+            crate::config::read_value(&ctx.paths, "agent_concurrency"),
+            Some(json!(5)),
+            "the file holds the later call's value"
+        );
+        assert_eq!(
+            ctx.scheduler.concurrency(),
+            5,
+            "the scheduler holds the later call's value"
+        );
+        assert_eq!(second, json!(5));
+        assert_eq!(first, json!(2), "the first reply names its own cap");
     }
 
     #[test]
@@ -485,9 +624,23 @@ mod tests {
         );
     }
 
-    /// A kill while the session's handshake is in flight finds no session
-    /// to stop, so `agent_spawn` stops the one that attaches afterwards
-    /// and reports no surviving worker.
+    /// Index of `worker_id`'s first `agent_session_exited` in `log`.
+    fn exited_at(log: &[SwarmEvent], worker_id: Uuid) -> Option<usize> {
+        log.iter().position(|event| {
+            matches!(event, SwarmEvent::AgentSessionExited(exited) if exited.worker_id == worker_id)
+        })
+    }
+
+    /// Index of `worker_id`'s `worker_killed` in `log`.
+    fn killed_at(log: &[SwarmEvent], worker_id: Uuid) -> Option<usize> {
+        log.iter().position(
+            |event| matches!(event, SwarmEvent::WorkerKilled(killed) if killed.worker_id == worker_id),
+        )
+    }
+
+    /// A kill while the session's handshake is in flight waits for it;
+    /// the attach then finds the worker closing, stops its own session
+    /// before the kill goes on, and reports no surviving worker.
     #[tokio::test]
     async fn test_agent_spawn_shuts_down_a_session_whose_worker_is_killed_during_attach() {
         let (ctx, dir, events) =
@@ -495,17 +648,22 @@ mod tests {
         let cwd = dir.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
 
-        let (id, result) = kill_during_attach(&ctx, &cwd).await;
+        let (id, result, at_kill) = kill_during_attach(&ctx, &cwd, &events).await;
 
         let err = result.unwrap_err();
         assert_eq!(err["workerId"], Value::Null, "{err}");
         assert!(ctx.agent_session_registry.get(&id).is_err());
         assert!(
-            emitted(&ctx, &events).await.iter().any(|event| matches!(
+            at_kill.iter().any(|event| matches!(
                 event,
                 SwarmEvent::AgentSessionExited(exited) if exited.worker_id == id
             )),
-            "the attached session must have been shut down"
+            "the attached session must have been shut down before kill_worker returned"
+        );
+        let (exited, killed) = (exited_at(&at_kill, id), killed_at(&at_kill, id));
+        assert!(
+            exited.is_some() && exited < killed,
+            "the session must exit before the worker is killed: exited at {exited:?}, killed at {killed:?}"
         );
     }
 
@@ -513,14 +671,92 @@ mod tests {
     /// no surviving worker, never a worker usable as a plain terminal.
     #[tokio::test]
     async fn test_agent_spawn_reports_no_worker_when_attach_fails_after_a_kill() {
-        let (ctx, dir, _events) =
+        let (ctx, dir, events) =
             test_ctx_with_claude(|sink| fake_claude(sink, "handshake_held_then_refused.mjs"));
         let cwd = dir.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
 
-        let (id, result) = kill_during_attach(&ctx, &cwd).await;
+        let (id, result, at_kill) = kill_during_attach(&ctx, &cwd, &events).await;
 
         let err = result.unwrap_err();
+        assert_eq!(err["workerId"], Value::Null, "{err}");
+        assert!(ctx.agent_session_registry.get(&id).is_err());
+        assert!(
+            killed_at(&at_kill, id).is_some(),
+            "the kill completed before kill_worker returned"
+        );
+    }
+
+    /// While a kill drains an attach still in its handshake, the worker
+    /// refuses a second attach and a new turn as closing, and the first
+    /// attach ends with no surviving worker or session.
+    #[tokio::test]
+    async fn test_attach_and_turn_admission_are_refused_while_the_worker_is_closing() {
+        let (ctx, dir, _events) =
+            test_ctx_with_claude(|sink| fake_claude(sink, "handshake_held.mjs"));
+        let cwd = dir.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let (id, spawn) = attach_held(&ctx, &cwd).await;
+
+        let (kill, closing_seen) = start_kill(&ctx, id).await;
+        assert!(closing_seen, "the kill must hold the worker closing");
+        let closing = AppError::WorkerClosing { id: id.to_string() }.to_string();
+        let turn = agent_send_turn(
+            ctx.clone(),
+            json!({"workerId": id.to_string(), "prompt": "p"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(turn, closing);
+        let attach = attach_session(
+            &ctx,
+            id,
+            cwd.display().to_string(),
+            ProviderId::ClaudeCode,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(attach["workerId"], Value::Null, "{attach}");
+        assert_eq!(attach["message"], closing);
+
+        std::fs::write(cwd.join(RELEASE_MARKER), "").unwrap();
+        kill.await.unwrap().unwrap();
+        let err = spawn.await.unwrap().unwrap_err();
+        assert_eq!(err["workerId"], Value::Null, "{err}");
+        assert!(ctx.agent_session_registry.get(&id).is_err());
+        assert!(ctx.registry.get_worker(&id).is_err());
+    }
+
+    /// `kill_worker` returns only after an attach racing it has ended:
+    /// once it returns no session is registered, and the attaching
+    /// session's `agent_session_exited` already precedes `worker_killed`.
+    /// The handshake is released only once the kill is underway, so a
+    /// kill that does not wait for it returns first.
+    #[tokio::test]
+    async fn test_kill_worker_returns_only_after_an_attaching_session_has_exited() {
+        let (ctx, dir, events) =
+            test_ctx_with_claude(|sink| fake_claude(sink, "handshake_held.mjs"));
+        let cwd = dir.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let (id, spawn) = attach_held(&ctx, &cwd).await;
+
+        let (kill, _closing_seen) = start_kill(&ctx, id).await;
+        std::fs::write(cwd.join(RELEASE_MARKER), "").unwrap();
+        kill.await.unwrap().unwrap();
+
+        assert!(
+            ctx.agent_session_registry.get(&id).is_err(),
+            "no session may be registered once kill_worker returns"
+        );
+        let at_kill = emitted(&ctx, &events).await;
+        let (exited, killed) = (exited_at(&at_kill, id), killed_at(&at_kill, id));
+        assert!(
+            exited.is_some() && killed.is_some() && exited < killed,
+            "the session must exit before the worker is killed: exited at {exited:?}, killed at {killed:?}"
+        );
+        let err = spawn.await.unwrap().unwrap_err();
         assert_eq!(err["workerId"], Value::Null, "{err}");
         assert!(ctx.agent_session_registry.get(&id).is_err());
     }

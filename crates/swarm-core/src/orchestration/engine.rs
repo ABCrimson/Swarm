@@ -24,8 +24,10 @@
 //! directory, across restarts and crashes: the writer reserves seqs in
 //! the log in blocks of `SEQ_RESERVATION_BLOCK` (1024) BEFORE issuing them,
 //! and a restarted engine resumes after the highest seq any earlier run
-//! could have issued ([`EventLog::resume_seq`]). A crash therefore costs
-//! at most one unused block of seqs, never a reused one; a clean
+//! could have issued ([`EventLog::resume_seq`]). A crash (process crash,
+//! OS crash or power loss, on storage that honours flushes: the log
+//! commits with `synchronous=EXTRA` and `fullfsync`) therefore costs at
+//! most one unused block of seqs, never a reused one; a clean
 //! [`OrchestrationEngine::shutdown`] records its exact head, so a clean
 //! restart continues without a gap.
 
