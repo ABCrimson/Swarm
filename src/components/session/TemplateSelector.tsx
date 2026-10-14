@@ -2,6 +2,7 @@ import { motion } from "motion/react";
 import { Suspense, use, useSyncExternalStore } from "react";
 import { Pill } from "#components/ui/Pill";
 import { pluralizeWorkers } from "#lib/format";
+import { DESKTOP_ONLY_REASON, isTauri } from "#lib/tauri";
 import { BUILT_IN_TEMPLATES, subscribeUserTemplates, userTemplatesResource } from "#lib/templates";
 import type { SessionTemplate } from "#store/types";
 
@@ -22,7 +23,8 @@ const sectionHeadingClass =
  * templates stream in beneath them (the cached `userTemplatesResource`
  * read through `use()`, re-read after every template write), and a store
  * that cannot be read says so instead of silently showing the built-ins
- * alone.
+ * alone. User templates are plugin-store files, so without the Tauri bridge
+ * the store is never read and that section says why instead.
  */
 export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): React.ReactElement {
   return (
@@ -60,15 +62,24 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
         </div>
       </section>
 
-      <Suspense
-        fallback={
-          <p role="status" className="text-xs text-fg-dim font-[family-name:var(--font-body)]">
-            Loading Your Templates…
+      {isTauri() ? (
+        <Suspense
+          fallback={
+            <p role="status" className="text-xs text-fg-dim font-[family-name:var(--font-body)]">
+              Loading Your Templates…
+            </p>
+          }
+        >
+          <UserTemplates onSelect={onSelect} />
+        </Suspense>
+      ) : (
+        <section aria-label="Your Templates">
+          <h3 className={sectionHeadingClass}>Your Templates</h3>
+          <p className="text-xs text-fg-dim font-[family-name:var(--font-body)]">
+            {DESKTOP_ONLY_REASON}
           </p>
-        }
-      >
-        <UserTemplates onSelect={onSelect} />
-      </Suspense>
+        </section>
+      )}
     </div>
   );
 }
