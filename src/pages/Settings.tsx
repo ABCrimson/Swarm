@@ -1,19 +1,12 @@
 import { useAtom, useAtomValue } from "jotai";
-import {
-  useEffect,
-  useEffectEvent,
-  useId,
-  useOptimistic,
-  useRef,
-  useState,
-  useTransition,
-} from "react";
+import { useEffect, useEffectEvent, useId, useRef, useState, useTransition } from "react";
 import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import * as z from "zod";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
+import { useMaxWorkersSync } from "#hooks/useMaxWorkersSync";
 import { type AlertThresholds, alertThresholdsAtom } from "#lib/alerts";
 import { ANTHROPIC_API_KEY_CONFIG_KEY } from "#lib/anthropic-config";
 import { errorMessage } from "#lib/is-error";
@@ -30,7 +23,6 @@ import {
   DESKTOP_ONLY_REASON,
   hasCapability,
   readConfig,
-  setMaxWorkers,
   writeConfig,
 } from "#lib/tauri";
 import {
@@ -43,9 +35,6 @@ import {
   selectedModelAtom,
   themeAtom,
 } from "#store/ui";
-
-/** Worker registry cap shown until the persisted value loads (the backend default). */
-const DEFAULT_MAX_WORKERS = 64;
 
 /**
  * Parses typed numeric input and clamps it to `[min, max]`. Blank or
@@ -610,7 +599,6 @@ export function Settings(): React.ReactElement {
   const [keybindings, setKeybindings] = useAtom(keybindingsAtom);
   const [checkingUpdates, startUpdateCheck] = useTransition();
   const [savingApiKey, startSavingApiKey] = useTransition();
-  const [, startMaxWorkersUpdate] = useTransition();
 
   const patchSettings = (patch: Partial<AppSettings>): void =>
     setAppSettings((prev) => ({ ...prev, ...patch }));
@@ -700,38 +688,20 @@ export function Settings(): React.ReactElement {
   };
 
   // ── Worker registry cap (backend-persisted via set_max_workers) ──
-  const [maxWorkers, setMaxWorkersState] = useState(DEFAULT_MAX_WORKERS);
-  // Shows a new cap immediately; reverts on its own if the backend refuses it.
-  const [shownMaxWorkers, showMaxWorkers] = useOptimistic(maxWorkers);
-
-  useEffect(() => {
-    let cancelled = false;
-    readConfig("max_workers", z.int().min(1))
-      .then((v) => {
-        if (!cancelled && v !== null) setMaxWorkersState(v);
-      })
-      .catch((err: unknown) => {
-        // Unset resolves null; a rejection means the backend could not answer — keep the default.
-        console.warn("[settings] Could not read the saved worker registry cap:", err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handleSetMaxWorkers = (v: number): void =>
-    startMaxWorkersUpdate(async () => {
-      showMaxWorkers(v);
-      try {
-        // The reply is the cap in force; `null` means no value came back.
-        const applied = (await setMaxWorkers(v)) ?? v;
-        if (applied !== v) showMaxWorkers(applied);
-        startMaxWorkersUpdate(() => setMaxWorkersState(applied));
-        toast.success(`Worker Registry Cap Set To ${applied}`);
-      } catch (err) {
-        toast.error("Failed To Update Worker Registry Cap", { description: errorMessage(err) });
-      }
-    });
+  const maxWorkers = useMaxWorkersSync();
+  const maxWorkersFeedback =
+    maxWorkers.sync.status === "pending" ? (
+      <p role="status" className="mt-1 text-xs text-fg-dim">
+        Applying…
+      </p>
+    ) : maxWorkers.sync.status === "failed" ? (
+      <div role="alert" className="mt-1 flex items-center gap-2 text-xs text-rose">
+        <span>{`Could Not Apply ${maxWorkers.sync.requested} Workers — ${maxWorkers.sync.message}`}</span>
+        <Button variant="ghost" size="sm" onClick={maxWorkers.sync.retry}>
+          Retry
+        </Button>
+      </div>
+    ) : undefined;
 
   return (
     <div className="flex max-w-180 flex-col gap-6 p-6">
@@ -843,8 +813,10 @@ export function Settings(): React.ReactElement {
             unit="Workers"
             min={1}
             max={256}
-            value={shownMaxWorkers}
-            onChange={handleSetMaxWorkers}
+            value={maxWorkers.shown}
+            onChange={maxWorkers.commit}
+            busy={maxWorkers.sync.status === "pending"}
+            feedback={maxWorkersFeedback}
           />
         </div>
       </SettingsSection>

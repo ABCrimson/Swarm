@@ -1,8 +1,8 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { getDefaultStore } from "jotai";
 import { toast } from "sonner";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsBridge } from "#hooks/useSettingsBridge";
 import { alertThresholdsAtom } from "#lib/alerts";
 import { CLAUDE_MODELS } from "#lib/models";
@@ -21,6 +21,9 @@ import {
   agentConcurrencySyncAtom,
   appSettingsAtom,
   DEFAULT_APP_SETTINGS,
+  DEFAULT_MAX_WORKERS,
+  maxWorkersAtom,
+  maxWorkersSyncAtom,
   selectedModelAtom,
 } from "#store/ui";
 
@@ -61,6 +64,8 @@ beforeEach(() => {
   vi.mocked(isTauri).mockReturnValue(false);
   vi.mocked(setAgentConcurrency).mockResolvedValue(null);
   store.set(agentConcurrencySyncAtom, { status: "idle" });
+  store.set(maxWorkersAtom, DEFAULT_MAX_WORKERS);
+  store.set(maxWorkersSyncAtom, { status: "idle" });
   store.set(alertThresholdsAtom, DEFAULT_THRESHOLDS);
   store.set(appSettingsAtom, DEFAULT_APP_SETTINGS);
   store.set(selectedModelAtom, "sonnet");
@@ -278,11 +283,114 @@ describe("Settings — worker registry cap", () => {
     await user.type(cap, "12{Enter}");
 
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith("Failed To Update Worker Registry Cap", {
-        description: "refused",
-      }),
+      expect(toast.error).toHaveBeenCalledWith(
+        "Failed To Update Worker Registry Cap",
+        expect.objectContaining({ description: "refused" }),
+      ),
     );
     await waitFor(() => expect(cap).toHaveValue(64));
+  });
+});
+
+describe("Settings — worker registry cap, one call in flight", () => {
+  /** Matches the sync's acknowledgement deadline. */
+  const ACK_TIMEOUT_MS = 10_000;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Commits `value` the way a keyboard user does: type, then Enter. */
+  function commitCap(value: number): HTMLElement {
+    const cap = screen.getByLabelText("Worker Registry Cap");
+    fireEvent.change(cap, { target: { value: String(value) } });
+    fireEvent.keyDown(cap, { key: "Enter" });
+    return cap;
+  }
+
+  it("sends a second rapid commit only after the first reply, then the latest value", async () => {
+    const first = Promise.withResolvers<number | null>();
+    vi.mocked(setMaxWorkers).mockReturnValueOnce(first.promise);
+    render(<Settings />);
+
+    commitCap(12);
+    const cap = commitCap(10);
+    expect(vi.mocked(setMaxWorkers).mock.calls).toStrictEqual([[12]]);
+    expect(cap).toHaveAttribute("aria-busy", "true");
+
+    await act(async () => first.resolve(12));
+
+    expect(vi.mocked(setMaxWorkers).mock.calls).toStrictEqual([[12], [10]]);
+    await waitFor(() => expect(cap).toHaveValue(10));
+    await waitFor(() => expect(cap).not.toHaveAttribute("aria-busy"));
+  });
+
+  it("collapses commits made meanwhile into the latest one", async () => {
+    const first = Promise.withResolvers<number | null>();
+    vi.mocked(setMaxWorkers).mockReturnValueOnce(first.promise);
+    render(<Settings />);
+
+    commitCap(12);
+    commitCap(11);
+    commitCap(10);
+    await act(async () => first.resolve(12));
+
+    expect(vi.mocked(setMaxWorkers).mock.calls).toStrictEqual([[12], [10]]);
+  });
+
+  it("shows the server's value when the reply differs from the request", async () => {
+    vi.mocked(setMaxWorkers).mockResolvedValueOnce(9);
+    render(<Settings />);
+
+    const cap = commitCap(12);
+
+    await waitFor(() => expect(cap).toHaveValue(9));
+    expect(toast.success).toHaveBeenCalledWith("Worker Registry Cap Set To 9");
+  });
+
+  it("rolls back with a visible error after the acknowledgement timeout and Retry sends again", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(setMaxWorkers).mockReturnValueOnce(new Promise<number | null>(() => {}));
+    render(<Settings />);
+
+    const cap = commitCap(12);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ACK_TIMEOUT_MS);
+    });
+
+    expect(cap).toHaveValue(64);
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Could Not Apply 12 Workers");
+
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await act(async () => {});
+
+    expect(vi.mocked(setMaxWorkers).mock.calls).toStrictEqual([[12], [12]]);
+    expect(cap).toHaveValue(12);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("re-sends the latest value when a reply arrives late with an older one", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const a = Promise.withResolvers<number | null>();
+    const b = Promise.withResolvers<number | null>();
+    vi.mocked(setMaxWorkers).mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+    render(<Settings />);
+
+    commitCap(12);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ACK_TIMEOUT_MS);
+    });
+    const cap = commitCap(10);
+    expect(vi.mocked(setMaxWorkers).mock.calls).toStrictEqual([[12], [10]]);
+
+    await act(async () => b.resolve(10));
+    await act(async () => a.resolve(12));
+
+    expect(vi.mocked(setMaxWorkers).mock.calls).toStrictEqual([[12], [10], [10]]);
+    expect(cap).toHaveValue(10);
   });
 });
 
