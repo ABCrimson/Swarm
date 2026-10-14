@@ -1,3 +1,11 @@
 {
-  "holds": []
+  "holds": [
+    {
+      "kind": "npm",
+      "name": "@xyflow/react",
+      "pin": "12.12.0",
+      "reason": "pnpm install of 13.0.0-next.0 fails: 'High-risk trust downgrade for \"@xyflow/react@13.0.0-next.0\" (possible package takeover)' (trustPolicy no-downgrade). 13.0.0-next.0 and its dependency @xyflow/system 1.0.0-next.4 were published manually by npm user webk1d without provenance or trusted publisher, while 12.12.0 carries trusted-publisher SLSA provenance. No upstream tag, changelog or migration guide for v13 exists. Recheck every sweep and move when a v13 build ships with provenance.",
+      "evidence": "https://registry.npmjs.org/@xyflow/react"
+    }
+  ]
 }
