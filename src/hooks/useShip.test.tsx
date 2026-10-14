@@ -3,7 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { INITIAL_SHIP_SNAPSHOT, type ShipSnapshot, shipReducer, useShip } from "#hooks/useShip";
-import type { DomainEvent, waitFor as waitForEvent } from "#lib/event-bus";
+import type { DomainEvent } from "#lib/event-bus";
 import { ShipCommandError } from "#lib/tauri";
 import type { CommitOutcome, PushOutcome, ShipContext, ShipPreflight } from "#store/types";
 
@@ -20,10 +20,6 @@ function emit(type: string, payload: unknown): void {
   for (const h of handlers.get("*") ?? []) h(e);
 }
 
-// DIRECTIVE (B1): this fake `waitFor` mirrors the real `#lib/event-bus`
-// timeout (a real `setTimeout` that rejects) instead of waiting forever.
-// A timer-less fake cannot tell an explicit 30000ms receipt budget from
-// the library's 5000ms default.
 vi.mock(import("#lib/event-bus"), () => ({
   onEvent: (type: string, handler: Handler) => {
     const set = handlers.get(type) ?? new Set<Handler>();
@@ -33,23 +29,6 @@ vi.mock(import("#lib/event-bus"), () => ({
       set.delete(handler);
     };
   },
-  // Only the predicate overload of `waitFor`: useShip never waits by type.
-  waitFor: ((predicate: (e: DomainEvent) => boolean, timeoutMs = 5000) =>
-    new Promise<DomainEvent>((resolve, reject) => {
-      const wildcard = handlers.get("*") ?? new Set<Handler>();
-      handlers.set("*", wildcard);
-      const timer = setTimeout(() => {
-        wildcard.delete(wrapped);
-        reject(new Error(`waitFor timeout after ${timeoutMs}ms`));
-      }, timeoutMs);
-      const wrapped: Handler = (e) => {
-        if (!predicate(e)) return;
-        clearTimeout(timer);
-        wildcard.delete(wrapped);
-        resolve(e);
-      };
-      wildcard.add(wrapped);
-    })) as typeof waitForEvent,
 }));
 
 const mockGitShipPreflight = vi.fn<(workerId: string, mode?: string) => Promise<ShipPreflight>>();
@@ -759,7 +738,7 @@ describe("useShip", () => {
 // ── A lost reply is unknown, never failed (M0.6) ──────
 
 describe("shipReducer: actionInterrupted", () => {
-  it("returns a running flow to previewing with progress, error and result cleared", () => {
+  it("returns a running flow to idle like reset, keeping message and mode but dropping the stale preview", () => {
     const running: ShipSnapshot = {
       ...INITIAL_SHIP_SNAPSHOT,
       state: "running",
@@ -768,11 +747,9 @@ describe("shipReducer: actionInterrupted", () => {
       progress: [{ step: "Awaiting Confirmation", status: "running", detail: null }],
     };
     expect(shipReducer(running, { type: "actionInterrupted" })).toEqual({
-      ...running,
-      state: "previewing",
-      progress: [],
-      error: null,
-      result: null,
+      ...INITIAL_SHIP_SNAPSHOT,
+      message: "feat: x",
+      mode: "all",
     });
   });
 });
@@ -863,6 +840,19 @@ describe("useShip: a lost reply over the daemon", () => {
     });
   });
 
+  it("a real failure still refreshes the preview quietly", async () => {
+    mockGitPush.mockRejectedValue(pushRejectedError());
+    const { result } = await renderPreviewing();
+    const preflightCalls = mockGitShipPreflight.mock.calls.length;
+    const { action } = await startShip(() => result.current.commitAndPush(), mockGitPush);
+    await act(async () => {
+      await action;
+    });
+
+    expect(result.current.state).toBe("failed");
+    expect(mockGitShipPreflight.mock.calls.length).toBeGreaterThan(preflightCalls);
+  });
+
   it("S2: fails with the receipt's error when the replayed receipt says the push failed", async () => {
     const { RpcConnectionLostError } = await import("#lib/transport");
     mockGitPush.mockRejectedValue(new RpcConnectionLostError("git_push"));
@@ -882,7 +872,7 @@ describe("useShip: a lost reply over the daemon", () => {
     expect(mockGitShipPreflight.mock.calls.length).toBeGreaterThan(preflightCalls);
   });
 
-  it("S3: a lost commit reply with a commit ok row and no receipt returns to a refreshed preview, and a second ship meanwhile does not re-commit", async () => {
+  it("S3: a lost commit reply with a commit ok row and no receipt returns to idle (the panel reloads the preview), and a second ship meanwhile does not re-commit", async () => {
     const { RpcTimeoutError } = await import("#lib/transport");
     mockGitStageCommit.mockRejectedValue(new RpcTimeoutError("git_stage_commit", 630_000));
     const { result } = await renderPreviewing();
@@ -908,11 +898,15 @@ describe("useShip: a lost reply over the daemon", () => {
       await action;
     });
 
-    expect(result.current.state).toBe("previewing");
+    expect(result.current.state).toBe("idle");
+    expect(result.current.preflight).toBeNull();
     expect(result.current.error).toBeNull();
     expect(result.current.progress).toEqual([]);
-    expect(mockGitShipPreflight.mock.calls.length).toBeGreaterThan(preflightCalls);
+    // ShipPanel reloads the preview on the transition into idle; the hook
+    // itself must not quietly refetch and then claim the preview is fresh.
+    expect(mockGitShipPreflight.mock.calls.length).toBe(preflightCalls);
     expect(toast.warning).toHaveBeenCalledOnce();
+    expect(vi.mocked(toast.warning).mock.calls[0]?.[0]).not.toMatch(/Is Refreshed/);
     expect(mockGitPush).not.toHaveBeenCalled();
   });
 
@@ -933,7 +927,7 @@ describe("useShip: a lost reply over the daemon", () => {
     expect(result.current.state).toBe("settled");
   });
 
-  it("S4: a lost reply with no events stays running until rpcDeadlineMs, then returns to a refreshed preview, never failed", async () => {
+  it("S4: a lost reply with no events stays running until rpcDeadlineMs, then returns to idle, never failed", async () => {
     const { RpcConnectionLostError, rpcDeadlineMs } = await import("#lib/transport");
     mockGitPush.mockRejectedValue(new RpcConnectionLostError("git_push"));
     const { result } = await renderPreviewing();
@@ -952,9 +946,10 @@ describe("useShip: a lost reply over the daemon", () => {
       await action;
     });
 
-    expect(result.current.state).toBe("previewing");
+    expect(result.current.state).toBe("idle");
+    expect(result.current.preflight).toBeNull();
     expect(result.current.error).toBeNull();
-    expect(mockGitShipPreflight.mock.calls.length).toBeGreaterThan(preflightCalls);
+    expect(mockGitShipPreflight.mock.calls.length).toBe(preflightCalls);
     expect(toast.warning).toHaveBeenCalledOnce();
   });
 
@@ -981,6 +976,47 @@ describe("useShip: a lost reply over the daemon", () => {
     expect(result.current.result).toEqual({
       commitSha: "deadbeefcafef00d",
       pushedRef: "origin/swarm/agent-abcd1234",
+    });
+  });
+
+  it("F3: a ship started while a lost reply is unreconciled says so instead of doing nothing", async () => {
+    const { RpcConnectionLostError, rpcDeadlineMs } = await import("#lib/transport");
+    mockGitPush.mockRejectedValue(new RpcConnectionLostError("git_push"));
+    const { result } = await renderPreviewing();
+    const { action } = await startShip(() => result.current.commitAndPush(), mockGitPush);
+
+    await act(async () => {
+      await result.current.commitAndPush();
+    });
+
+    expect(toast.info).toHaveBeenCalledOnce();
+    expect(vi.mocked(toast.info).mock.calls[0]?.[0]).toMatch(/Awaiting/);
+    expect(mockGitStageCommit).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(rpcDeadlineMs("git_push"));
+      await action;
+    });
+  });
+
+  it("F3: a plain double-click on a running ship stays silent", async () => {
+    const push = Promise.withResolvers<ReturnType<typeof makePushOutcome>>();
+    mockGitPush.mockReturnValue(push.promise);
+    const { result } = await renderPreviewing();
+    const { action, shipId } = await startShip(() => result.current.commitAndPush(), mockGitPush);
+
+    await act(async () => {
+      await result.current.commitAndPush();
+    });
+
+    expect(toast.info).not.toHaveBeenCalled();
+    expect(mockGitStageCommit).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      emit("ship_settled", receipt(shipId, {}));
+      push.resolve(makePushOutcome());
+      await vi.advanceTimersByTimeAsync(0);
+      await action;
     });
   });
 

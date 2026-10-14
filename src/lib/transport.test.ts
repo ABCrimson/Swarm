@@ -101,6 +101,7 @@ let mockLastSeq = 0;
 
 import {
   DaemonAuthError,
+  DEFAULT_RPC_DEADLINE_MS,
   initTokenFromLocationHash,
   isOutcomeUnknown,
   RpcConnectionLostError,
@@ -127,6 +128,19 @@ function openAndReady(serverSeq = 0): FakeWebSocket {
 function lastRpc(socket: FakeWebSocket): { frame: string; id: string; cmd: string; args: unknown } {
   return socket.lastSentFrame() as { frame: string; id: string; cmd: string; args: unknown };
 }
+
+/**
+ * Advances fake time by `ms` while the daemon keeps talking (its
+ * `system_metrics` heartbeat), so the link watchdog sees a live socket.
+ */
+async function advanceWithTraffic(socket: FakeWebSocket, ms: number): Promise<void> {
+  const STEP_MS = 10_000;
+  for (let elapsed = 0; elapsed < ms; elapsed += STEP_MS) {
+    await vi.advanceTimersByTimeAsync(Math.min(STEP_MS, ms - elapsed));
+    socket.simulateServerFrame(event(++heartbeatSeq));
+  }
+}
+let heartbeatSeq = 0;
 
 const event = (seq: number) => ({ seq, ts: seq, type: "worker_spawned", payload: {} });
 
@@ -582,7 +596,7 @@ describe("wsTransport", () => {
       const settled = vi.fn();
       invokePromise.then(settled, settled);
       const socket = openAndReady(0);
-      await vi.advanceTimersByTimeAsync(45_000);
+      await advanceWithTraffic(socket, 45_000);
       expect(settled).not.toHaveBeenCalled();
 
       socket.simulateServerFrame({
@@ -604,9 +618,9 @@ describe("wsTransport", () => {
       );
       const settled = vi.fn();
       void outcome.then(settled);
-      openAndReady(0);
+      const socket = openAndReady(0);
 
-      await vi.advanceTimersByTimeAsync(deadline - 1);
+      await advanceWithTraffic(socket, deadline - 1);
       expect(settled).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       const err = await outcome;
@@ -644,6 +658,55 @@ describe("wsTransport", () => {
       expect(isOutcomeUnknown(new Error("WebSocket Closed Before The Handshake Completed."))).toBe(
         false,
       );
+    });
+
+    describe("link watchdog", () => {
+      it("closes a socket that goes silent under a long git_push and rejects it as connection lost", async () => {
+        vi.useFakeTimers();
+        vi.spyOn(Math, "random").mockReturnValue(0);
+        const outcome = transport.invoke("git_push").then(
+          () => null,
+          (err: unknown) => err,
+        );
+        const socket = openAndReady(0);
+        await vi.advanceTimersByTimeAsync(DEFAULT_RPC_DEADLINE_MS * 2);
+
+        expect(await outcome).toBeInstanceOf(RpcConnectionLostError);
+        expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+        await vi.advanceTimersByTimeAsync(500);
+        expect(FakeWebSocket.instances).toHaveLength(2);
+      });
+
+      it("leaves a long git_push pending while the socket keeps receiving frames", async () => {
+        vi.useFakeTimers();
+        const settled = vi.fn();
+        transport.invoke("git_push").then(settled, settled);
+        const socket = openAndReady(0);
+        for (let seq = 1; seq <= 8; seq++) {
+          await vi.advanceTimersByTimeAsync(10_000);
+          socket.simulateServerFrame(event(seq));
+        }
+
+        expect(settled).not.toHaveBeenCalled();
+        expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+        expect(FakeWebSocket.instances).toHaveLength(1);
+      });
+
+      it("leaves no timer behind once the last pending rpc has settled", async () => {
+        vi.useFakeTimers();
+        const invokePromise = transport.invoke("git_push");
+        const socket = openAndReady(0);
+        await vi.advanceTimersByTimeAsync(0);
+        socket.simulateServerFrame({
+          frame: "rpcResult",
+          id: lastRpc(socket).id,
+          ok: true,
+          result: null,
+        });
+        await invokePromise;
+
+        expect(vi.getTimerCount()).toBe(0);
+      });
     });
 
     it("fails fast when the socket drops between the handshake and the send", async () => {

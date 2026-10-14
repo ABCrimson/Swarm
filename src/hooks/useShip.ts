@@ -116,7 +116,7 @@ type ShipAction =
   | { readonly type: "progressReported"; readonly row: ShipProgressRow }
   | { readonly type: "actionSettled"; readonly result: ShipResult }
   | { readonly type: "actionFailed"; readonly error: ShipError }
-  /** The attempt's outcome could not be confirmed; the flow returns to the (refreshed) preview. */
+  /** The attempt's outcome could not be confirmed; the flow returns to idle, where `ShipPanel` reloads a current preview. */
   | { readonly type: "actionInterrupted" }
   | { readonly type: "reset" };
 
@@ -140,9 +140,8 @@ export const INITIAL_SHIP_SNAPSHOT: ShipSnapshot = {
 
 /**
  * The ship state machine: idle → preflighting → previewing → running →
- * settled | failed, or back to previewing when a running attempt could
- * not be confirmed (`actionInterrupted`), with `reset` back to idle.
- * Pure — every side effect lives in the module-level helpers that
+ * settled | failed, with `reset` (and `actionInterrupted`, for a running
+ * attempt that could not be confirmed) back to idle. Pure — every side effect lives in the module-level helpers that
  * dispatch into it.
  */
 export function shipReducer(snapshot: ShipSnapshot, action: ShipAction): ShipSnapshot {
@@ -198,7 +197,6 @@ export function shipReducer(snapshot: ShipSnapshot, action: ShipAction): ShipSna
     case "actionFailed":
       return { ...snapshot, state: "failed", error: action.error };
     case "actionInterrupted":
-      return { ...snapshot, state: "previewing", progress: [], error: null, result: null };
     case "reset":
       return {
         ...INITIAL_SHIP_SNAPSHOT,
@@ -319,6 +317,14 @@ type ShipSteps = (
  */
 const inFlightWorkers = new Set<string>();
 
+/**
+ * Workers whose running attempt lost a reply and waits for the daemon's
+ * record. A subset of `inFlightWorkers`, kept so a second ship request
+ * can say why it did nothing. Added when `reconcileLostReply` starts,
+ * removed with the guard.
+ */
+const awaitingConfirmation = new Set<string>();
+
 /** The newest refetch per worker, so a superseded refetch's failure can stay silent. */
 const latestRefresh = new Map<string, symbol>();
 
@@ -434,14 +440,21 @@ async function generateProse(
 
 /**
  * Runs one ship action: the in-flight guard, the per-attempt event
- * recorder and the terminal transition live here once. The guard stays
- * held until every follow-up has finished. After a failure, or when a
- * lost reply left the attempt unconfirmed, the worktree may still have
- * changed (a commit landed, then the push was rejected), so preflight
- * and the causal record are refreshed silently before the guard is
- * released: a retry then starts from the real state (B2's recovery
- * needs a current `ahead`), and cannot start at all while a lost
- * reply is unreconciled.
+ * recorder and the terminal transition live here once. The guard is held
+ * until the attempt has fully ended, including an unconfirmed one (see
+ * `reconcileLostReply`), so a second request for the same worker is
+ * dropped meanwhile; it says so with an info toast only when the first
+ * is awaiting confirmation, since a plain double-click needs no
+ * explanation. After a failure the worktree may still have changed (a
+ * commit landed, then the push was rejected), so preflight and the
+ * causal record are refreshed silently before the guard is released:
+ * a retry then starts from the real state (B2's recovery needs a
+ * current `ahead`). An unconfirmed attempt instead returns the flow to
+ * idle, which makes `ShipPanel` reload the preview loudly. The guard
+ * is per module, not per mount, but the awaiting state itself lives in
+ * the mounted flow: a panel remounted mid-attempt starts idle again and
+ * its ship requests are dropped (with the info toast) until the
+ * attempt ends.
  */
 async function runAction(
   workerId: string,
@@ -449,7 +462,10 @@ async function runAction(
   dispatch: ShipDispatch,
   steps: ShipSteps,
 ): Promise<void> {
-  if (inFlightWorkers.has(workerId)) return;
+  if (inFlightWorkers.has(workerId)) {
+    if (awaitingConfirmation.has(workerId)) toast.info(STILL_AWAITING_NOTICE);
+    return;
+  }
   inFlightWorkers.add(workerId);
 
   const shipId = crypto.randomUUID();
@@ -464,17 +480,23 @@ async function runAction(
       prUrl = outcome.result.prUrl;
     } else {
       if (outcome.kind === "failed") dispatch({ type: "actionFailed", error: outcome.error });
-      await Promise.all([
-        refreshPreflight(workerId, draft.mode, dispatch, { quiet: true }),
-        fetchContext(workerId, dispatch, { silent: true }),
-      ]);
       if (outcome.kind === "interrupted") {
+        // No quiet refetch: a failed one would leave the old preview
+        // under a notice that says it was reloaded. Idle makes
+        // `ShipPanel` run a loud preflight, which shows no ship button
+        // until a current preview has loaded.
         dispatch({ type: "actionInterrupted" });
         toast.warning(outcome.notice);
+      } else {
+        await Promise.all([
+          refreshPreflight(workerId, draft.mode, dispatch, { quiet: true }),
+          fetchContext(workerId, dispatch, { silent: true }),
+        ]);
       }
     }
   } finally {
     attempt.recorder.dispose();
+    awaitingConfirmation.delete(workerId);
     inFlightWorkers.delete(workerId);
   }
 
@@ -516,7 +538,7 @@ async function carryOut(
     return { kind: "settled", result: await steps(workerId, shipId, draft, attempt) };
   } catch (err) {
     if (!isOutcomeUnknown(err)) return { kind: "failed", error: toShipError(err) };
-    return reconcileLostReply(err.cmd, dispatch, attempt);
+    return reconcileLostReply(workerId, err.cmd, dispatch, attempt);
   }
 }
 
@@ -524,10 +546,13 @@ async function carryOut(
 const AWAITING_CONFIRMATION_STEP = "Awaiting Confirmation";
 
 const STEP_FINISHED_NOTICE =
-  "The Step Finished But Its Reply Was Lost. The Preview Is Refreshed — Ship Again To Continue.";
+  "The Step Finished But Its Reply Was Lost. The Preview Is Reloading — Check It, Then Ship Again To Continue.";
 
 const UNCONFIRMED_NOTICE =
-  "No Confirmation Arrived. The Commit Or Push May Still Be Running, Or The Daemon May Have Restarted — Check The Refreshed Preview Before Shipping Again.";
+  "No Confirmation Arrived. The Commit Or Push May Still Be Running, Or The Daemon May Have Restarted — The Preview Is Reloading; Check It Before Shipping Again.";
+
+const STILL_AWAITING_NOTICE =
+  "A Ship For This Worker Is Still Awaiting The Daemon's Confirmation. Try Again Once It Settles.";
 
 /**
  * Settles an attempt whose last rpc was sent but never answered. The
@@ -538,19 +563,23 @@ const UNCONFIRMED_NOTICE =
  * - the `ship_settled` receipt decides it (success or failure);
  * - the lost call's terminal `ship_progress` row without a receipt means
  *   the step finished but the chain stopped, so the receipt gets
- *   `SHIP_SETTLED_TIMEOUT_MS` more, then the preview is refreshed;
+ *   `SHIP_SETTLED_TIMEOUT_MS` more, then the flow returns to idle and
+ *   the panel reloads the preview;
  * - nothing at all means the call may still be running or the daemon
- *   restarted: the preview is refreshed and the user decides.
+ *   restarted: same return to idle, and the user decides from the
+ *   reloaded preview.
  *
  * Both of the daemon's records are persistent events replayed to a
  * client that reconnects, which is how a reply lost with the socket is
  * recovered.
  */
 async function reconcileLostReply(
+  workerId: string,
   cmd: string,
   dispatch: ShipDispatch,
   { recorder, known }: ShipAttempt,
 ): Promise<ShipOutcome> {
+  awaitingConfirmation.add(workerId);
   dispatch({
     type: "progressReported",
     row: {

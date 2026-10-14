@@ -5,6 +5,8 @@ import {
   DEFAULT_RPC_DEADLINE_MS,
   GIT_MUTATE_BUDGET_MS,
   GIT_PUSH_BUDGET_MS,
+  GIT_READ_BUDGET_MS,
+  GIT_SCAN_BUDGET_MS,
   RPC_DEADLINE_MARGIN_MS,
   rpcDeadlineMs,
 } from "#lib/transport";
@@ -28,15 +30,32 @@ describe("rpc deadlines", () => {
   it("mirrors the daemon's git budgets in git/cli.rs", () => {
     expect(GIT_MUTATE_BUDGET_MS).toBe(rustBudgetSeconds("MUTATE_TIMEOUT") * 1000);
     expect(GIT_PUSH_BUDGET_MS).toBe(rustBudgetSeconds("PUSH_TIMEOUT") * 1000);
+    expect(GIT_SCAN_BUDGET_MS).toBe(rustBudgetSeconds("SCAN_TIMEOUT") * 1000);
+    expect(GIT_READ_BUDGET_MS).toBe(rustBudgetSeconds("READ_TIMEOUT") * 1000);
   });
 
-  it("gives each git mutation its budget plus the margin", () => {
-    expect(rpcDeadlineMs("git_stage_commit")).toBe(GIT_MUTATE_BUDGET_MS + RPC_DEADLINE_MARGIN_MS);
-    expect(rpcDeadlineMs("git_push")).toBe(GIT_PUSH_BUDGET_MS + RPC_DEADLINE_MARGIN_MS);
+  it("bounds each ship command by the sum of the git calls it can run, plus the margin", () => {
+    // Worst-case call counts, derived in `rpcDeadlineMs`'s doc.
+    const margin = RPC_DEADLINE_MARGIN_MS;
+    expect(rpcDeadlineMs("git_stage_commit")).toBe(
+      3 * GIT_SCAN_BUDGET_MS + 3 * GIT_MUTATE_BUDGET_MS + 2 * GIT_READ_BUDGET_MS + margin,
+    );
+    expect(rpcDeadlineMs("git_push")).toBe(GIT_PUSH_BUDGET_MS + 6 * GIT_READ_BUDGET_MS + margin);
+    expect(rpcDeadlineMs("git_ship_preflight")).toBe(
+      3 * GIT_SCAN_BUDGET_MS + 4 * GIT_READ_BUDGET_MS + margin,
+    );
+    expect(rpcDeadlineMs("ship_compare_url")).toBe(4 * GIT_READ_BUDGET_MS + margin);
+  });
+
+  it("gives the documented totals while the Rust budgets stand", () => {
+    expect(rpcDeadlineMs("git_stage_commit")).toBe(2_040_000);
+    expect(rpcDeadlineMs("git_push")).toBe(720_000);
+    expect(rpcDeadlineMs("git_ship_preflight")).toBe(270_000);
+    expect(rpcDeadlineMs("ship_compare_url")).toBe(90_000);
   });
 
   it("gives every other command the default deadline", () => {
-    for (const cmd of ["list_workers", "git_ship_preflight", "ship_context", "ship_compare_url"]) {
+    for (const cmd of ["list_workers", "ship_context", "kill_worker"]) {
       expect(rpcDeadlineMs(cmd)).toBe(DEFAULT_RPC_DEADLINE_MS);
     }
     expect(DEFAULT_RPC_DEADLINE_MS).toBe(30_000);
