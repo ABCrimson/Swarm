@@ -620,9 +620,12 @@ mod tests {
         // EOF on stdin lets the echo command finish.
         drop(handle.stdin);
 
+        // 60 s, not 10: on Windows the echo child is powershell.exe, whose cold
+        // start on a fresh CI runner has exceeded 10 s (PR #40, run 38554129656);
+        // the deadline guards against a hang, not against a slow start.
         let mut received = Vec::new();
         while received.len() < 2 {
-            match tokio::time::timeout(Duration::from_secs(10), handle.lines.recv()).await {
+            match tokio::time::timeout(Duration::from_secs(60), handle.lines.recv()).await {
                 Ok(Some(line)) => received.push(line),
                 Ok(None) => break,
                 Err(_) => panic!("timed out waiting for echoed NDJSON lines, got: {received:?}"),
