@@ -342,8 +342,10 @@ The frontend half is `useShip` (`src/hooks/useShip.ts`), a thin view over a pure
 (`idle`, `preflighting`, `previewing`, `running`, `settled`, `failed`). A module-level in-flight set,
 checked synchronously, stops a double click starting two commits. The `ship_settled` listener is armed
 **before** the triggering call, because the event path and the IPC response have no ordering guarantee;
-once that call has resolved, the flow waits up to 30 s more for a receipt that has not yet arrived
-(`SHIP_SETTLED_TIMEOUT_MS`). Failing to open the compare page after a settled ship is a warning toast
+once that call has resolved, a receipt that has not yet arrived is given 30 s of silence
+(`SHIP_SETTLED_TIMEOUT_MS`) before the attempt counts as unconfirmed. An rpc whose reply or receipt is lost keeps
+the flow running as Awaiting Confirmation and reconciles from the persisted ship events, bounded by `rpcDeadlineMs`,
+then returns to idle for a preflight reload. Failing to open the compare page after a settled ship is a warning toast
 and never flips the outcome. The default commit message is deterministic
 (`src/lib/ship-message.ts`: a Conventional Commit inferred from paths and the diff stat).
 

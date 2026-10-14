@@ -7,18 +7,19 @@
  * machine) and holds no `try` blocks: every async step lives in a
  * module-level helper that reports back through `dispatch`, which keeps
  * the hook compilable by the React Compiler and every transition
- * unit-testable on its own. The rule tags below: B1 (the receipt
- * timeout) is defined at `SHIP_SETTLED_TIMEOUT_MS`; B2 (nothing-to-commit
- * recovery) and B3 (mode-aware preflight) are the rules of the same name
- * in `docs/architecture.md`'s Ship Chain section.
+ * unit-testable on its own. The rule tags below: B1 (a missing receipt
+ * is an unconfirmed ship, not a failed one) is defined at
+ * `SHIP_SETTLED_TIMEOUT_MS`; B2 (nothing-to-commit recovery) and B3
+ * (mode-aware preflight) are the rules of the same name in
+ * `docs/architecture.md`'s Ship Chain section.
  *
  * Over the daemon a ship mutation can outlive its rpc: the socket drops,
  * or the reply misses `rpcDeadlineMs`, while the commit or push keeps
- * running there. Such an attempt is never "failed". It stays "running"
+ * running there; or the reply arrives but the receipt does not. Such an attempt is never "failed". It stays "running"
  * (no buttons, so no duplicate mutation) as "Awaiting Confirmation"
  * while the `ship_progress` rows and the `ship_settled` receipt, which
  * the daemon records and replays after a reconnect, say how it ended;
- * `reconcileLostReply` has the rules.
+ * `reconcileUnconfirmed` has the rules.
  *
  * @module useShip
  */
@@ -320,7 +321,7 @@ const inFlightWorkers = new Set<string>();
 /**
  * Workers whose running attempt lost a reply and waits for the daemon's
  * record. A subset of `inFlightWorkers`, kept so a second ship request
- * can say why it did nothing. Added when `reconcileLostReply` starts,
+ * can say why it did nothing. Added when `reconcileUnconfirmed` starts,
  * removed with the guard.
  */
 const awaitingConfirmation = new Set<string>();
@@ -329,17 +330,19 @@ const awaitingConfirmation = new Set<string>();
 const latestRefresh = new Map<string, symbol>();
 
 /**
- * DIRECTIVE (B1): how long the receipt (`ship_settled`) may stay missing
- * after the final step's invoke resolves before the flow reports
- * "failed". The clock starts when that invoke resolves, not when the
- * call starts, so a commit or push that the backend lets run for its
- * full 600s budget (`git/cli.rs`: `MUTATE_TIMEOUT` for `commit`,
- * `PUSH_TIMEOUT` for `push`) is never misreported as a timeout; a
- * backend give-up rejects the invoke itself. The event and the invoke
- * response travel separately, so 30s is the allowance for the receipt
- * to land after the response. The reconcile path reuses it as the grace
- * for a receipt after the lost call's terminal `ship_progress` row.
- * Always passed explicitly rather than relying on a default.
+ * (B1) How long the receipt (`ship_settled`) may stay silent after the
+ * final step's invoke resolves before the attempt counts as unconfirmed.
+ * The clock starts when that invoke resolves, not when the call starts,
+ * so a commit or push that the backend lets run for its full budget
+ * (`git/cli.rs`: `MUTATE_TIMEOUT`, `PUSH_TIMEOUT`) is never mistaken for a
+ * missing receipt; a backend give-up rejects the invoke itself. The event
+ * and the invoke response travel separately, so 30s is the allowance for
+ * the receipt to land after the response. Expiry is not a failure: the
+ * flow shows "Awaiting Confirmation" and keeps waiting up to
+ * `rpcDeadlineMs` of the final command (`reconcileUnconfirmed`). The
+ * reconcile path also uses it as the grace for a receipt after a lost
+ * call's terminal `ship_progress` row. Always passed explicitly rather
+ * than relying on a default.
  */
 const SHIP_SETTLED_TIMEOUT_MS = 30_000;
 
@@ -442,7 +445,7 @@ async function generateProse(
  * Runs one ship action: the in-flight guard, the per-attempt event
  * recorder and the terminal transition live here once. The guard is held
  * until the attempt has fully ended, including an unconfirmed one (see
- * `reconcileLostReply`), so a second request for the same worker is
+ * `reconcileUnconfirmed`), so a second request for the same worker is
  * dropped meanwhile; it says so with an info toast only when the first
  * is awaiting confirmation, since a plain double-click needs no
  * explanation. After a failure the worktree may still have changed (a
@@ -522,9 +525,10 @@ type ShipOutcome =
 /**
  * Runs the steps and turns whatever they throw into an outcome. A
  * command's own error is a real failure. A lost reply (the rpc was sent,
- * its answer never came back) is not: the daemon finishes a ship
- * mutation even when the connection that asked for it is gone, so the
- * outcome is reconciled from the daemon's own record instead.
+ * its answer never came back) is not, and neither is an ok reply whose
+ * receipt never shows: the daemon finishes a ship mutation even when the
+ * connection that asked for it is gone, so the outcome is reconciled
+ * from the daemon's own record instead.
  */
 async function carryOut(
   workerId: string,
@@ -537,8 +541,11 @@ async function carryOut(
   try {
     return { kind: "settled", result: await steps(workerId, shipId, draft, attempt) };
   } catch (err) {
+    if (err instanceof ReceiptMissing) {
+      return reconcileUnconfirmed(workerId, err.cmd, dispatch, attempt, "replied");
+    }
     if (!isOutcomeUnknown(err)) return { kind: "failed", error: toShipError(err) };
-    return reconcileLostReply(workerId, err.cmd, dispatch, attempt);
+    return reconcileUnconfirmed(workerId, err.cmd, dispatch, attempt, "lost");
   }
 }
 
@@ -554,30 +561,40 @@ const UNCONFIRMED_NOTICE =
 const STILL_AWAITING_NOTICE =
   "A Ship For This Worker Is Still Awaiting The Daemon's Confirmation. Try Again Once It Settles.";
 
+/** The receipt of a ship whose reply was ok arrived late or not at all. */
+const RECEIPT_MISSING_NOTICE =
+  "The Step Finished But No Confirmation Arrived. The Preview Is Reloading — Check It Before Shipping Again.";
+
 /**
- * Settles an attempt whose last rpc was sent but never answered. The
- * flow stays `"running"` (no buttons, the in-flight guard held) while the
+ * Settles an attempt whose outcome the client cannot see: the last rpc
+ * was sent but never answered (`"lost"`), or it answered ok and its
+ * `ship_settled` receipt then stayed silent for `SHIP_SETTLED_TIMEOUT_MS`
+ * (`"replied"`). Neither is a failure. The flow stays `"running"` (no
+ * buttons, the in-flight guard held) as "Awaiting Confirmation" while the
  * daemon's record is awaited for up to `rpcDeadlineMs(cmd)`, the longest
- * the lost call could still have been running:
+ * the call could still have been running:
  *
  * - the `ship_settled` receipt decides it (success or failure);
- * - the lost call's terminal `ship_progress` row without a receipt means
- *   the step finished but the chain stopped, so the receipt gets
- *   `SHIP_SETTLED_TIMEOUT_MS` more, then the flow returns to idle and
- *   the panel reloads the preview;
+ * - after a lost reply, the call's terminal `ship_progress` row without
+ *   a receipt means the step finished but the chain stopped, so the
+ *   receipt gets `SHIP_SETTLED_TIMEOUT_MS` more, then the flow returns to
+ *   idle and the panel reloads the preview;
  * - nothing at all means the call may still be running or the daemon
  *   restarted: same return to idle, and the user decides from the
  *   reloaded preview.
  *
  * Both of the daemon's records are persistent events replayed to a
  * client that reconnects, which is how a reply lost with the socket is
- * recovered.
+ * recovered. A settled `"replied"` attempt reports the reply's own
+ * values (`known`) and lets the receipt fill gaps; a `"lost"` one has
+ * only the receipt to go on, with earlier steps' values filling gaps.
  */
-async function reconcileLostReply(
+async function reconcileUnconfirmed(
   workerId: string,
   cmd: string,
   dispatch: ShipDispatch,
   { recorder, known }: ShipAttempt,
+  how: "lost" | "replied",
 ): Promise<ShipOutcome> {
   awaitingConfirmation.add(workerId);
   dispatch({
@@ -585,18 +602,26 @@ async function reconcileLostReply(
     row: {
       step: AWAITING_CONFIRMATION_STEP,
       status: "running",
-      detail: "The Reply Was Lost — Waiting For The Daemon's Record.",
+      detail:
+        how === "lost"
+          ? "The Reply Was Lost — Waiting For The Daemon's Record."
+          : "The Receipt Has Not Arrived — Waiting For The Daemon's Record.",
     },
   });
 
-  const first = await recorder.next(rpcDeadlineMs(cmd), cmd);
+  const first = await recorder.next(rpcDeadlineMs(cmd), how === "lost" ? cmd : undefined);
   if (first === "terminal") await recorder.next(SHIP_SETTLED_TIMEOUT_MS);
 
   const receipt = recorder.receipt();
   if (receipt === null) {
     return {
       kind: "interrupted",
-      notice: first === "terminal" ? STEP_FINISHED_NOTICE : UNCONFIRMED_NOTICE,
+      notice:
+        how === "replied"
+          ? RECEIPT_MISSING_NOTICE
+          : first === "terminal"
+            ? STEP_FINISHED_NOTICE
+            : UNCONFIRMED_NOTICE,
     };
   }
   if (receipt.status !== "ok") {
@@ -619,12 +644,14 @@ async function reconcileLostReply(
       detail: "Confirmed By The Daemon's Record.",
     },
   });
+  const fill = <T>(fromReceipt: T | null, fromFlow: T | undefined): T | undefined =>
+    how === "replied" ? (fromFlow ?? fromReceipt ?? undefined) : (fromReceipt ?? fromFlow);
   return {
     kind: "settled",
     result: {
-      commitSha: receipt.commitSha ?? known.commitSha,
-      pushedRef: receipt.pushedRef ?? known.pushedRef,
-      prUrl: receipt.prUrl ?? undefined,
+      commitSha: fill(receipt.commitSha, known.commitSha),
+      pushedRef: fill(receipt.pushedRef, known.pushedRef),
+      prUrl: fill(receipt.prUrl, known.prUrl),
     },
   };
 }
@@ -638,7 +665,7 @@ async function commitOnlySteps(
 ): Promise<ShipResult> {
   const commit = await gitStageCommit(workerId, shipId, message, mode, true);
   known.commitSha = commit.sha;
-  await requireReceipt(recorder);
+  await requireReceipt(recorder, "git_stage_commit");
   return { commitSha: commit.sha };
 }
 
@@ -660,7 +687,7 @@ async function commitAndPushSteps(
   const push = await gitPush(workerId, shipId, true);
   known.commitSha = commitSha ?? push.sha;
   known.pushedRef = push.pushedRef;
-  await requireReceipt(recorder);
+  await requireReceipt(recorder, "git_push");
   return { commitSha: commitSha ?? push.sha, pushedRef: push.pushedRef };
 }
 
@@ -695,7 +722,8 @@ async function commitPushAndCompareSteps(
     title,
     body,
   );
-  await requireReceipt(recorder);
+  known.prUrl = prUrl;
+  await requireReceipt(recorder, "ship_compare_url");
   return { commitSha: commitSha ?? push.sha, pushedRef: push.pushedRef, prUrl };
 }
 
@@ -758,7 +786,7 @@ const COMMAND_STEPS = new Map<string, readonly string[]>([
 interface ShipAttempt {
   readonly recorder: ShipRecorder;
   /** What the flow has learned so far, to fill what a receipt leaves out. */
-  readonly known: { commitSha?: string; pushedRef?: string };
+  readonly known: { commitSha?: string; pushedRef?: string; prUrl?: string };
 }
 
 /** The recorder of one ship attempt, from {@link recordShip}. */
@@ -851,19 +879,31 @@ function recordShip(workerId: string, shipId: string, dispatch: ShipDispatch): S
 }
 
 /**
- * B1: after the final step's invoke resolved, the receipt may still be
- * missing for up to `SHIP_SETTLED_TIMEOUT_MS`. It is awaited here, not
- * from the call's start, so a slow but successful commit or push is
- * never reported as a timeout. The timeout is a `ShipCommandError` of
- * kind `"timeout"` (the git step may still have completed).
+ * Thrown by {@link requireReceipt} when the final step's reply was ok but
+ * its receipt stayed silent for `SHIP_SETTLED_TIMEOUT_MS`. Internal: `carryOut`
+ * turns it into the same reconcile as a lost reply, so it never reaches
+ * the user as an error.
  */
-async function requireReceipt(recorder: ShipRecorder): Promise<void> {
-  if ((await recorder.next(SHIP_SETTLED_TIMEOUT_MS)) !== "timeout") return;
-  throw new ShipCommandError({
-    kind: "timeout",
-    message: `No Confirmation Arrived Within ${SHIP_SETTLED_TIMEOUT_MS / 1000} Seconds — The Commit Or Push May Still Have Completed; Refresh The Preflight To Check.`,
-    remedy: null,
-  });
+class ReceiptMissing extends Error {
+  readonly cmd: string;
+
+  constructor(cmd: string) {
+    super("The Receipt Has Not Arrived.");
+    this.name = "ReceiptMissing";
+    this.cmd = cmd;
+  }
+}
+
+/**
+ * B1: after the final step's invoke resolved (command `cmd`), waits up to
+ * `SHIP_SETTLED_TIMEOUT_MS` for the receipt. It is awaited here, not
+ * from the call's start, so a slow but successful commit or push is
+ * never mistaken for a missing receipt. A receipt that is still missing
+ * throws {@link ReceiptMissing}: the git step may well have completed,
+ * so the attempt is unconfirmed, not failed.
+ */
+async function requireReceipt(recorder: ShipRecorder, cmd: string): Promise<void> {
+  if ((await recorder.next(SHIP_SETTLED_TIMEOUT_MS)) === "timeout") throw new ReceiptMissing(cmd);
 }
 
 /** Extracts the typed `ShipError` from a thrown `ShipCommandError`, falling back to a generic `"unknown"` for anything else (a task panic, a network hiccup). */

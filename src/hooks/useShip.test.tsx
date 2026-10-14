@@ -567,7 +567,7 @@ describe("useShip", () => {
     expect(result.current.state).toBe("settled");
   });
 
-  it("reports a missing receipt after the 30 s budget as a timeout, not as an unknown failure", async () => {
+  it("an ok reply whose receipt is still missing after 30 s is awaiting confirmation, then settles with the reply's result when the receipt lands", async () => {
     vi.useFakeTimers();
     mockGitShipPreflight.mockResolvedValue(makePreflight());
     mockGitStageCommit.mockResolvedValue(makeCommitOutcome());
@@ -580,13 +580,101 @@ describe("useShip", () => {
       actionPromise = result.current.commitAndPush();
     });
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    const shipId = mockGitPush.mock.calls[0]?.[1] as string;
+
+    expect(result.current.state).toBe("running");
+    expect(result.current.error).toBeNull();
+    expect(result.current.progress.at(-1)).toMatchObject({
+      step: "Awaiting Confirmation",
+      status: "running",
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+      emit("ship_settled", {
+        shipId,
+        workerId: WORKER_ID,
+        commitSha: null,
+        pushedRef: null,
+        prUrl: null,
+        status: "ok",
+        error: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await actionPromise;
+    });
+
+    expect(result.current.state).toBe("settled");
+    expect(result.current.result).toEqual({
+      commitSha: "deadbeefcafef00d",
+      pushedRef: "origin/swarm/agent-abcd1234",
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("an ok reply with no receipt returns to idle at 30 s + rpcDeadlineMs of the final step, with a warning and never a failure", async () => {
+    vi.useFakeTimers();
+    const { rpcDeadlineMs } = await import("#lib/transport");
+    mockGitShipPreflight.mockResolvedValue(makePreflight());
+    mockGitStageCommit.mockResolvedValue(makeCommitOutcome());
+    mockGitPush.mockResolvedValue(makePushOutcome());
+
+    const { result } = await renderPreviewing();
+
+    let actionPromise: Promise<void> = Promise.resolve();
+    act(() => {
+      actionPromise = result.current.commitAndPush();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000 + rpcDeadlineMs("git_push") - 1);
+    });
+    expect(result.current.state).toBe("running");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+      await actionPromise;
+    });
+
+    expect(result.current.state).toBe("idle");
+    expect(result.current.preflight).toBeNull();
+    expect(result.current.error).toBeNull();
+    expect(toast.warning).toHaveBeenCalledOnce();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("an ok reply followed by an error receipt fails with the receipt's error", async () => {
+    vi.useFakeTimers();
+    mockGitShipPreflight.mockResolvedValue(makePreflight());
+    mockGitStageCommit.mockResolvedValue(makeCommitOutcome());
+    mockGitPush.mockResolvedValue(makePushOutcome());
+
+    const { result } = await renderPreviewing();
+
+    let actionPromise: Promise<void> = Promise.resolve();
+    act(() => {
+      actionPromise = result.current.commitAndPush();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    const shipId = mockGitPush.mock.calls[0]?.[1] as string;
+    const rejected = pushRejectedError().shipError;
+
+    await act(async () => {
+      emit("ship_settled", {
+        shipId,
+        workerId: WORKER_ID,
+        status: "error",
+        error: rejected,
+      });
+      await vi.advanceTimersByTimeAsync(0);
       await actionPromise;
     });
 
     expect(result.current.state).toBe("failed");
-    expect(result.current.error?.kind).toBe("timeout");
-    expect(result.current.error?.message).toContain("May Still Have Completed");
+    expect(result.current.error).toEqual(rejected);
   });
 
   // ── B2: NothingToCommit recovery when there's already unpushed work ──
