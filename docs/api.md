@@ -1539,7 +1539,7 @@ A stamped envelope additionally carries `originWorker`/`causeSeq`:
 
 | Field          | Type                | Description                                                          |
 |----------------|---------------------|------------------------------------------------------------------------|
-| `seq`          | `number`            | Monotonic sequence number assigned by the single-writer engine. Wire order == seq order; never reused (not even across restarts: the engine reserves blocks of seqs in the log), never reordered. |
+| `seq`          | `number`            | Monotonic sequence number assigned by the single-writer engine. Wire order == seq order; never reused (not even across restarts, crashes or power loss, on storage that honours flushes: the engine reserves blocks of seqs in the log and flushes each reservation before issuing from it), never reordered. |
 | `ts`           | `number`            | Unix timestamp in milliseconds, assigned by the writer thread.        |
 | `originWorker` | `string` (optional) | UUID of the worker whose action **caused** this event, when known. Absent (not `null`) when unattributed -- present only when the engine was given an explicit causer to record. |
 | `causeSeq`     | `number` (optional) | `seq` of the event this one is causally reacting to, when known. Typically an `agent_turn_started` seq. |
@@ -1697,7 +1697,7 @@ Everything above describes the Tauri IPC transport (`invoke` / `listen` over `@t
 5. Live: event frames continue arriving; send  rpc  at any time, receive matching  rpcResult
 ```
 
-Reconnects are just a new socket, from step 1 -- the client's own gap detection (`event-bus.ts`) treats every reattach identically to the original connection. `lastSeq` stays valid across a daemon restart, because seqs never repeat.
+Reconnects are just a new socket, from step 1 -- the client's own gap detection (`event-bus.ts`) treats every reattach identically to the original connection. `lastSeq` stays valid across a daemon restart, because seqs never repeat (on storage that honours flushes, [ADR-0039](adr/0039-event-log-flushes-every-commit.md)).
 
 The same listener serves nothing but `/ws`, plus the optional static web bundle at `/` when the daemon runs with `--serve-ui DIR` (`pnpm build:web` builds it with `__SWARM_TRANSPORT__` set to `"ws"`; responses carry a strict CSP with `connect-src 'self'` and `frame-ancestors 'none'`, and hidden path segments are 404).
 
