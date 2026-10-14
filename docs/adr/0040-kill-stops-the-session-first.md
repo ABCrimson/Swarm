@@ -75,3 +75,12 @@ Pinned by `test_kill_worker_stops_the_provider_session_before_removing_the_workt
   sessions, so a future caller of it must close the worker first.
 
 See [Workers and PTYs](../architecture.md#workers-and-ptys).
+
+## Amended 2026-10-13
+
+`swarmd`'s `STOP_WORKERS_TIMEOUT` is 40 s (`crates/swarmd/src/main.rs`), no longer the 10 s the
+Consequences above compare against, and `TimeoutStopSec` in `swarmd.service` and `ExitTimeOut` in the
+launchd plist are 60 s. A daemon stop now abandons a kill only when its attach's session teardown outlasts
+what is left of the 40 s after the 30 s handshake, about 10 s. The Windows Scheduled Task still stops without
+a graceful window. The kill-on-drop guard around the Claude Code handshake, and the reaping of a process whose
+kill was dropped mid-teardown, remain open follow-ups.

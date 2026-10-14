@@ -41,11 +41,13 @@ import {
  * `isTauri()`, which reads the `globalThis.isTauri` flag the shell
  * injects. Desktop-only controls (file dialogs and workspace browsing,
  * native alert notifications, the update check, the webview-direct AI
- * chat) decide whether to offer themselves with {@link hasCapability};
+ * chat, the local snapshot and template stores) decide whether to offer
+ * themselves with {@link hasCapability};
  * this is the runtime check for call sites that invoke a plugin and need
  * the bridge itself (there is no opener capability: WorkerDetail checks
- * this before `openPath`, ShipPanel's compare link opens a browser tab
- * without it, and useShip's post-ship `openUrl` catches the failure). A
+ * this before `openPath`, ShipPanel's compare button opens a tab with
+ * `window.open` without it, and useShip's post-ship `openUrl` runs only
+ * inside it, where a failure becomes the warning toast). A
  * `wsTransport` connection is a real backend but not a Tauri bridge, so
  * this is `false` there; see {@link hasTransport}.
  */
@@ -68,7 +70,7 @@ export type TransportFeature = Exclude<keyof TransportCapabilities, "kind">;
 /**
  * Whether the active transport offers `feature`, read from its capability
  * metadata. The flags are fixed per build (the desktop build offers all
- * four, the `pnpm build:web` page none), so a control gated on this keeps
+ * five, the `pnpm build:web` page none), so a control gated on this keeps
  * its UI in a plain-browser preview of the desktop build; the runtime
  * bridge checks ({@link isTauri}) stay in addition where a plugin call
  * needs the bridge itself.
@@ -419,11 +421,26 @@ export async function agentTurnStarted(
 }
 
 /**
- * Sets the backend worker-registry cap. Applies to new spawns at once
- * and persists across restarts (config key `max_workers`).
+ * The reply of a setting command: the cap in force once the call applied
+ * (a positive integer), normalized to `null` when no value came back.
+ * `undefined` is what `tauriTransport` resolves in a plain-browser
+ * preview with no bridge; `null` is "the backend did not report a value".
  */
-export async function setMaxWorkers(max: number): Promise<void> {
-  return invoke<void>("set_max_workers", { max });
+const AppliedCapReply = z
+  .int()
+  .positive()
+  .nullish()
+  .transform((cap) => cap ?? null);
+
+/**
+ * Sets the backend worker-registry cap. Applies to new spawns at once
+ * and persists across restarts (config key `max_workers`). Resolves to
+ * the cap in force once this call applied, or `null` when no value
+ * came back (no backend); a reply of any other shape rejects.
+ */
+export async function setMaxWorkers(max: number): Promise<number | null> {
+  const raw = await invoke("set_max_workers", { max });
+  return parseResponse(AppliedCapReply, raw, "Set Max Workers Returned An Unexpected Shape.");
 }
 
 /**
@@ -433,9 +450,12 @@ export async function setMaxWorkers(max: number): Promise<void> {
  * across restarts (config key `agent_concurrency`). The backend
  * counterpart of `useAiStore`'s `concurrentLimit`, which only bounds the
  * webview-direct chat path; `useSettingsBridge` keeps the two in step.
+ * Resolves to the cap in force once this call applied, or `null` when no
+ * value came back (no backend); a reply of any other shape rejects.
  */
-export async function setAgentConcurrency(limit: number): Promise<void> {
-  return invoke<void>("set_agent_concurrency", { limit });
+export async function setAgentConcurrency(limit: number): Promise<number | null> {
+  const raw = await invoke("set_agent_concurrency", { limit });
+  return parseResponse(AppliedCapReply, raw, "Set Agent Concurrency Returned An Unexpected Shape.");
 }
 
 /**
@@ -677,10 +697,12 @@ export async function gitStageCommit(
 
 /**
  * Pushes `workerId`'s branch (`origin <branch> --set-upstream`, fixed
- * argv, never forced). The backend resolves `HEAD` itself at push time
+ * argv, never forced). The backend resolves the tip of the checked-out
+ * branch itself and pushes that commit as `<sha>:refs/heads/<branch>`
  * (see `swarm_core::git::ship::push`), so already-committed, unpushed
  * work (`ShipPreflight.ahead > 0`) can be pushed without a
- * `gitStageCommit` in the same attempt. On success the backend records
+ * `gitStageCommit` in the same attempt. On success it records the
+ * worker's push (`PushRecord`: sha and refs) and
  * `lastShippedSeq`/`lastShippedCommit`. `finalStep` is `true` for
  * "Commit + Push" and `false` when a {@link shipCompareUrl} call follows.
  */
@@ -700,21 +722,21 @@ export async function gitPush(
 /**
  * Builds the GitHub compare URL for `workerId`'s worktree, prefilled
  * with `title`/`body` through `quick_pull=1` (capped server-side at 6000
- * characters, `body` truncated first). Always the final step of "Commit
+ * characters, `body` truncated first). The receipt carries the sha and
+ * ref of the worker's latest recorded push (its `PushRecord`), never
+ * values from the caller. Always the final step of "Commit
  * + Push + Open Compare Page": emits the terminal `ship_settled` receipt
  * on success and failure.
  */
 export async function shipCompareUrl(
   workerId: string,
   shipId: string,
-  commitSha: string,
-  pushedRef: string,
   title: string,
   body: string,
 ): Promise<string> {
   return shipCommand(
     "ship_compare_url",
-    { workerId, shipId, commitSha, pushedRef, title, body },
+    { workerId, shipId, title, body },
     z.string().min(1),
     "Ship Compare URL Returned An Unexpected Shape.",
   );

@@ -2,7 +2,7 @@ import { motion } from "motion/react";
 import { Suspense, use, useSyncExternalStore } from "react";
 import { Pill } from "#components/ui/Pill";
 import { pluralizeWorkers } from "#lib/format";
-import { DESKTOP_ONLY_REASON, isTauri } from "#lib/tauri";
+import { DESKTOP_ONLY_REASON, hasCapability, isTauri } from "#lib/tauri";
 import { BUILT_IN_TEMPLATES, subscribeUserTemplates, userTemplatesResource } from "#lib/templates";
 import type { SessionTemplate } from "#store/types";
 
@@ -62,7 +62,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
         </div>
       </section>
 
-      {isTauri() ? (
+      {hasCapability("localStores") && isTauri() ? (
         <Suspense
           fallback={
             <p role="status" className="text-xs text-fg-dim font-[family-name:var(--font-body)]">

@@ -508,9 +508,9 @@ async function runAction(
   // browser, a URL outside the opener capability's scope) is a warning,
   // never a reason to flip the flow back to "failed". Only the desktop
   // shell has an opener bridge, so the flow auto-opens the compare page
-  // only there; in the browser build the receipt's Open Compare Page
-  // button is the way to it, and how that button opens outside the
-  // desktop shell is `ShipPanel`'s concern.
+  // only there; in the browser build nothing opens on its own, and the
+  // receipt's Open Compare Page button opens a tab (`ShipPanel`'s
+  // `openComparePage`, `window.open`).
   if (prUrl != null && isTauri()) {
     try {
       await openUrl(prUrl);
@@ -696,7 +696,7 @@ async function commitAndPushSteps(
   return { commitSha: commitSha ?? push.sha, pushedRef: push.pushedRef };
 }
 
-/** "Commit + Push + Open Compare Page": as above, then the compare URL as the final step (`runAction` opens it). */
+/** "Commit + Push + Open Compare Page": as above, then the compare URL as the final step (`runAction` opens it in the desktop shell; the browser build's receipt button does). */
 async function commitPushAndCompareSteps(
   workerId: string,
   shipId: string,
@@ -719,14 +719,7 @@ async function commitPushAndCompareSteps(
   // Record + optional AI prose) when it has loaded, else the commit
   // message's own trailing lines — shipping never waits on the record.
   const body = composedBody ?? bodyLines.join("\n").trim();
-  const prUrl = await shipCompareUrl(
-    workerId,
-    shipId,
-    commitSha ?? push.sha,
-    push.pushedRef,
-    title,
-    body,
-  );
+  const prUrl = await shipCompareUrl(workerId, shipId, title, body);
   known.prUrl = prUrl;
   await requireReceipt(recorder, "ship_compare_url");
   return { commitSha: commitSha ?? push.sha, pushedRef: push.pushedRef, prUrl };

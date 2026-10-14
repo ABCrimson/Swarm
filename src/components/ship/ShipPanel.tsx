@@ -131,10 +131,12 @@ function remedyInstructions(
 }
 
 /**
- * Re-opens the compare page from the receipt. An opener failure (no
- * default browser, a URL outside the opener capability's scope) is
- * surfaced as an error toast — never left as an unhandled rejection
- * from a click handler.
+ * Opens the compare page from the receipt's button: a new browser tab
+ * (`window.open`) in the browser build, the opener plugin in the desktop
+ * shell, where "Commit + Push + Open Compare Page" also auto-opens it
+ * (`useShip`). An opener failure (no default browser, a URL outside the opener
+ * capability's scope) is surfaced as an error toast — never left as an
+ * unhandled rejection from a click handler.
  */
 async function openComparePage(url: string): Promise<void> {
   // The opener plugin needs the Tauri bridge; a browser page opens the link

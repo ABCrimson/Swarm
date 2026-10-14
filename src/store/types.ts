@@ -360,7 +360,7 @@ export type CommitOutcome = z.infer<typeof CommitOutcomeSchema>;
 /** Zod schema for the `git_push` response. */
 export const PushOutcomeSchema = z.object({
   pushedRef: z.string(),
-  /** `HEAD` sha at push time, resolved server-side — never a caller-supplied value. */
+  /** The commit sha that was pushed: the branch tip the backend resolved and recorded in the worker's push record — never a caller-supplied value. */
   sha: z.string(),
 });
 

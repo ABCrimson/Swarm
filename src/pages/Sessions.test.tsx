@@ -21,7 +21,7 @@ vi.mock(import("#lib/templates"), async (importOriginal) => ({
   userTemplatesResource: () => userTemplates,
 }));
 
-/** `true` makes the active transport report no workspace browsing (the `build:web` page). */
+/** `true` makes the active transport report no capabilities (the `build:web` page). */
 const web = vi.hoisted(() => ({ on: false }));
 vi.mock(import("#lib/tauri"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -94,7 +94,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("Sessions — local stores need the Tauri bridge", () => {
+describe("Sessions — local stores need the local-stores capability", () => {
   it("describes nothing on Export Metrics while no session is active and file export is available", async () => {
     vi.unstubAllGlobals();
     await renderPage();
@@ -105,8 +105,8 @@ describe("Sessions — local stores need the Tauri bridge", () => {
     expect(exportMetrics).not.toHaveAttribute("aria-describedby");
   });
 
-  it("disables Snapshot and Save As Template, with the reason, without the bridge", async () => {
-    vi.unstubAllGlobals();
+  it("disables Snapshot and Save As Template, with the reason, in the browser build", async () => {
+    web.on = true;
     const session = addSession();
     useSessionStore.getState().setActiveSession(session.id);
     await renderPage();

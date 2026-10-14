@@ -29,7 +29,6 @@ import {
   checkForUpdates,
   DESKTOP_ONLY_REASON,
   hasCapability,
-  isTauri,
   readConfig,
   setMaxWorkers,
   writeConfig,
@@ -724,9 +723,11 @@ export function Settings(): React.ReactElement {
     startMaxWorkersUpdate(async () => {
       showMaxWorkers(v);
       try {
-        await setMaxWorkers(v);
-        startMaxWorkersUpdate(() => setMaxWorkersState(v));
-        toast.success(`Worker Registry Cap Set To ${v}`);
+        // The reply is the cap in force; `null` means no value came back.
+        const applied = (await setMaxWorkers(v)) ?? v;
+        if (applied !== v) showMaxWorkers(applied);
+        startMaxWorkersUpdate(() => setMaxWorkersState(applied));
+        toast.success(`Worker Registry Cap Set To ${applied}`);
       } catch (err) {
         toast.error("Failed To Update Worker Registry Cap", { description: errorMessage(err) });
       }
@@ -858,8 +859,8 @@ export function Settings(): React.ReactElement {
             max={120}
             value={appSettings.snapshotIntervalMin}
             onChange={(v) => patchSettings({ snapshotIntervalMin: v })}
-            // Snapshots are plugin-store files, which need the Tauri bridge.
-            unavailableReason={isTauri() ? undefined : DESKTOP_ONLY_REASON}
+            // Snapshots are local plugin-store files, which only the desktop transport offers.
+            unavailableReason={hasCapability("localStores") ? undefined : DESKTOP_ONLY_REASON}
           />
           <NumberField
             label="Log Retention"

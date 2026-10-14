@@ -37,9 +37,14 @@ RestartSec=5
 # the data directory. Retrying cannot help until it exits.
 RestartPreventExitStatus=75
 # swarmd shuts down gracefully on SIGTERM: clients are closed, workers are
-# stopped and the event log is flushed, which can take about 25 s (see
-# ExitTimeOut in dev.crimson.swarmd.plist, which matches this value).
-TimeoutStopSec=30
+# stopped and the event log is flushed. The worst case is about 55 s: up to
+# 5 s each to drain HTTP requests and WebSocket connections
+# (Limits::drain_timeout), 40 s to stop workers (STOP_WORKERS_TIMEOUT in
+# main.rs: the 30 s adapter handshake a kill may still wait on, plus the
+# session teardown) and 5 s for the runtime shutdown that flushes the event
+# log (two 2.5 s phases). The 60 s below leaves headroom; ExitTimeOut in
+# dev.crimson.swarmd.plist matches it.
+TimeoutStopSec=60
 
 # Loopback only: no --bind. swarmd refuses a non-loopback bind until a
 # loopback run has minted its token, and the token is the only

@@ -19,10 +19,7 @@ const SHIP_UUID = "6ba7b810-9dad-41d1-80b4-00c04fd430c8";
 const calls: readonly (readonly [string, () => Promise<unknown>])[] = [
   ["gitStageCommit", () => gitStageCommit(WORKER_UUID, SHIP_UUID, "feat: x", "all", false)],
   ["gitPush", () => gitPush(WORKER_UUID, SHIP_UUID, true)],
-  [
-    "shipCompareUrl",
-    () => shipCompareUrl(WORKER_UUID, SHIP_UUID, "abc", "origin/b", "feat: x", "body"),
-  ],
+  ["shipCompareUrl", () => shipCompareUrl(WORKER_UUID, SHIP_UUID, "feat: x", "body")],
 ];
 
 beforeEach(() => {

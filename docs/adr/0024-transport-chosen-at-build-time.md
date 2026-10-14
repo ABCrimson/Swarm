@@ -44,3 +44,10 @@ and session file dialogs, the webview AI chat, native alert notifications, the u
 The flags are static per build, so a plain-browser preview of the desktop build keeps its UI; runtime
 `isTauri()` checks stay where a plugin call needs the bridge itself. The sentence above that says nothing
 reads the flags describes the state at the original commit.
+
+A fifth flag, `localStores`, covers the local plugin-store files (session snapshots, saved templates,
+automatic snapshots): true for `tauriTransport`, false for `wsTransport`. The controls that offer them
+(Sessions' Snapshot and Save As Template, the palette's Snapshot Session, the Auto-Snapshot Interval) gate on
+`hasCapability("localStores")`; the template list read and the automatic snapshot schedule, which touch the
+store without a user action, also require `isTauri()`. The statement above that the plugin-store-backed
+surfaces are gated by `isTauri()` describes the original commit.

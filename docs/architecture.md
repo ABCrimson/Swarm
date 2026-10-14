@@ -344,8 +344,8 @@ the mechanics ([ADR-0009](adr/0009-ship-chain-structural-guarantees.md)). The lo
 | --- | --- |
 | `git_ship_preflight(workerId, mode?)` | Read-only. `mode` is `all` (default) or `staged`. Eight refusal conditions become Title Case `blockers` and `canShip = false`: not the worktree's toplevel, primary checkout, detached `HEAD`, branch equals the base branch, protected branch (`main`, `master`, `develop`, `release/*`), no `origin`, unresolved merge conflicts, nothing to ship. Also returns the deny-list preview, diff stat, ahead/behind and whether the host supports a compare URL. |
 | `git_stage_commit(workerId, shipId, message, mode, finalStep)` | Primary-checkout guard, then one `git status --porcelain=v2 -z` snapshot (conflicts refuse), the deny list, `git restore --staged` of denied paths, in `all` mode `git add` of an explicit `:(top,literal)` path list, an index re-check, then `git commit --file=- --trailer=…`. Emits `ship_progress` and `commit_created`. |
-| `git_push(workerId, shipId, finalStep)` | Primary-checkout guard, live branch (detached, protected `main`/`master`/`develop`/`release/*` and the base branch refuse), sha of the branch tip, `git push --end-of-options origin <sha>:refs/heads/<branch>` (the exact commit, non-force), then `git branch --set-upstream-to=refs/remotes/origin/<branch>`. Every successful push is recorded as the worker's push record (sha, remote ref, `origin/<branch>`), which the compare URL's branch is read from (`ship_compare_url`'s receipt still carries the caller's `commitSha` and `pushedRef`). When the event-log seq read succeeds it also records `last_shipped_seq` and `last_shipped_commit` (the only writer). |
-| `ship_compare_url(workerId, shipId, commitSha, pushedRef, title, body)` | `https://<host>/<owner>/<repo>/compare/<base>...<branch>?quick_pull=1&title=&body=`, capped at 6000 characters (the body is cut first, the title as a last resort, the path never). |
+| `git_push(workerId, shipId, finalStep)` | Primary-checkout guard, live branch (detached, protected `main`/`master`/`develop`/`release/*` and the base branch refuse), sha of the branch tip, `git push --end-of-options origin <sha>:refs/heads/<branch>` (the exact commit, non-force), then `git branch --set-upstream-to=refs/remotes/origin/<branch>`. Every successful push is recorded as the worker's push record (sha, remote ref, `origin/<branch>`), which `ship_compare_url` reads. When the event-log seq read succeeds it also records `last_shipped_seq` and `last_shipped_commit` (the only writer). |
+| `ship_compare_url(workerId, shipId, title, body)` | `https://<host>/<owner>/<repo>/compare/<base>...<branch>?quick_pull=1&title=&body=`, capped at 6000 characters (the body is cut first, the title as a last resort, the path never). |
 
 - Each command ends an attempt with exactly one `ship_settled`, on failure or on the call marked
   `finalStep` (`ship_compare_url` is always final). `nothingToCommit` from `git_stage_commit` settles
@@ -354,7 +354,7 @@ the mechanics ([ADR-0009](adr/0009-ship-chain-structural-guarantees.md)). The lo
   **B3**; `setMode` refetches). The base branch is `origin/HEAD`, else `init.defaultBranch`, else
   `main`, never the primary checkout's current branch.
 - **Deny list:** basename (case-insensitive) starting `.env` or `id_rsa`, ending `.pem` or `.key`;
-  `secret` anywhere in the path; a file over 5 MiB, measured on the bytes the commit would contain (the index blob in `staged` mode, via `git ls-files --stage` and `git cat-file --batch-check`; the working-tree file `all` mode is about to stage; the index blob again in the final pre-commit check); an untracked `.claude/settings.json`. Denied paths
+  `secret` anywhere in the path; a file over 5 MiB, measured on the bytes the commit would contain (the index blob in `staged` mode, via `git ls-files --stage` and `git cat-file --batch-check`; the working-tree file `all` mode is about to stage; the index blob again in the final check before `git commit`; the guard holds for what SWARM stages, before hooks run, because a pre-commit hook runs inside `git commit` and can stage a file it never measured); an untracked `.claude/settings.json`. Denied paths
   are returned as `skipped[]` with a Title Case reason and never committed.
 - **Trailers:** `Swarm-Seq-Range: <from>..<to>` (omitted when unknown or degenerate) and the configured
   `Co-Authored-By` (`shipCoAuthoredBy`; dropped if it contains a newline). The range `(seqFrom, seqTo]`
@@ -387,8 +387,9 @@ checked synchronously, stops a double click starting two commits. The `ship_sett
 once that call has resolved, a receipt that has not yet arrived is given 30 s of silence
 (`SHIP_SETTLED_TIMEOUT_MS`) before the attempt counts as unconfirmed. An rpc whose reply or receipt is lost keeps
 the flow running as Awaiting Confirmation and reconciles from the persisted ship events, bounded by `rpcDeadlineMs`,
-then returns to idle for a preflight reload. Failing to open the compare page after a settled ship is a warning toast
-and never flips the outcome. The default commit message is deterministic
+then returns to idle for a preflight reload. The post-ship auto-open of the compare page runs only inside the Tauri bridge; failing to open it
+there is a warning toast and never flips the outcome. The browser build opens nothing on its own: the
+receipt's Open Compare Page button opens a tab with `window.open`. The default commit message is deterministic
 (`src/lib/ship-message.ts`: a Conventional Commit inferred from paths and the diff stat).
 
 ### The Causal Record
@@ -552,7 +553,7 @@ and [api.md](api.md#wire-protocol-swarmd)):
   512 watermark); `rpcResult` rides a separate 256-slot lane; at most 8 `rpc` calls run per connection.
 - **Policy:** every `rpc` goes through `Registry::dispatch_remote`. An authenticated client can run
   commands as the daemon's user, so treat the token like an SSH key.
-- **Shutdown:** SIGINT/SIGTERM closes clients with `1001`, stops every worker through `kill_worker` (each worktree gets its usual disposition; 10 s budget, `STOP_WORKERS_TIMEOUT`; a kill still waiting on an in-flight attach when it expires is abandoned, leaving that worker and its worktree unreconciled, see [ADR-0040](adr/0040-kill-stops-the-session-first.md)), then runs `Runtime::shutdown`. The desktop app instead leaves workers to the OS on quit.
+- **Shutdown:** SIGINT/SIGTERM closes clients with `1001`, stops every worker through `kill_worker` (each worktree gets its usual disposition; 40 s budget, `STOP_WORKERS_TIMEOUT`; a kill still waiting on an in-flight attach when it expires is abandoned, leaving that worker and its worktree unreconciled, see [ADR-0040](adr/0040-kill-stops-the-session-first.md)), then runs `Runtime::shutdown`. The desktop app instead leaves workers to the OS on quit.
 - **Service units** (`crates/swarmd/service/`): `systemd --user`, a launchd LaunchAgent, and on Windows a
   per-user **logon Scheduled Task**, not a Windows service ([ADR-0029](adr/0029-windows-daemon-logon-task.md)).
 - CI checks that neither `swarm-core` nor `swarmd` depends on `tauri*`.
@@ -587,7 +588,13 @@ worker-membership events that arrive while it is in flight and replaying them ov
 agent concurrency cap ("AI Concurrent Stream Limit") to the backend and waits for the acknowledgement: Settings
 shows "Applying…", and a failure or a 10 s timeout rolls the field back to the last acknowledged value with an
 alert and Retry (a late acknowledgement is adopted, and an older push the backend acknowledges becomes the
-rollback target). At launch, with a backend reachable, the field adopts the backend's `agent_concurrency`
+rollback target). The reply is the cap in force and wins: if it differs from the request, the field shows it
+and it is the acknowledged value. Only one `set_agent_concurrency` call is in flight, because the daemon
+orders calls only from the moment each reaches its lock; a value requested meanwhile waits in a one-slot
+queue (a newer request replaces it, so intermediate values are never sent) and goes out when the call
+settles or its 10 s ack timeout fires, whichever comes first. A call released by its timeout can still reach
+the daemon after a newer one (a reconnecting socket holds its frame), so when it settles late with a value other
+than the latest, the bridge sends the latest value again and the daemon ends on it. At launch, with a backend reachable, the field adopts the backend's `agent_concurrency`
 (unset is 3); a backend value the field cannot show (11 to 16) is overwritten by pushing the field's value.
 Dates and durations use `src/lib/time.ts` on `Temporal` and `Intl`; there is no date library.
 
@@ -598,9 +605,10 @@ load by the Vite define `__SWARM_TRANSPORT__` (`"ws"` only for `pnpm build:web`)
 ([ADR-0024](adr/0024-transport-chosen-at-build-time.md)). `src/lib/tauri.ts` wraps every command with typed,
 zod-validated functions on top; `isTauri()` means the Tauri bridge specifically, `hasTransport()` means
 some backend is reachable, and `hasCapability(feature)` reads the transport's capability flags
-(`workspaceBrowsing`, `nativeNotifications`, `autoUpdate`, `localAiChat`; all on for `tauriTransport`, all off for
+(`workspaceBrowsing`, `nativeNotifications`, `autoUpdate`, `localAiChat`, `localStores`; all on for `tauriTransport`, all off for
 `wsTransport`). Desktop-only controls gate on it: the remote build hides Graph Export / Import Workflow and
-disables Open Project, session file export and import, the update check and native-notification toggles, the
+disables Open Project, session file export and import, the snapshot and template controls (the local
+plugin-store files), the update check and native-notification toggles, the
 Settings API key field and Save API Key, the Ship preview's summary Generate / Regenerate (its text area stays
 editable), and the spawn dialog's Webview Anthropic provider (the dialog starts on Claude Code) and folder picker, each showing
 `DESKTOP_ONLY_REASON` ("Available In The Desktop App Only"). `checkForUpdates()` rejects with "Update Checks Need

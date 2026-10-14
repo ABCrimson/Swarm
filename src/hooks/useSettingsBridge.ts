@@ -40,6 +40,9 @@ import {
  * resize, so a healthy backend answers in milliseconds: ten seconds
  * tolerates a loaded disk or a reconnecting socket without leaving the
  * user staring at a spinner. A resolve that arrives later is still adopted.
+ * The deadline also frees the one in-flight slot (see
+ * `createAgentConcurrencySync`), so a call that never settles cannot
+ * hold back the pushes queued behind it.
  */
 export const AGENT_CONCURRENCY_ACK_TIMEOUT_MS = 10_000;
 
@@ -71,7 +74,25 @@ type Store = ReturnType<typeof getDefaultStore>;
  *   run before", keeps StrictMode's extra effect run from pushing.
  * - A rejected or timed-out push rolls the field back to the last
  *   acknowledged value without pushing the rollback, and offers Retry.
- * - Pushes are sequenced: an older push's outcome never changes a newer
+ * - The backend's reply is authoritative: a push resolves to the cap in
+ *   force, and a value that differs from the request is shown and becomes
+ *   the acknowledged one. A reply without a value (`null`) acknowledges
+ *   the requested value.
+ * - At most one `setAgentConcurrency` call is in flight. The server
+ *   serializes calls only from the moment each reaches its lock, and
+ *   each request runs as its own task, so two unawaited requests could
+ *   reach it in either order; sending the next value only after the
+ *   previous reply makes "last sent" mean "last applied". A value
+ *   requested meanwhile waits in a one-slot queue (a newer request
+ *   replaces it, so intermediate values are never sent) and goes out when
+ *   the in-flight call settles or its ack timeout fires, whichever is
+ *   first. Releasing on the timeout keeps a wedged invoke from stalling
+ *   the queue, but the timed-out request may still be unsent (a
+ *   reconnecting socket holds it) and can then reach the server's lock
+ *   after the next one. So a call that settles late, after a newer push,
+ *   with a value other than the latest one re-sends the latest value
+ *   (through the same slot), and the server ends on it.
+ * - Outcomes are sequenced: an older push's outcome never changes a newer
  *   push's pending or failed state, but an older push the backend
  *   acknowledged becomes the rollback target, and is shown at once if the
  *   newest push has already failed.
@@ -85,6 +106,10 @@ function createAgentConcurrencySync(store: Store) {
   /** The newest push the backend has acknowledged (0: none this launch). */
   let acknowledgedPush = 0;
   let reconciling = false;
+  /** The call holding the single in-flight slot (null: free). */
+  let inFlight: { released: boolean } | null = null;
+  /** The newest request made while the slot was held; older ones are dropped. */
+  let queued: { push: number; requested: number } | null = null;
   const timers = new Set<ReturnType<typeof setTimeout>>();
 
   const showLimit = (limit: number): void =>
@@ -115,20 +140,47 @@ function createAgentConcurrencySync(store: Store) {
     });
   };
 
+  /** Registers `requested` as the newest push: pending at once, sent when the slot is free. */
   const start = (requested: number): void => {
     const push = ++newestPush;
     if (store.get(agentConcurrencySyncAtom).status === "failed") {
       toast.dismiss(AGENT_CONCURRENCY_TOAST_ID);
     }
     store.set(agentConcurrencySyncAtom, { status: "pending", requested });
+    if (inFlight) {
+      queued = { push, requested };
+      return;
+    }
+    send(push, requested);
+  };
+
+  /** Sends the queued request, if any, once the slot is free. */
+  const sendQueued = (): void => {
+    const next = queued;
+    queued = null;
+    if (next) send(next.push, next.requested);
+  };
+
+  const send = (push: number, requested: number): void => {
+    const call = { released: false };
+    inFlight = call;
+    /** Frees the slot once per call, whichever of settle and timeout comes first. */
+    const release = (): void => {
+      if (call.released) return;
+      call.released = true;
+      inFlight = null;
+      sendQueued();
+    };
 
     let timedOut = false;
     const timer = setTimeout(() => {
       timers.delete(timer);
-      if (push !== newestPush) return;
       timedOut = true;
-      console.error("useSettingsBridge: setAgentConcurrency timed out", requested);
-      fail(requested, "The Backend Did Not Respond In Time");
+      if (push === newestPush) {
+        console.error("useSettingsBridge: setAgentConcurrency timed out", requested);
+        fail(requested, "The Backend Did Not Respond In Time");
+      }
+      release();
     }, AGENT_CONCURRENCY_ACK_TIMEOUT_MS);
     timers.add(timer);
 
@@ -141,32 +193,51 @@ function createAgentConcurrencySync(store: Store) {
     // Logged as well as surfaced: this effect also runs for changes the
     // user did not directly make, and the console keeps the raw error.
     setAgentConcurrency(requested).then(
-      () => {
+      (reply) => {
         const newest = settle();
+        // `null`: the backend reported no value, so the request stands.
+        const applied = reply ?? requested;
         // Any push the backend applied is the newest acknowledgement unless a
         // later push was already acknowledged, newest or not.
         if (push > acknowledgedPush) {
           acknowledgedPush = push;
-          acknowledged = requested;
+          acknowledged = applied;
           // A newer push already failed and rolled the field back to an
           // older acknowledgement: show what the backend now holds instead.
           if (!newest && store.get(agentConcurrencySyncAtom).status === "failed") {
-            pushed = requested;
-            showLimit(requested);
+            pushed = applied;
+            showLimit(applied);
           }
         }
-        if (!newest) return;
-        if (timedOut) {
-          // The backend did apply it after all; undo the rollback.
-          toast.dismiss(AGENT_CONCURRENCY_TOAST_ID);
-          adopt(requested);
+        if (newest) {
+          if (timedOut) {
+            // The backend did apply it after all; undo the rollback.
+            toast.dismiss(AGENT_CONCURRENCY_TOAST_ID);
+            adopt(applied);
+          } else if (applied !== requested) {
+            // The cap in force differs from the request: show it.
+            adopt(applied);
+          }
+          store.set(agentConcurrencySyncAtom, { status: "idle" });
         }
-        store.set(agentConcurrencySyncAtom, { status: "idle" });
+        // A call released by its timeout may have been applied after a newer
+        // one: put the user's latest value back on the server.
+        if (
+          timedOut &&
+          push < newestPush &&
+          applied !== pushed &&
+          store.get(agentConcurrencySyncAtom).status !== "failed"
+        ) {
+          start(pushed);
+        }
+        release();
       },
       (err: unknown) => {
-        if (!settle()) return;
-        console.error("useSettingsBridge: setAgentConcurrency failed", err);
-        if (!timedOut) fail(requested, errorMessage(err));
+        if (settle()) {
+          console.error("useSettingsBridge: setAgentConcurrency failed", err);
+          if (!timedOut) fail(requested, errorMessage(err));
+        }
+        release();
       },
     );
   };

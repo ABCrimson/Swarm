@@ -19,6 +19,8 @@ import {
   resizeWorker,
   ShipCommandError,
   sessionAddWorker,
+  setAgentConcurrency,
+  setMaxWorkers,
   spawnWorker,
   validateRepoRoot,
 } from "#lib/tauri";
@@ -39,6 +41,7 @@ vi.mock(import("#lib/transport"), async (importOriginal) => {
               nativeNotifications: false,
               autoUpdate: false,
               localAiChat: false,
+              localStores: false,
             } as const)
           : actual.transport.capabilities;
       },
@@ -366,6 +369,43 @@ describe("listWorkers", () => {
   });
 });
 
+describe.each([
+  ["setAgentConcurrency", setAgentConcurrency, "set_agent_concurrency", { limit: 4 }],
+  ["setMaxWorkers", setMaxWorkers, "set_max_workers", { max: 4 }],
+] as const)("%s", (_name, call, command, args) => {
+  it("resolves to the cap the backend reports", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce(3);
+
+    await expect(call(4)).resolves.toBe(3);
+    expect(tauriInvoke).toHaveBeenCalledExactlyOnceWith(command, args);
+  });
+
+  it("resolves to null for a null reply", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce(null);
+
+    await expect(call(4)).resolves.toBeNull();
+  });
+
+  it("resolves to null without a backend (invoke resolves undefined)", async () => {
+    disableTauri();
+
+    await expect(call(4)).resolves.toBeNull();
+    expect(tauriInvoke).not.toHaveBeenCalled();
+  });
+
+  it.each([["four"], [0], [2.5]])(
+    "rejects the unexpected reply %j with the parse error as cause",
+    async (reply) => {
+      vi.mocked(tauriInvoke).mockResolvedValueOnce(reply);
+
+      const caught = await call(4).catch((e: unknown) => e);
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toMatch(/Unexpected Shape/);
+      expect((caught as Error).cause).toBeInstanceOf(z.ZodError);
+    },
+  );
+});
+
 describe("readConfig", () => {
   it("returns the value when it matches the schema", async () => {
     vi.mocked(tauriInvoke).mockResolvedValueOnce(8);
@@ -476,6 +516,7 @@ describe("hasCapability", () => {
     expect(hasCapability("nativeNotifications")).toBe(true);
     expect(hasCapability("autoUpdate")).toBe(true);
     expect(hasCapability("localAiChat")).toBe(true);
+    expect(hasCapability("localStores")).toBe(true);
   });
 
   it("offers none of them on the ws transport (the build:web page)", () => {
@@ -485,6 +526,7 @@ describe("hasCapability", () => {
     expect(hasCapability("nativeNotifications")).toBe(false);
     expect(hasCapability("autoUpdate")).toBe(false);
     expect(hasCapability("localAiChat")).toBe(false);
+    expect(hasCapability("localStores")).toBe(false);
   });
 
   it("names the reason a gated control shows", () => {

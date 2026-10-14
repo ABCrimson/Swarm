@@ -2,7 +2,7 @@ import { motion } from "motion/react";
 import { type CSSProperties, useId, useRef } from "react";
 import { Pill } from "#components/ui/Pill";
 import { pluralizeWorkers } from "#lib/format";
-import { DESKTOP_ONLY_REASON, hasCapability, isTauri } from "#lib/tauri";
+import { DESKTOP_ONLY_REASON, hasCapability } from "#lib/tauri";
 import { formatRelativeTime } from "#lib/time";
 import type { Session } from "#store/types";
 import { useWorkerStore } from "#store/workers";
@@ -236,7 +236,7 @@ function SessionMenu({
       />
       <SessionMenuItem
         label="Save As Template"
-        unavailableReason={isTauri() ? undefined : DESKTOP_ONLY_REASON}
+        unavailableReason={hasCapability("localStores") ? undefined : DESKTOP_ONLY_REASON}
         onSelect={onCreateTemplate}
       />
       <hr className="my-1 h-px border-0 bg-[oklch(0.28_0.04_220)]" />

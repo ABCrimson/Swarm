@@ -8,7 +8,7 @@ import type { PageId } from "#hooks/useNavigate";
 import { errorMessage } from "#lib/is-error";
 import { matchesBinding } from "#lib/keybindings";
 import { createSnapshot } from "#lib/snapshots";
-import { isTauri, killWorker } from "#lib/tauri";
+import { hasCapability, killWorker } from "#lib/tauri";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
 import { type FrecencyEntry, frecencyAtom } from "#store/frecency";
 import { useSessionStore } from "#store/sessions";
@@ -254,8 +254,8 @@ function PaletteBody({
       keywords: ["toggle", "view", "graph", "list", "switch"],
       action: () => setGraphView((prev) => (prev === "graph" ? "list" : "graph")),
     },
-    // Snapshots are plugin-store files, which need the Tauri bridge.
-    ...(isTauri()
+    // Snapshots are local plugin-store files, which only the desktop transport offers.
+    ...(hasCapability("localStores")
       ? [
           {
             id: "session:snapshot",

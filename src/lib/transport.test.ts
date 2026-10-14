@@ -744,6 +744,7 @@ describe("wsTransport", () => {
         nativeNotifications: false,
         autoUpdate: false,
         localAiChat: false,
+        localStores: false,
       });
     });
   });

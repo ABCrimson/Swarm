@@ -55,11 +55,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(readConfig).mockResolvedValue(null);
   vi.mocked(writeConfig).mockResolvedValue(undefined);
-  vi.mocked(setMaxWorkers).mockResolvedValue(undefined);
+  vi.mocked(setMaxWorkers).mockResolvedValue(null);
   vi.mocked(checkForUpdates).mockResolvedValue({ available: false });
   vi.mocked(hasCapability).mockReturnValue(true);
   vi.mocked(isTauri).mockReturnValue(false);
-  vi.mocked(setAgentConcurrency).mockResolvedValue(undefined);
+  vi.mocked(setAgentConcurrency).mockResolvedValue(null);
   store.set(agentConcurrencySyncAtom, { status: "idle" });
   store.set(alertThresholdsAtom, DEFAULT_THRESHOLDS);
   store.set(appSettingsAtom, DEFAULT_APP_SETTINGS);
@@ -253,6 +253,21 @@ describe("Settings — worker registry cap", () => {
     expect(cap).toHaveValue(12);
   });
 
+  it("shows and announces the cap the backend reports when it differs from the request", async () => {
+    vi.mocked(setMaxWorkers).mockResolvedValue(10);
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    const cap = screen.getByLabelText("Worker Registry Cap");
+    await user.clear(cap);
+    await user.type(cap, "12{Enter}");
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith("Worker Registry Cap Set To 10"),
+    );
+    expect(cap).toHaveValue(10);
+  });
+
   it("rolls the shown cap back when the backend refuses it", async () => {
     const user = userEvent.setup();
     vi.mocked(setMaxWorkers).mockRejectedValue(new Error("refused"));
@@ -444,8 +459,10 @@ describe("Settings — AI concurrent stream limit acknowledgement", () => {
 
   it("marks the field busy and says it is applying until the backend answers", async () => {
     const user = userEvent.setup();
-    let acknowledge: () => void = () => {};
-    vi.mocked(setAgentConcurrency).mockReturnValueOnce(new Promise<void>((r) => (acknowledge = r)));
+    let acknowledge: (cap: number | null) => void = () => {};
+    vi.mocked(setAgentConcurrency).mockReturnValueOnce(
+      new Promise<number | null>((r) => (acknowledge = r)),
+    );
     render(<SettingsWithBridge />);
 
     const field = screen.getByLabelText("AI Concurrent Stream Limit");
@@ -455,7 +472,7 @@ describe("Settings — AI concurrent stream limit acknowledgement", () => {
     expect(field).toHaveAttribute("aria-busy", "true");
     expect(screen.getByText("Applying…")).toHaveAttribute("role", "status");
 
-    acknowledge();
+    acknowledge(null);
     await waitFor(() => expect(field).not.toHaveAttribute("aria-busy"));
     expect(screen.queryByText("Applying…")).not.toBeInTheDocument();
   });
@@ -514,7 +531,8 @@ describe("Settings — in the browser build", () => {
 });
 
 describe("Settings — auto-snapshot interval", () => {
-  it("is disabled with the desktop-only reason without the Tauri bridge", () => {
+  it("is disabled with the desktop-only reason in the browser build", () => {
+    vi.mocked(hasCapability).mockReturnValue(false);
     render(<Settings />);
 
     const field = screen.getByLabelText("Auto-Snapshot Interval");
@@ -522,8 +540,7 @@ describe("Settings — auto-snapshot interval", () => {
     expect(field).toHaveAccessibleDescription(new RegExp(DESKTOP_ONLY_REASON));
   });
 
-  it("is editable in the desktop shell", () => {
-    vi.mocked(isTauri).mockReturnValue(true);
+  it("is editable when the transport offers local stores", () => {
     render(<Settings />);
 
     const field = screen.getByLabelText("Auto-Snapshot Interval");
