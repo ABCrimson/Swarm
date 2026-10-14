@@ -582,7 +582,7 @@ is polyfilled at boot.
 `temporal-polyfill` is installed (as its own chunk) before any module that uses it evaluates.
 `main.tsx` preloads `swarm-settings.json` in the desktop shell and suspends on it with `use()`, so the
 first render already shows persisted settings, then renders `App`. `App` connects the event bus and mounts
-the app-wide subscriptions once (`useTheme`, `useWorkerEvents`, `useAgentSessionEvents`,
+the app-wide subscriptions once (`useWorkerEvents`, `useAgentSessionEvents`,
 `useProvenanceEvents`, `useSystemLogEvents`, `useSessionEvents`, `useMetrics`, `useAlerts`,
 `useSettingsBridge`); the auto-snapshot loop and the store integrity check wait for the first idle period.
 `useSessionEvents` restores sessions from a `listSessions` snapshot at startup, recording `session_deleted` and
