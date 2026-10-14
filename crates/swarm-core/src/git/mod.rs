@@ -12,9 +12,10 @@
 //! `swarm-core` stays Tauri-free here too. Every module that runs git
 //! ([`repo`], [`worktree`], [`ship`]) shells out to the system `git`
 //! binary through [`cli::run`] (argument vectors only, never a shell
-//! string), and the only filesystem root this module assumes is
-//! `~/.swarm/worktrees/**`, resolved by the caller (`worker::lifecycle`)
-//! from `crate::paths::home_dir`. [`redact`] and [`remote`] are
+//! string), and the only filesystem root this module assumes is the
+//! worktrees root its caller (`worker::lifecycle`) passes in:
+//! `SystemConfig::worktrees_root`, by default `~/.swarm/worktrees`
+//! (from `crate::paths::home_dir`). [`redact`] and [`remote`] are
 //! pure text functions; [`causal`] works on the event-log rows
 //! (`orchestration::log::StoredEvent`) it is handed and never runs git.
 //!
