@@ -114,7 +114,7 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
 | [`list_workers`](#list_workers) | none | `WorkerInfo[]` | Allowed |
 | [`worker_input`](#worker_input) | `id`, `data`, `source`, provenance | `void` | Allowed |
 | [`resize_worker`](#resize_worker) | `id`, `rows`, `cols` | `void` | Allowed |
-| [`set_max_workers`](#set_max_workers) | `max` | `void` | Allowed |
+| [`set_max_workers`](#set_max_workers) | `max` | `number` | Allowed |
 | [`validate_repo_root`](#validate_repo_root) | `path` | toplevel path | Allowed |
 | [`git_ship_preflight`](#git_ship_preflight) | `workerId`, `mode?` | `ShipPreflight` | Allowed |
 | [`git_stage_commit`](#git_stage_commit) | `workerId`, `shipId`, `message`, `mode`, `finalStep` | `CommitOutcome` | Allowed |
@@ -134,7 +134,7 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
 | [`agent_shutdown`](#agent_shutdown) | `workerId` | `void` | Allowed |
 | [`agent_probe`](#agent_probe) | `provider?` | `ProbeReport` | Allowed |
 | [`agent_permission_respond`](#agent_permission_respond) | `workerId`, `requestId`, `decision` | `void` | Allowed |
-| [`set_agent_concurrency`](#set_agent_concurrency) | `limit` | `void` | Allowed |
+| [`set_agent_concurrency`](#set_agent_concurrency) | `limit` | `number` | Allowed |
 | [`read_config`](#read_config) | `key` | value or `null` | SecretFiltered |
 | [`write_config`](#write_config) | `key`, `value` | `void` | SecretFiltered |
 | [`read_file`](#read_file) | `path` | text | **Denied** |
@@ -453,7 +453,7 @@ await invoke("resize_worker", { id: workerId, rows: 40, cols: 120 });
 
 ### `set_max_workers`
 
-Sets how many workers may exist at once. The value is validated, persisted to `swarm-config.json` as `max_workers` (re-applied at startup), then applied to the live registry. Lowering it below the current worker count does not kill anyone; it only refuses further spawns.
+Sets how many workers may exist at once. The value is validated, persisted to `swarm-config.json` as `max_workers` (re-applied at startup), then applied to the live registry. Lowering it below the current worker count does not kill anyone; it only refuses further spawns. Overlapping calls are serialized: each holds the setting's lock across the write and the apply, and calls take the lock in the order they started, so the last call to start is the one in force, in the file and in the registry.
 
 **Parameters:**
 
@@ -461,7 +461,7 @@ Sets how many workers may exist at once. The value is validated, persisted to `s
 |-------|----------|----------|--------------------------------------------|
 | `max` | `number` | Yes      | New ceiling, `1..=256` (the default is 64) |
 
-**Returns:** `void`
+**Returns:** `number` -- the cap in force once this call has applied (read back from the registry under the lock).
 
 **Errors:** ``Max Workers Must Be Between 1 And 256, Got <n>.`` for an out-of-range value (nothing is persisted), or `Config error: ...` when the config file cannot be written.
 
@@ -1219,7 +1219,7 @@ await invoke("agent_permission_respond", {
 
 ### `set_agent_concurrency`
 
-Sets how many agent turns may execute at the same time. Validated, persisted to `swarm-config.json` as `agent_concurrency` (re-applied at startup), then applied to the live scheduler, in that order, so a failed write never leaves the scheduler enforcing a cap the file disagrees with.
+Sets how many agent turns may execute at the same time. Validated, persisted to `swarm-config.json` as `agent_concurrency` (re-applied at startup), then applied to the live scheduler, in that order, so a failed write never leaves the scheduler enforcing a cap the file disagrees with. Overlapping calls are serialized: each holds the setting's lock across the write and the apply, and calls take the lock in the order they started, so the last call to start is the one in force, in the file and in the scheduler.
 
 **Parameters:**
 
@@ -1227,7 +1227,7 @@ Sets how many agent turns may execute at the same time. Validated, persisted to 
 |---------|----------|----------|--------------|
 | `limit` | `number` | Yes      | `1..=16` (`MIN_AGENT_CONCURRENCY..=MAX_AGENT_CONCURRENCY`) |
 
-**Returns:** `void`
+**Returns:** `number` -- the cap in force once this call has applied (read back from the scheduler under the lock).
 
 **Errors:** ``Agent Concurrency Must Be Between 1 And 16, Got <n>.`` (nothing is persisted), or `Config error: ...`.
 

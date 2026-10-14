@@ -219,7 +219,13 @@ struct MaxWorkersArgs {
 
 /// Sets how many workers may run at once: persisted to
 /// `swarm-config.json` (`max_workers`, re-applied by
-/// [`crate::runtime::Runtime::start`]), then applied live.
+/// [`crate::runtime::Runtime::start`]), then applied live. Resolves to
+/// the cap in force once this call has applied.
+///
+/// Overlapping calls are serialized (see
+/// [`crate::worker::registry::WorkerRegistry::lock_max_workers_setting`]):
+/// the last call to start is the last applied, to the file and the
+/// registry.
 pub async fn set_max_workers(ctx: Ctx, args: Value) -> Result<Value, Value> {
     use crate::worker::registry::{MAX_MAX_WORKERS, MIN_MAX_WORKERS};
 
@@ -230,18 +236,32 @@ pub async fn set_max_workers(ctx: Ctx, args: Value) -> Result<Value, Value> {
         )));
     }
 
-    let paths = ctx.paths.clone();
-    tokio::task::spawn_blocking(move || {
-        crate::config::write_value(&paths, "max_workers", serde_json::json!(max))
+    apply_max_workers(&ctx, max, move |paths| {
+        crate::config::write_value(paths, "max_workers", serde_json::json!(max))
     })
     .await
-    .map_err(|e| Value::String(e.to_string()))?
-    .map_err(|e| err_value(&e))?;
+}
+
+/// Under the setting's lock, persists `max` with `write` (on the
+/// blocking pool), applies it to the registry and resolves to the cap
+/// then in force. `write` is the config write, a parameter so tests can
+/// slow it down.
+async fn apply_max_workers(
+    ctx: &Ctx,
+    max: usize,
+    write: impl FnOnce(&crate::Paths) -> Result<(), crate::error::AppError> + Send + 'static,
+) -> Result<Value, Value> {
+    let _setting = ctx.registry.lock_max_workers_setting().await;
+    let paths = ctx.paths.clone();
+    tokio::task::spawn_blocking(move || write(&paths))
+        .await
+        .map_err(|e| Value::String(e.to_string()))?
+        .map_err(|e| err_value(&e))?;
 
     ctx.registry
         .set_max_workers(max)
         .map_err(|e| err_value(&e))?;
-    ok_value(&())
+    ok_value(&ctx.registry.config.read().max_workers)
 }
 
 #[cfg(test)]
@@ -584,6 +604,50 @@ mod tests {
             "SWARM never force-removes"
         );
         assert!(ctx.agent_session_registry.get(&id).is_err());
+    }
+
+    /// Two overlapping calls, the first with a slow config write: the
+    /// later call is the one in force, in the file and in the registry,
+    /// and each reply names the cap in force when it was applied.
+    #[tokio::test]
+    async fn test_set_max_workers_applies_the_last_call_to_start() {
+        let (ctx, _dir, _events) = test_ctx();
+        let (entered_tx, entered) = std::sync::mpsc::channel();
+        let first = tokio::spawn({
+            let ctx = ctx.clone();
+            async move {
+                apply_max_workers(&ctx, 4, move |paths| {
+                    entered_tx.send(()).unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    crate::config::write_value(paths, "max_workers", json!(4))
+                })
+                .await
+            }
+        });
+        wait_until("the first call's config write", || {
+            entered.try_recv().is_ok()
+        })
+        .await;
+
+        let second = apply_max_workers(&ctx, 7, |paths| {
+            crate::config::write_value(paths, "max_workers", json!(7))
+        })
+        .await
+        .unwrap();
+        let first = first.await.unwrap().unwrap();
+
+        assert_eq!(
+            crate::config::read_value(&ctx.paths, "max_workers"),
+            Some(json!(7)),
+            "the file holds the later call's value"
+        );
+        assert_eq!(
+            ctx.registry.config.read().max_workers,
+            7,
+            "the registry holds the later call's value"
+        );
+        assert_eq!(second, json!(7));
+        assert_eq!(first, json!(4), "the first reply names its own cap");
     }
 
     #[tokio::test]

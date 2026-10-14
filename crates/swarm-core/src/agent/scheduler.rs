@@ -149,6 +149,9 @@ pub struct AgentScheduler {
     /// turns and can't alone tell `set_concurrency` how big a delta to
     /// apply).
     concurrency_limit: AtomicUsize,
+    /// Serializes changes to the persisted concurrency setting; see
+    /// [`Self::lock_concurrency_setting`].
+    concurrency_setting: tokio::sync::Mutex<()>,
 }
 
 impl AgentScheduler {
@@ -200,6 +203,7 @@ impl AgentScheduler {
             semaphore,
             pending_forgets,
             concurrency_limit: AtomicUsize::new(limit),
+            concurrency_setting: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -256,6 +260,22 @@ impl AgentScheduler {
             }
             Ordering::Equal => {}
         }
+    }
+
+    /// Locks the concurrency setting for one change: hold the guard
+    /// across persisting the new limit and [`Self::set_concurrency`], so
+    /// the file and the live cap never disagree and overlapping changes
+    /// apply in the order they asked for the lock — tokio's `Mutex` hands the lock out in the order it was
+    /// requested ("Tokio's Mutex operates on a guaranteed FIFO basis",
+    /// tokio 1.53 `sync/mutex.rs`).
+    pub async fn lock_concurrency_setting(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.concurrency_setting.lock().await
+    }
+
+    /// The concurrency cap in force: the last limit
+    /// [`Self::set_concurrency`] applied (clamped), or the configured one.
+    pub fn concurrency(&self) -> usize {
+        self.concurrency_limit.load(AtomicOrdering::SeqCst)
     }
 
     /// Queues an agent turn for dispatch. Non-blocking.

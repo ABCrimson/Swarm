@@ -111,6 +111,9 @@ pub struct WorkerRegistry {
     /// Slots reserved by [`Self::reserve`] and not yet filled or
     /// released. Its lock is the admission lock.
     pending: Arc<Mutex<usize>>,
+    /// Serializes changes to the persisted `max_workers` setting; see
+    /// [`Self::lock_max_workers_setting`].
+    max_workers_setting: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// A capacity slot reserved by [`WorkerRegistry::reserve`].
@@ -171,7 +174,18 @@ impl WorkerRegistry {
             workers: Arc::new(DashMap::new()),
             config: Arc::new(RwLock::new(SystemConfig::default())),
             pending: Arc::new(Mutex::new(0)),
+            max_workers_setting: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    /// Locks the `max_workers` setting for one change: hold the guard
+    /// across persisting the new cap and [`Self::set_max_workers`], so the
+    /// file and the live cap never disagree and overlapping changes apply
+    /// in the order they asked for the lock — tokio's `Mutex` hands the lock out in the order it was
+    /// requested ("Tokio's Mutex operates on a guaranteed FIFO basis",
+    /// tokio 1.53 `sync/mutex.rs`).
+    pub async fn lock_max_workers_setting(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.max_workers_setting.lock().await
     }
 
     /// Number of registered workers (reserved but unfilled slots are

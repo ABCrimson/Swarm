@@ -362,10 +362,14 @@ struct SetAgentConcurrencyArgs {
 
 /// Sets how many agent turns run at once: persisted to
 /// `swarm-config.json` (`agent_concurrency`, re-applied by
-/// [`crate::runtime::Runtime::start`]) and applied live.
+/// [`crate::runtime::Runtime::start`]) and applied live. Resolves to the
+/// cap in force once this call has applied.
 ///
 /// Validate, persist, then apply: a failed write must not leave the
 /// scheduler enforcing a cap neither the UI nor the file agrees with.
+/// Overlapping calls are serialized (see
+/// [`crate::agent::AgentScheduler::lock_concurrency_setting`]): the last
+/// call to start is the last applied, to the file and the scheduler.
 pub async fn set_agent_concurrency(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let SetAgentConcurrencyArgs { limit } = parse_args(args)?;
 
@@ -375,16 +379,30 @@ pub async fn set_agent_concurrency(ctx: Ctx, args: Value) -> Result<Value, Value
         )));
     }
 
-    let paths = ctx.paths.clone();
-    tokio::task::spawn_blocking(move || {
-        crate::config::write_value(&paths, "agent_concurrency", serde_json::json!(limit))
+    apply_agent_concurrency(&ctx, limit, move |paths| {
+        crate::config::write_value(paths, "agent_concurrency", serde_json::json!(limit))
     })
     .await
-    .map_err(|e| Value::String(e.to_string()))?
-    .map_err(|e| err_value(&e))?;
+}
+
+/// Under the setting's lock, persists `limit` with `write` (on the
+/// blocking pool), applies it to the scheduler and resolves to the cap
+/// then in force. `write` is the config write, a parameter so tests can
+/// slow it down.
+async fn apply_agent_concurrency(
+    ctx: &Ctx,
+    limit: u32,
+    write: impl FnOnce(&crate::Paths) -> Result<(), crate::error::AppError> + Send + 'static,
+) -> Result<Value, Value> {
+    let _setting = ctx.scheduler.lock_concurrency_setting().await;
+    let paths = ctx.paths.clone();
+    tokio::task::spawn_blocking(move || write(&paths))
+        .await
+        .map_err(|e| Value::String(e.to_string()))?
+        .map_err(|e| err_value(&e))?;
 
     ctx.scheduler.set_concurrency(limit as usize);
-    ok_value(&())
+    ok_value(&ctx.scheduler.concurrency())
 }
 
 #[cfg(test)]
@@ -509,6 +527,47 @@ mod tests {
     ) -> Vec<SwarmEvent> {
         ctx.engine.flush().await.unwrap();
         events.try_iter().map(|envelope| envelope.event).collect()
+    }
+
+    /// Two overlapping calls, the first with a slow config write: the
+    /// later call is the one in force, in the file and in the scheduler,
+    /// and each reply names the cap in force when it was applied.
+    #[tokio::test]
+    async fn test_set_agent_concurrency_applies_the_last_call_to_start() {
+        let (ctx, _dir, _events) = test_ctx();
+        let (entered_tx, entered) = std::sync::mpsc::channel();
+        let first = tokio::spawn({
+            let ctx = ctx.clone();
+            async move {
+                apply_agent_concurrency(&ctx, 2, move |paths| {
+                    entered_tx.send(()).unwrap();
+                    std::thread::sleep(Duration::from_millis(300));
+                    crate::config::write_value(paths, "agent_concurrency", json!(2))
+                })
+                .await
+            }
+        });
+        wait_for("the first call's config write", || entered.try_recv().ok()).await;
+
+        let second = apply_agent_concurrency(&ctx, 5, |paths| {
+            crate::config::write_value(paths, "agent_concurrency", json!(5))
+        })
+        .await
+        .unwrap();
+        let first = first.await.unwrap().unwrap();
+
+        assert_eq!(
+            crate::config::read_value(&ctx.paths, "agent_concurrency"),
+            Some(json!(5)),
+            "the file holds the later call's value"
+        );
+        assert_eq!(
+            ctx.scheduler.concurrency(),
+            5,
+            "the scheduler holds the later call's value"
+        );
+        assert_eq!(second, json!(5));
+        assert_eq!(first, json!(2), "the first reply names its own cap");
     }
 
     #[test]
