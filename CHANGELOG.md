@@ -9,7 +9,7 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 
 ## [Unreleased]
 
-The `modernize/2026-09-23` branch: a Tauri 3 desktop shell, a rewritten agent and event core, hardened git and `swarmd`, a rebuilt frontend, and the newest release of every dependency on every channel. Rust gates run on `nightly-2026-10-14` (rustc 1.101).
+The work since v0.13.1 (proposed as 0.14.0): a Tauri 3 desktop shell, a rewritten agent and event core, hardened git and `swarmd`, a rebuilt frontend, and the newest release of every dependency on every channel. Rust gates run on `nightly-2026-10-14` (rustc 1.101).
 
 ### Breaking
 

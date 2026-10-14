@@ -9,7 +9,9 @@ on:
       - "docs/**"
       - "site/**"
       - "scripts/build-site.ts"
-      # The landing page's version chip and the pinned marked version.
+      # The landing page reads the latest release heading from the changelog and
+      # the proposed next version from package.json; marked is pinned there too.
+      - "CHANGELOG.md"
       - "package.json"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
