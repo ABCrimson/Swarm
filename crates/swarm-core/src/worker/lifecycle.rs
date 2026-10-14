@@ -333,7 +333,7 @@ fn worktrees_root(registry: &WorkerRegistry) -> Result<PathBuf, AppError> {
     let configured = registry.config.read().worktrees_root.clone();
     match configured {
         Some(root) => Ok(root),
-        None => Ok(git::home_dir()?.join(".swarm").join("worktrees")),
+        None => Ok(crate::paths::home_dir()?.join(".swarm").join("worktrees")),
     }
 }
 
