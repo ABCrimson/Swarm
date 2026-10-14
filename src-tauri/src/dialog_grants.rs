@@ -107,7 +107,7 @@ mod tests {
         (app, main)
     }
 
-    /// `readTextFile(path)` from the webview, which fs 3.0.0-alpha.2
+    /// `readTextFile(path)` from the webview, which fs 3.0.0-alpha.3
     /// serves through the `read_file` command.
     fn read_file(webview: &WebviewWindow<MockRuntime>, path: &Path) -> Result<(), String> {
         get_ipc_response(

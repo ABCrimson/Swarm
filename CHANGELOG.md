@@ -9,6 +9,10 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 
 ## [Unreleased]
 
+### Changed
+
+- **Dependencies.** The Tauri 3 alpha stack moved to the builds of 2026-10-14: `tauri` and `tauri-runtime-wry` `3.0.0-alpha.5`, `tauri-build` `3.0.0-alpha.4`, `tauri-plugin-dialog` `3.0.0-alpha.4`, the fs, opener, store, updater and notification plugins `3.0.0-alpha.3`; on npm `@tauri-apps/cli` `3.0.0-alpha.5`, `@tauri-apps/api` `3.0.0-alpha.3`, `@tauri-apps/plugin-dialog` `3.0.0-alpha.4` and `@tauri-apps/plugin-fs`, `plugin-opener` and `plugin-store` `3.0.0-alpha.3`. Tailwind CSS and `@tailwindcss/vite` moved to `0.0.0-insiders.d76d566`. No app code changed: the releases port Tauri v2 fixes (a throwing `Channel` handler no longer stalls the channel, the fs `read` command caps its buffer, the updater restores the previous app when an install fails), and the one breaking item, RPM bundles compressed with zstd by default, does not reach the release, which builds only `deb` and `appimage` on Linux.
+
 ---
 
 ## [0.14.0] - 2026-10-14

@@ -182,7 +182,7 @@ fn fs_access_has_no_static_allow_scope() {
     }
 }
 
-/// The fs grants name the fs 3.0.0-alpha.2 commands: `readTextFile` and
+/// The fs grants name the fs 3.0.0-alpha.3 commands: `readTextFile` and
 /// `writeTextFile` are served by `read_file` and `write_file` (the
 /// text-file commands and permissions are gone), and `stat` backs the
 /// file preview's size check before anything is read.

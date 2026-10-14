@@ -67,15 +67,15 @@ swarm-core                = { path = "crates/swarm-core" }
 # tauri-runtime-wry. swarm-desktop's own `devtools` feature forwards to
 # it; debug builds get the inspector regardless (tauri-runtime-wry and
 # wry gate it on `any(debug_assertions, feature = "devtools")`).
-tauri                     = { version = "=3.0.0-alpha.4", features = ["image-png"] }
-tauri-runtime-wry         = "=3.0.0-alpha.4"
-tauri-build               = "=3.0.0-alpha.3"
-tauri-plugin-fs           = "=3.0.0-alpha.2"
-tauri-plugin-dialog       = "=3.0.0-alpha.3"
-tauri-plugin-opener       = "=3.0.0-alpha.2"
-tauri-plugin-store        = "=3.0.0-alpha.2"
-tauri-plugin-updater      = "=3.0.0-alpha.2"
-tauri-plugin-notification = "=3.0.0-alpha.2"
+tauri                     = { version = "=3.0.0-alpha.5", features = ["image-png"] }
+tauri-runtime-wry         = "=3.0.0-alpha.5"
+tauri-build               = "=3.0.0-alpha.4"
+tauri-plugin-fs           = "=3.0.0-alpha.3"
+tauri-plugin-dialog       = "=3.0.0-alpha.4"
+tauri-plugin-opener       = "=3.0.0-alpha.3"
+tauri-plugin-store        = "=3.0.0-alpha.3"
+tauri-plugin-updater      = "=3.0.0-alpha.3"
+tauri-plugin-notification = "=3.0.0-alpha.3"
 # Dev-only, swarm-desktop's capability contract test: the matcher
 # tauri-plugin-opener evaluates URL scopes with (already in the tree
 # through it, at this exact version).

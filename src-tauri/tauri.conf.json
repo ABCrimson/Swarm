@@ -1,5 +1,5 @@
 {
-  "$schema": "https://schema.tauri.app/config/3.0.0-alpha.4",
+  "$schema": "https://schema.tauri.app/config/3.0.0-alpha.5",
   "productName": "SWARM Orchestrator",
   "identifier": "dev.crimson.swarm-orchestrator",
   "version": "../package.json",
