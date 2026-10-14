@@ -1,11 +1,10 @@
-// ── One-time-per-reason "pipeline can't start" diagnostics ──
+// ── "Pipeline can't start" diagnostics ──
 //
-// Module-level (not component state) so the warning/toast fires at most
-// once per *distinct reason* per app session, however often the
-// component re-renders, remounts (StrictMode) or retries after a device
-// loss. Keyed on the reason, not a boolean: a retry (e.g. toggling
-// particles in Settings) can surface a different, more current reason,
-// which should still be reported once.
+// Module-level (not component state) so the guard survives re-renders and
+// remounts (StrictMode). It fires once per change of reason: the same
+// reason recurring (re-renders, remounts, retries after a device loss)
+// stays silent, while a retry that surfaces a different reason reports it
+// once. Only the last reported reason is remembered.
 
 import { toast } from "sonner";
 import type { WebGPUUnavailableReason } from "#lib/webgpu";
@@ -17,7 +16,7 @@ export function resetParticlesUnavailableWarning(): void {
   lastWarnedReason = null;
 }
 
-/** Logs and toasts why the particle background cannot start, once per distinct reason. */
+/** Logs and toasts why the particle background cannot start, unless that reason was the last one reported. */
 export function warnParticlesUnavailable(reason: WebGPUUnavailableReason): void {
   if (lastWarnedReason === reason) return;
   lastWarnedReason = reason;
