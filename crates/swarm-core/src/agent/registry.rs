@@ -252,8 +252,8 @@ impl AgentSessionRegistry {
     /// The wait is bounded by the attaches themselves: each runs one
     /// adapter handshake, which the adapter bounds (30 s for Claude Code
     /// and Codex), then shuts down the session it can no longer register.
-    /// That bound is longer than `swarmd`'s 10 s `STOP_WORKERS_TIMEOUT`,
-    /// so a daemon stop can give up on a kill that is still waiting here.
+    /// `swarmd` sizes its `STOP_WORKERS_TIMEOUT` (40 s) above that bound and
+    /// asserts the ordering, so a daemon stop outlasts a kill waiting here.
     /// Once this returns, every session attached to the worker is either
     /// in the registry, where [`Self::take_session`] finds it, or already
     /// held by a [`SessionStop`], which [`Self::wait_stopped`] waits for.
