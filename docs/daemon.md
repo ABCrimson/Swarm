@@ -9,6 +9,7 @@
 - [What `swarmd` Is](#what-swarmd-is)
 - [Getting the Binary](#getting-the-binary)
 - [Quick Start (Loopback)](#quick-start-loopback)
+- [What the Browser Build Offers](#what-the-browser-build-offers)
 - [Command Line](#command-line)
 - [Installing as a User Service](#installing-as-a-user-service)
   - [Linux (systemd)](#linux-systemd)
@@ -73,6 +74,24 @@ SWARM Daemon Listening On http://127.0.0.1:8787/ (Run `swarmd connect-url` For T
 ```
 
 To get a browser UI from the daemon itself, build the web bundle (`pnpm build:web`, output in `dist-web/`) and serve it with `--serve-ui dist-web`, then open the connect URL. Without `--serve-ui`, point any WebSocket client at `ws://127.0.0.1:8787/ws`. `Ctrl-C` stops it gracefully.
+
+## What the Browser Build Offers
+
+The page `--serve-ui` serves talks to the daemon over the WebSocket (`wsTransport`), not Tauri IPC, so it has no native dialogs, no filesystem plugin, no OS notifications and no updater, and no webview-direct Anthropic chat. The frontend reads that from the transport's capability flags (`hasCapability()` in `src/lib/tauri.ts`, fixed per build) and either hides a control or disables it with "Available In The Desktop App Only", rather than offering it and failing.
+
+| Control | Desktop app | `--serve-ui` browser build |
+| --- | --- | --- |
+| Workspace page, Open Project (folder picker, file tree, file viewer) | Works | Button disabled, "Available In The Desktop App Only" |
+| Graph Export / Import Workflow | Works | Hidden |
+| Sessions: export (JSON, Markdown, metrics CSV) and import | Works (native save and open dialogs) | The buttons are still shown and fail with the toast "File Dialogs Need The Desktop App" |
+| Sessions: delete | Native confirmation dialog | The browser's own confirmation dialog |
+| Worker AI panel: webview chat, model selector, Inject Instruction, Queue | Works for workers without an agent session | Replaced by a notice, "Available In The Desktop App Only"; Claude Code and Codex workers chat as usual |
+| Alert thresholds: OS notification mirror | Works when enabled in Settings | The in-app toast only |
+| Settings: Check For Updates | Works | Disabled, says "Update Checks Need The Desktop App" <!-- pending W-F2/W-F4 --> |
+| Settings: update check on launch, native alert notifications toggles | Work | Disabled, "Available In The Desktop App Only" <!-- pending W-F2/W-F4 --> |
+| Spawn dialog: Webview Anthropic provider, folder picker | Work | Disabled, "Available In The Desktop App Only" <!-- pending W-F2/W-F4 --> |
+
+`checkForUpdates()` itself rejects with "Update Checks Need The Desktop App" when the transport has no updater or there is no Tauri bridge, so a check that did not run never reads as "up to date".
 
 ## Command Line
 

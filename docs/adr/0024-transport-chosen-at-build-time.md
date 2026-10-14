@@ -34,3 +34,13 @@ gate on `isTauri()` and nothing reads those flags yet.
 - A built desktop app cannot attach to a running daemon.
 - Superseded: a `Kv` abstraction (`src/lib/kv.ts`) was added as the migration target for the
   plugin-store surfaces but was never wired to a call site and has been deleted.
+
+## Amended 2026-10-13
+
+The capability flags are now read. `hasCapability(feature)` in `src/lib/tauri.ts` returns
+`transport.capabilities[feature]`, and desktop-only controls (the folder picker and file tree, workflow
+and session file dialogs, the webview AI chat, native alert notifications, the updater) gate on it, showing
+`DESKTOP_ONLY_REASON` ("Available In The Desktop App Only") where a control is disabled instead of hidden.
+The flags are static per build, so a plain-browser preview of the desktop build keeps its UI; runtime
+`isTauri()` checks stay where a plugin call needs the bridge itself. The sentence above that says nothing
+reads the flags describes the state at the original commit.
