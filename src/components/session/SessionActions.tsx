@@ -4,6 +4,7 @@ import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { errorMessage } from "#lib/is-error";
 import { createAndActivateSession, importSessionFromFile } from "#lib/session-lifecycle";
+import { DESKTOP_ONLY_REASON, hasCapability } from "#lib/tauri";
 
 /** What the create-session form action leaves behind for the next render. */
 interface CreateFormState {
@@ -41,11 +42,15 @@ async function importSession(): Promise<void> {
 /**
  * Action bar for creating and importing sessions: "New Session" opens an
  * inline form, "Import" reads a session JSON file through the native
- * dialog (`#lib/session-lifecycle`) and is disabled while one is running.
+ * dialog (`#lib/session-lifecycle`) and is disabled while one is running,
+ * and for good, with the reason beside it, on a transport without native
+ * file dialogs (the `pnpm build:web` page).
  */
 export function SessionActions(): React.ReactElement {
   const [naming, setNaming] = useState(false);
   const [importing, startImport] = useTransition();
+  const canImportFiles = hasCapability("workspaceBrowsing");
+  const importReasonId = useId();
   // Set when the form closes, so New Session takes focus back as it remounts
   // (the form held focus; without this it falls to <body>).
   const restoreFocus = useRef(false);
@@ -79,10 +84,17 @@ export function SessionActions(): React.ReactElement {
         variant="secondary"
         size="sm"
         loading={importing}
+        disabled={!canImportFiles}
+        aria-describedby={canImportFiles ? undefined : importReasonId}
         onClick={() => startImport(importSession)}
       >
         Import
       </Button>
+      {!canImportFiles && (
+        <span id={importReasonId} className="text-fg-dim text-xs">
+          {DESKTOP_ONLY_REASON}
+        </span>
+      )}
     </div>
   );
 }

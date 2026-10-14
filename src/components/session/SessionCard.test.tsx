@@ -86,12 +86,35 @@ function resetWorkerStore(): void {
   for (const [id] of useWorkerStore.getState().workers) useWorkerStore.getState().removeWorker(id);
 }
 
+/** `true` makes the active transport report no workspace browsing (the `build:web` page). */
+const web = vi.hoisted(() => ({ on: false }));
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  hasCapability: () => !web.on,
+}));
+
 describe("SessionCard", () => {
   // Unmount before the store reset, so the reset never re-renders a
   // still-mounted card outside act().
   afterEach(() => {
     cleanup();
     resetWorkerStore();
+    web.on = false;
+  });
+
+  it("marks Export As JSON unavailable, with the reason, when the transport cannot browse files", async () => {
+    web.on = true;
+    const user = userEvent.setup();
+    const props = renderCard();
+
+    await user.click(screen.getByRole("button", { name: 'Actions For Session "Test Session"' }));
+    const item = screen.getByRole("menuitem", { name: "Export As JSON" });
+
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveAccessibleDescription("Available In The Desktop App Only");
+    expect(item).toHaveFocus();
+    await user.click(item);
+    expect(props.onExport).not.toHaveBeenCalled();
   });
 
   // ── live worker count ──

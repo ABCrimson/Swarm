@@ -21,6 +21,13 @@ vi.mock(import("#lib/templates"), async (importOriginal) => ({
   userTemplatesResource: () => userTemplates,
 }));
 
+/** `true` makes the active transport report no workspace browsing (the `build:web` page). */
+const web = vi.hoisted(() => ({ on: false }));
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  hasCapability: () => !web.on,
+}));
+
 const mockSaveToFile = vi.fn<(...args: unknown[]) => Promise<string | null>>();
 vi.mock(import("#lib/export"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -72,6 +79,7 @@ function chooseMenuItem(name: string): void {
 }
 
 beforeEach(() => {
+  web.on = false;
   resetStores();
   vi.clearAllMocks();
   mockSaveUserTemplate.mockReset().mockResolvedValue(undefined);
@@ -210,6 +218,26 @@ describe("Sessions — views", () => {
 });
 
 describe("Sessions — export and templates", () => {
+  it("disables every file export and says why when the transport cannot browse files", async () => {
+    web.on = true;
+    const user = userEvent.setup();
+    const session = addSession();
+    useSessionStore.getState().setActiveSession(session.id);
+    await renderPage();
+
+    for (const name of ["Export MD", "Export JSON", "Export Metrics"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription("Available In The Desktop App Only");
+      await user.click(button);
+    }
+    chooseMenuItem("Export As JSON");
+    expect(
+      screen.getAllByRole("menuitem", { name: "Export As JSON", hidden: true })[0],
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(mockSaveToFile).not.toHaveBeenCalled();
+  });
+
   it("exports the metrics history as CSV", async () => {
     const user = userEvent.setup();
     await renderPage();
