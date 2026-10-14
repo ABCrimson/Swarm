@@ -541,8 +541,9 @@ worker-membership events that arrive while it is in flight and replaying them ov
 `hydrateSessions`, so a late snapshot never undoes them; unmounting discards it. `useSettingsBridge` pushes the
 agent concurrency cap ("AI Concurrent Stream Limit") to the backend and waits for the acknowledgement: Settings
 shows "Applying…", and a failure or a 10 s timeout rolls the field back to the last acknowledged value with an
-alert and Retry (a late acknowledgement is adopted). At launch, with a backend reachable, the field adopts the
-backend's `agent_concurrency` (unset is 3).
+alert and Retry (a late acknowledgement is adopted, and an older push the backend acknowledges becomes the
+rollback target). At launch, with a backend reachable, the field adopts the backend's `agent_concurrency`
+(unset is 3); a backend value the field cannot show (11 to 16) is overwritten by pushing the field's value.
 Dates and durations use `src/lib/time.ts` on `Temporal` and `Intl`; there is no date library.
 
 ### Event bus and transport

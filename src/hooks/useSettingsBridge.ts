@@ -65,7 +65,8 @@ type Store = ReturnType<typeof getDefaultStore>;
  * from render.
  *
  * - The backend persists its own copy of the cap and restores it at
- *   startup, so only a CHANGE made during this launch is pushed.
+ *   startup, so only a CHANGE made during this launch is pushed (the one
+ *   exception: a launch value the field cannot show, see `reconcile`).
  *   Comparing against the last pushed value, rather than "has the effect
  *   run before", keeps StrictMode's extra effect run from pushing.
  * - A rejected or timed-out push rolls the field back to the last

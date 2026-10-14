@@ -4,7 +4,8 @@
 // startup, so the bridge pushes only a change made during this launch:
 // never the value it mounts with (which would be a redundant disk write
 // and a scheduler down/up resize on every launch), not even under
-// StrictMode's extra effect run.
+// StrictMode's extra effect run, unless launch reconciliation finds a
+// backend cap the field cannot show (11 to 16).
 
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { getDefaultStore } from "jotai";
