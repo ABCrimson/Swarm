@@ -308,8 +308,9 @@ pub struct ClaudeCodeAdapter {
 const PROBE_DIR_PREFIX: &str = "swarm-claude-probe-";
 
 /// Most bytes of a repo's `.claude/settings.json` SWARM reads for its
-/// deny entries; a larger file contributes none. What it contributes is
-/// capped again by [`tier::cap_repo_deny`].
+/// deny entries; a longer file (by its size, and by what a read yields)
+/// contributes none. What it contributes is capped again by
+/// [`tier::cap_repo_deny`].
 const REPO_SETTINGS_MAX_BYTES: u64 = 1024 * 1024;
 
 /// Creates a fresh directory for one probe under the temp root, owner-only
@@ -330,10 +331,19 @@ async fn private_probe_dir() -> std::io::Result<PathBuf> {
 }
 
 /// The `permissions.deny` entries of `<cwd>/.claude/settings.json`
-/// ([`tier::repo_deny_entries`]), or none when the file is missing, not a
-/// regular file, larger than [`REPO_SETTINGS_MAX_BYTES`], unreadable, or
-/// not valid JSON. Nothing else in the file is used.
+/// ([`tier::repo_deny_entries`], then [`tier::cap_repo_deny`]), or none
+/// when the file is missing, not a regular file, unreadable, not UTF-8,
+/// not a JSON object, or longer than [`REPO_SETTINGS_MAX_BYTES`]. Each
+/// of those but a missing file is logged. Nothing else in the file is
+/// used.
+///
+/// The metadata check keeps FIFOs and devices from being opened, but it
+/// cannot bound the read: a symlink to `/proc/self/pagemap` reports a
+/// regular file of length 0 and then yields zeros without end. So the
+/// read itself stops one byte past the cap.
 async fn read_repo_deny(cwd: &Path) -> Vec<String> {
+    use tokio::io::AsyncReadExt;
+
     let file = cwd.join(".claude").join("settings.json");
     match tokio::fs::metadata(&file).await {
         Ok(meta) if meta.is_file() && meta.len() <= REPO_SETTINGS_MAX_BYTES => {}
@@ -343,19 +353,35 @@ async fn read_repo_deny(cwd: &Path) -> Vec<String> {
         }
         Err(_) => return Vec::new(),
     }
-    match tokio::fs::read_to_string(&file).await {
-        Ok(text) => {
-            let (kept, dropped) = cap_repo_deny(repo_deny_entries(&text));
-            if dropped > 0 {
-                tracing::warn!(path = %file.display(), dropped, "claude code: repo settings list more deny entries than fit; the rest are dropped");
-            }
-            kept
-        }
-        Err(error) => {
-            tracing::warn!(path = %file.display(), %error, "claude code: repo settings are unreadable; ignoring their deny list");
-            Vec::new()
-        }
+    let mut bytes = Vec::new();
+    let read = async {
+        tokio::fs::File::open(&file)
+            .await?
+            .take(REPO_SETTINGS_MAX_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .await
+    };
+    if let Err(error) = read.await {
+        tracing::warn!(path = %file.display(), %error, "claude code: repo settings are unreadable; ignoring their deny list");
+        return Vec::new();
     }
+    if bytes.len() as u64 > REPO_SETTINGS_MAX_BYTES {
+        tracing::warn!(path = %file.display(), "claude code: repo settings are larger than the size cap; ignoring their deny list");
+        return Vec::new();
+    }
+    let Ok(text) = String::from_utf8(bytes) else {
+        tracing::warn!(path = %file.display(), "claude code: repo settings are not UTF-8; ignoring their deny list");
+        return Vec::new();
+    };
+    let Some(entries) = repo_deny_entries(&text) else {
+        tracing::warn!(path = %file.display(), "claude code: repo settings are not a JSON object; ignoring their deny list");
+        return Vec::new();
+    };
+    let (kept, dropped) = cap_repo_deny(entries);
+    if dropped > 0 {
+        tracing::warn!(path = %file.display(), dropped, "claude code: repo settings list more deny entries than fit; the rest are dropped");
+    }
+    kept
 }
 
 impl ClaudeCodeAdapter {

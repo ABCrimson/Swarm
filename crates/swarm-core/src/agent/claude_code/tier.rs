@@ -151,23 +151,27 @@ pub(super) fn inline_settings_json(tier: ClaudeCodeTrustTier, repo_deny: &[Strin
 }
 
 /// The `permissions.deny` string entries of a repo's
-/// `.claude/settings.json` text, in order. Anything else in the file
-/// (`env`, `apiKeyHelper`, hooks, `allow`, `defaultMode`, ...) is never
-/// read, and a file that is not a JSON object yields nothing, as do
-/// non-string entries and empty strings.
-pub(super) fn repo_deny_entries(settings: &str) -> Vec<String> {
+/// `.claude/settings.json` text, in order, or `None` when the text is not
+/// a JSON object (invalid JSON, a byte-order mark, a non-object root), so
+/// the caller can say so. Anything else in the file (`env`,
+/// `apiKeyHelper`, hooks, `allow`, `defaultMode`, ...) is never read;
+/// non-string entries and empty strings are skipped, and an object
+/// without a deny list yields an empty one.
+pub(super) fn repo_deny_entries(settings: &str) -> Option<Vec<String>> {
     let Ok(serde_json::Value::Object(root)) = serde_json::from_str(settings) else {
-        return Vec::new();
+        return None;
     };
-    root.get("permissions")
-        .and_then(|permissions| permissions.get("deny"))
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .filter(|entry| !entry.trim().is_empty())
-        .map(str::to_owned)
-        .collect()
+    Some(
+        root.get("permissions")
+            .and_then(|permissions| permissions.get("deny"))
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .filter(|entry| !entry.trim().is_empty())
+            .map(str::to_owned)
+            .collect(),
+    )
 }
 
 /// Most bytes of JSON the entries appended to the inline deny list may

@@ -1474,17 +1474,32 @@ fn repo_deny_entries_take_only_deny_strings() {
     .to_string();
     assert_eq!(
         repo_deny_entries(&settings),
-        ["Bash(curl*)".to_owned(), "WebFetch".to_owned()]
+        Some(vec!["Bash(curl*)".to_owned(), "WebFetch".to_owned()])
     );
     for nothing in [
-        "",
-        "not json",
-        "[\"Bash\"]",
         "{}",
         r#"{"permissions":{"deny":"Bash"}}"#,
         r#"{"permissions":["Bash"]}"#,
     ] {
-        assert!(repo_deny_entries(nothing).is_empty(), "{nothing:?}");
+        assert_eq!(repo_deny_entries(nothing), Some(Vec::new()), "{nothing:?}");
+    }
+}
+
+/// Text that is not a JSON object is reported as `None` (so the caller can
+/// warn), never read as an empty list: invalid JSON, a byte-order mark and
+/// a non-object root.
+#[test]
+fn repo_deny_entries_report_malformed_settings() {
+    let bom = format!("\u{feff}{}", r#"{"permissions":{"deny":["Bash"]}}"#);
+    for malformed in [
+        "",
+        "not json",
+        "{ not json",
+        "[\"Bash\"]",
+        "null",
+        bom.as_str(),
+    ] {
+        assert_eq!(repo_deny_entries(malformed), None, "{malformed:?}");
     }
 }
 
@@ -1738,6 +1753,49 @@ async fn an_unreadable_repo_settings_file_adds_nothing() {
         settings["permissions"]["deny"],
         json!(deny_list(ClaudeCodeTrustTier::Standard))
     );
+}
+
+/// A harness whose `.claude/settings.json` is written by `write`.
+fn harness_with_settings(write: impl FnOnce(&std::path::Path)) -> Harness {
+    let harness = Harness::new();
+    std::fs::create_dir_all(harness.cwd.join(".claude")).expect("create .claude");
+    write(&harness.cwd.join(".claude").join("settings.json"));
+    harness
+}
+
+/// A symlink to `/proc/self/pagemap` reports a regular file of length 0
+/// and then streams zeros without end: the read must stop at the cap, not
+/// run to EOF. The timeout keeps a regression from running away.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn an_endless_repo_settings_file_is_not_read_to_the_end() {
+    let harness = harness_with_settings(|file| {
+        std::os::unix::fs::symlink("/proc/self/pagemap", file).expect("symlink");
+    });
+    let deny = tokio::time::timeout(Duration::from_secs(2), read_repo_deny(&harness.cwd))
+        .await
+        .expect("the read stops at the size cap");
+    assert!(deny.is_empty(), "{deny:?}");
+}
+
+#[tokio::test]
+async fn an_oversized_or_non_utf8_repo_settings_file_adds_nothing() {
+    let padding = " ".repeat(usize::try_from(REPO_SETTINGS_MAX_BYTES).expect("fits") + 1);
+    let oversized = harness_with_settings(|file| {
+        std::fs::write(
+            file,
+            format!(r#"{{"permissions":{{"deny":["Bash(curl*)"]}}}}{padding}"#),
+        )
+        .expect("write");
+    });
+    assert!(read_repo_deny(&oversized.cwd).await.is_empty());
+    let binary =
+        harness_with_settings(|file| std::fs::write(file, [0xff, 0xfe, b'{']).expect("write"));
+    assert!(read_repo_deny(&binary.cwd).await.is_empty());
+    let fine = harness_with_settings(|file| {
+        std::fs::write(file, r#"{"permissions":{"deny":["Bash(curl*)"]}}"#).expect("write");
+    });
+    assert_eq!(read_repo_deny(&fine.cwd).await, ["Bash(curl*)"]);
 }
 
 #[tokio::test]
