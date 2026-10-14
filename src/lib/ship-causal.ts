@@ -228,16 +228,16 @@ function renderTurnForPrompt(turn: CausalTurn, index: number): string {
 /**
  * Builds the `{system, user}` prompt for the AI prose model —
  * synchronous, pure, and the ONLY place the prompt text is assembled, so
- * this is also the ONE place to audit for the no-secrets-in-prompt
- * guarantee. Reads exclusively from `CausalProseInput`'s own fields:
- * `diffStat`'s three numbers, `branch`/`baseBranch` strings, and each
- * turn's status + tool call `name`/`target`/`ok` — `target` is already
- * an allowlist-extracted, length-capped string by the time it reaches
- * `ShipContext` (see `git::causal::extract_target`'s doc), so no raw
- * tool `input`/`content`/config value/token/`.env` content can reach
- * this function even if it wanted to read one — there is no code path
- * here that reads `readConfig`, a file, or an environment variable at
- * all.
+ * this is also the ONE place to audit what the prompt can contain. Reads
+ * exclusively from `CausalProseInput`'s own fields: `diffStat`'s three
+ * numbers, `branch`/`baseBranch` strings, and each turn's status + tool
+ * call `name`/`target`/`ok`. `target` is an allowlist-extracted excerpt of
+ * the tool input, redacted by `git::causal::extract_target` (recognized
+ * token shapes and URL credentials) and length-capped by the time it
+ * reaches `ShipContext`; an opaque secret with no recognizable shape can
+ * still pass that redaction. Nothing else from a tool `input`/`content`
+ * reaches this function, and no code path here reads `readConfig`, a
+ * file, `.env` content, or an environment variable.
  */
 export function buildCausalPromptInput(input: CausalProseInput): { system: string; user: string } {
   const system = [

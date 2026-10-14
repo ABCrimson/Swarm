@@ -67,7 +67,7 @@ function resetStores(): void {
   for (const [id] of workerState.workers) {
     workerState.removeWorker(id);
   }
-  useMessageHistoryStore.getState().clearAll();
+  useMessageHistoryStore.setState(useMessageHistoryStore.getInitialState(), true);
 }
 
 beforeEach(resetStores);
