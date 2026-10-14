@@ -39,11 +39,11 @@ import {
 /**
  * `true` inside the Tauri desktop webview: `@tauri-apps/api/core`'s
  * `isTauri()`, which reads the `globalThis.isTauri` flag the shell
- * injects. Desktop-only controls (`tauri-plugin-fs`/`-dialog`/
- * `-opener`/`-notification`/`-updater`, the webview-direct AI chat path)
- * decide whether to offer themselves with {@link hasCapability}; this is
- * the runtime check for call sites that invoke a plugin and need the
- * bridge itself. A `wsTransport` connection is a real backend but not a
+ * injects. Desktop-only controls (file dialogs and workspace browsing,
+ * native alert notifications, the update check, the webview-direct AI
+ * chat) decide whether to offer themselves with {@link hasCapability};
+ * this is the runtime check for call sites that invoke a plugin and need
+ * the bridge itself (the opener calls gate on it alone). A `wsTransport` connection is a real backend but not a
  * Tauri bridge, so this is `false` there; see {@link hasTransport}.
  */
 export { isTauri };
@@ -548,8 +548,8 @@ type UpdateCheckResult = z.output<typeof UpdateCheckResultSchema>;
 
 /**
  * Asks the configured update endpoint for a newer version.
- * Desktop-only, like {@link sendNotification}: rejects with an `Error`
- * ("Update Checks Need The Desktop App") when the transport has no
+ * Desktop-only. Unlike {@link sendNotification}, which is a silent no-op
+ * there, it rejects with an `Error` ("Update Checks Need The Desktop App") when the transport has no
  * updater or there is no Tauri bridge, because a check that never ran
  * must not read as "up to date".
  */

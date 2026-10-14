@@ -71,5 +71,6 @@ describe("WorkerAIPanel without the webview AI chat (the browser build)", () => 
     expect(screen.queryByRole("button", { name: "Inject Instruction" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Queue" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^AI Model:/ })).not.toBeInTheDocument();
   });
 });
