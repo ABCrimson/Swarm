@@ -387,8 +387,9 @@ checked synchronously, stops a double click starting two commits. The `ship_sett
 once that call has resolved, a receipt that has not yet arrived is given 30 s of silence
 (`SHIP_SETTLED_TIMEOUT_MS`) before the attempt counts as unconfirmed. An rpc whose reply or receipt is lost keeps
 the flow running as Awaiting Confirmation and reconciles from the persisted ship events, bounded by `rpcDeadlineMs`,
-then returns to idle for a preflight reload. Failing to open the compare page after a settled ship is a warning toast
-and never flips the outcome. The default commit message is deterministic
+then returns to idle for a preflight reload. The post-ship auto-open of the compare page runs only inside the Tauri bridge; failing to open it
+there is a warning toast and never flips the outcome. The browser build opens nothing on its own: the
+receipt's Open Compare Page button opens a tab with `window.open`. The default commit message is deterministic
 (`src/lib/ship-message.ts`: a Conventional Commit inferred from paths and the diff stat).
 
 ### The Causal Record
@@ -586,7 +587,11 @@ worker-membership events that arrive while it is in flight and replaying them ov
 agent concurrency cap ("AI Concurrent Stream Limit") to the backend and waits for the acknowledgement: Settings
 shows "Applying…", and a failure or a 10 s timeout rolls the field back to the last acknowledged value with an
 alert and Retry (a late acknowledgement is adopted, and an older push the backend acknowledges becomes the
-rollback target). At launch, with a backend reachable, the field adopts the backend's `agent_concurrency`
+rollback target). The reply is the cap in force and wins: if it differs from the request, the field shows it
+and it is the acknowledged value. Only one `set_agent_concurrency` call is in flight, because the daemon
+orders calls only from the moment each reaches its lock; a value requested meanwhile waits in a one-slot
+queue (a newer request replaces it, so intermediate values are never sent) and goes out when the call
+settles or its 10 s ack timeout fires, whichever comes first. At launch, with a backend reachable, the field adopts the backend's `agent_concurrency`
 (unset is 3); a backend value the field cannot show (11 to 16) is overwritten by pushing the field's value.
 Dates and durations use `src/lib/time.ts` on `Temporal` and `Intl`; there is no date library.
 
@@ -597,9 +602,10 @@ load by the Vite define `__SWARM_TRANSPORT__` (`"ws"` only for `pnpm build:web`)
 ([ADR-0024](adr/0024-transport-chosen-at-build-time.md)). `src/lib/tauri.ts` wraps every command with typed,
 zod-validated functions on top; `isTauri()` means the Tauri bridge specifically, `hasTransport()` means
 some backend is reachable, and `hasCapability(feature)` reads the transport's capability flags
-(`workspaceBrowsing`, `nativeNotifications`, `autoUpdate`, `localAiChat`; all on for `tauriTransport`, all off for
+(`workspaceBrowsing`, `nativeNotifications`, `autoUpdate`, `localAiChat`, `localStores`; all on for `tauriTransport`, all off for
 `wsTransport`). Desktop-only controls gate on it: the remote build hides Graph Export / Import Workflow and
-disables Open Project, session file export and import, the update check and native-notification toggles, the
+disables Open Project, session file export and import, the snapshot and template controls (the local
+plugin-store files), the update check and native-notification toggles, the
 Settings API key field and Save API Key, the Ship preview's summary Generate / Regenerate (its text area stays
 editable), and the spawn dialog's Webview Anthropic provider (the dialog starts on Claude Code) and folder picker, each showing
 `DESKTOP_ONLY_REASON` ("Available In The Desktop App Only"). `checkForUpdates()` rejects with "Update Checks Need

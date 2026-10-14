@@ -44,3 +44,10 @@ why the causal record keys off the `agent_*` family ([ADR-0011](0011-pr-body-evi
   yet.
 - Webview tools that act on the machine wait for the user's approval, and the file commands behind
   them are scoped and deny-listed ([ADR-0035](0035-ai-tool-approval-and-fs-scope.md)).
+
+## Amended 2026-10-13
+
+`TransportCapabilities.localAiChat` is read now: `hasCapability("localAiChat")` hides or disables the
+webview chat (the worker AI panel, the spawn dialog's Webview Anthropic provider, Settings' API key field,
+the Ship preview's summary generation) in the browser build. The sentence above that no call site reads it
+describes the state at the original commit.
