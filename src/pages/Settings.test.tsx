@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { getDefaultStore } from "jotai";
+import { Activity } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsBridge } from "#hooks/useSettingsBridge";
@@ -245,7 +246,7 @@ describe("Settings — switches and number fields", () => {
 describe("Settings — worker registry cap", () => {
   it("applies a new cap through set_max_workers", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    render(<SettingsWithBridge />);
 
     const cap = screen.getByLabelText("Worker Registry Cap");
     await user.clear(cap);
@@ -261,7 +262,7 @@ describe("Settings — worker registry cap", () => {
   it("shows and announces the cap the backend reports when it differs from the request", async () => {
     vi.mocked(setMaxWorkers).mockResolvedValue(10);
     const user = userEvent.setup();
-    render(<Settings />);
+    render(<SettingsWithBridge />);
 
     const cap = screen.getByLabelText("Worker Registry Cap");
     await user.clear(cap);
@@ -276,7 +277,7 @@ describe("Settings — worker registry cap", () => {
   it("rolls the shown cap back when the backend refuses it", async () => {
     const user = userEvent.setup();
     vi.mocked(setMaxWorkers).mockRejectedValue(new Error("refused"));
-    render(<Settings />);
+    render(<SettingsWithBridge />);
 
     const cap = screen.getByLabelText("Worker Registry Cap");
     await user.clear(cap);
@@ -311,7 +312,7 @@ describe("Settings — worker registry cap, one call in flight", () => {
   it("sends a second rapid commit only after the first reply, then the latest value", async () => {
     const first = Promise.withResolvers<number | null>();
     vi.mocked(setMaxWorkers).mockReturnValueOnce(first.promise);
-    render(<Settings />);
+    render(<SettingsWithBridge />);
 
     commitCap(12);
     const cap = commitCap(10);
@@ -328,7 +329,7 @@ describe("Settings — worker registry cap, one call in flight", () => {
   it("collapses commits made meanwhile into the latest one", async () => {
     const first = Promise.withResolvers<number | null>();
     vi.mocked(setMaxWorkers).mockReturnValueOnce(first.promise);
-    render(<Settings />);
+    render(<SettingsWithBridge />);
 
     commitCap(12);
     commitCap(11);
@@ -340,7 +341,7 @@ describe("Settings — worker registry cap, one call in flight", () => {
 
   it("shows the server's value when the reply differs from the request", async () => {
     vi.mocked(setMaxWorkers).mockResolvedValueOnce(9);
-    render(<Settings />);
+    render(<SettingsWithBridge />);
 
     const cap = commitCap(12);
 
@@ -352,7 +353,7 @@ describe("Settings — worker registry cap, one call in flight", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(setMaxWorkers).mockReturnValueOnce(new Promise<number | null>(() => {}));
-    render(<Settings />);
+    render(<SettingsWithBridge />);
 
     const cap = commitCap(12);
     await act(async () => {
@@ -377,7 +378,7 @@ describe("Settings — worker registry cap, one call in flight", () => {
     const a = Promise.withResolvers<number | null>();
     const b = Promise.withResolvers<number | null>();
     vi.mocked(setMaxWorkers).mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
-    render(<Settings />);
+    render(<SettingsWithBridge />);
 
     commitCap(12);
     await act(async () => {
@@ -391,6 +392,34 @@ describe("Settings — worker registry cap, one call in flight", () => {
 
     expect(vi.mocked(setMaxWorkers).mock.calls).toStrictEqual([[12], [10], [10]]);
     expect(cap).toHaveValue(10);
+  });
+
+  it("keeps the queue moving after the page is hidden and shown again", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(setMaxWorkers).mockReturnValueOnce(new Promise<number | null>(() => {}));
+    // The app-root bridge sits outside the page host's Activity, as in App.
+    function Host({ mode }: { readonly mode: "visible" | "hidden" }): React.ReactElement {
+      useSettingsBridge();
+      return (
+        <Activity mode={mode}>
+          <Settings />
+        </Activity>
+      );
+    }
+    const { rerender } = render(<Host mode="visible" />);
+
+    commitCap(12);
+    rerender(<Host mode="hidden" />);
+    rerender(<Host mode="visible" />);
+    commitCap(10);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ACK_TIMEOUT_MS);
+    });
+
+    expect(vi.mocked(setMaxWorkers).mock.calls).toStrictEqual([[12], [10]]);
+    await act(async () => {});
+    expect(store.get(maxWorkersSyncAtom)).toStrictEqual({ status: "idle" });
   });
 });
 

@@ -66,7 +66,7 @@ export type AgentConcurrencySync = CapSync;
 
 export const agentConcurrencySyncAtom = atom<AgentConcurrencySync>({ status: "idle" });
 
-/** The Worker Registry Cap field's sync state, written by `useMaxWorkersSync`. */
+/** The Worker Registry Cap field's sync state, written by `useSettingsBridge`. */
 export const maxWorkersSyncAtom = atom<CapSync>({ status: "idle" });
 
 /** What the backend allows for the worker registry until `max_workers` is set. */
