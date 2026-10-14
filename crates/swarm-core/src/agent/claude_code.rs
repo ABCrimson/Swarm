@@ -331,8 +331,8 @@ async fn private_probe_dir() -> std::io::Result<PathBuf> {
 }
 
 /// Reads at most `max` bytes of `reader`: `None` when it holds more (the
-/// read stops one byte past `max`, so an endless source costs `max + 1`
-/// bytes of memory, never more).
+/// read stops one byte past `max`, so even an endless source leaves the
+/// buffer holding at most `max + 1` bytes of content).
 async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
     reader: R,
     max: u64,
@@ -369,12 +369,21 @@ async fn read_repo_deny(cwd: &Path) -> Vec<String> {
         }
         Err(_) => return Vec::new(),
     }
-    let opened = tokio::fs::File::open(&file).await;
-    let bytes = match opened {
-        Ok(opened) => read_capped(opened, REPO_SETTINGS_MAX_BYTES).await,
-        Err(error) => Err(error),
-    };
-    let bytes = match bytes {
+    match tokio::fs::File::open(&file).await {
+        Ok(opened) => deny_from_reader(&file, opened).await,
+        Err(error) => {
+            tracing::warn!(path = %file.display(), %error, "claude code: repo settings are unreadable; ignoring their deny list");
+            Vec::new()
+        }
+    }
+}
+
+/// The deny entries in the content of `reader` (the opened settings file at
+/// `file`, named in the warnings): at most [`REPO_SETTINGS_MAX_BYTES`] of it
+/// is read, through [`read_capped`]. Anything unusable yields none and is
+/// logged.
+async fn deny_from_reader<R: tokio::io::AsyncRead + Unpin>(file: &Path, reader: R) -> Vec<String> {
+    let bytes = match read_capped(reader, REPO_SETTINGS_MAX_BYTES).await {
         Ok(Some(bytes)) => bytes,
         Ok(None) => {
             tracing::warn!(path = %file.display(), "claude code: repo settings are larger than the size cap; ignoring their deny list");

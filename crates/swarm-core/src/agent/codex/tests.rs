@@ -1891,7 +1891,10 @@ async fn spawn_refuses_an_empty_or_relative_cwd() {
 }
 
 /// A uniquely named subdirectory of the test's working directory, removed
-/// on drop: `name` alone is a relative path on every OS.
+/// on drop: `name` alone is a relative path on every OS. It sits under the
+/// working directory, not the temp directory, because a relative PATH entry
+/// resolves against the process's working directory and tests must not
+/// change that.
 struct CwdSubdir {
     name: PathBuf,
     absolute: PathBuf,
@@ -1904,8 +1907,15 @@ impl CwdSubdir {
             .expect("the test's working directory")
             .join(&name);
         std::fs::create_dir_all(&absolute).expect("create the relative PATH dir");
-        assert!(name.is_relative() && name.is_dir(), "{name:?}");
-        Self { name, absolute }
+        // The guard exists before anything can panic, so unwinding removes the
+        // directory.
+        let subdir = Self { name, absolute };
+        assert!(
+            subdir.name.is_relative() && subdir.name.is_dir(),
+            "{:?}",
+            subdir.name
+        );
+        subdir
     }
 }
 

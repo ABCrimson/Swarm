@@ -1808,6 +1808,42 @@ async fn read_capped_stops_one_byte_past_the_cap() {
     );
 }
 
+/// `read_repo_deny` reads through the cap: valid settings followed by more
+/// than the cap's worth of padding contribute nothing. The source is
+/// finite, so a regression fails here without running away.
+#[tokio::test]
+async fn an_oversized_reader_contributes_nothing() {
+    let mut text = r#"{"permissions":{"deny":["Bash(curl*)"]}}"#.to_owned();
+    let cap = usize::try_from(REPO_SETTINGS_MAX_BYTES).expect("fits");
+    text.push_str(&" ".repeat(cap + 1 - text.len()));
+    assert_eq!(text.len(), cap + 1);
+    assert!(
+        deny_from_reader(Path::new("x"), text.as_bytes())
+            .await
+            .is_empty()
+    );
+    let fits = &text[..cap];
+    assert_eq!(
+        deny_from_reader(Path::new("x"), fits.as_bytes()).await,
+        ["Bash(curl*)"]
+    );
+}
+
+/// An endless reader is cut off at the cap. A regression to an unbounded
+/// read would not fail this test, only hang (and exhaust memory), so the
+/// timeout is the assertion; `an_oversized_reader_contributes_nothing` is
+/// the one that fails cleanly.
+#[tokio::test]
+async fn an_endless_reader_contributes_nothing() {
+    let deny = tokio::time::timeout(
+        Duration::from_secs(2),
+        deny_from_reader(Path::new("x"), tokio::io::repeat(b' ')),
+    )
+    .await
+    .expect("stops at the cap");
+    assert!(deny.is_empty());
+}
+
 #[tokio::test]
 async fn an_oversized_or_non_utf8_repo_settings_file_adds_nothing() {
     let padding = " ".repeat(usize::try_from(REPO_SETTINGS_MAX_BYTES).expect("fits") + 1);
@@ -1927,7 +1963,7 @@ fn the_repo_deny_list_is_capped_in_file_order() {
 }
 
 #[tokio::test]
-async fn an_oversized_repo_deny_list_reaches_the_cli_capped() {
+async fn an_oversized_repo_deny_list_is_capped_before_the_inline_settings() {
     let harness = Harness::new();
     std::fs::create_dir_all(harness.cwd.join(".claude")).expect("create .claude");
     let entries: Vec<String> = (0..2000).map(|i| format!("Bash(tool-{i}*)")).collect();
@@ -1982,7 +2018,9 @@ fn place_executable(dir: &std::path::Path, program: &str) {
 
 /// A uniquely named subdirectory of the test's working directory, removed
 /// on drop: `name` alone is a relative path on every OS, whatever drive
-/// the temp directory is on.
+/// the temp directory is on. It sits under the working directory, not the
+/// temp directory, because a relative PATH entry resolves against the
+/// process's working directory and tests must not change that.
 struct CwdSubdir {
     name: PathBuf,
     absolute: PathBuf,
@@ -1995,8 +2033,15 @@ impl CwdSubdir {
             .expect("the test's working directory")
             .join(&name);
         std::fs::create_dir_all(&absolute).expect("create the relative PATH dir");
-        assert!(name.is_relative() && name.is_dir(), "{name:?}");
-        Self { name, absolute }
+        // The guard exists before anything can panic, so unwinding removes the
+        // directory.
+        let subdir = Self { name, absolute };
+        assert!(
+            subdir.name.is_relative() && subdir.name.is_dir(),
+            "{:?}",
+            subdir.name
+        );
+        subdir
     }
 }
 
