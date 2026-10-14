@@ -1,4 +1,5 @@
 import { use } from "react";
+import { escapeForDisplay } from "#lib/display-escape";
 import { basename, type FilePreview, formatBytes, MAX_PREVIEW_BYTES } from "#lib/file-preview";
 import { tokenizeJson } from "#lib/syntax-highlight";
 
@@ -44,9 +45,9 @@ export function FileViewer({ selection, pending = false }: FileViewerProps): Rea
     >
       <p
         className="truncate border-border border-b bg-surface-1/60 px-4 py-2 font-mono text-fg-muted text-sm"
-        title={selection.path}
+        title={escapeForDisplay(selection.path)}
       >
-        {basename(selection.path)}
+        {escapeForDisplay(basename(selection.path))}
       </p>
       <PreviewBody path={selection.path} preview={preview} />
     </div>
@@ -109,7 +110,7 @@ function TextView({
 
   return (
     <section
-      aria-label={`Contents Of ${name}`}
+      aria-label={`Contents Of ${escapeForDisplay(name)}`}
       // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1).
       tabIndex={0}
       className="scroll-area flex flex-1 overflow-auto py-3 font-mono text-md leading-relaxed"

@@ -25,10 +25,19 @@ describe("FileViewer", () => {
       text: "one\ntwo\nthree",
     });
 
-    expect(screen.getByText("notes.txt")).toHaveAttribute("title", "C:\\proj\\notes.txt");
+    expect(screen.getByText("notes.txt")).toHaveAttribute("title", "C:\\\\proj\\\\notes.txt");
     expect(gutter?.textContent).toBe("1\n2\n3");
     expect(gutter).toHaveAttribute("aria-hidden", "true");
     expect(code?.textContent).toBe("one\ntwo\nthree");
+  });
+
+  // Trojan Source: a right-to-left override in the path must show as an escape,
+  // in the header and in the tooltip, never as an invisible reordering.
+  it("escapes bidi controls in the header and its tooltip", async () => {
+    await renderPreview("/proj/a\u202Eb.js", { kind: "text", text: "x" });
+
+    expect(screen.getByText("a\\u202Eb.js")).toBeInTheDocument();
+    expect(screen.getByTitle("/proj/a\\u202Eb.js")).toHaveTextContent("a\\u202Eb.js");
   });
 
   // Regression: the JSON tokenizer dropped comment characters and
