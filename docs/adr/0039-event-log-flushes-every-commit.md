@@ -82,14 +82,40 @@ Alternatives:
   writer's FIFO, so a terminal-output or delta event queued behind a persistent one waits for that
   event's flush; a burst of N persistent events delays them about N x 2 ms, more when a commit triggers
   a WAL checkpoint. The queue backs up rather than dropping events.
-- The shutdown drain has a budget (`SHUTDOWN_PHASE_TIMEOUT`, 2.5 s, in `src-tauri/src/lifecycle.rs` and
-  `crates/swarmd/src/main.rs`). A long backlog of flushes can overrun it. Events still queued at the
-  deadline are never written or emitted, so the log can lack shutdown receipts such as
-  `agent_turn_settled` and `worker_killed`, and the exact head is not recorded, so the next start skips
-  to the reservation (a seq gap, never a reused seq).
+- A long backlog of flushes lengthens the exit instead of losing events: the shutdown drain waits for
+  the writer's backlog, not for a timer (see the amendment below).
 - Test: `test_open_flushes_every_commit_to_stable_storage` in `orchestration/log.rs`. The ignored
   `measure_append_throughput_by_synchronous_level` reproduces the table above.
 - Out of scope: the Wave 2 durable spine (a bounded replay watermark and operation receipts) builds on
   this guarantee and decides nothing here.
+
+## Amendment (2026-10-14): the shutdown drain is bounded by the backlog, not by a timer
+
+The first Windows CI run ([job "Rust (windows-2025)"](https://github.com/ABCrimson/Swarm/actions/runs/38546843636/job/115795064860)) showed this decision's cost landing
+on shutdown. `lifecycle::tests::shutdown_persists_everything_recorded_before_it` records 500
+`worker_killed` events and shuts down; the runner's NTFS had committed 407 of them when the 2.5 s drain
+budget ran out, and an exiting process never writes the rest. With a flush per persistent event, any
+fixed drain budget is a bet on the disk, and losing the bet drops events the writer had accepted, which
+the fail-closed rule of [ADR-0034](0034-persist-before-emit-fails-closed.md) and the guarantee above do
+not allow.
+
+`OrchestrationEngine::shutdown` therefore takes no budget. Closing the sinks freezes the backlog (an
+event recorded after that is dropped at the sink and its caller told), and the FIFO `Shutdown` barrier
+queued behind the backlog reaches the writer only once the last accepted event is committed or failed
+closed. The call returns then, so the wait is the backlog times the per-event flush. The writer channel
+itself is unbounded; what makes the wait finite is that nothing joins the backlog after the close. A
+long drain logs the number of uncommitted events every 5 s. A safety ceiling, `DRAIN_CEILING` (120 s),
+covers a disk that stops making progress: reaching it logs an error with the number of accepted
+persistent events left unpersisted (the sinks count what they queue, the writer what it commits) and
+fails the shutdown with that count in its message, never silently. `Runtime::shutdown`'s argument now
+bounds only the agent sessions (`SESSION_SHUTDOWN_TIMEOUT`, 2.5 s, in `src-tauri/src/lifecycle.rs` and
+`crates/swarmd/src/main.rs`), and both shells log a failed shutdown at error level. The pragmas and the
+per-event flush are unchanged; group commit remains the way to make the drain itself shorter.
+
+Tests: `test_shutdown_waits_for_a_slow_writer_to_commit_its_backlog` in `runtime.rs` (a 10 ms-per-event
+writer with a 4 s backlog), `test_shutdown_returns_after_the_last_accepted_seq_is_committed` and
+`test_a_drain_at_its_ceiling_reports_the_unpersisted_count` in `orchestration/engine.rs`, the lifecycle
+test above, and `test_sigterm_shuts_down_gracefully_and_releases_the_lock` in `swarmd`'s integration
+tests, which counts every `session_created` a `SIGTERM` interrupted.
 
 See [Ordered Event Core](../architecture.md#ordered-event-core).

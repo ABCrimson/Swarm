@@ -65,9 +65,12 @@ const DEFAULT_LOG_FILTER: &str = "swarm_core=info,swarmd=info,warn";
 /// session's teardown (ADR-0040). `swarmd.service` and the launchd plist
 /// size their stop timeouts from it.
 const STOP_WORKERS_TIMEOUT: Duration = Duration::from_secs(40);
-/// Budget for each phase of [`Runtime::shutdown`] (agent sessions still
-/// registered, then the event writer's drain), so it takes at most 5 s.
-const SHUTDOWN_PHASE_TIMEOUT: Duration = Duration::from_millis(2500);
+/// Budget for the agent sessions [`Runtime::shutdown`] still finds
+/// registered. Its event-writer drain has no budget of its own, because a
+/// timer there would drop accepted events whenever the disk's flushes are
+/// slow: it waits for the writer's backlog, up to the engine's
+/// `DRAIN_CEILING`.
+const SESSION_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(2500);
 
 fn main() -> ExitCode {
     let command = match cli::parse(std::env::args_os().skip(1)) {
@@ -505,11 +508,12 @@ async fn stop_runtime(state: &AppState, runtime: Runtime) {
         target: "swarmd".to_owned(),
         timestamp: swarm_core::clock::unix_millis(),
     }));
-    // Everything recorded before this call, the log line above included,
-    // is persisted when it returns.
-    match runtime.shutdown(SHUTDOWN_PHASE_TIMEOUT).await {
+    // Every persistent event recorded before this call is committed when
+    // it returns, and everything else (the ephemeral log line above
+    // included) is delivered: the drain waits for the writer's backlog.
+    match runtime.shutdown(SESSION_SHUTDOWN_TIMEOUT).await {
         Ok(head_seq) => tracing::info!(head_seq, "the event log is final"),
-        Err(error) => tracing::warn!(%error, "the runtime did not shut down cleanly"),
+        Err(error) => tracing::error!(%error, "the runtime did not shut down cleanly"),
     }
     drop(runtime);
 }

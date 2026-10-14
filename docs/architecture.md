@@ -121,8 +121,11 @@ load `sessions.json`; apply the persisted `max_workers`; start a background task
 prunes worktrees of `default_repo_root`; start the metrics loop; build both adapters, the agent session
 registry and the scheduler; apply the persisted `agent_concurrency`.
 **Shutdown** (`Runtime::shutdown`, once, on exit): stop the metrics loop, shut every live agent
-session down (in-flight turns get their settlement), then drain the event writer and record the exact
-head seq. `Runtime::shutdown` kills no PTY worker; `swarmd` stops them itself first (see [Runtime Modes](#runtime-modes)).
+session down (in-flight turns get their settlement, within the caller's session budget), then drain the
+event writer and record the exact head seq. The drain has no budget: it returns once the writer has
+committed the last event accepted before it, however slow the disk's flushes are, and only a 120 s
+`DRAIN_CEILING` ends it early, logged at error level with the number of accepted events left
+unpersisted. `Runtime::shutdown` kills no PTY worker; `swarmd` stops them itself first (see [Runtime Modes](#runtime-modes)).
 
 ### The command registry
 
@@ -509,7 +512,7 @@ shells return the registry's value untouched, so desktop and daemon report ident
   up the writer instead of losing events), manage `Ctx`, `Registry` and the runtime, then show the main
   window (created hidden). A start failure is shown in a non-blocking dialog and the app exits.
 - `commands/command_list.rs` is the one list of app command names (registry, then native). `commands/mod.rs` expands it through `commands!` into one forwarder per registry command (arguments in, registry JSON out, untouched); `build.rs` hands the same names to `tauri_build::AppManifest::commands`, which generates `allow-<command>`/`deny-<command>` for each. `commands/native.rs` holds `check_for_updates` and `send_notification`.
-- `lifecycle.rs`: the app's `swarm-lifecycle` plugin. Its `on_cleanup_before_exit` hook, which every exit path reaches (including `restart` on the main thread, which skips `RunEvent::Exit`), runs `Runtime::shutdown` once (2.5 s per phase) on a scoped helper thread through the Tokio handle captured at registration, so it is safe when `exit` runs it on a Tokio worker; then it drops the release-log guard so the teardown's own lines are flushed. See [ADR-0033](adr/0033-cleanup-hook-teardown-and-command-acl.md).
+- `lifecycle.rs`: the app's `swarm-lifecycle` plugin. Its `on_cleanup_before_exit` hook, which every exit path reaches (including `restart` on the main thread, which skips `RunEvent::Exit`), runs `Runtime::shutdown` once (2.5 s for agent sessions, then the event drain, which waits for the writer's backlog) on a scoped helper thread through the Tokio handle captured at registration, so it is safe when `exit` runs it on a Tokio worker; then it drops the release-log guard so the teardown's own lines are flushed. See [ADR-0033](adr/0033-cleanup-hook-teardown-and-command-acl.md).
 - `dialog_grants.rs`: mirrors dialog folder grants into the global fs scope so dot-entries are readable
   on macOS and Linux.
 

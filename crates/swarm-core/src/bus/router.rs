@@ -168,7 +168,7 @@ mod tests {
     #[tokio::test]
     async fn test_a_send_after_engine_shutdown_reports_the_writer_unavailable() {
         let (router, engine, _events) = router();
-        tokio::task::spawn_blocking(move || engine.shutdown(Duration::from_secs(5)))
+        tokio::task::spawn_blocking(move || engine.shutdown())
             .await
             .unwrap()
             .unwrap();
