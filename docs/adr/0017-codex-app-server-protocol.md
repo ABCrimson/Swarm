@@ -1,6 +1,6 @@
 # ADR-0017: Codex is driven over the verified app-server protocol
 
-- **Status:** Accepted (supersedes the 2026-08-15 authored protocol); binary resolution superseded by [0038](0038-agent-provider-trust-model.md)
+- **Status:** Accepted (supersedes the 2026-08-15 authored protocol); binary resolution superseded by [ADR-0038](0038-agent-provider-trust-model.md)
 - **Date:** 2026-09-23
 
 ## Context
