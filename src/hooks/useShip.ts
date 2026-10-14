@@ -12,6 +12,14 @@
  * recovery) and B3 (mode-aware preflight) are the rules of the same name
  * in `docs/architecture.md`'s Ship Chain section.
  *
+ * Over the daemon a ship mutation can outlive its rpc: the socket drops,
+ * or the reply misses `rpcDeadlineMs`, while the commit or push keeps
+ * running there. Such an attempt is never "failed". It stays "running"
+ * (no buttons, so no duplicate mutation) as "Awaiting Confirmation"
+ * while the `ship_progress` rows and the `ship_settled` receipt, which
+ * the daemon records and replays after a reconnect, say how it ended;
+ * `reconcileLostReply` has the rules.
+ *
  * @module useShip
  */
 
@@ -20,7 +28,7 @@ import { useAtomValue } from "jotai";
 import { useEffect, useReducer, useRef } from "react";
 import { toast } from "sonner";
 import * as z from "zod";
-import { type DomainEvent, onEvent, waitFor } from "#lib/event-bus";
+import { onEvent } from "#lib/event-bus";
 import { errorMessage } from "#lib/is-error";
 import { CLAUDE_MODELS } from "#lib/models";
 import { composeShipBody, generateCausalProse } from "#lib/ship-causal";
@@ -33,6 +41,7 @@ import {
   shipCompareUrl,
   shipContext,
 } from "#lib/tauri";
+import { isOutcomeUnknown, rpcDeadlineMs } from "#lib/transport";
 import type { ShipContext, ShipError, ShipPreflight, StagingMode } from "#store/types";
 import { selectedModelAtom } from "#store/ui";
 
@@ -107,6 +116,8 @@ type ShipAction =
   | { readonly type: "progressReported"; readonly row: ShipProgressRow }
   | { readonly type: "actionSettled"; readonly result: ShipResult }
   | { readonly type: "actionFailed"; readonly error: ShipError }
+  /** The attempt's outcome could not be confirmed; the flow returns to the (refreshed) preview. */
+  | { readonly type: "actionInterrupted" }
   | { readonly type: "reset" };
 
 type ShipDispatch = (action: ShipAction) => void;
@@ -129,8 +140,10 @@ export const INITIAL_SHIP_SNAPSHOT: ShipSnapshot = {
 
 /**
  * The ship state machine: idle → preflighting → previewing → running →
- * settled | failed, with `reset` back to idle. Pure — every side effect
- * lives in the module-level helpers that dispatch into it.
+ * settled | failed, or back to previewing when a running attempt could
+ * not be confirmed (`actionInterrupted`), with `reset` back to idle.
+ * Pure — every side effect lives in the module-level helpers that
+ * dispatch into it.
  */
 export function shipReducer(snapshot: ShipSnapshot, action: ShipAction): ShipSnapshot {
   switch (action.type) {
@@ -184,6 +197,8 @@ export function shipReducer(snapshot: ShipSnapshot, action: ShipAction): ShipSna
       return { ...snapshot, state: "settled", result: action.result };
     case "actionFailed":
       return { ...snapshot, state: "failed", error: action.error };
+    case "actionInterrupted":
+      return { ...snapshot, state: "previewing", progress: [], error: null, result: null };
     case "reset":
       return {
         ...INITIAL_SHIP_SNAPSHOT,
@@ -286,8 +301,13 @@ interface ShipDraft {
   readonly composedBody: string | null;
 }
 
-/** One action's git steps for one `shipId`; resolves once the backend's `ship_settled` receipt arrives. */
-type ShipSteps = (workerId: string, shipId: string, draft: ShipDraft) => Promise<ShipResult>;
+/** One action's git steps for one `shipId`; resolves once the backend's `ship_settled` receipt has been recorded in `attempt`. */
+type ShipSteps = (
+  workerId: string,
+  shipId: string,
+  draft: ShipDraft,
+  attempt: ShipAttempt,
+) => Promise<ShipResult>;
 
 /**
  * Module-level in-flight guard, keyed by `workerId` — checked
@@ -311,7 +331,9 @@ const latestRefresh = new Map<string, symbol>();
  * `PUSH_TIMEOUT` for `push`) is never misreported as a timeout; a
  * backend give-up rejects the invoke itself. The event and the invoke
  * response travel separately, so 30s is the allowance for the receipt
- * to land after the response. Always passed explicitly rather than relying on `waitFor`'s 5s default.
+ * to land after the response. The reconcile path reuses it as the grace
+ * for a receipt after the lost call's terminal `ship_progress` row.
+ * Always passed explicitly rather than relying on a default.
  */
 const SHIP_SETTLED_TIMEOUT_MS = 30_000;
 
@@ -323,9 +345,6 @@ const ShipProgressPayloadSchema = z.object({
   status: z.enum(["running", "ok", "error"]),
   detail: z.string().nullish(),
 });
-
-/** The one `ship_settled` field the receipt wait matches on. */
-const ShipSettledPayloadSchema = z.object({ shipId: z.string() });
 
 async function loadPreflight(
   workerId: string,
@@ -414,12 +433,15 @@ async function generateProse(
 }
 
 /**
- * Runs one ship action: the in-flight guard, `ship_progress` collection
- * and the terminal transition live here once. After a failure the
- * worktree may still have changed (a commit landed, then the push was
- * rejected), so preflight and the causal record are refreshed silently
- * before the guard is released — a retry then starts from the real
- * state (B2's recovery needs a current `ahead`).
+ * Runs one ship action: the in-flight guard, the per-attempt event
+ * recorder and the terminal transition live here once. The guard stays
+ * held until every follow-up has finished. After a failure, or when a
+ * lost reply left the attempt unconfirmed, the worktree may still have
+ * changed (a commit landed, then the push was rejected), so preflight
+ * and the causal record are refreshed silently before the guard is
+ * released: a retry then starts from the real state (B2's recovery
+ * needs a current `ahead`), and cannot start at all while a lost
+ * reply is unreconciled.
  */
 async function runAction(
   workerId: string,
@@ -432,40 +454,150 @@ async function runAction(
 
   const shipId = crypto.randomUUID();
   dispatch({ type: "actionStarted" });
-  const offProgress = onEvent("ship_progress", (e) => {
-    const parsed = ShipProgressPayloadSchema.safeParse(e.payload);
-    if (!parsed.success) return;
-    const { shipId: eventShipId, workerId: eventWorkerId, step, status, detail } = parsed.data;
-    if (eventShipId !== shipId || eventWorkerId !== workerId) return;
-    dispatch({ type: "progressReported", row: { step, status, detail: detail ?? null } });
-  });
+  const attempt: ShipAttempt = { recorder: recordShip(workerId, shipId, dispatch), known: {} };
 
-  let result: ShipResult;
+  let prUrl: string | undefined;
   try {
-    result = await steps(workerId, shipId, draft);
-  } catch (err) {
-    dispatch({ type: "actionFailed", error: toShipError(err) });
-    await Promise.all([
-      refreshPreflight(workerId, draft.mode, dispatch, { quiet: true }),
-      fetchContext(workerId, dispatch, { silent: true }),
-    ]);
-    return;
+    const outcome = await carryOut(workerId, shipId, draft, dispatch, steps, attempt);
+    if (outcome.kind === "settled") {
+      dispatch({ type: "actionSettled", result: outcome.result });
+      prUrl = outcome.result.prUrl;
+    } else {
+      if (outcome.kind === "failed") dispatch({ type: "actionFailed", error: outcome.error });
+      await Promise.all([
+        refreshPreflight(workerId, draft.mode, dispatch, { quiet: true }),
+        fetchContext(workerId, dispatch, { silent: true }),
+      ]);
+      if (outcome.kind === "interrupted") {
+        dispatch({ type: "actionInterrupted" });
+        toast.warning(outcome.notice);
+      }
+    }
   } finally {
-    offProgress();
+    attempt.recorder.dispose();
     inFlightWorkers.delete(workerId);
   }
-  dispatch({ type: "actionSettled", result });
 
   // The ship itself already succeeded; an opener failure (no default
   // browser, a URL outside the opener capability's scope) is a warning,
   // never a reason to flip the flow back to "failed".
-  if (result.prUrl != null) {
+  if (prUrl != null) {
     try {
-      await openUrl(result.prUrl);
+      await openUrl(prUrl);
     } catch (err) {
       toast.warning(`Shipped, But Could Not Open The Compare Page: ${errorMessage(err)}`);
     }
   }
+}
+
+/** How one ship attempt ended. */
+type ShipOutcome =
+  | { readonly kind: "settled"; readonly result: ShipResult }
+  | { readonly kind: "failed"; readonly error: ShipError }
+  /** The outcome could not be confirmed; `notice` tells the user what to do next. */
+  | { readonly kind: "interrupted"; readonly notice: string };
+
+/**
+ * Runs the steps and turns whatever they throw into an outcome. A
+ * command's own error is a real failure. A lost reply (the rpc was sent,
+ * its answer never came back) is not: the daemon finishes a ship
+ * mutation even when the connection that asked for it is gone, so the
+ * outcome is reconciled from the daemon's own record instead.
+ */
+async function carryOut(
+  workerId: string,
+  shipId: string,
+  draft: ShipDraft,
+  dispatch: ShipDispatch,
+  steps: ShipSteps,
+  attempt: ShipAttempt,
+): Promise<ShipOutcome> {
+  try {
+    return { kind: "settled", result: await steps(workerId, shipId, draft, attempt) };
+  } catch (err) {
+    if (!isOutcomeUnknown(err)) return { kind: "failed", error: toShipError(err) };
+    return reconcileLostReply(err.cmd, dispatch, attempt);
+  }
+}
+
+/** The one row that stands for an unconfirmed step; `ShipProgress` shows an unknown step's raw name, so it is Title Case. */
+const AWAITING_CONFIRMATION_STEP = "Awaiting Confirmation";
+
+const STEP_FINISHED_NOTICE =
+  "The Step Finished But Its Reply Was Lost. The Preview Is Refreshed — Ship Again To Continue.";
+
+const UNCONFIRMED_NOTICE =
+  "No Confirmation Arrived. The Commit Or Push May Still Be Running, Or The Daemon May Have Restarted — Check The Refreshed Preview Before Shipping Again.";
+
+/**
+ * Settles an attempt whose last rpc was sent but never answered. The
+ * flow stays `"running"` (no buttons, the in-flight guard held) while the
+ * daemon's record is awaited for up to `rpcDeadlineMs(cmd)`, the longest
+ * the lost call could still have been running:
+ *
+ * - the `ship_settled` receipt decides it (success or failure);
+ * - the lost call's terminal `ship_progress` row without a receipt means
+ *   the step finished but the chain stopped, so the receipt gets
+ *   `SHIP_SETTLED_TIMEOUT_MS` more, then the preview is refreshed;
+ * - nothing at all means the call may still be running or the daemon
+ *   restarted: the preview is refreshed and the user decides.
+ *
+ * Both of the daemon's records are persistent events replayed to a
+ * client that reconnects, which is how a reply lost with the socket is
+ * recovered.
+ */
+async function reconcileLostReply(
+  cmd: string,
+  dispatch: ShipDispatch,
+  { recorder, known }: ShipAttempt,
+): Promise<ShipOutcome> {
+  dispatch({
+    type: "progressReported",
+    row: {
+      step: AWAITING_CONFIRMATION_STEP,
+      status: "running",
+      detail: "The Reply Was Lost — Waiting For The Daemon's Record.",
+    },
+  });
+
+  const first = await recorder.next(rpcDeadlineMs(cmd), cmd);
+  if (first === "terminal") await recorder.next(SHIP_SETTLED_TIMEOUT_MS);
+
+  const receipt = recorder.receipt();
+  if (receipt === null) {
+    return {
+      kind: "interrupted",
+      notice: first === "terminal" ? STEP_FINISHED_NOTICE : UNCONFIRMED_NOTICE,
+    };
+  }
+  if (receipt.status !== "ok") {
+    const error = receipt.error ?? {
+      kind: "unknown",
+      message: "The Daemon Reported That The Ship Failed.",
+      remedy: null,
+    };
+    dispatch({
+      type: "progressReported",
+      row: { step: AWAITING_CONFIRMATION_STEP, status: "error", detail: error.message },
+    });
+    return { kind: "failed", error };
+  }
+  dispatch({
+    type: "progressReported",
+    row: {
+      step: AWAITING_CONFIRMATION_STEP,
+      status: "ok",
+      detail: "Confirmed By The Daemon's Record.",
+    },
+  });
+  return {
+    kind: "settled",
+    result: {
+      commitSha: receipt.commitSha ?? known.commitSha,
+      pushedRef: receipt.pushedRef ?? known.pushedRef,
+      prUrl: receipt.prUrl ?? undefined,
+    },
+  };
 }
 
 /** "Commit Only": stage + commit as the final step, awaiting its own receipt. */
@@ -473,15 +605,11 @@ async function commitOnlySteps(
   workerId: string,
   shipId: string,
   { message, mode }: ShipDraft,
+  { recorder, known }: ShipAttempt,
 ): Promise<ShipResult> {
-  const receipt = armSettledWait(shipId);
-  const commit = await gitStageCommit(workerId, shipId, message, mode, true).catch(
-    (err: unknown) => {
-      receipt.disarm();
-      throw err;
-    },
-  );
-  await receipt.settled();
+  const commit = await gitStageCommit(workerId, shipId, message, mode, true);
+  known.commitSha = commit.sha;
+  await requireReceipt(recorder);
   return { commitSha: commit.sha };
 }
 
@@ -490,6 +618,7 @@ async function commitAndPushSteps(
   workerId: string,
   shipId: string,
   { message, mode, preflight }: ShipDraft,
+  { recorder, known }: ShipAttempt,
 ): Promise<ShipResult> {
   const commitSha = await stageOrRecoverFromNothingToCommit(
     workerId,
@@ -498,15 +627,11 @@ async function commitAndPushSteps(
     mode,
     preflight,
   );
-  // Armed *before* the call whose completion races the event: the
-  // backend can emit ship_settled at any point during the push,
-  // including before its invoke() promise resolves.
-  const receipt = armSettledWait(shipId);
-  const push = await gitPush(workerId, shipId, true).catch((err: unknown) => {
-    receipt.disarm();
-    throw err;
-  });
-  await receipt.settled();
+  known.commitSha = commitSha ?? undefined;
+  const push = await gitPush(workerId, shipId, true);
+  known.commitSha = commitSha ?? push.sha;
+  known.pushedRef = push.pushedRef;
+  await requireReceipt(recorder);
   return { commitSha: commitSha ?? push.sha, pushedRef: push.pushedRef };
 }
 
@@ -515,6 +640,7 @@ async function commitPushAndCompareSteps(
   workerId: string,
   shipId: string,
   { message, mode, preflight, composedBody }: ShipDraft,
+  { recorder, known }: ShipAttempt,
 ): Promise<ShipResult> {
   const commitSha = await stageOrRecoverFromNothingToCommit(
     workerId,
@@ -523,13 +649,15 @@ async function commitPushAndCompareSteps(
     mode,
     preflight,
   );
+  known.commitSha = commitSha ?? undefined;
   const push = await gitPush(workerId, shipId, false);
+  known.commitSha = commitSha ?? push.sha;
+  known.pushedRef = push.pushedRef;
   const [title = message, ...bodyLines] = message.split("\n");
   // The compare body is the composed causal body (deterministic Causal
   // Record + optional AI prose) when it has loaded, else the commit
   // message's own trailing lines — shipping never waits on the record.
   const body = composedBody ?? bodyLines.join("\n").trim();
-  const receipt = armSettledWait(shipId);
   const prUrl = await shipCompareUrl(
     workerId,
     shipId,
@@ -537,11 +665,8 @@ async function commitPushAndCompareSteps(
     push.pushedRef,
     title,
     body,
-  ).catch((err: unknown) => {
-    receipt.disarm();
-    throw err;
-  });
-  await receipt.settled();
+  );
+  await requireReceipt(recorder);
   return { commitSha: commitSha ?? push.sha, pushedRef: push.pushedRef, prUrl };
 }
 
@@ -575,53 +700,141 @@ async function stageOrRecoverFromNothingToCommit(
   }
 }
 
-/** The receipt wait for one ship attempt, from {@link armSettledWait}. */
-interface SettledWait {
-  /** Resolves once the receipt has arrived (now or earlier); rejects with a `"timeout"` `ShipCommandError` if it is still missing `SHIP_SETTLED_TIMEOUT_MS` after this call. */
-  readonly settled: () => Promise<void>;
-  /** Drops the listener; called when the final invoke rejects, because no receipt will be awaited. */
-  readonly disarm: () => void;
+/** The `ship_settled` receipt, as the reconcile path reads it. */
+interface ShipReceipt {
+  readonly status: string;
+  readonly commitSha: string | null;
+  readonly pushedRef: string | null;
+  readonly prUrl: string | null;
+  readonly error: ShipError | null;
+}
+
+/** What ended a {@link ShipRecorder.next} wait. */
+type RecorderWake = "receipt" | "terminal" | "timeout";
+
+/**
+ * The `ship_progress` steps each ship command ends on (`swarm_core`'s
+ * ship chain): `git_stage_commit` ends on `commit` ok, or on a
+ * `staging`/`commit` error; `git_push` on `push`; `ship_compare_url` on
+ * `compare`. A row for one of these steps that is an error, or the
+ * last step's `ok`, means the command finished.
+ */
+const COMMAND_STEPS = new Map<string, readonly string[]>([
+  ["git_stage_commit", ["staging", "commit"]],
+  ["git_push", ["push"]],
+  ["ship_compare_url", ["compare"]],
+]);
+
+/** Everything the steps and the reconcile path share for one attempt. */
+interface ShipAttempt {
+  readonly recorder: ShipRecorder;
+  /** What the flow has learned so far, to fill what a receipt leaves out. */
+  readonly known: { commitSha?: string; pushedRef?: string };
+}
+
+/** The recorder of one ship attempt, from {@link recordShip}. */
+interface ShipRecorder {
+  /** The receipt, once it has arrived; `null` before. */
+  readonly receipt: () => ShipReceipt | null;
+  /**
+   * Resolves `"receipt"` as soon as the receipt is recorded (now or
+   * later), `"terminal"` as soon as `terminalOf`'s command has a
+   * terminal row recorded, or `"timeout"` after `timeoutMs`.
+   */
+  readonly next: (timeoutMs: number, terminalOf?: string) => Promise<RecorderWake>;
+  /** Drops the event subscriptions. */
+  readonly dispose: () => void;
 }
 
 /**
- * Starts listening for this attempt's `ship_settled` receipt *before* the
- * final step's invoke, because the backend can emit it before that
- * invoke resolves. Arrival is only recorded here; the
- * `SHIP_SETTLED_TIMEOUT_MS` clock starts in `settled()`, after the invoke
- * resolved, so a slow but successful commit or push is never reported as
- * a timeout. A backend give-up rejects the invoke, not this wait. The
- * timeout rejects as a `ShipCommandError` of kind `"timeout"` (the git
- * step may still have completed) with the `waitFor` error as its cause.
+ * Records this attempt's `ship_progress` rows and `ship_settled`
+ * receipt from before the first invoke, because the backend can emit
+ * either at any point during a call, including before its response, and
+ * a call whose response is lost leaves them as the only evidence of how
+ * it ended. Progress rows also feed the live checklist.
  */
-function armSettledWait(shipId: string): SettledWait {
-  const isReceipt = (e: DomainEvent): boolean =>
-    e.type === "ship_settled" &&
-    ShipSettledPayloadSchema.safeParse(e.payload).data?.shipId === shipId;
-  let arrived = false;
-  const disarm = onEvent("*", (e) => {
-    if (!isReceipt(e)) return;
-    arrived = true;
-    disarm();
+function recordShip(workerId: string, shipId: string, dispatch: ShipDispatch): ShipRecorder {
+  let receipt: ShipReceipt | null = null;
+  const stepStatus = new Map<string, ShipProgressRow["status"]>();
+  const waiters = new Set<() => void>();
+  const notify = (): void => {
+    for (const waiter of [...waiters]) waiter();
+  };
+
+  const offProgress = onEvent("ship_progress", (e) => {
+    const parsed = ShipProgressPayloadSchema.safeParse(e.payload);
+    if (!parsed.success) return;
+    const { shipId: eventShipId, workerId: eventWorkerId, step, status, detail } = parsed.data;
+    if (eventShipId !== shipId || eventWorkerId !== workerId) return;
+    stepStatus.set(step, status);
+    dispatch({ type: "progressReported", row: { step, status, detail: detail ?? null } });
+    notify();
   });
+  const offSettled = onEvent("ship_settled", (e) => {
+    if (e.payload.shipId !== shipId || receipt !== null) return;
+    const { status, commitSha, pushedRef, prUrl, error } = e.payload;
+    receipt = {
+      status,
+      commitSha: commitSha ?? null,
+      pushedRef: pushedRef ?? null,
+      prUrl: prUrl ?? null,
+      error: error ?? null,
+    };
+    notify();
+  });
+
+  const terminalRowSeen = (cmd: string): boolean => {
+    const steps = COMMAND_STEPS.get(cmd) ?? [];
+    return steps.some((step) => {
+      const status = stepStatus.get(step);
+      return status === "error" || (status === "ok" && step === steps.at(-1));
+    });
+  };
+  const ready = (terminalOf: string | undefined): RecorderWake | null => {
+    if (receipt !== null) return "receipt";
+    return terminalOf !== undefined && terminalRowSeen(terminalOf) ? "terminal" : null;
+  };
+
   return {
-    disarm,
-    settled: async () => {
-      disarm();
-      if (arrived) return;
-      try {
-        await waitFor(isReceipt, SHIP_SETTLED_TIMEOUT_MS);
-      } catch (err) {
-        throw new ShipCommandError(
-          {
-            kind: "timeout",
-            message: `No Confirmation Arrived Within ${SHIP_SETTLED_TIMEOUT_MS / 1000} Seconds — The Commit Or Push May Still Have Completed; Refresh The Preflight To Check.`,
-            remedy: null,
-          },
-          { cause: err },
-        );
-      }
+    receipt: () => receipt,
+    next: (timeoutMs, terminalOf) => {
+      const now = ready(terminalOf);
+      if (now !== null) return Promise.resolve(now);
+      const { promise, resolve } = Promise.withResolvers<RecorderWake>();
+      const finish = (wake: RecorderWake): void => {
+        clearTimeout(timer);
+        waiters.delete(check);
+        resolve(wake);
+      };
+      const check = (): void => {
+        const wake = ready(terminalOf);
+        if (wake !== null) finish(wake);
+      };
+      const timer = setTimeout(() => finish("timeout"), timeoutMs);
+      waiters.add(check);
+      return promise;
+    },
+    dispose: () => {
+      offProgress();
+      offSettled();
     },
   };
+}
+
+/**
+ * B1: after the final step's invoke resolved, the receipt may still be
+ * missing for up to `SHIP_SETTLED_TIMEOUT_MS`. It is awaited here, not
+ * from the call's start, so a slow but successful commit or push is
+ * never reported as a timeout. The timeout is a `ShipCommandError` of
+ * kind `"timeout"` (the git step may still have completed).
+ */
+async function requireReceipt(recorder: ShipRecorder): Promise<void> {
+  if ((await recorder.next(SHIP_SETTLED_TIMEOUT_MS)) !== "timeout") return;
+  throw new ShipCommandError({
+    kind: "timeout",
+    message: `No Confirmation Arrived Within ${SHIP_SETTLED_TIMEOUT_MS / 1000} Seconds — The Commit Or Push May Still Have Completed; Refresh The Preflight To Check.`,
+    remedy: null,
+  });
 }
 
 /** Extracts the typed `ShipError` from a thrown `ShipCommandError`, falling back to a generic `"unknown"` for anything else (a task panic, a network hiccup). */

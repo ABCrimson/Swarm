@@ -99,7 +99,15 @@ vi.mock("#lib/event-bus", () => ({
 }));
 let mockLastSeq = 0;
 
-import { DaemonAuthError, initTokenFromLocationHash, WsTransport } from "#lib/transport";
+import {
+  DaemonAuthError,
+  initTokenFromLocationHash,
+  isOutcomeUnknown,
+  RpcConnectionLostError,
+  RpcTimeoutError,
+  rpcDeadlineMs,
+  WsTransport,
+} from "#lib/transport";
 
 function latestSocket(): FakeWebSocket {
   const s = FakeWebSocket.instances.at(-1);
@@ -554,9 +562,9 @@ describe("wsTransport", () => {
 
     it("keeps a socket that is still receiving frames when one RPC times out", async () => {
       vi.useFakeTimers();
-      const invokePromise = transport.invoke("git_push");
+      const invokePromise = transport.invoke("list_workers");
       const assertion = expect(invokePromise).rejects.toThrow(
-        'RPC "git_push" Timed Out After 30000ms.',
+        'RPC "list_workers" Timed Out After 30000ms.',
       );
       const socket = openAndReady(0);
       await vi.advanceTimersByTimeAsync(10_000);
@@ -566,6 +574,76 @@ describe("wsTransport", () => {
       await assertion;
       expect(socket.readyState).toBe(FakeWebSocket.OPEN);
       expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it("keeps a git_push rpc pending past 30 s and accepts its late rpcResult", async () => {
+      vi.useFakeTimers();
+      const invokePromise = transport.invoke<{ pushedRef: string }>("git_push", { shipId: "s" });
+      const settled = vi.fn();
+      invokePromise.then(settled, settled);
+      const socket = openAndReady(0);
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(settled).not.toHaveBeenCalled();
+
+      socket.simulateServerFrame({
+        frame: "rpcResult",
+        id: lastRpc(socket).id,
+        ok: true,
+        result: { pushedRef: "origin/x" },
+      });
+      await expect(invokePromise).resolves.toStrictEqual({ pushedRef: "origin/x" });
+      expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+    });
+
+    it("rejects git_stage_commit with RpcTimeoutError only at its own deadline", async () => {
+      vi.useFakeTimers();
+      const deadline = rpcDeadlineMs("git_stage_commit");
+      const outcome = transport.invoke("git_stage_commit").then(
+        () => null,
+        (err: unknown) => err,
+      );
+      const settled = vi.fn();
+      void outcome.then(settled);
+      openAndReady(0);
+
+      await vi.advanceTimersByTimeAsync(deadline - 1);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      const err = await outcome;
+      expect(err).toBeInstanceOf(RpcTimeoutError);
+      expect(err).toMatchObject({ cmd: "git_stage_commit", deadlineMs: deadline });
+      expect(isOutcomeUnknown(err)).toBe(true);
+    });
+
+    it("rejects a pending rpc with RpcConnectionLostError when the socket closes", async () => {
+      vi.useFakeTimers();
+      const outcome = transport.invoke("git_push").then(
+        () => null,
+        (err: unknown) => err,
+      );
+      const socket = openAndReady(0);
+      await vi.advanceTimersByTimeAsync(0);
+      socket.simulateAbruptClose();
+
+      const err = await outcome;
+      expect(err).toBeInstanceOf(RpcConnectionLostError);
+      expect(err).toMatchObject({ cmd: "git_push", message: "WebSocket Connection Closed." });
+      expect(isOutcomeUnknown(err)).toBe(true);
+    });
+
+    it("treats a failure before the frame is sent as a definite failure, not an unknown outcome", async () => {
+      const notConnected = transport.invoke("git_push");
+      const socket = openAndReady(0);
+      socket.simulateAbruptClose();
+      const notConnectedErr = await notConnected.catch((err: unknown) => err);
+      expect(notConnectedErr).toMatchObject({ message: "Not Connected To The SWARM Daemon." });
+      expect(isOutcomeUnknown(notConnectedErr)).toBe(false);
+
+      expect(isOutcomeUnknown(new DaemonAuthError())).toBe(false);
+      expect(isOutcomeUnknown({ kind: "pushRejected" })).toBe(false);
+      expect(isOutcomeUnknown(new Error("WebSocket Closed Before The Handshake Completed."))).toBe(
+        false,
+      );
     });
 
     it("fails fast when the socket drops between the handshake and the send", async () => {
