@@ -39,7 +39,7 @@
 - **Where the plan starts.** The current release is 0.13.1 (`package.json` version; the Cargo workspace version in `Cargo.toml` matches). `CHANGELOG.md` `[Unreleased]` holds the Tauri 3 (alpha) modernization and the product fixes of Milestone 0 (M0), for example per-command RPC deadlines for ship over `swarmd` (M0.6). That section has a Breaking heading, so it ships as a 0.y release: proposed 0.14.0. It is the starting line, not one of the ten. Before 0.14.0 ships, Milestone 0's event-log durability change is measured on macOS and NTFS, and a p50 over 5 ms blocks the release (G3 V-A2).
 - **What a major is.** A named release that delivers one outcome a user can observe. Before 1.0 a major is a `0.y.0` release (SemVer treats every 0.y bump as possibly breaking). From 1.0 on, a major that keeps every stored event log, wire frame and command contract compatible ships as the next `1.y.0`; a major that breaks any of them ships as the next `x.0.0` instead, and the table below shifts by that one number.
 - **What a minor is.** The point releases between two majors (`0.y.z` / `1.y.z`): dependency refreshes, follow-ups, hardening and docs truth. A minor never changes a stored log, a wire frame or a command contract.
-- **Where 1.0 falls, and why.** 1.0.0 is the sixth major. By then the event log is durable and replayable with upcasters (0.15.0), one job survives a crash without repeating an effect (0.16.0), acceptance is bound to an exact tree and reviewed by an identity other than the author (0.17.0), and every attempt's cost is ledgered (0.19.0). 1.0.0 itself adds release evidence: signed and notarized installers and attestations. 1.0 is a compatibility and trust promise, not a claim that more agents produce better work. That claim is measured in 1.1.0, and only what wins there is scaled in 1.4.0.
+- **Where 1.0 falls, and why.** 1.0.0 is the sixth major. By then the event log is durable and replayable with upcasters (0.15.0), one job survives a crash without repeating an effect (0.16.0), acceptance is bound to an exact tree and reviewed by an identity other than the author (0.17.0), and every attempt's cost is ledgered (0.19.0). 1.0.0 itself adds release evidence: signed and notarized installers, and signed attestations over the event log that `swarm verify` checks (build-provenance attestations already ship). 1.0 is a compatibility and trust promise, not a claim that more agents produce better work. That claim is measured in 1.1.0, and only what wins there is scaled in 1.4.0.
 - **Sizes.** S is at most 2 days, M at most 1 week, L at most 3 weeks, XL more than 3 weeks of one focused lane. A size is an estimate of effort, not a date.
 - **How acceptance is proven.** This applies to every major; each section names its specific evidence.
   1. Each named test or command passes on the exact integrated tree, and the evidence records argv, timestamps, exit code, tree hash, runtime identities (toolchain and provider CLI versions) and fixture and output digests (the M0 evidence rule).
@@ -71,16 +71,14 @@ Rows 1, 4, 8, 9 and 10 take their epics' planned sizes; rows 2, 3, 5, 6 and 7 ar
 
 ## Minor Releases Before 0.15.0
 
-- Dependency refresh under the newest-on-any-channel rule (`AGENTS.md`); `@xyflow/react` moves to 13 once a build with provenance exists or the owner accepts pnpm's trust-downgrade refusal of 13.0.0-next.0. — G1
+- Dependency refresh under the newest-on-any-channel rule (`AGENTS.md`); `@xyflow/react` moves to 13 once a build with provenance exists or the owner chooses to override pnpm's trust-downgrade refusal of 13.0.0-next.0. — G1
 - Escape the remaining raw path and name renders outside the display-escape census (file tree, worker detail, session views and others). — M0.2 follow-up (G2)
 - In the browser build, command-palette and template spawns stop creating webview Anthropic workers. — M0.8 follow-up (G4)
-- A rapid A, B, A settings edit can leave an older pushed value on the backend; close that edge. — M0.8 follow-up (G4)
 - Claude adapter follow-ups: clean up the probe directory when a probe is dropped, and close the documented gap for subagents started with `isolation: "worktree"`. — M0.1 follow-up (G2)
-- Decide, then implement, how Standard and Write-Enabled Claude workers receive the repository's own instructions (CLAUDE.md, rules, AGENTS.md) once Milestone 0's adapter-trust change runs them with `--setting-sources ""`. This is an owner decision. — M0.1 follow-up (G2)
+- Decide, then implement, how Standard and Write-Enabled Claude workers receive the repository's own instructions (`CLAUDE.md`, `.claude/rules`, `.claude/skills`), which they no longer load since Milestone 0's adapter-trust change runs them with `--setting-sources ""` ([ADR-0038](adr/0038-agent-provider-trust-model.md)); `AGENTS.md` loaded under neither setting in that runtime check. This is an owner decision. — M0.1 follow-up (G2)
 - Codex adapter watch: the app-server schema marks `ThreadStartResponse.sandbox` as legacy in favor of `activePermissionProfile` (the schema generated by codex-cli 0.163.0-alpha.5, read 2026-10-13); the adapter moves when it is removed. — G2 watch item
-- Make the `swarmd` worker-stop timeout outlast the attach wait on shutdown. — G3 follow-up
-- Run the Windows-only and macOS-only code paths on native CI runners, not only by compiling them. — G2, G5 follow-ups
-- Docs truth: recount the per-command RPC deadlines and correct stale transport comments after Milestone 0 integrates. — G4, G5 follow-ups
+- Claude adapter: a `spawn_session` dropped mid-handshake shuts its CLI down instead of leaving it running (a drop guard, as the Codex adapter has). — G3 follow-up
+- Run the integrated branch through the CI Rust matrix (`windows-2025` and `macos-26` in `.github/workflows/ci.yml`): the Claude adapter's Windows-only branches (`cfg(not(unix))`, `PATHEXT`) have not been built locally, and the Rust hook fixture has run only on Linux and WSL. — G2, G5 follow-ups
 
 ---
 
@@ -88,7 +86,7 @@ Rows 1, 4, 8, 9 and 10 take their epics' planned sizes; rows 2, 3, 5, 6 and 7 ar
 
 ### Outcome
 
-A command happens exactly once or visibly fails, survives a crash or restart, and reaches every client within bounded time and bytes. Today a reconnecting `swarmd` client replays every persisted event after its last seq however far behind it is (module doc of `crates/swarmd/src/ws.rs`), there is no command receipt or effect outbox, and killing a worker signals only its shell ([Known Gaps](architecture.md#known-gaps)).
+A command happens exactly once or visibly fails, survives a crash or restart, and reaches every client within bounded time and bytes. Today a reconnecting `swarmd` client replays every persisted event after its last seq however far behind it is (module doc of `crates/swarmd/src/ws.rs`), only a ship attempt ends in a receipt (`ship_settled`) while other commands carry no command id or durable receipt, there is no effect outbox, and killing a worker signals only its shell ([Known Gaps](architecture.md#known-gaps)).
 
 ### Scope
 
@@ -225,7 +223,7 @@ You see, comment on, rewind and ship each worker's changes as a pull request, wi
 
 - Turn checkpoints as hidden refs, with a deny-list that keeps secrets out of checkpoint objects. — W3.3
 - Diff viewer with line comments that become composer context; each hunk links to the seq that wrote it. — W3.4
-- `swarm-forge` crate: GitHub first, reuse-or-create pull requests whose body carries the full Causal Record; the compare page stays as the fallback. Push destinations are immutable and PR creation binds to receipts. — W3.5, M4
+- `swarm-forge` crate: GitHub first, reuse-or-create pull requests whose body carries the full Causal Record; the compare page stays as the fallback. Push destinations are immutable and PR creation binds to receipts (a push already binds its commit sha, and the compare receipt already comes from the recorded push). — W3.5, M4
 - PR watch reactor, started by agents through the `swarm_watch_pr` tool: failing checks, remarks and conflicts wake the worker within fixed caps. — W3.6
 - Rewind a worker's files to a checkpoint, never touching another worker's tree. — W3.7
 - Cross-worker conflict radar before either worker ships. — W3.8
@@ -268,7 +266,7 @@ You see what every attempt costs, every resource is bounded, and the job, review
 - A unified attempt ledger with cache categories and an authoritative / estimated / unknown status on every amount; reservations and hard ceilings. — M3
 - Usage limits with scheduler deferral at window exhaustion, and cost per merged hunk; live model discovery replaces the hard-coded catalog. — W4.9
 - Disk and byte quotas, paged transcripts, retention and export; app-wide daemon limits; replay watermarks. — M3
-- Capability metadata authoritative at every control, including a `localStores` transport capability. — M3, G4 follow-up
+- Capability metadata authoritative at every control. — M3
 - Typed routes with deep links, and feature folders. — W4.1
 - Inbox and notifications: Needs You, Working and Done-Unread shelves; OS notifications that deep-link to the turn. — W4.2
 - Virtualized conversation timeline. — W4.3
@@ -455,7 +453,7 @@ More providers (ACP agents) and mixed teams where the 1.1.0 measurements show a 
 - Scheduled prompts and multi-repo. — W6.4
 - Desktop as a client of several environments (WSL and remote side by side). — W7.2
 - SSH launcher. — W7.3
-- A real Windows service; `swarmd` runs as a per-user logon Scheduled Task today (ADR 0029). — W7.6
+- A real Windows service; `swarmd` runs as a per-user logon Scheduled Task today ([ADR-0029](adr/0029-windows-daemon-logon-task.md)). — W7.6
 - A PWA served by `swarmd`. — W7.7
 
 Gate: the ACP and team pieces (W6.1-W6.3) ship only if the 1.1.0 measurements show the governed, multi-agent arm wins for their workload; the machine pieces do not depend on it.
@@ -498,7 +496,7 @@ Gate: the ACP and team pieces (W6.1-W6.3) ship only if the 1.1.0 measurements sh
 
 ## Sources
 
-- Repository at commit 090c47c, read 2026-10-13: `package.json` (version 0.13.1), `Cargo.toml` (`[workspace.package]` version), `CHANGELOG.md` `[Unreleased]`, `docs/architecture.md` (Known Gaps), `docs/daemon.md`, `docs/e2e.md`, `docs/updater-keys.md`, `docs/adr/README.md` (ADRs 0001-0037), `docs/adr/0029-windows-daemon-logon-task.md`, `.github/workflows/release.yml`, `crates/swarmd/src/ws.rs` (module doc), `crates/swarm-core/src/config.rs`, `crates/swarm-core/src/agent/codex.rs` (module doc: verified against codex-cli 0.156.1).
+- Repository at commit f243f17, read 2026-10-13: `package.json` (version 0.13.1), `Cargo.toml` (`[workspace.package]` version), `CHANGELOG.md` `[Unreleased]`, `.peak-modern-holds.json`, `docs/architecture.md` (Known Gaps), `docs/daemon.md`, `docs/e2e.md`, `docs/updater-keys.md`, `docs/adr/README.md` (ADRs 0001-0040), `docs/adr/0029-windows-daemon-logon-task.md`, `docs/adr/0038-agent-provider-trust-model.md`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `crates/swarmd/src/ws.rs` (module doc), `crates/swarm-core/src/config.rs`, `crates/swarm-core/src/agent/codex.rs` (module doc: verified against codex-cli 0.156.1).
 - Planning record (not in this repository): the Waves 2-8 roadmap (2026-10-10); the Wave 2 durable-spine design and plan (2026-10-10); three external reviews pasted by the owner (a design review, an audit and an implementation roadmap with milestones M0-M5, 2026-10-12); the integration log and reports G1-G7 and G9 (2026-10-13).
 - codex-cli 0.163.0-alpha.5 app-server schema, generated 2026-10-13 (G2).
 - Agent Client Protocol, fetched 2026-10-13: https://agentclientprotocol.com/overview/introduction, https://agentclientprotocol.com/get-started/registry, https://agentclientprotocol.com/get-started/agents, https://raw.githubusercontent.com/agentclientprotocol/registry/main/FORMAT.md ("Each binary distribution may include a `sha256` …").

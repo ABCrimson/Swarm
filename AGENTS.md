@@ -159,7 +159,7 @@ Content rules:
   command names are checked against the code or a command run today, in the
   same change that moves them. If a number is not worth re-measuring, leave it
   out.
-- Do not commit plans, research notes or agent scratch files.
+- Do not commit plans, research notes or agent scratch files. The one exception is `docs/roadmap.md`, the public release plan: what it says exists today follows the rule above and is re-checked at every release head.
 
 ## Gates
 
