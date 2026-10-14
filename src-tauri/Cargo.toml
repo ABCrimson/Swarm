@@ -39,11 +39,7 @@ parking_lot               = { workspace = true }
 tracing                   = { workspace = true }
 tracing-subscriber        = { workspace = true }
 # The release log's writer thread (`tracing_appender::non_blocking`).
-# Pinned here rather than in the workspace table: swarm-desktop is its
-# only user. It adds only itself and the small `symlink` crate to the
-# lock; crossbeam-channel, time, thiserror and tracing-subscriber are
-# already in the tree.
-tracing-appender          = "=0.2.5"
+tracing-appender          = { workspace = true }
 
 [dev-dependencies]
 # `test` adds tauri::test's MockRuntime, which drives real IPC requests
