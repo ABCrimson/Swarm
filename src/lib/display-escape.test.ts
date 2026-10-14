@@ -50,7 +50,11 @@ describe("escapeForDisplay's home", () => {
   it("is defined only in #lib/display-escape and imported only from there", () => {
     const entries = Object.entries(sources);
     const definers = entries
-      .filter(([, text]) => /\b(?:function\s+escapeForDisplay|escapeForDisplay\s*=)/.test(text))
+      .filter(([, text]) =>
+        /\bfunction\s*\*?\s*escapeForDisplay\b|\b(?:const|let|var)\s+escapeForDisplay\b|\bexport\s*\{[^}]*\bescapeForDisplay\b[^}]*\}/.test(
+          text,
+        ),
+      )
       .map(([path]) => path);
     const strays = entries
       .filter(([, text]) =>
