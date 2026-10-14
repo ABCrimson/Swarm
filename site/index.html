@@ -232,7 +232,7 @@
       <li class="claim">
         <h3>The Event Log Flushes Every Commit</h3>
         <blockquote cite="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0039-event-log-flushes-every-commit.md"><p><code>EventLog::init</code> sets <code>PRAGMA synchronous = EXTRA</code> and <code>PRAGMA fullfsync = 1</code> on the writer connection, reads both back (neither pragma echoes its value) and fails the open with <code>AppError::EventLog</code> unless they read 3 and 1.</p></blockquote>
-        <p>The cost measured on 2026-10-13 on an ext4 WSL2 disk is about 2 ms per persistent event; native Windows NTFS and macOS are unmeasured.</p>
+        <p>The cost per persistent event at the shipped setting: about 2 ms on an ext4 WSL2 disk (2026-10-13), 0.75 ms p50 on macOS APFS and 3.37 ms p50 on native Windows NTFS on GitHub-hosted runners (2026-10-14), all under the 5 ms gate of ADR-0039.</p>
         <p class="source"><span class="tag">v0.14.0</span><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0039-event-log-flushes-every-commit.md">ADR-0039</a><a href="./performance.html#event-log-persistence">Event Log Persistence</a></p>
       </li>
       <li class="claim">
