@@ -132,4 +132,20 @@ describe("useWorker", () => {
       description: "Worker Not Found",
     });
   });
+
+  it("toasts a DOMException-like error by its message when Error.isError rejects it (WebKit)", async () => {
+    using _isError = vi.spyOn(Error, "isError").mockReturnValue(false);
+    const worker = seed();
+    // jsdom's DOMException lives in another realm than `Error`; WebKit's reaches
+    // Error.prototype, which an Error named AbortError reproduces.
+    const abort = Object.assign(new Error("Backend Gone"), { name: "AbortError" });
+    vi.mocked(killWorker).mockRejectedValue(abort);
+    const { result } = renderHook(() => useWorker(worker.id));
+
+    await act(async () => result.current.kill());
+
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith("Could Not Kill Worker", {
+      description: "Backend Gone",
+    });
+  });
 });

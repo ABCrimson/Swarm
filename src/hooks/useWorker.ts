@@ -1,5 +1,6 @@
 import { useOptimistic, useTransition } from "react";
 import { toast } from "#components/ui/Toast";
+import { errorMessage } from "#lib/is-error";
 import { killWorker, pauseWorker, resumeWorker } from "#lib/tauri";
 import type { Worker, WorkerState } from "#store/types";
 import { useWorkerAgentStore } from "#store/worker-agents";
@@ -43,7 +44,7 @@ export function useWorker(id: string): UseWorkerReturn {
         await command(id);
         onSuccess();
       } catch (err) {
-        toast.error(failure, { description: Error.isError(err) ? err.message : String(err) });
+        toast.error(failure, { description: errorMessage(err) });
       }
     });
   };
