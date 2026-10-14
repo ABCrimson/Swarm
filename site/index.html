@@ -36,7 +36,7 @@
       <dt>Latest Release</dt>
       <dd><!-- LATEST_RELEASE --></dd>
       <dt>On <code>main</code></dt>
-      <dd>Unreleased work proposed as <data value="0.14.0">0.14.0</data>, including breaking changes: the desktop shell moves to Tauri 3 (alpha). <a href="https://github.com/ABCrimson/Swarm/blob/main/CHANGELOG.md#unreleased">Read The Changelog</a></dd>
+      <dd>Changes since v0.14.0 are listed under Unreleased in the changelog. <a href="https://github.com/ABCrimson/Swarm/blob/main/CHANGELOG.md#unreleased">Read The Changelog</a></dd>
     </dl>
     <p class="actions">
       <a class="primary" href="./architecture.html">Read The Architecture</a>
@@ -202,12 +202,12 @@
 
   <section class="section claims" aria-labelledby="today">
     <h2 id="today">What The Code Does Today</h2>
-    <p>Each item is true of the code this site was built from and links to the record that pins it. An item tagged Unreleased describes changes made after v0.13.1 and listed under Unreleased in the changelog; the untagged items already held in v0.13.1.</p>
+    <p>Each item is true of the code this site was built from and links to the record that pins it. An item tagged v0.14.0 is new or changed in v0.14.0 (2026-10-14); the untagged items already held in v0.13.1.</p>
     <ul>
       <li class="claim">
         <h3>One Core, Two Shells</h3>
-        <p>The Tauri 3 (alpha) desktop app and the headless <code>swarmd</code> daemon both run <code>swarm-core</code>, a Rust library with no Tauri dependency, and dispatch through the same command registry: 36 commands, plus 2 native ones only the desktop has.</p>
-        <p class="source"><span class="tag">Unreleased</span><a href="./architecture.html#runtime-modes">Runtime Modes</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0001-tauri-free-core-two-shells.md">ADR-0001</a></p>
+        <p>The Tauri 3 (alpha) desktop app and the headless <code>swarmd</code> daemon both run <code>swarm-core</code>, a Rust library with no Tauri dependency, and dispatch through the same command registry: 36 commands, plus 3 native ones only the desktop has.</p>
+        <p class="source"><span class="tag">v0.14.0</span><a href="./architecture.html#runtime-modes">Runtime Modes</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0001-tauri-free-core-two-shells.md">ADR-0001</a></p>
       </li>
       <li class="claim">
         <h3>A Daemon You Reattach To</h3>
@@ -217,23 +217,23 @@
       <li class="claim">
         <h3>Two Providers Behind One Trait Pair</h3>
         <p>Claude Code runs over its stream-json control protocol and Codex over <code>codex app-server</code> JSON-RPC, both behind the <code>AgentAdapter</code> and <code>AgentSession</code> traits. A session runs in one of three trust tiers, <code>restricted</code>, <code>standard</code> or <code>write_enabled</code>, and bypass modes cannot be constructed.</p>
-        <p class="source"><span class="tag">Unreleased</span><a href="./architecture.html#adapter-layer">Adapter Layer</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0013-provider-adapter-trait-pair.md">ADR-0013</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0015-trust-tiers-closed-vocabulary.md">ADR-0015</a></p>
+        <p class="source"><span class="tag">v0.14.0</span><a href="./architecture.html#adapter-layer">Adapter Layer</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0013-provider-adapter-trait-pair.md">ADR-0013</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0015-trust-tiers-closed-vocabulary.md">ADR-0015</a></p>
       </li>
       <li class="claim">
         <h3>Agent Sessions Trust No Repo Configuration</h3>
         <p>Claude Code sessions start with <code>--setting-sources ""</code>, so a repo's <code>.claude/settings.json</code> cannot run an <code>apiKeyHelper</code> or redirect the CLI. SWARM appends only the repo's <code>permissions.deny</code> entries: a repo can narrow a session and nothing else. Both adapters look for the CLI on absolute <code>PATH</code> entries only.</p>
-        <p class="source"><span class="tag">Unreleased</span><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0038-agent-provider-trust-model.md">ADR-0038</a></p>
+        <p class="source"><span class="tag">v0.14.0</span><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0038-agent-provider-trust-model.md">ADR-0038</a></p>
       </li>
       <li class="claim">
         <h3>A Kill Stops The Session First</h3>
         <p><code>kill_worker</code> marks the worker closing, waits for attaches in flight and shuts the provider session down before it touches the shell or the worktree. When it returns, no session of that worker is registered, still handshaking or still shutting down.</p>
-        <p class="source"><span class="tag">Unreleased</span><a href="./architecture.html#workers-and-ptys">Workers And PTYs</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0040-kill-stops-the-session-first.md">ADR-0040</a></p>
+        <p class="source"><span class="tag">v0.14.0</span><a href="./architecture.html#workers-and-ptys">Workers And PTYs</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0040-kill-stops-the-session-first.md">ADR-0040</a></p>
       </li>
       <li class="claim">
         <h3>The Event Log Flushes Every Commit</h3>
         <blockquote cite="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0039-event-log-flushes-every-commit.md"><p><code>EventLog::init</code> sets <code>PRAGMA synchronous = EXTRA</code> and <code>PRAGMA fullfsync = 1</code> on the writer connection, reads both back (neither pragma echoes its value) and fails the open with <code>AppError::EventLog</code> unless they read 3 and 1.</p></blockquote>
         <p>The cost measured on 2026-10-13 on an ext4 WSL2 disk is about 2 ms per persistent event; native Windows NTFS and macOS are unmeasured.</p>
-        <p class="source"><span class="tag">Unreleased</span><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0039-event-log-flushes-every-commit.md">ADR-0039</a><a href="./performance.html#event-log-persistence">Event Log Persistence</a></p>
+        <p class="source"><span class="tag">v0.14.0</span><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0039-event-log-flushes-every-commit.md">ADR-0039</a><a href="./performance.html#event-log-persistence">Event Log Persistence</a></p>
       </li>
       <li class="claim">
         <h3>A Git Worktree Per Worker</h3>
@@ -243,22 +243,22 @@
       <li class="claim">
         <h3>A Ship Chain With Receipts</h3>
         <p>A finished worker becomes a real commit, a push of that exact commit (<code>&lt;sha&gt;:refs/heads/&lt;branch&gt;</code>, never forced) and a prefilled compare page. Each attempt ends with exactly one <code>ship_settled</code> receipt, and the compare page is built from the worker's recorded push.</p>
-        <p class="source"><span class="tag">Unreleased</span><a href="./architecture.html#ship-chain">Ship Chain</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0009-ship-chain-structural-guarantees.md">ADR-0009</a></p>
+        <p class="source"><span class="tag">v0.14.0</span><a href="./architecture.html#ship-chain">Ship Chain</a><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0009-ship-chain-structural-guarantees.md">ADR-0009</a></p>
       </li>
       <li class="claim">
         <h3>The Browser Build Says What It Cannot Do</h3>
         <p>Over <code>swarmd</code>, the browser build reads capability flags from its transport. Desktop-only controls are hidden or disabled with “Available In The Desktop App Only” instead of failing.</p>
-        <p class="source"><span class="tag">Unreleased</span><a href="./daemon.html#what-the-browser-build-offers">What The Browser Build Offers</a></p>
+        <p class="source"><span class="tag">v0.14.0</span><a href="./daemon.html#what-the-browser-build-offers">What The Browser Build Offers</a></p>
       </li>
       <li class="claim">
         <h3>React Compiler Through Oxc</h3>
         <p>Memoization is left to the React Compiler, run as the Oxc port with a WASI fallback binding. <code>pnpm check:compiler</code> fails the build when key components ship uncompiled.</p>
-        <p class="source"><span class="tag">Unreleased</span><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0032-react-compiler-oxc-wasi.md">ADR-0032</a></p>
+        <p class="source"><span class="tag">v0.14.0</span><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0032-react-compiler-oxc-wasi.md">ADR-0032</a></p>
       </li>
       <li class="claim">
         <h3>Temporal For Dates And Times</h3>
         <p>Dates and durations use <code>Temporal</code> and <code>Intl</code>, with no date library. WebKit webviews ship without <code>Temporal</code>, so <code>src/boot.ts</code> installs <code>temporal-polyfill</code> before the app loads.</p>
-        <p class="source"><span class="tag">Unreleased</span><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0031-temporal-polyfill-boot-entry.md">ADR-0031</a></p>
+        <p class="source"><span class="tag">v0.14.0</span><a href="https://github.com/ABCrimson/Swarm/blob/main/docs/adr/0031-temporal-polyfill-boot-entry.md">ADR-0031</a></p>
       </li>
     </ul>
   </section>

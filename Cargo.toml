@@ -16,7 +16,7 @@ resolver = "3"
 # "../package.json", so the bundle and updater version derive from it.
 # Cargo cannot read package.json, so this value is held in lockstep with
 # it by swarm-desktop's `app_version_resolves_from_package_json` test.
-version      = "0.13.1"
+version      = "0.14.0"
 edition      = "2024"
 # `[profile.release] trim-paths` is stable from 1.101 (cargo#17488), the
 # trim_prefix/trim_suffix and std::mem::DropGuard APIs the code uses from

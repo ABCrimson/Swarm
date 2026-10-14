@@ -20,7 +20,7 @@
 </p>
 
 > [!IMPORTANT]
-> **Latest release: v0.13.1 (2026-08-22).** `main` carries the unreleased work proposed as 0.14.0 (see `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md)), including breaking changes such as the move from Tauri v2 to Tauri 3 (alpha). No 0.14.0 tag or release exists. This page describes `main`. The trust tiers and the worktree per worker already held in v0.13.1, and the Tauri-free core with two shells, the provider trait pair and the ship chain shipped in it in an earlier form. Released binaries: [v0.13.1](https://github.com/ABCrimson/Swarm/releases/tag/v0.13.1).
+> **Latest release: [v0.14.0](https://github.com/ABCrimson/Swarm/releases/tag/v0.14.0) (2026-10-14)**, the first release on Tauri 3 (alpha). Its breaking changes are listed under `[0.14.0]` in [CHANGELOG.md](CHANGELOG.md). This page describes `main`; `[Unreleased]` in the changelog lists what has landed since.
 
 ## What It Is
 
@@ -28,7 +28,7 @@ SWARM Orchestrator supervises many coding agents at once. Each worker is a shell
 
 ## What Main Does Today
 
-The code on `main` as of this commit; the note at the top names what v0.13.1 already had.
+The code on `main` as of this commit.
 
 <table>
   <tr>
@@ -161,16 +161,16 @@ target/release/swarmd --serve-ui dist-web
 > [!WARNING]
 > The token is the only authentication and the WebSocket is plain `ws://`. Do not put `--bind 0.0.0.0:PORT` on the open internet; reach a remote daemon through an SSH tunnel or a reverse proxy that terminates TLS ([daemon guide](docs/daemon.md#reaching-the-daemon-off-box)).
 
-Released binaries (desktop installers and `swarmd`) are attached to the [v0.13.1 release](https://github.com/ABCrimson/Swarm/releases/tag/v0.13.1), which predates the `[Unreleased]` work in [CHANGELOG.md](CHANGELOG.md).
+Released binaries (desktop installers and `swarmd`) are attached to the [v0.14.0 release](https://github.com/ABCrimson/Swarm/releases/tag/v0.14.0).
 
 ## Roadmap At A Glance
 
-The plan starts from the unreleased work proposed as 0.14.0 on `main`. 1.0.0 is a compatibility and trust promise, not a claim that more agents produce better work; that is measured in 1.1.0. Each major's outcome, scope and acceptance evidence: [docs/roadmap.md](docs/roadmap.md#the-ten-majors-at-a-glance).
+The plan starts from 0.14.0, released 2026-10-14. 1.0.0 is a compatibility and trust promise, not a claim that more agents produce better work; that is measured in 1.1.0. Each major's outcome, scope and acceptance evidence: [docs/roadmap.md](docs/roadmap.md#the-ten-majors-at-a-glance).
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/readme/roadmap-dark.svg" />
-    <img src=".github/readme/roadmap-light.svg" alt="Roadmap: from the unreleased work proposed as 0.14.0 on main, the ten majors are 0.15.0 Durable Spine, 0.16.0 Recoverable Jobs, 0.17.0 Governed Organization, 0.18.0 Review And Ship, 0.19.0 Accountable Operations, 1.0.0 Release Evidence (the compatibility and trust promise), 1.1.0 Measured Value, 1.2.0 The Agent Surface, 1.3.0 Causal Record and 1.4.0 Scale What Wins." width="640" />
+    <img src=".github/readme/roadmap-light.svg" alt="Roadmap: from 0.14.0, released 2026-10-14, the ten majors are 0.15.0 Durable Spine, 0.16.0 Recoverable Jobs, 0.17.0 Governed Organization, 0.18.0 Review And Ship, 0.19.0 Accountable Operations, 1.0.0 Release Evidence (the compatibility and trust promise), 1.1.0 Measured Value, 1.2.0 The Agent Surface, 1.3.0 Causal Record and 1.4.0 Scale What Wins." width="640" />
   </picture>
 </p>
 
@@ -239,7 +239,7 @@ CI gathers every job into the single required status `CI OK`.
 
 | Component | Pin | Source |
 | --- | --- | --- |
-| App | 0.13.1 | `package.json` |
+| App | 0.14.0 | `package.json` |
 | pnpm | 12.13.0 | `package.json` `packageManager` |
 | Node.js | 27.0.0-nightly202610123b639be3a4 | `package.json` `devEngines.runtime` |
 | Rust toolchain | nightly-2026-10-14 (`rust-version` 1.101, edition 2024) | `rust-toolchain.toml`, `Cargo.toml` |

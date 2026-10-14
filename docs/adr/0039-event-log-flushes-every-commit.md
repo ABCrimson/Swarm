@@ -119,3 +119,12 @@ test above, and `test_sigterm_shuts_down_gracefully_and_releases_the_lock` in `s
 tests, which counts every `session_created` a `SIGTERM` interrupted.
 
 See [Ordered Event Core](../architecture.md#ordered-event-core).
+
+## Amendment (2026-10-14): 0.14.0 ships before the macOS and NTFS measurement
+
+0.14.0, released 2026-10-14 on the owner's order to cut it, contains this change but ships without the
+measurement the follow-up above asks for: `measure_append_throughput_by_synchronous_level` has not run on
+macOS (APFS, `F_FULLFSYNC`) or on native Windows NTFS. The follow-up now gates the first release after
+0.14.0: if either measurement shows a p50 per commit above 5 ms, group commit blocks that release. The only
+native NTFS figure so far is indirect: the `windows-2025` CI runner committed 407 of 500 events within a
+2.5 s drain budget, about 6 ms per event on average (a mean on a CI VM, not a p50).

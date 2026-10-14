@@ -9,8 +9,8 @@ on:
       - "docs/**"
       - "site/**"
       - "scripts/build-site.ts"
-      # The landing page reads the latest release heading from the changelog and
-      # the proposed next version from package.json; marked is pinned there too.
+      # The landing page reads the latest release from package.json's version and
+      # its date from the changelog heading; marked is pinned there too.
       - "CHANGELOG.md"
       - "package.json"
       - ".github/workflows/pages.yml"
