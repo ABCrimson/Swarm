@@ -5,10 +5,15 @@ import { isError } from "#lib/is-error";
 
 /**
  * What a transport can honestly promise. `hasTransport()` in
- * `#lib/tauri` reads `kind`. Nothing reads the feature flags yet:
- * desktop-only surfaces (fs/dialog file browsing, OS notifications, the
- * auto-updater, the webview-direct AI chat path) gate on `isTauri()`
- * instead (ADR-0024).
+ * `#lib/tauri` reads `kind`; `hasCapability()` there reads the feature
+ * flags, and the desktop-only controls gate on it (ADR-0024): file
+ * dialogs and workspace browsing, the local stores (session snapshots,
+ * saved templates), the native-notification setting, the update check
+ * and the webview-direct AI chat are hidden, or disabled with
+ * `DESKTOP_ONLY_REASON`, where a flag is false. The flags are fixed
+ * per build, so call sites that invoke a Tauri plugin also check
+ * `isTauri()`: a plain-browser preview of the desktop build has every
+ * flag but no bridge.
  */
 export interface TransportCapabilities {
   readonly kind: "tauri" | "ws";
@@ -20,6 +25,8 @@ export interface TransportCapabilities {
   readonly autoUpdate: boolean;
   /** The webview-direct AI chat path (`AIChat.tsx`, `dangerouslyAllowBrowser` fetch straight to Anthropic) — never available remotely; remote AI goes through the agent-adapter RPC surface instead. */
   readonly localAiChat: boolean;
+  /** The local plugin-store files (`tauri-plugin-store`): session snapshots, saved templates and automatic snapshots — Tauri-only. */
+  readonly localStores: boolean;
 }
 
 /** The seam every backend call and event subscription crosses. */
@@ -68,6 +75,7 @@ export const tauriTransport: Transport = {
     nativeNotifications: true,
     autoUpdate: true,
     localAiChat: true,
+    localStores: true,
   },
 };
 
@@ -384,6 +392,7 @@ export class WsTransport implements Transport {
     nativeNotifications: false,
     autoUpdate: false,
     localAiChat: false,
+    localStores: false,
   };
 
   private wsUrl(): string {

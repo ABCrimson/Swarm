@@ -29,7 +29,6 @@ import {
   checkForUpdates,
   DESKTOP_ONLY_REASON,
   hasCapability,
-  isTauri,
   readConfig,
   setMaxWorkers,
   writeConfig,
@@ -858,8 +857,8 @@ export function Settings(): React.ReactElement {
             max={120}
             value={appSettings.snapshotIntervalMin}
             onChange={(v) => patchSettings({ snapshotIntervalMin: v })}
-            // Snapshots are plugin-store files, which need the Tauri bridge.
-            unavailableReason={isTauri() ? undefined : DESKTOP_ONLY_REASON}
+            // Snapshots are local plugin-store files, which only the desktop transport offers.
+            unavailableReason={hasCapability("localStores") ? undefined : DESKTOP_ONLY_REASON}
           />
           <NumberField
             label="Log Retention"

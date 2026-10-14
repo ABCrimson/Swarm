@@ -516,7 +516,8 @@ describe("Settings — in the browser build", () => {
 });
 
 describe("Settings — auto-snapshot interval", () => {
-  it("is disabled with the desktop-only reason without the Tauri bridge", () => {
+  it("is disabled with the desktop-only reason in the browser build", () => {
+    vi.mocked(hasCapability).mockReturnValue(false);
     render(<Settings />);
 
     const field = screen.getByLabelText("Auto-Snapshot Interval");
@@ -524,8 +525,7 @@ describe("Settings — auto-snapshot interval", () => {
     expect(field).toHaveAccessibleDescription(new RegExp(DESKTOP_ONLY_REASON));
   });
 
-  it("is editable in the desktop shell", () => {
-    vi.mocked(isTauri).mockReturnValue(true);
+  it("is editable when the transport offers local stores", () => {
     render(<Settings />);
 
     const field = screen.getByLabelText("Auto-Snapshot Interval");

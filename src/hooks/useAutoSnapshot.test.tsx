@@ -11,6 +11,9 @@ configure({ reactStrictMode: true });
 
 const listeners = new Map<string, (payload: unknown) => void>();
 
+/** `true` makes the active transport report no capabilities (the `build:web` page). */
+const web = vi.hoisted(() => ({ on: false }));
+
 vi.mock("#lib/tauri", () => ({
   listen: async (event: string, handler: (payload: unknown) => void) => {
     listeners.set(event, handler);
@@ -18,6 +21,7 @@ vi.mock("#lib/tauri", () => ({
   },
   invoke: vi.fn(),
   isTauri: () => Boolean(Reflect.get(globalThis, "isTauri")),
+  hasCapability: () => !web.on,
 }));
 
 vi.mock("#lib/snapshots", () => ({
@@ -29,8 +33,10 @@ const SESSION = "6ba7b810-9dad-41d1-80b4-00c04fd430c8";
 const INTERVAL_MS = DEFAULT_APP_SETTINGS.snapshotIntervalMin * 60_000;
 
 describe("useAutoSnapshot", () => {
-  // Snapshots are plugin-store files, which need the Tauri bridge.
+  // Snapshots are plugin-store files: the local-stores capability and the
+  // Tauri bridge itself are both needed.
   beforeEach(async () => {
+    web.on = false;
     vi.stubGlobal("isTauri", true);
     vi.useFakeTimers();
     listeners.clear();
@@ -59,8 +65,16 @@ describe("useAutoSnapshot", () => {
     vi.unstubAllGlobals();
   });
 
-  it("schedules nothing without the Tauri bridge", () => {
-    vi.unstubAllGlobals();
+  it.each([
+    ["without the Tauri bridge", () => vi.unstubAllGlobals()],
+    [
+      "in the browser build",
+      () => {
+        web.on = true;
+      },
+    ],
+  ])("schedules nothing %s", (_name, withdraw) => {
+    withdraw();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     useSessionStore.setState({ activeSessionId: SESSION });
     renderHook(() => useAutoSnapshot());

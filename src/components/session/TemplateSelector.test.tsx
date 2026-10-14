@@ -20,8 +20,17 @@ const USER_TEMPLATE: SessionTemplate = {
   builtIn: false,
 };
 
-// User templates are plugin-store files, which need the Tauri bridge.
+/** `true` makes the active transport report no capabilities (the `build:web` page). */
+const web = vi.hoisted(() => ({ on: false }));
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  hasCapability: () => !web.on,
+}));
+
+// Reading the user templates is a plugin-store call: it needs the local-stores
+// capability and the Tauri bridge itself.
 beforeEach(() => {
+  web.on = false;
   vi.stubGlobal("isTauri", true);
   mockResource.mockReset();
 });
@@ -44,6 +53,7 @@ async function renderSelector(result: UserTemplatesResult) {
 
 describe("TemplateSelector", () => {
   it("shows the desktop-only reason and never reads the store without the Tauri bridge", async () => {
+    // A plain-browser preview of the desktop build: the capability is on, the bridge is not.
     vi.unstubAllGlobals();
     const onSelect = vi.fn();
     await act(async () => {
@@ -55,6 +65,17 @@ describe("TemplateSelector", () => {
     expect(within(yours).getByText("Available In The Desktop App Only")).toBeVisible();
     expect(mockResource).not.toHaveBeenCalled();
     expect(screen.getByRole("region", { name: "Built-In Templates" })).toBeInTheDocument();
+  });
+
+  it("shows the desktop-only reason and never reads the store in the browser build", async () => {
+    web.on = true;
+    await act(async () => {
+      render(<TemplateSelector onSelect={vi.fn()} onClose={vi.fn()} />);
+    });
+
+    const yours = screen.getByRole("region", { name: "Your Templates" });
+    expect(within(yours).getByText("Available In The Desktop App Only")).toBeVisible();
+    expect(mockResource).not.toHaveBeenCalled();
   });
 
   it("lists the built-in templates and the user's own, each selectable", async () => {

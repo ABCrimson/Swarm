@@ -41,6 +41,7 @@ vi.mock(import("#lib/transport"), async (importOriginal) => {
               nativeNotifications: false,
               autoUpdate: false,
               localAiChat: false,
+              localStores: false,
             } as const)
           : actual.transport.capabilities;
       },
@@ -515,6 +516,7 @@ describe("hasCapability", () => {
     expect(hasCapability("nativeNotifications")).toBe(true);
     expect(hasCapability("autoUpdate")).toBe(true);
     expect(hasCapability("localAiChat")).toBe(true);
+    expect(hasCapability("localStores")).toBe(true);
   });
 
   it("offers none of them on the ws transport (the build:web page)", () => {
@@ -524,6 +526,7 @@ describe("hasCapability", () => {
     expect(hasCapability("nativeNotifications")).toBe(false);
     expect(hasCapability("autoUpdate")).toBe(false);
     expect(hasCapability("localAiChat")).toBe(false);
+    expect(hasCapability("localStores")).toBe(false);
   });
 
   it("names the reason a gated control shows", () => {

@@ -19,14 +19,18 @@ import { commandPaletteOpenAtom, currentPageAtom, graphViewAtom } from "#store/u
 import { useWorkerStore } from "#store/workers";
 
 vi.mock("#lib/worker-spawn", () => ({ spawnWorkerFromSpec: vi.fn() }));
+/** `true` makes the active transport report no capabilities (the `build:web` page). */
+const web = vi.hoisted(() => ({ on: false }));
 vi.mock("#lib/tauri", async (importOriginal) => ({
   ...(await importOriginal<typeof import("#lib/tauri")>()),
   killWorker: vi.fn(),
+  hasCapability: () => !web.on,
 }));
 
 const store = getDefaultStore();
 
 beforeEach(() => {
+  web.on = false;
   store.set(commandPaletteOpenAtom, false);
   store.set(currentPageAtom, "dashboard");
   store.set(graphViewAtom, "graph");
@@ -80,15 +84,15 @@ async function killFromPalette(name: string): Promise<void> {
 }
 
 describe("CommandPalette — snapshots", () => {
-  it("lists Snapshot Session when the Tauri bridge is present", async () => {
-    vi.stubGlobal("isTauri", true);
+  it("lists Snapshot Session when the transport offers local stores", async () => {
     render(<CommandPalette />);
     act(() => store.set(commandPaletteOpenAtom, true));
 
     expect(await screen.findByRole("option", { name: "Snapshot Session" })).toBeInTheDocument();
   });
 
-  it("omits Snapshot Session without the Tauri bridge (snapshots are plugin-store files)", async () => {
+  it("omits Snapshot Session in the browser build (snapshots are local plugin-store files)", async () => {
+    web.on = true;
     render(<CommandPalette />);
     act(() => store.set(commandPaletteOpenAtom, true));
 

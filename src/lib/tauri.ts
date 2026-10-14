@@ -41,7 +41,8 @@ import {
  * `isTauri()`, which reads the `globalThis.isTauri` flag the shell
  * injects. Desktop-only controls (file dialogs and workspace browsing,
  * native alert notifications, the update check, the webview-direct AI
- * chat) decide whether to offer themselves with {@link hasCapability};
+ * chat, the local snapshot and template stores) decide whether to offer
+ * themselves with {@link hasCapability};
  * this is the runtime check for call sites that invoke a plugin and need
  * the bridge itself (there is no opener capability: WorkerDetail checks
  * this before `openPath`, ShipPanel's compare button opens a tab with
@@ -69,7 +70,7 @@ export type TransportFeature = Exclude<keyof TransportCapabilities, "kind">;
 /**
  * Whether the active transport offers `feature`, read from its capability
  * metadata. The flags are fixed per build (the desktop build offers all
- * four, the `pnpm build:web` page none), so a control gated on this keeps
+ * five, the `pnpm build:web` page none), so a control gated on this keeps
  * its UI in a plain-browser preview of the desktop build; the runtime
  * bridge checks ({@link isTauri}) stay in addition where a plugin call
  * needs the bridge itself.
