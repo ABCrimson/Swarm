@@ -25,7 +25,7 @@
         "backgroundThrottling": "disabled",
         "scrollBarStyle": "fluentOverlay",
         "preventOverflow": true,
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=WebGPU"
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI --enable-features=WebGPU"
       }
     ],
     "security": {
