@@ -87,11 +87,11 @@ The page `--serve-ui` serves talks to the daemon over the WebSocket (`wsTranspor
 | Sessions: delete | Native confirmation dialog | The browser's own confirmation dialog |
 | Worker AI panel: webview chat, model selector, Inject Instruction, Queue | Works for workers without an agent session | Replaced by a notice, "Available In The Desktop App Only"; Claude Code and Codex workers chat as usual |
 | Alert thresholds: OS notification mirror | Works when enabled in Settings | The in-app toast only |
-| Settings: Check For Updates | Works | Disabled, says "Update Checks Need The Desktop App" <!-- pending W-F2/W-F4 --> |
-| Settings: update check on launch, native alert notifications toggles | Work | Disabled, "Available In The Desktop App Only" <!-- pending W-F2/W-F4 --> |
-| Spawn dialog: Webview Anthropic provider, folder picker | Work | Disabled, "Available In The Desktop App Only" <!-- pending W-F2/W-F4 --> |
+| Settings: Check For Updates | Works | Button disabled, "Available In The Desktop App Only" beside it |
+| Settings: Check For Updates On Launch, Native Alert Notifications toggles | Work | Toggles disabled, with "Available In The Desktop App Only" |
+| Spawn dialog: Webview Anthropic provider, folder picker | Work; Webview Anthropic is the default provider | Both disabled, with "Available In The Desktop App Only"; the dialog starts on Claude Code |
 
-`checkForUpdates()` itself rejects with "Update Checks Need The Desktop App" when the transport has no updater or there is no Tauri bridge, so a check that did not run never reads as "up to date".
+The disabled Check For Updates button is what a browser-build user sees. `checkForUpdates()` itself rejects with "Update Checks Need The Desktop App" when the transport has no updater or there is no Tauri bridge (for example a plain-browser preview of the desktop build, where the button stays enabled and the failure toast, "Update Check Failed", carries that text), so a check that did not run never reads as "up to date".
 
 ## Command Line
 
