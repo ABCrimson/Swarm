@@ -313,7 +313,7 @@ Before killing, `try_wait` checks whether the shell already exited, so a reaped 
 
 If the worker was isolated into a git worktree, also unlocks and `git worktree remove`s it -- **never** with `--force`. git's own refusal on a dirty/untracked worktree is treated as a successful preserve, not an error: SWARM never deletes uncommitted work.
 
-**Agent sessions:** if this worker also has a live agent session attached ([`agent_spawn`](#agent_spawn)), it is removed from the `AgentSessionRegistry` and shut down too -- best-effort: a failure here is logged, not propagated, so an agent-session teardown hiccup never blocks the PTY worker's own kill.
+**Agent sessions come first:** before the worker is touched, it is marked closing in the `AgentSessionRegistry` -- from then on a new attach ([`agent_spawn`](#agent_spawn)), [`agent_send_turn`](#agent_send_turn), [`agent_cancel`](#agent_cancel) and [`agent_permission_respond`](#agent_permission_respond) for it fail with ``Worker `<id>` Is Closing`` -- and any attach still in its handshake is awaited (bounded by the adapter's 30 s handshake plus that attach's own session teardown). Then any attached session, including one such an attach registered, is removed and shut down, so the provider process is stopped and reaped. That shutdown is best-effort: a failure is logged, not propagated, so an agent-session teardown hiccup never blocks the PTY worker's own kill. Only then are the shell and worktree torn down as above, and the closing mark is cleared (later calls get ``Worker `<id>` not found``). When the command resolves, no agent session of the worker is registered or still handshaking ([ADR-0038](adr/0038-kill-stops-the-session-first.md)).
 
 **Parameters:**
 
@@ -1086,6 +1086,7 @@ Permission gating never rests on `allowedTools` (it widens what runs unasked rat
 | `null` | `Provider Not Supported By The Backend: <name>.` | `provider` is a reserved name with no adapter. Nothing was spawned |
 | `null` | the `spawn_worker` error text | The PTY worker spawn itself failed (registry full, worktree creation failed, ...) |
 | `null` | ``Worker `<id>` not found`` | The worker was killed before or during its session's attach. A session that did attach is shut down, and no worker remains |
+| `null` | ``Worker `<id>` Is Closing`` | A [`kill_worker`](#kill_worker) was in progress when the attach started or finished its handshake. A session that did attach is shut down before the kill proceeds, and no worker remains |
 | the new worker's id | the adapter's own error, verbatim | The session failed to attach (binary missing, handshake timeout, an unknown `trustTier`, Codex refusing a policy more permissive than requested, ...). **The PTY worker still exists and is usable as a plain terminal**; it is not rolled back |
 
 **Emits:** `worker_spawned` (and `worktree_created` if isolated) from the underlying spawn, then `agent_session_started` once the adapter's `spawn()` resolves. `payload.capabilities` tells the frontend what the session can honestly do (see [`agent_permission_respond`](#agent_permission_respond) and [`agent_cancel`](#agent_cancel)).
@@ -1111,8 +1112,9 @@ Enqueues one turn for `workerId`'s attached session through the `AgentScheduler`
 |---------------------------------|-----------|
 | ``Invalid UUID "<id>": ...``    | `workerId` is not a valid UUID string |
 | `AI queue full (256 capacity)`  | The scheduler's bounded admission queue (`AGENT_TURN_QUEUE_CAPACITY`) is full |
+| ``Worker `<id>` Is Closing``    | A [`kill_worker`](#kill_worker) for this worker is in progress; nothing is queued |
 
-A worker with no attached session is **not** an error here: the turn is admitted, and when it runs it settles at once with a synthesized `agent_turn_settled` (`status: "error"`, `error: "No Live Session For This Worker: ..."`); a session that rejects the turn settles the same way with `Turn Rejected: ...`. The scheduler runs at most one turn per worker at a time, so a second turn for a busy worker waits in the queue instead of reaching the session.
+A worker with no attached session is **not** an error here: the turn is admitted, and when it runs it settles at once with a synthesized `agent_turn_settled` (`status: "error"`, `error: "No Live Session For This Worker: ..."`) -- which is also how a turn queued before a kill settles, since by dispatch its worker is closing or its session is gone; a session that rejects the turn settles the same way with `Turn Rejected: ...`. The scheduler runs at most one turn per worker at a time, so a second turn for a busy worker waits in the queue instead of reaching the session.
 
 ---
 
@@ -1134,7 +1136,7 @@ A stale, already-settled or already-cancelling `turnId` is a benign no-op.
 
 **Returns:** `void`
 
-**Errors:** an invalid UUID, or no attached agent session for `workerId`.
+**Errors:** an invalid UUID, no attached agent session for `workerId`, or ``Worker `<id>` Is Closing`` while a [`kill_worker`](#kill_worker) for it is in progress (the kill's session shutdown settles the turn).
 
 **Emits:** exactly one `agent_turn_settled` for the turn (`status: "error"`), and `agent_session_exited` only if the session itself had to be torn down.
 
@@ -1201,7 +1203,7 @@ Not every `agent_permission_request` is a question. One with `suggestedDecision:
 
 **Returns:** `void`
 
-**Errors:** an invalid UUID, or no attached agent session for `workerId`. An unknown, already-answered, expired or report-only `requestId` is a benign no-op, so a double click or a late answer cannot fail.
+**Errors:** an invalid UUID, no attached agent session for `workerId`, or ``Worker `<id>` Is Closing`` while a [`kill_worker`](#kill_worker) for it is in progress. An unknown, already-answered, expired or report-only `requestId` is a benign no-op, so a double click or a late answer cannot fail.
 
 **Example:**
 
