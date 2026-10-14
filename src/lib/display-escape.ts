@@ -1,6 +1,6 @@
 // The one module that makes a model- or filesystem-controlled string safe to
-// show (the SEC-4 escaping contract). Every user-visible path, name, command
-// or message goes through `escapeForDisplay`; do not write a second copy.
+// show (the SEC-4 escaping contract): escape such a string here rather than
+// writing a second copy.
 
 /** Control, format, line/paragraph separator and default-ignorable characters (bidi, zero-width, tag, variation selector) that must never reach the screen raw. */
 const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
@@ -13,7 +13,7 @@ const NAMED_ESCAPES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Makes a model-controlled string safe to show, in one pass so an escape
+ * Makes a model- or filesystem-controlled string safe to show, in one pass so an escape
  * is never escaped again: a backslash becomes `\\`; newline, carriage
  * return and tab become `\n`, `\r`, `\t`; every other control,
  * format, line/paragraph separator or default-ignorable character becomes a visible
