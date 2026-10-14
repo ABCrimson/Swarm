@@ -32,6 +32,7 @@ use swarm_core::events::{SwarmEvent, SystemLogPayload, WorkerKilledPayload};
 use swarm_core::lock::LockError;
 use swarm_core::protocol::{ClientFrame, PROTOCOL_VERSION, ServerFrame};
 use swarm_core::runtime::{Runtime, RuntimeConfig, RuntimeStartError};
+use swarm_core::worker::handle::{WorkerHandle, WorkerState};
 use swarmd::auth::{AllowedHost, DaemonToken, HostPolicy};
 use swarmd::{AppState, Limits};
 
@@ -1190,6 +1191,265 @@ async fn test_shutdown_closes_pending_handshakes_promptly() {
         "shutdown took {:?}",
         started.elapsed()
     );
+}
+
+// ── Slow ship mutations ─────────────────────────────────────────────────
+
+/// How long the fixture's `pre-commit` hook runs: long enough that a reply
+/// arriving early would show up as a daemon-side deadline, short enough for CI.
+const HOOK_SLEEP: Duration = Duration::from_secs(3);
+
+/// Runs `git args…` in `dir`, asserting success, and returns trimmed stdout.
+#[track_caller]
+fn git(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("spawn git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// A repository with a linked worktree (the ship chain refuses a primary
+/// checkout) whose `pre-commit` hook sleeps [`HOOK_SLEEP`], and a worker
+/// registered on that worktree with an uncommitted change.
+struct ShipFixture {
+    worktree: PathBuf,
+    worker_id: uuid::Uuid,
+    /// Declared last so the repository outlives the registered worker.
+    _dir: tempfile::TempDir,
+}
+
+impl ShipFixture {
+    fn new(server: &TestServer) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let worktree = dir.path().join("worktree");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-b", "main"]);
+        for (key, value) in [
+            ("user.email", "swarmd-test@example.com"),
+            ("user.name", "Swarmd Test"),
+            // Hermetic against a developer's global signing and
+            // line-ending settings.
+            ("commit.gpgsign", "false"),
+            ("core.autocrlf", "false"),
+        ] {
+            git(&repo, &["config", key, value]);
+        }
+        std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+        git(&repo, &["add", "README.md"]);
+        git(&repo, &["commit", "-m", "initial"]);
+        let base_commit = git(&repo, &["rev-parse", "HEAD"]);
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "swarm/slow-ship",
+                worktree.to_str().unwrap(),
+            ],
+        );
+
+        // The hooks directory is shared by every linked worktree.
+        let hook = repo.join(".git").join("hooks").join("pre-commit");
+        std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        std::fs::write(
+            &hook,
+            format!("#!/bin/sh\nsleep {}\n", HOOK_SLEEP.as_secs()),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(worktree.join("change.txt"), "work in progress\n").unwrap();
+
+        let worker_id = uuid::Uuid::new_v4();
+        server
+            .runtime
+            .registry
+            .register(WorkerHandle {
+                id: worker_id,
+                state: WorkerState::Running,
+                name: "ship".to_owned(),
+                pid: None,
+                started_at: 0,
+                pty_writer: None,
+                child: None,
+                worktree_path: Some(worktree.display().to_string()),
+                repo_root: Some(repo.display().to_string()),
+                branch: Some("swarm/slow-ship".to_owned()),
+                base_commit: Some(base_commit),
+                last_shipped_seq: None,
+                last_shipped_commit: None,
+            })
+            .unwrap();
+        Self {
+            worktree,
+            worker_id,
+            _dir: dir,
+        }
+    }
+
+    /// The final-step `git_stage_commit` frame for `ship_id`.
+    fn commit_frame(&self, rpc_id: &str, ship_id: uuid::Uuid) -> ClientFrame {
+        ClientFrame::Rpc {
+            id: rpc_id.to_owned(),
+            cmd: "git_stage_commit".to_owned(),
+            args: json!({
+                "workerId": self.worker_id.to_string(),
+                "shipId": ship_id.to_string(),
+                "message": "feat: slow commit",
+                "mode": "all",
+                "finalStep": true,
+            }),
+        }
+    }
+}
+
+/// The `payload` of an event of type `kind` for `ship_id`.
+fn ship_payload<'a>(event: &'a Value, kind: &str, ship_id: uuid::Uuid) -> Option<&'a Value> {
+    (event_type(event) == Some(kind) && event["payload"]["shipId"] == ship_id.to_string())
+        .then_some(&event["payload"])
+}
+
+/// Whether `row` is the `ship_progress` row of a successful commit step.
+fn is_commit_ok(row: &Value) -> bool {
+    row["step"] == "commit" && row["status"] == "ok"
+}
+
+/// The daemon imposes no deadline of its own on an rpc: a commit held up by
+/// a slow hook is answered on its connection only once it finishes, and its
+/// `ship_progress` / `ship_settled` events arrive on that connection too.
+#[tokio::test]
+async fn test_slow_ship_commit_reply_arrives_late_on_its_connection() {
+    let server = TestServer::start().await;
+    let fixture = ShipFixture::new(&server);
+    let mut ws = attach(&server).await;
+    let ship_id = uuid::Uuid::new_v4();
+
+    let started = Instant::now();
+    send_frame(&mut ws, &fixture.commit_frame("slow", ship_id)).await;
+
+    let mut reply = None;
+    let mut commit_ok = false;
+    let mut settled = Vec::new();
+    // Ends when the reply, the commit row and the receipt have all arrived.
+    tokio::time::timeout(WAIT + HOOK_SLEEP, async {
+        while reply.is_none() || !commit_ok || settled.is_empty() {
+            match next_frame(&mut ws).await {
+                Inbound::Control(ServerFrame::RpcResult {
+                    id,
+                    ok,
+                    result,
+                    error,
+                }) if id == "slow" => reply = Some((ok, result, error, started.elapsed())),
+                Inbound::Event(event) => {
+                    if let Some(row) = ship_payload(&event, "ship_progress", ship_id) {
+                        commit_ok |= is_commit_ok(row);
+                    }
+                    if let Some(receipt) = ship_payload(&event, "ship_settled", ship_id) {
+                        settled.push(receipt.clone());
+                    }
+                }
+                Inbound::Control(_) => {}
+            }
+        }
+    })
+    .await
+    .expect("the reply, the commit row and the receipt should all arrive");
+
+    let (ok, result, error, elapsed) = reply.unwrap();
+    assert!(ok, "git_stage_commit failed: {error:?}");
+    assert!(
+        elapsed >= HOOK_SLEEP,
+        "the reply came after {elapsed:?}, before the hook finished"
+    );
+    let sha = result.as_ref().and_then(|r| r["sha"].as_str()).unwrap();
+    assert_eq!(settled.len(), 1, "exactly one receipt: {settled:?}");
+    assert_eq!(settled[0]["status"], "ok");
+    assert_eq!(settled[0]["commitSha"], sha);
+    assert_eq!(git(&fixture.worktree, &["rev-parse", "HEAD"]), sha);
+}
+
+/// A ship mutation keeps running after its connection closes, and a client
+/// that reconnects with its last `seq` is handed the outcome by replay: the
+/// `ship_progress` / `ship_settled` events arrive before `replayEnd`.
+#[tokio::test]
+async fn test_ship_outcome_replays_to_a_client_that_reconnects_mid_commit() {
+    let server = TestServer::start().await;
+    let fixture = ShipFixture::new(&server);
+    let ship_id = uuid::Uuid::new_v4();
+
+    let mut observer = attach(&server).await;
+    let mut first = connect(&server).await;
+    hello(&mut first, None, Some(&server.token)).await;
+    let Inbound::Control(ServerFrame::Ready { server_seq, .. }) = next_frame(&mut first).await
+    else {
+        panic!("expected ready");
+    };
+    send_frame(&mut first, &fixture.commit_frame("lost", ship_id)).await;
+    // Gone before the hook finishes: the reply has nobody to go to.
+    drop(first);
+
+    // The receipt reaching a connection that stayed open proves the commit
+    // ran to completion after its sender left.
+    let live = tokio::time::timeout(WAIT + HOOK_SLEEP, async {
+        loop {
+            if let Inbound::Event(event) = next_frame(&mut observer).await
+                && let Some(receipt) = ship_payload(&event, "ship_settled", ship_id)
+            {
+                return receipt.clone();
+            }
+        }
+    })
+    .await
+    .expect("the commit should finish and settle without its sender");
+    assert_eq!(live["status"], "ok", "live receipt: {live}");
+
+    // Only now does the second client connect: everything it learns comes
+    // from the log.
+    let mut second = connect(&server).await;
+    hello(&mut second, Some(server_seq), Some(&server.token)).await;
+    let mut commit_ok = false;
+    let mut settled = Vec::new();
+    let mut seen = Vec::new();
+    tokio::time::timeout(WAIT, async {
+        loop {
+            match next_frame(&mut second).await {
+                Inbound::Control(ServerFrame::ReplayEnd { .. }) => break,
+                Inbound::Event(event) => {
+                    if let Some(row) = ship_payload(&event, "ship_progress", ship_id) {
+                        commit_ok |= is_commit_ok(row);
+                    }
+                    if let Some(receipt) = ship_payload(&event, "ship_settled", ship_id) {
+                        settled.push(receipt.clone());
+                    }
+                    seen.push(event);
+                }
+                Inbound::Control(_) => {}
+            }
+        }
+    })
+    .await
+    .expect("replay should end");
+
+    assert_eq!(settled.len(), 1, "one replayed receipt; frames: {seen:?}");
+    assert_eq!(settled[0]["status"], "ok");
+    assert_eq!(
+        settled[0]["commitSha"],
+        git(&fixture.worktree, &["rev-parse", "HEAD"]).as_str()
+    );
+    assert!(commit_ok, "the commit row is replayed; frames: {seen:?}");
 }
 
 // ── --serve-ui ──────────────────────────────────────────────────────────

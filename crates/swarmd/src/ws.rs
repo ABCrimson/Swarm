@@ -82,6 +82,11 @@
 //! busy error. A malformed `rpc` frame whose `id` is readable is answered
 //! with an error instead of being left to time out.
 //!
+//! An `rpc` has no daemon-side deadline and keeps running after its
+//! connection closes (its reply is then dropped); a ship mutation's outcome
+//! stays recoverable from its persisted `ship_progress` / `ship_settled`
+//! events, which a reconnecting client receives by `lastSeq` replay.
+//!
 //! # Shutdown
 //!
 //! When the daemon's shutdown token fires, every connection sends
