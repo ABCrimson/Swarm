@@ -1,9 +1,9 @@
-<h1 align="center">
+<p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/readme/hero-dark.svg" />
     <img src=".github/readme/hero-light.svg" alt="SWARM Orchestrator" width="1200" />
   </picture>
-</h1>
+</p>
 
 <p align="center"><b>Many coding agents. One ordered event stream.</b></p>
 
@@ -97,12 +97,12 @@ flowchart TB
     FE -->|"Tauri IPC"| DESK
     FE -->|"WebSocket /ws"| DAEMON
     shells --> core
+    RT --> GIT
     RT --> SCHED
     SCHED --> PROV
     RT --> PROV
     RT --> ENG
     ENG --> LOG
-    RT --> GIT
 ```
 
 One Rust core, two shells. `swarm-desktop` forwards Tauri IPC calls to the core; `swarmd` serves the same 36 registry commands and the event stream over an authenticated WebSocket (the desktop app has 39: three native commands, `NATIVE_ONLY`, need the webview or the OS), and the frontend reaches it with the `pnpm build:web` bundle. CI checks that `cargo tree -p swarm-core` and `cargo tree -p swarmd` contain no `tauri` crate. Full reference: [docs/architecture.md](docs/architecture.md).
