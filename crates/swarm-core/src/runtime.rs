@@ -16,14 +16,15 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::Paths;
+use crate::agent::scheduler::execute_turn;
 use crate::agent::{
-    AgentScheduler, AgentSchedulerConfig, AgentSessionRegistry, AgentTurnRequest, AgentTurnStatus,
-    ClaudeCodeAdapter, CodexAdapter, MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY,
+    AgentScheduler, AgentSchedulerConfig, AgentSessionRegistry, ClaudeCodeAdapter, CodexAdapter,
+    MAX_AGENT_CONCURRENCY, MIN_AGENT_CONCURRENCY,
 };
 use crate::bus::channel::MessageBus;
 use crate::bus::router::Router;
 use crate::error::AppError;
-use crate::events::{AgentTurnSettledPayload, EventSink, SwarmEvent, SystemLogPayload};
+use crate::events::{EventSink, SwarmEvent, SystemLogPayload};
 use crate::git::{self, GitCapability, RepoLocks};
 use crate::lock::{LockError, SingleInstanceLock};
 use crate::metrics::SharedSystem;
@@ -315,52 +316,12 @@ fn spawn_git_startup(paths: &Paths, sink: EventSink) {
     });
 }
 
-/// The scheduler's executor: runs one queued turn on the worker's live
-/// session, holding that worker's turn lock for the whole turn. A turn
-/// that cannot start (no session, or rejected) still gets its terminal
-/// `agent_turn_settled` receipt, synthesized here.
-async fn execute_turn(sessions: AgentSessionRegistry, sink: EventSink, request: AgentTurnRequest) {
-    let turn_lock = sessions.turn_lock(&request.worker_id);
-    let _guard = turn_lock.lock().await;
-
-    let dispatch_error = match sessions.get(&request.worker_id) {
-        Ok(session) => match session.send_turn(request.turn).await {
-            Ok(turn_id) => {
-                if let Err(e) = session.await_turn_completion(turn_id).await {
-                    tracing::warn!(
-                        worker_id = %request.worker_id,
-                        error = %e,
-                        "agent turn dispatch: await_turn_completion failed"
-                    );
-                }
-                None
-            }
-            Err(e) => Some(format!("Turn Rejected: {e}")),
-        },
-        Err(e) => Some(format!("No Live Session For This Worker: {e}")),
-    };
-
-    if let Some(error) = dispatch_error {
-        tracing::warn!(worker_id = %request.worker_id, %error, "agent turn dispatch failed; synthesizing a terminal receipt");
-        sink.emit(SwarmEvent::AgentTurnSettled(AgentTurnSettledPayload {
-            worker_id: request.worker_id,
-            turn_id: uuid::Uuid::new_v4().to_string(),
-            status: AgentTurnStatus::Error,
-            error: Some(error),
-            cost_usd: None,
-            usage: None,
-            duration_ms: 0,
-            num_turns: None,
-        }));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
 
     use super::*;
-    use crate::state_file::tests::temp_dir;
+    use crate::test_support::temp_dir;
 
     fn config(dir: &std::path::Path, shell_name: &'static str) -> RuntimeConfig {
         RuntimeConfig {
@@ -466,178 +427,5 @@ mod tests {
             runtime.registry.config.read().max_workers,
             crate::worker::registry::SystemConfig::default().max_workers
         );
-    }
-
-    /// An `AgentSession` whose `send_turn` accepts or rejects on demand
-    /// and which records that its turn was awaited.
-    struct StubSession {
-        key: crate::agent::SessionKey,
-        reject: bool,
-        completed: Arc<std::sync::atomic::AtomicBool>,
-    }
-
-    impl StubSession {
-        fn new(reject: bool) -> (Arc<Self>, Arc<std::sync::atomic::AtomicBool>) {
-            let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let session = Arc::new(Self {
-                key: "stub".to_owned(),
-                reject,
-                completed: Arc::clone(&completed),
-            });
-            (session, completed)
-        }
-    }
-
-    impl crate::agent::AgentSession for StubSession {
-        fn session_key(&self) -> &crate::agent::SessionKey {
-            &self.key
-        }
-        fn send_turn(
-            &self,
-            _turn: crate::agent::TurnInput,
-        ) -> crate::agent::BoxFuture<'_, Result<crate::agent::TurnId, AppError>> {
-            let reject = self.reject;
-            Box::pin(async move {
-                if reject {
-                    Err(AppError::AgentSessionBusy)
-                } else {
-                    Ok("t".to_owned())
-                }
-            })
-        }
-        fn await_turn_completion(
-            &self,
-            _turn: crate::agent::TurnId,
-        ) -> crate::agent::BoxFuture<'_, Result<(), AppError>> {
-            self.completed
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            Box::pin(async { Ok(()) })
-        }
-        fn cancel(
-            &self,
-            _turn: crate::agent::TurnId,
-        ) -> crate::agent::BoxFuture<'_, Result<(), AppError>> {
-            Box::pin(async { Ok(()) })
-        }
-        fn respond_permission(
-            &self,
-            _req: crate::agent::PermissionId,
-            _decision: crate::agent::PermissionDecision,
-        ) -> crate::agent::BoxFuture<'_, Result<(), AppError>> {
-            Box::pin(async { Ok(()) })
-        }
-        fn shutdown(
-            &self,
-        ) -> crate::agent::BoxFuture<'_, Result<crate::agent::ExitSummary, AppError>> {
-            Box::pin(async {
-                Ok(crate::agent::ExitSummary {
-                    exit_code: Some(0),
-                    signal: None,
-                })
-            })
-        }
-    }
-
-    fn request(worker_id: uuid::Uuid) -> AgentTurnRequest {
-        AgentTurnRequest {
-            worker_id,
-            turn: crate::agent::TurnInput {
-                prompt: "p".to_owned(),
-            },
-            priority: crate::agent::TurnPriority::Normal,
-        }
-    }
-
-    /// The terminal receipt `execute_turn` synthesized, if any.
-    fn synthesized_receipt(
-        rx: &std::sync::mpsc::Receiver<crate::events::WriterMsg>,
-    ) -> AgentTurnSettledPayload {
-        let SwarmEvent::AgentTurnSettled(payload) = rx.try_recv().unwrap().event else {
-            panic!("expected an agent_turn_settled receipt");
-        };
-        payload
-    }
-
-    #[tokio::test]
-    async fn test_execute_turn_without_a_live_session_synthesizes_an_error_receipt() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        execute_turn(
-            AgentSessionRegistry::new(),
-            EventSink::new(tx),
-            request(uuid::Uuid::new_v4()),
-        )
-        .await;
-        let receipt = synthesized_receipt(&rx);
-        assert_eq!(receipt.status, AgentTurnStatus::Error);
-        assert!(
-            receipt
-                .error
-                .unwrap()
-                .starts_with("No Live Session For This Worker")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_execute_turn_rejected_by_the_session_synthesizes_an_error_receipt() {
-        let worker_id = uuid::Uuid::new_v4();
-        let sessions = AgentSessionRegistry::new();
-        let (session, completed) = StubSession::new(true);
-        sessions
-            .begin_attach(worker_id)
-            .unwrap()
-            .insert(session)
-            .unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
-        execute_turn(sessions, EventSink::new(tx), request(worker_id)).await;
-        let receipt = synthesized_receipt(&rx);
-        assert_eq!(receipt.status, AgentTurnStatus::Error);
-        assert!(receipt.error.unwrap().starts_with("Turn Rejected"));
-        assert!(!completed.load(std::sync::atomic::Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_execute_turn_accepted_by_the_session_awaits_it_and_emits_no_receipt() {
-        let worker_id = uuid::Uuid::new_v4();
-        let sessions = AgentSessionRegistry::new();
-        let (session, completed) = StubSession::new(false);
-        sessions
-            .begin_attach(worker_id)
-            .unwrap()
-            .insert(session)
-            .unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
-        execute_turn(sessions, EventSink::new(tx), request(worker_id)).await;
-        assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
-        assert!(rx.try_recv().is_err());
-    }
-
-    /// A turn dispatched while a kill holds its worker closing never
-    /// reaches the session about to be shut down: it settles as an
-    /// error receipt instead.
-    #[tokio::test]
-    async fn test_execute_turn_for_a_closing_worker_synthesizes_an_error_receipt() {
-        let worker_id = uuid::Uuid::new_v4();
-        let sessions = AgentSessionRegistry::new();
-        let (session, completed) = StubSession::new(false);
-        sessions
-            .begin_attach(worker_id)
-            .unwrap()
-            .insert(session)
-            .unwrap();
-        let _closing = sessions.begin_close(worker_id).await;
-        let (tx, rx) = std::sync::mpsc::channel();
-        execute_turn(sessions, EventSink::new(tx), request(worker_id)).await;
-        let receipt = synthesized_receipt(&rx);
-        assert_eq!(receipt.status, AgentTurnStatus::Error);
-        assert_eq!(
-            receipt.error.unwrap(),
-            format!(
-                "No Live Session For This Worker: {}",
-                AppError::WorkerClosing {
-                    id: worker_id.to_string()
-                }
-            )
-        );
-        assert!(!completed.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

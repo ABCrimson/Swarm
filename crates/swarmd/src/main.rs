@@ -40,7 +40,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use swarm_core::Paths;
 use swarm_core::events::{SwarmEvent, SystemLogPayload};
@@ -499,16 +499,11 @@ async fn stop_runtime(state: &AppState, runtime: Runtime) {
         }
     }
 
-    let timestamp = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
-        });
     ctx.sink.emit(SwarmEvent::SystemLog(SystemLogPayload {
         level: "info".to_owned(),
         message: "SWARM Daemon Stopped.".to_owned(),
         target: "swarmd".to_owned(),
-        timestamp,
+        timestamp: swarm_core::clock::unix_millis(),
     }));
     // Everything recorded before this call, the log line above included,
     // is persisted when it returns.

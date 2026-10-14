@@ -41,7 +41,7 @@ pub(crate) fn test_ctx_with_claude(
     DropGuard<PathBuf, impl FnOnce(PathBuf)>,
     Receiver<DomainEvent>,
 ) {
-    let (dir, cleanup) = crate::state_file::tests::temp_dir("cmd-test");
+    let (dir, cleanup) = crate::test_support::temp_dir("cmd-test");
 
     let (events_tx, events) = mpsc::channel();
     let engine = OrchestrationEngine::start(EventLog::open_in_memory().unwrap(), None, move |e| {

@@ -887,37 +887,42 @@ mod tests {
         }
     }
 
-    /// The dispatch half of the production executor in
-    /// `crate::runtime::Runtime::start`: hold the worker's turn lock, look
-    /// up the session, `send_turn`, then `await_turn_completion` before
-    /// the future (and therefore the scheduler's permit) resolves. The
-    /// production executor additionally synthesizes an error
-    /// `agent_turn_settled` when dispatch fails; that path needs an event
-    /// sink and is not what these tests measure.
-    fn make_test_executor(
+    /// The production executor ([`crate::agent::scheduler::execute_turn`]) over
+    /// `registry`, plus the receiver for the events it records: the
+    /// scheduler tests below exercise the same turn lock, `send_turn` and
+    /// `await_turn_completion` sequence the app runs, so a regression there
+    /// fails them.
+    fn production_executor(
         registry: AgentSessionRegistry,
-    ) -> impl Fn(AgentTurnRequest) -> BoxFuture<'static, ()> + Send + Sync + 'static {
-        move |request: AgentTurnRequest| {
-            let registry = registry.clone();
-            Box::pin(async move {
-                let lock = registry.turn_lock(&request.worker_id);
-                let _guard = lock.lock().await;
-                if let Ok(session) = registry.get(&request.worker_id)
-                    && let Ok(turn_id) = session.send_turn(request.turn).await
-                {
-                    let _ = session.await_turn_completion(turn_id).await;
-                }
-            })
-        }
+    ) -> (
+        impl Fn(AgentTurnRequest) -> BoxFuture<'static, ()> + Send + Sync + 'static,
+        std::sync::mpsc::Receiver<crate::events::WriterMsg>,
+    ) {
+        let (tx, events) = std::sync::mpsc::channel();
+        let sink = crate::events::EventSink::new(tx);
+        let executor = move |request: AgentTurnRequest| -> BoxFuture<'static, ()> {
+            Box::pin(crate::agent::scheduler::execute_turn(
+                registry.clone(),
+                sink.clone(),
+                request,
+            ))
+        };
+        (executor, events)
     }
 
     async fn wait_for_completed(
         tracker: &ConcurrencyTracker,
         total: usize,
         exec_log: &parking_lot::Mutex<Vec<String>>,
+        events: &std::sync::mpsc::Receiver<crate::events::WriterMsg>,
     ) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         while tracker.completed.load(Ordering::SeqCst) < total {
+            // A synthesized receipt means the executor failed a dispatch:
+            // fail now instead of at the deadline.
+            if let Ok(msg) = events.try_recv() {
+                panic!("synthesized receipt: {:?}", msg.event);
+            }
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "timed out: {}/{total} completed, log: {:?}",
@@ -946,11 +951,12 @@ mod tests {
             )),
         );
 
+        let (executor, events) = production_executor(registry.clone());
         let scheduler = AgentScheduler::new(
             AgentSchedulerConfig {
                 concurrent_limit: 4,
             },
-            make_test_executor(registry.clone()),
+            executor,
         );
 
         // Two turns for the SAME worker, back-to-back: the second must
@@ -967,7 +973,11 @@ mod tests {
                 .unwrap();
         }
 
-        wait_for_completed(&tracker, 2, &exec_log).await;
+        wait_for_completed(&tracker, 2, &exec_log, &events).await;
+        assert!(
+            events.try_recv().is_err(),
+            "accepted turns settle through their session, never a synthesized receipt"
+        );
         assert_eq!(
             *exec_log.lock(),
             ["w:A:start", "w:A:end", "w:B:start", "w:B:end"],
@@ -1003,11 +1013,12 @@ mod tests {
             })
             .collect();
 
+        let (executor, events) = production_executor(registry.clone());
         let scheduler = AgentScheduler::new(
             AgentSchedulerConfig {
                 concurrent_limit: CONCURRENT_LIMIT,
             },
-            make_test_executor(registry.clone()),
+            executor,
         );
         for &worker_id in &worker_ids {
             for t in 0..TURNS_PER_SESSION {
@@ -1023,7 +1034,17 @@ mod tests {
             }
         }
 
-        wait_for_completed(&tracker, labels.len() * TURNS_PER_SESSION, &exec_log).await;
+        wait_for_completed(
+            &tracker,
+            labels.len() * TURNS_PER_SESSION,
+            &exec_log,
+            &events,
+        )
+        .await;
+        assert!(
+            events.try_recv().is_err(),
+            "accepted turns settle through their session, never a synthesized receipt"
+        );
         assert_eq!(
             tracker.max_observed.load(Ordering::SeqCst),
             CONCURRENT_LIMIT,

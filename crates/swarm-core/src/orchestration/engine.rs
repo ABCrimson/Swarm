@@ -600,6 +600,7 @@ mod tests {
         SystemMetricsPayload, WorkerInputPayload, WorkerOutputPayload, WorkerSpawnedPayload,
         WorktreeCreatedPayload, WorktreeRemovedPayload,
     };
+    use crate::test_support::temp_db;
 
     fn spawned() -> SwarmEvent {
         SwarmEvent::WorkerSpawned(WorkerSpawnedPayload {
@@ -1214,20 +1215,6 @@ mod tests {
         }
         assert_eq!(engine.flush().await.unwrap(), 50);
         assert_eq!(engine.head_seq(), 50);
-    }
-
-    /// A temp database file removed (with its WAL siblings) on drop.
-    fn temp_db() -> (PathBuf, std::mem::DropGuard<PathBuf, impl FnOnce(PathBuf)>) {
-        let path = std::env::temp_dir().join(format!("swarm-engine-test-{}.db", Uuid::new_v4()));
-        let guard = std::mem::DropGuard::new(path.clone(), |path: PathBuf| {
-            for suffix in ["-wal", "-shm"] {
-                let mut sibling = path.clone().into_os_string();
-                sibling.push(suffix);
-                let _ = std::fs::remove_file(sibling);
-            }
-            let _ = std::fs::remove_file(&path);
-        });
-        (path, guard)
     }
 
     /// A timed-out drain fails every later call. The emit blocks the first
