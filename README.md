@@ -7,7 +7,7 @@
   <a href="https://github.com/ABCrimson/Swarm/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/ABCrimson/Swarm/ci.yml?branch=main&style=flat-square&labelColor=0a0e1a&color=ebb84a&label=CI" /></a>
   <img alt="Platforms: Windows, macOS, Linux" src="https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-ebb84a?style=flat-square&labelColor=0a0e1a" />
   <img alt="Tauri 3.0 alpha" src="https://img.shields.io/badge/Tauri-3.0%20alpha-ebb84a?style=flat-square&labelColor=0a0e1a&logo=tauri&logoColor=ebb84a" />
-  <img alt="Rust nightly" src="https://img.shields.io/badge/Rust-nightly--2026--10--13-ebb84a?style=flat-square&labelColor=0a0e1a&logo=rust&logoColor=ebb84a" />
+  <img alt="Rust nightly" src="https://img.shields.io/badge/Rust-nightly--2026--10--14-ebb84a?style=flat-square&labelColor=0a0e1a&logo=rust&logoColor=ebb84a" />
   <img alt="React 19.3" src="https://img.shields.io/badge/React-19.3%20canary-ebb84a?style=flat-square&labelColor=0a0e1a&logo=react&logoColor=ebb84a" />
   <img alt="TypeScript 7.1" src="https://img.shields.io/badge/TypeScript-7.1-ebb84a?style=flat-square&labelColor=0a0e1a&logo=typescript&logoColor=ebb84a" />
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-ebb84a?style=flat-square&labelColor=0a0e1a" /></a>
@@ -114,7 +114,7 @@ The Rust side is a **three-crate workspace**: `swarm-core` (tauri-free domain lo
 |---|---|---|
 | Node.js | 27.0.0-nightly202610123b639be3a4 | pinned via `devEngines.runtime`; pnpm downloads it for the project |
 | pnpm | 12.13.0 | pinned via `packageManager`; pnpm switches itself to it |
-| Rust | nightly-2026-10-13 | auto-configured by `rust-toolchain.toml` |
+| Rust | nightly-2026-10-14 | auto-configured by `rust-toolchain.toml` |
 | macOS (running the app) | 15.4 or newer | the bundle calls iterator helpers, `Error.isError` and `RegExp.escape` unguarded, which needs a Safari 18.4-class WKWebView; `bundle.macOS.minimumSystemVersion` enforces it |
 
 ### Desktop
@@ -186,7 +186,7 @@ Full operator guide: [`docs/daemon.md`](docs/daemon.md).
 
 | Layer | Technology | Version |
 |---|---|---|
-| Language | Rust | nightly-2026-10-13 (rustc 1.101.0-nightly) |
+| Language | Rust | nightly-2026-10-14 (rustc 1.101.0-nightly) |
 | Async runtime | Tokio | 1.53.3 |
 | Daemon transport | axum (WebSocket) | 0.8.9 |
 | Event log | rusqlite (bundled, WAL) | 0.40.2 |

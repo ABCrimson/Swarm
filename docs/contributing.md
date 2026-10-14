@@ -25,7 +25,7 @@ The house rules (exact pins, pnpm only, no manual memoization, `parking_lot`, an
 |---------|------------------------------------------|----------------------------------------------|
 | Node.js | 27.0.0-nightly202610123b639be3a4 (`devEngines.runtime`) | Frontend build and dev server (pnpm downloads it; do not install it separately) |
 | pnpm    | 12.13.0 (`packageManager`)               | Package management; npm and yarn are not used |
-| Rust    | nightly-2026-10-13 (`rust-toolchain.toml`) | Backend compilation (`rust-version` 1.101)   |
+| Rust    | nightly-2026-10-14 (`rust-toolchain.toml`) | Backend compilation (`rust-version` 1.101)   |
 
 Every version is pinned exactly: `package.json`, `pnpm-workspace.yaml`, the root `Cargo.toml` and `rust-toolchain.toml` are the source of truth, and this table follows them. The Node pin is the newest nightly that has a Windows x64 build, because `devEngines.runtime` cannot provision one without it; a pin held back for any other reason is recorded in `.peak-modern-holds.json`.
 
@@ -35,7 +35,7 @@ Every version is pinned exactly: `package.json`, `pnpm-workspace.yaml`, the root
 
 ```toml
 [toolchain]
-channel    = "nightly-2026-10-13"
+channel    = "nightly-2026-10-14"
 profile    = "minimal"
 components = ["rustfmt", "clippy", "rust-src", "rust-analyzer"]
 targets    = [
