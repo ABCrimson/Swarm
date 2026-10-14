@@ -1,6 +1,7 @@
 import { useDeferredValue, useId, useRef, useState } from "react";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
+import { escapeForDisplay } from "#lib/display-escape";
 import { pluralize } from "#lib/format";
 import { useSessionStore } from "#store/sessions";
 import type { Session } from "#store/types";
@@ -57,11 +58,15 @@ function withinRange(session: Session, range: DateRange): boolean {
 }
 
 /** `text` with every case-insensitive occurrence of `query` wrapped in `<mark>`. */
-function Highlighted({ text, query }: { readonly text: string; readonly query: string }) {
+function Highlighted({ text: raw, query }: { readonly text: string; readonly query: string }) {
+  // Matching runs on the escaped text, so the highlighted spans are exactly what is shown.
+  const text = escapeForDisplay(raw);
   if (query === "") return text;
   const nodes: React.ReactNode[] = [];
   let cursor = 0;
-  for (const { 0: match, index } of text.matchAll(new RegExp(RegExp.escape(query), "gi"))) {
+  for (const { 0: match, index } of text.matchAll(
+    new RegExp(RegExp.escape(escapeForDisplay(query)), "gi"),
+  )) {
     nodes.push(
       text.slice(cursor, index),
       <mark

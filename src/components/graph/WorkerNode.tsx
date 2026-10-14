@@ -3,6 +3,7 @@ import { Handle, Position } from "@xyflow/react";
 import type { CSSProperties } from "react";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Pill } from "#components/ui/Pill";
+import { escapeForDisplay } from "#lib/display-escape";
 import { withAlpha, workerColor } from "#lib/theme";
 import { useProvenanceStore } from "#store/provenance";
 import { useWorkerStore } from "#store/workers";
@@ -75,7 +76,7 @@ export function WorkerNode({ data }: NodeProps<WorkerFlowNode>): React.ReactElem
             maxWidth: 140,
           }}
         >
-          {name ?? workerId.slice(0, 8)}
+          {escapeForDisplay(name ?? workerId.slice(0, 8))}
         </span>
         <Badge state={state}>{stateLabels[state]}</Badge>
       </div>

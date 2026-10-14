@@ -36,6 +36,7 @@ import { stateLabels } from "#components/ui/Badge";
 import { Button } from "#components/ui/Button";
 import { Spinner } from "#components/ui/Spinner";
 import { useElkLayout } from "#hooks/useElkLayout";
+import { escapeForDisplay } from "#lib/display-escape";
 import { workerColor } from "#lib/theme";
 import type { WorkflowDefinition } from "#lib/workflow";
 import { exportWorkflow } from "#lib/workflow";
@@ -118,12 +119,12 @@ export function reduceNodeUi(
 
 /** Accessible name of a worker node's (focusable) xyflow wrapper. */
 function nodeAriaLabel(worker: Worker): string {
-  const name = worker.name ?? worker.id.slice(0, 8);
+  const name = escapeForDisplay(worker.name ?? worker.id.slice(0, 8));
   const pid = worker.pid != null ? `, PID ${worker.pid}` : "";
   return `Worker ${name}, Status: ${stateLabels[worker.state]}${pid}`;
 }
 
-/** Display name per worker id. */
+/** Name per worker id, raw: the workflow export saves it, so each display use escapes it. */
 const selectNames = (s: { workers: ReadonlyMap<string, Worker> }): Record<string, string> =>
   Object.fromEntries(s.workers.values().map((w) => [w.id, w.name ?? w.id.slice(0, 8)]));
 
@@ -150,7 +151,7 @@ export function toFlowEdges(
     type: "provenance",
     deletable: false,
     markerEnd: { type: MarkerType.ArrowClosed, color: KIND_STYLE[r.kind].stroke },
-    ariaLabel: `${KIND_LABEL[r.kind]}: ${names[r.from] ?? r.from} To ${names[r.to] ?? r.to}${
+    ariaLabel: `${KIND_LABEL[r.kind]}: ${escapeForDisplay(names[r.from] ?? r.from)} To ${escapeForDisplay(names[r.to] ?? r.to)}${
       r.count > 1 ? ` (×${r.count})` : ""
     }`,
     data: { kind: r.kind, count: r.count, lastSeq: r.lastSeq },
@@ -459,7 +460,7 @@ function WorkerGraphInner(): React.ReactElement {
     <div className="worker-graph" style={{ width: "100%", height: "100%", position: "relative" }}>
       <p role="status" className="sr-only">
         {linkSource !== null
-          ? `Linking From ${names[linkSource] ?? linkSource}: Focus Another Worker And Press Enter, Or Escape To Cancel`
+          ? `Linking From ${escapeForDisplay(names[linkSource] ?? linkSource)}: Focus Another Worker And Press Enter, Or Escape To Cancel`
           : isLayouting
             ? "Computing Layout"
             : ""}

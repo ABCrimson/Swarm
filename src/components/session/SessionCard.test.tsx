@@ -258,3 +258,21 @@ describe("SessionCard", () => {
     expect(props.onCreateTemplate).toHaveBeenCalledExactlyOnceWith(SESSION_ID);
   });
 });
+
+describe("SessionCard — Trojan Source", () => {
+  afterEach(() => {
+    cleanup();
+    resetWorkerStore();
+    web.on = false;
+  });
+
+  it("shows the session name with a bidi override as escaped data, also in the menu's accessible name", () => {
+    renderCard({ session: createSession({ name: "a\u202Eb" }) });
+
+    expect(screen.getByText(String.raw`a\u202Eb`)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: String.raw`Actions For Session "a\u202Eb"` }),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("\u202E");
+  });
+});

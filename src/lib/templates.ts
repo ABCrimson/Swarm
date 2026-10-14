@@ -13,9 +13,10 @@
  */
 
 import type { LazyStore } from "@tauri-apps/plugin-store";
+import { escapeForDisplay } from "#lib/display-escape";
 import { errorMessage } from "#lib/is-error";
 import { templatesStore } from "#lib/lazy-store";
-import { createSession as createSessionIpc } from "#lib/tauri";
+import { createSession as createSessionIpc, DESKTOP_ONLY_REASON, hasCapability } from "#lib/tauri";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
 import { useSessionStore } from "#store/sessions";
 import type { Session, SessionTemplate, WorkerSpawnSpec } from "#store/types";
@@ -304,6 +305,10 @@ export function createTemplateFromSession(
  * partial or total failure and report it, with `failures`, honestly instead
  * of always toasting success.
  *
+ * @throws {Error} With `DESKTOP_ONLY_REASON`, before creating a session, when the template has
+ * workers and the transport lacks `localAiChat` (the swarmd `--serve-ui` page): its workers would
+ * be webview workers, which `spawnWorkerFromSpec` refuses there.
+ *
  * @returns The created session, the worker IDs that spawned successfully (in
  * template order), and `failures`, one entry per worker that did not.
  */
@@ -312,6 +317,9 @@ export async function applyTemplate(template: SessionTemplate): Promise<{
   readonly workerIds: string[];
   readonly failures: string[];
 }> {
+  if (template.workerConfigs.length > 0 && !hasCapability("localAiChat")) {
+    throw new Error(DESKTOP_ONLY_REASON);
+  }
   const session = await createSessionIpc(template.name);
   useSessionStore.getState().addSession(session);
 
@@ -324,7 +332,7 @@ export async function applyTemplate(template: SessionTemplate): Promise<{
         console.error(
           `applyTemplate: spawnWorkerFromSpec returned null for worker "${spec.name}" from template "${template.name}" (no Tauri IPC bridge)`,
         );
-        failures.push(`${spec.name}: No Tauri IPC Bridge`);
+        failures.push(`${escapeForDisplay(spec.name)}: No Tauri IPC Bridge`);
         continue;
       }
       workerIds.push(workerId);
@@ -333,7 +341,7 @@ export async function applyTemplate(template: SessionTemplate): Promise<{
         `applyTemplate: failed to spawn worker "${spec.name}" from template "${template.name}"`,
         err,
       );
-      failures.push(`${spec.name}: ${errorMessage(err)}`);
+      failures.push(`${escapeForDisplay(spec.name)}: ${errorMessage(err)}`);
     }
   }
 

@@ -15,8 +15,8 @@
 // The node context menu is a native popover (see the shim's header).
 import "#test/top-layer-shim";
 
-import { open } from "@tauri-apps/plugin-dialog";
-import { readTextFile } from "@tauri-apps/plugin-fs";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MarkerType } from "@xyflow/react";
@@ -366,6 +366,16 @@ describe("WorkerGraph — interactions", () => {
     expect(nodeFor("w-a")).toHaveClass("selected");
   });
 
+  it("escapes a bidi override in a node wrapper's accessible name and visible name", async () => {
+    await renderWith(createWorker({ id: "w-rlo", name: "Al\u202Epha", pid: 7 }));
+
+    expect(nodeFor("w-rlo")).toHaveAttribute(
+      "aria-label",
+      String.raw`Worker Al\u202Epha, Status: Running, PID 7`,
+    );
+    expect(nodeFor("w-rlo")).toHaveTextContent(String.raw`Al\u202Epha`);
+  });
+
   it("gives each node wrapper an accessible name and opens the detail panel on Enter", async () => {
     const user = userEvent.setup();
     await renderWith(createWorker({ id: "w-a", name: "Alpha", pid: 42 }));
@@ -461,6 +471,19 @@ describe("WorkerGraph — interactions", () => {
     });
 
     expect(commits).not.toHaveBeenCalled();
+  });
+
+  it("exports a worker's real name, not its escaped display form", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("isTauri", true);
+    vi.mocked(save).mockResolvedValueOnce("/out/wf.json");
+    await renderWith(createWorker({ id: "w-rlo", name: "a\u202Eb" }));
+
+    await user.click(screen.getByRole("button", { name: "Export Workflow" }));
+
+    await waitFor(() => expect(writeTextFile).toHaveBeenCalled());
+    const workflow = JSON.parse(vi.mocked(writeTextFile).mock.calls[0]?.[1] as string);
+    expect(workflow.nodes[0].data.label).toBe("a\u202Eb");
   });
 
   it("imports a workflow onto live workers only: positions and annotations, nothing fabricated", async () => {

@@ -129,3 +129,42 @@ describe("TemplateSelector", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 });
+
+describe("TemplateSelector — browser build", () => {
+  it("disables every template that spawns workers, with the reason, and selects nothing", async () => {
+    web.on = true;
+    const user = userEvent.setup();
+    const { onSelect } = await renderSelector({ templates: [], failed: false });
+
+    const builtIns = screen.getByRole("region", { name: "Built-In Templates" });
+    const cards = within(builtIns).getAllByRole("button");
+    expect(cards).toHaveLength(BUILT_IN_TEMPLATES.length);
+    for (const card of cards) {
+      expect(card).toBeDisabled();
+      expect(card).toHaveAccessibleDescription("Available In The Desktop App Only");
+      await user.click(card);
+    }
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("leaves the cards enabled on the desktop", async () => {
+    await renderSelector({ templates: [], failed: false });
+
+    const builtIns = screen.getByRole("region", { name: "Built-In Templates" });
+    for (const card of within(builtIns).getAllByRole("button")) expect(card).toBeEnabled();
+    expect(
+      within(builtIns).queryByText("Available In The Desktop App Only"),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("TemplateSelector — Trojan Source", () => {
+  it("shows a template name with a bidi override as escaped data", async () => {
+    await renderSelector({
+      templates: [{ ...USER_TEMPLATE, name: "a\u202Eb" }],
+      failed: false,
+    });
+
+    expect(await screen.findByText(String.raw`a\u202Eb`)).toBeInTheDocument();
+  });
+});

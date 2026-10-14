@@ -26,3 +26,12 @@ describe("ProviderBadge", () => {
     expect(screen.getByText("Codex · gpt-5-codex")).toBeInTheDocument();
   });
 });
+
+describe("ProviderBadge — Trojan Source", () => {
+  it("shows an agent-supplied model with a bidi override as escaped data", () => {
+    render(<ProviderBadge provider="codex" model={"m\u202Eodel"} />);
+
+    const badge = screen.getByText(String.raw`Codex · m\u202Eodel`);
+    expect(badge.closest("[title]")).toHaveAttribute("title", String.raw`Codex · m\u202Eodel`);
+  });
+});

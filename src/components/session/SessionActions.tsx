@@ -2,6 +2,7 @@ import { useActionState, useId, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
+import { escapeForDisplay } from "#lib/display-escape";
 import { errorMessage } from "#lib/is-error";
 import { createAndActivateSession, importSessionFromFile } from "#lib/session-lifecycle";
 import { DESKTOP_ONLY_REASON, hasCapability } from "#lib/tauri";
@@ -23,7 +24,7 @@ async function submitNewSession(form: FormData): Promise<CreateFormState> {
   if (name === "") return { error: "Enter A Session Name.", name, created: false };
   try {
     const session = await createAndActivateSession(name);
-    toast.success(`Session "${session.name}" Created`);
+    toast.success(`Session "${escapeForDisplay(session.name)}" Created`);
     return { error: null, name: "", created: true };
   } catch (err) {
     return { error: `Failed To Create Session: ${errorMessage(err)}`, name, created: false };
@@ -33,7 +34,7 @@ async function submitNewSession(form: FormData): Promise<CreateFormState> {
 async function importSession(): Promise<void> {
   try {
     const session = await importSessionFromFile();
-    if (session != null) toast.success(`Session "${session.name}" Imported`);
+    if (session != null) toast.success(`Session "${escapeForDisplay(session.name)}" Imported`);
   } catch (err) {
     toast.error(`Import Failed: ${errorMessage(err)}`);
   }

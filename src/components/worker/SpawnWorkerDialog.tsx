@@ -4,6 +4,7 @@ import { useActionState, useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { PROVIDER_LABELS, type TrustTier, TrustTierSchema } from "#lib/agent-events";
+import { escapeForDisplay } from "#lib/display-escape";
 import { errorMessage } from "#lib/is-error";
 import { DEFAULT_REPO_ROOT_KEY, getPersistedRepoRoot } from "#lib/project-root";
 import {
@@ -380,7 +381,10 @@ export function SpawnWorkerDialog({
       try {
         persisted = await getPersistedRepoRoot();
       } catch (err) {
-        if (!cancelled) setNotice(`Could Not Read The Saved Project Root: ${errorMessage(err)}`);
+        if (!cancelled)
+          setNotice(
+            `Could Not Read The Saved Project Root: ${escapeForDisplay(errorMessage(err))}`,
+          );
         return null;
       }
       if (!persisted) return null;
@@ -388,7 +392,9 @@ export function SpawnWorkerDialog({
         return await validateRepoRoot(persisted);
       } catch (err) {
         if (!cancelled) {
-          setNotice(`Could Not Validate The Saved Project Root ${persisted}: ${errorMessage(err)}`);
+          setNotice(
+            `Could Not Validate The Saved Project Root ${escapeForDisplay(persisted)}: ${escapeForDisplay(errorMessage(err))}`,
+          );
         }
         return null;
       }
@@ -458,7 +464,7 @@ export function SpawnWorkerDialog({
         multiple: false,
       });
     } catch (err) {
-      setNotice(`Could Not Open The Folder Picker: ${errorMessage(err)}`);
+      setNotice(`Could Not Open The Folder Picker: ${escapeForDisplay(errorMessage(err))}`);
       return;
     }
     if (!selected) return;
@@ -466,7 +472,9 @@ export function SpawnWorkerDialog({
     try {
       toplevel = await validateRepoRoot(selected);
     } catch (err) {
-      setNotice(`Could Not Use ${selected} As The Project Root: ${errorMessage(err)}`);
+      setNotice(
+        `Could Not Use ${escapeForDisplay(selected)} As The Project Root: ${escapeForDisplay(errorMessage(err))}`,
+      );
       return;
     }
     setProjectRoot(toplevel);
@@ -474,7 +482,7 @@ export function SpawnWorkerDialog({
     try {
       await writeConfig(DEFAULT_REPO_ROOT_KEY, toplevel);
     } catch (err) {
-      setNotice(`Could Not Save Project Root: ${errorMessage(err)}`);
+      setNotice(`Could Not Save Project Root: ${escapeForDisplay(errorMessage(err))}`);
     }
   };
 
@@ -605,10 +613,15 @@ export function SpawnWorkerDialog({
           <div style={fieldGroupStyle}>
             <span style={fieldLabelStyle}>Working Directory</span>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={repoRootPathStyle} title={projectRoot ?? undefined}>
+              <span
+                style={repoRootPathStyle}
+                title={projectRoot == null ? undefined : escapeForDisplay(projectRoot)}
+              >
                 {projectRoot === undefined
                   ? "Loading…"
-                  : (projectRoot ?? "No Project Root — Spawns Without Worktree Isolation")}
+                  : escapeForDisplay(
+                      projectRoot ?? "No Project Root — Spawns Without Worktree Isolation",
+                    )}
               </span>
               <Button
                 variant="secondary"

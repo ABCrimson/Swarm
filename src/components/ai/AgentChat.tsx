@@ -267,14 +267,14 @@ function PermissionRow({
   return (
     // A fieldset groups the request with its answer buttons; `loading`, not `disabled`, holds them while an answer is in flight, so keyboard focus stays on the pressed button.
     <fieldset
-      aria-label={`Permission Request: ${payload.tool}`}
+      aria-label={`Permission Request: ${escapeForDisplay(payload.tool)}`}
       style={waiting ? permissionPendingStyle : permissionStyle}
     >
       <div style={permissionHeaderStyle}>
         <Pill tone={PERMISSION_TONE[state]} size="sm">
           {permissionLabel(state, payload.denialSubclass)}
         </Pill>
-        <span style={permissionToolStyle}>{payload.tool}</span>
+        <span style={permissionToolStyle}>{escapeForDisplay(payload.tool)}</span>
       </div>
       {review.args.length > 0 && <ApprovalArgList review={review} />}
       {payload.message && (

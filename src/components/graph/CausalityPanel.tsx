@@ -5,6 +5,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import * as z from "zod";
 import { useShallow } from "zustand/react/shallow";
 import { Spinner } from "#components/ui/Spinner";
+import { escapeForDisplay } from "#lib/display-escape";
 import { type DomainEvent, DomainEventSchema } from "#lib/event-bus";
 import { errorMessage } from "#lib/is-error";
 import { invoke } from "#lib/tauri";
@@ -169,21 +170,22 @@ function describeRow(event: DomainEvent, names: LiveNames): RowDescription {
     }
     case "worker_input": {
       const workerId = workerIdOf("workerId");
-      const preview = typeof payload.preview === "string" ? payload.preview.trim() : "";
+      const preview =
+        typeof payload.preview === "string" ? escapeForDisplay(payload.preview.trim()) : "";
       const label = workerLabel(workerId, names);
       return { text: preview ? `${label} Ran ${preview}` : `${label} Received Input`, workerId };
     }
     case "bus_message": {
       const fromWorker = workerIdOf("fromWorker");
       const toWorker = workerIdOf("toWorker");
-      const topic = typeof payload.topic === "string" ? payload.topic : "A Topic";
+      const topic = typeof payload.topic === "string" ? escapeForDisplay(payload.topic) : "A Topic";
       return {
         text: `${workerLabel(fromWorker, names)} Sent "${topic}" To ${workerLabel(toWorker, names)}`,
         workerId: toWorker ?? fromWorker,
       };
     }
     case "file_written": {
-      const path = typeof payload.path === "string" ? payload.path : "A File";
+      const path = typeof payload.path === "string" ? escapeForDisplay(payload.path) : "A File";
       return { text: `Wrote ${path}` };
     }
     default:
@@ -265,7 +267,9 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
   // replaces a worker object) does not re-render the open inspector.
   const names = useWorkerStore(
     useShallow((s) =>
-      Object.fromEntries(s.workers.values().map((w) => [w.id, w.name ?? w.id.slice(0, 8)])),
+      Object.fromEntries(
+        s.workers.values().map((w) => [w.id, escapeForDisplay(w.name ?? w.id.slice(0, 8))]),
+      ),
     ),
   );
   const setSelectedWorkerId = useSetAtom(selectedWorkerIdAtom);

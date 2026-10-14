@@ -555,3 +555,37 @@ describe("AgentChat", () => {
     expect(screen.getByText("Persisted answer")).toBeInTheDocument();
   });
 });
+
+describe("AgentChat — Trojan Source", () => {
+  it("shows a permission request's tool name with a bidi override as escaped data", () => {
+    render(<Harness />);
+    startSession("claude_code", { interactivePermissions: true });
+
+    fire("agent_permission_request", {
+      turnId: "t1",
+      requestId: "req-rlo",
+      tool: "Ba\u202Esh",
+      input: {},
+    });
+
+    const request = screen.getByRole("group", { name: String.raw`Permission Request: Ba\u202Esh` });
+    expect(request).toHaveTextContent(String.raw`Ba\u202Esh`);
+    expect(request.textContent).not.toContain("\u202E");
+  });
+
+  it("shows a tool call's name with a bidi override as escaped data", () => {
+    render(<Harness />);
+
+    fire("agent_tool_call", { turnId: "t1", toolUseId: "tool-rlo", name: "ru\u202En", input: {} });
+    fire("agent_tool_result", {
+      turnId: "t1",
+      toolUseId: "tool-rlo",
+      isError: false,
+      content: "ok",
+    });
+
+    const call = screen.getByRole("button", { name: String.raw`Tool Call: ru\u202En, Complete` });
+    expect(call).toHaveTextContent(String.raw`ru\u202En`);
+    expect(call.textContent).not.toContain("\u202E");
+  });
+});

@@ -418,3 +418,15 @@ describe("ShipPreview — agent-controlled names", () => {
     expect(screen.getByText("Branch `a\\u202Eb` Is Protected")).toBeInTheDocument();
   });
 });
+
+describe("ShipPreview — tool-call names", () => {
+  it("escapes bidi controls in an agent-supplied tool name", () => {
+    renderPreview({
+      context: makeContext({
+        turns: [makeTurn({ toolCalls: [{ seq: 5, name: "Ba\u202Esh", target: "x", ok: true }] })],
+      }),
+    });
+
+    expect(screen.getByText(String.raw`Ba\u202Esh`)).toBeInTheDocument();
+  });
+});

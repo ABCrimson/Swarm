@@ -5,6 +5,7 @@ import { useEffectEvent, useLayoutEffect, useState } from "react";
 import { toast } from "sonner";
 
 import type { PageId } from "#hooks/useNavigate";
+import { escapeForDisplay } from "#lib/display-escape";
 import { errorMessage } from "#lib/is-error";
 import { matchesBinding } from "#lib/keybindings";
 import { createSnapshot } from "#lib/snapshots";
@@ -230,15 +231,21 @@ function PaletteBody({
       keywords: ["panel", "collapse", "expand"],
       action: () => setSidebarCollapsed((prev) => !prev),
     },
-    {
-      id: "worker:spawn",
-      label: "Spawn Worker",
-      group: "Workers",
-      keywords: ["create", "new", "add", "agent"],
-      action: () => void spawn(),
-    },
+    // The command spawns a webview worker, whose Claude client only the desktop app has;
+    // agent CLI workers spawn from the Spawn Worker dialog.
+    ...(hasCapability("localAiChat")
+      ? [
+          {
+            id: "worker:spawn",
+            label: "Spawn Worker",
+            group: "Workers",
+            keywords: ["create", "new", "add", "agent"],
+            action: () => void spawn(),
+          } satisfies CommandDef,
+        ]
+      : []),
     ...workers.entries().map(([id, worker]): CommandDef => {
-      const name = worker.name ?? id.slice(0, 8);
+      const name = escapeForDisplay(worker.name ?? id.slice(0, 8));
       return {
         id: `worker:kill:${id}`,
         label: `Kill ${name}`,

@@ -1,5 +1,6 @@
 import { Pill } from "#components/ui/Pill";
 import { PROVIDER_LABELS, type ProviderId } from "#lib/agent-events";
+import { escapeForDisplay } from "#lib/display-escape";
 
 /**
  * Categorical provider color — not one of Pill's semantic tones, so it
@@ -25,7 +26,7 @@ interface ProviderBadgeProps {
  */
 export function ProviderBadge({ provider, model }: ProviderBadgeProps): React.ReactElement {
   const label = PROVIDER_LABELS[provider];
-  const text = model ? `${label} · ${model}` : label;
+  const text = model ? `${label} · ${escapeForDisplay(model)}` : label;
   return (
     <Pill tone="neutral" style={PROVIDER_BADGE_COLOR} maxWidth={220} title={text}>
       {text}

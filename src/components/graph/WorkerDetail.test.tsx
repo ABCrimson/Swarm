@@ -337,3 +337,49 @@ describe("WorkerDetail", () => {
     });
   });
 });
+
+describe("WorkerDetail — Trojan Source", () => {
+  afterEach(() => {
+    resetStore();
+    vi.clearAllMocks();
+  });
+
+  it("shows the name, branch and worktree path with bidi overrides as escaped data", () => {
+    const worker = createWorker({
+      name: "w\u202Eorker",
+      branch: "swarm/a\u202Eb",
+      worktreePath: "/wt/c\u202Ed",
+    });
+    seedWorker(worker);
+    const { container } = render(<WorkerDetail worker={worker} />);
+
+    expect(screen.getByText(String.raw`w\u202Eorker`)).toBeInTheDocument();
+    expect(screen.getByText(String.raw`swarm/a\u202Eb`)).toBeInTheDocument();
+    const path = screen.getByText(String.raw`/wt/c\u202Ed`);
+    expect(path).toHaveAttribute("title", String.raw`/wt/c\u202Ed`);
+    expect(container.textContent).not.toContain("\u202E");
+  });
+
+  it("escapes the worktree path outside the desktop app too", () => {
+    tauri.isTauri.mockReturnValue(false);
+    const worker = createWorker({ worktreePath: "/wt/c\u202Ed" });
+    seedWorker(worker);
+    render(<WorkerDetail worker={worker} />);
+
+    expect(screen.getByText(String.raw`/wt/c\u202Ed`)).toHaveAttribute(
+      "title",
+      String.raw`/wt/c\u202Ed`,
+    );
+    tauri.isTauri.mockReturnValue(true);
+  });
+
+  it("still opens the raw worktree path", async () => {
+    const worker = createWorker({ worktreePath: "/wt/e\u202Ef" });
+    seedWorker(worker);
+    render(<WorkerDetail worker={worker} />);
+
+    await userEvent.setup().click(screen.getByTitle(String.raw`/wt/e\u202Ef`));
+
+    expect(vi.mocked(openPath)).toHaveBeenCalledWith("/wt/e\u202Ef");
+  });
+});

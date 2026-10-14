@@ -96,7 +96,7 @@ describe("CommandPalette — snapshots", () => {
     render(<CommandPalette />);
     act(() => store.set(commandPaletteOpenAtom, true));
 
-    await screen.findByRole("option", { name: "Spawn Worker" });
+    await screen.findByRole("option", { name: "Switch To List View" });
     expect(screen.queryByRole("option", { name: "Snapshot Session" })).not.toBeInTheDocument();
   });
 });
@@ -196,5 +196,27 @@ describe("CommandPalette", () => {
     const [first] = await within(reopened).findAllByRole("option");
     expect(first).toHaveTextContent(/^Go To Workers1$/);
     expect(first).toHaveAccessibleName("Go To Workers");
+  });
+});
+
+describe("CommandPalette — Trojan Source", () => {
+  it("shows a worker name with a bidi override as escaped data in its Kill command and confirmation", async () => {
+    addWorker("w-rlo", "a\u202Eb");
+    await killFromPalette(String.raw`a\u202Eb`);
+
+    expect(vi.mocked(toast.warning).mock.lastCall?.[0]).toBe(String.raw`Kill a\u202Eb?`);
+    // The kill itself addresses the raw id, never the display form.
+    expect(killWorker).toHaveBeenCalledExactlyOnceWith("w-rlo");
+  });
+});
+
+describe("CommandPalette — browser build", () => {
+  it("offers no Spawn Worker command (a webview worker is a desktop feature)", async () => {
+    web.on = true;
+    render(<CommandPalette />);
+    act(() => store.set(commandPaletteOpenAtom, true));
+
+    await screen.findByRole("option", { name: "Switch To List View" });
+    expect(screen.queryByRole("option", { name: "Spawn Worker" })).not.toBeInTheDocument();
   });
 });

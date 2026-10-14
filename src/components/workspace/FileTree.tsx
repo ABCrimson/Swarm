@@ -1,6 +1,7 @@
 import { useResizeObserver } from "@crimson_dev/use-resize-observer";
 import { type DirEntry, readDir } from "@tauri-apps/plugin-fs";
 import { useEffect, useId, useRef, useState } from "react";
+import { escapeForDisplay } from "#lib/display-escape";
 import { childPath } from "#lib/file-preview";
 import { errorMessage } from "#lib/is-error";
 
@@ -351,9 +352,9 @@ export function FileTree({
                 <span aria-hidden="true" className="text-sm">
                   {fileIcon(node)}
                 </span>
-                <span className="truncate">{node.name}</span>
+                <span className="truncate">{escapeForDisplay(node.name)}</span>
                 {node.error && (
-                  <span className="truncate text-rose text-sm" title={node.error}>
+                  <span className="truncate text-rose text-sm" title={escapeForDisplay(node.error)}>
                     — Could Not Read Folder
                   </span>
                 )}
