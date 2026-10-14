@@ -14,14 +14,20 @@
 //! passes one today.
 //!
 //! The registry also owns each worker's lifecycle fence, which keeps a
-//! kill and a session attach from interleaving: an attach holds an
-//! [`AttachPermit`] from before its handshake until it has registered
-//! (or abandoned) its session, and a kill
+//! kill from interleaving with a session attach or another session stop:
+//! an attach holds an [`AttachPermit`] from before its handshake until it
+//! has registered (or abandoned) its session; a stop holds a
+//! [`SessionStop`] ([`AgentSessionRegistry::take_session`]) until the
+//! session's shutdown has finished; and a kill
 //! ([`AgentSessionRegistry::begin_close`]) marks the worker closing,
-//! then waits for every permit to drop. While a worker is closing, a new
-//! attach, a registration and a session lookup (so turn admission and
-//! dispatch) fail with [`AppError::WorkerClosing`].
+//! waits for every permit to drop, stops the session, then waits for
+//! every stop to finish ([`AgentSessionRegistry::wait_stopped`]). While a
+//! worker is closing, a new attach, a registration and a session lookup
+//! (so turn dispatch, cancel and permission answers) fail with
+//! [`AppError::WorkerClosing`]; `agent_send_turn` refuses a turn through
+//! [`AgentSessionRegistry::ensure_open`] before it queues it.
 
+use std::ops::Deref;
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -32,8 +38,9 @@ use uuid::Uuid;
 use super::adapter::AgentSession;
 use crate::error::AppError;
 
-/// One worker's attach/close fence. Exists only while a kill is closing
-/// the worker or an attach is in flight; idle fences are removed.
+/// One worker's lifecycle fence. Exists only while a kill is closing the
+/// worker, an attach is in flight or a session stop is running; idle
+/// fences are removed.
 #[derive(Default)]
 struct Fence {
     /// Kills in progress. A count, so of two overlapping kills of one
@@ -41,11 +48,42 @@ struct Fence {
     closing: usize,
     /// Live [`AttachPermit`]s. A closer subscribes and waits for zero.
     attaches: watch::Sender<usize>,
+    /// Live [`SessionStop`]s. [`AgentSessionRegistry::wait_stopped`]
+    /// subscribes and waits for zero.
+    stops: watch::Sender<usize>,
 }
 
 impl Fence {
     fn is_idle(&self) -> bool {
-        self.closing == 0 && *self.attaches.borrow() == 0
+        self.closing == 0 && *self.attaches.borrow() == 0 && *self.stops.borrow() == 0
+    }
+}
+
+/// A session taken out of the registry to be shut down, from
+/// [`AgentSessionRegistry::take_session`]. It derefs to the session; until
+/// it drops, [`AgentSessionRegistry::wait_stopped`] waits, so drop it
+/// once `shutdown()` has finished.
+#[must_use = "a session stop fences the worker only while it is held"]
+pub struct SessionStop {
+    session: Arc<dyn AgentSession>,
+    registry: AgentSessionRegistry,
+    worker_id: Uuid,
+}
+
+impl Deref for SessionStop {
+    type Target = dyn AgentSession;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.session
+    }
+}
+
+impl Drop for SessionStop {
+    fn drop(&mut self) {
+        if let Some(fence) = self.registry.fences.get(&self.worker_id) {
+            fence.stops.send_modify(|stops| *stops -= 1);
+        }
+        self.registry.remove_fence_if_idle(self.worker_id);
     }
 }
 
@@ -175,8 +213,11 @@ impl AgentSessionRegistry {
     /// The wait is bounded by the attaches themselves: each runs one
     /// adapter handshake, which the adapter bounds (30 s for Claude Code
     /// and Codex), then shuts down the session it can no longer register.
-    /// Once this returns, every session attached to the worker is in the
-    /// registry, where [`Self::remove`] finds it.
+    /// That bound is longer than `swarmd`'s 10 s `STOP_WORKERS_TIMEOUT`,
+    /// so a daemon stop can give up on a kill that is still waiting here.
+    /// Once this returns, every session attached to the worker is either
+    /// in the registry, where [`Self::take_session`] finds it, or already
+    /// held by a [`SessionStop`], which [`Self::wait_stopped`] waits for.
     pub async fn begin_close(&self, worker_id: Uuid) -> ClosingGuard {
         let mut attaches = {
             let mut fence = self.fences.entry(worker_id).or_default();
@@ -228,8 +269,9 @@ impl AgentSessionRegistry {
     /// The lock lives and dies with the session entry, so the registry
     /// never accumulates locks for workers that are long gone. For a
     /// worker with no registered session this returns a fresh, unshared
-    /// lock — the caller's subsequent [`Self::get`] fails with
-    /// [`AppError::WorkerNotFound`] anyway.
+    /// lock — the caller's subsequent [`Self::get`] fails anyway, with
+    /// [`AppError::WorkerNotFound`] (or [`AppError::WorkerClosing`] while
+    /// a kill is closing the worker).
     pub fn turn_lock(&self, worker_id: &Uuid) -> TurnLock {
         self.entries
             .get(worker_id)
@@ -294,18 +336,49 @@ impl AgentSessionRegistry {
             })
     }
 
-    /// Removes and returns `worker_id`'s session, if any, closing or not.
-    /// The caller is responsible for calling `shutdown()` on it (this
-    /// registry never tears a removed session down on its own, matching
+    /// Removes `worker_id`'s session, if any, closing or not, and returns
+    /// it as a [`SessionStop`]. The caller is responsible for calling
+    /// `shutdown()` on it and then dropping the stop (this registry never
+    /// tears a removed session down on its own, matching
     /// [`crate::worker::registry::WorkerRegistry::remove_worker`]'s
     /// "caller cleans up" contract). The worker's turn lock goes with it.
-    pub fn remove(&self, worker_id: &Uuid) -> Option<Arc<dyn AgentSession>> {
-        self.entries
-            .remove(worker_id)
-            .map(|(_, entry)| entry.session)
+    ///
+    /// The removal and the stop's count happen under the worker's fence,
+    /// so a [`Self::wait_stopped`] that starts after the session is gone
+    /// from the registry always sees this stop.
+    pub fn take_session(&self, worker_id: &Uuid) -> Option<SessionStop> {
+        let fence = self.fences.entry(*worker_id).or_default();
+        let Some((_, entry)) = self.entries.remove(worker_id) else {
+            drop(fence);
+            self.remove_fence_if_idle(*worker_id);
+            return None;
+        };
+        fence.stops.send_modify(|stops| *stops += 1);
+        drop(fence);
+        Some(SessionStop {
+            session: entry.session,
+            registry: self.clone(),
+            worker_id: *worker_id,
+        })
     }
 
-    /// Drops `worker_id`'s fence once no kill or attach holds it.
+    /// Waits until every [`SessionStop`] for `worker_id` has dropped, so
+    /// a kill never touches a worker whose session another caller (a
+    /// second kill, `agent_shutdown`) is still shutting down. Bounded by
+    /// those shutdowns, which each adapter bounds itself.
+    pub async fn wait_stopped(&self, worker_id: Uuid) {
+        let Some(mut stops) = self
+            .fences
+            .get(&worker_id)
+            .map(|fence| fence.stops.subscribe())
+        else {
+            return;
+        };
+        // A closed channel means the fence went idle: no stop remains.
+        let _stopped = stops.wait_for(|running| *running == 0).await.is_ok();
+    }
+
+    /// Drops `worker_id`'s fence once no kill, attach or stop holds it.
     fn remove_fence_if_idle(&self, worker_id: Uuid) {
         self.fences
             .remove_if(&worker_id, |_, fence| fence.is_idle());
@@ -392,7 +465,7 @@ mod tests {
         let fetched = registry.get(&worker_id).expect("session should exist");
         assert_eq!(fetched.session_key(), "key-1");
 
-        assert!(registry.remove(&worker_id).is_some());
+        assert!(registry.take_session(&worker_id).is_some());
         assert!(registry.get(&worker_id).is_err());
     }
 
@@ -421,7 +494,7 @@ mod tests {
             Err(AppError::WorkerClosing { .. })
         );
         assert!(
-            registry.remove(&closing_id).is_some(),
+            registry.take_session(&closing_id).is_some(),
             "the kill still reaches the session it must stop"
         );
         assert!(registry.ensure_open(&other_id).is_ok());
@@ -456,7 +529,10 @@ mod tests {
             permit.insert(Arc::new(NoopSession::new("late"))),
             Err(AppError::WorkerClosing { .. })
         );
-        assert!(registry.remove(&worker_id).is_none(), "nothing registered");
+        assert!(
+            registry.take_session(&worker_id).is_none(),
+            "nothing registered"
+        );
         drop(permit);
 
         let guard = tokio::time::timeout(Duration::from_secs(5), close)
@@ -481,6 +557,28 @@ mod tests {
         assert!(registry.is_closing(&worker_id));
         drop(second);
         assert!(!registry.is_closing(&worker_id));
+        assert!(registry.fences.is_empty());
+    }
+
+    /// `wait_stopped` waits for a taken session's stop to drop, and
+    /// returns at once when no stop is running.
+    #[tokio::test]
+    async fn test_wait_stopped_waits_for_a_taken_session_to_be_released() {
+        let registry = AgentSessionRegistry::new();
+        let worker_id = Uuid::new_v4();
+        registry.wait_stopped(worker_id).await;
+        attach(&registry, worker_id, Arc::new(NoopSession::new("s")));
+        let stop = registry.take_session(&worker_id).unwrap();
+        assert_eq!(stop.session_key(), "s", "the stop derefs to the session");
+
+        let waiting =
+            tokio::time::timeout(Duration::from_millis(50), registry.wait_stopped(worker_id)).await;
+        assert!(waiting.is_err(), "the wait holds while the stop is held");
+
+        drop(stop);
+        tokio::time::timeout(Duration::from_secs(5), registry.wait_stopped(worker_id))
+            .await
+            .expect("the wait ends once the stop drops");
         assert!(registry.fences.is_empty());
     }
 
@@ -522,7 +620,7 @@ mod tests {
         let b = registry.turn_lock(&worker_id);
         assert!(Arc::ptr_eq(&a, &b), "one lock per registered session");
 
-        registry.remove(&worker_id);
+        drop(registry.take_session(&worker_id));
         assert_eq!(
             Arc::strong_count(&a),
             2,

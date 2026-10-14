@@ -106,14 +106,18 @@ pub async fn resume_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
 /// 2. Removes and shuts down its agent session, if it has one (one an
 ///    in-flight attach registered included), so the provider process is
 ///    stopped and reaped. Best-effort: a failed shutdown is logged and
-///    never changes the kill's own result.
+///    never changes the kill's own result. It then waits for any other
+///    shutdown of the worker's session still running (an overlapping
+///    kill's, or `agent_shutdown`'s; see
+///    [`crate::agent::AgentSessionRegistry::wait_stopped`]).
 /// 3. Kills the worker and reconciles its worktree per its isolation
 ///    policy ([`lifecycle::do_kill_worker`]).
-/// 4. Clears the closing mark; the worker is gone, so later calls get
-///    [`crate::error::AppError::WorkerNotFound`].
+/// 4. Clears the closing mark once that work has finished, even if this
+///    future was dropped meanwhile; the worker is gone, so later calls
+///    get [`crate::error::AppError::WorkerNotFound`].
 ///
-/// Once this returns, no session of the worker is registered or still
-/// handshaking.
+/// Once this returns, no session of the worker is registered, still
+/// handshaking or still shutting down.
 pub async fn kill_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let WorkerIdArgs {
         id,
@@ -124,21 +128,24 @@ pub async fn kill_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let provenance = parse_provenance(origin_worker, cause_seq)?;
 
     let closing = ctx.agent_session_registry.begin_close(uuid).await;
-    if let Some(session) = ctx.agent_session_registry.remove(&uuid)
+    if let Some(session) = ctx.agent_session_registry.take_session(&uuid)
         && let Err(e) = session.shutdown().await
     {
         tracing::warn!(worker_id = %uuid, error = %e, "agent session shutdown failed during kill_worker");
     }
+    ctx.agent_session_registry.wait_stopped(uuid).await;
 
     let sink = ctx.sink.clone();
     let registry = ctx.registry.clone();
     let repo_locks = ctx.repo_locks.clone();
+    // The closing mark moves into the blocking task, so it outlives
+    // `do_kill_worker` even if this future is dropped while it runs.
     let kill_result = tokio::task::spawn_blocking(move || {
+        let _closing = closing;
         lifecycle::do_kill_worker(&sink, &registry, &repo_locks, uuid, provenance)
     })
     .await
     .map_err(|e| Value::String(e.to_string()))?;
-    drop(closing);
 
     kill_result.map_err(|e| err_value(&e))?;
     ok_value(&())
@@ -319,13 +326,14 @@ mod tests {
 
     /// A provider session whose `shutdown` records whether its worker's
     /// worktree directory and registry entry still existed at that
-    /// moment.
+    /// moment, then, given a `release`, waits for it before it resolves.
     struct RecordingSession {
         key: crate::agent::SessionKey,
         worker_id: uuid::Uuid,
         worktree: std::path::PathBuf,
         registry: crate::worker::registry::WorkerRegistry,
         seen: Arc<parking_lot::Mutex<Option<AtShutdown>>>,
+        release: Option<Arc<tokio::sync::Notify>>,
     }
 
     impl crate::agent::AgentSession for RecordingSession {
@@ -366,7 +374,11 @@ mod tests {
                 worktree_existed: self.worktree.exists(),
                 worker_registered: self.registry.get_worker(&self.worker_id).is_ok(),
             });
-            Box::pin(async {
+            let release = self.release.clone();
+            Box::pin(async move {
+                if let Some(release) = release {
+                    release.notified().await;
+                }
                 Ok(crate::agent::ExitSummary {
                     exit_code: Some(0),
                     signal: None,
@@ -377,11 +389,13 @@ mod tests {
 
     /// Spawns an isolated worker of `repo` through the real handler, with
     /// worktrees under the repo's temp base, and attaches a
-    /// [`RecordingSession`] to it. Resolves to the worker id, its
-    /// worktree, and what the session's shutdown will record.
+    /// [`RecordingSession`] to it whose shutdown waits for `release`, if
+    /// given. Resolves to the worker id, its worktree, and what the
+    /// session's shutdown will record.
     async fn isolated_worker_with_session(
         ctx: &Ctx,
         repo: &crate::git::test_support::TempRepo,
+        release: Option<Arc<tokio::sync::Notify>>,
     ) -> (
         uuid::Uuid,
         std::path::PathBuf,
@@ -407,6 +421,7 @@ mod tests {
                 worktree: worktree.clone(),
                 registry: ctx.registry.clone(),
                 seen: Arc::clone(&seen),
+                release,
             }))
             .unwrap();
         (id, worktree, seen)
@@ -428,7 +443,7 @@ mod tests {
     async fn test_kill_worker_stops_the_provider_session_before_removing_the_worktree() {
         let repo = crate::git::test_support::TempRepo::new("kill-order");
         let (ctx, _dir, _events) = test_ctx();
-        let (id, worktree, seen) = isolated_worker_with_session(&ctx, &repo).await;
+        let (id, worktree, seen) = isolated_worker_with_session(&ctx, &repo, None).await;
 
         kill_worker(ctx.clone(), json!({"id": id.to_string()}))
             .await
@@ -447,6 +462,95 @@ mod tests {
         assert!(ctx.agent_session_registry.get(&id).is_err());
     }
 
+    /// Polls `done` every 10 ms until it holds; fails after 10 s.
+    async fn wait_until(what: &str, done: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {what}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Asserts that, while the session's shutdown is held, `kill` has not
+    /// returned and the worker and its worktree are untouched.
+    async fn assert_kill_held(
+        ctx: &Ctx,
+        id: uuid::Uuid,
+        worktree: &std::path::Path,
+        kill: &tokio::task::JoinHandle<Result<Value, Value>>,
+    ) {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            !kill.is_finished(),
+            "the kill must wait for the session shutdown in progress"
+        );
+        assert!(worktree.exists(), "the worktree must outlive the session");
+        assert!(ctx.registry.get_worker(&id).is_ok());
+    }
+
+    /// Two overlapping kills: the second finds the session already taken
+    /// by the first, and still waits for its shutdown to finish before it
+    /// touches the worker or its worktree.
+    #[tokio::test]
+    async fn test_a_second_kill_waits_for_the_first_kills_session_shutdown() {
+        let repo = crate::git::test_support::TempRepo::new("kill-twice");
+        let (ctx, _dir, _events) = test_ctx();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let (id, worktree, seen) =
+            isolated_worker_with_session(&ctx, &repo, Some(Arc::clone(&release))).await;
+
+        let first = tokio::spawn(kill_worker(ctx.clone(), json!({"id": id.to_string()})));
+        wait_until("the first kill's session shutdown", || {
+            seen.lock().is_some()
+        })
+        .await;
+        let second = tokio::spawn(kill_worker(ctx.clone(), json!({"id": id.to_string()})));
+        assert_kill_held(&ctx, id, &worktree, &second).await;
+
+        release.notify_one();
+        let results = [first.await.unwrap(), second.await.unwrap()];
+        let not_found = Value::String(
+            crate::error::AppError::WorkerNotFound { id: id.to_string() }.to_string(),
+        );
+        assert_eq!(
+            results.iter().filter(|r| r.is_ok()).count(),
+            1,
+            "exactly one kill removes the worker: {results:?}"
+        );
+        assert!(
+            results.iter().any(|r| r.as_ref().err() == Some(&not_found)),
+            "the other finds it gone: {results:?}"
+        );
+        assert!(!worktree.exists());
+    }
+
+    /// A kill racing an `agent_shutdown` already in progress waits for
+    /// that shutdown before it touches the worker or its worktree.
+    #[tokio::test]
+    async fn test_kill_worker_waits_for_an_agent_shutdown_in_progress() {
+        let repo = crate::git::test_support::TempRepo::new("kill-after-shutdown");
+        let (ctx, _dir, _events) = test_ctx();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let (id, worktree, seen) =
+            isolated_worker_with_session(&ctx, &repo, Some(Arc::clone(&release))).await;
+
+        let shutdown = tokio::spawn(crate::commands::agent::agent_shutdown(
+            ctx.clone(),
+            json!({"workerId": id.to_string()}),
+        ));
+        wait_until("the agent_shutdown in progress", || seen.lock().is_some()).await;
+        let kill = tokio::spawn(kill_worker(ctx.clone(), json!({"id": id.to_string()})));
+        assert_kill_held(&ctx, id, &worktree, &kill).await;
+
+        release.notify_one();
+        shutdown.await.unwrap().unwrap();
+        kill.await.unwrap().unwrap();
+        assert!(!worktree.exists());
+    }
+
     /// Preserve-on-dirty through the session-aware kill path: the
     /// session is shut down, and a worktree with uncommitted work
     /// survives as `preserved_dirty`, work included.
@@ -454,7 +558,7 @@ mod tests {
     async fn test_kill_worker_preserves_a_dirty_worktree_with_a_session_attached() {
         let repo = crate::git::test_support::TempRepo::new("kill-dirty");
         let (ctx, _dir, events) = test_ctx();
-        let (id, worktree, seen) = isolated_worker_with_session(&ctx, &repo).await;
+        let (id, worktree, seen) = isolated_worker_with_session(&ctx, &repo, None).await;
         std::fs::write(worktree.join("scratch.txt"), "uncommitted agent output").unwrap();
 
         kill_worker(ctx.clone(), json!({"id": id.to_string()}))

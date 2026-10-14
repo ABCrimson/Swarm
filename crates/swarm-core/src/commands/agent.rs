@@ -212,7 +212,7 @@ async fn attach_session(
             // holds back, so the worker is still here; the lookup keeps a
             // worker removed any other way from keeping a live session.
             if let Err(e) = ctx.registry.get_worker(&worker_id) {
-                if let Some(session) = ctx.agent_session_registry.remove(&worker_id)
+                if let Some(session) = ctx.agent_session_registry.take_session(&worker_id)
                     && let Err(err) = session.shutdown().await
                 {
                     tracing::warn!(%worker_id, error = %err, "agent_spawn: session shutdown after the worker vanished during attach failed");
@@ -295,11 +295,12 @@ struct AgentShutdownArgs {
 }
 
 /// Shuts down the worker's agent session, if it has one. The PTY worker
-/// itself is untouched.
+/// itself is untouched. A `kill_worker` racing this waits for the
+/// shutdown to finish before it touches the worker.
 pub async fn agent_shutdown(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let AgentShutdownArgs { worker_id } = parse_args(args)?;
     let uuid = parse_uuid(&worker_id)?;
-    if let Some(session) = ctx.agent_session_registry.remove(&uuid) {
+    if let Some(session) = ctx.agent_session_registry.take_session(&uuid) {
         session.shutdown().await.map_err(|e| err_value(&e))?;
     }
     ok_value(&())

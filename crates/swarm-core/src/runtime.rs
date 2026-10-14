@@ -219,7 +219,8 @@ impl Runtime {
     /// worker is held closing while attaches in flight for it finish
     /// (see [`AgentSessionRegistry::begin_close`]), then its session is
     /// removed and shut down, so one an attach registers meanwhile is
-    /// stopped too. Agent sessions, attaches included, get up to
+    /// stopped too, and any other shutdown of it in progress is awaited.
+    /// Agent sessions, attaches and stops included, get up to
     /// `timeout` in total; draining the engine gets up to `timeout`
     /// more. Call it once, on exit — events
     /// recorded afterwards are dropped. The runtime (and its lock) stays
@@ -240,11 +241,12 @@ impl Runtime {
             let registry = self.agent_session_registry.clone();
             sessions.spawn(async move {
                 let _closing = registry.begin_close(worker.id).await;
-                if let Some(session) = registry.remove(&worker.id)
+                if let Some(session) = registry.take_session(&worker.id)
                     && let Err(e) = session.shutdown().await
                 {
                     tracing::warn!(worker_id = %worker.id, error = %e, "agent session shutdown failed");
                 }
+                registry.wait_stopped(worker.id).await;
             });
         }
         // `join_next`, not `join_all`: `join_all` re-raises a panicked
