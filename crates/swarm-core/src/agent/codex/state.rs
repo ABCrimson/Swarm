@@ -9,8 +9,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
 use super::Timeouts;
-use super::process::{WriteJob, encode_line};
-use super::protocol::{Notification, Request, RequestId, RpcError};
+use super::process::WriteJob;
+use super::protocol::{Notification, Request, RequestId, RpcError, encode_line};
 
 use crate::agent::adapter::{ExitSummary, PermissionId, TurnId};
 use crate::error::AppError;

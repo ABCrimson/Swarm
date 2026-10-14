@@ -12,7 +12,8 @@
 //! the server neither sends nor requires it, and its own serializer omits
 //! it. A message with `method` and `id` is a request, `method` without
 //! `id` a notification, and `id` without `method` a response (`result`)
-//! or error response (`error`).
+//! or error response (`error`). [`encode_line`] frames any outgoing message
+//! as one newline-terminated JSON line.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -165,6 +166,14 @@ pub struct Request<'a, P> {
 pub struct Notification<'a> {
     /// One of the client-notification [`method`] names.
     pub method: &'a str,
+}
+
+/// Serializes `message` as one newline-terminated JSON line, the framing
+/// the app-server speaks on stdio.
+pub(super) fn encode_line(message: &impl Serialize) -> Result<String, String> {
+    let mut line = serde_json::to_string(message).map_err(|e| e.to_string())?;
+    line.push('\n');
+    Ok(line)
 }
 
 /// A successful answer to a server request.

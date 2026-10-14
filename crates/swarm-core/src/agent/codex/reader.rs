@@ -9,13 +9,12 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use super::process::encode_line;
 use super::protocol::{
     ApprovalDecision, ApprovalRequest, ApprovalResponse, DeltaNotification, ErrorNotification,
     ErrorObject, ErrorResponse, INVALID_PARAMS, Incoming, Item, ItemNotification, METHOD_NOT_FOUND,
     PermissionGrantScope, PermissionsResponse, RequestId, Response, RpcError,
     ServerRequestResolved, TokenUsageNotification, Turn, TurnError, TurnNotification,
-    TurnStartResponse, TurnStatus, method,
+    TurnStartResponse, TurnStatus, encode_line, method,
 };
 use super::state::{ApprovalKind, BlockStream, Inner, PendingApproval, Shared, TurnSlot};
 use super::teardown::{teardown, teardown_on_drop};

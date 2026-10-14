@@ -5,7 +5,6 @@ use std::io::Write;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -166,13 +165,6 @@ pub(super) fn start_stdin_writer(
             }
         })?;
     Ok(jobs)
-}
-
-/// Serializes `message` as one newline-terminated JSON line.
-pub(super) fn encode_line(message: &impl Serialize) -> Result<String, String> {
-    let mut line = serde_json::to_string(message).map_err(|e| e.to_string())?;
-    line.push('\n');
-    Ok(line)
 }
 
 /// Waits up to `grace` for `child` to exit on its own (its stdin is
