@@ -310,11 +310,15 @@ const PROBE_DIR_PREFIX: &str = "swarm-claude-probe-";
 /// [`tier::cap_repo_deny`].
 const REPO_SETTINGS_MAX_BYTES: u64 = 1024 * 1024;
 
-/// Creates a fresh directory for one probe under `root`, owner-only
-/// (`0700`) on Unix. Creation is not recursive, so it fails when the path
-/// already exists rather than reuse a directory someone else made.
-async fn private_probe_dir(root: &Path) -> std::io::Result<PathBuf> {
-    let dir = root.join(format!("{PROBE_DIR_PREFIX}{}", Uuid::new_v4()));
+/// A fresh, unused path for one probe's directory under `root`.
+fn probe_dir_path(root: &Path) -> PathBuf {
+    root.join(format!("{PROBE_DIR_PREFIX}{}", Uuid::new_v4()))
+}
+
+/// Creates the probe directory `dir`, owner-only (`0700`) on Unix.
+/// Creation is not recursive, so it fails when the path already exists
+/// rather than reuse a directory someone else made.
+async fn create_private_probe_dir(dir: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     let builder = {
         let mut builder = tokio::fs::DirBuilder::new();
@@ -323,8 +327,7 @@ async fn private_probe_dir(root: &Path) -> std::io::Result<PathBuf> {
     };
     #[cfg(not(unix))]
     let builder = tokio::fs::DirBuilder::new();
-    builder.create(&dir).await?;
-    Ok(dir)
+    builder.create(dir).await
 }
 
 /// How often `remove_probe_dir` retries a removal that fails.
@@ -503,26 +506,29 @@ impl ClaudeCodeAdapter {
         found
     }
 
-    /// Runs the probe in a fresh private directory (`private_probe_dir`)
-    /// and removes it on every return path, including a dropped future.
+    /// Runs the probe in a fresh private directory (`create_private_probe_dir`)
+    /// and removes it on every return path, including a future dropped during
+    /// the create.
     async fn run_probe(&self) -> ProbeReport {
-        let cwd = match private_probe_dir(&self.probe_root).await {
-            Ok(cwd) => cwd,
-            Err(error) => {
-                return ProbeReport {
-                    available: false,
-                    version: None,
-                    detail: Some(format!(
-                        "Claude Code Probe Directory Could Not Be Created: {error}"
-                    )),
-                };
-            }
-        };
-        // A dropped probe future must not leave the directory behind. The
-        // guard is dismissed on the normal path so `probe()` returns with
-        // the directory already gone.
+        let cwd = probe_dir_path(&self.probe_root);
+        // Armed before the create: the create runs on the blocking pool, so
+        // a future dropped while it is pending still leaves the directory
+        // behind once the create lands, and the guard removes it.
         let remove_if_dropped =
             DropGuard::new(cwd.clone(), remove_probe_dir_detached as fn(PathBuf));
+        if let Err(error) = create_private_probe_dir(&cwd).await {
+            // The path is ours alone and was not created: nothing to remove.
+            DropGuard::dismiss(remove_if_dropped);
+            return ProbeReport {
+                available: false,
+                version: None,
+                detail: Some(format!(
+                    "Claude Code Probe Directory Could Not Be Created: {error}"
+                )),
+            };
+        }
+        // The guard is dismissed on the normal path so `probe()` returns
+        // with the directory already gone.
         let report = self.run_probe_in(&cwd).await;
         DropGuard::dismiss(remove_if_dropped);
         if let Err(error) = tokio::fs::remove_dir_all(&cwd).await {

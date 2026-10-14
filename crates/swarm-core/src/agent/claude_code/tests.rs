@@ -1885,12 +1885,18 @@ async fn spawn_refuses_an_empty_or_relative_cwd() {
 
 #[tokio::test]
 async fn private_probe_dir_is_fresh_and_owner_only() {
-    let first = private_probe_dir(&std::env::temp_dir())
+    let first = probe_dir_path(&std::env::temp_dir());
+    create_private_probe_dir(&first)
         .await
         .expect("create a probe dir");
-    let second = private_probe_dir(&std::env::temp_dir())
+    let second = probe_dir_path(&std::env::temp_dir());
+    create_private_probe_dir(&second)
         .await
         .expect("create a probe dir");
+    // Creation never reuses an existing directory.
+    create_private_probe_dir(&first)
+        .await
+        .expect_err("an existing path is refused");
     assert_ne!(first, second);
     for dir in [&first, &second] {
         assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
@@ -2573,6 +2579,49 @@ async fn a_dropped_probe_future_removes_its_private_directory() {
         assert!(
             Instant::now() < deadline,
             "{dir:?} outlived the dropped probe"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// The probe directory's guard is armed before the create is awaited: a
+/// probe future that is dropped after the create landed on the blocking pool
+/// but before the future observed it (it is never polled again) still has
+/// its directory removed.
+#[tokio::test]
+async fn a_probe_future_dropped_during_the_directory_create_leaves_no_directory() {
+    let harness = Harness::new();
+    let root = harness.cwd.join("probes-create");
+    std::fs::create_dir_all(&root).expect("create the probe root");
+    let adapter = harness
+        .adapter("handshake_held.mjs")
+        .with_probe_root(root.clone());
+    // Boxed: `drop` must drop the future itself, not a pinned borrow.
+    let mut probe = Box::pin(adapter.run_probe());
+    // One poll starts the create and parks the future on it.
+    let first = std::future::poll_fn(|cx| std::task::Poll::Ready(probe.as_mut().poll(cx))).await;
+    assert!(first.is_pending(), "the probe settled on its first poll");
+    // The create finishes on the blocking pool while the future, never
+    // polled again, still waits on it.
+    let created = Instant::now() + WAIT;
+    while std::fs::read_dir(&root)
+        .expect("read the root")
+        .next()
+        .is_none()
+    {
+        assert!(Instant::now() < created, "the create never landed");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    drop(probe);
+    let deadline = Instant::now() + WAIT;
+    while std::fs::read_dir(&root)
+        .expect("read the root")
+        .next()
+        .is_some()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the dropped probe left its directory behind"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
