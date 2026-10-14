@@ -48,7 +48,7 @@ const mockShipContext = vi.fn<(workerId: string) => Promise<ShipContext>>();
 
 vi.mock(import("#lib/tauri"), async (importOriginal) => ({
   ...(await importOriginal()),
-  // These tests drive the desktop opener-plugin path; the browser build opens the compare page through the receipt link instead.
+  // These tests drive the desktop path, where the flow auto-opens the compare page through the opener plugin.
   isTauri: () => true,
   gitShipPreflight: (...args) => mockGitShipPreflight(...args),
   gitStageCommit: (...args) => mockGitStageCommit(...args),

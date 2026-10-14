@@ -507,8 +507,10 @@ async function runAction(
   // The ship itself already succeeded; an opener failure (no default
   // browser, a URL outside the opener capability's scope) is a warning,
   // never a reason to flip the flow back to "failed". Only the desktop
-  // shell has an opener bridge: in the browser build `ShipPanel`'s
-  // receipt link is how the compare page is opened.
+  // shell has an opener bridge, so the flow auto-opens the compare page
+  // only there; in the browser build the receipt's Open Compare Page
+  // button is the way to it, and how that button opens outside the
+  // desktop shell is `ShipPanel`'s concern.
   if (prUrl != null && isTauri()) {
     try {
       await openUrl(prUrl);

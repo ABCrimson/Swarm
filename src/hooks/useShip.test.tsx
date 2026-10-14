@@ -997,8 +997,10 @@ describe("useShip: a lost reply over the daemon", () => {
   });
 
   it("S3: a lost commit reply with a commit ok row and no receipt returns to idle (the panel reloads the preview), and a second ship meanwhile does not re-commit", async () => {
-    const { RpcTimeoutError } = await import("#lib/transport");
-    mockGitStageCommit.mockRejectedValue(new RpcTimeoutError("git_stage_commit", 630_000));
+    const { RpcTimeoutError, rpcDeadlineMs } = await import("#lib/transport");
+    mockGitStageCommit.mockRejectedValue(
+      new RpcTimeoutError("git_stage_commit", rpcDeadlineMs("git_stage_commit")),
+    );
     const { result } = await renderPreviewing();
     const { action, shipId } = await startShip(
       () => result.current.commitAndPush(),
@@ -1035,8 +1037,8 @@ describe("useShip: a lost reply over the daemon", () => {
   });
 
   it("S3: the receipt following the lost call's terminal row still settles the flow", async () => {
-    const { RpcTimeoutError } = await import("#lib/transport");
-    mockGitPush.mockRejectedValue(new RpcTimeoutError("git_push", 630_000));
+    const { RpcTimeoutError, rpcDeadlineMs } = await import("#lib/transport");
+    mockGitPush.mockRejectedValue(new RpcTimeoutError("git_push", rpcDeadlineMs("git_push")));
     const { result } = await renderPreviewing();
     const { action, shipId } = await startShip(() => result.current.commitAndPush(), mockGitPush);
 
