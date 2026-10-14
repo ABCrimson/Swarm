@@ -226,7 +226,8 @@ impl EventLog {
         let fullfsync: i64 = conn.pragma_query_value(None, "fullfsync", |row| row.get(0))?;
         if synchronous != SYNCHRONOUS_EXTRA || fullfsync != 1 {
             return Err(AppError::EventLog(format!(
-                "SQLite reports synchronous={synchronous} (need EXTRA, {SYNCHRONOUS_EXTRA}) and                  fullfsync={fullfsync} (need 1); the event log refuses to run with weaker durability."
+                "SQLite reports synchronous={synchronous} (need EXTRA, {SYNCHRONOUS_EXTRA}) and \
+                 fullfsync={fullfsync} (need 1); the event log refuses to run with weaker durability."
             )));
         }
         conn.pragma_update(None, "journal_size_limit", WAL_SIZE_LIMIT_BYTES)?;
