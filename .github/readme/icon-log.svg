@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-label="An event log flushed every commit">
+<title>An event log flushed every commit</title>
+<style>.t{fill:oklch(0.177 0.034 269.6);stroke:oklch(0.43 0.045 270)}.g{fill:none;stroke:oklch(0.809 0.138 83.5);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.f{fill:oklch(0.809 0.138 83.5);stroke:none}.b{stroke-width:3}</style>
+<rect class="t" x=".5" y=".5" width="47" height="47" rx="11"/>
+<g class="g"><path d="M13.5 15h4M21.5 15h13M13.5 21h4M21.5 21h9.5M13.5 27h4M21.5 27h11.5"/><path d="M13.5 34h21" class="b"/></g>
+</svg>
