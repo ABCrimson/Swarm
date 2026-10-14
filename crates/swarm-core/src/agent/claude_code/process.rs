@@ -4,6 +4,7 @@
 use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::io::Write;
+use std::mem::DropGuard;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus};
 use std::sync::Arc;
@@ -168,9 +169,39 @@ impl StdinWriter {
     }
 }
 
-/// A started `claude` child before it becomes a session.
+/// A `claude` child that is killed and reaped if it is dropped while
+/// still armed. `std::process::Child` does not kill on drop, so a
+/// future dropped mid-handshake would otherwise leave the CLI running.
+/// [`DropGuard::dismiss`] hands the child on once its owner takes over.
+pub(super) type GuardedChild = DropGuard<Child, fn(Child)>;
+
+/// Arms [`kill_and_reap_detached`] over `child`.
+fn guard_child(child: Child) -> GuardedChild {
+    DropGuard::new(child, kill_and_reap_detached as fn(Child))
+}
+
+/// The guard's drop action: kills `child` and waits for it on the
+/// blocking pool, so no Tokio worker thread waits inside `Drop`. A child
+/// that already exited makes the kill a no-op. With no runtime on the
+/// dropping thread (it is not a Tokio worker either) the same work runs
+/// inline. A runtime that is shutting down discards the queued task; the
+/// process is ending anyway and its pipes are closed.
+fn kill_and_reap_detached(child: Child) {
+    let stop = move || {
+        let mut child = child;
+        child.kill().ok();
+        child.wait().ok();
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => drop(runtime.spawn_blocking(stop)),
+        Err(_) => stop(),
+    }
+}
+
+/// A started `claude` child before it becomes a session. Dropping it
+/// before it is handed over kills and reaps the child.
 pub(super) struct Process {
-    pub(super) child: Child,
+    pub(super) child: GuardedChild,
     pub(super) stdin: StdinWriter,
     pub(super) lines: mpsc::Receiver<String>,
     pub(super) framer_errors: mpsc::UnboundedReceiver<AppError>,
@@ -182,6 +213,16 @@ impl Process {
         // Process creation is a blocking syscall; keep it off the async
         // worker threads.
         let (binary, argv, cwd) = (binary.to_owned(), argv.to_vec(), cwd.to_owned());
+        // The result travels over a channel rather than the join handle: a
+        // dropped caller leaves the blocking task running, and its `send`
+        // fails, so the task itself kills the child it just created.
+        let (sent, received) = oneshot::channel();
+        drop(tokio::task::spawn_blocking(move || {
+            let spawned = spawn_piped(&binary, &argv, &cwd, &child_env());
+            if let Err(Ok(orphan)) = sent.send(spawned) {
+                kill_and_reap_detached(orphan.child);
+            }
+        }));
         let PipedHandle {
             stdin,
             child,
@@ -189,12 +230,12 @@ impl Process {
             lines,
             framer_errors,
             stderr_tail,
-        } = tokio::task::spawn_blocking(move || spawn_piped(&binary, &argv, &cwd, &child_env()))
+        } = received
             .await
             .map_err(|e| anyhow::anyhow!("the claude spawn task failed: {e}"))??;
         match StdinWriter::start(stdin) {
             Ok(stdin) => Ok(Self {
-                child,
+                child: guard_child(child),
                 stdin,
                 lines,
                 framer_errors,
@@ -212,7 +253,16 @@ impl Process {
     /// stderr it wrote.
     pub(super) async fn finish(self, graceful: bool) -> String {
         self.stdin.close();
-        reap(self.child, graceful).await;
+        let mut child = self.child;
+        if graceful {
+            // The child stays guarded while it is given time to exit, so a
+            // dropped `finish` still kills it.
+            let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
+            while tokio::time::Instant::now() < deadline && matches!(child.try_wait(), Ok(None)) {
+                tokio::time::sleep(EXIT_POLL_INTERVAL).await;
+            }
+        }
+        reap(DropGuard::dismiss(child), false).await;
         crate::agent::drained_stderr_snippet(&self.stderr_tail).await
     }
 }

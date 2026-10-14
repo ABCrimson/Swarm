@@ -110,6 +110,7 @@ mod tests;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::mem::DropGuard;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -330,6 +331,42 @@ async fn private_probe_dir() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// How often `remove_probe_dir` retries a removal that fails.
+const PROBE_DIR_REMOVE_ATTEMPTS: u32 = 50;
+/// The wait between those retries.
+const PROBE_DIR_REMOVE_RETRY: Duration = Duration::from_millis(100);
+
+/// The probe directory's drop action: removes it on the blocking pool (a
+/// Tokio worker must not wait on the filesystem inside `Drop`), inline
+/// when the dropping thread has no runtime.
+///
+/// A dropped probe future also drops its `Process`, whose guard kills and
+/// reaps the child on the blocking pool. That runs concurrently with this
+/// removal, and Windows refuses to remove a directory that is a live
+/// process's working directory, so the removal retries until the child is
+/// gone. On Unix the first attempt succeeds.
+fn remove_probe_dir_detached(dir: PathBuf) {
+    match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => drop(runtime.spawn_blocking(move || remove_probe_dir(&dir))),
+        Err(_) => remove_probe_dir(&dir),
+    }
+}
+
+/// Removes `dir`, retrying while a dying child may still hold it, and
+/// warns when it cannot. An already-missing directory counts as removed.
+fn remove_probe_dir(dir: &Path) {
+    for attempt in 1..=PROBE_DIR_REMOVE_ATTEMPTS {
+        match std::fs::remove_dir_all(dir) {
+            Ok(()) => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if attempt == PROBE_DIR_REMOVE_ATTEMPTS => {
+                tracing::warn!(path = %dir.display(), %error, "claude code: the probe directory could not be removed");
+            }
+            Err(_) => std::thread::sleep(PROBE_DIR_REMOVE_RETRY),
+        }
+    }
+}
+
 /// Reads at most `max` bytes of `reader`: `None` when it holds more (the
 /// read stops one byte past `max`, so even an endless source leaves the
 /// buffer holding at most `max + 1` bytes of content).
@@ -461,7 +498,7 @@ impl ClaudeCodeAdapter {
     }
 
     /// Runs the probe in a fresh private directory (`private_probe_dir`)
-    /// and removes it on every return path.
+    /// and removes it on every return path, including a dropped future.
     async fn run_probe(&self) -> ProbeReport {
         let cwd = match private_probe_dir().await {
             Ok(cwd) => cwd,
@@ -475,7 +512,13 @@ impl ClaudeCodeAdapter {
                 };
             }
         };
+        // A dropped probe future must not leave the directory behind. The
+        // guard is dismissed on the normal path so `probe()` returns with
+        // the directory already gone.
+        let remove_if_dropped =
+            DropGuard::new(cwd.clone(), remove_probe_dir_detached as fn(PathBuf));
         let report = self.run_probe_in(&cwd).await;
+        DropGuard::dismiss(remove_if_dropped);
         if let Err(error) = tokio::fs::remove_dir_all(&cwd).await {
             tracing::warn!(path = %cwd.display(), %error, "claude code: the probe directory could not be removed");
         }
@@ -650,6 +693,10 @@ impl ClaudeCodeAdapter {
             framer_errors,
             stderr_tail,
         } = process;
+        // Nothing below awaits before the child is owned by `Shared`, so
+        // dismissing the guard here leaves no window in which a dropped
+        // future could leak it.
+        let child = DropGuard::dismiss(child);
         let fresh = spec.resume.is_none();
         let session_key = spec
             .resume
