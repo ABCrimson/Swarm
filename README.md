@@ -20,7 +20,7 @@
 </p>
 
 > [!IMPORTANT]
-> **Latest release: v0.13.1 (2026-08-22).** `main` carries the unreleased work proposed as 0.14.0 (see `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md)), including breaking changes such as the move from Tauri v2 to Tauri 3 (alpha). No 0.14.0 tag or release exists. This page describes `main`. The trust tiers and the worktree per worker already held there, and the Tauri-free core with two shells, the provider trait pair and the ship chain shipped there in an earlier form. Released binaries: [v0.13.1](https://github.com/ABCrimson/Swarm/releases/tag/v0.13.1).
+> **Latest release: v0.13.1 (2026-08-22).** `main` carries the unreleased work proposed as 0.14.0 (see `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md)), including breaking changes such as the move from Tauri v2 to Tauri 3 (alpha). No 0.14.0 tag or release exists. This page describes `main`. The trust tiers and the worktree per worker already held in v0.13.1, and the Tauri-free core with two shells, the provider trait pair and the ship chain shipped in it in an earlier form. Released binaries: [v0.13.1](https://github.com/ABCrimson/Swarm/releases/tag/v0.13.1).
 
 ## What It Is
 
@@ -96,8 +96,7 @@ flowchart TB
     end
     FE -->|"Tauri IPC"| DESK
     FE -->|"WebSocket /ws"| DAEMON
-    DESK --> RT
-    DAEMON --> RT
+    shells --> core
     RT --> SCHED
     SCHED --> PROV
     RT --> PROV
