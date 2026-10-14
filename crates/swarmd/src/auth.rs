@@ -225,6 +225,24 @@ fn restrict_permissions(path: &Path) -> io::Result<()> {
     windows_acl::restrict_to_current_user(path)
 }
 
+/// The SID in one line of `whoami /user /fo csv /nh` output, which
+/// looks like `"DOMAIN\user","S-1-5-21-..."` followed by a line ending: the
+/// last comma-separated field with its quotes removed, accepted only when it
+/// is the `S-` prefix followed by digits and dashes. Platform-independent so
+/// the parsing is tested everywhere, although only the Windows ACL path calls it.
+#[cfg_attr(
+    not(windows),
+    expect(
+        dead_code,
+        reason = "only the Windows ACL path calls it; the parser is tested on every platform"
+    )
+)]
+fn sid_from_whoami_csv(stdout: &str) -> Option<&str> {
+    let sid = stdout.trim().rsplit(',').next()?.trim_matches('"');
+    let digits = sid.strip_prefix("S-")?;
+    (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit() || b == b'-')).then_some(sid)
+}
+
 /// Reduces a file's DACL to a single full-control ACE for the current
 /// user's SID. The workspace denies `unsafe`, so this drives the system's
 /// own `whoami.exe` and `icacls.exe`, both resolved from `%SystemRoot%`
@@ -270,14 +288,7 @@ mod windows_acl {
             )));
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout
-            .trim()
-            .rsplit(',')
-            .next()
-            .map(|field| field.trim_matches('"'))
-            .filter(|sid| {
-                sid.starts_with("S-1-") && sid.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-            })
+        super::sid_from_whoami_csv(&stdout)
             .map(str::to_owned)
             .ok_or_else(|| io::Error::other(format!("unexpected whoami output: {stdout}")))
     }
@@ -463,6 +474,37 @@ impl HostPolicy {
                 .extra
                 .iter()
                 .any(|allowed| allowed.host == *host && allowed.port.is_none_or(|p| p == port))
+    }
+}
+
+#[cfg(test)]
+mod whoami_tests {
+    use super::sid_from_whoami_csv;
+
+    /// The exact line a GitHub windows-2025 runner printed on 2026-10-14; the
+    /// first parser rejected every real SID because its leading S is neither
+    /// a digit nor a dash.
+    #[test]
+    fn parses_the_runner_output() {
+        let line =
+            "\"runnervmfi6oq\\runneradmin\",\"S-1-5-21-1643835476-1616584234-1346609752-500\"\r\n";
+        assert_eq!(
+            sid_from_whoami_csv(line),
+            Some("S-1-5-21-1643835476-1616584234-1346609752-500")
+        );
+    }
+
+    #[test]
+    fn rejects_anything_that_is_not_a_sid() {
+        for bad in [
+            "",
+            "\"a\",\"b\"",
+            "\"x\",\"S-\"",
+            "S-1-5-xyz",
+            "\"u\",\"S-1-5-21-1,2\"",
+        ] {
+            assert_eq!(sid_from_whoami_csv(bad), None, "{bad:?}");
+        }
     }
 }
 
