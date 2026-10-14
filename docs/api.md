@@ -665,7 +665,7 @@ console.log("Committed:", outcome.sha, "skipped:", outcome.skipped);
 
 ### `git_push`
 
-Pushes the worker's branch: `git push --set-upstream --end-of-options origin refs/heads/<branch>:refs/heads/<branch>` -- **fixed argv** (`--end-of-options` keeps an option-shaped branch an operand, and the fully qualified refspec makes a leading `+` part of the literal ref name, so a branch named `+main` cannot force-update `main`), no force token constructible anywhere in the argv builder (`--force`/`-f`/`--force-with-lease` cannot be reached). Both the branch and the sha pushed are resolved **live**, server-side, at push time -- this command takes **no** commit sha from the caller at all. On success, records `lastShippedSeq`/`lastShippedCommit` for the worker via `WorkerRegistry::set_last_shipped` -- the ship chain is the only writer of those two fields.
+Pushes the worker's branch: `git push --end-of-options origin <sha>:refs/heads/<branch>` -- **fixed argv** (the source is the resolved commit id, so the push carries exactly the commit that was read even if the branch moves meanwhile and an id never starts with `+`; `--end-of-options` keeps an option-shaped branch an operand, and the fully qualified destination makes a leading `+` part of the literal ref name, so a branch named `+main` cannot force-update `main`); the upstream is then recorded with `git branch --set-upstream-to=origin/<branch>`, since git only records one for a branch source, no force token constructible anywhere in the argv builder (`--force`/`-f`/`--force-with-lease` cannot be reached). Both the branch and the sha pushed are resolved **live**, server-side, at push time -- this command takes **no** commit sha from the caller at all. On success, records `lastShippedSeq`/`lastShippedCommit` for the worker via `WorkerRegistry::set_last_shipped` -- the ship chain is the only writer of those two fields.
 
 **This is what lets a worker with already-committed, unpushed work go straight to `git_push`.** If `git_stage_commit` fails with `nothingToCommit` but `ShipPreflight.ahead > 0` (e.g. an earlier "Commit Only" already committed real work that was never pushed), the frontend calls `git_push` directly -- no fresh commit is required, because this command resolves whatever `HEAD` already is, live, rather than trusting a value from a preceding `git_stage_commit` call.
 
@@ -679,7 +679,7 @@ Emits `ship_progress` for the `"push"` step, and -- when `finalStep` is `true` (
 | `shipId`    | `string`  | Yes      | Correlation ID matching the preceding `git_stage_commit` call (if any) |
 | `finalStep` | `boolean` | Yes      | `true` for "Commit + Push" (no compare-page step follows)             |
 
-**Returns:** `PushOutcome` -- `{ pushedRef: string, sha: string }` (e.g. `{ pushedRef: "origin/swarm/agent-abcd1234", sha: "..." }`). `sha` is `HEAD` at push time, resolved server-side.
+**Returns:** `PushOutcome` -- `{ pushedRef: string, remote: string, remoteRef: string, sha: string }` (e.g. `{ pushedRef: "origin/swarm/agent-abcd1234", remote: "origin", remoteRef: "refs/heads/swarm/agent-abcd1234", sha: "..." }`). `sha` is `HEAD` at push time, resolved server-side, and the commit the remote ref now points at (the push carries it). The frontend's `PushOutcomeSchema` reads `pushedRef` and `sha` and ignores the other two fields.
 
 **Errors:**
 

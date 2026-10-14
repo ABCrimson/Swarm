@@ -1059,6 +1059,142 @@ fn test_push_resolves_and_pushes_existing_head_with_no_prior_stage_and_commit_ca
     );
 }
 
+/// A worker on `branch` with a bare `origin` and one commit of work,
+/// not yet pushed.
+fn push_fixture(
+    tag: &str,
+    branch: &str,
+) -> (
+    TempRepo,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    WorkerRegistry,
+    WorkerId,
+) {
+    let repo = TempRepo::new(tag);
+    let bare = repo.add_bare_origin();
+    let worktree = repo.add_worktree("wt", branch);
+    let registry = WorkerRegistry::new();
+    let id = register(&registry, &repo, &worktree, branch);
+    write_file(&worktree, "feature.txt", "work");
+    git_in(&worktree, &["add", "feature.txt"]);
+    git_in(&worktree, &["commit", "-m", "feat: work"]);
+    (repo, worktree, bare, registry, id)
+}
+
+/// B2: the push carries the sha that was read. A commit that lands on
+/// the branch between the sha read and the push (the agent keeps
+/// committing) must not ride along, and the outcome must report what was
+/// pushed.
+#[test]
+fn test_push_commit_pushes_the_read_sha_when_a_racing_commit_lands_first() {
+    let (_repo, worktree, bare, registry, id) = push_fixture("b2-race", "swarm/race-abcd1234");
+    let info = worktree_info_for_worker(&registry, id).unwrap();
+    let read_sha = repo::head_sha(&worktree).unwrap();
+
+    // The race: another commit lands on the branch after the sha read.
+    git_in(
+        &worktree,
+        &["commit", "--allow-empty", "-m", "racing commit"],
+    );
+    let racing_sha = repo::head_sha(&worktree).unwrap();
+    assert_ne!(racing_sha, read_sha);
+
+    let outcome = push::push_commit(
+        &RepoLocks::new(),
+        &info.repo_root,
+        &worktree,
+        "swarm/race-abcd1234",
+        &read_sha,
+    )
+    .unwrap();
+
+    let remote_tip = repo::rev_parse(&bare, "swarm/race-abcd1234").unwrap();
+    assert_eq!(remote_tip, read_sha, "the remote must hold the read sha");
+    assert_ne!(remote_tip, racing_sha);
+    assert_eq!(outcome.sha, remote_tip);
+}
+
+/// B2: a remote that moved on is a non-fast-forward rejection, never a
+/// forced overwrite.
+#[test]
+fn test_push_rejects_a_non_fast_forward_and_leaves_the_remote_unchanged() {
+    let (repo, worktree, bare, registry, id) = push_fixture("b2-nff", "swarm/nff-abcd1234");
+    let repo_locks = RepoLocks::new();
+    push(&registry, &repo_locks, id).unwrap();
+
+    // Someone else advances the remote branch.
+    let other = repo.base().join("other");
+    let bare_arg = bare.display().to_string();
+    let other_arg = other.display().to_string();
+    git_in(repo.base(), &["clone", &bare_arg, &other_arg]);
+    for (key, value) in [("user.email", "o@example.com"), ("user.name", "Other")] {
+        git_in(&other, &["config", key, value]);
+    }
+    git_in(&other, &["checkout", "swarm/nff-abcd1234"]);
+    git_in(&other, &["commit", "--allow-empty", "-m", "someone else"]);
+    git_in(&other, &["push", "origin", "swarm/nff-abcd1234"]);
+    let remote_before = repo::rev_parse(&bare, "swarm/nff-abcd1234").unwrap();
+
+    git_in(&worktree, &["commit", "--allow-empty", "-m", "local work"]);
+    let err = push(&registry, &repo_locks, id).unwrap_err();
+    assert_eq!(err.kind, ShipErrorKind::PushRejected);
+    assert_eq!(
+        repo::rev_parse(&bare, "swarm/nff-abcd1234").unwrap(),
+        remote_before
+    );
+}
+
+/// B2, the happy path: the outcome's sha is the remote tip and the local
+/// `HEAD`, and the branch tracks `origin/<branch>` afterwards (a push of
+/// a sha does not record an upstream by itself).
+#[test]
+fn test_push_outcome_sha_is_the_remote_tip_and_records_the_upstream() {
+    let (_repo, worktree, bare, registry, id) = push_fixture("b2-happy", "swarm/happy-abcd1234");
+
+    let outcome = push(&registry, &RepoLocks::new(), id).unwrap();
+
+    let head = repo::head_sha(&worktree).unwrap();
+    assert_eq!(outcome.sha, head);
+    assert_eq!(
+        repo::rev_parse(&bare, "swarm/happy-abcd1234").unwrap(),
+        head
+    );
+    assert_eq!(outcome.pushed_ref, "origin/swarm/happy-abcd1234");
+    assert_eq!(outcome.remote, "origin");
+    assert_eq!(outcome.remote_ref, "refs/heads/swarm/happy-abcd1234");
+    let upstream = git_in(
+        &worktree,
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+    );
+    assert_eq!(upstream.stdout_trimmed(), "origin/swarm/happy-abcd1234");
+}
+
+/// The compare receipt is read from what the registry recorded for the
+/// push, never from the caller.
+#[test]
+fn test_recorded_push_reports_the_registered_sha_and_live_remote_ref() {
+    let (_repo, worktree, _bare, registry, id) = push_fixture("b2-recorded", "swarm/rec-abcd1234");
+    assert_eq!(recorded_push(&registry, id).unwrap(), None);
+
+    let outcome = push(&registry, &RepoLocks::new(), id).unwrap();
+    registry.set_last_shipped(&id, 7, &outcome.sha).unwrap();
+    git_in(&worktree, &["branch", "-m", "swarm/rec-renamed"]);
+
+    assert_eq!(
+        recorded_push(&registry, id).unwrap(),
+        Some(RecordedPush {
+            sha: outcome.sha,
+            pushed_ref: "origin/swarm/rec-renamed".to_owned(),
+        })
+    );
+}
+
 /// F8: push uses the branch checked out now, never the stale stored one.
 #[test]
 fn test_push_uses_live_branch_not_stale_stored_handle_branch() {
