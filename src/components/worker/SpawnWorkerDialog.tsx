@@ -381,7 +381,10 @@ export function SpawnWorkerDialog({
       try {
         persisted = await getPersistedRepoRoot();
       } catch (err) {
-        if (!cancelled) setNotice(`Could Not Read The Saved Project Root: ${errorMessage(err)}`);
+        if (!cancelled)
+          setNotice(
+            `Could Not Read The Saved Project Root: ${escapeForDisplay(errorMessage(err))}`,
+          );
         return null;
       }
       if (!persisted) return null;
@@ -390,7 +393,7 @@ export function SpawnWorkerDialog({
       } catch (err) {
         if (!cancelled) {
           setNotice(
-            `Could Not Validate The Saved Project Root ${escapeForDisplay(persisted)}: ${errorMessage(err)}`,
+            `Could Not Validate The Saved Project Root ${escapeForDisplay(persisted)}: ${escapeForDisplay(errorMessage(err))}`,
           );
         }
         return null;
@@ -461,7 +464,7 @@ export function SpawnWorkerDialog({
         multiple: false,
       });
     } catch (err) {
-      setNotice(`Could Not Open The Folder Picker: ${errorMessage(err)}`);
+      setNotice(`Could Not Open The Folder Picker: ${escapeForDisplay(errorMessage(err))}`);
       return;
     }
     if (!selected) return;
@@ -470,7 +473,7 @@ export function SpawnWorkerDialog({
       toplevel = await validateRepoRoot(selected);
     } catch (err) {
       setNotice(
-        `Could Not Use ${escapeForDisplay(selected)} As The Project Root: ${errorMessage(err)}`,
+        `Could Not Use ${escapeForDisplay(selected)} As The Project Root: ${escapeForDisplay(errorMessage(err))}`,
       );
       return;
     }
@@ -479,7 +482,7 @@ export function SpawnWorkerDialog({
     try {
       await writeConfig(DEFAULT_REPO_ROOT_KEY, toplevel);
     } catch (err) {
-      setNotice(`Could Not Save Project Root: ${errorMessage(err)}`);
+      setNotice(`Could Not Save Project Root: ${escapeForDisplay(errorMessage(err))}`);
     }
   };
 

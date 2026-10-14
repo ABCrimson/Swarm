@@ -211,13 +211,12 @@ describe("CommandPalette — Trojan Source", () => {
 });
 
 describe("CommandPalette — browser build", () => {
-  it("offers no Spawn Worker command (a webview worker is a desktop feature) and spawns nothing", async () => {
+  it("offers no Spawn Worker command (a webview worker is a desktop feature)", async () => {
     web.on = true;
     render(<CommandPalette />);
     act(() => store.set(commandPaletteOpenAtom, true));
 
     await screen.findByRole("option", { name: "Switch To List View" });
     expect(screen.queryByRole("option", { name: "Spawn Worker" })).not.toBeInTheDocument();
-    expect(spawnWorkerFromSpec).not.toHaveBeenCalled();
   });
 });

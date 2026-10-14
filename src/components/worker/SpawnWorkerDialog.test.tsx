@@ -498,10 +498,14 @@ describe("SpawnWorkerDialog — Trojan Source", () => {
     expect(root).toHaveAttribute("title", String.raw`/repo/a\u202Eb`);
 
     vi.mocked(openFolderPicker).mockResolvedValue("/not/c\u202Ed");
-    vi.mocked(validateRepoRoot).mockRejectedValueOnce(new Error("no repo"));
-    await user.click(screen.getByRole("button", { name: "Choose…" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      String.raw`Could Not Use /not/c\u202Ed As The Project Root: no repo`,
+    vi.mocked(validateRepoRoot).mockRejectedValueOnce(
+      new Error("/not/c\u202Ed is not inside a git repository"),
     );
+    await user.click(screen.getByRole("button", { name: "Choose…" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      String.raw`Could Not Use /not/c\u202Ed As The Project Root: /not/c\u202Ed is not inside a git repository`,
+    );
+    expect(alert.textContent).not.toContain(String.fromCharCode(0x202e));
   });
 });

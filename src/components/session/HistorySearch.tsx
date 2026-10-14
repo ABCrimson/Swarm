@@ -64,7 +64,9 @@ function Highlighted({ text: raw, query }: { readonly text: string; readonly que
   if (query === "") return text;
   const nodes: React.ReactNode[] = [];
   let cursor = 0;
-  for (const { 0: match, index } of text.matchAll(new RegExp(RegExp.escape(query), "gi"))) {
+  for (const { 0: match, index } of text.matchAll(
+    new RegExp(RegExp.escape(escapeForDisplay(query)), "gi"),
+  )) {
     nodes.push(
       text.slice(cursor, index),
       <mark
