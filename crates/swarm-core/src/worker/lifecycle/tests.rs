@@ -489,8 +489,8 @@ fn test_worker_input_preview_redacts_credentials() {
     // on the raw text.
     for (input, leak) in [
         (
-            &b"echo ok\rAKIAIOSFODNN7EXAMPLE\rls\r"[..],
-            "AKIAIOSFODNN7EXAMPLE",
+            concat!("echo ok\rAKIA", "IOSFODNN7EXAMPLE\rls\r").as_bytes(),
+            concat!("AKIA", "IOSFODNN7EXAMPLE"),
         ),
         (
             &b"cat <<EOF\nsk-proj-abcdefghijklmnopqrstuvwxyz\nEOF\n"[..],

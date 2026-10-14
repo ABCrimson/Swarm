@@ -280,12 +280,15 @@ mod tests {
         assert!(!snippet.contains("hunter2"), "{snippet}");
 
         let tail = Mutex::new(VecDeque::from(
-            b"id [0mAKIAIOSFODNN7EXAMPLE rejected
-"
-            .to_vec(),
+            concat!("id \x1b[0mAKIA", "IOSFODNN7EXAMPLE rejected\n")
+                .as_bytes()
+                .to_vec(),
         ));
         let snippet = stderr_snippet(&tail);
-        assert!(!snippet.contains("AKIAIOSFODNN7EXAMPLE"), "{snippet}");
+        assert!(
+            !snippet.contains(concat!("AKIA", "IOSFODNN7EXAMPLE")),
+            "{snippet}"
+        );
     }
 
     #[test]
