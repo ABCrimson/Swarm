@@ -12,8 +12,9 @@
 //! `swarm-core` stays Tauri-free here too. Every module that runs git
 //! ([`repo`], [`worktree`], [`ship`]) shells out to the system `git`
 //! binary through [`cli::run`] (argument vectors only, never a shell
-//! string), and the only filesystem root this module assumes is the
-//! user's home directory ([`home_dir`]). [`redact`] and [`remote`] are
+//! string), and the only filesystem root this module assumes is
+//! `~/.swarm/worktrees/**`, resolved by the caller (`worker::lifecycle`)
+//! from `crate::paths::home_dir`. [`redact`] and [`remote`] are
 //! pure text functions; [`causal`] works on the event-log rows
 //! (`orchestration::log::StoredEvent`) it is handed and never runs git.
 //!
@@ -152,22 +153,6 @@ pub(crate) fn is_lock_contention_message(message: &str) -> bool {
         || lower.contains("another git process")
 }
 
-/// Resolves the user's home directory with [`std::env::home_dir`]: `$HOME`
-/// (then the password database) on Unix, the profile folder on Windows
-/// — the same folder Tauri resolves `$HOME` to in the
-/// `opener:allow-open-path` scope `$HOME/.swarm/worktrees/**` (see
-/// `src-tauri/capabilities/default.json`). This is the root of
-/// `~/.swarm/worktrees/**`.
-///
-/// # Errors
-///
-/// * [`AppError::Git`] — the platform reports no home directory.
-pub fn home_dir() -> Result<PathBuf, AppError> {
-    std::env::home_dir()
-        .filter(|home| !home.as_os_str().is_empty())
-        .ok_or_else(|| AppError::Git("could not resolve the home directory".to_owned()))
-}
-
 /// Deterministic 8-hex-character tag derived from `input` (FNV-1a
 /// 64-bit, truncated to its low 32 bits). Disambiguates same-named
 /// repos under `~/.swarm/worktrees/<repo>-<hash8>/` without a hashing
@@ -261,12 +246,6 @@ mod tests {
         // leaves at the end is trimmed.
         let slug = slugify(&format!("{} b", "a".repeat(MAX_SLUG_LEN - 1)));
         assert_eq!(slug, "a".repeat(MAX_SLUG_LEN - 1));
-    }
-
-    #[test]
-    fn test_home_dir_resolves() {
-        let home = home_dir().expect("the test environment has a home directory");
-        assert!(!home.as_os_str().is_empty());
     }
 
     #[test]
