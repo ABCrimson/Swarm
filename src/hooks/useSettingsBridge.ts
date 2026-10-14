@@ -50,6 +50,9 @@ const BACKEND_DEFAULT_AGENT_CONCURRENCY = 3;
 /** The backend's accepted range (`set_agent_concurrency`), wider than the Settings field's. */
 const BackendAgentConcurrency = z.int().min(1).max(16);
 
+/** The backend's accepted range (`MIN_MAX_WORKERS..=MAX_MAX_WORKERS`, worker/registry.rs); a saved value outside it is ignored at startup. */
+const BackendMaxWorkers = z.int().min(1).max(256);
+
 /** Identifies the failure toast, so a later push or a late resolve can dismiss it. */
 const AGENT_CONCURRENCY_TOAST_ID = "agent-concurrency-sync";
 
@@ -130,7 +133,8 @@ function createAgentConcurrencySync(store: Store) {
 function createMaxWorkersSync(store: Store) {
   const sync = createAcknowledgedSync({
     initial: store.get(maxWorkersAtom),
-    // Looked up at call time, not creation time.
+    // A closure, not `setMaxWorkers` itself: useSettingsBridge.test.tsx mocks
+    // #lib/tauri without it, and reading a missing export of a vitest mock throws.
     call: (cap) => setMaxWorkers(cap),
     show: (cap) => store.set(maxWorkersAtom, cap),
     getStatus: () => store.get(maxWorkersSyncAtom),
@@ -150,7 +154,7 @@ function createMaxWorkersSync(store: Store) {
       if (reconciling || !hasTransport()) return;
       reconciling = true;
       try {
-        const saved = await readConfig("max_workers", z.int().min(1));
+        const saved = await readConfig("max_workers", BackendMaxWorkers);
         // A cap committed while the read was in flight is newer than the saved one.
         if (saved !== null && !sync.touched) sync.adopt(saved);
       } catch (err) {

@@ -11,6 +11,7 @@ import {
   checkForUpdates,
   DESKTOP_ONLY_REASON,
   hasCapability,
+  hasTransport,
   isTauri,
   readConfig,
   setAgentConcurrency,
@@ -32,6 +33,7 @@ vi.mock(import("#lib/tauri"), async (importOriginal) => ({
   ...(await importOriginal()),
   isTauri: vi.fn(),
   hasCapability: vi.fn(),
+  hasTransport: vi.fn(),
   setAgentConcurrency: vi.fn(),
   readConfig: vi.fn(),
   writeConfig: vi.fn(),
@@ -62,6 +64,7 @@ beforeEach(() => {
   vi.mocked(setMaxWorkers).mockResolvedValue(null);
   vi.mocked(checkForUpdates).mockResolvedValue({ available: false });
   vi.mocked(hasCapability).mockReturnValue(true);
+  vi.mocked(hasTransport).mockReturnValue(false);
   vi.mocked(isTauri).mockReturnValue(false);
   vi.mocked(setAgentConcurrency).mockResolvedValue(null);
   store.set(agentConcurrencySyncAtom, { status: "idle" });
@@ -308,6 +311,14 @@ describe("Settings — worker registry cap, one call in flight", () => {
     fireEvent.keyDown(cap, { key: "Enter" });
     return cap;
   }
+
+  it("shows the saved cap at launch without pushing it", async () => {
+    vi.mocked(hasTransport).mockReturnValue(true);
+    vi.mocked(readConfig).mockImplementation(async (key) => (key === "max_workers" ? 8 : null));
+    render(<SettingsWithBridge />);
+    await waitFor(() => expect(screen.getByLabelText("Worker Registry Cap")).toHaveValue(8));
+    expect(setMaxWorkers).not.toHaveBeenCalled();
+  });
 
   it("sends a second rapid commit only after the first reply, then the latest value", async () => {
     const first = Promise.withResolvers<number | null>();
