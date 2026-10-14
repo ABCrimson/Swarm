@@ -6,6 +6,11 @@
 //! inherently platform/shell-specific (e.g. Tauri's
 //! `app.path().app_data_dir()`) — the shell constructs [`Paths`] once at
 //! startup and passes it in.
+//!
+//! The one directory `swarm-core` does resolve itself is the user's home
+//! ([`home_dir`]): the root of the default worktrees directory
+//! `~/.swarm/worktrees` and of the home scope `read_file` and
+//! `write_file` allow.
 
 use std::path::PathBuf;
 
