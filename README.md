@@ -7,7 +7,7 @@
   <a href="https://github.com/ABCrimson/Swarm/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/ABCrimson/Swarm/ci.yml?branch=main&style=flat-square&labelColor=0a0e1a&color=ebb84a&label=CI" /></a>
   <img alt="Platforms: Windows, macOS, Linux" src="https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-ebb84a?style=flat-square&labelColor=0a0e1a" />
   <img alt="Tauri 3.0 alpha" src="https://img.shields.io/badge/Tauri-3.0%20alpha-ebb84a?style=flat-square&labelColor=0a0e1a&logo=tauri&logoColor=ebb84a" />
-  <img alt="Rust nightly" src="https://img.shields.io/badge/Rust-nightly--2026--10--10-ebb84a?style=flat-square&labelColor=0a0e1a&logo=rust&logoColor=ebb84a" />
+  <img alt="Rust nightly" src="https://img.shields.io/badge/Rust-nightly--2026--10--14-ebb84a?style=flat-square&labelColor=0a0e1a&logo=rust&logoColor=ebb84a" />
   <img alt="React 19.3" src="https://img.shields.io/badge/React-19.3%20canary-ebb84a?style=flat-square&labelColor=0a0e1a&logo=react&logoColor=ebb84a" />
   <img alt="TypeScript 7.1" src="https://img.shields.io/badge/TypeScript-7.1-ebb84a?style=flat-square&labelColor=0a0e1a&logo=typescript&logoColor=ebb84a" />
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-ebb84a?style=flat-square&labelColor=0a0e1a" /></a>
@@ -112,9 +112,9 @@ The Rust side is a **three-crate workspace**: `swarm-core` (tauri-free domain lo
 
 | Tool | Version | Notes |
 |---|---|---|
-| Node.js | 27.0.0-nightly202610086d5e309871 | pinned via `devEngines.runtime`; pnpm downloads it for the project |
-| pnpm | 12.12.0 | pinned via `packageManager`; pnpm switches itself to it |
-| Rust | nightly-2026-10-11 | auto-configured by `rust-toolchain.toml` |
+| Node.js | 27.0.0-nightly202610123b639be3a4 | pinned via `devEngines.runtime`; pnpm downloads it for the project |
+| pnpm | 12.13.0 | pinned via `packageManager`; pnpm switches itself to it |
+| Rust | nightly-2026-10-14 | auto-configured by `rust-toolchain.toml` |
 | macOS (running the app) | 15.4 or newer | the bundle calls iterator helpers, `Error.isError` and `RegExp.escape` unguarded, which needs a Safari 18.4-class WKWebView; `bundle.macOS.minimumSystemVersion` enforces it |
 
 ### Desktop
@@ -167,17 +167,17 @@ Full operator guide: [`docs/daemon.md`](docs/daemon.md).
 | Layer | Technology | Version |
 |---|---|---|
 | Desktop shell | Tauri (CLI · JS API) | 3.0.0-alpha.4 · 3.0.0-alpha.2 |
-| UI | React | 19.3.0-canary-b618bbb4-20261007 |
-| Language | TypeScript | 7.1.0-dev.20261010.1 (native compiler) |
+| UI | React | 19.3.0-canary-07dde64d-20261013 |
+| Language | TypeScript | 7.1.0-dev.20261013.1 (native compiler) |
 | Build | Vite (Rolldown) | 8.3.4 (oxc minify) |
-| Compiler | React Compiler: Oxc (`oxc-transform-react`, native binding with a WASI fallback) | 0.153.0 |
-| Styling | Tailwind CSS (v4 insiders) | 0.0.0-insiders.de2255b |
+| Compiler | React Compiler: Oxc (`oxc-transform-react`, native binding with a WASI fallback) | 0.154.0 |
+| Styling | Tailwind CSS (v4 insiders) | 0.0.0-insiders.1a38f84 |
 | State | Zustand / Jotai / Immer | 5.0.15 / 3.0.1 / 11.1.21 |
-| Validation | Zod | 4.6.5 |
+| Validation | Zod | 4.6.7 |
 | Graph | @xyflow/react + elkjs | 12.12.0 / 0.12.0 |
-| Terminal | @xterm/xterm | 6.1.0-beta.304 |
-| Charts / Motion | Recharts / motion | 3.11.0-canary.5 / 14.1.0 |
-| Lint · Test · E2E | Biome / Vitest / Playwright | 2.5.15 / 5.0.3 / 1.65.0-alpha-2026-10-11 |
+| Terminal | @xterm/xterm | 6.1.0-beta.315 |
+| Charts / Motion | Recharts / motion | 3.11.0-canary.6 / 14.2.0 |
+| Lint · Test · E2E | Biome / Vitest / Playwright | 2.5.15 / 5.0.4 / 1.65.0-alpha-2026-10-13 |
 
 </details>
 
@@ -186,8 +186,8 @@ Full operator guide: [`docs/daemon.md`](docs/daemon.md).
 
 | Layer | Technology | Version |
 |---|---|---|
-| Language | Rust | nightly-2026-10-11 (rustc 1.101.0-nightly) |
-| Async runtime | Tokio | 1.53.2 |
+| Language | Rust | nightly-2026-10-14 (rustc 1.101.0-nightly) |
+| Async runtime | Tokio | 1.53.3 |
 | Daemon transport | axum (WebSocket) | 0.8.9 |
 | Event log | rusqlite (bundled, WAL) | 0.40.2 |
 | Concurrency | DashMap / parking_lot | 7.0.0-rc2 / 0.12.5 |
