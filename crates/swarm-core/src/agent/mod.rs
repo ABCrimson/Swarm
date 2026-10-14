@@ -107,11 +107,12 @@ pub(crate) fn signal_name(_status: &std::process::ExitStatus) -> Option<String> 
 ///
 /// Recognized credentials are redacted ([`crate::git::redact::redact`])
 /// because the snippet lands in persisted settlement errors. A full tail
-/// (`STDERR_TAIL_CAP` bytes) had its front cut off by the ring, possibly
+/// (`STDERR_TAIL_CAP` bytes) may have lost its front to the ring, possibly
 /// inside a token, and a token's tail alone matches no redaction pattern
 /// (`ant-api03-…`, `//u:tok@h`). Every pattern excludes whitespace, so the
 /// leading run of non-whitespace bytes is dropped before redacting; a full
-/// tail without any whitespace yields `Stderr: [Truncated]`.
+/// tail with nothing but whitespace left after that run yields
+/// `Stderr: [Truncated]`.
 pub(crate) fn stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String {
     let mut tail = tail.lock();
     let full = tail.len() >= STDERR_TAIL_CAP;
@@ -122,7 +123,7 @@ pub(crate) fn stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String {
             .position(u8::is_ascii_whitespace)
             .unwrap_or(bytes.len());
         bytes = &bytes[partial..];
-        if bytes.is_empty() {
+        if bytes.trim_ascii().is_empty() {
             return "Stderr: [Truncated]".to_owned();
         }
     }
@@ -222,6 +223,15 @@ mod tests {
         assert_ne!(snippet, "No Stderr Output");
         assert!(!snippet.contains("aaaa"), "{snippet}");
     }
+
+    #[test]
+    fn test_stderr_snippet_of_a_full_tail_with_only_trailing_whitespace_is_truncated() {
+        let mut bytes = vec![b'a'; STDERR_TAIL_CAP - 1];
+        bytes.push(b'\n');
+        let tail = Mutex::new(VecDeque::from(bytes));
+        assert_eq!(stderr_snippet(&tail), "Stderr: [Truncated]");
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_signal_name_maps_signals_and_ignores_normal_exits() {
