@@ -211,8 +211,6 @@ describe("alert cooldown (parametrized)", () => {
   });
 });
 
-// Stored thresholds are validated on read: a malformed or partial object
-// must never leave a field undefined, which would silently disable alerts.
 describe("thresholdsError", () => {
   it("accepts warning below critical", () => {
     expect(thresholdsError(DEFAULT_THRESHOLDS)).toBeNull();
@@ -235,6 +233,8 @@ describe("thresholdsError", () => {
   });
 });
 
+// Stored thresholds are validated on read: a malformed or partial object
+// must never leave a field undefined, which would silently disable alerts.
 describe("alertThresholdsAtom hydration", () => {
   afterEach(() => {
     resetPersistedSettingsCache();
