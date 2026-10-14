@@ -32,9 +32,11 @@
 //! session through the registry by worker id.
 
 use std::collections::VecDeque;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use regex::Regex;
 
 use crate::worker::proc::STDERR_TAIL_CAP;
 
@@ -100,6 +102,14 @@ pub(crate) fn signal_name(_status: &std::process::ExitStatus) -> Option<String> 
     None
 }
 
+/// ANSI escape sequences: CSI (SGR colours and the like) and OSC (e.g.
+/// hyperlinks). A provider CLI can colour its stderr even into a pipe, and a
+/// code glued to a token (`\x1b[0mhttps://u:p@h`, `\x1b[0msk-…`) defeats the
+/// word boundary the redaction patterns anchor on.
+static ANSI_ESCAPE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?)").expect("valid regex")
+});
+
 /// The tail of a child's stderr as one line for a failure message:
 /// `Stderr: <text>`, or `No Stderr Output` when it wrote nothing.
 /// Shared by both provider adapters, which keep the same bounded byte
@@ -112,7 +122,9 @@ pub(crate) fn signal_name(_status: &std::process::ExitStatus) -> Option<String> 
 /// (`ant-api03-…`, `//u:tok@h`). Every pattern excludes whitespace, so the
 /// leading run of non-whitespace bytes is dropped before redacting; a full
 /// tail with nothing but whitespace left after that run yields
-/// `Stderr: [Truncated]`.
+/// `Stderr: [Truncated]`. An unterminated trailing run is dropped too (the
+/// drain thread can sit between two reads of one write, so it may be the
+/// front half of a token), and ANSI escapes are stripped before redaction.
 pub(crate) fn stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String {
     let mut tail = tail.lock();
     let full = tail.len() >= STDERR_TAIL_CAP;
@@ -123,12 +135,21 @@ pub(crate) fn stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String {
             .position(u8::is_ascii_whitespace)
             .unwrap_or(bytes.len());
         bytes = &bytes[partial..];
-        if bytes.trim_ascii().is_empty() {
-            return "Stderr: [Truncated]".to_owned();
-        }
     }
-    let text = crate::git::redact::redact(&String::from_utf8_lossy(bytes));
+    // The drain thread can sit between two reads of one write, so an
+    // unterminated last run may be the front half of a token: drop it too.
+    let cut_end = bytes.last().is_some_and(|byte| !byte.is_ascii_whitespace());
+    if cut_end {
+        let end = bytes
+            .iter()
+            .rposition(u8::is_ascii_whitespace)
+            .map_or(0, |index| index + 1);
+        bytes = &bytes[..end];
+    }
+    let text = String::from_utf8_lossy(bytes);
+    let text = crate::git::redact::redact(&ANSI_ESCAPE.replace_all(&text, ""));
     match text.trim() {
+        "" if full || cut_end => "Stderr: [Truncated]".to_owned(),
         "" => "No Stderr Output".to_owned(),
         text => format!("Stderr: {text}"),
     }
@@ -212,7 +233,11 @@ mod tests {
 
     #[test]
     fn test_stderr_snippet_keeps_a_short_tail_whole() {
-        let tail = Mutex::new(VecDeque::from(b"fatal: boom".to_vec()));
+        let tail = Mutex::new(VecDeque::from(
+            b"fatal: boom
+"
+            .to_vec(),
+        ));
         assert_eq!(stderr_snippet(&tail), "Stderr: fatal: boom");
     }
 
@@ -229,6 +254,57 @@ mod tests {
         let mut bytes = vec![b'a'; STDERR_TAIL_CAP - 1];
         bytes.push(b'\n');
         let tail = Mutex::new(VecDeque::from(bytes));
+        assert_eq!(stderr_snippet(&tail), "Stderr: [Truncated]");
+    }
+
+    #[test]
+    fn test_stderr_snippet_redacts_a_token_glued_to_an_ansi_code() {
+        let key = format!("sk-proj-{}", "d".repeat(40));
+        let tail = Mutex::new(VecDeque::from(
+            format!(
+                "key [2m=[0m{key} rejected
+"
+            )
+            .into_bytes(),
+        ));
+        let snippet = stderr_snippet(&tail);
+        assert!(!snippet.contains(&key), "{snippet}");
+        assert!(snippet.contains("[REDACTED]"), "{snippet}");
+
+        let tail = Mutex::new(VecDeque::from(
+            b"[2m=[0mhttps://alice:hunter2@h/x failed
+"
+            .to_vec(),
+        ));
+        let snippet = stderr_snippet(&tail);
+        assert!(!snippet.contains("hunter2"), "{snippet}");
+
+        let tail = Mutex::new(VecDeque::from(
+            b"id [0mAKIAIOSFODNN7EXAMPLE rejected
+"
+            .to_vec(),
+        ));
+        let snippet = stderr_snippet(&tail);
+        assert!(!snippet.contains("AKIAIOSFODNN7EXAMPLE"), "{snippet}");
+    }
+
+    #[test]
+    fn test_stderr_snippet_drops_an_unterminated_trailing_run() {
+        let tail = Mutex::new(VecDeque::from(
+            b"fatal: proxy https://alice:hunter2".to_vec(),
+        ));
+        let snippet = stderr_snippet(&tail);
+        assert!(!snippet.contains("hunter2"), "{snippet}");
+        assert!(!snippet.contains("alice"), "{snippet}");
+
+        let tail = Mutex::new(VecDeque::from(
+            format!("fatal: token ghp_{}", "a".repeat(19)).into_bytes(),
+        ));
+        let snippet = stderr_snippet(&tail);
+        assert!(!snippet.contains("ghp_"), "{snippet}");
+        assert_eq!(snippet, "Stderr: fatal: token");
+
+        let tail = Mutex::new(VecDeque::from(b"onlyonerun".to_vec()));
         assert_eq!(stderr_snippet(&tail), "Stderr: [Truncated]");
     }
 

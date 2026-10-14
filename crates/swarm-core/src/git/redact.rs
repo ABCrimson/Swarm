@@ -44,11 +44,17 @@ static URL_USERINFO: LazyLock<Regex> =
 /// - GitLab personal access tokens: `glpat-`
 /// - Anthropic API keys: `sk-ant-`
 /// - OpenAI-style secret keys: `sk-`, `sk-proj-`, `sk-svcacct-`
-/// - AWS access key ids: `AKIA` + 16
+/// - AWS access key ids: `AKIA` + 16, and temporary (STS) ones: `ASIA` + 16
+/// - Google API keys: `AIza` + 35
+/// - Google OAuth access tokens: `ya29.` + 20 or more
+/// - JSON Web Tokens: `eyJ…` header, payload and signature segments
+///
+/// (`Bearer` tokens have no prefix of their own: see [`BEARER`].)
 ///
 /// The distinctive prefixes match anywhere — a token glued to the text
-/// before it is still a token. Only the generic `sk-` form and the AWS
-/// key id need a word boundary, so `task-…` or `risk-…` never match.
+/// before it is still a token. Only the generic `sk-` form, the AWS key
+/// ids and the short `ya29.` prefix need a word boundary, so `task-…` or
+/// `risk-…` never match.
 static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"gh[pousr]_[A-Za-z0-9]{20,}",
@@ -57,9 +63,22 @@ static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
         r"|sk-ant-[A-Za-z0-9_-]{10,}",
         r"|\bsk-[A-Za-z0-9_-]{20,}",
         r"|\bAKIA[0-9A-Z]{16}\b",
+        // STS temporary key ids share AKIA's shape, so they share its boundary.
+        r"|\bASIA[0-9A-Z]{16}\b",
+        // Google API keys: fixed 39-character shape behind a fixed prefix.
+        r"|AIza[0-9A-Za-z_-]{35}",
+        // Google OAuth access tokens; the short prefix needs the boundary.
+        r"|\bya29\.[0-9A-Za-z_-]{20,}",
+        // JWTs: a base64url JSON header always starts `eyJ`.
+        r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
     ))
     .expect("valid regex")
 });
+
+/// `Authorization: Bearer <token>` credentials of any issuer. The scheme
+/// word stays so the line still reads as a header; only the token goes.
+static BEARER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]{16,}").expect("valid regex"));
 
 /// Redacts every recognized secret in `input`, replacing it with
 /// `[REDACTED]`. A redacted URL keeps its scheme and the trailing `@`
@@ -73,7 +92,10 @@ pub fn redact(input: &str) -> String {
             format!("{}{REDACTED}@", &caps[1])
         }
     });
-    TOKEN.replace_all(&without_userinfo, REDACTED).into_owned()
+    let without_tokens = TOKEN.replace_all(&without_userinfo, REDACTED);
+    BEARER
+        .replace_all(&without_tokens, format!("${{1}}{REDACTED}"))
+        .into_owned()
 }
 
 /// Caps `input` at roughly `max_bytes`, keeping its head **and** its
@@ -163,6 +185,73 @@ mod tests {
                 "expected {token} to be redacted: {out}"
             );
             assert!(out.contains(REDACTED));
+        }
+    }
+
+    #[test]
+    fn test_redacts_aws_temporary_key_ids() {
+        let id = "ASIAIOSFODNN7EXAMPLE";
+        let out = redact(&format!("export AWS_ACCESS_KEY_ID={id} # set"));
+        assert_eq!(out, "export AWS_ACCESS_KEY_ID=[REDACTED] # set");
+        // Wrong length or glued to a longer word: not a key id.
+        for clean in [
+            "ASIAIOSFODNN7EXAMPL",
+            "ASIAIOSFODNN7EXAMPLES",
+            "BASIAIOSFODNN7EXAMPLE",
+        ] {
+            assert_eq!(redact(clean), clean);
+        }
+    }
+
+    #[test]
+    fn test_redacts_google_api_keys() {
+        let key = format!("AIza{}", "Sy-_9".repeat(7));
+        let out = redact(&format!("request to ?key={key}&alt=json failed"));
+        assert_eq!(out, "request to ?key=[REDACTED]&alt=json failed");
+        // Too short to be a key.
+        let short = format!("AIza{}", "a".repeat(34));
+        assert_eq!(redact(&short), short);
+    }
+
+    #[test]
+    fn test_redacts_google_oauth_access_tokens() {
+        let token = format!("ya29.{}", "a0Af_-".repeat(10));
+        let out = redact(&format!("token {token} expired"));
+        assert_eq!(out, "token [REDACTED] expired");
+        // Too short, and not at a word boundary.
+        for clean in ["ya29.short", "pya29.aaaaaaaaaaaaaaaaaaaaaaaa"] {
+            assert_eq!(redact(clean), clean);
+        }
+    }
+
+    #[test]
+    fn test_redacts_json_web_tokens() {
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r";
+        let out = redact(&format!("jwt={jwt};"));
+        assert_eq!(out, "jwt=[REDACTED];");
+        // Two segments only, or segments too short: not a JWT.
+        for clean in [
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+            "eyJhbGci.eyJzdWIi.sig",
+        ] {
+            assert_eq!(redact(clean), clean);
+        }
+    }
+
+    #[test]
+    fn test_redacts_bearer_tokens_and_keeps_the_scheme_word() {
+        let out = redact("Authorization: Bearer abc123.DEF-456_ghi~789+jkl/mno= rejected");
+        assert_eq!(out, "Authorization: Bearer [REDACTED] rejected");
+        let out = redact("authorization: bearer   0123456789abcdef0123");
+        assert_eq!(out, "authorization: bearer   [REDACTED]");
+        // Prose and short values are not credentials.
+        for clean in [
+            "the Bearer of bad news",
+            "Bearer short",
+            "Bearer\tdeadbeef",
+            "Bearers 0123456789abcdef0123",
+        ] {
+            assert_eq!(redact(clean), clean);
         }
     }
 
