@@ -1,6 +1,6 @@
 # ADR-0017: Codex is driven over the verified app-server protocol
 
-- **Status:** Accepted (supersedes the 2026-08-15 authored protocol)
+- **Status:** Accepted (supersedes the 2026-08-15 authored protocol); binary resolution superseded by [0038](0038-agent-provider-trust-model.md)
 - **Date:** 2026-09-23
 
 ## Context
@@ -47,9 +47,7 @@ against a live 0.156.1 server (no model turns):
 - Shutdown closes stdin, which app-server treats as a request to exit; the child is killed only after a
   grace period. Bounds: handshake 30 s, turn acknowledgement 30 s, other requests 10 s, interrupt
   settle 10 s, graceful exit 3 s, probe 5 s per subprocess.
-- The binary is resolved over absolute `PATH` entries only, with no bare-name fallback (see
-  [0038](0038-agent-provider-trust-model.md)); on Windows the `codex.cmd` npm shim is resolved through
-  `PATHEXT`.
+- On Windows the `codex.cmd` npm shim is resolved through `PATHEXT`.
 
 ## Consequences
 

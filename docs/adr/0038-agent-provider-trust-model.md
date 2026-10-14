@@ -35,8 +35,10 @@ inline `--settings` JSON is the session's only settings. SWARM itself reads
 `<cwd>/.claude/settings.json` and takes only the `permissions.deny` string entries from it, appended
 after the tier's deny list: a repo can narrow a session and nothing else. The appended entries are kept
 in file order up to 8 KiB of JSON in total and the rest are dropped with a warning, because the
-settings travel as one argv element and Windows caps one at about 32K characters. The file read itself
-is capped at 1 MiB.
+settings travel as one argv element and Windows caps one at about 32K characters. SWARM reads at most
+1 MiB of the file: the read stops one byte past the cap, because the reported length cannot be trusted
+(a symlink to `/proc/self/pagemap` reports a regular file of length 0 and then yields zeros without
+end). A longer, unreadable, non-UTF-8 or non-object file contributes no entries and is logged.
 
 **Deny lists.** Every tier denies `EnterWorktree` and `ExitWorktree`. Restricted also denies
 `PowerShell` (the flag removes it; the entry is a second fence, like `Bash`), `DesignSync` (writes to
@@ -65,7 +67,7 @@ else: relative and empty entries are skipped, the current directory is never sea
 found is "Not Found On PATH" at probe and a spawn error, never a bare name for the OS to search. Claude
 looks for an executable `claude` (Unix) or `claude.exe` (Windows); an npm `claude.cmd` shim maps to the
 `node_modules/@anthropic-ai/claude-code/bin/claude.exe` beside it, since the shim itself is never run.
-Codex keeps its `PATHEXT` lookup on Windows. The Claude adapter caches the resolution: a probe resolves
+Codex uses the same rule (an executable `codex` on Unix; on Windows the `PATHEXT` lookup, which finds the npm `codex.cmd` shim) and no longer falls back to the bare name. The Claude adapter caches the resolution: a probe resolves
 afresh, a spawn reuses it.
 
 ## Consequences

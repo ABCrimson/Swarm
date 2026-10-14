@@ -39,7 +39,7 @@ Each record is `NNNN-<slug>.md` with a status, a date, then Context, Decision an
 | [0014](0014-piped-stdio-for-json-providers.md) | Piped stdio, not a PTY, for JSON-protocol provider CLIs | Accepted |
 | [0015](0015-trust-tiers-closed-vocabulary.md) | Trust tiers are a closed vocabulary | Accepted; project setting sources superseded by [0038](0038-agent-provider-trust-model.md) |
 | [0016](0016-claude-code-control-protocol.md) | Claude Code is driven over the stream-json control protocol | Accepted; project setting sources superseded by [0038](0038-agent-provider-trust-model.md) |
-| [0017](0017-codex-app-server-protocol.md) | Codex is driven over the verified app-server protocol | Accepted |
+| [0017](0017-codex-app-server-protocol.md) | Codex is driven over the verified app-server protocol | Accepted; binary resolution superseded by [0038](0038-agent-provider-trust-model.md) |
 | [0018](0018-agent-turn-scheduler.md) | One agent-turn scheduler with per-worker admission | Accepted |
 | [0019](0019-webview-chat-beside-adapters.md) | The webview chat path stays beside the provider adapters | Accepted |
 | [0020](0020-bus-routes-by-recording-events.md) | The bus routes by recording events | Accepted |
