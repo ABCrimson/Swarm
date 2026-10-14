@@ -1,4 +1,4 @@
-# ADR-0038: A kill stops the provider session first, behind a closing fence
+# ADR-0040: A kill stops the provider session first, behind a closing fence
 
 - **Status:** Accepted
 - **Date:** 2026-10-13

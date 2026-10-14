@@ -549,7 +549,7 @@ and [api.md](api.md#wire-protocol-swarmd)):
   512 watermark); `rpcResult` rides a separate 256-slot lane; at most 8 `rpc` calls run per connection.
 - **Policy:** every `rpc` goes through `Registry::dispatch_remote`. An authenticated client can run
   commands as the daemon's user, so treat the token like an SSH key.
-- **Shutdown:** SIGINT/SIGTERM closes clients with `1001`, stops every worker through `kill_worker` (each worktree gets its usual disposition; 10 s budget, `STOP_WORKERS_TIMEOUT`; a kill still waiting on an in-flight attach when it expires is abandoned, leaving that worker and its worktree unreconciled, see [ADR-0038](adr/0038-kill-stops-the-session-first.md)), then runs `Runtime::shutdown`. The desktop app instead leaves workers to the OS on quit.
+- **Shutdown:** SIGINT/SIGTERM closes clients with `1001`, stops every worker through `kill_worker` (each worktree gets its usual disposition; 10 s budget, `STOP_WORKERS_TIMEOUT`; a kill still waiting on an in-flight attach when it expires is abandoned, leaving that worker and its worktree unreconciled, see [ADR-0040](adr/0040-kill-stops-the-session-first.md)), then runs `Runtime::shutdown`. The desktop app instead leaves workers to the OS on quit.
 - **Service units** (`crates/swarmd/service/`): `systemd --user`, a launchd LaunchAgent, and on Windows a
   per-user **logon Scheduled Task**, not a Windows service ([ADR-0029](adr/0029-windows-daemon-logon-task.md)).
 - CI checks that neither `swarm-core` nor `swarmd` depends on `tauri*`.
