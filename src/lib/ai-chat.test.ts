@@ -22,6 +22,7 @@ import {
   type StreamParams,
   streamMessage,
 } from "#lib/anthropic";
+import { isError } from "#lib/is-error";
 import { CLAUDE_MODELS, type ModelInfo } from "#lib/models";
 import { agentTurnStarted } from "#lib/tauri";
 import { executeTool, getAllAnthropicTools, getPendingToolApprovals } from "#lib/tools";
@@ -127,7 +128,7 @@ beforeEach(() => {
     if (!round) throw new Error("unexpected request");
     for (const delta of round.deltas ?? []) yield delta;
     await round.hold?.(signal);
-    if (Error.isError(round.result)) throw round.result;
+    if (isError(round.result)) throw round.result;
     return round.result;
   });
 });
