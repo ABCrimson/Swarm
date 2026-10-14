@@ -110,6 +110,7 @@ mod tests;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::mem::DropGuard;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -294,9 +295,12 @@ pub struct ClaudeCodeAdapter {
     /// every probe, reused by every spawn that follows, and resolved by
     /// the first spawn when no probe ran.
     resolved: parking_lot::RwLock<Option<PathBuf>>,
+    /// Where each probe's private directory is created: the temp dir,
+    /// except in tests, which give each adapter a root of its own.
+    probe_root: PathBuf,
 }
 
-/// Name of a probe's private working directory under the temp root: the
+/// Name of a probe's private working directory under the probe root: the
 /// prefix, then a fresh UUID.
 const PROBE_DIR_PREFIX: &str = "swarm-claude-probe-";
 
@@ -306,11 +310,11 @@ const PROBE_DIR_PREFIX: &str = "swarm-claude-probe-";
 /// [`tier::cap_repo_deny`].
 const REPO_SETTINGS_MAX_BYTES: u64 = 1024 * 1024;
 
-/// Creates a fresh directory for one probe under the temp root, owner-only
+/// Creates a fresh directory for one probe under `root`, owner-only
 /// (`0700`) on Unix. Creation is not recursive, so it fails when the path
 /// already exists rather than reuse a directory someone else made.
-async fn private_probe_dir() -> std::io::Result<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("{PROBE_DIR_PREFIX}{}", Uuid::new_v4()));
+async fn private_probe_dir(root: &Path) -> std::io::Result<PathBuf> {
+    let dir = root.join(format!("{PROBE_DIR_PREFIX}{}", Uuid::new_v4()));
     #[cfg(unix)]
     let builder = {
         let mut builder = tokio::fs::DirBuilder::new();
@@ -321,6 +325,42 @@ async fn private_probe_dir() -> std::io::Result<PathBuf> {
     let builder = tokio::fs::DirBuilder::new();
     builder.create(&dir).await?;
     Ok(dir)
+}
+
+/// How often `remove_probe_dir` retries a removal that fails.
+const PROBE_DIR_REMOVE_ATTEMPTS: u32 = 50;
+/// The wait between those retries.
+const PROBE_DIR_REMOVE_RETRY: Duration = Duration::from_millis(100);
+
+/// The probe directory's drop action: removes it on the blocking pool (a
+/// Tokio worker must not wait on the filesystem inside `Drop`), inline
+/// when the dropping thread has no runtime.
+///
+/// A dropped probe future also drops its `Process`, whose guard kills and
+/// reaps the child on the blocking pool. That runs concurrently with this
+/// removal, and Windows refuses to remove a directory that is a live
+/// process's working directory, so the removal retries until the child is
+/// gone. On Unix the first attempt usually succeeds (a child still writing can make `remove_dir_all` fail with ENOTEMPTY).
+fn remove_probe_dir_detached(dir: PathBuf) {
+    match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => drop(runtime.spawn_blocking(move || remove_probe_dir(&dir))),
+        Err(_) => remove_probe_dir(&dir),
+    }
+}
+
+/// Removes `dir`, retrying while a dying child may still hold it, and
+/// warns when it cannot. An already-missing directory counts as removed.
+fn remove_probe_dir(dir: &Path) {
+    for attempt in 1..=PROBE_DIR_REMOVE_ATTEMPTS {
+        match std::fs::remove_dir_all(dir) {
+            Ok(()) => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if attempt == PROBE_DIR_REMOVE_ATTEMPTS => {
+                tracing::warn!(path = %dir.display(), %error, "claude code: the probe directory could not be removed");
+            }
+            Err(_) => std::thread::sleep(PROBE_DIR_REMOVE_RETRY),
+        }
+    }
 }
 
 /// Reads at most `max` bytes of `reader`: `None` when it holds more (the
@@ -410,6 +450,7 @@ impl ClaudeCodeAdapter {
             binary: "claude".to_owned(),
             prefix_args: Vec::new(),
             resolved: parking_lot::RwLock::new(None),
+            probe_root: std::env::temp_dir(),
         }
     }
 
@@ -428,7 +469,16 @@ impl ClaudeCodeAdapter {
             binary: binary.into(),
             prefix_args,
             resolved: parking_lot::RwLock::new(None),
+            probe_root: std::env::temp_dir(),
         }
+    }
+
+    /// Creates probe directories under `root` instead of the temp dir, so
+    /// a test sees only its own.
+    #[cfg(test)]
+    pub fn with_probe_root(mut self, root: PathBuf) -> Self {
+        self.probe_root = root;
+        self
     }
 
     /// The executable to start: the cached resolution unless `refresh` or
@@ -454,9 +504,9 @@ impl ClaudeCodeAdapter {
     }
 
     /// Runs the probe in a fresh private directory (`private_probe_dir`)
-    /// and removes it on every return path.
+    /// and removes it on every return path, including a dropped future.
     async fn run_probe(&self) -> ProbeReport {
-        let cwd = match private_probe_dir().await {
+        let cwd = match private_probe_dir(&self.probe_root).await {
             Ok(cwd) => cwd,
             Err(error) => {
                 return ProbeReport {
@@ -468,7 +518,13 @@ impl ClaudeCodeAdapter {
                 };
             }
         };
+        // A dropped probe future must not leave the directory behind. The
+        // guard is dismissed on the normal path so `probe()` returns with
+        // the directory already gone.
+        let remove_if_dropped =
+            DropGuard::new(cwd.clone(), remove_probe_dir_detached as fn(PathBuf));
         let report = self.run_probe_in(&cwd).await;
+        DropGuard::dismiss(remove_if_dropped);
         if let Err(error) = tokio::fs::remove_dir_all(&cwd).await {
             tracing::warn!(path = %cwd.display(), %error, "claude code: the probe directory could not be removed");
         }
@@ -643,6 +699,10 @@ impl ClaudeCodeAdapter {
             framer_errors,
             stderr_tail,
         } = process;
+        // Nothing below awaits before the child is owned by `Shared`, so
+        // dismissing the guard here leaves no window in which a dropped
+        // future could leak it.
+        let child = DropGuard::dismiss(child);
         let fresh = spec.resume.is_none();
         let session_key = spec
             .resume

@@ -1885,8 +1885,12 @@ async fn spawn_refuses_an_empty_or_relative_cwd() {
 
 #[tokio::test]
 async fn private_probe_dir_is_fresh_and_owner_only() {
-    let first = private_probe_dir().await.expect("create a probe dir");
-    let second = private_probe_dir().await.expect("create a probe dir");
+    let first = private_probe_dir(&std::env::temp_dir())
+        .await
+        .expect("create a probe dir");
+    let second = private_probe_dir(&std::env::temp_dir())
+        .await
+        .expect("create a probe dir");
     assert_ne!(first, second);
     for dir in [&first, &second] {
         assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
@@ -2470,4 +2474,96 @@ async fn real_cli_probe_and_idle_sessions_speak_the_current_protocol() {
     }
     assert_eq!(harness.recorder.count("agent_session_started"), 3);
     assert_eq!(harness.recorder.count("agent_turn_settled"), 0);
+}
+
+// ── Cancellation safety ──────────────────────────────────────────────
+
+/// Waits until `pid` no longer names a process (reaped, not even a
+/// zombie). Linux only: elsewhere there is no cheap, race-free check, so
+/// the wait returns at once and the callers' other assertions still run.
+async fn wait_until_reaped(pid: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        let proc_dir = format!("/proc/{}", pid.trim());
+        let deadline = Instant::now() + WAIT;
+        while std::path::Path::new(&proc_dir).exists() {
+            assert!(
+                Instant::now() < deadline,
+                "pid {pid} outlived the dropped future"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = pid;
+}
+
+/// Dropping `spawn` mid-handshake kills and reaps the child and
+/// registers no session. The reaping assertion is a Linux-only regression
+/// check (`/proc`); elsewhere the test checks only that no session event
+/// was emitted.
+#[tokio::test]
+async fn a_dropped_spawn_future_kills_and_reaps_the_child() {
+    let harness = Harness::new();
+    let spec = harness.spec();
+    let pid_file = std::env::temp_dir().join(format!("swarm-fake-claude-{}.pid", spec.worker_id));
+    let adapter = harness.adapter("handshake_silent.mjs");
+    // The fake writes its pid file once it runs; the handshake then waits
+    // on a reply that never comes.
+    let child_is_up = async {
+        while !std::fs::read_to_string(&pid_file).is_ok_and(|pid| !pid.is_empty()) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::select! {
+        spawned = adapter.spawn(spec) => {
+            panic!("the silent handshake settled: {}", spawned.is_ok());
+        }
+        up = tokio::time::timeout(WAIT, child_is_up) => up.expect("the fake started"),
+    }
+    let pid = std::fs::read_to_string(&pid_file).expect("the fake wrote its pid");
+    std::fs::remove_file(&pid_file).ok();
+    wait_until_reaped(&pid).await;
+    assert_eq!(harness.recorder.count("agent_session_started"), 0);
+}
+
+/// Dropping `probe` mid-handshake removes its private directory.
+#[tokio::test]
+async fn a_dropped_probe_future_removes_its_private_directory() {
+    let harness = Harness::new();
+    // The adapter's own probe root: no other test or lane sharing the
+    // temp dir can have a probe directory here.
+    let root = harness.cwd.join("probes");
+    std::fs::create_dir_all(&root).expect("create the probe root");
+    let adapter = harness
+        .adapter("handshake_held.mjs")
+        .with_probe_root(root.clone());
+    // The held fake drops a marker into its working directory (the probe
+    // directory) while it withholds the `initialize` reply.
+    let find_held_dir = async {
+        loop {
+            let held = std::fs::read_dir(&root)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|entry| entry.path())
+                .find(|path| path.join("swarm-fake-claude.held").exists());
+            if let Some(dir) = held {
+                return dir;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    let dir = tokio::select! {
+        report = adapter.probe() => panic!("the held probe settled: {report:?}"),
+        dir = tokio::time::timeout(WAIT, find_held_dir) => dir.expect("the probe started its fake"),
+    };
+    let deadline = Instant::now() + WAIT;
+    while dir.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "{dir:?} outlived the dropped probe"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
