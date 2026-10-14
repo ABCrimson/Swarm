@@ -21,7 +21,6 @@ use super::protocol::{
 };
 use super::reader::permission_id;
 use super::state::{ApprovalKind, PendingApproval};
-use super::teardown::signal_name;
 use super::tier::verify_effective_policy;
 use super::*;
 use crate::agent::adapter::{AgentTurnStatus, CancelGranularity};
@@ -661,6 +660,8 @@ fn capabilities_promise_resume_graceful_cancel_and_interactive_approvals() {
 #[test]
 fn signal_names_are_reported_on_unix() {
     use std::os::unix::process::ExitStatusExt;
+
+    use super::teardown::signal_name;
     assert_eq!(
         signal_name(&std::process::ExitStatus::from_raw(9)),
         Some("SIGKILL".to_string())
