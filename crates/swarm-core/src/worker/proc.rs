@@ -177,8 +177,6 @@ pub struct PipedHandle {
     pub stdin: Box<dyn Write + Send>,
     /// The child process, for `kill`/`wait`.
     pub child: Child,
-    /// OS process ID of the child.
-    pub pid: Option<u32>,
     /// Complete NDJSON lines framed from the child's stdout, in order.
     /// Bounded: a slow consumer backs the stream up, nothing is dropped.
     /// Closes once stdout reaches end of stream (the child exited or
@@ -272,7 +270,6 @@ pub fn spawn_piped(
     Ok(PipedHandle {
         stdin: Box::new(stdin),
         child,
-        pid: Some(pid),
         lines,
         framer_errors,
         stderr_tail,
