@@ -30,7 +30,7 @@ Two more facts decide the setting:
   from FULL in WAL mode" (pragma documentation).
 
 Measured cost (2026-10-13, WSL2 Ubuntu-26.04 on an Intel Core Ultra 9 290HX Plus, 3000 one-transaction
-appends of a 392-byte payload plus a reservation per 1024 seqs, three runs each; details and the
+appends of a 392-byte payload plus a reservation per 1024 seqs, three runs each, EXTRA two (within run-to-run noise of FULL); details and the
 reproduction command in [Event Log Persistence](../performance.md#event-log-persistence)):
 
 | Directory | NORMAL | FULL (EXTRA measured the same) |
@@ -48,8 +48,10 @@ they read 3 and 1. In WAL mode EXTRA is FULL: each event append and each seq res
 committed transaction and syncs the `-wal` file before the writer goes on, so an event is on stable
 storage before it is emitted and a block of seqs before its first seq is issued. `fullfsync` makes that
 sync a `F_FULLFSYNC` on macOS and does nothing elsewhere. EXTRA also keeps the guarantee if WAL is ever
-refused. The read-only connections never commit and set neither pragma (both are per connection); the
-last connection to close may run the final checkpoint, which syncs at its own default level.
+refused. Both pragmas are per connection and the read-only connections never commit, but they set `fullfsync`
+too, so a final checkpoint run by whichever connection closes last flushes the same way. One limit
+remains: if the filesystem refuses WAL, SQLite's directory sync after unlinking a rollback journal is
+a plain `fsync()` on macOS.
 
 Alternatives:
 
@@ -61,9 +63,10 @@ Alternatives:
 - **EXTRA with `fullfsync`.** Chosen. The measured cost equals FULL's in WAL mode.
 - **Group commit under FULL/EXTRA.** The writer drains every queued command, appends its persistent
   events in one transaction (one flush), then emits them in seq order: the same guarantee, and a burst of
-  N costs one flush. Not done here. It is an open follow-up, required before macOS ships with
-  `fullfsync` if its measured per-commit cost is high, or if native Windows exceeds about 5 ms per
-  commit.
+  N costs one flush. Not done here. Open follow-up: measure
+  `measure_append_throughput_by_synchronous_level` on macOS (APFS, `F_FULLFSYNC`) and on native Windows
+  NTFS before the next release that contains this change. If either shows a p50 per commit above 5 ms,
+  group commit blocks that release.
 
 ## Consequences
 
@@ -80,8 +83,10 @@ Alternatives:
   event's flush; a burst of N persistent events delays them about N x 2 ms, more when a commit triggers
   a WAL checkpoint. The queue backs up rather than dropping events.
 - The shutdown drain has a budget (`SHUTDOWN_PHASE_TIMEOUT`, 2.5 s, in `src-tauri/src/lifecycle.rs` and
-  `crates/swarmd/src/main.rs`). A long backlog of flushes can overrun it; the cost is a seq gap at the
-  next start, never a reused seq.
+  `crates/swarmd/src/main.rs`). A long backlog of flushes can overrun it. Events still queued at the
+  deadline are never written or emitted, so the log can lack shutdown receipts such as
+  `agent_turn_settled` and `worker_killed`, and the exact head is not recorded, so the next start skips
+  to the reservation (a seq gap, never a reused seq).
 - Test: `test_open_flushes_every_commit_to_stable_storage` in `orchestration/log.rs`. The ignored
   `measure_append_throughput_by_synchronous_level` reproduces the table above.
 - Out of scope: the Wave 2 durable spine (a bounded replay watermark and operation receipts) builds on

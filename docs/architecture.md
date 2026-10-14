@@ -174,10 +174,11 @@ any thread/task ──EventSink::emit / emit_with / emit_awaiting_seq──▶ o
   crash, an OS crash or a power loss (on storage that honours flushes) skips at most one block and
   never reuses a seq; a clean shutdown records the exact head. Persisted seqs therefore have gaps
   (ephemeral events consume seqs too).
-- **Log:** `<data dir>/swarm-events.db`, SQLite in WAL mode with `synchronous=EXTRA` and `fullfsync`, schema
-  version 2 on a `PRAGMA user_version` ladder whose rungs each run in a transaction: `events(seq PK, ts,
-  type, payload, origin_worker, cause_seq) STRICT` with an index on `(type, seq)`, and `meta`. A
-  database newer than the build is refused. The writer owns the only read-write connection; readers open their own read-only.
+- **Log:** `<data dir>/swarm-events.db`, SQLite in WAL mode with `synchronous=EXTRA` and `fullfsync`,
+  schema version 2 on a `PRAGMA user_version` ladder whose rungs each run in a transaction:
+  `events(seq PK, ts, type, payload, origin_worker, cause_seq) STRICT` with an index on `(type, seq)`,
+  and `meta`. A database newer than the build is refused. The writer owns the only read-write
+  connection; readers open their own read-only.
 - **Persistence by exclusion** ([ADR-0004](adr/0004-persistence-by-exclusion.md)): never persisted are
   `worker_output`, `system_metrics`, `system_log`, `agent_turn_delta`, and `worker_input` whose
   `source` is `terminal`. Everything else is appended before it is emitted.

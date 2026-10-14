@@ -183,6 +183,10 @@ impl EventLog {
         )?;
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.pragma_update(None, "query_only", true)?;
+        // A reader never commits, but whichever connection closes last runs
+        // the final checkpoint and deletes the WAL, so it must flush like
+        // the writer (`fullfsync` is a connection flag `query_only` allows).
+        conn.pragma_update(None, "fullfsync", true)?;
         Ok(Self { conn })
     }
 
@@ -215,9 +219,8 @@ impl EventLog {
         // - fullfsync: on macOS SQLite calls a plain fsync(), which leaves
         //   the data in the drive cache, unless this is on (F_FULLFSYNC);
         //   it is a no-op elsewhere.
-        // Both are per connection. The read-only connections never commit;
-        // the last connection to close may run the final checkpoint, which
-        // syncs at its own default level.
+        // Both are per connection; `open_readonly` sets `fullfsync` too, for
+        // the final checkpoint it may run when it closes last.
         conn.pragma_update(None, "synchronous", "EXTRA")?;
         conn.pragma_update(None, "fullfsync", true)?;
         // These pragmas do not echo their value, so read them back:
@@ -385,12 +388,22 @@ impl EventLog {
 
     /// Clean-shutdown bookkeeping for the writer: records `head` as the
     /// exact seq reservation, refreshes planner statistics, and
-    /// checkpoints the WAL back into the main file.
+    /// checkpoints the WAL back into the main file. A checkpoint a reader
+    /// blocks (`busy != 0`) is logged, not an error: the WAL stays and the
+    /// next open recovers it, and the head is already recorded.
     pub(super) fn finalize(&mut self, head: u64) -> Result<(), AppError> {
         self.reserve_seqs(head)?;
         self.conn.execute_batch("PRAGMA optimize;")?;
-        self.conn
-            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        let (busy, wal_frames, checkpointed): (i64, i64, i64) =
+            self.conn
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.try_into())?;
+        if busy != 0 {
+            tracing::warn!(
+                wal_frames,
+                checkpointed,
+                "event log checkpoint was blocked; the WAL stays until the next open"
+            );
+        }
         Ok(())
     }
 
@@ -868,6 +881,17 @@ mod tests {
     fn test_open_in_memory_still_initializes() {
         let log = EventLog::open_in_memory().unwrap();
         assert_eq!(log.max_seq().unwrap(), 0);
+    }
+
+    /// Whichever connection closes last runs the final checkpoint, so a
+    /// reader must flush exactly like the writer (ADR-0039): `fullfsync`
+    /// is a connection flag that `query_only` does not forbid.
+    #[test]
+    fn test_open_readonly_flushes_like_the_writer() {
+        let (path, _cleanup) = temp_db();
+        let _writer = EventLog::open(&path).unwrap();
+        let reader = EventLog::open_readonly(&path).unwrap();
+        assert_eq!(pragma(&reader, "fullfsync"), 1, "fullfsync must be on");
     }
 
     #[test]
