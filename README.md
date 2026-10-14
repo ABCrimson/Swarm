@@ -1,37 +1,78 @@
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/hero-dark.svg" />
+    <img src=".github/readme/hero-light.svg" alt="SWARM Orchestrator" width="1200" />
+  </picture>
+</h1>
+
+<p align="center"><b>Many coding agents. One ordered event stream.</b></p>
+
 <p align="center">
-  <img src="site/favicon.svg" alt="SWARM Orchestrator logo" width="96" height="96" />
+  <a href="https://github.com/ABCrimson/Swarm/actions/workflows/ci.yml"><img alt="CI status on main" src="https://img.shields.io/github/actions/workflow/status/ABCrimson/Swarm/ci.yml?branch=main&label=CI&style=flat-square&labelColor=1c2033" /></a>
+  <a href="https://github.com/ABCrimson/Swarm/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/ABCrimson/Swarm?label=release&color=c99a2e&style=flat-square&labelColor=1c2033" /></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/ABCrimson/Swarm?color=c99a2e&style=flat-square&labelColor=1c2033" /></a>
+  <a href="https://abcrimson.github.io/Swarm/"><img alt="Docs site" src="https://img.shields.io/badge/docs-abcrimson.github.io%2FSwarm-c99a2e?style=flat-square&labelColor=1c2033" /></a>
+  <br />
+  <a href="rust-toolchain.toml"><img alt="Rust toolchain pinned in rust-toolchain.toml" src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FABCrimson%2FSwarm%2Fmain%2Frust-toolchain.toml&query=%24.toolchain.channel&label=Rust&color=7f6bd6&style=flat-square&labelColor=1c2033" /></a>
+  <a href="package.json"><img alt="Node.js nightly, pinned in package.json devEngines" src="https://img.shields.io/badge/Node-nightly-7f6bd6?style=flat-square&labelColor=1c2033" /></a>
+  <a href="package.json"><img alt="Package manager pinned in package.json" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FABCrimson%2FSwarm%2Fmain%2Fpackage.json&query=%24.packageManager&label=package%20manager&color=7f6bd6&style=flat-square&labelColor=1c2033" /></a>
+  <a href="Cargo.toml"><img alt="Tauri 3 alpha" src="https://img.shields.io/badge/Tauri-3%20alpha-7f6bd6?style=flat-square&labelColor=1c2033" /></a>
 </p>
 
-<h1 align="center">SWARM Orchestrator</h1>
-
-<p align="center">
-  <a href="https://github.com/ABCrimson/Swarm/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ABCrimson/Swarm/actions/workflows/ci.yml/badge.svg" /></a>
-  <a href="https://github.com/ABCrimson/Swarm/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/ABCrimson/Swarm" /></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/ABCrimson/Swarm" /></a>
-  <a href="https://abcrimson.github.io/Swarm/"><img alt="Docs site" src="https://img.shields.io/badge/docs-abcrimson.github.io%2FSwarm-informational" /></a>
-</p>
+> [!IMPORTANT]
+> **Latest release: v0.13.1 (2026-08-22).** `main` carries the unreleased work proposed as 0.14.0 (see `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md)), including breaking changes such as the move from Tauri v2 to Tauri 3 (alpha). No 0.14.0 tag or release exists. This page describes `main`. The trust tiers and the worktree per worker already held in v0.13.1, and the Tauri-free core with two shells, the provider trait pair and the ship chain shipped in it in an earlier form. Released binaries: [v0.13.1](https://github.com/ABCrimson/Swarm/releases/tag/v0.13.1).
 
 ## What It Is
 
 SWARM Orchestrator supervises many coding agents at once. Each worker is a shell on its own pseudo-terminal, optionally in its own git worktree and driving Claude Code or Codex over a structured protocol. Everything that happens is an event on one ordered stream backed by a SQLite log, which the UI renders, a pull request body cites, and a headless daemon replays to remote clients. It is a Tauri 3 (alpha) desktop app with a React 19 frontend, and the same Rust core also runs headless as `swarmd`.
 
-## Status
-
-> [!IMPORTANT]
-> **Latest release: v0.13.1 (2026-08-22).** `main` carries the unreleased 0.14.0 work (see `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md)), including breaking changes such as the move from Tauri v2 to Tauri 3 (alpha). No 0.14.0 tag or release exists. Most of what is listed below is not in v0.13.1. The trust tiers and the worktree per worker already held there, and the Tauri-free core with two shells, the provider trait pair and the ship chain shipped there in an earlier form. Released binaries: [v0.13.1](https://github.com/ABCrimson/Swarm/releases/tag/v0.13.1).
-
 ## What Main Does Today
 
-The code on `main` as of this commit; Status above names what v0.13.1 already had.
+The code on `main` as of this commit; the note at the top names what v0.13.1 already had.
 
-- **One Tauri-free core, two shells.** A Tauri 3 (alpha) desktop app and the headless `swarmd` daemon both embed the same `swarm-core` library ([ADR-0001](docs/adr/0001-tauri-free-core-two-shells.md), [daemon guide](docs/daemon.md)).
-- **Two providers behind one trait pair.** Claude Code over its stream-json control protocol and Codex over `codex app-server` implement `AgentAdapter` and `AgentSession` ([ADR-0013](docs/adr/0013-provider-adapter-trait-pair.md), [ADR-0016](docs/adr/0016-claude-code-control-protocol.md), [ADR-0017](docs/adr/0017-codex-app-server-protocol.md)).
-- **Trust tiers.** A closed vocabulary (`restricted`, `standard`, `write_enabled`) that fails closed on anything else ([ADR-0015](docs/adr/0015-trust-tiers-closed-vocabulary.md)).
-- **Agent sessions trust no repo configuration.** A Claude Code session loads no settings file from the repo, and the provider CLI is found only on absolute `PATH` entries ([ADR-0038](docs/adr/0038-agent-provider-trust-model.md)).
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/adr/0001-tauri-free-core-two-shells.md" title="ADR-0001"><img src=".github/readme/icon-core.svg" width="48" height="48" alt="" /><br /><b>One Tauri-free core, two shells.</b></a><br />
+      A Tauri 3 (alpha) desktop app and the headless <code>swarmd</code> daemon both embed the same <code>swarm-core</code> library.<br />
+      <sub><a href="docs/daemon.md">The daemon guide</a></sub>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/adr/0013-provider-adapter-trait-pair.md" title="ADR-0013"><img src=".github/readme/icon-providers.svg" width="48" height="48" alt="" /><br /><b>Two providers behind one trait pair.</b></a><br />
+      Claude Code over its stream-json control protocol and Codex over <code>codex app-server</code> both implement <code>AgentAdapter</code> and <code>AgentSession</code>.<br />
+      <sub><a href="docs/adr/0016-claude-code-control-protocol.md">ADR-0016</a>, <a href="docs/adr/0017-codex-app-server-protocol.md">ADR-0017</a></sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/adr/0015-trust-tiers-closed-vocabulary.md" title="ADR-0015"><img src=".github/readme/icon-tiers.svg" width="48" height="48" alt="" /><br /><b>Trust tiers that fail closed.</b></a><br />
+      Three tiers, <code>restricted</code>, <code>standard</code> and <code>write_enabled</code>; absent means <code>standard</code>, and any other token is refused.<br />
+      <sub><a href="#providers-and-trust-tiers">The tier table</a></sub>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/adr/0007-worktree-per-worker-system-git.md" title="ADR-0007"><img src=".github/readme/icon-worktree.svg" width="48" height="48" alt="" /><br /><b>A worktree per worker, never force-removed.</b></a><br />
+      A worker can get its own locked git worktree on a <code>swarm/</code> branch; removal never forces, and a dirty tree is preserved.<br />
+      <sub><a href="docs/adr/0008-worktree-removal-never-forces.md">ADR-0008</a></sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/adr/0009-ship-chain-structural-guarantees.md" title="ADR-0009"><img src=".github/readme/icon-ship.svg" width="48" height="48" alt="" /><br /><b>A ship chain bound to the commit sha.</b></a><br />
+      Commit, push, then a prefilled GitHub compare page. The push sends the commit sha it resolved and is never forced, and every attempt ends in one <code>ship_settled</code> receipt.<br />
+      <sub><a href="docs/architecture.md#ship-chain">Architecture: Ship Chain</a></sub>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/adr/0039-event-log-flushes-every-commit.md" title="ADR-0039"><img src=".github/readme/icon-log.svg" width="48" height="48" alt="" /><br /><b>An event log flushed every commit.</b></a><br />
+      A persistent event is on stable storage before it is emitted, and a block of seqs before its first seq is issued, on storage that honours fsync. Ephemeral events such as terminal output are never stored.<br />
+      <sub><a href="#the-event-log-guarantee">The guarantee and its cost</a></sub>
+    </td>
+  </tr>
+</table>
+
+Also on `main`:
+
+- **Claude Code sessions trust no repo configuration.** A Claude Code session loads no settings file (`--setting-sources ""`), and both provider CLIs are found only on absolute `PATH` entries ([ADR-0038](docs/adr/0038-agent-provider-trust-model.md)).
 - **A kill stops the provider session first**, then the worker's shell and worktree ([ADR-0040](docs/adr/0040-kill-stops-the-session-first.md)).
-- **The event log flushes every commit**, so an event is on stable storage before it is emitted ([ADR-0039](docs/adr/0039-event-log-flushes-every-commit.md)).
-- **An isolated git worktree per worker**, created with `git worktree add -b swarm/<slug>-<id8>` and locked; removal never forces, and a dirty tree is preserved ([ADR-0007](docs/adr/0007-worktree-per-worker-system-git.md), [ADR-0008](docs/adr/0008-worktree-removal-never-forces.md)).
-- **A ship chain** from commit to push to a prefilled GitHub compare page. The push is bound to the commit sha (`git push --end-of-options origin <sha>:refs/heads/<branch>`, non-force), and every attempt ends in one `ship_settled` receipt ([ADR-0009](docs/adr/0009-ship-chain-structural-guarantees.md), [architecture: Ship Chain](docs/architecture.md#ship-chain)).
 - **A browser build that gates desktop-only controls.** The `pnpm build:web` bundle, served by `swarmd --serve-ui`, reads the transport's capability flags and hides or disables controls that need the desktop app ([daemon guide: What the Browser Build Offers](docs/daemon.md#what-the-browser-build-offers), [ADR-0024](docs/adr/0024-transport-chosen-at-build-time.md)).
 - **React Compiler on Oxc.** The compiler, TypeScript stripping, JSX and Fast Refresh run in one pass through `oxc-transform-react`, with a WASI fallback binding ([ADR-0032](docs/adr/0032-react-compiler-oxc-wasi.md)).
 - **Temporal for dates**, with `temporal-polyfill` loaded at boot only when the runtime lacks `Temporal` ([ADR-0031](docs/adr/0031-temporal-polyfill-boot-entry.md)).
@@ -45,7 +86,7 @@ flowchart TB
         DESK["swarm-desktop (src-tauri/)"]
         DAEMON["swarmd (crates/swarmd)"]
     end
-    subgraph core["swarm-core (crates/swarm-core), Tauri-Free"]
+    subgraph core["swarm-core, Tauri-Free"]
         RT["Runtime and Command Registry"]
         SCHED["AgentScheduler"]
         PROV["ClaudeCodeAdapter and CodexAdapter"]
@@ -55,8 +96,7 @@ flowchart TB
     end
     FE -->|"Tauri IPC"| DESK
     FE -->|"WebSocket /ws"| DAEMON
-    DESK --> RT
-    DAEMON --> RT
+    shells --> core
     RT --> SCHED
     SCHED --> PROV
     RT --> PROV
@@ -65,17 +105,17 @@ flowchart TB
     RT --> GIT
 ```
 
-One Rust core, two shells. `swarm-desktop` forwards Tauri IPC calls to the core; `swarmd` serves the same commands and the event stream over an authenticated WebSocket, and the frontend reaches it with the `pnpm build:web` bundle. CI checks that `cargo tree -p swarm-core` and `cargo tree -p swarmd` contain no `tauri` crate. Full reference: [docs/architecture.md](docs/architecture.md).
+One Rust core, two shells. `swarm-desktop` forwards Tauri IPC calls to the core; `swarmd` serves the same 36 registry commands and the event stream over an authenticated WebSocket (the desktop app has 39: three native commands, `NATIVE_ONLY`, need the webview or the OS), and the frontend reaches it with the `pnpm build:web` bundle. CI checks that `cargo tree -p swarm-core` and `cargo tree -p swarmd` contain no `tauri` crate. Full reference: [docs/architecture.md](docs/architecture.md).
 
 ## Providers and Trust Tiers
 
 Each worker's tier maps onto the provider's own permission settings ([ADR-0015](docs/adr/0015-trust-tiers-closed-vocabulary.md)). Absent means `standard`; any other token is refused.
 
-| Tier | Claude Code | Codex |
-| --- | --- | --- |
-| `restricted` | `--restricted`, `--permission-mode dontAsk`, deny list for `Bash`, `PowerShell`, `Write`, `Edit`, `NotebookEdit`, `EnterWorktree`, `ExitWorktree`, `DesignSync`, `WebSearch`, `PushNotification` | `untrusted` approvals, `read-only` sandbox |
-| `standard` | `--permission-mode manual`, deny list of `EnterWorktree`, `ExitWorktree` and destructive Bash patterns | `untrusted` approvals, `workspace-write` sandbox |
-| `write_enabled` | `--permission-mode acceptEdits`, the same deny list as `standard` | `on-request` approvals, `workspace-write` sandbox |
+| Tier | What it maps to |
+| --- | --- |
+| `restricted` | **Claude Code:** `--restricted`, `--permission-mode dontAsk`, deny list for `Bash, PowerShell, Write, Edit, NotebookEdit, EnterWorktree, ExitWorktree, DesignSync, WebSearch, PushNotification`<br />**Codex:** `untrusted` approvals, `read-only` sandbox |
+| `standard` | **Claude Code:** `--permission-mode manual`, deny list of `EnterWorktree`, `ExitWorktree` and destructive Bash patterns<br />**Codex:** `untrusted` approvals, `workspace-write` sandbox |
+| `write_enabled` | **Claude Code:** `--permission-mode acceptEdits`, the same deny list as `standard`<br />**Codex:** `on-request` approvals, `workspace-write` sandbox |
 
 No tier maps to Claude Code's `bypassPermissions`, and the Codex types have no `never` or `danger-full-access` variants, so those values cannot be put on the wire.
 
@@ -87,11 +127,11 @@ The decision, verbatim from [ADR-0039](docs/adr/0039-event-log-flushes-every-com
 
 > `EventLog::init` sets `PRAGMA synchronous = EXTRA` and `PRAGMA fullfsync = 1` on the writer connection, reads both back (neither pragma echoes its value) and fails the open with `AppError::EventLog` unless they read 3 and 1. In WAL mode EXTRA is FULL: each event append and each seq reservation is its own committed transaction and syncs the `-wal` file before the writer goes on, so an event is on stable storage before it is emitted and a block of seqs before its first seq is issued.
 
-The cost, as measured on 2026-10-13 on an Intel Core Ultra 9 290HX Plus under WSL2 (Ubuntu-26.04, ext4 on a VHD), 3000 appends of a 392-byte payload: 469 to 514 events/s at `synchronous=FULL` (p50 1.97 to 2.19 ms), against 23219 to 31606 events/s at `NORMAL`. Native Windows NTFS and macOS (`F_FULLFSYNC`) are unmeasured. Method and the full table: [docs/performance.md](docs/performance.md#event-log-persistence).
+The cost, as measured on 2026-10-13 on an Intel Core Ultra 9 290HX Plus under WSL2 (Ubuntu-26.04, ext4 on a VHD), 3000 appends of a 392-byte payload: the shipped `synchronous=EXTRA` ran at 463 and 492 events/s (two runs, p50 2.2 to 2.4 ms), within run-to-run noise of `FULL` at 469 to 514 events/s (p50 1.97 to 2.19 ms), against 23219 to 31606 events/s at `NORMAL`. Native Windows NTFS and macOS (`F_FULLFSYNC`) are unmeasured. Method and the full table: [docs/performance.md](docs/performance.md#event-log-persistence).
 
 ## Install and Run
 
-Prerequisites, as pinned in `package.json`, `rust-toolchain.toml` and [docs/contributing.md](docs/contributing.md):
+Prerequisites, from `package.json`, `rust-toolchain.toml`, [docs/contributing.md](docs/contributing.md), `MIN_GIT_VERSION` in `crates/swarm-core/src/git/cli.rs` and `minimumSystemVersion` in `src-tauri/tauri.conf.json`:
 
 - **pnpm** at the version in `packageManager` (`pnpm@12.13.0`).
 - **Node.js** at the nightly pinned in `engines.node` and `devEngines.runtime` (`onFail: download`); per docs/contributing.md, pnpm downloads it, so do not install it separately.
@@ -121,6 +161,34 @@ target/release/swarmd --serve-ui dist-web
 
 Released binaries (desktop installers and `swarmd`) are attached to the [v0.13.1 release](https://github.com/ABCrimson/Swarm/releases/tag/v0.13.1), which predates the `[Unreleased]` work in [CHANGELOG.md](CHANGELOG.md).
 
+## Roadmap At A Glance
+
+The plan starts from the unreleased work proposed as 0.14.0 on `main`. 1.0.0 is a compatibility and trust promise, not a claim that more agents produce better work; that is measured in 1.1.0. Each major's outcome, scope and acceptance evidence: [docs/roadmap.md](docs/roadmap.md#the-ten-majors-at-a-glance).
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/roadmap-dark.svg" />
+    <img src=".github/readme/roadmap-light.svg" alt="Roadmap: from the unreleased work proposed as 0.14.0 on main, the ten majors are 0.15.0 Durable Spine, 0.16.0 Recoverable Jobs, 0.17.0 Governed Organization, 0.18.0 Review And Ship, 0.19.0 Accountable Operations, 1.0.0 Release Evidence (the compatibility and trust promise), 1.1.0 Measured Value, 1.2.0 The Agent Surface, 1.3.0 Causal Record and 1.4.0 Scale What Wins." width="640" />
+  </picture>
+</p>
+
+## Docs
+
+Also published at <https://abcrimson.github.io/Swarm/>.
+
+| Page | Summary |
+| --- | --- |
+| [API Reference](docs/api.md) | The command, event and wire-protocol contract of the backend: 39 commands, one ordered event stream, two transports. |
+| [Architecture](docs/architecture.md) | The current-state reference: how the system is put together at this commit. |
+| [Contributing](docs/contributing.md) | Development setup, code standards, and contribution guidelines. |
+| [The `swarmd` Daemon](docs/daemon.md) | Running SWARM Orchestrator headless, as a per-user background program reachable over an authenticated WebSocket. |
+| [End-to-End Testing](docs/e2e.md) | Playwright coverage for the frontend shell, its hard boundary, and the documented (not yet built) path past it. |
+| [Performance Architecture](docs/performance.md) | Performance targets, budgets, and implementation details. |
+| [Roadmap](docs/roadmap.md) | The next ten major releases and the minor releases between them, as planned on 2026-10-13. |
+| [Updater Keys](docs/updater-keys.md) | How the in-app updater is signed: the Ed25519 keypair, the CI signing flow, signed-version enforcement, and how each Linux bundle would update. |
+
+Decision records are indexed in [docs/adr/README.md](docs/adr/README.md).
+
 ## Gates
 
 The commands a change must pass, copied from [AGENTS.md](AGENTS.md#gates).
@@ -147,7 +215,8 @@ Rust (from the repo root):
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
+cargo test --workspace --locked --all-targets
+cargo test --locked --doc -p swarm-core -p swarmd   # doctests: Tauri-free crates only (ci.yml says why)
 cargo deny check
 # plus: cargo tree -p swarm-core / -p swarmd must contain no tauri crate (ci.yml rust-policy)
 ```
@@ -163,37 +232,8 @@ CI gathers every job into the single required status `CI OK`.
 
 </details>
 
-## Docs
-
-Also published at <https://abcrimson.github.io/Swarm/>.
-
-| Page | Summary |
-| --- | --- |
-| [API Reference](docs/api.md) | The command, event and wire-protocol contract of the backend: 39 commands, one ordered event stream, two transports. |
-| [Architecture](docs/architecture.md) | The current-state reference: how the system is put together at this commit. |
-| [Contributing](docs/contributing.md) | Development setup, code standards, and contribution guidelines. |
-| [The `swarmd` Daemon](docs/daemon.md) | Running SWARM Orchestrator headless, as a per-user background program reachable over an authenticated WebSocket. |
-| [End-to-End Testing](docs/e2e.md) | Playwright coverage for the frontend shell, its hard boundary, and the documented (not yet built) path past it. |
-| [Performance Architecture](docs/performance.md) | Performance targets, budgets, and implementation details. |
-| [Roadmap](docs/roadmap.md) | The next ten major releases and the minor releases between them, as planned on 2026-10-13. |
-| [Updater Keys](docs/updater-keys.md) | How the in-app updater is signed: the Ed25519 keypair, the CI signing flow, signed-version enforcement, and how each Linux bundle would update. |
-
-Decision records are indexed in [docs/adr/README.md](docs/adr/README.md).
-
-## Security
-
-Do not open a public issue for a vulnerability. Report it through [GitHub Security Advisories](https://github.com/ABCrimson/Swarm/security/advisories/new) or by email to security@crimson.dev, as described in [SECURITY.md](SECURITY.md).
-
-## Contributing
-
-Setup, standards and the pull request process are in [docs/contributing.md](docs/contributing.md). House rules from [AGENTS.md](AGENTS.md), which `CLAUDE.md` imports: pnpm is the only package manager, every dependency version is pinned exactly, and Biome is the only frontend linter and formatter.
-
-## License
-
-[MIT](LICENSE). Copyright (c) 2026 Albert Badalov.
-
 <details>
-<summary>Pinned Versions at This Commit</summary>
+<summary>Pinned Versions At This Commit</summary>
 
 | Component | Pin | Source |
 | --- | --- | --- |
@@ -210,3 +250,15 @@ Setup, standards and the pull request process are in [docs/contributing.md](docs
 | Playwright | 1.65.0-alpha-2026-10-14 | `package.json` |
 
 </details>
+
+## Security
+
+Do not open a public issue for a vulnerability. Report it through [GitHub Security Advisories](https://github.com/ABCrimson/Swarm/security/advisories/new) or by email to security@crimson.dev, as described in [SECURITY.md](SECURITY.md).
+
+## Contributing
+
+Setup, standards and the pull request process are in [docs/contributing.md](docs/contributing.md). House rules from [AGENTS.md](AGENTS.md), which `CLAUDE.md` imports: pnpm is the only package manager, every dependency version is pinned exactly, and Biome is the only frontend linter and formatter.
+
+## License
+
+[MIT](LICENSE). Copyright (c) 2026 Albert Badalov.
