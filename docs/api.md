@@ -1060,7 +1060,7 @@ Spawns a worker through the same path as [`spawn_worker`](#spawn_worker) (`do_sp
 
 | Name        | Type                                    | Required | Description |
 |-------------|------------------------------------------|----------|--------------|
-| `config`    | `WorkerConfig`                           | Yes      | Same shape [`spawn_worker`](#spawn_worker) takes. For an isolated worker the session runs in the new worktree, not in `cwd` |
+| `config`    | `WorkerConfig`                           | Yes      | Same shape [`spawn_worker`](#spawn_worker) takes. For an isolated worker the session runs in the new worktree, not in `cwd`. The session's working directory must be absolute and an existing directory, so a config with neither a `repoRoot` nor a `cwd` fails to attach (below) |
 | `provider`  | `string`                                 | Yes      | `"claude_code"` or `"codex"` |
 | `model`     | `string`                                 | No       | Model alias or id; omitted defers to the adapter's default |
 | `trustTier` | `"restricted" \| "standard" \| "write_enabled"` | No | Spawn-time trust dial, the same three tokens for both providers, mapped onto each one's own mechanism (below). Omitted means `"standard"`; any other string fails the spawn closed, so a provider's raw mode names (`bypassPermissions`, `acceptEdits`) and Codex's `never` / `danger-full-access` cannot be requested |
@@ -1071,9 +1071,9 @@ Spawns a worker through the same path as [`spawn_worker`](#spawn_worker) (`do_sp
 
 | Tier | Claude Code | Codex |
 |---|---|---|
-| `restricted` | `--restricted`, `--permission-mode dontAsk`, writing tools on the deny list: read-only exploration | `untrusted` approvals + `read-only` sandbox |
-| `standard` | `--permission-mode manual`: reads run, anything needing approval is asked of the human, destructive Bash patterns always denied | `untrusted` approvals + `workspace-write` sandbox |
-| `write_enabled` | `--permission-mode acceptEdits`: edits in the working directory run unasked, commands are asked, the same patterns stay denied | `on-request` approvals + `workspace-write` sandbox |
+| `restricted` | `--restricted`, `--permission-mode dontAsk`, the writing tools (`Write`, `Edit`, `NotebookEdit`, the worktree tools, `DesignSync`) and the outbound ones (`WebSearch`, `PushNotification`) on the deny list: read-only exploration | `untrusted` approvals + `read-only` sandbox |
+| `standard` | `--permission-mode manual`: reads run, anything needing approval is asked of the human, the worktree tools and a few destructive Bash patterns denied (a convenience fence; the human is the gate) | `untrusted` approvals + `workspace-write` sandbox |
+| `write_enabled` | `--permission-mode acceptEdits`: edits and the commands `mkdir`, `touch`, `rm`, `rmdir`, `mv`, `cp` and `sed` in the working directory run unasked, other commands are asked, the same denials apply | `on-request` approvals + `workspace-write` sandbox |
 
 Permission gating never rests on `allowedTools` (it widens what runs unasked rather than narrowing it).
 
@@ -1087,7 +1087,7 @@ Permission gating never rests on `allowedTools` (it widens what runs unasked rat
 | `null` | the `spawn_worker` error text | The PTY worker spawn itself failed (registry full, worktree creation failed, ...) |
 | `null` | ``Worker `<id>` not found`` | The worker was killed before its session's attach, so no session started and no worker remains |
 | `null` | ``Worker `<id>` is closing`` | A [`kill_worker`](#kill_worker) was in progress when the attach started or finished its handshake. A session that did attach is shut down before the kill proceeds, and no worker remains |
-| the new worker's id | the adapter's own error, verbatim | The session failed to attach (binary missing, handshake timeout, an unknown `trustTier`, Codex refusing a policy more permissive than requested, ...). **The PTY worker still exists and is usable as a plain terminal**; it is not rolled back |
+| the new worker's id | the adapter's own error, verbatim | The session failed to attach (binary missing, `Agent Session Needs An Absolute, Existing Working Directory (Got "...")`, handshake timeout, an unknown `trustTier`, Codex refusing a policy more permissive than requested, ...). **The PTY worker still exists and is usable as a plain terminal**; it is not rolled back |
 
 **Emits:** `worker_spawned` (and `worktree_created` if isolated) from the underlying spawn, then `agent_session_started` once the adapter's `spawn()` resolves. `payload.capabilities` tells the frontend what the session can honestly do (see [`agent_permission_respond`](#agent_permission_respond) and [`agent_cancel`](#agent_cancel)).
 
@@ -1178,7 +1178,7 @@ Checks whether `provider`'s CLI is installed, new enough and signed in, without 
 { available: boolean; version?: string | null; detail?: string | null }
 ```
 
-An unusable provider is reported as `{ available: false, detail }`, never as an error; `detail` is human-readable (`Claude Code CLI Not Found On PATH: ...`, `Claude Code 2.1.259 Or Newer Required`, `Claude Code CLI Not Signed In`, `Not Signed In — Run \`codex login\` In A Terminal`, `... Probe Timed Out`). A usable one reports the sign-in as it observed it (`Signed In (Max)`, `Using An API Key (...)`, Codex's own `login status` line, or `Sign-In State Unknown: ...` when Codex's status call does not answer).
+An unusable provider is reported as `{ available: false, detail }`, never as an error; `detail` is human-readable (`Claude Code CLI Not Found On PATH: ...` (also when no absolute `PATH` entry holds the binary), `Claude Code 2.1.259 Or Newer Required`, `Claude Code CLI Not Signed In`, `Not Signed In — Run \`codex login\` In A Terminal`, `... Probe Timed Out`). The Claude Code probe runs in a fresh private directory it removes afterwards and loads no settings file. A usable provider reports the sign-in as it observed it (`Signed In (Max)`, `Using An API Key (...)`, Codex's own `login status` line, or `Sign-In State Unknown: ...` when Codex's status call does not answer).
 
 **Errors:** a provider with no adapter rejects with `Provider Not Supported By The Backend: <name>.`; an unknown provider string fails argument parsing.
 

@@ -1,8 +1,10 @@
-//! The `claude` child process: stdin writer, spawn, reap and the
-//! `initialize` handshake.
+//! The `claude` child process: binary resolution, stdin writer, spawn,
+//! reap and the `initialize` handshake.
 
 use std::collections::VecDeque;
+use std::ffi::OsStr;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus};
 use std::sync::Arc;
 
@@ -15,6 +17,78 @@ use super::wire::{self, ControlResponse, Inbound, InitializeResponse};
 use super::{EXIT_POLL_INTERVAL, SHUTDOWN_GRACE};
 use crate::error::AppError;
 use crate::worker::proc::{PipedHandle, spawn_piped, write_to_piped};
+
+// ── Binary resolution ────────────────────────────────────────────────
+
+/// Where an npm install of `@anthropic-ai/claude-code` keeps the real
+/// executable, relative to the directory holding its `claude.cmd` shim:
+/// the package's `bin` entry is `"claude": "bin/claude.exe"`.
+const NPM_CLAUDE_EXE: [&str; 5] = [
+    "node_modules",
+    "@anthropic-ai",
+    "claude-code",
+    "bin",
+    "claude.exe",
+];
+
+/// The executable to start for `program`. An absolute `program` is used
+/// as given; any other name with a directory in it is refused (`None`).
+/// A bare name is looked up in the ABSOLUTE entries of `path` only, in
+/// order: a relative or empty entry would resolve against the child's
+/// working directory, the repo, once the spawn changes into it (Unix
+/// changes directory before its `PATH` search). The current directory is
+/// never searched.
+///
+/// With `windows`, a directory matches on `<program>.exe`, or, for
+/// `claude`, on an npm `claude.cmd` shim whose package executable
+/// ([`NPM_CLAUDE_EXE`]) exists, which is returned instead of the shim.
+/// Otherwise a directory matches on an executable file named `program`.
+/// Touches the file system: call it off the async threads.
+pub(super) fn resolve_program(
+    program: &str,
+    path: Option<&OsStr>,
+    windows: bool,
+) -> Option<PathBuf> {
+    let given = Path::new(program);
+    if given.is_absolute() {
+        return Some(given.to_path_buf());
+    }
+    if given.components().count() != 1 {
+        return None;
+    }
+    std::env::split_paths(path?)
+        .filter(|dir| dir.is_absolute())
+        .find_map(|dir| program_in(&dir, program, windows))
+}
+
+/// `program` in `dir` under [`resolve_program`]'s matching rules.
+fn program_in(dir: &Path, program: &str, windows: bool) -> Option<PathBuf> {
+    if !windows {
+        let candidate = dir.join(program);
+        return is_executable_file(&candidate).then_some(candidate);
+    }
+    let exe = dir.join(format!("{program}.exe"));
+    if exe.is_file() {
+        return Some(exe);
+    }
+    let npm_exe = NPM_CLAUDE_EXE
+        .iter()
+        .fold(dir.to_path_buf(), |path, part| path.join(part));
+    (program == "claude" && dir.join("claude.cmd").is_file() && npm_exe.is_file())
+        .then_some(npm_exe)
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}
 
 // ── Child process plumbing ───────────────────────────────────────────
 

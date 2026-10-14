@@ -175,7 +175,7 @@ pub struct CodexAdapter {
 }
 
 impl CodexAdapter {
-    /// Drives the `codex` binary found on `PATH` (on Windows including the
+    /// Drives the `codex` binary found in an absolute `PATH` entry (on Windows including the
     /// `codex.cmd` shim an npm install creates).
     pub fn new(sink: EventSink) -> Self {
         Self {
@@ -223,7 +223,15 @@ impl AgentAdapter for CodexAdapter {
         let prefix = self.extra_prefix_args.clone();
         let limit = self.timeouts.probe;
         Box::pin(async move {
-            let program = resolve_program(binary).await;
+            let Some(program) = resolve_program(binary.clone()).await else {
+                return Ok(ProbeReport {
+                    available: false,
+                    version: None,
+                    detail: Some(format!(
+                        "Codex CLI Not Found On PATH: No Absolute PATH Entry Holds {binary:?}"
+                    )),
+                });
+            };
             let (version, login) = tokio::join!(
                 run_cli(&program, &prefix, &["--version"], limit),
                 run_cli(&program, &prefix, &["login", "status"], limit),
@@ -301,9 +309,26 @@ impl AgentAdapter for CodexAdapter {
         let prefix = self.extra_prefix_args.clone();
         let timeouts = self.timeouts;
         Box::pin(async move {
+            // An empty working directory would make the child inherit
+            // SWARM's own, and the sandbox's workspace would then be
+            // wherever SWARM happens to run.
+            let cwd_ok = std::path::Path::new(&spec.cwd).is_absolute()
+                && tokio::fs::metadata(&spec.cwd)
+                    .await
+                    .is_ok_and(|meta| meta.is_dir());
+            if !cwd_ok {
+                return Err(AppError::Ai(format!(
+                    "Agent Session Needs An Absolute, Existing Working Directory (Got {:?})",
+                    spec.cwd
+                )));
+            }
             let tier = parse_trust_tier(spec.permission_mode.as_deref())?;
             let model = requested_model(spec.model.as_deref()).map(str::to_owned);
-            let program = resolve_program(binary).await;
+            let program = resolve_program(binary.clone()).await.ok_or_else(|| {
+                AppError::Ai(format!(
+                    "failed to spawn codex: No Absolute PATH Entry Holds {binary:?}"
+                ))
+            })?;
             let mut argv = prefix;
             argv.push("app-server".to_string());
 

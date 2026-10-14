@@ -46,10 +46,20 @@
 //!
 //! - **Condition A** (controlled config environment): a worker's
 //!   provider CLI never loads the operator's personal settings, plugins,
-//!   hooks or MCP servers (Claude Code: `--setting-sources project`,
-//!   `--strict-mcp-config`, inline `--settings` with `disableAllHooks`).
-//!   The repo's project settings, its `env` block and `apiKeyHelper`
-//!   included, still apply outside `--restricted`.
+//!   hooks or MCP servers, nor the repo's project settings (Claude Code:
+//!   `--setting-sources ""`, `--strict-mcp-config`, inline `--settings`
+//!   with `disableAllHooks`). A repo's `.claude/settings.json` can only
+//!   narrow a session: SWARM appends its `permissions.deny` strings to
+//!   the inline deny list, and nothing else the repo's `.claude/` holds
+//!   loads (`env`, `apiKeyHelper`, hooks, `allow`, `ask`,
+//!   `defaultMode`, `.claude/agents`). The repo's `CLAUDE.md`,
+//!   `.claude/rules` and `.claude/skills` do not reach Standard or
+//!   WriteEnabled workers either: the 2.1.296 CLI gates them on the
+//!   `projectSettings` source (verified at runtime on Claude Code 2.1.296,
+//!   2026-10-13: they load under `--setting-sources project`, not under
+//!   `""`). The `AGENTS.md` walk did not load under either setting, and
+//!   its gating remains source-only. Feeding that text back to a worker
+//!   is the owner's decision (ADR-0038).
 //! - **Condition B** (synthesize the terminal receipt on ungraceful
 //!   exit): see [`AgentSession::shutdown`]'s doc.
 //! - **Condition C** (never gate permissions on `allowedTools`): see

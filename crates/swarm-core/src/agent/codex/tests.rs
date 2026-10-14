@@ -14,7 +14,7 @@ use std::time::Instant;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::process::resolve_with_pathext;
+use super::process::{find_program, resolve_program, resolve_with_pathext};
 use super::protocol::{
     ApprovalsReviewer, AskForApproval, Incoming, METHOD_NOT_FOUND, RequestId, SandboxMode,
     ThreadOpened, ThreadStartParams,
@@ -1855,5 +1855,181 @@ async fn probe_reports_a_non_executable_binary_as_not_startable() {
             .as_deref()
             .is_some_and(|d| d.starts_with("Codex CLI Could Not Be Started")),
         "{report:?}"
+    );
+}
+
+// ── Working directory and binary resolution ──────────────────────────
+
+#[tokio::test]
+async fn spawn_refuses_an_empty_or_relative_cwd() {
+    let h = Harness::new("happy_turn.script");
+    let file = h.scratch.path().join("a-file");
+    std::fs::write(&file, "").expect("write the file");
+    let missing = h.scratch.path().join("missing");
+    for cwd in [
+        String::new(),
+        "rel/dir".to_owned(),
+        file.display().to_string(),
+        missing.display().to_string(),
+    ] {
+        let spec = AgentSpawnSpec {
+            cwd: cwd.clone(),
+            ..h.spec(None, None, None)
+        };
+        let error = h.adapter.spawn(spec).await.err().expect("refused");
+        let AppError::Ai(detail) = error else {
+            panic!("unexpected error for {cwd:?}: {error:?}");
+        };
+        assert_eq!(
+            detail,
+            format!("Agent Session Needs An Absolute, Existing Working Directory (Got {cwd:?})")
+        );
+    }
+    // The fake records `started` the moment it runs, so nothing recorded
+    // means no app-server was ever launched.
+    assert!(h.record().is_empty(), "{:?}", h.record());
+}
+
+/// A uniquely named subdirectory of the test's working directory, removed
+/// on drop: `name` alone is a relative path on every OS. It sits under the
+/// working directory, not the temp directory, because a relative PATH entry
+/// resolves against the process's working directory and tests must not
+/// change that.
+struct CwdSubdir {
+    name: PathBuf,
+    absolute: PathBuf,
+}
+
+impl CwdSubdir {
+    fn new() -> Self {
+        let name = PathBuf::from(format!("swarm-relative-path-{}", Uuid::new_v4()));
+        let absolute = std::env::current_dir()
+            .expect("the test's working directory")
+            .join(&name);
+        std::fs::create_dir_all(&absolute).expect("create the relative PATH dir");
+        // The guard exists before anything can panic, so unwinding removes the
+        // directory.
+        let subdir = Self { name, absolute };
+        assert!(
+            subdir.name.is_relative() && subdir.name.is_dir(),
+            "{:?}",
+            subdir.name
+        );
+        subdir
+    }
+}
+
+impl Drop for CwdSubdir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.absolute);
+    }
+}
+
+/// Writes an executable stand-in for `codex` into `dir` under the Unix
+/// name and the Windows `.exe` name.
+fn place_codex(dir: &Path) {
+    std::fs::create_dir_all(dir).expect("create the PATH dir");
+    for name in ["codex", "codex.exe"] {
+        let path = dir.join(name);
+        std::fs::write(&path, "#!/bin/sh\n").expect("write the stand-in");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+    }
+}
+
+#[test]
+fn the_resolver_skips_relative_path_entries_and_takes_the_first_absolute_match() {
+    let scratch = Scratch::new();
+    let planted = CwdSubdir::new();
+    let (first, second) = (scratch.path().join("first"), scratch.path().join("second"));
+    for dir in [&planted.absolute, &first, &second] {
+        place_codex(dir);
+    }
+    // A relative entry that does hold `codex`, and an empty entry.
+    let path = std::env::join_paths([planted.name.clone(), PathBuf::new(), first.clone(), second])
+        .expect("a PATH value");
+    for windows in [false, true] {
+        let name = if windows { "codex.exe" } else { "codex" };
+        assert_eq!(
+            find_program("codex", Some(&path), Some(".exe"), windows),
+            Some(first.join(name)),
+            "windows: {windows}"
+        );
+    }
+    // Only relative and empty entries: nothing, never a bare name.
+    let only_relative =
+        std::env::join_paths([planted.name.clone(), PathBuf::new()]).expect("a PATH value");
+    for windows in [false, true] {
+        assert_eq!(
+            find_program("codex", Some(&only_relative), None, windows),
+            None
+        );
+        assert_eq!(find_program("codex", None, None, windows), None);
+    }
+    // A name with a directory is refused; an absolute path is used as given.
+    assert_eq!(find_program("bin/codex", Some(&path), None, false), None);
+    let absolute = first.join("anything");
+    assert_eq!(
+        find_program(&absolute.display().to_string(), Some(&path), None, false),
+        Some(absolute)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_unix_resolver_skips_files_that_are_not_executable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = Scratch::new();
+    let (plain, runnable) = (
+        scratch.path().join("plain"),
+        scratch.path().join("runnable"),
+    );
+    place_codex(&plain);
+    place_codex(&runnable);
+    std::fs::set_permissions(plain.join("codex"), std::fs::Permissions::from_mode(0o644))
+        .expect("chmod");
+    let path = std::env::join_paths([&plain, &runnable]).expect("a PATH value");
+    assert_eq!(
+        find_program("codex", Some(&path), None, false),
+        Some(runnable.join("codex"))
+    );
+}
+
+#[tokio::test]
+async fn an_unresolvable_binary_is_not_found_at_probe_and_at_spawn() {
+    let h = Harness::new("happy_turn.script");
+    assert_eq!(
+        resolve_program("swarm-no-such-codex-binary".to_owned()).await,
+        None
+    );
+    let missing = CodexAdapter::with_test_binary(
+        h.sink.clone(),
+        "swarm-no-such-codex-binary",
+        Vec::new(),
+        test_timeouts(),
+    );
+    let report = missing.probe().await.expect("probe");
+    assert!(!report.available);
+    assert_eq!(
+        report.detail.as_deref(),
+        Some(
+            "Codex CLI Not Found On PATH: No Absolute PATH Entry Holds \"swarm-no-such-codex-binary\""
+        )
+    );
+    let error = missing
+        .spawn(h.spec(None, None, None))
+        .await
+        .err()
+        .expect("spawn fails");
+    let AppError::Ai(detail) = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert_eq!(
+        detail,
+        "failed to spawn codex: No Absolute PATH Entry Holds \"swarm-no-such-codex-binary\""
     );
 }

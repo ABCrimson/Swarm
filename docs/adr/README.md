@@ -37,9 +37,9 @@ Each record is `NNNN-<slug>.md` with a status, a date, then Context, Decision an
 | [0012](0012-single-git-runner.md) | One git runner: redaction, environment and tiered budgets | Accepted |
 | [0013](0013-provider-adapter-trait-pair.md) | Provider adapters: one trait pair with honest capabilities | Accepted |
 | [0014](0014-piped-stdio-for-json-providers.md) | Piped stdio, not a PTY, for JSON-protocol provider CLIs | Accepted |
-| [0015](0015-trust-tiers-closed-vocabulary.md) | Trust tiers are a closed vocabulary | Accepted |
-| [0016](0016-claude-code-control-protocol.md) | Claude Code is driven over the stream-json control protocol | Accepted |
-| [0017](0017-codex-app-server-protocol.md) | Codex is driven over the verified app-server protocol | Accepted |
+| [0015](0015-trust-tiers-closed-vocabulary.md) | Trust tiers are a closed vocabulary | Accepted; project setting sources superseded by [0038](0038-agent-provider-trust-model.md) |
+| [0016](0016-claude-code-control-protocol.md) | Claude Code is driven over the stream-json control protocol | Accepted; project setting sources superseded by [0038](0038-agent-provider-trust-model.md) |
+| [0017](0017-codex-app-server-protocol.md) | Codex is driven over the verified app-server protocol | Accepted; binary resolution superseded by [0038](0038-agent-provider-trust-model.md) |
 | [0018](0018-agent-turn-scheduler.md) | One agent-turn scheduler with per-worker admission | Accepted |
 | [0019](0019-webview-chat-beside-adapters.md) | The webview chat path stays beside the provider adapters | Accepted |
 | [0020](0020-bus-routes-by-recording-events.md) | The bus routes by recording events | Accepted |
@@ -60,5 +60,6 @@ Each record is `NNNN-<slug>.md` with a status, a date, then Context, Decision an
 | [0035](0035-ai-tool-approval-and-fs-scope.md) | Webview AI tools need per-call approval; the file commands canonicalize and deny secrets | Accepted |
 | [0036](0036-model-catalogue-and-per-attempt-pricing.md) | One model catalogue, priced per attempt | Accepted |
 | [0037](0037-webkit-floor-and-macos-15-4.md) | The webview floor is WebKit 18.4, so macOS 15.4 | Accepted |
+| [0038](0038-agent-provider-trust-model.md) | Agent sessions trust no repo configuration; the provider CLI is found only on absolute PATH entries | Accepted |
 | [0039](0039-event-log-flushes-every-commit.md) | The event log flushes every commit | Accepted |
 | [0040](0040-kill-stops-the-session-first.md) | A kill stops the provider session first, behind a closing fence | Accepted |
