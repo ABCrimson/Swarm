@@ -170,8 +170,9 @@ const NOT_WIRED: &[&str] = &[
 /// shape is defined).
 #[test]
 fn frontend_invokes_match_the_handler() {
-    let native_params: [(&str, &[&str]); 2] = [
+    let native_params: [(&str, &[&str]); 3] = [
         ("check_for_updates", &[]),
+        ("open_worker_directory", &["workerId"]),
         ("send_notification", &["title", "body"]),
     ];
     let calls = all_frontend_calls();

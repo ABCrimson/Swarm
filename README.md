@@ -169,7 +169,7 @@ Also published at <https://abcrimson.github.io/Swarm/>.
 
 | Page | Summary |
 | --- | --- |
-| [API Reference](docs/api.md) | The command, event and wire-protocol contract of the backend: 38 commands, one ordered event stream, two transports. |
+| [API Reference](docs/api.md) | The command, event and wire-protocol contract of the backend: 39 commands, one ordered event stream, two transports. |
 | [Architecture](docs/architecture.md) | The current-state reference: how the system is put together at this commit. |
 | [Contributing](docs/contributing.md) | Development setup, code standards, and contribution guidelines. |
 | [The `swarmd` Daemon](docs/daemon.md) | Running SWARM Orchestrator headless, as a per-user background program reachable over an authenticated WebSocket. |

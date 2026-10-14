@@ -48,3 +48,15 @@ tests:
   `'none'`.
 - Windows and macOS bundling and the v3 `latest.json` updater manifest are verified only by a release
   dry run.
+
+## Amendment (2026-10-14): the webview opens no path
+
+The `openPath` scope `$HOME/.swarm/worktrees/**` admitted every file at any depth under the worktrees,
+and an agent writes what it likes there: a `run.bat` it leaves in its worktree was one `openPath` call
+from the OS running it (finding P-C18-L9-3-01). A tighter glob still trusts the shape of a path the
+webview supplies, so the grant is gone instead: `opener:allow-open-path` is no longer in the
+capability, and the worktree link calls the native `open_worker_directory` command with a worker id.
+The shell looks the path up in its registry (the one recorded when the worktree was created), checks
+`symlink_metadata().is_dir()` so a file, symlink or junction put in its place is refused, and opens it
+with the opener plugin's Rust API, which applies no scope of its own. The opener grant left is
+`openUrl` for `https://*/*/*/compare/*`; `capability_is_least_privilege` pins that it is the only one.

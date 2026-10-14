@@ -110,9 +110,14 @@ fn url_scope_admits_any_https_compare_page() {
 }
 
 /// Every opener permission carries a scope (no bare `opener:default`,
-/// which admits any http(s)/mailto/tel URL and reveals any path), no
-/// shell or updater permission is granted (the frontend uses neither
-/// plugin), and the webview-profile deny set is present.
+/// which admits any http(s)/mailto/tel URL and reveals any path), the
+/// only one is the compare-page URL scope, no shell or updater
+/// permission is granted (the frontend uses neither plugin), and the
+/// webview-profile deny set is present. The webview opens no path: an
+/// agent can write any file into its worktree (a `run.bat`), and a path
+/// scope over the worktrees would let the webview have the OS open it.
+/// `open_worker_directory` opens a worker's own worktree directory
+/// natively instead, by worker id.
 #[test]
 fn capability_is_least_privilege() {
     let permissions = permissions();
@@ -138,11 +143,17 @@ fn capability_is_least_privilege() {
         );
     }
     assert!(ids.contains(&"fs:deny-default"));
+    let opener: Vec<&str> = ids
+        .iter()
+        .copied()
+        .filter(|id| id.starts_with("opener:"))
+        .collect();
     assert_eq!(
-        scope("opener:allow-open-path", "allow", "path"),
-        ["$HOME/.swarm/worktrees/**"],
-        "openPath is limited to the worker worktree root"
+        opener,
+        ["opener:allow-open-url"],
+        "the webview opens compare-page URLs and nothing else"
     );
+    assert!(ids.contains(&"allow-open-worker-directory"));
 }
 
 /// No fs permission grants a static path: the webview reads and writes

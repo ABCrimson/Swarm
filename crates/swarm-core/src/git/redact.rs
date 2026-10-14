@@ -34,8 +34,15 @@ const REDACTED: &str = "[REDACTED]";
 /// URL userinfo: `scheme://<userinfo>@`. Every userinfo is redacted —
 /// `user:pass` and a bare token-as-username alike — except the
 /// conventional, secret-free SSH user `git` (`ssh://git@host/…`).
+///
+/// The userinfo runs to the last `@` before `/`, `?`, `#` or whitespace.
+/// The last `@`, because a password can hold a literal `@` and all of it
+/// is secret. Not past `?` or `#`, because curl ends the authority there:
+/// in `https://evil.example?@github.com/o/r` git pushes to `evil.example`,
+/// and redacting that as a userinfo would leave the URL reading as a push
+/// to github.com.
 static URL_USERINFO: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\b([a-z][a-z0-9+.-]*://)([^\s/@]+)@").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"(?i)\b([a-z][a-z0-9+.-]*://)([^\s/?#]+)@").expect("valid regex"));
 
 /// Bare credential tokens, by issuer prefix:
 ///
@@ -150,6 +157,31 @@ mod tests {
         // An opaque, prefix-less token as the username is redacted too.
         let out = redact("https://abc123opaque@git.example.com/o/r.git");
         assert!(!out.contains("abc123opaque"), "{out}");
+    }
+
+    /// curl ends the authority at `?` and `#`, so the text before such an
+    /// `@` is the host git pushes to, not a userinfo: redacting it would
+    /// leave the URL reading as a push to the host after the `@`.
+    #[test]
+    fn test_keeps_a_host_that_a_query_or_fragment_ends() {
+        for url in [
+            "https://evil.example?@github.com/o/r",
+            "https://evil.example#@github.com/o/r",
+        ] {
+            assert_eq!(redact(url), url);
+        }
+    }
+
+    /// A password with a literal `@` is redacted whole, up to the last
+    /// `@` of the authority.
+    #[test]
+    fn test_redacts_a_userinfo_that_contains_an_at() {
+        let out = redact("fatal: unable to access 'https://user:p@ss@github.com/o/r/'");
+        assert_eq!(
+            out,
+            "fatal: unable to access 'https://[REDACTED]@github.com/o/r/'"
+        );
+        assert!(!out.contains("ss@"), "{out}");
     }
 
     #[test]

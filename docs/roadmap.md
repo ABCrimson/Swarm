@@ -80,6 +80,7 @@ Rows 1, 4, 8, 9 and 10 take their epics' planned sizes; rows 2, 3, 5, 6 and 7 ar
 - macOS kill path: when a worker is killed while its output pump is stalled, drain or close the PTY before waiting on the shell, because XNU holds a dead session leader until its unread terminal output is read (seen in the 2026-10-14 CI run; the exit-watcher test now drains). — CI follow-up
 - Close the shutdown race at the event sink: an emit that passes `EventSink::record`'s `closed` check just before `OrchestrationEngine::shutdown` sets it lands behind the `Shutdown` barrier, so the writer never processes it and it is dropped with a failed ack and no log line (`events/emitter.rs`, `orchestration/engine.rs`). — CI-shutdown-drain follow-up
 - Run the integrated branch through the CI Rust matrix (`windows-2025` and `macos-26` in `.github/workflows/ci.yml`): the Claude adapter's Windows-only branches (`cfg(not(unix))`, `PATHEXT`) have not been built locally, and the Rust hook fixture has run only on Linux and WSL. — G2, G5 follow-ups
+- Bind the previewed push URL to the push (`git_push { workerId, expectedRemote }`, refused on mismatch) so an `origin` changed between preview and push cannot redirect it. — P-C21-L9-3-01 follow-up (verifier, 2026-10-14)
 
 ---
 

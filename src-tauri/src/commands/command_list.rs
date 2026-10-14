@@ -58,7 +58,7 @@ macro_rules! command_list {
                 bus_send,
                 bus_list_channels,
             ],
-            native: [check_for_updates, send_notification],
+            native: [check_for_updates, open_worker_directory, send_notification],
         }
     };
 }

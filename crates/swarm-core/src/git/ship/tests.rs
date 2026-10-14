@@ -235,10 +235,13 @@ fn test_current_branch_errors_when_git_cannot_read_the_directory() {
 
 /// Only exit 2 means "no such remote"; any other failure is an error.
 #[test]
-fn test_remote_url_errors_on_a_failed_read_and_is_none_for_a_missing_remote() {
+fn test_push_urls_error_on_a_failed_read_and_are_empty_for_a_missing_remote() {
     let repo = TempRepo::new("remote-url");
-    assert!(remote_url(&repo.base().join("gone"), "origin").is_err());
-    assert_eq!(remote_url(repo.root(), "origin").unwrap(), None);
+    assert!(push_urls(&repo.base().join("gone"), "origin").is_err());
+    assert_eq!(
+        push_urls(repo.root(), "origin").unwrap(),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -327,6 +330,46 @@ fn test_full_ship_cycle_advances_a_real_bare_remote() {
         repo::rev_parse(&bare, "swarm/agent-abcd1234").unwrap(),
         outcome.sha
     );
+}
+
+/// `push` does not trust that its caller checked `canShip`: with two push
+/// URLs `git push origin` would send the branch to both, so it refuses
+/// before pushing, and neither remote receives the branch.
+#[test]
+fn test_push_refuses_more_than_one_push_url_and_pushes_nowhere() {
+    let repo = TempRepo::new("push-two-pushurls");
+    let first = repo.add_bare_origin();
+    let second = repo.base().join("second.git");
+    std::fs::create_dir_all(&second).unwrap();
+    git_in(&second, &["init", "--bare", "-b", "main"]);
+    for bare in [&first, &second] {
+        repo.git(&[
+            "remote",
+            "set-url",
+            "--add",
+            "--push",
+            "origin",
+            &bare.display().to_string(),
+        ]);
+    }
+    let branch = "swarm/two-urls-abcd1234";
+    let worktree = repo.add_worktree("wt", branch);
+    let registry = WorkerRegistry::new();
+    let id = register(&registry, &repo, &worktree, branch);
+    write_file(&worktree, "feature.txt", "real work");
+    git_in(&worktree, &["add", "feature.txt"]);
+    git_in(&worktree, &["commit", "-m", "feat: work"]);
+
+    let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
+    assert_eq!(err.kind, ShipErrorKind::NonGitHubHost);
+    assert_eq!(err.message, many_push_urls(2));
+    for bare in [&first, &second] {
+        assert!(
+            repo::rev_parse(bare, &format!("refs/heads/{branch}")).is_err(),
+            "{} received the branch",
+            bare.display()
+        );
+    }
 }
 
 /// DIRECTIVE: a secret-shaped file and an oversized blob are both
@@ -934,6 +977,109 @@ fn test_preflight_nothing_to_ship_blocker_when_clean_and_ahead_zero() {
             .blockers
             .iter()
             .any(|b| b.contains("Nothing To Ship"))
+    );
+}
+
+/// A preflight with something to ship and `origin` fetching from
+/// github.com, for the push-URL tests below.
+fn push_url_fixture(tag: &str) -> (TempRepo, WorkerRegistry, WorkerId) {
+    let (repo, worktree, registry, id) = fixture(tag, "swarm/push-url-abcd1234");
+    repo.git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/example/repo.git",
+    ]);
+    write_file(&worktree, "new.txt", "content\n");
+    (repo, registry, id)
+}
+
+/// `git push origin` sends to `remote.origin.pushurl` when it is set, so
+/// that is the remote preflight shows and takes the host from, not the
+/// fetch URL.
+#[test]
+fn test_preflight_shows_the_pushurl_git_pushes_to() {
+    let (repo, registry, id) = push_url_fixture("preflight-pushurl");
+    repo.git(&[
+        "config",
+        "remote.origin.pushurl",
+        "https://evil.example/example/repo.git",
+    ]);
+
+    let result = preflight(&registry, id, StagingMode::All).unwrap();
+    assert_eq!(
+        result.remote.as_deref(),
+        Some("https://evil.example/example/repo.git")
+    );
+    assert_eq!(result.host.as_deref(), Some("evil.example"));
+    assert!(result.can_ship, "blockers: {:?}", result.blockers);
+}
+
+/// `url.<base>.pushInsteadOf` rewrites the push URL alone; preflight
+/// shows the rewritten one.
+#[test]
+fn test_preflight_shows_the_push_insteadof_rewrite() {
+    let (repo, registry, id) = push_url_fixture("preflight-pushinsteadof");
+    repo.git(&[
+        "config",
+        "url.https://evil.example/.pushInsteadOf",
+        "https://github.com/",
+    ]);
+
+    let result = preflight(&registry, id, StagingMode::All).unwrap();
+    assert_eq!(
+        result.remote.as_deref(),
+        Some("https://evil.example/example/repo.git")
+    );
+    assert_eq!(result.host.as_deref(), Some("evil.example"));
+}
+
+/// With two push URLs `git push origin` pushes to both, which no single
+/// host can show: preflight blocks shipping and names no host.
+#[test]
+fn test_preflight_blocks_more_than_one_push_url() {
+    let (repo, registry, id) = push_url_fixture("preflight-two-pushurls");
+    for url in [
+        "https://github.com/example/repo.git",
+        "https://ghp_abcdefghijklmnopqrstuvwxyz0123456789@evil.example/example/repo.git",
+    ] {
+        repo.git(&["remote", "set-url", "--add", "--push", "origin", url]);
+    }
+
+    let result = preflight(&registry, id, StagingMode::All).unwrap();
+    assert!(!result.can_ship);
+    assert!(
+        result
+            .blockers
+            .contains(&"Remote `origin` Has 2 Push URLs — Git Pushes To All Of Them.".to_owned()),
+        "blockers: {:?}",
+        result.blockers
+    );
+    assert_eq!(result.host, None);
+    assert!(!result.host_supports_compare);
+    assert_eq!(
+        result.remote.as_deref(),
+        Some(
+            "https://github.com/example/repo.git, https://[REDACTED]@evil.example/example/repo.git"
+        ),
+        "every push URL is shown, credentials redacted"
+    );
+}
+
+/// The compare page is built for the host the branch was pushed to.
+#[test]
+fn test_compare_url_uses_the_push_url() {
+    let (repo, registry, id) = push_url_fixture("compare-pushurl");
+    repo.git(&[
+        "config",
+        "remote.origin.pushurl",
+        "https://ghes.example/team/pushed.git",
+    ]);
+
+    let url = compare_url(&registry, id, "t", "b").unwrap();
+    assert!(
+        url.starts_with("https://ghes.example/team/pushed/compare/"),
+        "{url}"
     );
 }
 

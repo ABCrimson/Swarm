@@ -27,9 +27,8 @@ pub struct Paths {
 
 /// Resolves the user's home directory with [`std::env::home_dir`]: `$HOME`
 /// (then the password database) on Unix, the profile folder on Windows
-/// — the same folder Tauri resolves `$HOME` to in the
-/// `opener:allow-open-path` scope `$HOME/.swarm/worktrees/**` (see
-/// `src-tauri/capabilities/default.json`). This is the root of
+/// — the same folder Tauri resolves `$HOME` to in the `fs:scope` deny
+/// list of `src-tauri/capabilities/default.json`. This is the root of
 /// `~/.swarm/worktrees/**` and of the home scope `read_file` and
 /// `write_file` allow.
 ///

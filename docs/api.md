@@ -1,6 +1,6 @@
 # API Reference
 
-> The command, event and wire-protocol contract of the SWARM Orchestrator backend: 38 commands, one ordered event stream, two transports.
+> The command, event and wire-protocol contract of the SWARM Orchestrator backend: 39 commands, one ordered event stream, two transports.
 
 The backend is one Rust library, `swarm-core`, behind two shells. Both expose the same command surface and the same event stream:
 
@@ -70,6 +70,7 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
   - [bus_list_channels](#bus_list_channels)
 - [Native Commands (Desktop Only)](#native-commands-desktop-only)
   - [check_for_updates](#check_for_updates)
+  - [open_worker_directory](#open_worker_directory)
   - [send_notification](#send_notification)
 - [Events](#events)
   - [The Envelope](#the-envelope)
@@ -94,7 +95,7 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
 
 ### Conventions
 
-- **One table.** `swarm_core::commands::Registry` maps each command name to an `async fn(Ctx, serde_json::Value) -> Result<Value, Value>` and a `RemotePolicy`. It holds **36** commands. Two more, `check_for_updates` and `send_notification` (`swarm_core::commands::NATIVE_ONLY`), exist only as `#[tauri::command]` wrappers in `swarm-desktop` because they need the webview or the OS; they are not reachable through `swarmd`. That makes **38** commands on the desktop and 36 on the daemon.
+- **One table.** `swarm_core::commands::Registry` maps each command name to an `async fn(Ctx, serde_json::Value) -> Result<Value, Value>` and a `RemotePolicy`. It holds **36** commands. Three more, `check_for_updates`, `open_worker_directory` and `send_notification` (`swarm_core::commands::NATIVE_ONLY`), exist only as `#[tauri::command]` wrappers in `swarm-desktop` because they need the webview or the OS; they are not reachable through `swarmd`. That makes **39** commands on the desktop and 36 on the daemon.
 - **One macro on the desktop side.** `src-tauri/src/commands/mod.rs` declares a forwarder per command with the `commands!` macro. The name list lives once in `src-tauri/src/commands/command_list.rs`, which `commands!` and `build.rs` (the ACL manifest, see [Who Can Call What](#who-can-call-what)) both `include!`, so a command cannot exist without its permission. Contract tests compare that list with `Registry::keys()` and `NATIVE_ONLY`, so a command added on one side only fails CI.
 - **Arguments are one JSON object.** Both dispatchers normalize them first: omitted or `null` becomes `{}`, and anything other than an object (a positional array, a bare string) is rejected before any policy check or handler runs with `Invalid Arguments: Expected A JSON Object.` Field names are `camelCase`. A missing required field is reported as ``Invalid Arguments: missing field `name` ``.
 - **Errors are values, mostly strings.** A failed command rejects with the registry's error `Value`. Almost always that is a plain string, the `Display` text of `swarm_core::error::AppError` (for example ``Worker `<uuid>` not found``, ``Registry at capacity (64)``, ``Session `<uuid>` not found``, `AI queue full (256 capacity)`). Two families carry structure instead: the ship commands reject with a [`ShipError`](#ship-commands) object, and `agent_spawn` rejects with `{ workerId, message }`. An unknown command is the string ``Unknown Command: "<name>".``
@@ -144,13 +145,14 @@ Application code never calls `invoke` or `listen` directly: `src/lib/transport.t
 | [`bus_send`](#bus_send) | `fromWorkerId`, `toWorkerId?`, `topic`, `payload`, `causeSeq?` | `0` | Allowed |
 | [`bus_list_channels`](#bus_list_channels) | none | `string[]` | Allowed |
 | [`check_for_updates`](#check_for_updates) | none | `UpdateCheckResult` | native, desktop only |
+| [`open_worker_directory`](#open_worker_directory) | `workerId` | `void` | native, desktop only |
 | [`send_notification`](#send_notification) | `title`, `body` | `void` | native, desktop only |
 
 ### Who Can Call What
 
 Three independent layers decide whether a command call runs. Each is enforced in code and pinned by a test; the webview chat's tools add a fourth, described below.
 
-1. **The Tauri ACL (desktop webview).** `src-tauri/build.rs` hands the command-name list to `tauri_build::AppManifest::commands`, which generates an `allow-<name>` / `deny-<name>` permission for every one of the 38 commands. `src-tauri/capabilities/default.json` grants exactly those `allow-*` entries to the `main` window (plus `core:default`, the `fs`, `dialog`, `opener` and `store` plugin permissions it needs). A command with no `allow-*` entry cannot be invoked by the webview at all. `capability_contract.rs` fails the build when the capability names a command that does not exist, omits one that does, or grants a bare non-`allow-` app permission.
+1. **The Tauri ACL (desktop webview).** `src-tauri/build.rs` hands the command-name list to `tauri_build::AppManifest::commands`, which generates an `allow-<name>` / `deny-<name>` permission for every one of the 39 commands. `src-tauri/capabilities/default.json` grants exactly those `allow-*` entries to the `main` window (plus `core:default`, the `fs`, `dialog`, `opener` and `store` plugin permissions it needs). A command with no `allow-*` entry cannot be invoked by the webview at all. `capability_contract.rs` fails the build when the capability names a command that does not exist, omits one that does, or grants a bare non-`allow-` app permission.
 2. **`RemotePolicy` (swarmd).** Every registry entry declares a policy, and `swarmd` dispatches every `rpc` through `Registry::dispatch_remote`, never `dispatch`. `Allowed` commands are reachable by any authenticated client (including `spawn_worker` and `worker_input`: running commands as the daemon's user is the product). `SecretFiltered` commands (`read_config`, `write_config`) are refused when the `key` argument looks like a credential (`is_secret_key`: split into words at `_`, `-`, `:`, `.`, spaces and camelCase; secret-shaped when the last word (skipping trailing version words such as `2` or `v2`, and ignoring trailing digits) is `key`, `apikey`, `token`, `secret`, `password`, `passwd`, `pat`, `credential` or `credentials`, or any word (trailing digits ignored) is `apikey`, `secret`, `password`, `passwd`, `credential` or `credentials`) with ``Remote Access To Secret-Shaped Config Keys Is Denied.``. `Denied` commands (`read_file`, `write_file`) never reach their handler: `"read_file" Is Not Available Over A Remote Connection.` The local `dispatch` path ignores the policy, because the desktop user is not the boundary it defends.
 3. **The file scope (`read_file` / `write_file`).** Both commands canonicalize the path against the real filesystem (symlinks resolved), confine it to fixed scopes and refuse a deny list of credential files for every caller that reaches them (a remote call never does: layer 2 denies it first). See [File System Commands](#file-system-commands).
 
@@ -552,7 +554,7 @@ The ship chain turns a worker's finished work into a real commit, a real upstrea
 
 Computes the full ship preflight for a worker's worktree, evaluated for `mode` (defaults to `"all"` when omitted): branch/remote/tracking state, working-tree status, the deny-list preview (mode-aware -- a `"staged"` preview reflects only the index, matching what `git_stage_commit` would actually commit for that mode), and the `canShip`/`blockers` verdict. Read-only -- never mutates the working tree, emits no events.
 
-**Refuses (via non-fatal `blockers`, `canShip: false` when any is present) rather than erroring:** toplevel mismatch (the worktree path no longer resolves to itself), primary checkout (`--git-common-dir == --git-dir`), detached `HEAD`, `branch == baseBranch`, a protected branch (`main`/`master`/`develop`/`release/*`), missing `origin` remote, unresolved merge conflicts, or nothing to ship at all (clean working tree **and** `ahead == 0`).
+**Refuses (via non-fatal `blockers`, `canShip: false` when any is present) rather than erroring:** toplevel mismatch (the worktree path no longer resolves to itself), primary checkout (`--git-common-dir == --git-dir`), detached `HEAD`, `branch == baseBranch`, a protected branch (`main`/`master`/`develop`/`release/*`), missing `origin` remote, an `origin` with more than one push URL (`git push origin` pushes to all of them, so no one host can be shown), unresolved merge conflicts, or nothing to ship at all (clean working tree **and** `ahead == 0`).
 
 **Parameters:**
 
@@ -570,8 +572,8 @@ Computes the full ship preflight for a worker's worktree, evaluated for `mode` (
 | `workerId`            | `string` (UUID)    | The worker this preflight was computed for                                |
 | `branch`              | `string`           | Current branch checked out in the worktree                                |
 | `baseBranch`          | `string`           | The remote's default branch (`origin/HEAD`, stripped of the `origin/` prefix) -> falls back to the repo's `init.defaultBranch` config -> falls back to `"main"`. **Never** the primary checkout's current `HEAD` -- a human can have any branch checked out there at any time |
-| `remote`              | `string \| null`   | `origin`'s URL, redacted (see `swarm_core::git::redact`)                   |
-| `host`                | `string \| null`   | Host parsed from `remote` (e.g. `"github.com"`)                           |
+| `remote`              | `string \| null`   | `origin`'s push URL, redacted (see `swarm_core::git::redact`): what `git remote get-url --push --all origin` prints, i.e. where `git push origin` sends after `remote.origin.pushurl` and `url.<base>.pushInsteadOf`, which can differ from the fetch URL. Every push URL, comma-separated, when there are several (a blocker then) |
+| `host`                | `string \| null`   | Host parsed from the push URL (e.g. `"github.com"`); `null` without exactly one push URL, and for a URL whose host the parser will not guess (a `?`, `#` or second `@` in a URL authority) |
 | `hostSupportsCompare` | `boolean`          | Whether `host` looks like GitHub/GHES -- the frontend disables *only* the "Open Compare Page" action when `false`, Commit Only / Commit + Push stay available |
 | `upstream`            | `string \| null`   | Tracking ref (e.g. `"origin/swarm/x"`) -- `null` means no upstream yet, not an error |
 | `ahead`               | `number`           | Commits ahead of `upstream`; when there's no upstream yet, a fallback count of commits reachable from `HEAD` but not from the worktree's recorded base commit |
@@ -717,7 +719,7 @@ try {
 
 ### `ship_compare_url`
 
-Builds the GitHub-style compare URL for a worker's worktree, prefilled with a PR title/body via `quick_pull=1` query parameters, capped at 6000 total characters. If the untruncated URL would exceed the cap, `body` is shortened first (with a visible truncation marker); if even an *empty* body still doesn't fit, `title` is clamped too as a last resort -- only the compare path itself (host/owner/repo/base/branch) is never truncated. The branch is the one the worker's latest recorded push pushed (see [`git_push`](#git_push)), so a rename since then cannot retarget the page; a worker with no push on record falls back to the branch checked out now. Supports `https`/`ssh`/GHES remote URL shapes; a non-GitHub-shaped host (`gitlab.com`, `bitbucket.org`, etc.) is rejected rather than producing a broken URL.
+Builds the GitHub-style compare URL for a worker's worktree, prefilled with a PR title/body via `quick_pull=1` query parameters, capped at 6000 total characters. If the untruncated URL would exceed the cap, `body` is shortened first (with a visible truncation marker); if even an *empty* body still doesn't fit, `title` is clamped too as a last resort -- only the compare path itself (host/owner/repo/base/branch) is never truncated. The branch is the one the worker's latest recorded push pushed (see [`git_push`](#git_push)), so a rename since then cannot retarget the page; a worker with no push on record falls back to the branch checked out now. Supports `https`/`ssh`/GHES remote URL shapes, read from `origin`'s push URL (where the branch was pushed, as in [`git_ship_preflight`](#git_ship_preflight)); a non-GitHub-shaped host (`gitlab.com`, `bitbucket.org`, etc.), or an `origin` with more than one push URL, is rejected (`nonGitHubHost`) rather than producing a broken URL.
 
 The frontend is expected to pre-check `ShipPreflight.hostSupportsCompare` and disable the "Open Compare Page" action entirely for a non-GitHub remote -- this command's own `nonGitHubHost` error is the defensive fallback for a stale preflight, not the primary UX.
 
@@ -741,7 +743,7 @@ Always the true final step of the "Commit + Push + Open Compare Page" action -- 
 | `workerNotFound` / `noWorktree` | `workerId` is malformed or names no worker, or the worker was spawned without worktree isolation |
 | `invalidBranch`  | Detached `HEAD`                                                     |
 | `noRemote`       | No `origin` remote configured                                       |
-| `nonGitHubHost`  | The remote's host isn't one a GitHub-style compare URL applies to (e.g. GitLab, Bitbucket) |
+| `nonGitHubHost`  | The push URL's host isn't one a GitHub-style compare URL applies to (e.g. GitLab, Bitbucket), or `origin` has more than one push URL |
 | `timeout` | Reading the live branch (no push on record) or the `origin` remote exceeded its timeout budget |
 | `unknown` | `shipId` is not a UUID, or any other failure, including reading the live branch (no push on record) or the `origin` remote |
 
@@ -1489,6 +1491,28 @@ if (update.available) {
 ```
 
 The signing keypair, the `plugins.updater.pubkey` value and the release flow are described in [Updater Keys](updater-keys.md).
+
+---
+
+### `open_worker_directory`
+
+Opens a worker's worktree folder in the system file manager, through `tauri-plugin-opener`'s Rust API on the native side. The webview names the worker, never a path, and has no `opener:allow-open-path` grant at all: an agent can write any file into its worktree (a `run.bat`), and a path scope over the worktrees would let the webview have the OS open, and so run, it. The path opened is the one the registry recorded when the worktree was created, and only while it is a real directory (`symlink_metadata().is_dir()`: not a file, and not a symlink or Windows junction).
+
+**Parameters:**
+
+| Name       | Type     | Required | Description        |
+|------------|----------|----------|--------------------|
+| `workerId` | `string` | Yes      | UUID of the worker |
+
+**Returns:** `void`
+
+**Errors (string):** the registry's worker-not-found message, `This Worker Has No Worktree.`, `Refusing To Open The Worktree: It Is Not A Directory.`, `Could Not Read The Worktree: <io error>`, or the opener's message when the OS cannot open the folder.
+
+**Example:**
+
+```typescript
+await invoke("open_worker_directory", { workerId });
+```
 
 ---
 
