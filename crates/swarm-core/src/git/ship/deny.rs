@@ -136,27 +136,34 @@ fn index_blob_sizes(
         )));
     }
     // Records are `<mode> SP <object> SP <stage> TAB <path>`, NUL-terminated.
-    let mut blob_of_path: HashMap<String, String> = HashMap::new();
+    // Paths decode lossily, exactly as the status snapshot's do, so a
+    // non-UTF-8 name matches its candidate; two raw names that decode
+    // alike share one entry and the largest blob wins. A record that does
+    // not parse fails closed.
+    let mut entries: Vec<(String, String)> = Vec::new();
     for record in listing.stdout.split(|&byte| byte == 0) {
-        let Ok(record) = std::str::from_utf8(record) else {
+        if record.is_empty() {
             continue;
+        }
+        let record = String::from_utf8_lossy(record);
+        let parsed = record.split_once('\t').and_then(|(meta, path)| {
+            let mut fields = meta.split(' ');
+            Some((fields.next()?, fields.next()?, fields.next()?, path))
+        });
+        let Some((mode, oid, stage, path)) = parsed else {
+            return Err(AppError::Git(format!(
+                "unexpected `git ls-files --stage` record: {record:?}"
+            )));
         };
-        let Some((meta, path)) = record.split_once('\t') else {
-            continue;
-        };
-        let mut fields = meta.split(' ');
-        if let (Some(mode), Some(oid), Some("0")) = (fields.next(), fields.next(), fields.next())
-            && mode != "160000"
-            && paths.contains(path)
-        {
-            blob_of_path.insert(path.to_owned(), oid.to_owned());
+        if stage == "0" && mode != "160000" && paths.contains(path) {
+            entries.push((path.to_owned(), oid.to_owned()));
         }
     }
-    if blob_of_path.is_empty() {
+    if entries.is_empty() {
         return Ok(HashMap::new());
     }
 
-    let oids: HashSet<&str> = blob_of_path.values().map(String::as_str).collect();
+    let oids: HashSet<&str> = entries.iter().map(|(_, oid)| oid.as_str()).collect();
     let stdin: String = oids.iter().map(|oid| format!("{oid}\n")).collect();
     let checked = cli::run_with_stdin(
         &args_in(
@@ -185,15 +192,17 @@ fn index_blob_sizes(
         };
         size_of_oid.insert(oid.to_owned(), size);
     }
-    blob_of_path
-        .into_iter()
-        .map(|(path, oid)| match size_of_oid.get(&oid) {
-            Some(&size) => Ok((path, size)),
-            None => Err(AppError::Git(format!(
+    let mut size_of_path: HashMap<String, u64> = HashMap::new();
+    for (path, oid) in entries {
+        let Some(&size) = size_of_oid.get(&oid) else {
+            return Err(AppError::Git(format!(
                 "`git cat-file --batch-check` reported no size for blob {oid} of {path}"
-            ))),
-        })
-        .collect()
+            )));
+        };
+        let largest = size_of_path.entry(path).or_default();
+        *largest = (*largest).max(size);
+    }
+    Ok(size_of_path)
 }
 
 /// Splits `candidates` into the paths that may be committed and the
@@ -234,7 +243,9 @@ pub(super) fn partition(
     for path in unmeasured {
         let size = match basis {
             SizeBasis::Index => index_sizes.get(&path).copied(),
-            SizeBasis::WorkingCopy => fs::metadata(worktree.join(&path))
+            // `symlink_metadata`: a symlink is committed as its link text,
+            // so it is measured as a link, never as its target.
+            SizeBasis::WorkingCopy => fs::symlink_metadata(worktree.join(&path))
                 .ok()
                 .filter(fs::Metadata::is_file)
                 .map(|meta| meta.len()),
@@ -346,6 +357,33 @@ mod tests {
                 reason: "Skipped — Larger Than 5 MB".to_owned(),
             }]
         );
+    }
+
+    /// S3: git reports the raw bytes of a non-UTF-8 name; status decodes
+    /// it lossily, so the index listing must decode the same way to
+    /// match the candidate.
+    #[cfg(unix)]
+    #[test]
+    fn test_partition_denies_an_oversized_non_utf8_name_in_index_basis() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let repo = TempRepo::new("deny-non-utf8");
+        let name = std::ffi::OsStr::from_bytes(b"big\xff.bin");
+        let size = usize::try_from(MAX_STAGED_FILE_BYTES).unwrap() + 1;
+        std::fs::write(repo.root().join(name), vec![0_u8; size]).unwrap();
+        repo.git(&["add", "."]);
+        let lossy = String::from_utf8_lossy(name.as_bytes()).into_owned();
+
+        let (survivors, skipped) = partition(
+            repo.root(),
+            vec![lossy.clone()],
+            &HashSet::new(),
+            SizeBasis::Index,
+        )
+        .unwrap();
+        assert!(survivors.is_empty(), "{survivors:?}");
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].path, lossy);
     }
 
     #[test]

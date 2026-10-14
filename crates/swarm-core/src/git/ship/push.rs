@@ -10,10 +10,11 @@ use super::{
     is_protected_branch, mutate, remote_url, resolve_base_branch, resolve_live_branch,
     worktree_info_for_worker,
 };
+use crate::error::AppError;
 use crate::git::cli::{PUSH_TIMEOUT, READ_TIMEOUT};
 use crate::git::remote;
 use crate::git::repo::{self, args_in};
-use crate::worker::registry::{WorkerId, WorkerRegistry};
+use crate::worker::registry::{PushRecord, WorkerId, WorkerRegistry};
 
 /// A push [`push`] made — `git_push`'s IPC result, which the frontend
 /// validates with `PushOutcomeSchema` (`src/store/types.ts`).
@@ -56,11 +57,13 @@ fn push_args(worktree: &Path, sha: &str, branch: &str) -> Vec<String> {
     args_in(worktree, &["push", "--end-of-options", "origin", &refspec])
 }
 
-/// Argv for `git branch --set-upstream-to=origin/<branch>
+/// Argv for `git branch --set-upstream-to=refs/remotes/origin/<branch>
 /// --end-of-options <branch>` — makes `branch` track the remote-tracking
 /// ref the push just updated, which preflight's ahead/behind counts read.
+/// The full ref name keeps a local branch literally named `origin/<branch>`
+/// from making the short name ambiguous.
 fn set_upstream_args(worktree: &Path, branch: &str) -> Vec<String> {
-    let upstream = format!("--set-upstream-to=origin/{branch}");
+    let upstream = format!("--set-upstream-to=refs/remotes/origin/{branch}");
     args_in(worktree, &["branch", &upstream, "--end-of-options", branch])
 }
 
@@ -180,8 +183,16 @@ pub fn push(
             "No `origin` Remote Configured.",
         ));
     }
-    let sha = repo::head_sha(wt)?;
-    push_commit(repo_locks, &info.repo_root, wt, &branch, &sha)
+    let sha = resolve_push_sha(wt, &branch)?;
+    push_commit(registry, id, repo_locks, &info.repo_root, wt, &branch, &sha)
+}
+
+/// The tip of `refs/heads/<branch>` — the commit [`push`] sends. Resolved
+/// from the branch it already read, never from `HEAD`: an agent that
+/// switches branches between the two reads would otherwise get another
+/// branch's tip pushed to `branch`.
+pub(super) fn resolve_push_sha(wt: &Path, branch: &str) -> Result<String, AppError> {
+    repo::rev_parse(wt, &format!("refs/heads/{branch}"))
 }
 
 /// Pushes commit `sha` to `origin`'s `branch` (non-force: a
@@ -195,6 +206,8 @@ pub fn push(
 /// failure to record it is logged, not returned — reporting the push as
 /// failed would hide a commit that is on the remote.
 pub(super) fn push_commit(
+    registry: &WorkerRegistry,
+    id: WorkerId,
     repo_locks: &RepoLocks,
     repo_root: &Path,
     wt: &Path,
@@ -234,53 +247,44 @@ pub(super) fn push_commit(
         }
     }
 
-    Ok(PushOutcome {
+    let outcome = PushOutcome {
         pushed_ref: format!("origin/{branch}"),
         remote: "origin".to_owned(),
         remote_ref: format!("refs/heads/{branch}"),
         sha: sha.to_owned(),
-    })
-}
-
-/// The last push recorded for a worker — what a compare-page receipt
-/// reports, read from the registry instead of taken from the caller.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecordedPush {
-    /// The commit sha the last successful [`push`] recorded.
-    pub sha: String,
-    /// The remote-tracking ref of the branch checked out now
-    /// (`origin/<branch>`), as in [`PushOutcome::pushed_ref`].
-    pub pushed_ref: String,
-}
-
-/// The push recorded for `id` through
-/// [`WorkerRegistry::set_last_shipped`], or `None` when this worker has
-/// not pushed since it was spawned (the record is in memory only).
-///
-/// # Errors
-///
-/// * [`ShipErrorKind::WorkerNotFound`] / [`ShipErrorKind::NoWorktree`] —
-///   as [`super::worktree_info_for_worker`].
-/// * [`ShipErrorKind::InvalidBranch`] / [`ShipErrorKind::Timeout`] /
-///   [`ShipErrorKind::Unknown`] — reading the live branch failed.
-pub fn recorded_push(
-    registry: &WorkerRegistry,
-    id: WorkerId,
-) -> Result<Option<RecordedPush>, ShipError> {
-    let info = worktree_info_for_worker(registry, id)?;
-    let Some(sha) = info.last_shipped_commit else {
-        return Ok(None);
     };
-    let branch = resolve_live_branch(&info.worktree_path)?;
-    Ok(Some(RecordedPush {
-        sha,
-        pushed_ref: format!("origin/{branch}"),
-    }))
+    // Recorded here, where the push happened, so the receipt exists
+    // whether or not the caller can also record `last_shipped` (that needs
+    // an event-log read that can fail).
+    if let Err(error) = registry.record_push(
+        &id,
+        PushRecord {
+            sha: outcome.sha.clone(),
+            remote: outcome.remote.clone(),
+            remote_ref: outcome.remote_ref.clone(),
+            pushed_ref: outcome.pushed_ref.clone(),
+        },
+    ) {
+        tracing::warn!(worker_id = %id, %error, "ship: pushed, but the worker is gone; no push record");
+    }
+    Ok(outcome)
+}
+
+/// The latest push recorded for `id` (see
+/// [`WorkerRegistry::record_push`]), or `None` when this worker has not
+/// pushed since it was spawned. A pure registry read: it runs no git, so
+/// a branch rename after the push cannot change what it reports.
+///
+/// The record is per worker, not per ship attempt: interleaved attempts
+/// on one worker share the latest push.
+pub fn recorded_push(registry: &WorkerRegistry, id: WorkerId) -> Option<PushRecord> {
+    registry.push_record(&id)
 }
 
 /// Builds the GitHub-style compare URL for `id`'s worktree, prefilled
 /// with `title`/`body` (capped per [`remote::MAX_COMPARE_URL_LEN`]).
-/// The branch is the one checked out **now**, as in [`push`].
+/// The branch is the one the worker's latest push recorded
+/// ([`recorded_push`]), else the one checked out **now**, as in [`push`].
 ///
 /// The UI checks `ShipPreflight.hostSupportsCompare` and disables "Open
 /// Compare Page" before ever calling this (leaving Commit Only and
@@ -305,7 +309,17 @@ pub fn compare_url(
 ) -> Result<String, ShipError> {
     let info = worktree_info_for_worker(registry, id)?;
     let wt = info.worktree_path.as_path();
-    let branch = resolve_live_branch(wt)?;
+    // The branch that was pushed, when a push is on record (a rename
+    // since then must not retarget the page); else the one checked out now.
+    let branch = match registry.push_record(&id).and_then(|record| {
+        record
+            .remote_ref
+            .strip_prefix("refs/heads/")
+            .map(str::to_owned)
+    }) {
+        Some(pushed) => pushed,
+        None => resolve_live_branch(wt)?,
+    };
 
     let raw_remote = remote_url(wt, "origin")?
         .ok_or_else(|| ShipError::new(ShipErrorKind::NoRemote, "No `origin` Remote Configured."))?;
@@ -412,7 +426,7 @@ mod tests {
             args[4..],
             [
                 "branch",
-                "--set-upstream-to=origin/--force",
+                "--set-upstream-to=refs/remotes/origin/--force",
                 "--end-of-options",
                 "--force"
             ]

@@ -67,7 +67,7 @@ pub use self::commit::{CommitOutcome, CommitRequest, StagingMode, stage_and_comm
 pub use self::deny::SkippedFile;
 pub use self::error::{ShipError, ShipErrorKind, ShipRemedy};
 pub use self::preflight::{ShipPreflight, preflight};
-pub use self::push::{PushOutcome, RecordedPush, compare_url, push, recorded_push};
+pub use self::push::{PushOutcome, compare_url, push, recorded_push};
 pub use self::status::DiffStat;
 use super::cli::{self, GitOutput, READ_TIMEOUT};
 use super::repo::{self, args_in};
