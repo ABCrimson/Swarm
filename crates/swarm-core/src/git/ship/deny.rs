@@ -1,14 +1,36 @@
 //! The secret/size deny list every file a ship would commit passes
 //! through first.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-/// Files larger than this (5 MiB) are never staged.
+use crate::error::AppError;
+use crate::git::cli::{self, SCAN_TIMEOUT, args_in};
+
+/// Files larger than this (5 MiB) are never committed.
 pub(super) const MAX_STAGED_FILE_BYTES: u64 = 5 * 1024 * 1024;
+
+/// The reason a path over [`MAX_STAGED_FILE_BYTES`] is skipped with.
+const OVERSIZED_REASON: &str = "Skipped — Larger Than 5 MB";
+
+/// Which bytes the size limit measures — always the ones the commit
+/// would contain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SizeBasis {
+    /// The blob in the index. A staged-only commit is the index as it
+    /// stands, so the working-tree copy (shrunk or grown since `git
+    /// add`) is never read.
+    Index,
+    /// The working-tree file. "Stage everything" mode screens its
+    /// candidates before `git add` runs, and `git add` is about to
+    /// replace each index entry with exactly this file. The index is
+    /// measured again after staging ([`SizeBasis::Index`]), which is
+    /// the check that guards the commit itself.
+    WorkingCopy,
+}
 
 /// A file the deny list kept out of a commit, with its Title Case
 /// reason.
@@ -31,18 +53,19 @@ fn is_claude_settings_json(rel_path: &str) -> bool {
         && path.components().any(|c| c.as_os_str() == ".claude")
 }
 
-/// Why `rel_path` must be kept out of a commit, or `None` to allow it:
+/// Why `rel_path` must be kept out of a commit by name alone, or `None`
+/// to allow it:
 ///
 /// - a credential-shaped name — a basename (case-insensitive) starting
 ///   with `.env` or an SSH key name (`id_rsa`, `id_ed25519`, `id_ecdsa`,
 ///   `id_dsa`) or ending in `.pem`, `.key`, `.p12` or `.pfx`, or `secret`
 ///   anywhere in the full relative path (so `config/secrets/api.yaml`
 ///   is caught although its basename looks innocuous);
-/// - larger than [`MAX_STAGED_FILE_BYTES`], measured on the working-tree
-///   copy in `worktree` right now (a deleted path can only be denied by
-///   name);
 /// - an **untracked** `.claude/settings.json` (`is_untracked`, from a
 ///   `?` status entry).
+///
+/// The size rule is not here: it needs the bytes the commit would
+/// contain, which [`partition`] measures per [`SizeBasis`].
 ///
 /// # The untracked `.claude/settings.json` rule
 ///
@@ -55,7 +78,7 @@ fn is_claude_settings_json(rel_path: &str) -> bool {
 /// the agent's own `git add`) counts as tracked and is never denied on
 /// this basis. The rule therefore reflects the status snapshot a ship
 /// takes, not a standing guarantee about the file.
-pub(super) fn deny_reason(worktree: &Path, rel_path: &str, is_untracked: bool) -> Option<String> {
+fn name_deny_reason(rel_path: &str, is_untracked: bool) -> Option<String> {
     if is_untracked && is_claude_settings_json(rel_path) {
         return Some("Skipped — SWARM Configuration File".to_owned());
     }
@@ -73,37 +96,159 @@ pub(super) fn deny_reason(worktree: &Path, rel_path: &str, is_untracked: bool) -
             .iter()
             .any(|&prefix| basename.starts_with(prefix))
         || rel_path.to_ascii_lowercase().contains("secret");
-    if looks_like_credential {
-        return Some("Skipped — Looks Like A Credential".to_owned());
+    looks_like_credential.then(|| "Skipped — Looks Like A Credential".to_owned())
+}
+
+/// Sizes in bytes of the stage-0 index blobs of `paths`, from two
+/// plumbing calls through the single git runner: `git ls-files --stage
+/// -z` (path to blob id) and `git cat-file --batch-check` (blob id to
+/// size). A path with no stage-0 entry (a staged deletion, an unmerged
+/// path) and a submodule gitlink (mode `160000`, a commit id) have no
+/// blob and are absent from the result.
+///
+/// The whole index is listed instead of passing a pathspec list: the
+/// listing is the index git already holds in memory, and it keeps a
+/// large change set off the command line. Blob ids — never paths — go
+/// to `cat-file`'s line-oriented stdin, so a path containing a newline
+/// cannot desync it.
+///
+/// # Errors
+///
+/// * [`AppError::Git`] — a command failed or its output was not in the
+///   documented shape (fail closed: an unmeasured blob is never waved
+///   through).
+/// * [`AppError::GitTimeout`] — a call exceeded [`SCAN_TIMEOUT`].
+fn index_blob_sizes(
+    worktree: &Path,
+    paths: &HashSet<&str>,
+) -> Result<HashMap<String, u64>, AppError> {
+    if paths.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let listing = cli::run(
+        &args_in(worktree, &["ls-files", "--stage", "-z"]),
+        SCAN_TIMEOUT,
+    )?;
+    if !listing.success() {
+        return Err(AppError::Git(format!(
+            "`git ls-files --stage` failed: {}",
+            listing.stderr.trim()
+        )));
+    }
+    // Records are `<mode> SP <object> SP <stage> TAB <path>`, NUL-terminated.
+    let mut blob_of_path: HashMap<String, String> = HashMap::new();
+    for record in listing.stdout.split(|&byte| byte == 0) {
+        let Ok(record) = std::str::from_utf8(record) else {
+            continue;
+        };
+        let Some((meta, path)) = record.split_once('\t') else {
+            continue;
+        };
+        let mut fields = meta.split(' ');
+        if let (Some(mode), Some(oid), Some("0")) = (fields.next(), fields.next(), fields.next())
+            && mode != "160000"
+            && paths.contains(path)
+        {
+            blob_of_path.insert(path.to_owned(), oid.to_owned());
+        }
+    }
+    if blob_of_path.is_empty() {
+        return Ok(HashMap::new());
     }
 
-    if let Ok(meta) = fs::metadata(worktree.join(rel_path))
-        && meta.is_file()
-        && meta.len() > MAX_STAGED_FILE_BYTES
-    {
-        return Some("Skipped — Larger Than 5 MB".to_owned());
+    let oids: HashSet<&str> = blob_of_path.values().map(String::as_str).collect();
+    let stdin: String = oids.iter().map(|oid| format!("{oid}\n")).collect();
+    let checked = cli::run_with_stdin(
+        &args_in(
+            worktree,
+            &["cat-file", "--batch-check=%(objectname) %(objectsize)"],
+        ),
+        stdin.as_bytes(),
+        SCAN_TIMEOUT,
+    )?;
+    if !checked.success() {
+        return Err(AppError::Git(format!(
+            "`git cat-file --batch-check` failed: {}",
+            checked.stderr.trim()
+        )));
     }
-
-    None
+    let mut size_of_oid: HashMap<String, u64> = HashMap::new();
+    for line in String::from_utf8_lossy(&checked.stdout).lines() {
+        // `<object> missing` and any other shape fail closed.
+        let Some((oid, size)) = line
+            .split_once(' ')
+            .and_then(|(oid, size)| Some((oid, size.parse::<u64>().ok()?)))
+        else {
+            return Err(AppError::Git(format!(
+                "unexpected `git cat-file --batch-check` line: {line:?}"
+            )));
+        };
+        size_of_oid.insert(oid.to_owned(), size);
+    }
+    blob_of_path
+        .into_iter()
+        .map(|(path, oid)| match size_of_oid.get(&oid) {
+            Some(&size) => Ok((path, size)),
+            None => Err(AppError::Git(format!(
+                "`git cat-file --batch-check` reported no size for blob {oid} of {path}"
+            ))),
+        })
+        .collect()
 }
 
 /// Splits `candidates` into the paths that may be committed and the
 /// ones the deny list keeps out. A candidate counts as untracked when
-/// it is in `untracked`.
+/// it is in `untracked`. Names are screened first (see
+/// [`name_deny_reason`]); a surviving path is denied when the bytes the
+/// commit would contain, per `basis`, exceed [`MAX_STAGED_FILE_BYTES`].
+/// A path with nothing to measure (deleted in the working tree, or a
+/// staged deletion) has no size to deny.
+///
+/// # Errors
+///
+/// [`AppError`] from measuring index blobs ([`SizeBasis::Index`]);
+/// never for [`SizeBasis::WorkingCopy`].
 pub(super) fn partition(
     worktree: &Path,
     candidates: Vec<String>,
     untracked: &HashSet<&str>,
-) -> (Vec<String>, Vec<SkippedFile>) {
-    let mut survivors = Vec::new();
+    basis: SizeBasis,
+) -> Result<(Vec<String>, Vec<SkippedFile>), AppError> {
     let mut skipped = Vec::new();
+    let mut unmeasured = Vec::new();
     for path in candidates {
-        match deny_reason(worktree, &path, untracked.contains(path.as_str())) {
+        match name_deny_reason(&path, untracked.contains(path.as_str())) {
             Some(reason) => skipped.push(SkippedFile { path, reason }),
-            None => survivors.push(path),
+            None => unmeasured.push(path),
         }
     }
-    (survivors, skipped)
+
+    let index_sizes = match basis {
+        SizeBasis::Index => {
+            let wanted: HashSet<&str> = unmeasured.iter().map(String::as_str).collect();
+            index_blob_sizes(worktree, &wanted)?
+        }
+        SizeBasis::WorkingCopy => HashMap::new(),
+    };
+    let mut survivors = Vec::new();
+    for path in unmeasured {
+        let size = match basis {
+            SizeBasis::Index => index_sizes.get(&path).copied(),
+            SizeBasis::WorkingCopy => fs::metadata(worktree.join(&path))
+                .ok()
+                .filter(fs::Metadata::is_file)
+                .map(|meta| meta.len()),
+        };
+        if size.is_some_and(|size| size > MAX_STAGED_FILE_BYTES) {
+            skipped.push(SkippedFile {
+                path,
+                reason: OVERSIZED_REASON.to_owned(),
+            });
+        } else {
+            survivors.push(path);
+        }
+    }
+    Ok((survivors, skipped))
 }
 
 #[cfg(test)]
@@ -112,8 +257,7 @@ mod tests {
     use crate::git::test_support::TempRepo;
 
     #[test]
-    fn test_deny_reason_matches_credential_shaped_names() {
-        let repo = TempRepo::new("deny-names");
+    fn test_name_deny_reason_matches_credential_shaped_names() {
         for name in [
             ".env",
             ".env.local",
@@ -128,31 +272,80 @@ mod tests {
             "config/secrets/api.yaml",
         ] {
             assert_eq!(
-                deny_reason(repo.root(), name, false).as_deref(),
+                name_deny_reason(name, false).as_deref(),
                 Some("Skipped — Looks Like A Credential"),
                 "expected {name} to be denied"
             );
         }
         for name in ["README.md", "src/main.rs", "package.json", "environment.ts"] {
             assert!(
-                deny_reason(repo.root(), name, false).is_none(),
+                name_deny_reason(name, false).is_none(),
                 "expected {name} to survive the deny list"
             );
         }
     }
 
     #[test]
-    fn test_deny_reason_matches_oversized_files() {
-        let repo = TempRepo::new("deny-size");
+    fn test_partition_measures_the_working_copy_in_working_copy_basis() {
+        let repo = TempRepo::new("deny-size-wc");
         let oversized = usize::try_from(MAX_STAGED_FILE_BYTES).unwrap() + 1;
         std::fs::write(repo.root().join("blob.bin"), vec![0_u8; oversized]).unwrap();
         std::fs::write(repo.root().join("tiny.bin"), [0_u8; 10]).unwrap();
 
+        let (survivors, skipped) = partition(
+            repo.root(),
+            vec![
+                "blob.bin".to_owned(),
+                "tiny.bin".to_owned(),
+                "gone.bin".to_owned(),
+            ],
+            &HashSet::new(),
+            SizeBasis::WorkingCopy,
+        )
+        .unwrap();
+        assert_eq!(survivors, ["tiny.bin", "gone.bin"]);
         assert_eq!(
-            deny_reason(repo.root(), "blob.bin", false).as_deref(),
-            Some("Skipped — Larger Than 5 MB")
+            skipped,
+            [SkippedFile {
+                path: "blob.bin".to_owned(),
+                reason: "Skipped — Larger Than 5 MB".to_owned(),
+            }]
         );
-        assert!(deny_reason(repo.root(), "tiny.bin", false).is_none());
+    }
+
+    /// The limit is inclusive: exactly [`MAX_STAGED_FILE_BYTES`] ships.
+    #[test]
+    fn test_partition_measures_the_index_blob_in_index_basis() {
+        let repo = TempRepo::new("deny-size-index");
+        let limit = usize::try_from(MAX_STAGED_FILE_BYTES).unwrap();
+        std::fs::write(repo.root().join("over.bin"), vec![0_u8; limit + 1]).unwrap();
+        std::fs::write(repo.root().join("at.bin"), vec![1_u8; limit]).unwrap();
+        std::fs::write(repo.root().join("small.bin"), b"small").unwrap();
+        repo.git(&["add", "over.bin", "at.bin", "small.bin"]);
+        // Working copies diverge from the index in both directions.
+        std::fs::write(repo.root().join("over.bin"), b"shrunk").unwrap();
+        std::fs::write(repo.root().join("small.bin"), vec![2_u8; limit + 1]).unwrap();
+
+        let (survivors, skipped) = partition(
+            repo.root(),
+            vec![
+                "over.bin".to_owned(),
+                "at.bin".to_owned(),
+                "small.bin".to_owned(),
+                "never-staged.bin".to_owned(),
+            ],
+            &HashSet::new(),
+            SizeBasis::Index,
+        )
+        .unwrap();
+        assert_eq!(survivors, ["at.bin", "small.bin", "never-staged.bin"]);
+        assert_eq!(
+            skipped,
+            [SkippedFile {
+                path: "over.bin".to_owned(),
+                reason: "Skipped — Larger Than 5 MB".to_owned(),
+            }]
+        );
     }
 
     #[test]
@@ -167,18 +360,15 @@ mod tests {
     }
 
     #[test]
-    fn test_deny_reason_skips_untracked_but_not_tracked_claude_settings_json() {
-        let repo = TempRepo::new("deny-claude");
-        repo.write(".claude/settings.json", "{}");
-
+    fn test_name_deny_reason_skips_untracked_but_not_tracked_claude_settings_json() {
         for path in [".claude/settings.json", "worker/.claude/settings.json"] {
             assert_eq!(
-                deny_reason(repo.root(), path, true).as_deref(),
+                name_deny_reason(path, true).as_deref(),
                 Some("Skipped — SWARM Configuration File")
             );
         }
         // The same path tracked or staged is the user's own file.
-        assert!(deny_reason(repo.root(), ".claude/settings.json", false).is_none());
+        assert!(name_deny_reason(".claude/settings.json", false).is_none());
     }
 
     #[test]
@@ -193,7 +383,9 @@ mod tests {
                 ".claude/settings.json".to_owned(),
             ],
             &untracked,
-        );
+            SizeBasis::WorkingCopy,
+        )
+        .unwrap();
         assert_eq!(survivors, ["src/lib.rs"]);
         let skipped_paths: Vec<&str> = skipped.iter().map(|s| s.path.as_str()).collect();
         assert_eq!(skipped_paths, [".env", ".claude/settings.json"]);

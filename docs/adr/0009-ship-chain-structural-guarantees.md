@@ -27,7 +27,9 @@ hold because the code cannot express the unsafe thing:
   `guard_not_primary_checkout` before touching anything, so a stale preflight or a caller that skips
   preflight can never mutate the repo's primary checkout.
 - **A deny list is enforced, not narrated.** A credential-shaped name (basename starting `.env` or
-  `id_rsa`, ending `.pem` or `.key`, or `secret` anywhere in the path), a file over 5 MiB, or an
+  `id_rsa`, ending `.pem` or `.key`, or `secret` anywhere in the path), a file over 5 MiB (measured on the blob the commit would contain: the index blob
+  in `staged` mode, the working-tree file `all` mode is about to stage, and the index blob again
+  in the final pre-commit check in both modes), or an
   untracked `.claude/settings.json` never reaches a commit SWARM makes. In `staged` mode a denied path
   already in the index is unstaged with `git restore --staged`, and if that fails nothing is
   committed. The index is checked again just before `git commit`.

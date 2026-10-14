@@ -352,6 +352,70 @@ fn test_secret_and_size_guard_neither_file_is_committed() {
     assert_eq!(committed_paths(&worktree, &outcome.sha), ["safe.txt"]);
 }
 
+/// The audit's blob size: 648 bytes over [`deny::MAX_STAGED_FILE_BYTES`].
+const AUDIT_BLOB_BYTES: usize = 5_243_904;
+
+/// B1: the size guard measures the blob the commit would contain. A
+/// 5,243,904-byte blob is staged, then the working copy is shrunk
+/// without re-adding: staged-only mode commits the index, so the oversized
+/// blob must be denied, unstaged and left out.
+#[test]
+fn test_staged_mode_denies_an_oversized_index_blob_whose_working_copy_shrank() {
+    let (_repo, worktree, registry, id) = fixture("b1-shrunk", "swarm/b1-shrunk-abcd1234");
+    std::fs::write(worktree.join("blob.bin"), vec![0_u8; AUDIT_BLOB_BYTES]).unwrap();
+    write_file(&worktree, "safe.txt", "fine");
+    git_in(&worktree, &["add", "blob.bin", "safe.txt"]);
+    std::fs::write(worktree.join("blob.bin"), b"tiny").unwrap();
+
+    let outcome = stage_and_commit(
+        &registry,
+        &RepoLocks::new(),
+        id,
+        &request(StagingMode::Staged, "feat: staged"),
+    )
+    .unwrap();
+
+    assert_eq!(committed_paths(&worktree, &outcome.sha), ["safe.txt"]);
+    assert_eq!(
+        outcome.skipped,
+        [SkippedFile {
+            path: "blob.bin".to_owned(),
+            reason: "Skipped — Larger Than 5 MB".to_owned(),
+        }]
+    );
+    // Unstaged, never deleted: the (tiny) working copy is untouched.
+    let after = status::StatusSnapshot::read(&worktree).unwrap().classify();
+    assert_eq!(after.untracked, ["blob.bin"]);
+    assert_eq!(std::fs::read(worktree.join("blob.bin")).unwrap(), b"tiny");
+}
+
+/// B1, the other direction: staged-only mode never reads the working
+/// copy to decide what is committed, so a small staged blob ships even
+/// though the file on disk has since grown past the limit.
+#[test]
+fn test_staged_mode_commits_a_small_index_blob_whose_working_copy_grew() {
+    let (_repo, worktree, registry, id) = fixture("b1-grew", "swarm/b1-grew-abcd1234");
+    write_file(&worktree, "blob.bin", "small");
+    git_in(&worktree, &["add", "blob.bin"]);
+    std::fs::write(worktree.join("blob.bin"), vec![0_u8; AUDIT_BLOB_BYTES]).unwrap();
+
+    let outcome = stage_and_commit(
+        &registry,
+        &RepoLocks::new(),
+        id,
+        &request(StagingMode::Staged, "feat: staged"),
+    )
+    .unwrap();
+
+    assert_eq!(committed_paths(&worktree, &outcome.sha), ["blob.bin"]);
+    assert!(outcome.skipped.is_empty(), "{:?}", outcome.skipped);
+    let blob = git_in(
+        &worktree,
+        &["cat-file", "-s", &format!("{}:blob.bin", outcome.sha)],
+    );
+    assert_eq!(blob.stdout_trimmed(), "5");
+}
+
 /// Security: "all" mode unstages a pre-staged `.env`, reports it
 /// skipped and leaves it out of the commit (still on disk, untracked).
 #[test]
