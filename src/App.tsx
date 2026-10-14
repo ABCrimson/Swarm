@@ -14,7 +14,6 @@ import { useProvenanceEvents } from "#hooks/useProvenanceEvents";
 import { useSessionEvents } from "#hooks/useSessionEvents";
 import { useSettingsBridge } from "#hooks/useSettingsBridge";
 import { useSystemLogEvents } from "#hooks/useSystemLogEvents";
-import { useTheme } from "#hooks/useTheme";
 import { useWorkerEvents } from "#hooks/useWorkerEvents";
 import { connectEventBus } from "#lib/event-bus";
 import { onIdle } from "#lib/idle";
@@ -60,7 +59,6 @@ export function App(): React.ReactElement {
     };
   }, []);
 
-  useTheme();
   useWorkerEvents();
   useAgentSessionEvents();
   useProvenanceEvents();
