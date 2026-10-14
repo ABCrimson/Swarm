@@ -1,49 +1,14 @@
-//! Session teardown: runs exactly once; also the exit-signal name that
-//! teardown's [`ExitSummary`] carries.
+//! Session teardown: runs exactly once.
 
 use std::mem::DropGuard;
 use std::sync::Arc;
 
-use super::PROCESS_EXITED_WITHOUT_RECEIPT;
 use super::process::reap;
 use super::state::{Shared, TurnSlot};
 
 use crate::agent::adapter::{AgentTurnStatus, ExitSummary};
-use crate::agent::drained_stderr_snippet;
+use crate::agent::{PROCESS_EXITED_WITHOUT_RECEIPT, drained_stderr_snippet, signal_name};
 use crate::events::{AgentSessionExitedPayload, AgentTurnSettledPayload, Provenance, SwarmEvent};
-
-/// The terminating signal's name, on Unix.
-#[cfg(unix)]
-pub(super) fn signal_name(status: &std::process::ExitStatus) -> Option<String> {
-    use std::os::unix::process::ExitStatusExt;
-    /// Signals whose numbers agree across Linux and macOS.
-    const NAMES: [(i32, &str); 9] = [
-        (1, "SIGHUP"),
-        (2, "SIGINT"),
-        (3, "SIGQUIT"),
-        (6, "SIGABRT"),
-        (9, "SIGKILL"),
-        (11, "SIGSEGV"),
-        (13, "SIGPIPE"),
-        (14, "SIGALRM"),
-        (15, "SIGTERM"),
-    ];
-    status.signal().map(|signal| {
-        NAMES
-            .iter()
-            .find(|(number, _)| *number == signal)
-            .map_or_else(
-                || format!("signal {signal}"),
-                |(_, name)| (*name).to_string(),
-            )
-    })
-}
-
-/// Windows has no signals: a killed process has only an exit code.
-#[cfg(not(unix))]
-pub(super) fn signal_name(_status: &std::process::ExitStatus) -> Option<String> {
-    None
-}
 
 /// Arms teardown for a guard dropped without being dismissed (a dropped
 /// spawn future, a panicking reader): spawns [`teardown`] on the current

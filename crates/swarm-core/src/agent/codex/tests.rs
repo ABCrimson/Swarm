@@ -21,9 +21,9 @@ use super::protocol::{
 };
 use super::reader::permission_id;
 use super::state::{ApprovalKind, PendingApproval};
-use super::teardown::signal_name;
 use super::tier::verify_effective_policy;
 use super::*;
+use crate::agent::PROCESS_EXITED_WITHOUT_RECEIPT;
 use crate::agent::adapter::{AgentTurnStatus, CancelGranularity};
 use crate::events::{
     AgentBlockPayload, AgentPermissionRequestPayload, AgentSessionExitedPayload,
@@ -655,17 +655,6 @@ fn capabilities_promise_resume_graceful_cancel_and_interactive_approvals() {
         capabilities.permission_modes,
         ["restricted", "standard", "write_enabled"]
     );
-}
-
-#[cfg(unix)]
-#[test]
-fn signal_names_are_reported_on_unix() {
-    use std::os::unix::process::ExitStatusExt;
-    assert_eq!(
-        signal_name(&std::process::ExitStatus::from_raw(9)),
-        Some("SIGKILL".to_string())
-    );
-    assert_eq!(signal_name(&std::process::ExitStatus::from_raw(0)), None);
 }
 
 // ── Handshake ────────────────────────────────────────────────────────
