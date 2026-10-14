@@ -502,6 +502,16 @@ mod tests {
             PtySize::default(),
         )
         .expect("the platform default shell spawns");
+        // Drain the shell's output, as the output pump does in a real
+        // worker. The shell is a session leader on the PTY, and macOS
+        // (XNU `proc_exit` -> `ttywait`) holds a dying session leader
+        // until its terminal's output queue drains, with no timeout: an
+        // unread prompt would keep the killed shell from ever becoming
+        // waitable.
+        let mut reader = spawned.reader;
+        std::thread::spawn(move || {
+            let _ = std::io::copy(&mut reader, &mut std::io::sink());
+        });
         let process = Arc::new(Mutex::new(spawned.child));
         let (tx, rx) = std::sync::mpsc::channel();
         spawn_exit_watcher(Uuid::new_v4(), Arc::downgrade(&process), move |status| {

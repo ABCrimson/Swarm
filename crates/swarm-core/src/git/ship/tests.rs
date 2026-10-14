@@ -419,16 +419,20 @@ fn test_staged_mode_commits_a_small_index_blob_whose_working_copy_grew() {
 
 /// S3: a staged 6 MB file with a non-UTF-8 name never reaches a commit
 /// in staged-only mode: the ship is refused (it cannot be unstaged).
+/// Staged mode commits the index, so the entry is staged through the
+/// index alone; that lets the test run on macOS, whose APFS cannot hold
+/// the name.
 #[cfg(unix)]
 #[test]
 fn test_staged_mode_never_commits_an_oversized_non_utf8_name() {
-    use std::os::unix::ffi::OsStrExt;
+    use crate::git::test_support::stage_raw_name;
 
     let (_repo, worktree, registry, id) = fixture("s3-non-utf8", "swarm/s3-abcd1234");
-    let name = std::ffi::OsStr::from_bytes(b"big\xff.bin");
-    std::fs::write(worktree.join(name), vec![0_u8; 6 * 1024 * 1024]).unwrap();
+    stage_raw_name(&worktree, b"big\xff.bin", &vec![0_u8; 6 * 1024 * 1024]);
     write_file(&worktree, "safe.txt", "fine");
-    git_in(&worktree, &["add", "."]);
+    // By name, not `.`: the raw-named entry has no file on disk, and
+    // `add .` would stage that absence as its removal.
+    git_in(&worktree, &["add", "safe.txt"]);
 
     // Fail closed: the lossy name cannot be unstaged by pathspec, so the
     // ship is refused rather than committing or silently skipping.

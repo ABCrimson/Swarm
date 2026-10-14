@@ -366,18 +366,18 @@ mod tests {
 
     /// S3: git reports the raw bytes of a non-UTF-8 name; status decodes
     /// it lossily, so the index listing must decode the same way to
-    /// match the candidate.
+    /// match the candidate. The entry is staged through the index alone,
+    /// so the test also runs on macOS, whose APFS cannot hold the name.
     #[cfg(unix)]
     #[test]
     fn test_partition_denies_an_oversized_non_utf8_name_in_index_basis() {
-        use std::os::unix::ffi::OsStrExt;
+        use crate::git::test_support::stage_raw_name;
 
         let repo = TempRepo::new("deny-non-utf8");
-        let name = std::ffi::OsStr::from_bytes(b"big\xff.bin");
+        let name = b"big\xff.bin";
         let size = usize::try_from(MAX_STAGED_FILE_BYTES).unwrap() + 1;
-        std::fs::write(repo.root().join(name), vec![0_u8; size]).unwrap();
-        repo.git(&["add", "."]);
-        let lossy = String::from_utf8_lossy(name.as_bytes()).into_owned();
+        stage_raw_name(repo.root(), name, &vec![0_u8; size]);
+        let lossy = String::from_utf8_lossy(name).into_owned();
 
         let (survivors, skipped) = partition(
             repo.root(),
