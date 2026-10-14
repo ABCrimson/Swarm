@@ -13,16 +13,16 @@
 
 ## What It Is
 
-SWARM Orchestrator runs coding agents (Claude Code and Codex) as workers, each optionally in its own git worktree and driven over a structured protocol. Everything that happens is an event on one ordered stream backed by a SQLite log, which the UI renders, a pull request body cites, and a headless daemon replays to remote clients. It is a Tauri 3 (alpha) desktop app with a React 19 frontend, and the same Rust core also runs headless as `swarmd`.
+SWARM Orchestrator supervises many coding agents at once. Each worker is a shell on its own pseudo-terminal, optionally in its own git worktree and driving Claude Code or Codex over a structured protocol. Everything that happens is an event on one ordered stream backed by a SQLite log, which the UI renders, a pull request body cites, and a headless daemon replays to remote clients. It is a Tauri 3 (alpha) desktop app with a React 19 frontend, and the same Rust core also runs headless as `swarmd`.
 
 ## Status
 
 > [!IMPORTANT]
-> **Latest release: v0.13.1 (2026-08-22).** `main` carries the unreleased 0.14.0 work (see `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md)), including breaking changes such as the move from Tauri v2 to Tauri 3 (alpha). No 0.14.0 tag or release exists. Everything under "What Ships on Main" is on `main` and is not in v0.13.1. Released binaries: [v0.13.1](https://github.com/ABCrimson/Swarm/releases/tag/v0.13.1).
+> **Latest release: v0.13.1 (2026-08-22).** `main` carries the unreleased 0.14.0 work (see `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md)), including breaking changes such as the move from Tauri v2 to Tauri 3 (alpha). No 0.14.0 tag or release exists. Most of what is listed below is not in v0.13.1. The trust tiers and the worktree per worker already held there, and the Tauri-free core with two shells, the provider trait pair and the ship chain shipped there in an earlier form. Released binaries: [v0.13.1](https://github.com/ABCrimson/Swarm/releases/tag/v0.13.1).
 
-## What Ships on Main
+## What Main Does Today
 
-Unreleased 0.14.0 work, as of this commit.
+The code on `main` as of this commit; Status above names what v0.13.1 already had.
 
 - **One Tauri-free core, two shells.** A Tauri 3 (alpha) desktop app and the headless `swarmd` daemon both embed the same `swarm-core` library ([ADR-0001](docs/adr/0001-tauri-free-core-two-shells.md), [daemon guide](docs/daemon.md)).
 - **Two providers behind one trait pair.** Claude Code over its stream-json control protocol and Codex over `codex app-server` implement `AgentAdapter` and `AgentSession` ([ADR-0013](docs/adr/0013-provider-adapter-trait-pair.md), [ADR-0016](docs/adr/0016-claude-code-control-protocol.md), [ADR-0017](docs/adr/0017-codex-app-server-protocol.md)).
@@ -40,18 +40,18 @@ Unreleased 0.14.0 work, as of this commit.
 
 ```mermaid
 flowchart TB
-    FE["React 19 frontend (src/)"]
-    subgraph shells["Two shells"]
+    FE["React 19 Frontend (src/)"]
+    subgraph shells["Two Shells"]
         DESK["swarm-desktop (src-tauri/)"]
         DAEMON["swarmd (crates/swarmd)"]
     end
-    subgraph core["swarm-core (crates/swarm-core), Tauri-free"]
-        RT["Runtime and command Registry"]
+    subgraph core["swarm-core (crates/swarm-core), Tauri-Free"]
+        RT["Runtime and Command Registry"]
         SCHED["AgentScheduler"]
         PROV["ClaudeCodeAdapter and CodexAdapter"]
         ENG["OrchestrationEngine"]
         LOG[("EventLog (SQLite)")]
-        GIT["Worktrees and ship chain (git/)"]
+        GIT["Worktrees and Ship Chain (git/)"]
     end
     FE -->|"Tauri IPC"| DESK
     FE -->|"WebSocket /ws"| DAEMON
@@ -59,6 +59,7 @@ flowchart TB
     DAEMON --> RT
     RT --> SCHED
     SCHED --> PROV
+    RT --> PROV
     RT --> ENG
     ENG --> LOG
     RT --> GIT
@@ -72,13 +73,13 @@ Each worker's tier maps onto the provider's own permission settings ([ADR-0015](
 
 | Tier | Claude Code | Codex |
 | --- | --- | --- |
-| `restricted` | `--restricted`, `--permission-mode dontAsk`, deny list for `Bash`, `Write`, `Edit`, `NotebookEdit` | `untrusted` approvals, `read-only` sandbox |
-| `standard` | `--permission-mode manual`, deny list of destructive Bash patterns | `untrusted` approvals, `workspace-write` sandbox |
-| `write_enabled` | `--permission-mode acceptEdits`, the same Bash deny list | `on-request` approvals, `workspace-write` sandbox |
+| `restricted` | `--restricted`, `--permission-mode dontAsk`, deny list for `Bash`, `PowerShell`, `Write`, `Edit`, `NotebookEdit`, `EnterWorktree`, `ExitWorktree`, `DesignSync`, `WebSearch`, `PushNotification` | `untrusted` approvals, `read-only` sandbox |
+| `standard` | `--permission-mode manual`, deny list of `EnterWorktree`, `ExitWorktree` and destructive Bash patterns | `untrusted` approvals, `workspace-write` sandbox |
+| `write_enabled` | `--permission-mode acceptEdits`, the same deny list as `standard` | `on-request` approvals, `workspace-write` sandbox |
 
 No tier maps to Claude Code's `bypassPermissions`, and the Codex types have no `never` or `danger-full-access` variants, so those values cannot be put on the wire.
 
-Per [ADR-0038](docs/adr/0038-agent-provider-trust-model.md), a Claude Code session loads no repo settings (`--setting-sources ""`). SWARM reads only the `permissions.deny` string entries from `<cwd>/.claude/settings.json` and appends them to the tier's deny list: a repo can narrow a session and nothing else. The Bash deny patterns are a convenience fence, not the gate; the gate is the permission mode plus the human.
+Per [ADR-0038](docs/adr/0038-agent-provider-trust-model.md), a Claude Code session loads no repo settings (`--setting-sources ""`). SWARM reads only the `permissions.deny` string entries from `<cwd>/.claude/settings.json` and appends them, in file order and up to 8 KiB of JSON, to the tier's deny list (at the first entry that does not fit, that entry and all later ones are dropped): a repo can narrow a session and nothing else. The Bash deny patterns are a convenience fence, not the gate; the gate is the permission mode plus the human.
 
 ## The Event Log Guarantee
 
@@ -92,7 +93,7 @@ The cost, as measured on 2026-10-13 on an Intel Core Ultra 9 290HX Plus under WS
 
 Prerequisites, as pinned in `package.json`, `rust-toolchain.toml` and [docs/contributing.md](docs/contributing.md):
 
-- **pnpm** at the version in `packageManager` (`pnpm@12.13.0`), enabled through `corepack enable`.
+- **pnpm** at the version in `packageManager` (`pnpm@12.13.0`).
 - **Node.js** at the nightly pinned in `engines.node` and `devEngines.runtime` (`onFail: download`); per docs/contributing.md, pnpm downloads it, so do not install it separately.
 - **Rust** at the nightly pinned by `rust-toolchain.toml`; any `cargo` command in the repo installs it.
 - **git 2.32 or newer** (a startup probe reports older versions).
@@ -118,14 +119,14 @@ target/release/swarmd --serve-ui dist-web
 > [!WARNING]
 > The token is the only authentication and the WebSocket is plain `ws://`. Do not put `--bind 0.0.0.0:PORT` on the open internet; reach a remote daemon through an SSH tunnel or a reverse proxy that terminates TLS ([daemon guide](docs/daemon.md#reaching-the-daemon-off-box)).
 
-Released binaries (desktop installers and `swarmd`) are attached to the [v0.13.1 release](https://github.com/ABCrimson/Swarm/releases/tag/v0.13.1), which does not contain the work listed under "What Ships on Main".
+Released binaries (desktop installers and `swarmd`) are attached to the [v0.13.1 release](https://github.com/ABCrimson/Swarm/releases/tag/v0.13.1), which predates the `[Unreleased]` work in [CHANGELOG.md](CHANGELOG.md).
 
 ## Gates
 
 The commands a change must pass, copied from [AGENTS.md](AGENTS.md#gates).
 
 <details>
-<summary>Frontend, Rust and workflow gates</summary>
+<summary>Frontend, Rust and Workflow Gates</summary>
 
 Frontend (all must pass):
 
@@ -185,14 +186,14 @@ Do not open a public issue for a vulnerability. Report it through [GitHub Securi
 
 ## Contributing
 
-Setup, standards and the pull request process are in [docs/contributing.md](docs/contributing.md). House rules from [CLAUDE.md](CLAUDE.md): pnpm is the only package manager, every dependency version is pinned exactly, and Biome is the single linter and formatter.
+Setup, standards and the pull request process are in [docs/contributing.md](docs/contributing.md). House rules from [AGENTS.md](AGENTS.md), which `CLAUDE.md` imports: pnpm is the only package manager, every dependency version is pinned exactly, and Biome is the only frontend linter and formatter.
 
 ## License
 
 [MIT](LICENSE). Copyright (c) 2026 Albert Badalov.
 
 <details>
-<summary>Pinned versions at this commit</summary>
+<summary>Pinned Versions at This Commit</summary>
 
 | Component | Pin | Source |
 | --- | --- | --- |
@@ -202,10 +203,10 @@ Setup, standards and the pull request process are in [docs/contributing.md](docs
 | Rust toolchain | nightly-2026-10-14 (`rust-version` 1.101, edition 2024) | `rust-toolchain.toml`, `Cargo.toml` |
 | Tauri | 3.0.0-alpha.4 (`tauri`, `tauri-runtime-wry`) | `Cargo.toml` |
 | React | 19.3.0-canary-07dde64d-20261013 | `package.json` |
-| TypeScript | 7.1.0-dev.20261013.1 | `package.json` |
+| TypeScript | 7.1.0-dev.20261014.1 | `package.json` |
 | Vite | 8.3.4 | `package.json` |
 | Biome | 2.5.15 | `package.json` |
 | Vitest | 5.0.4 | `package.json` |
-| Playwright | 1.65.0-alpha-2026-10-13 | `package.json` |
+| Playwright | 1.65.0-alpha-2026-10-14 | `package.json` |
 
 </details>
