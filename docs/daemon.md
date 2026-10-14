@@ -90,6 +90,8 @@ The page `--serve-ui` serves talks to the daemon over the WebSocket (`wsTranspor
 | Settings: Check For Updates | Works | Button disabled, "Available In The Desktop App Only" beside it |
 | Settings: Check For Updates On Launch, Native Alert Notifications toggles | Work | Toggles disabled, with "Available In The Desktop App Only" |
 | Spawn dialog: Webview Anthropic provider, folder picker | Work; Webview Anthropic is the default provider | Both disabled, with "Available In The Desktop App Only"; the dialog starts on Claude Code |
+| Settings, AI Connectivity: API Key field, Save API Key | Work | Both disabled, with "Available In The Desktop App Only"; the key is never read, because `swarmd` denies secret-shaped config keys to remote clients |
+| Ship preview: summary Generate / Regenerate | Streams a draft from the webview to Anthropic | Disabled, with "Available In The Desktop App Only"; the summary text area stays editable |
 
 The disabled Check For Updates button is what a browser-build user sees. `checkForUpdates()` itself rejects with "Update Checks Need The Desktop App" when the transport has no updater or there is no Tauri bridge (for example a plain-browser preview of the desktop build, where the button stays enabled and the failure toast, "Update Check Failed", carries that text), so a check that did not run never reads as "up to date".
 

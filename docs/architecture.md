@@ -554,8 +554,9 @@ zod-validated functions on top; `isTauri()` means the Tauri bridge specifically,
 some backend is reachable, and `hasCapability(feature)` reads the transport's capability flags
 (`workspaceBrowsing`, `nativeNotifications`, `autoUpdate`, `localAiChat`; all on for `tauriTransport`, all off for
 `wsTransport`). Desktop-only controls gate on it: the remote build hides Graph Export / Import Workflow and
-disables Open Project, session file export and import, the update check and native-notification toggles, and the
-spawn dialog's Webview Anthropic provider (the dialog starts on Claude Code) and folder picker, each showing
+disables Open Project, session file export and import, the update check and native-notification toggles, the
+Settings API key field and Save API Key, the Ship preview's summary Generate / Regenerate (its text area stays
+editable), and the spawn dialog's Webview Anthropic provider (the dialog starts on Claude Code) and folder picker, each showing
 `DESKTOP_ONLY_REASON` ("Available In The Desktop App Only"). `checkForUpdates()` rejects with "Update Checks Need
 The Desktop App" when it cannot run. The table is in [daemon.md](daemon.md#what-the-browser-build-offers).
 
