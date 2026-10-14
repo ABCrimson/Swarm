@@ -89,8 +89,8 @@ resolution: a probe resolves afresh, a spawn reuses it.
 - A repo agent's `permissionMode` could raise a subagent's mode (read in the CLI source, not verified
   at runtime); with no repo agents loaded this cannot arise from the repo.
 - The probe directory is removed before `probe()` returns. If the probe future is dropped first, a drop
-  guard removes it on the blocking pool, after the probe's `claude` child has been killed and reaped
-  (see the amendment below).
+  guard removes it on the blocking pool, concurrently with the kill and reap of the probe's `claude`
+  child, retrying for about 5 s while that child still holds it as its working directory.
 - A same-user process could swap `.claude/settings.json` for a FIFO between the metadata check and the
   open, and the read would then block on that spawned task; this is accepted because it needs same-user
   write access to the worktree.
@@ -112,5 +112,8 @@ moves into the session's state, so a spawn future dropped mid-handshake leaves n
 registered session and no `agent_session_started` event. The probe directory has its own drop guard that
 removes it on the blocking pool, retrying while the dying child may still hold it as its working
 directory (Windows refuses to remove a directory that is a live process's cwd). This removes the leak the
-bullet above used to accept. A caller that drops a spawn future during the process-creation syscall itself
-is covered too: the blocking task kills the child it created when nobody is left to receive it.
+bullet above used to accept. A caller dropped at any point after the process is created is covered too:
+the child is guarded before it leaves the blocking task.
+
+One gap remains and is accepted: a probe dropped during `private_probe_dir().await` can still leave an
+empty directory, created after the drop and before any guard exists.

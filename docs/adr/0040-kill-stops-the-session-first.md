@@ -84,3 +84,10 @@ launchd plist are 60 s. A daemon stop now abandons a kill only when its attach's
 what is left of the 40 s after the 30 s handshake, about 10 s. The Windows Scheduled Task still stops without
 a graceful window. The kill-on-drop guard around the Claude Code handshake, and the reaping of a process whose
 kill was dropped mid-teardown, remain open follow-ups.
+
+## Amended 2026-10-14
+
+The kill-on-drop guard around the Claude Code handshake exists now (see the 2026-10-14 amendment to
+[ADR-0038](0038-agent-provider-trust-model.md)): a dropped `spawn` future kills and reaps its CLI. What
+remains open is letting a kill abandon an attach in flight, since the attach still awaits `adapter.spawn`
+inline and a kill waits for it.

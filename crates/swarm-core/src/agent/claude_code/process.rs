@@ -180,21 +180,20 @@ fn guard_child(child: Child) -> GuardedChild {
     DropGuard::new(child, kill_and_reap_detached as fn(Child))
 }
 
-/// The guard's drop action: kills `child` and waits for it on the
-/// blocking pool, so no Tokio worker thread waits inside `Drop`. A child
-/// that already exited makes the kill a no-op. With no runtime on the
-/// dropping thread (it is not a Tokio worker either) the same work runs
-/// inline. A runtime that is shutting down discards the queued task; the
-/// process is ending anyway and its pipes are closed.
-fn kill_and_reap_detached(child: Child) {
-    let stop = move || {
-        let mut child = child;
-        child.kill().ok();
-        child.wait().ok();
-    };
+/// The guard's drop action: kills `child` at once and waits for it on the
+/// blocking pool, so no Tokio worker thread waits inside `Drop`. The kill
+/// is a non-blocking syscall, and a child that already exited makes it a
+/// no-op. With no runtime on the dropping thread (it is not a Tokio worker
+/// either) the wait runs inline. A runtime that is shutting down discards
+/// the queued wait; the child is already killed and stays a zombie only
+/// until this process exits.
+fn kill_and_reap_detached(mut child: Child) {
+    child.kill().ok();
     match tokio::runtime::Handle::try_current() {
-        Ok(runtime) => drop(runtime.spawn_blocking(stop)),
-        Err(_) => stop(),
+        Ok(runtime) => drop(runtime.spawn_blocking(move || child.wait().ok())),
+        Err(_) => {
+            child.wait().ok();
+        }
     }
 }
 
@@ -213,36 +212,38 @@ impl Process {
         // Process creation is a blocking syscall; keep it off the async
         // worker threads.
         let (binary, argv, cwd) = (binary.to_owned(), argv.to_vec(), cwd.to_owned());
-        // The result travels over a channel rather than the join handle: a
-        // dropped caller leaves the blocking task running, and its `send`
-        // fails, so the task itself kills the child it just created.
+        // A dropped caller leaves this blocking task running, so the child
+        // is guarded on this thread before it is sent: a send that fails, or
+        // that succeeds into a receiver dropped before it is polled (tokio
+        // drops the unreceived value), drops the guard and kills the child.
         let (sent, received) = oneshot::channel();
         drop(tokio::task::spawn_blocking(move || {
-            let spawned = spawn_piped(&binary, &argv, &cwd, &child_env());
-            if let Err(Ok(orphan)) = sent.send(spawned) {
-                kill_and_reap_detached(orphan.child);
-            }
+            let spawned = spawn_piped(&binary, &argv, &cwd, &child_env()).map(|piped| {
+                let PipedHandle {
+                    stdin,
+                    child,
+                    pid: _,
+                    lines,
+                    framer_errors,
+                    stderr_tail,
+                } = piped;
+                (guard_child(child), stdin, lines, framer_errors, stderr_tail)
+            });
+            sent.send(spawned).ok();
         }));
-        let PipedHandle {
-            stdin,
-            child,
-            pid: _,
-            lines,
-            framer_errors,
-            stderr_tail,
-        } = received
+        let (child, stdin, lines, framer_errors, stderr_tail) = received
             .await
             .map_err(|e| anyhow::anyhow!("the claude spawn task failed: {e}"))??;
         match StdinWriter::start(stdin) {
             Ok(stdin) => Ok(Self {
-                child: guard_child(child),
+                child,
                 stdin,
                 lines,
                 framer_errors,
                 stderr_tail,
             }),
             Err(error) => {
-                reap(child, false).await;
+                reap(DropGuard::dismiss(child), false).await;
                 Err(error.into())
             }
         }

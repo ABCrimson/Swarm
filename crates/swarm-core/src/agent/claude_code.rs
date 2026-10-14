@@ -302,9 +302,12 @@ pub struct ClaudeCodeAdapter {
     /// every probe, reused by every spawn that follows, and resolved by
     /// the first spawn when no probe ran.
     resolved: parking_lot::RwLock<Option<PathBuf>>,
+    /// Where each probe's private directory is created: the temp dir,
+    /// except in tests, which give each adapter a root of its own.
+    probe_root: PathBuf,
 }
 
-/// Name of a probe's private working directory under the temp root: the
+/// Name of a probe's private working directory under the probe root: the
 /// prefix, then a fresh UUID.
 const PROBE_DIR_PREFIX: &str = "swarm-claude-probe-";
 
@@ -314,11 +317,11 @@ const PROBE_DIR_PREFIX: &str = "swarm-claude-probe-";
 /// [`tier::cap_repo_deny`].
 const REPO_SETTINGS_MAX_BYTES: u64 = 1024 * 1024;
 
-/// Creates a fresh directory for one probe under the temp root, owner-only
+/// Creates a fresh directory for one probe under `root`, owner-only
 /// (`0700`) on Unix. Creation is not recursive, so it fails when the path
 /// already exists rather than reuse a directory someone else made.
-async fn private_probe_dir() -> std::io::Result<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("{PROBE_DIR_PREFIX}{}", Uuid::new_v4()));
+async fn private_probe_dir(root: &Path) -> std::io::Result<PathBuf> {
+    let dir = root.join(format!("{PROBE_DIR_PREFIX}{}", Uuid::new_v4()));
     #[cfg(unix)]
     let builder = {
         let mut builder = tokio::fs::DirBuilder::new();
@@ -344,7 +347,7 @@ const PROBE_DIR_REMOVE_RETRY: Duration = Duration::from_millis(100);
 /// reaps the child on the blocking pool. That runs concurrently with this
 /// removal, and Windows refuses to remove a directory that is a live
 /// process's working directory, so the removal retries until the child is
-/// gone. On Unix the first attempt succeeds.
+/// gone. On Unix the first attempt usually succeeds (a child still writing can make `remove_dir_all` fail with ENOTEMPTY).
 fn remove_probe_dir_detached(dir: PathBuf) {
     match tokio::runtime::Handle::try_current() {
         Ok(runtime) => drop(runtime.spawn_blocking(move || remove_probe_dir(&dir))),
@@ -454,6 +457,7 @@ impl ClaudeCodeAdapter {
             binary: "claude".to_owned(),
             prefix_args: Vec::new(),
             resolved: parking_lot::RwLock::new(None),
+            probe_root: std::env::temp_dir(),
         }
     }
 
@@ -472,7 +476,16 @@ impl ClaudeCodeAdapter {
             binary: binary.into(),
             prefix_args,
             resolved: parking_lot::RwLock::new(None),
+            probe_root: std::env::temp_dir(),
         }
+    }
+
+    /// Creates probe directories under `root` instead of the temp dir, so
+    /// a test sees only its own.
+    #[cfg(test)]
+    pub fn with_probe_root(mut self, root: PathBuf) -> Self {
+        self.probe_root = root;
+        self
     }
 
     /// The executable to start: the cached resolution unless `refresh` or
@@ -500,7 +513,7 @@ impl ClaudeCodeAdapter {
     /// Runs the probe in a fresh private directory (`private_probe_dir`)
     /// and removes it on every return path, including a dropped future.
     async fn run_probe(&self) -> ProbeReport {
-        let cwd = match private_probe_dir().await {
+        let cwd = match private_probe_dir(&self.probe_root).await {
             Ok(cwd) => cwd,
             Err(error) => {
                 return ProbeReport {

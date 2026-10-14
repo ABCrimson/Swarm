@@ -1884,8 +1884,12 @@ async fn spawn_refuses_an_empty_or_relative_cwd() {
 
 #[tokio::test]
 async fn private_probe_dir_is_fresh_and_owner_only() {
-    let first = private_probe_dir().await.expect("create a probe dir");
-    let second = private_probe_dir().await.expect("create a probe dir");
+    let first = private_probe_dir(&std::env::temp_dir())
+        .await
+        .expect("create a probe dir");
+    let second = private_probe_dir(&std::env::temp_dir())
+        .await
+        .expect("create a probe dir");
     assert_ne!(first, second);
     for dir in [&first, &second] {
         assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
@@ -2494,7 +2498,9 @@ async fn wait_until_reaped(pid: &str) {
 }
 
 /// Dropping `spawn` mid-handshake kills and reaps the child and
-/// registers no session.
+/// registers no session. The reaping assertion is a Linux-only regression
+/// check (`/proc`); elsewhere the test checks only that no session event
+/// was emitted.
 #[tokio::test]
 async fn a_dropped_spawn_future_kills_and_reaps_the_child() {
     let harness = Harness::new();
@@ -2524,30 +2530,23 @@ async fn a_dropped_spawn_future_kills_and_reaps_the_child() {
 #[tokio::test]
 async fn a_dropped_probe_future_removes_its_private_directory() {
     let harness = Harness::new();
-    let adapter = harness.adapter("handshake_held.mjs");
+    // The adapter's own probe root: no other test or lane sharing the
+    // temp dir can have a probe directory here.
+    let root = harness.cwd.join("probes");
+    std::fs::create_dir_all(&root).expect("create the probe root");
+    let adapter = harness
+        .adapter("handshake_held.mjs")
+        .with_probe_root(root.clone());
     // The held fake drops a marker into its working directory (the probe
     // directory) while it withholds the `initialize` reply.
-    // A directory a crashed earlier run left behind must not be mistaken
-    // for this probe's, so only directories that appear later count.
-    let probe_dirs = || -> Vec<PathBuf> {
-        std::fs::read_dir(std::env::temp_dir())
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with("swarm-claude-probe-"))
-            })
-            .collect()
-    };
-    let before = probe_dirs();
     let find_held_dir = async {
         loop {
-            let held = probe_dirs().into_iter().find(|path| {
-                !before.contains(path) && path.join("swarm-fake-claude.held").exists()
-            });
+            let held = std::fs::read_dir(&root)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|entry| entry.path())
+                .find(|path| path.join("swarm-fake-claude.held").exists());
             if let Some(dir) = held {
                 return dir;
             }
