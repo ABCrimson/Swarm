@@ -45,6 +45,7 @@ import type {
 } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import * as z from "zod";
 import { ANTHROPIC_API_KEY_CONFIG_KEY } from "#lib/anthropic-config";
+import { isError } from "#lib/is-error";
 import { estimateCostUsd, getModelById, hasPricing, type UsageTokens } from "#lib/models";
 import { readConfig } from "#lib/tauri";
 import { useAiStore } from "#store/ai";
@@ -302,7 +303,7 @@ export function toAiRequestError(err: unknown): AiRequestError {
   }
   return new AiRequestError(
     "unknown",
-    Error.isError(err) ? err.message : "Unexpected AI Request Failure",
+    isError(err) ? err.message : "Unexpected AI Request Failure",
     opts,
   );
 }

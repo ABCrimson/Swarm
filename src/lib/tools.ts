@@ -30,6 +30,7 @@ import {
   isValidToolName,
   runCustomTool,
 } from "#lib/custom-tools";
+import { errorMessage } from "#lib/is-error";
 import type { ProvenanceArgs } from "#lib/tauri";
 import { invoke, killWorker, workerInput } from "#lib/tauri";
 import { spawnWorkerFromSpec } from "#lib/worker-spawn";
@@ -80,7 +81,7 @@ export interface SwarmTool {
 
 /** A failed tool result carrying a Title Case, model- and user-readable message. */
 function failure(error: unknown): SwarmToolResult {
-  return { success: false, error: Error.isError(error) ? error.message : String(error) };
+  return { success: false, error: errorMessage(error) };
 }
 
 /** Validates model-supplied input, returning the parsed value or a failed result. */
