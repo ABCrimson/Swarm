@@ -5,6 +5,7 @@ import { Pill } from "#components/ui/Pill";
 import { Spinner } from "#components/ui/Spinner";
 import { type UseShipReturn, useShip } from "#hooks/useShip";
 import { errorMessage } from "#lib/is-error";
+import { isTauri } from "#lib/tauri";
 import type { ShipError, ShipErrorKind, ShipPreflight, ShipRemedy } from "#store/types";
 import { ShipPreview } from "./ShipPreview.tsx";
 import { ShipProgress } from "./ShipProgress.tsx";
@@ -136,6 +137,12 @@ function remedyInstructions(
  * from a click handler.
  */
 async function openComparePage(url: string): Promise<void> {
+  // The opener plugin needs the Tauri bridge; a browser page opens the link
+  // itself (this runs from a click, so no popup blocker applies).
+  if (!isTauri()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
   try {
     await openUrl(url);
   } catch (err) {

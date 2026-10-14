@@ -44,8 +44,8 @@ import {
  * chat) decide whether to offer themselves with {@link hasCapability};
  * this is the runtime check for call sites that invoke a plugin and need
  * the bridge itself (there is no opener capability: WorkerDetail checks
- * this before `openPath`, and the ship flow's `openUrl` calls catch the
- * failure instead). A `wsTransport` connection is a real backend but not
+ * this before `openPath`, ShipPanel's compare link opens a browser tab
+ * without it, and useShip's post-ship `openUrl` catches the failure). A `wsTransport` connection is a real backend but not
  * a Tauri bridge, so this is `false` there; see {@link hasTransport}.
  */
 export { isTauri };
