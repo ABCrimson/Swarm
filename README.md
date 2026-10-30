@@ -136,7 +136,7 @@ The cost, as measured on 2026-10-13 on an Intel Core Ultra 9 290HX Plus under WS
 
 Prerequisites, from `package.json`, `rust-toolchain.toml`, [docs/contributing.md](docs/contributing.md), `MIN_GIT_VERSION` in `crates/swarm-core/src/git/cli.rs` and `minimumSystemVersion` in `src-tauri/tauri.conf.json`:
 
-- **pnpm** at the version in `packageManager` (`pnpm@12.13.0`).
+- **pnpm** at the version in `packageManager` (`pnpm@12.17.0`).
 - **Node.js** at the nightly pinned in `engines.node` and `devEngines.runtime` (`onFail: download`); per docs/contributing.md, pnpm downloads it, so do not install it separately.
 - **Rust** at the nightly pinned by `rust-toolchain.toml`; any `cargo` command in the repo installs it.
 - **git 2.32 or newer** (a startup probe reports older versions).
@@ -241,16 +241,16 @@ CI gathers every job into the single required status `CI OK`.
 | Component | Pin | Source |
 | --- | --- | --- |
 | App | 0.14.0 | `package.json` |
-| pnpm | 12.13.0 | `package.json` `packageManager` |
-| Node.js | 27.0.0-nightly202610123b639be3a4 | `package.json` `devEngines.runtime` |
-| Rust toolchain | nightly-2026-10-14 (`rust-version` 1.101, edition 2024) | `rust-toolchain.toml`, `Cargo.toml` |
+| pnpm | 12.17.0 | `package.json` `packageManager` |
+| Node.js | 28.0.0-nightly202610304e48b9b06b | `package.json` `devEngines.runtime` |
+| Rust toolchain | nightly-2026-10-30 (`rust-version` 1.101, edition 2024) | `rust-toolchain.toml`, `Cargo.toml` |
 | Tauri | 3.0.0-alpha.5 (`tauri`, `tauri-runtime-wry`) | `Cargo.toml` |
 | React | 19.3.1 | `package.json` |
-| TypeScript | 7.1.0-dev.20261014.1 | `package.json` |
-| Vite | 8.3.4 | `package.json` |
-| Biome | 2.5.15 | `package.json` |
-| Vitest | 5.0.4 | `package.json` |
-| Playwright | 1.65.0-alpha-2026-10-14 | `package.json` |
+| TypeScript | 7.1.0-dev.20261030.1 | `package.json` |
+| Vite | 8.3.5 | `package.json` |
+| Biome | 2.6.4 | `package.json` |
+| Vitest | 5.1.0-beta.1 | `package.json` |
+| Playwright | 1.65.0-alpha-2026-10-30 | `package.json` |
 
 </details>
 
