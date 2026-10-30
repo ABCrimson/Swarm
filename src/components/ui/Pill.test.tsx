@@ -169,6 +169,9 @@ describe("Pill", () => {
       </Pill>,
     );
 
-    expect(container.firstElementChild).toHaveStyle({ background: "oklch(0.5 0.2 30)" });
+    // The override uses the `background` shorthand, as ToolCallDisplay's accents do; its
+    // computed value serializes every longhand (jsdom 30.1.3, like browsers), so the color
+    // it carries is read from `background-color`.
+    expect(container.firstElementChild).toHaveStyle({ backgroundColor: "oklch(0.5 0.2 30)" });
   });
 });

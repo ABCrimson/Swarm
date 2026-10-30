@@ -48,15 +48,35 @@
         "noExplicitAny": "error"
       },
       "nursery": {
+        "noArraySortForMinMax": "error",
+        "noBooleanSortComparator": "error",
+        "noConsoleSpaces": "error",
+        "noEagerArrayMethodsInLoops": "error",
         "noFloatingPromises": "error",
+        "noMagicArrayFlatDepth": "error",
         "noMeaninglessVoidOperator": "error",
+        "noPathConcat": "error",
         "noReactObjectTypeAsDefaultProp": "error",
         "noReturnInFinally": "error",
+        "noSelfNestedLayer": "error",
         "noTailwindRawColors": "warn",
         "noUnmodifiedLoopCondition": "error",
+        "noUnreadableIife": "error",
+        "noUselessRecursion": "error",
+        "noUselessSplice": "error",
         "noXorAsExponentiation": "error",
+        "noZeroLengthUnit": "error",
+        "useBlockStatementOverIife": "error",
+        "useConsistentLightnessNotation": {
+          "level": "error",
+          "options": { "notation": "number" }
+        },
+        "useExpectToContain": "error",
         "useFlatMathMinMax": "error",
+        "useMathAbs": "error",
+        "useMathTrunc": "error",
         "useModernMathApis": "error",
+        "usePackageJsonValidEngines": "error",
         "useReactCompiler": "warn"
       }
     }
@@ -79,6 +99,11 @@
     },
     "formatter": {
       "enabled": true
+    }
+  },
+  "markdown": {
+    "formatter": {
+      "enabled": false
     }
   },
   "javascript": {

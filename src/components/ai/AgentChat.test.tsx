@@ -67,6 +67,12 @@ function Harness(): React.ReactElement {
   return <AgentChat workerId={WORKER_ID} />;
 }
 
+/** The session-event subscription alone, mounted apart from any chat. */
+function Events(): null {
+  useAgentSessionEvents();
+  return null;
+}
+
 async function submit(text: string): Promise<void> {
   const user = userEvent.setup();
   const input = screen.getByRole("textbox", { name: /^Message / });
@@ -537,10 +543,6 @@ describe("AgentChat", () => {
   });
 
   it("keeps the transcript when the chat unmounts (tab switch)", () => {
-    function Events(): null {
-      useAgentSessionEvents();
-      return null;
-    }
     render(<Events />);
     const chat = render(<AgentChat workerId={WORKER_ID} />);
     fire("agent_block", {

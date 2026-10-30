@@ -261,6 +261,16 @@ describe("Settings — worker registry cap", () => {
   });
 });
 
+/** The app-root bridge sits outside the page host's Activity, as in App. */
+function Host({ mode }: { readonly mode: "visible" | "hidden" }): React.ReactElement {
+  useSettingsBridge();
+  return (
+    <Activity mode={mode}>
+      <Settings />
+    </Activity>
+  );
+}
+
 describe("Settings — worker registry cap, one call in flight", () => {
   /** Matches the sync's acknowledgement deadline. */
   const ACK_TIMEOUT_MS = 10_000;
@@ -374,15 +384,6 @@ describe("Settings — worker registry cap, one call in flight", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(setMaxWorkers).mockReturnValueOnce(new Promise<number | null>(() => {}));
-    // The app-root bridge sits outside the page host's Activity, as in App.
-    function Host({ mode }: { readonly mode: "visible" | "hidden" }): React.ReactElement {
-      useSettingsBridge();
-      return (
-        <Activity mode={mode}>
-          <Settings />
-        </Activity>
-      );
-    }
     const { rerender } = render(<Host mode="visible" />);
 
     commitCap(12);

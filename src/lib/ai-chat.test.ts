@@ -486,9 +486,12 @@ describe("ai-chat engine", () => {
     g.release();
     await settle();
 
-    const last = requests[1]?.messages.at(-1) as ChatMessageParam;
-    expect(last.role).toBe("user");
-    expect(last.content).toContainEqual({ type: "text", text: "Be brief" });
+    const last = requests[1]?.messages.at(-1);
+    expect(last?.role).toBe("user");
+    expect(last?.role === "user" ? last.content : []).toContainEqual({
+      type: "text",
+      text: "Be brief",
+    });
     expect(requests[1]?.model).toBe("claude-sonnet-5-5");
   });
 

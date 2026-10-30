@@ -28,8 +28,8 @@ export default defineConfig({
     css: false,
     // `pnpm test:coverage` (CI runs it on every push and PR). The
     // thresholds are a ratchet, not a target: the measured floor, rounded
-    // down (2026-10-13, Vitest 5.0.4: 91.46% statements, 85.16% branches,
-    // 87.8% functions, 92.98% lines), so coverage can only go up. Raise
+    // down (2026-10-30, Vitest 5.1.0-beta.1: 92.42% statements, 86.7% branches,
+    // 88.96% functions, 93.96% lines), so coverage can only go up. Raise
     // them whenever a change lifts the numbers.
     coverage: {
       provider: "v8",
@@ -38,10 +38,10 @@ export default defineConfig({
       // Full table in the log, browsable report in coverage/index.html.
       reporter: ["text", "html"],
       thresholds: {
-        statements: 91,
-        branches: 85,
-        functions: 87,
-        lines: 92,
+        statements: 92,
+        branches: 86,
+        functions: 88,
+        lines: 93,
       },
     },
   },

@@ -1,5 +1,5 @@
 import { act, render, screen } from "@testing-library/react";
-import { createStore, Provider, useAtomValue } from "jotai";
+import { type Atom, createStore, Provider, useAtomValue } from "jotai";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +18,11 @@ import {
   selectedModelAtom,
   themeAtom,
 } from "#store/ui";
+
+/** Renders an atom's value as text under an accessible name. */
+function Probe({ name, atom }: { readonly name: string; readonly atom: Atom<boolean> }) {
+  return createElement("output", { "aria-label": name }, String(useAtomValue(atom)));
+}
 
 describe("persisted UI settings", () => {
   beforeEach(() => {
@@ -168,14 +173,12 @@ describe("reducedMotionAtom", () => {
     media.query.matches = true;
 
     const store = createStore();
-    const Probe = ({ name }: { name: string }) =>
-      createElement("output", { "aria-label": name }, String(useAtomValue(atom)));
     render(
       createElement(
         Provider,
         { store },
-        createElement(Probe, { name: "a" }),
-        createElement(Probe, { name: "b" }),
+        createElement(Probe, { name: "a", atom }),
+        createElement(Probe, { name: "b", atom }),
       ),
     );
     await act(async () => {});

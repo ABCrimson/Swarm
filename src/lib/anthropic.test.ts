@@ -3,6 +3,7 @@
 // wiring, stream accumulation and error mapping are all exercised the
 // way they run in the app.
 
+import type { BetaMessageStreamParams } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { ChatResponse, StreamDelta, StreamParams } from "#lib/anthropic";
 import {
@@ -140,14 +141,14 @@ describe("streamMessage", () => {
   });
 
   describe("authentication", () => {
-    it("sends the configured API key as x-api-key on the request itself", async () => {
+    it("sends the configured API key as a bearer token on the request itself", async () => {
       const key = useFreshKey();
       fetchMock.mockResolvedValue(textResponse(CLAUDE_MODELS.sonnet.id, "Hi"));
 
       await run(SONNET);
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(sentHeaders().get("x-api-key")).toBe(key);
+      expect(sentHeaders().get("authorization")).toBe(`Bearer ${key}`);
     });
 
     it("re-reads the key before every request, so a key changed in Settings applies immediately", async () => {
@@ -157,8 +158,8 @@ describe("streamMessage", () => {
       const second = useFreshKey();
       await run(SONNET);
 
-      expect(sentHeaders(0).get("x-api-key")).toBe(first);
-      expect(sentHeaders(1).get("x-api-key")).toBe(second);
+      expect(sentHeaders(0).get("authorization")).toBe(`Bearer ${first}`);
+      expect(sentHeaders(1).get("authorization")).toBe(`Bearer ${second}`);
     });
 
     it("throws missing_key without any HTTP request when no key is configured", async () => {
@@ -193,15 +194,20 @@ describe("streamMessage", () => {
       for (const sampling of ["temperature", "top_p", "top_k"]) {
         expect(body).not.toHaveProperty(sampling);
       }
+      // The API version that removed the sampling parameters.
+      expect(sentHeaders().get("anthropic-version")).toBe("2026-10-21");
       // Sonnet 5.5 has classifiers: it opts into server-side refusal fallbacks.
       expect(body).toMatchObject({ fallbacks: "default" });
       expect(sentHeaders().get("anthropic-beta")).toBe("server-side-fallback-2026-07-01");
     });
 
-    it("offers no sampling parameters on StreamParams", () => {
+    it("offers no sampling parameters on StreamParams or the SDK request", () => {
       expectTypeOf<StreamParams>().not.toHaveProperty("temperature");
       expectTypeOf<StreamParams>().not.toHaveProperty("top_p");
       expectTypeOf<StreamParams>().not.toHaveProperty("top_k");
+      expectTypeOf<BetaMessageStreamParams>().not.toHaveProperty("temperature");
+      expectTypeOf<BetaMessageStreamParams>().not.toHaveProperty("top_p");
+      expectTypeOf<BetaMessageStreamParams>().not.toHaveProperty("top_k");
     });
 
     it("sends thinking and effort for Haiku 5.5, clamps max_tokens to its 128K output limit and sends no fallbacks", async () => {

@@ -7,27 +7,25 @@ import { PageHost } from "#components/layout/PageHost";
 import { currentPageAtom } from "#store/ui";
 
 /** A stand-in page with local state, to prove state survives navigation. */
-function fakePage(title: string) {
-  return function FakePage(): React.ReactElement {
-    const [clicks, setClicks] = useState(0);
-    return (
-      <section>
-        <h1>{title}</h1>
-        <button type="button" onClick={() => setClicks((n) => n + 1)}>
-          {title} Clicked {clicks}
-        </button>
-      </section>
-    );
-  };
+function FakePage({ title }: { readonly title: string }): React.ReactElement {
+  const [clicks, setClicks] = useState(0);
+  return (
+    <section>
+      <h1>{title}</h1>
+      <button type="button" onClick={() => setClicks((n) => n + 1)}>
+        {title} Clicked {clicks}
+      </button>
+    </section>
+  );
 }
 
-vi.mock("#pages/Dashboard", () => ({ Dashboard: fakePage("Dashboard") }));
-vi.mock("#pages/Workers", () => ({ Workers: fakePage("Workers") }));
-vi.mock("#pages/Sessions", () => ({ Sessions: fakePage("Sessions") }));
-vi.mock("#pages/Metrics", () => ({ Metrics: fakePage("Metrics") }));
-vi.mock("#pages/Logs", () => ({ Logs: fakePage("Logs") }));
-vi.mock("#pages/Tools", () => ({ Tools: fakePage("Tools") }));
-vi.mock("#pages/Workspace", () => ({ Workspace: fakePage("Workspace") }));
+vi.mock("#pages/Dashboard", () => ({ Dashboard: () => <FakePage title="Dashboard" /> }));
+vi.mock("#pages/Workers", () => ({ Workers: () => <FakePage title="Workers" /> }));
+vi.mock("#pages/Sessions", () => ({ Sessions: () => <FakePage title="Sessions" /> }));
+vi.mock("#pages/Metrics", () => ({ Metrics: () => <FakePage title="Metrics" /> }));
+vi.mock("#pages/Logs", () => ({ Logs: () => <FakePage title="Logs" /> }));
+vi.mock("#pages/Tools", () => ({ Tools: () => <FakePage title="Tools" /> }));
+vi.mock("#pages/Workspace", () => ({ Workspace: () => <FakePage title="Workspace" /> }));
 vi.mock("#pages/Settings", () => ({
   Settings: () => {
     throw new Error("Settings Exploded");
