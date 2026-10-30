@@ -34,3 +34,14 @@ minimumReleaseAgeExclude:
   - playwright-core@1.65.0-alpha-2026-10-30
   - playwright@1.65.0-alpha-2026-10-30
   - typescript@7.1.0-dev.20261030.1
+
+# The React Compiler's WASI binding (oxc-transform-react 0.156.0) pins @emnapi/core and
+# @emnapi/runtime to 2.0.0-alpha.6 but resolves @napi-rs/wasm-runtime 1.2.6 through
+# ~1.2.6, which peers "^1.7.1 || 2.0.0-beta.2" and calls emnapi's beta API
+# (addonModule, renamed from napiModule). With alpha.6 the binding dies on load
+# ("Cannot set properties of undefined (setting 'initWorker')") and the loader silently
+# falls back to native, so `NAPI_RS_FORCE_WASI=true pnpm check:compiler` fails. Pin the
+# beta the runtime declares until the binding's own pins catch up.
+overrides:
+  "@oxc-transform-react/binding-wasm32-wasip1>@emnapi/core": 2.0.0-beta.2
+  "@oxc-transform-react/binding-wasm32-wasip1>@emnapi/runtime": 2.0.0-beta.2
