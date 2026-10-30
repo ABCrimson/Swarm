@@ -33,7 +33,7 @@ jobs:
 
       # pnpm (packageManager), the pinned Node (devEngines.runtime) and a
       # frozen-lockfile install in one step.
-      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
+      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         with:
           cache: true
           require-lockfile: true
@@ -79,7 +79,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
+      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         with:
           cache: true
           require-lockfile: true
@@ -98,7 +98,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
+      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         with:
           cache: true
           require-lockfile: true
@@ -265,9 +265,9 @@ jobs:
       # Annotations instead of a SARIF upload: no security-events grant, and
       # findings still fail the job. Online audits check every pinned SHA
       # against its `# vX.Y.Z` comment and known-vulnerable action versions.
-      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
         with:
-          version: 1.30.1
+          version: 1.31.1
           advanced-security: false
           annotations: true
 
