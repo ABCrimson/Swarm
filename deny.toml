@@ -16,6 +16,18 @@ yanked = "deny"
 # Linux GTK3 stack carries one transitively: proc-macro-error
 # (RUSTSEC-2024-0370, via glib-macros).
 unmaintained = "workspace"
+# Unsound advisories fail for every crate in the graph, transitive ones
+# included (the default scope is "workspace", which would hide them); each
+# accepted one is listed below with its reason and re-checked at every bump.
+unsound = "all"
+ignore = [
+  # glib 0.18.5 reaches the Linux target only, through Tauri 3 alpha's GTK3
+  # stack (gtk 0.18 via tauri, tauri-runtime-wry, tao, wry, muda, webkit2gtk).
+  # The unsoundness is confined to glib::VariantStrIter, which nothing in this
+  # workspace or that stack iterates; the fix, glib 0.20, pairs with GTK4,
+  # which Tauri tracks in its 3.0 milestone (tauri-apps/tauri#14684).
+  { id = "RUSTSEC-2024-0429", reason = "glib::VariantStrIter unsoundness; transitive via Tauri 3 alpha's GTK3 stack on Linux; fixed only by glib 0.20 (GTK4), which Tauri 3 does not use yet; the affected iterator is not called" },
+]
 
 [licenses]
 confidence-threshold = 0.93

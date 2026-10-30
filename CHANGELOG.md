@@ -21,6 +21,7 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 ### Security
 
 - **Four RustSec advisories closed.** `rustls-webpki` `0.103.16` removes RUSTSEC-2026-0382; building `tauri-plugin-updater` without its `zip` feature removes RUSTSEC-2026-0367, -0368 and -0369. `pnpm audit` reports no known vulnerabilities (`undici` `8.12.3`, reached through jsdom, replaces the `8.11.2` that carried eight advisories).
+- **`cargo deny` reports unsound advisories for transitive crates too.** `deny.toml` sets `unsound = "all"` (the default scope hid them) and records the one it accepts: RUSTSEC-2024-0429, glib 0.18's `VariantStrIter` unsoundness, which reaches the Linux build through Tauri 3 alpha's GTK3 stack, is not called by anything in the tree, and is fixed only by glib 0.20 with GTK4.
 
 ---
 
