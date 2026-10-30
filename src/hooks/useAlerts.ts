@@ -18,14 +18,14 @@ const TOAST_STYLE = {
   critical: {
     background: "oklch(0.14 0.06 10 / 0.95)",
     border: "1px solid oklch(0.50 0.14 10)",
-    color: "oklch(0.72 0.20 10)",
+    color: "var(--color-rose)",
     fontFamily: "var(--font-mono)",
     fontSize: 12,
   },
   warning: {
     background: "oklch(0.14 0.06 70 / 0.95)",
     border: "1px solid oklch(0.55 0.12 70)",
-    color: "oklch(0.82 0.19 70)",
+    color: "var(--color-amber)",
     fontFamily: "var(--font-mono)",
     fontSize: 12,
   },
