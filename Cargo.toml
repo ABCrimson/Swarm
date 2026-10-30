@@ -18,9 +18,10 @@ resolver = "3"
 # it by swarm-desktop's `app_version_resolves_from_package_json` test.
 version      = "0.14.0"
 edition      = "2024"
-# `[profile.release] trim-paths` is stable from 1.101 (cargo#17488), the
-# trim_prefix/trim_suffix and std::mem::DropGuard APIs the code uses from
-# 1.100; rust-toolchain.toml pins the matching 1.101 nightly.
+# `[profile.release] trim-paths` (cargo#17488) and `<[T]>::split_once` are
+# stable from 1.101, the trim_prefix/trim_suffix and std::mem::DropGuard
+# APIs the code uses from 1.100; rust-toolchain.toml pins the matching
+# 1.101 nightly.
 rust-version = "1.101"
 license      = "MIT"
 repository   = "https://github.com/ABCrimson/Swarm"
@@ -74,7 +75,8 @@ tauri-plugin-fs           = "=3.0.0-alpha.3"
 tauri-plugin-dialog       = "=3.0.0-alpha.4"
 tauri-plugin-opener       = "=3.0.0-alpha.3"
 tauri-plugin-store        = "=3.0.0-alpha.3"
-tauri-plugin-updater      = "=3.0.0-alpha.3"
+# Default features minus zip (v1 .zip/.AppImage.tar.gz only); createUpdaterArtifacts ships raw .exe/.msi/.AppImage.
+tauri-plugin-updater      = { version = "=3.0.0-alpha.3", default-features = false, features = ["rustls-tls", "system-proxy"] }
 tauri-plugin-notification = "=3.0.0-alpha.3"
 # Dev-only, swarm-desktop's capability contract test: the matcher
 # tauri-plugin-opener evaluates URL scopes with (already in the tree
