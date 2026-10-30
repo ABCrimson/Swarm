@@ -328,8 +328,7 @@ fn drain_stderr(
                         tracing::debug!(pid, bytes = n, "piped child stderr chunk");
                         let mut tail = tail.lock();
                         tail.extend(&buf[..n]);
-                        let excess = tail.len().saturating_sub(STDERR_TAIL_CAP);
-                        tail.drain(..excess);
+                        tail.retain_back(STDERR_TAIL_CAP);
                     }
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                     Err(e) => {
