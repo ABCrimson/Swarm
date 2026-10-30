@@ -81,7 +81,7 @@ tauri-plugin-notification = "=3.0.0-alpha.3"
 # through it, at this exact version).
 glob                      = "=0.3.4"
 # ── Runtime (swarm-core; swarm-desktop and swarmd share several) ─────
-tokio                     = { version = "=1.53.3", features = ["full"] }
+tokio                     = { version = "=1.54.1", features = ["full"] }
 portable-pty              = "=0.9.0"
 serde                     = { version = "=1.0.229", features = ["derive"] }
 serde_json                = "=1.0.154"
@@ -92,12 +92,12 @@ tracing-subscriber        = { version = "=0.3.23", features = ["json", "env-filt
 # The release log's writer thread (`tracing_appender::non_blocking`), used
 # by swarm-desktop.
 tracing-appender          = "=0.2.5"
-uuid                      = { version = "=1.28.0", features = ["v4", "serde"] }
+uuid                      = { version = "=1.29.0", features = ["v4", "serde"] }
 dashmap                   = "=7.0.0-rc2"
-parking_lot               = "=0.12.5"
-rusqlite                  = { version = "=0.40.2", features = ["bundled"] }
+parking_lot               = "=0.13.0"
+rusqlite                  = { version = "=0.41.1", features = ["bundled"] }
 regex                     = "=1.13.1"
-sysinfo                   = "=0.39.6"
+sysinfo                   = "=0.40.1"
 tokio-util                = { version = "=0.7.20", features = ["rt"] }
 # ── swarmd (headless daemon) ─────────────────────────────────────────
 # axum is swarmd's HTTP/WebSocket server stack; only swarmd depends on it
