@@ -62,9 +62,7 @@ export const causalityInspectorAtom = atom<{ readonly startSeq: number } | null>
  * to the Settings field (`CapSync` in #lib/acknowledged-sync describes
  * the states). Written by `useSettingsBridge`, read by the Settings page.
  */
-export type AgentConcurrencySync = CapSync;
-
-export const agentConcurrencySyncAtom = atom<AgentConcurrencySync>({ status: "idle" });
+export const agentConcurrencySyncAtom = atom<CapSync>({ status: "idle" });
 
 /** The Worker Registry Cap field's sync state, written by `useSettingsBridge`. */
 export const maxWorkersSyncAtom = atom<CapSync>({ status: "idle" });
