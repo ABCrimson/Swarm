@@ -5,9 +5,11 @@
  *
  * - The API key is read from the backend config (`anthropic_api_key`,
  *   written by Settings) before every request and handed to the SDK as
- *   a plain string, which it sends as `Authorization: Bearer <key>`. A
- *   missing key therefore fails as `missing_key` before the SDK is
- *   involved, instead of surfacing wrapped in an SDK error.
+ *   a plain string, which it sends as `Authorization: Bearer <key>`.
+ *   The key is read here rather than through the SDK's `apiKey`
+ *   function form (`ApiKeySetter`), so a missing key fails as
+ *   `missing_key` before the SDK is involved instead of as the SDK's
+ *   generic "must return a non-empty string" error.
  * - {@link streamMessage} streams through the SDK's `BetaMessageStream`
  *   and returns `stream.finalMessage()` — the complete assistant turn
  *   (thinking blocks with signatures, text and `tool_use` blocks in model
