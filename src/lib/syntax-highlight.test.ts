@@ -86,19 +86,19 @@ describe("tokenizeJson", () => {
     ).toBe(input);
   });
 
-  it("gives every token its type's OKLCH color", () => {
+  it("gives every token its type's color", () => {
     const expected: Record<TokenType, string> = {
-      key: "oklch(0.78 0.18 205)",
-      string: "oklch(0.82 0.18 140)",
-      number: "oklch(0.82 0.19 70)",
+      key: "var(--color-plasma)",
+      string: "var(--color-lime)",
+      number: "var(--color-amber)",
       boolean: "oklch(0.72 0.20 290)",
       null: "oklch(0.72 0.20 290)",
       brace: "oklch(0.66 0.04 220)",
-      colon: "oklch(0.62 0.04 220)",
-      comma: "oklch(0.62 0.04 220)",
+      colon: "var(--color-fg-dim)",
+      comma: "var(--color-fg-dim)",
       comment: "oklch(0.62 0.02 220)",
       whitespace: "oklch(0 0 0 / 0)",
-      plain: "oklch(0.82 0.04 220)",
+      plain: "var(--color-fg)",
     };
     const tokens = tokenizeJson('{"a": [1, true, null, "s"], "b": NaN} // c');
 
