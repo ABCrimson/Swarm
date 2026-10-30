@@ -228,35 +228,9 @@ any thread/task ──EventSink::emit / emit_with / emit_awaiting_seq──▶ o
 ### Event catalogue
 
 27 event types, one `snake_case` tag each (`SwarmEvent` in `events/emitter.rs`; `swarm_event_tags!`
-keeps the tag list exhaustive). Payload fields are `camelCase`; full shapes are in
-[api.md](api.md#events).
-
-| Type | Payload fields | Persisted |
-| --- | --- | --- |
-| `worker_spawned` | `workerId, name, pid, isolation` | yes |
-| `worker_killed` | `workerId` | yes |
-| `worker_output` | `workerId, data` | no |
-| `worker_state` | `workerId, state` | yes |
-| `worker_input` | `workerId, bytes, source, preview` (redacted; withheld when the input contains any control other than CR or LF (BS, DEL, TAB, ESC, C1 controls)) | not when `source` is `terminal` |
-| `session_created` / `session_deleted` | `sessionId, name` / `sessionId` | yes |
-| `session_worker_added` / `session_worker_removed` | `sessionId, workerId` | yes |
-| `system_metrics` | `cpuPercent, memoryMb, memoryTotalMb, workerCount, timestamp` | no |
-| `system_log` | `level, message, target, timestamp` | no |
-| `bus_message` | `messageId, fromWorker, toWorker, topic, payload` | yes |
-| `worktree_created` | `workerId, sessionId, repoRoot, worktreePath, branch, baseCommit` | yes |
-| `worktree_removed` | `workerId, worktreePath, branch, disposition, headCommit, reason` | yes |
-| `ship_progress` | `shipId, workerId, step, status, detail` | yes |
-| `ship_settled` | `shipId, workerId, commitSha, pushedRef, prUrl, status, error` | yes |
-| `commit_created` | `workerId, sha, branch, seqFrom, seqTo` | yes |
-| `file_written` | `path, bytes` | yes |
-| `agent_turn_started` | `workerId, model, requestId` | yes |
-| `agent_session_started` | `workerId, provider, sessionKey, model, cwd, capabilities` | yes |
-| `agent_turn_delta` | `workerId, turnId, blockIndex, kind, text` | no |
-| `agent_block` | `workerId, turnId, blockIndex, kind, content` | yes |
-| `agent_tool_call` / `agent_tool_result` | `workerId, turnId, toolUseId, name, input` / `…, isError, content` | yes |
-| `agent_permission_request` | `workerId, turnId, requestId, tool, input, suggestedDecision, denialSubclass, message` | yes |
-| `agent_turn_settled` | `workerId, turnId, status, error, costUsd, usage, durationMs, numTurns` | yes |
-| `agent_session_exited` | `workerId, exitCode, signal` | yes |
+keeps the tag list exhaustive). Payload fields are `camelCase`; each type's payload and whether it
+persists are in [api.md](api.md#type-tags), and the rule itself is Persistence by exclusion under
+[Ordered Event Core](#ordered-event-core).
 
 `system_metrics` carries only measured values; nothing counts provider requests, so it has no request-rate field.
 
