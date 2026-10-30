@@ -261,7 +261,7 @@ const inlineScripts = (html: string): string[] =>
   [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1] ?? "");
 
 /** The first sentence of a paragraph, as plain text, cut to a search-snippet length. */
-function describe(text: string): string {
+function metaDescription(text: string): string {
   const flat = text.replace(/\s+/g, " ").trim();
   const sentence = flat.split(/(?<=[.!?])\s/, 1)[0] ?? flat;
   if (sentence.length <= 200) return sentence;
@@ -434,7 +434,7 @@ function renderPage(name: string, pages: readonly string[]): RenderedPage {
     const para = tokens.find((t) => t.type === "paragraph") as Tokens.Paragraph | undefined;
     if (para) dekText = parser.parseInline(para.tokens, parser.textRenderer);
   }
-  const description = describe(dekText);
+  const description = metaDescription(dekText);
   if (description === "") throw new Error(`${file}: no paragraph to describe the page with`);
 
   // Legacy aliases go in only once every real id is known, so an alias can

@@ -50,7 +50,7 @@ async function openForm(user: ReturnType<typeof userEvent.setup>) {
   return screen.getByRole("textbox", { name: "Session Name" });
 }
 
-describe("SessionActions — import", () => {
+describe("SessionActions — import in the browser build", () => {
   it("disables Import and says why when the transport cannot browse files", async () => {
     web.on = true;
     const user = userEvent.setup();
@@ -149,7 +149,7 @@ describe("SessionActions — new session", () => {
   });
 });
 
-describe("SessionActions — import", () => {
+describe("SessionActions — import in the desktop app", () => {
   it("toasts the imported session's name", async () => {
     const user = userEvent.setup();
     mockImport.mockResolvedValue(makeSession("Imported One"));

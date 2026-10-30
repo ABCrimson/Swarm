@@ -592,13 +592,11 @@
       }
     }
 
-    /* biome-ignore lint/style/noDescendingSpecificity: this is .toc ol ol (0,1,2), above .toc ol (0,1,1); Biome scores the nested form without .toc. */
     & ol ol {
       margin: 0;
       border: 0;
     }
 
-    /* biome-ignore lint/style/noDescendingSpecificity: .toc ol ol a and .actions a never match one element (doc pages vs the landing page). */
     & ol ol a {
       padding-inline-start: 1.8rem;
       font-size: 0.85rem;
@@ -662,8 +660,7 @@
       margin-block-start: 1.5rem;
     }
 
-    & ul,
-    & ol {
+    & :is(ul, ol) {
       padding-inline-start: 1.4rem;
     }
 
@@ -726,7 +723,6 @@
       opacity: 1;
     }
 
-    /* biome-ignore lint/style/noDescendingSpecificity: .anchor and .toc a are different links, so neither focus rule can override the other. */
     &:focus-visible {
       opacity: 1;
     }
@@ -782,7 +778,6 @@
       opacity: 1;
     }
 
-    /* biome-ignore lint/style/noDescendingSpecificity: .copy is a button and .toc a a link, so neither focus rule can override the other. */
     &:focus-visible {
       opacity: 1;
     }
@@ -877,6 +872,7 @@
       grid-template-columns: 1fr 1fr;
     }
 
+    /* biome-ignore lint/style/noDescendingSpecificity: .pager a and .toc ol ol a never match one element (two separate navigation landmarks). */
     & a {
       display: grid;
       gap: 0.15rem;
@@ -1101,7 +1097,6 @@
         }
 
         to {
-          /* biome-ignore lint/suspicious/noDuplicateCustomProperties: `from` and `to` are separate keyframe blocks, so --flow is set once in each. */
           --flow: 1;
         }
       }
