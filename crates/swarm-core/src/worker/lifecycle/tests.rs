@@ -1,7 +1,6 @@
 //! Unit tests for [`super`].
 
 use std::assert_matches;
-use std::mem::DropGuard;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
@@ -912,11 +911,7 @@ fn worktree_dirs(worktrees: &Path) -> Vec<PathBuf> {
 /// there is no fallback to an unisolated worker at `config.cwd`.
 #[test]
 fn test_spawn_hard_fails_when_repo_root_is_not_a_git_repo() {
-    let not_a_repo = std::env::temp_dir().join(format!("swarm-not-a-repo-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&not_a_repo).unwrap();
-    let _cleanup = DropGuard::new(not_a_repo.clone(), |dir| {
-        let _ = std::fs::remove_dir_all(dir);
-    });
+    let (not_a_repo, _cleanup) = crate::test_support::temp_dir("not-a-repo");
 
     let registry = WorkerRegistry::new();
     registry.set_max_workers(1).unwrap();
