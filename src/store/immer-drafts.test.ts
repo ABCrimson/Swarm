@@ -6,7 +6,7 @@ import { useWorkerAgentStore } from "#store/worker-agents";
 import { useWorkerStore } from "#store/workers";
 
 /**
- * immer 11.1.21 throws when a revoked Map/Set draft is read. The four
+ * immer throws when a revoked Map/Set draft is read. The four
  * `enableMapSet` stores must therefore never leak a draft out of a producer:
  * a snapshot taken before an update has to stay fully readable (and
  * unchanged) after later updates, and values read back must be plain data.
