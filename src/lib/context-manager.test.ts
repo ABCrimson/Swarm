@@ -37,7 +37,9 @@ describe("context-manager", () => {
     expect(fitted.droppedExchanges).toBe(1);
     expect(fitted.messages[0]).toEqual({ role: "user", content: "question 2" });
     expect(fitted.messages).toHaveLength(8);
-    const blocks = fitted.messages.flatMap((m) => (typeof m.content === "string" ? [] : m.content));
+    const blocks = fitted.messages.flatMap((m) =>
+      m.role === "system" || typeof m.content === "string" ? [] : m.content,
+    );
     expect(blocks.some((b) => b.type === "thinking")).toBe(false);
     expect(blocks.filter((b) => b.type === "tool_use")).toHaveLength(2);
     expect(blocks.filter((b) => b.type === "tool_result")).toHaveLength(2);

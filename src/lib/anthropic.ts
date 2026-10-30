@@ -5,9 +5,9 @@
  *
  * - The API key is read from the backend config (`anthropic_api_key`,
  *   written by Settings) before every request and handed to the SDK as
- *   a plain string. The SDK keeps `apiKey` only when it is a string: an
- *   async getter type-checks (`ApiKeySetter`) but is discarded at runtime,
- *   leaving the client with no key, so every request fails authentication.
+ *   a plain string, which it sends as `Authorization: Bearer <key>`. A
+ *   missing key therefore fails as `missing_key` before the SDK is
+ *   involved, instead of surfacing wrapped in an SDK error.
  * - {@link streamMessage} streams through the SDK's `BetaMessageStream`
  *   and returns `stream.finalMessage()` — the complete assistant turn
  *   (thinking blocks with signatures, text and `tool_use` blocks in model
@@ -23,9 +23,9 @@
  *   and a `kind` derived from the SDK's typed error classes (never from
  *   message substrings); the SDK error stays on `cause`.
  *
- * Requests never carry `temperature`/`top_p`/`top_k`: every current
- * model rejects non-default sampling parameters with a 400, so
- * {@link StreamParams} has no field for them.
+ * Requests carry no `temperature`/`top_p`/`top_k`: API version
+ * 2026-10-21 removed the sampling parameters, and SDK 1.x has no field
+ * for them, so neither does {@link StreamParams}.
  *
  * @module anthropic
  */
@@ -38,6 +38,7 @@ import type {
   BetaMessageParam,
   BetaMessageStreamParams,
   BetaRedactedThinkingBlock,
+  BetaSystemMessageParam,
   BetaTextBlock,
   BetaThinkingBlock,
   BetaTool,
@@ -55,8 +56,18 @@ const REFUSAL_FALLBACK_BETA = "server-side-fallback-2026-07-01";
 
 // ── Request / response types ─────────────────────────
 
-/** A conversation message as sent to (and replayed back into) the Messages API. */
+/**
+ * A conversation message as sent to (and replayed back into) the Messages
+ * API: a user, assistant or mid-conversation system turn. Narrow on `role`
+ * before reading `content` — only user and assistant turns carry content
+ * blocks of every kind.
+ */
 export type ChatMessageParam = BetaMessageParam;
+/**
+ * A mid-conversation `role: "system"` message. Its `content` is optional
+ * and limited to text, `tool_addition` and `tool_removal` blocks.
+ */
+export type SystemMessageParam = BetaSystemMessageParam;
 /** A client tool definition. */
 export type ChatTool = BetaTool;
 /** A complete assistant response. */

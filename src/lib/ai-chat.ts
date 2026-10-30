@@ -37,7 +37,13 @@
  */
 
 import { getDefaultStore } from "jotai";
-import type { ChatMessageParam, ChatResponse, Effort, StreamDelta } from "#lib/anthropic";
+import type {
+  ChatMessageParam,
+  ChatResponse,
+  Effort,
+  StreamDelta,
+  SystemMessageParam,
+} from "#lib/anthropic";
 import {
   AiRefusalError,
   replayableContent,
@@ -138,11 +144,11 @@ function closeOpenToolUses(
 }
 
 /** A `system` message's instruction as a user text block, for places a system message cannot go. */
-function operatorText(message: ChatMessageParam): { type: "text"; text: string } {
+function operatorText({ content = "" }: SystemMessageParam): { type: "text"; text: string } {
   const body =
-    typeof message.content === "string"
-      ? message.content
-      : message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
+    typeof content === "string"
+      ? content
+      : content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
   return { type: "text", text: `[Operator Instruction] ${body}` };
 }
 
@@ -168,7 +174,9 @@ function forModel(transcript: readonly ChatMessageParam[], model: ModelInfo): Ch
 function foldTrailingSystem(transcript: readonly ChatMessageParam[]): ChatMessageParam[] {
   const start = transcript.findLastIndex((message) => message.role !== "system") + 1;
   if (start === transcript.length) return [...transcript];
-  const folded = transcript.slice(start).map(operatorText);
+  const folded = transcript
+    .slice(start)
+    .flatMap((message) => (message.role === "system" ? [operatorText(message)] : []));
   const head = transcript.slice(0, start);
   const previous = head.at(-1);
   if (previous?.role !== "user") return [...head, { role: "user", content: folded }];
@@ -498,7 +506,7 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
             ...t.transcript,
             toolResults,
             ...(model.systemMessages
-              ? injections.map((text): ChatMessageParam => ({ role: "system", content: text }))
+              ? injections.map((text): SystemMessageParam => ({ role: "system", content: text }))
               : []),
           ],
           live:

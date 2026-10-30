@@ -37,9 +37,14 @@ function startsExchange(message: ChatMessageParam): boolean {
   );
 }
 
-/** Strips `thinking`/`redacted_thinking` blocks from every message, dropping messages left empty. */
+/**
+ * Strips `thinking`/`redacted_thinking` blocks from every user and
+ * assistant message, dropping messages left empty. System messages pass
+ * through untouched: they never carry thinking blocks.
+ */
 export function stripThinking(transcript: readonly ChatMessageParam[]): ChatMessageParam[] {
-  return transcript.flatMap((message) => {
+  return transcript.flatMap((message): ChatMessageParam[] => {
+    if (message.role === "system") return [message];
     const content = withoutThinking(message.content);
     return content.length === 0 ? [] : [{ ...message, content }];
   });
