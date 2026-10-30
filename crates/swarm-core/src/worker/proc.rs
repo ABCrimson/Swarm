@@ -110,11 +110,11 @@ impl NdjsonFramer {
     /// the whole session: a protocol message was lost.
     pub fn push(&mut self, mut bytes: &[u8]) -> Result<Vec<String>, AppError> {
         if self.discarding {
-            let Some(end) = bytes.iter().position(|&b| b == b'\n') else {
+            let Some((_, rest)) = bytes.split_once(|&b| b == b'\n') else {
                 return Ok(Vec::new());
             };
             self.discarding = false;
-            bytes = &bytes[end + 1..];
+            bytes = rest;
         }
         self.buf.extend_from_slice(bytes);
 

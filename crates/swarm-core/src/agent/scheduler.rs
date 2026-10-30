@@ -272,7 +272,7 @@ impl AgentScheduler {
     /// file and the live cap disagreeing (`write_config` can still write
     /// the key without applying it), and they apply in the order they
     /// reach this lock: tokio's `Mutex` hands it out in request order
-    /// ("Tokio's Mutex operates on a guaranteed FIFO basis", tokio 1.53
+    /// ("Tokio's Mutex operates on a guaranteed FIFO basis", tokio 1.54
     /// `sync/mutex.rs`).
     pub async fn lock_concurrency_setting(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.concurrency_setting.lock().await

@@ -18,9 +18,10 @@ resolver = "3"
 # it by swarm-desktop's `app_version_resolves_from_package_json` test.
 version      = "0.14.0"
 edition      = "2024"
-# `[profile.release] trim-paths` is stable from 1.101 (cargo#17488), the
-# trim_prefix/trim_suffix and std::mem::DropGuard APIs the code uses from
-# 1.100; rust-toolchain.toml pins the matching 1.101 nightly.
+# `[profile.release] trim-paths` (cargo#17488) and `<[T]>::split_once` are
+# stable from 1.101, the trim_prefix/trim_suffix and std::mem::DropGuard
+# APIs the code uses from 1.100; rust-toolchain.toml pins the matching
+# 1.101 nightly.
 rust-version = "1.101"
 license      = "MIT"
 repository   = "https://github.com/ABCrimson/Swarm"
@@ -74,14 +75,15 @@ tauri-plugin-fs           = "=3.0.0-alpha.3"
 tauri-plugin-dialog       = "=3.0.0-alpha.4"
 tauri-plugin-opener       = "=3.0.0-alpha.3"
 tauri-plugin-store        = "=3.0.0-alpha.3"
-tauri-plugin-updater      = "=3.0.0-alpha.3"
+# Default features minus zip (v1 .zip/.AppImage.tar.gz only); createUpdaterArtifacts ships raw .exe/.msi/.AppImage.
+tauri-plugin-updater      = { version = "=3.0.0-alpha.3", default-features = false, features = ["rustls-tls", "system-proxy"] }
 tauri-plugin-notification = "=3.0.0-alpha.3"
 # Dev-only, swarm-desktop's capability contract test: the matcher
 # tauri-plugin-opener evaluates URL scopes with (already in the tree
 # through it, at this exact version).
 glob                      = "=0.3.4"
 # ── Runtime (swarm-core; swarm-desktop and swarmd share several) ─────
-tokio                     = { version = "=1.53.3", features = ["full"] }
+tokio                     = { version = "=1.54.1", features = ["full"] }
 portable-pty              = "=0.9.0"
 serde                     = { version = "=1.0.229", features = ["derive"] }
 serde_json                = "=1.0.154"
@@ -92,12 +94,12 @@ tracing-subscriber        = { version = "=0.3.23", features = ["json", "env-filt
 # The release log's writer thread (`tracing_appender::non_blocking`), used
 # by swarm-desktop.
 tracing-appender          = "=0.2.5"
-uuid                      = { version = "=1.28.0", features = ["v4", "serde"] }
+uuid                      = { version = "=1.29.0", features = ["v4", "serde"] }
 dashmap                   = "=7.0.0-rc2"
-parking_lot               = "=0.12.5"
-rusqlite                  = { version = "=0.40.2", features = ["bundled"] }
+parking_lot               = "=0.13.0"
+rusqlite                  = { version = "=0.41.1", features = ["bundled"] }
 regex                     = "=1.13.1"
-sysinfo                   = "=0.39.6"
+sysinfo                   = "=0.40.1"
 tokio-util                = { version = "=0.7.20", features = ["rt"] }
 # ── swarmd (headless daemon) ─────────────────────────────────────────
 # axum is swarmd's HTTP/WebSocket server stack; only swarmd depends on it

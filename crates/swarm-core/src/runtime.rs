@@ -61,6 +61,9 @@ pub enum RuntimeStartError {
     /// The event log could not be opened, or its writer not started.
     #[error("Failed To Open The Event Log: {0}")]
     EventLog(#[source] AppError),
+    /// The host-metrics backend could not be initialised.
+    #[error("Failed To Start Host Metrics: {0}")]
+    Metrics(#[source] sysinfo::Error),
 }
 
 /// Every piece of shared, Tauri-free application state, wired together
@@ -117,7 +120,9 @@ impl Runtime {
     /// [`RuntimeStartError::Lock`] if another process holds the data
     /// directory (exit with its message);
     /// [`RuntimeStartError::EventLog`] if the event log cannot be opened
-    /// or its writer cannot start.
+    /// or its writer cannot start;
+    /// [`RuntimeStartError::Metrics`] if the platform's system-information
+    /// backend cannot be initialised.
     ///
     /// # Panics
     ///
@@ -150,7 +155,7 @@ impl Runtime {
         let registry = WorkerRegistry::new();
         let session_manager = SessionManager::new();
         let message_bus = MessageBus::new();
-        let shared_system = SharedSystem::new();
+        let shared_system = SharedSystem::new().map_err(RuntimeStartError::Metrics)?;
         let router = Router::new(message_bus.clone(), sink.clone());
 
         if let Err(e) = crate::session::persist::load(&paths, &session_manager) {

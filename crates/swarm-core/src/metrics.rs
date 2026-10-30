@@ -39,17 +39,15 @@ pub struct SharedSystem(Arc<Mutex<System>>);
 impl SharedSystem {
     /// Loads only what the host metrics read (global CPU usage and RAM);
     /// the process table is read on demand by [`MetricsSnapshot::collect`].
-    pub fn new() -> Self {
+    ///
+    /// # Errors
+    ///
+    /// The platform's system-information backend could not be initialised.
+    pub fn new() -> Result<Self, sysinfo::Error> {
         let host = RefreshKind::nothing()
-            .with_cpu(CpuRefreshKind::nothing().with_cpu_usage())
+            .with_cpu(CpuRefreshKind::nothing().with_usage())
             .with_memory(MemoryRefreshKind::nothing().with_ram());
-        Self(Arc::new(Mutex::new(System::new_with_specifics(host))))
-    }
-}
-
-impl Default for SharedSystem {
-    fn default() -> Self {
-        Self::new()
+        System::new_with_specifics(host).map(|sys| Self(Arc::new(Mutex::new(sys))))
     }
 }
 
@@ -267,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_shared_system_loads_host_memory_but_no_process_table() {
-        let shared = SharedSystem::new();
+        let shared = SharedSystem::new().unwrap();
         let sys = shared.0.lock();
         assert!(sys.total_memory() > 0);
         assert!(
@@ -279,15 +277,18 @@ mod tests {
     #[test]
     fn test_collect_per_worker_metrics_empty_registry() {
         let registry = WorkerRegistry::new();
-        let sys = System::new();
+        let sys = System::new().unwrap();
         assert!(collect_per_worker_metrics(&registry, &sys).is_empty());
     }
 
     #[test]
     fn test_snapshot_shape_on_empty_registry() {
         let registry = WorkerRegistry::new();
-        let snap = serde_json::to_value(MetricsSnapshot::collect(&registry, &SharedSystem::new()))
-            .unwrap();
+        let snap = serde_json::to_value(MetricsSnapshot::collect(
+            &registry,
+            &SharedSystem::new().unwrap(),
+        ))
+        .unwrap();
         assert_eq!(snap["totalWorkers"], 0);
         assert_eq!(snap["running"], 0);
         assert!(snap["memoryTotalMb"].as_f64().unwrap() > 0.0);
@@ -341,7 +342,7 @@ mod tests {
             })
             .unwrap();
 
-        let mut sys = System::new();
+        let mut sys = System::new().unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         let child_pid = loop {
             sys.refresh_processes_specifics(
@@ -400,7 +401,7 @@ mod tests {
                     last_shipped_commit: None,
                 })
                 .unwrap();
-            let metrics = collect_per_worker_metrics(&registry, &System::new());
+            let metrics = collect_per_worker_metrics(&registry, &System::new().unwrap());
             assert_eq!(metrics.len(), 1);
             assert_eq!(metrics[0].pid, pid);
             assert_eq!(
@@ -438,7 +439,7 @@ mod tests {
     #[test]
     fn test_snapshot_measures_a_registered_worker() {
         let registry = registry_with_self("self");
-        let snap = MetricsSnapshot::collect(&registry, &SharedSystem::new());
+        let snap = MetricsSnapshot::collect(&registry, &SharedSystem::new().unwrap());
         assert_eq!(snap.workers.total_workers, 1);
         assert_eq!(snap.workers.running, 1);
         assert_eq!(snap.per_worker.len(), 1);
@@ -470,7 +471,7 @@ mod tests {
                 spins = std::hint::black_box(spins.wrapping_add(1));
             }
         };
-        let mut sys = System::new();
+        let mut sys = System::new().unwrap();
         busy();
         refresh(&mut sys);
         busy();
@@ -498,7 +499,7 @@ mod tests {
         start_metrics_loop(
             engine.sink(),
             WorkerRegistry::new(),
-            SharedSystem::new(),
+            SharedSystem::new().unwrap(),
             cancel.clone(),
         );
         let ticks = || {

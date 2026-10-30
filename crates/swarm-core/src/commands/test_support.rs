@@ -56,7 +56,7 @@ pub(crate) fn test_ctx_with_claude(
         repo_locks: RepoLocks::new(),
         router: Router::new(message_bus.clone(), sink.clone()),
         message_bus,
-        shared_system: SharedSystem::new(),
+        shared_system: SharedSystem::new().unwrap(),
         claude_adapter: Arc::new(claude_adapter(sink.clone())),
         codex_adapter: Arc::new(CodexAdapter::new(sink.clone())),
         agent_session_registry: AgentSessionRegistry::new(),
