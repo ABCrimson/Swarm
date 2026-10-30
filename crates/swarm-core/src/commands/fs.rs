@@ -62,8 +62,8 @@ const DENIED_DATA_FILE_PREFIXES: [&str; 2] = [
 const DENIED_WRITE_DATA_FILE_PREFIXES: [&str; 6] = [
     crate::runtime::EVENT_LOG_FILE,
     crate::session::persist::SESSIONS_FILE,
-    // `lock::LOCK_FILE` is private to a file C08 does not own; this literal
-    // also covers the lock's `daemon.lock.json` info file.
+    // `lock::LOCK_FILE`; as a prefix it also covers the lock's
+    // `daemon.lock.json` info file (`lock::INFO_FILE`).
     "daemon.lock",
     // The webview's tauri-plugin-store files (`src/lib/lazy-store.ts`).
     "swarm-settings.json",
