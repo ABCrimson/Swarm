@@ -15,7 +15,7 @@ import { type getDefaultStore, useAtomValue, useStore } from "jotai";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import * as z from "zod";
-import { CAP_ACK_TIMEOUT_MS, createAcknowledgedSync } from "#lib/acknowledged-sync";
+import { createAcknowledgedSync } from "#lib/acknowledged-sync";
 import {
   checkForUpdates,
   hasCapability,
@@ -36,9 +36,6 @@ import {
   maxWorkersAtom,
   maxWorkersSyncAtom,
 } from "#store/ui";
-
-/** How long an agent concurrency push may stay unacknowledged; see `CAP_ACK_TIMEOUT_MS`. */
-export const AGENT_CONCURRENCY_ACK_TIMEOUT_MS = CAP_ACK_TIMEOUT_MS;
 
 /**
  * What the backend runs with while the `agent_concurrency` config key is
@@ -133,9 +130,7 @@ function createAgentConcurrencySync(store: Store) {
 function createMaxWorkersSync(store: Store) {
   const sync = createAcknowledgedSync({
     initial: store.get(maxWorkersAtom),
-    // A closure, not `setMaxWorkers` itself: useSettingsBridge.test.tsx mocks
-    // #lib/tauri without it, and reading a missing export of a vitest mock throws.
-    call: (cap) => setMaxWorkers(cap),
+    call: setMaxWorkers,
     show: (cap) => store.set(maxWorkersAtom, cap),
     getStatus: () => store.get(maxWorkersSyncAtom),
     setStatus: (status) => store.set(maxWorkersSyncAtom, status),
