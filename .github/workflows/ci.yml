@@ -262,6 +262,11 @@ jobs:
         # YAML single quotes keep the shell's double quotes (shellcheck SC2086).
         run: '"$RUNNER_TEMP/actionlint"'
 
+      # The manifest is data the release token must not follow: prove the
+      # verifier's URL allowlist on every change, before any release builds.
+      - name: Test the updater-manifest verifier
+        run: bash .github/scripts/verify-updater-manifest.test.sh
+
       # Annotations instead of a SARIF upload: no security-events grant, and
       # findings still fail the job. Online audits check every pinned SHA
       # against its `# vX.Y.Z` comment and known-vulnerable action versions.
