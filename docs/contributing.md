@@ -23,9 +23,9 @@ The house rules (exact pins, pnpm only, no manual memoization, `parking_lot`, an
 
 | Tool    | Version                                  | Purpose                                      |
 |---------|------------------------------------------|----------------------------------------------|
-| Node.js | 27.0.0-nightly202610123b639be3a4 (`devEngines.runtime`) | Frontend build and dev server (pnpm downloads it; do not install it separately) |
-| pnpm    | 12.13.0 (`packageManager`)               | Package management; npm and yarn are not used |
-| Rust    | nightly-2026-10-14 (`rust-toolchain.toml`) | Backend compilation (`rust-version` 1.101)   |
+| Node.js | 28.0.0-nightly202610304e48b9b06b (`devEngines.runtime`) | Frontend build and dev server (pnpm downloads it; do not install it separately) |
+| pnpm    | 12.17.0 (`packageManager`)               | Package management; npm and yarn are not used |
+| Rust    | nightly-2026-10-30 (`rust-toolchain.toml`) | Backend compilation (`rust-version` 1.101)   |
 
 Every version is pinned exactly: `package.json`, `pnpm-workspace.yaml`, the root `Cargo.toml` and `rust-toolchain.toml` are the source of truth, and this table follows them. The Node pin is the newest nightly whose `index.json` and `SHASUMS256.txt` list a Windows x64 build, because `devEngines.runtime` provisioning needs that checksum; a pin held back for any other reason is recorded in `.peak-modern-holds.json`.
 
@@ -35,7 +35,7 @@ Every version is pinned exactly: `package.json`, `pnpm-workspace.yaml`, the root
 
 ```toml
 [toolchain]
-channel    = "nightly-2026-10-14"
+channel    = "nightly-2026-10-30"
 profile    = "minimal"
 components = ["rustfmt", "clippy", "rust-src", "rust-analyzer"]
 targets    = [
@@ -96,7 +96,7 @@ On Linux, Tauri's WebKitGTK system libraries must be installed first; `.github/w
 
 ### TypeScript / React
 
-**Formatter/Linter:** Biome 2.5.15 (the only one; no ESLint, no Prettier). Its nursery rules in `biome.json` (`noFloatingPromises`, `noReactObjectTypeAsDefaultProp`, `noMeaninglessVoidOperator`, `useReactCompiler` and others) are part of the standard.
+**Formatter/Linter:** Biome 2.6.4 (the only one; no ESLint, no Prettier). Its nursery rules in `biome.json` (`noFloatingPromises`, `noReactObjectTypeAsDefaultProp`, `noMeaninglessVoidOperator`, `useReactCompiler` and others) are part of the standard.
 
 ```bash
 # Lint + format (auto-fix)
@@ -387,7 +387,7 @@ cargo test --workspace --doc
 
 ### Frontend Testing
 
-Frontend tests run via Vitest (`pnpm test`): **123 test files, 1310 tests** _(all green at the 2026-10-13 head)_, covering components, hooks, stores, and `lib/` utilities. `pnpm test:coverage` adds the coverage floor from `vitest.config.ts`.
+Frontend tests run via Vitest (`pnpm test`): **131 test files, 1508 tests** _(all green at the 2026-10-30 head)_, covering components, hooks, stores, and `lib/` utilities. `pnpm test:coverage` adds the coverage floor from `vitest.config.ts`.
 
 Tests are **colocated**: `X.test.ts(x)` sits next to the `X.ts(x)` it covers, and a suite that covers one facet of a larger module takes a dotted suffix (`src/lib/tools.file-io.test.ts`, `src/lib/tools.spawn-worker.test.ts`). Import the module under test through its `#` alias like any other code. Vitest collects `src/**/*.test.{ts,tsx}` only, so the Playwright `e2e/*.spec.ts` suites are never picked up.
 
