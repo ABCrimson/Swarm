@@ -1431,7 +1431,7 @@ fn test_compare_url_with_record_returns_the_record_that_built_the_url() {
     assert!(
         url.contains(&format!(
             "main...{}?",
-            record.remote_ref.trim_start_matches("refs/heads/")
+            record.remote_ref.trim_prefix("refs/heads/")
         )),
         "{url}"
     );
