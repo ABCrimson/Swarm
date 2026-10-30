@@ -1684,6 +1684,31 @@ fn every_tier_denies_the_cli_worktree_tools() {
     }
 }
 
+#[test]
+fn capabilities_are_honest() {
+    let capabilities = claude_code_capabilities();
+    assert!(capabilities.partial_deltas);
+    assert!(capabilities.resume);
+    assert!(capabilities.native_cost);
+    assert_eq!(capabilities.cancel_granularity, CancelGranularity::Graceful);
+    assert!(!capabilities.interrupt_midturn);
+    assert!(capabilities.worktree_aware);
+    assert!(capabilities.interactive_permissions);
+    for mode in &capabilities.permission_modes {
+        assert!(
+            parse_trust_tier(Some(mode)).is_ok(),
+            "{mode:?} is advertised, so a spawn must accept it"
+        );
+    }
+    assert_eq!(
+        capabilities.permission_modes,
+        ["restricted", "standard", "write_enabled"]
+    );
+    let adapter = ClaudeCodeAdapter::new(Harness::new().sink.clone());
+    assert_eq!(adapter.provider(), ProviderId::ClaudeCode);
+    assert_eq!(adapter.capabilities(), capabilities);
+}
+
 // ── Launch environment ───────────────────────────────────────────────
 
 /// The JSON line `report_launch.mjs` wrote to stderr, out of the failure
@@ -2138,31 +2163,6 @@ async fn the_adapter_reuses_its_resolved_binary_until_a_probe_refreshes_it() {
         Some(b.join(exe_name(program))),
         "a probe resolves afresh"
     );
-}
-
-#[test]
-fn capabilities_are_honest() {
-    let capabilities = claude_code_capabilities();
-    assert!(capabilities.partial_deltas);
-    assert!(capabilities.resume);
-    assert!(capabilities.native_cost);
-    assert_eq!(capabilities.cancel_granularity, CancelGranularity::Graceful);
-    assert!(!capabilities.interrupt_midturn);
-    assert!(capabilities.worktree_aware);
-    assert!(capabilities.interactive_permissions);
-    for mode in &capabilities.permission_modes {
-        assert!(
-            parse_trust_tier(Some(mode)).is_ok(),
-            "{mode:?} is advertised, so a spawn must accept it"
-        );
-    }
-    assert_eq!(
-        capabilities.permission_modes,
-        ["restricted", "standard", "write_enabled"]
-    );
-    let adapter = ClaudeCodeAdapter::new(Harness::new().sink.clone());
-    assert_eq!(adapter.provider(), ProviderId::ClaudeCode);
-    assert_eq!(adapter.capabilities(), capabilities);
 }
 
 // ── Wire and pure helpers ────────────────────────────────────────────
