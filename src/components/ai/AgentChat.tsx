@@ -112,7 +112,7 @@ const transcriptStyle: CSSProperties = {
 const bubbleBaseStyle: CSSProperties = {
   padding: "8px 12px",
   borderRadius: 8,
-  fontFamily: "var(--font-body, 'DM Sans Variable', system-ui, sans-serif)",
+  fontFamily: "var(--font-body)",
   fontSize: 13,
   lineHeight: 1.5,
   overflowWrap: "anywhere",
@@ -121,7 +121,7 @@ const bubbleBaseStyle: CSSProperties = {
 const userBubbleStyle: CSSProperties = {
   ...bubbleBaseStyle,
   alignSelf: "flex-end",
-  background: "oklch(0.78 0.18 205 / 0.15)",
+  background: "oklch(from var(--color-plasma) l c h / 0.15)",
   color: "oklch(0.92 0.03 205)",
   maxWidth: "85%",
   whiteSpace: "pre-wrap",
@@ -171,13 +171,13 @@ const permissionPendingStyle: CSSProperties = {
 const permissionHeaderStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
 
 const permissionToolStyle: CSSProperties = {
-  fontFamily: "var(--font-mono, monospace)",
-  fontSize: 11.5,
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--text-xs)",
   color: "oklch(0.85 0.12 60)",
 };
 
 const permissionMessageStyle: CSSProperties = {
-  fontFamily: "var(--font-mono, monospace)",
+  fontFamily: "var(--font-mono)",
   fontSize: 12,
   color: "oklch(0.88 0.06 60)",
   lineHeight: 1.4,
@@ -188,16 +188,16 @@ const permissionMessageStyle: CSSProperties = {
 const settledStyle: CSSProperties = {
   alignSelf: "center",
   color: "var(--color-fg-dim)",
-  fontFamily: "var(--font-mono, monospace)",
-  fontSize: 10.5,
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--text-xs)",
 };
 
 const settledErrorStyle: CSSProperties = { ...settledStyle, color: "oklch(0.72 0.20 25)" };
 
 const capabilityNoteStyle: CSSProperties = {
   padding: "4px 12px",
-  fontFamily: "var(--font-mono, monospace)",
-  fontSize: 10.5,
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--text-xs)",
   color: "var(--color-fg-dim)",
   flexShrink: 0,
 };
@@ -240,7 +240,7 @@ function PermissionRow({
     isPatch
       ? {
           ...request,
-          changes: patch ? toRecord(patch.payload.input).changes : "(not received yet)",
+          changes: patch ? toRecord(patch.payload.input).changes : "(Not Received Yet)",
         }
       : payload.input,
   );

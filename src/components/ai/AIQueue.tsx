@@ -13,9 +13,9 @@ const queueContainerStyle: CSSProperties = {
   flexDirection: "column",
   gap: 2,
   padding: 12,
-  background: "oklch(0.08 0.02 220)",
+  background: "var(--color-surface-0)",
   borderRadius: 8,
-  border: "1px solid oklch(0.22 0.04 220)",
+  border: "1px solid var(--color-border)",
 };
 
 const headerStyle: CSSProperties = {
@@ -32,7 +32,7 @@ const headerTitleStyle: CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
   color: "oklch(0.78 0.04 220)",
-  fontFamily: "var(--font-body, 'DM Sans Variable', system-ui, sans-serif)",
+  fontFamily: "var(--font-body)",
 };
 
 const streamCountStyle: CSSProperties = {
@@ -41,7 +41,7 @@ const streamCountStyle: CSSProperties = {
   gap: 6,
   fontSize: 12,
   color: "var(--color-fg-dim)",
-  fontFamily: "var(--font-mono, 'JetBrains Mono Variable', 'Fira Code', monospace)",
+  fontFamily: "var(--font-mono)",
 };
 
 const itemStyle: CSSProperties = {
@@ -65,7 +65,7 @@ const positionStyle: CSSProperties = {
   color: "var(--color-fg-dim)",
   fontSize: 11,
   fontWeight: 700,
-  fontFamily: "var(--font-mono, 'JetBrains Mono Variable', 'Fira Code', monospace)",
+  fontFamily: "var(--font-mono)",
   flexShrink: 0,
 };
 
@@ -107,7 +107,7 @@ function StatusLabel({
       return (
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
           <Spinner size="sm" />
-          <span style={{ fontSize: 11, color: "oklch(0.78 0.18 205)" }}>Running</span>
+          <span style={{ fontSize: 11, color: "var(--color-plasma)" }}>Running</span>
         </span>
       );
     case "pending":
@@ -117,9 +117,9 @@ function StatusLabel({
         </span>
       );
     case "complete":
-      return <span style={{ fontSize: 11, color: "oklch(0.82 0.18 140)" }}>✓ Done</span>;
+      return <span style={{ fontSize: 11, color: "var(--color-lime)" }}>✓ Done</span>;
     case "error":
-      return <span style={{ fontSize: 11, color: "oklch(0.72 0.20 10)" }}>✗ Error</span>;
+      return <span style={{ fontSize: 11, color: "var(--color-rose)" }}>✗ Error</span>;
   }
 }
 
@@ -160,9 +160,7 @@ export function AIQueue({ workerId }: AIQueueProps): React.ReactElement {
         <h3 style={headerTitleStyle}>AI Queue</h3>
         <span style={streamCountStyle}>
           {activeStreams}/{concurrentLimit} Active
-          {waiting > 0 && (
-            <span style={{ color: "oklch(0.82 0.19 70)" }}> • {waiting} Waiting</span>
-          )}
+          {waiting > 0 && <span style={{ color: "var(--color-amber)" }}> • {waiting} Waiting</span>}
         </span>
       </div>
 

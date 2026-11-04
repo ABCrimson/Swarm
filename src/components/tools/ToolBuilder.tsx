@@ -30,7 +30,7 @@ interface ToolBuilderProps {
 
 const labelStyle: CSSProperties = {
   fontFamily: "var(--font-body)",
-  fontSize: "0.75rem",
+  fontSize: "var(--text-sm)",
   fontWeight: 600,
   color: "oklch(0.65 0.04 220)",
   marginBottom: 4,
@@ -41,8 +41,8 @@ const errorTextStyle: CSSProperties = {
   display: "block",
   marginTop: 4,
   fontFamily: "var(--font-body)",
-  fontSize: "0.6875rem",
-  color: "oklch(0.72 0.20 10)",
+  fontSize: "var(--text-xs)",
+  color: "var(--color-rose)",
 };
 
 const invalidBorder: CSSProperties = { borderColor: "oklch(0.55 0.14 10)" };
@@ -57,8 +57,8 @@ const textareaStyle: CSSProperties = {
 const panelStyle: CSSProperties = {
   background: "oklch(0.09 0.02 220 / 0.5)",
   backdropFilter: "blur(12px) saturate(1.5)",
-  border: "1px solid oklch(0.22 0.04 220)",
-  borderRadius: 12,
+  border: "1px solid var(--color-border)",
+  borderRadius: "var(--radius-lg)",
 };
 
 /**
@@ -236,7 +236,7 @@ export function ToolBuilder({
                         width: "auto",
                         padding: "0 6px",
                         fontFamily: "var(--font-mono)",
-                        fontSize: "0.6875rem",
+                        fontSize: "var(--text-xs)",
                         cursor: "pointer",
                       }}
                     >
@@ -301,7 +301,7 @@ export function ToolBuilder({
             style={{
               ...textareaStyle,
               fontFamily: "var(--font-mono)",
-              fontSize: "0.75rem",
+              fontSize: "var(--text-sm)",
               lineHeight: 1.6,
             }}
           />
@@ -326,9 +326,9 @@ export function ToolBuilder({
           style={{
             margin: 0,
             padding: "10px 16px",
-            borderBottom: "1px solid oklch(0.22 0.04 220)",
+            borderBottom: "1px solid var(--color-border)",
             fontFamily: "var(--font-display)",
-            fontSize: "0.75rem",
+            fontSize: "var(--text-sm)",
             fontWeight: 700,
             letterSpacing: "0.04em",
             color: "oklch(0.65 0.04 220)",

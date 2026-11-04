@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { useId } from "react";
 import { Button } from "#components/ui/Button";
+import { EmptyState } from "#components/ui/EmptyState";
 import { Pill } from "#components/ui/Pill";
 import type { CustomToolDef } from "#lib/custom-tools";
 import { pluralize } from "#lib/format";
@@ -21,11 +22,9 @@ interface ToolListProps {
 const sectionHeadingStyle: CSSProperties = {
   margin: "0 0 8px",
   fontFamily: "var(--font-body)",
-  fontSize: "0.6875rem",
-  fontWeight: 600,
-  color: "var(--color-fg-dim)",
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
+  fontSize: "var(--text-md)",
+  fontWeight: 500,
+  color: "var(--color-fg-muted)",
 };
 
 const gridStyle: CSSProperties = {
@@ -73,20 +72,14 @@ export function ToolList({
       }}
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span
-          style={{
-            fontFamily: "var(--font-display)",
-            fontSize: "0.75rem",
-            fontWeight: 700,
-            letterSpacing: "0.04em",
-            color: "oklch(0.65 0.04 220)",
-            textTransform: "uppercase",
-          }}
-        >
-          Tools ({BUILT_IN_TOOLS.length + customTools.length})
-        </span>
-        <Button variant="secondary" size="sm" onClick={onCreateNew}>
-          + New Tool
+        <p className="m-0 font-display text-lg font-semibold tracking-tight text-fg-bright">
+          Tools{" "}
+          <span className="font-mono text-fg-dim tabular-nums">
+            ({BUILT_IN_TOOLS.length + customTools.length})
+          </span>
+        </p>
+        <Button variant="primary" size="sm" onClick={onCreateNew}>
+          New Tool
         </Button>
       </div>
 
@@ -111,20 +104,12 @@ export function ToolList({
           Custom
         </h2>
         {customTools.length === 0 ? (
-          <p
-            style={{
-              margin: 0,
-              padding: "24px 16px",
-              textAlign: "center",
-              fontFamily: "var(--font-body)",
-              fontSize: "0.8125rem",
-              color: "var(--color-fg-dim)",
-              border: "1px dashed oklch(0.22 0.04 220)",
-              borderRadius: 12,
-            }}
-          >
-            No Custom Tools Yet. Click “New Tool” To Create One.
-          </p>
+          <div className="rounded-lg border border-dashed border-border">
+            <EmptyState
+              title="No Custom Tools Yet"
+              body="Every AI Chat Request Offers Your Tools To Claude"
+            />
+          </div>
         ) : (
           <div style={gridStyle}>
             {customTools.map((tool) => (
@@ -164,8 +149,8 @@ function ToolCard({
       aria-labelledby={headingId}
       style={{
         padding: 14,
-        borderRadius: 10,
-        border: "1px solid oklch(0.22 0.04 220)",
+        borderRadius: "var(--radius-lg)",
+        border: "1px solid var(--color-border)",
         background: "oklch(0.10 0.03 220 / 0.5)",
         backdropFilter: "blur(12px) saturate(1.5)",
         display: "flex",
@@ -179,9 +164,9 @@ function ToolCard({
           style={{
             margin: 0,
             fontFamily: "var(--font-mono)",
-            fontSize: "0.8125rem",
+            fontSize: "var(--text-md)",
             fontWeight: 600,
-            color: "oklch(0.78 0.18 205)",
+            color: "var(--color-plasma)",
           }}
         >
           {name}
@@ -194,7 +179,7 @@ function ToolCard({
       <p
         style={{
           fontFamily: "var(--font-body)",
-          fontSize: "0.75rem",
+          fontSize: "var(--text-sm)",
           color: "var(--color-fg-dim)",
           lineHeight: 1.5,
           margin: 0,

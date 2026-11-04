@@ -1,6 +1,8 @@
-// WorkerAIPanel's Inject Instruction dialog: a native modal <dialog>
-// (showModal, Escape closes it) that hands the instruction to the chat
-// engine exactly once.
+// WorkerAIPanel: the Inject Instruction dialog (a native modal <dialog>:
+// showModal, Escape closes it, the instruction reaches the chat engine
+// exactly once) and, on a transport without `localAiChat` (the build:web
+// page), the desktop-only notice in place of the webview chat's model
+// selector, Inject Instruction and Queue buttons and instruction input.
 
 import "#test/dom-polyfills";
 import { render, screen } from "@testing-library/react";
@@ -24,9 +26,9 @@ vi.mock(import("#lib/tauri"), async (importOriginal) => ({
   ...(await importOriginal()),
   hasCapability: () => !web.on,
 }));
-vi.mock("#lib/ai-chat", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("#lib/ai-chat")>()),
-  injectInstruction: vi.fn(() => "sent"),
+vi.mock(import("#lib/ai-chat"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  injectInstruction: vi.fn(() => "sent" as const),
 }));
 
 beforeEach(() => {

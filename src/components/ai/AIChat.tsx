@@ -24,7 +24,7 @@ const chatContainerStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   height: "100%",
-  background: "oklch(0.08 0.02 220)",
+  background: "var(--color-surface-0)",
   overflow: "hidden",
 };
 
@@ -41,7 +41,7 @@ const scrollerStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column-reverse",
   scrollbarWidth: "thin",
-  scrollbarColor: "oklch(0.28 0.05 220) oklch(0 0 0 / 0)",
+  scrollbarColor: "var(--color-border-2) oklch(0 0 0 / 0)",
 };
 
 const messagesStyle: CSSProperties = {
@@ -56,7 +56,7 @@ const inputAreaStyle: CSSProperties = {
   alignItems: "flex-end",
   gap: 8,
   padding: "12px 16px",
-  borderTop: "1px solid oklch(0.22 0.04 220)",
+  borderTop: "1px solid var(--color-border)",
   background: "oklch(0.10 0.02 220 / 0.9)",
   backdropFilter: "blur(8px)",
 };
@@ -67,7 +67,7 @@ const textareaStyle: CSSProperties = {
   padding: "10px 14px",
   background: "oklch(0.12 0.03 220)",
   color: "oklch(0.88 0.03 220)",
-  fontSize: 14,
+  fontSize: "var(--text-md)",
   lineHeight: 1.5,
   resize: "none",
   fieldSizing: "content",
@@ -80,10 +80,10 @@ const userBubbleStyle: CSSProperties = {
   maxWidth: "75%",
   padding: "10px 14px",
   borderRadius: "12px 12px 4px 12px",
-  background: "oklch(0.78 0.18 205 / 0.15)",
-  border: "1px solid oklch(0.78 0.18 205 / 0.3)",
+  background: "oklch(from var(--color-plasma) l c h / 0.15)",
+  border: "1px solid oklch(from var(--color-plasma) l c h / 0.3)",
   color: "oklch(0.88 0.03 220)",
-  fontSize: 14,
+  fontSize: "var(--text-md)",
   lineHeight: 1.6,
   whiteSpace: "pre-wrap",
   overflowWrap: "anywhere",
@@ -104,7 +104,7 @@ const metaStyle: CSSProperties = {
 };
 
 const thinkingStyle: CSSProperties = {
-  fontSize: 12.5,
+  fontSize: "var(--text-sm)",
   lineHeight: 1.5,
   color: "oklch(0.60 0.03 220)",
   fontStyle: "italic",
@@ -113,7 +113,7 @@ const thinkingStyle: CSSProperties = {
 };
 
 const NOTICE_COLORS: Record<ChatNotice["tone"], string> = {
-  info: "oklch(0.62 0.04 220)",
+  info: "var(--color-fg-dim)",
   warning: "oklch(0.82 0.16 75)",
   error: "oklch(0.78 0.16 20)",
 };
@@ -126,7 +126,7 @@ const emptyStateStyle: CSSProperties = {
   minHeight: 160,
   gap: 8,
   color: "var(--color-fg-dim)",
-  fontSize: 14,
+  fontSize: "var(--text-md)",
 };
 
 const errorStyle: CSSProperties = {
@@ -317,7 +317,7 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
           className="swarm-input"
           aria-label={`Message ${model.label}`}
           placeholder="Type A Message… (Shift+Enter For A New Line)"
-          rows={1}
+          rows={3}
           style={textareaStyle}
           onInput={(e) => setDraftEmpty(!e.currentTarget.value.trim())}
           onKeyDown={handleKeyDown}

@@ -14,7 +14,7 @@ function keyByOffset(tokens: readonly HighlightToken[]): (HighlightToken & { key
 
 const baseStyle: CSSProperties = {
   margin: 0,
-  fontFamily: "var(--font-mono, 'JetBrains Mono Variable', monospace)",
+  fontFamily: "var(--font-mono)",
   whiteSpace: "pre-wrap",
   overflowWrap: "anywhere",
 };

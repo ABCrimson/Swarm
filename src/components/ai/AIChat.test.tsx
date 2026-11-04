@@ -16,14 +16,14 @@ import { useAiStore } from "#store/ai";
 import { useMessageHistoryStore } from "#store/message-history";
 import { selectedModelAtom } from "#store/ui";
 
-vi.mock("#lib/anthropic", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("#lib/anthropic")>()),
+vi.mock(import("#lib/anthropic"), async (importOriginal) => ({
+  ...(await importOriginal()),
   streamMessage: vi.fn(),
 }));
 /** `true` makes the active transport report no webview AI chat (the `build:web` page). */
 const web = vi.hoisted(() => ({ on: false }));
-vi.mock("#lib/tauri", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("#lib/tauri")>()),
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
   agentTurnStarted: vi.fn(),
   hasCapability: () => !web.on,
 }));

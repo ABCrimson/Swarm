@@ -6,13 +6,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToolApprovalPrompt } from "#components/ai/ToolApprovalPrompt";
 
-vi.mock("#lib/tauri", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("#lib/tauri")>()),
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
   invoke: vi.fn().mockResolvedValue("file text"),
 }));
 
-vi.mock("#lib/tools", async (io) => {
-  const a = await io<typeof import("#lib/tools")>();
+vi.mock(import("#lib/tools"), async (io) => {
+  const a = await io();
   return { ...a, getPendingToolApprovals: vi.fn(a.getPendingToolApprovals) };
 });
 
@@ -126,7 +126,7 @@ describe("ToolApprovalPrompt", () => {
     );
 
     const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
-    expect(prompt).toHaveTextContent("6 bytes");
+    expect(prompt).toHaveTextContent("6 Bytes");
     expect(screen.queryByRole("button", { name: "Allow For Session" })).toBeNull();
     expect(screen.getByRole("button", { name: "Allow Once" })).toBeDefined();
   });
@@ -228,7 +228,7 @@ describe("ToolApprovalPrompt", () => {
 
     const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
     expect(prompt.textContent).not.toContain("END");
-    expect(prompt).toHaveTextContent("… 1500 more characters");
+    expect(prompt).toHaveTextContent("… 1500 More Characters");
     const allow = screen.getByRole("button", { name: "Allow Once" });
     expect(allow).toBeDisabled();
     expect(allow).toHaveAccessibleDescription(/Show All/);
@@ -241,7 +241,7 @@ describe("ToolApprovalPrompt", () => {
 
     await user.click(screen.getByRole("button", { name: "Show Less" }));
 
-    expect(prompt).toHaveTextContent("… 1500 more characters");
+    expect(prompt).toHaveTextContent("… 1500 More Characters");
     expect(screen.getByRole("button", { name: "Allow Once" })).toBeEnabled();
   });
 
@@ -257,7 +257,7 @@ describe("ToolApprovalPrompt", () => {
 
     const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
     expect(prompt).toHaveTextContent("x\\u202Ey");
-    expect(prompt).toHaveTextContent("… 1499 more characters");
+    expect(prompt).toHaveTextContent("… 1499 More Characters");
   });
 
   it("never cuts between the halves of a surrogate pair", async () => {
@@ -272,7 +272,7 @@ describe("ToolApprovalPrompt", () => {
 
     const prompt = await screen.findByRole("alert", { name: "Tool Approval" });
     expect(prompt.textContent).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
-    expect(prompt).toHaveTextContent("… 601 more characters");
+    expect(prompt).toHaveTextContent("… 601 More Characters");
   });
 
   it("never truncates a run_command command", async () => {

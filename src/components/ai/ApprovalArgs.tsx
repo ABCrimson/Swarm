@@ -14,7 +14,7 @@ const argsStyle: CSSProperties = {
   gridTemplateColumns: "fit-content(40%) minmax(0, 1fr)",
   gap: "2px 12px",
   margin: "4px 0 0",
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+  fontFamily: "var(--font-mono)",
   fontSize: 12,
   lineHeight: 1.5,
   color: "oklch(0.88 0.03 220)",
@@ -22,7 +22,7 @@ const argsStyle: CSSProperties = {
   overflowWrap: "anywhere",
 };
 
-const labelStyle: CSSProperties = { margin: 0, color: "oklch(0.7 0.04 220)" };
+const labelStyle: CSSProperties = { margin: 0, color: "var(--color-fg-muted)" };
 
 const valueStyle: CSSProperties = { margin: 0 };
 
@@ -95,7 +95,7 @@ function approvalArgs(tool: string, input: unknown): ReadonlyArray<ApprovalArg> 
       args.push({
         key: "size",
         label: "Size",
-        value: `${new TextEncoder().encode(value).length} bytes`,
+        value: `${new TextEncoder().encode(value).length} Bytes`,
         truncatable: false,
       });
     }
@@ -135,7 +135,7 @@ function ArgValue({
   return (
     <dd style={valueStyle}>
       {escapeForDisplay(arg.value.slice(0, cut))}
-      {hidden > 0 && ` … ${hidden} more characters`}
+      {hidden > 0 && ` … ${hidden} More Characters`}
       {long && (
         <Button size="sm" variant="secondary" style={showAllStyle} onClick={onToggle}>
           {showing ? "Show Less" : "Show All"}
@@ -205,7 +205,7 @@ export function ApprovalBlockedReason({
   if (!review.blocked) return null;
   return (
     <p id={review.reasonId} style={reasonStyle}>
-      Allow is off until you have used Show All on every shortened value (
+      Allow Is Off Until You Have Used Show All On Every Shortened Value (
       {review.unseen.map((arg) => arg.label).join(", ")}).
     </p>
   );

@@ -14,12 +14,12 @@ const containerStyle: CSSProperties = {
   position: "relative",
   padding: "12px 16px",
   borderRadius: 8,
-  background: "oklch(0.14 0.03 220 / 0.6)",
+  background: "oklch(from var(--color-surface-2) l c h / 0.6)",
   backdropFilter: "blur(12px) saturate(1.5)",
-  border: "1px solid oklch(0.22 0.04 220)",
+  border: "1px solid var(--color-border)",
   color: "oklch(0.88 0.03 220)",
-  fontFamily: "var(--font-body, 'DM Sans Variable', system-ui, sans-serif)",
-  fontSize: 14,
+  fontFamily: "var(--font-body)",
+  fontSize: "var(--text-md)",
   lineHeight: 1.7,
   whiteSpace: "pre-wrap",
   overflowWrap: "anywhere",
@@ -30,13 +30,13 @@ const codeBlockStyle: CSSProperties = {
   padding: "12px 14px",
   margin: "8px 0",
   borderRadius: 6,
-  background: "oklch(0.08 0.02 220)",
+  background: "var(--color-surface-0)",
   border: "1px solid oklch(0.20 0.03 220)",
-  fontFamily: "var(--font-mono, 'JetBrains Mono Variable', 'Fira Code', monospace)",
+  fontFamily: "var(--font-mono)",
   fontSize: 13,
   lineHeight: 1.6,
   overflowX: "auto",
-  color: "oklch(0.82 0.04 220)",
+  color: "var(--color-fg)",
   tabSize: 2,
 };
 
@@ -44,16 +44,16 @@ const inlineCodeStyle: CSSProperties = {
   padding: "2px 6px",
   borderRadius: 4,
   background: "oklch(0.12 0.02 220)",
-  fontFamily: "var(--font-mono, 'JetBrains Mono Variable', 'Fira Code', monospace)",
+  fontFamily: "var(--font-mono)",
   fontSize: "0.9em",
-  color: "oklch(0.78 0.18 205)",
+  color: "var(--color-plasma)",
 };
 
 const cursorStyle: CSSProperties = {
   display: "inline-block",
   width: 2,
   height: "1.2em",
-  background: "oklch(0.78 0.18 205)",
+  background: "var(--color-plasma)",
   marginLeft: 2,
   verticalAlign: "text-bottom",
 };
@@ -65,13 +65,13 @@ const langLabelStyle: CSSProperties = {
   color: "oklch(0.62 0.08 205)",
   textTransform: "uppercase",
   letterSpacing: "0.05em",
-  fontFamily: "var(--font-body, 'DM Sans Variable', system-ui, sans-serif)",
+  fontFamily: "var(--font-body)",
 };
 
 const TOKEN_COLORS = {
-  string: "oklch(0.82 0.18 140)",
+  string: "var(--color-lime)",
   comment: "oklch(0.62 0.03 220)",
-  number: "oklch(0.82 0.19 70)",
+  number: "var(--color-amber)",
   keyword: "oklch(0.72 0.20 290)",
 } as const;
 
