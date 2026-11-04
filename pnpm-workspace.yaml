@@ -45,6 +45,7 @@ minimumReleaseAgeExclude:
   - "@typescript/typescript-win32-arm64@7.1.0-dev.20261103.1"
   - "@typescript/typescript-win32-x64@7.1.0-dev.20261103.1"
   - framer-motion@14.9.1
+  - modern-cmdk@1.2.3
   - motion-dom@14.9.1
   - motion@14.9.1
   - oxc-transform-react@0.157.0
