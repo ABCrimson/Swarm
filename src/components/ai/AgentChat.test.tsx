@@ -24,8 +24,8 @@ vi.mock("#lib/event-bus", () => ({
   },
 }));
 
-vi.mock("#lib/tauri", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("#lib/tauri")>()),
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
   agentSendTurn: vi.fn(),
   agentCancel: vi.fn(),
   agentPermissionRespond: vi.fn(),

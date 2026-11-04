@@ -6,13 +6,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToolApprovalPrompt } from "#components/ai/ToolApprovalPrompt";
 
-vi.mock("#lib/tauri", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("#lib/tauri")>()),
+vi.mock(import("#lib/tauri"), async (importOriginal) => ({
+  ...(await importOriginal()),
   invoke: vi.fn().mockResolvedValue("file text"),
 }));
 
-vi.mock("#lib/tools", async (io) => {
-  const a = await io<typeof import("#lib/tools")>();
+vi.mock(import("#lib/tools"), async (io) => {
+  const a = await io();
   return { ...a, getPendingToolApprovals: vi.fn(a.getPendingToolApprovals) };
 });
 
