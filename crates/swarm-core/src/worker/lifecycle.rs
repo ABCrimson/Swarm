@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
 use parking_lot::Mutex;
-use portable_pty::{Child, ExitStatus, PtySize};
+use portable_pty::{Child, ExitStatus, MasterPty, PtySize};
 use regex::Regex;
 use uuid::Uuid;
 
@@ -221,7 +221,7 @@ fn start_shell(
     let process = Arc::new(Mutex::new(child));
     let (pump, watcher) = spawn_worker_threads(sink, registry, worker_id, &process, reader)
         .map_err(|e| {
-            reap(process.lock().as_mut(), worker_id);
+            reap(process.lock().as_mut(), master.as_ref(), worker_id);
             AppError::PtySpawn(format!("cannot start the worker's threads: {e}"))
         })?;
 
@@ -292,8 +292,11 @@ fn on_shell_exit(
 /// and its Unix `kill` (SIGHUP, about 200 ms of `try_wait`, then SIGKILL)
 /// errors only if a signal cannot be delivered, so the `kill` result is
 /// advisory: after it, `try_wait` (polled briefly) is the authority on
-/// whether the shell is gone, and `wait` reaps it either way.
-fn reap(child: &mut dyn Child, worker_id: Uuid) {
+/// whether the shell is gone, and `wait` reaps it either way. A shell
+/// still not gone gets its terminal drained first ([`pty::drain_output`]
+/// on `master`): macOS holds a dying session leader until its unread
+/// output is read, so a stalled output pump would hang the `wait`.
+fn reap(child: &mut dyn Child, master: &dyn MasterPty, worker_id: Uuid) {
     match child.try_wait() {
         Ok(Some(status)) => {
             tracing::debug!(%worker_id, ?status, "worker shell had already exited");
@@ -313,6 +316,7 @@ fn reap(child: &mut dyn Child, worker_id: Uuid) {
         }
         child.try_wait().ok().flatten()
     });
+    let still_running = exited.is_none();
     match (exited, killed) {
         (Some(status), _) => tracing::debug!(%worker_id, ?status, "worker shell exited after kill"),
         (None, Err(e)) => {
@@ -321,6 +325,9 @@ fn reap(child: &mut dyn Child, worker_id: Uuid) {
         (None, Ok(())) => {
             tracing::warn!(%worker_id, "kill reported success but the shell is still running; waiting")
         }
+    }
+    if still_running {
+        pty::drain_output(master, worker_id);
     }
     match child.wait() {
         Ok(status) => tracing::debug!(%worker_id, ?status, "worker shell reaped"),
@@ -599,7 +606,10 @@ pub fn do_resize_worker(
 ///    the terminal's session is hung up; Windows: closing the
 ///    pseudoconsole closes every console client). A process that
 ///    detached from the terminal can survive and keep the worktree
-///    busy, in which case its removal below reports `failed`.
+///    busy, in which case its removal below reports `failed`. A shell
+///    still running after its kill gets its terminal drained before the
+///    wait (macOS holds a dying session leader until its unread output
+///    is read; see [`pty::spawn_drain`]).
 /// 3. Releases the PTY writer and master, only now that the shell is
 ///    gone: the Unix writer's drop writes to the terminal, and the
 ///    Windows master's drop closes the pseudoconsole.
@@ -633,7 +643,7 @@ pub fn do_kill_worker(
     } = registry.remove_worker(&id)?;
 
     if let Some(pty) = &child {
-        reap(pty.process.lock().as_mut(), id);
+        reap(pty.process.lock().as_mut(), pty.master.lock().as_ref(), id);
     }
     drop(pty_writer);
     drop(child);

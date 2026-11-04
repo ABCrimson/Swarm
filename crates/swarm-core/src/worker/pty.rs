@@ -27,7 +27,9 @@
 //!   that can resize the terminal, and on Windows it owns the
 //!   pseudoconsole: dropping it calls `ClosePseudoConsole`, which tears
 //!   the console down under the shell. The kill path releases it only
-//!   after the shell has been reaped.
+//!   after the shell has been reaped, and drains a clone of its reader
+//!   ([`drain_output`]) while it waits on a shell that did not exit at
+//!   once.
 //! - **Reader**: moved into the output pump, which ends at end of
 //!   stream: on Unix once every holder of the slave side is gone (the
 //!   kernel reports `EIO`), on Windows once the pseudoconsole closes.
@@ -49,7 +51,7 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::Weak;
 use std::sync::mpsc::{SyncSender, sync_channel};
-use std::thread::Thread;
+use std::thread::{JoinHandle, Thread};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -321,6 +323,59 @@ pub fn spawn_exit_watcher(
     })
 }
 
+/// Bytes [`spawn_drain`] discards before it stops reading.
+///
+/// A dying shell's unread output is at most its terminal's output queue
+/// (a few KiB); the cap only bounds a drain that a still-running job on
+/// the terminal keeps feeding.
+const DRAIN_CAP: u64 = 1024 * 1024;
+
+/// Starts the `pty-drain-<id8>` thread: reads and discards `reader` until
+/// end of stream, a read error or [`DRAIN_CAP`] bytes. The thread is
+/// detached by dropping the returned handle.
+///
+/// The kill path runs it on a fresh clone of the master's reader
+/// ([`drain_output`]) before it waits on a shell that did not exit after
+/// its kill. A Unix shell is its terminal's session leader, and macOS (XNU
+/// `proc_exit` -> `ttywait`) holds a dying session leader, with no
+/// timeout, until that terminal's output queue drains; a stalled output
+/// pump would otherwise make the wait hang. It is a plain named thread,
+/// not the runtime's blocking pool: it can block until the last holder
+/// of the terminal exits, and a runtime does not shut down while a
+/// blocking task still runs.
+///
+/// # Errors
+///
+/// Fails only if the OS refuses to create the thread.
+pub fn spawn_drain(worker_id: Uuid, reader: Box<dyn Read + Send>) -> io::Result<JoinHandle<()>> {
+    std::thread::Builder::new()
+        .name(format!("pty-drain-{}", short_id8(worker_id)))
+        .spawn(
+            move || match io::copy(&mut reader.take(DRAIN_CAP), &mut io::sink()) {
+                Ok(bytes) => tracing::debug!(%worker_id, bytes, "PTY drain ended"),
+                Err(e) if is_hangup(&e) => {
+                    tracing::debug!(%worker_id, "PTY drain reached the hangup")
+                }
+                Err(e) => tracing::debug!(%worker_id, error = %e, "PTY drain read failed"),
+            },
+        )
+}
+
+/// Drains the terminal's output on a clone of `master`'s reader
+/// ([`spawn_drain`]), so a shell that is being killed can finish exiting
+/// even when nothing else reads its output. The bytes are discarded, and
+/// a live output pump may lose the last ones it would have read. Failures
+/// are logged: the kill goes on either way.
+pub fn drain_output(master: &dyn MasterPty, worker_id: Uuid) {
+    let started = master
+        .try_clone_reader()
+        // Dropping the handle detaches the thread.
+        .and_then(|reader| Ok(spawn_drain(worker_id, reader).map(drop)?));
+    if let Err(e) = started {
+        tracing::warn!(%worker_id, error = %format!("{e:#}"), "cannot drain the PTY of a shell being killed");
+    }
+}
+
 /// `EIO`, the same value on every Unix this crate targets.
 #[cfg(unix)]
 const EIO: i32 = 5;
@@ -490,6 +545,26 @@ mod tests {
         );
     }
 
+    /// The drain stops at its cap even when the output never ends.
+    #[test]
+    fn test_drain_stops_at_its_cap() {
+        let drain = spawn_drain(Uuid::new_v4(), Box::new(io::repeat(b'x'))).unwrap();
+        assert!(
+            drain
+                .thread()
+                .name()
+                .is_some_and(|name| name.starts_with("pty-drain-"))
+        );
+        drain.join().expect("the drain ends at its cap");
+    }
+
+    /// The drain ends at end of stream.
+    #[test]
+    fn test_drain_ends_at_end_of_stream() {
+        let drain = spawn_drain(Uuid::new_v4(), Box::new(io::empty())).unwrap();
+        drain.join().expect("the drain ends at end of stream");
+    }
+
     /// A real shell on a real PTY: the watcher reports its exit status
     /// once it exits, and stays silent while it runs.
     #[test]
@@ -503,15 +578,10 @@ mod tests {
         )
         .expect("the platform default shell spawns");
         // Drain the shell's output, as the output pump does in a real
-        // worker. The shell is a session leader on the PTY, and macOS
-        // (XNU `proc_exit` -> `ttywait`) holds a dying session leader
-        // until its terminal's output queue drains, with no timeout: an
+        // worker and the kill path does for a stalled one: on macOS an
         // unread prompt would keep the killed shell from ever becoming
-        // waitable.
-        let mut reader = spawned.reader;
-        std::thread::spawn(move || {
-            let _ = std::io::copy(&mut reader, &mut std::io::sink());
-        });
+        // waitable (see `spawn_drain`).
+        spawn_drain(Uuid::new_v4(), spawned.reader).unwrap();
         let process = Arc::new(Mutex::new(spawned.child));
         let (tx, rx) = std::sync::mpsc::channel();
         spawn_exit_watcher(Uuid::new_v4(), Arc::downgrade(&process), move |status| {
