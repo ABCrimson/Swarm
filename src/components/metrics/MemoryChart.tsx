@@ -3,8 +3,16 @@
 // backend reports (sysinfo used and total), nothing estimated.
 // OKLCH fills: used = METRIC_COLOR.memory (violet, as in MetricsChart), free = neutral grey.
 
-import { useId } from "react";
-import { Area, AreaChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Legend,
+  linearGradient,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
 import { formatMb, formatTime, METRIC_COLOR } from "#lib/chart-theme";
 import { lastN } from "#lib/chart-window";
@@ -14,6 +22,20 @@ import type { MetricPoint } from "#store/types";
 
 const COLOR_USED = METRIC_COLOR.memory;
 const COLOR_FREE = "oklch(0.6 0.03 220)";
+
+/** Top-to-bottom fades; stops without a colour take the area's own. */
+const FADE_USED = linearGradient({
+  stops: [
+    { offset: 0.05, opacity: 0.4 },
+    { offset: 0.95, opacity: 0.05 },
+  ],
+});
+const FADE_FREE = linearGradient({
+  stops: [
+    { offset: 0.05, opacity: 0.2 },
+    { offset: 0.95, opacity: 0.02 },
+  ],
+});
 
 /** One chart row: used and free memory in MB at `time`. */
 export interface MemoryChartPoint {
@@ -43,8 +65,6 @@ export function MemoryChart(): React.ReactElement {
   const history = useSystemStore((s) => s.metrics.history);
   const memoryTotalMb = useSystemStore((s) => s.metrics.memoryTotalMb);
   const data = memoryChartData(history, memoryTotalMb);
-  // Gradient ids are document-global; useId keeps two mounted charts apart.
-  const gradientId = useId();
 
   return (
     <ChartPanel title="Memory Usage">
@@ -55,17 +75,6 @@ export function MemoryChart(): React.ReactElement {
         margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
         title="Used And Free Memory Over Time"
       >
-        <defs>
-          <linearGradient id={`${gradientId}-used`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor={COLOR_USED} stopOpacity={0.4} />
-            <stop offset="95%" stopColor={COLOR_USED} stopOpacity={0.05} />
-          </linearGradient>
-          <linearGradient id={`${gradientId}-free`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor={COLOR_FREE} stopOpacity={0.2} />
-            <stop offset="95%" stopColor={COLOR_FREE} stopOpacity={0.02} />
-          </linearGradient>
-        </defs>
-
         <CartesianGrid />
         <XAxis dataKey="time" tickFormatter={formatTime} />
         <YAxis tickFormatter={formatMb} />
@@ -81,7 +90,7 @@ export function MemoryChart(): React.ReactElement {
           name="Used"
           stackId="mem"
           stroke={COLOR_USED}
-          fill={`url(#${gradientId}-used)`}
+          fill={{ color: COLOR_USED, definition: FADE_USED }}
           strokeWidth={1.5}
           isAnimationActive={false}
         />
@@ -91,7 +100,7 @@ export function MemoryChart(): React.ReactElement {
           name="Free"
           stackId="mem"
           stroke={COLOR_FREE}
-          fill={`url(#${gradientId}-free)`}
+          fill={{ color: COLOR_FREE, definition: FADE_FREE }}
           strokeWidth={1.5}
           isAnimationActive={false}
         />
