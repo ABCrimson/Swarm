@@ -254,8 +254,8 @@ interface CausalityPanelProps {
  *
  * A native modal `<dialog>` (`showModal()`): the browser provides the
  * top layer, an inert background, the focus trap, focus restore on
- * close, Escape, and (`closedby="any"`, or an `onClick` backdrop test
- * where WebKit lacks it) closing on a backdrop click. Key
+ * close, Escape, and (`closedby="any"`, or a press-and-release backdrop test
+ * where the engine lacks it) closing on a backdrop click. Key
  * events still bubble to `document`, so the graph's own shortcuts stay
  * gated on the inspector atom. A fresh panel mounts per open cycle, and
  * closing it aborts a walk still in flight.
@@ -263,6 +263,15 @@ interface CausalityPanelProps {
  * Forward traversal (from a cause to everything it caused) is
  * deliberately out of scope for v1.
  */
+/**
+ * Whether a viewport point lies outside the dialog's border box (on its
+ * `::backdrop`).
+ */
+function isOutside(dialog: HTMLDialogElement, x: number, y: number): boolean {
+  const box = dialog.getBoundingClientRect();
+  return x < box.left || x > box.right || y < box.top || y > box.bottom;
+}
+
 export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): React.ReactElement {
   // Names of live workers, compared shallowly: a PTY output chunk (which
   // replaces a worker object) does not re-render the open inspector.
@@ -278,6 +287,10 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
   const [result, setResult] = useState<CausalityWalkResult | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const unmountingRef = useRef(false);
+  // Whether the current press began on the backdrop: a drag that starts
+  // inside the panel and ends outside it fires `click` on the dialog too,
+  // and must not close it.
+  const backdropPressRef = useRef(false);
   const titleId = useId();
 
   useEffect(() => {
@@ -321,14 +334,21 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
       className="causality-panel"
       aria-labelledby={titleId}
       closedby="any"
+      onPointerDown={(event) => {
+        backdropPressRef.current =
+          event.target === event.currentTarget &&
+          isOutside(event.currentTarget, event.clientX, event.clientY);
+      }}
       onClick={(event) => {
-        // WebKit ships no `closedby` yet. A backdrop click targets the
-        // dialog itself at a point outside its border box.
+        // Only engines without `closedby` (WebKit today) take this path. A
+        // backdrop click is pressed and released on the dialog itself at a
+        // point outside its border box.
+        const pressed = backdropPressRef.current;
+        backdropPressRef.current = false;
+        if ("closedBy" in HTMLDialogElement.prototype) return;
         const dialog = event.currentTarget;
-        if (event.target !== dialog) return;
-        const box = dialog.getBoundingClientRect();
-        const { clientX: x, clientY: y } = event;
-        if (x < box.left || x > box.right || y < box.top || y > box.bottom) dialog.close();
+        if (pressed && event.target === dialog && isOutside(dialog, event.clientX, event.clientY))
+          dialog.close();
       }}
       onClose={(event) => {
         // `close` is delivered as a queued task. Ignore it when this panel

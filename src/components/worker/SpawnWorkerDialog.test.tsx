@@ -371,12 +371,38 @@ describe("SpawnWorkerDialog", () => {
     await waitForProbeSettled();
     const dialog = screen.getByRole("dialog", { name: "Spawn Worker" });
 
-    // A backdrop click targets the dialog at a point outside its box.
+    // A backdrop click is pressed and released on the dialog at a point
+    // outside its box.
     act(() => {
+      dialog.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, clientX: -1, clientY: -1 }),
+      );
       dialog.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: -1, clientY: -1 }));
     });
 
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("stays open when a press inside the dialog is released on the backdrop", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<SpawnWorkerDialog onClose={onClose} />);
+    await waitForProbeSettled();
+    await user.click(screen.getByRole("radio", { name: "Claude Code" }));
+    const dialog = screen.getByRole("dialog", { name: "Spawn Worker" });
+
+    // A drag-select from the Model Alias input that ends outside the dialog.
+    act(() => {
+      screen
+        .getByLabelText("Model Alias")
+        .dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, clientX: 10, clientY: 10 }),
+        );
+      dialog.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: -1, clientY: -1 }));
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialog).toHaveAttribute("open");
   });
 
   it("calls onClose without spawning when Cancel is clicked", async () => {
@@ -410,9 +436,11 @@ describe("SpawnWorkerDialog", () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     act(() => {
-      screen
-        .getByRole("dialog", { name: "Spawn Worker" })
-        .dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: -1, clientY: -1 }));
+      const dialog = screen.getByRole("dialog", { name: "Spawn Worker" });
+      dialog.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, clientX: -1, clientY: -1 }),
+      );
+      dialog.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: -1, clientY: -1 }));
     });
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: "Spawn Worker" })).toHaveAttribute("open");

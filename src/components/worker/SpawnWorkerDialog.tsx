@@ -305,13 +305,22 @@ const footerStyle: CSSProperties = {
   flexShrink: 0,
 };
 
+/**
+ * Whether a viewport point lies outside the dialog's border box (on its
+ * `::backdrop`).
+ */
+function isOutside(dialog: HTMLDialogElement, x: number, y: number): boolean {
+  const box = dialog.getBoundingClientRect();
+  return x < box.left || x > box.right || y < box.top || y > box.bottom;
+}
+
 // ── Component ─────────────────────────────────────────
 
 /**
  * The Workers page's spawn dialog, a native modal `<dialog>` opened with
  * `showModal()` (top layer, inert page, native focus handling and focus
  * return; Escape and backdrop clicks close it via `closedby="any"`, and
- * an `onClick` backdrop test where WebKit lacks `closedby`).
+ * a press-and-release backdrop test where the engine lacks `closedby`).
  *
  * - Provider: Webview Anthropic, Claude Code or Codex. Webview Anthropic
  *   is the default where the build has the `localAiChat` capability;
@@ -463,6 +472,11 @@ export function SpawnWorkerDialog({
     if (!isSpawning) closeDialog();
   };
 
+  // Whether the current press began on the backdrop: a drag-select that
+  // starts in an input and ends outside the dialog fires `click` on the
+  // dialog too, and must not dismiss it.
+  const backdropPressRef = useRef(false);
+
   const pickProjectRoot = async () => {
     let selected: string | null;
     try {
@@ -503,14 +517,24 @@ export function SpawnWorkerDialog({
       closedby="any"
       aria-labelledby={titleId}
       onClose={onClose}
+      onPointerDown={(e) => {
+        backdropPressRef.current =
+          e.target === e.currentTarget && isOutside(e.currentTarget, e.clientX, e.clientY);
+      }}
       onClick={(e) => {
-        // WebKit ships no `closedby` yet. A backdrop click targets the
-        // dialog itself at a point outside its border box; mid-spawn it is
-        // refused like every other dismissal.
-        if (e.target !== e.currentTarget) return;
-        const box = e.currentTarget.getBoundingClientRect();
-        const { clientX: x, clientY: y } = e;
-        if (x < box.left || x > box.right || y < box.top || y > box.bottom) requestDismiss();
+        // Only engines without `closedby` (WebKit today) take this path. A
+        // backdrop click is pressed and released on the dialog itself at a
+        // point outside its border box; mid-spawn it is refused like every
+        // other dismissal.
+        const pressed = backdropPressRef.current;
+        backdropPressRef.current = false;
+        if ("closedBy" in HTMLDialogElement.prototype) return;
+        if (
+          pressed &&
+          e.target === e.currentTarget &&
+          isOutside(e.currentTarget, e.clientX, e.clientY)
+        )
+          requestDismiss();
       }}
       onCancel={(e) => {
         // Escape and backdrop light-dismiss; never mid-spawn (see `requestDismiss`).
