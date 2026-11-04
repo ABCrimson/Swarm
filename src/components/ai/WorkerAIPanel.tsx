@@ -33,7 +33,7 @@ const panelContainerStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   height: "100%",
-  background: "oklch(0.06 0.02 220)",
+  background: "var(--color-void)",
   overflow: "hidden",
 };
 
@@ -42,7 +42,7 @@ const toolbarStyle: CSSProperties = {
   alignItems: "center",
   gap: 8,
   padding: "6px 12px",
-  borderBottom: "1px solid oklch(0.22 0.04 220)",
+  borderBottom: "1px solid var(--color-border)",
   background: "oklch(0.10 0.02 220 / 0.9)",
   backdropFilter: "blur(8px)",
   flexShrink: 0,
@@ -54,26 +54,14 @@ const flowIndicatorStyle: CSSProperties = {
   gap: 6,
   fontSize: 11,
   color: "oklch(0.58 0.04 220)",
-  fontFamily: "var(--font-mono, 'JetBrains Mono Variable', 'Fira Code', monospace)",
+  fontFamily: "var(--font-mono)",
 };
 
 const flowDotStyle: CSSProperties = {
   width: 6,
   height: 6,
   borderRadius: "50%",
-  background: "oklch(0.82 0.18 140)",
-};
-
-const toolbarButtonStyle: CSSProperties = {
-  padding: "4px 10px",
-  borderRadius: 6,
-  border: "1px solid oklch(0.35 0.10 70)",
-  background: "oklch(0.14 0.06 70 / 0.6)",
-  color: "oklch(0.82 0.19 70)",
-  fontSize: 11,
-  fontWeight: 500,
-  cursor: "pointer",
-  transition: "background 0.15s ease",
+  background: "var(--color-lime)",
 };
 
 /** Tailwind's preflight zeroes dialog margins; `margin: auto` re-centers the modal. */
@@ -83,17 +71,17 @@ const dialogStyle: CSSProperties = {
   padding: 20,
   borderRadius: 12,
   background: "oklch(0.12 0.03 220 / 0.95)",
-  border: "1px solid oklch(0.28 0.05 220)",
+  border: "1px solid var(--color-border-2)",
   backdropFilter: "blur(16px) saturate(1.5)",
   boxShadow: "0 16px 48px oklch(0 0 0 / 0.5)",
-  color: "oklch(0.82 0.04 220)",
+  color: "var(--color-fg)",
 };
 
 const dialogTitleStyle: CSSProperties = {
   margin: "0 0 12px",
   fontSize: 15,
   fontWeight: 600,
-  color: "oklch(0.82 0.04 220)",
+  color: "var(--color-fg)",
 };
 
 const labelStyle: CSSProperties = {
@@ -240,44 +228,48 @@ export function WorkerAIPanel({
         </div>
 
         {webviewChat && (
-          <button type="button" onClick={() => setShowInject(true)} style={toolbarButtonStyle}>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setShowInject(true)}
+            style={{ borderColor: "oklch(0.35 0.10 70)", color: "var(--color-amber)" }}
+          >
             Inject Instruction
-          </button>
+          </Button>
         )}
 
         {onRequestShipTab != null && (
-          <button
-            type="button"
+          <Button
+            size="sm"
+            variant="secondary"
             onClick={onRequestShipTab}
             disabled={!shippable}
             title={shippable ? undefined : "Shipping Requires An Isolated Worktree"}
-            style={{
-              ...toolbarButtonStyle,
-              borderColor: shippable ? "oklch(0.35 0.10 150)" : "oklch(0.28 0.05 220)",
-              background: shippable ? "oklch(0.14 0.06 150 / 0.6)" : "oklch(0.12 0.03 220 / 0.6)",
-              color: shippable ? "oklch(0.75 0.16 150)" : "oklch(0.40 0.03 220)",
-              cursor: shippable ? "pointer" : "not-allowed",
-            }}
+            style={
+              shippable
+                ? { borderColor: "oklch(0.35 0.10 150)", color: "oklch(0.75 0.16 150)" }
+                : undefined
+            }
           >
             Ship
-          </button>
+          </Button>
         )}
 
         {webviewChat && (
-          <button
-            type="button"
+          <Button
+            size="sm"
+            variant="secondary"
             onClick={() => setShowQueue(!showQueue)}
-            style={{
-              ...toolbarButtonStyle,
-              borderColor: "oklch(0.35 0.10 205)",
-              background: showQueue ? "oklch(0.20 0.08 205 / 0.6)" : "oklch(0.14 0.06 205 / 0.6)",
-              color: "oklch(0.78 0.18 205)",
-              marginLeft: "auto",
-            }}
             aria-pressed={showQueue}
+            style={{
+              marginLeft: "auto",
+              borderColor: "oklch(0.35 0.10 205)",
+              color: "var(--color-plasma)",
+              background: showQueue ? "oklch(0.20 0.08 205 / 0.6)" : undefined,
+            }}
           >
             Queue
-          </button>
+          </Button>
         )}
       </div>
 
