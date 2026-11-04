@@ -6,6 +6,7 @@ import * as z from "zod";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
+import type { CapSync } from "#lib/acknowledged-sync";
 import {
   type AlertThresholds,
   alertThresholdsAtom,
@@ -552,6 +553,26 @@ function AlertThresholdsSection({
   );
 }
 
+/** Feedback under a backend-acknowledged cap (pushed by #hooks/useSettingsBridge; Retry re-applies). Returns undefined while idle so NumberField omits -feedback from aria-describedby, hence a function, not a component. */
+function capSyncFeedback(sync: CapSync, unit: string): React.ReactNode {
+  if (sync.status === "pending")
+    return (
+      <p role="status" className="mt-1 text-xs text-fg-dim">
+        Applying…
+      </p>
+    );
+  if (sync.status === "failed")
+    return (
+      <div role="alert" className="mt-1 flex items-center gap-2 text-xs text-rose">
+        <span>{`Could Not Apply ${sync.requested} ${unit} — ${sync.message}`}</span>
+        <Button variant="ghost" size="sm" onClick={sync.retry}>
+          Retry
+        </Button>
+      </div>
+    );
+  return undefined;
+}
+
 // ── Page ─────────────────────────────────────────────
 
 /** Settings page for application configuration and preferences. */
@@ -599,22 +620,6 @@ export function Settings(): React.ReactElement {
       }
     });
 
-  // The bridge (#hooks/useSettingsBridge) pushes the cap to the backend and
-  // rolls the field back when the push fails; Retry re-applies the request.
-  const agentConcurrencyFeedback =
-    agentConcurrencySync.status === "pending" ? (
-      <p role="status" className="mt-1 text-xs text-fg-dim">
-        Applying…
-      </p>
-    ) : agentConcurrencySync.status === "failed" ? (
-      <div role="alert" className="mt-1 flex items-center gap-2 text-xs text-rose">
-        <span>{`Could Not Apply ${agentConcurrencySync.requested} Streams — ${agentConcurrencySync.message}`}</span>
-        <Button variant="ghost" size="sm" onClick={agentConcurrencySync.retry}>
-          Retry
-        </Button>
-      </div>
-    ) : undefined;
-
   // ── API key (read on mount, written on Save via #lib/tauri) ──
   // The key itself is never logged, traced, or included in a toast; a failed
   // save shows the backend's error text, which never contains the value.
@@ -660,19 +665,6 @@ export function Settings(): React.ReactElement {
   // ── Worker registry cap (backend-persisted via set_max_workers) ──
   const [shownMaxWorkers, setShownMaxWorkers] = useAtom(maxWorkersAtom);
   const maxWorkersSync = useAtomValue(maxWorkersSyncAtom);
-  const maxWorkersFeedback =
-    maxWorkersSync.status === "pending" ? (
-      <p role="status" className="mt-1 text-xs text-fg-dim">
-        Applying…
-      </p>
-    ) : maxWorkersSync.status === "failed" ? (
-      <div role="alert" className="mt-1 flex items-center gap-2 text-xs text-rose">
-        <span>{`Could Not Apply ${maxWorkersSync.requested} Workers — ${maxWorkersSync.message}`}</span>
-        <Button variant="ghost" size="sm" onClick={maxWorkersSync.retry}>
-          Retry
-        </Button>
-      </div>
-    ) : undefined;
 
   return (
     <div className="flex max-w-180 flex-col gap-6 p-6">
@@ -767,7 +759,7 @@ export function Settings(): React.ReactElement {
             value={appSettings.aiConcurrentLimit}
             onChange={(v) => patchSettings({ aiConcurrentLimit: v })}
             busy={agentConcurrencySync.status === "pending"}
-            feedback={agentConcurrencyFeedback}
+            feedback={capSyncFeedback(agentConcurrencySync, "Streams")}
           />
           <NumberField
             label="Chat History Worker Cap"
@@ -787,7 +779,7 @@ export function Settings(): React.ReactElement {
             value={shownMaxWorkers}
             onChange={setShownMaxWorkers}
             busy={maxWorkersSync.status === "pending"}
-            feedback={maxWorkersFeedback}
+            feedback={capSyncFeedback(maxWorkersSync, "Workers")}
           />
         </div>
       </SettingsSection>
