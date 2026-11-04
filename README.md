@@ -207,7 +207,7 @@ The commands a change must pass are listed in [AGENTS.md](AGENTS.md#gates), the 
 | Rust toolchain | nightly-2026-11-04 (`rust-version` 1.101, edition 2024) | `rust-toolchain.toml`, `Cargo.toml` |
 | Tauri | 3.0.0-alpha.5 (`tauri`, `tauri-runtime-wry`) | `Cargo.toml` |
 | React | 19.3.0-canary-e84e1492-20261031 | `package.json` |
-| TypeScript | 7.1.0-dev.20261103.1 | `package.json` |
+| TypeScript | 7.1.0-dev.20261104.1 | `package.json` |
 | Vite | 8.3.5 | `package.json` |
 | Biome | 2.6.4 | `package.json` |
 | Vitest | 5.1.0 | `package.json` |
