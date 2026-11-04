@@ -300,7 +300,7 @@
   }
 
   .swarm-cmdk-content:has([data-command-input]:focus-visible) {
-    border-color: var(--color-plasma);
+    border-color: oklch(from var(--color-plasma) l c h / 0.5);
   }
 
   @media (forced-colors: active) {
