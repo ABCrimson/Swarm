@@ -73,6 +73,8 @@ Anywhere else (a service manager, a redirect) it prints only the address and the
 SWARM Daemon Listening On http://127.0.0.1:8787/ (Run `swarmd connect-url` For The Connect URL)
 ```
 
+Either way a status line follows (the log's `swarmd started` line records the policy as `serves`). It names the networks plaintext clients are served on through this bind: `Serving Plaintext Clients On: Loopback Only` for a loopback bind (even with `--allow-plaintext-lan`, because no LAN peer can reach a loopback socket) and for a wildcard bind without the flag, which adds ` (LAN Clients Are Refused Without --allow-plaintext-lan)`. Only a wildcard or private-LAN bind with `--allow-plaintext-lan` prints `Loopback And Private IPv4 Networks (RFC 1918, 100.64.0.0/10)`.
+
 To get a browser UI from the daemon itself, build the web bundle (`pnpm build:web`, output in `dist-web/`) and serve it with `--serve-ui dist-web`, then open the connect URL. Without `--serve-ui`, point any WebSocket client at `ws://127.0.0.1:8787/ws`. `Ctrl-C` stops it gracefully.
 
 ## What the Browser Build Offers
@@ -107,7 +109,8 @@ swarmd connect-url [--bind ADDR] [--data-dir PATH]
 
 | Option | Meaning |
 |---|---|
-| `--bind ADDR` | Listen address, default `127.0.0.1:8787`. A non-loopback address needs a token minted by an earlier loopback run (see [Reaching the Daemon Off-Box](#reaching-the-daemon-off-box)). |
+| `--bind ADDR` | Listen address, default `127.0.0.1:8787`. A non-loopback address needs a token minted by an earlier loopback run; a private-LAN one also needs `--allow-plaintext-lan`, and a public one is refused (see [Reaching the Daemon Off-Box](#reaching-the-daemon-off-box)). |
+| `--allow-plaintext-lan` | Also serve plain `ws://` clients on private IPv4 networks (RFC 1918, `100.64.0.0/10`). Without it only loopback clients are served. A switch: it takes no value. |
 | `--data-dir PATH` | Data directory, default the desktop app's: `%APPDATA%\dev.crimson.swarm-orchestrator` on Windows, `~/Library/Application Support/dev.crimson.swarm-orchestrator` on macOS, `$XDG_DATA_HOME/dev.crimson.swarm-orchestrator` (else `~/.local/share/...`) elsewhere. |
 | `--serve-ui DIR` | Serve the `pnpm build:web` bundle in `DIR` at `/` (refused at startup if there is none). |
 | `--allow-host NAME[:PORT]` | Also accept this name in the `Host` / `Origin` headers (a reverse proxy, a MagicDNS name). Repeatable. A name without a port matches any port. |
@@ -115,7 +118,7 @@ swarmd connect-url [--bind ADDR] [--data-dir PATH]
 | `-h`, `--help` / `-V`, `--version` | Usage / version. |
 | `connect-url` | Print the connect URL (it carries the token) and exit; fails if no token exists yet. |
 
-Flags take their value as the next argument or inline (`--bind=ADDR`). `RUST_LOG` overrides the default log filter (`swarm_core=info,swarmd=info,warn`).
+Flags other than `--allow-plaintext-lan` take their value as the next argument or inline (`--bind=ADDR`). `RUST_LOG` overrides the default log filter (`swarm_core=info,swarmd=info,warn`).
 
 **Exit status:** `0` clean stop, `2` bad command line, `75` (`EX_TEMPFAIL`) another SWARM instance holds the data directory, `1` any other startup failure.
 
@@ -182,10 +185,11 @@ Add `--bind ADDR` and `--data-dir PATH` if the daemon runs with non-default valu
 
 ## Reaching the Daemon Off-Box
 
-By default every install binds **loopback only**, and `swarmd` **refuses** a non-loopback bind on a data directory that has never completed a loopback run -- there is no token yet to authenticate with. The check runs before anything could mint a token, so a refused run does not create the file that would let an identical second run through. Exposing it is a deliberate two-step:
+By default every install binds **loopback only**, and `swarmd` **refuses** a non-loopback bind on a data directory that has never completed a loopback run -- there is no token yet to authenticate with. The check runs before anything could mint a token, so a refused run does not create the file that would let an identical second run through. Exposing it takes deliberate steps:
 
 1. **Establish the token.** Run once on loopback (any install above does this). This mints `<data-dir>/daemon-token`.
-2. **Front it with transport security you control.** The token is the *only* authentication and the WebSocket is plain `ws://`; do not put `--bind 0.0.0.0:PORT` on the open internet. Reach it instead through an SSH tunnel (`ssh -L 8787:127.0.0.1:8787 host`, keeping the local port equal to the daemon's, or adding `--allow-host 127.0.0.1:<port>` for another one) or a reverse proxy that terminates TLS, forwards WebSocket upgrades and adds its own access control, started with `--allow-host proxy.example.com` so its `Host` / `Origin` are accepted. Binding a wildcard address works for LAN and tailnet clients: a request whose `Host` names the interface address it actually reached is accepted automatically. A non-loopback bind also hard-fails unless the data directory and the token file could be restricted to you.
+2. **Front it with transport security you control.** The token is the *only* authentication and the WebSocket is plain `ws://`; do not put `--bind 0.0.0.0:PORT` on the open internet. Reach it instead through an SSH tunnel (`ssh -L 8787:127.0.0.1:8787 host`, keeping the local port equal to the daemon's, or adding `--allow-host 127.0.0.1:<port>` for another one) or a reverse proxy that terminates TLS, forwards WebSocket upgrades and adds its own access control, started with `--allow-host proxy.example.com` so its `Host` / `Origin` are accepted. A non-loopback bind also hard-fails unless the data directory and the token file could be restricted to you.
+3. **Admit the private network, if you want LAN clients.** `swarmd` speaks plain `ws://` only, so it judges every connection by both of its ends before anything else: **loopback** (both ends loopback, which includes every SSH-tunnel and same-machine proxy client) is always served; **private LAN** (both ends loopback or private IPv4, RFC 1918 or `100.64.0.0/10`, plain or IPv4-mapped, at least one not loopback) only with `--allow-plaintext-lan`; **public** (any other address, every native IPv6 address but `::1` included, or a local end the OS could not report) never. Both ends count because a public peer on a private interface came through a port forward, and a private peer on a public interface means that interface faces the internet. `100.64.0.0/10` is carrier-grade NAT space that IPv4 tailnet addresses share with carriers and other VPNs, so it is treated as private space, never as proof of a tailnet; a tailnet's IPv6 addresses are public here. A concrete `--bind` address no connection could be served on (a private-LAN one without the flag, or any public one) exits `1` at startup before any file work; a wildcard bind is judged per connection. With the flag, a wildcard bind serves LAN and IPv4 tailnet clients: a request whose `Host` names the interface address it actually reached is accepted automatically.
 
 The connect URL shows the bind address, or the loopback address (`127.0.0.1` / `[::1]`) for a wildcard bind. Replace the origin with the one your client reaches (`https://swarm.example.com/#t=<token>`).
 
@@ -193,6 +197,7 @@ The connect URL shows the bind address, or the loopback address (`127.0.0.1` / `
 
 - **Token in the URL fragment**, never a query parameter -- it is not sent to the server on the initial request and not captured by intervening proxies. The browser client moves it into `sessionStorage` and scrubs it from the address bar. A client that can send headers may use `Authorization: Bearer <token>` on the upgrade instead.
 - **256-bit token, constant-time comparison**, minted with `getrandom`, validated on load (exactly 64 hex characters; a malformed file is an error, never silently replaced), permissions re-applied on every start. No unauthenticated mode exists.
+- **The plaintext exposure gate on every request** (step 3 above), in the request layer before the Host and Origin checks, and again in the `/ws` upgrade before it takes a handshake slot, so a refused peer never holds one. A refused connection gets a `403` whose body names what it would need (`Plaintext Connections Over A Private LAN Need --allow-plaintext-lan.` or `Plaintext Connections Are Served Only On Loopback And Private IPv4 Networks.`) and a warning in the log with both ends. It decides what `swarmd` serves, not what can reach the port: it is not a firewall.
 - **Host and Origin checks on every request**, `/ws` and the static `--serve-ui` routes alike. WebSocket upgrades are exempt from CORS, and a DNS-rebinding page can reach a loopback daemon under an attacker's host name, so a `Host` (and `Origin`, when sent) that does not name the connection's own local address, a loopback spelling on a loopback connection, or an `--allow-host` entry gets a `403`.
 - **Bounded admission**: 32 authenticated connections, a separate pool of 16 pending handshakes (4 per client address), `hello` within 5 s, 2 MiB per message, 8 concurrent `rpc` calls per connection. Unauthenticated sockets cannot take an authenticated client's slot.
 - **`RemotePolicy` at the command boundary**: `read_file` / `write_file` are `Denied` over the wire and `read_config` / `write_config` are `SecretFiltered` (any key shaped like a credential is refused in both directions), so a remote client cannot exfiltrate the daemon token, API keys, or arbitrary files even though the command runs the same code the desktop shell does. See [API Reference: Who Can Call What](api.md#who-can-call-what).
