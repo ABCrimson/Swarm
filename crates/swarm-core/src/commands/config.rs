@@ -55,8 +55,12 @@ const SECRET_ANY_WORDS: &[&str] = &[
 /// words such as `2` or `v2` and ignoring that word's trailing digits,
 /// is one of `SECRET_LAST_WORDS`, or when any word, trailing digits
 /// ignored, is one of `SECRET_ANY_WORDS`. Ordinary settings such as
-/// `max_workers`, `max_tokens` or `default_repo_root` are not.
+/// `max_workers`, `max_tokens` or `default_repo_root` are not. Every
+/// key in `crate::config::SECRET_KEYS` is secret whatever its words.
 pub fn is_secret_key(key: &str) -> bool {
+    if crate::config::SECRET_KEYS.contains(&key) {
+        return true;
+    }
     let words = key_words(key);
     words
         .iter()

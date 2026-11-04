@@ -7,8 +7,8 @@
 //! Unix) for a headless `swarmd` whose host runs no Secret Service.
 //! Which one serves a process is decided once, on the first secret
 //! access, by `keyring::v1::Entry::store_status()` (see [`with_store`]);
-//! the next process that has the keychain adopts whatever the file
-//! holds into it (`crate::config::adopt_file_secrets`).
+//! the next process that has the keychain moves the file's API key into
+//! it (`crate::config::adopt_file_secrets`).
 //! Unit tests always get the file store, so no test touches the
 //! developer's keychain.
 //!
