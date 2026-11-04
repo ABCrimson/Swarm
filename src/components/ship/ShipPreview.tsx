@@ -400,14 +400,14 @@ export function ShipPreview({
             {escapeForDisplay(preflight.branch)}
           </Pill>
           <span style={separatorStyle}>{"→"}</span>
-          <span>{escapeForDisplay(preflight.baseBranch)}</span>
+          <span>
+            {escapeForDisplay(preflight.baseBranch)}
+            {preflight.remote != null && ","}
+          </span>
           {preflight.remote != null && (
-            <>
-              <span style={separatorStyle}>{","}</span>
-              <span title={escapeForDisplay(preflight.remote)}>
-                {escapeForDisplay(preflight.host ?? preflight.remote)}
-              </span>
-            </>
+            <span title={escapeForDisplay(preflight.remote)}>
+              {escapeForDisplay(preflight.host ?? preflight.remote)}
+            </span>
           )}
           {preflight.ahead > 0 && (
             <Pill tone="warning" size="sm">
