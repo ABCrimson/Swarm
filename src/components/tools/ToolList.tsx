@@ -71,21 +71,10 @@ export function ToolList({
         padding: 16,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <p className="m-0 font-display text-lg font-semibold tracking-tight text-fg-bright">
-          Tools{" "}
-          <span className="font-mono text-fg-dim tabular-nums">
-            ({BUILT_IN_TOOLS.length + customTools.length})
-          </span>
-        </p>
-        <Button variant="primary" size="sm" onClick={onCreateNew}>
-          New Tool
-        </Button>
-      </div>
-
       <section aria-labelledby={builtInHeadingId}>
         <h2 id={builtInHeadingId} style={sectionHeadingStyle}>
-          Built-In
+          Built-In{" "}
+          <span className="font-mono text-fg-dim tabular-nums">{BUILT_IN_TOOLS.length}</span>
         </h2>
         <div style={gridStyle}>
           {BUILT_IN_TOOLS.map((tool) => (
@@ -100,9 +89,16 @@ export function ToolList({
       </section>
 
       <section aria-labelledby={customHeadingId}>
-        <h2 id={customHeadingId} style={sectionHeadingStyle}>
-          Custom
-        </h2>
+        {/* New Tool belongs to the section it creates into. */}
+        <div className="mb-2 flex items-center justify-between">
+          <h2 id={customHeadingId} style={{ ...sectionHeadingStyle, margin: 0 }}>
+            Custom{" "}
+            <span className="font-mono text-fg-dim tabular-nums">{customTools.length}</span>
+          </h2>
+          <Button variant="primary" size="sm" onClick={onCreateNew}>
+            New Tool
+          </Button>
+        </div>
         {customTools.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border">
             <EmptyState
