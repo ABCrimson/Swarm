@@ -242,15 +242,15 @@ CI gathers every job into the single required status `CI OK`.
 | --- | --- | --- |
 | App | 0.14.0 | `package.json` |
 | pnpm | 12.17.0 | `package.json` `packageManager` |
-| Node.js | 28.0.0-nightly202610304e48b9b06b | `package.json` `devEngines.runtime` |
-| Rust toolchain | nightly-2026-10-30 (`rust-version` 1.101, edition 2024) | `rust-toolchain.toml`, `Cargo.toml` |
+| Node.js | 28.0.0-nightly2026110370074c6f98 | `package.json` `devEngines.runtime` |
+| Rust toolchain | nightly-2026-11-04 (`rust-version` 1.101, edition 2024) | `rust-toolchain.toml`, `Cargo.toml` |
 | Tauri | 3.0.0-alpha.5 (`tauri`, `tauri-runtime-wry`) | `Cargo.toml` |
-| React | 19.3.1 | `package.json` |
-| TypeScript | 7.1.0-dev.20261030.1 | `package.json` |
+| React | 19.3.0-canary-e84e1492-20261031 | `package.json` |
+| TypeScript | 7.1.0-dev.20261103.1 | `package.json` |
 | Vite | 8.3.5 | `package.json` |
 | Biome | 2.6.4 | `package.json` |
-| Vitest | 5.1.0-beta.1 | `package.json` |
-| Playwright | 1.65.0-alpha-2026-10-30 | `package.json` |
+| Vitest | 5.1.0 | `package.json` |
+| Playwright | 1.66.0-alpha-2026-11-04 | `package.json` |
 
 </details>
 
