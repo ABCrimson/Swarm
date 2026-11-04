@@ -62,6 +62,7 @@
     --amber: light-dark(oklch(0.5 0.105 65), oklch(0.83 0.13 82));
     --cyan: light-dark(oklch(0.47 0.08 215), oklch(0.82 0.1 205));
     --on-amber: light-dark(oklch(0.99 0.004 85), oklch(0.2 0.04 266));
+    --amber-hover: light-dark(oklch(0.44 0.1 65), oklch(0.88 0.12 85));
     --focus: var(--amber);
     --selection: light-dark(oklch(0.88 0.08 82), oklch(0.42 0.08 82));
     --header-bg: light-dark(oklch(0.975 0.007 266 / 0.9), oklch(0.165 0.028 266 / 0.88));
@@ -71,7 +72,7 @@
     --alert-note: light-dark(oklch(0.48 0.12 255), oklch(0.78 0.11 255));
     --alert-tip: light-dark(oklch(0.48 0.1 150), oklch(0.8 0.13 150));
     --alert-important: light-dark(oklch(0.48 0.15 300), oklch(0.78 0.12 300));
-    --alert-warning: light-dark(oklch(0.5 0.105 65), oklch(0.83 0.13 82));
+    --alert-warning: var(--amber);
     --alert-caution: light-dark(oklch(0.5 0.16 25), oklch(0.75 0.14 25));
 
     --sans: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
@@ -106,12 +107,12 @@
       --amber: oklch(0.5 0.105 65);
       --cyan: oklch(0.47 0.08 215);
       --on-amber: oklch(0.99 0.004 85);
+      --amber-hover: oklch(0.44 0.1 65);
       --selection: oklch(0.88 0.08 82);
       --header-bg: oklch(0.975 0.007 266 / 0.9);
       --alert-note: oklch(0.48 0.12 255);
       --alert-tip: oklch(0.48 0.1 150);
       --alert-important: oklch(0.48 0.15 300);
-      --alert-warning: oklch(0.5 0.105 65);
       --alert-caution: oklch(0.5 0.16 25);
     }
   }
@@ -387,6 +388,11 @@
         border-color: var(--amber);
         background: var(--amber);
         color: var(--on-amber);
+
+        &:hover {
+          border-color: var(--amber-hover);
+          background: var(--amber-hover);
+        }
       }
     }
   }
