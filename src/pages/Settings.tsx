@@ -29,6 +29,7 @@ import {
   checkForUpdates,
   DESKTOP_ONLY_REASON,
   hasCapability,
+  hasTransport,
   isTauri,
   readConfig,
   writeConfig,
@@ -686,7 +687,13 @@ export function Settings(): React.ReactElement {
     <div className="flex max-w-180 flex-col">
       <PageHeader
         title="Settings"
-        subtitle={isTauri() ? "Saved On This Device" : "Not Saved Outside The Desktop App"}
+        subtitle={
+          isTauri()
+            ? "Saved On This Device"
+            : hasTransport()
+              ? "Only The Stream Limit And Registry Cap Are Saved Outside The Desktop App"
+              : "Not Saved Outside The Desktop App"
+        }
       />
       <div className="flex flex-col gap-6 px-7 pb-6">
         <form onSubmit={handleSaveApiKey}>
