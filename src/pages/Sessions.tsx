@@ -2,11 +2,13 @@ import { useAtomValue } from "jotai";
 import { MotionConfig } from "motion/react";
 import { Activity, useActionState, useId, useRef, useState } from "react";
 import { toast } from "sonner";
+import { PageHeader } from "#components/layout/PageHeader";
 import { HistorySearch } from "#components/session/HistorySearch";
 import { SessionActions } from "#components/session/SessionActions";
 import { SessionList } from "#components/session/SessionList";
 import { TemplateSelector } from "#components/session/TemplateSelector";
 import { Button } from "#components/ui/Button";
+import { SEGMENT_LIST_CLASS, SEGMENT_TAB_CLASS } from "#components/ui/Tabs";
 import { escapeForDisplay } from "#lib/display-escape";
 import { exportAsMarkdown, exportMetricsCSV, saveToFile, sessionFileSlug } from "#lib/export";
 import { pluralizeWorkers } from "#lib/format";
@@ -229,106 +231,97 @@ export function Sessions(): React.ReactElement {
 
   return (
     <MotionConfig reducedMotion={reducedMotion ? "always" : "user"}>
-      <div className="flex h-full flex-col gap-6 overflow-auto p-6">
-        <header>
-          <h1 className="text-2xl font-bold tracking-tight text-[oklch(0.95_0.02_220)] font-[family-name:var(--font-display)]">
-            Sessions
-          </h1>
-          <p className="mt-1 text-sm text-fg-dim font-[family-name:var(--font-body)]">
-            Active And Historical Worker Sessions.
-          </p>
-        </header>
+      <div className="flex h-full flex-col overflow-auto">
+        <PageHeader title="Sessions" />
+        <div className="flex min-h-0 flex-1 flex-col gap-6 px-7 pb-6">
+          <div className="glass-panel flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border p-3">
+            <SessionActions />
 
-        <div
-          className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-[oklch(0.25_0.04_220/0.5)] bg-[oklch(0.12_0.02_220/0.6)] p-3"
-          style={{ backdropFilter: "blur(12px)" }}
-        >
-          <SessionActions />
+            <div className="flex flex-wrap items-center gap-2">
+              <fieldset className={`m-0 ${SEGMENT_LIST_CLASS}`}>
+                <legend className="sr-only">View</legend>
+                {VIEWS.map(({ id, label }) => (
+                  <ViewToggle
+                    key={id}
+                    label={label}
+                    active={view === id}
+                    onClick={() => setView(id)}
+                  />
+                ))}
+              </fieldset>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <fieldset className="m-0 flex items-center gap-2 border-0 p-0">
-              <legend className="sr-only">View</legend>
-              {VIEWS.map(({ id, label }) => (
-                <ViewToggle
-                  key={id}
-                  label={label}
-                  active={view === id}
-                  onClick={() => setView(id)}
-                />
-              ))}
-            </fieldset>
-
-            {/* Actions on the active session */}
-            {activeSession != null && (
-              <div className="ml-2 flex items-center gap-1 border-l border-[oklch(0.25_0.03_220)] pl-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={!canUseLocalStores}
-                  aria-describedby={canUseLocalStores ? undefined : exportReasonId}
-                  onClick={() => void snapshotSession(activeSession)}
-                >
-                  Snapshot
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={!canExportFiles}
-                  aria-describedby={canExportFiles ? undefined : exportReasonId}
-                  onClick={() => void exportSessionMarkdown(activeSession)}
-                >
-                  Export MD
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={!canExportFiles}
-                  aria-describedby={canExportFiles ? undefined : exportReasonId}
-                  onClick={() => void exportSessionJson(activeSession.id)}
-                >
-                  Export JSON
-                </Button>
-              </div>
-            )}
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={!canExportFiles}
-              aria-describedby={canExportFiles ? undefined : exportReasonId}
-              onClick={() => void exportMetrics()}
-            >
-              Export Metrics
-            </Button>
-            {(!canExportFiles || (activeSession != null && !canUseLocalStores)) && (
-              <span id={exportReasonId} className="text-fg-dim text-xs">
-                {DESKTOP_ONLY_REASON}
-              </span>
-            )}
+              {/* Actions on the active session */}
+              {activeSession != null && (
+                <div className="ml-2 flex items-center gap-1 border-l border-border pl-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={!canUseLocalStores}
+                    aria-describedby={canUseLocalStores ? undefined : exportReasonId}
+                    onClick={() => void snapshotSession(activeSession)}
+                  >
+                    Snapshot
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={!canExportFiles}
+                    aria-describedby={canExportFiles ? undefined : exportReasonId}
+                    onClick={() => void exportSessionMarkdown(activeSession)}
+                  >
+                    Export MD
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={!canExportFiles}
+                    aria-describedby={canExportFiles ? undefined : exportReasonId}
+                    onClick={() => void exportSessionJson(activeSession.id)}
+                  >
+                    Export JSON
+                  </Button>
+                </div>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!canExportFiles}
+                aria-describedby={canExportFiles ? undefined : exportReasonId}
+                onClick={() => void exportMetrics()}
+              >
+                Export Metrics
+              </Button>
+              {(!canExportFiles || (activeSession != null && !canUseLocalStores)) && (
+                <span id={exportReasonId} className="text-fg-dim text-xs">
+                  {DESKTOP_ONLY_REASON}
+                </span>
+              )}
+            </div>
           </div>
-        </div>
 
-        {templateSource != null && (
-          <TemplateForm
-            key={templateSource.id}
-            session={templateSource}
-            onDone={closeTemplateForm}
-          />
-        )}
-
-        <div className="min-h-0 flex-1">
-          <Activity mode={view === "list" ? "visible" : "hidden"}>
-            <SessionList
-              onDelete={(id) => void deleteSession(id)}
-              onExport={(id) => void exportSessionJson(id)}
-              onCreateTemplate={openTemplateForm}
+          {templateSource != null && (
+            <TemplateForm
+              key={templateSource.id}
+              session={templateSource}
+              onDone={closeTemplateForm}
             />
-          </Activity>
-          <Activity mode={view === "search" ? "visible" : "hidden"}>
-            <HistorySearch onResultSelect={handleSearchResultSelect} />
-          </Activity>
-          <Activity mode={view === "templates" ? "visible" : "hidden"}>
-            <TemplateSelector onSelect={handleTemplateSelect} onClose={() => setView("list")} />
-          </Activity>
+          )}
+
+          <div className="min-h-0 flex-1">
+            <Activity mode={view === "list" ? "visible" : "hidden"}>
+              <SessionList
+                onDelete={(id) => void deleteSession(id)}
+                onExport={(id) => void exportSessionJson(id)}
+                onCreateTemplate={openTemplateForm}
+              />
+            </Activity>
+            <Activity mode={view === "search" ? "visible" : "hidden"}>
+              <HistorySearch onResultSelect={handleSearchResultSelect} />
+            </Activity>
+            <Activity mode={view === "templates" ? "visible" : "hidden"}>
+              <TemplateSelector onSelect={handleTemplateSelect} onClose={() => setView("list")} />
+            </Activity>
+          </div>
         </div>
       </div>
     </MotionConfig>
@@ -360,8 +353,7 @@ function TemplateForm({
     INITIAL_TEMPLATE_FORM,
   );
 
-  const labelClass =
-    "text-xs font-medium text-[oklch(0.75_0.08_290)] font-[family-name:var(--font-body)]";
+  const labelClass = "text-xs font-medium text-fg-muted";
   const errorProps =
     state.error != null ? { "aria-invalid": true, "aria-describedby": errorId } : {};
 
@@ -369,7 +361,7 @@ function TemplateForm({
     <form
       action={saveAction}
       aria-label={`Save "${escapeForDisplay(session.name)}" As A Template`}
-      className="flex flex-wrap items-center gap-3 rounded-xl border border-[oklch(0.35_0.08_290/0.5)] bg-[oklch(0.14_0.03_290/0.4)] p-3"
+      className="flex flex-wrap items-center gap-3 rounded-lg border border-plasma/30 bg-plasma/8 p-3"
       onKeyDown={(e) => {
         if (e.key === "Escape") onDone();
       }}
@@ -405,7 +397,7 @@ function TemplateForm({
         Cancel
       </Button>
       {state.error != null && (
-        <span id={errorId} role="alert" className="basis-full text-xs text-[oklch(0.72_0.20_25)]">
+        <span id={errorId} role="alert" className="basis-full text-rose text-xs">
           {state.error}
         </span>
       )}
@@ -423,16 +415,7 @@ function ViewToggle({
   readonly onClick: () => void;
 }): React.ReactElement {
   return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={`cursor-pointer rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors font-[family-name:var(--font-body)] focus-visible:outline-2 focus-visible:outline-plasma ${
-        active
-          ? "border-[oklch(0.45_0.15_290/0.4)] bg-[oklch(0.25_0.06_290/0.4)] text-[oklch(0.85_0.12_290)]"
-          : "border-transparent bg-transparent text-fg-dim hover:text-fg"
-      }`}
-    >
+    <button type="button" aria-pressed={active} onClick={onClick} className={SEGMENT_TAB_CLASS}>
       {label}
     </button>
   );

@@ -75,6 +75,28 @@ beforeEach(() => {
   store.set(selectedModelAtom, "sonnet");
 });
 
+describe("Settings — header subtitle", () => {
+  it("says settings are saved on this device in the desktop app", () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(hasTransport).mockReturnValue(true);
+    render(<Settings />);
+    expect(screen.getByText("Saved On This Device")).toBeInTheDocument();
+  });
+
+  it("names the two daemon-persisted settings on swarmd", () => {
+    vi.mocked(hasTransport).mockReturnValue(true);
+    render(<Settings />);
+    expect(
+      screen.getByText("Only The Stream Limit And Registry Cap Are Saved Outside The Desktop App"),
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing is saved without a backend", () => {
+    render(<Settings />);
+    expect(screen.getByText("Not Saved Outside The Desktop App")).toBeInTheDocument();
+  });
+});
+
 describe("Settings — API key", () => {
   it("reads the anthropic_api_key config key on mount and shows the stored key", async () => {
     vi.mocked(readConfig).mockImplementation(async (key) =>
@@ -573,10 +595,8 @@ describe("Settings — AI concurrent stream limit acknowledgement", () => {
 
   it("marks the field busy and says it is applying until the backend answers", async () => {
     const user = userEvent.setup();
-    let acknowledge: (cap: number | null) => void = () => {};
-    vi.mocked(setAgentConcurrency).mockReturnValueOnce(
-      new Promise<number | null>((r) => (acknowledge = r)),
-    );
+    const ack = Promise.withResolvers<number | null>();
+    vi.mocked(setAgentConcurrency).mockReturnValueOnce(ack.promise);
     render(<SettingsWithBridge />);
 
     const field = screen.getByLabelText("AI Concurrent Stream Limit");
@@ -586,7 +606,7 @@ describe("Settings — AI concurrent stream limit acknowledgement", () => {
     expect(field).toHaveAttribute("aria-busy", "true");
     expect(screen.getByText("Applying…")).toHaveAttribute("role", "status");
 
-    acknowledge(null);
+    ack.resolve(null);
     await waitFor(() => expect(field).not.toHaveAttribute("aria-busy"));
     expect(screen.queryByText("Applying…")).not.toBeInTheDocument();
   });

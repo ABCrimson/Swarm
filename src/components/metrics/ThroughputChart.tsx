@@ -85,7 +85,11 @@ export function ThroughputChart(): React.ReactElement {
   const activeSeries = ALL_SERIES.filter((series) => data.some((p) => p[series] > 0));
 
   return (
-    <ChartPanel title="AI Throughput" caption={`Tokens/Sec · Last ${MAX_CHART_POINTS}`}>
+    <ChartPanel
+      title="AI Throughput"
+      caption={`Tokens/Sec · Last ${MAX_CHART_POINTS} Samples`}
+      sampleCount={data.length}
+    >
       <LineChart
         responsive
         style={CHART_FILL_STYLE}

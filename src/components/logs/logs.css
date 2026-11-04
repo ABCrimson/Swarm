@@ -11,9 +11,14 @@
     flex-direction: column;
     height: 100%;
     overflow: hidden;
-    background: var(--color-surface-0);
+    background: oklch(from var(--color-surface-0) l c h / 0.7);
+    backdrop-filter: blur(12px) saturate(1.5);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-lg);
+
+    @supports not (backdrop-filter: blur(1px)) {
+      background: oklch(from var(--color-surface-0) l c h / 0.95);
+    }
   }
 
   .log-viewer__scroll {
@@ -23,7 +28,7 @@
   }
 
   .log-viewer__scroll:focus-visible {
-    outline: 2px solid oklch(0.78 0.18 205 / 0.6);
+    outline: 2px solid oklch(from var(--color-plasma) l c h / 0.6);
     outline-offset: -2px;
   }
 
@@ -39,12 +44,6 @@
   .log-viewer__empty {
     position: absolute;
     inset: 0;
-    display: grid;
-    place-items: center;
-    margin: 0;
-    font-family: var(--font-body);
-    font-size: 0.875rem;
-    color: var(--color-fg-dim);
   }
 
   .log-viewer__resume {
@@ -61,7 +60,7 @@
     align-items: center;
     gap: 8px;
     padding: 0 12px;
-    border-bottom: 1px solid oklch(0.12 0.03 220);
+    border-bottom: 1px solid oklch(from var(--color-border) l c h / 0.5);
     font-family: var(--font-mono);
     font-size: var(--text-sm);
   }
@@ -99,7 +98,7 @@
   .log-row__match {
     padding: 0 1px;
     border-radius: 2px;
-    background: oklch(0.82 0.19 70 / 0.3);
+    background: oklch(from var(--color-amber) l c h / 0.3);
     color: var(--color-fg-bright);
   }
 
@@ -111,8 +110,6 @@
     gap: 8px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--color-border);
-    background: oklch(0.1 0.03 220 / 0.6);
-    backdrop-filter: blur(12px) saturate(1.5);
   }
 
   .log-filter__levels {
@@ -163,17 +160,15 @@
 
   .log-filter__level:focus-visible,
   .log-filter__source:focus-visible {
-    outline: 2px solid oklch(0.78 0.18 205 / 0.6);
+    outline: 2px solid oklch(from var(--color-plasma) l c h / 0.6);
     outline-offset: 1px;
   }
 
-  .log-filter__source {
+  .log-filter .log-filter__source {
     min-width: 120px;
-    padding: 4px 8px;
-    border: 1px solid var(--color-border);
-    border-radius: 6px;
-    background: oklch(0.1 0.03 220);
-    color: oklch(0.72 0.04 220);
+    width: auto;
+    height: 28px;
+    padding: 0 8px;
     font-family: var(--font-mono);
     font-size: var(--text-sm);
     cursor: pointer;

@@ -4,6 +4,7 @@
 // height. The body installs the shared Recharts theme, and the chart
 // inside sizes itself from it with Recharts 3's `responsive` prop — no
 // ResponsiveContainer wrapper and no guessed percentage heights.
+// With fewer than two samples the body shows a waiting line, not empty axes.
 
 import type { CSSProperties } from "react";
 import { RechartsThemeProvider } from "recharts";
@@ -16,9 +17,9 @@ const panelStyle: CSSProperties = {
   height: "100%",
   minHeight: 200,
   padding: 12,
-  background: "oklch(0.08 0.02 220 / 0.7)",
-  border: "1px solid oklch(0.22 0.04 220)",
-  borderRadius: 8,
+  background: "oklch(from var(--color-surface-0) l c h / 0.7)",
+  border: "1px solid var(--color-border)",
+  borderRadius: "var(--radius-lg)",
   backdropFilter: "blur(12px) saturate(1.5)",
 };
 
@@ -51,21 +52,40 @@ export const CHART_FILL_STYLE: CSSProperties = { width: "100%", height: "100%" }
 export function ChartPanel({
   title,
   caption,
+  span,
+  sampleCount,
   children,
 }: {
   readonly title: string;
   /** Short, Title Case note on the right of the title row (e.g. the sample window). */
   readonly caption?: string;
+  /** "full" spans every column of the ChartGrid. */
+  readonly span?: "full";
+  /** Samples behind the chart. Under 2 the body says so instead of drawing empty axes; omit it for a snapshot chart. */
+  readonly sampleCount?: number;
   readonly children: React.ReactNode;
 }): React.ReactElement {
   return (
-    <figure style={panelStyle} className="m-0">
+    <figure
+      style={span === "full" ? { ...panelStyle, gridColumn: "1 / -1" } : panelStyle}
+      className="m-0"
+    >
       <figcaption style={headerStyle}>
         <span>{title}</span>
         {caption && <span style={captionStyle}>{caption}</span>}
       </figcaption>
       <div style={{ flex: 1, minHeight: 0 }}>
-        <RechartsThemeProvider value={CHART_THEME}>{children}</RechartsThemeProvider>
+        {sampleCount !== undefined && sampleCount < 2 ? (
+          <p className="m-0 flex h-full items-center justify-center gap-2 text-fg-dim text-md">
+            <span
+              aria-hidden="true"
+              className="size-1.5 rounded-full bg-plasma motion-safe:animate-[tool-pulse_2s_ease-in-out_infinite]"
+            />
+            Waiting For Samples
+          </p>
+        ) : (
+          <RechartsThemeProvider value={CHART_THEME}>{children}</RechartsThemeProvider>
+        )}
       </div>
     </figure>
   );

@@ -4,6 +4,7 @@ import { useResizeObserver } from "@crimson_dev/use-resize-observer";
 import { useDeferredValue, useLayoutEffect, useRef, useState } from "react";
 import { LogFilter } from "#components/logs/LogFilter";
 import { Button } from "#components/ui/Button";
+import { EmptyState } from "#components/ui/EmptyState";
 import type { PillTone } from "#components/ui/Pill";
 import { Pill } from "#components/ui/Pill";
 import type { LogEntry, LogLevel } from "#store/logs";
@@ -160,9 +161,13 @@ export function LogViewer(): React.ReactElement {
         </div>
 
         {filteredEntries.length === 0 && (
-          <p className="log-viewer__empty">
-            {entries.length === 0 ? "No Log Entries Yet" : "No Entries Match Current Filters"}
-          </p>
+          <div className="log-viewer__empty">
+            <EmptyState
+              title={
+                entries.length === 0 ? "No Log Entries Yet" : "No Entries Match Current Filters"
+              }
+            />
+          </div>
         )}
       </div>
     </div>
@@ -184,7 +189,11 @@ function LogRow({
       >
         {formatTimestamp(entry.timestamp)}
       </time>
-      <Pill tone={LEVEL_TONE[entry.level]} size="sm" className="log-row__level">
+      <Pill
+        tone={LEVEL_TONE[entry.level]}
+        size="sm"
+        className="log-row__level font-mono tracking-[0.04em]"
+      >
         {LOG_LEVEL_LABEL[entry.level]}
       </Pill>
       <span className="log-row__source">{entry.source}</span>

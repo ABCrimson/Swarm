@@ -67,7 +67,7 @@ export function MemoryChart(): React.ReactElement {
   const data = memoryChartData(history, memoryTotalMb);
 
   return (
-    <ChartPanel title="Memory Usage">
+    <ChartPanel title="Memory Usage" sampleCount={data.length}>
       <AreaChart
         responsive
         style={CHART_FILL_STYLE}

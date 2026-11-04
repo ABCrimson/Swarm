@@ -45,7 +45,7 @@ export function MetricsChart(): React.ReactElement {
   const data = systemChartData(history, memoryTotalMb);
 
   return (
-    <ChartPanel title="System Metrics">
+    <ChartPanel title="System Metrics" span="full" sampleCount={data.length}>
       <LineChart
         responsive
         style={CHART_FILL_STYLE}

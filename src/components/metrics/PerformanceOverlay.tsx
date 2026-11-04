@@ -20,8 +20,8 @@ const overlayStyle: CSSProperties = {
   right: 12,
   width: 220,
   padding: "10px 14px",
-  background: "oklch(0.06 0.02 220 / 0.88)",
-  border: "1px solid oklch(0.22 0.04 220)",
+  background: "oklch(from var(--color-void) l c h / 0.88)",
+  border: "1px solid var(--color-border)",
   borderRadius: 8,
   backdropFilter: "blur(12px) saturate(1.5)",
   fontFamily: "var(--font-mono)",
@@ -39,7 +39,7 @@ const titleStyle: CSSProperties = {
   fontWeight: 700,
   textTransform: "uppercase",
   letterSpacing: "0.1em",
-  color: "oklch(0.78 0.18 205)",
+  color: "var(--color-plasma)",
   marginBottom: 2,
 };
 
@@ -55,9 +55,9 @@ const valueStyle: CSSProperties = {
 };
 
 function fpsColor(fps: number): string {
-  if (fps >= 55) return "oklch(0.78 0.18 140)";
-  if (fps >= 30) return "oklch(0.78 0.18 70)";
-  return "oklch(0.68 0.22 15)";
+  if (fps >= 55) return "var(--color-lime)";
+  if (fps >= 30) return "var(--color-amber)";
+  return "var(--color-rose)";
 }
 
 /** Frames per second, measured with requestAnimationFrame while `active`. */

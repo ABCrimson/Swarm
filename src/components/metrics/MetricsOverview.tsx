@@ -76,16 +76,6 @@ export function MetricCards(): React.ReactElement {
   );
 }
 
-const sectionTitleStyle: CSSProperties = {
-  fontFamily: "var(--font-display)",
-  fontSize: 15,
-  fontWeight: 700,
-  letterSpacing: "0.04em",
-  color: "oklch(0.75 0.06 220)",
-  textTransform: "uppercase",
-  margin: "0 0 4px",
-};
-
 /** A page section named by its own `<h2>`, so heading navigation reaches it. */
 export function MetricsSection({
   title,
@@ -97,7 +87,10 @@ export function MetricsSection({
   const headingId = useId();
   return (
     <section aria-labelledby={headingId}>
-      <h2 id={headingId} style={sectionTitleStyle}>
+      <h2
+        id={headingId}
+        className="mb-2 font-display text-lg font-semibold tracking-tight text-fg-bright"
+      >
         {title}
       </h2>
       {children}
@@ -107,12 +100,15 @@ export function MetricsSection({
 
 const chartGridStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(min(380px, 100%), 1fr))",
+  // A track is at least half the row (less one gap), so auto-fit never makes a
+  // third column; the 16px in the calc must equal `gap`.
+  gridTemplateColumns:
+    "repeat(auto-fit, minmax(min(max(380px, calc((100% - 16px) / 2)), 100%), 1fr))",
   gridAutoRows: 280,
   gap: 16,
 };
 
-/** Responsive grid of fixed-height chart panels. */
+/** Responsive grid of fixed-height chart panels, at most two columns. */
 export function ChartGrid({
   children,
 }: {
@@ -121,12 +117,10 @@ export function ChartGrid({
   return <div style={chartGridStyle}>{children}</div>;
 }
 
-/** Scrollable page column shared by the metrics pages. */
+/** Body column under the PageHeader on the metrics pages. */
 export const metricsPageStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 24,
-  padding: "24px 28px 56px",
-  overflowY: "auto",
-  height: "100%",
+  padding: "0 28px 56px",
 };

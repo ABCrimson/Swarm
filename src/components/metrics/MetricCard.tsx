@@ -1,9 +1,9 @@
 // ── MetricCard ──────────────────────────────────────
 // One stat tile: label, current value and, only when the caller measured
-// one, a trend arrow. The value is coloured by severity in OKLCH (green =
-// good, amber = warning, rose = critical) on a glass panel, and a warning
-// or critical value also shows its name, so severity never rests on colour
-// alone.
+// one, a trend arrow. The value is fg-bright when good and coloured only
+// when a threshold speaks (amber = warning, rose = critical); the tiles
+// share one divided glass strip, and a warning or critical value also
+// shows its name, so severity never rests on colour alone.
 //
 // Semantics: a tile is one term/description pair of the enclosing
 // `<dl>` (see `MetricCardList`), so assistive tech reads "CPU Usage,
@@ -23,11 +23,11 @@ interface MetricCardProps {
   readonly trend?: Trend;
 }
 
-/** Value colour per severity. */
+/** Value colour per severity: fg-bright at rest, the amber and rose tokens (as on the warning/danger pills) when a threshold speaks. */
 export const SEVERITY_COLOR: Readonly<Record<Severity, string>> = {
-  good: "oklch(0.78 0.18 140)",
-  warning: "oklch(0.78 0.18 70)",
-  critical: "oklch(0.68 0.22 15)",
+  good: "var(--color-fg-bright)",
+  warning: "var(--color-amber)",
+  critical: "var(--color-rose)",
 };
 
 /** Visible name for a non-good severity, so the state never rests on colour alone. */
@@ -43,10 +43,6 @@ const TREND: Readonly<Record<Trend, { readonly symbol: string; readonly label: s
 };
 
 const cardStyle: CSSProperties = {
-  background: "oklch(0.08 0.02 220 / 0.7)",
-  border: "1px solid oklch(0.22 0.04 220)",
-  borderRadius: 8,
-  backdropFilter: "blur(12px) saturate(1.5)",
   padding: "12px 16px",
   display: "flex",
   flexDirection: "column",
@@ -56,17 +52,20 @@ const cardStyle: CSSProperties = {
 
 const labelStyle: CSSProperties = {
   fontFamily: "var(--font-body)",
-  fontSize: 11,
-  color: "var(--color-fg-dim)",
-  textTransform: "uppercase",
-  letterSpacing: "0.05em",
+  fontSize: 12,
+  fontWeight: 500,
+  color: "var(--color-fg-muted)",
 };
 
 const cardListStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-  gap: 12,
   margin: 0,
+  border: "1px solid var(--color-border)",
+  borderRadius: "var(--radius-lg)",
+  background: "oklch(from var(--color-surface-0) l c h / 0.7)",
+  backdropFilter: "blur(12px) saturate(1.5)",
+  overflow: "hidden",
 };
 
 /**
@@ -99,12 +98,10 @@ export function MetricCard({
         {severity !== "good" && (
           <span
             style={{
-              fontFamily: "var(--font-mono)",
+              fontFamily: "var(--font-body)",
               fontSize: 11,
               fontWeight: 600,
               color: accentColor,
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
               lineHeight: 1.4,
             }}
           >
@@ -136,5 +133,9 @@ export function MetricCardList({
 }: {
   readonly children: React.ReactNode;
 }): React.ReactElement {
-  return <dl style={cardListStyle}>{children}</dl>;
+  return (
+    <dl style={cardListStyle} className="*:shadow-[-1px_-1px_0_var(--color-border)]">
+      {children}
+    </dl>
+  );
 }

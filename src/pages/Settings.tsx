@@ -3,9 +3,11 @@ import { useEffect, useEffectEvent, useId, useRef, useState, useTransition } fro
 import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import * as z from "zod";
+import { PageHeader } from "#components/layout/PageHeader";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
+import type { CapSync } from "#lib/acknowledged-sync";
 import {
   type AlertThresholds,
   alertThresholdsAtom,
@@ -27,6 +29,8 @@ import {
   checkForUpdates,
   DESKTOP_ONLY_REASON,
   hasCapability,
+  hasTransport,
+  isTauri,
   readConfig,
   writeConfig,
 } from "#lib/tauri";
@@ -49,15 +53,19 @@ type ThresholdKey = keyof AlertThresholds;
 
 function SettingsSection({
   title,
+  headingId: headingIdProp,
   action,
   children,
 }: {
   readonly title: string;
+  /** The heading's id when a control in the section is labelled by it; generated otherwise. */
+  readonly headingId?: string;
   /** Controls shown next to the heading. */
   readonly action?: React.ReactNode;
   readonly children: React.ReactNode;
 }): React.ReactElement {
-  const headingId = useId();
+  const generatedHeadingId = useId();
+  const headingId = headingIdProp ?? generatedHeadingId;
   return (
     <section
       aria-labelledby={headingId}
@@ -334,7 +342,7 @@ function KeybindingField({
 
 /**
  * The model catalog as a native radio group (one choice): arrow keys move
- * the selection, and each card is a `<label>` styled from its radio's
+ * the selection, and each row is a `<label>` styled from its radio's
  * state with `:has()`. The radio is named by the model name alone; the
  * description and limits are its description.
  */
@@ -346,14 +354,18 @@ function ModelPicker({ labelledBy }: { readonly labelledBy: string }): React.Rea
   >;
 
   return (
-    <div role="radiogroup" aria-labelledby={labelledBy} className="flex flex-wrap gap-3">
+    <div
+      role="radiogroup"
+      aria-labelledby={labelledBy}
+      className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface-0"
+    >
       {models.map(([key, model]) => {
         const cardId = `${id}-${key}`;
         return (
           <label
             key={key}
             data-model-id={model.id}
-            className="group flex flex-1 cursor-pointer flex-col gap-1.5 rounded-[10px] border border-border bg-surface-0 px-4.5 py-3.5 transition-colors hover:border-border-3 has-checked:border-plasma has-checked:bg-plasma/8 has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-plasma forced-colors:has-checked:outline-2 forced-colors:has-checked:outline-[Highlight]"
+            className="group flex cursor-pointer items-center gap-4 px-4 py-3 transition-colors hover:bg-surface-2 has-checked:bg-plasma/8 has-focus-visible:outline-2 has-focus-visible:-outline-offset-2 has-focus-visible:outline-plasma forced-colors:has-checked:outline-2 forced-colors:has-checked:outline-[Highlight]"
           >
             <input
               type="radio"
@@ -370,29 +382,35 @@ function ModelPicker({ labelledBy }: { readonly labelledBy: string }): React.Rea
               aria-describedby={`${cardId}-description ${cardId}-limits`}
               className="sr-only"
             />
-            <span className="flex flex-wrap items-center gap-2">
-              <span
-                aria-hidden="true"
-                className="size-2 shrink-0 rounded-full bg-border-2 transition-colors group-has-checked:bg-plasma"
-              />
-              <span
-                id={`${cardId}-name`}
-                className="font-display text-md font-bold tracking-tight text-fg-muted group-has-checked:text-fg-bright"
-              >
-                {model.label}
+            <span
+              aria-hidden="true"
+              className="size-2 shrink-0 rounded-full bg-border-2 transition-colors group-has-checked:bg-plasma"
+            />
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="flex flex-wrap items-center gap-2">
+                <span
+                  id={`${cardId}-name`}
+                  className="font-display text-md font-bold tracking-tight text-fg-muted group-has-checked:text-fg-bright"
+                >
+                  {model.label}
+                </span>
+                {model.gated !== undefined && (
+                  <Pill tone="warning" size="sm">
+                    Requires Project Glasswing
+                  </Pill>
+                )}
               </span>
-              {model.gated !== undefined && (
-                <Pill tone="warning" size="sm">
-                  Requires Project Glasswing
-                </Pill>
-              )}
+              <span id={`${cardId}-description`} className="text-xs text-fg-dim">
+                {model.description}
+              </span>
             </span>
-            <span id={`${cardId}-description`} className="text-xs text-fg-dim">
-              {model.description}
+            <span
+              id={`${cardId}-limits`}
+              className="ml-auto shrink-0 text-right font-mono text-fg-dim text-xs tabular-nums"
+            >
+              <span className="block">{formatContextLabel(model.contextWindow)}</span>{" "}
+              <span className="block">{formatMaxOutputLabel(model.maxOutputTokens)}</span>
             </span>
-            <Pill id={`${cardId}-limits`} tone="neutral" size="sm" className="self-start">
-              {`${formatContextLabel(model.contextWindow)} · ${formatMaxOutputLabel(model.maxOutputTokens)}`}
-            </Pill>
           </label>
         );
       })}
@@ -552,6 +570,26 @@ function AlertThresholdsSection({
   );
 }
 
+/** Feedback under a backend-acknowledged cap (pushed by #hooks/useSettingsBridge; Retry re-applies). Returns undefined while idle so NumberField omits -feedback from aria-describedby, hence a function, not a component. */
+function capSyncFeedback(sync: CapSync, unit: string): React.ReactNode {
+  if (sync.status === "pending")
+    return (
+      <p role="status" className="mt-1 text-xs text-fg-dim">
+        Applying…
+      </p>
+    );
+  if (sync.status === "failed")
+    return (
+      <div role="alert" className="mt-1 flex items-center gap-2 text-xs text-rose">
+        <span>{`Could Not Apply ${sync.requested} ${unit} — ${sync.message}`}</span>
+        <Button variant="ghost" size="sm" onClick={sync.retry}>
+          Retry
+        </Button>
+      </div>
+    );
+  return undefined;
+}
+
 // ── Page ─────────────────────────────────────────────
 
 /** Settings page for application configuration and preferences. */
@@ -599,22 +637,6 @@ export function Settings(): React.ReactElement {
       }
     });
 
-  // The bridge (#hooks/useSettingsBridge) pushes the cap to the backend and
-  // rolls the field back when the push fails; Retry re-applies the request.
-  const agentConcurrencyFeedback =
-    agentConcurrencySync.status === "pending" ? (
-      <p role="status" className="mt-1 text-xs text-fg-dim">
-        Applying…
-      </p>
-    ) : agentConcurrencySync.status === "failed" ? (
-      <div role="alert" className="mt-1 flex items-center gap-2 text-xs text-rose">
-        <span>{`Could Not Apply ${agentConcurrencySync.requested} Streams — ${agentConcurrencySync.message}`}</span>
-        <Button variant="ghost" size="sm" onClick={agentConcurrencySync.retry}>
-          Retry
-        </Button>
-      </div>
-    ) : undefined;
-
   // ── API key (read on mount, written on Save via #lib/tauri) ──
   // The key itself is never logged, traced, or included in a toast; a failed
   // save shows the backend's error text, which never contains the value.
@@ -660,244 +682,229 @@ export function Settings(): React.ReactElement {
   // ── Worker registry cap (backend-persisted via set_max_workers) ──
   const [shownMaxWorkers, setShownMaxWorkers] = useAtom(maxWorkersAtom);
   const maxWorkersSync = useAtomValue(maxWorkersSyncAtom);
-  const maxWorkersFeedback =
-    maxWorkersSync.status === "pending" ? (
-      <p role="status" className="mt-1 text-xs text-fg-dim">
-        Applying…
-      </p>
-    ) : maxWorkersSync.status === "failed" ? (
-      <div role="alert" className="mt-1 flex items-center gap-2 text-xs text-rose">
-        <span>{`Could Not Apply ${maxWorkersSync.requested} Workers — ${maxWorkersSync.message}`}</span>
-        <Button variant="ghost" size="sm" onClick={maxWorkersSync.retry}>
-          Retry
-        </Button>
-      </div>
-    ) : undefined;
 
   return (
-    <div className="flex max-w-180 flex-col gap-6 p-6">
-      <header>
-        <h1 className="font-display text-2xl font-bold tracking-tight text-fg-bright">Settings</h1>
-        <p className="mt-1 text-sm text-fg-dim">
-          Configure AI Models, Visual Preferences, And Alert Thresholds.
-        </p>
-      </header>
-
-      <form onSubmit={handleSaveApiKey}>
-        <SettingsSection title="AI Connectivity">
-          <label htmlFor="anthropic-api-key" className="mb-1.5 block text-md font-medium text-fg">
-            API Key
-          </label>
-          <Input
-            id="anthropic-api-key"
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={apiKeyDraft}
-            onChange={(e) => setApiKeyDraft(e.target.value)}
-            placeholder="Enter Your Anthropic API Key"
-            disabled={!canUseWebviewChat}
-            aria-describedby={
-              canUseWebviewChat
-                ? "anthropic-api-key-description"
-                : `anthropic-api-key-description ${apiKeyReasonId}`
-            }
-            className="font-mono"
-          />
-          <p id="anthropic-api-key-description" className="mt-1 text-xs text-fg-dim">
-            Your Anthropic API Key. Required To Use Webview AI Chat. Stored Locally In Plaintext At
-            App Data — Never Logged Or Displayed In Clear Text.
-          </p>
-          {!canUseWebviewChat && (
-            <p id={apiKeyReasonId} className="mt-1 text-xs text-fg-dim">
-              {DESKTOP_ONLY_REASON}
+    <div className="flex max-w-180 flex-col">
+      <PageHeader
+        title="Settings"
+        subtitle={
+          isTauri()
+            ? "Saved On This Device"
+            : hasTransport()
+              ? "Only The Stream Limit And Registry Cap Are Saved Outside The Desktop App"
+              : "Not Saved Outside The Desktop App"
+        }
+      />
+      <div className="flex flex-col gap-6 px-7 pb-6">
+        <form onSubmit={handleSaveApiKey}>
+          <SettingsSection title="AI Connectivity">
+            <label htmlFor="anthropic-api-key" className="mb-1.5 block text-md font-medium text-fg">
+              API Key
+            </label>
+            <Input
+              id="anthropic-api-key"
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              value={apiKeyDraft}
+              onChange={(e) => setApiKeyDraft(e.target.value)}
+              placeholder="Enter Your Anthropic API Key"
+              disabled={!canUseWebviewChat}
+              aria-describedby={
+                canUseWebviewChat
+                  ? "anthropic-api-key-description"
+                  : `anthropic-api-key-description ${apiKeyReasonId}`
+              }
+              className="font-mono"
+            />
+            <p id="anthropic-api-key-description" className="mt-1 text-xs text-fg-dim">
+              Your Anthropic API Key. Required To Use Webview AI Chat. Stored Locally In Plaintext
+              At App Data — Never Logged Or Displayed In Clear Text.
             </p>
-          )}
-          <div className="mt-3 flex justify-end">
+            {!canUseWebviewChat && (
+              <p id={apiKeyReasonId} className="mt-1 text-xs text-fg-dim">
+                {DESKTOP_ONLY_REASON}
+              </p>
+            )}
+            <div className="mt-3 flex justify-end">
+              <Button
+                type="submit"
+                size="sm"
+                disabled={!canUseWebviewChat || !apiKeyDirty}
+                loading={savingApiKey}
+              >
+                Save API Key
+              </Button>
+            </div>
+          </SettingsSection>
+        </form>
+
+        <SettingsSection title="AI Model" headingId={modelHeadingId}>
+          <ModelPicker labelledBy={modelHeadingId} />
+        </SettingsSection>
+
+        <SettingsSection title="Visual Preferences">
+          <div className="divide-y divide-border">
+            <Toggle
+              checked={theme.particlesEnabled}
+              onChange={(v) => setTheme((prev) => ({ ...prev, particlesEnabled: v }))}
+              label="Particle Background"
+              description="GPU-Accelerated WebGPU Particle System Behind The Workspace. Disable To Reduce GPU Usage."
+            />
+            <Toggle
+              checked={theme.gpuOverlay}
+              onChange={(v) => setTheme((prev) => ({ ...prev, gpuOverlay: v }))}
+              label="GPU Frame Time Overlay"
+              description="Display GPU Frame Timing In The Status Bar For Performance Monitoring."
+            />
+          </div>
+        </SettingsSection>
+
+        <SettingsSection title="Workers & AI">
+          <div className="divide-y divide-border">
+            <NumberField
+              label="AI Concurrent Stream Limit"
+              description="Maximum Simultaneous AI Streams Across All Workers."
+              unit="Streams"
+              min={AI_CONCURRENT_LIMIT_MIN}
+              max={AI_CONCURRENT_LIMIT_MAX}
+              value={appSettings.aiConcurrentLimit}
+              onChange={(v) => patchSettings({ aiConcurrentLimit: v })}
+              busy={agentConcurrencySync.status === "pending"}
+              feedback={capSyncFeedback(agentConcurrencySync, "Streams")}
+            />
+            <NumberField
+              label="Chat History Worker Cap"
+              description="How Many Workers Keep Chat History In Memory — Least-Recently-Used Workers Are Evicted Past The Cap."
+              unit="Workers"
+              min={5}
+              max={200}
+              value={appSettings.historyMaxWorkers}
+              onChange={(v) => patchSettings({ historyMaxWorkers: v })}
+            />
+            <NumberField
+              label="Worker Registry Cap"
+              description="Backend Limit On Simultaneous Worker Processes — Applies Immediately To New Spawns And Persists Across Restarts."
+              unit="Workers"
+              min={1}
+              max={256}
+              value={shownMaxWorkers}
+              onChange={setShownMaxWorkers}
+              busy={maxWorkersSync.status === "pending"}
+              feedback={capSyncFeedback(maxWorkersSync, "Workers")}
+            />
+          </div>
+        </SettingsSection>
+
+        <SettingsSection title="Sessions & Logs">
+          <div className="divide-y divide-border">
+            <NumberField
+              label="Auto-Snapshot Interval"
+              description="How Often The Active Session Is Snapshotted Automatically."
+              unit="Minutes"
+              min={1}
+              max={120}
+              value={appSettings.snapshotIntervalMin}
+              onChange={(v) => patchSettings({ snapshotIntervalMin: v })}
+              // Snapshots are local plugin-store files, which only the desktop transport offers.
+              unavailableReason={hasCapability("localStores") ? undefined : DESKTOP_ONLY_REASON}
+            />
+            <NumberField
+              label="Log Retention"
+              description="Maximum Log Entries Kept In Memory — The Oldest Are Evicted Past The Cap."
+              unit="Entries"
+              min={100}
+              max={100_000}
+              value={appSettings.logMaxEntries}
+              onChange={(v) => patchSettings({ logMaxEntries: v })}
+            />
+          </div>
+        </SettingsSection>
+
+        <SettingsSection title="Keybindings">
+          <div className="divide-y divide-border">
+            <KeybindingField
+              label="Command Palette"
+              description="Open The Global Command Palette."
+              value={keybindings.commandPalette}
+              onChange={(b) => patchKeybinding("commandPalette", b)}
+            />
+            <KeybindingField
+              label="Graph / List Toggle"
+              description="Switch The Workers Page Between Graph And List View."
+              value={keybindings.graphToggle}
+              onChange={(b) => patchKeybinding("graphToggle", b)}
+            />
+            <KeybindingField
+              label="Performance Overlay"
+              description="Toggle The FPS / GPU Frame-Time Overlay (Dev Builds)."
+              value={keybindings.perfOverlay}
+              onChange={(b) => patchKeybinding("perfOverlay", b)}
+            />
+          </div>
+        </SettingsSection>
+
+        <AlertThresholdsSection>
+          <NumberField
+            label="Alert Cooldown"
+            description="Minimum Time Between Repeat Alerts For The Same Metric."
+            unit="Seconds"
+            min={5}
+            max={600}
+            value={appSettings.alertCooldownSec}
+            onChange={(v) => patchSettings({ alertCooldownSec: v })}
+          />
+          <Toggle
+            checked={appSettings.nativeAlertNotifications}
+            onChange={(v) => patchSettings({ nativeAlertNotifications: v })}
+            label="Native Alert Notifications"
+            description="Also Send An OS Notification When An Alert Fires — Visible Even When The App Is In The Background."
+            unavailableReason={
+              hasCapability("nativeNotifications") ? undefined : DESKTOP_ONLY_REASON
+            }
+          />
+        </AlertThresholdsSection>
+
+        <SettingsSection title="About">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-5 gap-y-1.5 font-mono text-xs">
+            <dt className="text-fg-dim">Version</dt>
+            <dd className="text-plasma">{__APP_VERSION__}</dd>
+            <dt className="text-fg-dim">Runtime</dt>
+            <dd className="text-fg-muted">Tauri + React</dd>
+            <dt className="text-fg-dim">Backend</dt>
+            <dd className="text-fg-muted">Rust + Tokio</dd>
+            <dt className="text-fg-dim">AI</dt>
+            <dd className="text-fg-muted">Anthropic SDK</dd>
+            <dt className="text-fg-dim">License</dt>
+            <dd className="text-fg-muted">MIT</dd>
+          </dl>
+          <div className="mt-4 border-t border-border">
+            <Toggle
+              checked={appSettings.updateCheckOnLaunch}
+              onChange={(v) => patchSettings({ updateCheckOnLaunch: v })}
+              label="Check For Updates On Launch"
+              description="Query The Update Endpoint Once Each Time The App Starts."
+              unavailableReason={canCheckForUpdates ? undefined : DESKTOP_ONLY_REASON}
+            />
+          </div>
+          <div className="flex items-center justify-end gap-3">
+            {!canCheckForUpdates && (
+              <span id={updatesReasonId} className="text-xs text-fg-dim">
+                {DESKTOP_ONLY_REASON}
+              </span>
+            )}
             <Button
-              type="submit"
               size="sm"
-              disabled={!canUseWebviewChat || !apiKeyDirty}
-              loading={savingApiKey}
+              loading={checkingUpdates}
+              disabled={!canCheckForUpdates}
+              aria-describedby={canCheckForUpdates ? undefined : updatesReasonId}
+              onClick={handleCheckForUpdates}
             >
-              Save API Key
+              Check For Updates
             </Button>
           </div>
         </SettingsSection>
-      </form>
-
-      <section
-        aria-labelledby={modelHeadingId}
-        className="rounded-lg border border-border bg-surface-1 px-7 py-6"
-      >
-        <h2
-          id={modelHeadingId}
-          className="mb-4 font-display text-lg font-bold tracking-tight text-fg-bright"
-        >
-          AI Model
-        </h2>
-        <ModelPicker labelledBy={modelHeadingId} />
-      </section>
-
-      <SettingsSection title="Visual Preferences">
-        <div className="divide-y divide-border">
-          <Toggle
-            checked={theme.particlesEnabled}
-            onChange={(v) => setTheme((prev) => ({ ...prev, particlesEnabled: v }))}
-            label="Particle Background"
-            description="GPU-Accelerated WebGPU Particle System Behind The Workspace. Disable To Reduce GPU Usage."
-          />
-          <Toggle
-            checked={theme.gpuOverlay}
-            onChange={(v) => setTheme((prev) => ({ ...prev, gpuOverlay: v }))}
-            label="GPU Frame Time Overlay"
-            description="Display GPU Frame Timing In The Status Bar For Performance Monitoring."
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection title="Workers & AI">
-        <div className="divide-y divide-border">
-          <NumberField
-            label="AI Concurrent Stream Limit"
-            description="Maximum Simultaneous AI Streams Across All Workers."
-            unit="Streams"
-            min={AI_CONCURRENT_LIMIT_MIN}
-            max={AI_CONCURRENT_LIMIT_MAX}
-            value={appSettings.aiConcurrentLimit}
-            onChange={(v) => patchSettings({ aiConcurrentLimit: v })}
-            busy={agentConcurrencySync.status === "pending"}
-            feedback={agentConcurrencyFeedback}
-          />
-          <NumberField
-            label="Chat History Worker Cap"
-            description="How Many Workers Keep Chat History In Memory — Least-Recently-Used Workers Are Evicted Past The Cap."
-            unit="Workers"
-            min={5}
-            max={200}
-            value={appSettings.historyMaxWorkers}
-            onChange={(v) => patchSettings({ historyMaxWorkers: v })}
-          />
-          <NumberField
-            label="Worker Registry Cap"
-            description="Backend Limit On Simultaneous Worker Processes — Applies Immediately To New Spawns And Persists Across Restarts."
-            unit="Workers"
-            min={1}
-            max={256}
-            value={shownMaxWorkers}
-            onChange={setShownMaxWorkers}
-            busy={maxWorkersSync.status === "pending"}
-            feedback={maxWorkersFeedback}
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection title="Sessions & Logs">
-        <div className="divide-y divide-border">
-          <NumberField
-            label="Auto-Snapshot Interval"
-            description="How Often The Active Session Is Snapshotted Automatically."
-            unit="Minutes"
-            min={1}
-            max={120}
-            value={appSettings.snapshotIntervalMin}
-            onChange={(v) => patchSettings({ snapshotIntervalMin: v })}
-            // Snapshots are local plugin-store files, which only the desktop transport offers.
-            unavailableReason={hasCapability("localStores") ? undefined : DESKTOP_ONLY_REASON}
-          />
-          <NumberField
-            label="Log Retention"
-            description="Maximum Log Entries Kept In Memory — The Oldest Are Evicted Past The Cap."
-            unit="Entries"
-            min={100}
-            max={100_000}
-            value={appSettings.logMaxEntries}
-            onChange={(v) => patchSettings({ logMaxEntries: v })}
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection title="Keybindings">
-        <div className="divide-y divide-border">
-          <KeybindingField
-            label="Command Palette"
-            description="Open The Global Command Palette."
-            value={keybindings.commandPalette}
-            onChange={(b) => patchKeybinding("commandPalette", b)}
-          />
-          <KeybindingField
-            label="Graph / List Toggle"
-            description="Switch The Workers Page Between Graph And List View."
-            value={keybindings.graphToggle}
-            onChange={(b) => patchKeybinding("graphToggle", b)}
-          />
-          <KeybindingField
-            label="Performance Overlay"
-            description="Toggle The FPS / GPU Frame-Time Overlay (Dev Builds)."
-            value={keybindings.perfOverlay}
-            onChange={(b) => patchKeybinding("perfOverlay", b)}
-          />
-        </div>
-      </SettingsSection>
-
-      <AlertThresholdsSection>
-        <NumberField
-          label="Alert Cooldown"
-          description="Minimum Time Between Repeat Alerts For The Same Metric."
-          unit="Seconds"
-          min={5}
-          max={600}
-          value={appSettings.alertCooldownSec}
-          onChange={(v) => patchSettings({ alertCooldownSec: v })}
-        />
-        <Toggle
-          checked={appSettings.nativeAlertNotifications}
-          onChange={(v) => patchSettings({ nativeAlertNotifications: v })}
-          label="Native Alert Notifications"
-          description="Also Send An OS Notification When An Alert Fires — Visible Even When The App Is In The Background."
-          unavailableReason={hasCapability("nativeNotifications") ? undefined : DESKTOP_ONLY_REASON}
-        />
-      </AlertThresholdsSection>
-
-      <SettingsSection title="About">
-        <dl className="grid grid-cols-[auto_1fr] gap-x-5 gap-y-1.5 font-mono text-xs">
-          <dt className="text-fg-dim">Version</dt>
-          <dd className="text-plasma">{__APP_VERSION__}</dd>
-          <dt className="text-fg-dim">Runtime</dt>
-          <dd className="text-fg-muted">Tauri + React</dd>
-          <dt className="text-fg-dim">Backend</dt>
-          <dd className="text-fg-muted">Rust + Tokio</dd>
-          <dt className="text-fg-dim">AI</dt>
-          <dd className="text-fg-muted">Anthropic SDK</dd>
-          <dt className="text-fg-dim">License</dt>
-          <dd className="text-fg-muted">MIT</dd>
-        </dl>
-        <div className="mt-4 border-t border-border">
-          <Toggle
-            checked={appSettings.updateCheckOnLaunch}
-            onChange={(v) => patchSettings({ updateCheckOnLaunch: v })}
-            label="Check For Updates On Launch"
-            description="Query The Update Endpoint Once Each Time The App Starts."
-            unavailableReason={canCheckForUpdates ? undefined : DESKTOP_ONLY_REASON}
-          />
-        </div>
-        <div className="flex items-center justify-end gap-3">
-          {!canCheckForUpdates && (
-            <span id={updatesReasonId} className="text-xs text-fg-dim">
-              {DESKTOP_ONLY_REASON}
-            </span>
-          )}
-          <Button
-            size="sm"
-            loading={checkingUpdates}
-            disabled={!canCheckForUpdates}
-            aria-describedby={canCheckForUpdates ? undefined : updatesReasonId}
-            onClick={handleCheckForUpdates}
-          >
-            Check For Updates
-          </Button>
-        </div>
-      </SettingsSection>
+      </div>
     </div>
   );
 }
