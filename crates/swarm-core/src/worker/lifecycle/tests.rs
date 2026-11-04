@@ -9,6 +9,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use super::*;
 use crate::events::emitter::WriterMsg;
 use crate::git::test_support::{TempRepo, git_in};
+use crate::test_support::SharedBuf;
 
 /// How long a test waits for a real shell to react.
 const SHELL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -34,28 +35,6 @@ fn make_handle(state: WorkerState) -> WorkerHandle {
         base_commit: None,
         last_shipped_seq: None,
         last_shipped_commit: None,
-    }
-}
-
-/// A `Write` over a shared buffer: a stand-in PTY writer, and the sink
-/// for a captured tracing subscriber.
-#[derive(Clone, Default)]
-struct SharedBuf(Arc<Mutex<Vec<u8>>>);
-
-impl Write for SharedBuf {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
-    type Writer = Self;
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
     }
 }
 
