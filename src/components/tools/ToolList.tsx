@@ -166,7 +166,7 @@ function ToolCard({
         >
           {name}
         </h3>
-        <Pill tone="neutral" size="sm">
+        <Pill tone="neutral" size="sm" className="tabular-nums">
           {pluralize("Param", paramCount)}
         </Pill>
       </div>

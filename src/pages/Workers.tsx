@@ -80,7 +80,13 @@ function WorkerRow({ id }: { readonly id: string }): React.ReactElement | null {
             {escapeForDisplay(name ?? id.slice(0, 8))}
           </span>
           {branch != null && (
-            <Pill tone="info" size="sm" maxWidth={160} title={escapeForDisplay(branch)}>
+            <Pill
+              tone="info"
+              size="sm"
+              maxWidth={160}
+              title={escapeForDisplay(branch)}
+              className="font-mono"
+            >
               {escapeForDisplay(branch)}
             </Pill>
           )}

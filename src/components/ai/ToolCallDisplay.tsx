@@ -273,6 +273,7 @@ export function ToolCallDisplay({
         <Pill
           tone="neutral"
           size="sm"
+          className="font-mono"
           style={{
             background: badgeColors.bg,
             color: badgeColors.text,
