@@ -67,6 +67,10 @@ overrides:
 # break; main still says ">=0.152.0 <0.157.0" on 2026-11-03). 0.157.0 only adds the
 # `typescript` option (oxc-project/oxc 8dd67a6), and the full gate including both
 # check:compiler runs is green on it. Drop this once plugin-react widens the range.
+# @crimson_dev/use-resize-observer 1.0.1 peers react ">=19.3.0", and semver orders the
+# React canary 19.3.0-canary-e84e1492-20261031 (published 2026-10-31, after 19.3.1 on 2026-10-14)
+# below 19.3.0 because it is a prerelease. Drop this when react leaves the canary pin.
 peerDependencyRules:
   allowedVersions:
     "@vitejs/plugin-react>oxc-transform-react": 0.157.0
+    "@crimson_dev/use-resize-observer>react": 19.3.0-canary-e84e1492-20261031
