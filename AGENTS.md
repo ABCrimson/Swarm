@@ -61,14 +61,19 @@ file is canonical; `CLAUDE.md` only imports it.
 Traps this repo and its maintainer's Windows host actually set. Each one fails
 silently or misleadingly; know them before you debug anything else.
 
-- **Rust builds cannot run natively on the maintainer's Windows host.** Smart
-  App Control (enforce mode) blocks every freshly compiled build script and
-  test binary (`os error 4551`, "An Application Control policy has blocked
-  this file"). `cargo fmt` works; `clippy`, `test` and `build` run in WSL
-  (Ubuntu-26.04) against the Windows checkout. Never suggest turning Smart
-  App Control off (it cannot be undone without reinstalling Windows), and
-  never run `pnpm tauri build` natively. `cfg(windows)` code only runs on the
-  CI Windows runner.
+- **Rust gates on the maintainer's Windows host run natively only under a
+  deduplicated `PATH`, and App Control can still block them.** Smart App
+  Control's enforce flag reads 0 (registry `VerifiedAndReputablePolicyState`,
+  read 2026-10-30), and on 2026-11-04 `cargo check` and
+  `cargo test -p swarm-core --locked --all-targets` (691 passed) ran natively
+  once `PATH` was pruned to existing directories: with the raw `PATH` below,
+  `cmd.exe` finds neither `ping` nor `node`, so every fixture test that
+  shells out fails. A build script or test binary refused with `os error 4551`
+  ("An Application Control policy has blocked this file") means a hash policy
+  survived the flag: run `clippy`, `test` and `build` in WSL (Ubuntu-26.04)
+  against the Windows checkout instead. Neither `pnpm tauri build` nor the
+  `swarm-desktop` tests have been proven natively; `cfg(windows)` code is
+  proven by the CI Windows runner.
 - **The user `PATH` on that host is longer than 8191 characters.** `cmd.exe`,
   which pnpm uses to run package scripts on Windows, expands it to nothing, so
   `pnpm typecheck` or `pnpm test` then fail with "tsc is not recognized" even
