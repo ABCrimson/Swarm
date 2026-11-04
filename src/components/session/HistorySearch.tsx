@@ -136,7 +136,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
             value={dateRange.from}
             max={dateRange.to || "9999-12-31"}
             onChange={(e) => setDateRange((prev) => ({ ...prev, from: e.target.value }))}
-            className="swarm-input flex-1 text-xs [color-scheme:dark]"
+            className="swarm-input flex-1 text-xs"
           />
           <label htmlFor={toId} className={labelClass}>
             To
@@ -148,7 +148,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
             min={dateRange.from || undefined}
             max="9999-12-31"
             onChange={(e) => setDateRange((prev) => ({ ...prev, to: e.target.value }))}
-            className="swarm-input flex-1 text-xs [color-scheme:dark]"
+            className="swarm-input flex-1 text-xs"
           />
           {(dateRange.from !== "" || dateRange.to !== "") && (
             <Button
