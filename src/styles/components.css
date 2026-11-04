@@ -273,10 +273,6 @@
       0 0 0 1px oklch(from var(--color-plasma) l c h / 0.1),
       0 24px 64px oklch(from var(--color-void) l c h / 0.8);
     overflow: hidden;
-
-    @supports not (backdrop-filter: blur(1px)) {
-      background: oklch(from var(--color-surface-1) l c h / 0.95);
-    }
   }
 
   /* The dialog container itself only receives programmatic focus; the

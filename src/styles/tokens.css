@@ -116,8 +116,4 @@
 @utility glass-panel {
   background: oklch(from var(--color-surface-1) l c h / 0.7);
   backdrop-filter: blur(12px) saturate(1.5);
-
-  @supports not (backdrop-filter: blur(1px)) {
-    background: oklch(from var(--color-surface-1) l c h / 0.95);
-  }
 }
