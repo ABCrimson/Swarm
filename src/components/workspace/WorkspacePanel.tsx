@@ -2,6 +2,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { Suspense, useId, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
+import { EmptyState } from "#components/ui/EmptyState";
 import { Spinner } from "#components/ui/Spinner";
 import { loadFilePreview } from "#lib/file-preview";
 import { errorMessage } from "#lib/is-error";
@@ -105,41 +106,28 @@ export function WorkspacePanel(): React.ReactElement {
 
   if (!rootPath) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4">
-        <svg width={56} height={56} viewBox="0 0 56 56" fill="none" aria-hidden="true">
-          <rect
-            x={8}
-            y={14}
-            width={40}
-            height={30}
-            rx={3}
-            strokeWidth={2}
-            className="stroke-border-2"
-          />
-          <path
-            d="M8 20h16l4-6h12"
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="stroke-fg-dim"
-          />
-        </svg>
-        <p className="text-fg-muted text-lg">No Project Directory Open</p>
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={!canBrowse}
-          aria-describedby={canBrowse ? undefined : reasonId}
-          onClick={() => void handleOpenProject()}
-        >
-          Open Project
-        </Button>
-        {!canBrowse && (
-          <p id={reasonId} className="text-fg-dim text-sm">
-            {DESKTOP_ONLY_REASON}
-          </p>
-        )}
-      </div>
+      <EmptyState
+        title="No Project Directory Open"
+        body="Open A Repository To Browse Its Files"
+        action={
+          <>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!canBrowse}
+              aria-describedby={canBrowse ? undefined : reasonId}
+              onClick={() => void handleOpenProject()}
+            >
+              Open Project
+            </Button>
+            {!canBrowse && (
+              <p id={reasonId} className="text-fg-dim text-sm">
+                {DESKTOP_ONLY_REASON}
+              </p>
+            )}
+          </>
+        }
+      />
     );
   }
 
