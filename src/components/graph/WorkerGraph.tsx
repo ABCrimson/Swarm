@@ -479,7 +479,7 @@ function WorkerGraphInner(): React.ReactElement {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              background: "oklch(0.06 0.02 220 / 0.5)",
+              background: "oklch(from var(--color-void) l c h / 0.5)",
               backdropFilter: "blur(2px)",
               borderRadius: 12,
             }}
@@ -502,7 +502,7 @@ function WorkerGraphInner(): React.ReactElement {
                     fontFamily: "var(--font-body)",
                     fontSize: "0.875rem",
                     fontWeight: 600,
-                    color: "oklch(0.72 0.20 10)",
+                    color: "var(--color-rose)",
                   }}
                 >
                   {layoutError}
@@ -571,7 +571,7 @@ function WorkerGraphInner(): React.ReactElement {
               borderRadius: 999,
               background: "oklch(0.12 0.03 220 / 0.75)",
               backdropFilter: "blur(8px)",
-              border: "1px solid oklch(0.22 0.04 220)",
+              border: "1px solid var(--color-border)",
               fontFamily: "var(--font-body)",
               fontSize: "0.6875rem",
               color: "var(--color-fg-dim)",
