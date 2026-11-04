@@ -8,14 +8,17 @@
 A worker's session runs the provider CLI inside a repo SWARM did not write, often one it has never
 seen. Claude Code with `--setting-sources project` (ADR-0015, ADR-0016) loaded that repo's
 `.claude/settings.json`. A review of the adapters measured what that costs on `claude` 2.1.296, using
-only the free control requests (`initialize`, `get_settings`) so no model turn ran:
+only the free control requests (`initialize`, `get_settings`) so no model turn ran; on 2.1.318
+(2026-11-04) the `apiKeyHelper`, `env`, agent, skill and `permissions.allow` results held with the same
+requests plus `get_binary_version`:
 
 - A repo `apiKeyHelper` **ran** during the `initialize` handshake, before any approval, and a repo
   `env` block was applied (`ANTHROPIC_BASE_URL` redirects the CLI and the user's credentials with it;
   `CLAUDE_CODE_USE_BEDROCK` switched the reported provider). `disableAllHooks` stops neither.
-- Repo `.claude/agents/*.md` loaded in Standard but not under `--restricted`.
-- Repo `permissions.allow` and `additionalDirectories` were ignored in an untrusted folder, and
-  `defaultMode` was honored.
+- Repo `.claude/agents/*.md` and `.claude/skills` loaded in Standard. That agents did not load under
+  `--restricted` was measured on 2.1.296 alone.
+- Repo `permissions.allow` was ignored in an untrusted folder. On 2.1.296 alone, `additionalDirectories`
+  was ignored too and `defaultMode` was honored.
 - `--setting-sources ""` loads none of this, while inline `--settings` still applies.
 
 The probe had the same hole: it ran in `std::env::temp_dir()`, which is the shared `/tmp` on Linux,
@@ -84,8 +87,17 @@ resolution: a probe resolves afresh, a spawn reuses it.
   `permissions.ask` no longer load either.
 - The Agent tool's `isolation: "worktree"` creates a worktree too, and no deny rule short of denying
   `Agent` blocks it. It is a known gap.
-- Not tested on a CLI older than 2.1.296. An older CLI that rejects `--setting-sources ""` fails the
-  probe or the handshake, which is closed.
+- The probe refuses any CLI older than 2.1.318 ("Claude Code 2.1.318 Or Newer Required"), the newest
+  release this boundary was measured on. That includes Claude Code's `stable` channel (2.1.311 on
+  2026-11-04, npm dist-tags) until it reaches 2.1.318. Measured 2026-11-04 on `claude` 2.1.318 with
+  SWARM's exact probe, Standard, WriteEnabled and Restricted argv, in a directory with a planted
+  `.claude/settings.json` (one run: an `apiKeyHelper` that writes a marker; one run: `env`
+  `CLAUDE_CODE_USE_BEDROCK=1`), a planted agent, skill, rule and `CLAUDE.md`. In all eight runs no
+  marker was written, `apiProvider` stayed `firstParty`, `initialize` listed neither the planted agent
+  nor the planted skill, and `get_settings` listed only `flagSettings`. The same argv with
+  `--setting-sources project` ran the helper (`apiKeySource: "apiKeyHelper"`), switched the provider
+  to `bedrock`, and listed the agent, the skill and `projectSettings`. `CLAUDE.md` and `.claude/rules`
+  gating needs a model turn and is verified only on 2.1.296.
 - A repo agent's `permissionMode` could raise a subagent's mode (read in the CLI source, not verified
   at runtime); with no repo agents loaded this cannot arise from the repo.
 - The probe directory is removed before `probe()` returns. If the probe future is dropped first, a drop
