@@ -81,6 +81,9 @@ async fn run_teardown(shared: Arc<Shared>, stop: Stop) {
                 // the tree kill could not run.
                 Ok(child) => reap(child, false).await,
                 Err(error) => {
+                    // The closure never ran, so stdin is still open: an
+                    // idle CLI still gets its EOF.
+                    shared.stdin.close();
                     tracing::error!(worker_id = %shared.worker_id, %error, "claude adapter: the stop task failed");
                     None
                 }
