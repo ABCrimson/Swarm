@@ -4,6 +4,8 @@
 //!
 //! - [`auth`]: the daemon token and the `Host`/`Origin` allow-list.
 //! - [`cli`]: command-line parsing and the default data directory.
+//! - [`exposure`]: the plaintext exposure gate, which judges a connection
+//!   by both of its ends.
 //! - [`ws`]: the `/ws` WebSocket transport (handshake, replay, live events,
 //!   RPC).
 //! - [`serve_ui`]: the optional `--serve-ui` static bundle.
@@ -15,6 +17,7 @@
 
 pub mod auth;
 pub mod cli;
+pub mod exposure;
 pub mod serve_ui;
 pub mod ws;
 
@@ -43,6 +46,7 @@ use swarm_core::protocol::ServerCaps;
 use swarm_core::runtime::Runtime;
 
 use crate::auth::{DaemonToken, HostPolicy, Rejection};
+use crate::exposure::ExposurePolicy;
 
 /// Connection and message limits. [`Limits::default`] is what the daemon
 /// runs with; tests shrink the timeouts.
@@ -104,6 +108,8 @@ pub struct Shared {
     pub(crate) registry: Registry,
     pub(crate) token: DaemonToken,
     pub(crate) hosts: HostPolicy,
+    /// Which networks a plaintext connection may cross.
+    pub(crate) exposure: ExposurePolicy,
     pub(crate) limits: Limits,
     /// Permits for WebSocket upgrades still inside their handshake.
     pub(crate) handshakes: Arc<Semaphore>,
@@ -128,12 +134,19 @@ impl Deref for AppState {
 
 impl AppState {
     /// Builds the state for a live [`Runtime`].
-    pub fn new(runtime: &Runtime, token: DaemonToken, hosts: HostPolicy, limits: Limits) -> Self {
+    pub fn new(
+        runtime: &Runtime,
+        token: DaemonToken,
+        hosts: HostPolicy,
+        exposure: ExposurePolicy,
+        limits: Limits,
+    ) -> Self {
         Self(Arc::new(Shared {
             ctx: Ctx::from_runtime(runtime),
             registry: Registry::new(),
             token,
             hosts,
+            exposure,
             handshakes: Arc::new(Semaphore::new(limits.max_pending_handshakes)),
             peer_handshakes: ws::PeerHandshakes::new(limits.max_pending_handshakes_per_peer),
             connections: Arc::new(Semaphore::new(limits.max_connections)),
@@ -208,8 +221,8 @@ impl Connected<IncomingStream<'_, DaemonListener>> for ConnectionAddrs {
 }
 
 /// Builds the router: `/ws`, plus the static bundle at `/` when
-/// `serve_ui_dir` is given. Every route sits behind the `Host`/`Origin`
-/// allow-list.
+/// `serve_ui_dir` is given. Every route sits behind the exposure gate and
+/// the `Host`/`Origin` allow-list.
 pub fn router(state: AppState, serve_ui_dir: Option<&Path>) -> Router {
     let mut router = Router::new().route("/ws", get(ws::upgrade));
     if let Some(dir) = serve_ui_dir {
@@ -220,13 +233,17 @@ pub fn router(state: AppState, serve_ui_dir: Option<&Path>) -> Router {
         .with_state(state)
 }
 
-/// Rejects, with 403, any request whose `Host` or `Origin` does not name
-/// this daemon (see [`HostPolicy`]).
+/// Rejects, with 403, any request whose connection crosses a network the
+/// [`ExposurePolicy`] does not serve, then any whose `Host` or `Origin` does
+/// not name this daemon (see [`HostPolicy`]).
 async fn guard_host(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let addrs = request
         .extensions()
         .get::<ConnectInfo<ConnectionAddrs>>()
         .map(|ConnectInfo(addrs)| *addrs);
+    if let Some(refused) = exposure::refusal(state.exposure, addrs) {
+        return refused;
+    }
     let headers = request.headers();
     // A `Host` or `Origin` that is present but not visible ASCII is malformed, not missing.
     let host_unreadable = headers

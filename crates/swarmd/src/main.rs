@@ -7,26 +7,32 @@
 //! `swarmd --help` lists the options; [`swarmd::cli`] parses them.
 //!
 //! Startup order matters. The shutdown signal handlers are installed before
-//! any of it, and steps 1-3 (blocking file work) run on the main thread
-//! before the async runtime serves anything:
+//! any of it, and steps 1-4 (argument checks and blocking file work) run on
+//! the main thread before the async runtime serves anything:
 //!
-//! 1. The data directory is created (or tightened) to mode `0700` on Unix:
+//! 1. The exposure gate: a concrete `--bind` address that no connection
+//!    could be served on (a private-LAN address without
+//!    `--allow-plaintext-lan`, or any public one) is refused before any
+//!    file is touched (see [`swarmd::exposure`]). A wildcard bind is judged
+//!    per connection.
+//! 2. The data directory is created (or tightened) to mode `0700` on Unix:
 //!    it holds the Anthropic API key, the event log and the token.
-//! 2. The non-loopback gate: `--bind` to a non-loopback address is refused
+//! 3. The non-loopback gate: `--bind` to a non-loopback address is refused
 //!    unless a valid token file already exists, and this check runs BEFORE
 //!    anything could mint one (see [`swarmd::auth`]).
-//! 3. The token is loaded or minted; failing to make its file private is
+//! 4. The token is loaded or minted; failing to make its file private is
 //!    fatal for a non-loopback bind and a warning on loopback.
-//! 4. The listener is bound BEFORE the runtime starts, so a port conflict
+//! 5. The listener is bound BEFORE the runtime starts, so a port conflict
 //!    exits before the lock, the event log or any startup work, and the
 //!    real address (port `0` resolved) is what the lock file records.
-//! 5. The runtime starts; another instance holding the data directory
+//! 6. The runtime starts; another instance holding the data directory
 //!    exits with status 75 (`EX_TEMPFAIL`), which the systemd unit does
 //!    not restart in a tight loop.
 //!
 //! The connect URL carries the token in its fragment. It is printed only
 //! when stdout is a terminal; under a service manager the log gets the
-//! address and a `swarmd connect-url` command instead.
+//! address and a `swarmd connect-url` command instead. A status line after
+//! it names the networks plaintext clients are served on.
 //!
 //! SIGINT/SIGTERM (Ctrl-C, console close, logoff or shutdown on Windows)
 //! start a graceful shutdown: clients get `1001 Going Away`, every worker
@@ -48,6 +54,7 @@ use swarm_core::lock::LockError;
 use swarm_core::runtime::{Runtime, RuntimeConfig, RuntimeStartError};
 use swarmd::auth::{DaemonToken, HostPolicy};
 use swarmd::cli::{self, Command, ConnectUrlArgs, ServeArgs};
+use swarmd::exposure::{Exposure, ExposurePolicy};
 use swarmd::{AppState, Limits};
 use tokio::net::TcpListener;
 
@@ -192,9 +199,12 @@ struct Startup {
     token: DaemonToken,
 }
 
-/// Startup steps 1-3 (see the crate doc), plus the `--serve-ui` bundle
+/// Startup steps 1-4 (see the crate doc), plus the `--serve-ui` bundle
 /// check: blocking file work, run before the async runtime starts serving.
 fn prepare(args: &ServeArgs) -> Result<Startup, Fatal> {
+    ExposurePolicy::new(args.allow_plaintext_lan)
+        .check_bind(args.bind.ip())
+        .map_err(|refusal| fatal(format!("Refusing To Bind {}: {refusal}", args.bind)))?;
     let data_dir = resolve_data_dir(args.data_dir.clone())?;
     let loopback = args.bind.ip().to_canonical().is_loopback();
 
@@ -269,7 +279,7 @@ fn prepare(args: &ServeArgs) -> Result<Startup, Fatal> {
     })
 }
 
-/// Startup steps 4-5 (see the crate doc), then serves until a shutdown
+/// Startup steps 5-6 (see the crate doc), then serves until a shutdown
 /// signal and stops the runtime.
 async fn serve(
     args: ServeArgs,
@@ -309,14 +319,21 @@ async fn serve(
             error => fatal(format!("Failed To Start The SWARM Runtime: {error}")),
         })?;
 
+    let exposure = ExposurePolicy::new(args.allow_plaintext_lan);
     let state = AppState::new(
         &runtime,
         token.clone(),
         HostPolicy::new(args.allow_hosts),
+        exposure,
         Limits::default(),
     );
-    announce(local_addr, &token, args.data_dir.as_deref());
-    tracing::info!(bind = %local_addr, data_dir = %data_dir.display(), "swarmd started");
+    announce(local_addr, &token, args.data_dir.as_deref(), exposure);
+    tracing::info!(
+        bind = %local_addr,
+        data_dir = %data_dir.display(),
+        serves = %exposure,
+        "swarmd started"
+    );
 
     match signals {
         Ok(signal) => {
@@ -410,9 +427,15 @@ fn restrict_dir(dir: &Path) -> io::Result<()> {
     }
 }
 
-/// Prints the listening line: the tokenized connect URL on a terminal, and
-/// otherwise the address plus the command that prints the URL.
-fn announce(local_addr: SocketAddr, token: &DaemonToken, data_dir: Option<&Path>) {
+/// Prints the listening line (the tokenized connect URL on a terminal, and
+/// otherwise the address plus the command that prints the URL), then the
+/// status line naming the networks plaintext clients are served on.
+fn announce(
+    local_addr: SocketAddr,
+    token: &DaemonToken,
+    data_dir: Option<&Path>,
+    exposure: ExposurePolicy,
+) {
     if io::stdout().is_terminal() {
         println!(
             "SWARM Daemon Listening On {}",
@@ -432,12 +455,18 @@ fn announce(local_addr: SocketAddr, token: &DaemonToken, data_dir: Option<&Path>
             cli::base_url(local_addr)
         );
     }
-    if local_addr.ip().is_unspecified() {
-        println!(
-            "Listening On Every Interface: Remote Clients Connect Through This Machine's LAN Or \
-             Tailnet Address, Which Is Accepted Automatically."
-        );
-    }
+    println!("{}", status_line(local_addr, exposure));
+}
+
+/// The startup status line: which networks plaintext clients are served on,
+/// naming the override when a wildcard bind leaves LAN clients out.
+fn status_line(local_addr: SocketAddr, exposure: ExposurePolicy) -> String {
+    let hint = if exposure.widest() == Exposure::Loopback && local_addr.ip().is_unspecified() {
+        " (LAN Clients Are Refused Without --allow-plaintext-lan)"
+    } else {
+        ""
+    };
+    format!("Serving Plaintext Clients On: {exposure}{hint}")
 }
 
 /// Installs the shutdown signal handlers. The returned future resolves on
@@ -527,6 +556,29 @@ mod tests {
     /// in `codex.rs`; neither is public), and it then tears that session
     /// down. A budget at or under the handshake would abandon the kill and
     /// leave the worker's worktree unreconciled (ADR-0040).
+    #[test]
+    fn test_status_line_names_what_is_served() {
+        let addr = |raw: &str| raw.parse::<SocketAddr>().unwrap();
+        let strict = ExposurePolicy::default();
+        let lan = ExposurePolicy::new(true);
+        assert_eq!(
+            status_line(addr("127.0.0.1:8787"), strict),
+            "Serving Plaintext Clients On: Loopback Only"
+        );
+        assert_eq!(
+            status_line(addr("0.0.0.0:8787"), strict),
+            "Serving Plaintext Clients On: Loopback Only \
+             (LAN Clients Are Refused Without --allow-plaintext-lan)"
+        );
+        for bind in ["0.0.0.0:8787", "[::]:8787", "192.168.1.5:8787"] {
+            assert_eq!(
+                status_line(addr(bind), lan),
+                format!("Serving Plaintext Clients On: {lan}"),
+                "{bind}"
+            );
+        }
+    }
+
     #[test]
     fn test_stop_workers_timeout_outlasts_the_adapter_handshake() {
         const ADAPTER_HANDSHAKE: Duration = Duration::from_secs(30);

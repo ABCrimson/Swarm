@@ -30,6 +30,9 @@ Options:
   --bind ADDR               Listen Address [Default: 127.0.0.1:8787]. A
                             Non-Loopback Address Needs A Token Minted By An
                             Earlier Loopback Run.
+  --allow-plaintext-lan     Also Serve Plain ws:// Clients On Private IPv4
+                            Networks (RFC 1918, 100.64.0.0/10). Without It
+                            Only Loopback Clients Are Served.
   --data-dir PATH           Data Directory [Default: The Desktop App's]
   --serve-ui DIR            Serve The `pnpm build:web` Bundle In DIR At /
   --allow-host NAME[:PORT]  Also Accept This Host In Host/Origin Headers
@@ -57,6 +60,9 @@ pub enum Command {
 #[derive(Debug)]
 pub struct ServeArgs {
     pub bind: SocketAddr,
+    /// `--allow-plaintext-lan`: serve private-LAN peers as well as loopback
+    /// ones (see [`crate::exposure`]).
+    pub allow_plaintext_lan: bool,
     pub data_dir: Option<PathBuf>,
     pub serve_ui: Option<PathBuf>,
     pub allow_hosts: Vec<AllowedHost>,
@@ -67,6 +73,7 @@ impl Default for ServeArgs {
     fn default() -> Self {
         Self {
             bind: DEFAULT_BIND,
+            allow_plaintext_lan: false,
             data_dir: None,
             serve_ui: None,
             allow_hosts: Vec::new(),
@@ -100,7 +107,8 @@ pub enum CliError {
 
 /// Parses the arguments after the program name. Flags take their value as
 /// the next argument or inline (`--bind=ADDR`); path values may be any OS
-/// string in the separate-argument form.
+/// string in the separate-argument form. `--allow-plaintext-lan` is a
+/// switch and takes no value.
 ///
 /// # Errors
 ///
@@ -124,6 +132,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, CliErr
             ("-h" | "--help", _) => return Ok(Command::Help),
             ("-V" | "--version", false) => return Ok(Command::Version),
             ("--bind", _) => serve.bind = parse_value("--bind", &value("--bind")?)?,
+            ("--allow-plaintext-lan", false) if inline.is_none() => {
+                serve.allow_plaintext_lan = true;
+            }
             ("--data-dir", _) => serve.data_dir = Some(value("--data-dir")?.into()),
             ("--serve-ui", false) => serve.serve_ui = Some(value("--serve-ui")?.into()),
             ("--allow-host", false) => serve
@@ -276,6 +287,7 @@ mod tests {
     fn test_defaults() {
         let args = serve(&[]);
         assert_eq!(args.bind, DEFAULT_BIND);
+        assert!(!args.allow_plaintext_lan);
         assert!(args.data_dir.is_none() && args.serve_ui.is_none() && args.log_file.is_none());
         assert!(args.allow_hosts.is_empty());
     }
@@ -341,6 +353,19 @@ mod tests {
         assert_eq!(
             parse_strs(&["serve"]).unwrap_err(),
             CliError::Unrecognized("serve".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_allow_plaintext_lan_is_a_serve_only_switch() {
+        assert!(serve(&["--allow-plaintext-lan", "--bind", "0.0.0.0:8787"]).allow_plaintext_lan);
+        assert_eq!(
+            parse_strs(&["--allow-plaintext-lan=yes"]).unwrap_err(),
+            CliError::Unrecognized("--allow-plaintext-lan=yes".to_owned())
+        );
+        assert_eq!(
+            parse_strs(&["connect-url", "--allow-plaintext-lan"]).unwrap_err(),
+            CliError::Unrecognized("--allow-plaintext-lan".to_owned())
         );
     }
 

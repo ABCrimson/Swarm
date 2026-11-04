@@ -6,16 +6,20 @@
 //!
 //! # Admission
 //!
-//! The router-wide `Host`/`Origin` check runs first (see `crate::auth`).
+//! The router-wide exposure gate and `Host`/`Origin` check run first (see
+//! [`crate::exposure`] and `crate::auth`). The upgrade repeats the exposure
+//! gate (a 403) before it takes any permit, so a peer on a network the
+//! daemon does not serve never holds a slot, whichever router mounts `/ws`.
 //! A valid `Authorization: Bearer` header then takes the connection slot
 //! itself. Any other upgrade takes a handshake permit instead: from a
 //! separate, smaller pool, so sockets that never authenticate cannot occupy
 //! a client's slot, and at most [`Limits::max_pending_handshakes_per_peer`]
 //! per remote client address (an IPv6 client by its `/64`, the block one
 //! host usually holds), so one remote host cannot hold the whole pool.
-//! Every refusal is a 503 before upgrading. A client that authenticates
-//! through `hello` takes its slot after the token is checked, or is closed
-//! with `1013 Try Again Later` if the daemon filled up in the meantime.
+//! Every capacity refusal is a 503 before upgrading. A client that
+//! authenticates through `hello` takes its slot after the token is checked,
+//! or is closed with `1013 Try Again Later` if the daemon filled up in the
+//! meantime.
 //!
 //! Loopback peers have no per-address share, only the pool: on the default
 //! loopback bind, over an `ssh -L` tunnel and behind a local TLS reverse
@@ -126,7 +130,7 @@ use self::feed::{FeedEnd, feed};
 use self::writer::write_frames;
 #[cfg(doc)]
 use crate::Limits;
-use crate::{AppState, ConnectionAddrs};
+use crate::{AppState, ConnectionAddrs, exposure};
 
 /// Replay page size: the same page limit the `events_since` command uses.
 pub const REPLAY_PAGE_SIZE: u32 = PAGE_LIMIT;
@@ -160,6 +164,9 @@ pub(crate) async fn upgrade(
     let peer = addrs.remote;
     if state.shutdown.is_cancelled() {
         return refuse(peer, "Daemon Shutting Down.");
+    }
+    if let Some(refused) = exposure::refusal(state.exposure, Some(addrs)) {
+        return refused;
     }
     let admission = if bearer_token(&headers).is_some_and(|token| state.token.matches(token)) {
         // Already authenticated: straight to a connection slot, with no
