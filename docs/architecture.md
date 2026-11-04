@@ -108,12 +108,12 @@ at the repository root; run cargo from there. The frontend uses Node subpath imp
 | `runtime` | `Runtime::start` / `shutdown`: the one constructor both shells call. |
 | `commands` | The command `Registry`, `RemotePolicy`, and one handler module per area. |
 | `events`, `orchestration` | The `SwarmEvent` enum and `EventSink`; the single-writer `OrchestrationEngine` and its SQLite `EventLog`. |
-| `worker` | `handle` (config, state), `lifecycle` (spawn, pause, resume, resize, input, kill), `pty`, `proc` (piped children and the NDJSON framer), `registry`. |
+| `worker` | `handle` (config, state), `lifecycle` (spawn, pause, resume, resize, input, kill), `pty`, `proc` (piped children and the NDJSON framer), `tree_kill` (process-tree termination), `registry`. |
 | `agent` | `adapter` (trait pair, capabilities), `claude_code`, `codex`, `scheduler`, `registry`. |
 | `git` | `cli` (runner, probe), `repo`, `worktree`, `remote`, `ship/*`, `causal`. |
 | `session` | `manager` (in memory), `persist` (`sessions.json`). |
 | `bus` | `channel` (topic registry), `router` (a send becomes an event). |
-| `config`, `state_file`, `paths`, `clock`, `error`, `lock`, `metrics`, `protocol`, `redact` | Settings file, atomic JSON files, data-directory paths, epoch timestamps, `AppError`, the single-instance lock, sampling, `swarmd` frames, secret redaction and size capping for surfaced text. |
+| `config`, `state_file`, `paths`, `clock`, `error`, `lock`, `metrics`, `protocol`, `redact`, `secrets` | Settings file, atomic JSON files, data-directory paths, epoch timestamps, `AppError`, the single-instance lock, sampling, `swarmd` frames, secret redaction and size capping for surfaced text, the API key's store (OS keychain, or `swarm-secrets.json`). |
 
 **Start** (`Runtime::start`): take the single-instance lock ([ADR-0025](adr/0025-single-instance-lock.md));
 open the event log and start the writer; build the worker registry, session manager, bus and router;

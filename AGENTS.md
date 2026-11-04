@@ -64,7 +64,7 @@ silently or misleadingly; know them before you debug anything else.
 - **Rust gates on the maintainer's Windows host run natively only under a
   deduplicated `PATH`, and App Control can still block them.** Smart App
   Control's enforce flag reads 0 (registry `VerifiedAndReputablePolicyState`,
-  read 2026-10-30), and on 2026-11-04 `cargo check` and
+  read 2026-11-04), and on 2026-11-04 `cargo check` and
   `cargo test -p swarm-core --locked --all-targets` (691 passed) ran natively
   once `PATH` was pruned to existing directories: with the raw `PATH` below,
   `cmd.exe` finds neither `ping` nor `node`, so every fixture test that

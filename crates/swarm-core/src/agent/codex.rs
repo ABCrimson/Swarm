@@ -27,7 +27,7 @@
 //! ([`CodexAdapter::with_data_dir`]), so it reads none of the operator's
 //! Codex configuration, `[mcp_servers]` or plugins; only `auth.json` is
 //! copied in, and the Swarm-written `config.toml` turns off Codex's
-//! built-in apps, remote plugins, computer use and browser use. That a
+//! built-in apps, remote plugins, computer use, browser use and skill MCP-dependency installs. That a
 //! private home then lists no MCP server was measured without a login
 //! (`mcpServerStatus/list` on 0.168.0-alpha.1, 2026-11-04, no `auth.json`
 //! in the home); a signed-in run is not recorded. User skills under
@@ -218,7 +218,7 @@ impl CodexAdapter {
     /// `config.toml` and a copy of the operator's `auth.json` (from
     /// `$CODEX_HOME`, else `~/.codex`), so no worker reads the operator's
     /// Codex configuration, `[mcp_servers]` or plugins, and Codex's
-    /// built-in apps, remote plugins, computer use and browser use are off.
+    /// built-in apps, remote plugins, computer use, browser use and skill MCP-dependency installs are off.
     /// That such a home lists no MCP server was measured without a login
     /// (0.168.0-alpha.1, 2026-11-04). User skills under
     /// `~/.agents/skills` are outside `CODEX_HOME` and still load (measured

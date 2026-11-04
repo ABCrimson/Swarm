@@ -139,7 +139,7 @@ exposes: 12 on the measuring host by `mcpServerStatus/list` (2026-11-04), of whi
 built into the CLI, so no `mcp_servers` edit reaches them. A `-c 'mcp_servers={}'` override merges an
 empty table into the loaded one: with it, `config/read` returned the same three keys.
 
-Every Codex child now runs with `CODEX_HOME` at `<data dir>/codex-home/<worker id>`
+Every Codex child runs with `CODEX_HOME` at `<data dir>/codex-home/<worker id>`
 (`crates/swarm-core/src/agent/codex/home.rs`). The home holds a Swarm-written `config.toml`, rewritten
 at every spawn, with no `[mcp_servers]` table, no plugins and no `[projects]` trust entries, and a
 `[features]` table that turns off `apps` (the built-in `codex_apps` connectors), `remote_plugin`,
