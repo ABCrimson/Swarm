@@ -113,10 +113,10 @@ describe("FileTree", () => {
   // Regression: a second click while the listing was in flight started a
   // second readDir, and its result force-expanded the folder again.
   it("lists a folder once and respects a collapse made while it loads", async () => {
-    let resolveChildren: (entries: DirEntry[]) => void = () => {};
+    const children = Promise.withResolvers<DirEntry[]>();
     vi.mocked(readDir)
       .mockResolvedValueOnce([dir("src")])
-      .mockReturnValueOnce(new Promise((resolve) => (resolveChildren = resolve)));
+      .mockReturnValueOnce(children.promise);
     renderTree();
 
     const folder = await screen.findByRole("treeitem");
@@ -124,7 +124,7 @@ describe("FileTree", () => {
     fireEvent.click(folder);
     fireEvent.click(folder);
     fireEvent.click(folder);
-    await act(async () => resolveChildren([file("main.ts")]));
+    await act(async () => children.resolve([file("main.ts")]));
 
     expect(readDir).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("treeitem", { name: /src/ })).toHaveAttribute("aria-expanded", "false");

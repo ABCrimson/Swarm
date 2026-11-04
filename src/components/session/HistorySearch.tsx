@@ -1,4 +1,5 @@
 import { useDeferredValue, useId, useRef, useState } from "react";
+import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
 import { escapeForDisplay } from "#lib/display-escape";
@@ -110,7 +111,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
     .toArray()
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 
-  const labelClass = "shrink-0 text-xs text-fg-dim font-[family-name:var(--font-body)]";
+  const labelClass = "shrink-0 text-xs text-fg-dim";
 
   return (
     <div className="flex flex-col gap-4">
@@ -135,7 +136,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
             value={dateRange.from}
             max={dateRange.to || "9999-12-31"}
             onChange={(e) => setDateRange((prev) => ({ ...prev, from: e.target.value }))}
-            className="swarm-input flex-1 text-xs [color-scheme:dark]"
+            className="swarm-input flex-1 text-xs"
           />
           <label htmlFor={toId} className={labelClass}>
             To
@@ -147,26 +148,26 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
             min={dateRange.from || undefined}
             max="9999-12-31"
             onChange={(e) => setDateRange((prev) => ({ ...prev, to: e.target.value }))}
-            className="swarm-input flex-1 text-xs [color-scheme:dark]"
+            className="swarm-input flex-1 text-xs"
           />
           {(dateRange.from !== "" || dateRange.to !== "") && (
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => {
                 setDateRange({ from: "", to: "" });
                 fromInputRef.current?.focus();
               }}
-              className="cursor-pointer rounded bg-[oklch(0.22_0.03_220/0.5)] px-2 py-1 text-xs text-[oklch(0.65_0.06_220)] hover:bg-[oklch(0.26_0.04_220/0.6)] focus-visible:outline-2 focus-visible:outline-plasma"
             >
               Clear Dates
-            </button>
+            </Button>
           )}
         </div>
       </search>
 
       {filtering && (
         <section aria-label="Search Results" className="flex flex-col gap-1.5">
-          <p role="status" className="text-xs text-fg-dim font-[family-name:var(--font-mono)]">
+          <p role="status" className="text-xs text-fg-dim font-mono">
             {pluralize("Result", results.length)}
           </p>
 
@@ -180,9 +181,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
           ))}
 
           {results.length === 0 && (
-            <p className="py-4 text-center text-sm text-fg-dim font-[family-name:var(--font-body)]">
-              No Matching Sessions Found.
-            </p>
+            <p className="py-4 text-center text-sm text-fg-dim">No Matching Sessions Found.</p>
           )}
         </section>
       )}
@@ -209,13 +208,13 @@ function SearchResultItem({
     <button
       type="button"
       onClick={() => onSelect(session.id)}
-      className="w-full cursor-pointer rounded-lg border border-[oklch(0.25_0.03_220/0.4)] bg-[oklch(0.15_0.02_220/0.4)] p-3 text-left transition-colors hover:bg-[oklch(0.18_0.04_220/0.5)] focus-visible:outline-2 focus-visible:outline-plasma"
+      className="w-full cursor-pointer rounded-lg border border-[oklch(0.25_0.03_220/0.4)] bg-[oklch(0.15_0.02_220/0.4)] p-3 text-left transition-colors hover:bg-[oklch(0.18_0.04_220/0.5)]"
     >
-      <span className="block text-sm font-medium text-[oklch(0.85_0.03_220)] font-[family-name:var(--font-display)]">
+      <span className="block text-sm font-medium text-[oklch(0.85_0.03_220)] font-display">
         <Highlighted text={session.name} query={query} />
       </span>
       {description != null && description !== "" && (
-        <span className="mt-1 block truncate text-xs text-fg-dim font-[family-name:var(--font-body)]">
+        <span className="mt-1 block truncate text-xs text-fg-dim">
           <Highlighted text={description} query={query} />
         </span>
       )}

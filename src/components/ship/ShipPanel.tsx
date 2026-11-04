@@ -74,7 +74,7 @@ const remedyCommandStyle: CSSProperties = {
   padding: "6px 8px",
   borderRadius: 6,
   background: "var(--color-void)",
-  color: "var(--color-text)",
+  color: "var(--color-fg)",
   fontFamily: "var(--font-mono)",
   fontSize: "0.6875rem",
   whiteSpace: "pre-wrap",
@@ -318,7 +318,7 @@ function ShipReceipt({ ship }: { readonly ship: UseShipReturn }): React.ReactEle
               aria-label="Open Compare Page"
               title={prUrl}
               onClick={() => void openComparePage(prUrl)}
-              className="cursor-pointer rounded-sm underline focus-visible:outline-2 focus-visible:outline-plasma"
+              className="cursor-pointer rounded-sm underline"
               style={{
                 background: "none",
                 border: "none",

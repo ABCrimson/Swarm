@@ -1,3 +1,4 @@
+import { EmptyState } from "#components/ui/EmptyState";
 import { useSessionStore } from "#store/sessions";
 import { SessionCard } from "./SessionCard.tsx";
 
@@ -34,18 +35,8 @@ export function SessionList({
     .toArray()
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 
-  if (sortedSessions.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16 text-center text-fg-dim">
-        <p className="text-lg font-medium font-[family-name:var(--font-display)]">
-          No Sessions Yet
-        </p>
-        <p className="mt-1 text-sm font-[family-name:var(--font-body)]">
-          Create A New Session To Get Started.
-        </p>
-      </div>
-    );
-  }
+  if (sortedSessions.length === 0)
+    return <EmptyState title="No Sessions Yet" body="Create A New Session To Get Started" />;
 
   return (
     <ul

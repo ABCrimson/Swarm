@@ -55,7 +55,7 @@ const labelStyle: CSSProperties = {
 const detailStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: "0.6875rem",
-  color: "var(--color-text-dim)",
+  color: "var(--color-fg-dim)",
   maxWidth: 220,
   overflow: "hidden",
   textOverflow: "ellipsis",

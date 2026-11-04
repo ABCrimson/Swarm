@@ -15,7 +15,7 @@ const handlers = new Map<string, Set<Handler>>();
 
 function emit(type: string, payload: unknown): void {
   const e: DomainEvent = { seq: 1, ts: 0, type, payload };
-  for (const h of [...(handlers.get(type) ?? []), ...(handlers.get("*") ?? [])]) h(e);
+  for (const h of handlers.get(type) ?? []) h(e);
 }
 
 vi.mock(import("#lib/event-bus"), () => ({
@@ -27,17 +27,6 @@ vi.mock(import("#lib/event-bus"), () => ({
       set.delete(handler);
     };
   },
-  waitFor: (predicate: (e: DomainEvent) => boolean) =>
-    new Promise<DomainEvent>((resolve) => {
-      const wildcard = handlers.get("*") ?? new Set<Handler>();
-      handlers.set("*", wildcard);
-      const wrapped: Handler = (e) => {
-        if (!predicate(e)) return;
-        wildcard.delete(wrapped);
-        resolve(e);
-      };
-      wildcard.add(wrapped);
-    }),
 }));
 
 const mockGitShipPreflight = vi.fn<(workerId: string, mode?: string) => Promise<ShipPreflight>>();
@@ -273,13 +262,11 @@ describe("ShipPanel", () => {
     using open = vi.spyOn(window, "open").mockReturnValue(null);
     const user = userEvent.setup();
     const receipt = await renderShipped(user);
-    // useShip's post-ship auto-open still calls the plugin (and catches its failure).
-    const autoOpenCalls = vi.mocked(openUrl).mock.calls.length;
-
     await user.click(within(receipt).getByRole("button", { name: "Open Compare Page" }));
 
     expect(open).toHaveBeenCalledWith(COMPARE_URL, "_blank", "noopener,noreferrer");
-    expect(openUrl).toHaveBeenCalledTimes(autoOpenCalls);
+    // Without the bridge useShip never auto-opens, so the plugin stays uncalled.
+    expect(openUrl).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
   });
 

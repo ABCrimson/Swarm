@@ -42,7 +42,7 @@ const sectionStyle: CSSProperties = {
 const labelStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: "0.6875rem",
-  color: "var(--color-text-dim)",
+  color: "var(--color-fg-dim)",
   textTransform: "uppercase",
   letterSpacing: "0.08em",
 };
@@ -50,7 +50,7 @@ const labelStyle: CSSProperties = {
 const monoRowStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: "0.75rem",
-  color: "var(--color-text)",
+  color: "var(--color-fg)",
   display: "flex",
   alignItems: "center",
   gap: 6,
@@ -71,7 +71,7 @@ const fileListStyle: CSSProperties = {
   fontSize: "0.6875rem",
   padding: "8px 10px",
   background: "var(--color-void)",
-  border: "1px solid oklch(0.14 0.03 220)",
+  border: "1px solid var(--color-surface-2)",
   borderRadius: 8,
 };
 
@@ -169,14 +169,14 @@ function commandPlanFor(mode: StagingMode, includePush: boolean, includeCompare:
 const causalMutedStyle: CSSProperties = {
   fontFamily: "var(--font-body)",
   fontSize: "0.75rem",
-  color: "var(--color-text-dim)",
+  color: "var(--color-fg-dim)",
   fontStyle: "italic",
 };
 
 const causalTableWrapStyle: CSSProperties = {
   maxHeight: 220,
   overflowY: "auto",
-  border: "1px solid oklch(0.14 0.03 220)",
+  border: "1px solid var(--color-surface-2)",
   borderRadius: 8,
 };
 
@@ -190,11 +190,11 @@ const causalTableStyle: CSSProperties = {
 const causalHeadCellStyle: CSSProperties = {
   textAlign: "left",
   padding: "6px 10px",
-  color: "var(--color-text-dim)",
+  color: "var(--color-fg-dim)",
   textTransform: "uppercase",
   letterSpacing: "0.06em",
   fontSize: "0.625rem",
-  borderBottom: "1px solid oklch(0.14 0.03 220)",
+  borderBottom: "1px solid var(--color-surface-2)",
   position: "sticky",
   top: 0,
   background: "var(--color-void)",
@@ -202,7 +202,7 @@ const causalHeadCellStyle: CSSProperties = {
 
 const causalCellStyle: CSSProperties = {
   padding: "5px 10px",
-  color: "var(--color-text)",
+  color: "var(--color-fg)",
   borderBottom: "1px solid oklch(0.11 0.02 220)",
   overflow: "hidden",
   textOverflow: "ellipsis",
