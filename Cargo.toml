@@ -101,6 +101,14 @@ rusqlite                  = { version = "=0.41.1", features = ["bundled"] }
 regex                     = "=1.13.1"
 sysinfo                   = "=0.40.1"
 tokio-util                = { version = "=0.7.20", features = ["rt"] }
+# The OS keychain behind swarm-core's `secrets` store (Windows Credential
+# Manager, macOS Keychain, the Secret Service over zbus on Linux). `v1`
+# selects exactly those three native stores. `default` is `["v1"]` in
+# 4.2.0; naming it keeps a future default (the `cli` store set) out.
+keyring                   = { version = "=4.2.0", default-features = false, features = ["v1"] }
+# `Zeroizing<String>` for secrets held in memory; the same version the
+# lock already carries through rustls.
+zeroize                   = "=1.9.1"
 # ── swarmd (headless daemon) ─────────────────────────────────────────
 # axum is swarmd's HTTP/WebSocket server stack; only swarmd depends on it
 # (see docs/adr/0002-swarmd-separate-binary.md).
