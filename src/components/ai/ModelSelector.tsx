@@ -58,11 +58,7 @@ const triggerStyle: CSSProperties = {
   color: "var(--color-fg)",
 };
 
-/**
- * CSS anchor positioning where the engine has it (WebKit 26+, Chromium);
- * elsewhere (the WebKit 18.4 floor) the popover keeps the UA default,
- * centered in the viewport.
- */
+/** CSS anchor positioning where the engine has it (WebKit 26+, Chromium); elsewhere (the WebKit 18.4 floor) the popover is centered in the viewport: panelStyle's margin: auto restores the UA popover margin that Tailwind's preflight zeroes. */
 const SUPPORTS_ANCHOR_POSITIONING = globalThis.CSS?.supports?.("top", "anchor(bottom)") ?? false;
 
 /**
@@ -71,6 +67,7 @@ const SUPPORTS_ANCHOR_POSITIONING = globalThis.CSS?.supports?.("top", "anchor(bo
  * is needed.
  */
 const panelStyle: CSSProperties = {
+  margin: "auto",
   minWidth: 280,
   padding: 0,
   borderRadius: 8,
