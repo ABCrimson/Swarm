@@ -6,9 +6,9 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::{
-    RepoLocks, ShipError, ShipErrorKind, ShipRemedy, guard_not_primary_checkout,
-    is_protected_branch, many_push_urls, mutate, push_urls, resolve_base_branch,
-    resolve_live_branch, worktree_info_for_worker,
+    RepoLocks, ShipError, ShipErrorKind, ShipRemedy, ShipWorktreeInfo, guard_not_primary_checkout,
+    is_protected_branch, many_push_urls, mutate, preview_remote, push_urls, resolve_base_branch,
+    resolve_live_branch, run_mutation, worktree_info_for_worker,
 };
 use crate::error::AppError;
 use crate::git::cli::{PUSH_TIMEOUT, READ_TIMEOUT, args_in};
@@ -145,6 +145,12 @@ fn classify_push_error(raw_stderr: &str, surfaced_stderr: &str) -> ShipError {
 /// commits (`ShipPreflight.ahead > 0`, e.g. from an earlier "Commit
 /// Only") goes straight here.
 ///
+/// `expected_remote` is the `ShipPreflight.remote` the caller showed
+/// (redacted push URL). When it is given, `origin`'s push URL is read
+/// again under the same lock hold as the push and must still redact to
+/// it, so an `origin` re-pointed after the preview never receives the
+/// branch. `None` skips that comparison (a caller that predates it).
+///
 /// # Errors
 ///
 /// * [`ShipErrorKind::WorkerNotFound`] / [`ShipErrorKind::NoWorktree`] —
@@ -155,14 +161,17 @@ fn classify_push_error(raw_stderr: &str, surfaced_stderr: &str) -> ShipError {
 /// * [`ShipErrorKind::NoRemote`] — no `origin` remote configured.
 /// * [`ShipErrorKind::NonGitHubHost`] — `origin` has more than one push
 ///   URL, so `git push origin` would send the branch to every one of them.
-/// * [`ShipErrorKind::PushRejected`] / [`ShipErrorKind::AuthExpired`] /
-///   [`ShipErrorKind::Timeout`] / [`ShipErrorKind::Unknown`] — the push
-///   itself failed, or reading the live branch or the `origin` remote
-///   did.
+/// * [`ShipErrorKind::PushRejected`] — `origin`'s push URL no longer
+///   matches `expected_remote` ([`ORIGIN_CHANGED`], no remedy), or the
+///   remote refused a non-fast-forward.
+/// * [`ShipErrorKind::AuthExpired`] / [`ShipErrorKind::Timeout`] /
+///   [`ShipErrorKind::Unknown`] — the push itself failed, or reading the
+///   live branch or the `origin` remote did.
 pub fn push(
     registry: &WorkerRegistry,
     repo_locks: &RepoLocks,
     id: WorkerId,
+    expected_remote: Option<&str>,
 ) -> Result<PushOutcome, ShipError> {
     let info = worktree_info_for_worker(registry, id)?;
     let wt = info.worktree_path.as_path();
@@ -181,23 +190,42 @@ pub fn push(
             format!("Branch `{branch}` Is The Base Branch — Ship Refuses To Push Directly To It."),
         ));
     }
-    match push_urls(wt, "origin")?.as_slice() {
-        [] => {
-            return Err(ShipError::new(
-                ShipErrorKind::NoRemote,
-                "No `origin` Remote Configured.",
-            ));
-        }
-        [_] => {}
-        many => {
-            return Err(ShipError::new(
-                ShipErrorKind::NonGitHubHost,
-                many_push_urls(many.len()),
-            ));
-        }
-    }
     let sha = resolve_push_sha(wt, &branch)?;
-    push_commit(registry, id, repo_locks, &info.repo_root, wt, &branch, &sha)
+    push_commit(
+        registry,
+        id,
+        repo_locks,
+        &info,
+        &branch,
+        &sha,
+        expected_remote,
+    )
+}
+
+/// The [`ShipErrorKind::PushRejected`] message for an `origin` whose push
+/// URL changed between the preview and the push.
+pub(super) const ORIGIN_CHANGED: &str = "Origin Changed Since The Preview";
+
+/// Where `git push origin` would send, checked before it runs: exactly
+/// one push URL in `urls` ([`super::push_urls`] of `origin`) and, with
+/// `expected_remote`, the one the preview showed ([`preview_remote`]).
+fn check_destination(urls: &[String], expected_remote: Option<&str>) -> Result<(), ShipError> {
+    match urls {
+        [] => Err(ShipError::new(
+            ShipErrorKind::NoRemote,
+            "No `origin` Remote Configured.",
+        )),
+        [_] => match expected_remote {
+            Some(expected) if preview_remote(urls).as_deref() != Some(expected) => {
+                Err(ShipError::new(ShipErrorKind::PushRejected, ORIGIN_CHANGED))
+            }
+            _ => Ok(()),
+        },
+        many => Err(ShipError::new(
+            ShipErrorKind::NonGitHubHost,
+            many_push_urls(many.len()),
+        )),
+    }
 }
 
 /// The tip of `refs/heads/<branch>` — the commit [`push`] sends. Resolved
@@ -209,11 +237,13 @@ pub(super) fn resolve_push_sha(wt: &Path, branch: &str) -> Result<String, AppErr
 }
 
 /// Pushes commit `sha` to `origin`'s `branch` (non-force: a
-/// non-fast-forward is [`ShipErrorKind::PushRejected`]), then points
-/// `branch`'s upstream at `origin/<branch>`. Each git call runs under
-/// `repo_locks`; the push carries `sha` itself, so the receipt names
-/// exactly the commit that was pushed even when `branch` has moved since
-/// `sha` was read.
+/// non-fast-forward is [`ShipErrorKind::PushRejected`]) from `info`'s
+/// worktree, then points `branch`'s upstream at `origin/<branch>`. Each
+/// git call runs under `repo_locks`; `origin`'s push URLs are read in the
+/// same lock hold as the push and checked by [`check_destination`]
+/// first, so nothing is sent to a destination the caller did not see.
+/// The push carries `sha` itself, so the receipt names exactly the commit
+/// that was pushed even when `branch` has moved since `sha` was read.
 ///
 /// The upstream is bookkeeping after the push has already succeeded, so a
 /// failure to record it is logged, not returned — reporting the push as
@@ -222,10 +252,10 @@ pub(super) fn push_commit(
     registry: &WorkerRegistry,
     id: WorkerId,
     repo_locks: &RepoLocks,
-    repo_root: &Path,
-    wt: &Path,
+    info: &ShipWorktreeInfo,
     branch: &str,
     sha: &str,
+    expected_remote: Option<&str>,
 ) -> Result<PushOutcome, ShipError> {
     if !is_object_id(sha) {
         return Err(ShipError::new(
@@ -233,13 +263,13 @@ pub(super) fn push_commit(
             format!("Refusing To Push: `{sha}` Is Not A Commit Id."),
         ));
     }
-    let output = mutate(
-        repo_locks,
-        repo_root,
-        &push_args(wt, sha, branch),
-        None,
-        PUSH_TIMEOUT,
-    )?;
+    let (repo_root, wt) = (info.repo_root.as_path(), info.worktree_path.as_path());
+    let output = repo_locks.run_serialized(repo_root, || {
+        if let Err(refusal) = check_destination(&push_urls(wt, "origin")?, expected_remote) {
+            return Ok(Err(refusal));
+        }
+        run_mutation(&push_args(wt, sha, branch), None, PUSH_TIMEOUT).map(Ok)
+    })??;
     if !output.success() {
         return Err(classify_push_error(output.raw_stderr(), &output.stderr));
     }

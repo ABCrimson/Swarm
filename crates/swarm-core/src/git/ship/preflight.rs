@@ -12,12 +12,11 @@ use super::deny::{self, SkippedFile};
 use super::status::{self, DiffStat, NUMSTAT_ARGS, StatusSnapshot};
 use super::{
     NOT_A_WORKTREE, PRIMARY_CHECKOUT, ShipError, git, is_protected_branch, many_push_urls,
-    push_urls, resolve_base_branch, single_value, worktree_info_for_worker,
+    preview_remote, push_urls, resolve_base_branch, single_value, worktree_info_for_worker,
 };
 use crate::error::AppError;
 use crate::git::cli::SCAN_TIMEOUT;
 use crate::git::{remote, repo};
-use crate::redact;
 use crate::worker::registry::{WorkerId, WorkerRegistry};
 
 /// The ship preflight for one worker — `git_ship_preflight`'s IPC result,
@@ -144,13 +143,7 @@ pub fn preflight(
             None
         }
     };
-    let remote = (!push_urls.is_empty()).then(|| {
-        push_urls
-            .iter()
-            .map(|url| redact::redact(url))
-            .collect::<Vec<_>>()
-            .join(", ")
-    });
+    let remote = preview_remote(&push_urls);
     let host = push_url.and_then(remote::parse).map(|parsed| parsed.host);
     let host_supports_compare = host.as_deref().is_some_and(remote::looks_like_github_host);
 

@@ -714,8 +714,8 @@ export async function gitStageCommit(
 }
 
 /**
- * Pushes `workerId`'s branch (`origin <branch> --set-upstream`, fixed
- * argv, never forced). The backend resolves the tip of the checked-out
+ * Pushes `workerId`'s branch to `origin` (fixed argv, never forced; the
+ * upstream is recorded after the push). The backend resolves the tip of the checked-out
  * branch itself and pushes that commit as `<sha>:refs/heads/<branch>`
  * (see `swarm_core::git::ship::push`), so already-committed, unpushed
  * work (`ShipPreflight.ahead > 0`) can be pushed without a
@@ -723,15 +723,21 @@ export async function gitStageCommit(
  * worker's push (`PushRecord`: sha and refs) and
  * `lastShippedSeq`/`lastShippedCommit`. `finalStep` is `true` for
  * "Commit + Push" and `false` when a {@link shipCompareUrl} call follows.
+ * `expectedRemote` is the `ShipPreflight.remote` the user was shown: the
+ * backend re-reads `origin`'s redacted push URL under the repo lock and
+ * refuses a mismatch as `pushRejected` ("Origin Changed Since The
+ * Preview") before anything is sent. Omitted (or `null`), the push is
+ * not bound to a preview.
  */
 export async function gitPush(
   workerId: string,
   shipId: string,
   finalStep: boolean,
+  expectedRemote?: string | null,
 ): Promise<PushOutcome> {
   return shipCommand(
     "git_push",
-    { workerId, shipId, finalStep },
+    { workerId, shipId, finalStep, expectedRemote },
     PushOutcomeSchema,
     "Git Push Returned An Unexpected Shape.",
   );
