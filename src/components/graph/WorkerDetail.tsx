@@ -127,7 +127,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
       style={{
         width: 320,
         height: "100%",
-        background: "oklch(0.10 0.03 220)",
+        background: "var(--color-surface-1)",
         borderLeft: "1px solid var(--color-border)",
         display: "flex",
         flexDirection: "column",
