@@ -573,10 +573,8 @@ describe("Settings — AI concurrent stream limit acknowledgement", () => {
 
   it("marks the field busy and says it is applying until the backend answers", async () => {
     const user = userEvent.setup();
-    let acknowledge: (cap: number | null) => void = () => {};
-    vi.mocked(setAgentConcurrency).mockReturnValueOnce(
-      new Promise<number | null>((r) => (acknowledge = r)),
-    );
+    const ack = Promise.withResolvers<number | null>();
+    vi.mocked(setAgentConcurrency).mockReturnValueOnce(ack.promise);
     render(<SettingsWithBridge />);
 
     const field = screen.getByLabelText("AI Concurrent Stream Limit");
@@ -586,7 +584,7 @@ describe("Settings — AI concurrent stream limit acknowledgement", () => {
     expect(field).toHaveAttribute("aria-busy", "true");
     expect(screen.getByText("Applying…")).toHaveAttribute("role", "status");
 
-    acknowledge(null);
+    ack.resolve(null);
     await waitFor(() => expect(field).not.toHaveAttribute("aria-busy"));
     expect(screen.queryByText("Applying…")).not.toBeInTheDocument();
   });
