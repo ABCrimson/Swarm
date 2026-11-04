@@ -138,11 +138,13 @@ use crate::events::{AgentSessionStartedPayload, EventSink, SwarmEvent};
 
 // ── Constants ────────────────────────────────────────────────────────
 
-/// Oldest `claude` release this adapter drives: `--permission-prompts`
-/// (2.1.259) is the newest flag it passes (`--restricted` arrived in
-/// 2.1.248). [`ClaudeCodeAdapter::probe`] reports anything older as
-/// unavailable.
-const MIN_CLI_VERSION: (u32, u32, u32) = (2, 1, 259);
+/// Oldest `claude` release this adapter drives: the newest release the
+/// ADR-0038 trust boundary was measured on (2.1.318, 2026-11-04: with
+/// the probe and tier argv, a planted repo `.claude/settings.json` ran no
+/// `apiKeyHelper`, applied no `env` and loaded no agents or skills). The
+/// newest flag it passes, `--permission-prompts`, arrived in 2.1.259.
+/// [`ClaudeCodeAdapter::probe`] reports anything older as unavailable.
+const MIN_CLI_VERSION: (u32, u32, u32) = (2, 1, 318);
 
 /// Bound on the `initialize` handshake that opens every session.
 #[cfg(not(test))]
@@ -271,7 +273,7 @@ fn provider_label(provider: &str) -> &str {
     }
 }
 
-/// `"2.1.281"` or `"2.1.281 (Claude Code)"` -> `(2, 1, 281)`.
+/// `"2.1.318"` or `"2.1.318 (Claude Code)"` -> `(2, 1, 318)`.
 fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
     let mut parts = raw
         .split_whitespace()

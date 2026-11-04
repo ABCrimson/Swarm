@@ -38,8 +38,11 @@ import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 
 const DEFAULTS = {
-  /** `get_binary_version` answer and `system/init.claude_code_version`. */
-  version: "2.1.281",
+  /**
+   * `get_binary_version` answer and `system/init.claude_code_version`:
+   * the adapter's `MIN_CLI_VERSION`, so the default probe sits on the floor.
+   */
+  version: "2.1.318",
   /** `initialize` account; this is the signed-in (OAuth) shape. */
   account: {
     email: "worker@example.com",
