@@ -22,5 +22,5 @@ export function warnParticlesUnavailable(reason: WebGPUUnavailableReason): void 
   lastWarnedReason = reason;
 
   console.warn(`[particles] Particle Background Unavailable: ${reason}`);
-  toast.warning("Particle Background Unavailable", { description: reason });
+  toast("Particle Background Off", { description: reason });
 }

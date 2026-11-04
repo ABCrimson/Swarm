@@ -24,7 +24,7 @@ describe("warnParticlesUnavailable", () => {
     expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
       "[particles] Particle Background Unavailable: WebGPU Is Not Exposed By This WebView",
     );
-    expect(toast.warning).toHaveBeenCalledExactlyOnceWith("Particle Background Unavailable", {
+    expect(toast).toHaveBeenCalledExactlyOnceWith("Particle Background Off", {
       description: "WebGPU Is Not Exposed By This WebView",
     });
   });
@@ -34,16 +34,16 @@ describe("warnParticlesUnavailable", () => {
     warnParticlesUnavailable("WebGPU Is Not Exposed By This WebView");
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(toast.warning).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledTimes(1);
   });
 
   it("reports a different reason, and again after a reset", () => {
     warnParticlesUnavailable("WebGPU Is Not Exposed By This WebView");
     warnParticlesUnavailable("No Compatible GPU Adapter Found");
-    expect(toast.warning).toHaveBeenCalledTimes(2);
+    expect(toast).toHaveBeenCalledTimes(2);
 
     resetParticlesUnavailableWarning();
     warnParticlesUnavailable("No Compatible GPU Adapter Found");
-    expect(toast.warning).toHaveBeenCalledTimes(3);
+    expect(toast).toHaveBeenCalledTimes(3);
   });
 });

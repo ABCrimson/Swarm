@@ -122,11 +122,11 @@ describe("ParticleBackground diagnostics", () => {
     render(<ParticleBackground />);
 
     await waitFor(() => {
-      expect(toast.warning).toHaveBeenCalledTimes(1);
+      expect(toast).toHaveBeenCalledTimes(1);
     });
 
-    expect(toast.warning).toHaveBeenCalledWith(
-      "Particle Background Unavailable",
+    expect(toast).toHaveBeenCalledWith(
+      "Particle Background Off",
       expect.objectContaining({ description: "WebGPU Is Not Exposed By This WebView" }),
     );
     expect(warnSpy).toHaveBeenCalledWith(
@@ -140,7 +140,7 @@ describe("ParticleBackground diagnostics", () => {
     setNavigatorGpu(undefined);
 
     const first = render(<ParticleBackground />);
-    await waitFor(() => expect(toast.warning).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(toast).toHaveBeenCalledTimes(1));
 
     first.unmount();
     render(<ParticleBackground />);
@@ -149,7 +149,7 @@ describe("ParticleBackground diagnostics", () => {
     // Give any (incorrect) second effect a chance to fire before asserting.
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(toast.warning).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -166,7 +166,7 @@ describe("ParticleBackground diagnostics", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(container.querySelector("canvas")).toBeNull();
-    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
@@ -174,10 +174,10 @@ describe("ParticleBackground diagnostics", () => {
     setNavigatorGpu(undefined);
 
     const first = render(<ParticleBackground />);
-    await waitFor(() => expect(toast.warning).toHaveBeenCalledTimes(1));
-    expect(toast.warning).toHaveBeenNthCalledWith(
+    await waitFor(() => expect(toast).toHaveBeenCalledTimes(1));
+    expect(toast).toHaveBeenNthCalledWith(
       1,
-      "Particle Background Unavailable",
+      "Particle Background Off",
       expect.objectContaining({ description: "WebGPU Is Not Exposed By This WebView" }),
     );
 
@@ -192,10 +192,10 @@ describe("ParticleBackground diagnostics", () => {
 
     render(<ParticleBackground />);
 
-    await waitFor(() => expect(toast.warning).toHaveBeenCalledTimes(2));
-    expect(toast.warning).toHaveBeenNthCalledWith(
+    await waitFor(() => expect(toast).toHaveBeenCalledTimes(2));
+    expect(toast).toHaveBeenNthCalledWith(
       2,
-      "Particle Background Unavailable",
+      "Particle Background Off",
       expect.objectContaining({ description: "No Compatible GPU Adapter Found" }),
     );
     expect(warnSpy).toHaveBeenCalledTimes(2);
