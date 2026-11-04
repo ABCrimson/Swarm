@@ -1,4 +1,5 @@
 import { useDeferredValue, useId, useRef, useState } from "react";
+import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
 import { escapeForDisplay } from "#lib/display-escape";
@@ -150,16 +151,16 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
             className="swarm-input flex-1 text-xs [color-scheme:dark]"
           />
           {(dateRange.from !== "" || dateRange.to !== "") && (
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => {
                 setDateRange({ from: "", to: "" });
                 fromInputRef.current?.focus();
               }}
-              className="cursor-pointer rounded bg-[oklch(0.22_0.03_220/0.5)] px-2 py-1 text-xs text-[oklch(0.65_0.06_220)] hover:bg-[oklch(0.26_0.04_220/0.6)] focus-visible:outline-2 focus-visible:outline-plasma"
             >
               Clear Dates
-            </button>
+            </Button>
           )}
         </div>
       </search>
