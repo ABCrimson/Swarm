@@ -303,7 +303,7 @@ mod tests {
                 .with_ansi(false)
                 .finish(),
         );
-        // Earlier tests registered dispatchers; a callsite cached as disabled would skip this subscriber.
+        // A parallel test's subscriber change can leave a callsite cached as disabled; re-evaluate with this subscriber installed.
         tracing::callsite::rebuild_interest_cache();
         let (ctx, _dir, _events) = test_ctx();
 

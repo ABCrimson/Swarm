@@ -1189,7 +1189,7 @@ mod tests {
                 .with_ansi(false)
                 .finish(),
         );
-        // Earlier tests registered dispatchers; a callsite cached as disabled would skip this subscriber.
+        // A parallel test's subscriber change can leave a callsite cached as disabled; re-evaluate with this subscriber installed.
         tracing::callsite::rebuild_interest_cache();
         let (done_tx, done_rx) = mpsc::sync_channel(1);
         let (late, mut ack) = acked(spawned());

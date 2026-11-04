@@ -13,8 +13,9 @@
 //! developer's keychain.
 //!
 //! The OS keychain holds one `swarm`/`anthropic_api_key` entry per OS
-//! user, shared by every data directory; migrating a legacy key from
-//! any data directory replaces it, and clearing it clears it for all.
+//! user, shared by every data directory; migrating a legacy key, or
+//! adopting a `swarm-secrets.json` key, from any data directory
+//! replaces it, and clearing it clears it for all.
 //! Only the [`FileStore`] is per data directory.
 //!
 //! Every store call blocks (the keychain APIs are synchronous, and a

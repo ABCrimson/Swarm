@@ -115,12 +115,18 @@ fn file_secrets(paths: &Paths) -> Map<String, Value> {
 /// [`AppError::Config`] when a file cannot be read or rewritten or the
 /// store refuses a secret; that file's copy is then left in place.
 pub fn migrate_secrets(paths: &Paths) -> Result<(), AppError> {
+    migrate_with(paths, process_keychain())
+}
+
+/// [`migrate_secrets`], adopting the [`FileStore`] fallback into
+/// `keychain` (none: nothing to adopt into).
+fn migrate_with(paths: &Paths, keychain: Option<&dyn SecretStore>) -> Result<(), AppError> {
     let _secret_guard = SECRET_LOCK.lock();
     let found = file_secrets(paths);
     if !found.is_empty() {
         secrets::with_store(paths, |store| move_secrets(paths, store, &found))?;
     }
-    adopt_into_process_keychain(paths)
+    adopt_into_keychain(paths, keychain)
 }
 
 /// Moves every secret the [`FileStore`] in `paths.data_dir` holds into
@@ -129,10 +135,10 @@ pub fn migrate_secrets(paths: &Paths) -> Result<(), AppError> {
 /// life; this pass, run by the next process that has one, carries them
 /// over, so the key neither vanishes nor stays on disk in plaintext.
 ///
-/// The file's copy wins over one already in `keychain`: only a process
-/// without a keychain writes the file, and every secret access of a
-/// process with one adopts the file first, so the file's copy is the
-/// newer user write.
+/// The file's copy replaces the keychain entry, which every data
+/// directory shares: within one data directory every keychain access
+/// adopts the file first, so the file is the newer write there; a key
+/// set meanwhile from another data directory is replaced.
 ///
 /// # Errors
 ///
@@ -144,10 +150,17 @@ pub fn adopt_file_secrets(paths: &Paths, keychain: &dyn SecretStore) -> Result<(
     adopt_into(paths, keychain)
 }
 
-/// [`adopt_file_secrets`] into this process's OS keychain, with
-/// [`SECRET_LOCK`] held; a no-op on a process without one.
-fn adopt_into_process_keychain(paths: &Paths) -> Result<(), AppError> {
-    secrets::keychain().map_or(Ok(()), |keychain| adopt_into(paths, keychain))
+/// This process's OS keychain, `None` on a host without one (and in
+/// unit tests, which never open it). The secret paths take it as a
+/// parameter so a test can stand an in-memory keychain in.
+fn process_keychain() -> Option<&'static dyn SecretStore> {
+    secrets::keychain().map(|keychain| keychain as &dyn SecretStore)
+}
+
+/// [`adopt_file_secrets`] into `keychain`, with [`SECRET_LOCK`] held; a
+/// no-op on a process without one.
+fn adopt_into_keychain(paths: &Paths, keychain: Option<&dyn SecretStore>) -> Result<(), AppError> {
+    keychain.map_or(Ok(()), |keychain| adopt_into(paths, keychain))
 }
 
 /// [`adopt_file_secrets`] with [`SECRET_LOCK`] held.
@@ -204,11 +217,12 @@ fn move_secrets(
 }
 
 /// Reads secret `key` from `store`, migrating the file and adopting the
-/// [`FileStore`] fallback first. While either fails, that file's copy is
-/// still the key.
+/// [`FileStore`] fallback into `keychain` first. While either fails,
+/// that file's copy is still the key.
 fn read_secret(
     paths: &Paths,
     store: &dyn SecretStore,
+    keychain: Option<&dyn SecretStore>,
     key: &str,
 ) -> Result<Option<Value>, AppError> {
     {
@@ -222,7 +236,7 @@ fn read_secret(
                 return Ok(Some(value));
             }
         }
-        if let Err(e) = adopt_into_process_keychain(paths) {
+        if let Err(e) = adopt_into_keychain(paths, keychain) {
             tracing::warn!(error = %e, "could not move the API key out of swarm-secrets.json yet");
             if let Ok(Some(secret)) = FileStore::new(&paths.data_dir).get(key) {
                 return Ok(Some(Value::String(secret.expose().to_owned())));
@@ -235,11 +249,12 @@ fn read_secret(
 }
 
 /// Writes secret `key` to `store` (`null` or `""` deletes it), after
-/// migrating the file and adopting the [`FileStore`] fallback, so
-/// neither old copy can ever overwrite this write.
+/// migrating the file and adopting the [`FileStore`] fallback into
+/// `keychain`, so neither old copy can ever overwrite this write.
 fn write_secret(
     paths: &Paths,
     store: &dyn SecretStore,
+    keychain: Option<&dyn SecretStore>,
     key: &str,
     value: Value,
 ) -> Result<(), AppError> {
@@ -256,7 +271,7 @@ fn write_secret(
     if !found.is_empty() {
         move_secrets(paths, store, &found)?;
     }
-    adopt_into_process_keychain(paths)?;
+    adopt_into_keychain(paths, keychain)?;
     match secret {
         Some(secret) => store.set(key, &secret),
         None => store.delete(key),
@@ -270,12 +285,14 @@ fn write_secret(
 /// without its contents).
 pub fn read_value(paths: &Paths, key: &str) -> Option<Value> {
     if is_secret(key) {
-        return secrets::with_store(paths, |store| read_secret(paths, store, key))
-            .inspect_err(|e| {
-                tracing::warn!(error = %e, "the API key is unreadable; reading it as not configured");
-            })
-            .ok()
-            .flatten();
+        return secrets::with_store(paths, |store| {
+            read_secret(paths, store, process_keychain(), key)
+        })
+        .inspect_err(|e| {
+            tracing::warn!(error = %e, "the API key is unreadable; reading it as not configured");
+        })
+        .ok()
+        .flatten();
     }
     let _guard = CONFIG_LOCK.lock();
     match state_file::read_object(&config_path(paths)) {
@@ -304,7 +321,9 @@ pub fn read_value(paths: &Paths, key: &str) -> Option<Value> {
 /// secret's store cannot be read.
 pub fn read_value_checked(paths: &Paths, key: &str) -> Result<Option<Value>, AppError> {
     if is_secret(key) {
-        return secrets::with_store(paths, |store| read_secret(paths, store, key));
+        return secrets::with_store(paths, |store| {
+            read_secret(paths, store, process_keychain(), key)
+        });
     }
     let _guard = CONFIG_LOCK.lock();
     let path = config_path(paths);
@@ -335,7 +354,9 @@ pub fn read_value_checked(paths: &Paths, key: &str) -> Result<Option<Value>, App
 /// a string nor `null`, or the store refuses the write.
 pub fn write_value(paths: &Paths, key: &str, value: Value) -> Result<(), AppError> {
     if is_secret(key) {
-        return secrets::with_store(paths, |store| write_secret(paths, store, key, value));
+        return secrets::with_store(paths, |store| {
+            write_secret(paths, store, process_keychain(), key, value)
+        });
     }
     if write_plain(paths, key, value)? {
         // A store that refuses the secret keeps it in the file; this
@@ -613,12 +634,12 @@ mod tests {
         fs::write(config_path(&paths), legacy).unwrap();
 
         assert_eq!(
-            read_secret(&paths, &Refusing, API_KEY).unwrap(),
+            read_secret(&paths, &Refusing, None, API_KEY).unwrap(),
             Some(json!("sk-ant-legacy"))
         );
         assert_eq!(config_text(&paths), legacy);
         assert_matches!(
-            write_secret(&paths, &Refusing, API_KEY, json!("sk-ant-new")),
+            write_secret(&paths, &Refusing, None, API_KEY, json!("sk-ant-new")),
             Err(AppError::Config(msg)) if msg == "Refused"
         );
         assert_eq!(config_text(&paths), legacy);
@@ -665,14 +686,14 @@ mod tests {
             );
         });
 
-        assert_eq!(read_secret(&paths, &free, API_KEY).unwrap(), None);
+        assert_eq!(read_secret(&paths, &free, None, API_KEY).unwrap(), None);
         assert!(!config_text(&paths).contains("sk-ant-legacy"));
         fs::write(
             config_path(&paths),
             r#"{"anthropic_api_key": "sk-ant-legacy"}"#,
         )
         .unwrap();
-        write_secret(&paths, &free, API_KEY, json!("sk-ant-new")).unwrap();
+        write_secret(&paths, &free, None, API_KEY, json!("sk-ant-new")).unwrap();
         assert!(!config_text(&paths).contains("sk-ant-legacy"));
     }
 
@@ -692,10 +713,83 @@ mod tests {
             .unwrap();
         });
 
-        read_secret(&paths, &rewrite, API_KEY).unwrap();
+        read_secret(&paths, &rewrite, None, API_KEY).unwrap();
         let text = config_text(&paths);
         assert!(text.contains("sk-ant-newer"), "{text}");
         assert!(text.contains("dark"), "{text}");
+    }
+
+    /// An in-memory stand-in for the OS keychain.
+    #[derive(Default)]
+    struct Memory(Mutex<Map<String, Value>>);
+
+    impl SecretStore for Memory {
+        fn get(&self, name: &str) -> Result<Option<SecretString>, AppError> {
+            Ok(self
+                .0
+                .lock()
+                .get(name)
+                .and_then(Value::as_str)
+                .map(|value| SecretString::from(value.to_owned())))
+        }
+
+        fn set(&self, name: &str, secret: &SecretString) -> Result<(), AppError> {
+            self.0
+                .lock()
+                .insert(name.to_owned(), json!(secret.expose()));
+            Ok(())
+        }
+
+        fn delete(&self, name: &str) -> Result<(), AppError> {
+            self.0.lock().remove(name);
+            Ok(())
+        }
+    }
+
+    /// A key a keychain-less process left in `swarm-secrets.json` is
+    /// adopted into the keychain by every secret path of a process that
+    /// has one, before that path touches the key.
+    #[test]
+    fn test_every_secret_path_adopts_the_file_store_into_the_keychain() {
+        let (dir, _cleanup) = temp_dir("config");
+        let paths = paths(&dir);
+        let file = FileStore::new(&paths.data_dir);
+        let offline = || {
+            file.set(API_KEY, &SecretString::from("sk-ant-offline".to_owned()))
+                .unwrap();
+        };
+        let keychain = Memory::default();
+
+        offline();
+        migrate_with(&paths, Some(&keychain)).unwrap();
+        assert!(file.get(API_KEY).unwrap().is_none());
+        assert_eq!(
+            keychain.get(API_KEY).unwrap().unwrap().expose(),
+            "sk-ant-offline"
+        );
+
+        keychain.delete(API_KEY).unwrap();
+        offline();
+        assert_eq!(
+            read_secret(&paths, &keychain, Some(&keychain), API_KEY).unwrap(),
+            Some(json!("sk-ant-offline"))
+        );
+        assert!(file.get(API_KEY).unwrap().is_none());
+
+        offline();
+        write_secret(
+            &paths,
+            &keychain,
+            Some(&keychain),
+            API_KEY,
+            json!("sk-ant-new"),
+        )
+        .unwrap();
+        assert!(file.get(API_KEY).unwrap().is_none());
+        assert_eq!(
+            keychain.get(API_KEY).unwrap().unwrap().expose(),
+            "sk-ant-new"
+        );
     }
 
     /// A file that exists but cannot be read is never overwritten.

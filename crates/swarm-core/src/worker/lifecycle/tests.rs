@@ -613,6 +613,8 @@ fn spawn_under_capture(shell: &str) -> (Result<Uuid, AppError>, String, WorkerRe
     };
 
     let result = tracing::subscriber::with_default(subscriber, || {
+        // A parallel test's subscriber change can leave a callsite cached as disabled; re-evaluate with this subscriber installed.
+        tracing::callsite::rebuild_interest_cache();
         do_spawn_worker(&sink, &registry, &repo_locks, config, Provenance::default())
     });
     if let Ok(id) = result {
