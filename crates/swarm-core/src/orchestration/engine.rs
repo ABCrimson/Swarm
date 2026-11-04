@@ -33,7 +33,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -151,8 +151,6 @@ pub struct OrchestrationEngine {
     broadcast_tx: broadcast::Sender<Arc<DomainEvent>>,
     /// See [`Self::head_seq`].
     head: Arc<AtomicU64>,
-    /// Shared with every [`EventSink`] clone; set by [`Self::shutdown`].
-    closed: Arc<AtomicBool>,
     /// Persistent events accepted and committed, shared with every sink and
     /// the writer; what a drain that hits [`DRAIN_CEILING`] reports.
     backlog: Arc<Backlog>,
@@ -213,13 +211,11 @@ impl OrchestrationEngine {
                 AppError::EventLog(format!("Failed To Spawn The Event Writer Thread: {e}"))
             })?;
 
-        let closed = Arc::new(AtomicBool::new(false));
         Ok(Self {
-            sink: EventSink::for_writer(tx, Arc::clone(&closed), Arc::clone(&backlog)),
+            sink: EventSink::for_writer(tx, Arc::clone(&backlog)),
             db_path,
             broadcast_tx,
             head,
-            closed,
             backlog,
             writer: Arc::new(Mutex::new(Some(handle))),
             shutdown_outcome: Arc::new(Mutex::new(None)),
@@ -297,8 +293,10 @@ impl OrchestrationEngine {
     /// optimize`, checkpoints the WAL), and stops the writer thread.
     /// Returns the final head seq.
     ///
-    /// The handshake: closing the sinks freezes the backlog, and the
-    /// `Shutdown` barrier queued behind it reaches the writer only after
+    /// The handshake: closing the sinks and queuing the `Shutdown` barrier
+    /// are one step ([`EventSink::close`]), so every event accepted before
+    /// it is queued ahead of the barrier, none can follow it, and the
+    /// backlog is frozen. The barrier reaches the writer only after
     /// the writer has committed (or failed closed on) every event accepted
     /// before it, the last one included. So the call returns when the last
     /// accepted seq is committed, however long its flushes take; only
@@ -337,8 +335,12 @@ impl OrchestrationEngine {
         if let Some(first) = outcome.as_ref() {
             return first.clone().map_err(AppError::EventLog);
         }
-        self.closed.store(true, Ordering::Release);
-        let result = self.drain(ceiling);
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        let result = if self.sink.close(WriterCmd::Shutdown(done_tx)) {
+            self.drain(&done_rx, ceiling)
+        } else {
+            Err(writer_unavailable())
+        };
         *outcome = Some(match &result {
             Ok(head) => Ok(*head),
             Err(AppError::EventLog(message)) => Err(message.clone()),
@@ -347,14 +349,14 @@ impl OrchestrationEngine {
         result
     }
 
-    /// Queues the barrier, waits for the writer to reach it (logging
-    /// progress meanwhile, giving up only at `ceiling`), joins the writer
-    /// thread.
-    fn drain(&self, ceiling: Duration) -> Result<u64, AppError> {
-        let (done_tx, done_rx) = mpsc::sync_channel(1);
-        if !self.sink.send_command(WriterCmd::Shutdown(done_tx)) {
-            return Err(writer_unavailable());
-        }
+    /// Waits for the writer to reach the queued shutdown barrier, whose
+    /// outcome arrives on `done_rx` (logging progress meanwhile, giving up
+    /// only at `ceiling`), and joins the writer thread.
+    fn drain(
+        &self,
+        done_rx: &Receiver<Result<u64, String>>,
+        ceiling: Duration,
+    ) -> Result<u64, AppError> {
         let started = Instant::now();
         let outcome = loop {
             let left = ceiling.saturating_sub(started.elapsed());
@@ -502,6 +504,7 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
                         .finalize()
                         .map(|()| self.seq)
                         .map_err(|e| format!("The Event Log Could Not Be Finalized: {e}"));
+                    Self::refuse_behind_the_barrier(rx);
                     let _ = done.send(outcome);
                     return self.log;
                 }
@@ -511,6 +514,22 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
             tracing::warn!(error = %e, "failed to finalize the event log");
         }
         self.log
+    }
+
+    /// Drops whatever is already queued behind the shutdown barrier. The
+    /// sinks' gate ([`EventSink::close`]) queues no record there, so any
+    /// record found is a broken handshake: it is logged at error level with
+    /// its type tag, never emitted (it has no seq and no row), and its ack
+    /// resolves to an error. A flush behind the barrier fails the same way.
+    fn refuse_behind_the_barrier(rx: &Receiver<WriterCmd>) {
+        for cmd in rx.try_iter() {
+            if let WriterCmd::Record(msg) = cmd {
+                tracing::error!(
+                    event_type = msg.event.type_tag(),
+                    "event queued behind the shutdown barrier; dropped"
+                );
+            }
+        }
     }
 
     /// Orders one event: reserves its seq (when past the reservation),
@@ -1157,6 +1176,36 @@ mod tests {
         assert_matches!(done_rx.recv().unwrap(), Err(_));
     }
 
+    /// A record found behind the shutdown barrier (which the sinks' gate
+    /// should make impossible) is never emitted or persisted: the writer
+    /// drops it, resolving its ack to an error, and logs it at error level
+    /// with its type tag instead of losing it silently.
+    #[test]
+    fn test_a_record_behind_the_shutdown_barrier_is_logged_not_lost() {
+        let capture = crate::test_support::SharedBuf::default();
+        let _subscriber = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_writer(capture.clone())
+                .with_ansi(false)
+                .finish(),
+        );
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        let (late, mut ack) = acked(spawned());
+        let (_log, seen) = drive(
+            EventLog::open_in_memory().unwrap(),
+            vec![WriterCmd::Shutdown(done_tx), WriterCmd::Record(late)],
+        );
+
+        assert_eq!(done_rx.recv().unwrap().unwrap(), 0);
+        assert!(seen.is_empty(), "nothing behind the barrier is emitted");
+        assert_matches!(ack.try_recv(), Err(oneshot::error::TryRecvError::Closed));
+        let captured = String::from_utf8_lossy(&capture.0.lock()).into_owned();
+        assert!(
+            captured.contains("ERROR") && captured.contains("event_type=\"worker_spawned\""),
+            "{captured}"
+        );
+    }
+
     /// A persist failure emits nothing on EITHER channel,
     /// leaves `head` where it was, and resolves the ack to `RecvError`;
     /// only one ephemeral `system_log` error takes the next seq.
@@ -1381,6 +1430,95 @@ mod tests {
         let reader = EventLog::open_readonly(&path).unwrap();
         assert_eq!(reader.max_seq().unwrap(), last_seq);
         assert_eq!(reader.events_since(0, 1000).unwrap().len(), RECORDED);
+    }
+
+    /// An emit racing `shutdown` is committed before the barrier or
+    /// refused at the sink, never accepted and then lost: one that passed
+    /// the closed check before shutdown closed the sinks, but queued its
+    /// record after the barrier, would be counted as accepted and never
+    /// committed. Each round, four threads emit persistent events until the
+    /// sink refuses one (its ack is closed at once), so they are mid-emit
+    /// when the shutdown, started after the first 64 emits, closes the
+    /// sinks; the rounds run until at least 10,000 emits have raced.
+    #[test]
+    fn test_an_emit_racing_shutdown_is_committed_or_refused() {
+        use std::sync::atomic::AtomicUsize;
+
+        use oneshot::error::TryRecvError;
+
+        const EMITTERS: usize = 4;
+        const BEFORE_SHUTDOWN: usize = 64;
+        const RACED: usize = 10_000;
+        let mut emits = 0;
+        let mut round = 0;
+        while emits < RACED {
+            round += 1;
+            let engine =
+                OrchestrationEngine::start(EventLog::open_in_memory().unwrap(), None, |_| {});
+            let started = AtomicUsize::new(0);
+            let (head, outcomes) = std::thread::scope(|s| {
+                let emitters: Vec<_> = (0..EMITTERS)
+                    .map(|_| {
+                        let sink = engine.sink();
+                        let started = &started;
+                        s.spawn(move || {
+                            let mut pending = Vec::new();
+                            let mut committed = 0_u64;
+                            let mut emitted = 0;
+                            loop {
+                                started.fetch_add(1, Ordering::Relaxed);
+                                emitted += 1;
+                                let mut ack =
+                                    sink.emit_awaiting_seq(spawned(), Provenance::default());
+                                match ack.try_recv() {
+                                    Ok(_) => committed += 1,
+                                    Err(TryRecvError::Empty) => pending.push(ack),
+                                    // Refused at the sink: every later emit is too.
+                                    Err(TryRecvError::Closed) => break,
+                                }
+                            }
+                            (emitted, committed, pending)
+                        })
+                    })
+                    .collect();
+                let shutdown = s.spawn(|| {
+                    while started.load(Ordering::Relaxed) < BEFORE_SHUTDOWN {
+                        std::hint::spin_loop();
+                    }
+                    engine.shutdown().unwrap()
+                });
+                let outcomes: Vec<_> = emitters
+                    .into_iter()
+                    .map(|emitter| emitter.join().unwrap())
+                    .collect();
+                (shutdown.join().unwrap(), outcomes)
+            });
+
+            let mut committed = 0;
+            for (emitted, early, pending) in outcomes {
+                emits += emitted;
+                committed += early;
+                for mut ack in pending {
+                    match ack.try_recv() {
+                        Ok(_) => committed += 1,
+                        Err(TryRecvError::Closed) => {}
+                        Err(TryRecvError::Empty) => {
+                            panic!("round {round}: an ack is unresolved after shutdown returned")
+                        }
+                    }
+                }
+            }
+            assert_eq!(
+                engine.backlog.uncommitted(),
+                0,
+                "round {round}: an emit passed the closed check and queued behind the \
+                 shutdown barrier, accepted but never committed"
+            );
+            assert_eq!(
+                committed, head,
+                "round {round}: every committed emit took one seq"
+            );
+        }
     }
 
     /// Shutdown drains everything queued before it
