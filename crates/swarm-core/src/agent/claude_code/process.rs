@@ -231,7 +231,7 @@ impl Process {
                 stderr_tail,
             }),
             Err(error) => {
-                reap(DropGuard::dismiss(child), false).await;
+                reap(DropGuard::dismiss(child)).await;
                 Err(error.into())
             }
         }
@@ -251,27 +251,15 @@ impl Process {
                 tokio::time::sleep(EXIT_POLL_INTERVAL).await;
             }
         }
-        reap(DropGuard::dismiss(child), false).await;
+        reap(DropGuard::dismiss(child)).await;
         crate::agent::drained_stderr_snippet(&self.stderr_tail).await
     }
 }
 
-/// Stops `child` and waits for it, off the async threads. With
-/// `graceful`, the child first gets [`SHUTDOWN_GRACE`] to exit on its own
-/// (stdin must already be closed for that to happen).
-pub(super) async fn reap(mut child: Child, graceful: bool) -> Option<ExitStatus> {
-    if graceful {
-        let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => return Some(status),
-                Ok(None) if tokio::time::Instant::now() < deadline => {
-                    tokio::time::sleep(EXIT_POLL_INTERVAL).await;
-                }
-                Ok(None) | Err(_) => break,
-            }
-        }
-    }
+/// Kills `child` (only the child: a tree goes through
+/// [`crate::worker::proc::stop_tree`] first) and waits for it, off the
+/// async threads.
+pub(super) async fn reap(mut child: Child) -> Option<ExitStatus> {
     tokio::task::spawn_blocking(move || {
         // Killing a process that already exited is not an error worth
         // reporting: the end state is the same.

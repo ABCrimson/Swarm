@@ -41,9 +41,11 @@
 //!
 //! # Concurrency and durability
 //!
-//! A process-wide lock serializes every read-modify-write cycle, and each
-//! write replaces the file atomically and durably (see
-//! `state_file::write_atomic`).
+//! `CONFIG_LOCK` serializes every read and read-modify-write of the file
+//! and is never held across a secret-store call; `SECRET_LOCK`, always
+//! taken before `CONFIG_LOCK` and never under it, orders every move of a
+//! legacy key with every secret write. Each write replaces the file
+//! atomically and durably (see `state_file::write_atomic`).
 
 use std::path::PathBuf;
 

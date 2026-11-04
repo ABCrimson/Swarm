@@ -344,6 +344,11 @@ const DRAIN_CAP: u64 = 1024 * 1024;
 /// of the terminal exits, and a runtime does not shut down while a
 /// blocking task still runs.
 ///
+/// While it runs, its clone keeps the master open, so a process still
+/// holding the terminal is not hung up when the kill path drops the
+/// master; it keeps the terminal until it exits or the drain reaches its
+/// cap.
+///
 /// # Errors
 ///
 /// Fails only if the OS refuses to create the thread.

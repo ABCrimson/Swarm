@@ -74,10 +74,11 @@ fn branch_delete_args(repo_root: &Path, branch: &str) -> Vec<String> {
 ///
 /// `git worktree add -b` creates `branch` before it validates the
 /// target directory, so a refused add (an occupied, non-empty target)
-/// can leave the branch behind. When the add fails, a `branch` that did
-/// not exist before the call and still points at `base_sha` is deleted
-/// with `git branch -d` (never `-D`); a branch that already existed, or
-/// one that moved, is left alone.
+/// can leave the branch behind. When git refuses the add (a non-zero exit;
+/// a timeout returns [`AppError::GitTimeout`] without a rollback), a
+/// `branch` that did not exist before the call and still points at
+/// `base_sha` is deleted with `git branch -d` (never `-D`); a branch that
+/// already existed, or one that moved, is left alone.
 ///
 /// # Errors
 ///

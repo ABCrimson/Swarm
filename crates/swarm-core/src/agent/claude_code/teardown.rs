@@ -79,7 +79,7 @@ async fn run_teardown(shared: Arc<Shared>, stop: Stop) {
             match stopped {
                 // Only collects the status, or kills the child itself if
                 // the tree kill could not run.
-                Ok(child) => reap(child, false).await,
+                Ok(child) => reap(child).await,
                 Err(error) => {
                     // The closure never ran, so stdin is still open: an
                     // idle CLI still gets its EOF.

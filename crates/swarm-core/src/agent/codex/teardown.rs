@@ -2,7 +2,6 @@
 
 use std::mem::DropGuard;
 use std::sync::Arc;
-use std::time::Duration;
 
 use super::process::reap;
 use super::state::{Shared, TurnSlot};
@@ -98,7 +97,7 @@ async fn run_teardown(shared: Arc<Shared>) -> ExitSummary {
                     ExitSequence::CloseStdinThenWait,
                     grace,
                 );
-                reap(child, Duration::ZERO)
+                reap(child)
             })
             .await
             .ok()

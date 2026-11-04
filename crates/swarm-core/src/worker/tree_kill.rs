@@ -21,15 +21,15 @@
 //! there is no graceful tree request there: a caller's graceful step is
 //! closing the child's stdin.
 //!
-//! Every function here first asks `try_wait` whether the child still
+//! [`terminate`] and [`kill`] first ask `try_wait` whether the child still
 //! runs. An unreaped child keeps its pid (and, on Unix, its group id)
 //! reserved; once `try_wait` has reaped it, the number can belong to an
 //! unrelated process, so nothing is signalled after that. A grandchild
 //! that outlives a provider which exited on its own is therefore not
 //! reached.
 //!
-//! Each call runs a short-lived helper process and waits for it: call
-//! these off the async runtime's worker threads.
+//! [`terminate`] and [`kill`] run a short-lived helper process and wait for
+//! it: call them off the async runtime's worker threads.
 
 use std::process::{Child, Command, Stdio};
 
