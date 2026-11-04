@@ -96,7 +96,7 @@ On Linux, Tauri's WebKitGTK system libraries must be installed first; `.github/w
 
 ### TypeScript / React
 
-**Formatter/Linter:** Biome 2.6.4 (the only one; no ESLint, no Prettier). Its nursery rules in `biome.json` (`noFloatingPromises`, `noReactObjectTypeAsDefaultProp`, `noMeaninglessVoidOperator`, `useReactCompiler` and others) are part of the standard.
+**Formatter/Linter:** Biome 2.6.5 (the only one; no ESLint, no Prettier). Its nursery rules in `biome.json` (`noFloatingPromises`, `noReactObjectTypeAsDefaultProp`, `noMeaninglessVoidOperator`, `useReactCompiler` and others) are part of the standard.
 
 ```bash
 # Lint + format (auto-fix)

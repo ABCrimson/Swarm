@@ -66,7 +66,7 @@
     "zustand": "5.0.16"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.4",
+    "@biomejs/biome": "2.6.5",
     "@oxc-transform-react/binding-wasm32-wasip1": "0.157.0",
     "@playwright/test": "1.66.0-alpha-2026-11-04",
     "@tailwindcss/vite": "0.0.0-insiders.8cc0551",

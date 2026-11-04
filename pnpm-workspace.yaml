@@ -16,6 +16,17 @@ trustPolicy: no-downgrade
 minimumReleaseAgeExcludePrune: true
 minimumReleaseAgeExclude:
   # Published 2026-11-03/04; pruned automatically once mature (minimumReleaseAgeExcludePrune).
+  - "@biomejs/biome@2.6.5"
+  - "@biomejs/cli-android-arm64@2.6.5"
+  - "@biomejs/cli-android-x64@2.6.5"
+  - "@biomejs/cli-darwin-arm64@2.6.5"
+  - "@biomejs/cli-darwin-x64@2.6.5"
+  - "@biomejs/cli-linux-arm64-musl@2.6.5"
+  - "@biomejs/cli-linux-arm64@2.6.5"
+  - "@biomejs/cli-linux-x64-musl@2.6.5"
+  - "@biomejs/cli-linux-x64@2.6.5"
+  - "@biomejs/cli-win32-arm64@2.6.5"
+  - "@biomejs/cli-win32-x64@2.6.5"
   - "@oxc-transform-react/binding-android-arm-eabi@0.157.0"
   - "@oxc-transform-react/binding-android-arm64@0.157.0"
   - "@oxc-transform-react/binding-darwin-arm64@0.157.0"

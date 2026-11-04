@@ -209,7 +209,7 @@ The commands a change must pass are listed in [AGENTS.md](AGENTS.md#gates), the 
 | React | 19.3.0-canary-e84e1492-20261031 | `package.json` |
 | TypeScript | 7.1.0-dev.20261104.1 | `package.json` |
 | Vite | 8.3.5 | `package.json` |
-| Biome | 2.6.4 | `package.json` |
+| Biome | 2.6.5 | `package.json` |
 | Vitest | 5.1.0 | `package.json` |
 | Playwright | 1.66.0-alpha-2026-11-04 | `package.json` |
 
