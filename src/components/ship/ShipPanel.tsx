@@ -74,7 +74,7 @@ const remedyCommandStyle: CSSProperties = {
   padding: "6px 8px",
   borderRadius: 6,
   background: "var(--color-void)",
-  color: "var(--color-text)",
+  color: "var(--color-fg)",
   fontFamily: "var(--font-mono)",
   fontSize: "0.6875rem",
   whiteSpace: "pre-wrap",
