@@ -332,8 +332,10 @@ fn spawn_git_startup(paths: &Paths, sink: EventSink) {
 }
 
 /// Moves an API key an older build left in `swarm-config.json` into the
-/// secret store, once, off the startup path (a keychain can wait on an
-/// access prompt). Otherwise a key nothing reads or writes, as on a
+/// secret store, and one a keychain-less start left in
+/// `swarm-secrets.json` into the keychain when this process has one,
+/// once, off the startup path (a keychain can wait on an access
+/// prompt). Otherwise a key nothing reads or writes, as on a
 /// `swarmd --serve-ui` host whose browser cannot read it, would stay in
 /// the file in plaintext. A refusal is logged, and the key keeps reading
 /// from the file until a later access moves it.

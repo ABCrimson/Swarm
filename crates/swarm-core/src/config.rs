@@ -18,7 +18,10 @@
 //! [`crate::runtime::Runtime::start`]), on the key's first read or write
 //! and on any rewrite of the file; a store that refuses it leaves
 //! the file as it was, and the key keeps reading from the file until a
-//! later access moves it. Store calls block, so call these functions from a
+//! later access moves it. A key that the [`FileStore`] fallback took
+//! while the keychain was unreachable is adopted into the keychain the
+//! same way (see [`adopt_file_secrets`]) by the first process that has
+//! one. Store calls block, so call these functions from a
 //! blocking thread. No store call runs under the file's lock, so a
 //! keychain waiting on an access prompt stalls only other secret
 //! accesses, never a read of another key.
@@ -54,7 +57,7 @@ use serde_json::{Map, Value};
 
 use crate::Paths;
 use crate::error::AppError;
-use crate::secrets::{self, SecretStore, SecretString};
+use crate::secrets::{self, FileStore, SecretStore, SecretString};
 use crate::state_file::{self, StoredObject};
 
 /// Config file name within the app data directory.
@@ -69,8 +72,9 @@ static CONFIG_LOCK: Mutex<()> = Mutex::new(());
 /// before [`CONFIG_LOCK`], never while holding it.
 static SECRET_LOCK: Mutex<()> = Mutex::new(());
 
-/// Keys kept in the [`secrets`] store instead of the file.
-const SECRET_KEYS: &[&str] = &["anthropic_api_key"];
+/// Keys kept in the [`secrets`] store instead of the file; the remote
+/// command filter's `is_secret_key` must deny each of them.
+pub(crate) const SECRET_KEYS: &[&str] = &["anthropic_api_key"];
 
 fn config_path(paths: &Paths) -> PathBuf {
     paths.data_dir.join(CONFIG_FILE)
@@ -97,9 +101,10 @@ fn file_secrets(paths: &Paths) -> Map<String, Value> {
 }
 
 /// Moves every secret a pre-keychain build left in `swarm-config.json`
-/// into the secret store and rewrites the file without it. A no-op when
-/// the file holds none (or is missing, malformed or unreadable), so the
-/// store is opened only when there is something to move.
+/// into the secret store and rewrites the file without it; nothing is
+/// moved when the file holds none (or is missing, malformed or
+/// unreadable). Then, when this process has the OS keychain, moves into
+/// it what the [`FileStore`] fallback holds (see [`adopt_file_secrets`]).
 ///
 /// The file's copy wins over one already in the store: only a build
 /// from before the store writes the key to the file, so the file's
@@ -107,15 +112,54 @@ fn file_secrets(paths: &Paths) -> Map<String, Value> {
 ///
 /// # Errors
 ///
-/// [`AppError::Config`] when the file cannot be rewritten or the store
-/// refuses a secret; the file is then left as it was.
+/// [`AppError::Config`] when a file cannot be read or rewritten or the
+/// store refuses a secret; that file's copy is then left in place.
 pub fn migrate_secrets(paths: &Paths) -> Result<(), AppError> {
     let _secret_guard = SECRET_LOCK.lock();
     let found = file_secrets(paths);
-    if found.is_empty() {
-        return Ok(());
+    if !found.is_empty() {
+        secrets::with_store(paths, |store| move_secrets(paths, store, &found))?;
     }
-    secrets::with_store(paths, |store| move_secrets(paths, store, &found))
+    adopt_into_process_keychain(paths)
+}
+
+/// Moves every secret the [`FileStore`] in `paths.data_dir` holds into
+/// `keychain` and deletes it from the file. A process that found no
+/// keychain at its start keeps its secrets in that file for its whole
+/// life; this pass, run by the next process that has one, carries them
+/// over, so the key neither vanishes nor stays on disk in plaintext.
+///
+/// The file's copy wins over one already in `keychain`: only a process
+/// without a keychain writes the file, and every secret access of a
+/// process with one adopts the file first, so the file's copy is the
+/// newer user write.
+///
+/// # Errors
+///
+/// [`AppError::Config`] when the file cannot be read or rewritten, or
+/// `keychain` refuses a secret; the file's copy is then left in place
+/// for a later pass.
+pub fn adopt_file_secrets(paths: &Paths, keychain: &dyn SecretStore) -> Result<(), AppError> {
+    let _secret_guard = SECRET_LOCK.lock();
+    adopt_into(paths, keychain)
+}
+
+/// [`adopt_file_secrets`] into this process's OS keychain, with
+/// [`SECRET_LOCK`] held; a no-op on a process without one.
+fn adopt_into_process_keychain(paths: &Paths) -> Result<(), AppError> {
+    secrets::keychain().map_or(Ok(()), |keychain| adopt_into(paths, keychain))
+}
+
+/// [`adopt_file_secrets`] with [`SECRET_LOCK`] held.
+fn adopt_into(paths: &Paths, keychain: &dyn SecretStore) -> Result<(), AppError> {
+    let file = FileStore::new(&paths.data_dir);
+    for key in SECRET_KEYS {
+        if let Some(secret) = file.get(key)? {
+            keychain.set(key, &secret)?;
+            file.delete(key)?;
+        }
+    }
+    Ok(())
 }
 
 /// Moves `found` (read by [`file_secrets`]) into `store`, with
@@ -159,8 +203,9 @@ fn move_secrets(
         .map_err(|e| AppError::Config(format!("Failed To Write {}: {e}", path.display())))
 }
 
-/// Reads secret `key` from `store`, migrating the file first. While the
-/// migration fails, the file's copy is still the key.
+/// Reads secret `key` from `store`, migrating the file and adopting the
+/// [`FileStore`] fallback first. While either fails, that file's copy is
+/// still the key.
 fn read_secret(
     paths: &Paths,
     store: &dyn SecretStore,
@@ -177,6 +222,12 @@ fn read_secret(
                 return Ok(Some(value));
             }
         }
+        if let Err(e) = adopt_into_process_keychain(paths) {
+            tracing::warn!(error = %e, "could not move the API key out of swarm-secrets.json yet");
+            if let Ok(Some(secret)) = FileStore::new(&paths.data_dir).get(key) {
+                return Ok(Some(Value::String(secret.expose().to_owned())));
+            }
+        }
     }
     Ok(store
         .get(key)?
@@ -184,7 +235,8 @@ fn read_secret(
 }
 
 /// Writes secret `key` to `store` (`null` or `""` deletes it), after
-/// migrating the file, so its old copy can never overwrite this write.
+/// migrating the file and adopting the [`FileStore`] fallback, so
+/// neither old copy can ever overwrite this write.
 fn write_secret(
     paths: &Paths,
     store: &dyn SecretStore,
@@ -204,6 +256,7 @@ fn write_secret(
     if !found.is_empty() {
         move_secrets(paths, store, &found)?;
     }
+    adopt_into_process_keychain(paths)?;
     match secret {
         Some(secret) => store.set(key, &secret),
         None => store.delete(key),
