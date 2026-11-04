@@ -5,11 +5,19 @@ import { WorkerAIPanel } from "#components/ai/WorkerAIPanel";
 import { CausalityPanel } from "#components/graph/CausalityPanel";
 import { WorkerDetail } from "#components/graph/WorkerDetail";
 import { WorkerGraph } from "#components/graph/WorkerGraph";
+import { PageHeader } from "#components/layout/PageHeader";
 import { ShipPanel } from "#components/ship/ShipPanel";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Button } from "#components/ui/Button";
+import { EmptyState } from "#components/ui/EmptyState";
 import { Pill } from "#components/ui/Pill";
-import { type TabItem, TabList, TabPanel } from "#components/ui/Tabs";
+import {
+  SEGMENT_LIST_CLASS,
+  SEGMENT_TAB_CLASS,
+  type TabItem,
+  TabList,
+  TabPanel,
+} from "#components/ui/Tabs";
 import { ProviderBadge } from "#components/worker/ProviderBadge";
 import { SpawnWorkerDialog } from "#components/worker/SpawnWorkerDialog";
 import { escapeForDisplay } from "#lib/display-escape";
@@ -38,9 +46,6 @@ const DETAIL_WIDTH: Record<DetailTab, string> = {
   ai: "w-120",
   ship: "w-105",
 };
-
-const VIEW_TAB_CLASS =
-  "cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium text-fg-muted transition-colors hover:text-fg aria-selected:bg-plasma/15 aria-selected:text-plasma";
 
 const DETAIL_TAB_CLASS =
   "flex-1 cursor-pointer px-3 py-2 text-sm font-medium text-fg-muted transition-colors hover:text-fg aria-selected:bg-plasma/12 aria-selected:text-plasma disabled:cursor-not-allowed disabled:text-fg-dim disabled:hover:text-fg-dim";
@@ -93,22 +98,13 @@ function WorkerListView(): React.ReactElement {
   const ids = useWorkerStore(useShallow((s) => [...s.workers.keys()]));
   const { commandPalette } = useAtomValue(keybindingsAtom);
 
-  if (ids.length === 0) {
+  if (ids.length === 0)
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3">
-        <div
-          aria-hidden="true"
-          className="flex size-12 items-center justify-center rounded-lg border border-border bg-surface-1 text-xl text-fg-dim"
-        >
-          +
-        </div>
-        <p className="text-md text-fg-muted">No Workers Running</p>
-        <p className="font-mono text-xs text-fg-dim">
-          Click "Spawn Worker" Or Press {formatBinding(commandPalette)}
-        </p>
-      </div>
+      <EmptyState
+        title="No Workers Running"
+        body={`Click "Spawn Worker" Or Press ${formatBinding(commandPalette)}`}
+      />
     );
-  }
 
   return (
     <ul className="scroll-area flex h-full flex-col gap-2 overflow-y-auto p-4">
@@ -187,27 +183,25 @@ export function Workers(): React.ReactElement {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <header className="flex shrink-0 items-center justify-between border-b border-border px-6 py-4">
-        <div>
-          <h1 className="font-display text-xl font-bold tracking-tight text-fg-bright">Workers</h1>
-          <p className="mt-1 text-sm text-fg-muted">Manage And Monitor Worker Processes.</p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Button variant="primary" size="sm" onClick={() => setSpawnDialogOpen(true)}>
-            Spawn Worker
-          </Button>
-          <TabList
-            label="Worker View"
-            idBase={`${idBase}-view`}
-            items={VIEW_TABS}
-            value={viewMode}
-            onChange={showView}
-            className="flex rounded-lg border border-border bg-surface-0 p-0.5"
-            tabClassName={VIEW_TAB_CLASS}
-          />
-        </div>
-      </header>
+      <PageHeader
+        title="Workers"
+        actions={
+          <div className="flex items-center gap-3">
+            <Button variant="primary" size="sm" onClick={() => setSpawnDialogOpen(true)}>
+              Spawn Worker
+            </Button>
+            <TabList
+              label="Worker View"
+              idBase={`${idBase}-view`}
+              items={VIEW_TABS}
+              value={viewMode}
+              onChange={showView}
+              className={SEGMENT_LIST_CLASS}
+              tabClassName={SEGMENT_TAB_CLASS}
+            />
+          </div>
+        }
+      />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className="min-w-0 flex-1 overflow-hidden">
