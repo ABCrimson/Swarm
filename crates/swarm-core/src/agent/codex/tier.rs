@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Context as _;
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

@@ -7,8 +7,11 @@
 //! 'mcp_servers={}'` override merges an empty table into the loaded one and
 //! removes nothing. So every worker runs with its own home under
 //! `<data dir>/codex-home/<worker id>`, holding a Swarm-written
-//! `config.toml` that sets nothing and, when the operator is signed in
-//! through a file, a copy of the operator's `auth.json`.
+//! `config.toml` (no `[mcp_servers]`, no plugins, and Codex's built-in
+//! apps, remote plugins, computer use, browser use and skill
+//! MCP-dependency installs turned off; see [`SWARM_CONFIG`]) and, when the
+//! operator is signed in through a file, a copy of the operator's
+//! `auth.json`.
 //!
 //! Two limits were measured on codex-cli 0.168.0-alpha.1 (2026-11-04).
 //! User skills under `~/.agents/skills` are outside `CODEX_HOME` and still
@@ -41,12 +44,25 @@ const AUTH_FILE: &str = "auth.json";
 const AUTH_STAGING_FILE: &str = "auth.json.swarm-staging";
 
 /// The whole `config.toml` of a private home, rewritten at every spawn.
-/// It sets no key: no `[mcp_servers]` table and no plugins, so the worker
-/// loads none of the operator's servers, and Codex's defaults apply.
+/// It has no `[mcp_servers]` table and no plugins, and its `[features]`
+/// table turns off five features codex-cli 0.168.0-alpha.1 enables by
+/// default that hand a worker tools beyond its sandbox: `apps` (the
+/// built-in `codex_apps` connectors), `remote_plugin`, `computer_use`
+/// (`cua_repl`), `browser_use` and `skill_mcp_dependency_install`. With
+/// `CODEX_HOME` at an empty directory, `codex features list` reads all
+/// five `true`; at a home holding only this file it reads all five
+/// `false` (measured 2026-11-04). Every other key keeps Codex's default.
 const SWARM_CONFIG: &str = "\
 # Written by Swarm Orchestrator at every spawn of this Codex worker; edits are overwritten.
-# It sets nothing on purpose: no [mcp_servers] table and no plugins, so this worker
-# loads none of the operator's MCP servers (docs/adr/0038-agent-provider-trust-model.md).
+# No MCP server table and no plugins, and the features below off, so this worker gets
+# none of the operator's MCP servers and none of Codex's built-in app, remote-plugin,
+# computer-use or browser tools (docs/adr/0038-agent-provider-trust-model.md).
+[features]
+apps = false
+remote_plugin = false
+computer_use = false
+browser_use = false
+skill_mcp_dependency_install = false
 ";
 
 /// Where the private homes live and where their `auth.json` comes from.

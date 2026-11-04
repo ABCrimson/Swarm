@@ -1113,11 +1113,31 @@ fn a_private_home_holds_only_swarm_config_and_keeps_codex_state_across_spawns() 
     assert_eq!(entries(&home), ["config.toml"], "no plugins, no auth.json");
     let config = std::fs::read_to_string(home.join("config.toml")).expect("read config.toml");
     assert!(
-        config
+        !config
             .lines()
-            .all(|line| line.trim().is_empty() || line.starts_with('#')),
-        "the Swarm-written config sets nothing, so no [mcp_servers] table: {config}"
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .any(|line| line.contains("mcp_servers")),
+        "the Swarm-written config has no [mcp_servers] table: {config}"
     );
+    let features = config
+        .lines()
+        .position(|line| line.trim() == "[features]")
+        .expect("a [features] table");
+    for key in [
+        "apps",
+        "remote_plugin",
+        "computer_use",
+        "browser_use",
+        "skill_mcp_dependency_install",
+    ] {
+        assert!(
+            config
+                .lines()
+                .skip(features + 1)
+                .any(|line| line.trim() == format!("{key} = false")),
+            "[features] turns {key} off: {config}"
+        );
+    }
 
     // Codex keeps threads in its home, so a later spawn (thread/resume)
     // must find them; a config.toml edited in between is reset.

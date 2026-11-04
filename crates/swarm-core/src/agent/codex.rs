@@ -24,9 +24,13 @@
 //! ## A private `CODEX_HOME` per worker
 //!
 //! Every child runs with `CODEX_HOME` at `<data dir>/codex-home/<worker id>`
-//! ([`CodexAdapter::with_data_dir`]), so it loads none of the operator's
-//! Codex configuration, MCP servers or plugins; only `auth.json` is copied
-//! in. User skills under `~/.agents/skills` are outside `CODEX_HOME` and
+//! ([`CodexAdapter::with_data_dir`]), so it reads none of the operator's
+//! Codex configuration, `[mcp_servers]` or plugins; only `auth.json` is
+//! copied in, and the Swarm-written `config.toml` turns off Codex's
+//! built-in apps, remote plugins, computer use and browser use. That a
+//! private home then lists no MCP server was measured without a login
+//! (`mcpServerStatus/list` on 0.168.0-alpha.1, 2026-11-04, no `auth.json`
+//! in the home); a signed-in run is not recorded. User skills under `~/.agents/skills` are outside `CODEX_HOME` and
 //! still load (measured on 0.168.0-alpha.1, 2026-11-04). An adapter built
 //! without a data directory refuses to spawn rather than fall back to the
 //! operator's home. `kill_worker` deletes a worker's home
@@ -211,8 +215,11 @@ impl CodexAdapter {
     /// Runs every worker with a private `CODEX_HOME` at
     /// `data_dir/codex-home/<worker id>`, holding a Swarm-written
     /// `config.toml` and a copy of the operator's `auth.json` (from
-    /// `$CODEX_HOME`, else `~/.codex`), so no worker loads the operator's
-    /// Codex configuration, MCP servers or plugins. User skills under
+    /// `$CODEX_HOME`, else `~/.codex`), so no worker reads the operator's
+    /// Codex configuration, `[mcp_servers]` or plugins, and Codex's
+    /// built-in apps, remote plugins, computer use and browser use are off.
+    /// That such a home lists no MCP server was measured without a login
+    /// (0.168.0-alpha.1, 2026-11-04). User skills under
     /// `~/.agents/skills` are outside `CODEX_HOME` and still load (measured
     /// on 0.168.0-alpha.1, 2026-11-04). `data_dir` is
     /// [`crate::Paths::data_dir`].
