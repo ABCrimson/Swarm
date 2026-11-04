@@ -194,46 +194,7 @@ Decision records are indexed in [docs/adr/README.md](docs/adr/README.md).
 
 ## Gates
 
-The commands a change must pass, copied from [AGENTS.md](AGENTS.md#gates).
-
-<details>
-<summary>Frontend, Rust and Workflow Gates</summary>
-
-Frontend (all must pass):
-
-```bash
-pnpm install --frozen-lockfile
-pnpm typecheck          # tsconfig.json, tsconfig.worker.json, tsconfig.node.json
-pnpm exec biome ci .
-pnpm test:coverage      # Vitest plus the coverage floor in vitest.config.ts
-pnpm build              # also: pnpm build:web
-pnpm check:compiler     # also: NAPI_RS_FORCE_WASI=true pnpm check:compiler
-pnpm exec knip --treat-config-hints-as-errors   # dead code / unused deps (knip.jsonc)
-pnpm test:e2e --shuffle # Playwright (chromium; webkit and firefox are opt-in projects)
-pnpm build:site         # docs site
-```
-
-Rust (from the repo root):
-
-```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked --all-targets
-cargo test --locked --doc -p swarm-core -p swarmd   # doctests: Tauri-free crates only (ci.yml says why)
-cargo deny check
-# plus: cargo tree -p swarm-core / -p swarmd must contain no tauri crate (ci.yml rust-policy)
-```
-
-Workflows (the `workflows` job of `ci.yml`; run it when you touch `.github/`):
-
-```bash
-actionlint              # the version pinned in ci.yml
-zizmor .github          # the version pinned in ci.yml; set GH_TOKEN so the online audits (pinned SHA vs its # vX.Y.Z comment, known-vulnerable actions) run as they do in CI
-```
-
-CI gathers every job into the single required status `CI OK`.
-
-</details>
+The commands a change must pass are listed in [AGENTS.md](AGENTS.md#gates), the canonical copy. CI gathers every job into the single required status `CI OK`.
 
 <details>
 <summary>Pinned Versions At This Commit</summary>
