@@ -66,6 +66,15 @@ test.describe("Stylesheet cascade", () => {
     }
   });
 
+  test("the page title sits at the same height on a page with header actions", async ({ app }) => {
+    // PageHeader is items-start: the 36px Graph/List segment on Workers must not push its h1 below pt-6.
+    await app.goTo("Logs");
+    const plain = await app.heading().boundingBox();
+    await app.goTo("Workers");
+    const withActions = await app.heading().boundingBox();
+    expect(withActions?.y).toBe(plain?.y);
+  });
+
   test("tools are rule-divided grid rows, and a 64-character name stays in its column", async ({
     app,
     page,

@@ -403,7 +403,7 @@ export function ShipPreview({
           <span>{escapeForDisplay(preflight.baseBranch)}</span>
           {preflight.remote != null && (
             <>
-              <span style={separatorStyle}>{"·"}</span>
+              <span style={separatorStyle}>{","}</span>
               <span title={escapeForDisplay(preflight.remote)}>
                 {escapeForDisplay(preflight.host ?? preflight.remote)}
               </span>

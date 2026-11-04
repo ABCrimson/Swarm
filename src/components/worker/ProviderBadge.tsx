@@ -21,12 +21,12 @@ interface ProviderBadgeProps {
 
 /**
  * A live agent session's provider and model as one Pill, e.g.
- * "Claude Code · sonnet" — shown in the Workers list and in
+ * "Claude Code, sonnet" — shown in the Workers list and in
  * `WorkerAIPanel`'s toolbar.
  */
 export function ProviderBadge({ provider, model }: ProviderBadgeProps): React.ReactElement {
   const label = PROVIDER_LABELS[provider];
-  const text = model ? `${label} · ${escapeForDisplay(model)}` : label;
+  const text = model ? `${label}, ${escapeForDisplay(model)}` : label;
   return (
     <Pill tone="neutral" style={PROVIDER_BADGE_COLOR} maxWidth={220} title={text}>
       {text}
