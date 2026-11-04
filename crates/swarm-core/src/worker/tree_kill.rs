@@ -28,8 +28,8 @@
 //! that outlives a provider which exited on its own is therefore not
 //! reached.
 //!
-//! [`terminate`] and [`kill`] run a short-lived helper process and wait for
-//! it: call them off the async runtime's worker threads.
+//! [`kill`] and, on Unix, [`terminate`] run a short-lived helper process and
+//! wait for it: call them off the async runtime's worker threads.
 
 use std::process::{Child, Command, Stdio};
 
