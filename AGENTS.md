@@ -144,7 +144,9 @@ before reporting done, and say which items you could not run.
 `docs/*.md` is the only source for the GitHub Pages site. `pnpm build:site`
 renders it into `site/_template.html` and writes `dist-site/`; never commit
 generated HTML. A new page needs a nav link in `site/_template.html` and
-`site/index.html` (the build fails otherwise).
+`site/index.html`, and one card in the Documentation section of
+`site/index.html` whose `<strong>` is the page's H1 (the build fails
+otherwise), plus a row in README.md's Docs table (nothing checks that one).
 
 Content rules:
 
