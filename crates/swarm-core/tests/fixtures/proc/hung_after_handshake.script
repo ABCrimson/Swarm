@@ -1,0 +1,12 @@
+# A Codex app-server that completes the handshake and then hangs: it
+# ignores stdin EOF and never answers again, so only a kill ends it. Run
+# through codex.cmd (Windows) or codex.sh (Unix) by the adapter's shim test
+# (crates/swarm-core/src/agent/codex/tests.rs). The fake records its pid
+# (`{"fake":"started"}`) before it reads this script.
+#DIRECTIVE EXPECT_REQUEST initialize
+#DIRECTIVE RESPOND_INITIALIZE
+#DIRECTIVE EXPECT_NOTIFICATION initialized
+#DIRECTIVE EXPECT_REQUEST thread/start
+#DIRECTIVE RESPOND_THREAD_START 019a7c00-0000-7000-8000-000000000001
+#DIRECTIVE IGNORE_STDIN_EOF
+#DIRECTIVE HANG

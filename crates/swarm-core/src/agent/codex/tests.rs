@@ -41,6 +41,12 @@ fn fixture(name: &str) -> String {
     format!("{}/tests/fixtures/codex/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
+/// A fixture under `tests/fixtures/proc/`, shared with
+/// `tests/proc_tree_stop.rs`.
+fn proc_fixture(name: &str) -> String {
+    format!("{}/tests/fixtures/proc/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
 /// Generous bounds for the wire tests; individual tests shorten the one
 /// they exercise.
 fn test_timeouts() -> Timeouts {
@@ -115,6 +121,7 @@ impl Harness {
         let scratch = Scratch::new();
         let record = scratch.path().join("wire.jsonl");
         Self::build(
+            "node",
             vec![
                 fixture("fake_codex_app_server.mjs"),
                 "--script".to_string(),
@@ -127,7 +134,30 @@ impl Harness {
         )
     }
 
-    fn build(prefix_args: Vec<String>, timeouts: Timeouts, scratch: Scratch) -> Self {
+    /// A harness whose adapter runs the fake with `script` through its npm
+    /// shim, the way a `codex` install looks on the owner's host:
+    /// `tests/fixtures/proc/codex.cmd` on Windows (std runs a `.cmd`
+    /// through `cmd.exe /c`), `/bin/sh` with its twin `codex.sh`
+    /// elsewhere. Either way the child the adapter holds is the shim, and
+    /// the fake's `node` runs beneath it.
+    fn through_npm_shim(script: &str, timeouts: Timeouts) -> Self {
+        let scratch = Scratch::new();
+        let record = scratch.path().join("wire.jsonl");
+        let mut fake_args = vec![
+            "--script".to_string(),
+            proc_fixture(script),
+            "--record".to_string(),
+            record.display().to_string(),
+        ];
+        if cfg!(windows) {
+            Self::build(&proc_fixture("codex.cmd"), fake_args, timeouts, scratch)
+        } else {
+            fake_args.insert(0, proc_fixture("codex.sh"));
+            Self::build("/bin/sh", fake_args, timeouts, scratch)
+        }
+    }
+
+    fn build(binary: &str, prefix_args: Vec<String>, timeouts: Timeouts, scratch: Scratch) -> Self {
         let (events_tx, events) = watch::channel(Vec::new());
         let log = EventLog::open_in_memory().expect("open an in-memory event log");
         let engine = OrchestrationEngine::start(log, None, move |envelope| {
@@ -135,7 +165,7 @@ impl Harness {
         });
         let sink = engine.sink();
         // No operator home: a wire test never copies an `auth.json`.
-        let adapter = CodexAdapter::with_test_binary(sink.clone(), "node", prefix_args, timeouts)
+        let adapter = CodexAdapter::with_test_binary(sink.clone(), binary, prefix_args, timeouts)
             .with_private_homes(PrivateHomes::new(&scratch.data_dir(), None));
         Self {
             _engine: engine,
@@ -874,6 +904,33 @@ async fn a_handshake_timeout_kills_and_reaps_the_child() {
     );
     h.flush().await;
     assert!(h.events().is_empty());
+}
+
+/// F-08's Windows premise at the adapter: a hung app-server behind npm's
+/// `codex.cmd` shim (here its fixture twin) ends with the session. The
+/// child the adapter holds is the shim, so a plain kill of it would leave
+/// the `node` beneath running; shutdown's process-tree kill ends it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_ends_a_hung_app_server_beneath_its_npm_shim() {
+    let h = Harness::through_npm_shim(
+        "hung_after_handshake.script",
+        Timeouts {
+            graceful_exit: Duration::from_millis(500),
+            ..test_timeouts()
+        },
+    );
+    let session = h.spawn().await;
+    let started = &h.record()[0];
+    assert_eq!(started["fake"], "started");
+    let node = u32::try_from(started["pid"].as_u64().expect("the fake records its pid"))
+        .expect("a pid fits u32");
+    assert!(
+        crate::test_support::is_running(node),
+        "the app-server runs beneath its shim"
+    );
+
+    session.shutdown().await.expect("shutdown");
+    crate::test_support::assert_gone(node, "the app-server beneath the shim").await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2112,6 +2169,7 @@ async fn nothing_is_emitted_once_teardown_began() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn probe_reports_version_and_sign_in_state() {
     let signed_in = Harness::build(
+        "node",
         vec![fixture("fake_codex_app_server.mjs")],
         test_timeouts(),
         Scratch::new(),
@@ -2122,6 +2180,7 @@ async fn probe_reports_version_and_sign_in_state() {
     assert_eq!(report.detail.as_deref(), Some("Logged in using ChatGPT"));
 
     let signed_out = Harness::build(
+        "node",
         vec![
             fixture("fake_codex_app_server.mjs"),
             "--logged-out".to_string(),
