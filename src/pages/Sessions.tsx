@@ -405,7 +405,7 @@ function TemplateForm({
         Cancel
       </Button>
       {state.error != null && (
-        <span id={errorId} role="alert" className="basis-full text-xs text-[oklch(0.72_0.20_25)]">
+        <span id={errorId} role="alert" className="basis-full text-rose text-xs">
           {state.error}
         </span>
       )}
