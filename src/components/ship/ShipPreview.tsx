@@ -59,7 +59,7 @@ const monoRowStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
-const separatorStyle: CSSProperties = { color: "oklch(0.45 0.03 220)" };
+const separatorStyle: CSSProperties = { color: "var(--color-fg-dim)" };
 
 const fileListStyle: CSSProperties = {
   display: "flex",

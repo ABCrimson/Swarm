@@ -87,11 +87,11 @@ const rowStyle: React.CSSProperties = {
   gap: 12,
   width: "100%",
   padding: "10px 12px",
-  background: "oklch(0.13 0.03 220 / 0.7)",
-  border: "1px solid oklch(0.24 0.04 220)",
+  background: "oklch(from var(--color-surface-2) l c h / 0.7)",
+  border: "1px solid var(--color-border)",
   borderRadius: 8,
   textAlign: "left",
-  color: "oklch(0.85 0.03 220)",
+  color: "var(--color-fg)",
   fontFamily: "var(--font-body)",
   fontSize: "0.8125rem",
 };
@@ -121,7 +121,7 @@ const placeholderStyle: React.CSSProperties = {
   color: "var(--color-fg-dim)",
   textAlign: "center",
   padding: "10px 12px",
-  border: "1px dashed oklch(0.30 0.05 220)",
+  border: "1px dashed var(--color-border-2)",
   borderRadius: 8,
 };
 

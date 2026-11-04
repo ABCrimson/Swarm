@@ -35,7 +35,7 @@ const centeredStyle: CSSProperties = {
 const messageStyle: CSSProperties = {
   fontFamily: "var(--font-body)",
   fontSize: "0.8125rem",
-  color: "oklch(0.65 0.04 220)",
+  color: "var(--color-fg-dim)",
   textAlign: "center",
 };
 
