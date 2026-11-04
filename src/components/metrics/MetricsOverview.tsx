@@ -76,16 +76,6 @@ export function MetricCards(): React.ReactElement {
   );
 }
 
-const sectionTitleStyle: CSSProperties = {
-  fontFamily: "var(--font-display)",
-  fontSize: 15,
-  fontWeight: 700,
-  letterSpacing: "0.04em",
-  color: "oklch(0.75 0.06 220)",
-  textTransform: "uppercase",
-  margin: "0 0 4px",
-};
-
 /** A page section named by its own `<h2>`, so heading navigation reaches it. */
 export function MetricsSection({
   title,
@@ -97,7 +87,10 @@ export function MetricsSection({
   const headingId = useId();
   return (
     <section aria-labelledby={headingId}>
-      <h2 id={headingId} style={sectionTitleStyle}>
+      <h2
+        id={headingId}
+        className="mb-2 font-display text-lg font-semibold tracking-tight text-fg-bright"
+      >
         {title}
       </h2>
       {children}
