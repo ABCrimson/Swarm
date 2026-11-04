@@ -210,7 +210,11 @@ function segmentStyle(active: boolean, disabled: boolean): CSSProperties {
     padding: "8px 12px",
     background: active ? "oklch(from var(--color-plasma) l c h / 0.15)" : "oklch(0 0 0 / 0)",
     borderRadius: 6,
-    color: disabled ? "var(--color-fg-dim)" : active ? "var(--color-plasma)" : "var(--color-fg-muted)",
+    color: disabled
+      ? "var(--color-fg-dim)"
+      : active
+        ? "var(--color-plasma)"
+        : "var(--color-fg-muted)",
     opacity: disabled ? 0.6 : 1,
     fontFamily: "var(--font-body)",
     fontSize: "0.8125rem",
