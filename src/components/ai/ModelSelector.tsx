@@ -21,8 +21,8 @@ const MODEL_STYLE = {
   fable: { color: "oklch(0.80 0.19 55)", tint: "oklch(0.80 0.19 55 / 0.14)" },
   mythos: { color: "oklch(0.75 0.22 340)", tint: "oklch(0.75 0.22 340 / 0.14)" },
   opus: { color: "oklch(0.72 0.20 290)", tint: "oklch(0.72 0.20 290 / 0.14)" },
-  sonnet: { color: "oklch(0.78 0.18 205)", tint: "oklch(0.78 0.18 205 / 0.14)" },
-  haiku: { color: "oklch(0.82 0.18 140)", tint: "oklch(0.82 0.18 140 / 0.14)" },
+  sonnet: { color: "var(--color-plasma)", tint: "oklch(from var(--color-plasma) l c h / 0.14)" },
+  haiku: { color: "var(--color-lime)", tint: "oklch(from var(--color-lime) l c h / 0.14)" },
 } as const satisfies Record<ModelKey, { readonly color: string; readonly tint: string }>;
 
 const MODEL_CAPABILITIES = {
@@ -49,22 +49,44 @@ const triggerStyle: CSSProperties = {
   gap: 8,
   padding: "6px 12px",
   borderRadius: 8,
-  border: "1px solid oklch(0.28 0.05 220)",
+  border: "1px solid var(--color-border-2)",
   background: "oklch(0.12 0.03 220 / 0.9)",
   cursor: "pointer",
-  transition: "border-color 0.15s ease",
-  fontFamily: "var(--font-body, 'DM Sans Variable', system-ui, sans-serif)",
+  transition: "border-color 0.15s var(--ease-out)",
+  fontFamily: "var(--font-body)",
   fontSize: 13,
-  color: "oklch(0.82 0.04 220)",
+  color: "var(--color-fg)",
 };
+
+/**
+ * CSS anchor positioning where the engine has it (WebKit 26+, Chromium);
+ * elsewhere (the WebKit 18.4 floor) the popover keeps the UA default,
+ * centered in the viewport.
+ */
+const SUPPORTS_ANCHOR_POSITIONING = globalThis.CSS?.supports?.("top", "anchor(bottom)") ?? false;
 
 /**
  * The listbox is a popover in the top layer, so no ancestor stacking
  * context (the toolbar's `backdrop-filter`) can trap it and no z-index
- * is needed; CSS anchor positioning keeps it under its trigger through
- * scrolling and resizing, flipping above it when there is no room.
+ * is needed.
  */
 const panelStyle: CSSProperties = {
+  minWidth: 280,
+  padding: 0,
+  borderRadius: 8,
+  border: "1px solid var(--color-border-2)",
+  background: "oklch(0.10 0.03 220 / 0.95)",
+  backdropFilter: "blur(16px) saturate(1.5)",
+  boxShadow: "0 8px 32px oklch(0 0 0 / 0.4)",
+  color: "var(--color-fg)",
+};
+
+/**
+ * Keeps the listbox under its trigger through scrolling and resizing,
+ * flipping above it when there is no room; applies only with
+ * SUPPORTS_ANCHOR_POSITIONING.
+ */
+const anchoredPanelStyle: CSSProperties = {
   margin: 0,
   inset: "auto",
   top: "anchor(bottom)",
@@ -72,13 +94,6 @@ const panelStyle: CSSProperties = {
   marginTop: 4,
   minWidth: "max(280px, anchor-size(width))",
   positionTryFallbacks: "flip-block",
-  padding: 0,
-  borderRadius: 8,
-  border: "1px solid oklch(0.28 0.05 220)",
-  background: "oklch(0.10 0.03 220 / 0.95)",
-  backdropFilter: "blur(16px) saturate(1.5)",
-  boxShadow: "0 8px 32px oklch(0 0 0 / 0.4)",
-  color: "oklch(0.82 0.04 220)",
 };
 
 const optionStyle: CSSProperties = {
@@ -130,10 +145,10 @@ interface ModelSelectorProps {
  * Built on the platform: the listbox is a `popover="auto"` opened by the
  * trigger's `popovertarget` (top layer, light dismiss on outside click
  * and Escape, focus returning to the trigger) and positioned with CSS
- * anchor positioning. Keyboard: opening focuses the selected option;
- * Arrow Up/Down, Home and End move a roving focus; Enter or Space picks;
- * Tab leaves and closes it. The trigger's accessible name includes the
- * current model.
+ * anchor positioning where the engine has it. Keyboard: opening focuses
+ * the selected option; Arrow Up/Down, Home and End move a roving focus;
+ * Enter or Space picks; Tab leaves and closes it. The trigger's
+ * accessible name includes the current model.
  */
 export function ModelSelector({ workerId }: ModelSelectorProps): React.ReactElement {
   const [selectedModel, setSelectedModel] = useAtom(selectedModelAtom);
@@ -201,7 +216,7 @@ export function ModelSelector({ workerId }: ModelSelectorProps): React.ReactElem
         style={{
           ...triggerStyle,
           anchorName,
-          borderColor: open ? MODEL_STYLE[currentKey].color : "oklch(0.28 0.05 220)",
+          borderColor: open ? MODEL_STYLE[currentKey].color : "var(--color-border-2)",
         }}
       >
         <span
@@ -221,7 +236,11 @@ export function ModelSelector({ workerId }: ModelSelectorProps): React.ReactElem
         aria-label="AI Model Options"
         tabIndex={-1}
         className="opacity-0 transition-[opacity,translate,display,overlay] transition-discrete duration-150 -translate-y-1 open:translate-y-0 open:opacity-100 starting:open:-translate-y-1 starting:open:opacity-0 motion-reduce:transition-none"
-        style={{ ...panelStyle, positionAnchor: anchorName }}
+        style={
+          SUPPORTS_ANCHOR_POSITIONING
+            ? { ...panelStyle, ...anchoredPanelStyle, positionAnchor: anchorName }
+            : panelStyle
+        }
         onToggle={(e) => {
           const isOpen = e.newState === "open";
           setOpen(isOpen);
