@@ -3,7 +3,7 @@
 // with the reason, a failed project-root read still lets you spawn, and
 // submit calls the right IPC wrapper with the right shape per provider.
 
-import "#test/dom-polyfills";
+import "#test/top-layer-shim";
 import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -376,7 +376,7 @@ describe("SpawnWorkerDialog", () => {
       dialog.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: -1, clientY: -1 }));
     });
 
-    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
   it("calls onClose without spawning when Cancel is clicked", async () => {
@@ -387,7 +387,7 @@ describe("SpawnWorkerDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
-    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     expect(spawnWorker).not.toHaveBeenCalled();
     expect(agentSpawn).not.toHaveBeenCalled();
   });
@@ -429,7 +429,7 @@ describe("SpawnWorkerDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Close Spawn Worker Dialog" }));
 
-    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
   it("in web mode disables Webview Anthropic with the desktop-only reason and defaults to Claude Code", async () => {
@@ -496,7 +496,7 @@ describe("SpawnWorkerDialog", () => {
       document.dispatchEvent(event);
     });
 
-    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 });
 
