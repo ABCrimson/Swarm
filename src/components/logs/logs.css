@@ -11,9 +11,14 @@
     flex-direction: column;
     height: 100%;
     overflow: hidden;
-    background: var(--color-surface-0);
+    background: oklch(from var(--color-surface-0) l c h / 0.7);
+    backdrop-filter: blur(12px) saturate(1.5);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-lg);
+
+    @supports not (backdrop-filter: blur(1px)) {
+      background: oklch(from var(--color-surface-0) l c h / 0.95);
+    }
   }
 
   .log-viewer__scroll {
@@ -61,7 +66,7 @@
     align-items: center;
     gap: 8px;
     padding: 0 12px;
-    border-bottom: 1px solid oklch(0.12 0.03 220);
+    border-bottom: 1px solid oklch(from var(--color-border) l c h / 0.5);
     font-family: var(--font-mono);
     font-size: var(--text-sm);
   }
