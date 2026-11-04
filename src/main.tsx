@@ -39,9 +39,9 @@ function AppLoader(): React.ReactElement {
         justifyContent: "center",
         width: "100vw",
         height: "100vh",
-        background: "oklch(0.06 0.02 220)",
-        color: "oklch(0.78 0.18 205)",
-        fontFamily: "'JetBrains Mono Variable', monospace",
+        background: "var(--color-void)",
+        color: "var(--color-plasma)",
+        fontFamily: "var(--font-mono)",
         fontSize: "14px",
       }}
     >
