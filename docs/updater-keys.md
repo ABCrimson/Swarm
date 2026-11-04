@@ -92,7 +92,7 @@ Without `--app-version`, the resulting `.sig` has no signed version, and every u
   - `https://api.github.com/repos/<owner>/<repo>/releases/assets/<numeric id>`, the form `tauri-apps/tauri-action` writes (it joins `GITHUB_API_URL` and the asset id, for draft and published releases alike). Only these requests carry the token. The API answers with a redirect to release storage on another host; `curl` is run without `--location-trusted`, so it drops the `Authorization` header on that hop.
   - `https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>`, the form of a hand-edited manifest. It is fetched without the token.
 
-  `curl` also runs with `--proto '=https' --proto-redir '=https'`, so neither the request nor a redirect can leave HTTPS. `.github/scripts/verify-updater-manifest.test.sh` (run by the job before the verification) feeds the script crafted manifests (other hosts, lookalike hosts, userinfo, `http`, another repository, `..` segments) against a stub `curl` and asserts that none of them produces a request.
+  `curl` also runs with `--proto '=https' --proto-redir '=https'`, so neither the request nor a redirect can leave HTTPS. `.github/scripts/verify-updater-manifest.test.sh` (run by the `workflows` job of `ci.yml`, which every release build waits on) feeds the script crafted manifests (other hosts, lookalike hosts, userinfo, `http`, another repository, `..` segments) against a stub `curl` and asserts that none of them produces a request.
 
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` is in the workflow for forward compatibility, but the secret is currently unset/empty. If the key is ever rotated to a password-protected one, set that secret in the `release` environment before the next tagged release.
 
