@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use swarm_core::config::secrets::{FileStore, SecretStore, SecretString};
+use swarm_core::secrets::{FileStore, SecretStore, SecretString};
 
 /// A fresh directory under the system temp dir, removed on drop.
 struct TempDir(PathBuf);

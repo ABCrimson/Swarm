@@ -44,17 +44,14 @@
 //! write replaces the file atomically and durably (see
 //! `state_file::write_atomic`).
 
-#[path = "secrets/mod.rs"]
-pub mod secrets;
-
 use std::path::PathBuf;
 
 use parking_lot::Mutex;
 use serde_json::{Map, Value};
 
-use self::secrets::{SecretStore, SecretString};
 use crate::Paths;
 use crate::error::AppError;
+use crate::secrets::{self, SecretStore, SecretString};
 use crate::state_file::{self, StoredObject};
 
 /// Config file name within the app data directory.

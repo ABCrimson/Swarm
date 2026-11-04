@@ -35,6 +35,8 @@
 //!   reach a log, event or toast.
 //! - [`bus`] — worker-to-worker messages, recorded as events.
 //! - [`config`] — `swarm-config.json`.
+//! - [`secrets`] — the Anthropic API key's store: the OS keychain, or
+//!   the owner-only `swarm-secrets.json` on a host without one.
 //! - [`metrics`] — system and per-worker resource sampling.
 //! - [`error`] — [`error::AppError`], the shared error type.
 //! - [`clock`] — wall-clock time as the `i64` Unix-epoch timestamps every
@@ -55,6 +57,7 @@ mod paths;
 pub mod protocol;
 pub mod redact;
 pub mod runtime;
+pub mod secrets;
 pub mod session;
 mod state_file;
 #[cfg(test)]

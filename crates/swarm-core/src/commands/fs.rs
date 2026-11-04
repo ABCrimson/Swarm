@@ -60,7 +60,7 @@ const MAX_READ_BYTES: u64 = 16 << 20;
 /// `swarm-secrets.json.corrupt-<ms>`).
 const DENIED_DATA_FILE_PREFIXES: [&str; 3] = [
     crate::config::CONFIG_FILE,
-    crate::config::secrets::SECRETS_FILE,
+    crate::secrets::SECRETS_FILE,
     // swarmd's `auth::TOKEN_FILE`; swarm-core cannot depend on swarmd.
     "daemon-token",
 ];
