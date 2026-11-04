@@ -541,7 +541,7 @@ export function SpawnWorkerDialog({
         if (isSpawning) e.preventDefault();
       }}
       style={dialogStyle}
-      className="opacity-0 translate-y-2 transition-[opacity,translate,display,overlay] transition-discrete duration-200 ease-out-cubic open:translate-y-0 open:opacity-100 starting:open:translate-y-2 starting:open:opacity-0 backdrop:bg-[oklch(0.04_0.01_220/0.55)] backdrop:backdrop-blur-[2px] backdrop:opacity-0 backdrop:transition-opacity backdrop:duration-200 open:backdrop:opacity-100 starting:open:backdrop:opacity-0"
+      className="opacity-0 translate-y-2 transition-[opacity,translate,display,overlay] transition-discrete duration-200 ease-out-cubic open:translate-y-0 open:opacity-100 starting:open:translate-y-2 starting:open:opacity-0 backdrop:bg-[oklch(0.04_0.01_220/0.55)] backdrop:backdrop-blur-[2px] backdrop:opacity-0 backdrop:transition-opacity backdrop:duration-200 backdrop:ease-out-cubic open:backdrop:opacity-100 starting:open:backdrop:opacity-0"
     >
       <form ref={formRef} action={spawn} style={formStyle}>
         <div style={headerStyle}>
