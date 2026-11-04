@@ -221,6 +221,21 @@ describe("shipReducer", () => {
       mode: "staged",
     });
   });
+
+  it("actionInterrupted returns a running flow to idle like reset, keeping message and mode but dropping the stale preview", () => {
+    const running: ShipSnapshot = {
+      ...INITIAL_SHIP_SNAPSHOT,
+      state: "running",
+      preflight: makePreflight(),
+      message: "feat: x",
+      progress: [{ step: "Awaiting Confirmation", status: "running", detail: null }],
+    };
+    expect(shipReducer(running, { type: "actionInterrupted" })).toEqual({
+      ...INITIAL_SHIP_SNAPSHOT,
+      message: "feat: x",
+      mode: "all",
+    });
+  });
 });
 
 describe("useShip", () => {
@@ -858,23 +873,6 @@ describe("useShip", () => {
 });
 
 // ── A lost reply is unknown, never failed (M0.6) ──────
-
-describe("shipReducer: actionInterrupted", () => {
-  it("returns a running flow to idle like reset, keeping message and mode but dropping the stale preview", () => {
-    const running: ShipSnapshot = {
-      ...INITIAL_SHIP_SNAPSHOT,
-      state: "running",
-      preflight: makePreflight(),
-      message: "feat: x",
-      progress: [{ step: "Awaiting Confirmation", status: "running", detail: null }],
-    };
-    expect(shipReducer(running, { type: "actionInterrupted" })).toEqual({
-      ...INITIAL_SHIP_SNAPSHOT,
-      message: "feat: x",
-      mode: "all",
-    });
-  });
-});
 
 describe("useShip: a lost reply over the daemon", () => {
   /** Starts `start` and lets its first steps run; returns the action promise and the shipId of the first `call`. */
