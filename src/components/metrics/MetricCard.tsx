@@ -23,11 +23,11 @@ interface MetricCardProps {
   readonly trend?: Trend;
 }
 
-/** Value colour per severity. */
+/** Value colour per severity: the lime, amber and rose tokens, as on the success/warning/danger pills. */
 export const SEVERITY_COLOR: Readonly<Record<Severity, string>> = {
-  good: "oklch(0.78 0.18 140)",
-  warning: "oklch(0.78 0.18 70)",
-  critical: "oklch(0.68 0.22 15)",
+  good: "var(--color-lime)",
+  warning: "var(--color-amber)",
+  critical: "var(--color-rose)",
 };
 
 /** Visible name for a non-good severity, so the state never rests on colour alone. */
@@ -43,8 +43,8 @@ const TREND: Readonly<Record<Trend, { readonly symbol: string; readonly label: s
 };
 
 const cardStyle: CSSProperties = {
-  background: "oklch(0.08 0.02 220 / 0.7)",
-  border: "1px solid oklch(0.22 0.04 220)",
+  background: "oklch(from var(--color-surface-0) l c h / 0.7)",
+  border: "1px solid var(--color-border)",
   borderRadius: 8,
   backdropFilter: "blur(12px) saturate(1.5)",
   padding: "12px 16px",

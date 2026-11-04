@@ -16,8 +16,8 @@ const panelStyle: CSSProperties = {
   height: "100%",
   minHeight: 200,
   padding: 12,
-  background: "oklch(0.08 0.02 220 / 0.7)",
-  border: "1px solid oklch(0.22 0.04 220)",
+  background: "oklch(from var(--color-surface-0) l c h / 0.7)",
+  border: "1px solid var(--color-border)",
   borderRadius: 8,
   backdropFilter: "blur(12px) saturate(1.5)",
 };
