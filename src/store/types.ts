@@ -54,27 +54,6 @@ export const SessionSchema = z.object({
 /** A SWARM session grouping one or more workers with shared config. */
 export type Session = z.infer<typeof SessionSchema>;
 
-/**
- * Zod schema for the `session_worker_removed` event payload (mirrors
- * Rust's `SessionWorkerRemovedPayload`,
- * `crates/swarm-core/src/events/emitter.rs`). The event bus validates
- * payloads with it (`#lib/event-payloads`).
- */
-export const SessionWorkerRemovedPayloadSchema = z.object({
-  sessionId: z.uuid(),
-  workerId: z.uuid(),
-});
-
-/**
- * Zod schema for the `session_worker_added` event payload (mirrors
- * Rust's `SessionWorkerAddedPayload`), emitted by `session_add_worker`
- * only when the membership actually changed.
- */
-export const SessionWorkerAddedPayloadSchema = z.object({
-  sessionId: z.uuid(),
-  workerId: z.uuid(),
-});
-
 // ── Snapshot schemas ────────────────────────────────
 
 /** Zod schema for a point-in-time session snapshot. */

@@ -22,12 +22,7 @@ import {
   AgentTurnDeltaPayloadSchema,
   AgentTurnSettledPayloadSchema,
 } from "#lib/agent-events";
-import {
-  SessionWorkerAddedPayloadSchema,
-  SessionWorkerRemovedPayloadSchema,
-  ShipErrorSchema,
-  WorkerStateSchema,
-} from "#store/types";
+import { ShipErrorSchema, WorkerStateSchema } from "#store/types";
 
 const Count = z.int().nonnegative();
 
@@ -53,8 +48,10 @@ export const EVENT_PAYLOAD_SCHEMAS = {
 
   session_created: z.looseObject({ sessionId: z.uuid(), name: z.string() }),
   session_deleted: z.looseObject({ sessionId: z.uuid() }),
-  session_worker_added: SessionWorkerAddedPayloadSchema.loose(),
-  session_worker_removed: SessionWorkerRemovedPayloadSchema.loose(),
+  /** Mirrors Rust's `SessionWorkerAddedPayload`; `session_add_worker` emits it only when the membership changed. */
+  session_worker_added: z.looseObject({ sessionId: z.uuid(), workerId: z.uuid() }),
+  /** Mirrors Rust's `SessionWorkerRemovedPayload`. */
+  session_worker_removed: z.looseObject({ sessionId: z.uuid(), workerId: z.uuid() }),
 
   system_metrics: z.looseObject({
     cpuPercent: z.number(),
