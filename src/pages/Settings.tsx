@@ -705,8 +705,9 @@ export function Settings(): React.ReactElement {
             className="font-mono"
           />
           <p id="anthropic-api-key-description" className="mt-1 text-xs text-fg-dim">
-            Your Anthropic API Key. Required To Use Webview AI Chat. Stored Locally In Plaintext At
-            App Data — Never Logged Or Displayed In Clear Text.
+            Your Anthropic API Key. Required To Use Webview AI Chat. Stored In Your OS Keychain, Or
+            In An Owner-Only File In App Data Where There Is None — Never Logged Or Displayed In
+            Clear Text.
           </p>
           {!canUseWebviewChat && (
             <p id={apiKeyReasonId} className="mt-1 text-xs text-fg-dim">

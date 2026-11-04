@@ -87,6 +87,14 @@ describe("Settings — API key", () => {
     expect(input.type).toBe("password");
   });
 
+  it("describes where the key is stored: the OS keychain, never plaintext", () => {
+    render(<Settings />);
+
+    const input = screen.getByLabelText("API Key");
+    expect(input).toHaveAccessibleDescription(/Stored In Your OS Keychain/);
+    expect(input).not.toHaveAccessibleDescription(/Plaintext/);
+  });
+
   it("enables Save only for a change, writes the key, and never logs it", async () => {
     const user = userEvent.setup();
     // Restored when the test ends, pass or fail (spies are Disposable).
