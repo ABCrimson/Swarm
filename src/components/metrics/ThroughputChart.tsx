@@ -69,7 +69,8 @@ export function sampleThroughput(
 /**
  * Real AI throughput (tokens/sec) per model family over the trailing
  * `MAX_CHART_POINTS` samples. Only families with usage in the window get
- * a line, so the legend never lists models that were not used.
+ * a line, so the legend never lists models that were not used; with no
+ * usage at all the panel keeps its waiting line instead of empty axes.
  */
 export function ThroughputChart(): React.ReactElement {
   const [data, setData] = useState<ThroughputPoint[]>([]);
@@ -88,7 +89,7 @@ export function ThroughputChart(): React.ReactElement {
     <ChartPanel
       title="AI Throughput"
       caption={`Tokens/Sec, Last ${MAX_CHART_POINTS} Samples`}
-      sampleCount={data.length}
+      sampleCount={activeSeries.length === 0 ? 0 : data.length}
     >
       <LineChart
         responsive
