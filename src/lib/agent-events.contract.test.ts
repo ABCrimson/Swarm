@@ -99,7 +99,7 @@ const ENUMS: readonly [string, string, z.ZodEnum][] = [
 ];
 
 describe("agent event contract (Rust source ↔ Zod)", () => {
-  it.each(STRUCTS)("%#: %s fields match", (src, name, schema) => {
+  it.each(STRUCTS)("%#: $1 fields match", (src, name, schema) => {
     expect(renameAll(src, "struct", name), `${name} rename_all`).toBe("camelCase");
     const fields = structFields(src, name);
     expect([...fields.keys()].toSorted()).toEqual(Object.keys(schema.shape).toSorted());
@@ -116,7 +116,7 @@ describe("agent event contract (Rust source ↔ Zod)", () => {
     }
   });
 
-  it.each(ENUMS)("%#: %s variants match", (src, name, schema) => {
+  it.each(ENUMS)("%#: $1 variants match", (src, name, schema) => {
     expect(renameAll(src, "enum", name), `${name} rename_all`).toBe("snake_case");
     expect(enumVariants(src, name)).toEqual(schema.options);
   });

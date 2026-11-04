@@ -20,7 +20,7 @@ function rustBudgetSeconds(name: string): number {
   const seconds = declaration.exec(source)?.[1];
   if (seconds === undefined) {
     throw new Error(
-      `${name} is no longer a Duration::from_secs(N) const in crates/swarm-core/src/git/cli.rs: the daemon's git budget moved, so re-derive GIT_MUTATE_BUDGET_MS and GIT_PUSH_BUDGET_MS in #lib/transport.`,
+      `${name} is no longer a Duration::from_secs(N) const in crates/swarm-core/src/git/cli.rs: the daemon's git budget moved, so re-derive GIT_${name.replace(/_TIMEOUT$/, "")}_BUDGET_MS in #lib/transport.`,
     );
   }
   return Number(seconds.replaceAll("_", ""));
