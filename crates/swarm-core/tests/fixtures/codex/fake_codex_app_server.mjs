@@ -17,8 +17,11 @@
  * - Stdin EOF ends the process (exit 0), unless IGNORE_STDIN_EOF or ON_STDIN_EOF was given.
  *
  * Every message the client writes is appended to the `--record` file as
- * one JSON line, so a test can assert the exact wire traffic; the fake
- * also records `{"fake":"stdin-eof"}` when stdin closes.
+ * one JSON line, so a test can assert the exact wire traffic. The first
+ * entry, `{"fake":"started",...}`, records the child's environment: the
+ * current-directory exe lookup switch, `CODEX_HOME` and the sorted entries
+ * of that directory at startup. The fake also records `{"fake":"stdin-eof"}`
+ * when stdin closes.
  *
  * Usage:
  *   node fake_codex_app_server.mjs --version
@@ -56,7 +59,7 @@
  * real server.
  */
 
-import { appendFileSync, readFileSync, writeSync } from "node:fs";
+import { appendFileSync, readdirSync, readFileSync, writeSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 
@@ -146,6 +149,9 @@ record({
   fake: "started",
   pid: process.pid,
   noCwdExeLookup: process.env.NoDefaultCurrentDirectoryInExePath ?? null,
+  codexHome: process.env.CODEX_HOME ?? null,
+  codexHomeEntries:
+    process.env.CODEX_HOME === undefined ? null : readdirSync(process.env.CODEX_HOME).sort(),
 });
 const input = createInterface({ input: process.stdin, crlfDelay: Number.POSITIVE_INFINITY });
 input.on("line", (line) => {
@@ -264,7 +270,7 @@ const directives = {
   RESPOND_INITIALIZE() {
     respond({
       userAgent: `swarm/${VERSION} (fake)`,
-      codexHome: "/tmp/fake-codex-home",
+      codexHome: process.env.CODEX_HOME ?? "/tmp/fake-codex-home",
       platformFamily: "unix",
       platformOs: "linux",
     });
