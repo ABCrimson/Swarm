@@ -59,7 +59,7 @@ const monoRowStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
-const separatorStyle: CSSProperties = { color: "oklch(0.45 0.03 220)" };
+const separatorStyle: CSSProperties = { color: "var(--color-fg-dim)" };
 
 const fileListStyle: CSSProperties = {
   display: "flex",
@@ -91,9 +91,16 @@ const textareaStyle: CSSProperties = {
   resize: "vertical",
 };
 
+/** The summary field is prose, so it sets DM Sans; the commit message keeps mono (git wraps it at column width). */
+const proseTextareaStyle: CSSProperties = {
+  ...textareaStyle,
+  fontFamily: "var(--font-body)",
+  fontSize: "var(--text-md)",
+};
+
 const trailerNoteStyle: CSSProperties = {
-  fontFamily: "var(--font-mono)",
-  fontSize: "0.625rem",
+  fontFamily: "var(--font-body)",
+  fontSize: "var(--text-sm)",
   color: "var(--color-fg-dim)",
 };
 
@@ -454,7 +461,9 @@ export function ShipPreview({
                 >
                   {escapeForDisplay(row.path)}
                 </span>
-                {row.reason != null && <span>{row.reason}</span>}
+                {row.reason != null && (
+                  <span style={{ fontFamily: "var(--font-body)" }}>{row.reason}</span>
+                )}
               </li>
             ))}
           </ul>
@@ -521,7 +530,7 @@ export function ShipPreview({
           className="swarm-input"
           value={aiProse ?? ""}
           onChange={(e) => onAiProseChange(e.target.value)}
-          style={textareaStyle}
+          style={proseTextareaStyle}
           spellCheck={true}
           placeholder={
             canGenerateProse

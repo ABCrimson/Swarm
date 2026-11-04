@@ -388,15 +388,15 @@ cargo test --workspace --doc
 
 ### Frontend Testing
 
-Frontend tests run via Vitest (`pnpm test`): **131 test files, 1508 tests** _(all green at the 2026-11-04 head)_, covering components, hooks, stores, and `lib/` utilities. `pnpm test:coverage` adds the coverage floor from `vitest.config.ts`.
+Frontend tests run via Vitest (`pnpm test`): **136 test files, 1535 tests** _(all green at the 2026-11-04 head)_, covering components, hooks, stores, and `lib/` utilities. `pnpm test:coverage` adds the coverage floor from `vitest.config.ts`.
 
 Tests are **colocated**: `X.test.ts(x)` sits next to the `X.ts(x)` it covers, and a suite that covers one facet of a larger module takes a dotted suffix (`src/lib/tools.file-io.test.ts`, `src/lib/tools.spawn-worker.test.ts`). Import the module under test through its `#` alias like any other code. Vitest collects `src/**/*.test.{ts,tsx}` only, so the Playwright `e2e/*.spec.ts` suites are never picked up.
 
 | Location                          | Files | Focus                                                          |
 |-----------------------------------|-------|-----------------------------------------------------------------|
-| `src/components/**/*.test.{ts,tsx}` | 49  | UI primitives, the graph and causality surfaces, layout, logs, metrics charts, sessions, and the agent/ship surfaces |
+| `src/components/**/*.test.{ts,tsx}` | 53  | UI primitives, the graph and causality surfaces, layout, logs, metrics charts, sessions, and the agent/ship surfaces |
 | `src/hooks/*.test.tsx`            | 15    | `useWorker`, `useElkLayout`, `useTerminal`, `useWebGPU`, `useSettingsBridge`, `useShip`, and the event-stream hooks |
-| `src/lib/*.test.ts`               | 43    | `anthropic`, `event-bus`, `export`, `keybindings`, `models`, `time`, the `tools*` suites, `transport` (the `wsTransport` client), `webgpu`, `worker-spawn`, ... |
+| `src/lib/*.test.ts`               | 52    | `anthropic`, `event-bus`, `export`, `keybindings`, `models`, `time`, the `tools*` suites, `transport` (the `wsTransport` client), `webgpu`, `worker-spawn`, ... |
 | `src/pages/*.test.tsx`            | 4     | The pages with their own control surface (`Sessions`, `Settings`, `Tools`, `Workers`) |
 | `src/store/*.test.ts`             | 12    | The Zustand stores and persisted settings |
 

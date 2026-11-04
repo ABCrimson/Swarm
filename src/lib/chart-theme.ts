@@ -73,7 +73,7 @@ export const CHART_THEME: RechartsTheme = {
     wrapperStyle: {
       color: "oklch(0.6 0.05 220)",
       fontSize: 11,
-      fontFamily: "var(--font-mono)",
+      fontFamily: "var(--font-body)",
     },
   },
 };

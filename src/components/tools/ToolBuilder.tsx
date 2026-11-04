@@ -201,8 +201,8 @@ export function ToolBuilder({
                   style={{
                     padding: 8,
                     borderRadius: 8,
-                    background: "oklch(0.10 0.03 220 / 0.5)",
-                    border: "1px solid oklch(0.18 0.04 220)",
+                    background: "oklch(from var(--color-surface-1) l c h / 0.5)",
+                    border: "1px solid var(--color-border)",
                   }}
                 >
                   <div

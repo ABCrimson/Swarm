@@ -1,10 +1,14 @@
 // Every catalogued model, dated id or alias resolves to its own family series; a model outside
-// the catalog falls into 'other' instead of vanishing from the chart.
+// the catalog falls into 'other' instead of vanishing from the chart; with no usage the panel
+// keeps its waiting line instead of drawing empty axes.
 
-import { describe, expect, it } from "vitest";
-import { sampleThroughput, seriesOf } from "#components/metrics/ThroughputChart";
+import { act, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { sampleThroughput, seriesOf, ThroughputChart } from "#components/metrics/ThroughputChart";
+import { MAX_CHART_POINTS } from "#lib/chart-window";
 import { TOKEN_RATE_WINDOW_MS } from "#lib/metrics-aggregation";
 import { CLAUDE_MODELS } from "#lib/models";
+import { useAiStore } from "#store/ai";
 import type { TokenUsageRecord } from "#store/types";
 
 const usage = (model: string, tokens: number, timestamp: number): TokenUsageRecord => ({
@@ -45,5 +49,25 @@ describe("sampleThroughput", () => {
     );
     expect(point).toMatchObject({ time: now, fable: 100 / perSecond, other: 50 / perSecond });
     expect(point.sonnet).toBe(0);
+  });
+});
+
+describe("ThroughputChart", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps the waiting line while no model has produced a token", () => {
+    vi.useFakeTimers();
+    useAiStore.setState(useAiStore.getInitialState(), true);
+    const { container } = render(<ThroughputChart />);
+
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    expect(screen.getByText("Waiting For Samples")).toBeInTheDocument();
+    expect(screen.getByText(`Tokens/Sec, Last ${MAX_CHART_POINTS} Samples`)).toBeInTheDocument();
+    expect(container.querySelector(".recharts-cartesian-grid")).toBeNull();
   });
 });
