@@ -1181,7 +1181,7 @@ mod tests {
     /// drops it, resolving its ack to an error, and logs it at error level
     /// with its type tag instead of losing it silently.
     #[test]
-    fn test_a_record_behind_the_shutdown_barrier_is_logged_not_lost() {
+    fn test_a_record_behind_the_shutdown_barrier_is_dropped_with_an_error_log() {
         let capture = crate::test_support::SharedBuf::default();
         let _subscriber = tracing::subscriber::set_default(
             tracing_subscriber::fmt()
