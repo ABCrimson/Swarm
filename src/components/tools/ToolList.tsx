@@ -19,14 +19,6 @@ interface ToolListProps {
   readonly onCreateNew: () => void;
 }
 
-const sectionHeadingStyle: CSSProperties = {
-  margin: "0 0 8px",
-  fontFamily: "var(--font-body)",
-  fontSize: "var(--text-md)",
-  fontWeight: 500,
-  color: "var(--color-fg-muted)",
-};
-
 const listStyle: CSSProperties = { display: "flex", flexDirection: "column" };
 
 /** Built-in tools as shown on the page — their Title Case `uiDescription`, never the model-facing one. */
@@ -68,7 +60,10 @@ export function ToolList({
       }}
     >
       <section aria-labelledby={builtInHeadingId}>
-        <h2 id={builtInHeadingId} style={sectionHeadingStyle}>
+        <h2
+          id={builtInHeadingId}
+          className="mb-2 font-display text-lg font-semibold tracking-tight text-fg-bright"
+        >
           Built-In{" "}
           <span className="font-mono text-fg-dim tabular-nums">{BUILT_IN_TOOLS.length}</span>
         </h2>
@@ -87,7 +82,10 @@ export function ToolList({
       <section aria-labelledby={customHeadingId}>
         {/* New Tool belongs to the section it creates into. */}
         <div className="mb-2 flex items-center justify-between">
-          <h2 id={customHeadingId} style={{ ...sectionHeadingStyle, margin: 0 }}>
+          <h2
+            id={customHeadingId}
+            className="font-display text-lg font-semibold tracking-tight text-fg-bright"
+          >
             Custom <span className="font-mono text-fg-dim tabular-nums">{customTools.length}</span>
           </h2>
           <Button variant="primary" size="sm" onClick={onCreateNew}>
