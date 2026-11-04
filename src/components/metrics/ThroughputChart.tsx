@@ -105,7 +105,7 @@ export function ThroughputChart(): React.ReactElement {
           labelFormatter={(label) => formatTime(Number(label))}
           formatter={(value) => `${Number(value).toFixed(1)} tok/s`}
         />
-        <Legend />
+        <Legend itemSorter={null} />
         {activeSeries.map((series) => (
           <Line
             key={series}

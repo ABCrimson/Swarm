@@ -54,7 +54,7 @@ export function AIQueueChart(): React.ReactElement {
         <XAxis dataKey="name" />
         <YAxis allowDecimals={false} />
         <Tooltip />
-        <Legend />
+        <Legend itemSorter={null} />
         {PRIORITIES.map(({ key, label, color }) => (
           <Bar
             key={key}
