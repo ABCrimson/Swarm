@@ -113,7 +113,7 @@ function StatusLabel({
     case "pending":
       return (
         <span style={{ fontSize: 11, color: "var(--color-fg-dim)" }}>
-          Waiting · #{waitPosition} In Line
+          Waiting, #{waitPosition} In Line
         </span>
       );
     case "complete":

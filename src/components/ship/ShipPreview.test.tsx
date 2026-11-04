@@ -326,13 +326,13 @@ describe("ShipPreview — ship action gating", () => {
 
   it("labels each action with only the commands that action runs", () => {
     renderPreview();
-    expect(screen.getByText("Will Run: git add -- <files> · git commit")).toBeInTheDocument();
+    expect(screen.getByText("Will Run: git add -- <files>, git commit")).toBeInTheDocument();
     expect(
-      screen.getByText("Will Run: git add -- <files> · git commit · git push -u origin <branch>"),
+      screen.getByText("Will Run: git add -- <files>, git commit, git push -u origin <branch>"),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Will Run: git add -- <files> · git commit · git push -u origin <branch> · Open Compare Page",
+        "Will Run: git add -- <files>, git commit, git push -u origin <branch>, Open Compare Page",
       ),
     ).toBeInTheDocument();
   });

@@ -87,7 +87,7 @@ export function ThroughputChart(): React.ReactElement {
   return (
     <ChartPanel
       title="AI Throughput"
-      caption={`Tokens/Sec · Last ${MAX_CHART_POINTS} Samples`}
+      caption={`Tokens/Sec, Last ${MAX_CHART_POINTS} Samples`}
       sampleCount={data.length}
     >
       <LineChart

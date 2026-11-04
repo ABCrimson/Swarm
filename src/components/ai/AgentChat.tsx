@@ -371,7 +371,7 @@ function TranscriptRow({
         ...(costUsd != null ? [`$${costUsd.toFixed(4)}`] : []),
       ];
       return (
-        <div style={status === "ok" ? settledStyle : settledErrorStyle}>{parts.join(" · ")}</div>
+        <div style={status === "ok" ? settledStyle : settledErrorStyle}>{parts.join(", ")}</div>
       );
     }
   }
