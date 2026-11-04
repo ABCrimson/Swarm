@@ -1,7 +1,7 @@
 //! Each Codex worker's private `CODEX_HOME`.
 //!
-//! Codex loads its configuration, MCP servers, plugins, skills and login
-//! from `CODEX_HOME` (default `~/.codex`). A worker that inherits the
+//! Codex loads its configuration, MCP servers, plugins and login from
+//! `CODEX_HOME` (default `~/.codex`). A worker that inherits the
 //! operator's home can call every MCP server that home exposes, including
 //! servers that Codex plugins add and that are not keys of `mcp_servers`. A `-c
 //! 'mcp_servers={}'` override merges an empty table into the loaded one and
@@ -10,8 +10,16 @@
 //! `config.toml` that sets nothing and, when the operator is signed in
 //! through a file, a copy of the operator's `auth.json`.
 //!
+//! Two limits were measured on codex-cli 0.168.0-alpha.1 (2026-11-04).
+//! User skills under `~/.agents/skills` are outside `CODEX_HOME` and still
+//! load: with a fresh home, `skills/list` returned the operator's user
+//! skills. And the empty `mcpServerStatus/list` of a private home was
+//! measured without an `auth.json` in it.
+//!
 //! The home outlives the session: Codex keeps the worker's threads there,
 //! and `thread/resume` finds them only in the home that started them.
+//! [`PrivateHomes::remove`] deletes it, the `auth.json` copy included, once
+//! the worker is gone.
 
 use std::fs;
 use std::io::{self, ErrorKind};
@@ -24,7 +32,7 @@ use uuid::Uuid;
 pub(super) const CODEX_HOME_ENV: &str = "CODEX_HOME";
 
 /// The directory under the data directory that holds every worker's home.
-const HOMES_DIR: &str = "codex-home";
+pub(crate) const HOMES_DIR: &str = "codex-home";
 /// Codex's configuration file in a home.
 const CONFIG_FILE: &str = "config.toml";
 /// Codex's file-based login in a home.
@@ -79,7 +87,7 @@ impl PrivateHomes {
     /// none. Everything Codex wrote there itself is left alone. Blocking
     /// file I/O: call it off the async worker threads.
     pub(super) fn prepare(&self, worker_id: Uuid) -> io::Result<PathBuf> {
-        let home = self.root.join(worker_id.to_string());
+        let home = self.home(worker_id);
         let mut dir = fs::DirBuilder::new();
         dir.recursive(true);
         #[cfg(unix)]
@@ -88,6 +96,22 @@ impl PrivateHomes {
         fs::write(home.join(CONFIG_FILE), SWARM_CONFIG)?;
         self.sync_auth(&home)?;
         Ok(home)
+    }
+
+    /// Deletes `worker_id`'s home with everything in it, the `auth.json`
+    /// copy and Codex's threads included; a home that does not exist counts
+    /// as removed. Call it once the worker's session has ended (a running
+    /// child holds files there) and off the async worker threads: it is
+    /// blocking file I/O.
+    pub(crate) fn remove(&self, worker_id: Uuid) -> io::Result<()> {
+        match fs::remove_dir_all(self.home(worker_id)) {
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+            result => result,
+        }
+    }
+
+    fn home(&self, worker_id: Uuid) -> PathBuf {
+        self.root.join(worker_id.to_string())
     }
 
     fn sync_auth(&self, home: &Path) -> io::Result<()> {

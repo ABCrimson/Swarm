@@ -14,7 +14,7 @@ use std::time::Instant;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::home::{CODEX_HOME_ENV, PrivateHomes};
+use super::home::{CODEX_HOME_ENV, HOMES_DIR, PrivateHomes};
 use super::process::{find_program, first_line, resolve_program, resolve_with_pathext};
 use super::protocol::{
     ApprovalsReviewer, AskForApproval, Incoming, METHOD_NOT_FOUND, OPTED_OUT_NOTIFICATIONS,
@@ -1120,6 +1120,55 @@ fn the_operator_auth_is_copied_refreshed_when_newer_and_dropped_when_gone() {
     std::fs::remove_file(&source).unwrap();
     homes.prepare(worker).expect("prepare");
     assert_eq!(entries(&home), ["config.toml"]);
+}
+
+#[test]
+fn removing_a_private_home_deletes_its_auth_copy_and_a_missing_home_is_ok() {
+    // A placeholder, never a credential.
+    let scratch = Scratch::new();
+    let operator = scratch.path().join("operator-codex");
+    std::fs::create_dir_all(&operator).expect("create the operator home");
+    std::fs::write(operator.join("auth.json"), r#"{"placeholder":1}"#).expect("write the source");
+    let homes = PrivateHomes::new(&scratch.data_dir(), Some(operator));
+    let worker = Uuid::new_v4();
+    let home = homes.prepare(worker).expect("prepare");
+    std::fs::create_dir_all(home.join("sessions")).expect("create sessions/");
+    assert_eq!(entries(&home), ["auth.json", "config.toml", "sessions"]);
+
+    homes.remove(worker).expect("remove the home");
+    assert!(!home.exists(), "the home and its auth.json copy are gone");
+    homes.remove(worker).expect("removing a removed home is Ok");
+    homes
+        .remove(Uuid::new_v4())
+        .expect("removing a never-prepared home is Ok");
+    assert!(
+        scratch.data_dir().join(HOMES_DIR).is_dir(),
+        "only the worker's own home is removed"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_adapter_removes_an_ended_workers_home() {
+    let h = Harness::new("handshake.script");
+    let session = h.spawn().await;
+    session.shutdown().await.expect("shutdown");
+    let home = h
+        .scratch
+        .data_dir()
+        .join(HOMES_DIR)
+        .join(h.worker_id.to_string());
+    assert!(home.is_dir(), "the spawn created the home");
+
+    h.adapter
+        .remove_worker_home(h.worker_id)
+        .await
+        .expect("remove the home");
+    assert!(!home.exists());
+
+    CodexAdapter::new(h.sink.clone())
+        .remove_worker_home(h.worker_id)
+        .await
+        .expect("an adapter without a data directory has no home to remove");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

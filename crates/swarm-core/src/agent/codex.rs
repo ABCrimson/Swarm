@@ -25,9 +25,12 @@
 //!
 //! Every child runs with `CODEX_HOME` at `<data dir>/codex-home/<worker id>`
 //! ([`CodexAdapter::with_data_dir`]), so it loads none of the operator's
-//! configuration, MCP servers, plugins or skills; only the operator's
-//! `auth.json` is copied in. An adapter built without a data directory
-//! refuses to spawn rather than fall back to the operator's home.
+//! Codex configuration, MCP servers or plugins; only `auth.json` is copied
+//! in. User skills under `~/.agents/skills` are outside `CODEX_HOME` and
+//! still load (measured on 0.168.0-alpha.1, 2026-11-04). An adapter built
+//! without a data directory refuses to spawn rather than fall back to the
+//! operator's home. [`CodexAdapter::remove_worker_home`] deletes a home once
+//! its worker is gone.
 //!
 //! ## Session lifecycle
 //!
@@ -86,7 +89,7 @@
 //! can put them on the wire, and `parse_trust_tier` fails closed on
 //! every token outside SWARM's three tiers.
 
-mod home;
+pub(crate) mod home;
 mod process;
 mod protocol;
 mod reader;
@@ -102,11 +105,11 @@ use std::collections::HashMap;
 use std::mem::DropGuard;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
-
-use anyhow::Context as _;
 use std::time::Duration;
 
+use anyhow::Context as _;
 use tokio::sync::{oneshot, watch};
+use uuid::Uuid;
 
 use self::home::PrivateHomes;
 use self::process::{
@@ -209,7 +212,10 @@ impl CodexAdapter {
     /// `data_dir/codex-home/<worker id>`, holding a Swarm-written
     /// `config.toml` and a copy of the operator's `auth.json` (from
     /// `$CODEX_HOME`, else `~/.codex`), so no worker loads the operator's
-    /// MCP servers, plugins or skills. `data_dir` is [`crate::Paths::data_dir`].
+    /// Codex configuration, MCP servers or plugins. User skills under
+    /// `~/.agents/skills` are outside `CODEX_HOME` and still load (measured
+    /// on 0.168.0-alpha.1, 2026-11-04). `data_dir` is
+    /// [`crate::Paths::data_dir`].
     #[must_use = "the adapter refuses every spawn until it has a data directory"]
     pub fn with_data_dir(self, data_dir: &Path) -> Self {
         self.with_private_homes(PrivateHomes::new(data_dir, PrivateHomes::operator_home()))
@@ -218,6 +224,22 @@ impl CodexAdapter {
     fn with_private_homes(mut self, homes: PrivateHomes) -> Self {
         self.homes = Some(homes);
         self
+    }
+
+    /// Deletes `worker_id`'s private `CODEX_HOME`, the copy of the
+    /// operator's `auth.json` and the worker's Codex threads included, so a
+    /// deleted worker leaves no login behind. Call it once the worker's
+    /// session has ended. A missing home, or an adapter without a data
+    /// directory, has nothing to remove. The file I/O runs on the blocking
+    /// pool.
+    pub async fn remove_worker_home(&self, worker_id: Uuid) -> Result<(), AppError> {
+        let Some(homes) = self.homes.clone() else {
+            return Ok(());
+        };
+        tokio::task::spawn_blocking(move || homes.remove(worker_id))
+            .await
+            .map_err(|e| AppError::Ai(format!("the codex home removal task failed: {e}")))??;
+        Ok(())
     }
 
     /// Drives `binary prefix_args...` instead of `codex`, with `timeouts`.

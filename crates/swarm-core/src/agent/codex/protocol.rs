@@ -7,8 +7,9 @@
 //! 0.166.0's are checked in under `tests/fixtures/codex/schema/<version>/`,
 //! a test fails when a name in [`method`] or [`OPTED_OUT_NOTIFICATIONS`] is
 //! missing from the newest one, and the handshake was run against a live
-//! server of that release. Field names and casing follow the schema exactly. Everything the adapter does not read is left out —
-//! serde ignores unknown fields — so a newer server that adds fields stays
+//! server of that release. Field names and casing follow the schema
+//! exactly. Everything the adapter does not read is left out — serde
+//! ignores unknown fields — so a newer server that adds fields stays
 //! compatible.
 //!
 //! The envelope is JSON-RPC 2.0 without the `"jsonrpc": "2.0"` member:
