@@ -67,6 +67,15 @@ impl PrivateHomes {
         }
     }
 
+    /// The same homes with no operator login to copy.
+    #[cfg(test)]
+    pub(super) fn without_login(self) -> Self {
+        Self {
+            operator: None,
+            ..self
+        }
+    }
+
     /// The operator's Codex home as Codex itself resolves it: a non-empty
     /// `CODEX_HOME`, else `~/.codex`.
     pub(super) fn operator_home() -> Option<PathBuf> {

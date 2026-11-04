@@ -242,6 +242,21 @@ impl CodexAdapter {
         Ok(())
     }
 
+    /// This adapter's sink, timeouts and private homes, driving
+    /// `node prefix_args...` (a fake app-server) instead of `codex`. The
+    /// homes copy no `auth.json`, so a test never copies the operator's
+    /// login.
+    #[cfg(test)]
+    pub(crate) fn driving_fake_for_test(&self, prefix_args: Vec<String>) -> Self {
+        Self {
+            sink: self.sink.clone(),
+            binary: "node".to_string(),
+            extra_prefix_args: prefix_args,
+            timeouts: self.timeouts,
+            homes: self.homes.clone().map(PrivateHomes::without_login),
+        }
+    }
+
     /// Drives `binary prefix_args...` instead of `codex`, with `timeouts`.
     #[cfg(test)]
     fn with_test_binary(
