@@ -13,12 +13,14 @@
 //! shape) but is kept in [`secrets`]: the OS keychain, or the
 //! owner-only `swarm-secrets.json` on a host without one. Writing
 //! `null` or `""` deletes it. A key that a build from before the
-//! keychain left in this file is moved to the store, once, by
-//! [`migrate_secrets`], which the key's first read or write and any
-//! rewrite of the file run; a store that refuses it leaves the file as
-//! it was, and the key keeps reading from the file until a later
+//! keychain left in this file is moved to the store, once, by the same
+//! step [`migrate_secrets`] runs, on the key's first read or write and
+//! on any rewrite of the file; a store that refuses it leaves the file
+//! as it was, and the key keeps reading from the file until a later
 //! access moves it. Store calls block, so call these functions from a
-//! blocking thread.
+//! blocking thread. No store call runs under the file's lock, so a
+//! keychain waiting on an access prompt stalls only other secret
+//! accesses, never a read of another key.
 //!
 //! # Security
 //!
@@ -58,8 +60,14 @@ use crate::state_file::{self, StoredObject};
 /// Config file name within the app data directory.
 pub(crate) const CONFIG_FILE: &str = "swarm-config.json";
 
-/// Serializes every read and read-modify-write of the file.
+/// Serializes every read and read-modify-write of the file. Never held
+/// across a [`SecretStore`] call.
 static CONFIG_LOCK: Mutex<()> = Mutex::new(());
+
+/// Serializes every move of a secret into the store with every secret
+/// write, so a moved copy can never land after a newer write. Taken
+/// before [`CONFIG_LOCK`], never while holding it.
+static SECRET_LOCK: Mutex<()> = Mutex::new(());
 
 /// Keys kept in the [`secrets`] store instead of the file.
 const SECRET_KEYS: &[&str] = &["anthropic_api_key"];
@@ -76,6 +84,18 @@ fn holds_secret(map: &Map<String, Value>) -> bool {
     SECRET_KEYS.iter().any(|key| map.contains_key(*key))
 }
 
+/// The secret entries `swarm-config.json` holds; none when the file is
+/// missing, malformed or unreadable.
+fn file_secrets(paths: &Paths) -> Map<String, Value> {
+    let _guard = CONFIG_LOCK.lock();
+    match state_file::read_object(&config_path(paths)) {
+        Ok(StoredObject::Object(map)) => {
+            map.into_iter().filter(|(key, _)| is_secret(key)).collect()
+        }
+        _ => Map::new(),
+    }
+}
+
 /// Moves every secret a pre-keychain build left in `swarm-config.json`
 /// into the secret store and rewrites the file without it. A no-op when
 /// the file holds none (or is missing, malformed or unreadable), so the
@@ -90,43 +110,53 @@ fn holds_secret(map: &Map<String, Value>) -> bool {
 /// [`AppError::Config`] when the file cannot be rewritten or the store
 /// refuses a secret; the file is then left as it was.
 pub fn migrate_secrets(paths: &Paths) -> Result<(), AppError> {
-    let _guard = CONFIG_LOCK.lock();
-    match state_file::read_object(&config_path(paths)) {
-        Ok(StoredObject::Object(map)) if holds_secret(&map) => {
-            secrets::with_store(paths, |store| migrate_locked(paths, store))
-        }
-        _ => Ok(()),
-    }
-}
-
-/// [`migrate_secrets`] into `store`, with [`CONFIG_LOCK`] held.
-fn migrate_locked(paths: &Paths, store: &dyn SecretStore) -> Result<(), AppError> {
-    let path = config_path(paths);
-    let Ok(StoredObject::Object(mut map)) = state_file::read_object(&path) else {
-        return Ok(());
-    };
-    if !holds_secret(&map) {
+    let _secret_guard = SECRET_LOCK.lock();
+    let found = file_secrets(paths);
+    if found.is_empty() {
         return Ok(());
     }
-    take_secrets(&mut map, store)?;
-    let json = serde_json::to_vec_pretty(&map)?;
-    state_file::write_atomic(&path, &json)
-        .map_err(|e| AppError::Config(format!("Failed To Write {}: {e}", path.display())))
+    secrets::with_store(paths, |store| move_secrets(paths, store, &found))
 }
 
-/// Moves each secret key out of `map` into `store`. A non-empty string
-/// is stored; anything else is no usable key and is dropped. On a store
-/// error the keys not yet moved stay in `map`.
-fn take_secrets(map: &mut Map<String, Value>, store: &dyn SecretStore) -> Result<(), AppError> {
-    for &key in SECRET_KEYS {
-        if let Some(Value::String(value)) = map.get(key)
+/// Moves `found` (read by [`file_secrets`]) into `store`, with
+/// [`SECRET_LOCK`] held. A non-empty string is stored; anything else is
+/// no usable key and is only dropped from the file.
+///
+/// The store calls run without [`CONFIG_LOCK`] (a keychain can wait on
+/// an access prompt, and config reads must not wait with it), so the
+/// file is read again afterwards and an entry is removed only if it
+/// still holds the value moved: a key written meanwhile is newer and
+/// stays for the next migration. On a store error the file is left as
+/// it was.
+fn move_secrets(
+    paths: &Paths,
+    store: &dyn SecretStore,
+    found: &Map<String, Value>,
+) -> Result<(), AppError> {
+    for (key, value) in found {
+        if let Value::String(value) = value
             && !value.is_empty()
         {
             store.set(key, &SecretString::from(value.clone()))?;
         }
-        map.remove(key);
     }
-    Ok(())
+    let _guard = CONFIG_LOCK.lock();
+    let path = config_path(paths);
+    let Ok(StoredObject::Object(mut map)) = state_file::read_object(&path) else {
+        return Ok(());
+    };
+    let before = map.len();
+    for (key, value) in found {
+        if map.get(key) == Some(value) {
+            map.remove(key);
+        }
+    }
+    if map.len() == before {
+        return Ok(());
+    }
+    let json = serde_json::to_vec_pretty(&map)?;
+    state_file::write_atomic(&path, &json)
+        .map_err(|e| AppError::Config(format!("Failed To Write {}: {e}", path.display())))
 }
 
 /// Reads secret `key` from `store`, migrating the file first. While the
@@ -137,12 +167,13 @@ fn read_secret(
     key: &str,
 ) -> Result<Option<Value>, AppError> {
     {
-        let _guard = CONFIG_LOCK.lock();
-        if let Err(e) = migrate_locked(paths, store) {
+        let _secret_guard = SECRET_LOCK.lock();
+        let found = file_secrets(paths);
+        if !found.is_empty()
+            && let Err(e) = move_secrets(paths, store, &found)
+        {
             tracing::warn!(error = %e, "could not move the API key out of swarm-config.json yet");
-            if let Ok(StoredObject::Object(mut map)) = state_file::read_object(&config_path(paths))
-                && let Some(value) = map.remove(key)
-            {
+            if let Some(value) = file_secrets(paths).remove(key) {
                 return Ok(Some(value));
             }
         }
@@ -168,9 +199,10 @@ fn write_secret(
             return Err(AppError::Config(format!("{key} Must Be A String Or Null")));
         }
     };
-    {
-        let _guard = CONFIG_LOCK.lock();
-        migrate_locked(paths, store)?;
+    let _secret_guard = SECRET_LOCK.lock();
+    let found = file_secrets(paths);
+    if !found.is_empty() {
+        move_secrets(paths, store, &found)?;
     }
     match secret {
         Some(secret) => store.set(key, &secret),
@@ -252,6 +284,20 @@ pub fn write_value(paths: &Paths, key: &str, value: Value) -> Result<(), AppErro
     if is_secret(key) {
         return secrets::with_store(paths, |store| write_secret(paths, store, key, value));
     }
+    if write_plain(paths, key, value)? {
+        // A store that refuses the secret keeps it in the file; this
+        // write of another key has gone through.
+        if let Err(e) = migrate_secrets(paths) {
+            tracing::warn!(error = %e, "could not move the API key out of swarm-config.json yet");
+        }
+    }
+    Ok(())
+}
+
+/// [`write_value`] of a key kept in the file. Returns whether the file
+/// still holds a secret, for the caller to move once [`CONFIG_LOCK`] is
+/// released.
+fn write_plain(paths: &Paths, key: &str, value: Value) -> Result<bool, AppError> {
     let _guard = CONFIG_LOCK.lock();
     let path = config_path(paths);
     let config_error = |action: &str, e: std::io::Error| {
@@ -272,16 +318,10 @@ pub fn write_value(paths: &Paths, key: &str, value: Value) -> Result<(), AppErro
         }
         Err(e) => return Err(config_error("Read (So Not Overwriting)", e)),
     };
-    // A store that refuses the secret keeps it in the file; this write
-    // of another key still goes through.
-    if holds_secret(&map)
-        && let Err(e) = secrets::with_store(paths, |store| take_secrets(&mut map, store))
-    {
-        tracing::warn!(error = %e, "could not move the API key out of swarm-config.json yet");
-    }
     map.insert(key.to_owned(), value);
     let json = serde_json::to_vec_pretty(&map)?;
-    state_file::write_atomic(&path, &json).map_err(|e| config_error("Write", e))
+    state_file::write_atomic(&path, &json).map_err(|e| config_error("Write", e))?;
+    Ok(holds_secret(&map))
 }
 
 #[cfg(test)]
@@ -530,12 +570,79 @@ mod tests {
         );
         assert_eq!(config_text(&paths), legacy);
 
-        let StoredObject::Object(mut map) = state_file::read_object(&config_path(&paths)).unwrap()
-        else {
-            panic!("legacy file is an object");
-        };
-        assert!(take_secrets(&mut map, &Refusing).is_err());
-        assert_eq!(map.get(API_KEY), Some(&json!("sk-ant-legacy")));
+        assert!(move_secrets(&paths, &Refusing, &file_secrets(&paths)).is_err());
+        assert_eq!(config_text(&paths), legacy);
+    }
+
+    /// A store whose `set` runs `during_set` first, then accepts.
+    struct Probe<F: Fn() + Send + Sync>(F);
+
+    impl<F: Fn() + Send + Sync> SecretStore for Probe<F> {
+        fn get(&self, _name: &str) -> Result<Option<SecretString>, AppError> {
+            Ok(None)
+        }
+
+        fn set(&self, _name: &str, _secret: &SecretString) -> Result<(), AppError> {
+            (self.0)();
+            Ok(())
+        }
+
+        fn delete(&self, _name: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
+    /// A keychain call can wait on an access prompt, so it never runs
+    /// with `CONFIG_LOCK` held: other config reads go on meanwhile.
+    #[test]
+    fn test_the_store_is_called_without_the_config_lock() {
+        let (dir, _cleanup) = temp_dir("config");
+        let paths = paths(&dir);
+        fs::write(
+            config_path(&paths),
+            r#"{"anthropic_api_key": "sk-ant-legacy"}"#,
+        )
+        .unwrap();
+        let free = Probe(|| {
+            assert!(
+                CONFIG_LOCK
+                    .try_lock_for(std::time::Duration::from_secs(5))
+                    .is_some(),
+                "CONFIG_LOCK is held during a store call"
+            );
+        });
+
+        assert_eq!(read_secret(&paths, &free, API_KEY).unwrap(), None);
+        assert!(!config_text(&paths).contains("sk-ant-legacy"));
+        fs::write(
+            config_path(&paths),
+            r#"{"anthropic_api_key": "sk-ant-legacy"}"#,
+        )
+        .unwrap();
+        write_secret(&paths, &free, API_KEY, json!("sk-ant-new")).unwrap();
+        assert!(!config_text(&paths).contains("sk-ant-legacy"));
+    }
+
+    /// A key written to the file while the store call waited is newer
+    /// than the copy moved, so the migration leaves it in the file.
+    #[test]
+    fn test_a_migration_keeps_a_key_changed_during_the_store_call() {
+        let (dir, _cleanup) = temp_dir("config");
+        let paths = paths(&dir);
+        let file = config_path(&paths);
+        fs::write(&file, r#"{"anthropic_api_key": "sk-ant-legacy"}"#).unwrap();
+        let rewrite = Probe(|| {
+            fs::write(
+                &file,
+                r#"{"anthropic_api_key": "sk-ant-newer", "theme": "dark"}"#,
+            )
+            .unwrap();
+        });
+
+        read_secret(&paths, &rewrite, API_KEY).unwrap();
+        let text = config_text(&paths);
+        assert!(text.contains("sk-ant-newer"), "{text}");
+        assert!(text.contains("dark"), "{text}");
     }
 
     /// A file that exists but cannot be read is never overwritten.

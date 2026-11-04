@@ -10,6 +10,11 @@
 //! Unit tests always get the file store, so no test touches the
 //! developer's keychain.
 //!
+//! The OS keychain holds one `swarm`/`anthropic_api_key` entry per OS
+//! user, shared by every data directory; migrating a legacy key from
+//! any data directory replaces it, and clearing it clears it for all.
+//! Only the [`FileStore`] is per data directory.
+//!
 //! Every store call blocks (the keychain APIs are synchronous, and a
 //! locked keychain can wait on the user), so it runs on a blocking
 //! thread, never on a Tokio worker. Only [`crate::config`] opens a
