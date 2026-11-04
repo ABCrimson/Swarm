@@ -27,11 +27,7 @@ const sectionHeadingStyle: CSSProperties = {
   color: "var(--color-fg-muted)",
 };
 
-const gridStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-  gap: 8,
-};
+const listStyle: CSSProperties = { display: "flex", flexDirection: "column" };
 
 /** Built-in tools as shown on the page — their Title Case `uiDescription`, never the model-facing one. */
 const BUILT_IN_TOOLS = toolRegistry
@@ -47,7 +43,7 @@ const BUILT_IN_TOOLS = toolRegistry
   .toArray();
 
 /**
- * List of all tools (built-in + custom) as OKLCH-styled cards: name,
+ * List of all tools (built-in + custom) as rule-divided rows: name,
  * description and parameter count, with Edit/Delete actions (named per
  * tool for assistive technology) on custom tools.
  */
@@ -76,9 +72,9 @@ export function ToolList({
           Built-In{" "}
           <span className="font-mono text-fg-dim tabular-nums">{BUILT_IN_TOOLS.length}</span>
         </h2>
-        <div style={gridStyle}>
+        <div className="divide-y divide-border" style={listStyle}>
           {BUILT_IN_TOOLS.map((tool) => (
-            <ToolCard
+            <ToolRow
               key={tool.name}
               name={tool.name}
               description={tool.description}
@@ -106,9 +102,9 @@ export function ToolList({
             />
           </div>
         ) : (
-          <div style={gridStyle}>
+          <div className="divide-y divide-border" style={listStyle}>
             {customTools.map((tool) => (
-              <ToolCard
+              <ToolRow
                 key={tool.id}
                 name={tool.name}
                 description={tool.description}
@@ -124,7 +120,7 @@ export function ToolList({
   );
 }
 
-function ToolCard({
+function ToolRow({
   name,
   description,
   paramCount,
@@ -142,34 +138,22 @@ function ToolCard({
   return (
     <article
       aria-labelledby={headingId}
-      style={{
-        padding: 14,
-        borderRadius: "var(--radius-lg)",
-        border: "1px solid var(--color-border)",
-        background: "oklch(0.10 0.03 220 / 0.5)",
-        backdropFilter: "blur(12px) saturate(1.5)",
-        display: "flex",
-        flexDirection: "column",
-        gap: 6,
-      }}
+      className="grid grid-cols-[200px_1fr_auto] items-baseline gap-x-4 py-3"
     >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <h3
-          id={headingId}
-          style={{
-            margin: 0,
-            fontFamily: "var(--font-mono)",
-            fontSize: "var(--text-md)",
-            fontWeight: 600,
-            color: "var(--color-plasma)",
-          }}
-        >
-          {name}
-        </h3>
-        <Pill tone="neutral" size="sm" className="tabular-nums">
-          {pluralize("Param", paramCount)}
-        </Pill>
-      </div>
+      <h3
+        id={headingId}
+        style={{
+          margin: 0,
+          minWidth: 0,
+          overflowWrap: "anywhere",
+          fontFamily: "var(--font-mono)",
+          fontSize: "var(--text-md)",
+          fontWeight: 600,
+          color: "var(--color-plasma)",
+        }}
+      >
+        {name}
+      </h3>
 
       <p
         style={{
@@ -187,22 +171,27 @@ function ToolCard({
         {description}
       </p>
 
-      {onEdit && onDelete && (
-        <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-          <Pill interactive tone="neutral" size="sm" onClick={onEdit} aria-label={`Edit ${name}`}>
-            Edit
-          </Pill>
-          <Pill
-            interactive
-            tone="danger"
-            size="sm"
-            onClick={onDelete}
-            aria-label={`Delete ${name}`}
-          >
-            Delete
-          </Pill>
-        </div>
-      )}
+      <div className="flex items-center gap-1.5">
+        <Pill tone="neutral" size="sm" className="tabular-nums">
+          {pluralize("Param", paramCount)}
+        </Pill>
+        {onEdit && onDelete && (
+          <>
+            <Pill interactive tone="neutral" size="sm" onClick={onEdit} aria-label={`Edit ${name}`}>
+              Edit
+            </Pill>
+            <Pill
+              interactive
+              tone="danger"
+              size="sm"
+              onClick={onDelete}
+              aria-label={`Delete ${name}`}
+            >
+              Delete
+            </Pill>
+          </>
+        )}
+      </div>
     </article>
   );
 }

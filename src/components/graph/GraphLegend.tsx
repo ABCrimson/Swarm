@@ -98,10 +98,10 @@ export function GraphLegend({ presentKinds }: GraphLegendProps): React.ReactElem
           )}
           <span
             style={{
-              fontSize: "0.5625rem",
+              fontFamily: "var(--font-display)",
+              fontSize: "var(--text-md)",
               fontWeight: 600,
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
+              letterSpacing: "-0.01em",
               color: "var(--color-fg-dim)",
             }}
           >

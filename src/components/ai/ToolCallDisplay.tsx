@@ -103,10 +103,10 @@ const jsonStyle: CSSProperties = {
 const sectionLabelStyle: CSSProperties = {
   display: "block",
   padding: "6px 14px 2px",
-  fontSize: 10,
+  fontFamily: "var(--font-display)",
+  fontSize: "var(--text-md)",
   fontWeight: 600,
-  textTransform: "uppercase",
-  letterSpacing: "0.08em",
+  letterSpacing: "-0.01em",
   color: "var(--color-fg-dim)",
   background: "var(--color-surface-0)",
 };

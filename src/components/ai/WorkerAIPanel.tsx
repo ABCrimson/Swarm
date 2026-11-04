@@ -85,11 +85,11 @@ const dialogTitleStyle: CSSProperties = {
 };
 
 const labelStyle: CSSProperties = {
-  fontSize: 11,
   color: "var(--color-fg-dim)",
-  fontWeight: 500,
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
+  fontFamily: "var(--font-display)",
+  fontSize: "var(--text-md)",
+  fontWeight: 600,
+  letterSpacing: "-0.01em",
   padding: "0 4px",
 };
 

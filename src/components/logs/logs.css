@@ -74,7 +74,7 @@
 
   .log-row__level {
     flex-shrink: 0;
-    width: 44px;
+    width: 56px;
     text-transform: uppercase;
   }
 
@@ -169,7 +169,7 @@
     width: auto;
     height: 28px;
     padding: 0 8px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: var(--text-sm);
     cursor: pointer;
   }
@@ -180,7 +180,7 @@
     width: auto;
     height: 28px;
     padding: 0 10px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: var(--text-sm);
   }
 }

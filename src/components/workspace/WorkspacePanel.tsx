@@ -139,7 +139,7 @@ export function WorkspacePanel(): React.ReactElement {
         style={{ width: sidebarWidth }}
       >
         <div className="flex items-center justify-between border-border border-b px-3 py-2.5">
-          <h2 className="font-bold font-display text-fg-muted text-sm uppercase tracking-[0.04em]">
+          <h2 className="font-display font-semibold text-fg-muted text-md tracking-tight">
             Explorer
           </h2>
           <button

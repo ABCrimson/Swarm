@@ -73,7 +73,10 @@ function SettingsSection({
       className="py-6"
     >
       <div className="mb-3 flex items-center justify-between gap-4">
-        <h2 id={headingId} className="font-display text-lg font-bold tracking-tight text-fg-bright">
+        <h2
+          id={headingId}
+          className="font-display text-lg font-semibold tracking-tight text-fg-bright"
+        >
           {title}
         </h2>
         {action}

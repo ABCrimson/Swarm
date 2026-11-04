@@ -122,9 +122,9 @@ const dialogStyle: CSSProperties = {
   maxWidth: "calc(100vw - 32px)",
   maxHeight: "85vh",
   padding: 0,
-  background: "oklch(0.10 0.03 220)",
+  background: "var(--color-surface-1)",
   border: "1px solid var(--color-border-2)",
-  borderRadius: 12,
+  borderRadius: "var(--radius-lg)",
   boxShadow:
     "0 0 0 1px oklch(from var(--color-plasma) l c h / 0.1), 0 16px 48px oklch(from var(--color-void) l c h / 0.6)",
   color: "var(--color-fg)",

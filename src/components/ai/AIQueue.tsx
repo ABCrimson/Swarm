@@ -178,11 +178,7 @@ export function AIQueue({ workerId }: AIQueueProps): React.ReactElement {
               style={itemStyle}
             >
               <span style={positionStyle}>{index + 1}</span>
-              <Pill
-                tone={PRIORITY_TONE[item.priority]}
-                size="sm"
-                style={{ textTransform: "uppercase" }}
-              >
+              <Pill tone={PRIORITY_TONE[item.priority]} size="sm">
                 {PRIORITY_LABEL[item.priority]}
               </Pill>
               <StatusLabel status={item.status} waitPosition={waitPositions.get(item.id) ?? 0} />
