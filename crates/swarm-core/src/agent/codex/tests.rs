@@ -14,6 +14,7 @@ use std::time::Instant;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use super::home::{CODEX_HOME_ENV, PrivateHomes};
 use super::process::{find_program, first_line, resolve_program, resolve_with_pathext};
 use super::protocol::{
     ApprovalsReviewer, AskForApproval, Incoming, METHOD_NOT_FOUND, RequestId, SandboxMode,
@@ -21,7 +22,7 @@ use super::protocol::{
 };
 use super::reader::permission_id;
 use super::state::{ApprovalKind, PendingApproval};
-use super::tier::verify_effective_policy;
+use super::tier::{NO_CWD_EXE_LOOKUP_ENV, verify_effective_policy};
 use super::*;
 use crate::agent::PROCESS_EXITED_WITHOUT_RECEIPT;
 use crate::agent::adapter::{AgentTurnStatus, CancelGranularity};
@@ -53,8 +54,8 @@ fn test_timeouts() -> Timeouts {
     }
 }
 
-/// A per-test temporary directory (the session's `cwd` and the fake's
-/// record file), removed on drop.
+/// A per-test temporary directory (the session's `cwd`, the fake's
+/// record file and the adapter's data directory), removed on drop.
 struct Scratch(PathBuf);
 
 impl Scratch {
@@ -66,6 +67,11 @@ impl Scratch {
 
     fn path(&self) -> &Path {
         &self.0
+    }
+
+    /// The data directory the harness adapter keeps private Codex homes in.
+    fn data_dir(&self) -> PathBuf {
+        self.0.join("data")
     }
 }
 
@@ -128,7 +134,9 @@ impl Harness {
             events_tx.send_modify(|events| events.push(envelope.event.clone()));
         });
         let sink = engine.sink();
-        let adapter = CodexAdapter::with_test_binary(sink.clone(), "node", prefix_args, timeouts);
+        // No operator home: a wire test never copies an `auth.json`.
+        let adapter = CodexAdapter::with_test_binary(sink.clone(), "node", prefix_args, timeouts)
+            .with_private_homes(PrivateHomes::new(&scratch.data_dir(), None));
         Self {
             _engine: engine,
             sink,
@@ -885,6 +893,183 @@ async fn an_unknown_trust_tier_never_starts_a_process() {
         .err()
         .expect("refused");
     assert_matches!(error, AppError::PermissionDenied(_));
+}
+
+// ── Private CODEX_HOME ───────────────────────────────────────────────
+
+/// Sorted file names in `dir`.
+fn entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("read the directory")
+        .map(|entry| {
+            entry
+                .expect("a directory entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// Sets `path`'s modification time to `at`.
+fn set_modified(path: &Path, at: std::time::SystemTime) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_modified(at))
+        .expect("set the modification time");
+}
+
+fn modified(path: &Path) -> std::time::SystemTime {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .expect("read the modification time")
+}
+
+#[test]
+fn child_env_points_codex_home_at_the_private_home() {
+    let home = std::env::temp_dir()
+        .join("codex-home")
+        .join(Uuid::nil().to_string());
+    let env = child_env(&home).expect("a UTF-8 path");
+    assert_eq!(env.len(), 2, "{env:?}");
+    assert_eq!(env[CODEX_HOME_ENV], home.to_str().expect("UTF-8"));
+    assert_eq!(env[NO_CWD_EXE_LOOKUP_ENV], "1");
+}
+
+#[test]
+fn a_private_home_holds_only_swarm_config_and_keeps_codex_state_across_spawns() {
+    let scratch = Scratch::new();
+    let homes = PrivateHomes::new(&scratch.data_dir(), None);
+    let worker = Uuid::new_v4();
+    let home = homes.prepare(worker).expect("prepare the private home");
+    assert_eq!(
+        home,
+        scratch
+            .data_dir()
+            .join("codex-home")
+            .join(worker.to_string())
+    );
+    assert_eq!(entries(&home), ["config.toml"], "no plugins, no auth.json");
+    let config = std::fs::read_to_string(home.join("config.toml")).expect("read config.toml");
+    assert!(
+        config
+            .lines()
+            .all(|line| line.trim().is_empty() || line.starts_with('#')),
+        "the Swarm-written config sets nothing, so no [mcp_servers] table: {config}"
+    );
+
+    // Codex keeps threads in its home, so a later spawn (thread/resume)
+    // must find them; a config.toml edited in between is reset.
+    std::fs::create_dir_all(home.join("sessions")).expect("create sessions/");
+    std::fs::write(
+        home.join("config.toml"),
+        "[mcp_servers.github]
+command = \"gh\"
+",
+    )
+    .expect("tamper with config.toml");
+    assert_eq!(homes.prepare(worker).expect("prepare again"), home);
+    assert_eq!(entries(&home), ["config.toml", "sessions"]);
+    assert_eq!(
+        std::fs::read_to_string(home.join("config.toml")).expect("read config.toml"),
+        config
+    );
+}
+
+#[test]
+fn the_operator_auth_is_copied_refreshed_when_newer_and_dropped_when_gone() {
+    // A placeholder, never a credential.
+    let scratch = Scratch::new();
+    let operator = scratch.path().join("operator-codex");
+    std::fs::create_dir_all(&operator).expect("create the operator home");
+    let source = operator.join("auth.json");
+    std::fs::write(&source, r#"{"placeholder":1}"#).expect("write the source");
+    let homes = PrivateHomes::new(&scratch.data_dir(), Some(operator));
+    let worker = Uuid::new_v4();
+
+    let home = homes.prepare(worker).expect("prepare");
+    let copy = home.join("auth.json");
+    assert_eq!(
+        std::fs::read_to_string(&copy).unwrap(),
+        r#"{"placeholder":1}"#
+    );
+    assert_eq!(entries(&home), ["auth.json", "config.toml"]);
+
+    // Codex refreshed the token inside the private home: the newer private
+    // copy is kept.
+    std::fs::write(&copy, r#"{"placeholder":2}"#).unwrap();
+    set_modified(&copy, modified(&source) + Duration::from_secs(60));
+    homes.prepare(worker).expect("prepare");
+    assert_eq!(
+        std::fs::read_to_string(&copy).unwrap(),
+        r#"{"placeholder":2}"#
+    );
+
+    // The operator signed in again: the newer source replaces the copy.
+    std::fs::write(&source, r#"{"placeholder":3}"#).unwrap();
+    set_modified(&source, modified(&copy) + Duration::from_secs(60));
+    homes.prepare(worker).expect("prepare");
+    assert_eq!(
+        std::fs::read_to_string(&copy).unwrap(),
+        r#"{"placeholder":3}"#
+    );
+
+    // The operator signed out: the worker is signed out too.
+    std::fs::remove_file(&source).unwrap();
+    homes.prepare(worker).expect("prepare");
+    assert_eq!(entries(&home), ["config.toml"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_child_runs_with_a_private_codex_home_under_the_data_dir() {
+    let h = Harness::new("handshake.script");
+    let session = h.spawn().await;
+    let started = &h.record()[0];
+    let home = h
+        .scratch
+        .data_dir()
+        .join("codex-home")
+        .join(h.worker_id.to_string());
+    assert_eq!(started["codexHome"], home.to_str().expect("UTF-8"));
+    assert_eq!(
+        started["codexHomeEntries"],
+        json!(["config.toml"]),
+        "the child sees only the Swarm-written config"
+    );
+    session.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_adapter_without_a_data_dir_never_starts_codex() {
+    let h = Harness::new("handshake.script");
+    let record = h.scratch.path().join("wire.jsonl");
+    let adapter = CodexAdapter::with_test_binary(
+        h.sink.clone(),
+        "node",
+        vec![
+            fixture("fake_codex_app_server.mjs"),
+            "--script".to_string(),
+            fixture("handshake.script"),
+            "--record".to_string(),
+            record.display().to_string(),
+        ],
+        test_timeouts(),
+    );
+    let error = adapter
+        .spawn(h.spec(None, None, None))
+        .await
+        .err()
+        .expect("refused");
+    assert_matches!(&error, AppError::Ai(detail) if detail.contains("CODEX_HOME"), "{error:?}");
+    assert!(
+        h.record().is_empty(),
+        "no process started: {:?}",
+        h.record()
+    );
+    assert!(!h.scratch.data_dir().exists());
 }
 
 // ── Turns ────────────────────────────────────────────────────────────

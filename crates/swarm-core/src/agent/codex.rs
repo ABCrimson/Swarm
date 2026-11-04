@@ -10,10 +10,19 @@
 //! item notifications come from the generated schema; the fixtures under
 //! `tests/fixtures/codex/` follow it.
 //!
-//! The wire types live in `protocol`; the trust-tier mapping in `tier`, the
-//! child process and handshake in `process`, the shared session state in
-//! `state`, teardown in `teardown` and the reader task's line handlers in
-//! `reader`; this file holds the constants, the adapter and the session.
+//! The wire types live in `protocol`; the trust-tier mapping and the child's
+//! environment in `tier`, each worker's private `CODEX_HOME` in `home`,
+//! the child process and handshake in `process`, the shared session state
+//! in `state`, teardown in `teardown` and the reader task's line handlers
+//! in `reader`; this file holds the constants, the adapter and the session.
+//!
+//! ## A private `CODEX_HOME` per worker
+//!
+//! Every child runs with `CODEX_HOME` at `<data dir>/codex-home/<worker id>`
+//! ([`CodexAdapter::with_data_dir`]), so it loads none of the operator's
+//! configuration, MCP servers, plugins or skills; only the operator's
+//! `auth.json` is copied in. An adapter built without a data directory
+//! refuses to spawn rather than fall back to the operator's home.
 //!
 //! ## Session lifecycle
 //!
@@ -72,6 +81,7 @@
 //! can put them on the wire, and `parse_trust_tier` fails closed on
 //! every token outside SWARM's three tiers.
 
+mod home;
 mod process;
 mod protocol;
 mod reader;
@@ -85,11 +95,15 @@ pub use self::tier::CodexTrustTier;
 
 use std::collections::HashMap;
 use std::mem::DropGuard;
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
+
+use anyhow::Context as _;
 use std::time::Duration;
 
 use tokio::sync::{oneshot, watch};
 
+use self::home::PrivateHomes;
 use self::process::{
     ProbeFailure, first_line, open_thread, resolve_program, run_cli, start_stdin_writer,
 };
@@ -168,18 +182,37 @@ pub struct CodexAdapter {
     /// fake server through `node <script> ...`.
     extra_prefix_args: Vec<String>,
     timeouts: Timeouts,
+    /// Each worker's private `CODEX_HOME`; `None` refuses every spawn.
+    homes: Option<PrivateHomes>,
 }
 
 impl CodexAdapter {
     /// Drives the `codex` binary found in an absolute `PATH` entry (on Windows including the
-    /// `codex.cmd` shim an npm install creates).
+    /// `codex.cmd` shim an npm install creates). It spawns nothing until
+    /// [`Self::with_data_dir`] gives it a place for the workers' homes.
     pub fn new(sink: EventSink) -> Self {
         Self {
             sink,
             binary: "codex".to_string(),
             extra_prefix_args: Vec::new(),
             timeouts: Timeouts::PRODUCTION,
+            homes: None,
         }
+    }
+
+    /// Runs every worker with a private `CODEX_HOME` at
+    /// `data_dir/codex-home/<worker id>`, holding a Swarm-written
+    /// `config.toml` and a copy of the operator's `auth.json` (from
+    /// `$CODEX_HOME`, else `~/.codex`), so no worker loads the operator's
+    /// MCP servers, plugins or skills. `data_dir` is [`crate::Paths::data_dir`].
+    #[must_use = "the adapter refuses every spawn until it has a data directory"]
+    pub fn with_data_dir(self, data_dir: &Path) -> Self {
+        self.with_private_homes(PrivateHomes::new(data_dir, PrivateHomes::operator_home()))
+    }
+
+    fn with_private_homes(mut self, homes: PrivateHomes) -> Self {
+        self.homes = Some(homes);
+        self
     }
 
     /// Drives `binary prefix_args...` instead of `codex`, with `timeouts`.
@@ -195,6 +228,7 @@ impl CodexAdapter {
             binary: binary.into(),
             extra_prefix_args: prefix_args,
             timeouts,
+            homes: None,
         }
     }
 }
@@ -304,6 +338,7 @@ impl AgentAdapter for CodexAdapter {
         let binary = self.binary.clone();
         let prefix = self.extra_prefix_args.clone();
         let timeouts = self.timeouts;
+        let homes = self.homes.clone();
         Box::pin(async move {
             // An empty working directory would make the child inherit
             // SWARM's own, and the sandbox's workspace would then be
@@ -325,12 +360,19 @@ impl AgentAdapter for CodexAdapter {
                     "failed to spawn codex: No Absolute PATH Entry Holds {binary:?}"
                 ))
             })?;
+            let homes = homes.ok_or_else(|| {
+                AppError::Ai(
+                    "failed to spawn codex: No Data Directory For The Worker's Private CODEX_HOME                      (Refusing To Run Codex With The Operator's Home)"
+                        .to_string(),
+                )
+            })?;
             let mut argv = prefix;
             argv.push("app-server".to_string());
 
-            // Process creation is a blocking syscall; keep it off the
-            // async worker threads.
+            // Preparing the home is file I/O and process creation a
+            // blocking syscall; keep both off the async worker threads.
             let cwd = spec.cwd.clone();
+            let worker_id = spec.worker_id;
             let PipedHandle {
                 stdin,
                 child,
@@ -338,7 +380,10 @@ impl AgentAdapter for CodexAdapter {
                 framer_errors,
                 stderr_tail,
             } = tokio::task::spawn_blocking(move || {
-                spawn_piped(&program, &argv, &cwd, &child_env())
+                let home = homes.prepare(worker_id).with_context(|| {
+                    format!("preparing the private CODEX_HOME for worker {worker_id}")
+                })?;
+                spawn_piped(&program, &argv, &cwd, &child_env(&home)?)
             })
             .await
             .map_err(|e| AppError::Ai(format!("the codex spawn task failed: {e}")))?
