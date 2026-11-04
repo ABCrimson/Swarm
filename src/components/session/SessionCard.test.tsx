@@ -1,59 +1,10 @@
+import "#test/dom-polyfills";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionCard } from "#components/session/SessionCard";
 import type { Session } from "#store/types";
 import { useWorkerStore } from "#store/workers";
-
-// jsdom implements neither the Popover API nor `popovertarget` invokers,
-// and its UA sheet hides every `[popover]` (it cannot match
-// `:popover-open`). This stand-in models what SessionCard relies on: open
-// state (as `data-popover-open`, shown via an inline `display`), the
-// `toggle` event React's `onToggle` reads, and a `popovertarget` click
-// toggling its target. Light dismiss and focus restoration are the
-// browser's job and are not simulated.
-let uninstallPopover = () => {};
-beforeAll(() => {
-  const proto = HTMLElement.prototype;
-  const originals = {
-    showPopover: proto.showPopover,
-    hidePopover: proto.hidePopover,
-    togglePopover: proto.togglePopover,
-  };
-  const setOpen = (element: HTMLElement, open: boolean) => {
-    if (element.hasAttribute("data-popover-open") === open) return;
-    element.toggleAttribute("data-popover-open", open);
-    element.style.display = open ? "block" : "";
-    element.dispatchEvent(
-      Object.assign(new Event("toggle"), {
-        newState: open ? "open" : "closed",
-        oldState: open ? "closed" : "open",
-      }),
-    );
-  };
-  proto.showPopover = function (this: HTMLElement) {
-    setOpen(this, true);
-  };
-  proto.hidePopover = function (this: HTMLElement) {
-    setOpen(this, false);
-  };
-  proto.togglePopover = function (this: HTMLElement) {
-    setOpen(this, !this.hasAttribute("data-popover-open"));
-    return this.hasAttribute("data-popover-open");
-  };
-  const onClick = (event: MouseEvent) => {
-    const targetId = (event.target as Element)
-      .closest("[popovertarget]")
-      ?.getAttribute("popovertarget");
-    if (targetId != null) document.getElementById(targetId)?.togglePopover();
-  };
-  document.addEventListener("click", onClick);
-  uninstallPopover = () => {
-    document.removeEventListener("click", onClick);
-    Object.assign(proto, originals);
-  };
-});
-afterAll(() => uninstallPopover());
 
 const SESSION_ID = "0f0e0d0c-0b0a-4908-8706-050403020100";
 
@@ -200,7 +151,7 @@ describe("SessionCard", () => {
     await user.click(trigger);
 
     const menu = screen.getByRole("menu", { name: 'Actions For Session "Test Session"' });
-    expect(menu).toHaveAttribute("data-popover-open");
+    expect(menu.matches(":popover-open")).toBe(true);
     expect(within(menu).getByRole("menuitem", { name: "Export As JSON" })).toHaveFocus();
   });
 
@@ -233,7 +184,7 @@ describe("SessionCard", () => {
 
     expect(props.onDelete).toHaveBeenCalledExactlyOnceWith(SESSION_ID);
     expect(props.onExport).not.toHaveBeenCalled();
-    expect(screen.getByRole("menu", { hidden: true })).not.toHaveAttribute("data-popover-open");
+    expect(screen.getByRole("menu", { hidden: true }).matches(":popover-open")).toBe(false);
   });
 
   it("closes the menu on Tab", async () => {
@@ -243,7 +194,7 @@ describe("SessionCard", () => {
 
     await user.keyboard("{Tab}");
 
-    expect(screen.getByRole("menu", { hidden: true })).not.toHaveAttribute("data-popover-open");
+    expect(screen.getByRole("menu", { hidden: true }).matches(":popover-open")).toBe(false);
   });
 
   it("opens the same menu on right-click", async () => {
@@ -252,7 +203,7 @@ describe("SessionCard", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /^Test Session/ }));
     const menu = screen.getByRole("menu");
-    expect(menu).toHaveAttribute("data-popover-open");
+    expect(menu.matches(":popover-open")).toBe(true);
 
     await user.click(within(menu).getByRole("menuitem", { name: "Save As Template" }));
     expect(props.onCreateTemplate).toHaveBeenCalledExactlyOnceWith(SESSION_ID);
