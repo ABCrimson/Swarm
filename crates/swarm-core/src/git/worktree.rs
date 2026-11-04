@@ -56,8 +56,9 @@ fn prune_args(repo_root: &Path) -> Vec<String> {
 /// Argv for `git branch -d <branch>` — deliberately incapable of ever
 /// carrying `-D`/`--delete --force`. `-d` (lowercase) is git's own
 /// safe delete: it refuses if `branch` isn't fully merged. Both of
-/// SWARM's callers (`worker::lifecycle::do_kill_worker` and the
-/// rollback in [`add`]) additionally check the branch tip against the
+/// SWARM's callers (`worker::lifecycle::delete_isolation_branch_if_unchanged`,
+/// on kill and on spawn rollback, and the rollback in [`add`])
+/// additionally check the branch tip against the
 /// base commit before even attempting this, so the two checks are
 /// redundant defense in depth, not a substitute for one another.
 fn branch_delete_args(repo_root: &Path, branch: &str) -> Vec<String> {

@@ -146,10 +146,12 @@ fn classify_push_error(raw_stderr: &str, surfaced_stderr: &str) -> ShipError {
 /// Only") goes straight here.
 ///
 /// `expected_remote` is the `ShipPreflight.remote` the caller showed
-/// (redacted push URL). When it is given, `origin`'s push URL is read
-/// again under the same lock hold as the push and must still redact to
-/// it, so an `origin` re-pointed after the preview never receives the
-/// branch. `None` skips that comparison (a caller that predates it).
+/// (redacted push URL). When it is given, `origin`'s push URLs are
+/// re-read in the same lock hold, immediately before the push, and must
+/// still redact to it, so an `origin` re-pointed after the preview is
+/// refused ([`RepoLocks`] does not serialize a re-point by another
+/// process in the moment between that read and git's own lookup).
+/// `None` skips that comparison (a caller that predates it).
 ///
 /// # Errors
 ///
@@ -241,7 +243,7 @@ pub(super) fn resolve_push_sha(wt: &Path, branch: &str) -> Result<String, AppErr
 /// worktree, then points `branch`'s upstream at `origin/<branch>`. Each
 /// git call runs under `repo_locks`; `origin`'s push URLs are read in the
 /// same lock hold as the push and checked by [`check_destination`]
-/// first, so nothing is sent to a destination the caller did not see.
+/// immediately before git runs.
 /// The push carries `sha` itself, so the receipt names exactly the commit
 /// that was pushed even when `branch` has moved since `sha` was read.
 ///
