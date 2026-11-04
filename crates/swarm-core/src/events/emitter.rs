@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, SyncSender};
 
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -908,6 +909,19 @@ enum Outlet {
     Capture(Sender<WriterMsg>),
 }
 
+/// The shutdown gate every clone of one [`EventSink`] shares. `record`
+/// holds `lock` shared across its `closed` check and its send, and
+/// [`EventSink::close`] holds it exclusively while it sets `closed` and
+/// queues the shutdown barrier, so no record can be queued behind the
+/// barrier: it either reaches the writer before it or is refused at the
+/// sink. Uncontended except while `close` runs.
+#[derive(Default)]
+struct Gate {
+    lock: RwLock<()>,
+    /// Read and written only under `lock`, which orders it.
+    closed: AtomicBool,
+}
+
 /// A cloneable handle for recording [`SwarmEvent`]s into the
 /// [`crate::orchestration::OrchestrationEngine`]'s ordered pipeline.
 ///
@@ -917,10 +931,10 @@ enum Outlet {
 #[derive(Clone)]
 pub struct EventSink {
     outlet: Outlet,
-    /// Set once the engine starts shutting down: later events are
+    /// Closed once the engine starts shutting down: later events are
     /// dropped with a debug log instead of queueing behind a writer
     /// that will never process them.
-    closed: Arc<AtomicBool>,
+    gate: Arc<Gate>,
     /// Shared with the writer; counts the persistent events this sink
     /// queues.
     backlog: Arc<Backlog>,
@@ -929,16 +943,12 @@ pub struct EventSink {
 impl EventSink {
     /// Wraps the writer channel. Called only by
     /// [`crate::orchestration::OrchestrationEngine::try_start`], which
-    /// keeps a clone of `closed` to flip at shutdown and of `backlog` to
-    /// report what a shutdown leaves unpersisted.
-    pub(crate) fn for_writer(
-        tx: Sender<WriterCmd>,
-        closed: Arc<AtomicBool>,
-        backlog: Arc<Backlog>,
-    ) -> Self {
+    /// keeps a clone of this sink to [`Self::close`] at shutdown and of
+    /// `backlog` to report what a shutdown leaves unpersisted.
+    pub(crate) fn for_writer(tx: Sender<WriterCmd>, backlog: Arc<Backlog>) -> Self {
         Self {
             outlet: Outlet::Writer(tx),
-            closed,
+            gate: Arc::default(),
             backlog,
         }
     }
@@ -950,7 +960,7 @@ impl EventSink {
     pub(crate) fn new(tx: Sender<WriterMsg>) -> Self {
         Self {
             outlet: Outlet::Capture(tx),
-            closed: Arc::default(),
+            gate: Arc::default(),
             backlog: Arc::default(),
         }
     }
@@ -966,12 +976,25 @@ impl EventSink {
         }
     }
 
+    /// Closes this sink and every clone of it, and queues `barrier` (the
+    /// shutdown barrier) as one step: every event recorded before it is
+    /// queued ahead of the barrier, and every later one is refused at the
+    /// sink, so the backlog's accepted count is frozen once this returns.
+    /// `false` when there is no live writer thread to receive the barrier.
+    pub(crate) fn close(&self, barrier: WriterCmd) -> bool {
+        let _closing = self.gate.lock.write();
+        self.gate.closed.store(true, Ordering::Relaxed);
+        self.send_command(barrier)
+    }
+
     /// Hands one event to the writer thread, or drops it (logged) when
     /// the engine is shutting down or its writer thread is gone. A
     /// dropped event's ack sender is dropped with it.
     fn record(&self, msg: WriterMsg) {
         let event_type = msg.event.type_tag();
-        if self.closed.load(Ordering::Acquire) {
+        // Held until the event is queued: see `Gate`.
+        let held = self.gate.lock.read();
+        if self.gate.closed.load(Ordering::Relaxed) {
             tracing::debug!(event_type, "event engine is shut down; event dropped");
             return;
         }
@@ -992,6 +1015,7 @@ impl EventSink {
             #[cfg(test)]
             Outlet::Capture(tx) => tx.send(msg).is_ok(),
         };
+        drop(held);
         if !delivered {
             tracing::error!(event_type, "event writer thread is gone; event dropped");
         }
@@ -2059,16 +2083,32 @@ mod tests {
     }
 
     /// Once the engine is shutting down, events are dropped at the sink
-    /// (never queued behind a writer that will not process them), and an
-    /// awaited seq resolves to an error instead of hanging.
+    /// (never queued behind the barrier `close` queued), on every clone,
+    /// and an awaited seq resolves to an error instead of hanging.
     #[tokio::test]
     async fn test_a_closed_sink_drops_events_and_fails_acks() {
         let (tx, rx) = std::sync::mpsc::channel();
-        let sink = EventSink::for_writer(tx, Arc::new(AtomicBool::new(true)), Arc::default());
+        let backlog = Arc::new(Backlog::default());
+        let sink = EventSink::for_writer(tx, Arc::clone(&backlog));
+        let clone = sink.clone();
+        let (barrier, _done) = oneshot::channel();
+        assert!(sink.close(WriterCmd::Flush(barrier)));
 
-        sink.emit(killed());
+        clone.emit(killed());
         let ack = sink.emit_awaiting_seq(killed(), Provenance::default());
         assert!(ack.await.is_err());
-        assert!(rx.try_recv().is_err(), "nothing reached the writer channel");
+        assert!(
+            matches!(rx.try_recv(), Ok(WriterCmd::Flush(_))),
+            "the barrier reached the writer channel"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "nothing reached the writer after the barrier"
+        );
+        assert_eq!(
+            backlog.uncommitted(),
+            0,
+            "a refused event is never accepted"
+        );
     }
 }
