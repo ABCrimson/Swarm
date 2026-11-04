@@ -4,7 +4,8 @@
 //! `codex.cmd` shim that std runs through `cmd.exe /c`, with `node` and
 //! the native binary beneath it, and a Bash tool call leaves a shell
 //! under any provider. Killing only the child Swarm holds leaves the rest
-//! writing in the worktree.
+//! writing in the worktree. A timed-out `git` call (`git::cli`) and the
+//! hooks and helpers it started are ended the same way.
 //!
 //! | Platform | Group a child into | Terminate request | Forced kill |
 //! |----------|--------------------|-------------------|-------------|
