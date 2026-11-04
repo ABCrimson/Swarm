@@ -33,29 +33,25 @@ export function StatusBar(): React.ReactElement {
   const { label, dot } = health(cpuPercent);
 
   return (
-    <footer className="glass-panel flex h-7 shrink-0 items-center justify-between border-border border-t px-4 font-mono text-fg-muted text-xs">
+    <footer className="glass-panel flex h-7 shrink-0 items-center justify-between border-border border-t px-4 text-fg-muted text-xs">
       <div className="flex items-center gap-4">
         <span role="status" className="flex items-center gap-1.5">
           <span aria-hidden="true" className={`size-1.5 rounded-full ${dot}`} />
           {label}
         </span>
-        <span aria-hidden="true" className="text-fg-dim">
-          |
-        </span>
-        <span>{pluralizeWorkers(workerCount)}</span>
+        <span aria-hidden="true" className="h-3 w-px bg-border-2" />
+        <span className="tabular-nums">{pluralizeWorkers(workerCount)}</span>
       </div>
 
       <div className="flex items-center gap-4">
         <span title="Anthropic API Spend Recorded Since The App Started">
-          AI Spend {usd.format(spentUsd)}
+          AI Spend <span className="font-mono tabular-nums">{usd.format(spentUsd)}</span>
         </span>
         {showGpu && (
           <>
-            <span aria-hidden="true" className="text-fg-dim">
-              |
-            </span>
+            <span aria-hidden="true" className="h-3 w-px bg-border-2" />
             <span title="Time The GPU Took To Finish The Last Particle Frames">
-              GPU {gpuFrameTime.toFixed(1)}ms
+              GPU <span className="font-mono tabular-nums">{gpuFrameTime.toFixed(1)}ms</span>
             </span>
           </>
         )}
@@ -63,7 +59,7 @@ export function StatusBar(): React.ReactElement {
           type="button"
           onClick={() => setTheme((prev) => ({ ...prev, gpuOverlay: !prev.gpuOverlay }))}
           aria-label={showGpu ? "Hide GPU Frame Time" : "Show GPU Frame Time"}
-          className="cursor-pointer rounded px-1.5 py-0.5 text-2xs transition-colors duration-150 hover:bg-surface-2 hover:text-plasma"
+          className="cursor-pointer rounded px-1.5 py-0.5 text-xs transition-colors duration-150 hover:bg-surface-2 hover:text-plasma"
         >
           {showGpu ? "Hide GPU" : "Show GPU"}
         </button>
