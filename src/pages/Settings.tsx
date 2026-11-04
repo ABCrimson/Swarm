@@ -50,15 +50,19 @@ type ThresholdKey = keyof AlertThresholds;
 
 function SettingsSection({
   title,
+  headingId: headingIdProp,
   action,
   children,
 }: {
   readonly title: string;
+  /** The heading's id when a control in the section is labelled by it; generated otherwise. */
+  readonly headingId?: string;
   /** Controls shown next to the heading. */
   readonly action?: React.ReactNode;
   readonly children: React.ReactNode;
 }): React.ReactElement {
-  const headingId = useId();
+  const generatedHeadingId = useId();
+  const headingId = headingIdProp ?? generatedHeadingId;
   return (
     <section
       aria-labelledby={headingId}
@@ -718,18 +722,9 @@ export function Settings(): React.ReactElement {
         </SettingsSection>
       </form>
 
-      <section
-        aria-labelledby={modelHeadingId}
-        className="rounded-lg border border-border bg-surface-1 px-7 py-6"
-      >
-        <h2
-          id={modelHeadingId}
-          className="mb-4 font-display text-lg font-bold tracking-tight text-fg-bright"
-        >
-          AI Model
-        </h2>
+      <SettingsSection title="AI Model" headingId={modelHeadingId}>
         <ModelPicker labelledBy={modelHeadingId} />
-      </section>
+      </SettingsSection>
 
       <SettingsSection title="Visual Preferences">
         <div className="divide-y divide-border">
