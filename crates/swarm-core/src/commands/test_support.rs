@@ -49,6 +49,8 @@ pub(crate) fn test_ctx_with_claude(
     });
     let sink = engine.sink();
     let message_bus = MessageBus::new();
+    // Built like the runtime's: each Codex worker's home sits under `dir`.
+    let codex_adapter = CodexAdapter::new(sink.clone()).with_data_dir(&dir);
     let ctx = CtxInner {
         paths: Paths { data_dir: dir },
         registry: WorkerRegistry::new(),
@@ -58,7 +60,7 @@ pub(crate) fn test_ctx_with_claude(
         message_bus,
         shared_system: SharedSystem::new().unwrap(),
         claude_adapter: Arc::new(claude_adapter(sink.clone())),
-        codex_adapter: Arc::new(CodexAdapter::new(sink.clone())),
+        codex_adapter: Arc::new(codex_adapter),
         agent_session_registry: AgentSessionRegistry::new(),
         scheduler: Arc::new(AgentScheduler::new(
             AgentSchedulerConfig::default(),

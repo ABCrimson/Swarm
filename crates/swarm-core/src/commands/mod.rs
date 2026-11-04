@@ -175,9 +175,10 @@ pub enum RemotePolicy {
     /// gets no file access at all. `read_file`/`write_file` reach the
     /// daemon host's filesystem (the data directory and all of `$HOME` for
     /// reads, the data directory and `~/.swarm` for writes); their deny list
-    /// keeps out the daemon token, the API key file and the home credential
-    /// stores, but it misses a hard link to a secret, so it is no network
-    /// boundary.
+    /// keeps out the daemon token, both API key files (`swarm-secrets.json`
+    /// and `swarm-config.json`), the Codex workers' homes and the home
+    /// credential stores, but it misses a hard link to a secret, so it is
+    /// no network boundary.
     Denied,
     /// Reachable, but denied when the `key` argument names a secret (see
     /// [`config::is_secret_key`]): reading one would exfiltrate a

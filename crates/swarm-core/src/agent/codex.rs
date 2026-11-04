@@ -2,18 +2,40 @@
 //! bidirectional JSON-RPC protocol, over piped stdio
 //! ([`crate::worker::proc::spawn_piped`]).
 //!
-//! Verified against codex-cli 0.156.1: the wire types in `protocol` are
-//! transcribed from the schema that release generates
-//! (`codex app-server generate-json-schema` / `generate-ts`), and the
-//! handshake, thread-open, resume, interrupt and stdin-EOF behavior below
-//! was checked against a live 0.156.1 server (no model turns). Turn and
-//! item notifications come from the generated schema; the fixtures under
-//! `tests/fixtures/codex/` follow it.
+//! Verified against codex-cli 0.168.0-alpha.1
+//! (`protocol::VERIFIED_CODEX_VERSION`). The wire types in `protocol` are
+//! transcribed from the schema 0.156.1 generates
+//! (`codex app-server generate-json-schema`); every method name they use
+//! is present in the schemas of 0.166.0 (npm `latest`) and
+//! 0.168.0-alpha.1, checked in under `tests/fixtures/codex/schema/` and
+//! tested against the newest. The handshake, thread-open, resume, interrupt
+//! and stdin-EOF behavior below was checked against a live 0.168.0-alpha.1
+//! server (no model turns). Turn and item notifications come from the
+//! generated schema, and the fields the adapter reads from them are present
+//! in 0.168.0-alpha.1's; the fixtures under `tests/fixtures/codex/` follow
+//! 0.156.1's frames.
 //!
-//! The wire types live in `protocol`; the trust-tier mapping in `tier`, the
-//! child process and handshake in `process`, the shared session state in
-//! `state`, teardown in `teardown` and the reader task's line handlers in
-//! `reader`; this file holds the constants, the adapter and the session.
+//! The wire types live in `protocol`; the trust-tier mapping and the child's
+//! environment in `tier`, each worker's private `CODEX_HOME` in `home`,
+//! the child process and handshake in `process`, the shared session state
+//! in `state`, teardown in `teardown` and the reader task's line handlers
+//! in `reader`; this file holds the constants, the adapter and the session.
+//!
+//! ## A private `CODEX_HOME` per worker
+//!
+//! Every child runs with `CODEX_HOME` at `<data dir>/codex-home/<worker id>`
+//! ([`CodexAdapter::with_data_dir`]), so it reads none of the operator's
+//! Codex configuration, `[mcp_servers]` or plugins; only `auth.json` is
+//! copied in, and the Swarm-written `config.toml` turns off Codex's
+//! built-in apps, remote plugins, computer use and browser use. That a
+//! private home then lists no MCP server was measured without a login
+//! (`mcpServerStatus/list` on 0.168.0-alpha.1, 2026-11-04, no `auth.json`
+//! in the home); a signed-in run is not recorded. User skills under
+//! `~/.agents/skills` are outside `CODEX_HOME` and still load (measured
+//! on 0.168.0-alpha.1, 2026-11-04). An adapter built without a data
+//! directory refuses to spawn rather than fall back to the operator's
+//! home. `kill_worker` deletes a worker's home
+//! (`CodexAdapter::remove_worker_home`) once the worker is gone.
 //!
 //! ## Session lifecycle
 //!
@@ -72,6 +94,7 @@
 //! can put them on the wire, and `parse_trust_tier` fails closed on
 //! every token outside SWARM's three tiers.
 
+pub(crate) mod home;
 mod process;
 mod protocol;
 mod reader;
@@ -85,11 +108,15 @@ pub use self::tier::CodexTrustTier;
 
 use std::collections::HashMap;
 use std::mem::DropGuard;
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use anyhow::Context as _;
 use tokio::sync::{oneshot, watch};
+use uuid::Uuid;
 
+use self::home::PrivateHomes;
 use self::process::{
     ProbeFailure, first_line, open_thread, resolve_program, run_cli, start_stdin_writer,
 };
@@ -168,17 +195,73 @@ pub struct CodexAdapter {
     /// fake server through `node <script> ...`.
     extra_prefix_args: Vec<String>,
     timeouts: Timeouts,
+    /// Each worker's private `CODEX_HOME`; `None` refuses every spawn.
+    homes: Option<PrivateHomes>,
 }
 
 impl CodexAdapter {
     /// Drives the `codex` binary found in an absolute `PATH` entry (on Windows including the
-    /// `codex.cmd` shim an npm install creates).
+    /// `codex.cmd` shim an npm install creates). It spawns nothing until
+    /// [`Self::with_data_dir`] gives it a place for the workers' homes.
     pub fn new(sink: EventSink) -> Self {
         Self {
             sink,
             binary: "codex".to_string(),
             extra_prefix_args: Vec::new(),
             timeouts: Timeouts::PRODUCTION,
+            homes: None,
+        }
+    }
+
+    /// Runs every worker with a private `CODEX_HOME` at
+    /// `data_dir/codex-home/<worker id>`, holding a Swarm-written
+    /// `config.toml` and a copy of the operator's `auth.json` (from
+    /// `$CODEX_HOME`, else `~/.codex`), so no worker reads the operator's
+    /// Codex configuration, `[mcp_servers]` or plugins, and Codex's
+    /// built-in apps, remote plugins, computer use and browser use are off.
+    /// That such a home lists no MCP server was measured without a login
+    /// (0.168.0-alpha.1, 2026-11-04). User skills under
+    /// `~/.agents/skills` are outside `CODEX_HOME` and still load (measured
+    /// on 0.168.0-alpha.1, 2026-11-04). `data_dir` is
+    /// [`crate::Paths::data_dir`].
+    #[must_use = "the adapter refuses every spawn until it has a data directory"]
+    pub fn with_data_dir(self, data_dir: &Path) -> Self {
+        self.with_private_homes(PrivateHomes::new(data_dir, PrivateHomes::operator_home()))
+    }
+
+    fn with_private_homes(mut self, homes: PrivateHomes) -> Self {
+        self.homes = Some(homes);
+        self
+    }
+
+    /// Deletes `worker_id`'s private `CODEX_HOME`, the copy of the
+    /// operator's `auth.json` and the worker's Codex threads included, so a
+    /// deleted worker leaves no login behind. Call it once the worker's
+    /// session has ended. A missing home, or an adapter without a data
+    /// directory, has nothing to remove. The file I/O runs on the blocking
+    /// pool.
+    pub(crate) async fn remove_worker_home(&self, worker_id: Uuid) -> Result<(), AppError> {
+        let Some(homes) = self.homes.clone() else {
+            return Ok(());
+        };
+        tokio::task::spawn_blocking(move || homes.remove(worker_id))
+            .await
+            .map_err(|e| AppError::Ai(format!("the codex home removal task failed: {e}")))??;
+        Ok(())
+    }
+
+    /// This adapter's sink, timeouts and private homes, driving
+    /// `node prefix_args...` (a fake app-server) instead of `codex`. The
+    /// homes copy no `auth.json`, so a test never copies the operator's
+    /// login.
+    #[cfg(test)]
+    pub(crate) fn driving_fake_for_test(&self, prefix_args: Vec<String>) -> Self {
+        Self {
+            sink: self.sink.clone(),
+            binary: "node".to_string(),
+            extra_prefix_args: prefix_args,
+            timeouts: self.timeouts,
+            homes: self.homes.clone().map(PrivateHomes::without_login),
         }
     }
 
@@ -195,6 +278,7 @@ impl CodexAdapter {
             binary: binary.into(),
             extra_prefix_args: prefix_args,
             timeouts,
+            homes: None,
         }
     }
 }
@@ -304,6 +388,7 @@ impl AgentAdapter for CodexAdapter {
         let binary = self.binary.clone();
         let prefix = self.extra_prefix_args.clone();
         let timeouts = self.timeouts;
+        let homes = self.homes.clone();
         Box::pin(async move {
             // An empty working directory would make the child inherit
             // SWARM's own, and the sandbox's workspace would then be
@@ -325,12 +410,20 @@ impl AgentAdapter for CodexAdapter {
                     "failed to spawn codex: No Absolute PATH Entry Holds {binary:?}"
                 ))
             })?;
+            let homes = homes.ok_or_else(|| {
+                AppError::Ai(
+                    "failed to spawn codex: No Data Directory For The Worker's Private CODEX_HOME \
+                     (Refusing To Run Codex With The Operator's Home)"
+                        .to_string(),
+                )
+            })?;
             let mut argv = prefix;
             argv.push("app-server".to_string());
 
-            // Process creation is a blocking syscall; keep it off the
-            // async worker threads.
+            // Preparing the home is file I/O and process creation a
+            // blocking syscall; keep both off the async worker threads.
             let cwd = spec.cwd.clone();
+            let worker_id = spec.worker_id;
             let PipedHandle {
                 stdin,
                 child,
@@ -338,7 +431,10 @@ impl AgentAdapter for CodexAdapter {
                 framer_errors,
                 stderr_tail,
             } = tokio::task::spawn_blocking(move || {
-                spawn_piped(&program, &argv, &cwd, &child_env())
+                let home = homes.prepare(worker_id).with_context(|| {
+                    format!("preparing the private CODEX_HOME for worker {worker_id}")
+                })?;
+                spawn_piped(&program, &argv, &cwd, &child_env(&home)?)
             })
             .await
             .map_err(|e| AppError::Ai(format!("the codex spawn task failed: {e}")))?

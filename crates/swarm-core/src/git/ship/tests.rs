@@ -290,7 +290,7 @@ fn test_primary_checkout_guard_fires_before_any_mutation() {
     assert!(classified.staged.is_empty(), "no `git add` may have run");
     assert_eq!(classified.untracked, ["untracked.txt"]);
 
-    let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
+    let err = push(&registry, &RepoLocks::new(), id, None).unwrap_err();
     assert_eq!(err.kind, ShipErrorKind::PrimaryCheckout);
 }
 
@@ -323,7 +323,7 @@ fn test_full_ship_cycle_advances_a_real_bare_remote() {
     assert_eq!(skipped_paths(&outcome.skipped), [".env"]);
     assert_eq!(committed_paths(&worktree, &outcome.sha), ["feature.txt"]);
 
-    let pushed = push(&registry, &repo_locks, id).unwrap();
+    let pushed = push(&registry, &repo_locks, id, None).unwrap();
     assert_eq!(pushed.pushed_ref, "origin/swarm/agent-abcd1234");
     assert_eq!(pushed.sha, outcome.sha);
     assert_eq!(
@@ -360,7 +360,7 @@ fn test_push_refuses_more_than_one_push_url_and_pushes_nowhere() {
     git_in(&worktree, &["add", "feature.txt"]);
     git_in(&worktree, &["commit", "-m", "feat: work"]);
 
-    let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
+    let err = push(&registry, &RepoLocks::new(), id, None).unwrap_err();
     assert_eq!(err.kind, ShipErrorKind::NonGitHubHost);
     assert_eq!(err.message, many_push_urls(2));
     for bare in [&first, &second] {
@@ -1140,7 +1140,7 @@ fn test_preflight_reads_upstream_tracking_after_a_push() {
     write_file(&worktree, "a.txt", "a");
     git_in(&worktree, &["add", "a.txt"]);
     git_in(&worktree, &["commit", "-m", "a"]);
-    push(&registry, &RepoLocks::new(), id).unwrap();
+    push(&registry, &RepoLocks::new(), id, None).unwrap();
     write_file(&worktree, "b.txt", "b");
     git_in(&worktree, &["add", "b.txt"]);
     git_in(&worktree, &["commit", "-m", "b"]);
@@ -1230,7 +1230,7 @@ fn test_push_resolves_and_pushes_existing_head_with_no_prior_stage_and_commit_ca
     git_in(&worktree, &["commit", "-m", "feat: prior commit-only"]);
     let expected = repo::head_sha(&worktree).unwrap();
 
-    let outcome = push(&registry, &RepoLocks::new(), id).unwrap();
+    let outcome = push(&registry, &RepoLocks::new(), id, None).unwrap();
     assert_eq!(outcome.sha, expected);
     assert_eq!(outcome.pushed_ref, "origin/swarm/stranded-abcd1234");
     assert_eq!(
@@ -1284,10 +1284,10 @@ fn test_push_commit_pushes_the_read_sha_when_a_racing_commit_lands_first() {
         &registry,
         id,
         &RepoLocks::new(),
-        &info.repo_root,
-        &worktree,
+        &info,
         "swarm/race-abcd1234",
         &read_sha,
+        None,
     )
     .unwrap();
 
@@ -1303,7 +1303,7 @@ fn test_push_commit_pushes_the_read_sha_when_a_racing_commit_lands_first() {
 fn test_push_rejects_a_non_fast_forward_and_leaves_the_remote_unchanged() {
     let (repo, worktree, bare, registry, id) = push_fixture("b2-nff", "swarm/nff-abcd1234");
     let repo_locks = RepoLocks::new();
-    push(&registry, &repo_locks, id).unwrap();
+    push(&registry, &repo_locks, id, None).unwrap();
 
     // Someone else advances the remote branch.
     let other = repo.base().join("other");
@@ -1319,7 +1319,7 @@ fn test_push_rejects_a_non_fast_forward_and_leaves_the_remote_unchanged() {
     let remote_before = repo::rev_parse(&bare, "swarm/nff-abcd1234").unwrap();
 
     git_in(&worktree, &["commit", "--allow-empty", "-m", "local work"]);
-    let err = push(&registry, &repo_locks, id).unwrap_err();
+    let err = push(&registry, &repo_locks, id, None).unwrap_err();
     assert_eq!(err.kind, ShipErrorKind::PushRejected);
     assert_eq!(
         repo::rev_parse(&bare, "swarm/nff-abcd1234").unwrap(),
@@ -1334,7 +1334,7 @@ fn test_push_rejects_a_non_fast_forward_and_leaves_the_remote_unchanged() {
 fn test_push_outcome_sha_is_the_remote_tip_and_records_the_upstream() {
     let (_repo, worktree, bare, registry, id) = push_fixture("b2-happy", "swarm/happy-abcd1234");
 
-    let outcome = push(&registry, &RepoLocks::new(), id).unwrap();
+    let outcome = push(&registry, &RepoLocks::new(), id, None).unwrap();
 
     let head = repo::head_sha(&worktree).unwrap();
     assert_eq!(outcome.sha, head);
@@ -1365,7 +1365,7 @@ fn test_push_records_the_receipt_and_a_rename_does_not_change_it() {
     let (_repo, worktree, _bare, registry, id) = push_fixture("b2-recorded", "swarm/rec-abcd1234");
     assert_eq!(recorded_push(&registry, id), None);
 
-    let outcome = push(&registry, &RepoLocks::new(), id).unwrap();
+    let outcome = push(&registry, &RepoLocks::new(), id, None).unwrap();
     assert_eq!(registry.get_worker(&id).unwrap().last_shipped_seq, None);
     git_in(&worktree, &["branch", "-m", "swarm/rec-renamed"]);
 
@@ -1385,7 +1385,7 @@ fn test_push_records_the_receipt_and_a_rename_does_not_change_it() {
 #[test]
 fn test_compare_url_uses_the_recorded_branch_after_a_rename() {
     let (repo, worktree, _bare, registry, id) = push_fixture("b2-compare", "swarm/cmp-abcd1234");
-    push(&registry, &RepoLocks::new(), id).unwrap();
+    push(&registry, &RepoLocks::new(), id, None).unwrap();
     repo.git(&[
         "remote",
         "set-url",
@@ -1417,7 +1417,7 @@ fn test_compare_url_with_record_returns_the_record_that_built_the_url() {
     assert_eq!(record, None);
 
     repo.git(&["remote", "set-url", "origin", &bare.display().to_string()]);
-    let outcome = push(&registry, &RepoLocks::new(), id).unwrap();
+    let outcome = push(&registry, &RepoLocks::new(), id, None).unwrap();
     repo.git(&[
         "remote",
         "set-url",
@@ -1467,7 +1467,7 @@ fn test_push_uses_live_branch_not_stale_stored_handle_branch() {
     git_in(&worktree, &["add", "feature.txt"]);
     git_in(&worktree, &["commit", "-m", "feat: work"]);
 
-    let outcome = push(&registry, &RepoLocks::new(), id).unwrap();
+    let outcome = push(&registry, &RepoLocks::new(), id, None).unwrap();
     assert_eq!(outcome.pushed_ref, "origin/swarm/renamed-abcd1234");
     assert!(repo::rev_parse(&bare, "swarm/renamed-abcd1234").is_ok());
     assert!(repo::rev_parse(&bare, "swarm/original-abcd1234").is_err());
@@ -1478,7 +1478,7 @@ fn test_push_hard_fails_on_detached_head() {
     let (_repo, worktree, registry, id) = fixture("push-detached", "swarm/detached-abcd1234");
     git_in(&worktree, &["checkout", "--detach"]);
 
-    let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
+    let err = push(&registry, &RepoLocks::new(), id, None).unwrap_err();
     assert_eq!(err.kind, ShipErrorKind::InvalidBranch);
 }
 
@@ -1490,7 +1490,7 @@ fn test_push_refuses_protected_branch() {
     let registry = WorkerRegistry::new();
     let id = register(&registry, &repo, &wt, "swarm/prot-abcd1234");
     git_in(&wt, &["switch", "-c", "release/x"]);
-    let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
+    let err = push(&registry, &RepoLocks::new(), id, None).unwrap_err();
     assert_eq!(err.kind, ShipErrorKind::InvalidBranch);
     assert!(repo::rev_parse(&bare, "release/x").is_err());
 }
@@ -1510,7 +1510,7 @@ fn test_push_refuses_the_base_branch() {
     git_in(&wt, &["add", "x.txt"]);
     git_in(&wt, &["commit", "-m", "feat: x"]);
 
-    let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
+    let err = push(&registry, &RepoLocks::new(), id, None).unwrap_err();
     assert_eq!(err.kind, ShipErrorKind::InvalidBranch);
     assert_eq!(repo::rev_parse(&bare, "trunk").unwrap(), before);
 }
@@ -1528,7 +1528,7 @@ fn test_push_of_a_force_marker_branch_never_overwrites_origin_main() {
     let id = register(&registry, &repo, &wt, "swarm/plus-abcd1234");
     git_in(&wt, &["switch", "-c", "+main", "main"]);
 
-    let outcome = push(&registry, &RepoLocks::new(), id).unwrap();
+    let outcome = push(&registry, &RepoLocks::new(), id, None).unwrap();
     assert_eq!(outcome.pushed_ref, "origin/+main");
     assert_eq!(repo::rev_parse(&bare, "main").unwrap(), original);
 }
@@ -1536,8 +1536,80 @@ fn test_push_of_a_force_marker_branch_never_overwrites_origin_main() {
 #[test]
 fn test_push_without_origin_is_no_remote() {
     let (_repo, _worktree, registry, id) = fixture("push-no-remote", "swarm/no-remote-abcd1234");
-    let err = push(&registry, &RepoLocks::new(), id).unwrap_err();
+    let err = push(&registry, &RepoLocks::new(), id, None).unwrap_err();
     assert_eq!(err.kind, ShipErrorKind::NoRemote);
+}
+
+/// F-06: the push is bound to the remote the preview showed. An `origin`
+/// re-pointed between the preview and the push is refused before
+/// anything is sent, as `pushRejected`, and neither remote receives the
+/// branch.
+#[test]
+fn test_push_refuses_an_origin_changed_since_the_preview() {
+    let branch = "swarm/moved-origin-abcd1234";
+    let (repo, _worktree, bare, registry, id) = push_fixture("push-moved-origin", branch);
+    let previewed = preflight(&registry, id, StagingMode::All)
+        .unwrap()
+        .remote
+        .expect("the preview shows origin");
+
+    let elsewhere = repo.base().join("elsewhere.git");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    git_in(&elsewhere, &["init", "--bare", "-b", "main"]);
+    repo.git(&[
+        "remote",
+        "set-url",
+        "origin",
+        &elsewhere.display().to_string(),
+    ]);
+
+    let err = push(&registry, &RepoLocks::new(), id, Some(&previewed)).unwrap_err();
+    assert_eq!(err.kind, ShipErrorKind::PushRejected);
+    assert_eq!(err.message, "Origin Changed Since The Preview");
+    assert_eq!(err.remedy, None);
+    for remote in [&bare, &elsewhere] {
+        assert!(
+            repo::rev_parse(remote, &format!("refs/heads/{branch}")).is_err(),
+            "{} received the branch",
+            remote.display()
+        );
+    }
+    assert_eq!(recorded_push(&registry, id), None);
+}
+
+/// F-06, the reverse state: with the remote the preview showed, the push
+/// goes through; a push URL changed since then (`remote.origin.pushurl`,
+/// where `git push` actually sends) is refused like a changed `url`.
+#[test]
+fn test_push_with_the_previewed_remote_pushes_and_a_new_pushurl_is_refused() {
+    let branch = "swarm/bound-origin-abcd1234";
+    let (repo, worktree, bare, registry, id) = push_fixture("push-bound-origin", branch);
+    let repo_locks = RepoLocks::new();
+    let previewed = preflight(&registry, id, StagingMode::All)
+        .unwrap()
+        .remote
+        .expect("the preview shows origin");
+
+    let outcome = push(&registry, &repo_locks, id, Some(&previewed)).unwrap();
+    assert_eq!(
+        repo::rev_parse(&bare, &format!("refs/heads/{branch}")).unwrap(),
+        outcome.sha
+    );
+
+    let elsewhere = repo.base().join("pushurl.git");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    git_in(&elsewhere, &["init", "--bare", "-b", "main"]);
+    repo.git(&[
+        "remote",
+        "set-url",
+        "--push",
+        "origin",
+        &elsewhere.display().to_string(),
+    ]);
+    git_in(&worktree, &["commit", "--allow-empty", "-m", "more work"]);
+    let err = push(&registry, &repo_locks, id, Some(&previewed)).unwrap_err();
+    assert_eq!(err.kind, ShipErrorKind::PushRejected);
+    assert!(repo::rev_parse(&elsewhere, &format!("refs/heads/{branch}")).is_err());
 }
 
 // ── Compare URL ──────────────────────────────────────────────────────

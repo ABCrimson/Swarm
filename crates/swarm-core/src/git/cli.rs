@@ -30,15 +30,17 @@
 //!   its own thread, so a large payload can never deadlock against a
 //!   full stdout pipe.
 //! - On Windows, sets `CREATE_NO_WINDOW` so the GUI never flashes a
-//!   console window. On Unix, starts `git` in its own process group so
-//!   a timeout can signal `git` *and* every hook or helper it started.
+//!   console window. On Unix, starts `git` in its own process group
+//!   ([`tree_kill::lead_own_group`]) so a timeout can signal `git` *and*
+//!   every hook or helper it started.
 //! - Enforces a wall-clock budget. On expiry it terminates the whole
-//!   process tree: on Unix a `SIGTERM` to the group first — `git`'s
-//!   signal handlers delete the `index.lock`/ref locks it holds — then
-//!   `SIGKILL` after `TERM_GRACE`; on Windows `taskkill /T /F`, which
-//!   cannot let `git` clean up, so a killed mutation there can leave a
-//!   stale `index.lock` behind. The budgets below are sized so that only
-//!   a genuinely hung call ever reaches that path.
+//!   process tree through [`crate::worker::tree_kill`]: on Unix a
+//!   `SIGTERM` to the group first — `git`'s signal handlers delete the
+//!   `index.lock`/ref locks it holds — then `SIGKILL` after
+//!   `TERM_GRACE`; on Windows `taskkill /T /F`, which cannot let `git`
+//!   clean up, so a killed mutation there can leave a stale `index.lock`
+//!   behind. The budgets below are sized so that only a genuinely hung
+//!   call ever reaches that path.
 //! - Returns stdout **raw** — porcelain records, NUL-separated paths,
 //!   numstat rows and shas are data, and redacting or truncating them
 //!   corrupts what callers parse. stderr is only ever used for messages
@@ -63,6 +65,7 @@ use std::time::{Duration, Instant};
 
 use crate::error::AppError;
 use crate::redact;
+use crate::worker::tree_kill;
 
 /// Minimum supported `git` version. Each floor below is a feature SWARM
 /// actually uses:
@@ -280,11 +283,7 @@ fn command(args: &[impl AsRef<OsStr>]) -> Command {
         use std::os::windows::process::CommandExt;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
+    tree_kill::lead_own_group(&mut command);
     command
 }
 
@@ -451,72 +450,25 @@ fn spawn_reader<R: Read + Send + 'static>(mut pipe: R, stream: Stream, tx: Sende
 }
 
 /// Terminates a timed-out `git` and everything it started — see the
-/// module doc for the per-platform semantics.
+/// module doc for the per-platform semantics — through
+/// [`tree_kill`], which signals the tree only while `try_wait` still
+/// reports `git` running (an unreaped child keeps its pid and group id
+/// reserved). On Unix the `SIGTERM` gets [`TERM_GRACE`] to work before the
+/// `SIGKILL`; on Windows there is no graceful step. Reaps `git`.
 fn terminate(child: &mut Child) {
+    tree_kill::terminate(child);
     #[cfg(unix)]
     {
-        // `git` leads its own process group (`process_group(0)`), so its
-        // pid is the group id — and stays reserved while `git` is
-        // unreaped, which is why the group is only signalled while
-        // `try_wait` still reports it running.
-        let pgid = child.id();
-        signal_group(pgid, "TERM");
-        // A member stopped by SIGTTIN (an `ssh` prompt read from the
-        // terminal outside the foreground group) only acts on the
-        // pending SIGTERM once continued.
-        signal_group(pgid, "CONT");
         let grace_deadline = Instant::now() + TERM_GRACE;
-        loop {
+        while Instant::now() < grace_deadline {
             if matches!(child.try_wait(), Ok(Some(_))) {
                 return;
-            }
-            if Instant::now() >= grace_deadline {
-                signal_group(pgid, "KILL");
-                break;
             }
             std::thread::sleep(POLL_INTERVAL);
         }
     }
-    #[cfg(windows)]
-    kill_tree(child.id());
-
-    // Fallback for when the helper above could not run.
-    let _ = child.kill();
+    tree_kill::kill(child);
     let _ = child.wait();
-}
-
-/// Sends `SIG<signal>` to process group `pgid` through `kill(1)`: std
-/// only exposes `SIGKILL` for the child itself (`ChildExt::send_signal`
-/// is still unstable, rust-lang/rust#141975) and the workspace denies
-/// `unsafe_code`, so the POSIX utility is the std-only route to a group.
-#[cfg(unix)]
-fn signal_group(pgid: u32, signal: &str) {
-    let status = Command::new("kill")
-        .args(["-s", signal, "--", &format!("-{pgid}")])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    if let Err(e) = status {
-        tracing::warn!(pgid, signal, error = %e, "could not run kill(1) for a timed-out git");
-    }
-}
-
-/// Force-terminates the process tree rooted at `pid` (`git` plus any
-/// hook it is running) with `taskkill /T /F`.
-#[cfg(windows)]
-fn kill_tree(pid: u32) {
-    use std::os::windows::process::CommandExt;
-    let status = Command::new("taskkill")
-        .args(["/T", "/F", "/PID", &pid.to_string()])
-        .creation_flags(CREATE_NO_WINDOW)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    if let Err(e) = status {
-        tracing::warn!(pid, error = %e, "could not run taskkill for a timed-out git");
-    }
 }
 
 /// Capability outcome of the startup `git --version` probe.

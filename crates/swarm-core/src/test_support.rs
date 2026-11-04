@@ -56,3 +56,34 @@ pub(crate) fn temp_db() -> (PathBuf, DropGuard<PathBuf, impl FnOnce(PathBuf)>) {
     });
     (path, guard)
 }
+
+/// Whether `pid` names a live process. A zombie (Unix) counts as gone:
+/// it has exited and only waits for its reaper.
+pub(crate) fn is_running(pid: u32) -> bool {
+    if cfg!(windows) {
+        let output = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .expect("tasklist runs");
+        String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
+    } else {
+        let output = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .expect("ps runs");
+        let stat = String::from_utf8_lossy(&output.stdout);
+        output.status.success() && !stat.trim().is_empty() && !stat.trim_start().starts_with('Z')
+    }
+}
+
+/// Polls until `pid` is gone, or panics after 30 s.
+pub(crate) async fn assert_gone(pid: u32, what: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while is_running(pid) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what} (pid {pid}) still runs after the stop"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}

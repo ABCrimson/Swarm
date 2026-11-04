@@ -111,9 +111,13 @@ impl Runtime {
     /// its writer (delivering through `emit`, the caller's primary,
     /// lossless path — see [`OrchestrationEngine::try_start`]), restores
     /// persisted sessions and the persisted worker and agent-turn caps,
-    /// starts the metrics loop, and wires the agent scheduler. The git
-    /// probe and the startup `git worktree prune` of the configured
-    /// default repository run on a blocking task in the background.
+    /// starts the metrics loop, and wires the agent scheduler and the
+    /// provider adapters (the Codex one keeps each worker's private
+    /// `CODEX_HOME` under the data directory). The git probe and the
+    /// startup `git worktree prune` of the configured default repository
+    /// run on a blocking task in the background, and so does the move of a
+    /// legacy API key out of `swarm-config.json`
+    /// ([`crate::config::migrate_secrets`]).
     ///
     /// # Errors
     ///
@@ -127,7 +131,8 @@ impl Runtime {
     /// # Panics
     ///
     /// Outside a Tokio runtime: the metrics loop, the scheduler and the
-    /// background git task are spawned onto the current one.
+    /// background git and key-migration tasks are spawned onto the current
+    /// one.
     ///
     /// # Blocking
     ///
@@ -168,6 +173,7 @@ impl Runtime {
         }
 
         spawn_git_startup(&paths, sink.clone());
+        spawn_secret_migration(&paths);
 
         let metrics_cancel = CancellationToken::new();
         crate::metrics::start_metrics_loop(
@@ -178,7 +184,8 @@ impl Runtime {
         );
 
         let claude_adapter = Arc::new(ClaudeCodeAdapter::new(sink.clone()));
-        let codex_adapter = Arc::new(CodexAdapter::new(sink.clone()));
+        let codex_adapter =
+            Arc::new(CodexAdapter::new(sink.clone()).with_data_dir(&paths.data_dir));
         let agent_session_registry = AgentSessionRegistry::new();
         let scheduler = Arc::new(AgentScheduler::new(AgentSchedulerConfig::default(), {
             let (sessions, sink) = (agent_session_registry.clone(), sink.clone());
@@ -324,6 +331,21 @@ fn spawn_git_startup(paths: &Paths, sink: EventSink) {
     });
 }
 
+/// Moves an API key an older build left in `swarm-config.json` into the
+/// secret store, once, off the startup path (a keychain can wait on an
+/// access prompt). Otherwise a key nothing reads or writes, as on a
+/// `swarmd --serve-ui` host whose browser cannot read it, would stay in
+/// the file in plaintext. A refusal is logged, and the key keeps reading
+/// from the file until a later access moves it.
+fn spawn_secret_migration(paths: &Paths) {
+    let paths = paths.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = crate::config::migrate_secrets(&paths) {
+            tracing::warn!(error = %e, "could not move the API key out of swarm-config.json yet");
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
@@ -462,6 +484,85 @@ mod tests {
                 .count(),
             RECORDED
         );
+    }
+
+    /// The runtime's Codex adapter has the data directory: a spawn against
+    /// the fake app-server is not refused, and the child runs with
+    /// `CODEX_HOME` at `<data dir>/codex-home/<worker id>`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_a_codex_spawn_runs_in_the_workers_private_home_under_the_data_dir() {
+        use crate::agent::{AgentAdapter, AgentSpawnSpec};
+
+        let (dir, _cleanup) = temp_dir("runtime-codex");
+        let runtime = Runtime::start(config(&dir, "swarmd"), |_| {}).unwrap();
+        let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/codex");
+        let record = dir.join("codex-wire.jsonl");
+        let adapter = runtime.codex_adapter.driving_fake_for_test(vec![
+            format!("{fixtures}/fake_codex_app_server.mjs"),
+            "--script".to_owned(),
+            format!("{fixtures}/handshake.script"),
+            "--record".to_owned(),
+            record.display().to_string(),
+        ]);
+        let worker_id = uuid::Uuid::new_v4();
+        let session = adapter
+            .spawn(AgentSpawnSpec {
+                worker_id,
+                cwd: dir.display().to_string(),
+                model: None,
+                resume: None,
+                permission_mode: None,
+            })
+            .await
+            .expect("the runtime's Codex adapter spawns");
+        let wire = std::fs::read_to_string(&record).unwrap();
+        let started: serde_json::Value =
+            serde_json::from_str(wire.lines().next().unwrap()).unwrap();
+        assert_eq!(started["fake"], "started");
+        let home = dir
+            .join(crate::agent::codex::home::HOMES_DIR)
+            .join(worker_id.to_string());
+        assert_eq!(started["codexHome"], home.to_str().unwrap());
+        session.shutdown().await.unwrap();
+        runtime.shutdown(Duration::from_secs(10)).await.unwrap();
+    }
+
+    /// An API key an older build left in `swarm-config.json` is moved to
+    /// the secret store once at startup, with no read or write of it, and
+    /// the file keeps its other keys.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_start_moves_a_legacy_api_key_out_of_the_config_file() {
+        let (dir, _cleanup) = temp_dir("runtime-migrate");
+        let paths = Paths {
+            data_dir: dir.to_path_buf(),
+        };
+        let file = dir.join(crate::config::CONFIG_FILE);
+        std::fs::write(
+            &file,
+            r#"{"anthropic_api_key": "sk-ant-legacy", "theme": "dark"}"#,
+        )
+        .unwrap();
+        let runtime = Runtime::start(config(&dir, "swarmd"), |_| {}).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("sk-ant-legacy")
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the legacy key is still in swarm-config.json"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(std::fs::read_to_string(&file).unwrap().contains("dark"));
+        let key = tokio::task::spawn_blocking(move || {
+            crate::config::read_value(&paths, "anthropic_api_key")
+        })
+        .await
+        .unwrap();
+        assert_eq!(key, Some(serde_json::json!("sk-ant-legacy")));
+        drop(runtime);
     }
 
     /// A persisted `max_workers` is restored at start, and one outside the

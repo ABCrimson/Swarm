@@ -1163,7 +1163,7 @@ Shuts down `workerId`'s attached agent session (idempotent) and removes it from 
 
 ### `agent_probe`
 
-Checks whether `provider`'s CLI is installed, new enough and signed in, without starting a session. Claude Code: a throwaway `initialize` handshake in the temp directory, bounded by 15 s, requiring `claude` 2.1.259 or newer. Codex: `codex --version` and `codex login status`, each bounded by 5 s. Never touches or reports a credential.
+Checks whether `provider`'s CLI is installed, new enough and signed in, without starting a session. Claude Code: a throwaway `initialize` handshake in the temp directory, bounded by 15 s, requiring `claude` 2.1.318 or newer. Codex: `codex --version` and `codex login status`, each bounded by 5 s. Never touches or reports a credential.
 
 **Parameters:**
 
@@ -1177,7 +1177,7 @@ Checks whether `provider`'s CLI is installed, new enough and signed in, without 
 { available: boolean; version?: string | null; detail?: string | null }
 ```
 
-An unusable provider is reported as `{ available: false, detail }`, never as an error; `detail` is human-readable (`Claude Code CLI Not Found On PATH: ...` (also when no absolute `PATH` entry holds the binary), `Claude Code 2.1.259 Or Newer Required`, `Claude Code CLI Not Signed In`, `Not Signed In — Run \`codex login\` In A Terminal`, `... Probe Timed Out`). The Claude Code probe runs in a fresh private directory it removes afterwards and loads no settings file. A usable provider reports the sign-in as it observed it (`Signed In (Max)`, `Using An API Key (...)`, Codex's own `login status` line, or `Sign-In State Unknown: ...` when Codex's status call does not answer).
+An unusable provider is reported as `{ available: false, detail }`, never as an error; `detail` is human-readable (`Claude Code CLI Not Found On PATH: ...` (also when no absolute `PATH` entry holds the binary), `Claude Code 2.1.318 Or Newer Required`, `Claude Code CLI Not Signed In`, `Not Signed In — Run \`codex login\` In A Terminal`, `... Probe Timed Out`). The Claude Code probe runs in a fresh private directory it removes afterwards and loads no settings file. A usable provider reports the sign-in as it observed it (`Signed In (Max)`, `Using An API Key (...)`, Codex's own `login status` line, or `Sign-In State Unknown: ...` when Codex's status call does not answer).
 
 **Errors:** a provider with no adapter rejects with `Provider Not Supported By The Backend: <name>.`; an unknown provider string fails argument parsing.
 

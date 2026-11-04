@@ -2,10 +2,14 @@
 //! [`super::CodexSession`] speaks.
 //!
 //! Transcribed from the schema codex-cli 0.156.1 generates
-//! (`codex app-server generate-json-schema` / `generate-ts`) and checked
-//! against live 0.156.1 handshakes. Field names and casing follow that
-//! schema exactly. Everything the adapter does not read is left out —
-//! serde ignores unknown fields — so a newer server that adds fields stays
+//! (`codex app-server generate-json-schema`) and re-checked at
+//! [`VERIFIED_CODEX_VERSION`]: that release's schema and npm `latest`
+//! 0.166.0's are checked in under `tests/fixtures/codex/schema/<version>/`,
+//! a test fails when a name in [`method`] or [`OPTED_OUT_NOTIFICATIONS`] is
+//! missing from the newest one, and the handshake was run against a live
+//! server of that release. Field names and casing follow the schema
+//! exactly. Everything the adapter does not read is left out — serde
+//! ignores unknown fields — so a newer server that adds fields stays
 //! compatible.
 //!
 //! The envelope is JSON-RPC 2.0 without the `"jsonrpc": "2.0"` member:
@@ -18,8 +22,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The codex-cli release these shapes were verified against.
-pub const VERIFIED_CODEX_VERSION: &str = "0.156.1";
+/// The codex-cli release these shapes were verified against: the newest
+/// schema snapshot under `tests/fixtures/codex/schema/`.
+pub const VERIFIED_CODEX_VERSION: &str = "0.168.0-alpha.1";
 
 /// Method names, grouped by direction.
 pub mod method {
@@ -74,6 +79,38 @@ pub mod method {
     pub const FILE_CHANGE_REQUEST_APPROVAL: &str = "item/fileChange/requestApproval";
     /// Grant extra sandbox permissions (network, file-system roots).
     pub const PERMISSIONS_REQUEST_APPROVAL: &str = "item/permissions/requestApproval";
+
+    // ── Every name above, by direction, for the schema test ───────────
+    #[cfg(test)]
+    pub const CLIENT_REQUESTS: &[&str] = &[
+        INITIALIZE,
+        THREAD_START,
+        THREAD_RESUME,
+        TURN_START,
+        TURN_INTERRUPT,
+    ];
+    #[cfg(test)]
+    pub const CLIENT_NOTIFICATIONS: &[&str] = &[INITIALIZED];
+    #[cfg(test)]
+    pub const SERVER_NOTIFICATIONS: &[&str] = &[
+        ERROR,
+        TURN_STARTED,
+        TURN_COMPLETED,
+        ITEM_STARTED,
+        ITEM_COMPLETED,
+        AGENT_MESSAGE_DELTA,
+        REASONING_SUMMARY_TEXT_DELTA,
+        REASONING_TEXT_DELTA,
+        COMMAND_EXECUTION_OUTPUT_DELTA,
+        THREAD_TOKEN_USAGE_UPDATED,
+        SERVER_REQUEST_RESOLVED,
+    ];
+    #[cfg(test)]
+    pub const SERVER_REQUESTS: &[&str] = &[
+        COMMAND_EXECUTION_REQUEST_APPROVAL,
+        FILE_CHANGE_REQUEST_APPROVAL,
+        PERMISSIONS_REQUEST_APPROVAL,
+    ];
 }
 
 /// Server notifications this adapter never reads, opted out of at

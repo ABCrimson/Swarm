@@ -950,10 +950,24 @@ impl Drop for ClaudeCodeSession {
         if self.shared.teardown_started.load(Ordering::Acquire) {
             return;
         }
-        // Killing is a non-blocking syscall; the reader task sees stdout
-        // close and runs the real teardown, which reaps the child.
-        if let Some(child) = self.shared.state.lock().child.as_mut() {
-            child.kill().ok();
+        // Ends the CLI's whole tree (a Bash tool's processes run under
+        // it), not just the child. Inside a runtime this is the ordinary
+        // teardown with `Stop::Kill`: it claims the child under the state
+        // lock, stops its tree on the blocking pool without the lock, and
+        // records the exit, so no Tokio worker waits on the tree-kill
+        // helper. A runtime that is shutting down may drop that task.
+        // Without a runtime (this thread is no Tokio worker then) the tree
+        // is killed inline, with the state lock held across the helper
+        // (`kill(1)` or `taskkill`) so the child cannot be reaped, and its
+        // pid reused, while its tree is signalled; the reader task's
+        // teardown then reaps the child and records its exit.
+        match tokio::runtime::Handle::try_current() {
+            Ok(_) => teardown::begin_teardown(&self.shared, Stop::Kill),
+            Err(_) => {
+                if let Some(child) = self.shared.state.lock().child.as_mut() {
+                    crate::worker::tree_kill::kill(child);
+                }
+            }
         }
     }
 }

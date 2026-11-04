@@ -1,13 +1,16 @@
-//! Trust-tier mapping, the child's environment (current-directory exe
-//! lookup off), requested-model filtering, effective-policy verification
-//! and capabilities.
+//! Trust-tier mapping, the child's environment (its private `CODEX_HOME`,
+//! current-directory exe lookup off), requested-model filtering,
+//! effective-policy verification and capabilities.
 
 use std::collections::HashMap;
+use std::path::Path;
 
+use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::CLAUDE_MODEL_ALIASES;
+use super::home::CODEX_HOME_ENV;
 use super::protocol::{AskForApproval, SandboxMode, ThreadOpened};
 
 use crate::agent::adapter::{CancelGranularity, Capabilities};
@@ -19,9 +22,24 @@ use crate::error::AppError;
 /// Other platforms ignore it.
 pub(super) const NO_CWD_EXE_LOOKUP_ENV: &str = "NoDefaultCurrentDirectoryInExePath";
 
-/// Environment additions for every Codex child.
-pub(super) fn child_env() -> HashMap<String, String> {
-    HashMap::from([(NO_CWD_EXE_LOOKUP_ENV.to_owned(), "1".to_owned())])
+/// Environment additions for every Codex child: `CODEX_HOME` at the
+/// worker's private `home` (see `super::home`) and the current-directory
+/// exe lookup off.
+///
+/// # Errors
+///
+/// `home` is not valid UTF-8, so it cannot be passed as a variable.
+pub(super) fn child_env(home: &Path) -> anyhow::Result<HashMap<String, String>> {
+    let home = home.to_str().with_context(|| {
+        format!(
+            "the private CODEX_HOME {} is not valid UTF-8",
+            home.display()
+        )
+    })?;
+    Ok(HashMap::from([
+        (CODEX_HOME_ENV.to_owned(), home.to_owned()),
+        (NO_CWD_EXE_LOOKUP_ENV.to_owned(), "1".to_owned()),
+    ]))
 }
 
 /// SWARM's spawn-time trust dial for Codex — the same three wire tokens

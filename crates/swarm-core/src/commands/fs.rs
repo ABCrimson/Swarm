@@ -22,12 +22,17 @@
 //!
 //! A deny list applies to the canonical path of both reads and writes,
 //! so the app's secrets can never be read through (or planted by) these
-//! commands, whatever scope they sit in: `swarm-config.json` (it holds
-//! the Anthropic API key) and `daemon-token` in the data directory,
-//! along with the backup files named after them (for example
-//! `swarm-config.json.corrupt-<ms>`, or the daemon's `.daemon-token.<rand>`
-//! mint-time temp file, compared with leading dots ignored), and the
-//! credential stores under `~`: the capability's fs:scope deny list
+//! commands, whatever scope they sit in: `swarm-secrets.json` (the
+//! Anthropic API key on a host with no OS keychain), `swarm-config.json`
+//! (which held the key before the keychain, and may still until the key
+//! is moved out) and `daemon-token` in the data directory, along with the
+//! backup files named after them (for example
+//! `swarm-config.json.corrupt-<ms>`, `swarm-secrets.json.corrupt-<ms>`, or
+//! the daemon's `.daemon-token.<rand>` mint-time temp file; names compared
+//! lower-case with leading dots ignored); every path under the data
+//! directory's `codex-home/`, the Codex workers' private homes (each
+//! holds a copy of the operator's `auth.json`); and the credential stores
+//! under `~`: the capability's fs:scope deny list
 //! (`.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
 //! `.config/gh`, `.claude`, `.codex`, `.git-credentials`, `.netrc`), plus
 //! `AppData/Roaming/GitHub CLI` (gh on Windows), `.npmrc`, `.pypirc`,
@@ -50,9 +55,12 @@ use super::{Ctx, ok_value, parse_args, parse_provenance};
 const MAX_READ_BYTES: u64 = 16 << 20;
 
 /// File-name prefixes (compared lower-case) of the data-directory files
-/// that hold credentials.
-const DENIED_DATA_FILE_PREFIXES: [&str; 2] = [
+/// that hold credentials. As prefixes they also cover the backups named
+/// after them (`swarm-config.json.corrupt-<ms>`,
+/// `swarm-secrets.json.corrupt-<ms>`).
+const DENIED_DATA_FILE_PREFIXES: [&str; 3] = [
     crate::config::CONFIG_FILE,
+    crate::secrets::SECRETS_FILE,
     // swarmd's `auth::TOKEN_FILE`; swarm-core cannot depend on swarmd.
     "daemon-token",
 ];
@@ -156,9 +164,24 @@ impl FsScopes {
     fn is_denied(&self, real: &Path) -> bool {
         let home = canonical_root(&self.home);
         self.is_data_file(real, &DENIED_DATA_FILE_PREFIXES)
+            || self.is_in_codex_homes(real)
             || DENIED_HOME_ENTRIES
                 .iter()
                 .any(|entry| real.starts_with(home.join(entry)))
+    }
+
+    /// Whether `real` is the data directory's `codex-home` directory or
+    /// anything under it: every Codex worker's private home, which holds a
+    /// copy of the operator's `auth.json` and the config Codex trusts. The
+    /// first component below the data directory is compared lower-case.
+    fn is_in_codex_homes(&self, real: &Path) -> bool {
+        real.strip_prefix(canonical_root(&self.app_data))
+            .ok()
+            .and_then(|rest| rest.components().next())
+            .is_some_and(|first| {
+                first.as_os_str().to_string_lossy().to_lowercase()
+                    == crate::agent::codex::home::HOMES_DIR
+            })
     }
 
     /// Whether `real` is a file directly in the data directory whose name
@@ -518,11 +541,14 @@ mod tests {
     }
 
     #[test]
-    fn test_read_and_write_deny_the_config_file_and_the_daemon_token() {
+    fn test_read_and_write_deny_the_config_file_the_secrets_file_and_the_daemon_token() {
         let tree = Tree::new();
         for name in [
             "swarm-config.json",
             "swarm-config.json.corrupt-1760000000000",
+            "swarm-secrets.json",
+            "SWARM-SECRETS.JSON",
+            "swarm-secrets.json.corrupt-1",
             "daemon-token",
             "DAEMON-TOKEN",
             ".daemon-token.abc123",
@@ -543,6 +569,37 @@ mod tests {
         let sessions = tree.scopes.app_data.join("sessions.json");
         std::fs::write(&sessions, "[]").unwrap();
         assert!(tree.scopes.check_read(&sessions).is_ok());
+    }
+
+    #[test]
+    fn test_read_and_write_deny_every_path_under_the_codex_worker_homes() {
+        let tree = Tree::new();
+        let homes = tree
+            .scopes
+            .app_data
+            .join(crate::agent::codex::home::HOMES_DIR);
+        let home = homes.join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(home.join("plugins")).unwrap();
+        let auth = home.join("auth.json");
+        std::fs::write(&auth, r#"{"tokens":"SECRET"}"#).unwrap();
+        assert_eq!(tree.scopes.check_read(&auth), denied(), "auth.json copy");
+        assert_eq!(tree.scopes.check_write(&auth), denied(), "auth.json copy");
+        assert_eq!(
+            tree.scopes.check_write(&home.join("plugins").join("x")),
+            denied(),
+            "a new file in a worker home"
+        );
+        assert_eq!(
+            tree.scopes.check_write(&homes.join("planted.toml")),
+            denied(),
+            "a new file in the homes directory"
+        );
+        // Only the `codex-home` directory itself is covered, not a sibling
+        // whose name merely starts with it.
+        let sibling = tree.scopes.app_data.join("codex-homework.txt");
+        std::fs::write(&sibling, "notes").unwrap();
+        assert!(tree.scopes.check_read(&sibling).is_ok());
+        assert!(tree.scopes.check_write(&sibling).is_ok());
     }
 
     #[test]

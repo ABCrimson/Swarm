@@ -29,7 +29,7 @@ inline `--settings '<json>'` value with `--setting-sources project`.
 
 ## Decision
 
-Rewrite the adapter for the control protocol of 2.1.28x (oldest supported CLI 2.1.259):
+Rewrite the adapter for the control protocol of 2.1.28x (oldest supported CLI: `MIN_CLI_VERSION`, 2.1.318, set by [ADR-0038](0038-agent-provider-trust-model.md)):
 
 - **Handshake.** Every session opens with the `initialize` control request and waits (30 s) for its
   `control_response`, which costs no API call and reports models, account and active permission mode.

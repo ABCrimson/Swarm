@@ -3,7 +3,7 @@
 
 use std::io::Write;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
@@ -155,24 +155,15 @@ pub(super) fn start_stdin_writer(
     Ok(jobs)
 }
 
-/// Waits up to `grace` for `child` to exit on its own (its stdin is
-/// already closed), then kills it; reaps it either way. Blocking — run it
-/// on the blocking pool.
-pub(super) fn reap(
-    mut child: std::process::Child,
-    grace: Duration,
-) -> Option<std::process::ExitStatus> {
-    let deadline = Instant::now() + grace;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Some(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            Ok(None) => break,
-            Err(error) => {
-                tracing::warn!(%error, "codex adapter: polling the child's exit failed");
-                break;
-            }
-        }
+/// Collects `child`'s exit status, killing the child itself first if it
+/// still runs (only the child: its tree goes through
+/// [`crate::worker::proc::stop_tree`] first). Blocking — run it on the
+/// blocking pool.
+pub(super) fn reap(mut child: std::process::Child) -> Option<std::process::ExitStatus> {
+    match child.try_wait() {
+        Ok(Some(status)) => return Some(status),
+        Ok(None) => {}
+        Err(error) => tracing::warn!(%error, "codex adapter: polling the child's exit failed"),
     }
     if let Err(error) = child.kill() {
         tracing::debug!(%error, "codex adapter: kill failed (the child may have just exited)");

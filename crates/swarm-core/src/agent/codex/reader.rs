@@ -144,7 +144,7 @@ fn promote(shared: &Shared, inner: &mut Inner, turn_id: TurnId) {
 fn parse<T: DeserializeOwned>(method: &str, params: Value) -> Option<T> {
     serde_json::from_value(params)
         .inspect_err(|error| {
-            tracing::warn!(method, %error, "codex adapter: notification does not match the codex 0.156.1 schema, skipped");
+            tracing::warn!(method, %error, "codex adapter: notification does not match the verified codex schema, skipped");
         })
         .ok()
 }
@@ -200,7 +200,7 @@ fn handle_notification(shared: &Shared, method: &str, params: Value) {
                 tracing::warn!(
                     method,
                     %error,
-                    "codex adapter: notification does not match the codex 0.156.1 schema, settling the turn as an error"
+                    "codex adapter: notification does not match the verified codex schema, settling the turn as an error"
                 );
                 if let (Some(thread_id), Some(turn_id)) = (
                     params.get("threadId").and_then(Value::as_str),
@@ -471,7 +471,7 @@ fn settle(shared: &Shared, turn: Turn) {
 /// schema is treated as [`Item::Other`] and forwarded verbatim.
 fn typed_item(raw: &Value) -> Item {
     Item::deserialize(raw).unwrap_or_else(|error| {
-        tracing::warn!(%error, "codex adapter: item does not match the codex 0.156.1 schema, forwarded verbatim");
+        tracing::warn!(%error, "codex adapter: item does not match the verified codex schema, forwarded verbatim");
         Item::Other
     })
 }
@@ -563,7 +563,7 @@ fn handle_server_request(shared: &Shared, method: &str, id: RequestId, params: V
     let request = match ApprovalRequest::deserialize(&params) {
         Ok(request) => request,
         Err(error) => {
-            tracing::warn!(method, %error, "codex adapter: approval request does not match the codex 0.156.1 schema");
+            tracing::warn!(method, %error, "codex adapter: approval request does not match the verified codex schema");
             let message = format!("invalid {method} params: {error}");
             answer_error(&inner, id, INVALID_PARAMS, &message);
             return;

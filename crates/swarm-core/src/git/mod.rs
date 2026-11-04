@@ -141,8 +141,9 @@ impl RepoLocks {
 /// as opposed to a dirty worktree, a missing repo, a checkout failure
 /// or a real git bug. Deliberately narrow: git's generic "unable to
 /// create file …" checkout errors must never trigger a retry, because a
-/// retried `worktree add -b` would then fail on the branch its first
-/// attempt already created and hide the real error.
+/// retried `worktree add -b` would only repeat a deterministic failure
+/// (and, if `worktree::add`'s branch rollback failed, trip over the
+/// branch the first attempt created).
 #[must_use = "the check is the only result"]
 pub(crate) fn is_lock_contention_message(message: &str) -> bool {
     let lower = message.to_lowercase();

@@ -987,6 +987,57 @@ async fn shutdown_mid_turn_synthesizes_exactly_one_settlement() {
     assert_eq!(harness.recorder.count("agent_session_exited"), 1);
 }
 
+/// The `(cli, grandchild)` pids `grandchild_mid_turn.mjs` writes to
+/// `pids.json` in the session's working directory before its first delta.
+fn grandchild_pids(harness: &Harness) -> (u32, u32) {
+    let text = std::fs::read_to_string(harness.cwd.join("pids.json"))
+        .expect("the scenario wrote its pids");
+    let pids: Value = serde_json::from_str(&text).expect("pids.json is JSON");
+    let pid = |key: &str| {
+        u32::try_from(pids[key].as_u64().expect("a recorded pid")).expect("a pid fits u32")
+    };
+    (pid("pid"), pid("grandchild"))
+}
+
+/// A busy session's teardown kills the CLI's process tree: the sleeping
+/// process a Bash tool call leaves (the scenario's grandchild) does not
+/// outlive the CLI, which here ignores stdin EOF like a hung one. On Unix a
+/// plain kill of the child would leave the grandchild running; on Windows
+/// node's libuv job object already ends a non-detached child with its
+/// parent, so there the npm-shim test in `agent/codex/tests.rs` is the red
+/// test.
+#[tokio::test]
+async fn shutdown_mid_turn_ends_the_clis_grandchild() {
+    let harness = Harness::new();
+    let session = harness.spawn("grandchild_mid_turn.mjs").await;
+    send(session.as_ref(), "run a long command").await;
+    harness.recorder.wait_for("agent_turn_delta", 1).await;
+    let (cli, grandchild) = grandchild_pids(&harness);
+    assert!(crate::test_support::is_running(grandchild));
+
+    session.shutdown().await.expect("shutdown");
+    crate::test_support::assert_gone(cli, "the CLI").await;
+    crate::test_support::assert_gone(grandchild, "the CLI's grandchild").await;
+}
+
+/// A session dropped mid-turn without a shutdown still ends the CLI's
+/// whole tree: `Drop for ClaudeCodeSession` starts the teardown, which
+/// stops the tree off the async threads and records the exit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_a_busy_session_ends_the_clis_grandchild() {
+    let harness = Harness::new();
+    let session = harness.spawn("grandchild_mid_turn.mjs").await;
+    send(session.as_ref(), "run a long command").await;
+    harness.recorder.wait_for("agent_turn_delta", 1).await;
+    let (cli, grandchild) = grandchild_pids(&harness);
+    assert!(crate::test_support::is_running(grandchild));
+
+    drop(session);
+    crate::test_support::assert_gone(cli, "the CLI").await;
+    crate::test_support::assert_gone(grandchild, "the CLI's grandchild").await;
+    harness.recorder.wait_for("agent_session_exited", 1).await;
+}
+
 #[tokio::test]
 async fn a_framer_error_settles_the_turn_and_tears_the_session_down() {
     let harness = Harness::new();

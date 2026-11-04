@@ -13,7 +13,8 @@
  * and every turn's `system/init` follows that turn's user message. The
  * harness answers `initialize`, `get_binary_version` and `interrupt`
  * itself, refuses any other control request the way the CLI does, and
- * exits 0 on stdin EOF (the CLI's idle shutdown).
+ * exits 0 on stdin EOF (the CLI's idle shutdown) unless the scenario's
+ * config sets `ignoreStdinEof`.
  *
  * A scenario module default-exports `async (cli) => {}` and plays its
  * turns through the `cli` object below; it may also export `config` to
@@ -38,6 +39,8 @@ import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 
 const DEFAULTS = {
+  /** Keep running after stdin closes (a hung CLI); only a kill ends it. */
+  ignoreStdinEof: false,
   /**
    * `get_binary_version` answer and `system/init.claude_code_version`:
    * the adapter's `MIN_CLI_VERSION`, so the default probe sits on the floor.
@@ -466,8 +469,11 @@ input.on("line", (line) => {
       return undefined;
   }
 });
-// The CLI's idle shutdown: stdin EOF ends the process cleanly.
-input.on("close", () => process.exit(0));
+// The CLI's idle shutdown: stdin EOF ends the process cleanly, unless the
+// scenario plays a hung CLI (`ignoreStdinEof`).
+input.on("close", () => {
+  if (!config.ignoreStdinEof) process.exit(0);
+});
 
 // ── Scenario API ────────────────────────────────────────────────────
 

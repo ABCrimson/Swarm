@@ -115,6 +115,11 @@ pub async fn resume_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
 /// 4. Clears the closing mark once that work has finished, even if this
 ///    future was dropped meanwhile; the worker is gone, so later calls
 ///    get [`crate::error::AppError::WorkerNotFound`].
+/// 5. Once the worker is gone, deletes its private Codex home (its copy
+///    of the operator's `auth.json` and its Codex threads; see
+///    `CodexAdapter::remove_worker_home`). Best-effort: a
+///    failure is logged. A kill that failed with the worker still
+///    registered keeps the home, so its threads stay resumable.
 ///
 /// Once this returns, no session of the worker is registered, still
 /// handshaking or still shutting down.
@@ -146,6 +151,13 @@ pub async fn kill_worker(ctx: Ctx, args: Value) -> Result<Value, Value> {
     })
     .await
     .map_err(|e| Value::String(e.to_string()))?;
+
+    // The session has ended, so no child holds files in the home.
+    if ctx.registry.get_worker(&uuid).is_err()
+        && let Err(e) = ctx.codex_adapter.remove_worker_home(uuid).await
+    {
+        tracing::warn!(worker_id = %uuid, error = %e, "could not delete the killed worker's Codex home");
+    }
 
     kill_result.map_err(|e| err_value(&e))?;
     ok_value(&())
@@ -436,6 +448,35 @@ mod tests {
     ) -> Vec<crate::events::SwarmEvent> {
         ctx.engine.flush().await.unwrap();
         events.try_iter().map(|envelope| envelope.event).collect()
+    }
+
+    /// A killed worker's private Codex home, with its copy of the
+    /// operator's `auth.json`, is deleted once its session has been shut
+    /// down; another worker's home stays.
+    #[tokio::test]
+    async fn test_kill_worker_deletes_the_workers_codex_home_after_its_session() {
+        let repo = crate::git::test_support::TempRepo::new("kill-codex-home");
+        let (ctx, _dir, _events) = test_ctx();
+        let (id, _worktree, seen) = isolated_worker_with_session(&ctx, &repo, None).await;
+        let homes = ctx
+            .paths
+            .data_dir
+            .join(crate::agent::codex::home::HOMES_DIR);
+        let home = homes.join(id.to_string());
+        let other = homes.join(uuid::Uuid::new_v4().to_string());
+        for dir in [&home, &other] {
+            std::fs::create_dir_all(dir).unwrap();
+            // A placeholder, never a credential.
+            std::fs::write(dir.join("auth.json"), r#"{"placeholder":1}"#).unwrap();
+        }
+
+        kill_worker(ctx.clone(), json!({"id": id.to_string()}))
+            .await
+            .unwrap();
+
+        assert!(seen.lock().is_some(), "the session was shut down");
+        assert!(!home.exists(), "the killed worker's home is gone");
+        assert!(other.join("auth.json").exists(), "only its own home goes");
     }
 
     /// The provider is stopped while its checkout still exists: kill

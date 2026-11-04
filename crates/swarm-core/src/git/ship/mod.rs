@@ -156,10 +156,8 @@ fn single_value(output: &GitOutput) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// Runs one mutating git call under `repo_root`'s [`RepoLocks`] entry.
-/// A failure that is lock contention (another git process holding
-/// `index.lock` or a ref lock) becomes `Err`, which `RepoLocks` retries
-/// once; any other exit comes back as `Ok` for the caller to classify.
+/// Runs one mutating git call under `repo_root`'s [`RepoLocks`] entry —
+/// [`run_mutation`] with the lock taken for it.
 fn mutate(
     repo_locks: &RepoLocks,
     repo_root: &Path,
@@ -167,16 +165,26 @@ fn mutate(
     stdin: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<GitOutput, AppError> {
-    repo_locks.run_serialized(repo_root, || {
-        let output = match stdin {
-            Some(bytes) => cli::run_with_stdin(args, bytes, timeout)?,
-            None => cli::run(args, timeout)?,
-        };
-        if !output.success() && is_lock_contention_message(output.raw_stderr()) {
-            return Err(AppError::Git(output.stderr));
-        }
-        Ok(output)
-    })
+    repo_locks.run_serialized(repo_root, || run_mutation(args, stdin, timeout))
+}
+
+/// Runs one mutating git call; the caller holds the repo's [`RepoLocks`]
+/// entry. A failure that is lock contention (another git process holding
+/// `index.lock` or a ref lock) becomes `Err`, which `RepoLocks` retries
+/// once; any other exit comes back as `Ok` for the caller to classify.
+fn run_mutation(
+    args: &[String],
+    stdin: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<GitOutput, AppError> {
+    let output = match stdin {
+        Some(bytes) => cli::run_with_stdin(args, bytes, timeout)?,
+        None => cli::run(args, timeout)?,
+    };
+    if !output.success() && is_lock_contention_message(output.raw_stderr()) {
+        return Err(AppError::Git(output.stderr));
+    }
+    Ok(output)
 }
 
 /// `paths` as NUL-terminated `:(top,literal)` pathspecs, the stdin
@@ -303,6 +311,19 @@ fn push_urls(worktree: &Path, remote_name: &str) -> Result<Vec<String>, AppError
 /// more than one URL: no single host can show where the push goes.
 fn many_push_urls(count: usize) -> String {
     format!("Remote `origin` Has {count} Push URLs — Git Pushes To All Of Them.")
+}
+
+/// What a preview shows for `urls` ([`push_urls`] of `origin`): every
+/// URL redacted, comma-separated, or `None` when there is none. This is
+/// `ShipPreflight.remote`, and the value [`push`] holds a caller's
+/// `expected_remote` to.
+fn preview_remote(urls: &[String]) -> Option<String> {
+    (!urls.is_empty()).then(|| {
+        urls.iter()
+            .map(|url| crate::redact::redact(url))
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
 }
 
 /// The branch a worker's isolation branch is compared against. Only the
