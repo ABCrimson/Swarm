@@ -111,7 +111,8 @@ test.describe("Stylesheet cascade", () => {
       await app.open();
       await app.goTo("Logs");
       const label = app.main.locator(".log-row__level .swarm-pill-label").first();
-      // The label text is Title Case; `.log-row__level` paints it uppercase, the widest form.
+      await expect(app.main.locator(".log-row__level").first()).toHaveCSS("width", "56px");
+      // The label text is Title Case; `.log-row__level` paints it uppercase.
       await expect(label).toHaveText("Warn");
       await expect(label).toHaveCSS("text-transform", "uppercase");
       expect(await label.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
