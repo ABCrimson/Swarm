@@ -80,20 +80,22 @@ export function SessionCard({
         transition={{ type: "spring", stiffness: 400, damping: 25 }}
         className="block w-full cursor-pointer rounded-xl p-4 pr-12 text-left transition-colors"
         style={{
-          background: isActive ? "oklch(0.18 0.06 290 / 0.6)" : "oklch(0.14 0.02 220 / 0.5)",
+          background: isActive
+            ? "oklch(from var(--color-plasma) l c h / 0.08)"
+            : "oklch(0.14 0.02 220 / 0.5)",
           backdropFilter: "blur(12px) saturate(1.5)",
           border: isActive
-            ? "1px solid oklch(0.65 0.28 290 / 0.6)"
+            ? "1px solid oklch(from var(--color-plasma) l c h / 0.5)"
             : "1px solid oklch(0.28 0.04 220 / 0.5)",
           boxShadow: isActive
-            ? "0 0 20px oklch(0.55 0.25 290 / 0.15), inset 0 1px 0 oklch(1 0 0 / 0.05)"
+            ? "0 0 20px oklch(from var(--color-plasma) l c h / 0.15), inset 0 1px 0 oklch(1 0 0 / 0.05)"
             : "inset 0 1px 0 oklch(1 0 0 / 0.03)",
         }}
       >
         <span className="flex items-center justify-between gap-3">
           <span
             className="truncate text-sm font-semibold font-display"
-            style={{ color: isActive ? "oklch(0.92 0.08 290)" : "oklch(0.88 0.02 220)" }}
+            style={{ color: isActive ? "var(--color-fg-bright)" : "oklch(0.88 0.02 220)" }}
           >
             {escapeForDisplay(session.name)}
           </span>
