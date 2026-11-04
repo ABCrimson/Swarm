@@ -16,8 +16,8 @@ interface AppShellProps {
  * the main column (top bar, page area, status bar), over the particle
  * background.
  *
- * The one-time entrance (sidebar slides in, top bar drops in, page area
- * fades in) is pure CSS: Tailwind's `starting:` variant compiles to
+ * The one-time entrance (the sidebar settles 8px in from the left; the
+ * top bar and page area fade in) is pure CSS: Tailwind's `starting:` variant compiles to
  * `@starting-style`, so each region transitions from its starting style
  * the first time it renders. No JS runs for it, it never flashes the
  * final state first, and the global reduced-motion override in
@@ -40,18 +40,18 @@ export function AppShell({ children }: AppShellProps): React.ReactElement {
         data-sidebar-collapsed={sidebarCollapsed || undefined}
         className="grid h-screen w-screen grid-cols-[220px_1fr] grid-rows-1 overflow-hidden text-fg transition-[grid-template-columns] duration-250 ease-in-out data-sidebar-collapsed:grid-cols-[56px_1fr]"
       >
-        <div className="row-span-full transition-[opacity,translate] duration-400 ease-out-cubic starting:-translate-x-5 starting:opacity-0">
+        <div className="row-span-full transition-[opacity,translate] duration-250 ease-out-cubic starting:-translate-x-2 starting:opacity-0">
           <Sidebar />
         </div>
 
         <div className="grid min-w-0 grid-rows-[auto_1fr_auto]">
-          <div className="transition-[opacity,translate] delay-100 duration-300 ease-out-cubic starting:-translate-y-3 starting:opacity-0">
+          <div className="transition-opacity delay-100 duration-250 ease-out-cubic starting:opacity-0">
             <TopBar />
           </div>
 
           <main
             id="main-content"
-            className="relative overflow-hidden transition-opacity delay-250 duration-400 ease-out starting:opacity-0"
+            className="relative overflow-hidden transition-opacity delay-250 duration-250 ease-out-cubic starting:opacity-0"
           >
             {children}
           </main>

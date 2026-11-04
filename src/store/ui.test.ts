@@ -68,14 +68,14 @@ describe("persisted UI settings", () => {
   });
 
   describe("themeAtom", () => {
-    it("carries particlesEnabled over from the legacy key and takes the new gpuOverlay default", () => {
+    it("carries particlesEnabled over from the legacy key and takes the opt-in gpuOverlay default", () => {
       resetPersistedSettingsCache([
-        ["swarm:ui:theme", { particlesEnabled: false, gpuOverlay: false }],
+        ["swarm:ui:theme", { particlesEnabled: false, gpuOverlay: true }],
       ]);
 
       expect(createStore().get(themeAtom)).toStrictEqual({
         particlesEnabled: false,
-        gpuOverlay: true,
+        gpuOverlay: false,
       });
     });
 

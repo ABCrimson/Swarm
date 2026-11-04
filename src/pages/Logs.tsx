@@ -17,14 +17,8 @@ export function Logs(): React.ReactElement {
     >
       <PageHeader title="Logs" />
 
-      {/* Log viewer */}
-      <div
-        style={{
-          flex: 1,
-          margin: "0 16px 16px",
-          position: "relative",
-        }}
-      >
+      {/* Log viewer, on the PageHeader's 28px gutter */}
+      <div style={{ flex: 1, margin: "0 28px 24px", position: "relative" }}>
         <LogViewer />
       </div>
     </div>

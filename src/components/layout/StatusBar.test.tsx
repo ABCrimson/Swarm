@@ -65,17 +65,18 @@ describe("StatusBar", () => {
     store.set(gpuFrameTimeAtom, 3.25);
     renderBar(store);
 
-    expect(
-      screen.getByTitle("Time The GPU Took To Finish The Last Particle Frames"),
-    ).toHaveTextContent("GPU 3.3ms");
-    await user.click(screen.getByRole("button", { name: "Hide GPU Frame Time" }));
+    // Opt-in: the readout starts hidden.
     expect(
       screen.queryByTitle("Time The GPU Took To Finish The Last Particle Frames"),
     ).not.toBeInTheDocument();
-    expect(store.get(themeAtom).gpuOverlay).toBe(false);
-
     await user.click(screen.getByRole("button", { name: "Show GPU Frame Time" }));
     expect(store.get(themeAtom).gpuOverlay).toBe(true);
+    expect(
+      screen.getByTitle("Time The GPU Took To Finish The Last Particle Frames"),
+    ).toHaveTextContent("GPU 3.3ms");
+
+    await user.click(screen.getByRole("button", { name: "Hide GPU Frame Time" }));
+    expect(store.get(themeAtom).gpuOverlay).toBe(false);
     expect(store.get(themeAtom).particlesEnabled).toBe(true);
   });
 });

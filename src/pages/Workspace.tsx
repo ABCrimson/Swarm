@@ -12,7 +12,7 @@ export function Workspace(): React.ReactElement {
     <div className="flex h-full flex-col overflow-hidden">
       <PageHeader title="Workspace" />
 
-      <div className="mx-4 mb-4 flex-1 overflow-hidden rounded-lg border border-border bg-surface-0/50 backdrop-blur-md">
+      <div className="mx-7 mb-6 flex-1 overflow-hidden rounded-lg border border-border bg-surface-0/50 backdrop-blur-md">
         <WorkspacePanel />
       </div>
     </div>

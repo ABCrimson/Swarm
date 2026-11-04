@@ -69,7 +69,7 @@ export function Tools(): React.ReactElement {
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       <PageHeader title="Tools" />
 
-      <div ref={contentRef} style={{ flex: 1, margin: "0 16px 16px", overflow: "hidden" }}>
+      <div ref={contentRef} style={{ flex: 1, margin: "0 12px 8px", overflow: "hidden" }}>
         {view.mode === "build" ? (
           <ToolBuilder
             key={view.tool?.id ?? "new"}

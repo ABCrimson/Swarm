@@ -69,7 +69,8 @@ function SettingsSection({
   return (
     <section
       aria-labelledby={headingId}
-      className="rounded-lg border border-border bg-surface-1 px-7 py-6"
+      // A rule-separated group in the Settings column's divide-y.
+      className="py-6"
     >
       <div className="mb-3 flex items-center justify-between gap-4">
         <h2 id={headingId} className="font-display text-lg font-bold tracking-tight text-fg-bright">
@@ -357,7 +358,7 @@ function ModelPicker({ labelledBy }: { readonly labelledBy: string }): React.Rea
     <div
       role="radiogroup"
       aria-labelledby={labelledBy}
-      className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface-0"
+      className="flex flex-col divide-y divide-border"
     >
       {models.map(([key, model]) => {
         const cardId = `${id}-${key}`;
@@ -695,7 +696,8 @@ export function Settings(): React.ReactElement {
               : "Not Saved Outside The Desktop App"
         }
       />
-      <div className="flex flex-col gap-6 px-7 pb-6">
+      {/* Only the column's first group (inside the API-key form) sits on the header without a top pad. */}
+      <div className="flex flex-col divide-y divide-border px-7 pb-6 [&>:first-child>section]:pt-0">
         <form onSubmit={handleSaveApiKey}>
           <SettingsSection title="AI Connectivity">
             <label htmlFor="anthropic-api-key" className="mb-1.5 block text-md font-medium text-fg">

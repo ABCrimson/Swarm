@@ -199,6 +199,7 @@ Workflows (the `workflows` job of `ci.yml`; run it when you touch `.github/`):
 
 ```bash
 actionlint              # the version pinned in ci.yml
+bash .github/scripts/verify-updater-manifest.test.sh   # needs jq; the release verifier's URL allowlist
 zizmor .github          # the version pinned in ci.yml; set GH_TOKEN so the online audits (pinned SHA vs its # vX.Y.Z comment, known-vulnerable actions) run as they do in CI
 ```
 

@@ -137,7 +137,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     return (
       <div
         role="alert"
-        className="flex min-h-50 flex-col items-center justify-center gap-4 rounded-xl border border-rose/50 bg-surface-0 p-8"
+        className="flex min-h-50 flex-col items-center justify-center gap-4 rounded-lg border border-rose/50 bg-surface-0 p-8"
       >
         <p className="font-semibold text-base text-rose">Something Went Wrong</p>
         <p className="max-w-100 text-center text-fg-muted text-md">{error.message}</p>

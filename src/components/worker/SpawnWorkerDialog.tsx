@@ -127,7 +127,7 @@ const dialogStyle: CSSProperties = {
   borderRadius: 12,
   boxShadow:
     "0 0 0 1px oklch(from var(--color-plasma) l c h / 0.1), 0 16px 48px oklch(from var(--color-void) l c h / 0.6)",
-  color: "oklch(0.88 0.03 220)",
+  color: "var(--color-fg)",
   overflow: "hidden",
 };
 
@@ -163,7 +163,7 @@ const closeButtonStyle: CSSProperties = {
   background: "oklch(0 0 0 / 0)",
   border: "none",
   borderRadius: 6,
-  color: "oklch(0.55 0.04 220)",
+  color: "var(--color-fg-dim)",
   cursor: "pointer",
 };
 
@@ -211,10 +211,11 @@ function segmentStyle(active: boolean, disabled: boolean): CSSProperties {
     background: active ? "oklch(from var(--color-plasma) l c h / 0.15)" : "oklch(0 0 0 / 0)",
     borderRadius: 6,
     color: disabled
-      ? "oklch(0.38 0.03 220)"
+      ? "var(--color-fg-dim)"
       : active
         ? "var(--color-plasma)"
-        : "oklch(0.65 0.04 220)",
+        : "var(--color-fg-muted)",
+    opacity: disabled ? 0.6 : 1,
     fontFamily: "var(--font-body)",
     fontSize: "0.8125rem",
     fontWeight: 500,
@@ -260,13 +261,13 @@ const tierLabelStyle: CSSProperties = {
   fontFamily: "var(--font-body)",
   fontSize: "0.8125rem",
   fontWeight: 600,
-  color: "oklch(0.90 0.02 220)",
+  color: "var(--color-fg-bright)",
 };
 
 const tierExplanationStyle: CSSProperties = {
   fontFamily: "var(--font-body)",
   fontSize: "var(--text-xs)",
-  color: "oklch(0.58 0.04 220)",
+  color: "var(--color-fg-dim)",
   lineHeight: 1.4,
 };
 
@@ -280,7 +281,7 @@ const repoRootPathStyle: CSSProperties = {
   borderRadius: 8,
   border: "1px solid var(--color-border)",
   background: "oklch(from var(--color-surface-0) l c h / 0.6)",
-  color: "oklch(0.65 0.04 220)",
+  color: "var(--color-fg-muted)",
   fontFamily: "var(--font-mono)",
   fontSize: "0.75rem",
 };
@@ -594,11 +595,17 @@ export function SpawnWorkerDialog({
                 );
               })}
             </div>
-            {ALL_PROVIDERS.filter((p) => providerReason(p) != null).map((p) => (
-              <span key={p} style={unavailableNoteStyle}>
-                {PROVIDER_LABELS[p]} Unavailable — {providerReason(p)}
-              </span>
-            ))}
+            {Map.groupBy(
+              ALL_PROVIDERS.filter((p) => providerReason(p) != null),
+              (p) => String(providerReason(p)),
+            )
+              .entries()
+              .map(([reason, ps]) => (
+                <span key={reason} style={unavailableNoteStyle}>
+                  {ps.map((p) => PROVIDER_LABELS[p]).join(" And ")} Unavailable — {reason}
+                </span>
+              ))
+              .toArray()}
           </fieldset>
 
           {agent && (

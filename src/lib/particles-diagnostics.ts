@@ -8,6 +8,7 @@
 
 import { toast } from "sonner";
 import type { WebGPUUnavailableReason } from "#lib/webgpu";
+import { useLogStore } from "#store/logs";
 
 let lastWarnedReason: WebGPUUnavailableReason | null = null;
 
@@ -16,11 +17,16 @@ export function resetParticlesUnavailableWarning(): void {
   lastWarnedReason = null;
 }
 
-/** Logs and toasts why the particle background cannot start, unless that reason was the last one reported. */
+/** Writes to the Logs page and briefly toasts why the particle background cannot start, unless that reason was the last one reported. */
 export function warnParticlesUnavailable(reason: WebGPUUnavailableReason): void {
   if (lastWarnedReason === reason) return;
   lastWarnedReason = reason;
 
-  console.warn(`[particles] Particle Background Unavailable: ${reason}`);
-  toast("Particle Background Off", { description: reason });
+  useLogStore.getState().addEntry({
+    timestamp: Date.now(),
+    level: "warn",
+    source: "particles",
+    message: `Particle Background Unavailable: ${reason}`,
+  });
+  toast("Particle Background Off", { description: reason, duration: 3000 });
 }

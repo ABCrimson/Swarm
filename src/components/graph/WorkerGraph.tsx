@@ -434,7 +434,7 @@ function WorkerGraphInner({
         action={
           onSpawnRequest && (
             <Button variant="primary" size="sm" onClick={onSpawnRequest}>
-              Spawn Your First Worker
+              Spawn Worker
             </Button>
           )
         }
@@ -605,7 +605,7 @@ function WorkerGraphInner({
  * and a quiet "No Measured Causality Yet" hint; nothing is ever
  * fabricated. Motion honours the user's reduced-motion preference.
  * With no workers it renders the shared EmptyState, whose action is a
- * "Spawn Your First Worker" button when `onSpawnRequest` is given.
+ * "Spawn Worker" button when `onSpawnRequest` is given.
  */
 export function WorkerGraph({
   onSpawnRequest,

@@ -1,31 +1,38 @@
 import { toast } from "sonner";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resetParticlesUnavailableWarning,
   warnParticlesUnavailable,
 } from "#lib/particles-diagnostics";
+import { useLogStore } from "#store/logs";
+
+/** Messages the diagnostics wrote to the log store. */
+function particleLogs(): string[] {
+  return useLogStore
+    .getState()
+    .entries.filter((entry) => entry.source === "particles")
+    .map((entry) => entry.message);
+}
 
 describe("warnParticlesUnavailable", () => {
-  let warnSpy: ReturnType<typeof vi.spyOn>;
-
   beforeEach(() => {
     vi.clearAllMocks();
     resetParticlesUnavailableWarning();
-    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    useLogStore.getState().clear();
   });
 
-  afterEach(() => {
-    warnSpy.mockRestore();
-  });
-
-  it("warns and toasts with the reason", () => {
+  it("writes a warn entry to the log store and briefly toasts the reason", () => {
     warnParticlesUnavailable("WebGPU Is Not Exposed By This WebView");
 
-    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
-      "[particles] Particle Background Unavailable: WebGPU Is Not Exposed By This WebView",
-    );
+    const [entry] = useLogStore.getState().entries;
+    expect(entry).toMatchObject({
+      level: "warn",
+      source: "particles",
+      message: "Particle Background Unavailable: WebGPU Is Not Exposed By This WebView",
+    });
     expect(toast).toHaveBeenCalledExactlyOnceWith("Particle Background Off", {
       description: "WebGPU Is Not Exposed By This WebView",
+      duration: 3000,
     });
   });
 
@@ -33,7 +40,7 @@ describe("warnParticlesUnavailable", () => {
     warnParticlesUnavailable("WebGPU Is Not Exposed By This WebView");
     warnParticlesUnavailable("WebGPU Is Not Exposed By This WebView");
 
-    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(particleLogs()).toHaveLength(1);
     expect(toast).toHaveBeenCalledTimes(1);
   });
 
@@ -45,5 +52,6 @@ describe("warnParticlesUnavailable", () => {
     resetParticlesUnavailableWarning();
     warnParticlesUnavailable("No Compatible GPU Adapter Found");
     expect(toast).toHaveBeenCalledTimes(3);
+    expect(particleLogs()).toHaveLength(3);
   });
 });

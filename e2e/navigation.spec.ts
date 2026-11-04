@@ -123,7 +123,7 @@ test.describe("Navigation", () => {
     await expect(
       page.getByRole("tabpanel", { name: "List" }).getByText("No Workers Running", { exact: true }),
     ).toBeVisible();
-    await expect(page.getByText('Click "Spawn Worker" Or Press Ctrl+K')).toBeVisible();
+    await expect(page.getByText("Spawn A Worker To See It Listed")).toBeVisible();
   });
 
   test("Sessions page shows the empty state when no sessions exist", async ({ app, page }) => {

@@ -351,7 +351,7 @@ describe("WorkerGraph — interactions", () => {
     expect(await screen.findByText(/No Workers Running/)).toBeInTheDocument();
   });
 
-  it("the empty state offers Spawn Your First Worker only when a spawn handler is given", async () => {
+  it("the empty state offers Spawn Worker only when a spawn handler is given", async () => {
     const user = userEvent.setup();
     const onSpawnRequest = vi.fn();
     const { unmount } = render(<WorkerGraph />);
@@ -363,7 +363,7 @@ describe("WorkerGraph — interactions", () => {
     unmount();
 
     render(<WorkerGraph onSpawnRequest={onSpawnRequest} />);
-    await user.click(screen.getByRole("button", { name: "Spawn Your First Worker" }));
+    await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
     expect(onSpawnRequest).toHaveBeenCalledTimes(1);
   });
 

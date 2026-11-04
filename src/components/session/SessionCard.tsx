@@ -78,7 +78,7 @@ export function SessionCard({
         whileHover={{ scale: 1.015 }}
         whileTap={{ scale: 0.99 }}
         transition={{ type: "spring", stiffness: 400, damping: 25 }}
-        className="block w-full cursor-pointer rounded-xl p-4 pr-12 text-left transition-colors"
+        className="block w-full cursor-pointer rounded-lg p-4 pr-12 text-left transition-colors"
         style={{
           background: isActive
             ? "oklch(from var(--color-plasma) l c h / 0.08)"

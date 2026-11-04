@@ -26,7 +26,7 @@ export function TopBar(): React.ReactElement {
         </kbd>
       </p>
 
-      <p className="flex items-center gap-2 font-mono text-fg-muted text-sm">
+      <p className="flex items-center gap-2 text-fg-muted text-sm tabular-nums">
         <span aria-hidden="true" className="size-1.5 rounded-full bg-lime" />
         {pluralizeWorkers(workerCount)}
       </p>

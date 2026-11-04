@@ -396,7 +396,7 @@ export function ShipPreview({
       <div style={sectionStyle}>
         <span style={labelStyle}>Branch</span>
         <div style={monoRowStyle}>
-          <Pill tone="info" size="sm">
+          <Pill tone="info" size="sm" className="font-mono">
             {escapeForDisplay(preflight.branch)}
           </Pill>
           <span style={separatorStyle}>{"→"}</span>

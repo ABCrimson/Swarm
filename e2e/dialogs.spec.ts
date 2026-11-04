@@ -36,7 +36,8 @@ test.describe("Spawn Worker Dialog", () => {
 
     await expect(dialog.getByRole("radio", { name: "Claude Code" })).toBeDisabled();
     await expect(
-      dialog.getByText("Claude Code Unavailable — No Backend Transport Available."),
+      // Both CLI providers share the reason, so one grouped note names them.
+      dialog.getByText("Claude Code And Codex Unavailable — No Backend Transport Available."),
     ).toBeVisible();
   });
 
