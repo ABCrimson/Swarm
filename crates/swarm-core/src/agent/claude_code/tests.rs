@@ -1001,8 +1001,11 @@ fn grandchild_pids(harness: &Harness) -> (u32, u32) {
 
 /// A busy session's teardown kills the CLI's process tree: the sleeping
 /// process a Bash tool call leaves (the scenario's grandchild) does not
-/// outlive the CLI, which here ignores stdin EOF like a hung one. A plain
-/// kill of the child would leave the grandchild running.
+/// outlive the CLI, which here ignores stdin EOF like a hung one. On Unix a
+/// plain kill of the child would leave the grandchild running; on Windows
+/// node's libuv job object already ends a non-detached child with its
+/// parent, so there the npm-shim test in `agent/codex/tests.rs` is the red
+/// test.
 #[tokio::test]
 async fn shutdown_mid_turn_ends_the_clis_grandchild() {
     let harness = Harness::new();
@@ -1018,8 +1021,8 @@ async fn shutdown_mid_turn_ends_the_clis_grandchild() {
 }
 
 /// A session dropped mid-turn without a shutdown still ends the CLI's
-/// whole tree (`Drop for ClaudeCodeSession`), and the teardown the reader
-/// task then runs records the exit.
+/// whole tree: `Drop for ClaudeCodeSession` starts the teardown, which
+/// stops the tree off the async threads and records the exit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dropping_a_busy_session_ends_the_clis_grandchild() {
     let harness = Harness::new();

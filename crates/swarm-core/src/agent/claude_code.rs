@@ -946,25 +946,24 @@ impl Drop for ClaudeCodeSession {
         if self.shared.teardown_started.load(Ordering::Acquire) {
             return;
         }
-        // Kills the CLI's whole tree (a Bash tool's processes run under
-        // it), not just the child. The tree kill runs a helper process,
-        // so it goes to the blocking pool, or runs inline when no runtime
-        // is present (this thread is no Tokio worker then). The child
-        // stays in place: the reader task sees stdout close and runs the
-        // real teardown, which reaps it and records its exit. The state
-        // lock is held across the helper (`kill(1)` or `taskkill`), so the
-        // child cannot be reaped, and its pid reused, while its tree is
-        // signalled; a teardown racing this waits that long. A runtime
-        // that is shutting down may discard the queued kill.
-        let shared = Arc::clone(&self.shared);
-        let kill_tree = move || {
-            if let Some(child) = shared.state.lock().child.as_mut() {
-                crate::worker::tree_kill::kill(child);
-            }
-        };
+        // Ends the CLI's whole tree (a Bash tool's processes run under
+        // it), not just the child. Inside a runtime this is the ordinary
+        // teardown with `Stop::Kill`: it claims the child under the state
+        // lock, stops its tree on the blocking pool without the lock, and
+        // records the exit, so no Tokio worker waits on the tree-kill
+        // helper. A runtime that is shutting down may drop that task.
+        // Without a runtime (this thread is no Tokio worker then) the tree
+        // is killed inline, with the state lock held across the helper
+        // (`kill(1)` or `taskkill`) so the child cannot be reaped, and its
+        // pid reused, while its tree is signalled; the reader task's
+        // teardown then reaps the child and records its exit.
         match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => drop(runtime.spawn_blocking(kill_tree)),
-            Err(_) => kill_tree(),
+            Ok(_) => teardown::begin_teardown(&self.shared, Stop::Kill),
+            Err(_) => {
+                if let Some(child) = self.shared.state.lock().child.as_mut() {
+                    crate::worker::tree_kill::kill(child);
+                }
+            }
         }
     }
 }

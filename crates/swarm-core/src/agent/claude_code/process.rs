@@ -256,9 +256,11 @@ impl Process {
     }
 }
 
-/// Kills `child` (only the child: a tree goes through
-/// [`crate::worker::proc::stop_tree`] first) and waits for it, off the
-/// async threads.
+/// Kills `child` itself, not its tree, and waits for it, off the async
+/// threads. The session teardown stops the tree first
+/// ([`crate::worker::proc::stop_tree`]); the spawn-error and
+/// handshake/probe paths through [`Process::finish`] do not, since no
+/// tool call has run yet.
 pub(super) async fn reap(mut child: Child) -> Option<ExitStatus> {
     tokio::task::spawn_blocking(move || {
         // Killing a process that already exited is not an error worth

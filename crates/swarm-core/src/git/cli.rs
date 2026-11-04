@@ -34,12 +34,13 @@
 //!   ([`tree_kill::lead_own_group`]) so a timeout can signal `git` *and*
 //!   every hook or helper it started.
 //! - Enforces a wall-clock budget. On expiry it terminates the whole
-//!   process tree through [`crate::worker::tree_kill`]: on Unix a `SIGTERM` to the group first — `git`'s
-//!   signal handlers delete the `index.lock`/ref locks it holds — then
-//!   `SIGKILL` after `TERM_GRACE`; on Windows `taskkill /T /F`, which
-//!   cannot let `git` clean up, so a killed mutation there can leave a
-//!   stale `index.lock` behind. The budgets below are sized so that only
-//!   a genuinely hung call ever reaches that path.
+//!   process tree through [`crate::worker::tree_kill`]: on Unix a
+//!   `SIGTERM` to the group first — `git`'s signal handlers delete the
+//!   `index.lock`/ref locks it holds — then `SIGKILL` after
+//!   `TERM_GRACE`; on Windows `taskkill /T /F`, which cannot let `git`
+//!   clean up, so a killed mutation there can leave a stale `index.lock`
+//!   behind. The budgets below are sized so that only a genuinely hung
+//!   call ever reaches that path.
 //! - Returns stdout **raw** — porcelain records, NUL-separated paths,
 //!   numstat rows and shas are data, and redacting or truncating them
 //!   corrupts what callers parse. stderr is only ever used for messages

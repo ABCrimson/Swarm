@@ -1,6 +1,9 @@
 // A turn that starts a sleeping grandchild, the way a Bash tool call
 // leaves a process running under the CLI, and never finishes. The CLI
-// ignores stdin EOF, so only a kill of its process tree ends both.
+// ignores stdin EOF, so on Unix only a kill of its process tree ends
+// both; on Windows node's libuv job object already ends this
+// non-detached child with its parent, so there the npm-shim test in
+// `agent/codex/tests.rs` is the red test.
 // Once the grandchild runs, it writes `{"pid":<cli pid>,"grandchild":<pid>}`
 // to `pids.json` in the working directory, then streams the turn's first
 // delta. Synthetic: no capture.

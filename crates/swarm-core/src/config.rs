@@ -13,12 +13,12 @@
 //! shape) but is kept in [`secrets`]: the OS keychain, or the
 //! owner-only `swarm-secrets.json` on a host without one. Writing
 //! `null` or `""` deletes it. A key that a build from before the
-//! keychain left in this file is moved to the store, once, by the same
-//! step [`migrate_secrets`] runs, once at startup (in the background,
-//! from [`crate::runtime::Runtime::start`]), on the key's first read or
-//! write and on any rewrite of the file; a store that refuses it leaves the file
-//! as it was, and the key keeps reading from the file until a later
-//! access moves it. Store calls block, so call these functions from a
+//! keychain left in this file is moved to the store, once, by the same step
+//! [`migrate_secrets`] runs, once at startup (in the background, from
+//! [`crate::runtime::Runtime::start`]), on the key's first read or write
+//! and on any rewrite of the file; a store that refuses it leaves
+//! the file as it was, and the key keeps reading from the file until a
+//! later access moves it. Store calls block, so call these functions from a
 //! blocking thread. No store call runs under the file's lock, so a
 //! keychain waiting on an access prompt stalls only other secret
 //! accesses, never a read of another key.

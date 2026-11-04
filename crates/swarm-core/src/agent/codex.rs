@@ -30,10 +30,11 @@
 //! built-in apps, remote plugins, computer use and browser use. That a
 //! private home then lists no MCP server was measured without a login
 //! (`mcpServerStatus/list` on 0.168.0-alpha.1, 2026-11-04, no `auth.json`
-//! in the home); a signed-in run is not recorded. User skills under `~/.agents/skills` are outside `CODEX_HOME` and
-//! still load (measured on 0.168.0-alpha.1, 2026-11-04). An adapter built
-//! without a data directory refuses to spawn rather than fall back to the
-//! operator's home. `kill_worker` deletes a worker's home
+//! in the home); a signed-in run is not recorded. User skills under
+//! `~/.agents/skills` are outside `CODEX_HOME` and still load (measured
+//! on 0.168.0-alpha.1, 2026-11-04). An adapter built without a data
+//! directory refuses to spawn rather than fall back to the operator's
+//! home. `kill_worker` deletes a worker's home
 //! (`CodexAdapter::remove_worker_home`) once the worker is gone.
 //!
 //! ## Session lifecycle

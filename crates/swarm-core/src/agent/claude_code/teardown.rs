@@ -17,7 +17,7 @@ use crate::worker::proc::{ExitSequence, stop_tree};
 /// Starts teardown once; later calls are no-ops. It runs in its own task
 /// so a caller that stops waiting (a dropped `shutdown` future) cannot
 /// leave it half done.
-fn begin_teardown(shared: &Arc<Shared>, stop: Stop) {
+pub(super) fn begin_teardown(shared: &Arc<Shared>, stop: Stop) {
     if shared.teardown_started.swap(true, Ordering::AcqRel) {
         return;
     }
