@@ -29,8 +29,8 @@
 //! in. User skills under `~/.agents/skills` are outside `CODEX_HOME` and
 //! still load (measured on 0.168.0-alpha.1, 2026-11-04). An adapter built
 //! without a data directory refuses to spawn rather than fall back to the
-//! operator's home. [`CodexAdapter::remove_worker_home`] deletes a home once
-//! its worker is gone.
+//! operator's home. `kill_worker` deletes a worker's home
+//! (`CodexAdapter::remove_worker_home`) once the worker is gone.
 //!
 //! ## Session lifecycle
 //!
@@ -232,7 +232,7 @@ impl CodexAdapter {
     /// session has ended. A missing home, or an adapter without a data
     /// directory, has nothing to remove. The file I/O runs on the blocking
     /// pool.
-    pub async fn remove_worker_home(&self, worker_id: Uuid) -> Result<(), AppError> {
+    pub(crate) async fn remove_worker_home(&self, worker_id: Uuid) -> Result<(), AppError> {
         let Some(homes) = self.homes.clone() else {
             return Ok(());
         };
