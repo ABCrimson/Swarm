@@ -34,7 +34,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
   const unavailableReasonId = hasCapability("localAiChat") ? undefined : spawnReasonId;
   return (
     <div
-      className="rounded-xl border border-[oklch(0.28_0.04_220)] bg-[oklch(0.12_0.02_220/0.8)] p-6"
+      className="rounded-lg border border-[oklch(0.28_0.04_220)] bg-[oklch(0.12_0.02_220/0.8)] p-6"
       style={{ backdropFilter: "blur(16px) saturate(1.5)" }}
     >
       <div className="mb-5 flex items-center justify-between">
