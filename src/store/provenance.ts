@@ -44,7 +44,7 @@ const RING_EXCLUDED_TYPES = new Set<string>([
 /**
  * Bound on the `bySeq` ring — CausalityPanel's fast path for "what event
  * is at seq N". A miss falls back to a single-row `events_since` backfill
- * (see `CausalityPanel.tsx`), so this bound trades a rarer network hop
+ * (see `#lib/causality-walk`), so this bound trades a rarer network hop
  * for bounded memory, never correctness.
  */
 export const RING_LIMIT = 2000;
@@ -97,7 +97,7 @@ interface ProvenanceStoreState {
   /**
    * Bounded recent-event ring keyed by seq — see {@link RING_LIMIT}. One
    * Map for the store's lifetime, mutated in place and never replaced: it
-   * is read on demand (`getState().bySeq`, CausalityPanel's walk), never
+   * is read on demand (`getState().bySeq`, `walkCausalityChain`), never
    * subscribed to, so ringing an event notifies no subscriber.
    */
   readonly bySeq: Map<number, DomainEvent>;

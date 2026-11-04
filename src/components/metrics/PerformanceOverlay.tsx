@@ -37,8 +37,6 @@ const overlayStyle: CSSProperties = {
 const titleStyle: CSSProperties = {
   fontSize: 10,
   fontWeight: 700,
-  textTransform: "uppercase",
-  letterSpacing: "0.1em",
   color: "var(--color-plasma)",
   marginBottom: 2,
 };

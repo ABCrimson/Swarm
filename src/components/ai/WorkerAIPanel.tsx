@@ -116,7 +116,8 @@ function showModalOnMount(dialog: HTMLDialogElement | null): void {
 /**
  * Modal for injecting an instruction into the running conversation — a
  * native `<dialog>` opened with `showModal()` (top layer, inert page,
- * Escape and backdrop-click dismissal via `closedby="any"`). Cancel and Inject
+ * Escape and backdrop-click dismissal via `closedby="any"`, or an `onClick`
+ * backdrop test where WebKit lacks it). Cancel and Inject
  * also close it with `close()`, never by unmounting it: only the native close
  * returns focus to the button that opened it; its `close` event then unmounts it.
  */
@@ -132,6 +133,7 @@ function InjectDialog({
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the keyboard path is Escape (the dialog's native `cancel`); this click handler only adds backdrop dismissal where `closedby` is missing.
     <dialog
       ref={(dialog) => {
         dialogRef.current = dialog;
@@ -139,6 +141,15 @@ function InjectDialog({
       }}
       closedby="any"
       aria-labelledby={titleId}
+      onClick={(event) => {
+        // WebKit ships no `closedby` yet. A backdrop click targets the
+        // dialog itself at a point outside its border box.
+        const dialog = event.currentTarget;
+        if (event.target !== dialog) return;
+        const box = dialog.getBoundingClientRect();
+        const { clientX: x, clientY: y } = event;
+        if (x < box.left || x > box.right || y < box.top || y > box.bottom) dialog.close();
+      }}
       onClose={onClose}
       style={dialogStyle}
       className="backdrop:bg-[oklch(0_0_0/0.5)] backdrop:backdrop-blur-sm"

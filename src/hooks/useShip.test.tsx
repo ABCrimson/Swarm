@@ -478,7 +478,12 @@ describe("useShip", () => {
       });
       emit("ship_progress", { shipId, workerId, step: "commit", status: "ok", detail: null });
       // A different ship, and a payload that fails validation, never leak in.
-      emit("ship_progress", { shipId: crypto.randomUUID(), workerId, step: "commit", status: "error" });
+      emit("ship_progress", {
+        shipId: crypto.randomUUID(),
+        workerId,
+        step: "commit",
+        status: "error",
+      });
       emit("ship_progress", { shipId, workerId, step: "push", status: "exploded" });
       emit("ship_settled", { shipId, workerId });
       return makeCommitOutcome();

@@ -12,7 +12,7 @@ export type { EventPayload, EventType } from "#lib/event-payloads";
 
 /**
  * The ordered envelope of every backend event (Rust `DomainEvent`).
- * Exported so other seams (e.g. `CausalityPanel`'s single-row
+ * Exported so other seams (e.g. `walkCausalityChain`'s single-row
  * `events_since` lookups) validate against the same shape.
  *
  * `originWorker`/`causeSeq` are causal attribution (Rust `Provenance`,

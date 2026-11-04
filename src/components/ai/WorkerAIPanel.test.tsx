@@ -1,11 +1,11 @@
 // WorkerAIPanel: the Inject Instruction dialog (a native modal <dialog>:
-// showModal, Escape closes it, the instruction reaches the chat engine
+// showModal, Escape and a backdrop click close it, the instruction reaches the chat engine
 // exactly once) and, on a transport without `localAiChat` (the build:web
 // page), the desktop-only notice in place of the webview chat's model
 // selector, Inject Instruction and Queue buttons and instruction input.
 
 import "#test/dom-polyfills";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkerAIPanel } from "#components/ai/WorkerAIPanel";
@@ -58,6 +58,21 @@ describe("WorkerAIPanel inject dialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Inject Instruction" }));
     await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(injectInstruction).not.toHaveBeenCalled();
+  });
+
+  it("closes on a backdrop click, where `closedby` is missing", async () => {
+    const user = userEvent.setup();
+    render(<WorkerAIPanel workerId="w1" />);
+
+    await user.click(screen.getByRole("button", { name: "Inject Instruction" }));
+    const dialog = screen.getByRole("dialog", { name: "Inject Mid-Conversation Instruction" });
+    // A backdrop click targets the dialog at a point outside its box.
+    act(() => {
+      dialog.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: -1, clientY: -1 }));
+    });
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(injectInstruction).not.toHaveBeenCalled();
