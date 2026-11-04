@@ -362,7 +362,8 @@ impl AgentAdapter for CodexAdapter {
             })?;
             let homes = homes.ok_or_else(|| {
                 AppError::Ai(
-                    "failed to spawn codex: No Data Directory For The Worker's Private CODEX_HOME                      (Refusing To Run Codex With The Operator's Home)"
+                    "failed to spawn codex: No Data Directory For The Worker's Private CODEX_HOME \
+                     (Refusing To Run Codex With The Operator's Home)"
                         .to_string(),
                 )
             })?;

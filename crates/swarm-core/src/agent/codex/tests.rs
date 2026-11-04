@@ -966,9 +966,7 @@ fn a_private_home_holds_only_swarm_config_and_keeps_codex_state_across_spawns() 
     std::fs::create_dir_all(home.join("sessions")).expect("create sessions/");
     std::fs::write(
         home.join("config.toml"),
-        "[mcp_servers.github]
-command = \"gh\"
-",
+        "[mcp_servers.github]\ncommand = \"gh\"\n",
     )
     .expect("tamper with config.toml");
     assert_eq!(homes.prepare(worker).expect("prepare again"), home);
