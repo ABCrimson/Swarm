@@ -126,6 +126,6 @@ test.describe("Navigation", () => {
     await app.goTo("Sessions");
 
     await expect(page.getByText("No Sessions Yet")).toBeVisible();
-    await expect(page.getByText("Create A New Session To Get Started.")).toBeVisible();
+    await expect(page.getByText("Create A New Session To Get Started")).toBeVisible();
   });
 });
