@@ -114,12 +114,10 @@ export function ChartGrid({
   return <div style={chartGridStyle}>{children}</div>;
 }
 
-/** Scrollable page column shared by the metrics pages. */
+/** Body column under the PageHeader on the metrics pages. */
 export const metricsPageStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 24,
-  padding: "24px 28px 56px",
-  overflowY: "auto",
-  height: "100%",
+  padding: "0 28px 56px",
 };

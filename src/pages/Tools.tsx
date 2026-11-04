@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { toast } from "sonner";
+import { PageHeader } from "#components/layout/PageHeader";
 import { ToolBuilder } from "#components/tools/ToolBuilder";
 import { ToolList } from "#components/tools/ToolList";
 import type { CustomToolDef } from "#lib/custom-tools";
@@ -66,23 +67,7 @@ export function Tools(): React.ReactElement {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      <div style={{ padding: "20px 28px 12px" }}>
-        <h1
-          style={{
-            fontFamily: "var(--font-display)",
-            fontSize: 24,
-            fontWeight: 700,
-            letterSpacing: "-0.01em",
-            color: "oklch(0.95 0.02 220)",
-            marginBottom: 4,
-          }}
-        >
-          Tools
-        </h1>
-        <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "var(--color-fg-dim)" }}>
-          Manage Built-In And Custom Tool Definitions
-        </p>
-      </div>
+      <PageHeader title="Tools" />
 
       <div ref={contentRef} style={{ flex: 1, margin: "0 16px 16px", overflow: "hidden" }}>
         {view.mode === "build" ? (
