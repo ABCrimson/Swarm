@@ -74,7 +74,7 @@
 
   .log-row__level {
     flex-shrink: 0;
-    width: 44px;
+    width: 56px;
     text-transform: uppercase;
   }
 
