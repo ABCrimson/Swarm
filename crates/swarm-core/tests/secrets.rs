@@ -1,11 +1,17 @@
 //! The public secret-store API: the `FileStore` fallback a headless
-//! `swarmd` uses, and the redaction every secret value carries. The OS
-//! keychain is never touched here; a test must not write to the
+//! `swarmd` uses, its adoption into a keychain, and the redaction every
+//! secret value carries. The OS keychain is never touched here (an
+//! in-memory store stands in for it); a test must not write to the
 //! developer's credential store.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+use parking_lot::Mutex;
+use swarm_core::Paths;
+use swarm_core::config::adopt_file_secrets;
+use swarm_core::error::AppError;
 use swarm_core::secrets::{FileStore, SecretStore, SecretString};
 
 /// A fresh directory under the system temp dir, removed on drop.
@@ -128,4 +134,101 @@ fn file_store_is_owner_only() {
 fn secret_string_debug_is_redacted() {
     let value = secret("sk-ant-hidden");
     assert!(!format!("{value:?}").contains("sk-ant-hidden"));
+}
+
+/// An in-memory stand-in for the OS keychain; `refuse` makes every
+/// write fail, as a locked keychain does.
+#[derive(Default)]
+struct MemoryStore {
+    secrets: Mutex<HashMap<String, String>>,
+    refuse: bool,
+}
+
+impl SecretStore for MemoryStore {
+    fn get(&self, name: &str) -> Result<Option<SecretString>, AppError> {
+        Ok(self
+            .secrets
+            .lock()
+            .get(name)
+            .cloned()
+            .map(SecretString::from))
+    }
+
+    fn set(&self, name: &str, secret: &SecretString) -> Result<(), AppError> {
+        if self.refuse {
+            return Err(AppError::Config("Keychain Locked".to_owned()));
+        }
+        self.secrets
+            .lock()
+            .insert(name.to_owned(), secret.expose().to_owned());
+        Ok(())
+    }
+
+    fn delete(&self, name: &str) -> Result<(), AppError> {
+        self.secrets.lock().remove(name);
+        Ok(())
+    }
+}
+
+/// A key written to `swarm-secrets.json` while the keychain was
+/// unreachable moves into the keychain at the next start that has one,
+/// and leaves the file; a second pass is a no-op.
+#[test]
+fn file_secrets_are_adopted_into_the_keychain() {
+    let dir = TempDir::new();
+    let file = FileStore::new(&dir.0);
+    file.set("anthropic_api_key", &secret("sk-ant-offline"))
+        .unwrap();
+    file.set("other", &secret("kept")).unwrap();
+    let paths = Paths {
+        data_dir: dir.0.clone(),
+    };
+    let keychain = MemoryStore::default();
+
+    adopt_file_secrets(&paths, &keychain).unwrap();
+
+    assert_eq!(
+        keychain.get("anthropic_api_key").unwrap().unwrap().expose(),
+        "sk-ant-offline"
+    );
+    assert!(file.get("anthropic_api_key").unwrap().is_none());
+    assert!(
+        !fs::read_to_string(dir.file())
+            .unwrap()
+            .contains("sk-ant-offline")
+    );
+    // Only the secret keys move; anything else in the file stays.
+    assert_eq!(file.get("other").unwrap().unwrap().expose(), "kept");
+    assert!(keychain.get("other").unwrap().is_none());
+
+    adopt_file_secrets(&paths, &keychain).unwrap();
+    assert_eq!(
+        keychain.get("anthropic_api_key").unwrap().unwrap().expose(),
+        "sk-ant-offline"
+    );
+}
+
+/// A keychain that refuses the key leaves the file's copy in place for
+/// the next start, and the error carries no value.
+#[test]
+fn a_refused_adoption_keeps_the_file_copy() {
+    let dir = TempDir::new();
+    let file = FileStore::new(&dir.0);
+    file.set("anthropic_api_key", &secret("sk-ant-offline"))
+        .unwrap();
+    let paths = Paths {
+        data_dir: dir.0.clone(),
+    };
+    let keychain = MemoryStore {
+        refuse: true,
+        ..MemoryStore::default()
+    };
+
+    let err = adopt_file_secrets(&paths, &keychain).unwrap_err();
+
+    assert!(!err.to_string().contains("sk-ant-offline"), "{err}");
+    assert_eq!(
+        file.get("anthropic_api_key").unwrap().unwrap().expose(),
+        "sk-ant-offline"
+    );
 }

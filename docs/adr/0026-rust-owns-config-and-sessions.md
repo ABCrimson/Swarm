@@ -61,5 +61,6 @@ off the Tokio workers; a value lives in a `SecretString`, zeroed on drop, with a
 failed keychain read is cached for `FAILURE_TTL` (30 s), never for the process life.
 
 The OS keychain holds one `swarm`/`anthropic_api_key` entry per OS user, shared by every data directory;
-migrating a legacy key from any data directory replaces it, and clearing it clears it for all. Only
+migrating a legacy key, or adopting a `swarm-secrets.json` key, from any data directory replaces it, and
+clearing it clears it for all. Only
 `swarm-secrets.json` is per data directory.

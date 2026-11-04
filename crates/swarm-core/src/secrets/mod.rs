@@ -6,13 +6,16 @@
 //! Linux), [`FileStore`] the `swarm-secrets.json` fallback (`0600` on
 //! Unix) for a headless `swarmd` whose host runs no Secret Service.
 //! Which one serves a process is decided once, on the first secret
-//! access, by `keyring::v1::Entry::store_status()` (see [`with_store`]).
+//! access, by `keyring::v1::Entry::store_status()` (see [`with_store`]);
+//! the next process that has the keychain adopts whatever the file
+//! holds into it (`crate::config::adopt_file_secrets`).
 //! Unit tests always get the file store, so no test touches the
 //! developer's keychain.
 //!
 //! The OS keychain holds one `swarm`/`anthropic_api_key` entry per OS
-//! user, shared by every data directory; migrating a legacy key from
-//! any data directory replaces it, and clearing it clears it for all.
+//! user, shared by every data directory; migrating a legacy key, or
+//! adopting a `swarm-secrets.json` key, from any data directory
+//! replaces it, and clearing it clears it for all.
 //! Only the [`FileStore`] is per data directory.
 //!
 //! Every store call blocks (the keychain APIs are synchronous, and a
@@ -178,7 +181,7 @@ pub(crate) fn with_store<R>(paths: &Paths, f: impl FnOnce(&dyn SecretStore) -> R
 /// The process-wide keychain store, or `None` when the host has no
 /// usable keychain. Unit tests never open the keychain.
 #[cfg(not(test))]
-fn keychain() -> Option<&'static CachedStore<KeyringStore>> {
+pub(crate) fn keychain() -> Option<&'static CachedStore<KeyringStore>> {
     use std::sync::LazyLock;
 
     static KEYCHAIN: LazyLock<Option<CachedStore<KeyringStore>>> =
@@ -196,7 +199,7 @@ fn keychain() -> Option<&'static CachedStore<KeyringStore>> {
 }
 
 #[cfg(test)]
-fn keychain() -> Option<&'static CachedStore<KeyringStore>> {
+pub(crate) fn keychain() -> Option<&'static CachedStore<KeyringStore>> {
     None
 }
 

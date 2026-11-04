@@ -360,6 +360,10 @@ mod tests {
     async fn test_ws_upgrade_refuses_unserved_peers_without_the_router_layer() {
         let Some(lan) = private_interface_ip() else {
             eprintln!("skipped: the default route has no private IPv4 source address");
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "CI runner has no private IPv4 source address; the LAN gate tests did not run"
+            );
             return;
         };
         let dir = tempfile::tempdir().unwrap();

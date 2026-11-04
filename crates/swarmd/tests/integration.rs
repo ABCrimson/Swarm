@@ -568,6 +568,10 @@ fn private_interface_ip() -> Option<IpAddr> {
 async fn test_plaintext_lan_peers_need_the_override() {
     let Some(lan) = private_interface_ip() else {
         eprintln!("skipped: the default route has no private IPv4 source address");
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "CI runner has no private IPv4 source address; the LAN gate tests did not run"
+        );
         return;
     };
     let bundle = web_bundle();

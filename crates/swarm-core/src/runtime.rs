@@ -116,7 +116,8 @@ impl Runtime {
     /// `CODEX_HOME` under the data directory). The git probe and the
     /// startup `git worktree prune` of the configured default repository
     /// run on a blocking task in the background, and so does the move of a
-    /// legacy API key out of `swarm-config.json`
+    /// legacy API key out of `swarm-config.json` and of a
+    /// `swarm-secrets.json` key into the keychain
     /// ([`crate::config::migrate_secrets`]).
     ///
     /// # Errors
@@ -332,8 +333,10 @@ fn spawn_git_startup(paths: &Paths, sink: EventSink) {
 }
 
 /// Moves an API key an older build left in `swarm-config.json` into the
-/// secret store, once, off the startup path (a keychain can wait on an
-/// access prompt). Otherwise a key nothing reads or writes, as on a
+/// secret store, and one a keychain-less start left in
+/// `swarm-secrets.json` into the keychain when this process has one,
+/// once, off the startup path (a keychain can wait on an access
+/// prompt). Otherwise a key nothing reads or writes, as on a
 /// `swarmd --serve-ui` host whose browser cannot read it, would stay in
 /// the file in plaintext. A refusal is logged, and the key keeps reading
 /// from the file until a later access moves it.
@@ -341,7 +344,7 @@ fn spawn_secret_migration(paths: &Paths) {
     let paths = paths.clone();
     tokio::task::spawn_blocking(move || {
         if let Err(e) = crate::config::migrate_secrets(&paths) {
-            tracing::warn!(error = %e, "could not move the API key out of swarm-config.json yet");
+            tracing::warn!(error = %e, "could not move the API key into the secret store yet");
         }
     });
 }

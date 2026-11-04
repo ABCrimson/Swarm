@@ -156,6 +156,15 @@ mod tests {
         assert!(key_words("").is_empty());
     }
 
+    /// Every key the config module keeps in the secret store is denied
+    /// to remote callers.
+    #[test]
+    fn test_is_secret_key_denies_every_stored_secret() {
+        for key in crate::config::SECRET_KEYS {
+            assert!(is_secret_key(key), "{key}");
+        }
+    }
+
     #[test]
     fn test_is_secret_key_denies_the_anthropic_key_in_any_spelling() {
         for key in [
