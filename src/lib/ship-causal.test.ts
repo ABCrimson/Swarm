@@ -120,8 +120,8 @@ describe("renderCausalRecordSection", () => {
       "_Causal Record Unavailable For This Range — No Recorded Agent Turns._",
     );
     expect(section).not.toContain("| Turn | Tool | Target | Result |");
-    // The diff stat still renders — this is "diff-only body", not an
-    // empty one, per the ship-chain plan's degradation rule.
+    // The header (seq range, diff stat) renders before the zero-turn branch, which swaps only the
+    // table for the honest message, so the body is diff-only, not empty.
     expect(section).toContain("**Diff:** 2 Files Changed, +10/-3");
   });
 
@@ -252,7 +252,7 @@ describe("stripUnknownSeqCitations", () => {
     ).toBe("a b");
   });
 
-  it("keeps a citation whose seq falls within (seqFrom, seqTo]", () => {
+  it("keeps a citation of a listed tool call's seq", () => {
     const context = makeContext({ seqFrom: 9, seqTo: 14 });
     const prose = "The Write call [seq 11] updated the file.";
     expect(stripUnknownSeqCitations(prose, context)).toBe(prose);
@@ -278,7 +278,7 @@ describe("stripUnknownSeqCitations", () => {
     expect(stripped).toBe("This was caused by, a turn we never fetched.");
   });
 
-  it("strips a citation at or below seqFrom (exclusive lower bound) and above seqTo", () => {
+  it("strips a seq at either end of the range or past it when no listed tool call has it", () => {
     const context = makeContext({ seqFrom: 9, seqTo: 14 });
     expect(stripUnknownSeqCitations("[seq 9] boundary", context)).toBe("boundary");
     expect(stripUnknownSeqCitations("[seq 15] boundary", context)).toBe("boundary");

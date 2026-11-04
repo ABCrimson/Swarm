@@ -1,29 +1,29 @@
-// ── JSON / JSONC Syntax Highlighter (OKLCH) ─────────
+// ── JSON / JSONC Syntax Highlighter ─────────
 // Splits JSON text into colored tokens. Lossless: the token values
 // joined back together are exactly the input, so a viewer shows the
 // file as it is on disk, comments and invalid text included.
 
-/** OKLCH color per token type. */
+/** CSS color per token type: the design token where one matches, else an OKLCH literal. */
 const TOKEN_COLORS = {
-  key: "oklch(0.78 0.18 205)",
-  string: "oklch(0.82 0.18 140)",
-  number: "oklch(0.82 0.19 70)",
+  key: "var(--color-plasma)",
+  string: "var(--color-lime)",
+  number: "var(--color-amber)",
   boolean: "oklch(0.72 0.20 290)",
   null: "oklch(0.72 0.20 290)",
   brace: "oklch(0.66 0.04 220)",
-  colon: "oklch(0.62 0.04 220)",
-  comma: "oklch(0.62 0.04 220)",
+  colon: "var(--color-fg-dim)",
+  comma: "var(--color-fg-dim)",
   /** `//` and `/* *\/` comments (JSONC: tsconfig.json, biome.jsonc). */
   comment: "oklch(0.62 0.02 220)",
   whitespace: "oklch(0 0 0 / 0)",
   /** Anything that is not JSON, e.g. `NaN` or trailing garbage: shown as is. */
-  plain: "oklch(0.82 0.04 220)",
+  plain: "var(--color-fg)",
 } as const;
 
 /** A token category. */
 export type TokenType = keyof typeof TOKEN_COLORS;
 
-/** One highlighted token and its OKLCH color. */
+/** One highlighted token and its CSS color (a design-token var() or an OKLCH literal). */
 export interface HighlightToken {
   readonly type: TokenType;
   readonly value: string;
