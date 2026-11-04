@@ -51,7 +51,7 @@ export function AppShell({ children }: AppShellProps): React.ReactElement {
 
           <main
             id="main-content"
-            className="relative overflow-hidden transition-opacity delay-250 duration-400 ease-out-cubic starting:opacity-0"
+            className="relative overflow-hidden transition-opacity delay-250 duration-400 ease-out starting:opacity-0"
           >
             {children}
           </main>
