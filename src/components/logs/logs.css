@@ -44,12 +44,6 @@
   .log-viewer__empty {
     position: absolute;
     inset: 0;
-    display: grid;
-    place-items: center;
-    margin: 0;
-    font-family: var(--font-body);
-    font-size: 0.875rem;
-    color: var(--color-fg-dim);
   }
 
   .log-viewer__resume {
