@@ -681,7 +681,7 @@ Emits `ship_progress` for the `"push"` step, and -- when `finalStep` is `true` (
 | `workerId`  | `string`  | Yes      | UUID of the worker                                                   |
 | `shipId`    | `string`  | Yes      | Correlation ID matching the preceding `git_stage_commit` call (if any) |
 | `finalStep` | `boolean` | Yes      | `true` for "Commit + Push" (no compare-page step follows)             |
-| `expectedRemote` | `string | null` | No | The previewed `ShipPreflight.remote`; under the repo lock, before git runs, origin's redacted push URL must equal it, or `pushRejected`. Omitted or `null`, the push is not bound to a preview |
+| `expectedRemote` | `string \| null` | No | The previewed `ShipPreflight.remote`; under the repo lock, before git runs, origin's redacted push URL must equal it, or `pushRejected`. Omitted or `null`, the push is not bound to a preview |
 
 **Returns:** `PushOutcome` -- `{ pushedRef: string, remote: string, remoteRef: string, sha: string }` (e.g. `{ pushedRef: "origin/swarm/agent-abcd1234", remote: "origin", remoteRef: "refs/heads/swarm/agent-abcd1234", sha: "..." }`). `sha` is the tip of the branch checked out at push time (`refs/heads/<branch>`), resolved server-side, and the commit the remote ref now points at (the push carries it). `remote` and `remoteRef` are wire additions in this release; the frontend's `PushOutcomeSchema` is non-strict, reads `pushedRef` and `sha`, and ignores them.
 
@@ -1332,7 +1332,7 @@ await invoke("write_file", {
 
 ## Config Commands
 
-Read and write the app's persisted key/value configuration, a single JSON object at `<data-dir>/swarm-config.json`. Writes are atomic and keep every other key. On a write, a malformed file is moved aside (`swarm-config.json.corrupt-<ms>`) and a fresh config started; a file that exists but cannot be read is never overwritten. Keys the backend itself reads or writes include `max_workers`, `agent_concurrency`, `default_repo_root` and `shipCoAuthoredBy`. The Anthropic API key (`anthropic_api_key`) goes through these commands but is kept in the OS keychain (service `swarm`, one entry per OS user), or in owner-only `<data-dir>/swarm-secrets.json` on a host with no keychain; `null` or `""` deletes it, and a copy an older build left in `swarm-config.json` is moved out on access.
+Read and write the app's persisted key/value configuration, a single JSON object at `<data-dir>/swarm-config.json`. Writes are atomic and keep every other key. On a write, a malformed file is moved aside (`swarm-config.json.corrupt-<ms>`) and a fresh config started; a file that exists but cannot be read is never overwritten. Keys the backend itself reads or writes include `max_workers`, `agent_concurrency`, `default_repo_root` and `shipCoAuthoredBy`. The Anthropic API key (`anthropic_api_key`) goes through these commands but is kept in the OS keychain (service `swarm`, one entry per OS user), or in owner-only `<data-dir>/swarm-secrets.json` on a host with no keychain; `null` or `""` deletes it, and a copy an older build left in `swarm-config.json` is moved out at startup and on access.
 
 Over the `swarmd` WebSocket both commands are **`SecretFiltered`**: a secret-shaped key (see [Who Can Call What](#who-can-call-what)) is refused before the handler runs, in both directions, so a remote client can neither read the API key nor plant a credential the desktop app would trust. The desktop webview is not filtered: it legitimately reads `anthropic_api_key` to call the Anthropic API itself.
 

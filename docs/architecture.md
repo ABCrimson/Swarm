@@ -452,9 +452,9 @@ The data directory is Tauri's app data directory for the bundle identifier
 | --- | --- | --- |
 | `swarm-events.db` (+ `-wal`, `-shm`) | Rust | The event log. |
 | `sessions.json` | Rust | `{"sessions": [...]}`; saved after every create, delete and membership change. |
-| `swarm-config.json` | Rust | `max_workers`, `agent_concurrency`, `default_repo_root`, `shipCoAuthoredBy`, namespaced `<store>:<key>` entries (a key an older build left here is moved to the secret store on access). Owner-only on Unix. |
+| `swarm-config.json` | Rust | `max_workers`, `agent_concurrency`, `default_repo_root`, `shipCoAuthoredBy`, namespaced `<store>:<key>` entries (a key an older build left here is moved to the secret store at startup and on access). Owner-only on Unix. |
 | `swarm-secrets.json` | Rust | `anthropic_api_key`, only on a host with no OS keychain (otherwise the key is the keychain's `swarm`/`anthropic_api_key` entry, one per OS user, [ADR-0026](adr/0026-rust-owns-config-and-sessions.md)). Owner-only on Unix. |
-| `codex-home/<worker id>/` | Rust | Each Codex worker's private `CODEX_HOME` (Swarm `config.toml`, a copy of `auth.json`, Codex state); kept for `thread/resume`; deleted by `CodexAdapter::remove_worker_home` ([ADR-0038](adr/0038-agent-provider-trust-model.md)). |
+| `codex-home/<worker id>/` | Rust | Each Codex worker's private `CODEX_HOME` (Swarm `config.toml`, a copy of `auth.json`, Codex state); kept for `thread/resume` while the worker exists; `kill_worker` deletes it once the worker is gone (`CodexAdapter::remove_worker_home`; a kill that fails with the worker still registered keeps it) ([ADR-0038](adr/0038-agent-provider-trust-model.md)). |
 | `daemon.lock`, `daemon.lock.json` | Rust | The single-instance lock and who holds it. |
 | `daemon-token` | `swarmd` | The bearer token (`0600`, or a current-user DACL on Windows). |
 | `swarm-settings.json`, `swarm-snapshots.json`, `swarm-templates.json` | webview (`tauri-plugin-store`) | Preferences, session snapshots, templates. |

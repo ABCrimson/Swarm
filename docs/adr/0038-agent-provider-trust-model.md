@@ -144,7 +144,8 @@ Every Codex child now runs with `CODEX_HOME` at `<data dir>/codex-home/<worker i
 at every spawn, with no `[mcp_servers]` table, no plugins and no `[projects]` trust entries, and, when
 the operator is signed in through a file, a copy of the operator's `auth.json` (copied when missing or
 older than the source, kept when newer). Codex keeps its own state there, so `thread/resume` finds a
-worker's threads; `CodexAdapter::remove_worker_home` deletes the home, the `auth.json` copy included.
+worker's threads; `kill_worker` deletes the home once the worker is gone
+(`CodexAdapter::remove_worker_home`), the `auth.json` copy included.
 An adapter built without a data directory refuses to spawn rather than fall back to the operator's
 home. The fs commands deny every path under `<data dir>/codex-home/`
 ([ADR-0035](0035-ai-tool-approval-and-fs-scope.md)).
