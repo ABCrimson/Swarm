@@ -2,13 +2,18 @@
 //! bidirectional JSON-RPC protocol, over piped stdio
 //! ([`crate::worker::proc::spawn_piped`]).
 //!
-//! Verified against codex-cli 0.156.1: the wire types in `protocol` are
-//! transcribed from the schema that release generates
-//! (`codex app-server generate-json-schema` / `generate-ts`), and the
-//! handshake, thread-open, resume, interrupt and stdin-EOF behavior below
-//! was checked against a live 0.156.1 server (no model turns). Turn and
-//! item notifications come from the generated schema; the fixtures under
-//! `tests/fixtures/codex/` follow it.
+//! Verified against codex-cli 0.168.0-alpha.1
+//! (`protocol::VERIFIED_CODEX_VERSION`). The wire types in `protocol` are
+//! transcribed from the schema 0.156.1 generates
+//! (`codex app-server generate-json-schema`); every method name they use
+//! is present in the schemas of 0.166.0 (npm `latest`) and
+//! 0.168.0-alpha.1, checked in under `tests/fixtures/codex/schema/` and
+//! tested against the newest. The handshake, thread-open, resume, interrupt
+//! and stdin-EOF behavior below was checked against a live 0.168.0-alpha.1
+//! server (no model turns). Turn and item notifications come from the
+//! generated schema, and the fields the adapter reads from them are present
+//! in 0.168.0-alpha.1's; the fixtures under `tests/fixtures/codex/` follow
+//! 0.156.1's frames.
 //!
 //! The wire types live in `protocol`; the trust-tier mapping and the child's
 //! environment in `tier`, each worker's private `CODEX_HOME` in `home`,

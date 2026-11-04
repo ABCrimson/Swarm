@@ -17,8 +17,8 @@ use uuid::Uuid;
 use super::home::{CODEX_HOME_ENV, PrivateHomes};
 use super::process::{find_program, first_line, resolve_program, resolve_with_pathext};
 use super::protocol::{
-    ApprovalsReviewer, AskForApproval, Incoming, METHOD_NOT_FOUND, RequestId, SandboxMode,
-    ThreadOpened, ThreadStartParams,
+    ApprovalsReviewer, AskForApproval, Incoming, METHOD_NOT_FOUND, OPTED_OUT_NOTIFICATIONS,
+    RequestId, SandboxMode, ThreadOpened, ThreadStartParams, VERIFIED_CODEX_VERSION,
 };
 use super::reader::permission_id;
 use super::state::{ApprovalKind, PendingApproval};
@@ -893,6 +893,107 @@ async fn an_unknown_trust_tier_never_starts_a_process() {
         .err()
         .expect("refused");
     assert_matches!(error, AppError::PermissionDenied(_));
+}
+
+// ── Schema currency ──────────────────────────────────────────────────
+
+/// Schema snapshots: `tests/fixtures/codex/schema/<version>/` holds the
+/// `codex_app_server_protocol.schemas.json` bundle that
+/// `codex app-server generate-json-schema --out <dir>` writes for that
+/// release, formatted with `biome format --write`.
+fn schema_dir() -> PathBuf {
+    PathBuf::from(fixture("schema"))
+}
+
+/// `major.minor.patch` of a release name, prerelease dropped.
+fn release(version: &str) -> (u64, u64, u64) {
+    let core = version.split('-').next().unwrap_or(version);
+    let parts: Vec<u64> = core
+        .split('.')
+        .map(|part| {
+            part.parse()
+                .unwrap_or_else(|_| panic!("not a release: {version}"))
+        })
+        .collect();
+    let [major, minor, patch] = parts[..] else {
+        panic!("not a release: {version}");
+    };
+    (major, minor, patch)
+}
+
+#[test]
+fn the_verified_codex_version_is_the_newest_schema_snapshot() {
+    let verified = release(VERIFIED_CODEX_VERSION);
+    let snapshots = entries(&schema_dir());
+    assert!(
+        snapshots.iter().any(|name| name == VERIFIED_CODEX_VERSION),
+        "no schema snapshot for {VERIFIED_CODEX_VERSION}: {snapshots:?}"
+    );
+    for name in snapshots
+        .iter()
+        .filter(|name| *name != VERIFIED_CODEX_VERSION)
+    {
+        assert!(
+            release(name) < verified,
+            "snapshot {name} is newer than VERIFIED_CODEX_VERSION {VERIFIED_CODEX_VERSION}"
+        );
+    }
+}
+
+#[test]
+fn every_method_the_adapter_speaks_exists_in_the_newest_codex_schema() {
+    let path = schema_dir()
+        .join(VERIFIED_CODEX_VERSION)
+        .join("codex_app_server_protocol.schemas.json");
+    let schema: Value = serde_json::from_str(
+        &std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display())),
+    )
+    .expect("the schema bundle is JSON");
+    let methods = |union: &str| -> Vec<&str> {
+        schema["definitions"][union]["oneOf"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{union} has no oneOf in {}", path.display()))
+            .iter()
+            .filter_map(|variant| variant["properties"]["method"]["enum"][0].as_str())
+            .collect()
+    };
+    let directions = [
+        ("ClientRequest", method::CLIENT_REQUESTS),
+        ("ClientNotification", method::CLIENT_NOTIFICATIONS),
+        ("ServerRequest", method::SERVER_REQUESTS),
+        ("ServerNotification", method::SERVER_NOTIFICATIONS),
+        ("ServerNotification", OPTED_OUT_NOTIFICATIONS),
+    ];
+    let missing: Vec<String> = directions
+        .iter()
+        .flat_map(|(union, names)| {
+            let known = methods(union);
+            names
+                .iter()
+                .filter(move |name| !known.contains(name))
+                .map(move |name| format!("{name} ({union})"))
+        })
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "missing from the codex-cli {VERIFIED_CODEX_VERSION} schema: {missing:?}"
+    );
+
+    // A method constant added to `protocol::method` must join a list above.
+    let module = include_str!("protocol.rs")
+        .split("pub mod method {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .expect("protocol.rs has the method module");
+    let declared = module
+        .lines()
+        .filter(|line| line.trim_start().starts_with("pub const ") && line.contains(": &str = "))
+        .count();
+    let listed: usize = directions[..4].iter().map(|(_, names)| names.len()).sum();
+    assert_eq!(
+        declared, listed,
+        "a method constant is missing from the schema lists"
+    );
 }
 
 // ── Private CODEX_HOME ───────────────────────────────────────────────
