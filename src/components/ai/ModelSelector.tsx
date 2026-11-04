@@ -281,7 +281,7 @@ export function ModelSelector({ workerId }: ModelSelectorProps): React.ReactElem
                   style={{
                     color: style.color,
                     fontSize: 12,
-                    fontFamily: "var(--font-mono, monospace)",
+                    fontFamily: "var(--font-mono)",
                   }}
                 >
                   {costIndicator(model)}

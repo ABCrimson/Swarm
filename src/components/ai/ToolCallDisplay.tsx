@@ -208,7 +208,7 @@ function ResultViewer({ result }: { readonly result: string }): React.ReactEleme
             margin: 0,
             maxHeight: 120,
             overflow: "hidden",
-            fontFamily: "var(--font-mono, monospace)",
+            fontFamily: "var(--font-mono)",
             whiteSpace: "pre-wrap",
             overflowWrap: "anywhere",
           }}
@@ -230,7 +230,7 @@ function ResultViewer({ result }: { readonly result: string }): React.ReactEleme
         ...jsonStyle,
         margin: 0,
         color: "var(--color-fg)",
-        fontFamily: "var(--font-mono, monospace)",
+        fontFamily: "var(--font-mono)",
         whiteSpace: "pre-wrap",
         overflowWrap: "anywhere",
       }}

@@ -177,7 +177,7 @@ const permissionToolStyle: CSSProperties = {
 };
 
 const permissionMessageStyle: CSSProperties = {
-  fontFamily: "var(--font-mono, monospace)",
+  fontFamily: "var(--font-mono)",
   fontSize: 12,
   color: "oklch(0.88 0.06 60)",
   lineHeight: 1.4,
