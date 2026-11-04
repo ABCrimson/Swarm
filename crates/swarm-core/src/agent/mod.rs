@@ -169,6 +169,21 @@ pub(crate) async fn drained_stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String
     stderr_snippet(tail)
 }
 
+/// Whether a `PATH` search may start `path`: on Unix a regular file with an
+/// execute bit, elsewhere any file. Shared by both adapters' lookups.
+#[cfg(unix)]
+pub(crate) fn is_executable_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+/// Windows has no execute bit: any file matches.
+#[cfg(not(unix))]
+pub(crate) fn is_executable_file(path: &std::path::Path) -> bool {
+    path.is_file()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
