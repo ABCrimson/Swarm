@@ -40,10 +40,11 @@ const sectionStyle: CSSProperties = {
 };
 
 const labelStyle: CSSProperties = {
-  fontFamily: "var(--font-body)",
-  fontSize: "0.75rem",
-  fontWeight: 500,
-  color: "var(--color-fg-muted)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "0.6875rem",
+  color: "var(--color-fg-dim)",
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
 };
 
 const monoRowStyle: CSSProperties = {
@@ -190,6 +191,8 @@ const causalHeadCellStyle: CSSProperties = {
   textAlign: "left",
   padding: "6px 10px",
   color: "var(--color-fg-dim)",
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
   fontSize: "0.625rem",
   borderBottom: "1px solid var(--color-surface-2)",
   position: "sticky",
