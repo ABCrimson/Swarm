@@ -380,8 +380,8 @@ cargo test --locked --doc -p swarm-core -p swarmd
 | `swarm-core` `session`        | Session manager CRUD and atomic persistence |
 | `swarm-core` `bus`            | Channels and the router |
 | `swarm-core` top-level modules | `error`, `config`, `lock`, `metrics`, `protocol`, `runtime`, `state_file`, `clock` |
-| `swarmd`                      | 41 unit tests (CLI parsing, the daemon token and Host/Origin policy, the WebSocket writer, per-peer caps and replay) and 45 integration tests: 37 drive a real daemon over WebSocket and HTTP (the static UI included), 8 cover the service scripts (4 run `install.sh`/`uninstall.sh` against shims on Linux; 4 check the PowerShell scripts and unit files statically) |
-| `swarm-desktop`               | 35 unit tests (command list and per-command ACL, capability and config contracts, dialog grants, lifecycle teardown) and 1 integration test (the shared Tokio runtime) |
+| `swarmd`                      | Unit tests (CLI parsing, the daemon token and Host/Origin policy, the WebSocket writer, per-peer caps and replay) and integration tests that drive a real daemon over WebSocket and HTTP (the static UI included) and cover the service scripts (`install.sh`/`uninstall.sh` against shims on Linux; the PowerShell scripts and unit files checked statically) |
+| `swarm-desktop`               | Unit tests (command list and per-command ACL, capability and config contracts, dialog grants, lifecycle teardown) and an integration test of the shared Tokio runtime |
 
 `cargo test --workspace --locked --all-targets` prints the current count per target; the counts move with every change, so this page does not record them.
 
