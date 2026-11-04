@@ -40,7 +40,7 @@
 }
 
 ::view-transition-old(.swarm-page) {
-  animation: swarm-page-out 150ms ease-in both;
+  animation: swarm-page-out 120ms ease-in both;
 }
 
 ::view-transition-new(.swarm-page) {
@@ -50,14 +50,13 @@
 @keyframes swarm-page-out {
   to {
     opacity: 0;
-    translate: 0 -8px;
   }
 }
 
 @keyframes swarm-page-in {
   from {
     opacity: 0;
-    translate: 0 8px;
+    scale: 0.995;
   }
 }
 

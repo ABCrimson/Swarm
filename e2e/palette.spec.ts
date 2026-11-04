@@ -11,7 +11,7 @@ import { expect, test } from "./fixtures.ts";
 test.describe("Command Palette", () => {
   test("opens with Ctrl+K, labeled as the SWARM Command Palette", async ({ app }) => {
     const palette = await app.openPalette();
-    await expect(palette.getByPlaceholder("Type A Command Or Search...")).toBeFocused();
+    await expect(palette.getByPlaceholder("Type A Command Or Search…")).toBeFocused();
   });
 
   test("Escape closes the palette", async ({ app, page }) => {
@@ -24,7 +24,7 @@ test.describe("Command Palette", () => {
   test("typing a specific query filters the list down to matching commands", async ({ app }) => {
     const palette = await app.openPalette();
 
-    await palette.getByPlaceholder("Type A Command Or Search...").fill("spawn worker");
+    await palette.getByPlaceholder("Type A Command Or Search…").fill("spawn worker");
 
     await expect(palette.getByRole("option", { name: "Spawn Worker" })).toBeVisible();
     // Unrelated commands whose label/keywords share no fuzzy-orderable
@@ -38,9 +38,9 @@ test.describe("Command Palette", () => {
   test("a query matching nothing shows the empty state", async ({ app }) => {
     const palette = await app.openPalette();
 
-    await palette.getByPlaceholder("Type A Command Or Search...").fill("zzzznonexistentqueryxyz");
+    await palette.getByPlaceholder("Type A Command Or Search…").fill("zzzznonexistentqueryxyz");
 
-    await expect(palette.getByText("No Commands Found.")).toBeVisible();
+    await expect(palette.getByText("No Commands Found", { exact: true })).toBeVisible();
     await expect(palette.getByRole("option")).toHaveCount(0);
   });
 

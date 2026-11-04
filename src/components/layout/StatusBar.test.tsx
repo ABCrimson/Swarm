@@ -54,7 +54,9 @@ describe("StatusBar", () => {
     );
     renderBar();
 
-    expect(screen.getByText("AI Spend $1.23")).toBeInTheDocument();
+    expect(
+      screen.getByTitle("Anthropic API Spend Recorded Since The App Started"),
+    ).toHaveTextContent("AI Spend $1.23");
   });
 
   it("toggles the GPU readout through the shared theme setting", async () => {
@@ -63,9 +65,13 @@ describe("StatusBar", () => {
     store.set(gpuFrameTimeAtom, 3.25);
     renderBar(store);
 
-    expect(screen.getByText("GPU 3.3ms")).toBeInTheDocument();
+    expect(
+      screen.getByTitle("Time The GPU Took To Finish The Last Particle Frames"),
+    ).toHaveTextContent("GPU 3.3ms");
     await user.click(screen.getByRole("button", { name: "Hide GPU Frame Time" }));
-    expect(screen.queryByText(/^GPU /)).not.toBeInTheDocument();
+    expect(
+      screen.queryByTitle("Time The GPU Took To Finish The Last Particle Frames"),
+    ).not.toBeInTheDocument();
     expect(store.get(themeAtom).gpuOverlay).toBe(false);
 
     await user.click(screen.getByRole("button", { name: "Show GPU Frame Time" }));

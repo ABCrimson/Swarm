@@ -164,10 +164,10 @@ export function Sidebar(): React.ReactElement {
 
   return (
     <div className="glass-panel flex h-full select-none flex-col overflow-hidden border-border border-r">
-      <div className="flex h-14 items-center border-border border-b px-5">
+      <div className="flex h-12 items-center border-border border-b px-5">
         <span
           aria-hidden="true"
-          className={`font-display font-extrabold text-plasma tracking-[0.08em] [text-shadow:0_0_20px_oklch(from_var(--color-plasma)_l_c_h/0.3)] ${collapsed ? "text-base" : "text-[1.15rem]"}`}
+          className={`font-display font-extrabold text-plasma tracking-[0.08em] [text-shadow:0_0_20px_oklch(from_var(--color-plasma)_l_c_h/0.3)] ${collapsed ? "text-base" : "text-xl"}`}
         >
           {collapsed ? "S" : "SWARM"}
         </span>
@@ -186,7 +186,7 @@ export function Sidebar(): React.ReactElement {
               tabIndex={index === tabStop ? 0 : -1}
               title={collapsed ? item.label : undefined}
               aria-label={collapsed ? item.label : undefined}
-              className="group flex w-full cursor-pointer items-center gap-2.5 whitespace-nowrap rounded-lg border-transparent border-l-[2.5px] px-3 py-2.25 text-left font-[450] text-fg-muted text-md tracking-[0.01em] transition-colors duration-150 hover:bg-surface-2 hover:text-fg aria-[current=page]:border-plasma aria-[current=page]:bg-linear-135 aria-[current=page]:from-surface-3 aria-[current=page]:to-surface-2 aria-[current=page]:font-semibold aria-[current=page]:text-fg-bright"
+              className="group flex w-full cursor-pointer items-center gap-2.5 whitespace-nowrap rounded-lg border-transparent border-l-2 px-3 py-2.25 text-left font-[450] text-fg-muted text-md tracking-[0.01em] transition-colors duration-150 hover:bg-surface-2 hover:text-fg aria-[current=page]:border-plasma aria-[current=page]:bg-plasma/8 aria-[current=page]:font-semibold aria-[current=page]:text-fg-bright"
             >
               <span className="flex opacity-60 transition-opacity duration-150 group-aria-[current=page]:opacity-100">
                 <NavIcon>{item.icon}</NavIcon>
