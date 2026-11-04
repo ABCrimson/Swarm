@@ -18,7 +18,8 @@ in that window was accepted.
   wait for attaches in flight; remove and shut down the session (the provider and its process tree are
   stopped and the provider is reaped; a failed shutdown is logged and never changes the kill's result); wait for any other
   shutdown of that session still running; `do_kill_worker` (shell, then worktree, unchanged); clear
-  the mark, which travels into the blocking kill task so a cancelled kill cannot clear it early.
+  the mark, which travels into the blocking kill task so a cancelled kill cannot clear it early;
+  once the worker is gone, delete its private Codex home (best-effort, a failure is logged).
 - **A per-worker fence in `AgentSessionRegistry`.** An attach holds an `AttachPermit`
   (`begin_attach`) from before its handshake until it has registered its session through
   `AttachPermit::insert`, the only registration path. `begin_close` marks the worker closing, then
