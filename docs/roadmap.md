@@ -79,7 +79,6 @@ Rows 1, 4, 8, 9 and 10 take their epics' planned sizes; rows 2, 3, 5, 6 and 7 ar
 - Nothing cancels an attach in flight on kill: `kill_worker` → `begin_close` waits for attach permits (`agent/registry.rs`), and the attach awaits `adapter.spawn` inline (`commands/agent.rs`), so a kill still waits out the handshake, up to 30 s, although a dropped Claude `spawn` future now kills its CLI. — G3 follow-up
 - macOS kill path: when a worker is killed while its output pump is stalled, drain or close the PTY before waiting on the shell, because XNU holds a dead session leader until its unread terminal output is read (seen in the 2026-10-14 CI run; the exit-watcher test now drains). — CI follow-up
 - Run the integrated branch through the CI Rust matrix (`windows-2025` and `macos-26` in `.github/workflows/ci.yml`): the Claude adapter's Windows-only branches (`cfg(not(unix))`, `PATHEXT`) have not been built locally, and the Rust hook fixture has run only on Linux and WSL. — G2, G5 follow-ups
-- Bind the previewed push URL to the push (`git_push { workerId, expectedRemote }`, refused on mismatch) so an `origin` changed between preview and push cannot redirect it. — P-C21-L9-3-01 follow-up (verifier, 2026-10-14)
 
 ---
 

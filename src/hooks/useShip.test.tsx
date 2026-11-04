@@ -1,3 +1,4 @@
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { act, renderHook } from "@testing-library/react";
 import { toast } from "sonner";
@@ -157,6 +158,7 @@ beforeEach(() => {
 afterEach(() => {
   handlers.clear();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("shipReducer", () => {
@@ -316,9 +318,83 @@ describe("useShip", () => {
       "all",
       false,
     );
-    expect(mockGitPush).toHaveBeenCalledWith(WORKER_ID, expect.any(String), true);
+    expect(mockGitPush).toHaveBeenCalledWith(
+      WORKER_ID,
+      expect.any(String),
+      true,
+      "https://github.com/example/repo.git",
+    );
     expect(result.current.state).toBe("settled");
     expect(result.current.result?.pushedRef).toBe("origin/swarm/agent-abcd1234");
+  });
+
+  // F-06: the push is bound to the origin the preview showed. The real
+  // #lib/tauri wrapper runs here, so the assertion is on the IPC payload.
+  async function pushThroughTheRealWrapper(): Promise<void> {
+    const actual = await vi.importActual<typeof import("#lib/tauri")>("#lib/tauri");
+    // The flag the desktop shell injects, so the Tauri transport reaches `invoke`.
+    vi.stubGlobal("isTauri", true);
+    vi.mocked(tauriInvoke).mockImplementationOnce(async (cmd) => {
+      if (cmd === "git_push") return makePushOutcome();
+      throw new Error(`unexpected ${cmd}`);
+    });
+    mockGitPush.mockImplementation(
+      async (
+        workerId: string,
+        shipId: string,
+        finalStep: boolean,
+        expectedRemote?: string | null,
+      ) => {
+        const outcome = await actual.gitPush(workerId, shipId, finalStep, expectedRemote);
+        if (finalStep) emit("ship_settled", { shipId, workerId });
+        return outcome;
+      },
+    );
+  }
+
+  it("commitAndPush sends the previewed remote as git_push's expectedRemote", async () => {
+    mockGitShipPreflight.mockResolvedValue(
+      makePreflight({ remote: "https://github.com/example/previewed.git" }),
+    );
+    mockGitStageCommit.mockResolvedValue(makeCommitOutcome());
+    await pushThroughTheRealWrapper();
+
+    const { result } = await renderPreviewing();
+    await act(async () => {
+      await result.current.commitAndPush();
+    });
+
+    expect(result.current.state).toBe("settled");
+    expect(tauriInvoke).toHaveBeenCalledExactlyOnceWith(
+      "git_push",
+      expect.objectContaining({
+        finalStep: true,
+        expectedRemote: "https://github.com/example/previewed.git",
+      }),
+    );
+  });
+
+  it("commitPushAndOpenCompare sends the previewed remote as git_push's expectedRemote", async () => {
+    mockGitShipPreflight.mockResolvedValue(
+      makePreflight({ remote: "https://github.com/example/previewed.git" }),
+    );
+    mockGitStageCommit.mockResolvedValue(makeCommitOutcome());
+    mockShipCompareUrl.mockImplementation(settlesWith(COMPARE_URL));
+    await pushThroughTheRealWrapper();
+
+    const { result } = await renderPreviewing();
+    await act(async () => {
+      await result.current.commitPushAndOpenCompare();
+    });
+
+    expect(result.current.state).toBe("settled");
+    expect(tauriInvoke).toHaveBeenCalledExactlyOnceWith(
+      "git_push",
+      expect.objectContaining({
+        finalStep: false,
+        expectedRemote: "https://github.com/example/previewed.git",
+      }),
+    );
   });
 
   it("surfaces a push failure as the backend's typed ShipError (kind and remedy) and never calls shipCompareUrl", async () => {
