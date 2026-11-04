@@ -309,9 +309,8 @@ docs(api): document the ship_context causal record
      cargo tree --locked -p "$crate" -e normal --prefix none --format "{p}" | grep -E "^tauri"
    done
 
-   # Workflow files (ci.yml `workflows` job: actionlint, the updater-manifest verifier test, then zizmor); only needed when you touch .github/
+   # Workflow files (ci.yml `workflows` job: actionlint, then zizmor); only needed when you touch .github/
    actionlint
-   bash .github/scripts/verify-updater-manifest.test.sh   # needs bash, jq, base64; stubs curl and minisign
    zizmor .github          # online audits (pinned SHA vs its # vX.Y.Z comment, known-vulnerable actions) run only with GH_TOKEN set
    ```
 
