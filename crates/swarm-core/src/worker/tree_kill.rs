@@ -47,7 +47,7 @@ pub(crate) fn lead_own_group(
         windows,
         expect(
             unused_variables,
-            reason = "Windows has no process groups to join; `taskkill /T` walks the parent-pid tree"
+            reason = "on Windows `taskkill /T` walks the parent-pid tree, so the command needs no grouping"
         )
     )]
     cmd: &mut Command,
@@ -79,7 +79,7 @@ pub(crate) fn terminate(
         windows,
         expect(
             unused_variables,
-            reason = "Windows has no graceful tree signal, so the grace only waits for the child to exit after its stdin closes"
+            reason = "Windows has no graceful tree request: `taskkill /T` without `/F` posts `WM_CLOSE`, which a windowless console child never receives"
         )
     )]
     child: &mut Child,

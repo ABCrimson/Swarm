@@ -22,7 +22,7 @@ The house rules (exact pins, pnpm only, no manual memoization, `parking_lot`, an
 ### Prerequisites
 
 | Tool    | Version                                  | Purpose                                      |
-|---------|----------------------------------------------|
+|---------|------------------------------------------|----------------------------------------------|
 | Node.js | 28.0.0-nightly2026110370074c6f98 (`devEngines.runtime`) | Frontend build and dev server (pnpm downloads it; do not install it separately) |
 | pnpm    | 12.17.0 (`packageManager`)               | Package management; npm and yarn are not used |
 | Rust    | nightly-2026-11-04 (`rust-toolchain.toml`) | Backend compilation (`rust-version` 1.101)   |
@@ -379,7 +379,7 @@ cargo test --locked --doc -p swarm-core -p swarmd
 | `swarm-core` `events`         | Wire serialization, `snake_case` type tags, `camelCase` payloads, provenance |
 | `swarm-core` `session`        | Session manager CRUD and atomic persistence |
 | `swarm-core` `bus`            | Channels and the router |
-| `swarm-core` top-level modules | `error`, `config`, `lock`, `metrics`, `protocol`, `runtime`, `state_file`, `clock` |
+| `swarm-core` top-level modules | `error`, `config`, `lock`, `metrics`, `protocol`, `runtime`, `state_file`, `clock`, `paths`, `redact`, `secrets` |
 | `swarmd`                      | Unit tests (CLI parsing, the daemon token and Host/Origin policy, the WebSocket writer, per-peer caps and replay) and integration tests that drive a real daemon over WebSocket and HTTP (the static UI included) and cover the service scripts (`install.sh`/`uninstall.sh` against shims on Linux; the PowerShell scripts and unit files checked statically) |
 | `swarm-desktop`               | Unit tests (command list and per-command ACL, capability and config contracts, dialog grants, lifecycle teardown) and an integration test of the shared Tokio runtime |
 
@@ -392,7 +392,7 @@ Frontend tests run via Vitest (`pnpm test`), covering components, hooks, stores,
 Tests are **colocated**: `X.test.ts(x)` sits next to the `X.ts(x)` it covers, and a suite that covers one facet of a larger module takes a dotted suffix (`src/lib/tools.file-io.test.ts`, `src/lib/tools.spawn-worker.test.ts`). Import the module under test through its `#` alias like any other code. Vitest collects `src/**/*.test.{ts,tsx}` only, so the Playwright `e2e/*.spec.ts` suites are never picked up.
 
 | Location                          | Files | Focus                                                          |
-|-----------------------------------|-----------------------------------------------------------------|
+|-----------------------------------|-------|-----------------------------------------------------------------|
 | `src/components/**/*.test.{ts,tsx}` | 53  | UI primitives, the graph and causality surfaces, layout, logs, metrics charts, sessions, and the agent/ship surfaces |
 | `src/hooks/*.test.tsx`            | 15    | `useWorker`, `useElkLayout`, `useTerminal`, `useWebGPU`, `useSettingsBridge`, `useShip`, and the event-stream hooks |
 | `src/lib/*.test.ts`               | 52    | `anthropic`, `event-bus`, `export`, `keybindings`, `models`, `time`, the `tools*` suites, `transport` (the `wsTransport` client), `webgpu`, `worker-spawn`, ... |

@@ -41,7 +41,7 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 - **macOS: killing a worker whose terminal output nobody reads no longer hangs.** A shell still running after its kill gets up to 1 MiB of unread terminal output discarded before the wait.
 - **A refused `git worktree add -b` no longer leaves its branch behind.** When git refuses the add (an occupied, non-empty target), a branch the call created that still points at the base commit is deleted with `git branch -d`, never `-D`; a branch that already existed, or one that moved, is left alone, and a timed-out add returns without that rollback.
 - **An event emitted during shutdown is no longer lost silently.** An emit that passed the sink's closed check just before shutdown could queue behind the shutdown barrier and be dropped with no log line. The check and the send now run under one lock that shutdown takes before it queues the barrier, so an emit racing shutdown is either queued ahead of the barrier or refused at the sink.
-- **WebKit: clicking the backdrop closes the spawn dialog and the causality panel.** Safari 18.4, WKWebView and WebKitGTK lack `closedby="any"`; a dialog that is mid-spawn still refuses to close.
+- **WebKit: clicking the backdrop closes the spawn dialog, the causality panel and the inject dialog.** WebKit (Safari, WKWebView and WebKitGTK) ships no `closedby="any"`; a dialog that is mid-spawn still refuses to close.
 - **WebKit: the model picker opens centred.** It no longer appears in the window's top-left corner when anchor positioning is unavailable.
 
 ---
