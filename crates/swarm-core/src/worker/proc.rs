@@ -221,6 +221,12 @@ const EXIT_POLL: Duration = Duration::from_millis(20);
 /// child `grace` to exit, and force-kills the tree if it still runs
 /// (`worker::tree_kill::kill`).
 ///
+/// A zero `grace` is a forced stop: `sequence` is skipped, the tree is
+/// killed first and stdin closed after it, so a provider that exits
+/// cleanly at stdin EOF cannot end its work on its own before the kill
+/// lands (the kill helper takes milliseconds to start; a provider's EOF
+/// exit can take less).
+///
 /// `try_wait` comes before each step, and nothing is signalled once the
 /// child has exited (its pid may already be reused); `close_stdin` runs
 /// either way. The child is left for the caller to reap: `wait` returns
@@ -232,6 +238,11 @@ pub fn stop_tree(
     sequence: ExitSequence,
     grace: Duration,
 ) {
+    if grace.is_zero() {
+        super::tree_kill::kill(child);
+        close_stdin();
+        return;
+    }
     if sequence == ExitSequence::SignalThenCloseStdin {
         super::tree_kill::terminate(child);
     }

@@ -41,9 +41,10 @@ pub(super) async fn teardown(shared: &Arc<Shared>, stop: Stop) -> ExitSummary {
 }
 
 /// Claims the in-flight turn and the child in one critical section,
-/// closes stdin, stops the child and its process tree on the blocking
-/// pool (gracefully only when idle; [`stop_tree`]), synthesizes
-/// Condition B's settlement for a turn that never got its receipt, emits
+/// stops the child and its process tree on the blocking pool
+/// ([`stop_tree`]: an idle CLI gets its stdin EOF and a grace to exit, a
+/// busy one is killed before its stdin closes), synthesizes Condition B's
+/// settlement for a turn that never got its receipt, emits
 /// `agent_session_exited`, and publishes the exit summary.
 async fn run_teardown(shared: Arc<Shared>, stop: Stop) {
     let (in_flight, child) = {
@@ -56,8 +57,9 @@ async fn run_teardown(shared: Arc<Shared>, stop: Stop) {
         (turn, inner.child.take())
     };
     // An idle CLI ends its session at stdin EOF; a busy one is killed at
-    // once. Either way the tree goes too: a Bash tool call's processes
-    // run under the CLI.
+    // once (a zero grace kills before stdin closes, so the CLI cannot exit
+    // on its EOF first). Either way the tree goes too: a Bash tool call's
+    // processes run under the CLI.
     let grace = if stop == Stop::Graceful && in_flight.is_none() {
         SHUTDOWN_GRACE
     } else {

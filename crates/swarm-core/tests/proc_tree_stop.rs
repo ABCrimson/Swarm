@@ -275,3 +275,57 @@ async fn test_stop_after_the_child_exited_returns_its_status() {
 
     assert_eq!(status.code(), Some(7));
 }
+
+/// A zero grace is a forced stop: the tree is killed while stdin is still
+/// open, so a provider that exits 0 the moment its stdin ends is killed
+/// rather than left to end its work cleanly (a busy Claude Code session's
+/// teardown). The `close_stdin` here returns only once the child is gone
+/// (its stdout reaches EOF): that is how a fast stdin-EOF exit looks to a
+/// stop that runs on a loaded runner, where the kill helper starts slowly.
+#[test]
+fn test_a_zero_grace_kills_the_tree_before_closing_stdin() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    use swarm_core::worker::proc::stop_tree;
+
+    let mut command = Command::new("node");
+    command
+        .args([
+            "-e",
+            "process.stdin.on('end', () => process.exit(0)).resume(); console.log('ready');",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let mut child = command.spawn().expect("node spawns");
+    let stdin = child.stdin.take().expect("piped stdin");
+    let mut stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
+    let mut ready = String::new();
+    stdout.read_line(&mut ready).expect("node reports ready");
+    assert_eq!(ready.trim_end(), "ready");
+
+    stop_tree(
+        &mut child,
+        || {
+            drop(stdin);
+            std::io::copy(&mut stdout, &mut std::io::sink()).expect("stdout drains to EOF");
+        },
+        ExitSequence::CloseStdinThenWait,
+        Duration::ZERO,
+    );
+    let status = child.wait().expect("the child is reaped");
+
+    assert!(
+        !status.success(),
+        "the child was killed, not ended by stdin EOF: {status}"
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        std::os::unix::process::ExitStatusExt::signal(&status),
+        Some(9),
+        "SIGKILL ended it: {status}"
+    );
+}
