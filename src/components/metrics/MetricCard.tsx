@@ -98,12 +98,10 @@ export function MetricCard({
         {severity !== "good" && (
           <span
             style={{
-              fontFamily: "var(--font-mono)",
+              fontFamily: "var(--font-body)",
               fontSize: 11,
               fontWeight: 600,
               color: accentColor,
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
               lineHeight: 1.4,
             }}
           >
