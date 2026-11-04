@@ -97,7 +97,7 @@ pub const RELEVANT_EVENT_TYPES: &[&str] = &[
 /// `src/lib/ship-causal.ts`'s prompt assembly). The allowlist keeps file
 /// contents out by construction; a command/url/query value can still carry
 /// a credential, so [`extract_target`] runs it through
-/// [`super::redact::redact`], which strips recognized token shapes and URL
+/// [`crate::redact::redact`], which strips recognized token shapes and URL
 /// userinfo. An opaque secret with no recognizable shape can still pass.
 const TARGET_FIELD_ALLOWLIST: &[&str] = &[
     "path",
@@ -236,7 +236,7 @@ impl ShipContext {
 
 /// Reads `input`'s first allowlisted field (see [`TARGET_FIELD_ALLOWLIST`]'s
 /// doc for why this is an allowlist, not a generic extractor), trimmed,
-/// redacted with [`super::redact::redact`], then capped at
+/// redacted with [`crate::redact::redact`], then capped at
 /// [`MAX_TARGET_LEN`] chars. `None` for a non-object `input`, an
 /// empty/whitespace-only match, or no allowlisted field present at all.
 fn extract_target(input: &serde_json::Value) -> Option<String> {
@@ -248,7 +248,7 @@ fn extract_target(input: &serde_json::Value) -> Option<String> {
                 continue;
             }
             return Some(
-                super::redact::redact(trimmed)
+                crate::redact::redact(trimmed)
                     .chars()
                     .take(MAX_TARGET_LEN)
                     .collect(),

@@ -16,6 +16,7 @@ use uuid::Uuid;
 use super::tier::child_env;
 use super::wire::{self, ControlResponse, Inbound, InitializeResponse};
 use super::{EXIT_POLL_INTERVAL, SHUTDOWN_GRACE};
+use crate::agent::is_executable_file;
 use crate::error::AppError;
 use crate::worker::proc::{PipedHandle, spawn_piped, write_to_piped};
 
@@ -77,18 +78,6 @@ fn program_in(dir: &Path, program: &str, windows: bool) -> Option<PathBuf> {
         .fold(dir.to_path_buf(), |path, part| path.join(part));
     (program == "claude" && dir.join("claude.cmd").is_file() && npm_exe.is_file())
         .then_some(npm_exe)
-}
-
-#[cfg(unix)]
-fn is_executable_file(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable_file(path: &Path) -> bool {
-    path.is_file()
 }
 
 // ── Child process plumbing ───────────────────────────────────────────

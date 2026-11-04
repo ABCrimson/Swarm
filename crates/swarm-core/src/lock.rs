@@ -92,8 +92,7 @@ fn already_running_message(info: &LockInfo) -> String {
     let connect = info
         .bind
         .as_ref()
-        .map(|bind| format!(" — Connect At {bind}"))
-        .unwrap_or_default();
+        .map_or_default(|bind| format!(" — Connect At {bind}"));
     format!(
         "SWARM Is Already Running ({}, Pid {}){connect}",
         shell_display_name(&info.shell),

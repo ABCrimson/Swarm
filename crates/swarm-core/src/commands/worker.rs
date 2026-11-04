@@ -274,27 +274,7 @@ mod tests {
 
     use super::*;
     use crate::commands::test_support::test_ctx;
-
-    /// Collects formatted tracing output in memory.
-    #[derive(Clone, Default)]
-    struct Capture(Arc<parking_lot::Mutex<Vec<u8>>>);
-
-    impl std::io::Write for Capture {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
-        type Writer = Self;
-        fn make_writer(&'a self) -> Self {
-            self.clone()
-        }
-    }
+    use crate::test_support::SharedBuf;
 
     /// `spawn_worker` is the first place a worker's `config` (and its
     /// secret-bearing `env`) is logged on the command path. Drives the
@@ -303,7 +283,7 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_worker_never_logs_an_env_secret() {
         const SECRET: &str = "sk-ant-registry-handler-secret-should-never-be-logged";
-        let capture = Capture::default();
+        let capture = SharedBuf::default();
         let _subscriber = tracing::subscriber::set_default(
             tracing_subscriber::fmt()
                 .with_writer(capture.clone())

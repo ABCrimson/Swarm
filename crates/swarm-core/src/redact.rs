@@ -1,9 +1,9 @@
-//! Secret redaction and size capping for any git-produced text that can
-//! reach a log line, a persisted `SwarmEvent`, or a UI toast.
-//! [`crate::git::cli`] applies [`sanitize`] to every captured stderr
-//! ([`crate::git::cli::GitOutput::stderr`]); stdout is data and stays
-//! raw, so a caller that echoes stdout into a message sanitizes it
-//! itself.
+//! Secret redaction and size capping for any text that can reach a log
+//! line, a persisted `SwarmEvent` or a UI toast: git stderr, provider CLI
+//! stderr and probe output, tool-call targets, terminal input previews.
+//! [`crate::git::cli`] applies [`sanitize`] to every git stderr
+//! ([`crate::git::cli::GitOutput::stderr`]); git stdout stays raw, so a
+//! caller that echoes it sanitizes it.
 //!
 //! # Why this exists
 //!

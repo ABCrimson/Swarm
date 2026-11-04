@@ -18,7 +18,7 @@ use super::tier::{CodexTrustTier, NO_CWD_EXE_LOOKUP_ENV, verify_effective_policy
 use super::{CLIENT_NAME, CLIENT_TITLE};
 
 use crate::agent::adapter::AgentSpawnSpec;
-use crate::agent::stderr_snippet;
+use crate::agent::{is_executable_file, stderr_snippet};
 use crate::error::AppError;
 use crate::worker::proc::write_to_piped;
 
@@ -91,18 +91,6 @@ pub(super) fn find_program(
         .filter(|dir| dir.is_absolute())
         .map(|dir| dir.join(program))
         .find(|candidate| is_executable_file(candidate))
-}
-
-#[cfg(unix)]
-fn is_executable_file(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable_file(path: &std::path::Path) -> bool {
-    path.is_file()
 }
 
 /// The program to run for `binary` — see [`find_program`] — or `None` when
@@ -237,7 +225,7 @@ pub(super) fn first_line(output: &std::process::Output) -> Option<String> {
                 .lines()
                 .map(str::trim)
                 .find(|line| !line.is_empty())
-                .map(crate::git::redact::redact)
+                .map(crate::redact::redact)
         })
 }
 

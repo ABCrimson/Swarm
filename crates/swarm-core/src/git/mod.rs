@@ -1,9 +1,8 @@
-//! Git facade: the argv runner and capability probe ([`cli`]), secret
-//! redaction for surfaced text ([`redact`]), repo discovery ([`repo`]),
-//! worktree lifecycle ([`worktree`]), remote URL parsing and
-//! compare-URL construction ([`remote`]), the ship chain — preflight,
-//! staged commit, push ([`ship`]) — and the causal record behind a
-//! ship's PR body ([`causal`]). See [`ship`]'s module doc for the
+//! Git facade: the argv runner and capability probe ([`cli`]), repo
+//! discovery ([`repo`]), worktree lifecycle ([`worktree`]), remote URL
+//! parsing and compare-URL construction ([`remote`]), the ship chain —
+//! preflight, staged commit, push ([`ship`]) — and the causal record
+//! behind a ship's PR body ([`causal`]). See [`ship`]'s module doc for the
 //! worktree/ship ownership split: [`worktree`] (driven by
 //! `worker::lifecycle`) owns worktree creation and removal, [`ship`]
 //! owns commit and push, and they meet at
@@ -15,8 +14,8 @@
 //! string), and the only filesystem root this module assumes is the
 //! worktrees root its caller (`worker::lifecycle`) passes in:
 //! `SystemConfig::worktrees_root`, by default `~/.swarm/worktrees`
-//! (from `crate::paths::home_dir`). [`redact`] and [`remote`] are
-//! pure text functions; [`causal`] works on the event-log rows
+//! (from `crate::paths::home_dir`). [`remote`] is a pure text
+//! function; [`causal`] works on the event-log rows
 //! (`orchestration::log::StoredEvent`) it is handed and never runs git.
 //!
 //! ## Why shell out to `git` instead of a Rust git library
@@ -30,7 +29,6 @@
 
 pub mod causal;
 pub mod cli;
-pub mod redact;
 pub mod remote;
 pub mod repo;
 pub mod ship;

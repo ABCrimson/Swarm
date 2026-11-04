@@ -43,7 +43,7 @@
 //!   numstat rows and shas are data, and redacting or truncating them
 //!   corrupts what callers parse. stderr is only ever used for messages
 //!   and classification, so [`GitOutput::stderr`] is the redacted and
-//!   size-capped copy (see [`super::redact`]) every error message, log
+//!   size-capped copy (see [`crate::redact`]) every error message, log
 //!   line and event payload is built from; [`GitOutput::raw_stderr`]
 //!   keeps the full text for pattern classification only.
 //! - Bounds the post-exit pipe drain to `DRAIN_GRACE`: a grandchild
@@ -61,8 +61,8 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
-use super::redact;
 use crate::error::AppError;
+use crate::redact;
 
 /// Minimum supported `git` version. Each floor below is a feature SWARM
 /// actually uses:

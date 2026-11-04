@@ -115,7 +115,7 @@ static ANSI_ESCAPE: LazyLock<Regex> = LazyLock::new(|| {
 /// Shared by both provider adapters, which keep the same bounded byte
 /// tail of their CLI's stderr.
 ///
-/// Recognized credentials are redacted ([`crate::git::redact::redact`])
+/// Recognized credentials are redacted ([`crate::redact::redact`])
 /// because the snippet lands in persisted settlement errors. A full tail
 /// (`STDERR_TAIL_CAP` bytes) may have lost its front to the ring, possibly
 /// inside a token, and a token's tail alone matches no redaction pattern
@@ -147,7 +147,7 @@ pub(crate) fn stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String {
         bytes = &bytes[..end];
     }
     let text = String::from_utf8_lossy(bytes);
-    let text = crate::git::redact::redact(&ANSI_ESCAPE.replace_all(&text, ""));
+    let text = crate::redact::redact(&ANSI_ESCAPE.replace_all(&text, ""));
     match text.trim() {
         "" if full || cut_end => "Stderr: [Truncated]".to_owned(),
         "" => "No Stderr Output".to_owned(),
@@ -167,6 +167,21 @@ pub(crate) async fn drained_stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     stderr_snippet(tail)
+}
+
+/// Whether a `PATH` search may start `path`: on Unix a regular file with an
+/// execute bit, elsewhere any file. Shared by both adapters' lookups.
+#[cfg(unix)]
+pub(crate) fn is_executable_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+/// Windows has no execute bit: any file matches.
+#[cfg(not(unix))]
+pub(crate) fn is_executable_file(path: &std::path::Path) -> bool {
+    path.is_file()
 }
 
 #[cfg(test)]

@@ -13,8 +13,8 @@ use super::{
     mutate, worktree_info_for_worker,
 };
 use crate::error::AppError;
-use crate::git::cli::{GitOutput, MUTATE_TIMEOUT};
-use crate::git::repo::{self, args_in};
+use crate::git::cli::{GitOutput, MUTATE_TIMEOUT, args_in};
+use crate::git::repo;
 use crate::worker::registry::{WorkerId, WorkerRegistry};
 
 /// Staging strategy for [`stage_and_commit`].
@@ -179,7 +179,7 @@ fn trailers(request: &CommitRequest) -> Vec<String> {
 fn classify_commit_error(output: &GitOutput) -> ShipError {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let detail = if output.stderr.trim().is_empty() {
-        crate::git::redact::sanitize(stdout.trim())
+        crate::redact::sanitize(stdout.trim())
     } else {
         output.stderr.trim().to_owned()
     };

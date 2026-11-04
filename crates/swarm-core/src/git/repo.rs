@@ -3,10 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::cli::{self, READ_TIMEOUT};
-// Re-exported so the `ship` submodules keep importing `repo::args_in`; the
-// builder itself lives in `cli`.
-pub(crate) use super::cli::args_in;
+use super::cli::{self, READ_TIMEOUT, args_in};
 use crate::error::AppError;
 
 /// Argv for `git rev-parse --show-toplevel`.

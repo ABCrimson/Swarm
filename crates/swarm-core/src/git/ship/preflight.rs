@@ -16,7 +16,8 @@ use super::{
 };
 use crate::error::AppError;
 use crate::git::cli::SCAN_TIMEOUT;
-use crate::git::{redact, remote, repo};
+use crate::git::{remote, repo};
+use crate::redact;
 use crate::worker::registry::{WorkerId, WorkerRegistry};
 
 /// The ship preflight for one worker — `git_ship_preflight`'s IPC result,

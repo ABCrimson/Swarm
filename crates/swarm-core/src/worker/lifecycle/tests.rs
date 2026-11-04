@@ -1,7 +1,6 @@
 //! Unit tests for [`super`].
 
 use std::assert_matches;
-use std::mem::DropGuard;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
@@ -10,6 +9,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use super::*;
 use crate::events::emitter::WriterMsg;
 use crate::git::test_support::{TempRepo, git_in};
+use crate::test_support::SharedBuf;
 
 /// How long a test waits for a real shell to react.
 const SHELL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -35,28 +35,6 @@ fn make_handle(state: WorkerState) -> WorkerHandle {
         base_commit: None,
         last_shipped_seq: None,
         last_shipped_commit: None,
-    }
-}
-
-/// A `Write` over a shared buffer: a stand-in PTY writer, and the sink
-/// for a captured tracing subscriber.
-#[derive(Clone, Default)]
-struct SharedBuf(Arc<Mutex<Vec<u8>>>);
-
-impl Write for SharedBuf {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
-    type Writer = Self;
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
     }
 }
 
@@ -912,11 +890,7 @@ fn worktree_dirs(worktrees: &Path) -> Vec<PathBuf> {
 /// there is no fallback to an unisolated worker at `config.cwd`.
 #[test]
 fn test_spawn_hard_fails_when_repo_root_is_not_a_git_repo() {
-    let not_a_repo = std::env::temp_dir().join(format!("swarm-not-a-repo-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&not_a_repo).unwrap();
-    let _cleanup = DropGuard::new(not_a_repo.clone(), |dir| {
-        let _ = std::fs::remove_dir_all(dir);
-    });
+    let (not_a_repo, _cleanup) = crate::test_support::temp_dir("not-a-repo");
 
     let registry = WorkerRegistry::new();
     registry.set_max_workers(1).unwrap();
