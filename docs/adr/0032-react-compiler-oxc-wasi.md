@@ -31,7 +31,6 @@ except the class component `ErrorBoundary` carries a memo cache, and all 5 requi
 ## Consequences
 
 - Compilation on a blocked host is slower than native.
-- The only remaining dependency hold is the Node nightly, whose newest builds lack a Windows x64
-  artifact.
+- The forced-WASI check gates the Tailwind pin: every `@tailwindcss/oxide-wasm32-wasi` after insiders 8cc0551 blocks on load under `NAPI_RS_FORCE_WASI=true`, so `tailwindcss` and `@tailwindcss/vite` are held at 8cc0551 in `.peak-modern-holds.json`.
 - Source must stay compiler-clean: no manual `useMemo` or `useCallback`, no `try` blocks in hooks the
   compiler cannot handle (the ship hook keeps its async work in module-level helpers for that reason).
