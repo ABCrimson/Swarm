@@ -551,6 +551,7 @@ mod tests {
     use std::assert_matches;
 
     use super::*;
+    use crate::orchestration::engine::SEQ_RESERVATION_BLOCK;
     use crate::test_support::temp_db;
 
     fn append(log: &mut EventLog, seq: u64, event_type: &str, payload: &str) {
@@ -1110,15 +1111,14 @@ mod tests {
 
     /// Throughput of the engine's real write shape under each
     /// `synchronous` level: one autocommit `INSERT` per persistent event
-    /// (`OrchestrationEngine::persist`) plus one seq-block reservation
-    /// per 1024 seqs (`SEQ_RESERVATION_BLOCK`). Prints, never asserts.
+    /// (`Writer::persist` in `engine.rs`) plus one seq-block reservation
+    /// per `SEQ_RESERVATION_BLOCK` seqs. Prints, never asserts.
     /// Set `TMPDIR` to pick the filesystem under test, and see
     /// `docs/performance.md` for the recorded numbers.
     #[test]
     #[ignore = "throughput measurement; run explicitly"]
     fn measure_append_throughput_by_synchronous_level() {
         const APPENDS: u64 = 3000;
-        const RESERVATION_BLOCK: u64 = 1024;
 
         for (level, name) in [("NORMAL", "NORMAL"), ("FULL", "FULL"), ("EXTRA", "EXTRA")] {
             let (path, _cleanup) = temp_db();
@@ -1136,7 +1136,7 @@ mod tests {
             for seq in 1..=APPENDS {
                 let t = std::time::Instant::now();
                 if seq > reserved {
-                    reserved = seq + RESERVATION_BLOCK - 1;
+                    reserved = seq + SEQ_RESERVATION_BLOCK - 1;
                     log.reserve_seqs(reserved).unwrap();
                 }
                 log.append(

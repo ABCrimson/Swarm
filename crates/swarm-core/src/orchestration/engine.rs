@@ -79,7 +79,7 @@ const DRAIN_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 
 /// How many seqs one reservation write covers. A crash skips at most
 /// this many seqs; a busy writer pays one tiny `meta` write per block.
-const SEQ_RESERVATION_BLOCK: u64 = 1024;
+pub(super) const SEQ_RESERVATION_BLOCK: u64 = 1024;
 
 /// Ordered envelope wrapping every [`SwarmEvent`] on the wire.
 ///
