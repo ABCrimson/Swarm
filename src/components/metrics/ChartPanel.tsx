@@ -4,8 +4,9 @@
 // height. The body installs the shared Recharts theme, and the chart
 // inside sizes itself from it with Recharts 3's `responsive` prop — no
 // ResponsiveContainer wrapper and no guessed percentage heights.
-// With fewer than two samples the body shows a waiting line, and a snapshot
-// chart with nothing to plot shows its `empty` line, never empty axes.
+// With fewer than two samples the body shows a waiting line with a pulsing
+// dot (a live state), and a snapshot chart with nothing to plot shows its
+// `empty` line with no pulse (a resting state), never empty axes.
 
 import type { CSSProperties } from "react";
 import { RechartsThemeProvider } from "recharts";
@@ -81,10 +82,12 @@ export function ChartPanel({
       <div style={{ flex: 1, minHeight: 0 }}>
         {(sampleCount !== undefined && sampleCount < 2) || empty !== undefined ? (
           <p className="m-0 flex h-full items-center justify-center gap-2 text-fg-dim text-md">
-            <span
-              aria-hidden="true"
-              className="size-1.5 rounded-full bg-plasma motion-safe:animate-[tool-pulse_2s_ease-in-out_infinite]"
-            />
+            {empty === undefined && (
+              <span
+                aria-hidden="true"
+                className="size-1.5 rounded-full bg-plasma motion-safe:animate-[tool-pulse_2s_ease-in-out_infinite]"
+              />
+            )}
             {empty ?? "Waiting For Samples"}
           </p>
         ) : (

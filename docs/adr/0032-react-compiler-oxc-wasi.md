@@ -24,8 +24,9 @@ except the class component `ErrorBoundary` carries a memo cache, and all 5 requi
 - `@babel/core`, `@rolldown/plugin-babel` and `babel-plugin-react-compiler` are removed, together with
   the Babel hold.
 - `pnpm check:compiler` reports which binding ran (native or `wasm32-wasip1`) and fails when `Button`,
-  `Pill`, `Spinner`, `MetricCard` or `SplitPane` ship uncompiled. CI runs it with
-  `NAPI_RS_FORCE_WASI=true`.
+  `Pill`, `Spinner`, `MetricCard`, `SplitPane` or the `useWebGPU` hook ship uncompiled, or when the
+  compiler reports a diagnostic for a component, page or hook module that the script's `SKIPPED` map
+  does not name with a reason. CI runs it with `NAPI_RS_FORCE_WASI=true`.
 - The WASI binding's `@emnapi/core` and `@emnapi/runtime` are lifted to `2.0.0-beta.3` by a scoped override in `pnpm-workspace.yaml`: `@napi-rs/wasm-runtime` 1.2.7 writes `emnapi_shared.addonModule`, which the binding's own `2.0.0-alpha.6` pins do not have, so without the override the loader fell back to the native binding without saying so.
 
 ## Consequences

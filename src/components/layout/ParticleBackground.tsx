@@ -185,17 +185,22 @@ function ParticleCanvas(): React.ReactElement {
   // ── Render loop ──
   useEffect(() => {
     if (!device || !context || !system) return;
-    let raf = 0;
-    let lastFrame: number | null = null;
-    let backlogMs = 0;
-    let measuring = false;
-    let samples: number[] = [];
+    // One effect-local object, not `let`s: the React Compiler skips a
+    // component whose effect reassigns a captured variable from a callback
+    // that runs after render (here every animation frame).
+    const loop = {
+      raf: 0,
+      lastFrame: null as number | null,
+      backlogMs: 0,
+      measuring: false,
+      samples: [] as number[],
+    };
 
     const recordLatency = (ms: number): void => {
-      samples.push(ms);
-      if (samples.length < SAMPLE_WINDOW) return;
-      const avg = samples.reduce((sum, ms) => sum + ms, 0) / samples.length;
-      samples = [];
+      loop.samples.push(ms);
+      if (loop.samples.length < SAMPLE_WINDOW) return;
+      const avg = loop.samples.reduce((sum, ms) => sum + ms, 0) / loop.samples.length;
+      loop.samples = [];
       setGpuFrameTime(avg);
 
       const current = drawCountRef.current;
@@ -213,16 +218,16 @@ function ParticleCanvas(): React.ReactElement {
 
     const frame = (now: number): void => {
       // Scheduled first: nothing below can stop the loop.
-      raf = requestAnimationFrame(frame);
+      loop.raf = requestAnimationFrame(frame);
 
-      backlogMs += lastFrame === null ? STEP_MS : now - lastFrame;
-      lastFrame = now;
-      let steps = Math.floor(backlogMs / STEP_MS);
+      loop.backlogMs += loop.lastFrame === null ? STEP_MS : now - loop.lastFrame;
+      loop.lastFrame = now;
+      let steps = Math.floor(loop.backlogMs / STEP_MS);
       if (steps > MAX_STEPS_PER_FRAME) {
         steps = MAX_STEPS_PER_FRAME;
-        backlogMs = 0;
+        loop.backlogMs = 0;
       } else {
-        backlogMs -= steps * STEP_MS;
+        loop.backlogMs -= steps * STEP_MS;
       }
 
       try {
@@ -248,15 +253,15 @@ function ParticleCanvas(): React.ReactElement {
           device.queue.submit([encoder.finish()]);
         }
 
-        if (!measuring) {
-          measuring = true;
+        if (!loop.measuring) {
+          loop.measuring = true;
           device.queue.onSubmittedWorkDone().then(
             () => {
-              measuring = false;
+              loop.measuring = false;
               recordLatency(performance.now() - submitted);
             },
             () => {
-              measuring = false;
+              loop.measuring = false;
             },
           );
         }
@@ -266,8 +271,8 @@ function ParticleCanvas(): React.ReactElement {
       }
     };
 
-    raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
+    loop.raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(loop.raf);
   }, [device, context, system, targets, setGpuFrameTime, setParticleCount]);
 
   return (

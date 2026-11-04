@@ -98,6 +98,12 @@ export function GraphContextMenu({
   onClose,
 }: GraphContextMenuProps): React.ReactElement {
   const popoverRef = useRef<HTMLDivElement>(null);
+  /**
+   * The pending open of an `openOnRelease` menu. A ref, not an effect-local
+   * `let`: the React Compiler skips a component whose effect reassigns a
+   * captured variable from a callback that runs after render.
+   */
+  const openTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const titleId = useId();
   const { worker, pause, resume, kill } = useWorker(workerId);
   const state = worker?.state;
@@ -110,15 +116,14 @@ export function GraphContextMenu({
       popover.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
     };
     // After the release's own light-dismiss pass has run.
-    let timer: ReturnType<typeof setTimeout> | undefined;
     const openAfterRelease = (): void => {
-      timer = setTimeout(open);
+      openTimerRef.current = setTimeout(open);
     };
     if (openOnRelease) window.addEventListener("pointerup", openAfterRelease, { once: true });
     else open();
     return () => {
       window.removeEventListener("pointerup", openAfterRelease);
-      clearTimeout(timer);
+      clearTimeout(openTimerRef.current);
       if (popover.matches(":popover-open")) popover.hidePopover();
     };
   }, [openOnRelease]);
