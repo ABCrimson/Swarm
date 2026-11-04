@@ -41,7 +41,8 @@
 //!
 //! - the concrete local address the TCP connection arrived on, as an IP
 //!   literal with the same port (this is what makes `--bind 0.0.0.0` usable:
-//!   a LAN client's `Host: 192.168.1.5:8787` names the interface it reached);
+//!   a LAN client's `Host: 192.168.1.5:8787` names the interface it reached,
+//!   once `--allow-plaintext-lan` lets [`crate::exposure`] serve it);
 //! - any loopback spelling (`localhost`, `127.0.0.0/8`, `::1`, IPv4-mapped
 //!   forms) with the same port, when the connection arrived on loopback;
 //! - an operator-supplied `--allow-host NAME[:PORT]` entry, for reverse

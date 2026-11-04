@@ -4,6 +4,8 @@
 //!
 //! - [`auth`]: the daemon token and the `Host`/`Origin` allow-list.
 //! - [`cli`]: command-line parsing and the default data directory.
+//! - [`exposure`]: the plaintext exposure gate, which judges a connection
+//!   by both of its ends.
 //! - [`ws`]: the `/ws` WebSocket transport (handshake, replay, live events,
 //!   RPC).
 //! - [`serve_ui`]: the optional `--serve-ui` static bundle.
@@ -15,6 +17,7 @@
 
 pub mod auth;
 pub mod cli;
+pub mod exposure;
 pub mod serve_ui;
 pub mod ws;
 
@@ -43,6 +46,7 @@ use swarm_core::protocol::ServerCaps;
 use swarm_core::runtime::Runtime;
 
 use crate::auth::{DaemonToken, HostPolicy, Rejection};
+use crate::exposure::ExposurePolicy;
 
 /// Connection and message limits. [`Limits::default`] is what the daemon
 /// runs with; tests shrink the timeouts.
@@ -104,6 +108,8 @@ pub struct Shared {
     pub(crate) registry: Registry,
     pub(crate) token: DaemonToken,
     pub(crate) hosts: HostPolicy,
+    /// Which networks a plaintext connection may cross.
+    pub(crate) exposure: ExposurePolicy,
     pub(crate) limits: Limits,
     /// Permits for WebSocket upgrades still inside their handshake.
     pub(crate) handshakes: Arc<Semaphore>,
@@ -128,12 +134,19 @@ impl Deref for AppState {
 
 impl AppState {
     /// Builds the state for a live [`Runtime`].
-    pub fn new(runtime: &Runtime, token: DaemonToken, hosts: HostPolicy, limits: Limits) -> Self {
+    pub fn new(
+        runtime: &Runtime,
+        token: DaemonToken,
+        hosts: HostPolicy,
+        exposure: ExposurePolicy,
+        limits: Limits,
+    ) -> Self {
         Self(Arc::new(Shared {
             ctx: Ctx::from_runtime(runtime),
             registry: Registry::new(),
             token,
             hosts,
+            exposure,
             handshakes: Arc::new(Semaphore::new(limits.max_pending_handshakes)),
             peer_handshakes: ws::PeerHandshakes::new(limits.max_pending_handshakes_per_peer),
             connections: Arc::new(Semaphore::new(limits.max_connections)),
@@ -208,8 +221,8 @@ impl Connected<IncomingStream<'_, DaemonListener>> for ConnectionAddrs {
 }
 
 /// Builds the router: `/ws`, plus the static bundle at `/` when
-/// `serve_ui_dir` is given. Every route sits behind the `Host`/`Origin`
-/// allow-list.
+/// `serve_ui_dir` is given. Every route sits behind the exposure gate and
+/// the `Host`/`Origin` allow-list.
 pub fn router(state: AppState, serve_ui_dir: Option<&Path>) -> Router {
     let mut router = Router::new().route("/ws", get(ws::upgrade));
     if let Some(dir) = serve_ui_dir {
@@ -220,13 +233,17 @@ pub fn router(state: AppState, serve_ui_dir: Option<&Path>) -> Router {
         .with_state(state)
 }
 
-/// Rejects, with 403, any request whose `Host` or `Origin` does not name
-/// this daemon (see [`HostPolicy`]).
+/// Rejects, with 403, any request whose connection crosses a network the
+/// [`ExposurePolicy`] does not serve, then any whose `Host` or `Origin` does
+/// not name this daemon (see [`HostPolicy`]).
 async fn guard_host(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let addrs = request
         .extensions()
         .get::<ConnectInfo<ConnectionAddrs>>()
         .map(|ConnectInfo(addrs)| *addrs);
+    if let Some(refused) = exposure::refusal(state.exposure, addrs) {
+        return refused;
+    }
     let headers = request.headers();
     // A `Host` or `Origin` that is present but not visible ASCII is malformed, not missing.
     let host_unreadable = headers
@@ -313,4 +330,86 @@ pub async fn serve(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use swarm_core::Paths;
+    use swarm_core::runtime::RuntimeConfig;
+    use tokio_tungstenite::tungstenite;
+
+    use super::*;
+    use crate::exposure::{Exposure, classify};
+
+    /// This machine's address on its default route, when that is private
+    /// IPv4 (a CI runner's or WSL's interface). A UDP `connect` sends
+    /// nothing; it only picks the route and the source address.
+    fn private_interface_ip() -> Option<IpAddr> {
+        let probe = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+        probe.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
+        let ip = probe.local_addr().ok()?.ip();
+        (classify(ip, Some(ip)) == Exposure::PrivateLan).then_some(ip)
+    }
+
+    /// The `/ws` upgrade runs the exposure gate itself: mounted without the
+    /// router-wide [`guard_host`] layer, a private-LAN peer still gets the
+    /// 403 and never takes a handshake permit.
+    #[tokio::test]
+    async fn test_ws_upgrade_refuses_unserved_peers_without_the_router_layer() {
+        let Some(lan) = private_interface_ip() else {
+            eprintln!("skipped: the default route has no private IPv4 source address");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let token = DaemonToken::load_or_create(dir.path()).unwrap().token;
+        let listener = TcpListener::bind((lan, 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let config = RuntimeConfig {
+            paths: Paths {
+                data_dir: dir.path().to_path_buf(),
+            },
+            shell_name: "swarmd",
+            bind: Some(addr.to_string()),
+        };
+        let runtime = tokio::task::spawn_blocking(move || Runtime::start(config, |_| {}))
+            .await
+            .unwrap()
+            .unwrap();
+        let limits = Limits::default();
+        let pool = limits.max_pending_handshakes;
+        let state = AppState::new(
+            &runtime,
+            token,
+            HostPolicy::new(std::iter::empty()),
+            ExposurePolicy::default(),
+            limits,
+        );
+        let app = Router::new()
+            .route("/ws", get(ws::upgrade))
+            .with_state(state.clone())
+            .into_make_service_with_connect_info::<ConnectionAddrs>();
+        let server = tokio::spawn(
+            axum::serve(DaemonListener(listener), app)
+                .with_graceful_shutdown(state.shutdown_token().cancelled_owned())
+                .into_future(),
+        );
+
+        match tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await {
+            Err(tungstenite::Error::Http(response)) => {
+                assert_eq!(response.status().as_u16(), 403);
+                assert_eq!(
+                    String::from_utf8_lossy(response.body().as_deref().unwrap_or_default()),
+                    "Plaintext Connections Over A Private LAN Need --allow-plaintext-lan."
+                );
+            }
+            other => panic!("expected an HTTP rejection, got: {other:?}"),
+        }
+        assert_eq!(state.handshakes.available_permits(), pool);
+
+        state.shutdown_token().cancel();
+        server.await.unwrap().unwrap();
+        runtime.metrics_cancel.cancel();
+    }
 }

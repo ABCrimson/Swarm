@@ -4,11 +4,11 @@
 //! on an ephemeral loopback port, exactly as `main` runs it) against
 //! `tokio-tungstenite` WebSocket clients and a minimal HTTP/1.1 client. The
 //! second group spawns the compiled binary, for what only `main` does:
-//! argument handling, the non-loopback gate, the bound address, the lock's
-//! exit status and signal-driven shutdown.
+//! argument handling, the exposure and non-loopback gates, the bound
+//! address, the lock's exit status and signal-driven shutdown.
 
 use std::io::{BufRead, BufReader, Read};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc as std_mpsc;
@@ -34,6 +34,7 @@ use swarm_core::protocol::{ClientFrame, PROTOCOL_VERSION, ServerFrame};
 use swarm_core::runtime::{Runtime, RuntimeConfig, RuntimeStartError};
 use swarm_core::worker::handle::{WorkerHandle, WorkerState};
 use swarmd::auth::{AllowedHost, DaemonToken, HostPolicy};
+use swarmd::exposure::{Exposure, ExposurePolicy};
 use swarmd::{AppState, Limits};
 
 type WsStream = tokio_tungstenite::WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -61,6 +62,9 @@ struct Options {
     limits: Limits,
     allow_hosts: Vec<&'static str>,
     serve_ui: Option<PathBuf>,
+    /// The address to listen on (port `0`); loopback when `None`.
+    bind: Option<IpAddr>,
+    allow_plaintext_lan: bool,
 }
 
 impl TestServer {
@@ -76,7 +80,8 @@ impl TestServer {
 
     async fn start_in(data_dir: PathBuf, dir: Option<tempfile::TempDir>, options: Options) -> Self {
         let token = DaemonToken::load_or_create(&data_dir).unwrap().token;
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bind = options.bind.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+        let listener = TcpListener::bind((bind, 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();
         let runtime = start_runtime(&data_dir, addr).await;
         let hosts = HostPolicy::new(
@@ -85,7 +90,8 @@ impl TestServer {
                 .iter()
                 .map(|host| host.parse::<AllowedHost>().unwrap()),
         );
-        let state = AppState::new(&runtime, token.clone(), hosts, options.limits);
+        let exposure = ExposurePolicy::new(options.allow_plaintext_lan);
+        let state = AppState::new(&runtime, token.clone(), hosts, exposure, options.limits);
         let server = tokio::spawn({
             let state = state.clone();
             async move { swarmd::serve(listener, state, options.serve_ui.as_deref()).await }
@@ -540,6 +546,62 @@ async fn test_non_ascii_host_header_is_refused_as_malformed() {
     let (head, body) = raw.split_once("\r\n\r\n").unwrap();
     assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
     assert_eq!(body, "Malformed Host Header.");
+}
+
+// ── Exposure gate ───────────────────────────────────────────────────────
+
+/// This machine's address on its default route, when that is private IPv4
+/// (a CI runner's or WSL's interface). A UDP `connect` sends nothing; it
+/// only picks the route and the source address.
+fn private_interface_ip() -> Option<IpAddr> {
+    let probe = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    probe.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
+    let ip = probe.local_addr().ok()?.ip();
+    (swarmd::exposure::classify(ip, Some(ip)) == Exposure::PrivateLan).then_some(ip)
+}
+
+/// A peer reaching the daemon over a private LAN, both ends on this
+/// machine's private interface, is refused with 403 on `/ws` (a valid
+/// Bearer header included) and on `--serve-ui` routes until the daemon
+/// runs with `--allow-plaintext-lan`, and is then served.
+#[tokio::test]
+async fn test_plaintext_lan_peers_need_the_override() {
+    let Some(lan) = private_interface_ip() else {
+        eprintln!("skipped: the default route has no private IPv4 source address");
+        return;
+    };
+    let bundle = web_bundle();
+    let strict = TestServer::start_with(Options {
+        bind: Some(lan),
+        serve_ui: Some(bundle.path().to_path_buf()),
+        ..Options::default()
+    })
+    .await;
+    let lan_refusal = "Plaintext Connections Over A Private LAN Need --allow-plaintext-lan.";
+    assert_eq!(
+        refusal(tokio_tungstenite::connect_async(strict.ws_url()).await),
+        (403, lan_refusal.to_owned())
+    );
+    let mut bearer = strict.ws_url().into_client_request().unwrap();
+    bearer.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {}", strict.token).parse().unwrap(),
+    );
+    assert_eq!(
+        refusal(tokio_tungstenite::connect_async(bearer).await),
+        (403, lan_refusal.to_owned())
+    );
+    let (status, _, body) = http_get(strict.addr, "/", &strict.addr.to_string()).await;
+    assert_eq!((status, body.as_str()), (403, lan_refusal));
+    strict.stop().await;
+
+    let served = TestServer::start_with(Options {
+        bind: Some(lan),
+        allow_plaintext_lan: true,
+        ..Options::default()
+    })
+    .await;
+    let _ws = attach(&served).await;
 }
 
 /// Loopback aliases of the bound address and `--allow-host` names (a
@@ -1714,6 +1776,57 @@ fn test_fresh_dir_non_loopback_bind_is_refused_twice_in_a_row() {
     }
 }
 
+/// The exposure gate refuses a concrete private-LAN `--bind` without
+/// `--allow-plaintext-lan`, and a public one even with it, before the data
+/// directory is touched; with the override a LAN bind goes on to the
+/// non-loopback token gate. No address is bound, so no such interface is
+/// needed.
+#[test]
+fn test_plaintext_lan_bind_needs_the_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+
+    let (code, _, stderr) = run(&["--bind", "192.168.0.1:0", "--data-dir", path_str(&data)]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(
+        stderr.contains("Refusing To Bind 192.168.0.1:0"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Need --allow-plaintext-lan"), "{stderr}");
+    assert!(
+        !data.exists(),
+        "the exposure gate runs before any file work"
+    );
+
+    let (code, _, stderr) = run(&[
+        "--bind",
+        "203.0.113.4:0",
+        "--allow-plaintext-lan",
+        "--data-dir",
+        path_str(&data),
+    ]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(
+        stderr.contains("Served Only On Loopback And Private IPv4 Networks"),
+        "{stderr}"
+    );
+    assert!(!data.exists());
+
+    let (code, _, stderr) = run(&[
+        "--bind",
+        "192.168.0.1:0",
+        "--allow-plaintext-lan",
+        "--data-dir",
+        path_str(&data),
+    ]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(
+        stderr.contains("Refusing To Bind A Non-Loopback Address Without A Valid Daemon Token"),
+        "{stderr}"
+    );
+    assert!(!data.join("daemon-token").exists());
+}
+
 /// The data directory (it holds the API key, the event log and the token)
 /// ends up owner-only: an existing, looser directory is tightened, and a
 /// missing nested path is created private at every level swarmd creates.
@@ -1770,8 +1883,9 @@ fn test_malformed_token_file_is_refused_and_kept() {
     assert_eq!(std::fs::read_to_string(&token_file).unwrap(), "x");
 }
 
-/// `--bind 127.0.0.1:0` serves on the address it prints, and the printed
-/// line carries no token when stdout is not a terminal.
+/// `--bind 127.0.0.1:0` serves on the address it prints, the printed line
+/// carries no token when stdout is not a terminal, and the status line
+/// after it names what is served.
 #[tokio::test]
 async fn test_port_zero_bind_serves_the_printed_address() {
     let dir = tempfile::tempdir().unwrap();
@@ -1795,6 +1909,11 @@ async fn test_port_zero_bind_serves_the_printed_address() {
         .trim_end_matches('/')
         .to_owned();
     assert_ne!(addr, "127.0.0.1:0");
+    assert_eq!(
+        daemon.lines.recv_timeout(WAIT).unwrap(),
+        "Serving Plaintext Clients On: Loopback Only",
+        "the status line follows the listening line"
+    );
     let token = DaemonToken::load(dir.path()).unwrap().unwrap();
 
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
