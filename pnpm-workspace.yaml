@@ -44,6 +44,9 @@ minimumReleaseAgeExclude:
   - "@typescript/typescript-linux-x64@7.1.0-dev.20261103.1"
   - "@typescript/typescript-win32-arm64@7.1.0-dev.20261103.1"
   - "@typescript/typescript-win32-x64@7.1.0-dev.20261103.1"
+  - framer-motion@14.9.1
+  - motion-dom@14.9.1
+  - motion@14.9.1
   - oxc-transform-react@0.157.0
   - playwright-core@1.66.0-alpha-2026-11-04
   - playwright@1.66.0-alpha-2026-11-04
