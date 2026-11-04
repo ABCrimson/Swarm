@@ -203,7 +203,7 @@ The commands a change must pass are listed in [AGENTS.md](AGENTS.md#gates), the 
 | --- | --- | --- |
 | App | 0.14.0 | `package.json` |
 | pnpm | 12.17.0 | `package.json` `packageManager` |
-| Node.js | 28.0.0-nightly2026110370074c6f98 | `package.json` `devEngines.runtime` |
+| Node.js | 28.0.0-nightly20261104d36e9ba1f8 | `package.json` `devEngines.runtime` |
 | Rust toolchain | nightly-2026-11-04 (`rust-version` 1.101, edition 2024) | `rust-toolchain.toml`, `Cargo.toml` |
 | Tauri | 3.0.0-alpha.5 (`tauri`, `tauri-runtime-wry`) | `Cargo.toml` |
 | React | 19.3.0-canary-e84e1492-20261031 | `package.json` |
