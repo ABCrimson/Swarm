@@ -234,10 +234,7 @@ export function Sessions(): React.ReactElement {
       <div className="flex h-full flex-col overflow-auto">
         <PageHeader title="Sessions" />
         <div className="flex min-h-0 flex-1 flex-col gap-6 px-7 pb-6">
-          <div
-            className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-[oklch(0.25_0.04_220/0.5)] bg-[oklch(0.12_0.02_220/0.6)] p-3"
-            style={{ backdropFilter: "blur(12px)" }}
-          >
+          <div className="glass-panel flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border p-3">
             <SessionActions />
 
             <div className="flex flex-wrap items-center gap-2">
@@ -255,7 +252,7 @@ export function Sessions(): React.ReactElement {
 
               {/* Actions on the active session */}
               {activeSession != null && (
-                <div className="ml-2 flex items-center gap-1 border-l border-[oklch(0.25_0.03_220)] pl-2">
+                <div className="ml-2 flex items-center gap-1 border-l border-border pl-2">
                   <Button
                     variant="ghost"
                     size="sm"
