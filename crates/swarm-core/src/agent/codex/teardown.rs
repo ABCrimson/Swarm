@@ -2,6 +2,7 @@
 
 use std::mem::DropGuard;
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::process::reap;
 use super::state::{Shared, TurnSlot};
@@ -9,6 +10,7 @@ use super::state::{Shared, TurnSlot};
 use crate::agent::adapter::{AgentTurnStatus, ExitSummary};
 use crate::agent::{PROCESS_EXITED_WITHOUT_RECEIPT, drained_stderr_snippet, signal_name};
 use crate::events::{AgentSessionExitedPayload, AgentTurnSettledPayload, Provenance, SwarmEvent};
+use crate::worker::proc::{ExitSequence, stop_tree};
 
 /// Arms teardown for a guard dropped without being dismissed (a dropped
 /// spawn future, a panicking reader): spawns [`teardown`] on the current
@@ -52,8 +54,9 @@ pub(super) async fn teardown(shared: &Arc<Shared>) -> ExitSummary {
 /// event, request or answer is produced), claims a running turn, drops
 /// every pending request's reply channel (their callers resolve as
 /// closed) and forgets pending approvals. It then closes stdin, gives the
-/// child [`super::Timeouts::graceful_exit`] to exit, kills and reaps it on the
-/// blocking pool, and — only for a session whose start was announced —
+/// child [`super::Timeouts::graceful_exit`] to exit, kills its process tree
+/// if it still runs, and reaps it, all on the blocking pool
+/// ([`stop_tree`]), and — only for a session whose start was announced —
 /// synthesizes the running turn's settlement (Condition B) and emits
 /// `agent_session_exited`.
 async fn run_teardown(shared: Arc<Shared>) -> ExitSummary {
@@ -79,17 +82,32 @@ async fn run_teardown(shared: Arc<Shared>) -> ExitSummary {
         )
     };
 
-    // Closing the writer's queue ends its thread, which drops stdin.
-    drop(writer);
     let status = match child {
-        Some(child) => {
+        Some(mut child) => {
             let grace = shared.timeouts.graceful_exit;
-            tokio::task::spawn_blocking(move || reap(child, grace))
-                .await
-                .ok()
-                .flatten()
+            tokio::task::spawn_blocking(move || {
+                // The app-server ends its session at stdin EOF. Through
+                // npm's `codex.cmd` the child is `cmd.exe`, so only the tree
+                // kill reaches the `node` and `codex` beneath it. Closing the
+                // writer's queue ends its thread, which drops stdin; `reap`
+                // then only collects the status (or kills the child itself
+                // if the tree kill could not run).
+                stop_tree(
+                    &mut child,
+                    || drop(writer),
+                    ExitSequence::CloseStdinThenWait,
+                    grace,
+                );
+                reap(child, Duration::ZERO)
+            })
+            .await
+            .ok()
+            .flatten()
         }
-        None => None,
+        None => {
+            drop(writer);
+            None
+        }
     };
     let exit = ExitSummary {
         exit_code: status.and_then(|status| status.code()),

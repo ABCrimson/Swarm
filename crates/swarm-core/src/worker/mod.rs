@@ -12,7 +12,9 @@
 //!   the events each one emits
 //! - [`proc`] — piped-stdio children with NDJSON framing, for
 //!   JSON-protocol provider CLIs (a PTY would corrupt the framing; see
-//!   the module doc)
+//!   the module doc), and their stop ([`proc::PipedHandle::stop`])
+//! - `tree_kill` — ending a child and every process it started, std
+//!   only
 
 use uuid::Uuid;
 
@@ -21,6 +23,7 @@ pub mod lifecycle;
 pub mod proc;
 pub mod pty;
 pub mod registry;
+pub(crate) mod tree_kill;
 
 /// First 8 hex digits of `id`: the `<id8>` in a worker's branch name
 /// (`swarm/<slug>-<id8>`), worktree directory (`w-<id8>`) and thread

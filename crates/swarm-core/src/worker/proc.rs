@@ -18,8 +18,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use parking_lot::Mutex;
@@ -175,7 +176,10 @@ impl NdjsonFramer {
 pub struct PipedHandle {
     /// The child's stdin, for protocol input (see [`write_to_piped`]).
     pub stdin: Box<dyn Write + Send>,
-    /// The child process, for `kill`/`wait`.
+    /// The child process. [`Self::stop`] (or [`stop_tree`], once the
+    /// handle is taken apart) ends it with its tree; a bare `kill` ends
+    /// only the child, which on Windows can be the `cmd.exe` running a
+    /// `.cmd` shim.
     pub child: Child,
     /// Complete NDJSON lines framed from the child's stdout, in order.
     /// Bounded: a slow consumer backs the stream up, nothing is dropped.
@@ -191,6 +195,80 @@ pub struct PipedHandle {
     /// as they arrive, for diagnostics such as a provider's fatal startup
     /// message. The `piped-err-<pid>` thread is the only writer.
     pub stderr_tail: Arc<Mutex<VecDeque<u8>>>,
+}
+
+/// How a provider is asked to exit before [`stop_tree`] force-kills its
+/// process tree. Each provider picks the sequence its protocol defines as
+/// a clean exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitSequence {
+    /// Close stdin, then wait out the grace: for a provider that ends its
+    /// session at stdin EOF (Codex `app-server`, Claude Code's
+    /// `stream-json` input when idle).
+    CloseStdinThenWait,
+    /// Ask the whole tree to terminate (`SIGTERM` to the group on Unix;
+    /// nothing on Windows, see `worker::tree_kill`), close stdin, then
+    /// wait out the grace: for a provider that only exits mid-work on a
+    /// signal.
+    SignalThenCloseStdin,
+}
+
+/// How often [`stop_tree`] polls the child while it waits out the grace.
+const EXIT_POLL: Duration = Duration::from_millis(20);
+
+/// Stops `child` and its process tree: runs `sequence` (`close_stdin`
+/// closes the child's stdin, however the caller holds it), gives the
+/// child `grace` to exit, and force-kills the tree if it still runs
+/// (`worker::tree_kill::kill`).
+///
+/// `try_wait` comes before each step, and nothing is signalled once the
+/// child has exited (its pid may already be reused); `close_stdin` runs
+/// either way. The child is left for the caller to reap: `wait` returns
+/// at once after this. Blocks for up to `grace` plus the kill helper's
+/// run: call it on the blocking pool.
+pub fn stop_tree(
+    child: &mut Child,
+    close_stdin: impl FnOnce(),
+    sequence: ExitSequence,
+    grace: Duration,
+) {
+    if sequence == ExitSequence::SignalThenCloseStdin {
+        super::tree_kill::terminate(child);
+    }
+    close_stdin();
+    let deadline = Instant::now() + grace;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(EXIT_POLL),
+            Ok(None) => break,
+            Err(error) => {
+                tracing::warn!(pid = child.id(), %error, "polling a stopping child failed");
+                break;
+            }
+        }
+    }
+    super::tree_kill::kill(child);
+}
+
+impl PipedHandle {
+    /// Stops the child and its process tree with `sequence` and `grace`
+    /// (see [`stop_tree`]; closing stdin here drops [`Self::stdin`]), then
+    /// reaps it. Blocking: call it on the blocking pool.
+    ///
+    /// # Errors
+    ///
+    /// Fails only if the child cannot be reaped.
+    pub fn stop(&mut self, sequence: ExitSequence, grace: Duration) -> io::Result<ExitStatus> {
+        let stdin = &mut self.stdin;
+        stop_tree(
+            &mut self.child,
+            || drop(std::mem::replace(stdin, Box::new(io::sink()))),
+            sequence,
+            grace,
+        );
+        self.child.wait()
+    }
 }
 
 /// Spawns `program` with piped stdio and frames its stdout as NDJSON.
@@ -212,7 +290,8 @@ pub struct PipedHandle {
 /// `args` is an argument vector, never a shell string. The child
 /// inherits the process environment plus `env`, and starts in `cwd`
 /// (the current directory when empty). On Windows it gets no console
-/// window.
+/// window; on Unix it leads its own process group, so
+/// [`PipedHandle::stop`] reaches everything it starts.
 ///
 /// Only the program, the working directory and the argument and
 /// environment counts are recorded in the tracing span: arguments and
@@ -249,6 +328,7 @@ pub fn spawn_piped(
     }
     #[cfg(windows)]
     std::os::windows::process::CommandExt::creation_flags(&mut cmd, CREATE_NO_WINDOW);
+    super::tree_kill::lead_own_group(&mut cmd);
 
     let mut child = cmd.spawn().context("failed to spawn piped child process")?;
     let pid = child.id();
@@ -418,7 +498,6 @@ pub fn write_to_piped(writer: &mut dyn Write, data: &[u8]) -> anyhow::Result<()>
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
-    use std::time::Duration;
 
     use super::*;
 
