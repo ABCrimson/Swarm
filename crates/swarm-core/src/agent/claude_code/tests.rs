@@ -1337,7 +1337,7 @@ async fn probe(scenario: &str) -> ProbeReport {
 async fn probe_reports_version_and_sign_in_through_the_control_protocol() {
     let report = probe("happy_turn.mjs").await;
     assert!(report.available);
-    assert_eq!(report.version.as_deref(), Some("2.1.281"));
+    assert_eq!(report.version.as_deref(), Some("2.1.318"));
     let detail = report.detail.expect("detail");
     assert_eq!(detail, "Signed In (Claude Max)");
     assert!(!detail.contains('@'), "the account email never surfaces");
@@ -1357,10 +1357,10 @@ async fn probe_reports_a_signed_out_cli_as_unavailable() {
 async fn probe_reports_an_outdated_cli_as_unavailable() {
     let report = probe("probe_outdated.mjs").await;
     assert!(!report.available);
-    assert_eq!(report.version.as_deref(), Some("2.1.232"));
+    assert_eq!(report.version.as_deref(), Some("2.1.317"));
     assert_eq!(
         report.detail.as_deref(),
-        Some("Claude Code 2.1.259 Or Newer Required")
+        Some("Claude Code 2.1.318 Or Newer Required")
     );
 }
 
@@ -2441,10 +2441,10 @@ fn an_ask_shows_its_reason_else_its_title_else_its_description() {
 
 #[test]
 fn helpers_parse_versions_classify_denials_and_strip_ansi() {
-    assert_eq!(parse_version("2.1.281 (Claude Code)"), Some((2, 1, 281)));
+    assert_eq!(parse_version("2.1.318 (Claude Code)"), Some((2, 1, 318)));
     assert_eq!(parse_version("2.1"), None);
     assert_eq!(parse_version("x.y.z"), None);
-    assert!(MIN_CLI_VERSION <= (2, 1, 280));
+    assert_eq!(MIN_CLI_VERSION, (2, 1, 318));
 
     assert_eq!(
         classify_denial(Some("mode"), "anything").as_deref(),
