@@ -328,11 +328,10 @@ export function ToolBuilder({
             padding: "10px 16px",
             borderBottom: "1px solid var(--color-border)",
             fontFamily: "var(--font-display)",
-            fontSize: "var(--text-sm)",
-            fontWeight: 700,
-            letterSpacing: "0.04em",
+            fontSize: "var(--text-md)",
+            fontWeight: 600,
+            letterSpacing: "-0.01em",
             color: "oklch(0.65 0.04 220)",
-            textTransform: "uppercase",
           }}
         >
           Anthropic Tool Preview

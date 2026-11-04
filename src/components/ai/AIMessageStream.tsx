@@ -61,11 +61,11 @@ const cursorStyle: CSSProperties = {
 const langLabelStyle: CSSProperties = {
   display: "block",
   marginBottom: 6,
-  fontSize: 11,
   color: "oklch(0.62 0.08 205)",
-  textTransform: "uppercase",
-  letterSpacing: "0.05em",
-  fontFamily: "var(--font-body)",
+  fontFamily: "var(--font-display)",
+  fontSize: "var(--text-md)",
+  fontWeight: 600,
+  letterSpacing: "-0.01em",
 };
 
 const TOKEN_COLORS = {

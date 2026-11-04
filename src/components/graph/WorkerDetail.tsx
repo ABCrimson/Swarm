@@ -45,11 +45,11 @@ function DetailRow({
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
       <dt
         style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: "0.6875rem",
+          fontFamily: "var(--font-display)",
+          fontSize: "var(--text-md)",
+          fontWeight: 600,
+          letterSpacing: "-0.01em",
           color: "var(--color-fg-dim)",
-          textTransform: "uppercase",
-          letterSpacing: "0.08em",
         }}
       >
         {label}
@@ -252,11 +252,11 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
             <span
               aria-hidden="true"
               style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: "0.6875rem",
+                fontFamily: "var(--font-display)",
+                fontSize: "var(--text-md)",
+                fontWeight: 600,
+                letterSpacing: "-0.01em",
                 color: "var(--color-fg-dim)",
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
                 display: "block",
                 marginBottom: 8,
               }}
