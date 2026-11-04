@@ -295,9 +295,9 @@ function PaletteBody({
 
   return (
     <>
-      <Command.Input placeholder="Type A Command Or Search..." />
+      <Command.Input placeholder="Type A Command Or Search…" />
       <Command.List>
-        <Command.Empty>No Commands Found.</Command.Empty>
+        <Command.Empty>No Commands Found</Command.Empty>
         {[...groups].map(([groupName, cmds]) => (
           <Command.Group key={groupName} heading={groupName}>
             {cmds.map((cmd) => (
