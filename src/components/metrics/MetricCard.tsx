@@ -136,7 +136,7 @@ export function MetricCardList({
   readonly children: React.ReactNode;
 }): React.ReactElement {
   return (
-    <dl style={cardListStyle} className="divide-x divide-border">
+    <dl style={cardListStyle} className="*:shadow-[-1px_-1px_0_var(--color-border)]">
       {children}
     </dl>
   );
