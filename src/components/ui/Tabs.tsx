@@ -11,6 +11,11 @@ export interface TabItem<T extends string> {
 const tabId = (base: string, id: string): string => `${base}-tab-${id}`;
 const panelId = (base: string, id: string): string => `${base}-panel-${id}`;
 
+/** Segmented-control look for every view switch: Workers' tablist and Sessions' pressed toggles. */
+export const SEGMENT_LIST_CLASS = "flex rounded-lg border border-border bg-surface-0 p-0.5";
+export const SEGMENT_TAB_CLASS =
+  "cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium text-fg-muted transition-colors hover:text-fg aria-selected:bg-plasma/15 aria-selected:text-plasma aria-pressed:bg-plasma/15 aria-pressed:text-plasma";
+
 /**
  * A WAI-ARIA tablist (automatic activation): one Tab stop on the selected
  * tab; Arrow Left/Right, Home and End move to and select the neighbouring

@@ -2,7 +2,13 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
-import { type TabItem, TabList, TabPanel } from "#components/ui/Tabs";
+import {
+  SEGMENT_LIST_CLASS,
+  SEGMENT_TAB_CLASS,
+  type TabItem,
+  TabList,
+  TabPanel,
+} from "#components/ui/Tabs";
 
 type Id = "one" | "two" | "three";
 
@@ -109,5 +115,30 @@ describe("Tabs", () => {
 
     await user.click(screen.getByRole("tab", { name: "One" }));
     expect(screen.getByRole("button", { name: "Count 1" })).toBeVisible();
+  });
+
+  // The segmented look is driven by ARIA state, so a tablist and a row of
+  // pressed toggles share one class string.
+  it("styles the selected tab of a segmented list through aria-selected", () => {
+    const items: ReadonlyArray<TabItem<Id>> = [
+      { id: "one", label: "One" },
+      { id: "two", label: "Two" },
+    ];
+    render(
+      <TabList
+        label="Segments"
+        idBase="s"
+        items={items}
+        value="two"
+        onChange={() => undefined}
+        className={SEGMENT_LIST_CLASS}
+        tabClassName={SEGMENT_TAB_CLASS}
+      />,
+    );
+
+    expect(screen.getByRole("tablist", { name: "Segments" })).toHaveClass(SEGMENT_LIST_CLASS);
+    const selected = screen.getByRole("tab", { name: "Two" });
+    expect(selected).toHaveAttribute("aria-selected", "true");
+    expect(selected).toHaveClass("aria-selected:bg-plasma/15", "aria-pressed:bg-plasma/15");
   });
 });
