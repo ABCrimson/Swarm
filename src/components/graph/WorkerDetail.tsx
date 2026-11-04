@@ -59,7 +59,7 @@ function DetailRow({
           margin: 0,
           fontFamily: "var(--font-body)",
           fontSize: "0.8125rem",
-          color: "oklch(0.82 0.04 220)",
+          color: "var(--color-fg)",
         }}
       >
         {children}
@@ -128,7 +128,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
         width: 320,
         height: "100%",
         background: "oklch(0.10 0.03 220)",
-        borderLeft: "1px solid oklch(0.22 0.04 220)",
+        borderLeft: "1px solid var(--color-border)",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -141,7 +141,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
           alignItems: "center",
           justifyContent: "space-between",
           padding: "16px",
-          borderBottom: "1px solid oklch(0.22 0.04 220)",
+          borderBottom: "1px solid var(--color-border)",
         }}
       >
         <h2
@@ -149,7 +149,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
             fontFamily: "var(--font-display)",
             fontSize: "0.9375rem",
             fontWeight: 600,
-            color: "oklch(0.95 0.02 220)",
+            color: "var(--color-fg-bright)",
             margin: 0,
           }}
         >
@@ -189,7 +189,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
             fontFamily: "var(--font-display)",
             fontSize: "1rem",
             fontWeight: 600,
-            color: "oklch(0.95 0.02 220)",
+            color: "var(--color-fg-bright)",
           }}
         >
           {escapeForDisplay(worker.name ?? worker.id.slice(0, 8))}
@@ -270,8 +270,8 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
                 fontFamily: "var(--font-mono)",
                 fontSize: "0.6875rem",
                 color: "oklch(0.72 0.04 220)",
-                background: "oklch(0.06 0.02 220)",
-                border: "1px solid oklch(0.14 0.03 220)",
+                background: "var(--color-void)",
+                border: "1px solid var(--color-surface-2)",
                 borderRadius: 8,
                 padding: 12,
                 maxHeight: 200,
@@ -296,7 +296,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
           display: "flex",
           gap: 8,
           padding: "16px",
-          borderTop: "1px solid oklch(0.22 0.04 220)",
+          borderTop: "1px solid var(--color-border)",
         }}
       >
         <Pill

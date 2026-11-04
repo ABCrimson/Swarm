@@ -22,8 +22,8 @@ export type ProvenanceFlowEdge = Edge<ProvenanceEdgeData, "provenance">;
 export const KIND_STYLE: Readonly<
   Record<GraphEdgeKind, { readonly stroke: string; readonly dash?: string }>
 > = {
-  spawn: { stroke: "oklch(0.78 0.18 205 / 0.8)" },
-  kill: { stroke: "oklch(0.72 0.20 10 / 0.8)", dash: "3 3" },
+  spawn: { stroke: "oklch(from var(--color-plasma) l c h / 0.8)" },
+  kill: { stroke: "oklch(from var(--color-rose) l c h / 0.8)", dash: "3 3" },
   command: { stroke: "oklch(0.75 0.19 145 / 0.8)", dash: "7 3" },
   message: { stroke: "oklch(0.80 0.15 85 / 0.8)", dash: "1.5 3" },
   manual: { stroke: "oklch(0.72 0.02 220 / 0.8)", dash: "8 4" },

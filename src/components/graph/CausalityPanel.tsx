@@ -344,7 +344,7 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
           alignItems: "center",
           justifyContent: "space-between",
           padding: "14px 16px",
-          borderBottom: "1px solid oklch(0.22 0.04 220)",
+          borderBottom: "1px solid var(--color-border)",
         }}
       >
         <h2
@@ -353,7 +353,7 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
             fontFamily: "var(--font-display)",
             fontSize: "0.9375rem",
             fontWeight: 600,
-            color: "oklch(0.95 0.02 220)",
+            color: "var(--color-fg-bright)",
             margin: 0,
           }}
         >
