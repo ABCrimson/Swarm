@@ -32,7 +32,7 @@ const headerStyle: CSSProperties = {
   fontFamily: "var(--font-display)",
   fontSize: 14,
   fontWeight: 600,
-  color: "oklch(0.85 0.04 220)",
+  color: "var(--color-fg)",
 };
 
 const captionStyle: CSSProperties = {

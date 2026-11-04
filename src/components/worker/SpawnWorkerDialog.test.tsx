@@ -175,8 +175,9 @@ describe("SpawnWorkerDialog", () => {
 
     const claudeRadio = await screen.findByRole("radio", { name: "Claude Code" });
     await waitFor(() => expect(claudeRadio).toBeDisabled());
-    expect(screen.getByText(/Claude Code Unavailable/)).toHaveTextContent(
-      "Claude Code Unavailable — Claude Code CLI Not Found On PATH",
+    // Both CLIs report the same reason, so they share one grouped note.
+    expect(screen.getByText(/Unavailable —/)).toHaveTextContent(
+      "Claude Code And Codex Unavailable — Claude Code CLI Not Found On PATH",
     );
   });
 
