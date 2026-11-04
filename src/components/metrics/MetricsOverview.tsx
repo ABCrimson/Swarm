@@ -100,12 +100,15 @@ export function MetricsSection({
 
 const chartGridStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(min(380px, 100%), 1fr))",
+  // A track is at least half the row (less one gap), so auto-fit never makes a
+  // third column; the 16px in the calc must equal `gap`.
+  gridTemplateColumns:
+    "repeat(auto-fit, minmax(min(max(380px, calc((100% - 16px) / 2)), 100%), 1fr))",
   gridAutoRows: 280,
   gap: 16,
 };
 
-/** Responsive grid of fixed-height chart panels. */
+/** Responsive grid of fixed-height chart panels, at most two columns. */
 export function ChartGrid({
   children,
 }: {
