@@ -56,11 +56,12 @@ the key, so `read_config` / `write_config` keep their shape and their `SecretFil
 ([ADR-0021](0021-command-registry-remote-policy.md)); writing `null` or `""` deletes it. A key that an
 older build left in `swarm-config.json` is moved to the store once at startup (a background blocking task
 from `Runtime::start`), on the key's first read or write, and on any rewrite of the file; a store that
-refuses it leaves the file as it was. Every store call blocks and runs
+refuses it leaves the file as it was. A key the `swarm-secrets.json` fallback holds is moved into the keychain,
+and deleted from the file, by the next process that has one (`config::adopt_file_secrets`, under `SECRET_LOCK`);
+a keychain refusal leaves the file copy for a later pass. Every store call blocks and runs
 off the Tokio workers; a value lives in a `SecretString`, zeroed on drop, with a redacted `Debug`; a
 failed keychain read is cached for `FAILURE_TTL` (30 s), never for the process life.
 
 The OS keychain holds one `swarm`/`anthropic_api_key` entry per OS user, shared by every data directory;
 migrating a legacy key, or adopting a `swarm-secrets.json` key, from any data directory replaces it, and
-clearing it clears it for all. Only
-`swarm-secrets.json` is per data directory.
+clearing it clears it for all. Only `swarm-secrets.json` is per data directory.

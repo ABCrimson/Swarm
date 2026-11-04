@@ -19,9 +19,9 @@
 //! and on any rewrite of the file; a store that refuses it leaves
 //! the file as it was, and the key keeps reading from the file until a
 //! later access moves it. A key that the [`FileStore`] fallback took
-//! while the keychain was unreachable is adopted into the keychain the
-//! same way (see [`adopt_file_secrets`]) by the first process that has
-//! one. Store calls block, so call these functions from a
+//! while the keychain was unreachable is moved into the keychain (see
+//! [`adopt_file_secrets`]) at startup and on the key's next read or
+//! write, by the first process that has one. Store calls block, so call these functions from a
 //! blocking thread. No store call runs under the file's lock, so a
 //! keychain waiting on an access prompt stalls only other secret
 //! accesses, never a read of another key.
@@ -351,7 +351,9 @@ pub fn read_value_checked(paths: &Paths, key: &str) -> Result<Option<Value>, App
 /// [`AppError::Config`] when the existing file cannot be read (it is
 /// left untouched), a malformed file cannot be moved aside, or the new
 /// file cannot be written; for a secret key, when the value is neither
-/// a string nor `null`, or the store refuses the write.
+/// a string nor `null`, or the store refuses the write, or, with a
+/// keychain, `swarm-secrets.json` cannot be read or the keychain refuses
+/// the key it holds.
 pub fn write_value(paths: &Paths, key: &str, value: Value) -> Result<(), AppError> {
     if is_secret(key) {
         return secrets::with_store(paths, |store| {
