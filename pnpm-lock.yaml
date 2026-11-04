@@ -222,8 +222,8 @@ importers:
         specifier: 3.0.1
         version: 3.0.1(@types/react@19.3.0)(react@19.3.0-canary-e84e1492-20261031)
       modern-cmdk:
-        specifier: 1.2.2
-        version: 1.2.2(radix-ui@1.8.2-rc.1791984254107(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0-canary-e84e1492-20261031(react@19.3.0-canary-e84e1492-20261031))(react@19.3.0-canary-e84e1492-20261031))(react-dom@19.3.0-canary-e84e1492-20261031(react@19.3.0-canary-e84e1492-20261031))(react@19.3.0-canary-e84e1492-20261031)
+        specifier: 1.2.3
+        version: 1.2.3(radix-ui@1.8.2-rc.1791984254107(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0-canary-e84e1492-20261031(react@19.3.0-canary-e84e1492-20261031))(react@19.3.0-canary-e84e1492-20261031))(react-dom@19.3.0-canary-e84e1492-20261031(react@19.3.0-canary-e84e1492-20261031))(react@19.3.0-canary-e84e1492-20261031)
       motion:
         specifier: 14.9.1
         version: 14.9.1(react-dom@19.3.0-canary-e84e1492-20261031(react@19.3.0-canary-e84e1492-20261031))(react@19.3.0-canary-e84e1492-20261031)
@@ -2601,8 +2601,8 @@ packages:
     resolution: {integrity: sha512-I9jwMn07Sy/IwOj3zVkVik2JTvgpaykDZEigL6Rx6N9LbMywwUSMtxET+7lVoDLLd3O3IXwJwvuuns8UB/HeAg==}
     engines: {node: '>=4'}
 
-  modern-cmdk@1.2.2:
-    resolution: {integrity: sha512-WTv9hctPN2z+joJDO1EhjkhHY20dlJbnYQ+KLItvOKZf/oasUo0u4THEucsfX6QY3s3UofwMVnJlsVd17PdCJQ==}
+  modern-cmdk@1.2.3:
+    resolution: {integrity: sha512-03nb2WAU0UTAtJof+QNlcL6mZmqSaD7g+dlH1QyMmOATcMtgN/ns6eya/Mn6ITIvQMUZ7RgTc+9/Cn2ol+p8xA==}
     engines: {node: '>=26.4.0'}
     hasBin: true
     peerDependencies:
@@ -5181,7 +5181,7 @@ snapshots:
 
   min-indent@1.0.1: {}
 
-  modern-cmdk@1.2.2(radix-ui@1.8.2-rc.1791984254107(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0-canary-e84e1492-20261031(react@19.3.0-canary-e84e1492-20261031))(react@19.3.0-canary-e84e1492-20261031))(react-dom@19.3.0-canary-e84e1492-20261031(react@19.3.0-canary-e84e1492-20261031))(react@19.3.0-canary-e84e1492-20261031):
+  modern-cmdk@1.2.3(radix-ui@1.8.2-rc.1791984254107(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0-canary-e84e1492-20261031(react@19.3.0-canary-e84e1492-20261031))(react@19.3.0-canary-e84e1492-20261031))(react-dom@19.3.0-canary-e84e1492-20261031(react@19.3.0-canary-e84e1492-20261031))(react@19.3.0-canary-e84e1492-20261031):
     dependencies:
       idb-keyval: 6.3.0
     optionalDependencies:
