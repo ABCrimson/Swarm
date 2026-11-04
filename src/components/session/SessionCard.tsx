@@ -123,7 +123,7 @@ export function SessionCard({
         popoverTarget={menuId}
         aria-haspopup="menu"
         aria-label={`Actions For Session "${escapeForDisplay(session.name)}"`}
-        className="absolute top-3 right-3 grid size-7 cursor-pointer place-items-center rounded-md text-[oklch(0.65_0.04_220)] transition-colors hover:bg-[oklch(0.22_0.04_220/0.5)] hover:text-[oklch(0.88_0.02_220)] focus-visible:outline-2 focus-visible:outline-plasma"
+        className="absolute top-3 right-3 grid size-7 cursor-pointer place-items-center rounded-md text-[oklch(0.65_0.04_220)] transition-colors hover:bg-border/50 hover:text-[oklch(0.88_0.02_220)] focus-visible:outline-2 focus-visible:outline-plasma"
         style={{ anchorName }}
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -276,7 +276,7 @@ function SessionMenuItem({
       className={`block w-full cursor-pointer px-3 py-1.5 text-left text-sm transition-colors font-[family-name:var(--font-body)] focus-visible:outline-2 focus-visible:-outline-offset-2 ${
         danger
           ? "text-rose hover:bg-[oklch(0.20_0.06_10/0.3)] focus:bg-[oklch(0.20_0.06_10/0.3)] focus-visible:outline-rose"
-          : "hover:bg-[oklch(0.22_0.04_220/0.5)] focus:bg-[oklch(0.22_0.04_220/0.5)] focus-visible:outline-plasma"
+          : "hover:bg-border/50 focus:bg-border/50 focus-visible:outline-plasma"
       }`}
     >
       <span id={labelId}>{label}</span>

@@ -71,7 +71,7 @@ const fileListStyle: CSSProperties = {
   fontSize: "0.6875rem",
   padding: "8px 10px",
   background: "var(--color-void)",
-  border: "1px solid oklch(0.14 0.03 220)",
+  border: "1px solid var(--color-surface-2)",
   borderRadius: 8,
 };
 
@@ -176,7 +176,7 @@ const causalMutedStyle: CSSProperties = {
 const causalTableWrapStyle: CSSProperties = {
   maxHeight: 220,
   overflowY: "auto",
-  border: "1px solid oklch(0.14 0.03 220)",
+  border: "1px solid var(--color-surface-2)",
   borderRadius: 8,
 };
 
@@ -194,7 +194,7 @@ const causalHeadCellStyle: CSSProperties = {
   textTransform: "uppercase",
   letterSpacing: "0.06em",
   fontSize: "0.625rem",
-  borderBottom: "1px solid oklch(0.14 0.03 220)",
+  borderBottom: "1px solid var(--color-surface-2)",
   position: "sticky",
   top: 0,
   background: "var(--color-void)",

@@ -45,7 +45,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
           type="button"
           onClick={onClose}
           aria-label="Close Template Selector"
-          className="cursor-pointer rounded-lg p-1 text-[oklch(0.55_0.03_220)] transition-colors hover:bg-[oklch(0.22_0.04_220/0.5)] focus-visible:outline-2 focus-visible:outline-plasma"
+          className="cursor-pointer rounded-lg p-1 text-[oklch(0.55_0.03_220)] transition-colors hover:bg-border/50 focus-visible:outline-2 focus-visible:outline-plasma"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path
