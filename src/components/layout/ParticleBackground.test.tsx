@@ -3,7 +3,7 @@
 // Covers the "particles enabled in Settings but the pipeline can't
 // start" gap: with `navigator.gpu` absent (the WebView2 case), the
 // component must render its solid OKLCH fallback *and* surface a
-// one-time, Title-Cased console.warn + Sonner toast so the failure is
+// one-time, Title-Cased log-store entry + Sonner toast so the failure is
 // diagnosable instead of silent.
 //
 // The canvas path (ParticleCanvas) runs against a scripted fake device:
@@ -38,6 +38,7 @@ import {
   renderPostProcess,
 } from "#lib/postprocess";
 import { getWebGPUUnavailableReason } from "#lib/webgpu";
+import { useLogStore } from "#store/logs";
 import { gpuFrameTimeAtom, particleCountAtom, reducedMotionAtom } from "#store/ui";
 
 vi.mock("#hooks/useWebGPU", () => ({ useWebGPU: vi.fn() }));
@@ -85,7 +86,12 @@ function setNavigatorGpu(value: unknown): void {
 }
 
 describe("ParticleBackground diagnostics", () => {
-  let warnSpy: ReturnType<typeof vi.spyOn>;
+  /** Messages the diagnostics wrote to the log store. */
+  const particleLogs = (): string[] =>
+    useLogStore
+      .getState()
+      .entries.filter((entry) => entry.source === "particles")
+      .map((entry) => entry.message);
   // NOTE: `themeAtom` is not overridden here: its default
   // (`particlesEnabled: true`) is the state these tests want.
   // `reducedMotionAtom` is used below for the "intentionally off" bypass.
@@ -95,7 +101,7 @@ describe("ParticleBackground diagnostics", () => {
     vi.clearAllMocks();
     resetParticlesUnavailableWarning();
     store.set(reducedMotionAtom, false);
-    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    useLogStore.getState().clear();
   });
 
   afterEach(() => {
@@ -129,11 +135,9 @@ describe("ParticleBackground diagnostics", () => {
       "Particle Background Off",
       expect.objectContaining({ description: "WebGPU Is Not Exposed By This WebView" }),
     );
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Particle Background Unavailable: WebGPU Is Not Exposed By This WebView",
-      ),
-    );
+    expect(particleLogs()).toStrictEqual([
+      "Particle Background Unavailable: WebGPU Is Not Exposed By This WebView",
+    ]);
   });
 
   it("fires the toast/warning at most once per session, even across remounts", async () => {
@@ -150,7 +154,7 @@ describe("ParticleBackground diagnostics", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(toast).toHaveBeenCalledTimes(1);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(particleLogs()).toHaveLength(1);
   });
 
   it("does not warn when reduced motion is on, even though WebGPU is unsupported", async () => {
@@ -167,7 +171,7 @@ describe("ParticleBackground diagnostics", () => {
 
     expect(container.querySelector("canvas")).toBeNull();
     expect(toast).not.toHaveBeenCalled();
-    expect(warnSpy).not.toHaveBeenCalled();
+    expect(particleLogs()).toHaveLength(0);
   });
 
   it("warns again exactly once when a genuinely different failure reason follows the first", async () => {
@@ -198,11 +202,10 @@ describe("ParticleBackground diagnostics", () => {
       "Particle Background Off",
       expect.objectContaining({ description: "No Compatible GPU Adapter Found" }),
     );
-    expect(warnSpy).toHaveBeenCalledTimes(2);
-    expect(warnSpy).toHaveBeenNthCalledWith(
-      2,
-      expect.stringContaining("Particle Background Unavailable: No Compatible GPU Adapter Found"),
-    );
+    expect(particleLogs()).toStrictEqual([
+      "Particle Background Unavailable: WebGPU Is Not Exposed By This WebView",
+      "Particle Background Unavailable: No Compatible GPU Adapter Found",
+    ]);
   });
 });
 
