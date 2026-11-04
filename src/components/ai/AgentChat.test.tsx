@@ -373,7 +373,7 @@ describe("AgentChat", () => {
     });
 
     const request = screen.getByRole("group", { name: "Permission Request: fileChange" });
-    expect(request).toHaveTextContent("(not received yet)");
+    expect(request).toHaveTextContent("(Not Received Yet)");
     expect(screen.getByRole("button", { name: "Allow" })).toBeDisabled();
 
     fire("agent_tool_call", {
@@ -384,7 +384,7 @@ describe("AgentChat", () => {
     });
 
     expect(request).toHaveTextContent("/work/.git/hooks/pre-commit");
-    expect(request).not.toHaveTextContent("(not received yet)");
+    expect(request).not.toHaveTextContent("(Not Received Yet)");
     expect(screen.getByRole("button", { name: "Allow" })).toBeEnabled();
   });
 
