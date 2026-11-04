@@ -17,7 +17,7 @@ export function CPUChart(): React.ReactElement {
   const data = lastN(history);
 
   return (
-    <ChartPanel title="CPU Usage">
+    <ChartPanel title="CPU Usage" sampleCount={data.length}>
       <LineChart
         responsive
         style={CHART_FILL_STYLE}

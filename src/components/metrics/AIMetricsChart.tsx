@@ -99,7 +99,12 @@ export function AIMetricsChart(): React.ReactElement {
   }, []);
 
   return (
-    <ChartPanel title="AI Metrics" caption={`Last ${MAX_CHART_POINTS} Samples`}>
+    <ChartPanel
+      title="AI Metrics"
+      caption={`Last ${MAX_CHART_POINTS} Samples`}
+      span="full"
+      sampleCount={data.length}
+    >
       <AreaChart
         responsive
         style={CHART_FILL_STYLE}
