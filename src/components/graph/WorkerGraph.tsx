@@ -34,6 +34,7 @@ import type { WorkerFlowNode } from "#components/graph/WorkerNode";
 import { WorkerNode } from "#components/graph/WorkerNode";
 import { stateLabels } from "#components/ui/Badge";
 import { Button } from "#components/ui/Button";
+import { EmptyState } from "#components/ui/EmptyState";
 import { Spinner } from "#components/ui/Spinner";
 import { useElkLayout } from "#hooks/useElkLayout";
 import { escapeForDisplay } from "#lib/display-escape";
@@ -171,7 +172,11 @@ function manualEdge(id: string, source: string, target: string): ProvenanceFlowE
   };
 }
 
-function WorkerGraphInner(): React.ReactElement {
+function WorkerGraphInner({
+  onSpawnRequest,
+}: {
+  readonly onSpawnRequest?: () => void;
+}): React.ReactElement {
   // Graph-only projections with shallow equality: a PTY output chunk
   // (which replaces the worker object) leaves both records unchanged, so
   // the graph re-renders only when a worker is added, removed, renamed or
@@ -423,36 +428,17 @@ function WorkerGraphInner(): React.ReactElement {
 
   if (workerIds.length === 0) {
     return (
-      <div
-        style={{
-          width: "100%",
-          height: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          flexDirection: "column",
-          gap: 12,
-        }}
-      >
-        <svg width={48} height={48} viewBox="0 0 48 48" fill="none" aria-hidden="true">
-          <circle cx={24} cy={24} r={20} stroke="oklch(0.28 0.05 220)" strokeWidth={2} />
-          <path
-            d="M18 24h12M24 18v12"
-            stroke="oklch(0.55 0.04 220)"
-            strokeWidth={2}
-            strokeLinecap="round"
-          />
-        </svg>
-        <span
-          style={{
-            fontFamily: "var(--font-body)",
-            fontSize: "0.875rem",
-            color: "var(--color-fg-dim)",
-          }}
-        >
-          No Workers Running. Spawn A Worker To See The Topology Graph.
-        </span>
-      </div>
+      <EmptyState
+        title="No Workers Running"
+        body="Spawn A Worker To See The Topology"
+        action={
+          onSpawnRequest && (
+            <Button variant="primary" size="sm" onClick={onSpawnRequest}>
+              Spawn Your First Worker
+            </Button>
+          )
+        }
+      />
     );
   }
 
@@ -618,12 +604,18 @@ function WorkerGraphInner(): React.ReactElement {
  * distinct. Workers with no measured causality render with zero edges
  * and a quiet "No Measured Causality Yet" hint; nothing is ever
  * fabricated. Motion honours the user's reduced-motion preference.
+ * With no workers it renders the shared EmptyState, whose action is a
+ * "Spawn Your First Worker" button when `onSpawnRequest` is given.
  */
-export function WorkerGraph(): React.ReactElement {
+export function WorkerGraph({
+  onSpawnRequest,
+}: {
+  readonly onSpawnRequest?: () => void;
+}): React.ReactElement {
   return (
     <ReactFlowProvider>
       <MotionConfig reducedMotion="user">
-        <WorkerGraphInner />
+        <WorkerGraphInner onSpawnRequest={onSpawnRequest} />
       </MotionConfig>
     </ReactFlowProvider>
   );
