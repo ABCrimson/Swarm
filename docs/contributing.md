@@ -364,31 +364,30 @@ cargo test -p swarm-core test_registry_insert_get_remove
 cargo test --workspace -- --nocapture
 
 # Run doc-tests only
-cargo test --workspace --doc
+cargo test --locked --doc -p swarm-core -p swarmd
 ```
 
-**In-tree test functions** (counted by `#[test]` / `#[tokio::test]` attribute at the 2026-10-13 head; the number run varies with platform-gated tests):
+**In-tree test modules** and what they cover:
 
-| Crate / module                | Tests | Covers                                                  |
-|-------------------------------|-------|---------------------------------------------------------|
-| `swarm-core` `git`            | 179   | Binary discovery, worktree add/lock/unlock/remove, ship preflight/commit/push, causal-record generation, secret redaction |
-| `swarm-core` `agent`          | 133   | The `AgentAdapter` contract, Claude Code and Codex adapters against the fake-CLI fixtures, the session registry, the turn scheduler |
-| `swarm-core` `worker`         | 72    | Registry (capacity, `update_state_if`), lifecycle, PTY and piped-process plumbing, NDJSON framing |
-| `swarm-core` `commands`       | 65    | Registry dispatch, `RemotePolicy` gating, `events_since` paging, `read_file`/`write_file` scope and deny list (canonicalization, Windows name refusals), credential-leak regressions |
-| `swarm-core` `orchestration`  | 47    | Persistence policy, envelope shape, provenance stamping, the SQLite event log, fail-closed persistence and seq reservation |
-| `swarm-core` `events`         | 40    | Wire serialization, `snake_case` type tags, `camelCase` payloads, provenance |
-| `swarm-core` `session`        | 16    | Session manager CRUD and atomic persistence |
-| `swarm-core` `bus`            | 7     | Channels and the router |
-| `swarm-core` top-level modules | 59    | `error`, `config`, `lock`, `metrics`, `protocol`, `runtime`, `state_file`, `clock` |
-| `swarmd`                      | 86    | 41 unit tests (CLI parsing, the daemon token and Host/Origin policy, the WebSocket writer, per-peer caps and replay) and 45 integration tests: 37 drive a real daemon over WebSocket and HTTP (the static UI included), 8 cover the service scripts (4 run `install.sh`/`uninstall.sh` against shims on Linux; 4 check the PowerShell scripts and unit files statically) |
-| `swarm-desktop`               | 36    | 35 unit tests (command list and per-command ACL, capability and config contracts, dialog grants, lifecycle teardown) and 1 integration test (the shared Tokio runtime) |
-| **Total**                     | **740** |                                                       |
+| Crate / module                | Covers                                                  |
+|-------------------------------|---------------------------------------------------------|
+| `swarm-core` `git`            | Binary discovery, worktree add/lock/unlock/remove, ship preflight/commit/push, causal-record generation, secret redaction |
+| `swarm-core` `agent`          | The `AgentAdapter` contract, Claude Code and Codex adapters against the fake-CLI fixtures, the session registry, the turn scheduler |
+| `swarm-core` `worker`         | Registry (capacity, `update_state_if`), lifecycle, PTY and piped-process plumbing, NDJSON framing |
+| `swarm-core` `commands`       | Registry dispatch, `RemotePolicy` gating, `events_since` paging, `read_file`/`write_file` scope and deny list (canonicalization, Windows name refusals), credential-leak regressions |
+| `swarm-core` `orchestration`  | Persistence policy, envelope shape, provenance stamping, the SQLite event log, fail-closed persistence and seq reservation |
+| `swarm-core` `events`         | Wire serialization, `snake_case` type tags, `camelCase` payloads, provenance |
+| `swarm-core` `session`        | Session manager CRUD and atomic persistence |
+| `swarm-core` `bus`            | Channels and the router |
+| `swarm-core` top-level modules | `error`, `config`, `lock`, `metrics`, `protocol`, `runtime`, `state_file`, `clock`, `paths`, `redact`, `secrets` |
+| `swarmd`                      | Unit tests (CLI parsing, the daemon token and Host/Origin policy, the WebSocket writer, per-peer caps and replay) and integration tests that drive a real daemon over WebSocket and HTTP (the static UI included) and cover the service scripts (`install.sh`/`uninstall.sh` against shims on Linux; the PowerShell scripts and unit files checked statically) |
+| `swarm-desktop`               | Unit tests (command list and per-command ACL, capability and config contracts, dialog grants, lifecycle teardown) and an integration test of the shared Tokio runtime |
 
-`cargo test --workspace --locked` ran 754 tests at that head (in WSL; 753 passed and one is ignored: it drives the installed `claude` CLI): 632 in `swarm-core` (616 unit, one of them the ignored test, plus 16 doc-tests), 36 in `swarm-desktop` and 86 in `swarmd`. The attribute total leaves out the 16 doc-tests but counts tests that did not run in WSL: the ignored one and the `#[cfg(windows)]` tests (for example the short-name and invalid-name tests in `commands/fs.rs`). The doc-tests run with `cargo test --workspace --doc`.
+`cargo test --workspace --locked --all-targets` prints the current count per target; the counts move with every change, so this page does not record them.
 
 ### Frontend Testing
 
-Frontend tests run via Vitest (`pnpm test`): **136 test files, 1535 tests** _(all green at the 2026-11-04 head)_, covering components, hooks, stores, and `lib/` utilities. `pnpm test:coverage` adds the coverage floor from `vitest.config.ts`.
+Frontend tests run via Vitest (`pnpm test`), covering components, hooks, stores, and `lib/` utilities. `pnpm test:coverage` adds the coverage floor from `vitest.config.ts`.
 
 Tests are **colocated**: `X.test.ts(x)` sits next to the `X.ts(x)` it covers, and a suite that covers one facet of a larger module takes a dotted suffix (`src/lib/tools.file-io.test.ts`, `src/lib/tools.spawn-worker.test.ts`). Import the module under test through its `#` alias like any other code. Vitest collects `src/**/*.test.{ts,tsx}` only, so the Playwright `e2e/*.spec.ts` suites are never picked up.
 

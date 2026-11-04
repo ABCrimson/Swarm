@@ -42,11 +42,18 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// so [`terminate`] and [`kill`] reach everything it starts unless a
 /// descendant moves itself to another group or session. A no-op on
 /// Windows, where the tree is the parent-pid chain `taskkill /T` walks.
-pub(crate) fn lead_own_group(cmd: &mut Command) {
+pub(crate) fn lead_own_group(
+    #[cfg_attr(
+        windows,
+        expect(
+            unused_variables,
+            reason = "on Windows `taskkill /T` walks the parent-pid tree, so the command needs no grouping"
+        )
+    )]
+    cmd: &mut Command,
+) {
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(cmd, 0);
-    #[cfg(windows)]
-    let _ = cmd;
 }
 
 /// Whether `child` is still running (unreaped). An error from `try_wait`
@@ -67,15 +74,22 @@ fn running(child: &mut Child) -> bool {
 /// so a member stopped by job control (a `SIGTTIN` from reading the
 /// terminal outside the foreground group) acts on it. Does nothing on
 /// Windows (see the module doc) or once the child has exited.
-pub(crate) fn terminate(child: &mut Child) {
+pub(crate) fn terminate(
+    #[cfg_attr(
+        windows,
+        expect(
+            unused_variables,
+            reason = "Windows has no graceful tree request: `taskkill /T` without `/F` posts `WM_CLOSE`, which a windowless console child never receives"
+        )
+    )]
+    child: &mut Child,
+) {
     #[cfg(unix)]
     if running(child) {
         let pgid = child.id();
         signal_group(pgid, "TERM");
         signal_group(pgid, "CONT");
     }
-    #[cfg(windows)]
-    let _ = child;
 }
 
 /// Force-kills `child` and everything in its tree, unless the child has
