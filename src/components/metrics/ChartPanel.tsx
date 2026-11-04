@@ -4,7 +4,8 @@
 // height. The body installs the shared Recharts theme, and the chart
 // inside sizes itself from it with Recharts 3's `responsive` prop — no
 // ResponsiveContainer wrapper and no guessed percentage heights.
-// With fewer than two samples the body shows a waiting line, not empty axes.
+// With fewer than two samples the body shows a waiting line, and a snapshot
+// chart with nothing to plot shows its `empty` line, never empty axes.
 
 import type { CSSProperties } from "react";
 import { RechartsThemeProvider } from "recharts";
@@ -54,6 +55,7 @@ export function ChartPanel({
   caption,
   span,
   sampleCount,
+  empty,
   children,
 }: {
   readonly title: string;
@@ -63,6 +65,8 @@ export function ChartPanel({
   readonly span?: "full";
   /** Samples behind the chart. Under 2 the body says so instead of drawing empty axes; omit it for a snapshot chart. */
   readonly sampleCount?: number;
+  /** A snapshot chart with nothing to plot: the body shows this line instead of empty axes. */
+  readonly empty?: string;
   readonly children: React.ReactNode;
 }): React.ReactElement {
   return (
@@ -75,13 +79,13 @@ export function ChartPanel({
         {caption && <span style={captionStyle}>{caption}</span>}
       </figcaption>
       <div style={{ flex: 1, minHeight: 0 }}>
-        {sampleCount !== undefined && sampleCount < 2 ? (
+        {(sampleCount !== undefined && sampleCount < 2) || empty !== undefined ? (
           <p className="m-0 flex h-full items-center justify-center gap-2 text-fg-dim text-md">
             <span
               aria-hidden="true"
               className="size-1.5 rounded-full bg-plasma motion-safe:animate-[tool-pulse_2s_ease-in-out_infinite]"
             />
-            Waiting For Samples
+            {empty ?? "Waiting For Samples"}
           </p>
         ) : (
           <RechartsThemeProvider value={CHART_THEME}>{children}</RechartsThemeProvider>

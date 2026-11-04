@@ -34,10 +34,15 @@ export function pendingByPriority(queue: readonly AiQueueItem[]): Record<Priorit
 /** Stacked bar of pending AI requests per priority level. */
 export function AIQueueChart(): React.ReactElement {
   const queue = useAiStore((s) => s.queue);
-  const data = [{ name: "Queue", ...pendingByPriority(queue) }];
+  const counts = pendingByPriority(queue);
+  const pending = counts.critical + counts.high + counts.normal + counts.low;
+  const data = [{ name: "Queue", ...counts }];
 
   return (
-    <ChartPanel title="AI Queue By Priority">
+    <ChartPanel
+      title="AI Queue By Priority"
+      empty={pending === 0 ? "No Pending Requests" : undefined}
+    >
       <BarChart
         responsive
         style={CHART_FILL_STYLE}

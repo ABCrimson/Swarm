@@ -31,6 +31,16 @@ describe("ChartPanel", () => {
     expect(screen.queryByText("Waiting For Samples")).not.toBeInTheDocument();
   });
 
+  it("shows the empty line for a snapshot chart with nothing to plot", () => {
+    render(
+      <ChartPanel title="AI Queue By Priority" empty="No Pending Requests">
+        <span>Chart Body</span>
+      </ChartPanel>,
+    );
+    expect(screen.getByText("No Pending Requests")).toBeInTheDocument();
+    expect(screen.queryByText("Chart Body")).not.toBeInTheDocument();
+  });
+
   it("spans every grid column only when span is full", () => {
     const { rerender } = render(
       <ChartPanel title="System Metrics" span="full">
