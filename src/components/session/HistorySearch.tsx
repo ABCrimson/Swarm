@@ -207,7 +207,7 @@ function SearchResultItem({
     <button
       type="button"
       onClick={() => onSelect(session.id)}
-      className="w-full cursor-pointer rounded-lg border border-[oklch(0.25_0.03_220/0.4)] bg-[oklch(0.15_0.02_220/0.4)] p-3 text-left transition-colors hover:bg-[oklch(0.18_0.04_220/0.5)] focus-visible:outline-2 focus-visible:outline-plasma"
+      className="w-full cursor-pointer rounded-lg border border-[oklch(0.25_0.03_220/0.4)] bg-[oklch(0.15_0.02_220/0.4)] p-3 text-left transition-colors hover:bg-[oklch(0.18_0.04_220/0.5)]"
     >
       <span className="block text-sm font-medium text-[oklch(0.85_0.03_220)] font-display">
         <Highlighted text={session.name} query={query} />

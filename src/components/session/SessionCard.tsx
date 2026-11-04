@@ -78,7 +78,7 @@ export function SessionCard({
         whileHover={{ scale: 1.015 }}
         whileTap={{ scale: 0.99 }}
         transition={{ type: "spring", stiffness: 400, damping: 25 }}
-        className="block w-full cursor-pointer rounded-xl p-4 pr-12 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-plasma"
+        className="block w-full cursor-pointer rounded-xl p-4 pr-12 text-left transition-colors"
         style={{
           background: isActive ? "oklch(0.18 0.06 290 / 0.6)" : "oklch(0.14 0.02 220 / 0.5)",
           backdropFilter: "blur(12px) saturate(1.5)",
@@ -121,7 +121,7 @@ export function SessionCard({
         popoverTarget={menuId}
         aria-haspopup="menu"
         aria-label={`Actions For Session "${escapeForDisplay(session.name)}"`}
-        className="absolute top-3 right-3 grid size-7 cursor-pointer place-items-center rounded-md text-[oklch(0.65_0.04_220)] transition-colors hover:bg-border/50 hover:text-[oklch(0.88_0.02_220)] focus-visible:outline-2 focus-visible:outline-plasma"
+        className="absolute top-3 right-3 grid size-7 cursor-pointer place-items-center rounded-md text-[oklch(0.65_0.04_220)] transition-colors hover:bg-border/50 hover:text-[oklch(0.88_0.02_220)]"
         style={{ anchorName }}
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">

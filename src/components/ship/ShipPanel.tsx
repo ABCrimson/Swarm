@@ -318,7 +318,7 @@ function ShipReceipt({ ship }: { readonly ship: UseShipReturn }): React.ReactEle
               aria-label="Open Compare Page"
               title={prUrl}
               onClick={() => void openComparePage(prUrl)}
-              className="cursor-pointer rounded-sm underline focus-visible:outline-2 focus-visible:outline-plasma"
+              className="cursor-pointer rounded-sm underline"
               style={{
                 background: "none",
                 border: "none",

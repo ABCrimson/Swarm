@@ -45,7 +45,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
           type="button"
           onClick={onClose}
           aria-label="Close Template Selector"
-          className="cursor-pointer rounded-lg p-1 text-[oklch(0.55_0.03_220)] transition-colors hover:bg-border/50 focus-visible:outline-2 focus-visible:outline-plasma"
+          className="cursor-pointer rounded-lg p-1 text-[oklch(0.55_0.03_220)] transition-colors hover:bg-border/50"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path
@@ -163,7 +163,7 @@ function TemplateCard({
       disabled={unavailable}
       aria-describedby={unavailable ? unavailableReasonId : undefined}
       onClick={() => onSelect(template)}
-      className="cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 rounded-lg border border-[oklch(0.26_0.04_220/0.5)] bg-[oklch(0.16_0.03_220/0.6)] p-4 text-left transition-colors hover:border-[oklch(0.50_0.18_290/0.5)] hover:bg-[oklch(0.18_0.05_290/0.3)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-plasma"
+      className="cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 rounded-lg border border-[oklch(0.26_0.04_220/0.5)] bg-[oklch(0.16_0.03_220/0.6)] p-4 text-left transition-colors hover:border-[oklch(0.50_0.18_290/0.5)] hover:bg-[oklch(0.18_0.05_290/0.3)]"
       style={{ backdropFilter: "blur(8px)" }}
     >
       <span className="mb-1 block text-sm font-semibold text-[oklch(0.88_0.04_220)] font-display">
