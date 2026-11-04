@@ -87,33 +87,37 @@ export function useWebGPU(): UseWebGPUResult {
   useEffect(() => {
     if (!canvas || !enabled) return;
     if (generation > 0) console.info(`[webgpu] Re-initializing after device loss (#${generation})`);
-    let disposed = false;
-    let owned: WebGPUContext | null = null;
-    let recovery: ReturnType<typeof setTimeout> | undefined;
+    // No reassigned `let`s: the React Compiler skips a hook whose effect closures reassign a
+    // local, so disposal is an AbortSignal and the owned device and recovery timer sit in a holder.
+    const disposal = new AbortController();
+    const { signal } = disposal;
+    const held: { owned: WebGPUContext | null; recovery?: ReturnType<typeof setTimeout> } = {
+      owned: null,
+    };
 
     const onDeviceLost = (): void => {
-      if (disposed) return; // our own destroy() below
+      if (signal.aborted) return; // our own destroy() below
       setGpu(null);
       lossesRef.current += 1;
       if (lossesRef.current > MAX_RECOVERIES) {
         setFailureReason("GPU Device Request Failed");
         return;
       }
-      recovery = setTimeout(() => setGeneration((g) => g + 1), RECOVERY_DELAY_MS);
+      held.recovery = setTimeout(() => setGeneration((g) => g + 1), RECOVERY_DELAY_MS);
     };
 
     const run = initChainRef.current.then(async () => {
-      if (disposed) return;
+      if (signal.aborted) return;
       const result = await initWebGPU(canvas, onDeviceLost);
       if (!result.ok) {
-        if (!disposed) setFailureReason(result.reason);
+        if (!signal.aborted) setFailureReason(result.reason);
         return;
       }
-      if (disposed) {
+      if (signal.aborted) {
         result.value.device.destroy();
         return;
       }
-      owned = result.value;
+      held.owned = result.value;
       setGpu(result.value);
       setFailureReason(null);
     });
@@ -122,9 +126,9 @@ export function useWebGPU(): UseWebGPUResult {
     });
 
     return () => {
-      disposed = true;
-      clearTimeout(recovery);
-      owned?.device.destroy();
+      disposal.abort();
+      clearTimeout(held.recovery);
+      held.owned?.device.destroy();
       setGpu(null);
     };
   }, [canvas, enabled, generation]);
