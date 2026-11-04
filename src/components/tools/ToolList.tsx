@@ -92,8 +92,7 @@ export function ToolList({
         {/* New Tool belongs to the section it creates into. */}
         <div className="mb-2 flex items-center justify-between">
           <h2 id={customHeadingId} style={{ ...sectionHeadingStyle, margin: 0 }}>
-            Custom{" "}
-            <span className="font-mono text-fg-dim tabular-nums">{customTools.length}</span>
+            Custom <span className="font-mono text-fg-dim tabular-nums">{customTools.length}</span>
           </h2>
           <Button variant="primary" size="sm" onClick={onCreateNew}>
             New Tool
