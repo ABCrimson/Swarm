@@ -1,0 +1,5 @@
+# A hung app-server: it ignores stdin EOF and never answers, so only a
+# kill ends it. The fake records its pid (`{"fake":"started"}`) to the
+# --record file before it reads this script.
+#DIRECTIVE IGNORE_STDIN_EOF
+#DIRECTIVE HANG

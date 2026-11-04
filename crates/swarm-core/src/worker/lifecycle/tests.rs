@@ -711,6 +711,44 @@ fn test_spawned_shell_stays_alive_and_answers_input() {
     do_kill_worker(&sink, &registry, &repo_locks, id, Provenance::default()).unwrap();
 }
 
+/// The kill path reaps a shell whose output nobody reads (a stalled
+/// output pump). macOS (XNU `proc_exit` -> `ttywait`) holds a dying
+/// session leader until its terminal's output queue drains, with no
+/// timeout, so without the kill path's drain `wait` never returns there.
+/// Linux does not hold it, so this test passes there with or without the
+/// drain: the `macos-26` CI leg is the run that proves it.
+#[cfg(unix)]
+#[test]
+fn test_reap_returns_for_a_shell_whose_output_nobody_reads() {
+    let id = Uuid::new_v4();
+    let spawned = pty::spawn_pty(
+        id,
+        Some("/bin/sh"),
+        "",
+        &std::collections::HashMap::new(),
+        PtySize::default(),
+    )
+    .expect("/bin/sh spawns on a PTY");
+    // Held open and never read, like a pump that stopped reading.
+    let _stalled_reader = spawned.reader;
+    let mut writer = spawned.writer;
+    // Builtins only, so the shell itself is what fills the output queue.
+    pty::write_to_pty(
+        writer.as_mut(),
+        b"while :; do echo 0123456789abcdef0123456789abcdef0123456789abcdef; done\n",
+    )
+    .expect("the flood command is typed");
+
+    let (master, mut child) = (spawned.master, spawned.child);
+    let (done_tx, done) = channel();
+    std::thread::spawn(move || {
+        reap(child.as_mut(), master.as_ref(), id);
+        done_tx.send(()).unwrap();
+    });
+    done.recv_timeout(SHELL_TIMEOUT)
+        .expect("the kill path reaps the shell");
+}
+
 /// The PTY master is kept, so the terminal can be resized after the
 /// spawn and the shell sees the new size.
 #[test]

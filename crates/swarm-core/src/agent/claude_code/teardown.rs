@@ -2,12 +2,15 @@
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
+use super::SHUTDOWN_GRACE;
 use super::process::reap;
 use super::state::{Shared, Stop};
 use crate::agent::adapter::{AgentTurnStatus, ExitSummary};
 use crate::agent::{PROCESS_EXITED_WITHOUT_RECEIPT, drained_stderr_snippet, signal_name};
 use crate::events::{AgentSessionExitedPayload, AgentTurnSettledPayload, Provenance, SwarmEvent};
+use crate::worker::proc::{ExitSequence, stop_tree};
 
 // ── Teardown ─────────────────────────────────────────────────────────
 
@@ -38,7 +41,8 @@ pub(super) async fn teardown(shared: &Arc<Shared>, stop: Stop) -> ExitSummary {
 }
 
 /// Claims the in-flight turn and the child in one critical section,
-/// closes stdin, stops the child (gracefully only when idle), synthesizes
+/// closes stdin, stops the child and its process tree on the blocking
+/// pool (gracefully only when idle; [`stop_tree`]), synthesizes
 /// Condition B's settlement for a turn that never got its receipt, emits
 /// `agent_session_exited`, and publishes the exit summary.
 async fn run_teardown(shared: Arc<Shared>, stop: Stop) {
@@ -51,12 +55,44 @@ async fn run_teardown(shared: Arc<Shared>, stop: Stop) {
         shared.publish_in_flight(None);
         (turn, inner.child.take())
     };
-    shared.stdin.close();
-
-    let graceful = stop == Stop::Graceful && in_flight.is_none();
+    // An idle CLI ends its session at stdin EOF; a busy one is killed at
+    // once. Either way the tree goes too: a Bash tool call's processes
+    // run under the CLI.
+    let grace = if stop == Stop::Graceful && in_flight.is_none() {
+        SHUTDOWN_GRACE
+    } else {
+        Duration::ZERO
+    };
     let status = match child {
-        Some(child) => reap(child, graceful).await,
-        None => None,
+        Some(mut child) => {
+            let closing = Arc::clone(&shared);
+            let stopped = tokio::task::spawn_blocking(move || {
+                stop_tree(
+                    &mut child,
+                    || closing.stdin.close(),
+                    ExitSequence::CloseStdinThenWait,
+                    grace,
+                );
+                child
+            })
+            .await;
+            match stopped {
+                // Only collects the status, or kills the child itself if
+                // the tree kill could not run.
+                Ok(child) => reap(child, false).await,
+                Err(error) => {
+                    // The closure never ran, so stdin is still open: an
+                    // idle CLI still gets its EOF.
+                    shared.stdin.close();
+                    tracing::error!(worker_id = %shared.worker_id, %error, "claude adapter: the stop task failed");
+                    None
+                }
+            }
+        }
+        None => {
+            shared.stdin.close();
+            None
+        }
     };
     let summary = ExitSummary {
         exit_code: status.and_then(|status| status.code()),
