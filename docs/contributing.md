@@ -23,7 +23,7 @@ The house rules (exact pins, pnpm only, no manual memoization, `parking_lot`, an
 
 | Tool    | Version                                  | Purpose                                      |
 |---------|------------------------------------------|----------------------------------------------|
-| Node.js | 28.0.0-nightly2026110370074c6f98 (`devEngines.runtime`) | Frontend build and dev server (pnpm downloads it; do not install it separately) |
+| Node.js | 28.0.0-nightly20261104d36e9ba1f8 (`devEngines.runtime`) | Frontend build and dev server (pnpm downloads it; do not install it separately) |
 | pnpm    | 12.17.0 (`packageManager`)               | Package management; npm and yarn are not used |
 | Rust    | nightly-2026-11-04 (`rust-toolchain.toml`) | Backend compilation (`rust-version` 1.101)   |
 
