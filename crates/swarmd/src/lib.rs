@@ -331,3 +331,85 @@ pub async fn serve(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use swarm_core::Paths;
+    use swarm_core::runtime::RuntimeConfig;
+    use tokio_tungstenite::tungstenite;
+
+    use super::*;
+    use crate::exposure::{Exposure, classify};
+
+    /// This machine's address on its default route, when that is private
+    /// IPv4 (a CI runner's or WSL's interface). A UDP `connect` sends
+    /// nothing; it only picks the route and the source address.
+    fn private_interface_ip() -> Option<IpAddr> {
+        let probe = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+        probe.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
+        let ip = probe.local_addr().ok()?.ip();
+        (classify(ip, Some(ip)) == Exposure::PrivateLan).then_some(ip)
+    }
+
+    /// The `/ws` upgrade runs the exposure gate itself: mounted without the
+    /// router-wide [`guard_host`] layer, a private-LAN peer still gets the
+    /// 403 and never takes a handshake permit.
+    #[tokio::test]
+    async fn test_ws_upgrade_refuses_unserved_peers_without_the_router_layer() {
+        let Some(lan) = private_interface_ip() else {
+            eprintln!("skipped: the default route has no private IPv4 source address");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let token = DaemonToken::load_or_create(dir.path()).unwrap().token;
+        let listener = TcpListener::bind((lan, 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let config = RuntimeConfig {
+            paths: Paths {
+                data_dir: dir.path().to_path_buf(),
+            },
+            shell_name: "swarmd",
+            bind: Some(addr.to_string()),
+        };
+        let runtime = tokio::task::spawn_blocking(move || Runtime::start(config, |_| {}))
+            .await
+            .unwrap()
+            .unwrap();
+        let limits = Limits::default();
+        let pool = limits.max_pending_handshakes;
+        let state = AppState::new(
+            &runtime,
+            token,
+            HostPolicy::new(std::iter::empty()),
+            ExposurePolicy::default(),
+            limits,
+        );
+        let app = Router::new()
+            .route("/ws", get(ws::upgrade))
+            .with_state(state.clone())
+            .into_make_service_with_connect_info::<ConnectionAddrs>();
+        let server = tokio::spawn(
+            axum::serve(DaemonListener(listener), app)
+                .with_graceful_shutdown(state.shutdown_token().cancelled_owned())
+                .into_future(),
+        );
+
+        match tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await {
+            Err(tungstenite::Error::Http(response)) => {
+                assert_eq!(response.status().as_u16(), 403);
+                assert_eq!(
+                    String::from_utf8_lossy(response.body().as_deref().unwrap_or_default()),
+                    "Plaintext Connections Over A Private LAN Need --allow-plaintext-lan."
+                );
+            }
+            other => panic!("expected an HTTP rejection, got: {other:?}"),
+        }
+        assert_eq!(state.handshakes.available_permits(), pool);
+
+        state.shutdown_token().cancel();
+        server.await.unwrap().unwrap();
+        runtime.metrics_cancel.cancel();
+    }
+}

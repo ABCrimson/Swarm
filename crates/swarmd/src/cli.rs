@@ -29,7 +29,8 @@ served over an authenticated WebSocket.
 Options:
   --bind ADDR               Listen Address [Default: 127.0.0.1:8787]. A
                             Non-Loopback Address Needs A Token Minted By An
-                            Earlier Loopback Run.
+                            Earlier Loopback Run; A Private-LAN One Also Needs
+                            --allow-plaintext-lan, And A Public One Is Refused.
   --allow-plaintext-lan     Also Serve Plain ws:// Clients On Private IPv4
                             Networks (RFC 1918, 100.64.0.0/10). Without It
                             Only Loopback Clients Are Served.

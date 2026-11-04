@@ -54,7 +54,7 @@ use swarm_core::lock::LockError;
 use swarm_core::runtime::{Runtime, RuntimeConfig, RuntimeStartError};
 use swarmd::auth::{DaemonToken, HostPolicy};
 use swarmd::cli::{self, Command, ConnectUrlArgs, ServeArgs};
-use swarmd::exposure::{Exposure, ExposurePolicy};
+use swarmd::exposure::{Exposure, ExposurePolicy, classify};
 use swarmd::{AppState, Limits};
 use tokio::net::TcpListener;
 
@@ -458,15 +458,23 @@ fn announce(
     println!("{}", status_line(local_addr, exposure));
 }
 
-/// The startup status line: which networks plaintext clients are served on,
-/// naming the override when a wildcard bind leaves LAN clients out.
+/// The startup status line: which networks plaintext clients can be served
+/// on through this bind, naming the override when a wildcard bind leaves LAN
+/// clients out. A loopback bind serves loopback only whatever the policy
+/// allows, since no LAN peer can reach a loopback socket.
 fn status_line(local_addr: SocketAddr, exposure: ExposurePolicy) -> String {
-    let hint = if exposure.widest() == Exposure::Loopback && local_addr.ip().is_unspecified() {
+    let ip = local_addr.ip();
+    let served = if classify(ip, Some(ip)) == Exposure::Loopback {
+        ExposurePolicy::default()
+    } else {
+        exposure
+    };
+    let hint = if served.widest() == Exposure::Loopback && ip.is_unspecified() {
         " (LAN Clients Are Refused Without --allow-plaintext-lan)"
     } else {
         ""
     };
-    format!("Serving Plaintext Clients On: {exposure}{hint}")
+    format!("Serving Plaintext Clients On: {served}{hint}")
 }
 
 /// Installs the shutdown signal handlers. The returned future resolves on
@@ -551,11 +559,10 @@ async fn stop_runtime(state: &AppState, runtime: Runtime) {
 mod tests {
     use super::*;
 
-    /// A kill can still be inside an agent adapter's 30 s handshake when
-    /// shutdown starts (`HANDSHAKE_TIMEOUT` in `claude_code.rs`, `handshake`
-    /// in `codex.rs`; neither is public), and it then tears that session
-    /// down. A budget at or under the handshake would abandon the kill and
-    /// leave the worker's worktree unreconciled (ADR-0040).
+    /// The startup status line names the policy, and the override hint
+    /// appears only on a wildcard bind without --allow-plaintext-lan. A
+    /// loopback bind names loopback only whatever the flag: no LAN peer can
+    /// reach a loopback socket.
     #[test]
     fn test_status_line_names_what_is_served() {
         let addr = |raw: &str| raw.parse::<SocketAddr>().unwrap();
@@ -563,6 +570,10 @@ mod tests {
         let lan = ExposurePolicy::new(true);
         assert_eq!(
             status_line(addr("127.0.0.1:8787"), strict),
+            "Serving Plaintext Clients On: Loopback Only"
+        );
+        assert_eq!(
+            status_line(addr("127.0.0.1:8787"), lan),
             "Serving Plaintext Clients On: Loopback Only"
         );
         assert_eq!(
@@ -579,6 +590,11 @@ mod tests {
         }
     }
 
+    /// A kill can still be inside an agent adapter's 30 s handshake when
+    /// shutdown starts (`HANDSHAKE_TIMEOUT` in `claude_code.rs`, `handshake`
+    /// in `codex.rs`; neither is public), and it then tears that session
+    /// down. A budget at or under the handshake would abandon the kill and
+    /// leave the worker's worktree unreconciled (ADR-0040).
     #[test]
     fn test_stop_workers_timeout_outlasts_the_adapter_handshake() {
         const ADAPTER_HANDSHAKE: Duration = Duration::from_secs(30);
