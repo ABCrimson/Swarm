@@ -115,7 +115,7 @@ static ANSI_ESCAPE: LazyLock<Regex> = LazyLock::new(|| {
 /// Shared by both provider adapters, which keep the same bounded byte
 /// tail of their CLI's stderr.
 ///
-/// Recognized credentials are redacted ([`crate::git::redact::redact`])
+/// Recognized credentials are redacted ([`crate::redact::redact`])
 /// because the snippet lands in persisted settlement errors. A full tail
 /// (`STDERR_TAIL_CAP` bytes) may have lost its front to the ring, possibly
 /// inside a token, and a token's tail alone matches no redaction pattern
@@ -147,7 +147,7 @@ pub(crate) fn stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String {
         bytes = &bytes[..end];
     }
     let text = String::from_utf8_lossy(bytes);
-    let text = crate::git::redact::redact(&ANSI_ESCAPE.replace_all(&text, ""));
+    let text = crate::redact::redact(&ANSI_ESCAPE.replace_all(&text, ""));
     match text.trim() {
         "" if full || cut_end => "Stderr: [Truncated]".to_owned(),
         "" => "No Stderr Output".to_owned(),

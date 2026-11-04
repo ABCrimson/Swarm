@@ -225,7 +225,7 @@ pub(super) fn first_line(output: &std::process::Output) -> Option<String> {
                 .lines()
                 .map(str::trim)
                 .find(|line| !line.is_empty())
-                .map(crate::git::redact::redact)
+                .map(crate::redact::redact)
         })
 }
 

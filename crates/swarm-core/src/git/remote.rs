@@ -8,7 +8,7 @@
 //! - `https://github.com/owner/repo` (no `.git` suffix, or a trailing `/`)
 //! - `https://<userinfo>@github.com/owner/repo.git` — a `user:pass` pair
 //!   or a bare token used as the username (GitHub accepts both). Either
-//!   is a credential: [`parse`] discards it, and [`super::redact`] strips
+//!   is a credential: [`parse`] discards it, and [`crate::redact`] strips
 //!   it from any URL that is surfaced.
 //! - `git@github.com:owner/repo.git` (SSH "scp-like" syntax)
 //! - `ssh://git@github.com/owner/repo.git` (SSH URL syntax)
@@ -40,7 +40,7 @@ pub struct ParsedRemote {
 /// `scheme://[userinfo@]host[:port]/owner/repo[.git]` — covers both
 /// `https://` and `ssh://` URL-form remotes. Userinfo (if any) is
 /// matched but discarded; keeping credentials out of logs and events is
-/// [`super::redact`]'s job.
+/// [`crate::redact`]'s job.
 ///
 /// The host shown must be the host git reaches, so neither part may hold
 /// `@`, `?` or `#`. RFC 3986 userinfo cannot contain `@`, and curl (https)

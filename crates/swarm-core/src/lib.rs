@@ -31,6 +31,8 @@
 //!   the turn scheduler.
 //! - [`session`] — sessions and `sessions.json`.
 //! - [`git`] — worktree-per-worker isolation and the ship chain.
+//! - [`redact`] — secret redaction and size capping for text that can
+//!   reach a log, event or toast.
 //! - [`bus`] — worker-to-worker messages, recorded as events.
 //! - [`config`] — `swarm-config.json`.
 //! - [`metrics`] — system and per-worker resource sampling.
@@ -51,6 +53,7 @@ pub mod metrics;
 pub mod orchestration;
 mod paths;
 pub mod protocol;
+pub mod redact;
 pub mod runtime;
 pub mod session;
 mod state_file;

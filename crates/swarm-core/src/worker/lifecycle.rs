@@ -802,7 +802,7 @@ fn is_line_edited(text: &str) -> bool {
 /// ([`PREVIEW_WITHHELD`]): `sk-ant-XX\b\bapi03-…`, a CSI fragment, or
 /// readline's Ctrl-A and arrow keys all make the shell receive a key
 /// the stored text does not show, and emulating the line discipline is
-/// not this function's job. Otherwise [`git::redact::redact`] runs on the
+/// not this function's job. Otherwise [`crate::redact::redact`] runs on the
 /// raw lossy text (CR and LF are still word breaks there), invisible
 /// code points are dropped (they can split a token the shell sees
 /// whole), line ends become spaces so they stay word breaks, and
@@ -817,10 +817,10 @@ fn stamped_preview(data: &[u8]) -> String {
     if is_line_edited(&raw) {
         return PREVIEW_WITHHELD.to_owned();
     }
-    let first = git::redact::redact(&raw);
+    let first = crate::redact::redact(&raw);
     let visible = INVISIBLE.replace_all(&first, "");
     let flat = visible.replace(['\r', '\n'], " ");
-    git::redact::redact(flat.trim_end())
+    crate::redact::redact(flat.trim_end())
         .chars()
         .take(PREVIEW_CHARS)
         .collect()

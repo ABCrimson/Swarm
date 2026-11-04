@@ -179,7 +179,7 @@ fn trailers(request: &CommitRequest) -> Vec<String> {
 fn classify_commit_error(output: &GitOutput) -> ShipError {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let detail = if output.stderr.trim().is_empty() {
-        crate::git::redact::sanitize(stdout.trim())
+        crate::redact::sanitize(stdout.trim())
     } else {
         output.stderr.trim().to_owned()
     };
