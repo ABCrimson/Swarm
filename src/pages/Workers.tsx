@@ -148,18 +148,16 @@ export function Workers(): React.ReactElement {
   // open cycle — see SpawnWorkerDialog's doc.
   const [spawnDialogOpen, setSpawnDialogOpen] = useState(false);
 
-  const markShown = (id: string): void =>
-    setShown((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  // Adjusting state while rendering (as PageHost does): record the view
+  // and tab before the first render that shows them, whichever control
+  // switched them (tab bar, keybinding or command palette).
+  if (!shown.has(viewMode) || !shown.has(detailTab)) {
+    setShown(shown.union(new Set([viewMode, detailTab])));
+  }
 
-  const showView = (mode: ViewMode): void => {
-    markShown(mode);
-    setViewMode(mode);
-  };
+  const showView = (mode: ViewMode): void => setViewMode(mode);
 
-  const showDetailTab = (tab: DetailTab): void => {
-    markShown(tab);
-    setDetailTab(tab);
-  };
+  const showDetailTab = (tab: DetailTab): void => setDetailTab(tab);
 
   const onGlobalKeyDown = useEffectEvent((e: KeyboardEvent): void => {
     if (!matchesBinding(e, graphToggle)) return;

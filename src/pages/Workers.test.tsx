@@ -94,6 +94,17 @@ describe("Workers — view tabs", () => {
 
     expect(screen.getByText('Click "Spawn Worker" Or Press Alt+P')).toBeInTheDocument();
   });
+
+  it("keeps a view mounted after the command palette switched to it", () => {
+    render(<Workers />);
+    // The palette sets the atom directly, bypassing the tab bar.
+    act(() => store.set(graphViewAtom, "list"));
+    act(() => store.set(graphViewAtom, "graph"));
+
+    const listTab = screen.getByRole("tab", { name: "List" });
+    const listPanel = document.getElementById(listTab.getAttribute("aria-controls") ?? "");
+    expect(listPanel).toHaveTextContent("No Workers Running");
+  });
 });
 
 describe("Workers — list and detail panel", () => {
