@@ -17,6 +17,7 @@
 use std::path::Path;
 
 use super::cli::{self, CREATE_TIMEOUT, READ_TIMEOUT, REMOVE_TIMEOUT, args_in};
+use super::repo;
 use crate::error::AppError;
 
 // ── Argv builders ───────────────────────────────────────────────────
@@ -54,11 +55,11 @@ fn prune_args(repo_root: &Path) -> Vec<String> {
 
 /// Argv for `git branch -d <branch>` — deliberately incapable of ever
 /// carrying `-D`/`--delete --force`. `-d` (lowercase) is git's own
-/// safe delete: it refuses if `branch` isn't fully merged. SWARM's own
-/// caller (`worker::lifecycle::do_kill_worker`) additionally checks
-/// the branch tip against the worktree's recorded base commit before
-/// even attempting this, so the two checks are redundant defense in
-/// depth, not a substitute for one another.
+/// safe delete: it refuses if `branch` isn't fully merged. Both of
+/// SWARM's callers (`worker::lifecycle::do_kill_worker` and the
+/// rollback in [`add`]) additionally check the branch tip against the
+/// base commit before even attempting this, so the two checks are
+/// redundant defense in depth, not a substitute for one another.
 fn branch_delete_args(repo_root: &Path, branch: &str) -> Vec<String> {
     args_in(repo_root, &["branch", "-d", branch])
 }
@@ -70,10 +71,19 @@ fn branch_delete_args(repo_root: &Path, branch: &str) -> Vec<String> {
 /// Creates `worktree_path`'s parent directory first (git creates the
 /// leaf directory itself, but not arbitrarily deep missing parents).
 ///
+/// `git worktree add -b` creates `branch` before it validates the
+/// target directory, so a refused add (an occupied, non-empty target)
+/// can leave the branch behind. When the add fails, a `branch` that did
+/// not exist before the call and still points at `base_sha` is deleted
+/// with `git branch -d` (never `-D`); a branch that already existed, or
+/// one that moved, is left alone.
+///
 /// # Errors
 ///
 /// * [`AppError::Git`] — the parent directory could not be created, or
 ///   `git worktree add` failed (bad `base_sha`, branch already exists…).
+///   The message is git's refusal; a failed branch rollback is appended
+///   to it.
 /// * [`AppError::GitTimeout`] — the checkout exceeded
 ///   [`CREATE_TIMEOUT`].
 pub fn add(
@@ -90,18 +100,27 @@ pub fn add(
             ))
         })?;
     }
+    let branch_ref = format!("refs/heads/{branch}");
+    let branch_existed = repo::rev_parse(repo_root, &branch_ref).is_ok();
     let output = cli::run(
         &add_args(repo_root, worktree_path, branch, base_sha),
         CREATE_TIMEOUT,
     )?;
-    if !output.success() {
-        return Err(AppError::Git(format!(
-            "git worktree add failed for branch `{branch}` at {}: {}",
-            worktree_path.display(),
-            output.stderr.trim()
-        )));
+    if output.success() {
+        return Ok(());
     }
-    Ok(())
+    let mut message = format!(
+        "git worktree add failed for branch `{branch}` at {}: {}",
+        worktree_path.display(),
+        output.stderr.trim()
+    );
+    if !branch_existed
+        && repo::rev_parse(repo_root, &branch_ref).is_ok_and(|tip| tip == base_sha)
+        && let Err(e) = delete_branch(repo_root, branch)
+    {
+        message = format!("{message}; rollback of branch `{branch}` failed: {e}");
+    }
+    Err(AppError::Git(message))
 }
 
 /// Locks `worktree_path` so `git worktree prune` (and a casual `git
@@ -251,8 +270,8 @@ fn count_pruned(stderr: &str) -> usize {
 /// branch -d` (**never** `-D`) — see `branch_delete_args`. Intended
 /// for the one narrow case where it's safe: a `swarm/*` isolation
 /// branch whose tip the caller has already confirmed equals the
-/// commit the worktree was created from (i.e. the agent made no
-/// commits). git's own `-d` safety check (refuses an unmerged branch)
+/// commit the worktree was created from (the agent made no commits, or
+/// the [`add`] that created it failed). git's own `-d` safety check (refuses an unmerged branch)
 /// is a second, independent guard on top of that caller-side check.
 ///
 /// # Errors
@@ -441,6 +460,55 @@ mod tests {
 
         assert_eq!(prune(repo.root()).unwrap(), 1);
         assert_eq!(prune(repo.root()).unwrap(), 0);
+    }
+
+    /// `git worktree add -b` creates the branch before it checks the
+    /// target directory, so an occupied, non-empty target used to leave
+    /// an orphan `swarm/*` branch behind. `add` returns git's own
+    /// refusal, leaves no branch, and the next attempt succeeds.
+    #[test]
+    fn test_add_into_an_occupied_directory_rolls_the_branch_back() {
+        let repo = TempRepo::new("wt-occupied");
+        let head = crate::git::repo::head_sha(repo.root()).unwrap();
+        let worktree = repo.base().join("occupied");
+        write_file(&worktree, "squatter.txt", "not a worktree");
+
+        let err = add(repo.root(), &worktree, "swarm/occupied-test", &head).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("git worktree add failed for branch `swarm/occupied-test`"),
+            "the original add error comes back: {message}"
+        );
+        assert!(
+            !message.contains("rollback"),
+            "a clean rollback appends nothing: {message}"
+        );
+        let listing = repo.git(&["branch", "--list", "swarm/occupied-test"]);
+        assert_eq!(
+            listing.stdout_trimmed(),
+            "",
+            "the branch the failed add created is gone"
+        );
+
+        std::fs::remove_dir_all(&worktree).unwrap();
+        add(repo.root(), &worktree, "swarm/occupied-test", &head).unwrap();
+        assert!(worktree.join("README.md").exists());
+    }
+
+    /// A branch that existed before the call is never the add's to
+    /// delete, even when it still points at `base_sha`.
+    #[test]
+    fn test_add_failure_keeps_a_branch_that_already_existed() {
+        let repo = TempRepo::new("wt-preexisting");
+        let head = crate::git::repo::head_sha(repo.root()).unwrap();
+        repo.git(&["branch", "swarm/preexisting-test"]);
+        let worktree = repo.base().join("wt");
+
+        assert!(add(repo.root(), &worktree, "swarm/preexisting-test", &head).is_err());
+        assert_eq!(
+            crate::git::repo::rev_parse(repo.root(), "refs/heads/swarm/preexisting-test").unwrap(),
+            head
+        );
     }
 
     #[test]
