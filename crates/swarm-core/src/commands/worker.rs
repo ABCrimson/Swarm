@@ -303,6 +303,8 @@ mod tests {
                 .with_ansi(false)
                 .finish(),
         );
+        // Earlier tests registered dispatchers; a callsite cached as disabled would skip this subscriber.
+        tracing::callsite::rebuild_interest_cache();
         let (ctx, _dir, _events) = test_ctx();
 
         let result = spawn_worker(
