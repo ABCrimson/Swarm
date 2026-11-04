@@ -161,7 +161,7 @@ function commandPlanFor(mode: StagingMode, includePush: boolean, includeCompare:
     mode === "all" ? ["git add -- <files>", "git commit"] : ["git commit (Already-Staged Index)"];
   if (includePush) steps.push("git push -u origin <branch>");
   if (includeCompare) steps.push("Open Compare Page");
-  return `Will Run: ${steps.join(" · ")}`;
+  return `Will Run: ${steps.join(", ")}`;
 }
 
 // ── Causal Record (code-generated — see #lib/ship-causal) ────────────
@@ -296,9 +296,8 @@ function CausalRecordSection({
     <>
       <div style={monoRowStyle}>
         <span>
-          {context.seqFrom}..{context.seqTo}
+          {context.seqFrom}..{context.seqTo},
         </span>
-        <span style={separatorStyle}>{"·"}</span>
         <span>{pluralize("Turn", context.turns.length)}</span>
       </div>
       {truncationNote != null && <span style={causalMutedStyle}>{truncationNote}</span>}
@@ -401,14 +400,14 @@ export function ShipPreview({
             {escapeForDisplay(preflight.branch)}
           </Pill>
           <span style={separatorStyle}>{"→"}</span>
-          <span>{escapeForDisplay(preflight.baseBranch)}</span>
+          <span>
+            {escapeForDisplay(preflight.baseBranch)}
+            {preflight.remote != null && ","}
+          </span>
           {preflight.remote != null && (
-            <>
-              <span style={separatorStyle}>{"·"}</span>
-              <span title={escapeForDisplay(preflight.remote)}>
-                {escapeForDisplay(preflight.host ?? preflight.remote)}
-              </span>
-            </>
+            <span title={escapeForDisplay(preflight.remote)}>
+              {escapeForDisplay(preflight.host ?? preflight.remote)}
+            </span>
           )}
           {preflight.ahead > 0 && (
             <Pill tone="warning" size="sm">

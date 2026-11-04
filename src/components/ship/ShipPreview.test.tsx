@@ -81,11 +81,28 @@ function renderPreview(overrides: Partial<React.ComponentProps<typeof ShipPrevie
   return props;
 }
 
+describe("ShipPreview — Branch row", () => {
+  it("carries the comma on the base branch before the remote host", () => {
+    renderPreview();
+    expect(screen.getByText("main,")).toBeInTheDocument();
+    expect(screen.getByText("github.com")).toHaveAttribute(
+      "title",
+      "https://github.com/example/repo.git",
+    );
+  });
+
+  it("drops the comma when there is no remote", () => {
+    renderPreview({ preflight: makePreflight({ remote: null, host: null }) });
+    expect(screen.getByText("main")).toBeInTheDocument();
+    expect(screen.queryByText("github.com")).not.toBeInTheDocument();
+  });
+});
+
 describe("ShipPreview — Causal Record section", () => {
   it("renders the seq range, turn count, and a tool-call row for a populated context", () => {
     renderPreview();
 
-    expect(screen.getByText("9..14")).toBeInTheDocument();
+    expect(screen.getByText("9..14,")).toBeInTheDocument();
     expect(screen.getByText("1 Turn")).toBeInTheDocument();
     expect(screen.getByText("Write")).toBeInTheDocument();
     expect(screen.getByText("src/lib.rs")).toBeInTheDocument();
@@ -326,13 +343,13 @@ describe("ShipPreview — ship action gating", () => {
 
   it("labels each action with only the commands that action runs", () => {
     renderPreview();
-    expect(screen.getByText("Will Run: git add -- <files> · git commit")).toBeInTheDocument();
+    expect(screen.getByText("Will Run: git add -- <files>, git commit")).toBeInTheDocument();
     expect(
-      screen.getByText("Will Run: git add -- <files> · git commit · git push -u origin <branch>"),
+      screen.getByText("Will Run: git add -- <files>, git commit, git push -u origin <branch>"),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Will Run: git add -- <files> · git commit · git push -u origin <branch> · Open Compare Page",
+        "Will Run: git add -- <files>, git commit, git push -u origin <branch>, Open Compare Page",
       ),
     ).toBeInTheDocument();
   });

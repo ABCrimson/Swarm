@@ -66,6 +66,15 @@ test.describe("Stylesheet cascade", () => {
     }
   });
 
+  test("the page title sits at the same height on a page with header actions", async ({ app }) => {
+    // PageHeader is items-start: the 36px Graph/List segment on Workers must not push its h1 below pt-6.
+    await app.goTo("Logs");
+    const plain = await app.heading().boundingBox();
+    await app.goTo("Workers");
+    const withActions = await app.heading().boundingBox();
+    expect(withActions?.y).toBe(plain?.y);
+  });
+
   test("tools are rule-divided grid rows, and a 64-character name stays in its column", async ({
     app,
     page,
@@ -111,7 +120,8 @@ test.describe("Stylesheet cascade", () => {
       await app.open();
       await app.goTo("Logs");
       const label = app.main.locator(".log-row__level .swarm-pill-label").first();
-      // The label text is Title Case; `.log-row__level` paints it uppercase, the widest form.
+      await expect(app.main.locator(".log-row__level").first()).toHaveCSS("width", "56px");
+      // The label text is Title Case; `.log-row__level` paints it uppercase.
       await expect(label).toHaveText("Warn");
       await expect(label).toHaveCSS("text-transform", "uppercase");
       expect(await label.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);

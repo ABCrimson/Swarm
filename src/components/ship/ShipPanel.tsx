@@ -19,7 +19,7 @@ const containerStyle: CSSProperties = {
   flexDirection: "column",
   height: "100%",
   overflowY: "auto",
-  background: "oklch(0.10 0.03 220)",
+  background: "var(--color-surface-1)",
 };
 
 const centeredStyle: CSSProperties = {

@@ -129,7 +129,7 @@ describe("AgentChat", () => {
     });
 
     expect(screen.queryByText("Half a")).not.toBeInTheDocument();
-    expect(screen.getByText("Turn Failed: Cancelled · 5ms")).toBeInTheDocument();
+    expect(screen.getByText("Turn Failed: Cancelled, 5ms")).toBeInTheDocument();
   });
 
   it("renders a tool call as a labeled collapsible block showing name, input, and result", async () => {
@@ -459,7 +459,7 @@ describe("AgentChat", () => {
       numTurns: 2,
     });
 
-    expect(screen.getByText("Turn Complete · 1.5s · 2 Turns · $0.1234")).toBeInTheDocument();
+    expect(screen.getByText("Turn Complete, 1.5s, 2 Turns, $0.1234")).toBeInTheDocument();
   });
 
   it('labels the send button "Queue Next Turn" when the provider cannot interrupt, once busy', async () => {

@@ -205,7 +205,7 @@ function MessageBubble({ message }: { readonly message: ChatMessage }): React.Re
       )}
       <div style={metaStyle}>
         {time}
-        {message.servedBy && ` · Answered By ${message.servedBy} (Refusal Fallback)`}
+        {message.servedBy && `, Answered By ${message.servedBy} (Refusal Fallback)`}
       </div>
     </div>
   );
