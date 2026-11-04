@@ -5,6 +5,7 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sampleThroughput, seriesOf, ThroughputChart } from "#components/metrics/ThroughputChart";
+import { MAX_CHART_POINTS } from "#lib/chart-window";
 import { TOKEN_RATE_WINDOW_MS } from "#lib/metrics-aggregation";
 import { CLAUDE_MODELS } from "#lib/models";
 import { useAiStore } from "#store/ai";
@@ -66,6 +67,7 @@ describe("ThroughputChart", () => {
     });
 
     expect(screen.getByText("Waiting For Samples")).toBeInTheDocument();
+    expect(screen.getByText(`Tokens/Sec, Last ${MAX_CHART_POINTS} Samples`)).toBeInTheDocument();
     expect(container.querySelector(".recharts-cartesian-grid")).toBeNull();
   });
 });

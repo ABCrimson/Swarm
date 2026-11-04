@@ -35,4 +35,15 @@ describe("AIQueue", () => {
     expect(controller.signal.aborted).toBe(true);
     expect(useAiStore.getState().queue).toHaveLength(0);
   });
+
+  it("names a pending item's place in the whole queue", () => {
+    const base = { workerId: W, messages: [], status: "pending" } as const;
+    useAiStore
+      .getState()
+      .enqueue({ ...base, id: "aaaaaaaa-1111-4111-8111-111111111111", priority: "normal" });
+    useAiStore.getState().enqueue({ ...base, id: ITEM, priority: "normal" });
+    render(<AIQueue workerId={W} />);
+
+    expect(screen.getByText("Waiting, #2 In Line")).toBeInTheDocument();
+  });
 });

@@ -13,7 +13,7 @@ import { type ChatResponse, streamMessage } from "#lib/anthropic";
 import { agentTurnStarted } from "#lib/tauri";
 import { executeTool, resetToolApprovals } from "#lib/tools";
 import { useAiStore } from "#store/ai";
-import { useMessageHistoryStore } from "#store/message-history";
+import { EMPTY_THREAD, useMessageHistoryStore } from "#store/message-history";
 import { selectedModelAtom } from "#store/ui";
 
 vi.mock(import("#lib/anthropic"), async (importOriginal) => ({
@@ -78,6 +78,33 @@ afterEach(() => {
 });
 
 describe("AIChat", () => {
+  it("names the model that answered a refusal fallback", () => {
+    useMessageHistoryStore.setState({
+      threads: new Map([
+        [
+          W,
+          {
+            ...EMPTY_THREAD,
+            messages: [
+              {
+                id: "77777777-8888-4999-8aaa-bbbbbbbbbbbb",
+                role: "assistant",
+                content: "Answer",
+                timestamp: "2026-11-04T09:30:00.000Z",
+                servedBy: "claude-haiku",
+              },
+            ],
+          },
+        ],
+      ]),
+    });
+    render(<AIChat workerId={W} />);
+
+    expect(
+      screen.getByText(/, Answered By claude-haiku \(Refusal Fallback\)$/),
+    ).toBeInTheDocument();
+  });
+
   it("offers no message box when the transport has no webview AI chat", () => {
     web.on = true;
     render(<AIChat workerId={W} />);
