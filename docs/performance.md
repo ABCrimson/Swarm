@@ -195,7 +195,7 @@ Minification is Vite's default (Oxc). `pnpm build` writes `dist/` for the deskto
 `@anthropic-ai/sdk` has no vendor group. Only `src/lib/anthropic.ts` imports it, and every runtime importer of that module loads on demand: the lazily loaded Workers, Settings and Tools pages, and the `import("#lib/ai-chat")` in `useWorkerEvents`. Rolldown therefore places the SDK in chunks those pages load, off the startup path.
 
 > [!NOTE]
-> `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 14.9.0, not `framer-motion`.
+> `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 14.9.1, not `framer-motion`.
 
 ### Rust Release Profile
 
