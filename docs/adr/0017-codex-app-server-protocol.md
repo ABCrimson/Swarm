@@ -51,8 +51,9 @@ against a live 0.156.1 server (no model turns):
 
 ## Consequences
 
-- The adapter is tied to a verified server release (`VERIFIED_CODEX_VERSION`, 0.156.1); serde ignores
-  fields it does not read, so a newer server that only adds fields stays compatible.
+- The adapter is tied to a verified server release (`VERIFIED_CODEX_VERSION`, 0.168.0-alpha.1 since the
+  amendment below); serde ignores fields it does not read, so a newer server that only adds fields stays
+  compatible.
 - A thread is persisted by Codex only once it ran a turn; resuming one that never did fails with the
   server's `no rollout found`.
 - A turn whose `turn/start` is never acknowledged has no id to settle, so its `send_turn` fails instead
@@ -63,3 +64,12 @@ against a live 0.156.1 server (no model turns):
   enforces `Not initialized` and records the adapter's wire traffic.
 
 See [Adapter Layer](../architecture.md#adapter-layer).
+
+## Amendment (2026-11-04): verified against codex-cli 0.168.0-alpha.1 with checked-in schemas
+
+`VERIFIED_CODEX_VERSION` is 0.168.0-alpha.1. The output of `codex app-server generate-json-schema` for
+0.166.0 (npm `latest`) and 0.168.0-alpha.1 is checked in under
+`crates/swarm-core/tests/fixtures/codex/schema/<version>/`. One test asserts that the verified version is
+the newest snapshot; another walks every method and notification name the adapter sends or matches and
+fails with the name missing from the newest schema, so a renamed method fails in CI instead of at
+runtime. The schema generator is marked experimental, and its output layout may move between alphas.

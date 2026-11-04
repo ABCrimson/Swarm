@@ -122,7 +122,10 @@ prunes worktrees of `default_repo_root`; start the metrics loop; build both adap
 registry and the scheduler; apply the persisted `agent_concurrency`.
 **Shutdown** (`Runtime::shutdown`, once, on exit): stop the metrics loop, shut every live agent
 session down (in-flight turns get their settlement, within the caller's session budget), then drain the
-event writer and record the exact head seq. The drain has no budget: it returns once the writer has
+event writer and record the exact head seq. Closing the event sinks and queuing the writer's shutdown
+barrier are one step under the sinks' lock, which every emit holds across its closed check and its send,
+so an emit racing shutdown is either queued ahead of the barrier or refused at the sink; a record found
+behind the barrier is logged at error level with its type tag, never emitted. The drain has no budget: it returns once the writer has
 committed the last event accepted before it, however slow the disk's flushes are, and only a 120 s
 `DRAIN_CEILING` ends it early, logged at error level with the number of accepted events left
 unpersisted. `Runtime::shutdown` kills no PTY worker; `swarmd` stops them itself first (see [Runtime Modes](#runtime-modes)).
@@ -268,7 +271,10 @@ against a checkout being removed:
    the mark cannot register its session: it shuts the session down itself and reports no surviving
    worker.
 2. It removes the worker's session, one a drained attach registered included, and shuts it down, so
-   the provider process is stopped and reaped. A failed shutdown is logged and never fails the kill.
+   the provider and its process tree are stopped and reaped (stdin closed; then, if the provider still
+   runs after its grace — none for a Claude CLI mid-turn — a forced tree kill: `SIGKILL` to its
+   process group on Unix, `taskkill /T /F` on Windows, which also ends the `node` beneath npm's
+   `codex.cmd`). A failed shutdown is logged and never fails the kill.
    It then waits for any other shutdown of that session still running (an overlapping kill's, or
    `agent_shutdown`'s): a session leaves the registry only through `take_session`, which removes it
    and counts a `SessionStop`, or by being replaced in `AttachPermit::insert`, which counts a
@@ -296,6 +302,8 @@ spawn_worker(config)
   ─▶ git worktree lock  (reason: the worker id)
   ─▶ spawn_pty(cwd = worktree) ─▶ register ─▶ emit worker_spawned, then worktree_created
   any step failing ─▶ roll back the shell, worktree and unchanged branch; the spawn fails (no fallback cwd)
+    (a refused `git worktree add -b` deletes the branch it created with `git branch -d` when the tip is
+     still the base; a timed-out add returns without that rollback)
 
 kill_worker(id)
   mark closing + wait for attaches ─▶ shut the provider session down
@@ -321,7 +329,7 @@ the mechanics ([ADR-0009](adr/0009-ship-chain-structural-guarantees.md)). The lo
 | --- | --- |
 | `git_ship_preflight(workerId, mode?)` | Read-only. `mode` is `all` (default) or `staged`. Nine refusal conditions become Title Case `blockers` and `canShip = false`: not the worktree's toplevel, primary checkout, detached `HEAD`, branch equals the base branch, protected branch (`main`, `master`, `develop`, `release/*`), no `origin`, an `origin` with more than one push URL, unresolved merge conflicts, nothing to ship. The remote and host it shows are `origin`'s push URL (`git remote get-url --push --all`), the one `git push origin` reaches. Also returns the deny-list preview, diff stat, ahead/behind and whether the host supports a compare URL. |
 | `git_stage_commit(workerId, shipId, message, mode, finalStep)` | Primary-checkout guard, then one `git status --porcelain=v2 -z` snapshot (conflicts refuse), the deny list, `git restore --staged` of denied paths, in `all` mode `git add` of an explicit `:(top,literal)` path list, an index re-check, then `git commit --file=- --trailer=…`. Emits `ship_progress` and `commit_created`. |
-| `git_push(workerId, shipId, finalStep)` | Primary-checkout guard, live branch (detached, protected `main`/`master`/`develop`/`release/*` and the base branch refuse), sha of the branch tip, `git push --end-of-options origin <sha>:refs/heads/<branch>` (the exact commit, non-force), then `git branch --set-upstream-to=refs/remotes/origin/<branch>`. Every successful push is recorded as the worker's push record (sha, remote ref, `origin/<branch>`), which `ship_compare_url` reads. When the event-log seq read succeeds it also records `last_shipped_seq` and `last_shipped_commit` (the only writer). |
+| `git_push(workerId, shipId, finalStep, expectedRemote?)` | Primary-checkout guard, live branch (detached, protected `main`/`master`/`develop`/`release/*` and the base branch refuse), sha of the branch tip; in one repo-lock hold, origin's push URLs (none: `noRemote`; more than one: `nonGitHubHost`; a redacted URL other than `expectedRemote`: `pushRejected` "Origin Changed Since The Preview", before git runs), then `git push --end-of-options origin <sha>:refs/heads/<branch>` (the exact commit, non-force), then `git branch --set-upstream-to=refs/remotes/origin/<branch>`. Every successful push is recorded as the worker's push record (sha, remote ref, `origin/<branch>`), which `ship_compare_url` reads. When the event-log seq read succeeds it also records `last_shipped_seq` and `last_shipped_commit` (the only writer). |
 | `ship_compare_url(workerId, shipId, title, body)` | `https://<host>/<owner>/<repo>/compare/<base>...<branch>?quick_pull=1&title=&body=`, capped at 6000 characters (the body is cut first, the title as a last resort, the path never). |
 
 - Each command ends an attempt with exactly one `ship_settled`, on failure or on the call marked
@@ -398,13 +406,13 @@ live `Arc<dyn AgentSession>` through the
 | | Claude Code ([ADR-0016](adr/0016-claude-code-control-protocol.md)) | Codex ([ADR-0017](adr/0017-codex-app-server-protocol.md)) |
 | --- | --- | --- |
 | Process | `claude -p --input-format stream-json --output-format stream-json`, one child per session | `codex app-server`, JSON-RPC 2.0 without the `jsonrpc` member, one child per session (the binary is found on absolute `PATH` entries only; on Windows the `codex.cmd` npm shim is resolved through `PATHEXT`) |
-| Verified against | `claude` 2.1.280 and 2.1.281 (the protocol, turn frames); 2.1.296 (the settings sources, deny lists and `disable*Mode` settings keys of [ADR-0038](adr/0038-agent-provider-trust-model.md)); 2.1.318 (the settings sources and the `initialize`, `get_settings` and `get_binary_version` control requests); oldest accepted CLI 2.1.318 | codex-cli 0.156.1 (the protocol); 0.163.0-alpha.5 (schema compared, additive only; repo-config trust measured, [ADR-0038](adr/0038-agent-provider-trust-model.md)) |
+| Verified against | `claude` 2.1.280 and 2.1.281 (the protocol, turn frames); 2.1.296 (the settings sources, deny lists and `disable*Mode` settings keys of [ADR-0038](adr/0038-agent-provider-trust-model.md)); 2.1.318 (the settings sources and the `initialize`, `get_settings` and `get_binary_version` control requests); oldest accepted CLI 2.1.318 | codex-cli 0.168.0-alpha.1 (protocol; schema snapshots of 0.166.0 and 0.168.0-alpha.1 under `crates/swarm-core/tests/fixtures/codex/schema/`, method names tested against the newest; the private `CODEX_HOME` of [ADR-0038](adr/0038-agent-provider-trust-model.md)); 0.163.0-alpha.5 (repo-config trust measured) |
 | Handshake | `initialize` control request (30 s) opens every session | `initialize`, `initialized`, then `thread/start` or `thread/resume` (30 s) |
 | A turn | user line stamped with the turn id as `uuid`; the `result` line settles it | `turn/start` (acknowledged within 30 s); `turn/completed` settles it |
 | Permissions | `can_use_tool` over `--permission-prompt-tool stdio`; an unanswered ask is denied after 10 min | server requests `…/requestApproval`, answered by `respond_permission`; any other server request is answered `-32601` |
 | Cancel (**Graceful**) | `interrupt` control request; kill fallback after 5 s without an ack or a further 10 s without a result | `turn/interrupt`; the thread survives |
 | Capabilities | partial deltas, resume, native cost, worktree aware, interactive permissions; no mid-turn steering | the same, except no native cost (token counts only) |
-| Teardown | idle: close stdin, 3 s grace; busy: kill | close stdin, 3 s grace, then kill |
+| Teardown | idle: close stdin, 3 s grace; busy: no grace; then a process-tree kill if it still runs | close stdin, 3 s grace, then a process-tree kill |
 
 - **Trust tiers** `restricted`, `standard` (default) and `write_enabled` are the only accepted
   `permissionMode` values ([ADR-0015](adr/0015-trust-tiers-closed-vocabulary.md)); `bypassPermissions`,
@@ -444,7 +452,9 @@ The data directory is Tauri's app data directory for the bundle identifier
 | --- | --- | --- |
 | `swarm-events.db` (+ `-wal`, `-shm`) | Rust | The event log. |
 | `sessions.json` | Rust | `{"sessions": [...]}`; saved after every create, delete and membership change. |
-| `swarm-config.json` | Rust | `anthropic_api_key`, `max_workers`, `agent_concurrency`, `default_repo_root`, `shipCoAuthoredBy`, namespaced `<store>:<key>` entries. Owner-only on Unix. |
+| `swarm-config.json` | Rust | `max_workers`, `agent_concurrency`, `default_repo_root`, `shipCoAuthoredBy`, namespaced `<store>:<key>` entries (a key an older build left here is moved to the secret store at startup and on access). Owner-only on Unix. |
+| `swarm-secrets.json` | Rust | `anthropic_api_key`, only on a host with no OS keychain (otherwise the key is the keychain's `swarm`/`anthropic_api_key` entry, one per OS user, [ADR-0026](adr/0026-rust-owns-config-and-sessions.md)). Owner-only on Unix. |
+| `codex-home/<worker id>/` | Rust | Each Codex worker's private `CODEX_HOME` (Swarm `config.toml` with Codex's built-in apps, remote-plugin, computer-use, browser-use and skill MCP-install features off, a copy of `auth.json`, Codex state); kept for `thread/resume` while the worker exists; `kill_worker` deletes it once the worker is gone (`CodexAdapter::remove_worker_home`; a kill that fails with the worker still registered keeps it) ([ADR-0038](adr/0038-agent-provider-trust-model.md)). |
 | `daemon.lock`, `daemon.lock.json` | Rust | The single-instance lock and who holds it. |
 | `daemon-token` | `swarmd` | The bearer token (`0600`, or a current-user DACL on Windows). |
 | `swarm-settings.json`, `swarm-snapshots.json`, `swarm-templates.json` | webview (`tauri-plugin-store`) | Preferences, session snapshots, templates. |
@@ -522,7 +532,9 @@ and [api.md](api.md#wire-protocol-swarmd)):
   embedded in the binary.
 - **Auth and exposure** ([ADR-0022](adr/0022-swarmd-authentication-and-exposure.md)): a 64-hex-character
   token in `<data dir>/daemon-token`; non-loopback `--bind` refused until an earlier loopback run minted
-  it; a `Host`/`Origin` allow-list on every request (`--allow-host` for proxies); a 5 s handshake
+  it; a plaintext exposure gate on both connection ends (loopback always, RFC 1918 and `100.64.0.0/10`
+  only with `--allow-plaintext-lan`, public and native IPv6 beyond `::1` never; a concrete `--bind` no
+  connection could use exits 1); a `Host`/`Origin` allow-list on every request (`--allow-host` for proxies); a 5 s handshake
   deadline; 32 connections and 16 pending handshakes; a 2 MiB message cap; the token only in the connect
   URL's fragment.
 - **Delivery** ([ADR-0023](adr/0023-swarmd-one-ordered-lane.md)): each connection subscribes to the
@@ -690,9 +702,9 @@ textures: bloom (threshold, dual Kawase blur, composite), chromatic aberration, 
 
 | Boundary | Enforcement |
 | --- | --- |
-| Remote clients of `swarmd` | Token, `Host`/`Origin` allow-list, non-loopback gate, `RemotePolicy` ([ADR-0021](adr/0021-command-registry-remote-policy.md), [ADR-0022](adr/0022-swarmd-authentication-and-exposure.md)). An authenticated client can run commands as the daemon's user. |
+| Remote clients of `swarmd` | Token, exposure gate, `Host`/`Origin` allow-list, non-loopback gate, `RemotePolicy` ([ADR-0021](adr/0021-command-registry-remote-policy.md), [ADR-0022](adr/0022-swarmd-authentication-and-exposure.md)). An authenticated client can run commands as the daemon's user. |
 | Webview to OS | Capability file (per-command `allow-*` ACL, no static fs scope, deny list, opener URL scope) and CSP ([ADR-0030](adr/0030-tauri-3-alpha-capability-scoped-fs.md)). |
-| `read_file` / `write_file` commands | Absolute paths, canonicalized (symlinks, 8.3 short names) before the scope and deny checks; reads limited to the data directory and `$HOME`, writes to the data directory and `~/.swarm`; `swarm-config.json` (the API key), the daemon token and its temp form, and eighteen home credential stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.config/gh`, `~/.claude`, `~/.codex`, `~/.git-credentials`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials`, `~/.cargo/credentials.toml`, `~/.config/gcloud`, `~/AppData/Roaming/GitHub CLI`, `~/AppData/Roaming/gcloud`) are never accessible; the app's own state files in the data directory (`swarm-events.db`, `sessions.json`, `daemon.lock`, `swarm-settings.json`, `swarm-snapshots.json`, `swarm-templates.json`, and names with those prefixes) are never writable; Windows writes refuse `:`, a trailing `.` or space and device names; `Denied` remotely ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)). |
+| `read_file` / `write_file` commands | Absolute paths, canonicalized (symlinks, 8.3 short names) before the scope and deny checks; reads limited to the data directory and `$HOME`, writes to the data directory and `~/.swarm`; `swarm-config.json` and `swarm-secrets.json` (the API key), every path under `<data dir>/codex-home/` (the Codex workers' homes), the daemon token and its temp form, and eighteen home credential stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.config/gh`, `~/.claude`, `~/.codex`, `~/.git-credentials`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials`, `~/.cargo/credentials.toml`, `~/.config/gcloud`, `~/AppData/Roaming/GitHub CLI`, `~/AppData/Roaming/gcloud`) are never accessible; the app's own state files in the data directory (`swarm-events.db`, `sessions.json`, `daemon.lock`, `swarm-settings.json`, `swarm-snapshots.json`, `swarm-templates.json`, and names with those prefixes) are never writable; Windows writes refuse `:`, a trailing `.` or space and device names; `Denied` remotely ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)). |
 | Webview AI tools | Every tool that acts on the machine, `kill_worker` included, needs the user's per-call answer inside its own `execute`; session grants are exact to tool, worker and argument ([ADR-0035](adr/0035-ai-tool-approval-and-fs-scope.md)). |
 | Provider permissions | Closed trust tiers, no bypass modes ([ADR-0015](adr/0015-trust-tiers-closed-vocabulary.md)). |
 | Git | No force push, no hook bypass, deny list, primary-checkout guard, secret redaction ([ADR-0009](adr/0009-ship-chain-structural-guarantees.md), [ADR-0012](adr/0012-single-git-runner.md)). |

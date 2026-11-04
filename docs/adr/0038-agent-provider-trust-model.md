@@ -110,8 +110,9 @@ resolution: a probe resolves afresh, a spawn reuses it.
   `CODEX_HOME` and no trust entry, the project layer (`.codex/config.toml`) is listed but disabled
   ("To load project-local config, hooks, and exec policies, add <dir> as a trusted project in
   <CODEX_HOME>/config.toml"), and its model and `approval_policy` were not applied. SWARM does not
-  rely on this beyond the tier policy check it already makes. Not checked: behavior once the user
-  trusts the project, and whether trust is keyed by cwd or by git root.
+  rely on this beyond the tier policy check it already makes. Codex workers run with a private
+  `CODEX_HOME` with no `[projects]` trust entries (amendment of 2026-11-04), so a repo
+  `.codex/config.toml` stays disabled for every worker whatever the operator trusts.
 - Probe and spawn can still resolve different binaries if a `PATH` directory changes between them; the
   cache narrows that for Claude, and changing a `PATH` directory already needs the user's own write
   access.
@@ -129,3 +130,37 @@ the child is guarded before it leaves the blocking task.
 
 One gap remains and is accepted: a probe dropped during `private_probe_dir().await` can still leave an
 empty directory, created after the drop and before any guard exists.
+
+## Amended 2026-11-04: a private `CODEX_HOME` per Codex worker
+
+A Codex worker inherited the operator's Codex home (`~/.codex`) and with it every MCP server that home
+exposes: 12 on the measuring host by `mcpServerStatus/list` (2026-11-04), of which 3 are keys of
+`mcp_servers`, four come from Codex plugins (cloudflare, context7, gitlab, vercel) and `codex_apps` is
+built into the CLI, so no `mcp_servers` edit reaches them. A `-c 'mcp_servers={}'` override merges an
+empty table into the loaded one: with it, `config/read` returned the same three keys.
+
+Every Codex child now runs with `CODEX_HOME` at `<data dir>/codex-home/<worker id>`
+(`crates/swarm-core/src/agent/codex/home.rs`). The home holds a Swarm-written `config.toml`, rewritten
+at every spawn, with no `[mcp_servers]` table, no plugins and no `[projects]` trust entries, and a
+`[features]` table that turns off `apps` (the built-in `codex_apps` connectors), `remote_plugin`,
+`computer_use`, `browser_use` and `skill_mcp_dependency_install`, which codex-cli 0.168.0-alpha.1
+enables by default, and, when the operator is signed in through a file, a copy of the operator's
+`auth.json` (copied when missing or older than the source, kept when newer). Codex keeps its own state
+there, so `thread/resume` finds a worker's threads; `kill_worker` deletes the home once the worker is
+gone (`CodexAdapter::remove_worker_home`), the `auth.json` copy included.
+An adapter built without a data directory refuses to spawn rather than fall back to the operator's
+home. The fs commands deny every path under `<data dir>/codex-home/`
+([ADR-0035](0035-ai-tool-approval-and-fs-scope.md)).
+
+Evidence, codex-cli 0.168.0-alpha.1, 2026-11-04: with `CODEX_HOME` at an empty directory, `config/read`
+returned no `mcp_servers` keys and `mcpServerStatus/list` returned an empty list; the operator's home
+returned 3 keys and 12 servers. Limits of that evidence:
+
+- The 0 servers were measured only without a login (no `auth.json` in the private home). In an empty
+  home `codex features list` reports those five and `plugins` on; in a home holding only Swarm's
+  `config.toml` the five read `false`. Whether a signed-in worker still gets a server the CLI builds
+  in is not measured; a signed-in rerun needs the owner's go-ahead.
+- User skills under `~/.agents/skills` are outside `CODEX_HOME` and still load in every worker at any
+  tier (`skills/list` returned 63 user-scope skills). Skill isolation is an owner question.
+- Not run: a token refresh inside a private copy; the installed CLI reports "refresh token was already
+  used", so one refresh may invalidate the operator's and the other homes' copies.

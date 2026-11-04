@@ -20,13 +20,15 @@ interactive shells; `spawn_piped` is the only one a JSON provider may use.
 The framer scans linearly (its `\n` search resumes from a cursor, so each byte is examined once) and
 caps a line at `MAX_LINE_BYTES` (10 MiB): an unterminated line past the cap returns
 `AppError::LineTooLong`, discards the rest of that line, and keeps parsing. The caller still treats it
-as a session-level failure. `PipedHandle::kill_and_wait` closes stdin, kills and reaps only the child;
-`stderr_tail` keeps the last 4 KiB of stderr so a provider's fatal startup message is recoverable.
+as a session-level failure. A provider is stopped with its process tree (`PipedHandle::stop` /
+`proc::stop_tree`: the provider's exit sequence, its grace, then `SIGKILL` to its process group on Unix
+or `taskkill /T /F` on Windows; `spawn_piped` makes the child lead its own group); `stderr_tail` keeps the last 4 KiB of stderr so a provider's fatal startup message is recoverable.
 
 ## Consequences
 
 - Provider stderr is captured, not shown in a terminal.
-- Killing a provider kills the child only, not processes it started.
+- Stopping a provider ends its process tree, except a descendant that moved to another process group or
+  session, or one that outlives a provider which exited on its own within its grace.
 - The old Rust Anthropic client, SSE parser and queue (the `ai/` module) were deleted in the same
   change that introduced this ([ADR-0019](0019-webview-chat-beside-adapters.md)); the framer is the
   descendant of the SSE loop's line splitter.

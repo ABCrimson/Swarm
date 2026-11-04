@@ -679,7 +679,7 @@ async function commitAndPushSteps(
     preflight,
   );
   known.commitSha = commitSha ?? undefined;
-  const push = await gitPush(workerId, shipId, true);
+  const push = await gitPush(workerId, shipId, true, preflight?.remote);
   known.commitSha = commitSha ?? push.sha;
   known.pushedRef = push.pushedRef;
   await requireReceipt(recorder, "git_push");
@@ -701,7 +701,7 @@ async function commitPushAndCompareSteps(
     preflight,
   );
   known.commitSha = commitSha ?? undefined;
-  const push = await gitPush(workerId, shipId, false);
+  const push = await gitPush(workerId, shipId, false, preflight?.remote);
   known.commitSha = commitSha ?? push.sha;
   known.pushedRef = push.pushedRef;
   const [title = message, ...bodyLines] = message.split("\n");
