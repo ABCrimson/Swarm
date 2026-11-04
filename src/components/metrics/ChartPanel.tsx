@@ -37,7 +37,7 @@ const headerStyle: CSSProperties = {
 };
 
 const captionStyle: CSSProperties = {
-  fontFamily: "var(--font-mono)",
+  fontFamily: "var(--font-body)",
   fontSize: 11,
   fontWeight: 400,
   color: "var(--color-fg-dim)",
