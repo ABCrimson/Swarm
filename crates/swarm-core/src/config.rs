@@ -38,7 +38,7 @@ use crate::error::AppError;
 use crate::state_file::{self, StoredObject};
 
 /// Config file name within the app data directory.
-const CONFIG_FILE: &str = "swarm-config.json";
+pub(crate) const CONFIG_FILE: &str = "swarm-config.json";
 
 /// Serializes every read and read-modify-write of the file.
 static CONFIG_LOCK: Mutex<()> = Mutex::new(());

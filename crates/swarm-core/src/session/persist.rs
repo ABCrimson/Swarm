@@ -35,7 +35,7 @@ use crate::Paths;
 use crate::error::AppError;
 use crate::state_file::{self, StoredObject};
 
-const SESSIONS_FILE: &str = "sessions.json";
+pub(crate) const SESSIONS_FILE: &str = "sessions.json";
 const SESSIONS_KEY: &str = "sessions";
 
 /// Serializes every read and write of the file, and — in [`save`] — the

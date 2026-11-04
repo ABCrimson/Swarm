@@ -51,14 +51,21 @@ const MAX_READ_BYTES: u64 = 16 << 20;
 
 /// File-name prefixes (compared lower-case) of the data-directory files
 /// that hold credentials.
-const DENIED_DATA_FILE_PREFIXES: [&str; 2] = ["swarm-config.json", "daemon-token"];
+const DENIED_DATA_FILE_PREFIXES: [&str; 2] = [
+    crate::config::CONFIG_FILE,
+    // swarmd's `auth::TOKEN_FILE`; swarm-core cannot depend on swarmd.
+    "daemon-token",
+];
 
 /// Data-dir file prefixes (lower-case, dots trimmed) of live app state; a
 /// write could corrupt or poison them.
 const DENIED_WRITE_DATA_FILE_PREFIXES: [&str; 6] = [
-    "swarm-events.db",
-    "sessions.json",
+    crate::runtime::EVENT_LOG_FILE,
+    crate::session::persist::SESSIONS_FILE,
+    // `lock::LOCK_FILE`; as a prefix it also covers the lock's
+    // `daemon.lock.json` info file (`lock::INFO_FILE`).
     "daemon.lock",
+    // The webview's tauri-plugin-store files (`src/lib/lazy-store.ts`).
     "swarm-settings.json",
     "swarm-snapshots.json",
     "swarm-templates.json",
