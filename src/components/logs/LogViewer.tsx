@@ -166,6 +166,11 @@ export function LogViewer(): React.ReactElement {
               title={
                 entries.length === 0 ? "No Log Entries Yet" : "No Entries Match Current Filters"
               }
+              body={
+                entries.length === 0
+                  ? "Workers And The App Write Here As They Run"
+                  : "Clear A Level Or The Search To See More"
+              }
             />
           </div>
         )}
