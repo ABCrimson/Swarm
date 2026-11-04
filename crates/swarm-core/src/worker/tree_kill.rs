@@ -21,7 +21,7 @@
 //! there is no graceful tree request there: a caller's graceful step is
 //! closing the child's stdin.
 //!
-//! [`terminate`] and [`kill`] first ask `try_wait` whether the child still
+//! [`kill`] and, on Unix, [`terminate`] first ask `try_wait` whether the child
 //! runs. An unreaped child keeps its pid (and, on Unix, its group id)
 //! reserved; once `try_wait` has reaped it, the number can belong to an
 //! unrelated process, so nothing is signalled after that. A grandchild
@@ -68,15 +68,14 @@ fn running(child: &mut Child) -> bool {
 /// terminal outside the foreground group) acts on it. Does nothing on
 /// Windows (see the module doc) or once the child has exited.
 pub(crate) fn terminate(child: &mut Child) {
-    if !running(child) {
-        return;
-    }
     #[cfg(unix)]
-    {
+    if running(child) {
         let pgid = child.id();
         signal_group(pgid, "TERM");
         signal_group(pgid, "CONT");
     }
+    #[cfg(windows)]
+    let _ = child;
 }
 
 /// Force-kills `child` and everything in its tree, unless the child has
