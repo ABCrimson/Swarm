@@ -45,6 +45,27 @@ test.describe("Stylesheet cascade", () => {
     );
   });
 
+  test("every Settings group after the first has the same pad above its rule", async ({ app }) => {
+    // `py-6` on SettingsSection; only the column's first group drops its top
+    // pad. Alert Thresholds sits inside its own <form>, so a first-child rule
+    // that misses the wrapper leaves it flush on its rule.
+    await app.goTo("Settings");
+    const groups = [
+      "AI Connectivity",
+      "AI Model",
+      "Visual Preferences",
+      "Workers & AI",
+      "Sessions & Logs",
+      "Keybindings",
+      "Alert Thresholds",
+      "About",
+    ];
+    await expect(app.main.getByRole("region", { name: groups[0] })).toHaveCSS("padding-top", "0px");
+    for (const name of groups.slice(1)) {
+      await expect(app.main.getByRole("region", { name })).toHaveCSS("padding-top", "24px");
+    }
+  });
+
   test.describe("under reduced motion", () => {
     test.use({ reducedMotion: "reduce" });
 
