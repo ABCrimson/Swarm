@@ -272,9 +272,11 @@ against a checkout being removed:
    worker.
 2. It removes the worker's session, one a drained attach registered included, and shuts it down, so
    the provider and its process tree are stopped and reaped (stdin closed; then, if the provider still
-   runs after its grace — none for a Claude CLI mid-turn — a forced tree kill: `SIGKILL` to its
+   runs after its grace, a forced tree kill: `SIGKILL` to its
    process group on Unix, `taskkill /T /F` on Windows, which also ends the `node` beneath npm's
-   `codex.cmd`). A failed shutdown is logged and never fails the kill.
+   `codex.cmd`; a Claude CLI mid-turn gets no grace, so its tree is killed first and its stdin
+   closed after, and it cannot exit 0 on that EOF instead). A failed shutdown is logged and never
+   fails the kill.
    It then waits for any other shutdown of that session still running (an overlapping kill's, or
    `agent_shutdown`'s): a session leaves the registry only through `take_session`, which removes it
    and counts a `SessionStop`, or by being replaced in `AttachPermit::insert`, which counts a
@@ -412,7 +414,7 @@ live `Arc<dyn AgentSession>` through the
 | Permissions | `can_use_tool` over `--permission-prompt-tool stdio`; an unanswered ask is denied after 10 min | server requests `…/requestApproval`, answered by `respond_permission`; any other server request is answered `-32601` |
 | Cancel (**Graceful**) | `interrupt` control request; kill fallback after 5 s without an ack or a further 10 s without a result | `turn/interrupt`; the thread survives |
 | Capabilities | partial deltas, resume, native cost, worktree aware, interactive permissions; no mid-turn steering | the same, except no native cost (token counts only) |
-| Teardown | idle: close stdin, 3 s grace; busy: no grace; then a process-tree kill if it still runs | close stdin, 3 s grace, then a process-tree kill |
+| Teardown | idle: close stdin, 3 s grace, then a process-tree kill if it still runs; busy: a process-tree kill at once, then stdin closed | close stdin, 3 s grace, then a process-tree kill |
 
 - **Trust tiers** `restricted`, `standard` (default) and `write_enabled` are the only accepted
   `permissionMode` values ([ADR-0015](adr/0015-trust-tiers-closed-vocabulary.md)); `bypassPermissions`,
