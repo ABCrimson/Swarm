@@ -17,30 +17,30 @@
 @layer components {
   /* ── xyflow theme (ReactFlow colorMode="dark") ───────────────────── */
   .worker-graph .react-flow {
-    --xy-background-color: oklch(0.08 0.02 220);
-    --xy-background-pattern-dots-color: oklch(0.14 0.03 220);
+    --xy-background-color: var(--color-surface-0);
+    --xy-background-pattern-dots-color: var(--color-surface-2);
     --xy-edge-stroke: oklch(0.72 0.02 220 / 0.8);
     --xy-edge-stroke-selected: oklch(0.85 0.2 205);
     --xy-connectionline-stroke: oklch(0.72 0.02 220 / 0.8);
     --xy-connectionline-stroke-width: 2;
     --xy-minimap-background-color: oklch(0.1 0.03 220);
-    --xy-minimap-mask-background-color: oklch(0.06 0.02 220 / 0.8);
-    --xy-selection-background-color: oklch(0.78 0.18 205 / 0.08);
-    --xy-selection-border: 1px dotted oklch(0.78 0.18 205 / 0.8);
+    --xy-minimap-mask-background-color: oklch(from var(--color-void) l c h / 0.8);
+    --xy-selection-background-color: oklch(from var(--color-plasma) l c h / 0.08);
+    --xy-selection-border: 1px dotted oklch(from var(--color-plasma) l c h / 0.8);
     --xy-handle-border-color: transparent;
   }
 
   .worker-graph .react-flow__minimap {
-    border: 1px solid oklch(0.22 0.04 220);
-    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
     overflow: hidden;
   }
 
   /* The node wrapper is the single tab stop per node. */
   .worker-graph .react-flow__node:focus-visible {
-    outline: 2px solid oklch(0.78 0.18 205 / 0.7);
+    outline: 2px solid var(--color-plasma);
     outline-offset: 3px;
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
   }
 
   /* The armed annotation-link source: dashed, so it stays distinct from the
@@ -49,7 +49,7 @@
   .worker-graph .react-flow__node.worker-graph__node--link-source:focus-visible {
     outline: 2px dashed var(--color-plasma);
     outline-offset: 3px;
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
   }
 
   /* Colour and width arrive as custom properties so the focus rule below can override them. */
@@ -73,16 +73,16 @@
     flex-direction: column;
     gap: 8px;
     padding: 16px;
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     background: oklch(0.12 0.03 220 / 0.7);
     backdrop-filter: blur(12px) saturate(1.5);
     border: 1px solid var(--node-border);
     box-shadow: 0 0 0 1px var(--node-border);
     cursor: pointer;
     transition:
-      box-shadow 0.3s cubic-bezier(0, 0, 0.2, 1),
-      border-color 0.3s cubic-bezier(0, 0, 0.2, 1),
-      scale 0.15s cubic-bezier(0, 0, 0.2, 1);
+      box-shadow 0.3s var(--ease-out),
+      border-color 0.3s var(--ease-out),
+      scale 0.15s var(--ease-out);
   }
 
   .worker-node[data-state="running"] {
@@ -95,7 +95,7 @@
   .worker-node__glow {
     position: absolute;
     inset: -1px;
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     pointer-events: none;
     box-shadow: 0 0 20px var(--node-glow);
     opacity: 0.3;
@@ -154,11 +154,11 @@
     pointer-events: none;
     padding: 1px 5px;
     border: 1px solid var(--edge-stroke);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     background: oklch(0.1 0.03 220 / 0.85);
-    color: oklch(0.95 0.02 220);
+    color: var(--color-fg-bright);
     font-family: var(--font-mono);
-    font-size: 0.625rem;
+    font-size: var(--text-2xs);
     font-weight: 600;
   }
 
@@ -169,25 +169,20 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid oklch(0.28 0.05 220);
-    border-radius: 8px;
+    border: 1px solid var(--color-border-2);
+    border-radius: var(--radius-md);
     background: oklch(0.12 0.03 220 / 0.7);
     backdrop-filter: blur(12px) saturate(1.5);
-    color: oklch(0.82 0.04 220);
+    color: var(--color-fg);
     cursor: pointer;
     transition:
-      background 0.15s ease,
-      border-color 0.15s ease;
+      background-color 0.15s var(--ease-out),
+      border-color 0.15s var(--ease-out);
   }
 
   .graph-control:hover {
-    background: oklch(0.17 0.04 220);
-    border-color: oklch(0.35 0.06 220);
-  }
-
-  .graph-control:focus-visible {
-    outline: 2px solid oklch(0.78 0.18 205 / 0.7);
-    outline-offset: 2px;
+    background: var(--color-surface-3);
+    border-color: var(--color-border-3);
   }
 
   /* ── Node context menu (popover="auto") ────────────────────────── */
@@ -210,14 +205,14 @@
     margin: 0;
     min-width: 160px;
     padding: 4px;
-    border: 1px solid oklch(0.28 0.05 220);
-    border-radius: 8px;
+    border: 1px solid var(--color-border-2);
+    border-radius: var(--radius-md);
     background: oklch(0.12 0.03 220 / 0.85);
     backdrop-filter: blur(16px) saturate(1.5);
-    color: oklch(0.82 0.04 220);
+    color: var(--color-fg);
     box-shadow:
-      0 0 0 1px oklch(0.78 0.18 205 / 0.1),
-      0 12px 32px oklch(0.06 0.02 220 / 0.6);
+      0 0 0 1px oklch(from var(--color-plasma) l c h / 0.1),
+      0 12px 32px oklch(from var(--color-void) l c h / 0.6);
   }
 
   /* Collision-aware placement: below-right of the cursor, flipping at the viewport edges. */
@@ -237,7 +232,7 @@
   .graph-context-menu__title {
     padding: 4px 12px 6px;
     font-family: var(--font-mono);
-    font-size: 0.6875rem;
+    font-size: var(--text-xs);
     color: var(--color-fg-dim);
     user-select: text;
   }
@@ -247,22 +242,22 @@
     width: 100%;
     padding: 8px 12px;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background: transparent;
     color: inherit;
     font-family: var(--font-body);
-    font-size: 0.8125rem;
+    font-size: var(--text-md);
     text-align: start;
     cursor: pointer;
-    transition: background 0.1s ease;
+    transition: background-color 0.1s var(--ease-out);
   }
 
   .graph-context-menu__item[data-variant="danger"] {
-    color: oklch(0.72 0.2 10);
+    color: var(--color-rose);
   }
 
   .graph-context-menu__item:is(:hover, :focus-visible):not([aria-disabled="true"]) {
-    background: oklch(0.78 0.18 205 / 0.12);
+    background: oklch(from var(--color-plasma) l c h / 0.12);
   }
 
   .graph-context-menu__item:focus-visible:not([aria-disabled="true"]) {
@@ -271,7 +266,7 @@
   }
 
   .graph-context-menu__item[data-variant="danger"]:is(:hover, :focus-visible) {
-    background: oklch(0.72 0.2 10 / 0.12);
+    background: oklch(from var(--color-rose) l c h / 0.12);
   }
 
   .graph-context-menu__item[data-variant="danger"]:focus-visible:not([aria-disabled="true"]) {
@@ -292,7 +287,7 @@
     height: 1px;
     margin: 4px 0;
     border: none;
-    background: oklch(0.22 0.04 220);
+    background: var(--color-border);
   }
 
   /* ── Causality inspector (modal <dialog>) ──────────────────────── */
@@ -304,13 +299,13 @@
     width: min(420px, calc(100vw - 32px));
     max-height: 70vh;
     padding: 0;
-    border: 1px solid oklch(0.28 0.05 220);
-    border-radius: 12px;
+    border: 1px solid var(--color-border-2);
+    border-radius: var(--radius-lg);
     background: oklch(0.1 0.03 220);
     color: oklch(0.85 0.03 220);
     box-shadow:
-      0 0 0 1px oklch(0.78 0.18 205 / 0.1),
-      0 16px 48px oklch(0.06 0.02 220 / 0.6);
+      0 0 0 1px oklch(from var(--color-plasma) l c h / 0.1),
+      0 16px 48px oklch(from var(--color-void) l c h / 0.6);
     overflow: hidden;
   }
 
@@ -332,26 +327,19 @@
     align-items: center;
     justify-content: center;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background: transparent;
     color: oklch(0.55 0.04 220);
     cursor: pointer;
   }
 
   .graph-icon-button:hover {
-    background: oklch(0.17 0.04 220);
-    color: oklch(0.82 0.04 220);
-  }
-
-  .graph-icon-button:focus-visible,
-  .causality-panel__row:focus-visible,
-  .worker-detail__path:focus-visible {
-    outline: 2px solid oklch(0.78 0.18 205 / 0.7);
-    outline-offset: 2px;
+    background: var(--color-surface-3);
+    color: var(--color-fg);
   }
 
   .causality-panel__row:hover {
-    border-color: oklch(0.35 0.06 220);
+    border-color: var(--color-border-3);
   }
 
   /* Worktree path in the detail panel: a link-styled button (desktop) or plain text. */
@@ -362,7 +350,7 @@
     padding: 0;
     border: none;
     background: none;
-    color: oklch(0.78 0.18 205);
+    color: var(--color-plasma);
     font: inherit;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -376,7 +364,7 @@
   }
 
   span.worker-detail__path {
-    color: oklch(0.82 0.04 220);
+    color: var(--color-fg);
   }
 
   .causality-panel__trace {
