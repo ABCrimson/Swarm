@@ -9,7 +9,7 @@
 import { useEffect, useState } from "react";
 import { CartesianGrid, Legend, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
 import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
-import { formatTime, formatTokens } from "#lib/chart-theme";
+import { formatTime, formatTokens, SERIES_NEUTRAL } from "#lib/chart-theme";
 import { lastN, MAX_CHART_POINTS } from "#lib/chart-window";
 import { tokensPerSecond } from "#lib/metrics-aggregation";
 import type { ModelKey } from "#lib/models";
@@ -29,7 +29,7 @@ const SERIES_COLOR: Readonly<Record<ThroughputSeries, string>> = {
   opus: "oklch(0.68 0.22 290)",
   sonnet: "oklch(0.72 0.18 205)",
   haiku: "oklch(0.78 0.18 130)",
-  other: "oklch(0.6 0.03 220)",
+  other: SERIES_NEUTRAL,
 };
 
 /** Legend name per series: the catalog's model label. */

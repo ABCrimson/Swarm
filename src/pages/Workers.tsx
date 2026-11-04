@@ -212,7 +212,7 @@ export function Workers(): React.ReactElement {
             mounted={shown.has("graph")}
             className="h-full"
           >
-            <WorkerGraph />
+            <WorkerGraph onSpawnRequest={() => setSpawnDialogOpen(true)} />
           </TabPanel>
           <TabPanel
             idBase={`${idBase}-view`}

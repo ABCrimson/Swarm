@@ -28,7 +28,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAtomValue } from "jotai";
 import { useEffect, useReducer, useRef } from "react";
 import { toast } from "sonner";
-import * as z from "zod";
 import { onEvent } from "#lib/event-bus";
 import { errorMessage } from "#lib/is-error";
 import { CLAUDE_MODELS } from "#lib/models";
@@ -346,15 +345,6 @@ const latestRefresh = new Map<string, symbol>();
  * than relying on a default.
  */
 const SHIP_SETTLED_TIMEOUT_MS = 30_000;
-
-/** `ship_progress` payload (Rust `ShipProgressPayload`), validated at the event-bus seam. */
-const ShipProgressPayloadSchema = z.object({
-  shipId: z.string(),
-  workerId: z.string(),
-  step: z.string(),
-  status: z.enum(["running", "ok", "error"]),
-  detail: z.string().nullish(),
-});
 
 async function loadPreflight(
   workerId: string,
@@ -817,9 +807,7 @@ function recordShip(workerId: string, shipId: string, dispatch: ShipDispatch): S
   };
 
   const offProgress = onEvent("ship_progress", (e) => {
-    const parsed = ShipProgressPayloadSchema.safeParse(e.payload);
-    if (!parsed.success) return;
-    const { shipId: eventShipId, workerId: eventWorkerId, step, status, detail } = parsed.data;
+    const { shipId: eventShipId, workerId: eventWorkerId, step, status, detail } = e.payload;
     if (eventShipId !== shipId || eventWorkerId !== workerId) return;
     stepStatus.set(step, status);
     dispatch({ type: "progressReported", row: { step, status, detail: detail ?? null } });

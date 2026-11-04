@@ -4,6 +4,7 @@
 
 import { Bar, BarChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from "recharts";
 import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
+import { PRIORITY_COLOR } from "#lib/chart-theme";
 import { useAiStore } from "#store/ai";
 import type { AiQueueItem } from "#store/types";
 
@@ -15,10 +16,10 @@ const PRIORITIES: readonly {
   readonly label: string;
   readonly color: string;
 }[] = [
-  { key: "critical", label: "Critical", color: "oklch(0.68 0.22 15)" },
-  { key: "high", label: "High", color: "oklch(0.78 0.18 70)" },
-  { key: "normal", label: "Normal", color: "oklch(0.72 0.18 205)" },
-  { key: "low", label: "Low", color: "oklch(0.6 0.03 220)" },
+  { key: "critical", label: "Critical", color: PRIORITY_COLOR.critical },
+  { key: "high", label: "High", color: PRIORITY_COLOR.high },
+  { key: "normal", label: "Normal", color: PRIORITY_COLOR.normal },
+  { key: "low", label: "Low", color: PRIORITY_COLOR.low },
 ];
 
 /** Counts pending queue items per priority (every priority present, zero when none). */

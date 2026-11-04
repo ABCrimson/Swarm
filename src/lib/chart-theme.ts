@@ -18,6 +18,17 @@ import type { RechartsTheme } from "recharts";
 /** Default series colour (plasma) — Recharts' fallback for a series with no explicit colour. */
 const SERIES_DEFAULT = "oklch(0.78 0.18 205)";
 
+/** Neutral grey series colour (free memory, the "other" model bucket, the low queue priority). */
+export const SERIES_NEUTRAL = "oklch(0.6 0.03 220)";
+
+/** AI queue priority colours: the theme's rose, amber and plasma, plus neutral grey. */
+export const PRIORITY_COLOR = {
+  critical: "oklch(0.72 0.2 10)",
+  high: "oklch(0.82 0.19 70)",
+  normal: SERIES_DEFAULT,
+  low: SERIES_NEUTRAL,
+} as const;
+
 /**
  * One colour per system/AI metric, the same on every chart it appears
  * in, with hues far enough apart (205 / 290 / 140 / 70) to tell the

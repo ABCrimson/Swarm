@@ -14,14 +14,14 @@ import {
   YAxis,
 } from "recharts";
 import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
-import { formatMb, formatTime, METRIC_COLOR } from "#lib/chart-theme";
+import { formatMb, formatTime, METRIC_COLOR, SERIES_NEUTRAL } from "#lib/chart-theme";
 import { lastN } from "#lib/chart-window";
 import { memoryFreeMb } from "#lib/memory";
 import { useSystemStore } from "#store/system";
 import type { MetricPoint } from "#store/types";
 
 const COLOR_USED = METRIC_COLOR.memory;
-const COLOR_FREE = "oklch(0.6 0.03 220)";
+const COLOR_FREE = SERIES_NEUTRAL;
 
 /** Top-to-bottom fades; stops without a colour take the area's own. */
 const FADE_USED = linearGradient({

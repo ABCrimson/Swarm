@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { INITIAL_SHIP_SNAPSHOT, type ShipSnapshot, shipReducer, useShip } from "#hooks/useShip";
 import type { DomainEvent } from "#lib/event-bus";
+import { EVENT_PAYLOAD_SCHEMAS } from "#lib/event-payloads";
 import { ShipCommandError } from "#lib/tauri";
 import type { CommitOutcome, PushOutcome, ShipContext, ShipPreflight } from "#store/types";
 
@@ -14,7 +15,13 @@ type Handler = (e: DomainEvent) => void;
 const handlers = new Map<string, Set<Handler>>();
 let seq = 0;
 
+/** Mirrors the event bus: a `ship_progress` payload reaches handlers only if it passes its schema. */
 function emit(type: string, payload: unknown): void {
+  if (type === "ship_progress") {
+    const parsed = EVENT_PAYLOAD_SCHEMAS.ship_progress.safeParse(payload);
+    if (!parsed.success) return;
+    payload = parsed.data;
+  }
   const e: DomainEvent = { seq: ++seq, ts: Date.now(), type, payload };
   for (const h of handlers.get(type) ?? []) h(e);
   for (const h of handlers.get("*") ?? []) h(e);
@@ -471,7 +478,7 @@ describe("useShip", () => {
       });
       emit("ship_progress", { shipId, workerId, step: "commit", status: "ok", detail: null });
       // A different ship, and a payload that fails validation, never leak in.
-      emit("ship_progress", { shipId: "other", workerId, step: "commit", status: "error" });
+      emit("ship_progress", { shipId: crypto.randomUUID(), workerId, step: "commit", status: "error" });
       emit("ship_progress", { shipId, workerId, step: "push", status: "exploded" });
       emit("ship_settled", { shipId, workerId });
       return makeCommitOutcome();

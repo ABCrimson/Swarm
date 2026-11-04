@@ -96,7 +96,7 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     shipId: z.uuid(),
     workerId: z.uuid(),
     step: z.string(),
-    status: z.string(),
+    status: z.enum(["running", "ok", "error"]),
     detail: z.string().nullish(),
   }),
   ship_settled: z.looseObject({
