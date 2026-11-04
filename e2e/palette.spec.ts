@@ -40,7 +40,7 @@ test.describe("Command Palette", () => {
 
     await palette.getByPlaceholder("Type A Command Or Search…").fill("zzzznonexistentqueryxyz");
 
-    await expect(palette.getByText("No Commands Found")).toBeVisible();
+    await expect(palette.getByText("No Commands Found", { exact: true })).toBeVisible();
     await expect(palette.getByRole("option")).toHaveCount(0);
   });
 
