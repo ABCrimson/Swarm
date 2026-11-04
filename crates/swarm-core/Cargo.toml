@@ -25,6 +25,8 @@ parking_lot   = { workspace = true }
 rusqlite      = { workspace = true }
 regex         = { workspace = true }
 sysinfo       = { workspace = true }
+keyring       = { workspace = true }
+zeroize       = { workspace = true }
 
 [dev-dependencies]
 # Captures formatted tracing output in tests that prove a worker's env
