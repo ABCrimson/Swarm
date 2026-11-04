@@ -169,7 +169,7 @@
     width: auto;
     height: 28px;
     padding: 0 8px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: var(--text-sm);
     cursor: pointer;
   }
@@ -180,7 +180,7 @@
     width: auto;
     height: 28px;
     padding: 0 10px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: var(--text-sm);
   }
 }
