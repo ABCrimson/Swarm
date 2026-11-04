@@ -362,17 +362,24 @@ struct PushArgs {
     worker_id: String,
     ship_id: String,
     final_step: bool,
+    /// The `ShipPreflight.remote` the caller previewed. Optional within
+    /// 0.14.x: a caller that omits it pushes without the comparison.
+    #[serde(default)]
+    expected_remote: Option<String>,
 }
 
-/// `git_push { workerId, shipId, finalStep }` → `PushOutcome`. Pushes
-/// the branch checked out now (never forced) and records the ship
-/// range's end as the worker's last shipped seq. Errors are `ShipError`
-/// objects.
+/// `git_push { workerId, shipId, finalStep, expectedRemote? }` →
+/// `PushOutcome`. Pushes the branch checked out now (never forced) and
+/// records the ship range's end as the worker's last shipped seq. With
+/// `expectedRemote`, an `origin` whose redacted push URL no longer
+/// matches it is refused as `pushRejected` before anything is sent.
+/// Errors are `ShipError` objects.
 pub async fn git_push(ctx: Ctx, args: Value) -> Result<Value, Value> {
     let PushArgs {
         worker_id,
         ship_id,
         final_step,
+        expected_remote,
     } = parse_args(args)?;
     let sink = &ctx.sink;
     let (ship_id, id) = parse_ids(sink, &ship_id, &worker_id, "push")?;
@@ -388,9 +395,11 @@ pub async fn git_push(ctx: Ctx, args: Value) -> Result<Value, Value> {
 
     let registry = ctx.registry.clone();
     let repo_locks = ctx.repo_locks.clone();
-    let result = tokio::task::spawn_blocking(move || git::ship::push(&registry, &repo_locks, id))
-        .await
-        .map_err(|e| task_panicked("git_push", &e))?;
+    let result = tokio::task::spawn_blocking(move || {
+        git::ship::push(&registry, &repo_locks, id, expected_remote.as_deref())
+    })
+    .await
+    .map_err(|e| task_panicked("git_push", &e))?;
 
     match result {
         Ok(outcome) => {
@@ -908,6 +917,56 @@ mod tests {
             settled[0].error.as_ref().map(|error| error.kind),
             Some(ShipErrorKind::WorkerNotFound)
         );
+    }
+
+    /// F-06 over the wire: `expectedRemote` that no longer matches
+    /// `origin` refuses the push as `pushRejected`, settles the attempt
+    /// once with that error, and records nothing as shipped.
+    #[tokio::test]
+    async fn test_git_push_with_a_stale_expected_remote_is_rejected_and_settles_once() {
+        let (ctx, _dir, events) = test_ctx();
+        let repo = TempRepo::new("cmd-push-stale-remote");
+        let bare = repo.add_bare_origin();
+        let branch = "swarm/cmd-stale-abcd1234";
+        let worktree = repo.add_worktree("wt", branch);
+        let id = register_worker(&ctx, &repo, &worktree, branch);
+        git_in(&worktree, &["commit", "--allow-empty", "-m", "work"]);
+        let previewed = bare.display().to_string();
+        repo.git(&[
+            "remote",
+            "set-url",
+            "origin",
+            "https://example.invalid/moved.git",
+        ]);
+
+        let ship_id = Uuid::new_v4();
+        let err = git_push(
+            ctx.clone(),
+            serde_json::json!({
+                "workerId": id.to_string(), "shipId": ship_id.to_string(),
+                "finalStep": true, "expectedRemote": previewed
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err["kind"], "pushRejected");
+        assert_eq!(err["message"], "Origin Changed Since The Preview");
+
+        let emitted = ship_events(&ctx, &events).await;
+        assert!(has_progress(&emitted, "push", "error"));
+        let settled = receipts(&emitted);
+        assert_eq!(settled.len(), 1, "exactly one receipt per attempt");
+        assert_eq!(settled[0].ship_id, ship_id);
+        assert_eq!(
+            settled[0].error.as_ref().map(|error| error.kind),
+            Some(ShipErrorKind::PushRejected)
+        );
+        let info = ctx.registry.get_worker(&id).unwrap();
+        assert_eq!(
+            info.last_shipped_commit, None,
+            "a refused push records nothing as shipped"
+        );
+        assert_eq!(ctx.registry.push_record(&id), None);
     }
 
     /// `nothingToCommit` is the one failure that settles nothing: the

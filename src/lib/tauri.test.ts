@@ -162,6 +162,35 @@ describe("sessionAddWorker", () => {
   });
 });
 
+describe("gitPush", () => {
+  const outcome = { pushedRef: "origin/swarm/x-abcd1234", sha: "a".repeat(40) };
+
+  it("binds the push to the remote the preview showed", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce(outcome);
+
+    await gitPush(WORKER_UUID, SESSION_UUID, true, "https://github.com/example/repo.git");
+
+    expect(tauriInvoke).toHaveBeenCalledWith("git_push", {
+      workerId: WORKER_UUID,
+      shipId: SESSION_UUID,
+      finalStep: true,
+      expectedRemote: "https://github.com/example/repo.git",
+    });
+  });
+
+  it("sends no expectedRemote when the caller has no preview", async () => {
+    vi.mocked(tauriInvoke).mockResolvedValueOnce(outcome);
+
+    await gitPush(WORKER_UUID, SESSION_UUID, false);
+
+    expect(tauriInvoke).toHaveBeenCalledWith("git_push", {
+      workerId: WORKER_UUID,
+      shipId: SESSION_UUID,
+      finalStep: false,
+    });
+  });
+});
+
 describe("resizeWorker", () => {
   it("invokes resize_worker with the id and size", async () => {
     vi.mocked(tauriInvoke).mockResolvedValueOnce(null);
