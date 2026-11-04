@@ -30,7 +30,7 @@ const STATUS_LABEL: Record<ToolStatus, string> = {
 
 const containerStyle: CSSProperties = {
   borderRadius: 8,
-  border: "1px solid oklch(0.22 0.04 220)",
+  border: "1px solid var(--color-border)",
   background: "oklch(0.10 0.02 220 / 0.8)",
   overflow: "hidden",
   marginBlock: 6,
@@ -49,29 +49,29 @@ const headerStyle: CSSProperties = {
   color: "inherit",
   cursor: "pointer",
   userSelect: "none",
-  transition: "background 0.15s ease",
+  transition: "background-color 0.15s var(--ease-out)",
 };
 
 /** Per-tool accent colors for the built-in tools; custom tools get the neutral default. */
 const TOOL_BADGE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   spawn_worker: {
     bg: "oklch(0.18 0.06 205 / 0.4)",
-    text: "oklch(0.78 0.18 205)",
+    text: "var(--color-plasma)",
     border: "oklch(0.35 0.10 205)",
   },
   kill_worker: {
     bg: "oklch(0.18 0.06 10 / 0.4)",
-    text: "oklch(0.72 0.20 10)",
+    text: "var(--color-rose)",
     border: "oklch(0.35 0.10 10)",
   },
   run_command: {
     bg: "oklch(0.18 0.06 70 / 0.4)",
-    text: "oklch(0.82 0.19 70)",
+    text: "var(--color-amber)",
     border: "oklch(0.35 0.10 70)",
   },
   read_file: {
     bg: "oklch(0.18 0.06 140 / 0.4)",
-    text: "oklch(0.82 0.18 140)",
+    text: "var(--color-lime)",
     border: "oklch(0.35 0.10 140)",
   },
   write_file: {
@@ -96,7 +96,7 @@ const jsonStyle: CSSProperties = {
   padding: "10px 14px",
   fontSize: 12,
   lineHeight: 1.6,
-  background: "oklch(0.08 0.02 220)",
+  background: "var(--color-surface-0)",
   borderTop: "1px solid oklch(0.18 0.03 220)",
 };
 
@@ -107,15 +107,15 @@ const sectionLabelStyle: CSSProperties = {
   fontWeight: 600,
   textTransform: "uppercase",
   letterSpacing: "0.08em",
-  color: "oklch(0.55 0.04 220)",
-  background: "oklch(0.08 0.02 220)",
+  color: "var(--color-fg-dim)",
+  background: "var(--color-surface-0)",
 };
 
 const expandButtonStyle: CSSProperties = {
   display: "block",
   width: "100%",
   padding: "4px 14px",
-  background: "oklch(0.08 0.02 220)",
+  background: "var(--color-surface-0)",
   border: "none",
   borderTop: "1px solid oklch(0.18 0.03 220)",
   color: "oklch(0.65 0.10 205)",
@@ -126,7 +126,7 @@ const expandButtonStyle: CSSProperties = {
 
 // ── Status Indicator ────────────────────────────────
 
-function StatusIndicator({ status }: { readonly status: ToolStatus }): React.ReactElement {
+function StatusGlyph({ status }: { readonly status: ToolStatus }): React.ReactElement {
   switch (status) {
     case "executing":
       return (
@@ -137,7 +137,7 @@ function StatusIndicator({ status }: { readonly status: ToolStatus }): React.Rea
             width: 8,
             height: 8,
             borderRadius: "50%",
-            background: "oklch(0.82 0.19 70)",
+            background: "var(--color-amber)",
           }}
           aria-hidden="true"
         />
@@ -145,7 +145,7 @@ function StatusIndicator({ status }: { readonly status: ToolStatus }): React.Rea
     case "complete":
       return (
         <span
-          style={{ color: "oklch(0.82 0.18 140)", fontSize: 16, lineHeight: 1 }}
+          style={{ color: "var(--color-lime)", fontSize: 16, lineHeight: 1 }}
           aria-hidden="true"
         >
           ✓
@@ -154,13 +154,30 @@ function StatusIndicator({ status }: { readonly status: ToolStatus }): React.Rea
     case "error":
       return (
         <span
-          style={{ color: "oklch(0.72 0.20 10)", fontSize: 16, lineHeight: 1 }}
+          style={{ color: "var(--color-rose)", fontSize: 16, lineHeight: 1 }}
           aria-hidden="true"
         >
           ✗
         </span>
       );
   }
+}
+
+function StatusIndicator({ status }: { readonly status: ToolStatus }): React.ReactElement {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: "inline-grid",
+        placeItems: "center",
+        inlineSize: 16,
+        blockSize: 16,
+        flexShrink: 0,
+      }}
+    >
+      <StatusGlyph status={status} />
+    </span>
+  );
 }
 
 // ── Collapsible Result Viewer ───────────────────────
@@ -212,7 +229,7 @@ function ResultViewer({ result }: { readonly result: string }): React.ReactEleme
       style={{
         ...jsonStyle,
         margin: 0,
-        color: "oklch(0.82 0.04 220)",
+        color: "var(--color-fg)",
         fontFamily: "var(--font-mono, monospace)",
         whiteSpace: "pre-wrap",
         overflowWrap: "anywhere",
