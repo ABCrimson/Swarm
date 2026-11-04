@@ -85,7 +85,7 @@ describe("ShipPreview — Causal Record section", () => {
   it("renders the seq range, turn count, and a tool-call row for a populated context", () => {
     renderPreview();
 
-    expect(screen.getByText("9..14")).toBeInTheDocument();
+    expect(screen.getByText("9..14,")).toBeInTheDocument();
     expect(screen.getByText("1 Turn")).toBeInTheDocument();
     expect(screen.getByText("Write")).toBeInTheDocument();
     expect(screen.getByText("src/lib.rs")).toBeInTheDocument();

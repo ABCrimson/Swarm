@@ -296,9 +296,8 @@ function CausalRecordSection({
     <>
       <div style={monoRowStyle}>
         <span>
-          {context.seqFrom}..{context.seqTo}
+          {context.seqFrom}..{context.seqTo},
         </span>
-        <span style={separatorStyle}>{","}</span>
         <span>{pluralize("Turn", context.turns.length)}</span>
       </div>
       {truncationNote != null && <span style={causalMutedStyle}>{truncationNote}</span>}
