@@ -339,7 +339,7 @@ function KeybindingField({
 
 /**
  * The model catalog as a native radio group (one choice): arrow keys move
- * the selection, and each card is a `<label>` styled from its radio's
+ * the selection, and each row is a `<label>` styled from its radio's
  * state with `:has()`. The radio is named by the model name alone; the
  * description and limits are its description.
  */
@@ -351,14 +351,18 @@ function ModelPicker({ labelledBy }: { readonly labelledBy: string }): React.Rea
   >;
 
   return (
-    <div role="radiogroup" aria-labelledby={labelledBy} className="flex flex-wrap gap-3">
+    <div
+      role="radiogroup"
+      aria-labelledby={labelledBy}
+      className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface-0"
+    >
       {models.map(([key, model]) => {
         const cardId = `${id}-${key}`;
         return (
           <label
             key={key}
             data-model-id={model.id}
-            className="group flex flex-1 cursor-pointer flex-col gap-1.5 rounded-[10px] border border-border bg-surface-0 px-4.5 py-3.5 transition-colors hover:border-border-3 has-checked:border-plasma has-checked:bg-plasma/8 has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-plasma forced-colors:has-checked:outline-2 forced-colors:has-checked:outline-[Highlight]"
+            className="group flex cursor-pointer items-center gap-4 px-4 py-3 transition-colors hover:bg-surface-2 has-checked:bg-plasma/8 has-focus-visible:outline-2 has-focus-visible:-outline-offset-2 has-focus-visible:outline-plasma forced-colors:has-checked:outline-2 forced-colors:has-checked:outline-[Highlight]"
           >
             <input
               type="radio"
@@ -375,29 +379,35 @@ function ModelPicker({ labelledBy }: { readonly labelledBy: string }): React.Rea
               aria-describedby={`${cardId}-description ${cardId}-limits`}
               className="sr-only"
             />
-            <span className="flex flex-wrap items-center gap-2">
-              <span
-                aria-hidden="true"
-                className="size-2 shrink-0 rounded-full bg-border-2 transition-colors group-has-checked:bg-plasma"
-              />
-              <span
-                id={`${cardId}-name`}
-                className="font-display text-md font-bold tracking-tight text-fg-muted group-has-checked:text-fg-bright"
-              >
-                {model.label}
+            <span
+              aria-hidden="true"
+              className="size-2 shrink-0 rounded-full bg-border-2 transition-colors group-has-checked:bg-plasma"
+            />
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="flex flex-wrap items-center gap-2">
+                <span
+                  id={`${cardId}-name`}
+                  className="font-display text-md font-bold tracking-tight text-fg-muted group-has-checked:text-fg-bright"
+                >
+                  {model.label}
+                </span>
+                {model.gated !== undefined && (
+                  <Pill tone="warning" size="sm">
+                    Requires Project Glasswing
+                  </Pill>
+                )}
               </span>
-              {model.gated !== undefined && (
-                <Pill tone="warning" size="sm">
-                  Requires Project Glasswing
-                </Pill>
-              )}
+              <span id={`${cardId}-description`} className="text-xs text-fg-dim">
+                {model.description}
+              </span>
             </span>
-            <span id={`${cardId}-description`} className="text-xs text-fg-dim">
-              {model.description}
+            <span
+              id={`${cardId}-limits`}
+              className="ml-auto shrink-0 text-right font-mono text-fg-dim text-xs tabular-nums"
+            >
+              <span className="block">{formatContextLabel(model.contextWindow)}</span>{" "}
+              <span className="block">{formatMaxOutputLabel(model.maxOutputTokens)}</span>
             </span>
-            <Pill id={`${cardId}-limits`} tone="neutral" size="sm" className="self-start">
-              {`${formatContextLabel(model.contextWindow)} · ${formatMaxOutputLabel(model.maxOutputTokens)}`}
-            </Pill>
           </label>
         );
       })}
