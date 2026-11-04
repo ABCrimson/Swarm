@@ -32,7 +32,9 @@ vi.mock("#components/ai/WorkerAIPanel", async () => {
 });
 vi.mock("#components/ship/ShipPanel", () => ({ ShipPanel: () => <p>Ship View</p> }));
 vi.mock("#components/graph/CausalityPanel", () => ({ CausalityPanel: () => null }));
-vi.mock("#components/worker/SpawnWorkerDialog", () => ({ SpawnWorkerDialog: () => null }));
+vi.mock("#components/worker/SpawnWorkerDialog", () => ({
+  SpawnWorkerDialog: () => <p>Spawn Dialog Open</p>,
+}));
 
 const store = getDefaultStore();
 const ID = "0f5b8f5e-7a41-4a8e-9a53-1c1f7e0d9a11";
@@ -86,13 +88,17 @@ describe("Workers — view tabs", () => {
     expect(store.get(graphViewAtom)).toBe("graph");
   });
 
-  it("names the current command-palette binding in the empty-state hint", () => {
+  it("puts the one Spawn Worker button in the empty list, and it opens the dialog", async () => {
+    const user = userEvent.setup();
     store.set(graphViewAtom, "list");
     render(<Workers />);
-    // After mount: the storage-backed atom re-reads its initial value on mount.
-    act(() => store.set(keybindingsAtom, { ...DEFAULT_KEYBINDINGS, commandPalette: "alt+p" }));
 
-    expect(screen.getByText('Click "Spawn Worker" Or Press Alt+P')).toBeInTheDocument();
+    // No workers: the header drops its button, so the empty state holds the only one.
+    expect(screen.getAllByRole("button", { name: "Spawn Worker" })).toHaveLength(1);
+    const list = screen.getByRole("tabpanel", { name: "List" });
+    expect(list).toHaveTextContent("Spawn A Worker To See It Listed");
+    await user.click(within(list).getByRole("button", { name: "Spawn Worker" }));
+    expect(screen.getByText("Spawn Dialog Open")).toBeInTheDocument();
   });
 
   it("keeps a view mounted after the command palette switched to it", () => {

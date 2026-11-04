@@ -21,7 +21,7 @@ import {
 import { ProviderBadge } from "#components/worker/ProviderBadge";
 import { SpawnWorkerDialog } from "#components/worker/SpawnWorkerDialog";
 import { escapeForDisplay } from "#lib/display-escape";
-import { formatBinding, matchesBinding } from "#lib/keybindings";
+import { matchesBinding } from "#lib/keybindings";
 import { useAgentSessionStore } from "#store/agent-sessions";
 import {
   causalityInspectorAtom,
@@ -94,15 +94,23 @@ function WorkerRow({ id }: { readonly id: string }): React.ReactElement | null {
   );
 }
 
-function WorkerListView(): React.ReactElement {
+function WorkerListView({
+  onSpawnRequest,
+}: {
+  readonly onSpawnRequest: () => void;
+}): React.ReactElement {
   const ids = useWorkerStore(useShallow((s) => [...s.workers.keys()]));
-  const { commandPalette } = useAtomValue(keybindingsAtom);
 
   if (ids.length === 0)
     return (
       <EmptyState
         title="No Workers Running"
-        body={`Click "Spawn Worker" Or Press ${formatBinding(commandPalette)}`}
+        body="Spawn A Worker To See It Listed"
+        action={
+          <Button variant="primary" size="sm" onClick={onSpawnRequest}>
+            Spawn Worker
+          </Button>
+        }
       />
     );
 
@@ -143,6 +151,8 @@ export function Workers(): React.ReactElement {
   // `open` prop) so every field/probe/error resets cleanly on each
   // open cycle — see SpawnWorkerDialog's doc.
   const [spawnDialogOpen, setSpawnDialogOpen] = useState(false);
+  // With no workers the empty state carries the one primary spawn button.
+  const hasWorkers = useWorkerStore((s) => s.workers.size > 0);
 
   // Adjusting state while rendering (as PageHost does): record the view
   // and tab before the first render that shows them, whichever control
@@ -187,9 +197,11 @@ export function Workers(): React.ReactElement {
         title="Workers"
         actions={
           <div className="flex items-center gap-3">
-            <Button variant="primary" size="sm" onClick={() => setSpawnDialogOpen(true)}>
-              Spawn Worker
-            </Button>
+            {hasWorkers && (
+              <Button variant="primary" size="sm" onClick={() => setSpawnDialogOpen(true)}>
+                Spawn Worker
+              </Button>
+            )}
             <TabList
               label="Worker View"
               idBase={`${idBase}-view`}
@@ -221,7 +233,7 @@ export function Workers(): React.ReactElement {
             mounted={shown.has("list")}
             className="h-full"
           >
-            <WorkerListView />
+            <WorkerListView onSpawnRequest={() => setSpawnDialogOpen(true)} />
           </TabPanel>
         </div>
 
