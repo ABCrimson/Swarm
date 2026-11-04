@@ -15,8 +15,8 @@ in that window was accepted.
 ## Decision
 
 - **The session goes before the worker.** `kill_worker` runs, in order: mark the worker closing and
-  wait for attaches in flight; remove and shut down the session (the provider process is stopped and
-  reaped; a failed shutdown is logged and never changes the kill's result); wait for any other
+  wait for attaches in flight; remove and shut down the session (the provider and its process tree are
+  stopped and the provider is reaped; a failed shutdown is logged and never changes the kill's result); wait for any other
   shutdown of that session still running; `do_kill_worker` (shell, then worktree, unchanged); clear
   the mark, which travels into the blocking kill task so a cancelled kill cannot clear it early.
 - **A per-worker fence in `AgentSessionRegistry`.** An attach holds an `AttachPermit`

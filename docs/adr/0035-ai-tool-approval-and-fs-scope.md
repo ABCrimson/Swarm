@@ -33,10 +33,12 @@ have no backend side effect and are not gated. Answers are Allow Once, Allow For
 
 **File commands, in `crates/swarm-core/src/commands/fs.rs`.** The path is canonicalized (for a write:
 the parent and, when it exists, the target) and the scope and deny checks run on the real path. The
-deny list is `swarm-config.json` and `daemon-token` (and names prefixed with them, such as
-`.daemon-token.<rand>` and `.corrupt-<ms>` backups) in the data directory, compared case-insensitively,
-and `~/.ssh`, `~/.gnupg`, `~/.aws`. On Windows a write is also refused for a file name with `:`
-(alternate data streams), a trailing `.` or space, or a reserved device name. The lexical form only
+deny list is `swarm-config.json`, `swarm-secrets.json` and `daemon-token` (and names prefixed with them,
+such as `.daemon-token.<rand>` and `.corrupt-<ms>` backups) in the data directory, compared
+case-insensitively, every path under the data directory's `codex-home/` (the Codex workers' private
+homes; canonical prefix match), and `~/.ssh`, `~/.gnupg`, `~/.aws`. On Windows a write is also
+refused for a file name with `:` (alternate data streams), a trailing `.` or space, or a reserved
+device name. The lexical form only
 chooses the error once canonicalization fails.
 
 ## Consequences
