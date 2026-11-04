@@ -605,10 +605,12 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
 // ── Config ───────────────────────────────────────────
 
 /**
- * Reads `key` from the Rust-owned flat `swarm-config.json`
- * (`read_config`), validated with `schema`. Resolves `null` when the
- * key is unset, the value does not match `schema` (logged with the zod
- * issues, which never include the value), or there is no backend.
+ * Reads `key` through the Rust-owned config (`read_config`): the flat
+ * `swarm-config.json`, or the OS keychain for `anthropic_api_key`
+ * (`swarm-secrets.json` on a host without one), validated with
+ * `schema`. Resolves `null` when the key is unset, the value does not
+ * match `schema` (logged with the zod issues, which never include the
+ * value), or there is no backend.
  */
 export async function readConfig<S extends z.ZodType>(
   key: string,
@@ -618,11 +620,15 @@ export async function readConfig<S extends z.ZodType>(
   if (raw === null) return null;
   const parsed = schema.safeParse(raw);
   if (parsed.success) return parsed.data;
-  console.warn(`[config] Ignoring invalid "${key}" in swarm-config.json.`, parsed.error.issues);
+  console.warn(`[config] Ignoring invalid "${key}" in the config.`, parsed.error.issues);
   return null;
 }
 
-/** Writes `key` to the Rust-owned `swarm-config.json` (`write_config`). */
+/**
+ * Writes `key` through the Rust-owned config (`write_config`):
+ * `swarm-config.json`, or the OS keychain for `anthropic_api_key`
+ * (`swarm-secrets.json` on a host without one).
+ */
 export async function writeConfig<T>(key: string, value: T): Promise<void> {
   return invoke<void>("write_config", { key, value });
 }
