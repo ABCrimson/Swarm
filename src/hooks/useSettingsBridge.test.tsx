@@ -1,17 +1,15 @@
-// ── useSettingsBridge — agent concurrency push ──────
-//
-// The backend persists its own agent concurrency cap and restores it at
-// startup, so the bridge pushes only a change made during this launch:
-// never the value it mounts with (which would be a redundant disk write
-// and a scheduler down/up resize on every launch), not even under
-// StrictMode's extra effect run, unless launch reconciliation finds a
-// backend cap the field cannot show (11 to 16).
+// ── useSettingsBridge ───────────────────────────────
+// The agent concurrency sync (push, acknowledgement, Retry, the backend's
+// reply, one call in flight, launch reconciliation) and the update check
+// on launch. The max-workers sync is exercised through the Settings page,
+// in src/pages/Settings.test.tsx.
 
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { getDefaultStore } from "jotai";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_CONCURRENCY_ACK_TIMEOUT_MS, useSettingsBridge } from "#hooks/useSettingsBridge";
+import { useSettingsBridge } from "#hooks/useSettingsBridge";
+import { CAP_ACK_TIMEOUT_MS } from "#lib/acknowledged-sync";
 import { checkForUpdates } from "#lib/tauri";
 import { agentConcurrencySyncAtom, appSettingsAtom, DEFAULT_APP_SETTINGS } from "#store/ui";
 
@@ -28,6 +26,7 @@ vi.mock("#lib/tauri", () => ({
   readConfig: (...args: unknown[]) => mockReadConfig(...args),
   checkForUpdates: vi.fn().mockResolvedValue({ available: false }),
   setAgentConcurrency: (...args: unknown[]) => mockSetAgentConcurrency(...args),
+  setMaxWorkers: vi.fn().mockResolvedValue(null),
 }));
 
 // The shared sonner mock (src/test/setup.ts) has no `dismiss`, which the
@@ -80,6 +79,12 @@ function setLimit(limit: number): void {
 
 const limit = (): number => store.get(appSettingsAtom).aiConcurrentLimit;
 
+// The backend persists its own agent concurrency cap and restores it at
+// startup, so the bridge pushes only a change made during this launch:
+// never the value it mounts with (which would be a redundant disk write
+// and a scheduler down/up resize on every launch), not even under
+// StrictMode's extra effect run, unless launch reconciliation finds a
+// backend cap the field cannot show (11 to 16).
 describe("useSettingsBridge — agent concurrency push", () => {
   it("does not push the value it mounts with", () => {
     renderHook(() => useSettingsBridge());
@@ -139,16 +144,14 @@ describe("useSettingsBridge — agent concurrency push", () => {
 
 describe("useSettingsBridge — agent concurrency acknowledgement", () => {
   it("marks a push pending until the backend acknowledges it", async () => {
-    let acknowledge: (cap: number | null) => void = () => {};
-    mockSetAgentConcurrency.mockReturnValueOnce(
-      new Promise<number | null>((r) => (acknowledge = r)),
-    );
+    const ack = Promise.withResolvers<number | null>();
+    mockSetAgentConcurrency.mockReturnValueOnce(ack.promise);
     renderHook(() => useSettingsBridge());
 
     setLimit(8);
     expect(store.get(agentConcurrencySyncAtom)).toStrictEqual({ status: "pending", requested: 8 });
 
-    await act(async () => acknowledge(null));
+    await act(async () => ack.resolve(null));
     expect(store.get(agentConcurrencySyncAtom)).toStrictEqual({ status: "idle" });
     expect(limit()).toBe(8);
   });
@@ -197,15 +200,13 @@ describe("useSettingsBridge — agent concurrency acknowledgement", () => {
   it("fails a push that never settles after the ack timeout, then adopts a late resolve", async () => {
     vi.useFakeTimers();
     using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    let acknowledge: (cap: number | null) => void = () => {};
-    mockSetAgentConcurrency.mockReturnValueOnce(
-      new Promise<number | null>((r) => (acknowledge = r)),
-    );
+    const ack = Promise.withResolvers<number | null>();
+    mockSetAgentConcurrency.mockReturnValueOnce(ack.promise);
     renderHook(() => useSettingsBridge());
     setLimit(8);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(AGENT_CONCURRENCY_ACK_TIMEOUT_MS - 1);
+      await vi.advanceTimersByTimeAsync(CAP_ACK_TIMEOUT_MS - 1);
     });
     expect(store.get(agentConcurrencySyncAtom).status).toBe("pending");
 
@@ -216,7 +217,7 @@ describe("useSettingsBridge — agent concurrency acknowledgement", () => {
     expect(limit()).toBe(DEFAULT_LIMIT);
     expect(mockSetAgentConcurrency).toHaveBeenCalledTimes(1);
 
-    await act(async () => acknowledge(null));
+    await act(async () => ack.resolve(null));
     expect(limit()).toBe(8);
     expect(store.get(agentConcurrencySyncAtom)).toStrictEqual({ status: "idle" });
     expect(mockSetAgentConcurrency).toHaveBeenCalledTimes(1);
@@ -226,21 +227,19 @@ describe("useSettingsBridge — agent concurrency acknowledgement", () => {
     // The second push can only overlap the first once the first's ack
     // timeout frees the in-flight slot.
     vi.useFakeTimers();
-    let rejectFirst: (reason: Error) => void = () => {};
-    mockSetAgentConcurrency.mockReturnValueOnce(
-      new Promise<number | null>((_, reject) => (rejectFirst = reject)),
-    );
+    const first = Promise.withResolvers<number | null>();
+    mockSetAgentConcurrency.mockReturnValueOnce(first.promise);
     using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     renderHook(() => useSettingsBridge());
 
     setLimit(8);
     setLimit(9);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(AGENT_CONCURRENCY_ACK_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(CAP_ACK_TIMEOUT_MS);
     });
     expect(store.get(agentConcurrencySyncAtom)).toStrictEqual({ status: "idle" });
 
-    await act(async () => rejectFirst(new Error("late")));
+    await act(async () => first.reject(new Error("late")));
 
     expect(store.get(agentConcurrencySyncAtom)).toStrictEqual({ status: "idle" });
     expect(limit()).toBe(9);
@@ -263,7 +262,7 @@ describe("useSettingsBridge — Retry of the acknowledged value", () => {
     setLimit(8);
     setLimit(DEFAULT_LIMIT);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(AGENT_CONCURRENCY_ACK_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(CAP_ACK_TIMEOUT_MS);
     });
     expect(store.get(agentConcurrencySyncAtom).status).toBe("failed");
     expect(limit()).toBe(DEFAULT_LIMIT);
@@ -309,7 +308,7 @@ describe("useSettingsBridge — older push acknowledged after the newest", () =>
     setLimit(8);
     setLimit(9);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(AGENT_CONCURRENCY_ACK_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(CAP_ACK_TIMEOUT_MS);
     });
     await act(async () => second.reject(new Error("disk full")));
     expect(limit()).toBe(DEFAULT_LIMIT);
@@ -329,7 +328,7 @@ describe("useSettingsBridge — older push acknowledged after the newest", () =>
     setLimit(8);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(AGENT_CONCURRENCY_ACK_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(CAP_ACK_TIMEOUT_MS);
     });
     const failed = store.get(agentConcurrencySyncAtom);
     if (failed.status !== "failed") throw new Error("expected a failed sync");
@@ -522,7 +521,7 @@ describe("useSettingsBridge — one call in flight", () => {
     setLimit(8);
     setLimit(9);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(AGENT_CONCURRENCY_ACK_TIMEOUT_MS - 1);
+      await vi.advanceTimersByTimeAsync(CAP_ACK_TIMEOUT_MS - 1);
     });
     expect(mockSetAgentConcurrency.mock.calls).toStrictEqual([[8]]);
 
@@ -546,7 +545,7 @@ describe("useSettingsBridge — a call that settles after its timeout", () => {
 
     setLimit(5);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(AGENT_CONCURRENCY_ACK_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(CAP_ACK_TIMEOUT_MS);
     });
     expect(store.get(agentConcurrencySyncAtom).status).toBe("failed");
     setLimit(7);
@@ -573,7 +572,7 @@ describe("useSettingsBridge — a call that settles after its timeout", () => {
     setLimit(8);
     setLimit(9);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(AGENT_CONCURRENCY_ACK_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(CAP_ACK_TIMEOUT_MS);
     });
     expect(mockSetAgentConcurrency.mock.calls).toStrictEqual([[8], [9]]);
 
