@@ -16,7 +16,8 @@ interface TemplateSelectorProps {
 const STAGGER_S = 0.05;
 const MAX_STAGGERED = 8;
 
-const sectionHeadingClass = "mb-3 font-display text-lg font-semibold tracking-tight text-fg-muted";
+const sectionHeadingClass =
+  "mb-3 text-xs font-semibold tracking-widest text-fg-dim uppercase font-mono";
 
 /**
  * Template chooser: the built-in templates render at once; the user's own
