@@ -69,9 +69,8 @@ function SettingsSection({
   return (
     <section
       aria-labelledby={headingId}
-      // Rule-separated groups in the column's divide-y; the first section
-      // (inside the API-key form, the column's first child) drops its top pad.
-      className="py-6 first:pt-0"
+      // A rule-separated group in the Settings column's divide-y.
+      className="py-6"
     >
       <div className="mb-3 flex items-center justify-between gap-4">
         <h2 id={headingId} className="font-display text-lg font-bold tracking-tight text-fg-bright">
@@ -697,7 +696,8 @@ export function Settings(): React.ReactElement {
               : "Not Saved Outside The Desktop App"
         }
       />
-      <div className="flex flex-col divide-y divide-border px-7 pb-6">
+      {/* Only the column's first group (inside the API-key form) sits on the header without a top pad. */}
+      <div className="flex flex-col divide-y divide-border px-7 pb-6 [&>:first-child>section]:pt-0">
         <form onSubmit={handleSaveApiKey}>
           <SettingsSection title="AI Connectivity">
             <label htmlFor="anthropic-api-key" className="mb-1.5 block text-md font-medium text-fg">
