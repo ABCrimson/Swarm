@@ -93,20 +93,19 @@ interface ThemePrefs {
  * Persisted theme preferences (particle background toggle, GPU overlay),
  * stored under a v2 key.
  *
- * `gpuOverlay` defaults `true`, so the status bar's GPU readout is visible
- * by default; the Settings toggle and the status bar's Hide/Show GPU
- * button both read and write this field. The legacy `swarm:ui:theme` key
- * stored a `gpuOverlay` that was never honoured, so `migrate` carries
- * over `particlesEnabled` alone and `gpuOverlay` takes the `true` default.
+ * `gpuOverlay` defaults `false`: the readout is opt-in from Settings or
+ * the status bar's Show GPU button, which both read and write this field.
+ * The legacy key's `gpuOverlay` was never honoured, so `migrate` carries
+ * over `particlesEnabled` alone.
  */
 export const themeAtom = atomWithSettings<ThemePrefs>(
   "swarm:ui:theme2",
-  { particlesEnabled: true, gpuOverlay: true },
+  { particlesEnabled: true, gpuOverlay: false },
   {
     label: "Theme",
     schema: z.object({
       particlesEnabled: z.boolean().catch(true),
-      gpuOverlay: z.boolean().catch(true),
+      gpuOverlay: z.boolean().catch(false),
     }),
     migrate(initial, readRaw) {
       const legacy = z
