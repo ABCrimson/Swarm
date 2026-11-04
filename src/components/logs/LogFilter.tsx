@@ -38,7 +38,7 @@ export function LogFilter({
   onClear,
 }: LogFilterProps): React.ReactElement {
   return (
-    <search className="log-filter">
+    <search className="log-filter glass-panel">
       <div className="log-filter__levels">
         {LOG_LEVELS.map((level) => (
           <button
@@ -55,7 +55,7 @@ export function LogFilter({
       </div>
 
       <select
-        className="log-filter__source"
+        className="swarm-input log-filter__source"
         value={selectedSource ?? ""}
         onChange={(e) => onSelectSource(e.target.value === "" ? null : e.target.value)}
         aria-label="Filter By Source"

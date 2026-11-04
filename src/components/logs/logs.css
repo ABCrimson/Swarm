@@ -111,8 +111,6 @@
     gap: 8px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--color-border);
-    background: oklch(0.1 0.03 220 / 0.6);
-    backdrop-filter: blur(12px) saturate(1.5);
   }
 
   .log-filter__levels {
@@ -167,13 +165,11 @@
     outline-offset: 1px;
   }
 
-  .log-filter__source {
+  .log-filter .log-filter__source {
     min-width: 120px;
-    padding: 4px 8px;
-    border: 1px solid var(--color-border);
-    border-radius: 6px;
-    background: oklch(0.1 0.03 220);
-    color: oklch(0.72 0.04 220);
+    width: auto;
+    height: 28px;
+    padding: 0 8px;
     font-family: var(--font-mono);
     font-size: var(--text-sm);
     cursor: pointer;
