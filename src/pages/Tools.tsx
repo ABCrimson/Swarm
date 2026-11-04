@@ -26,7 +26,7 @@ export function Tools(): React.ReactElement {
   const contentRef = useRef<HTMLDivElement>(null);
   const pendingEditFocus = useRef<string | null>(null);
 
-  // saveTool commits after a microtask (mutate waits on hydration), so the saved tool's card renders after showList returns.
+  // saveTool commits after a microtask (mutate waits on hydration), so the saved tool's row renders after showList returns.
   useEffect(() => {
     const name = pendingEditFocus.current;
     if (name === null || !customTools.some((tool) => tool.name === name)) return;

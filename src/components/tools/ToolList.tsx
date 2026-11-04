@@ -74,7 +74,7 @@ export function ToolList({
         </h2>
         <div className="divide-y divide-border" style={listStyle}>
           {BUILT_IN_TOOLS.map((tool) => (
-            <ToolCard
+            <ToolRow
               key={tool.name}
               name={tool.name}
               description={tool.description}
@@ -104,7 +104,7 @@ export function ToolList({
         ) : (
           <div className="divide-y divide-border" style={listStyle}>
             {customTools.map((tool) => (
-              <ToolCard
+              <ToolRow
                 key={tool.id}
                 name={tool.name}
                 description={tool.description}
@@ -120,7 +120,7 @@ export function ToolList({
   );
 }
 
-function ToolCard({
+function ToolRow({
   name,
   description,
   paramCount,
@@ -144,6 +144,8 @@ function ToolCard({
         id={headingId}
         style={{
           margin: 0,
+          minWidth: 0,
+          overflowWrap: "anywhere",
           fontFamily: "var(--font-mono)",
           fontSize: "var(--text-md)",
           fontWeight: 600,
