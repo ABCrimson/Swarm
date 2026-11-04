@@ -143,7 +143,9 @@ use crate::events::{AgentSessionStartedPayload, EventSink, SwarmEvent};
 /// the probe and tier argv, a planted repo `.claude/settings.json` ran no
 /// `apiKeyHelper`, applied no `env` and loaded no agents or skills). The
 /// newest flag it passes, `--permission-prompts`, arrived in 2.1.259.
-/// [`ClaudeCodeAdapter::probe`] reports anything older as unavailable.
+/// [`ClaudeCodeAdapter::probe`] reports anything older as unavailable,
+/// including Claude Code's `stable` channel (2.1.311 on 2026-11-04, npm
+/// dist-tags) until it reaches 2.1.318.
 const MIN_CLI_VERSION: (u32, u32, u32) = (2, 1, 318);
 
 /// Bound on the `initialize` handshake that opens every session.
