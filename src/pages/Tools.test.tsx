@@ -9,7 +9,7 @@ beforeEach(() => {
 });
 
 async function createTool(user: ReturnType<typeof userEvent.setup>, name: string): Promise<void> {
-  await user.click(screen.getByRole("button", { name: "+ New Tool" }));
+  await user.click(screen.getByRole("button", { name: "New Tool" }));
   await user.type(screen.getByLabelText("Tool Name"), name);
   await user.click(screen.getByRole("button", { name: "Save Tool" }));
   await act(() => customToolsReady());
@@ -19,7 +19,7 @@ describe("Tools page focus management", () => {
   it("focuses the name field when New Tool opens the builder", async () => {
     const user = userEvent.setup();
     render(<Tools />);
-    await user.click(screen.getByRole("button", { name: "+ New Tool" }));
+    await user.click(screen.getByRole("button", { name: "New Tool" }));
     expect(screen.getByLabelText("Tool Name")).toHaveFocus();
   });
 
