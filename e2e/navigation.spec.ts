@@ -107,7 +107,9 @@ test.describe("Navigation", () => {
     // Graph view is the default (see graphViewAtom's default in #store/ui).
     await expect(page.getByRole("tab", { name: "Graph" })).toHaveAttribute("aria-selected", "true");
     await expect(
-      page.getByText("No Workers Running. Spawn A Worker To See The Topology Graph."),
+      page
+        .getByRole("tabpanel", { name: "Graph" })
+        .getByText("No Workers Running", { exact: true }),
     ).toBeVisible();
   });
 
@@ -118,7 +120,9 @@ test.describe("Navigation", () => {
     await app.goTo("Workers");
     await page.getByRole("tab", { name: "List" }).click();
 
-    await expect(page.getByText("No Workers Running", { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("tabpanel", { name: "List" }).getByText("No Workers Running", { exact: true }),
+    ).toBeVisible();
     await expect(page.getByText('Click "Spawn Worker" Or Press Ctrl+K')).toBeVisible();
   });
 
