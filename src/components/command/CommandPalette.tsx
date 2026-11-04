@@ -317,7 +317,7 @@ function PaletteBody({
                 {cmd.label}
                 {frecency.has(cmd.id) && (
                   <Command.Badge
-                    className="swarm-pill"
+                    className="swarm-pill font-mono tabular-nums"
                     data-tone="info"
                     data-size="sm"
                     aria-hidden="true"

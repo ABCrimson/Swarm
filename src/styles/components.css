@@ -149,8 +149,9 @@
    * Single consolidated implementation for every "small rounded label"
    * in the app (worker state, tool/status chips, log levels, capability
    * chips, counters, command-palette hints, action pills like
-   * Kill/Pause/Resume). Fixed padding/radius/height/font-size/
-   * letter-spacing per data-size; fixed semantic color per data-tone.
+   * Kill/Pause/Resume). Fixed padding/radius/height/font-size per
+   * data-size, in the body font (a caller labelling code, a count or a
+   * log level adds `font-mono`); fixed semantic color per data-tone.
    * Decorative/categorical colors that aren't one of the five semantic
    * tones are applied by the caller via an inline `style` override,
    * which wins over these rules while shape stays consistent.
@@ -165,9 +166,9 @@
     border-radius: 9999px;
     background: oklch(from var(--pill-tone) l c h / 0.15);
     color: var(--pill-tone);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-weight: 600;
-    letter-spacing: 0.02em;
+    letter-spacing: 0;
     white-space: nowrap;
     user-select: none;
     transition:
