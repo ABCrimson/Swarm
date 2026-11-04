@@ -365,6 +365,20 @@ describe("SpawnWorkerDialog", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("closes on a backdrop click, where `closedby` is missing", async () => {
+    const onClose = vi.fn();
+    render(<SpawnWorkerDialog onClose={onClose} />);
+    await waitForProbeSettled();
+    const dialog = screen.getByRole("dialog", { name: "Spawn Worker" });
+
+    // A backdrop click targets the dialog at a point outside its box.
+    act(() => {
+      dialog.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: -1, clientY: -1 }));
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("calls onClose without spawning when Cancel is clicked", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
@@ -394,6 +408,11 @@ describe("SpawnWorkerDialog", () => {
     await user.click(closeButton);
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    act(() => {
+      screen
+        .getByRole("dialog", { name: "Spawn Worker" })
+        .dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: -1, clientY: -1 }));
     });
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: "Spawn Worker" })).toHaveAttribute("open");

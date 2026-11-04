@@ -254,7 +254,8 @@ interface CausalityPanelProps {
  *
  * A native modal `<dialog>` (`showModal()`): the browser provides the
  * top layer, an inert background, the focus trap, focus restore on
- * close, Escape, and (`closedby="any"`) closing on a backdrop click. Key
+ * close, Escape, and (`closedby="any"`, or an `onClick` backdrop test
+ * where WebKit lacks it) closing on a backdrop click. Key
  * events still bubble to `document`, so the graph's own shortcuts stay
  * gated on the inspector atom. A fresh panel mounts per open cycle, and
  * closing it aborts a walk still in flight.
@@ -314,11 +315,21 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
   };
 
   return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the keyboard path is Escape (the dialog's native `cancel`); this click handler only adds backdrop dismissal where `closedby` is missing.
     <dialog
       ref={dialogRef}
       className="causality-panel"
       aria-labelledby={titleId}
       closedby="any"
+      onClick={(event) => {
+        // WebKit ships no `closedby` yet. A backdrop click targets the
+        // dialog itself at a point outside its border box.
+        const dialog = event.currentTarget;
+        if (event.target !== dialog) return;
+        const box = dialog.getBoundingClientRect();
+        const { clientX: x, clientY: y } = event;
+        if (x < box.left || x > box.right || y < box.top || y > box.bottom) dialog.close();
+      }}
       onClose={(event) => {
         // `close` is delivered as a queued task. Ignore it when this panel
         // is unmounting, and when the dialog is open again by then —

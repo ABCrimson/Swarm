@@ -304,7 +304,8 @@ const footerStyle: CSSProperties = {
 /**
  * The Workers page's spawn dialog, a native modal `<dialog>` opened with
  * `showModal()` (top layer, inert page, native focus handling and focus
- * return; Escape and backdrop clicks close it via `closedby="any"`).
+ * return; Escape and backdrop clicks close it via `closedby="any"`, and
+ * an `onClick` backdrop test where WebKit lacks `closedby`).
  *
  * - Provider: Webview Anthropic, Claude Code or Codex. Webview Anthropic
  *   is the default where the build has the `localAiChat` capability;
@@ -446,8 +447,9 @@ export function SpawnWorkerDialog({
     }
   }, null);
 
-  // The one user-dismissal path for the close and Cancel buttons (Escape and
-  // backdrop go through `onCancel`, which applies the same rule): a dialog
+  // The one user-dismissal path for the close and Cancel buttons and, where
+  // `closedby` is missing, a backdrop click (Escape and native light dismiss
+  // go through `onCancel`, same rule): a dialog
   // dismissed mid-spawn leaves the result nowhere to go. The `spawn` action
   // calls `closeDialog` directly because it closes while `isSpawning` is
   // still true.
@@ -489,11 +491,21 @@ export function SpawnWorkerDialog({
   const agent = isAgentProvider(provider) ? provider : null;
 
   return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the keyboard path is Escape (the dialog's native `cancel`); this click handler only adds backdrop dismissal where `closedby` is missing.
     <dialog
       ref={showModalOnMount}
       closedby="any"
       aria-labelledby={titleId}
       onClose={onClose}
+      onClick={(e) => {
+        // WebKit ships no `closedby` yet. A backdrop click targets the
+        // dialog itself at a point outside its border box; mid-spawn it is
+        // refused like every other dismissal.
+        if (e.target !== e.currentTarget) return;
+        const box = e.currentTarget.getBoundingClientRect();
+        const { clientX: x, clientY: y } = e;
+        if (x < box.left || x > box.right || y < box.top || y > box.bottom) requestDismiss();
+      }}
       onCancel={(e) => {
         // Escape and backdrop light-dismiss; never mid-spawn (see `requestDismiss`).
         if (isSpawning) e.preventDefault();
