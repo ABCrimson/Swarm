@@ -3,8 +3,17 @@
 // queue depth, active streams, and token/request rates over a trailing
 // minute, keeping the last MAX_CHART_POINTS samples.
 
-import { useEffect, useId, useState } from "react";
-import { Area, AreaChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from "recharts";
+import { useEffect, useState } from "react";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Legend,
+  linearGradient,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
 import { formatTime, METRIC_COLOR } from "#lib/chart-theme";
 import { lastN, MAX_CHART_POINTS } from "#lib/chart-window";
@@ -62,14 +71,20 @@ const SERIES = [
   { key: "reqPerMin", label: "Req/Min", axis: "count", color: METRIC_COLOR.reqPerMin },
 ] as const;
 
+/** Top-to-bottom fade of each series' own colour (stops without a colour take the fill's). */
+const FADE = linearGradient({
+  stops: [
+    { offset: 0.05, opacity: 0.3 },
+    { offset: 0.95, opacity: 0.02 },
+  ],
+});
+
 /**
  * AI performance over the trailing `MAX_CHART_POINTS` samples. Token
  * throughput has its own (left) axis; the small counts share the right.
  */
 export function AIMetricsChart(): React.ReactElement {
   const [data, setData] = useState<AiMetricPoint[]>([]);
-  // Gradient ids are document-global; useId keeps two mounted charts apart.
-  const gradientId = useId();
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -92,15 +107,6 @@ export function AIMetricsChart(): React.ReactElement {
         margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
         title="AI Queue, Streams And Throughput Over Time"
       >
-        <defs>
-          {SERIES.map(({ key, color }) => (
-            <linearGradient key={key} id={`${gradientId}-${key}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor={color} stopOpacity={0.3} />
-              <stop offset="95%" stopColor={color} stopOpacity={0.02} />
-            </linearGradient>
-          ))}
-        </defs>
-
         <CartesianGrid />
         <XAxis dataKey="time" tickFormatter={formatTime} />
         <YAxis yAxisId="tokens" />
@@ -116,7 +122,7 @@ export function AIMetricsChart(): React.ReactElement {
             dataKey={key}
             name={label}
             stroke={color}
-            fill={`url(#${gradientId}-${key})`}
+            fill={{ color, definition: FADE }}
             strokeWidth={1.5}
             dot={false}
             isAnimationActive={false}
