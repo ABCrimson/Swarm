@@ -110,7 +110,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
     .toArray()
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 
-  const labelClass = "shrink-0 text-xs text-fg-dim font-[family-name:var(--font-body)]";
+  const labelClass = "shrink-0 text-xs text-fg-dim";
 
   return (
     <div className="flex flex-col gap-4">
@@ -166,7 +166,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
 
       {filtering && (
         <section aria-label="Search Results" className="flex flex-col gap-1.5">
-          <p role="status" className="text-xs text-fg-dim font-[family-name:var(--font-mono)]">
+          <p role="status" className="text-xs text-fg-dim font-mono">
             {pluralize("Result", results.length)}
           </p>
 
@@ -180,9 +180,7 @@ export function HistorySearch({ onResultSelect }: HistorySearchProps): React.Rea
           ))}
 
           {results.length === 0 && (
-            <p className="py-4 text-center text-sm text-fg-dim font-[family-name:var(--font-body)]">
-              No Matching Sessions Found.
-            </p>
+            <p className="py-4 text-center text-sm text-fg-dim">No Matching Sessions Found.</p>
           )}
         </section>
       )}
@@ -211,11 +209,11 @@ function SearchResultItem({
       onClick={() => onSelect(session.id)}
       className="w-full cursor-pointer rounded-lg border border-[oklch(0.25_0.03_220/0.4)] bg-[oklch(0.15_0.02_220/0.4)] p-3 text-left transition-colors hover:bg-[oklch(0.18_0.04_220/0.5)] focus-visible:outline-2 focus-visible:outline-plasma"
     >
-      <span className="block text-sm font-medium text-[oklch(0.85_0.03_220)] font-[family-name:var(--font-display)]">
+      <span className="block text-sm font-medium text-[oklch(0.85_0.03_220)] font-display">
         <Highlighted text={session.name} query={query} />
       </span>
       {description != null && description !== "" && (
-        <span className="mt-1 block truncate text-xs text-fg-dim font-[family-name:var(--font-body)]">
+        <span className="mt-1 block truncate text-xs text-fg-dim">
           <Highlighted text={description} query={query} />
         </span>
       )}

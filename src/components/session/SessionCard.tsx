@@ -92,7 +92,7 @@ export function SessionCard({
       >
         <span className="flex items-center justify-between gap-3">
           <span
-            className="truncate text-sm font-semibold font-[family-name:var(--font-display)]"
+            className="truncate text-sm font-semibold font-display"
             style={{ color: isActive ? "oklch(0.92 0.08 290)" : "oklch(0.88 0.02 220)" }}
           >
             {escapeForDisplay(session.name)}
@@ -102,9 +102,7 @@ export function SessionCard({
           </Pill>
         </span>
 
-        <span className="mt-1.5 block text-xs text-fg-dim font-[family-name:var(--font-body)]">
-          {relativeTime}
-        </span>
+        <span className="mt-1.5 block text-xs text-fg-dim">{relativeTime}</span>
 
         {tags.length > 0 && (
           <span className="mt-2 flex flex-wrap gap-1">
@@ -273,7 +271,7 @@ function SessionMenuItem({
       aria-labelledby={unavailableReason != null ? labelId : undefined}
       aria-describedby={unavailableReason != null ? reasonId : undefined}
       onClick={unavailableReason != null ? undefined : onSelect}
-      className={`block w-full cursor-pointer px-3 py-1.5 text-left text-sm transition-colors font-[family-name:var(--font-body)] focus-visible:outline-2 focus-visible:-outline-offset-2 ${
+      className={`block w-full cursor-pointer px-3 py-1.5 text-left text-sm transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 ${
         danger
           ? "text-rose hover:bg-[oklch(0.20_0.06_10/0.3)] focus:bg-[oklch(0.20_0.06_10/0.3)] focus-visible:outline-rose"
           : "hover:bg-border/50 focus:bg-border/50 focus-visible:outline-plasma"

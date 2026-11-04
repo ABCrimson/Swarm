@@ -17,7 +17,7 @@ const STAGGER_S = 0.05;
 const MAX_STAGGERED = 8;
 
 const sectionHeadingClass =
-  "mb-3 text-xs font-semibold tracking-widest text-fg-dim uppercase font-[family-name:var(--font-mono)]";
+  "mb-3 text-xs font-semibold tracking-widest text-fg-dim uppercase font-mono";
 
 /**
  * Template chooser: the built-in templates render at once; the user's own
@@ -38,7 +38,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
       style={{ backdropFilter: "blur(16px) saturate(1.5)" }}
     >
       <div className="mb-5 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-[oklch(0.92_0.02_220)] font-[family-name:var(--font-display)]">
+        <h2 className="text-lg font-semibold text-[oklch(0.92_0.02_220)] font-display">
           Choose A Template
         </h2>
         <button
@@ -61,10 +61,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
       <section aria-label="Built-In Templates" className="mb-5">
         <h3 className={sectionHeadingClass}>Built-In</h3>
         {unavailableReasonId != null && (
-          <p
-            id={unavailableReasonId}
-            className="mb-3 text-xs text-fg-dim font-[family-name:var(--font-body)]"
-          >
+          <p id={unavailableReasonId} className="mb-3 text-xs text-fg-dim">
             {DESKTOP_ONLY_REASON}
           </p>
         )}
@@ -84,7 +81,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
       {hasCapability("localStores") && isTauri() ? (
         <Suspense
           fallback={
-            <p role="status" className="text-xs text-fg-dim font-[family-name:var(--font-body)]">
+            <p role="status" className="text-xs text-fg-dim">
               Loading Your Templates…
             </p>
           }
@@ -94,9 +91,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
       ) : (
         <section aria-label="Your Templates">
           <h3 className={sectionHeadingClass}>Your Templates</h3>
-          <p className="text-xs text-fg-dim font-[family-name:var(--font-body)]">
-            {DESKTOP_ONLY_REASON}
-          </p>
+          <p className="text-xs text-fg-dim">{DESKTOP_ONLY_REASON}</p>
         </section>
       )}
     </div>
@@ -119,10 +114,7 @@ function UserTemplates({
 
   if (failed) {
     return (
-      <p
-        role="alert"
-        className="text-xs text-[oklch(0.72_0.20_25)] font-[family-name:var(--font-body)]"
-      >
+      <p role="alert" className="text-xs text-[oklch(0.72_0.20_25)]">
         Could Not Load Your Templates.
       </p>
     );
@@ -174,12 +166,10 @@ function TemplateCard({
       className="cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 rounded-lg border border-[oklch(0.26_0.04_220/0.5)] bg-[oklch(0.16_0.03_220/0.6)] p-4 text-left transition-colors hover:border-[oklch(0.50_0.18_290/0.5)] hover:bg-[oklch(0.18_0.05_290/0.3)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-plasma"
       style={{ backdropFilter: "blur(8px)" }}
     >
-      <span className="mb-1 block text-sm font-semibold text-[oklch(0.88_0.04_220)] font-[family-name:var(--font-display)]">
+      <span className="mb-1 block text-sm font-semibold text-[oklch(0.88_0.04_220)] font-display">
         {escapeForDisplay(template.name)}
       </span>
-      <span className="mb-2 line-clamp-2 text-xs text-fg-dim font-[family-name:var(--font-body)]">
-        {template.description}
-      </span>
+      <span className="mb-2 line-clamp-2 text-xs text-fg-dim">{template.description}</span>
       <Pill tone="info" size="sm">
         {pluralizeWorkers(template.workerConfigs.length)}
       </Pill>

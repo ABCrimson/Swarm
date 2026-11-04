@@ -37,12 +37,8 @@ export function SessionList({
   if (sortedSessions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center text-fg-dim">
-        <p className="text-lg font-medium font-[family-name:var(--font-display)]">
-          No Sessions Yet
-        </p>
-        <p className="mt-1 text-sm font-[family-name:var(--font-body)]">
-          Create A New Session To Get Started.
-        </p>
+        <p className="text-lg font-medium font-display">No Sessions Yet</p>
+        <p className="mt-1 text-sm">Create A New Session To Get Started.</p>
       </div>
     );
   }
