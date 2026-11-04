@@ -176,8 +176,8 @@
     color: var(--color-fg);
     cursor: pointer;
     transition:
-      background-color 0.15s var(--ease-out),
-      border-color 0.15s var(--ease-out);
+      background-color 0.15s ease,
+      border-color 0.15s ease;
   }
 
   .graph-control:hover {
@@ -249,7 +249,7 @@
     font-size: var(--text-md);
     text-align: start;
     cursor: pointer;
-    transition: background-color 0.1s var(--ease-out);
+    transition: background-color 0.1s ease;
   }
 
   .graph-context-menu__item[data-variant="danger"] {
