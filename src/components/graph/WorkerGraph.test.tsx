@@ -351,6 +351,22 @@ describe("WorkerGraph — interactions", () => {
     expect(await screen.findByText(/No Workers Running/)).toBeInTheDocument();
   });
 
+  it("the empty state offers Spawn Your First Worker only when a spawn handler is given", async () => {
+    const user = userEvent.setup();
+    const onSpawnRequest = vi.fn();
+    const { unmount } = render(<WorkerGraph />);
+    expect(screen.getByText("No Workers Running", { exact: true })).toBeInTheDocument();
+    expect(
+      screen.getByText("Spawn A Worker To See The Topology", { exact: true }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    unmount();
+
+    render(<WorkerGraph onSpawnRequest={onSpawnRequest} />);
+    await user.click(screen.getByRole("button", { name: "Spawn Your First Worker" }));
+    expect(onSpawnRequest).toHaveBeenCalledTimes(1);
+  });
+
   it("Backspace/Delete never remove a selected live worker's node", async () => {
     const user = userEvent.setup();
     await renderWith(

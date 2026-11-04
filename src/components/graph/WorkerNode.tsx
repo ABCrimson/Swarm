@@ -69,7 +69,7 @@ export function WorkerNode({ data }: NodeProps<WorkerFlowNode>): React.ReactElem
             fontFamily: "var(--font-display)",
             fontSize: "0.8125rem",
             fontWeight: 600,
-            color: "oklch(0.95 0.02 220)",
+            color: "var(--color-fg-bright)",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",

@@ -254,7 +254,8 @@ interface CausalityPanelProps {
  *
  * A native modal `<dialog>` (`showModal()`): the browser provides the
  * top layer, an inert background, the focus trap, focus restore on
- * close, Escape, and (`closedby="any"`) closing on a backdrop click. Key
+ * close, Escape, and (`closedby="any"`, or a press-and-release backdrop test
+ * where the engine lacks it) closing on a backdrop click. Key
  * events still bubble to `document`, so the graph's own shortcuts stay
  * gated on the inspector atom. A fresh panel mounts per open cycle, and
  * closing it aborts a walk still in flight.
@@ -262,6 +263,15 @@ interface CausalityPanelProps {
  * Forward traversal (from a cause to everything it caused) is
  * deliberately out of scope for v1.
  */
+/**
+ * Whether a viewport point lies outside the dialog's border box (on its
+ * `::backdrop`).
+ */
+function isOutside(dialog: HTMLDialogElement, x: number, y: number): boolean {
+  const box = dialog.getBoundingClientRect();
+  return x < box.left || x > box.right || y < box.top || y > box.bottom;
+}
+
 export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): React.ReactElement {
   // Names of live workers, compared shallowly: a PTY output chunk (which
   // replaces a worker object) does not re-render the open inspector.
@@ -277,6 +287,10 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
   const [result, setResult] = useState<CausalityWalkResult | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const unmountingRef = useRef(false);
+  // Whether the current press began on the backdrop: a drag that starts
+  // inside the panel and ends outside it fires `click` on the dialog too,
+  // and must not close it.
+  const backdropPressRef = useRef(false);
   const titleId = useId();
 
   useEffect(() => {
@@ -314,11 +328,28 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
   };
 
   return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the keyboard path is Escape (the dialog's native `cancel`); this click handler only adds backdrop dismissal where `closedby` is missing.
     <dialog
       ref={dialogRef}
       className="causality-panel"
       aria-labelledby={titleId}
       closedby="any"
+      onPointerDown={(event) => {
+        backdropPressRef.current =
+          event.target === event.currentTarget &&
+          isOutside(event.currentTarget, event.clientX, event.clientY);
+      }}
+      onClick={(event) => {
+        // Only engines without `closedby` (WebKit today) take this path. A
+        // backdrop click is pressed and released on the dialog itself at a
+        // point outside its border box.
+        const pressed = backdropPressRef.current;
+        backdropPressRef.current = false;
+        if ("closedBy" in HTMLDialogElement.prototype) return;
+        const dialog = event.currentTarget;
+        if (pressed && event.target === dialog && isOutside(dialog, event.clientX, event.clientY))
+          dialog.close();
+      }}
       onClose={(event) => {
         // `close` is delivered as a queued task. Ignore it when this panel
         // is unmounting, and when the dialog is open again by then —
@@ -333,7 +364,7 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
           alignItems: "center",
           justifyContent: "space-between",
           padding: "14px 16px",
-          borderBottom: "1px solid oklch(0.22 0.04 220)",
+          borderBottom: "1px solid var(--color-border)",
         }}
       >
         <h2
@@ -342,7 +373,7 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
             fontFamily: "var(--font-display)",
             fontSize: "0.9375rem",
             fontWeight: 600,
-            color: "oklch(0.95 0.02 220)",
+            color: "var(--color-fg-bright)",
             margin: 0,
           }}
         >

@@ -294,6 +294,41 @@ describe("CausalityPanel (component)", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("closes on a backdrop click, where `closedby` is missing", async () => {
+    invoke.mockResolvedValue([]);
+    const { onClose, dialog } = renderPanel(999);
+
+    // A backdrop click is pressed and released on the dialog at a point
+    // outside its box.
+    act(() => {
+      dialog.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, clientX: -1, clientY: -1 }),
+      );
+      dialog.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: -1, clientY: -1 }));
+    });
+
+    expect(dialog.open).toBe(false);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("stays open when a press inside the panel is released on the backdrop", () => {
+    invoke.mockResolvedValue([]);
+    const { onClose, dialog } = renderPanel(999);
+
+    // A drag that starts on the panel heading and ends outside the dialog.
+    act(() => {
+      screen
+        .getByRole("heading", { name: "Causality Trace" })
+        .dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, clientX: 10, clientY: 10 }),
+        );
+      dialog.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: -1, clientY: -1 }));
+    });
+
+    expect(dialog.open).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("closes from the close button", async () => {
     const user = userEvent.setup();
     invoke.mockResolvedValue([]);

@@ -3,7 +3,7 @@
 // with the reason, a failed project-root read still lets you spawn, and
 // submit calls the right IPC wrapper with the right shape per provider.
 
-import "#test/dom-polyfills";
+import "#test/top-layer-shim";
 import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -365,6 +365,46 @@ describe("SpawnWorkerDialog", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("closes on a backdrop click, where `closedby` is missing", async () => {
+    const onClose = vi.fn();
+    render(<SpawnWorkerDialog onClose={onClose} />);
+    await waitForProbeSettled();
+    const dialog = screen.getByRole("dialog", { name: "Spawn Worker" });
+
+    // A backdrop click is pressed and released on the dialog at a point
+    // outside its box.
+    act(() => {
+      dialog.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, clientX: -1, clientY: -1 }),
+      );
+      dialog.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: -1, clientY: -1 }));
+    });
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("stays open when a press inside the dialog is released on the backdrop", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<SpawnWorkerDialog onClose={onClose} />);
+    await waitForProbeSettled();
+    await user.click(screen.getByRole("radio", { name: "Claude Code" }));
+    const dialog = screen.getByRole("dialog", { name: "Spawn Worker" });
+
+    // A drag-select from the Model Alias input that ends outside the dialog.
+    act(() => {
+      screen
+        .getByLabelText("Model Alias")
+        .dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, clientX: 10, clientY: 10 }),
+        );
+      dialog.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: -1, clientY: -1 }));
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialog).toHaveAttribute("open");
+  });
+
   it("calls onClose without spawning when Cancel is clicked", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
@@ -373,7 +413,7 @@ describe("SpawnWorkerDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
-    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     expect(spawnWorker).not.toHaveBeenCalled();
     expect(agentSpawn).not.toHaveBeenCalled();
   });
@@ -395,6 +435,13 @@ describe("SpawnWorkerDialog", () => {
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
+    act(() => {
+      const dialog = screen.getByRole("dialog", { name: "Spawn Worker" });
+      dialog.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, clientX: -1, clientY: -1 }),
+      );
+      dialog.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: -1, clientY: -1 }));
+    });
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: "Spawn Worker" })).toHaveAttribute("open");
 
@@ -410,7 +457,7 @@ describe("SpawnWorkerDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Close Spawn Worker Dialog" }));
 
-    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
   it("in web mode disables Webview Anthropic with the desktop-only reason and defaults to Claude Code", async () => {
@@ -477,7 +524,7 @@ describe("SpawnWorkerDialog", () => {
       document.dispatchEvent(event);
     });
 
-    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 });
 

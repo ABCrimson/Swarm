@@ -22,7 +22,15 @@ function LegendRow({ kind }: { readonly kind: GraphEdgeKind }): React.ReactEleme
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <svg width={20} height={8} viewBox="0 0 20 8" aria-hidden="true">
-        <line x1={1} y1={4} x2={19} y2={4} stroke={stroke} strokeWidth={2} strokeDasharray={dash} />
+        <line
+          x1={1}
+          y1={4}
+          x2={19}
+          y2={4}
+          style={{ stroke }}
+          strokeWidth={2}
+          strokeDasharray={dash}
+        />
       </svg>
       <span>{KIND_LABEL[kind]}</span>
     </div>
@@ -64,7 +72,7 @@ export function GraphLegend({ presentKinds }: GraphLegendProps): React.ReactElem
         borderRadius: 8,
         background: "oklch(0.12 0.03 220 / 0.85)",
         backdropFilter: "blur(8px)",
-        border: "1px solid oklch(0.28 0.05 220)",
+        border: "1px solid var(--color-border-2)",
         fontFamily: "var(--font-body)",
         fontSize: "0.6875rem",
         fontWeight: 500,
@@ -84,7 +92,7 @@ export function GraphLegend({ presentKinds }: GraphLegendProps): React.ReactElem
                 height: 1,
                 margin: "2px 0",
                 border: "none",
-                background: "oklch(0.28 0.05 220)",
+                background: "var(--color-border-2)",
               }}
             />
           )}

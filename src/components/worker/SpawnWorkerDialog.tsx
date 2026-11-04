@@ -118,14 +118,15 @@ function showModalOnMount(dialog: HTMLDialogElement | null): void {
 /** Tailwind's preflight zeroes dialog margins; `margin: auto` re-centers the modal. */
 const dialogStyle: CSSProperties = {
   margin: "auto",
-  width: 480,
+  width: 520,
   maxWidth: "calc(100vw - 32px)",
   maxHeight: "85vh",
   padding: 0,
   background: "oklch(0.10 0.03 220)",
-  border: "1px solid oklch(0.28 0.05 220)",
+  border: "1px solid var(--color-border-2)",
   borderRadius: 12,
-  boxShadow: "0 0 0 1px oklch(0.78 0.18 205 / 0.1), 0 16px 48px oklch(0.06 0.02 220 / 0.6)",
+  boxShadow:
+    "0 0 0 1px oklch(from var(--color-plasma) l c h / 0.1), 0 16px 48px oklch(from var(--color-void) l c h / 0.6)",
   color: "oklch(0.88 0.03 220)",
   overflow: "hidden",
 };
@@ -141,7 +142,7 @@ const headerStyle: CSSProperties = {
   alignItems: "center",
   justifyContent: "space-between",
   padding: "14px 16px",
-  borderBottom: "1px solid oklch(0.22 0.04 220)",
+  borderBottom: "1px solid var(--color-border)",
   flexShrink: 0,
 };
 
@@ -149,7 +150,7 @@ const titleStyle: CSSProperties = {
   fontFamily: "var(--font-display)",
   fontSize: "0.9375rem",
   fontWeight: 600,
-  color: "oklch(0.95 0.02 220)",
+  color: "var(--color-fg-bright)",
   margin: 0,
 };
 
@@ -185,35 +186,34 @@ const fieldsetStyle: CSSProperties = { ...fieldGroupStyle, border: "none", margi
 const fieldLabelStyle: CSSProperties = {
   padding: 0,
   fontFamily: "var(--font-body)",
-  fontSize: "0.75rem",
-  fontWeight: 600,
-  color: "oklch(0.72 0.03 220)",
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
+  fontSize: "var(--text-md)",
+  fontWeight: 500,
+  color: "var(--color-fg)",
 };
 
 const segmentedGroupStyle: CSSProperties = {
   display: "flex",
-  background: "oklch(0.08 0.02 220)",
-  border: "1px solid oklch(0.22 0.04 220)",
+  background: "var(--color-surface-0)",
+  border: "1px solid var(--color-border)",
   borderRadius: 8,
   padding: 2,
 };
 
 function segmentStyle(active: boolean, disabled: boolean): CSSProperties {
   return {
-    flex: 1,
+    flex: "1 1 auto",
+    whiteSpace: "nowrap",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
     padding: "8px 12px",
-    background: active ? "oklch(0.78 0.18 205 / 0.15)" : "oklch(0 0 0 / 0)",
+    background: active ? "oklch(from var(--color-plasma) l c h / 0.15)" : "oklch(0 0 0 / 0)",
     borderRadius: 6,
     color: disabled
       ? "oklch(0.38 0.03 220)"
       : active
-        ? "oklch(0.78 0.18 205)"
+        ? "var(--color-plasma)"
         : "oklch(0.65 0.04 220)",
     fontFamily: "var(--font-body)",
     fontSize: "0.8125rem",
@@ -223,9 +223,9 @@ function segmentStyle(active: boolean, disabled: boolean): CSSProperties {
 }
 
 const unavailableNoteStyle: CSSProperties = {
-  fontFamily: "var(--font-mono)",
-  fontSize: "0.6875rem",
-  color: "oklch(0.72 0.16 40)",
+  fontFamily: "var(--font-body)",
+  fontSize: "var(--text-sm)",
+  color: "var(--color-amber)",
   lineHeight: 1.5,
 };
 
@@ -236,15 +236,21 @@ function tierCardStyle(active: boolean): CSSProperties {
     gap: 10,
     padding: "10px 12px",
     borderRadius: 8,
-    border: `1px solid ${active ? "oklch(0.55 0.14 205)" : "oklch(0.22 0.04 220)"}`,
-    background: active ? "oklch(0.78 0.18 205 / 0.10)" : "oklch(0.08 0.02 220 / 0.6)",
+    border: `1px solid ${active ? "oklch(0.55 0.14 205)" : "var(--color-border)"}`,
+    background: active
+      ? "oklch(from var(--color-plasma) l c h / 0.1)"
+      : "oklch(from var(--color-surface-0) l c h / 0.6)",
     cursor: "pointer",
   };
 }
 
-/** `accent-color` themes the native radio dot to the house accent. */
+/**
+ * `accent-color` themes the trust-tier radios' native dot to the house accent.
+ * The provider radios are `sr-only`: their segment's fill shows the choice,
+ * plus a focus outline and, in forced colors, a Highlight outline when checked.
+ */
 const radioStyle: CSSProperties = {
-  accentColor: "oklch(0.78 0.18 205)",
+  accentColor: "var(--color-plasma)",
   cursor: "pointer",
   flexShrink: 0,
   marginTop: 2,
@@ -259,7 +265,7 @@ const tierLabelStyle: CSSProperties = {
 
 const tierExplanationStyle: CSSProperties = {
   fontFamily: "var(--font-body)",
-  fontSize: "0.71875rem",
+  fontSize: "var(--text-xs)",
   color: "oklch(0.58 0.04 220)",
   lineHeight: 1.4,
 };
@@ -272,8 +278,8 @@ const repoRootPathStyle: CSSProperties = {
   whiteSpace: "nowrap",
   padding: "8px 12px",
   borderRadius: 8,
-  border: "1px solid oklch(0.22 0.04 220)",
-  background: "oklch(0.08 0.02 220 / 0.6)",
+  border: "1px solid var(--color-border)",
+  background: "oklch(from var(--color-surface-0) l c h / 0.6)",
   color: "oklch(0.65 0.04 220)",
   fontFamily: "var(--font-mono)",
   fontSize: "0.75rem",
@@ -295,16 +301,26 @@ const footerStyle: CSSProperties = {
   justifyContent: "flex-end",
   gap: 8,
   padding: "12px 16px",
-  borderTop: "1px solid oklch(0.20 0.03 220)",
+  borderTop: "1px solid var(--color-border)",
   flexShrink: 0,
 };
+
+/**
+ * Whether a viewport point lies outside the dialog's border box (on its
+ * `::backdrop`).
+ */
+function isOutside(dialog: HTMLDialogElement, x: number, y: number): boolean {
+  const box = dialog.getBoundingClientRect();
+  return x < box.left || x > box.right || y < box.top || y > box.bottom;
+}
 
 // ── Component ─────────────────────────────────────────
 
 /**
  * The Workers page's spawn dialog, a native modal `<dialog>` opened with
  * `showModal()` (top layer, inert page, native focus handling and focus
- * return; Escape and backdrop clicks close it via `closedby="any"`).
+ * return; Escape and backdrop clicks close it via `closedby="any"`, and
+ * a press-and-release backdrop test where the engine lacks `closedby`).
  *
  * - Provider: Webview Anthropic, Claude Code or Codex. Webview Anthropic
  *   is the default where the build has the `localAiChat` capability;
@@ -446,14 +462,20 @@ export function SpawnWorkerDialog({
     }
   }, null);
 
-  // The one user-dismissal path for the close and Cancel buttons (Escape and
-  // backdrop go through `onCancel`, which applies the same rule): a dialog
+  // The one user-dismissal path for the close and Cancel buttons and, where
+  // `closedby` is missing, a backdrop click (Escape and native light dismiss
+  // go through `onCancel`, same rule): a dialog
   // dismissed mid-spawn leaves the result nowhere to go. The `spawn` action
   // calls `closeDialog` directly because it closes while `isSpawning` is
   // still true.
   const requestDismiss = () => {
     if (!isSpawning) closeDialog();
   };
+
+  // Whether the current press began on the backdrop: a drag-select that
+  // starts in an input and ends outside the dialog fires `click` on the
+  // dialog too, and must not dismiss it.
+  const backdropPressRef = useRef(false);
 
   const pickProjectRoot = async () => {
     let selected: string | null;
@@ -489,17 +511,37 @@ export function SpawnWorkerDialog({
   const agent = isAgentProvider(provider) ? provider : null;
 
   return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the keyboard path is Escape (the dialog's native `cancel`); this click handler only adds backdrop dismissal where `closedby` is missing.
     <dialog
       ref={showModalOnMount}
       closedby="any"
       aria-labelledby={titleId}
       onClose={onClose}
+      onPointerDown={(e) => {
+        backdropPressRef.current =
+          e.target === e.currentTarget && isOutside(e.currentTarget, e.clientX, e.clientY);
+      }}
+      onClick={(e) => {
+        // Only engines without `closedby` (WebKit today) take this path. A
+        // backdrop click is pressed and released on the dialog itself at a
+        // point outside its border box; mid-spawn it is refused like every
+        // other dismissal.
+        const pressed = backdropPressRef.current;
+        backdropPressRef.current = false;
+        if ("closedBy" in HTMLDialogElement.prototype) return;
+        if (
+          pressed &&
+          e.target === e.currentTarget &&
+          isOutside(e.currentTarget, e.clientX, e.clientY)
+        )
+          requestDismiss();
+      }}
       onCancel={(e) => {
         // Escape and backdrop light-dismiss; never mid-spawn (see `requestDismiss`).
         if (isSpawning) e.preventDefault();
       }}
       style={dialogStyle}
-      className="backdrop:bg-[oklch(0.04_0.01_220/0.55)] backdrop:backdrop-blur-[2px]"
+      className="opacity-0 translate-y-2 transition-[opacity,translate,display,overlay] transition-discrete duration-200 ease-out-cubic open:translate-y-0 open:opacity-100 starting:open:translate-y-2 starting:open:opacity-0 backdrop:bg-[oklch(0.04_0.01_220/0.55)] backdrop:backdrop-blur-[2px] backdrop:opacity-0 backdrop:transition-opacity backdrop:duration-200 backdrop:ease-out-cubic open:backdrop:opacity-100 starting:open:backdrop:opacity-0"
     >
       <form ref={formRef} action={spawn} style={formStyle}>
         <div style={headerStyle}>
@@ -534,6 +576,7 @@ export function SpawnWorkerDialog({
                 return (
                   <label
                     key={p}
+                    className="relative has-focus-visible:outline-2 has-focus-visible:-outline-offset-2 has-focus-visible:outline-plasma forced-colors:has-checked:outline-2 forced-colors:has-checked:outline-[Highlight]"
                     style={segmentStyle(provider === p, disabled)}
                     title={reason ?? undefined}
                   >
@@ -544,7 +587,7 @@ export function SpawnWorkerDialog({
                       checked={provider === p}
                       disabled={disabled}
                       onChange={() => setProvider(p)}
-                      style={radioStyle}
+                      className="sr-only"
                     />
                     {PROVIDER_LABELS[p]}
                   </label>
