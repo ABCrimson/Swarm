@@ -19,5 +19,5 @@
     "skipLibCheck": true
   },
   "include": ["src"],
-  "exclude": ["src/workers"]
+  "exclude": ["src/workers", "src/**/*.browser.test.tsx"]
 }

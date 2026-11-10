@@ -14,21 +14,15 @@ import { useSystemStore } from "#store/system";
 import type { SystemMetrics } from "#store/types";
 import { appSettingsAtom } from "#store/ui";
 
-const TOAST_STYLE = {
-  critical: {
-    background: "oklch(0.14 0.06 10 / 0.95)",
-    border: "1px solid oklch(0.50 0.14 10)",
-    color: "var(--color-rose)",
-    fontFamily: "var(--font-mono)",
-    fontSize: 12,
-  },
-  warning: {
-    background: "oklch(0.14 0.06 70 / 0.95)",
-    border: "1px solid oklch(0.55 0.12 70)",
-    color: "var(--color-amber)",
-    fontFamily: "var(--font-mono)",
-    fontSize: 12,
-  },
+/**
+ * Toast skins as utilities. Sonner's own stylesheet is unlayered, so every
+ * declaration here is important to outrank it; the colors are not tokens.
+ */
+const TOAST_CLASS = {
+  critical:
+    "border! border-solid! border-[oklch(0.50_0.14_10)]! bg-[oklch(0.14_0.06_10/0.95)]! font-mono! text-[12px]! text-rose!",
+  warning:
+    "border! border-solid! border-[oklch(0.55_0.12_70)]! bg-[oklch(0.14_0.06_70/0.95)]! font-mono! text-[12px]! text-amber!",
 } as const;
 
 /** Toasts one alert, and mirrors it as a fire-and-forget native notification when enabled and the transport can show one. */
@@ -39,9 +33,9 @@ function announce(alert: Alert, nativeNotifications: boolean): void {
     sendNotification(title, alert.message).catch(() => {});
   }
   if (alert.severity === "critical") {
-    toast.error(alert.message, { duration: 6000, style: TOAST_STYLE.critical });
+    toast.error(alert.message, { duration: 6000, className: TOAST_CLASS.critical });
   } else {
-    toast.warning(alert.message, { duration: 4000, style: TOAST_STYLE.warning });
+    toast.warning(alert.message, { duration: 4000, className: TOAST_CLASS.warning });
   }
 }
 

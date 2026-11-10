@@ -29,12 +29,9 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-fs", () => ({
-  BaseDirectory: { AppData: 14 },
-  exists: vi.fn().mockResolvedValue(false),
   readDir: vi.fn().mockResolvedValue([]),
   readTextFile: vi.fn().mockResolvedValue(""),
-  remove: vi.fn().mockResolvedValue(undefined),
-  rename: vi.fn().mockResolvedValue(undefined),
+  stat: vi.fn().mockResolvedValue({}),
   writeTextFile: vi.fn().mockResolvedValue(undefined),
 }));
 

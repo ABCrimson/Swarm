@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import { useId, useState } from "react";
 import { HighlightedJson } from "#components/ai/HighlightedJson";
 import { Button } from "#components/ui/Button";
@@ -28,38 +27,14 @@ interface ToolBuilderProps {
   readonly onCancel: () => void;
 }
 
-const labelStyle: CSSProperties = {
-  fontFamily: "var(--font-body)",
-  fontSize: "var(--text-sm)",
-  fontWeight: 600,
-  color: "var(--color-fg-muted)",
-  marginBottom: 4,
-  display: "block",
-};
-
-const errorTextStyle: CSSProperties = {
-  display: "block",
-  marginTop: 4,
-  fontFamily: "var(--font-body)",
-  fontSize: "var(--text-xs)",
-  color: "var(--color-rose)",
-};
-
-const invalidBorder: CSSProperties = { borderColor: "oklch(0.55 0.14 10)" };
-
-const textareaStyle: CSSProperties = {
-  height: "auto",
-  padding: "8px 12px",
-  resize: "vertical",
-  fieldSizing: "content",
-};
-
-const panelStyle: CSSProperties = {
-  background: "oklch(0.09 0.02 220 / 0.5)",
-  backdropFilter: "blur(12px) saturate(1.5)",
-  border: "1px solid var(--color-border)",
-  borderRadius: "var(--radius-lg)",
-};
+const LABEL_TEXT = "block font-body text-[length:var(--text-sm)] font-semibold text-fg-muted";
+const LABEL = `mb-1 ${LABEL_TEXT}`;
+const ERROR_TEXT = "mt-1 block font-body text-[length:var(--text-xs)] text-rose";
+/** Not a token: a rose between `--color-rose` and the border ramp. */
+const INVALID_BORDER = "border-[oklch(0.55_0.14_10)]";
+const TEXTAREA = "h-auto resize-y px-3 py-2 field-sizing-content";
+const PANEL =
+  "rounded-lg border border-border bg-[oklch(0.09_0.02_220/0.5)] [backdrop-filter:blur(12px)_saturate(1.5)]";
 
 /**
  * Form for creating or editing a custom tool definition: name,
@@ -105,29 +80,14 @@ export function ToolBuilder({
   const nameErrorId = `${idPrefix}-name-error`;
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 1fr",
-        gap: 16,
-        height: "100%",
-        overflow: "hidden",
-      }}
-    >
+    <div className="grid h-full grid-cols-[1fr_1fr] gap-4 overflow-hidden">
       <form
         action={save}
         aria-label={initialTool ? `Edit ${initialTool.name}` : "New Tool"}
-        style={{
-          ...panelStyle,
-          display: "flex",
-          flexDirection: "column",
-          gap: 16,
-          overflow: "auto",
-          padding: 16,
-        }}
+        className={`${PANEL} flex flex-col gap-4 overflow-auto p-4`}
       >
         <div>
-          <label htmlFor={`${idPrefix}-name`} style={labelStyle}>
+          <label htmlFor={`${idPrefix}-name`} className={LABEL}>
             Tool Name
           </label>
           <Input
@@ -137,43 +97,32 @@ export function ToolBuilder({
             onChange={(e) => setName(e.target.value)}
             aria-invalid={name !== "" && issues.name !== undefined}
             aria-describedby={name !== "" && issues.name ? nameErrorId : undefined}
-            style={name !== "" && issues.name ? invalidBorder : undefined}
+            className={name !== "" && issues.name ? INVALID_BORDER : undefined}
           />
           {name !== "" && issues.name && (
-            <span id={nameErrorId} style={errorTextStyle}>
+            <span id={nameErrorId} className={ERROR_TEXT}>
               {issues.name}
             </span>
           )}
         </div>
 
         <div>
-          <label htmlFor={`${idPrefix}-desc`} style={labelStyle}>
+          <label htmlFor={`${idPrefix}-desc`} className={LABEL}>
             Description
           </label>
           <textarea
             id={`${idPrefix}-desc`}
-            className="swarm-input"
             placeholder="What Does This Tool Do?"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
+            className={`swarm-input ${TEXTAREA}`}
             rows={3}
-            style={textareaStyle}
           />
         </div>
 
-        <fieldset
-          aria-labelledby={`${idPrefix}-params`}
-          style={{ border: "none", margin: 0, padding: 0, minWidth: 0 }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              marginBottom: 8,
-            }}
-          >
-            <span id={`${idPrefix}-params`} style={{ ...labelStyle, marginBottom: 0 }}>
+        <fieldset aria-labelledby={`${idPrefix}-params`} className="m-0 min-w-0 border-none p-0">
+          <div className="mb-2 flex items-center justify-between">
+            <span id={`${idPrefix}-params`} className={LABEL_TEXT}>
               Parameters
             </span>
             <Button
@@ -190,29 +139,14 @@ export function ToolBuilder({
             </Button>
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="flex flex-col gap-2">
             {params.map((param, index) => {
               const error = issues.params.get(param.id);
               const errorId = `${idPrefix}-param-${param.id}-error`;
               const rowLabel = param.name || `Parameter ${index + 1}`;
               return (
-                <div
-                  key={param.id}
-                  style={{
-                    padding: 8,
-                    borderRadius: 8,
-                    background: "oklch(from var(--color-surface-1) l c h / 0.5)",
-                    border: "1px solid var(--color-border)",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr auto 1fr auto",
-                      gap: 6,
-                      alignItems: "center",
-                    }}
-                  >
+                <div key={param.id} className="rounded-md border border-border bg-surface-1/50 p-2">
+                  <div className="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-1.5">
                     <Input
                       placeholder="Name"
                       aria-label={`Parameter ${index + 1} Name`}
@@ -220,7 +154,7 @@ export function ToolBuilder({
                       onChange={(e) => updateParam(param.id, { name: e.target.value })}
                       aria-invalid={error !== undefined}
                       aria-describedby={error ? errorId : undefined}
-                      style={{ height: 28, ...(error ? invalidBorder : undefined) }}
+                      className={error ? `h-7 ${INVALID_BORDER}` : "h-7"}
                     />
                     <select
                       value={param.type}
@@ -230,15 +164,7 @@ export function ToolBuilder({
                         })
                       }
                       aria-label={`${rowLabel} Type`}
-                      className="swarm-input"
-                      style={{
-                        height: 28,
-                        width: "auto",
-                        padding: "0 6px",
-                        fontFamily: "var(--font-mono)",
-                        fontSize: "var(--text-xs)",
-                        cursor: "pointer",
-                      }}
+                      className="swarm-input h-7 w-auto cursor-pointer px-1.5 font-mono text-[length:var(--text-xs)]"
                     >
                       {PARAM_TYPES.map((type) => (
                         <option key={type} value={type}>
@@ -251,7 +177,7 @@ export function ToolBuilder({
                       aria-label={`${rowLabel} Description`}
                       value={param.description}
                       onChange={(e) => updateParam(param.id, { description: e.target.value })}
-                      style={{ height: 28 }}
+                      className="h-7"
                     />
                     <Button
                       variant="ghost"
@@ -276,7 +202,7 @@ export function ToolBuilder({
                     </Button>
                   </div>
                   {error && (
-                    <span id={errorId} style={errorTextStyle}>
+                    <span id={errorId} className={ERROR_TEXT}>
                       {error}
                     </span>
                   )}
@@ -286,28 +212,22 @@ export function ToolBuilder({
           </div>
         </fieldset>
 
-        <div style={{ flex: 1 }}>
-          <label htmlFor={`${idPrefix}-script`} style={labelStyle}>
+        <div className="flex-1">
+          <label htmlFor={`${idPrefix}-script`} className={LABEL}>
             Execution Script
           </label>
           <textarea
             id={`${idPrefix}-script`}
-            className="swarm-input"
+            className={`swarm-input ${TEXTAREA} font-mono text-[length:var(--text-sm)] leading-[1.6]`}
             placeholder="// JavaScript That Runs In A Sandboxed Worker; `input` Holds The Arguments"
             value={script}
             onChange={(e) => setScript(e.target.value)}
             rows={8}
             spellCheck={false}
-            style={{
-              ...textareaStyle,
-              fontFamily: "var(--font-mono)",
-              fontSize: "var(--text-sm)",
-              lineHeight: 1.6,
-            }}
           />
         </div>
 
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={onCancel}>
             Cancel
           </Button>
@@ -319,20 +239,11 @@ export function ToolBuilder({
 
       <section
         aria-labelledby={`${idPrefix}-preview`}
-        style={{ ...panelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}
+        className={`${PANEL} flex flex-col overflow-hidden`}
       >
         <h2
           id={`${idPrefix}-preview`}
-          style={{
-            margin: 0,
-            padding: "10px 16px",
-            borderBottom: "1px solid var(--color-border)",
-            fontFamily: "var(--font-display)",
-            fontSize: "var(--text-md)",
-            fontWeight: 600,
-            letterSpacing: "-0.01em",
-            color: "var(--color-fg-muted)",
-          }}
+          className="m-0 border-b border-border px-4 py-2.5 font-display text-[length:var(--text-md)] font-semibold tracking-[-0.01em] text-fg-muted"
         >
           Anthropic Tool Preview
         </h2>
