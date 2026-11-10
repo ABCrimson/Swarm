@@ -20,7 +20,7 @@
     "build": "pnpm typecheck && vite build",
     "build:web": "pnpm typecheck && vite build --mode web",
     "build:site": "node scripts/build-site.ts",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json && tsc -p tsconfig.node.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json && tsc -p tsconfig.node.json && tsc -p tsconfig.browser.json",
     "check:compiler": "node scripts/check-react-compiler.ts",
     "check": "biome check --write .",
     "lint": "biome lint .",
