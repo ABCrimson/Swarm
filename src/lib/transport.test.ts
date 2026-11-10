@@ -107,6 +107,7 @@ import {
   RpcConnectionLostError,
   RpcTimeoutError,
   rpcDeadlineMs,
+  WAKE_PROBE_MS,
   WsTransport,
 } from "#lib/transport";
 
@@ -733,6 +734,92 @@ describe("wsTransport", () => {
       socket.simulateAbruptClose();
 
       await expect(invokePromise).rejects.toThrow("Not Connected To The SWARM Daemon.");
+    });
+  });
+
+  describe("wake", () => {
+    const wakeUp = (): void => {
+      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+
+    afterEach(() => {
+      Reflect.deleteProperty(document, "visibilityState");
+    });
+
+    it("connects at once when a wake lands during backoff", async () => {
+      vi.useFakeTimers();
+      void transport.connect().catch(() => {});
+      latestSocket().simulateAbruptClose();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+
+      window.dispatchEvent(new Event("online"));
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    });
+
+    it("abandons an open socket that stays silent for WAKE_PROBE_MS", async () => {
+      vi.useFakeTimers();
+      void transport.connect();
+      const socket = openAndReady(0);
+      wakeUp();
+      await vi.advanceTimersByTimeAsync(WAKE_PROBE_MS - 1);
+      expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+      await vi.advanceTimersByTimeAsync(500 * 1.3);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    });
+
+    it("keeps an open socket that delivers a frame within the probe", async () => {
+      vi.useFakeTimers();
+      void transport.connect();
+      const socket = openAndReady(0);
+      window.dispatchEvent(new Event("pageshow"));
+      await vi.advanceTimersByTimeAsync(500);
+      socket.simulateServerFrame(event(1));
+      await vi.advanceTimersByTimeAsync(WAKE_PROBE_MS);
+      expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it("ignores a visibilitychange to hidden", async () => {
+      vi.useFakeTimers();
+      void transport.connect();
+      const socket = openAndReady(0);
+      Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(WAKE_PROBE_MS * 2);
+      expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+    });
+
+    it("removes its listeners on dispose", async () => {
+      vi.useFakeTimers();
+      void transport.connect();
+      const socket = openAndReady(0);
+      transport.dispose();
+      window.dispatchEvent(new Event("online"));
+      wakeUp();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+    });
+
+    it("ignores wakes once swarmd refused the token", async () => {
+      vi.useFakeTimers();
+      const connectPromise = transport.connect();
+      const assertion = expect(connectPromise).rejects.toBeInstanceOf(DaemonAuthError);
+      latestSocket().simulateOpen();
+      latestSocket().simulateAbruptClose(4401);
+      await assertion;
+
+      window.dispatchEvent(new Event("online"));
+      wakeUp();
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it("does nothing for a transport that never connected", () => {
+      window.dispatchEvent(new Event("online"));
+      expect(FakeWebSocket.instances).toHaveLength(0);
     });
   });
 
