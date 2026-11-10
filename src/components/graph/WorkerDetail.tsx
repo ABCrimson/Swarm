@@ -2,18 +2,29 @@ import "./graph.css";
 
 import { useSetAtom } from "jotai";
 import { useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { toast } from "sonner";
+import { useShallow } from "zustand/react/shallow";
 import { Badge, stateLabels } from "#components/ui/Badge";
 import { Pill } from "#components/ui/Pill";
 import { useWorker } from "#hooks/useWorker";
 import { stripAnsi } from "#lib/ansi";
+import { walkCausalityChain } from "#lib/causality-walk";
 import { escapeForDisplay } from "#lib/display-escape";
+import type { DomainEvent } from "#lib/event-bus";
 import { errorMessage } from "#lib/is-error";
+import {
+  deriveLineage,
+  LINEAGE_FIRST_PAGE,
+  LINEAGE_PAGE_STEP,
+  selectLineageStartSeq,
+} from "#lib/lineage";
 import { isTauri, openWorkerDirectory } from "#lib/tauri";
 import { formatElapsed } from "#lib/time";
 import { selectMostRecentSeqForWorker, useProvenanceStore } from "#store/provenance";
-import type { Worker } from "#store/types";
-import { causalityInspectorAtom, detailPanelOpenAtom } from "#store/ui";
+import type { Worker, WorkerState } from "#store/types";
+import { causalityInspectorAtom, detailPanelOpenAtom, selectedWorkerIdAtom } from "#store/ui";
+import { useWorkerStore } from "#store/workers";
 
 interface WorkerDetailProps {
   readonly worker: Worker;
@@ -23,6 +34,20 @@ interface WorkerDetailProps {
 const OUTPUT_PREVIEW_CHARS = 2000;
 /** How often the uptime readout refreshes. */
 const UPTIME_TICK_MS = 15_000;
+
+/** State per live worker id, compared shallowly (a PTY output chunk changes none). */
+const selectStates = (s: { workers: ReadonlyMap<string, Worker> }): Record<string, WorkerState> =>
+  Object.fromEntries(s.workers.values().map((w) => [w.id, w.state]));
+
+/** Display name per live worker id. */
+const selectNames = (s: { workers: ReadonlyMap<string, Worker> }): Record<string, string> =>
+  Object.fromEntries(s.workers.values().map((w) => [w.id, w.name ?? w.id.slice(0, 8)]));
+
+/** A causality walk back from `startSeq`, root first. */
+interface CauseChain {
+  readonly startSeq: number;
+  readonly rows: readonly DomainEvent[];
+}
 
 /** The current time, refreshed every `intervalMs`. */
 function useNow(intervalMs: number): number {
@@ -70,9 +95,10 @@ function DetailRow({
 
 /**
  * Side panel with a worker's details — state, ID, PID, a live uptime,
- * branch/worktree, an escape-stripped output preview — and Pause, Resume
- * and Kill, `useWorker`'s IPC actions: each runs as a transition there,
- * so the optimistic state holds while the backend call is in flight.
+ * branch/worktree, the Related Workers list (`#lib/lineage`), an
+ * escape-stripped output preview — and Pause, Resume and Kill,
+ * `useWorker`'s IPC actions: each runs as a transition there, so the
+ * optimistic state holds while the backend call is in flight.
  */
 export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement {
   const setDetailOpen = useSetAtom(detailPanelOpenAtom);
@@ -86,7 +112,52 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
     selectMostRecentSeqForWorker(s.edges, worker.id),
   );
   const setCausalityTarget = useSetAtom(causalityInspectorAtom);
+  const setSelectedId = useSetAtom(selectedWorkerIdAtom);
   const now = useNow(UPTIME_TICK_MS);
+
+  // Related Workers: measured edges give Spawned By, Spawned and the
+  // direct Caused By rows; a causality walk back from the latest edge into
+  // this worker adds the transitive causes once it lands.
+  const edges = useProvenanceStore((s) => s.edges);
+  const liveStates = useWorkerStore(useShallow(selectStates));
+  const liveNames = useWorkerStore(useShallow(selectNames));
+  const lineageStartSeq = selectLineageStartSeq(edges, worker.id);
+  const [causeChain, setCauseChain] = useState<CauseChain | null>(null);
+  const [lineageShown, setLineageShown] = useState(LINEAGE_FIRST_PAGE);
+  const lineage = deriveLineage(
+    worker.id,
+    edges,
+    liveStates,
+    causeChain?.startSeq === lineageStartSeq ? causeChain.rows : [],
+  );
+
+  useEffect(() => {
+    if (lineageStartSeq === null) return undefined;
+    const controller = new AbortController();
+    // As in CausalityPanel: the ring is read once, at walk start, and a
+    // miss falls through to a backfill. A failed or short walk still
+    // yields the causes it reached.
+    walkCausalityChain(lineageStartSeq, useProvenanceStore.getState().bySeq, controller.signal)
+      .then((result) => setCauseChain({ startSeq: lineageStartSeq, rows: result.rows }))
+      .catch(() => {
+        // Aborted: the start seq moved or the panel closed.
+      });
+    return () => controller.abort();
+  }, [lineageStartSeq]);
+
+  // The Workers page keys this panel by worker, so selecting a related
+  // worker remounts it and the activated row unmounts: commit
+  // synchronously, then focus the new panel's heading instead of letting
+  // focus fall to <body>.
+  const selectRelated = (workerId: string): void => {
+    flushSync(() => {
+      setSelectedId(workerId);
+      setDetailOpen(true);
+    });
+    document
+      .querySelector<HTMLElement>(`[data-worker-detail="${CSS.escape(workerId)}"] h2`)
+      ?.focus();
+  };
 
   const closePanel = (): void => {
     // Hand focus back to this worker's graph node or list row before the
@@ -124,6 +195,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
 
   return (
     <div
+      data-worker-detail={worker.id}
       style={{
         width: 320,
         height: "100%",
@@ -145,6 +217,8 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
         }}
       >
         <h2
+          // A focus target for a Related Workers selection (see selectRelated), not a tab stop.
+          tabIndex={-1}
           style={{
             fontFamily: "var(--font-display)",
             fontSize: "0.9375rem",
@@ -245,6 +319,56 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
           >
             View Causality
           </Pill>
+        )}
+
+        {lineage.rows.length > 0 && (
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span
+                aria-hidden="true"
+                className="font-display text-md font-semibold tracking-[-0.01em] text-fg-dim"
+              >
+                Related Workers
+              </span>
+              {lineage.failed > 0 && (
+                <Pill tone="danger" size="sm">
+                  {lineage.failed} Failed
+                </Pill>
+              )}
+            </div>
+            <ul aria-label="Related Workers" className="m-0 flex list-none flex-col gap-1.5 p-0">
+              {lineage.rows.slice(0, lineageShown).map((row) => {
+                const name = escapeForDisplay(liveNames[row.workerId] ?? row.workerId.slice(0, 8));
+                return (
+                  <li key={row.workerId}>
+                    <button
+                      type="button"
+                      aria-label={`${row.relation}: ${name}, Status: ${stateLabels[row.state]}`}
+                      onClick={() => selectRelated(row.workerId)}
+                      className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-md border border-border bg-surface-2/70 px-3 py-2 text-left font-body text-md text-fg hover:border-border-3"
+                    >
+                      <span className="flex min-w-0 flex-col">
+                        <span className="text-xs text-fg-dim">{row.relation}</span>
+                        <span className="truncate">{name}</span>
+                      </span>
+                      <Badge state={row.state}>{stateLabels[row.state]}</Badge>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {lineage.rows.length > lineageShown && (
+              <Pill
+                interactive
+                tone="neutral"
+                size="sm"
+                className="mt-2"
+                onClick={() => setLineageShown((shown) => shown + LINEAGE_PAGE_STEP)}
+              >
+                Show More
+              </Pill>
+            )}
+          </div>
         )}
 
         {outputPreview && (

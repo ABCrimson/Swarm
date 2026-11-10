@@ -3,14 +3,19 @@
 // The detail panel's controls (Pause/Resume/Kill as shared Pills, Title
 // Case names, state-dependent disabling), the IPC each one reaches, the
 // optimistic state holding while that IPC is in flight, the worktree
-// opener (desktop only) and the escape-stripped output preview.
+// opener (desktop only), the escape-stripped output preview and the
+// Related Workers lineage list (rows as buttons, Tab order, selection,
+// paging, the failed count).
 
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { getDefaultStore, useAtomValue } from "jotai";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkerDetail } from "#components/graph/WorkerDetail";
+import { useProvenanceStore } from "#store/provenance";
 import type { Worker } from "#store/types";
+import { detailPanelOpenAtom, selectedWorkerIdAtom } from "#store/ui";
 import { useWorkerStore } from "#store/workers";
 
 // The IPC wrappers useWorker calls, the worktree opener, and the
@@ -45,6 +50,7 @@ function resetStore(): void {
     for (const [id] of state.workers) {
       state.removeWorker(id);
     }
+    useProvenanceStore.getState().reset();
   });
 }
 
@@ -386,5 +392,148 @@ describe("WorkerDetail — Trojan Source", () => {
     await userEvent.setup().click(screen.getByTitle(String.raw`/wt/e\u202Ef`));
 
     expect(tauri.openWorkerDirectory).toHaveBeenCalledExactlyOnceWith(worker.id);
+  });
+});
+
+/** The panel as the Workers page mounts it: keyed by the selected worker, so a selection remounts it. */
+function SelectedDetail(): React.ReactElement | null {
+  const id = useAtomValue(selectedWorkerIdAtom);
+  const selected = useWorkerStore((s) => (id === null ? undefined : s.workers.get(id)));
+  return selected ? <WorkerDetail key={selected.id} worker={selected} /> : null;
+}
+
+describe("WorkerDetail — Related Workers", () => {
+  let seq = 0;
+
+  /** Feeds one stamped envelope through the provenance store; returns its seq. */
+  function ingest(
+    type: "agent_turn_started" | "worker_spawned" | "worker_input",
+    originWorker: string,
+    workerId: string,
+    causeSeq?: number,
+  ): number {
+    seq += 1;
+    const event = { seq, ts: seq * 1000, type, originWorker, causeSeq, payload: { workerId } };
+    act(() => useProvenanceStore.getState().ingestEvent(event));
+    return seq;
+  }
+
+  function lineageButtons(): HTMLElement[] {
+    return within(screen.getByRole("list", { name: "Related Workers" })).getAllByRole("button");
+  }
+
+  beforeEach(() => {
+    seq = 0;
+    resetStore();
+    act(() => getDefaultStore().set(selectedWorkerIdAtom, null));
+  });
+  afterEach(() => {
+    resetStore();
+    vi.clearAllMocks();
+  });
+
+  it("shows no list for a worker with no measured relations", () => {
+    const worker = createWorker();
+    seedWorker(worker);
+    render(<WorkerDetail worker={worker} />);
+
+    expect(screen.queryByRole("list", { name: "Related Workers" })).not.toBeInTheDocument();
+  });
+
+  it("lists the parent, the children and the causes as buttons in Tab order, each with its status", async () => {
+    const user = userEvent.setup();
+    const parent = createWorker({ name: "Orchestrator" });
+    const worker = createWorker({ name: "Planner" });
+    const child = createWorker({ name: "Lint Fixer", state: "error" });
+    const reviewer = createWorker({ name: "Reviewer", state: "idle" });
+    for (const w of [parent, worker, child, reviewer]) seedWorker(w);
+    const turn = ingest("agent_turn_started", parent.id, parent.id);
+    const spawn = ingest("worker_spawned", parent.id, worker.id, turn);
+    ingest("worker_spawned", worker.id, child.id, spawn);
+    ingest("worker_input", reviewer.id, worker.id, spawn);
+    render(<WorkerDetail worker={worker} />);
+
+    const rows = await screen.findAllByRole("button", {
+      name: /^(Spawned By|Spawned|Caused By): /,
+    });
+    expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual([
+      "Spawned By: Orchestrator, Status: Running",
+      "Spawned: Lint Fixer, Status: Error",
+      "Caused By: Reviewer, Status: Idle",
+    ]);
+    expect(lineageButtons()).toEqual(rows);
+
+    rows[0]?.focus();
+    await user.tab();
+    expect(rows[1]).toHaveFocus();
+    await user.tab();
+    expect(rows[2]).toHaveFocus();
+  });
+
+  it("selects the related worker when its row is activated", async () => {
+    const user = userEvent.setup();
+    const parent = createWorker({ name: "Orchestrator" });
+    const worker = createWorker({ name: "Planner" });
+    seedWorker(parent);
+    seedWorker(worker);
+    ingest("worker_spawned", parent.id, worker.id);
+    render(<WorkerDetail worker={worker} />);
+
+    screen.getByRole("button", { name: /^Spawned By: Orchestrator/ }).focus();
+    await user.keyboard("{Enter}");
+
+    expect(getDefaultStore().get(selectedWorkerIdAtom)).toBe(parent.id);
+    expect(getDefaultStore().get(detailPanelOpenAtom)).toBe(true);
+  });
+
+  it("moves focus to the selected worker's panel heading when a row opens it", async () => {
+    const user = userEvent.setup();
+    const parent = createWorker({ name: "Orchestrator" });
+    const worker = createWorker({ name: "Planner" });
+    seedWorker(parent);
+    seedWorker(worker);
+    ingest("worker_spawned", parent.id, worker.id);
+    act(() => getDefaultStore().set(selectedWorkerIdAtom, worker.id));
+    render(<SelectedDetail />);
+
+    await user.click(screen.getByRole("button", { name: /^Spawned By: Orchestrator/ }));
+
+    expect(screen.getByText("Orchestrator")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Worker Detail" })).toHaveFocus();
+  });
+
+  it("shows the first 6 rows, then 12 more per Show More, and counts the failed workers", async () => {
+    const user = userEvent.setup();
+    const worker = createWorker({ name: "Planner" });
+    seedWorker(worker);
+    const children = Array.from({ length: 20 }, (_, i) =>
+      createWorker({ name: `Child ${i}`, state: i % 5 === 0 ? "error" : "running" }),
+    );
+    for (const child of children) {
+      seedWorker(child);
+      ingest("worker_spawned", worker.id, child.id);
+    }
+    render(<WorkerDetail worker={worker} />);
+
+    expect(screen.getByText("4 Failed")).toBeInTheDocument();
+    expect(lineageButtons()).toHaveLength(6);
+
+    await user.click(screen.getByRole("button", { name: "Show More" }));
+    expect(lineageButtons()).toHaveLength(18);
+
+    await user.click(screen.getByRole("button", { name: "Show More" }));
+    expect(lineageButtons()).toHaveLength(20);
+    expect(screen.queryByRole("button", { name: "Show More" })).not.toBeInTheDocument();
+  });
+
+  it("shows no failed count when no related worker failed", () => {
+    const parent = createWorker({ name: "Orchestrator" });
+    const worker = createWorker({ name: "Planner" });
+    seedWorker(parent);
+    seedWorker(worker);
+    ingest("worker_spawned", parent.id, worker.id);
+    render(<WorkerDetail worker={worker} />);
+
+    expect(screen.queryByText(/Failed$/)).not.toBeInTheDocument();
   });
 });
