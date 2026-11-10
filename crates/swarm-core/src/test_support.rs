@@ -69,6 +69,12 @@ impl LogCapture {
 /// the calling thread's default and captures what it writes. A line the
 /// thread logs is captured even when another thread, with no subscriber
 /// of its own, reached that callsite first.
+///
+/// One window stays open, once per process: a thread that loaded
+/// `has_just_one` as true (tracing-core 0.1.36 `callsite.rs:545`) just
+/// before the first capture registers still caches its own interest
+/// without a lock (`callsite.rs:562-566`), and can store `never` after
+/// that capture's rebuild; nothing outside tracing-core can close it.
 pub(crate) fn capture_logs(max_level: Level, span_events: FmtSpan) -> LogCapture {
     LazyLock::force(&MULTI_DISPATCH_KEEPALIVE);
     let buf = SharedBuf::default();
