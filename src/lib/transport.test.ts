@@ -771,6 +771,25 @@ describe("wsTransport", () => {
       expect(FakeWebSocket.instances).toHaveLength(2);
     });
 
+    it("reconnects when the probe abandons a socket whose handshake is unanswered", async () => {
+      vi.useFakeTimers();
+      void transport.connect().catch(() => {});
+      const socket = latestSocket();
+      // A real socket fires `close` only after the closing handshake; this one stalls.
+      socket.close = () => {
+        socket.readyState = FakeWebSocket.CLOSING;
+      };
+      socket.simulateOpen();
+      wakeUp();
+      await vi.advanceTimersByTimeAsync(WAKE_PROBE_MS);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+
+      socket.simulateAbruptClose(1005);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    });
+
     it("keeps an open socket that delivers a frame within the probe", async () => {
       vi.useFakeTimers();
       void transport.connect();

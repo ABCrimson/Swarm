@@ -346,6 +346,8 @@ interface Connection {
   framesReceived: number;
   /** The link watchdog's interval while any rpc is pending; see {@link WsTransport.armWatchdog}. */
   watchdog: ReturnType<typeof setInterval> | null;
+  /** Rejects this socket's pending handshake, if any, so an abandoned connect clears `connectPromise`. */
+  failHandshake: () => void;
 }
 
 interface ReadyFrame {
@@ -461,7 +463,14 @@ export class WsTransport implements Transport {
       this.armReconnect();
       return Promise.reject(isError(err) ? err : new Error(String(err), { cause: err }));
     }
-    const conn: Connection = { ws, pending: new Map(), framesReceived: 0, watchdog: null };
+    const conn: Connection = {
+      ws,
+      pending: new Map(),
+      framesReceived: 0,
+      watchdog: null,
+      failHandshake: () =>
+        settle(() => reject(new Error("WebSocket Closed Before The Handshake Completed."))),
+    };
     this.connection = conn;
 
     const handshakeTimer = setTimeout(() => {
@@ -545,13 +554,14 @@ export class WsTransport implements Transport {
     conn.watchdog = null;
   }
 
-  /** Closes `conn` and, without waiting for its `close` event (a half-open socket's closing handshake can stall until the browser gives up on TCP), rejects its pending calls and starts the reconnect. Idempotent with the `close` listener. */
+  /** Closes `conn` and, without waiting for its `close` event (a half-open socket's closing handshake can stall until the browser gives up on TCP), rejects its pending calls and handshake and starts the reconnect. Idempotent with the `close` listener. */
   private abandon(conn: Connection): void {
     conn.ws.close();
     this.clearWatchdog(conn);
     for (const pending of conn.pending.values())
       pending.reject(new RpcConnectionLostError(pending.cmd));
     conn.pending.clear();
+    conn.failHandshake();
     if (this.connection !== conn) return;
     this.connection = null;
     if (!this.disposed) this.armReconnect();
