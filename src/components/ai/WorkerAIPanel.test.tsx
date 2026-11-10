@@ -52,6 +52,17 @@ describe("WorkerAIPanel inject dialog", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("sizes the instruction box to its content between a minimum and a maximum", async () => {
+    const user = userEvent.setup();
+    render(<WorkerAIPanel workerId="w1" />);
+
+    await user.click(screen.getByRole("button", { name: "Inject Instruction" }));
+    const box = screen.getByRole("textbox", { name: "Instruction" });
+
+    expect(box).toHaveClass("[field-sizing:content]", "min-h-20", "max-h-60", "h-auto");
+    expect(box.style.minHeight).toBe("");
+  });
+
   it("closes on Escape without injecting", async () => {
     const user = userEvent.setup();
     render(<WorkerAIPanel workerId="w1" />);

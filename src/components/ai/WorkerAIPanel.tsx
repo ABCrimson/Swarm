@@ -166,13 +166,13 @@ function InjectDialog({
           Inject Mid-Conversation Instruction
         </h2>
         <textarea
-          className="swarm-input"
+          className="swarm-input h-auto max-h-60 min-h-20 [field-sizing:content]"
           aria-label="Instruction"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder="Enter An Instruction For The AI…"
           autoFocus
-          style={{ height: "auto", minHeight: 80, padding: "10px 12px", resize: "vertical" }}
+          style={{ padding: "10px 12px", resize: "vertical" }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
