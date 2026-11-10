@@ -40,8 +40,6 @@ const scrollerStyle: CSSProperties = {
   overflowY: "auto",
   display: "flex",
   flexDirection: "column-reverse",
-  scrollbarWidth: "thin",
-  scrollbarColor: "var(--color-border-2) oklch(0 0 0 / 0)",
 };
 
 const messagesStyle: CSSProperties = {
@@ -287,6 +285,7 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
         aria-label={`AI Chat With ${model.label}`}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1); WebKit (WKWebView, WebKitGTK) does not focus scroll containers natively.
         tabIndex={0}
+        className="scroll-area scrollbar-thin scrollbar-thumb-border-2 scrollbar-track-transparent"
         style={scrollerStyle}
       >
         <div style={messagesStyle}>
