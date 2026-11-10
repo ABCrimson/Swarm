@@ -1,6 +1,6 @@
 import { useResizeObserver } from "@crimson_dev/use-resize-observer";
 import { type DirEntry, readDir } from "@tauri-apps/plugin-fs";
-import { useEffect, useId, useRef, useState } from "react";
+import { Suspense, use, useId, useRef, useState } from "react";
 import { escapeForDisplay } from "#lib/display-escape";
 import { childPath } from "#lib/file-preview";
 import { errorMessage } from "#lib/is-error";
@@ -108,10 +108,41 @@ function updateNode(
   });
 }
 
-type RootState =
-  | { readonly status: "loading" }
+/** A root listing as it settles: it never rejects, so a failure renders in place of the tree. */
+type RootListing =
   | { readonly status: "ready"; readonly nodes: readonly TreeNode[] }
   | { readonly status: "error"; readonly message: string };
+
+/**
+ * Root listings in flight, keyed by root path. Each mount pins the promise
+ * it was handed (see {@link FileTree}); a settled listing leaves the cache,
+ * so the next mount (a new root, or the panel mounting again) lists
+ * afresh, while reads of one root that overlap — Strict Mode's double
+ * mount — share a single `readDir`.
+ */
+const rootListings = new Map<string, Promise<RootListing>>();
+
+function listRoot(rootPath: string): Promise<RootListing> {
+  const cached = rootListings.get(rootPath);
+  if (cached !== undefined) return cached;
+  const listing = readDir(rootPath).then(
+    (entries): RootListing => ({ status: "ready", nodes: toNodes(rootPath, entries) }),
+    (err: unknown): RootListing => ({ status: "error", message: errorMessage(err) }),
+  );
+  rootListings.set(rootPath, listing);
+  void listing.then(() => {
+    if (rootListings.get(rootPath) === listing) rootListings.delete(rootPath);
+  });
+  return listing;
+}
+
+/** The scroll box the tree draws into, owned by {@link FileTree} so it is measured before any rows exist. */
+interface Viewport {
+  readonly containerRef: React.RefObject<HTMLDivElement | null>;
+  readonly height: number;
+  readonly firstRow: number;
+  readonly setFirstRow: (row: number) => void;
+}
 
 /**
  * Virtualized file tree for browsing a project directory, following the
@@ -124,42 +155,81 @@ type RootState =
  * Only the rows in view (plus {@link OVERSCAN}) are in the DOM. The
  * scroll container renders from the first commit — also while the root
  * is loading — so its height is measured before any rows are laid out.
- * Directory listings load lazily on first expand; a failed listing is
- * shown under its folder (or instead of the tree for the root), never
- * swallowed. Key it by `rootPath` so a new root starts fresh.
+ * The root listing is read with `use()` under a Suspense boundary inside
+ * that container; directory listings below it load lazily on first
+ * expand. A failed listing is shown under its folder (or instead of the
+ * tree for the root), never swallowed. Key it by `rootPath` so a new root
+ * starts fresh.
  */
 export function FileTree({
   rootPath,
   onSelectFile,
   selectedPath,
 }: FileTreeProps): React.ReactElement {
-  const [root, setRoot] = useState<RootState>({ status: "loading" });
+  // Pinned for this mount; the parent's `rootPath` key mounts a new root afresh.
+  const [listing] = useState(() => listRoot(rootPath));
   const [firstRow, setFirstRow] = useState(0);
+  const { ref: containerRef, height = 0 } = useResizeObserver<HTMLDivElement>();
+
+  return (
+    <div
+      ref={containerRef}
+      className="scroll-area h-full overflow-y-auto px-1 py-2"
+      onScroll={(e) => setFirstRow(Math.floor(e.currentTarget.scrollTop / ROW_HEIGHT))}
+    >
+      <Suspense
+        fallback={
+          <p role="status" className="p-4 text-fg-muted text-md">
+            Loading…
+          </p>
+        }
+      >
+        <ListedTree
+          listing={listing}
+          viewport={{ containerRef, height, firstRow, setFirstRow }}
+          onSelectFile={onSelectFile}
+          selectedPath={selectedPath}
+        />
+      </Suspense>
+    </div>
+  );
+}
+
+interface TreeProps {
+  readonly viewport: Viewport;
+  readonly onSelectFile: (path: string) => void;
+  readonly selectedPath: string | undefined;
+}
+
+/** Suspends on the root listing; a failure takes the tree's place. */
+function ListedTree({
+  listing,
+  ...props
+}: TreeProps & { readonly listing: Promise<RootListing> }): React.ReactElement {
+  const root = use(listing);
+  if (root.status === "error") {
+    return (
+      <p role="alert" className="p-4 text-md text-rose">
+        Could Not Read This Folder: {root.message}
+      </p>
+    );
+  }
+  return <Tree rootNodes={root.nodes} {...props} />;
+}
+
+function Tree({
+  rootNodes,
+  viewport,
+  onSelectFile,
+  selectedPath,
+}: TreeProps & { readonly rootNodes: readonly TreeNode[] }): React.ReactElement {
+  const [nodes, setNodes] = useState(rootNodes);
   const [activePath, setActivePath] = useState<string | null>(null);
   /** Directories with a listing in flight, so a double click never lists twice. */
   const inFlightRef = useRef(new Set<string>());
   const idPrefix = useId();
-  const { ref: containerRef, height: viewportHeight = 0 } = useResizeObserver<HTMLDivElement>();
+  const { containerRef, height: viewportHeight, firstRow, setFirstRow } = viewport;
 
-  // Mount-time listing. The parent keys this component by `rootPath`, so
-  // a new root starts from a fresh "loading" state instead of resetting
-  // state inside the effect.
-  useEffect(() => {
-    let cancelled = false;
-    readDir(rootPath).then(
-      (entries) => {
-        if (!cancelled) setRoot({ status: "ready", nodes: toNodes(rootPath, entries) });
-      },
-      (err: unknown) => {
-        if (!cancelled) setRoot({ status: "error", message: errorMessage(err) });
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [rootPath]);
-
-  const nodes = root.status === "ready" ? root.nodes : [];
   const rows = flatten(nodes);
   const activeIndex = Math.max(
     0,
@@ -167,9 +237,7 @@ export function FileTree({
   );
 
   const patch = (path: string, update: (node: TreeNode) => TreeNode): void =>
-    setRoot((prev) =>
-      prev.status === "ready" ? { ...prev, nodes: updateNode(prev.nodes, path, update) } : prev,
-    );
+    setNodes((prev) => updateNode(prev, path, update));
 
   /** Lists a directory once; the result keeps whatever expanded state the user has set since. */
   const loadChildren = (path: string): void => {
@@ -283,86 +351,67 @@ export function FileTree({
     rendered.push(activeIndex);
   }
 
+  if (rows.length === 0) return <p className="p-4 text-fg-dim text-md">Empty Directory</p>;
+
   return (
     <div
-      ref={containerRef}
-      className="scroll-area h-full overflow-y-auto px-1 py-2"
-      onScroll={(e) => setFirstRow(Math.floor(e.currentTarget.scrollTop / ROW_HEIGHT))}
+      role="tree"
+      aria-label="Project Files"
+      tabIndex={0}
+      aria-activedescendant={rowId(activeIndex)}
+      onKeyDown={handleKeyDown}
+      className="group relative outline-hidden"
+      style={{ height: rows.length * ROW_HEIGHT }}
     >
-      {root.status === "loading" && (
-        <p role="status" className="p-4 text-fg-muted text-md">
-          Loading…
-        </p>
-      )}
-      {root.status === "error" && (
-        <p role="alert" className="p-4 text-md text-rose">
-          Could Not Read This Folder: {root.message}
-        </p>
-      )}
-      {root.status === "ready" && rows.length === 0 && (
-        <p className="p-4 text-fg-dim text-md">Empty Directory</p>
-      )}
-      {rows.length > 0 && (
-        <div
-          role="tree"
-          aria-label="Project Files"
-          tabIndex={0}
-          aria-activedescendant={rowId(activeIndex)}
-          onKeyDown={handleKeyDown}
-          className="group relative outline-hidden"
-          style={{ height: rows.length * ROW_HEIGHT }}
-        >
-          {rendered.map((index) => {
-            const row = rows[index];
-            if (!row) return null;
-            const { node, depth } = row;
-            return (
-              // biome-ignore lint/a11y/useKeyWithClickEvents: keyboard is handled on the tree (aria-activedescendant pattern)
-              <div
-                key={node.path}
-                id={rowId(index)}
-                role="treeitem"
-                aria-level={depth + 1}
-                aria-setsize={row.setSize}
-                aria-posinset={row.posInSet}
-                aria-expanded={node.kind === "dir" ? node.expanded : undefined}
-                aria-selected={node.path === selectedPath}
-                data-active={index === activeIndex || undefined}
-                // Focusable only programmatically; a click hands focus back to
-                // the tree, which owns keyboard handling and the active row.
-                tabIndex={-1}
-                onClick={(e) => {
-                  e.currentTarget.closest<HTMLElement>("[role=tree]")?.focus();
-                  setActivePath(node.path);
-                  open(node);
-                }}
-                className="absolute inset-x-0 flex cursor-pointer items-center gap-1.5 truncate rounded pr-2 text-fg-muted text-md hover:bg-surface-2/50 aria-selected:bg-plasma/15 aria-selected:text-fg-bright group-focus-visible:data-active:outline-2 group-focus-visible:data-active:outline-plasma group-focus-visible:data-active:-outline-offset-2"
-                style={{
-                  top: index * ROW_HEIGHT,
-                  height: ROW_HEIGHT,
-                  paddingLeft: 12 + depth * 16,
-                }}
-              >
-                <span
-                  aria-hidden="true"
-                  className={`inline-block w-3 text-2xs text-fg-dim transition-transform duration-150 ${node.expanded ? "rotate-90" : ""}`}
-                >
-                  {node.kind === "dir" ? "▶" : ""}
-                </span>
-                <span aria-hidden="true" className="text-sm">
-                  {fileIcon(node)}
-                </span>
-                <span className="truncate">{escapeForDisplay(node.name)}</span>
-                {node.error && (
-                  <span className="truncate text-rose text-sm" title={escapeForDisplay(node.error)}>
-                    — Could Not Read Folder
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {rendered.map((index) => {
+        const row = rows[index];
+        if (!row) return null;
+        const { node, depth } = row;
+        return (
+          // biome-ignore lint/a11y/useKeyWithClickEvents: keyboard is handled on the tree (aria-activedescendant pattern)
+          <div
+            key={node.path}
+            id={rowId(index)}
+            role="treeitem"
+            aria-level={depth + 1}
+            aria-setsize={row.setSize}
+            aria-posinset={row.posInSet}
+            aria-expanded={node.kind === "dir" ? node.expanded : undefined}
+            aria-selected={node.path === selectedPath}
+            data-active={index === activeIndex || undefined}
+            // Focusable only programmatically; a click hands focus back to
+            // the tree, which owns keyboard handling and the active row.
+            tabIndex={-1}
+            onClick={(e) => {
+              e.currentTarget.closest<HTMLElement>("[role=tree]")?.focus();
+              setActivePath(node.path);
+              open(node);
+            }}
+            className="absolute inset-x-0 flex cursor-pointer items-center gap-1.5 truncate rounded pr-2 text-fg-muted text-md hover:bg-surface-2/50 aria-selected:bg-plasma/15 aria-selected:text-fg-bright group-focus-visible:data-active:outline-2 group-focus-visible:data-active:outline-plasma group-focus-visible:data-active:-outline-offset-2"
+            style={{
+              top: index * ROW_HEIGHT,
+              height: ROW_HEIGHT,
+              paddingLeft: 12 + depth * 16,
+            }}
+          >
+            <span
+              aria-hidden="true"
+              className={`inline-block w-3 text-2xs text-fg-dim transition-transform duration-150 ${node.expanded ? "rotate-90" : ""}`}
+            >
+              {node.kind === "dir" ? "▶" : ""}
+            </span>
+            <span aria-hidden="true" className="text-sm">
+              {fileIcon(node)}
+            </span>
+            <span className="truncate">{escapeForDisplay(node.name)}</span>
+            {node.error && (
+              <span className="truncate text-rose text-sm" title={escapeForDisplay(node.error)}>
+                — Could Not Read Folder
+              </span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

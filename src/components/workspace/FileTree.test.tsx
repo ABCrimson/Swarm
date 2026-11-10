@@ -1,6 +1,7 @@
 import { ResizeObserverContext } from "@crimson_dev/use-resize-observer";
 import { type DirEntry, readDir } from "@tauri-apps/plugin-fs";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FileTree, ROW_HEIGHT } from "#components/workspace/FileTree";
 
@@ -44,11 +45,14 @@ const file = (name: string): DirEntry => ({
 const dir = (name: string): DirEntry => ({ ...file(name), isFile: false, isDirectory: true });
 const link = (name: string): DirEntry => ({ ...file(name), isFile: false, isSymlink: true });
 
-function renderTree(rootPath = "C:\\proj", onSelectFile = vi.fn()) {
-  render(
-    <ResizeObserverContext value={FakeResizeObserver as unknown as typeof ResizeObserver}>
-      <FileTree rootPath={rootPath} onSelectFile={onSelectFile} />
-    </ResizeObserverContext>,
+/** Renders inside an awaited act(), so the root listing `use()` suspends on can reveal. */
+async function renderTree(rootPath = "C:\\proj", onSelectFile = vi.fn()) {
+  await act(async () =>
+    render(
+      <ResizeObserverContext value={FakeResizeObserver as unknown as typeof ResizeObserver}>
+        <FileTree rootPath={rootPath} onSelectFile={onSelectFile} />
+      </ResizeObserverContext>,
+    ),
   );
   return { onSelectFile };
 }
@@ -62,7 +66,7 @@ describe("FileTree", () => {
   // never measured and only ~10 rows (the overscan) were ever drawn.
   it("renders every row that fits the measured viewport", async () => {
     vi.mocked(readDir).mockResolvedValue(Array.from({ length: 50 }, (_, i) => file(`f${i}.ts`)));
-    renderTree();
+    await renderTree();
 
     const visible = Math.ceil(VIEWPORT_HEIGHT / ROW_HEIGHT);
     await waitFor(() =>
@@ -73,7 +77,7 @@ describe("FileTree", () => {
 
   it("sorts folders first and exposes tree semantics", async () => {
     vi.mocked(readDir).mockResolvedValue([file("b.ts"), dir("src"), file("a.md")]);
-    renderTree();
+    await renderTree();
 
     const items = await screen.findAllByRole("treeitem");
     expect(items.map((i) => i.textContent)).toEqual([
@@ -91,7 +95,7 @@ describe("FileTree", () => {
 
   it("shows a root listing failure instead of an empty tree", async () => {
     vi.mocked(readDir).mockRejectedValue("forbidden path: D:\\code");
-    renderTree("D:\\code");
+    await renderTree("D:\\code");
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Could Not Read This Folder: forbidden path: D:\\code",
@@ -99,11 +103,58 @@ describe("FileTree", () => {
     expect(screen.queryByText("Empty Directory")).not.toBeInTheDocument();
   });
 
+  it("shows a loading status until the root listing answers, then the tree", async () => {
+    const listing = Promise.withResolvers<DirEntry[]>();
+    vi.mocked(readDir).mockReturnValue(listing.promise);
+    await renderTree("C:\\pending");
+
+    expect(screen.getByRole("status")).toHaveTextContent("Loading…");
+    expect(screen.queryByRole("tree")).not.toBeInTheDocument();
+
+    await act(async () => listing.resolve([file("a.ts")]));
+    expect(screen.getByRole("treeitem")).toHaveTextContent("a.ts");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("lists the root once, even when Strict Mode mounts it twice", async () => {
+    vi.mocked(readDir).mockResolvedValue([file("a.ts")]);
+    await act(async () =>
+      render(
+        <StrictMode>
+          <ResizeObserverContext value={FakeResizeObserver as unknown as typeof ResizeObserver}>
+            <FileTree rootPath="C:\strict" onSelectFile={vi.fn()} />
+          </ResizeObserverContext>
+        </StrictMode>,
+      ),
+    );
+
+    expect(await screen.findByRole("treeitem")).toHaveTextContent("a.ts");
+    expect(readDir).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists the new root when it is keyed by another rootPath", async () => {
+    vi.mocked(readDir).mockImplementation(async (path) =>
+      path === "C:\\one" ? [file("one.ts")] : [file("two.ts")],
+    );
+    const tree = (rootPath: string) => (
+      <ResizeObserverContext value={FakeResizeObserver as unknown as typeof ResizeObserver}>
+        <FileTree key={rootPath} rootPath={rootPath} onSelectFile={vi.fn()} />
+      </ResizeObserverContext>
+    );
+    const { rerender } = await act(async () => render(tree("C:\\one")));
+    expect(await screen.findByRole("treeitem")).toHaveTextContent("one.ts");
+
+    await act(async () => rerender(tree("C:\\two")));
+
+    await waitFor(() => expect(screen.getByRole("treeitem")).toHaveTextContent("two.ts"));
+    expect(readDir).toHaveBeenLastCalledWith("C:\\two");
+  });
+
   it("joins child paths with the root's own separator", async () => {
     vi.mocked(readDir)
       .mockResolvedValueOnce([dir("src")])
       .mockResolvedValueOnce([]);
-    renderTree("C:\\proj");
+    await renderTree("C:\\proj");
 
     fireEvent.click(await screen.findByRole("treeitem"));
 
@@ -117,7 +168,7 @@ describe("FileTree", () => {
     vi.mocked(readDir)
       .mockResolvedValueOnce([dir("src")])
       .mockReturnValueOnce(children.promise);
-    renderTree();
+    await renderTree();
 
     const folder = await screen.findByRole("treeitem");
     fireEvent.click(folder);
@@ -135,7 +186,7 @@ describe("FileTree", () => {
     vi.mocked(readDir)
       .mockResolvedValueOnce([dir("secret")])
       .mockRejectedValueOnce("denied");
-    renderTree();
+    await renderTree();
 
     fireEvent.click(await screen.findByRole("treeitem"));
 
@@ -146,7 +197,7 @@ describe("FileTree", () => {
     vi.mocked(readDir)
       .mockResolvedValueOnce([dir("src"), file("README.md")])
       .mockResolvedValueOnce([file("main.ts")]);
-    const { onSelectFile } = renderTree("/proj");
+    const { onSelectFile } = await renderTree("/proj");
     const tree = await screen.findByRole("tree");
     const active = () => document.getElementById(tree.getAttribute("aria-activedescendant") ?? "");
 
@@ -170,7 +221,7 @@ describe("FileTree", () => {
     vi.mocked(readDir)
       .mockResolvedValueOnce([link("latest.log")])
       .mockRejectedValueOnce("not a dir");
-    const { onSelectFile } = renderTree("/proj");
+    const { onSelectFile } = await renderTree("/proj");
 
     fireEvent.click(await screen.findByRole("treeitem"));
 
@@ -181,7 +232,7 @@ describe("FileTree", () => {
 describe("FileTree — Trojan Source", () => {
   it("shows a file name with a bidi override as escaped data", async () => {
     vi.mocked(readDir).mockResolvedValue([file("evil\u202Etxt.exe")]);
-    const { onSelectFile } = renderTree();
+    const { onSelectFile } = await renderTree();
 
     const row = await screen.findByRole("treeitem");
     expect(screen.getByText(String.raw`evil\u202Etxt.exe`)).toBeInTheDocument();

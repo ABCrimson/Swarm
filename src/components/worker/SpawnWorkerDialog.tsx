@@ -1,6 +1,6 @@
 import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
 import type { CSSProperties } from "react";
-import { useActionState, useEffect, useId, useRef, useState } from "react";
+import { Suspense, use, useActionState, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { PROVIDER_LABELS, type TrustTier, TrustTierSchema } from "#lib/agent-events";
@@ -27,6 +27,172 @@ type AgentProvider = Extract<SpawnProvider, "claude_code" | "codex">;
 const AGENT_PROVIDERS: readonly AgentProvider[] = ["claude_code", "codex"];
 
 const ALL_PROVIDERS = ["webview_anthropic", ...AGENT_PROVIDERS] as const;
+
+/** Why an agent provider cannot be used: `null` = available, a string = the reason. */
+type ProbeReasons = Readonly<Partial<Record<AgentProvider, string | null>>>;
+
+/**
+ * The probe answers so far. `next` settles when one more probe answers,
+ * so the provider rows fill in as each probe lands; it is `null` once
+ * every probe has answered.
+ */
+interface ProbeAnswers {
+  readonly reasons: ProbeReasons;
+  readonly next: Promise<ProbeAnswers> | null;
+}
+
+/**
+ * Reads in flight, keyed by what they read (a provider's probe, the saved
+ * project root). Each open of the dialog pins the promises it was handed
+ * (see {@link SpawnWorkerDialog}); a settled read leaves the cache, so the
+ * next open probes and reads afresh — an install or sign-in done while the
+ * app runs is picked up — while reads that overlap (Strict Mode's double
+ * mount) share one call.
+ */
+const inFlight = new Map<string, Promise<unknown>>();
+
+function sharedRead<T>(key: string, read: () => Promise<T>): Promise<T> {
+  const cached = inFlight.get(key) as Promise<T> | undefined;
+  if (cached !== undefined) return cached;
+  const promise = read();
+  inFlight.set(key, promise);
+  void promise.then(() => {
+    if (inFlight.get(key) === promise) inFlight.delete(key);
+  });
+  return promise;
+}
+
+/** Probes `p`; it never rejects, since a failed probe is itself a reason to disable the provider. */
+function probeReason(p: AgentProvider): Promise<string | null> {
+  return sharedRead(`probe:${p}`, () =>
+    agentProbe(p).then(
+      (report) =>
+        report.available ? null : (report.detail ?? `${PROVIDER_LABELS[p]} CLI Not Available`),
+      (err: unknown) => `Probe Failed: ${errorMessage(err)}`,
+    ),
+  );
+}
+
+/** The answers to `probes` beyond `known`, one more each time a probe settles. */
+function probeAnswers(
+  probes: Readonly<Record<AgentProvider, Promise<string | null>>>,
+  known: ProbeReasons = {},
+): Promise<ProbeAnswers> {
+  const waiting = AGENT_PROVIDERS.filter((p) => !Object.hasOwn(known, p));
+  return Promise.race(waiting.map((p) => probes[p].then((reason) => [p, reason] as const))).then(
+    ([p, reason]) => {
+      const reasons = { ...known, [p]: reason };
+      return { reasons, next: waiting.length > 1 ? probeAnswers(probes, reasons) : null };
+    },
+  );
+}
+
+/** The saved project root as the dialog opens: the validated root (or `null`), and what went wrong reading it. */
+interface SavedRoot {
+  readonly root: string | null;
+  readonly notice: string | null;
+}
+
+/**
+ * Reads and revalidates the persisted project root. It never rejects: a
+ * failure is a notice shown in the dialog itself, since a modal's top layer
+ * paints over, and makes inert, the page-level toaster.
+ */
+function readSavedRoot(): Promise<SavedRoot> {
+  return sharedRead(DEFAULT_REPO_ROOT_KEY, async () => {
+    let persisted: string | null;
+    try {
+      persisted = await getPersistedRepoRoot();
+    } catch (err) {
+      return {
+        root: null,
+        notice: `Could Not Read The Saved Project Root: ${escapeForDisplay(errorMessage(err))}`,
+      };
+    }
+    if (!persisted) return { root: null, notice: null };
+    try {
+      return { root: await validateRepoRoot(persisted), notice: null };
+    } catch (err) {
+      return {
+        root: null,
+        notice: `Could Not Validate The Saved Project Root ${escapeForDisplay(persisted)}: ${escapeForDisplay(errorMessage(err))}`,
+      };
+    }
+  });
+}
+
+/** What the dialog reads as it opens, pinned for that open. */
+function openReads(): {
+  readonly probes: Readonly<Record<AgentProvider, Promise<string | null>>>;
+  readonly answers: Promise<ProbeAnswers>;
+  readonly savedRoot: Promise<SavedRoot>;
+} {
+  const probes = { claude_code: probeReason("claude_code"), codex: probeReason("codex") };
+  return { probes, answers: probeAnswers(probes), savedRoot: readSavedRoot() };
+}
+
+/**
+ * Renders `render(reasons)` with the probe answers so far: each step
+ * suspends on the next answer and keeps showing the previous one meanwhile.
+ */
+function WithProbeAnswers({
+  answers,
+  render,
+}: {
+  readonly answers: Promise<ProbeAnswers>;
+  readonly render: (reasons: ProbeReasons) => React.ReactNode;
+}): React.ReactNode {
+  const { reasons, next } = use(answers);
+  const shown = render(reasons);
+  if (next === null) return shown;
+  return (
+    <Suspense fallback={shown}>
+      <WithProbeAnswers answers={next} render={render} />
+    </Suspense>
+  );
+}
+
+/** The probe-dependent `render` under its own boundary: before any probe answers, every agent provider counts as probing. */
+function probeBoundary(
+  answers: Promise<ProbeAnswers>,
+  render: (reasons: ProbeReasons) => React.ReactNode,
+): React.ReactElement {
+  return (
+    <Suspense fallback={render({})}>
+      <WithProbeAnswers answers={answers} render={render} />
+    </Suspense>
+  );
+}
+
+/** The working-directory path, with the full path as its tooltip. */
+function RootPath({ root }: { readonly root: string | null }): React.ReactElement {
+  return (
+    <span style={repoRootPathStyle} title={root == null ? undefined : escapeForDisplay(root)}>
+      {escapeForDisplay(root ?? "No Project Root — Spawns Without Worktree Isolation")}
+    </span>
+  );
+}
+
+function SavedRootPath({ read }: { readonly read: Promise<SavedRoot> }): React.ReactElement {
+  return <RootPath root={use(read).root} />;
+}
+
+function Notice({ text }: { readonly text: string | null }): React.ReactElement | null {
+  if (!text) return null;
+  return (
+    <div role="alert" style={errorBannerStyle}>
+      {text}
+    </div>
+  );
+}
+
+function SavedRootNotice({
+  read,
+}: {
+  readonly read: Promise<SavedRoot>;
+}): React.ReactElement | null {
+  return <Notice text={use(read).notice} />;
+}
 
 interface SpawnWorkerDialogProps {
   readonly onClose: () => void;
@@ -362,76 +528,26 @@ export function SpawnWorkerDialog({
     ...DEFAULT_MODEL_ALIAS,
   });
   const [trustTier, setTrustTier] = useState<TrustTier>("standard");
-  // Per provider: undefined = probing, null = available, string = why not.
-  const [unavailable, setUnavailable] = useState<Record<AgentProvider, string | null | undefined>>({
-    claude_code: undefined,
-    codex: undefined,
-  });
-  // undefined = loading, null = none, string = the validated repository root.
-  const [projectRoot, setProjectRoot] = useState<string | null | undefined>(undefined);
+  // The probes and the saved-root read, started once per open and read
+  // with `use()` by the rows that show them, each under its own boundary.
+  const [reads] = useState(openReads);
+  // A root chosen with the folder picker; undefined = none yet, so the saved one shows.
+  const [pickedRoot, setPickedRoot] = useState<string | undefined>(undefined);
   // Project-root problems shown in the dialog itself: a modal's top layer
-  // paints over, and makes inert, the page-level toaster.
-  const [notice, setNotice] = useState<string | null>(null);
+  // paints over, and makes inert, the page-level toaster. undefined = no
+  // pick yet, so the saved root's own notice shows.
+  const [notice, setNotice] = useState<string | null | undefined>(undefined);
 
-  useEffect(() => {
-    let cancelled = false;
-    for (const p of AGENT_PROVIDERS) {
-      void agentProbe(p)
-        .then(
-          (report) =>
-            report.available ? null : (report.detail ?? `${PROVIDER_LABELS[p]} CLI Not Available`),
-          (err: unknown) => `Probe Failed: ${errorMessage(err)}`,
-        )
-        .then((reason) => {
-          if (!cancelled) setUnavailable((prev) => ({ ...prev, [p]: reason }));
-        });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = async (): Promise<string | null> => {
-      let persisted: string | null;
-      try {
-        persisted = await getPersistedRepoRoot();
-      } catch (err) {
-        if (!cancelled)
-          setNotice(
-            `Could Not Read The Saved Project Root: ${escapeForDisplay(errorMessage(err))}`,
-          );
-        return null;
-      }
-      if (!persisted) return null;
-      try {
-        return await validateRepoRoot(persisted);
-      } catch (err) {
-        if (!cancelled) {
-          setNotice(
-            `Could Not Validate The Saved Project Root ${escapeForDisplay(persisted)}: ${escapeForDisplay(errorMessage(err))}`,
-          );
-        }
-        return null;
-      }
-    };
-    void load().then((root) => {
-      if (!cancelled) setProjectRoot(root);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  /** Why `p` cannot be used: undefined = probing, null = available, string = the reason. */
-  function providerReason(p: SpawnProvider): string | null | undefined {
-    return isAgentProvider(p) ? unavailable[p] : webviewReason;
+  /** Why `p` cannot be used given the probe answers so far: undefined = probing, null = available, string = the reason. */
+  function providerReason(p: SpawnProvider, reasons: ProbeReasons): string | null | undefined {
+    return isAgentProvider(p) ? reasons[p] : webviewReason;
   }
 
   const [spawnError, spawn, isSpawning] = useActionState(async (): Promise<string | null> => {
-    const reason = providerReason(provider);
+    // A spawn started while a probe or the saved-root read is in flight waits for its answer.
+    const reason = isAgentProvider(provider) ? await reads.probes[provider] : webviewReason;
     if (reason != null) return `${PROVIDER_LABELS[provider]} Unavailable: ${reason}`;
+    const projectRoot = pickedRoot !== undefined ? pickedRoot : (await reads.savedRoot).root;
     const options = { name: "Worker", ...(projectRoot ? { repoRoot: projectRoot } : {}) };
     try {
       const id = isAgentProvider(provider)
@@ -500,7 +616,7 @@ export function SpawnWorkerDialog({
       );
       return;
     }
-    setProjectRoot(toplevel);
+    setPickedRoot(toplevel);
     setNotice(null);
     try {
       await writeConfig(DEFAULT_REPO_ROOT_KEY, toplevel);
@@ -570,42 +686,46 @@ export function SpawnWorkerDialog({
         <div style={bodyStyle}>
           <fieldset style={fieldsetStyle}>
             <legend style={fieldLabelStyle}>Provider</legend>
-            <div style={segmentedGroupStyle}>
-              {ALL_PROVIDERS.map((p) => {
-                const reason = providerReason(p);
-                const disabled = reason != null;
-                return (
-                  <label
-                    key={p}
-                    className="relative has-focus-visible:outline-2 has-focus-visible:-outline-offset-2 has-focus-visible:outline-plasma forced-colors:has-checked:outline-2 forced-colors:has-checked:outline-[Highlight]"
-                    style={segmentStyle(provider === p, disabled)}
-                    title={reason ?? undefined}
-                  >
-                    <input
-                      type="radio"
-                      name="provider"
-                      value={p}
-                      checked={provider === p}
-                      disabled={disabled}
-                      onChange={() => setProvider(p)}
-                      className="sr-only"
-                    />
-                    {PROVIDER_LABELS[p]}
-                  </label>
-                );
-              })}
-            </div>
-            {Map.groupBy(
-              ALL_PROVIDERS.filter((p) => providerReason(p) != null),
-              (p) => String(providerReason(p)),
-            )
-              .entries()
-              .map(([reason, ps]) => (
-                <span key={reason} style={unavailableNoteStyle}>
-                  {ps.map((p) => PROVIDER_LABELS[p]).join(" And ")} Unavailable — {reason}
-                </span>
-              ))
-              .toArray()}
+            {probeBoundary(reads.answers, (reasons) => (
+              <>
+                <div style={segmentedGroupStyle}>
+                  {ALL_PROVIDERS.map((p) => {
+                    const reason = providerReason(p, reasons);
+                    const disabled = reason != null;
+                    return (
+                      <label
+                        key={p}
+                        className="relative has-focus-visible:outline-2 has-focus-visible:-outline-offset-2 has-focus-visible:outline-plasma forced-colors:has-checked:outline-2 forced-colors:has-checked:outline-[Highlight]"
+                        style={segmentStyle(provider === p, disabled)}
+                        title={reason ?? undefined}
+                      >
+                        <input
+                          type="radio"
+                          name="provider"
+                          value={p}
+                          checked={provider === p}
+                          disabled={disabled}
+                          onChange={() => setProvider(p)}
+                          className="sr-only"
+                        />
+                        {PROVIDER_LABELS[p]}
+                      </label>
+                    );
+                  })}
+                </div>
+                {Map.groupBy(
+                  ALL_PROVIDERS.filter((p) => providerReason(p, reasons) != null),
+                  (p) => String(providerReason(p, reasons)),
+                )
+                  .entries()
+                  .map(([reason, ps]) => (
+                    <span key={reason} style={unavailableNoteStyle}>
+                      {ps.map((p) => PROVIDER_LABELS[p]).join(" And ")} Unavailable — {reason}
+                    </span>
+                  ))
+                  .toArray()}
+              </>
+            ))}
           </fieldset>
 
           {agent && (
@@ -663,16 +783,13 @@ export function SpawnWorkerDialog({
           <div style={fieldGroupStyle}>
             <span style={fieldLabelStyle}>Working Directory</span>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span
-                style={repoRootPathStyle}
-                title={projectRoot == null ? undefined : escapeForDisplay(projectRoot)}
-              >
-                {projectRoot === undefined
-                  ? "Loading…"
-                  : escapeForDisplay(
-                      projectRoot ?? "No Project Root — Spawns Without Worktree Isolation",
-                    )}
-              </span>
+              {pickedRoot !== undefined ? (
+                <RootPath root={pickedRoot} />
+              ) : (
+                <Suspense fallback={<span style={repoRootPathStyle}>Loading…</span>}>
+                  <SavedRootPath read={reads.savedRoot} />
+                </Suspense>
+              )}
               <Button
                 variant="secondary"
                 size="sm"
@@ -690,10 +807,12 @@ export function SpawnWorkerDialog({
             )}
           </div>
 
-          {notice && (
-            <div role="alert" style={errorBannerStyle}>
-              {notice}
-            </div>
+          {notice !== undefined ? (
+            <Notice text={notice} />
+          ) : (
+            <Suspense fallback={null}>
+              <SavedRootNotice read={reads.savedRoot} />
+            </Suspense>
           )}
 
           {spawnError && (
@@ -707,15 +826,17 @@ export function SpawnWorkerDialog({
           <Button variant="ghost" size="sm" onClick={requestDismiss} disabled={isSpawning}>
             Cancel
           </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            size="sm"
-            loading={isSpawning}
-            disabled={projectRoot === undefined || providerReason(provider) != null}
-          >
-            Spawn Worker
-          </Button>
+          {probeBoundary(reads.answers, (reasons) => (
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              loading={isSpawning}
+              disabled={providerReason(provider, reasons) != null}
+            >
+              Spawn Worker
+            </Button>
+          ))}
         </div>
       </form>
     </dialog>

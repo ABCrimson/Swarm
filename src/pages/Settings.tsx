@@ -1,5 +1,14 @@
 import { useAtom, useAtomValue } from "jotai";
-import { useEffect, useEffectEvent, useId, useRef, useState, useTransition } from "react";
+import {
+  Suspense,
+  use,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import * as z from "zod";
@@ -594,6 +603,129 @@ function capSyncFeedback(sync: CapSync, unit: string): React.ReactNode {
   return undefined;
 }
 
+// ── API key ──────────────────────────────────────────
+
+/**
+ * Saved-key reads in flight, keyed by config key. The page pins the promise
+ * it was handed (see {@link Settings}); a settled read leaves the cache, so
+ * mounting the page again reads the key afresh, while reads that overlap —
+ * Strict Mode's double mount — share a single `readConfig`.
+ */
+const savedKeyReads = new Map<string, Promise<string | null>>();
+
+/**
+ * The saved API key, or `null` when none is set or it cannot be read. It
+ * never rejects: a rejection means the backend could not answer (transport
+ * down, or a swarmd page, which is denied secret-shaped keys), and it never
+ * carries the key, so it is logged and the field starts empty.
+ */
+function readSavedApiKey(): Promise<string | null> {
+  const configKey = ANTHROPIC_API_KEY_CONFIG_KEY;
+  const cached = savedKeyReads.get(configKey);
+  if (cached !== undefined) return cached;
+  const read = readConfig(configKey, z.string().min(1)).catch((err: unknown) => {
+    console.warn("[settings] Could not read the saved API key:", err);
+    return null;
+  });
+  savedKeyReads.set(configKey, read);
+  void read.then(() => {
+    if (savedKeyReads.get(configKey) === read) savedKeyReads.delete(configKey);
+  });
+  return read;
+}
+
+/** Suspends on the saved-key read, then hands the key to the form as its starting draft. */
+function SavedApiKeyForm({ read }: { readonly read: Promise<string | null> }): React.ReactElement {
+  return <ApiKeyForm savedKey={use(read) ?? ""} />;
+}
+
+/**
+ * The API key field, written on Save via #lib/tauri. While the saved key is
+ * still being read (`pending`, the Suspense fallback) the field is
+ * read-only, so nothing typed is overwritten when the key arrives; after
+ * that the draft is the user's own. The key itself is never logged, traced,
+ * or included in a toast; a failed save shows the backend's error text,
+ * which never contains the value.
+ */
+function ApiKeyForm({
+  savedKey,
+  pending = false,
+}: {
+  readonly savedKey: string;
+  readonly pending?: boolean;
+}): React.ReactElement {
+  // Only the webview-direct Anthropic client reads the API key, and a swarmd
+  // page is denied secret-shaped config keys, so there it can be neither read nor saved.
+  const canUseWebviewChat = hasCapability("localAiChat");
+  const apiKeyReasonId = useId();
+  const [savingApiKey, startSavingApiKey] = useTransition();
+  const [apiKeyDraft, setApiKeyDraft] = useState(savedKey);
+  const [apiKeySaved, setApiKeySaved] = useState(savedKey);
+  const apiKeyDirty = apiKeyDraft !== apiKeySaved;
+
+  const handleSaveApiKey = (event: React.FormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    if (pending || !apiKeyDirty || savingApiKey) return;
+    const key = apiKeyDraft;
+    startSavingApiKey(async () => {
+      try {
+        await writeConfig(ANTHROPIC_API_KEY_CONFIG_KEY, key);
+        setApiKeySaved(key);
+        toast.success("API Key Saved");
+      } catch (err) {
+        toast.error("Failed To Save API Key", { description: errorMessage(err) });
+      }
+    });
+  };
+
+  return (
+    <form onSubmit={handleSaveApiKey}>
+      <SettingsSection title="AI Connectivity">
+        <label htmlFor="anthropic-api-key" className="mb-1.5 block text-md font-medium text-fg">
+          API Key
+        </label>
+        <Input
+          id="anthropic-api-key"
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          value={apiKeyDraft}
+          onChange={(e) => setApiKeyDraft(e.target.value)}
+          placeholder="Enter Your Anthropic API Key"
+          disabled={!canUseWebviewChat}
+          readOnly={pending}
+          aria-describedby={
+            canUseWebviewChat
+              ? "anthropic-api-key-description"
+              : `anthropic-api-key-description ${apiKeyReasonId}`
+          }
+          className="font-mono"
+        />
+        <p id="anthropic-api-key-description" className="mt-1 text-xs text-fg-dim">
+          Your Anthropic API Key. Required To Use Webview AI Chat. Stored In Your OS Keychain, Or In
+          An Owner-Only File In App Data Where There Is None — Never Logged Or Displayed In Clear
+          Text.
+        </p>
+        {!canUseWebviewChat && (
+          <p id={apiKeyReasonId} className="mt-1 text-xs text-fg-dim">
+            {DESKTOP_ONLY_REASON}
+          </p>
+        )}
+        <div className="mt-3 flex justify-end">
+          <Button
+            type="submit"
+            size="sm"
+            disabled={!canUseWebviewChat || pending || !apiKeyDirty}
+            loading={savingApiKey}
+          >
+            Save API Key
+          </Button>
+        </div>
+      </SettingsSection>
+    </form>
+  );
+}
+
 // ── Page ─────────────────────────────────────────────
 
 /** Settings page for application configuration and preferences. */
@@ -604,13 +736,12 @@ export function Settings(): React.ReactElement {
   const agentConcurrencySync = useAtomValue(agentConcurrencySyncAtom);
   const canCheckForUpdates = hasCapability("autoUpdate");
   // Only the webview-direct Anthropic client reads the API key, and a swarmd
-  // page is denied secret-shaped config keys, so there it can be neither read nor saved.
-  const canUseWebviewChat = hasCapability("localAiChat");
-  const apiKeyReasonId = useId();
+  // page is denied secret-shaped config keys, so there it is never read.
+  // Pinned for this mount: the page reads the key once each time it mounts.
+  const [savedApiKey] = useState(() => (hasCapability("localAiChat") ? readSavedApiKey() : null));
   const updatesReasonId = useId();
   const [keybindings, setKeybindings] = useAtom(keybindingsAtom);
   const [checkingUpdates, startUpdateCheck] = useTransition();
-  const [savingApiKey, startSavingApiKey] = useTransition();
 
   const patchSettings = (patch: Partial<AppSettings>): void =>
     setAppSettings((prev) => ({ ...prev, ...patch }));
@@ -641,48 +772,6 @@ export function Settings(): React.ReactElement {
       }
     });
 
-  // ── API key (read on mount, written on Save via #lib/tauri) ──
-  // The key itself is never logged, traced, or included in a toast; a failed
-  // save shows the backend's error text, which never contains the value.
-  const [apiKeyDraft, setApiKeyDraft] = useState("");
-  const [apiKeySaved, setApiKeySaved] = useState("");
-
-  useEffect(() => {
-    if (!canUseWebviewChat) return;
-    let cancelled = false;
-    readConfig(ANTHROPIC_API_KEY_CONFIG_KEY, z.string().min(1))
-      .then((key) => {
-        if (cancelled || key === null) return;
-        setApiKeyDraft(key);
-        setApiKeySaved(key);
-      })
-      .catch((err: unknown) => {
-        // Unset resolves null; a rejection means the backend could not answer (transport
-        // down, or a swarmd page, which is denied secret-shaped keys). It never carries the key.
-        console.warn("[settings] Could not read the saved API key:", err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [canUseWebviewChat]);
-
-  const apiKeyDirty = apiKeyDraft !== apiKeySaved;
-
-  const handleSaveApiKey = (event: React.FormEvent<HTMLFormElement>): void => {
-    event.preventDefault();
-    if (!apiKeyDirty || savingApiKey) return;
-    const key = apiKeyDraft;
-    startSavingApiKey(async () => {
-      try {
-        await writeConfig(ANTHROPIC_API_KEY_CONFIG_KEY, key);
-        setApiKeySaved(key);
-        toast.success("API Key Saved");
-      } catch (err) {
-        toast.error("Failed To Save API Key", { description: errorMessage(err) });
-      }
-    });
-  };
-
   // ── Worker registry cap (backend-persisted via set_max_workers) ──
   const [shownMaxWorkers, setShownMaxWorkers] = useAtom(maxWorkersAtom);
   const maxWorkersSync = useAtomValue(maxWorkersSyncAtom);
@@ -701,49 +790,13 @@ export function Settings(): React.ReactElement {
       />
       {/* Only the column's first group (inside the API-key form) sits on the header without a top pad. */}
       <div className="flex flex-col divide-y divide-border px-7 pb-6 [&>:first-child>section]:pt-0">
-        <form onSubmit={handleSaveApiKey}>
-          <SettingsSection title="AI Connectivity">
-            <label htmlFor="anthropic-api-key" className="mb-1.5 block text-md font-medium text-fg">
-              API Key
-            </label>
-            <Input
-              id="anthropic-api-key"
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              value={apiKeyDraft}
-              onChange={(e) => setApiKeyDraft(e.target.value)}
-              placeholder="Enter Your Anthropic API Key"
-              disabled={!canUseWebviewChat}
-              aria-describedby={
-                canUseWebviewChat
-                  ? "anthropic-api-key-description"
-                  : `anthropic-api-key-description ${apiKeyReasonId}`
-              }
-              className="font-mono"
-            />
-            <p id="anthropic-api-key-description" className="mt-1 text-xs text-fg-dim">
-              Your Anthropic API Key. Required To Use Webview AI Chat. Stored In Your OS Keychain,
-              Or In An Owner-Only File In App Data Where There Is None — Never Logged Or Displayed
-              In Clear Text.
-            </p>
-            {!canUseWebviewChat && (
-              <p id={apiKeyReasonId} className="mt-1 text-xs text-fg-dim">
-                {DESKTOP_ONLY_REASON}
-              </p>
-            )}
-            <div className="mt-3 flex justify-end">
-              <Button
-                type="submit"
-                size="sm"
-                disabled={!canUseWebviewChat || !apiKeyDirty}
-                loading={savingApiKey}
-              >
-                Save API Key
-              </Button>
-            </div>
-          </SettingsSection>
-        </form>
+        {savedApiKey === null ? (
+          <ApiKeyForm savedKey="" />
+        ) : (
+          <Suspense fallback={<ApiKeyForm savedKey="" pending />}>
+            <SavedApiKeyForm read={savedApiKey} />
+          </Suspense>
+        )}
 
         <SettingsSection title="AI Model" headingId={modelHeadingId}>
           <ModelPicker labelledBy={modelHeadingId} />
