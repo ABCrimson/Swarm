@@ -1177,7 +1177,7 @@ fn the_operator_auth_is_copied_refreshed_when_newer_and_dropped_when_gone() {
     // Codex refreshed the token inside the private home: the newer private
     // copy is kept.
     std::fs::write(&copy, r#"{"placeholder":2}"#).unwrap();
-    set_modified(&copy, modified(&source) + Duration::from_secs(60));
+    set_modified(&copy, modified(&source) + Duration::from_mins(1));
     homes.prepare(worker).expect("prepare");
     assert_eq!(
         std::fs::read_to_string(&copy).unwrap(),
@@ -1186,7 +1186,7 @@ fn the_operator_auth_is_copied_refreshed_when_newer_and_dropped_when_gone() {
 
     // The operator signed in again: the newer source replaces the copy.
     std::fs::write(&source, r#"{"placeholder":3}"#).unwrap();
-    set_modified(&source, modified(&copy) + Duration::from_secs(60));
+    set_modified(&source, modified(&copy) + Duration::from_mins(1));
     homes.prepare(worker).expect("prepare");
     assert_eq!(
         std::fs::read_to_string(&copy).unwrap(),
