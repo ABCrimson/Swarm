@@ -22,6 +22,10 @@ use crate::events::Provenance;
 /// user_version` header field. See [`EventLog::migrate`].
 const SCHEMA_VERSION: i64 = 2;
 
+/// `PRAGMA auto_vacuum` value for incremental mode (0 none, 1 full, 2
+/// incremental). See [`EventLog::init`].
+const AUTO_VACUUM_INCREMENTAL: i64 = 2;
+
 /// How long a connection waits on another connection's lock (e.g. a WAL
 /// checkpoint) before failing with `SQLITE_BUSY`.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -200,7 +204,24 @@ impl EventLog {
         Self::init(Connection::open_in_memory()?)
     }
 
+    /// Configures the connection, then migrates the schema.
+    ///
+    /// A database with no tables yet is switched to
+    /// `auto_vacuum = INCREMENTAL` before anything else: SQLite fixes the
+    /// mode when the file's first table is created, and only a full
+    /// `VACUUM` changes it afterwards. The pragma must therefore come
+    /// before `journal_mode = WAL`, after which it is a silent no-op on a
+    /// fresh file. Incremental mode lets retention (W2.J) free pages
+    /// later; until then it frees nothing, and an existing log keeps mode 0
+    /// (no `VACUUM` runs here). SQLite reads the mode from the file
+    /// header, so an older build opens a new log unchanged.
     fn init(mut conn: Connection) -> Result<Self, AppError> {
+        let tables: i64 =
+            conn.query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))?;
+        let is_new = tables == 0;
+        if is_new {
+            conn.pragma_update(None, "auto_vacuum", AUTO_VACUUM_INCREMENTAL)?;
+        }
         let mode: String =
             conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
         // An in-memory database reports "memory"; anything else that is
@@ -236,6 +257,18 @@ impl EventLog {
         conn.pragma_update(None, "journal_size_limit", WAL_SIZE_LIMIT_BYTES)?;
         conn.busy_timeout(BUSY_TIMEOUT)?;
         Self::migrate(&mut conn)?;
+        if is_new {
+            let auto_vacuum: i64 =
+                conn.pragma_query_value(None, "auto_vacuum", |row| row.get(0))?;
+            if auto_vacuum != AUTO_VACUUM_INCREMENTAL {
+                // A first open that crashed after switching to WAL but before
+                // creating the first table: the pragma no longer applies.
+                tracing::warn!(
+                    auto_vacuum,
+                    "new event log is not in incremental auto_vacuum mode"
+                );
+            }
+        }
         Ok(Self { conn })
     }
 
@@ -859,6 +892,95 @@ mod tests {
         assert_eq!(mode, "wal");
         assert_eq!(pragma(&log, "fullfsync"), 1, "fullfsync must be on");
         assert_eq!(pragma(&log, "synchronous"), 3, "synchronous must be EXTRA");
+    }
+
+    /// `PRAGMA auto_vacuum` as SQLite stores it in the file header.
+    fn auto_vacuum(log: &EventLog) -> i64 {
+        pragma(log, "auto_vacuum")
+    }
+
+    /// A file written by a build that never set the pragma: the v2 schema
+    /// created through a raw connection, mode 0.
+    fn create_v2_log_without_the_pragma(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             CREATE TABLE events (
+                 seq           INTEGER PRIMARY KEY,
+                 ts            INTEGER NOT NULL,
+                 type          TEXT NOT NULL,
+                 payload       TEXT NOT NULL,
+                 origin_worker TEXT,
+                 cause_seq     INTEGER
+             ) STRICT;
+             CREATE INDEX idx_events_type_seq ON events(type, seq);
+             CREATE TABLE meta (
+                 key   TEXT PRIMARY KEY,
+                 value INTEGER NOT NULL
+             ) STRICT, WITHOUT ROWID;
+             INSERT INTO events (seq, ts, type, payload) VALUES (1, 1000, 'worker_spawned', '{}');
+             PRAGMA user_version = 2;",
+        )
+        .unwrap();
+    }
+
+    /// A new log is created in incremental mode (2), and a reader reports
+    /// the mode stored in the file.
+    #[test]
+    fn test_a_new_log_is_created_with_incremental_auto_vacuum() {
+        let (path, _cleanup) = temp_db();
+        let mut log = EventLog::open(&path).unwrap();
+        assert_eq!(auto_vacuum(&log), AUTO_VACUUM_INCREMENTAL);
+        append(&mut log, 1, "worker_spawned", "{}");
+        drop(log);
+
+        let reopened = EventLog::open(&path).unwrap();
+        assert_eq!(auto_vacuum(&reopened), AUTO_VACUUM_INCREMENTAL);
+        let reader = EventLog::open_readonly(&path).unwrap();
+        assert_eq!(auto_vacuum(&reader), AUTO_VACUUM_INCREMENTAL);
+        assert_eq!(reader.events_since(0, 10).unwrap().len(), 1);
+    }
+
+    /// An existing log keeps mode 0: the pragma is only set on a file with
+    /// no tables, and no VACUUM runs. It still migrates, appends and replays.
+    #[test]
+    fn test_an_existing_log_keeps_its_auto_vacuum_mode() {
+        let (path, _cleanup) = temp_db();
+        create_v2_log_without_the_pragma(&path);
+
+        let mut log = EventLog::open(&path).unwrap();
+        assert_eq!(auto_vacuum(&log), 0);
+        assert_eq!(user_version(&log.conn), SCHEMA_VERSION);
+        append(&mut log, 2, "worker_killed", "{}");
+        let seqs: Vec<u64> = log
+            .events_since(0, 10)
+            .unwrap()
+            .iter()
+            .map(|e| e.seq)
+            .collect();
+        assert_eq!(seqs, [1, 2]);
+        drop(log);
+
+        let reader = EventLog::open_readonly(&path).unwrap();
+        assert_eq!(auto_vacuum(&reader), 0);
+        assert_eq!(reader.events_since(0, 10).unwrap().len(), 2);
+    }
+
+    /// `open_readonly` reports the stored mode and writes nothing.
+    #[test]
+    fn test_open_readonly_does_not_touch_auto_vacuum() {
+        let (path, _cleanup) = temp_db();
+        create_v2_log_without_the_pragma(&path);
+        let before = std::fs::read(&path).unwrap();
+        let reader = EventLog::open_readonly(&path).unwrap();
+        assert_eq!(auto_vacuum(&reader), 0);
+        drop(reader);
+        // The mode lives in two header fields: the largest root b-tree page
+        // (bytes 52..56, non-zero in either auto-vacuum mode) and the
+        // incremental flag (bytes 64..68).
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(after[52..56], before[52..56]);
+        assert_eq!(after[64..68], before[64..68]);
     }
 
     #[test]

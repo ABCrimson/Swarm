@@ -464,10 +464,10 @@ mod tests {
     /// Creates a file symlink, or returns `false` where the host forbids
     /// it (Windows without developer mode).
     fn try_symlink(target: &Path, link: &Path) -> bool {
-        #[cfg(unix)]
-        let result = std::os::unix::fs::symlink(target, link);
-        #[cfg(windows)]
-        let result = std::os::windows::fs::symlink_file(target, link);
+        let result = cfg_select! {
+            unix => std::os::unix::fs::symlink(target, link),
+            windows => std::os::windows::fs::symlink_file(target, link),
+        };
         result.is_ok()
     }
 

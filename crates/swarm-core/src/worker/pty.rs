@@ -171,23 +171,22 @@ pub fn spawn_pty(
 }
 
 /// The platform default shell; see [`spawn_pty`]'s table.
-#[cfg(unix)]
 fn default_shell_command() -> CommandBuilder {
-    CommandBuilder::new_default_prog()
-}
-
-/// The platform default shell; see [`spawn_pty`]'s table.
-#[cfg(windows)]
-fn default_shell_command() -> CommandBuilder {
-    let on_path = |exe: &str| {
-        std::env::var_os("PATH")
-            .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(exe).is_file()))
-    };
-    CommandBuilder::new(if on_path("pwsh.exe") {
-        "pwsh.exe"
-    } else {
-        "powershell.exe"
-    })
+    cfg_select! {
+        unix => CommandBuilder::new_default_prog(),
+        windows => {
+            let on_path = |exe: &str| {
+                std::env::var_os("PATH").is_some_and(|path| {
+                    std::env::split_paths(&path).any(|dir| dir.join(exe).is_file())
+                })
+            };
+            CommandBuilder::new(if on_path("pwsh.exe") {
+                "pwsh.exe"
+            } else {
+                "powershell.exe"
+            })
+        }
+    }
 }
 
 /// A named thread held at its start line.
@@ -437,7 +436,7 @@ impl Utf8Stream {
     /// Flushes a trailing incomplete sequence at end of stream (as
     /// U+FFFD); `None` when nothing is held back.
     fn finish(self) -> Option<String> {
-        (!self.pending.is_empty()).then(|| String::from_utf8_lossy(&self.pending).into_owned())
+        (!self.pending.is_empty()).then(|| String::from_utf8_lossy_owned(self.pending))
     }
 }
 
