@@ -450,7 +450,7 @@ describe("streamMessage", () => {
     });
   });
 
-  describe("per-attempt pricing of Fable 5.1 fallbacks", () => {
+  describe("per-attempt pricing of Fable 5.2 fallbacks", () => {
     it("prices a Fable run rescued by Opus 5 at the Fable rate plus the Opus 5 rate", async () => {
       useFreshKey();
       const attempt = (type: string, model: string) => ({
@@ -483,8 +483,8 @@ describe("streamMessage", () => {
 
       await run({ ...SONNET, model: CLAUDE_MODELS.fable.id });
 
-      // $10 per MTok of Fable 5.1 input + $5 per MTok of Opus 5 input.
-      expect(useAiStore.getState().cumulativeUsage.totalCostUsd).toBeCloseTo(15, 10);
+      // $8 per MTok of Fable 5.2 input + $5 per MTok of Opus 5 input.
+      expect(useAiStore.getState().cumulativeUsage.totalCostUsd).toBeCloseTo(13, 10);
     });
   });
 

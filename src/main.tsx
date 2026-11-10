@@ -2,7 +2,7 @@ import "@fontsource-variable/jetbrains-mono/index.css";
 import "@fontsource-variable/syne/index.css";
 import "@fontsource-variable/dm-sans/index.css";
 import "@fontsource-variable/dm-sans/wght-italic.css";
-// modern-cmdk 1.2 base styles (dialog reveal animations via @property) —
+// modern-cmdk base styles (dialog reveal animations via @property) —
 // must load before our OKLCH theming overrides in global.css.
 import "modern-cmdk/styles.css";
 import "#styles/global.css";

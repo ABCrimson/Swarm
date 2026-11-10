@@ -29,7 +29,7 @@ export function Tools(): React.ReactElement {
   // saveTool commits after a microtask (mutate waits on hydration), so the saved tool's row renders after showList returns.
   useEffect(() => {
     const name = pendingEditFocus.current;
-    if (name === null || !customTools.some((tool) => tool.name === name)) return;
+    if (name === null || customTools.every((tool) => tool.name !== name)) return;
     pendingEditFocus.current = null;
     contentRef.current
       ?.querySelector<HTMLElement>(`button[aria-label="Edit ${CSS.escape(name)}"]`)

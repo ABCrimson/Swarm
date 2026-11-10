@@ -160,7 +160,7 @@ The count starts at the 10,000 capacity. The averaged latency is exposed via `gp
 
 ### Vite 8.3 + Rolldown
 
-The frontend builds with Vite 8.3.5 using the Rolldown bundler. The React Compiler runs inside `@vitejs/plugin-react` (`react({ compiler: true })`) as the Oxc port, `oxc-transform-react`: its native binding, or its WASI binding where the native one cannot load (Windows Smart App Control). No Babel is involved:
+The frontend builds with Vite 8.3.7 using the Rolldown bundler. The React Compiler runs inside `@vitejs/plugin-react` (`react({ compiler: true })`) as the Oxc port, `oxc-transform-react`: its native binding, or its WASI binding where the native one cannot load (Windows Smart App Control). No Babel is involved:
 
 ```ts
 build: {
@@ -195,7 +195,7 @@ Minification is Vite's default (Oxc). `pnpm build` writes `dist/` for the deskto
 `@anthropic-ai/sdk` has no vendor group. Only `src/lib/anthropic.ts` imports it, and every runtime importer of that module loads on demand: the lazily loaded Workers, Settings and Tools pages, and the `import("#lib/ai-chat")` in `useWorkerEvents`. Rolldown therefore places the SDK in chunks those pages load, off the startup path.
 
 > [!NOTE]
-> `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 14.9.1, not `framer-motion`.
+> `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 14.12.0, not `framer-motion`.
 
 ### Rust Release Profile
 

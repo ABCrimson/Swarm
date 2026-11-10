@@ -9,6 +9,12 @@
     "erasableSyntaxOnly": true,
     "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noUncheckedSideEffectImports": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noEmit": true,
     "skipLibCheck": true
   },

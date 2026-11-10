@@ -15,58 +15,85 @@ trustPolicy: no-downgrade
 # `update` and `remove` prune entries the lockfile no longer resolves.
 minimumReleaseAgeExcludePrune: true
 minimumReleaseAgeExclude:
-  # Published 2026-11-03/04; pruned automatically once mature (minimumReleaseAgeExcludePrune).
-  - "@biomejs/biome@2.6.5"
-  - "@biomejs/cli-android-arm64@2.6.5"
-  - "@biomejs/cli-android-x64@2.6.5"
-  - "@biomejs/cli-darwin-arm64@2.6.5"
-  - "@biomejs/cli-darwin-x64@2.6.5"
-  - "@biomejs/cli-linux-arm64-musl@2.6.5"
-  - "@biomejs/cli-linux-arm64@2.6.5"
-  - "@biomejs/cli-linux-x64-musl@2.6.5"
-  - "@biomejs/cli-linux-x64@2.6.5"
-  - "@biomejs/cli-win32-arm64@2.6.5"
-  - "@biomejs/cli-win32-x64@2.6.5"
-  - "@oxc-transform-react/binding-android-arm-eabi@0.157.0"
-  - "@oxc-transform-react/binding-android-arm64@0.157.0"
-  - "@oxc-transform-react/binding-darwin-arm64@0.157.0"
-  - "@oxc-transform-react/binding-darwin-x64@0.157.0"
-  - "@oxc-transform-react/binding-freebsd-x64@0.157.0"
-  - "@oxc-transform-react/binding-linux-arm-gnueabihf@0.157.0"
-  - "@oxc-transform-react/binding-linux-arm-musleabihf@0.157.0"
-  - "@oxc-transform-react/binding-linux-arm64-gnu@0.157.0"
-  - "@oxc-transform-react/binding-linux-arm64-musl@0.157.0"
-  - "@oxc-transform-react/binding-linux-ppc64-gnu@0.157.0"
-  - "@oxc-transform-react/binding-linux-riscv64-gnu@0.157.0"
-  - "@oxc-transform-react/binding-linux-riscv64-musl@0.157.0"
-  - "@oxc-transform-react/binding-linux-s390x-gnu@0.157.0"
-  - "@oxc-transform-react/binding-linux-x64-gnu@0.157.0"
-  - "@oxc-transform-react/binding-linux-x64-musl@0.157.0"
-  - "@oxc-transform-react/binding-openharmony-arm64@0.157.0"
-  - "@oxc-transform-react/binding-wasm32-wasip1@0.157.0"
-  - "@oxc-transform-react/binding-win32-arm64-msvc@0.157.0"
-  - "@oxc-transform-react/binding-win32-ia32-msvc@0.157.0"
-  - "@oxc-transform-react/binding-win32-x64-msvc@0.157.0"
-  - "@playwright/test@1.66.0-alpha-2026-11-04"
-  - "@typescript/typescript-darwin-arm64@7.1.0-dev.20261104.1"
-  - "@typescript/typescript-darwin-x64@7.1.0-dev.20261104.1"
-  - "@typescript/typescript-linux-arm64@7.1.0-dev.20261104.1"
-  - "@typescript/typescript-linux-arm@7.1.0-dev.20261104.1"
-  - "@typescript/typescript-linux-x64@7.1.0-dev.20261104.1"
-  - "@typescript/typescript-win32-arm64@7.1.0-dev.20261104.1"
-  - "@typescript/typescript-win32-x64@7.1.0-dev.20261104.1"
-  - framer-motion@14.9.1
-  - modern-cmdk@1.2.3
-  - motion-dom@14.9.1
-  - motion@14.9.1
-  - oxc-transform-react@0.157.0
-  - playwright-core@1.66.0-alpha-2026-11-04
-  - playwright@1.66.0-alpha-2026-11-04
-  - temporal-polyfill@1.0.7
-  - temporal-utils@1.0.4
-  - typescript@7.1.0-dev.20261104.1
+  # Published 2026-11-09 and 2026-11-10; pruned automatically once mature (minimumReleaseAgeExcludePrune).
+  - "@oxc-transform-react/binding-android-arm-eabi@0.158.0"
+  - "@oxc-transform-react/binding-android-arm64@0.158.0"
+  - "@oxc-transform-react/binding-darwin-arm64@0.158.0"
+  - "@oxc-transform-react/binding-darwin-x64@0.158.0"
+  - "@oxc-transform-react/binding-freebsd-x64@0.158.0"
+  - "@oxc-transform-react/binding-linux-arm-gnueabihf@0.158.0"
+  - "@oxc-transform-react/binding-linux-arm64-gnu@0.158.0"
+  - "@oxc-transform-react/binding-linux-arm64-musl@0.158.0"
+  - "@oxc-transform-react/binding-linux-ppc64-gnu@0.158.0"
+  - "@oxc-transform-react/binding-linux-riscv64-gnu@0.158.0"
+  - "@oxc-transform-react/binding-linux-riscv64-musl@0.158.0"
+  - "@oxc-transform-react/binding-linux-s390x-gnu@0.158.0"
+  - "@oxc-transform-react/binding-linux-x64-gnu@0.158.0"
+  - "@oxc-transform-react/binding-linux-x64-musl@0.158.0"
+  - "@oxc-transform-react/binding-openharmony-arm64@0.158.0"
+  - "@oxc-transform-react/binding-wasm32-wasip1@0.158.0"
+  - "@oxc-transform-react/binding-win32-arm64-msvc@0.158.0"
+  - "@oxc-transform-react/binding-win32-ia32-msvc@0.158.0"
+  - "@oxc-transform-react/binding-win32-x64-msvc@0.158.0"
+  - "@playwright/test@1.66.0-alpha-2026-11-10"
+  - "@rolldown/binding-android-arm-eabi@1.2.18"
+  - "@rolldown/binding-android-arm64@1.2.18"
+  - "@rolldown/binding-darwin-arm64@1.2.18"
+  - "@rolldown/binding-darwin-x64@1.2.18"
+  - "@rolldown/binding-freebsd-x64@1.2.18"
+  - "@rolldown/binding-linux-arm-gnueabihf@1.2.18"
+  - "@rolldown/binding-linux-arm64-gnu@1.2.18"
+  - "@rolldown/binding-linux-arm64-musl@1.2.18"
+  - "@rolldown/binding-linux-ppc64-gnu@1.2.18"
+  - "@rolldown/binding-linux-s390x-gnu@1.2.18"
+  - "@rolldown/binding-linux-x64-gnu@1.2.18"
+  - "@rolldown/binding-linux-x64-musl@1.2.18"
+  - "@rolldown/binding-openharmony-arm64@1.2.18"
+  - "@rolldown/binding-win32-arm64-msvc@1.2.18"
+  - "@rolldown/binding-win32-x64-msvc@1.2.18"
+  - "oxc-transform-react@0.158.0"
+  - "playwright-core@1.66.0-alpha-2026-11-10"
+  - "playwright@1.66.0-alpha-2026-11-10"
+  - "rolldown@1.2.18"
+  - "vite@8.3.7"
+  - "@oxc-transform-react/binding-linux-arm-musleabihf@0.158.0"
+  - "@testing-library/user-event@14.6.9"
+  - "@typescript/typescript-darwin-arm64@7.1.0-dev.20261110.1"
+  - "@typescript/typescript-darwin-x64@7.1.0-dev.20261110.1"
+  - "@typescript/typescript-linux-arm64@7.1.0-dev.20261110.1"
+  - "@typescript/typescript-linux-arm@7.1.0-dev.20261110.1"
+  - "@typescript/typescript-linux-x64@7.1.0-dev.20261110.1"
+  - "@typescript/typescript-win32-arm64@7.1.0-dev.20261110.1"
+  - "@typescript/typescript-win32-x64@7.1.0-dev.20261110.1"
+  - typescript@7.1.0-dev.20261110.1
+  - "@anthropic-ai/sdk@1.7.0"
+  - "framer-motion@14.12.0"
+  - "marked@18.2.0"
+  - "modern-cmdk@1.7.0"
+  - "motion-dom@14.12.0"
+  - "motion@14.12.0"
+  - "react-dom@19.3.0-canary-4ae637b6-20261109"
+  - "react-is@19.3.0-canary-4ae637b6-20261109"
+  - "react@19.3.0-canary-4ae637b6-20261109"
+  - "scheduler@0.28.0-canary-4ae637b6-20261109"
+  - "@tailwindcss/oxide-linux-x64-gnu@0.0.0-insiders.3603b3a"
+  - "@tailwindcss/oxide-linux-x64-musl@0.0.0-insiders.3603b3a"
+  - "@tailwindcss/oxide-wasm32-wasi@0.0.0-insiders.3603b3a"
+  - "@tailwindcss/oxide-win32-arm64-msvc@0.0.0-insiders.3603b3a"
+  - "@tailwindcss/oxide-win32-x64-msvc@0.0.0-insiders.3603b3a"
+  - "@tailwindcss/oxide@0.0.0-insiders.3603b3a"
+  - "@tailwindcss/vite@0.0.0-insiders.3603b3a"
+  - "@tailwindcss/node@0.0.0-insiders.3603b3a"
+  - "@tailwindcss/oxide-android-arm64@0.0.0-insiders.3603b3a"
+  - "@tailwindcss/oxide-darwin-arm64@0.0.0-insiders.3603b3a"
+  - "@tailwindcss/oxide-darwin-x64@0.0.0-insiders.3603b3a"
+  - "@tailwindcss/oxide-freebsd-x64@0.0.0-insiders.3603b3a"
+  - "@tailwindcss/oxide-linux-arm-gnueabihf@0.0.0-insiders.3603b3a"
+  - "@tailwindcss/oxide-linux-arm64-gnu@0.0.0-insiders.3603b3a"
+  - "@tailwindcss/oxide-linux-arm64-musl@0.0.0-insiders.3603b3a"
+  - "tailwindcss@0.0.0-insiders.3603b3a"
 
-# The React Compiler's WASI binding (oxc-transform-react 0.157.0) pins @emnapi/core and
+# The React Compiler's WASI binding (oxc-transform-react 0.158.0) pins @emnapi/core and
 # @emnapi/runtime to 2.0.0-alpha.6 but resolves @napi-rs/wasm-runtime 1.2.7 through
 # ~1.2.7, which peers "^1.7.1 || 2.0.0-beta.2 || 2.0.0-beta.3" and calls emnapi's beta
 # API (addonModule, renamed from napiModule). With alpha.6 the binding dies on load
@@ -77,15 +104,14 @@ overrides:
   "@oxc-transform-react/binding-wasm32-wasip1>@emnapi/core": 2.0.0-beta.3
   "@oxc-transform-react/binding-wasm32-wasip1>@emnapi/runtime": 2.0.0-beta.3
 
-# @vitejs/plugin-react 6.2.1 caps its optional oxc-transform-react peer at <0.157.0
-# (vitejs/vite-plugin-react#1540, 2026-11-02, an upper bound on a 0.x series, not a known
-# break; main still says ">=0.152.0 <0.157.0" on 2026-11-03). 0.157.0 only adds the
-# `typescript` option (oxc-project/oxc 8dd67a6), and the full gate including both
+# @vitejs/plugin-react 6.3.0 still caps its optional oxc-transform-react peer at <0.157.0
+# (vitejs/vite-plugin-react#1540: an upper bound on a 0.x series, not a known break).
+# oxc-transform-react 0.158.0 is installed, and the full gate including both
 # check:compiler runs is green on it. Drop this once plugin-react widens the range.
 # @crimson_dev/use-resize-observer 1.0.1 peers react ">=19.3.0", and semver orders the
-# React canary 19.3.0-canary-e84e1492-20261031 (published 2026-10-31, after 19.3.1 on 2026-10-14)
+# React canary 19.3.0-canary-4ae637b6-20261109 (published 2026-11-09, after 19.3.1 on 2026-10-14)
 # below 19.3.0 because it is a prerelease. Drop this when react leaves the canary pin.
 peerDependencyRules:
   allowedVersions:
-    "@vitejs/plugin-react>oxc-transform-react": 0.157.0
-    "@crimson_dev/use-resize-observer>react": 19.3.0-canary-e84e1492-20261031
+    "@vitejs/plugin-react>oxc-transform-react": 0.158.0
+    "@crimson_dev/use-resize-observer>react": 19.3.0-canary-4ae637b6-20261109

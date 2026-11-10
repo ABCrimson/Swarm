@@ -62,7 +62,7 @@ describe("ModelSelector", () => {
     await user.keyboard("{ArrowDown}");
     expect(screen.getByRole("option", { name: /Claude Haiku 5\.5/ })).toHaveFocus();
     await user.keyboard("{ArrowDown}");
-    expect(screen.getByRole("option", { name: /Claude Fable 5\.1/ })).toHaveFocus();
+    expect(screen.getByRole("option", { name: /Claude Fable 5\.2/ })).toHaveFocus();
     await user.keyboard("{End}");
     expect(screen.getByRole("option", { name: /Claude Haiku 5\.5/ })).toHaveFocus();
     await user.keyboard("{Home}{ArrowUp}");
@@ -109,7 +109,7 @@ describe("ModelSelector", () => {
     render(<ModelSelector />);
     await openWithKeyboard();
 
-    const mythos = screen.getByRole("option", { name: /Claude Mythos 5\.1/ });
+    const mythos = screen.getByRole("option", { name: /Claude Mythos 5\.2/ });
     expect(
       within(mythos).getByText("Requires Project Glasswing").closest(".swarm-pill"),
     ).toHaveAttribute("data-tone", "warning");
@@ -123,10 +123,10 @@ describe("ModelSelector", () => {
     render(<ModelSelector />);
     const user = await openWithKeyboard();
 
-    await user.click(screen.getByRole("option", { name: /Claude Mythos 5\.1/ }));
+    await user.click(screen.getByRole("option", { name: /Claude Mythos 5\.2/ }));
 
     expect(toast.warning).toHaveBeenCalledExactlyOnceWith(
-      "Claude Mythos 5.1 Requires Project Glasswing Access",
+      "Claude Mythos 5.2 Requires Project Glasswing Access",
     );
     expect(toast.success).not.toHaveBeenCalled();
   });

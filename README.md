@@ -136,7 +136,7 @@ The cost, as measured on 2026-10-13 on an Intel Core Ultra 9 290HX Plus under WS
 
 Prerequisites, from `package.json`, `rust-toolchain.toml`, [docs/contributing.md](docs/contributing.md), `MIN_GIT_VERSION` in `crates/swarm-core/src/git/cli.rs` and `minimumSystemVersion` in `src-tauri/tauri.conf.json`:
 
-- **pnpm** at the version in `packageManager` (`pnpm@12.17.0`).
+- **pnpm** at the version in `packageManager` (`pnpm@12.19.0`).
 - **Node.js** at the nightly pinned in `engines.node` and `devEngines.runtime` (`onFail: download`); per docs/contributing.md, pnpm downloads it, so do not install it separately.
 - **Rust** at the nightly pinned by `rust-toolchain.toml`; any `cargo` command in the repo installs it.
 - **git 2.32 or newer** (a startup probe reports older versions).
@@ -202,16 +202,16 @@ The commands a change must pass are listed in [AGENTS.md](AGENTS.md#gates), the 
 | Component | Pin | Source |
 | --- | --- | --- |
 | App | 0.14.0 | `package.json` |
-| pnpm | 12.17.0 | `package.json` `packageManager` |
-| Node.js | 28.0.0-nightly20261104d36e9ba1f8 | `package.json` `devEngines.runtime` |
-| Rust toolchain | nightly-2026-11-04 (`rust-version` 1.101, edition 2024) | `rust-toolchain.toml`, `Cargo.toml` |
-| Tauri | 3.0.0-alpha.5 (`tauri`, `tauri-runtime-wry`) | `Cargo.toml` |
-| React | 19.3.0-canary-e84e1492-20261031 | `package.json` |
-| TypeScript | 7.1.0-dev.20261104.1 | `package.json` |
-| Vite | 8.3.5 | `package.json` |
-| Biome | 2.6.5 | `package.json` |
+| pnpm | 12.19.0 | `package.json` `packageManager` |
+| Node.js | 28.0.0-nightly20261109768315cf71 | `package.json` `devEngines.runtime` |
+| Rust toolchain | nightly-2026-11-10 (rustc 1.102.0-nightly; `rust-version` 1.101, edition 2024) | `rust-toolchain.toml`, `Cargo.toml` |
+| Tauri | 3.0.0-alpha.6 (`tauri`, `tauri-runtime-wry`) | `Cargo.toml` |
+| React | 19.3.0-canary-4ae637b6-20261109 | `package.json` |
+| TypeScript | 7.1.0-dev.20261110.1 | `package.json` |
+| Vite | 8.3.7 | `package.json` |
+| Biome | 2.6.6 | `package.json` |
 | Vitest | 5.1.0 | `package.json` |
-| Playwright | 1.66.0-alpha-2026-11-04 | `package.json` |
+| Playwright | 1.66.0-alpha-2026-11-10 | `package.json` |
 
 </details>
 
