@@ -82,6 +82,9 @@ for (const plugin of plugins) {
   }
   exceptions += entries.length;
   for (const [, path, value] of entries) {
+    // Both capture groups are mandatory in the pattern above.
+    if (path === undefined || value === undefined)
+      throw new Error(`${plugin}: exception match lost a group`);
     const file = unescapeRegex(path.replaceAll("[/\\x5C]", "/"));
     const literal = `oklch(${unescapeRegex(value)})`;
     if (!readFileSync(join(root, file), "utf8").includes(literal)) {

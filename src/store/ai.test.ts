@@ -24,7 +24,7 @@ describe("AiStore", () => {
       useAiStore.getState().enqueue(item);
 
       expect(useAiStore.getState().queue).toHaveLength(1);
-      expect(useAiStore.getState().queue[0].id).toBe(item.id);
+      expect(useAiStore.getState().queue[0]?.id).toBe(item.id);
     });
 
     it("maintains priority ordering: critical before high", () => {
@@ -36,8 +36,8 @@ describe("AiStore", () => {
       enqueue(critical);
 
       const queue = useAiStore.getState().queue;
-      expect(queue[0].priority).toBe("critical");
-      expect(queue[1].priority).toBe("high");
+      expect(queue[0]?.priority).toBe("critical");
+      expect(queue[1]?.priority).toBe("high");
     });
 
     it("maintains priority ordering: high before normal before low", () => {
@@ -51,9 +51,9 @@ describe("AiStore", () => {
       enqueue(high);
 
       const queue = useAiStore.getState().queue;
-      expect(queue[0].priority).toBe("high");
-      expect(queue[1].priority).toBe("normal");
-      expect(queue[2].priority).toBe("low");
+      expect(queue[0]?.priority).toBe("high");
+      expect(queue[1]?.priority).toBe("normal");
+      expect(queue[2]?.priority).toBe("low");
     });
 
     it("inserts same-priority items in FIFO order", () => {
@@ -65,8 +65,8 @@ describe("AiStore", () => {
       enqueue(second);
 
       const queue = useAiStore.getState().queue;
-      expect(queue[0].id).toBe(first.id);
-      expect(queue[1].id).toBe(second.id);
+      expect(queue[0]?.id).toBe(first.id);
+      expect(queue[1]?.id).toBe(second.id);
     });
 
     it("handles all four priority levels correctly", () => {
@@ -109,7 +109,7 @@ describe("AiStore", () => {
 
       const queue = useAiStore.getState().queue;
       expect(queue).toHaveLength(1);
-      expect(queue[0].id).toBe(b.id);
+      expect(queue[0]?.id).toBe(b.id);
     });
 
     it("does nothing for a non-existent id", () => {
@@ -131,7 +131,7 @@ describe("AiStore", () => {
 
       updateItemStatus(item.id, "streaming");
 
-      expect(useAiStore.getState().queue[0].status).toBe("streaming");
+      expect(useAiStore.getState().queue[0]?.status).toBe("streaming");
     });
 
     it("updates an item status to complete", () => {
@@ -141,7 +141,7 @@ describe("AiStore", () => {
 
       updateItemStatus(item.id, "complete");
 
-      expect(useAiStore.getState().queue[0].status).toBe("complete");
+      expect(useAiStore.getState().queue[0]?.status).toBe("complete");
     });
 
     it("updates an item status to error", () => {
@@ -151,7 +151,7 @@ describe("AiStore", () => {
 
       updateItemStatus(item.id, "error");
 
-      expect(useAiStore.getState().queue[0].status).toBe("error");
+      expect(useAiStore.getState().queue[0]?.status).toBe("error");
     });
 
     it("does nothing for a non-existent item", () => {
@@ -162,7 +162,7 @@ describe("AiStore", () => {
       // Should not throw
       updateItemStatus("non-existent", "complete");
 
-      expect(useAiStore.getState().queue[0].status).toBe("pending");
+      expect(useAiStore.getState().queue[0]?.status).toBe("pending");
     });
   });
 
@@ -213,7 +213,7 @@ describe("AiStore", () => {
 
       const history = useAiStore.getState().cumulativeUsage.history;
       expect(history).toHaveLength(1);
-      expect(history[0].timestamp).toBe(T0 + 60_000);
+      expect(history[0]?.timestamp).toBe(T0 + 60_000);
     });
 
     it("pruning does not touch the cumulative totals", () => {

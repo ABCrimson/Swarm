@@ -81,7 +81,11 @@ export function generateCommitMessage(preflight: ShipPreflight): string {
   const { filesChanged, insertions, deletions } = preflight.diffStat;
   const files = pluralize("file", filesChanged);
 
-  const summary = paths.length === 1 ? `update ${displayPath(paths[0])}` : `update ${files}`;
+  const [onlyPath] = paths;
+  const summary =
+    paths.length === 1 && onlyPath !== undefined
+      ? `update ${displayPath(onlyPath)}`
+      : `update ${files}`;
   const lines = [`${type}: ${summary}`, "", `+${insertions}/-${deletions} across ${files}.`];
 
   if (paths.length > 0) {

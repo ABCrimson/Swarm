@@ -45,7 +45,12 @@ function harness(initial = 64, feedback = false) {
   return {
     sync,
     call,
-    pending,
+    /** The deferred reply of the `index`-th call; throws when that call never went out. */
+    reply(index: number) {
+      const deferred = pending[index];
+      if (deferred === undefined) throw new Error(`call ${index} never went out`);
+      return deferred;
+    },
     applied,
     get shown() {
       return shown;
@@ -73,10 +78,10 @@ describe("createAcknowledgedSync", () => {
     h.sync.push(11);
     h.sync.push(10);
     expect(h.call.mock.calls).toStrictEqual([[12]]);
-    h.pending[0].resolve(12);
+    h.reply(0).resolve(12);
     await flush();
     expect(h.call.mock.calls).toStrictEqual([[12], [10]]);
-    h.pending[1].resolve(10);
+    h.reply(1).resolve(10);
     await flush();
     expect(h.shown).toBe(10);
     expect(h.status.status).toBe("idle");
@@ -95,13 +100,13 @@ describe("createAcknowledgedSync", () => {
     await vi.advanceTimersByTimeAsync(CAP_ACK_TIMEOUT_MS);
     expect(h.status.status).toBe("failed");
     expect(h.shown).toBe(64);
-    h.pending[0].resolve(12);
+    h.reply(0).resolve(12);
     await flush();
     expect(h.shown).toBe(12);
     expect(h.status.status).toBe("idle");
     expect(toast.dismiss).toHaveBeenCalledWith("probe");
     h.sync.apply(20);
-    h.pending[1].resolve(20);
+    h.reply(1).resolve(20);
     await flush();
     expect(h.call.mock.calls).toStrictEqual([[12], [20]]);
   });
@@ -111,9 +116,9 @@ describe("createAcknowledgedSync", () => {
     await vi.advanceTimersByTimeAsync(CAP_ACK_TIMEOUT_MS);
     h.sync.apply(20);
     await vi.advanceTimersByTimeAsync(CAP_ACK_TIMEOUT_MS);
-    h.pending[0].resolve(12);
+    h.reply(0).resolve(12);
     await flush();
-    h.pending[1].resolve(20);
+    h.reply(1).resolve(20);
     await flush();
     expect(h.call.mock.calls).toStrictEqual([[12], [20]]);
     expect(h.shown).toBe(20);
@@ -125,12 +130,12 @@ describe("createAcknowledgedSync", () => {
     await vi.advanceTimersByTimeAsync(CAP_ACK_TIMEOUT_MS);
     h.sync.apply(20);
     await vi.advanceTimersByTimeAsync(CAP_ACK_TIMEOUT_MS);
-    h.pending[1].resolve(20);
+    h.reply(1).resolve(20);
     await flush();
-    h.pending[0].resolve(12);
+    h.reply(0).resolve(12);
     await flush();
     expect(h.call.mock.calls).toStrictEqual([[12], [20], [20]]);
-    h.pending[2].resolve(20);
+    h.reply(2).resolve(20);
     await flush();
     expect(h.call.mock.calls).toStrictEqual([[12], [20], [20]]);
     expect(h.shown).toBe(20);
@@ -146,10 +151,10 @@ describe("createAcknowledgedSync", () => {
     expect(h.call.mock.calls).toStrictEqual([[12], [12]]);
     expect(h.shown).toBe(12);
     expect(h.status.status).toBe("pending");
-    h.pending[0].resolve(12);
+    h.reply(0).resolve(12);
     await flush();
     expect(h.status.status).toBe("pending");
-    h.pending[1].resolve(12);
+    h.reply(1).resolve(12);
     await flush();
     expect(h.call.mock.calls).toStrictEqual([[12], [12]]);
     expect(h.shown).toBe(12);
@@ -158,13 +163,13 @@ describe("createAcknowledgedSync", () => {
   it("reply undefined and null acknowledge the request", async () => {
     const h = harness();
     h.sync.push(12);
-    h.pending[0].resolve(undefined);
+    h.reply(0).resolve(undefined);
     await flush();
     expect(h.shown).toBe(12);
     expect(h.status.status).toBe("idle");
     expect(h.applied).toHaveBeenLastCalledWith(12);
     h.sync.push(13);
-    h.pending[1].resolve(null);
+    h.reply(1).resolve(null);
     await flush();
     expect(h.shown).toBe(13);
     expect(h.applied).toHaveBeenLastCalledWith(13);
@@ -172,11 +177,11 @@ describe("createAcknowledgedSync", () => {
   it("server differs twice, no feedback push", async () => {
     const h = harness(64, true);
     h.sync.apply(12);
-    h.pending[0].resolve(9);
+    h.reply(0).resolve(9);
     await flush();
     expect(h.shown).toBe(9);
     h.sync.apply(12);
-    h.pending[1].resolve(9);
+    h.reply(1).resolve(9);
     await flush();
     expect(h.shown).toBe(9);
     expect(h.call.mock.calls).toStrictEqual([[12], [12]]);
@@ -185,12 +190,12 @@ describe("createAcknowledgedSync", () => {
     const h = harness();
     h.sync.push(12);
     h.sync.push(10);
-    h.pending[0].resolve(9);
+    h.reply(0).resolve(9);
     await flush();
     expect(h.call.mock.calls).toStrictEqual([[12], [10]]);
     expect(h.status.status).toBe("pending");
     expect(h.shown).toBe(10);
-    h.pending[1].resolve(10);
+    h.reply(1).resolve(10);
     await flush();
     expect(h.shown).toBe(10);
     expect(h.status.status).toBe("idle");
@@ -207,7 +212,7 @@ describe("createAcknowledgedSync", () => {
   it("Retry when the failed value equals the acknowledged one", async () => {
     const h = harness(12);
     h.sync.push(12);
-    h.pending[0].reject(new Error("refused"));
+    h.reply(0).reject(new Error("refused"));
     await flush();
     const s = h.status;
     if (s.status !== "failed") throw new Error("not failed");
@@ -218,7 +223,7 @@ describe("createAcknowledgedSync", () => {
   it("rejection rolls back with Retry toast", async () => {
     const h = harness();
     h.sync.push(12);
-    h.pending[0].reject(new Error("refused"));
+    h.reply(0).reject(new Error("refused"));
     await flush();
     expect(h.shown).toBe(64);
     expect(toast.error).toHaveBeenCalledWith(

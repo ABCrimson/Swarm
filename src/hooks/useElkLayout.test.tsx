@@ -191,6 +191,7 @@ describe("useElkLayout", () => {
       expect(MockWorker.instances.length).toBe(2);
 
       const secondWorker = MockWorker.instances[1];
+      if (secondWorker === undefined) throw new Error("the second worker was never created");
       const layoutCallsOnSecondWorker = secondWorker.postMessage.mock.calls.filter(
         ([msg]) => (msg as { cmd?: string } | undefined)?.cmd === "layout",
       );

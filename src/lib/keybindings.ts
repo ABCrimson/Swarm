@@ -101,10 +101,6 @@ export function formatBinding(binding: string): string {
   return binding
     .split("+")
     .filter((part) => part.length > 0)
-    .map(
-      (part) =>
-        KEY_DISPLAY_NAMES[part] ??
-        (part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1)),
-    )
+    .map((part) => KEY_DISPLAY_NAMES[part] ?? part.charAt(0).toUpperCase() + part.slice(1))
     .join("+");
 }

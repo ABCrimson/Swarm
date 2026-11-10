@@ -77,7 +77,7 @@ describe("evaluateThresholds", () => {
 
       const cpuAlerts = alerts.filter((a) => a.metric === "cpu");
       expect(cpuAlerts).toHaveLength(1);
-      expect(cpuAlerts[0].severity).toBe("critical");
+      expect(cpuAlerts[0]?.severity).toBe("critical");
     });
   });
 
@@ -146,7 +146,7 @@ describe("evaluateThresholds", () => {
       const snapshot: MetricsSnapshot = { cpuPercent: 75, memoryPercent: 50 };
       const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW, COOLDOWN_MS);
 
-      expect(alerts[0].timestamp).toBe(BASE_NOW);
+      expect(alerts[0]?.timestamp).toBe(BASE_NOW);
     });
   });
 
@@ -155,17 +155,17 @@ describe("evaluateThresholds", () => {
       const snapshot: MetricsSnapshot = { cpuPercent: 72.5, memoryPercent: 50 };
       const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW, COOLDOWN_MS);
 
-      expect(alerts[0].message).toContain("CPU Usage");
-      expect(alerts[0].message).toContain("72.5%");
-      expect(alerts[0].message).toContain("Elevated");
-      expect(alerts[0].message).toContain("(Threshold: 70%)");
+      expect(alerts[0]?.message).toContain("CPU Usage");
+      expect(alerts[0]?.message).toContain("72.5%");
+      expect(alerts[0]?.message).toContain("Elevated");
+      expect(alerts[0]?.message).toContain("(Threshold: 70%)");
     });
 
     it("includes 'Critically High' in critical messages", () => {
       const snapshot: MetricsSnapshot = { cpuPercent: 85, memoryPercent: 50 };
       const alerts = evaluateThresholds(snapshot, DEFAULT_THRESHOLDS, {}, BASE_NOW, COOLDOWN_MS);
 
-      expect(alerts[0].message).toContain("Critically High");
+      expect(alerts[0]?.message).toContain("Critically High");
     });
   });
 });
@@ -191,7 +191,7 @@ describe("alert cooldown (parametrized)", () => {
     const cooldowns = { cpu: 10_000 };
     const alerts = evaluateThresholds(hotSnapshot, thresholds, cooldowns, 75_000, 60_000);
     expect(alerts).toHaveLength(1);
-    expect(alerts[0].severity).toBe("critical");
+    expect(alerts[0]?.severity).toBe("critical");
   });
 
   it("fires exactly when the cooldown has just elapsed", () => {
