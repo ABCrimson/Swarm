@@ -28,11 +28,16 @@ interface WorkerAIPanelProps {
 
 // ── Styles (utilities; literals with no token wait for the Q-9 design direction) ──
 
-const PANEL_CONTAINER = "flex h-full flex-col overflow-hidden bg-void";
+/** A size container, so the toolbar can drop the AI ↔ PTY label in a narrow panel. */
+const PANEL_CONTAINER = "@container flex h-full flex-col overflow-hidden bg-void";
 
-/** A control that does not fit drops whole to a second row; no label wraps inside its control. */
+/**
+ * One row at any width: buttons never wrap their labels and the model
+ * picker's label ellipsizes. A second row would shrink the transcript
+ * below it, and WebKit then loses the pin to its newest turn.
+ */
 const TOOLBAR =
-  "flex shrink-0 flex-wrap items-center gap-2 gap-y-1.5 border-b border-border bg-[oklch(0.10_0.02_220/0.9)] px-3 py-1.5 backdrop-blur-[8px]";
+  "flex shrink-0 items-center gap-2 border-b border-border bg-[oklch(0.10_0.02_220/0.9)] px-3 py-1.5 backdrop-blur-[8px]";
 
 const FLOW_INDICATOR =
   "flex shrink-0 items-center gap-1.5 whitespace-nowrap font-sans text-[11px] text-[oklch(0.58_0.04_220)]";
@@ -184,9 +189,9 @@ export function WorkerAIPanel({
           webviewChat && <ModelSelector workerId={workerId} />
         )}
 
-        <div className={FLOW_INDICATOR}>
+        <div className={FLOW_INDICATOR} title="AI ↔ PTY">
           <span className={FLOW_DOT} aria-hidden="true" />
-          <span>AI ↔ PTY</span>
+          <span className="@max-[520px]:sr-only">AI ↔ PTY</span>
         </div>
 
         {webviewChat && (

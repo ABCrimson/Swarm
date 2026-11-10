@@ -91,6 +91,14 @@ describe("ShipPreview — Branch row", () => {
     );
   });
 
+  it("moves the arrow, the base branch and the host as one unit", () => {
+    renderPreview();
+    const target = screen.getByText("→").parentElement;
+    expect(target).toHaveClass("whitespace-nowrap", "shrink-0");
+    expect(screen.getByText("main,").parentElement).toBe(target);
+    expect(screen.getByText("github.com").parentElement).toBe(target);
+  });
+
   it("lets the branch name give way while the state pills keep their width", () => {
     renderPreview({ preflight: makePreflight({ ahead: 1, behind: 2 }) });
     // The visible label may ellipsize; the title keeps the whole name.

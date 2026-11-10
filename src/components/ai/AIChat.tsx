@@ -113,7 +113,12 @@ function Thinking({
 }): React.ReactElement {
   return (
     <details open={open}>
-      <summary className={`${META_BASE} mt-0 cursor-pointer -outline-offset-2`}>Thinking</summary>
+      {/* The row's p-1 leaves room for the 4px bleed left, so the text keeps its x and the ring hugs the label clear of the marker; the 3px inset keeps the whole ring inside the paint-containment clip. */}
+      <summary
+        className={`${META_BASE} mt-0 -ml-1 w-fit cursor-pointer rounded-sm px-1 py-0.5 -outline-offset-3`}
+      >
+        Thinking
+      </summary>
       <div className={THINKING}>{text}</div>
     </details>
   );

@@ -298,16 +298,19 @@ export function ShipPreview({
           >
             {escapeForDisplay(preflight.branch)}
           </Pill>
-          <span className={SEPARATOR_CLASS}>{"→"}</span>
-          <span>
-            {escapeForDisplay(preflight.baseBranch)}
-            {preflight.remote != null && ","}
-          </span>
-          {preflight.remote != null && (
-            <span title={escapeForDisplay(preflight.remote)}>
-              {escapeForDisplay(preflight.host ?? preflight.remote)}
+          {/* The target wraps as one unit, so a row never ends on "→ main,". */}
+          <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+            <span className={SEPARATOR_CLASS}>{"→"}</span>
+            <span>
+              {escapeForDisplay(preflight.baseBranch)}
+              {preflight.remote != null && ","}
             </span>
-          )}
+            {preflight.remote != null && (
+              <span title={escapeForDisplay(preflight.remote)}>
+                {escapeForDisplay(preflight.host ?? preflight.remote)}
+              </span>
+            )}
+          </span>
           {preflight.ahead > 0 && (
             <Pill tone="warning" size="sm" className="shrink-0">
               {pluralize("Unpushed Commit", preflight.ahead)}
