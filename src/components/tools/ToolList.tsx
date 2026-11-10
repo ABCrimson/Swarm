@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import { useId } from "react";
 import { Button } from "#components/ui/Button";
 import { EmptyState } from "#components/ui/EmptyState";
@@ -18,8 +17,6 @@ interface ToolListProps {
   /** Callback to create a new tool. */
   readonly onCreateNew: () => void;
 }
-
-const listStyle: CSSProperties = { display: "flex", flexDirection: "column" };
 
 /** Built-in tools as shown on the page — their Title Case `uiDescription`, never the model-facing one. */
 const BUILT_IN_TOOLS = toolRegistry
@@ -49,16 +46,7 @@ export function ToolList({
   const customHeadingId = useId();
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: 16,
-        height: "100%",
-        overflow: "auto",
-        padding: 16,
-      }}
-    >
+    <div className="flex h-full flex-col gap-4 overflow-auto p-4">
       <section aria-labelledby={builtInHeadingId}>
         <h2
           id={builtInHeadingId}
@@ -67,7 +55,7 @@ export function ToolList({
           Built-In{" "}
           <span className="font-mono text-fg-dim tabular-nums">{BUILT_IN_TOOLS.length}</span>
         </h2>
-        <div className="divide-y divide-border" style={listStyle}>
+        <div className="flex flex-col divide-y divide-border">
           {BUILT_IN_TOOLS.map((tool) => (
             <ToolRow
               key={tool.name}
@@ -100,7 +88,7 @@ export function ToolList({
             />
           </div>
         ) : (
-          <div className="divide-y divide-border" style={listStyle}>
+          <div className="flex flex-col divide-y divide-border">
             {customTools.map((tool) => (
               <ToolRow
                 key={tool.id}
@@ -140,32 +128,12 @@ function ToolRow({
     >
       <h3
         id={headingId}
-        style={{
-          margin: 0,
-          minWidth: 0,
-          overflowWrap: "anywhere",
-          fontFamily: "var(--font-mono)",
-          fontSize: "var(--text-md)",
-          fontWeight: 600,
-          color: "var(--color-plasma)",
-        }}
+        className="m-0 min-w-0 wrap-anywhere font-mono text-[length:var(--text-md)] font-semibold text-plasma"
       >
         {name}
       </h3>
 
-      <p
-        style={{
-          fontFamily: "var(--font-body)",
-          fontSize: "var(--text-sm)",
-          color: "var(--color-fg-dim)",
-          lineHeight: 1.5,
-          margin: 0,
-          overflow: "hidden",
-          display: "-webkit-box",
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: "vertical",
-        }}
-      >
+      <p className="m-0 line-clamp-2 font-body text-[length:var(--text-sm)] leading-[1.5] text-fg-dim">
         {description}
       </p>
 

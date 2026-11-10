@@ -32,19 +32,7 @@ function SettingsGate({ children }: { readonly children: ReactNode }): ReactNode
 /** Full-screen loading indicator shown while persisted settings load. */
 function AppLoader(): React.ReactElement {
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        width: "100vw",
-        height: "100vh",
-        background: "var(--color-void)",
-        color: "var(--color-plasma)",
-        fontFamily: "var(--font-mono)",
-        fontSize: "14px",
-      }}
-    >
+    <div className="flex h-screen w-screen items-center justify-center bg-void font-mono text-[14px] text-plasma">
       Initializing SWARM…
     </div>
   );
