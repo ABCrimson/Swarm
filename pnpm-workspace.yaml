@@ -66,6 +66,16 @@ minimumReleaseAgeExclude:
   - "@typescript/typescript-win32-arm64@7.1.0-dev.20261110.1"
   - "@typescript/typescript-win32-x64@7.1.0-dev.20261110.1"
   - typescript@7.1.0-dev.20261110.1
+  - "@anthropic-ai/sdk@1.7.0"
+  - "framer-motion@14.12.0"
+  - "marked@18.2.0"
+  - "modern-cmdk@1.7.0"
+  - "motion-dom@14.12.0"
+  - "motion@14.12.0"
+  - "react-dom@19.3.0-canary-4ae637b6-20261109"
+  - "react-is@19.3.0-canary-4ae637b6-20261109"
+  - "react@19.3.0-canary-4ae637b6-20261109"
+  - "scheduler@0.28.0-canary-4ae637b6-20261109"
 
 # The React Compiler's WASI binding (oxc-transform-react 0.158.0) pins @emnapi/core and
 # @emnapi/runtime to 2.0.0-alpha.6 but resolves @napi-rs/wasm-runtime 1.2.7 through
@@ -83,9 +93,9 @@ overrides:
 # oxc-transform-react 0.158.0 is installed, and the full gate including both
 # check:compiler runs is green on it. Drop this once plugin-react widens the range.
 # @crimson_dev/use-resize-observer 1.0.1 peers react ">=19.3.0", and semver orders the
-# React canary 19.3.0-canary-e84e1492-20261031 (published 2026-10-31, after 19.3.1 on 2026-10-14)
+# React canary 19.3.0-canary-4ae637b6-20261109 (published 2026-11-09, after 19.3.1 on 2026-10-14)
 # below 19.3.0 because it is a prerelease. Drop this when react leaves the canary pin.
 peerDependencyRules:
   allowedVersions:
     "@vitejs/plugin-react>oxc-transform-react": 0.158.0
-    "@crimson_dev/use-resize-observer>react": 19.3.0-canary-e84e1492-20261031
+    "@crimson_dev/use-resize-observer>react": 19.3.0-canary-4ae637b6-20261109
