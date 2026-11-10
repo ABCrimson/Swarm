@@ -22,7 +22,6 @@ import {
   useReactFlow,
 } from "@xyflow/react";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { GraphContextMenu } from "#components/graph/GraphContextMenu";
@@ -246,6 +245,7 @@ function WorkerGraphInner({
     ...edge,
     selected: selectedEdgeIds.has(edge.id),
   }));
+  const overlayOpen = isLayouting || layoutError !== null;
   const presentKinds = new Set<GraphEdgeKind>(edges.flatMap((e) => (e.data ? [e.data.kind] : [])));
   const selectedManualIds = manualEdges
     .filter((edge) => selectedEdgeIds.has(edge.id))
@@ -451,72 +451,65 @@ function WorkerGraphInner({
             ? "Computing Layout"
             : ""}
       </p>
-      <AnimatePresence>
-        {(isLayouting || layoutError) && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
+      {/* The layout overlay stays mounted so CSS can fade it both ways:
+          `starting:` fades it in when it leaves `display: none`, and
+          `transition-discrete` holds `display` until the fade-out ends.
+          Closed, it is inert (and out of the accessibility tree once
+          hidden); the status line above carries the announcement. */}
+      <div
+        data-open={overlayOpen}
+        inert={!overlayOpen}
+        className={`absolute inset-0 z-20 items-center justify-center rounded-lg bg-void/50 backdrop-blur-[2px] transition-[opacity,display] transition-discrete duration-200 ease-out-cubic ${
+          overlayOpen
+            ? "flex opacity-100 starting:opacity-0"
+            : "pointer-events-none hidden opacity-0"
+        }`}
+      >
+        {layoutError ? (
+          <div
+            role="alert"
             style={{
-              position: "absolute",
-              inset: 0,
-              zIndex: 20,
               display: "flex",
+              flexDirection: "column",
               alignItems: "center",
-              justifyContent: "center",
-              background: "oklch(from var(--color-void) l c h / 0.5)",
-              backdropFilter: "blur(2px)",
-              borderRadius: 12,
+              gap: 12,
+              padding: 24,
+              maxWidth: 320,
+              textAlign: "center",
             }}
           >
-            {layoutError ? (
-              <div
-                role="alert"
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: 12,
-                  padding: 24,
-                  maxWidth: 320,
-                  textAlign: "center",
-                }}
-              >
-                <span
-                  style={{
-                    fontFamily: "var(--font-body)",
-                    fontSize: "0.875rem",
-                    fontWeight: 600,
-                    color: "var(--color-rose)",
-                  }}
-                >
-                  {layoutError}
-                </span>
-                <Button variant="secondary" size="sm" onClick={runLayout}>
-                  Retry Layout
-                </Button>
-              </div>
-            ) : (
-              <div
-                aria-hidden="true"
-                style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}
-              >
-                <Spinner size="lg" decorative className="text-plasma" />
-                <span
-                  style={{
-                    fontFamily: "var(--font-body)",
-                    fontSize: "0.75rem",
-                    color: "var(--color-fg-dim)",
-                  }}
-                >
-                  Computing Layout
-                </span>
-              </div>
-            )}
-          </motion.div>
+            <span
+              style={{
+                fontFamily: "var(--font-body)",
+                fontSize: "0.875rem",
+                fontWeight: 600,
+                color: "var(--color-rose)",
+              }}
+            >
+              {layoutError}
+            </span>
+            <Button variant="secondary" size="sm" onClick={runLayout}>
+              Retry Layout
+            </Button>
+          </div>
+        ) : (
+          <div
+            aria-hidden="true"
+            style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}
+          >
+            <Spinner size="lg" decorative className="text-plasma" />
+            <span
+              style={{
+                fontFamily: "var(--font-body)",
+                fontSize: "0.75rem",
+                color: "var(--color-fg-dim)",
+              }}
+            >
+              Computing Layout
+            </span>
+          </div>
         )}
-      </AnimatePresence>
+      </div>
 
       <ReactFlow<WorkerFlowNode, ProvenanceFlowEdge>
         nodes={nodes}
@@ -614,9 +607,7 @@ export function WorkerGraph({
 }): React.ReactElement {
   return (
     <ReactFlowProvider>
-      <MotionConfig reducedMotion="user">
-        <WorkerGraphInner onSpawnRequest={onSpawnRequest} />
-      </MotionConfig>
+      <WorkerGraphInner onSpawnRequest={onSpawnRequest} />
     </ReactFlowProvider>
   );
 }
