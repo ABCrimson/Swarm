@@ -45,7 +45,7 @@ pub(crate) fn home_dir() -> Result<PathBuf, AppError> {
 /// host that has no home without mutating the process environment. An
 /// empty path counts as no home.
 fn home_dir_from(lookup: impl FnOnce() -> Option<PathBuf>) -> Result<PathBuf, AppError> {
-    lookup().filter(|home| !home.as_os_str().is_empty()).ok_or_else(|| {
+    lookup().filter(|home| !home.is_empty()).ok_or_else(|| {
         AppError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "could not resolve the home directory",
@@ -62,7 +62,7 @@ mod tests {
     #[test]
     fn test_home_dir_resolves() {
         let home = home_dir().expect("the test environment has a home directory");
-        assert!(!home.as_os_str().is_empty());
+        assert!(!home.is_empty());
     }
 
     #[test]
