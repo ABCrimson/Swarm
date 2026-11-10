@@ -73,7 +73,7 @@ A bundled build lets one instance run: a second launch focuses the first and exi
 
 `SWARM_BUNDLED_DEV=1 pnpm dev` (or `pnpm tauri:dev`) serves the client from one Rolldown bundle, Vite's experimental full-bundle dev mode: a cold start to the first page heading took a median 1631 ms against 2402 ms unbundled (Vite 8.3.7, 2026-11-10, three runs each). HMR boundaries are then computed in the browser, so an accept in a dead branch reloads the page; it stays opt-in while Vite marks it experimental.
 
-Two opt-in cargo features of `swarm-desktop` change what a build carries: `devtools` ships the web inspector in a release build (debug builds always have it), and `tracing` turns on the spans Tauri and tauri-runtime-wry open around setup, IPC, event emission (`app::emit`) and webview script evaluation, for measuring event delivery (`pnpm tauri dev --features tracing`, then `RUST_LOG=tauri=trace,swarm_desktop=debug`; the default filters leave those targets out). Neither is on in a signed release.
+Two opt-in cargo features of `swarm-desktop` change what a build carries: `devtools` ships the web inspector in a release build (debug builds always have it), and `tracing` turns on the spans Tauri and tauri-runtime-wry open around setup, IPC, event emission (`app::emit`) and webview script evaluation, for measuring event delivery (`pnpm tauri dev --features tracing`, then `RUST_LOG=tauri=trace,swarm_desktop=debug`; the default filters leave those targets out; the shell's log subscriber prints events, not span timings, so attach a span-aware layer (for example fmt with `with_span_events(FmtSpan::CLOSE)`) to measure). Neither is on in a signed release.
 
 ### Editor Setup
 
@@ -163,7 +163,7 @@ Every user-facing UI string is Title Case.
 
 **Formatter:** `cargo fmt`
 
-**Linter:** `cargo clippy` with warnings denied (zero tolerance). The workspace lint tables in the root `Cargo.toml` and `clippy.toml` are part of the standard: `unsafe_code` is denied, `allow_attributes` is denied (suppress only with `#[expect(lint, reason = "...")]`), `must_use_without_reason` is denied (write `#[must_use = "why"]`), and `std::sync::Mutex`/`RwLock` are banned types. Five more clippy lints are denied: `assert_is_empty` (write `assert_ne!(x, "")`, or `assert_eq!(v, [] as [T; 0])` when `T` is not inferable, so a failure prints the value), `redundant_clone`, `format_collect`, `needless_pass_by_ref_mut` and `duration_suboptimal_units` (`Duration::from_mins(2)`, not `from_secs(120)`).
+**Linter:** `cargo clippy` with warnings denied (zero tolerance). The workspace lint tables in the root `Cargo.toml` and `clippy.toml` are part of the standard: `unsafe_code` is denied, `allow_attributes` is denied (suppress only with `#[expect(lint, reason = "...")]`), `must_use_without_reason` is denied (write `#[must_use = "why"]`), and `std::sync::Mutex`/`RwLock` are banned types. Also denied: `assert_is_empty` (write `assert_ne!(x, "")`, or `assert_eq!(v, [] as [T; 0])` when `T` is not inferable, so a failure prints the value), `redundant_clone`, `format_collect`, `needless_pass_by_ref_mut` and `duration_suboptimal_units` (`Duration::from_mins(2)`, not `from_secs(120)`).
 
 ```bash
 # From the repository root

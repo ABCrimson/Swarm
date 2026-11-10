@@ -545,7 +545,7 @@ come from the GitHub releases `latest.json`, verified against the public key emb
 `tauri.conf.json` ([updater-keys.md](updater-keys.md)). `devtools` is an opt-in cargo feature; debug
 builds always have the inspector. `tracing` is another, off by default: it turns on the spans Tauri and
 tauri-runtime-wry open around setup, IPC, event emission (`app::emit`) and script evaluation, which the
-default log filters leave out (`RUST_LOG=tauri=trace,swarm_desktop=debug` names them).
+default log filters leave out (`RUST_LOG=tauri=trace,swarm_desktop=debug` enables their targets; their timings need a span-aware layer).
 
 ---
 
@@ -695,7 +695,7 @@ The Workers page is the centre: a graph/list switch (`WorkerGraph`, XYFlow with 
 probed provider status and trust-tier copy), and `CausalityPanel`. `WorkerDetail` also lists Related Workers
 (Spawned By, Spawned, Caused By, from the provenance edges and a backward causality walk in
 `src/lib/lineage.ts`) as a labelled list of buttons, so the cause chain is reachable as text and by keyboard.
-Data a component fetches on mount is a keyed module-level promise cache read with `use()`, under a
+The settings API key field, the spawn dialog's provider probes and the workspace file tree read keyed module-level promise caches with `use()`, under a
 Suspense boundary around only the reading field or row; `ui/Reveal` cross-fades that boundary with a
 `ViewTransition`. Other component groups: `ai/`,
 `session/`, `metrics/`, `logs/`, `workspace/` (file tree and viewer, desktop only), `tools/` (custom

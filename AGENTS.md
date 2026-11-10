@@ -44,9 +44,12 @@ file is canonical; `CLAUDE.md` only imports it.
   `X.browser.test.tsx` and runs in Chromium and WebKit (`pnpm test:browser`);
   Playwright specs live in `e2e/`.
 - Every user-facing UI string is Title Case. Colors are OKLCH only — never
-  hex, `rgb()`, `hsl()` or named colors — and a raw `oklch(` value lives only
-  in `src/styles/tokens.css`; components use the tokens (the Biome GritQL
-  raw-OKLCH plugins in `biome-plugins/` fail anything new). Animation is CSS
+  hex, `rgb()`, `hsl()` or named colors — and a new raw `oklch(` value goes
+  only in `src/styles/tokens.css` (the canvas, xterm, WebGPU and
+  syntax-highlight consumers excepted); components use the tokens. The Biome
+  GritQL raw-OKLCH plugins in `biome-plugins/` fail anything new, and the
+  literals that predate them are a baselined exception list that `pnpm
+  check:raw-oklch` only lets shrink. Animation is CSS
   (`@starting-style`, `linear()` springs via `--ease-spring`); there is no
   animation library.
 - `tsconfig` turns on `noUncheckedIndexedAccess`,
