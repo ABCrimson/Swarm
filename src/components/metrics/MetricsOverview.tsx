@@ -5,7 +5,6 @@
 // disagree about a value, its severity or its trend.
 
 import { useAtomValue } from "jotai";
-import type { CSSProperties } from "react";
 import { useId } from "react";
 import type { Trend } from "#components/metrics/MetricCard";
 import { MetricCard, MetricCardList } from "#components/metrics/MetricCard";
@@ -113,9 +112,4 @@ export function ChartGrid({
 }
 
 /** Body column under the PageHeader on the metrics pages. */
-export const metricsPageStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 24,
-  padding: "0 28px 56px",
-};
+export const METRICS_PAGE_CLASS = "flex flex-col gap-6 px-7 pb-14";
