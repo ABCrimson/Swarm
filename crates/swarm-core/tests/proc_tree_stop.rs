@@ -25,7 +25,7 @@ use uuid::Uuid;
 const GRACE: Duration = Duration::from_millis(500);
 /// Upper bound for a fixture to start (node's cold start on a fresh CI
 /// runner included) or for a killed process to disappear.
-const WAIT: Duration = Duration::from_secs(60);
+const WAIT: Duration = Duration::from_mins(1);
 
 fn fixture(dir: &str, name: &str) -> String {
     Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn test_a_failed_read_is_cached_within_its_ttl() {
-        let store = CachedStore::new(Broken::default(), Duration::from_secs(3600));
+        let store = CachedStore::new(Broken::default(), Duration::from_hours(1));
         for _ in 0..3 {
             assert_matches!(
                 store.get("k"),
@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn test_a_write_forgets_the_cached_failure() {
-        let store = CachedStore::new(Broken::default(), Duration::from_secs(3600));
+        let store = CachedStore::new(Broken::default(), Duration::from_hours(1));
         assert!(store.get("k").is_err());
         store.set("k", &SecretString::from("v".to_owned())).unwrap();
         assert!(store.get("k").is_err());
