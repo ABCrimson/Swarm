@@ -63,11 +63,12 @@
 /* ── Reduced motion ──────────────────────────────── */
 
 /*
- * `!important` is required: some components set `transition` through
- * inline `style` attributes (ModelSelector, ToolCallDisplay,
- * WorkerAIPanel), and an inline declaration beats every normal
- * stylesheet rule regardless of layer or specificity. Only an
- * important declaration outranks it. Animations collapse to their end
+ * This sheet is unlayered, so its normal declarations already beat every
+ * layered rule (utilities, component sheets, xyflow). `!important` is for
+ * inline styles: an inline declaration beats every normal stylesheet rule
+ * regardless of layer or specificity, and only an important one outranks
+ * it. No component sets motion inline (the style contract forbids it), but
+ * a library may set one at runtime. Animations collapse to their end
  * state in one frame instead of being removed, so anything that listens
  * for `animationend`/`transitionend` still gets its event. Delays are
  * zeroed as well, so a staggered entrance (AppShell) is not left
