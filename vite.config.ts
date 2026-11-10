@@ -87,11 +87,21 @@ export default defineConfig(async ({ mode, command }): Promise<UserConfig> => {
       format: "es",
     },
 
+    // `SWARM_BUNDLED_DEV=1 pnpm dev` serves the client from one Rolldown
+    // bundle instead of unbundled modules (Vite's experimental full-bundle
+    // dev mode; HMR boundaries are computed in the browser, so an accept in
+    // a dead branch reloads the page). Opt-in because it is experimental. On
+    // 2026-11-10 (Vite 8.3.7) a cold start to the first page heading took a
+    // median 1631 ms bundled against 2402 ms unbundled, three runs each.
+    experimental: {
+      bundledDev: process.env.SWARM_BUNDLED_DEV === "1",
+    },
+
     server: {
       port: 1420,
       strictPort: true,
       // boot.ts loads the app through `import("./main.tsx")` and PageHost
-      // lazy-loads every page; Vite pre-transforms only static imports, so a
+      // lazy-loads every page; unbundled dev (the default) pre-transforms only static imports, so a
       // cold server would transform each of these on first request. Pages are
       // named one by one: a `*.tsx` glob also matches the colocated
       // `*.test.tsx` files and pulls vitest and Testing Library into the dev
