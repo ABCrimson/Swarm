@@ -48,6 +48,7 @@
 | `LogViewer` | Scroll-window virtualization, 28px rows, overscan 10 | Auto-scroll with pause-on-scroll-up detection |
 | `FileTree` | Scroll-window virtualization, 28px rows, overscan 10 | Flattened tree for O(1) index lookup |
 | `SessionList` | `content-visibility: auto` with `contain-intrinsic-size` | Plain flow layout, so wrapped tag rows can never overlap; the browser skips off-screen cards |
+| `AgentChat`, `AIChat` | `content-visibility: auto` per transcript row (`auto 51px`) and committed message (`auto 112px`) | The sizes are the median row heights on the e2e transcript fixture at 1440x900 (Chromium); the streaming bubble has none. On Chromium, Home in a focused transcript of never-rendered rows advances only part of the way per press; Tab, focus and programmatic scrolls reach the top |
 
 The virtualized lists track container size with `@crimson_dev/use-resize-observer` and compute the visible range from `scrollTop`.
 
@@ -186,7 +187,6 @@ Minification is Vite's default (Oxc). `pnpm build` writes `dist/` for the deskto
 | Chunk | Contents |
 |-------|----------|
 | `react-vendor` | `react`, `react-dom`, `scheduler` |
-| `motion` | `motion` |
 | `graph` | `@xyflow/react`, `elkjs` |
 | `terminal` | `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-webgl` |
 | `state` | `zustand`, `immer`, `jotai` |
@@ -194,8 +194,7 @@ Minification is Vite's default (Oxc). `pnpm build` writes `dist/` for the deskto
 
 `@anthropic-ai/sdk` has no vendor group. Only `src/lib/anthropic.ts` imports it, and every runtime importer of that module loads on demand: the lazily loaded Workers, Settings and Tools pages, and the `import("#lib/ai-chat")` in `useWorkerEvents`. Rolldown therefore places the SDK in chunks those pages load, off the startup path.
 
-> [!NOTE]
-> `framer-motion` was renamed upstream to `motion` -- this project depends on `motion` 14.12.0, not `framer-motion`.
+There is no animation library to split: transitions are CSS (`@starting-style`, `transition-discrete`, `details-content:`, and the `--ease-spring` `linear()` token in `src/styles/tokens.css`).
 
 ### Rust Release Profile
 

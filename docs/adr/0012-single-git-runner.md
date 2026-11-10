@@ -18,7 +18,14 @@ Every invocation goes through `git::cli::run` / `run_with_stdin`, the only place
 spawned:
 
 - **argv vector only**, never a shell string; every call carries `-C <dir> -c core.longpaths=true`
-  per invocation, never written to the user's git config.
+  per invocation, never written to the user's git config. The read-only subcommands whose output
+  the git layer parses (`READ_SUBCOMMANDS`: `cat-file`, `diff`, `ls-files`, `rev-list`, `show`,
+  `status`) also carry `READ_PINS`, today `-c log.showSignature=false`: a user's
+  `log.showSignature=true` makes `git show` print the signature check ahead of the `--numstat -z`
+  records the ship chain parses. Subcommands that can write get no pins, so a write's argv is the
+  caller's own. A knob is pinned only when a test shows it changing a parsed read; `diff.relative`,
+  `diff.suppressBlankEmpty`, `diff.submodule`, `core.safecrlf`, `color.ui` and `core.quotepath`
+  changed none on git 2.56 and are not pinned.
 - **Environment hygiene:** `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, `GIT_OPTIONAL_LOCKS=0`,
   `LC_ALL=C` (the push-error classifier matches English phrases), and every inherited repository
   location variable (`GIT_DIR`, `GIT_INDEX_FILE`, and the rest of `git rev-parse --local-env-vars`)

@@ -69,6 +69,12 @@ pnpm tauri:dev
 
 On Linux, Tauri's WebKitGTK system libraries must be installed first; `.github/workflows/ci.yml` lists the exact packages.
 
+A bundled build lets one instance run: a second launch focuses the first and exits. `pnpm tauri:dev` leaves that plugin out (it keys on the bundle identifier the installed app shares), so beside a running installed app it still starts and shows the data-directory lock dialog instead of silently focusing the installed app ([ADR-0025](adr/0025-single-instance-lock.md)).
+
+`SWARM_BUNDLED_DEV=1 pnpm dev` (or `pnpm tauri:dev`) serves the client from one Rolldown bundle, Vite's experimental full-bundle dev mode: a cold start to the first page heading took a median 1631 ms against 2402 ms unbundled (Vite 8.3.7, 2026-11-10, three runs each). HMR boundaries are then computed in the browser, so an accept in a dead branch reloads the page; it stays opt-in while Vite marks it experimental.
+
+Two opt-in cargo features of `swarm-desktop` change what a build carries: `devtools` ships the web inspector in a release build (debug builds always have it), and `tracing` turns on the spans Tauri and tauri-runtime-wry open around setup, IPC, event emission (`app::emit`) and webview script evaluation, for measuring event delivery (`pnpm tauri dev --features tracing`, then `RUST_LOG=tauri=trace,swarm_desktop=debug`; the default filters leave those targets out). Neither is on in a signed release.
+
 ### Editor Setup
 
 **VS Code recommended extensions:**
@@ -111,6 +117,8 @@ pnpm format
 
 CI runs `pnpm exec biome ci .`, which fails on any error-level diagnostic and writes no fixes; the rules `biome.json` sets to `warn` are reported but do not fail it.
 
+**Type checker:** `pnpm typecheck` runs four `tsc` programs: `tsconfig.json` (the app), `tsconfig.worker.json`, `tsconfig.node.json` (configs, scripts, `e2e/`, `biome-plugins/*.ts`) and `tsconfig.browser.json` (the `*.browser.test.tsx` suites, which `tsconfig.json` excludes). All of them set `noUncheckedIndexedAccess` (an indexed read is `T | undefined`), `exactOptionalPropertyTypes` (an optional property does not accept an explicit `undefined`: omit the key, or say `| undefined` where it is a real value) and `noPropertyAccessFromIndexSignature` (a dotted read means a known key). Narrow or restructure; do not answer them with `!` or a cast.
+
 **Import style:** Use hash imports exclusively. `package.json` `"imports"` is the only alias map, and Biome's `noRestrictedImports` rejects parent-relative paths (`../`).
 
 ```typescript
@@ -133,18 +141,21 @@ import { Button } from "@/components/ui/Button";
 - Jotai atoms for UI state; settings that persist use `atomWithSettings` (`#store/persisted`)
 - Dates and durations go through `#lib/time` (Temporal plus `Intl`); `src/boot.ts` installs the Temporal polyfill where the webview has none
 
-**Color system:** OKLCH only. Never use `rgb()`, `hsl()`, `hex`, or named colors.
+**Color system:** OKLCH only. Never use `rgb()`, `hsl()`, `hex`, or named colors. Raw `oklch(…)` values belong in `src/styles/tokens.css`; components take a token as a utility (`bg-surface-1`), with the `/N` alpha modifier (`bg-plasma/15`), as `var(--color-…)` or through relative color syntax.
 
 ```css
 /* Correct */
-color: oklch(0.85 0.15 220);
-background: oklch(0.12 0.02 220 / 0.8);
+color: var(--color-plasma);
+background: oklch(from var(--color-surface-1) l c h / 0.8);
 
 /* Incorrect */
+color: oklch(0.85 0.15 220);   /* raw literal outside tokens.css: fails biome ci */
 color: #3b82f6;
 color: rgb(59, 130, 246);
 color: hsl(217, 91%, 60%);
 ```
+
+The raw-OKLCH gate is two Biome GritQL plugins, `biome-plugins/no-raw-oklch.grit` (TS/TSX) and `no-raw-oklch-css.grit` (CSS), wired in `biome.json` `plugins`. They skip tests, `tokens.css` and the consumers that need concrete colors (`useTerminal.ts`, `chart-theme.ts`, `particles.ts`, `postprocess.ts`, `syntax-highlight.ts`). The literals that predate the gate are known exceptions keyed on file and value, not line: delete an entry when its literal becomes a token, and never add one for new code. `pnpm check:raw-oklch` proves that the fixtures in `biome-plugins/fixtures/` still fail and that every exception still matches a literal; CI runs it.
 
 Every user-facing UI string is Title Case.
 
@@ -152,7 +163,7 @@ Every user-facing UI string is Title Case.
 
 **Formatter:** `cargo fmt`
 
-**Linter:** `cargo clippy` with warnings denied (zero tolerance). The workspace lint tables in the root `Cargo.toml` and `clippy.toml` are part of the standard: `unsafe_code` is denied, `allow_attributes` is denied (suppress only with `#[expect(lint, reason = "...")]`), `must_use_without_reason` is denied (write `#[must_use = "why"]`), and `std::sync::Mutex`/`RwLock` are banned types.
+**Linter:** `cargo clippy` with warnings denied (zero tolerance). The workspace lint tables in the root `Cargo.toml` and `clippy.toml` are part of the standard: `unsafe_code` is denied, `allow_attributes` is denied (suppress only with `#[expect(lint, reason = "...")]`), `must_use_without_reason` is denied (write `#[must_use = "why"]`), and `std::sync::Mutex`/`RwLock` are banned types. Five more clippy lints are denied: `assert_is_empty` (write `assert_ne!(x, "")`, or `assert_eq!(v, [] as [T; 0])` when `T` is not inferable, so a failure prints the value), `redundant_clone`, `format_collect`, `needless_pass_by_ref_mut` and `duration_suboptimal_units` (`Duration::from_mins(2)`, not `from_secs(120)`).
 
 ```bash
 # From the repository root
@@ -290,9 +301,11 @@ docs(api): document the ship_context causal record
 2. **Run all checks locally** (the same gates CI runs, from `AGENTS.md`):
    ```bash
    # Frontend
-   pnpm typecheck          # app, worker and node tsconfigs
+   pnpm typecheck          # app, worker, node and browser-test tsconfigs
    pnpm exec biome ci .
+   pnpm check:raw-oklch    # the raw-OKLCH gate still fails its fixtures; no stale exception
    pnpm test:coverage
+   pnpm test:browser       # after `pnpm exec playwright install --only-shell chromium webkit`
    pnpm build && pnpm build:web
    pnpm check:compiler && NAPI_RS_FORCE_WASI=true pnpm check:compiler
    pnpm exec knip --treat-config-hints-as-errors
@@ -381,25 +394,25 @@ cargo test --locked --doc -p swarm-core -p swarmd
 | `swarm-core` `bus`            | Channels and the router |
 | `swarm-core` top-level modules | `error`, `config`, `lock`, `metrics`, `protocol`, `runtime`, `state_file`, `clock`, `paths`, `redact`, `secrets` |
 | `swarmd`                      | Unit tests (CLI parsing, the daemon token and Host/Origin policy, the WebSocket writer, per-peer caps and replay) and integration tests that drive a real daemon over WebSocket and HTTP (the static UI included) and cover the service scripts (`install.sh`/`uninstall.sh` against shims on Linux; the PowerShell scripts and unit files checked statically) |
-| `swarm-desktop`               | Unit tests (command list and per-command ACL, capability and config contracts, dialog grants, lifecycle teardown) and an integration test of the shared Tokio runtime |
+| `swarm-desktop`               | Unit tests (command list and per-command ACL, capability and config contracts, dialog grants, lifecycle teardown, the attention badge count, the quit guard's decisions, the second-launch focus on a mock window) and an integration test of the shared Tokio runtime |
 
 `cargo test --workspace --locked --all-targets` prints the current count per target; the counts move with every change, so this page does not record them.
 
 ### Frontend Testing
 
-Frontend tests run via Vitest (`pnpm test`), covering components, hooks, stores, and `lib/` utilities. `pnpm test:coverage` adds the coverage floor from `vitest.config.ts`.
+Frontend tests run via Vitest, in two projects of `vitest.config.ts`. `unit` (`pnpm test`; `pnpm test:coverage` adds the coverage floor) runs every `*.test.{ts,tsx}` on jsdom, covering components, hooks, stores, and `lib/` utilities. `browser` (`pnpm test:browser`) runs the `*.browser.test.tsx` suites headless in real Chromium and WebKit through `@vitest/browser-playwright`, for what jsdom cannot model: the popover top layer, light dismiss, focus and layout (WebKit stands in for WKWebView and WebKitGTK). It needs the Playwright shells (`pnpm exec playwright install --only-shell chromium webkit`), loads no setup file, and serves from Vitest's own port range, never 1420. Its first suite is `ModelSelector.browser.test.tsx`; `tsconfig.json` excludes these files and `tsconfig.browser.json` type-checks them.
 
 Tests are **colocated**: `X.test.ts(x)` sits next to the `X.ts(x)` it covers, and a suite that covers one facet of a larger module takes a dotted suffix (`src/lib/tools.file-io.test.ts`, `src/lib/tools.spawn-worker.test.ts`). Import the module under test through its `#` alias like any other code. Vitest collects `src/**/*.test.{ts,tsx}` only, so the Playwright `e2e/*.spec.ts` suites are never picked up.
 
 | Location                          | Files | Focus                                                          |
 |-----------------------------------|-------|-----------------------------------------------------------------|
-| `src/components/**/*.test.{ts,tsx}` | 53  | UI primitives, the graph and causality surfaces, layout, logs, metrics charts, sessions, and the agent/ship surfaces |
+| `src/components/**/*.test.{ts,tsx}` | 54  | UI primitives, the graph and causality surfaces, layout, logs, metrics charts, sessions, and the agent/ship surfaces |
 | `src/hooks/*.test.tsx`            | 15    | `useWorker`, `useElkLayout`, `useTerminal`, `useWebGPU`, `useSettingsBridge`, `useShip`, and the event-stream hooks |
-| `src/lib/*.test.ts`               | 52    | `anthropic`, `event-bus`, `export`, `keybindings`, `models`, `time`, the `tools*` suites, `transport` (the `wsTransport` client), `webgpu`, `worker-spawn`, ... |
+| `src/lib/*.test.ts`               | 54    | `anthropic`, `event-bus`, `export`, `keybindings`, `lineage`, `models`, `settings-sync`, `time`, the `tools*` suites, `transport` (the `wsTransport` client), `webgpu`, `worker-spawn`, ... |
 | `src/pages/*.test.tsx`            | 4     | The pages with their own control surface (`Sessions`, `Settings`, `Tools`, `Workers`) |
 | `src/store/*.test.ts`             | 12    | The Zustand stores and persisted settings |
 
-Tauri IPC is mocked globally in `src/test/setup.ts`: `vi.mock` stubs `@tauri-apps/api/core` (`invoke`, `isTauri`) and `@tauri-apps/api/event` (`listen`), plus the `dialog`, `fs`, `opener` and `store` plugins and `sonner`. Individual tests override the default rejected/no-op behavior with `vi.mocked(invoke).mockResolvedValueOnce(...)` as needed. `src/test/dom-polyfills.ts` fills the jsdom gaps.
+Tauri IPC is mocked globally in `src/test/setup.ts`: `vi.mock` stubs `@tauri-apps/api/core` (`invoke`, `isTauri`) and `@tauri-apps/api/event` (`listen`), plus the `dialog`, `fs`, `opener` and `store` plugins and `sonner`, each with only the members production code imports (for `fs`: `readDir`, `readTextFile`, `stat`, `writeTextFile`); a test that needs another member mocks it itself. Individual tests override the default rejected/no-op behavior with `vi.mocked(invoke).mockResolvedValueOnce(...)` as needed. `src/test/dom-polyfills.ts` fills the jsdom gaps.
 
 ### End-to-End Tests (Playwright)
 
