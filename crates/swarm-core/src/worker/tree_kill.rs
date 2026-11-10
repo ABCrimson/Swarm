@@ -42,6 +42,13 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// so [`terminate`] and [`kill`] reach everything it starts unless a
 /// descendant moves itself to another group or session. A no-op on
 /// Windows, where the tree is the parent-pid chain `taskkill /T` walks.
+#[cfg_attr(
+    windows,
+    expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "the unix arm mutates the parameter"
+    )
+)]
 pub(crate) fn lead_own_group(
     #[cfg_attr(
         windows,
@@ -74,6 +81,13 @@ fn running(child: &mut Child) -> bool {
 /// so a member stopped by job control (a `SIGTTIN` from reading the
 /// terminal outside the foreground group) acts on it. Does nothing on
 /// Windows (see the module doc) or once the child has exited.
+#[cfg_attr(
+    windows,
+    expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "the unix arm mutates the parameter"
+    )
+)]
 pub(crate) fn terminate(
     #[cfg_attr(
         windows,

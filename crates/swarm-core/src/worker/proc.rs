@@ -554,7 +554,7 @@ mod tests {
         let chunk1 = format!("{{\"big\":\"{}", &big_value[..100_000]);
         let chunk2 = format!("{}\"}}\n", &big_value[100_000..]);
 
-        assert!(framer.push(chunk1.as_bytes()).unwrap().is_empty());
+        assert_eq!(framer.push(chunk1.as_bytes()).unwrap(), [] as [&str; 0]);
         assert_eq!(framer.buffered_len(), chunk1.len());
 
         let lines = framer.push(chunk2.as_bytes()).unwrap();
@@ -566,7 +566,7 @@ mod tests {
     fn test_framer_no_trailing_newline_keeps_partial_line_buffered() {
         let mut framer = NdjsonFramer::new();
         let lines = framer.push(b"{\"incomplete\":true}").unwrap();
-        assert!(lines.is_empty());
+        assert_eq!(lines, [] as [&str; 0]);
         assert!(framer.buffered_len() > 0);
     }
 
@@ -618,8 +618,11 @@ mod tests {
         let mut framer = NdjsonFramer::new();
         assert!(framer.push(&vec![b'z'; MAX_LINE_BYTES + 1]).is_err());
 
-        assert!(framer.push(b"zzzz still the same line").unwrap().is_empty());
-        assert!(framer.push(b"zz\"}").unwrap().is_empty());
+        assert_eq!(
+            framer.push(b"zzzz still the same line").unwrap(),
+            [] as [&str; 0]
+        );
+        assert_eq!(framer.push(b"zz\"}").unwrap(), [] as [&str; 0]);
         assert_eq!(
             framer.push(b"\n{\"a\":1}\n{\"b\"").unwrap(),
             [r#"{"a":1}"#],

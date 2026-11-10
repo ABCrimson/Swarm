@@ -164,7 +164,7 @@ fn index_blob_sizes(
     }
 
     let oids: HashSet<&str> = entries.iter().map(|(_, oid)| oid.as_str()).collect();
-    let stdin: String = oids.iter().map(|oid| format!("{oid}\n")).collect();
+    let stdin: String = oids.iter().flat_map(|oid| [*oid, "\n"]).collect();
     let checked = cli::run_with_stdin(
         &args_in(
             worktree,

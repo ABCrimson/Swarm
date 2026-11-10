@@ -20,7 +20,8 @@
 //!   frames), plus the three desktop-only commands that drive OS integrations.
 //! - [`lifecycle`] shuts the runtime down in a plugin cleanup hook that
 //!   every exit path runs, and the release log is flushed after it.
-//! - [`quit_guard`] asks before a user's quit stops registered workers.
+//! - [`quit_guard`] asks before a user's quit (closing the main window, or
+//!   Cmd+Q through the macOS app menu it builds) stops registered workers.
 //! - In bundled builds, a second launch hands over to the running
 //!   instance and exits; [`focus_main`] brings that instance forward.
 
@@ -112,7 +113,15 @@ pub fn run() {
             focus_main(app);
         }));
     }
+    // macOS only, where Tauri would otherwise install its default menu:
+    // the same menu with a guarded Quit (see `quit_guard`). Windows and
+    // Linux keep no menu, so the handler below never fires there.
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.menu(quit_guard::app_menu);
+    }
     let app = builder
+        .on_menu_event(|app, event| quit_guard::on_menu_event(app, &event))
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         // Two things open: the ship chain's GitHub compare page, from the
@@ -153,6 +162,10 @@ pub fn run() {
     app.manage(lifecycle::Teardown::new(init_tracing(
         app.path().app_log_dir(),
     )));
+    #[cfg(target_os = "macos")]
+    if quit_guard::QUIT_ITEM_MISSING.load(std::sync::atomic::Ordering::Relaxed) {
+        tracing::warn!("the default app menu has no Quit item; Cmd+Q is not guarded");
+    }
     app.manage(quit_guard::QuitGuard::default());
     app.run(|app, event| quit_guard::on_run_event(app, &event));
 }

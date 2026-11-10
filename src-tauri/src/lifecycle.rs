@@ -22,9 +22,10 @@
 //! exits right after. The hook runs its teardown once, however often it
 //! is called.
 //!
-//! Closing the main window and a user's exit can be held first: while
-//! workers are registered, `quit_guard` asks before the quit goes ahead,
-//! and "Keep Running" means this hook never runs.
+//! Closing the main window, Cmd+Q (the macOS app menu's Quit) and a
+//! user's exit can be held first: while workers are registered,
+//! `quit_guard` asks before the quit goes ahead, and "Keep Running" means
+//! this hook never runs.
 //!
 //! Terminal workers are left to the operating system: their PTYs close
 //! with the process, which ends the shells they run. Killing them through

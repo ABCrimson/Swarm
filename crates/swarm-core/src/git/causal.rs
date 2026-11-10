@@ -721,7 +721,7 @@ mod tests {
         let ctx = build_ship_context(events, me, 0, 10, false);
         // No agent_tool_call/agent_block/agent_turn_settled for t1 in
         // range at all — the orphan result must not fabricate a turn.
-        assert!(ctx.turns.is_empty());
+        assert_eq!(ctx.turns, []);
     }
 
     #[test]
@@ -740,8 +740,8 @@ mod tests {
     fn test_empty_range_yields_empty_context_not_fabricated_turns() {
         let me = Uuid::new_v4();
         let ctx = build_ship_context(Vec::new(), me, 5, 5, false);
-        assert!(ctx.turns.is_empty());
-        assert!(ctx.commits.is_empty());
+        assert_eq!(ctx.turns, []);
+        assert_eq!(ctx.commits, []);
         assert_eq!(ctx.omitted_turn_count, 0);
     }
 
@@ -774,8 +774,8 @@ mod tests {
         let me = Uuid::new_v4();
         let ctx = ShipContext::empty(me, 1, 1);
         assert_eq!(ctx.worker_id, me);
-        assert!(ctx.turns.is_empty());
-        assert!(ctx.commits.is_empty());
+        assert_eq!(ctx.turns, []);
+        assert_eq!(ctx.commits, []);
         assert_eq!(ctx.omitted_turn_count, 0);
         assert!(!ctx.events_truncated);
         assert!(!ctx.has_uncaptured_webview_activity);
@@ -817,7 +817,7 @@ mod tests {
         // The webview path leaves a signal, but never a fabricated
         // CausalTurn — agent_turn_started's requestId is not a TurnId
         // (see the module doc).
-        assert!(ctx.turns.is_empty());
+        assert_eq!(ctx.turns, []);
         assert!(ctx.has_uncaptured_webview_activity);
     }
 

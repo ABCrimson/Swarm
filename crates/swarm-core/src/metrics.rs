@@ -278,7 +278,7 @@ mod tests {
     fn test_collect_per_worker_metrics_empty_registry() {
         let registry = WorkerRegistry::new();
         let sys = System::new().unwrap();
-        assert!(collect_per_worker_metrics(&registry, &sys).is_empty());
+        assert_eq!(collect_per_worker_metrics(&registry, &sys), []);
     }
 
     #[test]
@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(snap["totalWorkers"], 0);
         assert_eq!(snap["running"], 0);
         assert!(snap["memoryTotalMb"].as_f64().unwrap() > 0.0);
-        assert!(snap["perWorker"].as_array().unwrap().is_empty());
+        assert_eq!(snap["perWorker"], serde_json::json!([]));
     }
 
     /// A shell that runs one long-lived child and waits for it.

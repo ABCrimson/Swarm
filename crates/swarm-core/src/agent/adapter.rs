@@ -727,7 +727,7 @@ mod tests {
             .await
             .expect("spawn should succeed");
 
-        assert!(!session.session_key().is_empty());
+        assert_ne!(session.session_key(), "");
 
         let turn_id = session
             .send_turn(TurnInput {
@@ -735,7 +735,7 @@ mod tests {
             })
             .await
             .expect("send_turn should succeed");
-        assert!(!turn_id.is_empty());
+        assert_ne!(turn_id, "");
 
         let summary = session.shutdown().await.expect("shutdown should succeed");
         assert_eq!(summary.exit_code, Some(0));

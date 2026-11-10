@@ -195,6 +195,6 @@ mod tests {
         app.fs_scope().allow_directory(&*dir, true).unwrap();
         app.fs_scope().allow_file(&file).unwrap();
 
-        assert!(folder_patterns(&app.fs_scope(), &file).is_empty());
+        assert_eq!(folder_patterns(&app.fs_scope(), &file), [] as [&str; 0]);
     }
 }

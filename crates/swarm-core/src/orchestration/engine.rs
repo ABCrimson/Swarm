@@ -672,7 +672,7 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
         )
     }
 
-    fn finalize(&mut self) -> Result<(), AppError> {
+    fn finalize(&self) -> Result<(), AppError> {
         self.log.finalize(self.seq)
     }
 }

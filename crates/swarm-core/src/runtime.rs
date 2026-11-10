@@ -574,7 +574,7 @@ mod tests {
     async fn test_start_restores_a_persisted_worker_cap_and_ignores_an_out_of_range_one() {
         let (dir, _cleanup) = temp_dir("runtime");
         let paths = Paths {
-            data_dir: dir.to_path_buf(),
+            data_dir: dir.clone(),
         };
         crate::config::write_value(&paths, "max_workers", serde_json::json!(3)).unwrap();
         let runtime = Runtime::start(config(&dir, "swarmd"), |_| {}).unwrap();
