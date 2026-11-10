@@ -1,6 +1,6 @@
 import { useResizeObserver } from "@crimson_dev/use-resize-observer";
 import { type DirEntry, readDir } from "@tauri-apps/plugin-fs";
-import { use, useId, useRef, useState } from "react";
+import { type CSSProperties, use, useId, useRef, useState } from "react";
 import { Reveal } from "#components/ui/Reveal";
 import { escapeForDisplay } from "#lib/display-escape";
 import { childPath } from "#lib/file-preview";
@@ -361,8 +361,13 @@ function Tree({
       tabIndex={0}
       aria-activedescendant={rowId(activeIndex)}
       onKeyDown={handleKeyDown}
-      className="group relative outline-hidden"
-      style={{ height: rows.length * ROW_HEIGHT }}
+      className="group relative h-(--tree-height) outline-hidden"
+      style={
+        {
+          "--row-height": `${ROW_HEIGHT}px`,
+          "--tree-height": `${rows.length * ROW_HEIGHT}px`,
+        } as CSSProperties
+      }
     >
       {rendered.map((index) => {
         const row = rows[index];
@@ -388,12 +393,13 @@ function Tree({
               setActivePath(node.path);
               open(node);
             }}
-            className="absolute inset-x-0 flex cursor-pointer items-center gap-1.5 truncate rounded pr-2 text-fg-muted text-md hover:bg-surface-2/50 aria-selected:bg-plasma/15 aria-selected:text-fg-bright group-focus-visible:data-active:outline-2 group-focus-visible:data-active:outline-plasma group-focus-visible:data-active:-outline-offset-2"
-            style={{
-              top: index * ROW_HEIGHT,
-              height: ROW_HEIGHT,
-              paddingLeft: 12 + depth * 16,
-            }}
+            className="absolute inset-x-0 top-(--row-top) h-(--row-height) pl-(--row-indent) flex cursor-pointer items-center gap-1.5 truncate rounded pr-2 text-fg-muted text-md hover:bg-surface-2/50 aria-selected:bg-plasma/15 aria-selected:text-fg-bright group-focus-visible:data-active:outline-2 group-focus-visible:data-active:outline-plasma group-focus-visible:data-active:-outline-offset-2"
+            style={
+              {
+                "--row-top": `${index * ROW_HEIGHT}px`,
+                "--row-indent": `${12 + depth * 16}px`,
+              } as CSSProperties
+            }
           >
             <span
               aria-hidden="true"

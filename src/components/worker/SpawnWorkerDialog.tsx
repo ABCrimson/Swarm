@@ -1,5 +1,4 @@
 import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
-import type { CSSProperties } from "react";
 import { Suspense, use, useActionState, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
@@ -168,7 +167,10 @@ function probeBoundary(
 /** The working-directory path, with the full path as its tooltip. */
 function RootPath({ root }: { readonly root: string | null }): React.ReactElement {
   return (
-    <span style={repoRootPathStyle} title={root == null ? undefined : escapeForDisplay(root)}>
+    <span
+      className={REPO_ROOT_PATH_CLASS}
+      title={root == null ? undefined : escapeForDisplay(root)}
+    >
       {escapeForDisplay(root ?? "No Project Root — Spawns Without Worktree Isolation")}
     </span>
   );
@@ -181,7 +183,7 @@ function SavedRootPath({ read }: { readonly read: Promise<SavedRoot> }): React.R
 function Notice({ text }: { readonly text: string | null }): React.ReactElement | null {
   if (!text) return null;
   return (
-    <div role="alert" style={errorBannerStyle}>
+    <div role="alert" className={ERROR_BANNER_CLASS}>
       {text}
     </div>
   );
@@ -280,136 +282,52 @@ function showModalOnMount(dialog: HTMLDialogElement | null): void {
   if (dialog && !dialog.open) dialog.showModal();
 }
 
-// ── Styles (OKLCH) ───────────────────────────────────
+// ── Styles (utility classes) ───────────────────────────────────────────────────────────
 
-/** Tailwind's preflight zeroes dialog margins; `margin: auto` re-centers the modal. */
-const dialogStyle: CSSProperties = {
-  margin: "auto",
-  width: 520,
-  maxWidth: "calc(100vw - 32px)",
-  maxHeight: "85vh",
-  padding: 0,
-  background: "var(--color-surface-1)",
-  border: "1px solid var(--color-border-2)",
-  borderRadius: "var(--radius-lg)",
-  boxShadow:
-    "0 0 0 1px oklch(from var(--color-plasma) l c h / 0.1), 0 16px 48px oklch(from var(--color-void) l c h / 0.6)",
-  color: "var(--color-fg)",
-  overflow: "hidden",
-};
+/**
+ * Tailwind's preflight zeroes dialog margins; `m-auto` re-centers the modal.
+ * The glow ring and the drop shadow are one composite `box-shadow`.
+ */
+const DIALOG_CLASS =
+  "m-auto w-130 max-w-[calc(100vw-32px)] max-h-[85vh] overflow-hidden rounded-lg border border-border-2 bg-surface-1 p-0 text-fg shadow-[0_0_0_1px_oklch(from_var(--color-plasma)_l_c_h/0.1),0_16px_48px_oklch(from_var(--color-void)_l_c_h/0.6)]";
 
-const formStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  maxHeight: "85vh",
-};
+const FORM_CLASS = "flex max-h-[85vh] flex-col";
 
-const headerStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  padding: "14px 16px",
-  borderBottom: "1px solid var(--color-border)",
-  flexShrink: 0,
-};
+const HEADER_CLASS =
+  "flex shrink-0 items-center justify-between border-b border-border px-4 py-3.5";
 
-const titleStyle: CSSProperties = {
-  fontFamily: "var(--font-display)",
-  fontSize: "0.9375rem",
-  fontWeight: 600,
-  color: "var(--color-fg-bright)",
-  margin: 0,
-};
+const TITLE_CLASS = "m-0 font-display font-semibold text-(length:--text-lg) text-fg-bright";
 
-const closeButtonStyle: CSSProperties = {
-  width: 28,
-  height: 28,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  background: "oklch(0 0 0 / 0)",
-  border: "none",
-  borderRadius: 6,
-  color: "var(--color-fg-dim)",
-  cursor: "pointer",
-};
-
-/** Matches `.swarm-btn:disabled`, the look of the footer Cancel button while disabled. */
-const closeButtonDisabledStyle: CSSProperties = { opacity: 0.5, cursor: "not-allowed" };
-
-const bodyStyle: CSSProperties = {
-  flex: 1,
-  overflowY: "auto",
-  padding: 16,
-  display: "flex",
-  flexDirection: "column",
-  gap: 18,
-};
-
-const fieldGroupStyle: CSSProperties = { display: "flex", flexDirection: "column", gap: 8 };
-
-const fieldsetStyle: CSSProperties = { ...fieldGroupStyle, border: "none", margin: 0, padding: 0 };
-
-const fieldLabelStyle: CSSProperties = {
-  padding: 0,
-  fontFamily: "var(--font-body)",
-  fontSize: "var(--text-md)",
-  fontWeight: 500,
-  color: "var(--color-fg)",
-};
-
-const segmentedGroupStyle: CSSProperties = {
-  display: "flex",
-  background: "var(--color-surface-0)",
-  border: "1px solid var(--color-border)",
-  borderRadius: 8,
-  padding: 2,
-};
-
-function segmentStyle(active: boolean, disabled: boolean): CSSProperties {
-  return {
-    flex: "1 1 auto",
-    whiteSpace: "nowrap",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    padding: "8px 12px",
-    background: active ? "oklch(from var(--color-plasma) l c h / 0.15)" : "oklch(0 0 0 / 0)",
-    borderRadius: 6,
-    color: disabled
-      ? "var(--color-fg-dim)"
-      : active
-        ? "var(--color-plasma)"
-        : "var(--color-fg-muted)",
-    opacity: disabled ? 0.6 : 1,
-    fontFamily: "var(--font-body)",
-    fontSize: "0.8125rem",
-    fontWeight: 500,
-    cursor: disabled ? "not-allowed" : "pointer",
-  };
+/** Matches `.swarm-btn:disabled` while spawning: the look of the footer Cancel button when disabled. */
+function closeButtonClass(disabled: boolean): string {
+  return `flex size-7 items-center justify-center rounded-[6px] border-none bg-transparent text-fg-dim ${
+    disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
+  }`;
 }
 
-const unavailableNoteStyle: CSSProperties = {
-  fontFamily: "var(--font-body)",
-  fontSize: "var(--text-sm)",
-  color: "var(--color-amber)",
-  lineHeight: 1.5,
-};
+const BODY_CLASS = "flex flex-1 flex-col gap-4.5 overflow-y-auto p-4";
 
-function tierCardStyle(active: boolean): CSSProperties {
-  return {
-    display: "flex",
-    alignItems: "flex-start",
-    gap: 10,
-    padding: "10px 12px",
-    borderRadius: 8,
-    border: `1px solid ${active ? "oklch(0.55 0.14 205)" : "var(--color-border)"}`,
-    background: active
-      ? "oklch(from var(--color-plasma) l c h / 0.1)"
-      : "oklch(from var(--color-surface-0) l c h / 0.6)",
-    cursor: "pointer",
-  };
+const FIELD_GROUP_CLASS = "flex flex-col gap-2";
+
+const FIELDSET_CLASS = `${FIELD_GROUP_CLASS} m-0 border-none p-0`;
+
+const FIELD_LABEL_CLASS = "p-0 font-medium font-sans text-(length:--text-md) text-fg";
+
+const SEGMENTED_GROUP_CLASS = "flex rounded-md border border-border bg-surface-0 p-0.5";
+
+function segmentClass(active: boolean, disabled: boolean): string {
+  const color = disabled ? "text-fg-dim" : active ? "text-plasma" : "text-fg-muted";
+  return `flex flex-auto items-center justify-center gap-1.5 whitespace-nowrap rounded-[6px] px-3 py-2 font-medium font-sans text-(length:--text-md) ${
+    active ? "bg-plasma/15" : "bg-transparent"
+  } ${color} ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`;
+}
+
+const UNAVAILABLE_NOTE_CLASS = "font-sans text-amber text-sm";
+
+function tierCardClass(active: boolean): string {
+  return `flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2.5 ${
+    active ? "border-[oklch(0.55_0.14_205)] bg-plasma/10" : "border-border bg-surface-0/60"
+  }`;
 }
 
 /**
@@ -417,61 +335,19 @@ function tierCardStyle(active: boolean): CSSProperties {
  * The provider radios are `sr-only`: their segment's fill shows the choice,
  * plus a focus outline and, in forced colors, a Highlight outline when checked.
  */
-const radioStyle: CSSProperties = {
-  accentColor: "var(--color-plasma)",
-  cursor: "pointer",
-  flexShrink: 0,
-  marginTop: 2,
-};
+const RADIO_CLASS = "mt-0.5 shrink-0 cursor-pointer accent-plasma";
 
-const tierLabelStyle: CSSProperties = {
-  fontFamily: "var(--font-body)",
-  fontSize: "0.8125rem",
-  fontWeight: 600,
-  color: "var(--color-fg-bright)",
-};
+const TIER_LABEL_CLASS = "font-sans font-semibold text-(length:--text-md) text-fg-bright";
 
-const tierExplanationStyle: CSSProperties = {
-  fontFamily: "var(--font-body)",
-  fontSize: "var(--text-xs)",
-  color: "var(--color-fg-dim)",
-  lineHeight: 1.4,
-};
+const TIER_EXPLANATION_CLASS = "font-sans text-fg-dim text-xs leading-[1.4]";
 
-const repoRootPathStyle: CSSProperties = {
-  flex: 1,
-  minWidth: 0,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-  padding: "8px 12px",
-  borderRadius: 8,
-  border: "1px solid var(--color-border)",
-  background: "oklch(from var(--color-surface-0) l c h / 0.6)",
-  color: "var(--color-fg-muted)",
-  fontFamily: "var(--font-mono)",
-  fontSize: "0.75rem",
-};
+const REPO_ROOT_PATH_CLASS =
+  "min-w-0 flex-1 truncate rounded-md border border-border bg-surface-0/60 px-3 py-2 font-mono text-(length:--text-sm) text-fg-muted";
 
-const errorBannerStyle: CSSProperties = {
-  padding: "8px 12px",
-  borderRadius: 8,
-  border: "1px solid oklch(0.45 0.18 25)",
-  background: "oklch(0.16 0.08 25 / 0.4)",
-  color: "oklch(0.82 0.19 25)",
-  fontFamily: "var(--font-body)",
-  fontSize: "0.75rem",
-  lineHeight: 1.4,
-};
+const ERROR_BANNER_CLASS =
+  "rounded-md border border-[oklch(0.45_0.18_25)] bg-[oklch(0.16_0.08_25/0.4)] px-3 py-2 font-sans text-[oklch(0.82_0.19_25)] text-sm leading-[1.4]";
 
-const footerStyle: CSSProperties = {
-  display: "flex",
-  justifyContent: "flex-end",
-  gap: 8,
-  padding: "12px 16px",
-  borderTop: "1px solid var(--color-border)",
-  flexShrink: 0,
-};
+const FOOTER_CLASS = "flex shrink-0 justify-end gap-2 border-t border-border px-4 py-3";
 
 /**
  * Whether a viewport point lies outside the dialog's border box (on its
@@ -658,12 +534,11 @@ export function SpawnWorkerDialog({
         // Escape and backdrop light-dismiss; never mid-spawn (see `requestDismiss`).
         if (isSpawning) e.preventDefault();
       }}
-      style={dialogStyle}
-      className="opacity-0 translate-y-2 transition-[opacity,translate,display,overlay] transition-discrete duration-200 ease-out-cubic open:translate-y-0 open:opacity-100 starting:open:translate-y-2 starting:open:opacity-0 backdrop:bg-[oklch(0.04_0.01_220/0.55)] backdrop:backdrop-blur-[2px] backdrop:opacity-0 backdrop:transition-opacity backdrop:duration-200 backdrop:ease-out-cubic open:backdrop:opacity-100 starting:open:backdrop:opacity-0"
+      className={`${DIALOG_CLASS} opacity-0 translate-y-2 transition-[opacity,translate,display,overlay] transition-discrete duration-200 ease-out-cubic open:translate-y-0 open:opacity-100 starting:open:translate-y-2 starting:open:opacity-0 backdrop:bg-[oklch(0.04_0.01_220/0.55)] backdrop:backdrop-blur-[2px] backdrop:opacity-0 backdrop:transition-opacity backdrop:duration-200 backdrop:ease-out-cubic open:backdrop:opacity-100 starting:open:backdrop:opacity-0`}
     >
-      <form ref={formRef} action={spawn} style={formStyle}>
-        <div style={headerStyle}>
-          <h2 id={titleId} style={titleStyle}>
+      <form ref={formRef} action={spawn} className={FORM_CLASS}>
+        <div className={HEADER_CLASS}>
+          <h2 id={titleId} className={TITLE_CLASS}>
             Spawn Worker
           </h2>
           <button
@@ -671,7 +546,7 @@ export function SpawnWorkerDialog({
             onClick={requestDismiss}
             disabled={isSpawning}
             aria-label="Close Spawn Worker Dialog"
-            style={{ ...closeButtonStyle, ...(isSpawning ? closeButtonDisabledStyle : null) }}
+            className={closeButtonClass(isSpawning)}
           >
             <svg width={14} height={14} viewBox="0 0 14 14" fill="none" aria-hidden="true">
               <path
@@ -684,20 +559,19 @@ export function SpawnWorkerDialog({
           </button>
         </div>
 
-        <div style={bodyStyle}>
-          <fieldset style={fieldsetStyle}>
-            <legend style={fieldLabelStyle}>Provider</legend>
+        <div className={BODY_CLASS}>
+          <fieldset className={FIELDSET_CLASS}>
+            <legend className={FIELD_LABEL_CLASS}>Provider</legend>
             {probeBoundary(reads.answers, (reasons) => (
               <>
-                <div style={segmentedGroupStyle}>
+                <div className={SEGMENTED_GROUP_CLASS}>
                   {ALL_PROVIDERS.map((p) => {
                     const reason = providerReason(p, reasons);
                     const disabled = reason != null;
                     return (
                       <label
                         key={p}
-                        className="relative has-focus-visible:outline-2 has-focus-visible:-outline-offset-2 has-focus-visible:outline-plasma forced-colors:has-checked:outline-2 forced-colors:has-checked:outline-[Highlight]"
-                        style={segmentStyle(provider === p, disabled)}
+                        className={`relative ${segmentClass(provider === p, disabled)} has-focus-visible:outline-2 has-focus-visible:-outline-offset-2 has-focus-visible:outline-plasma forced-colors:has-checked:outline-2 forced-colors:has-checked:outline-[Highlight]`}
                         title={reason ?? undefined}
                       >
                         <input
@@ -720,7 +594,7 @@ export function SpawnWorkerDialog({
                 )
                   .entries()
                   .map(([reason, ps]) => (
-                    <span key={reason} style={unavailableNoteStyle}>
+                    <span key={reason} className={UNAVAILABLE_NOTE_CLASS}>
                       {ps.map((p) => PROVIDER_LABELS[p]).join(" And ")} Unavailable — {reason}
                     </span>
                   ))
@@ -731,13 +605,13 @@ export function SpawnWorkerDialog({
 
           {agent && (
             <>
-              <div style={fieldGroupStyle}>
-                <label htmlFor={`${titleId}-model`} style={fieldLabelStyle}>
+              <div className={FIELD_GROUP_CLASS}>
+                <label htmlFor={`${titleId}-model`} className={FIELD_LABEL_CLASS}>
                   Model Alias
                 </label>
                 <input
                   id={`${titleId}-model`}
-                  className="swarm-input"
+                  className="swarm-input font-mono text-(length:--text-md)"
                   value={modelAliases[agent]}
                   onChange={(e) =>
                     setModelAliases((prev) => ({ ...prev, [agent]: e.target.value }))
@@ -745,18 +619,17 @@ export function SpawnWorkerDialog({
                   placeholder={MODEL_PLACEHOLDER[agent]}
                   autoComplete="off"
                   spellCheck={false}
-                  style={{ fontFamily: "var(--font-mono)", fontSize: "0.8125rem" }}
                 />
               </div>
 
-              <fieldset style={fieldsetStyle}>
-                <legend style={fieldLabelStyle}>Trust Tier</legend>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <fieldset className={FIELDSET_CLASS}>
+                <legend className={FIELD_LABEL_CLASS}>Trust Tier</legend>
+                <div className="flex flex-col gap-1.5">
                   {TrustTierSchema.options.map((tier) => {
                     const info = TRUST_TIER_INFO[agent][tier];
                     const explanationId = `${titleId}-tier-${tier}`;
                     return (
-                      <label key={tier} style={tierCardStyle(trustTier === tier)}>
+                      <label key={tier} className={tierCardClass(trustTier === tier)}>
                         <input
                           type="radio"
                           name="trust-tier"
@@ -765,11 +638,11 @@ export function SpawnWorkerDialog({
                           onChange={() => setTrustTier(tier)}
                           aria-label={info.label}
                           aria-describedby={explanationId}
-                          style={radioStyle}
+                          className={RADIO_CLASS}
                         />
-                        <span style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                          <span style={tierLabelStyle}>{info.label}</span>
-                          <span id={explanationId} style={tierExplanationStyle}>
+                        <span className="flex flex-col gap-[3px]">
+                          <span className={TIER_LABEL_CLASS}>{info.label}</span>
+                          <span id={explanationId} className={TIER_EXPLANATION_CLASS}>
                             {info.explanation}
                           </span>
                         </span>
@@ -781,13 +654,13 @@ export function SpawnWorkerDialog({
             </>
           )}
 
-          <div style={fieldGroupStyle}>
-            <span style={fieldLabelStyle}>Working Directory</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className={FIELD_GROUP_CLASS}>
+            <span className={FIELD_LABEL_CLASS}>Working Directory</span>
+            <div className="flex items-center gap-2">
               {pickedRoot !== undefined ? (
                 <RootPath root={pickedRoot} />
               ) : (
-                <Reveal fallback={<span style={repoRootPathStyle}>Loading…</span>}>
+                <Reveal fallback={<span className={REPO_ROOT_PATH_CLASS}>Loading…</span>}>
                   <SavedRootPath read={reads.savedRoot} />
                 </Reveal>
               )}
@@ -802,7 +675,7 @@ export function SpawnWorkerDialog({
               </Button>
             </div>
             {!canPickFolder && (
-              <span id={folderReasonId} style={unavailableNoteStyle}>
+              <span id={folderReasonId} className={UNAVAILABLE_NOTE_CLASS}>
                 {DESKTOP_ONLY_REASON}
               </span>
             )}
@@ -817,13 +690,13 @@ export function SpawnWorkerDialog({
           )}
 
           {spawnError && (
-            <div role="alert" style={errorBannerStyle}>
+            <div role="alert" className={ERROR_BANNER_CLASS}>
               {spawnError}
             </div>
           )}
         </div>
 
-        <div style={footerStyle}>
+        <div className={FOOTER_CLASS}>
           <Button variant="ghost" size="sm" onClick={requestDismiss} disabled={isSpawning}>
             Cancel
           </Button>

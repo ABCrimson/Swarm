@@ -153,13 +153,23 @@ describe("Pill", () => {
 
     const label = screen.getByText(longTag);
     expect(label.className).toContain("swarm-pill-label");
-    expect(label).toHaveStyle({ maxWidth: "120px" });
+    // The cap is a class that reads the render-computed custom property.
+    expect(label).toHaveClass("max-w-(--pill-max-width)");
+    expect(label.style.getPropertyValue("--pill-max-width")).toBe("120px");
+  });
+
+  it("passes a string maxWidth through unchanged", () => {
+    render(<Pill maxWidth="50%">Half</Pill>);
+
+    expect(screen.getByText("Half").style.getPropertyValue("--pill-max-width")).toBe("50%");
   });
 
   it("does not constrain label width when maxWidth is omitted", () => {
     render(<Pill>Short</Pill>);
 
-    expect(screen.getByText("Short").style.maxWidth).toBe("");
+    const label = screen.getByText("Short");
+    expect(label).not.toHaveClass("max-w-(--pill-max-width)");
+    expect(label.style.getPropertyValue("--pill-max-width")).toBe("");
   });
 
   it("lets an inline style override win over the tone's default color", () => {

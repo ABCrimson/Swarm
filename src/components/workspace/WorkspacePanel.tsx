@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useId, useRef, useState, useTransition } from "react";
+import { type CSSProperties, useId, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { EmptyState } from "#components/ui/EmptyState";
@@ -136,8 +136,8 @@ export function WorkspacePanel(): React.ReactElement {
     <div className="flex h-full overflow-hidden">
       <div
         id={treePaneId}
-        className="flex shrink-0 flex-col border-border border-r bg-surface-0/60 backdrop-blur-md"
-        style={{ width: sidebarWidth }}
+        className="flex shrink-0 flex-col border-border border-r bg-surface-0/60 backdrop-blur-md w-(--sidebar-width)"
+        style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
       >
         <div className="flex items-center justify-between border-border border-b px-3 py-2.5">
           <h2 className="font-display font-semibold text-fg-muted text-md tracking-tight">

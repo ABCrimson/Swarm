@@ -42,10 +42,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
   const spawnReasonId = useId();
   const unavailableReasonId = hasCapability("localAiChat") ? undefined : spawnReasonId;
   return (
-    <div
-      className="rounded-lg border border-[oklch(0.28_0.04_220)] bg-[oklch(0.12_0.02_220/0.8)] p-6"
-      style={{ backdropFilter: "blur(16px) saturate(1.5)" }}
-    >
+    <div className="rounded-lg border border-[oklch(0.28_0.04_220)] bg-[oklch(0.12_0.02_220/0.8)] p-6 backdrop-blur-[16px] backdrop-saturate-150">
       <div className="mb-5 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-[oklch(0.92_0.02_220)] font-display">
           Choose A Template
@@ -167,10 +164,8 @@ function TemplateCard({
       disabled={unavailable}
       aria-describedby={unavailable ? unavailableReasonId : undefined}
       onClick={() => onSelect(template)}
-      className={`cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 rounded-lg border border-[oklch(0.26_0.04_220/0.5)] bg-[oklch(0.16_0.03_220/0.6)] p-4 text-left hover:border-border-3 hover:bg-surface-3/60 ${CARD_MOTION_CLASS}`}
-      style={
-        { backdropFilter: "blur(8px)", "--i": Math.min(index, MAX_STAGGERED) } as CSSProperties
-      }
+      className={`cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 rounded-lg border border-[oklch(0.26_0.04_220/0.5)] bg-[oklch(0.16_0.03_220/0.6)] p-4 text-left hover:border-border-3 hover:bg-surface-3/60 backdrop-blur-[8px] ${CARD_MOTION_CLASS}`}
+      style={{ "--i": Math.min(index, MAX_STAGGERED) } as CSSProperties}
     >
       <span className="mb-1 block text-sm font-semibold text-[oklch(0.88_0.04_220)] font-display">
         {escapeForDisplay(template.name)}
