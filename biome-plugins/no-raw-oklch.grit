@@ -1,0 +1,655 @@
+// The raw-OKLCH gate for TypeScript and TSX. A numeric `oklch(` (one whose
+// first channel is a number, not `from …`) in a string literal, a JSX
+// attribute string or a template-literal chunk fails `biome ci`: colors come
+// from the tokens in src/styles/tokens.css, as a utility (`bg-surface-1`), a
+// `/N` modifier (`bg-plasma/15`), `var(--color-…)` or relative color syntax
+// (`oklch(from var(--color-plasma) l c h / 0.15)`).
+//
+// biome.json scopes it: src/**/*.{ts,tsx}, without the colocated tests (they
+// assert rendered values) and without the canvas, xterm, WebGPU and syntax
+// highlighter consumers, which need concrete colors (useTerminal.ts,
+// chart-theme.ts, particles.ts, postprocess.ts, syntax-highlight.ts).
+//
+// Known exceptions are keyed on file path plus literal value, not line, so
+// moving code never breaks them: the literals the stage-1 token sweep left
+// because no token matches them. A new value, or a known value in a new file,
+// fails. Delete a line when its literal becomes a token; the Q-9 design
+// direction names the rest. biome-plugins/no-raw-oklch-css.grit is the CSS
+// twin; `pnpm check:raw-oklch` proves both still fail a raw literal.
+language js
+
+predicate known_raw_oklch($color) {
+  or {
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIChat\.tsx",
+      $color <: r"(?s)0\.10_0\.02_220/0\.9\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIChat\.tsx",
+      $color <: r"(?s)0\.12_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIChat\.tsx",
+      $color <: r"(?s)0\.14_0\.06_10/0\.6\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIChat\.tsx",
+      $color <: r"(?s)0\.35_0\.10_10\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIChat\.tsx",
+      $color <: r"(?s)0\.60_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIChat\.tsx",
+      $color <: r"(?s)0\.78_0\.16_20\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIChat\.tsx",
+      $color <: r"(?s)0\.82_0\.15_10\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIChat\.tsx",
+      $color <: r"(?s)0\.82_0\.16_75\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIChat\.tsx",
+      $color <: r"(?s)0\.88_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIMessageStream\.tsx",
+      $color <: r"(?s)0\.12_0\.02_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIMessageStream\.tsx",
+      $color <: r"(?s)0\.20_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIMessageStream\.tsx",
+      $color <: r"(?s)0\.62_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIMessageStream\.tsx",
+      $color <: r"(?s)0\.62_0\.08_205\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIMessageStream\.tsx",
+      $color <: r"(?s)0\.72_0\.20_290\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIMessageStream\.tsx",
+      $color <: r"(?s)0\.88_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIQueue\.tsx",
+      $color <: r"(?s)0\.12_0\.03_220/0\.5\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIQueue\.tsx",
+      $color <: r"(?s)0\.16_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIQueue\.tsx",
+      $color <: r"(?s)0\.18_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIQueue\.tsx",
+      $color <: r"(?s)0\.20_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AIQueue\.tsx",
+      $color <: r"(?s)0\.78_0\.04_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AgentChat\.tsx",
+      $color <: r"(?s)0\.16_0\.08_25/0\.35\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AgentChat\.tsx",
+      $color <: r"(?s)0\.16_0\.08_25/0\.4\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AgentChat\.tsx",
+      $color <: r"(?s)0\.18_0\.06_75/0\.4\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AgentChat\.tsx",
+      $color <: r"(?s)0\.20_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AgentChat\.tsx",
+      $color <: r"(?s)0\.45_0\.18_25\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AgentChat\.tsx",
+      $color <: r"(?s)0\.55_0\.15_75\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AgentChat\.tsx",
+      $color <: r"(?s)0\.72_0\.20_25\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AgentChat\.tsx",
+      $color <: r"(?s)0\.85_0\.12_60\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AgentChat\.tsx",
+      $color <: r"(?s)0\.88_0\.06_60\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]AgentChat\.tsx",
+      $color <: r"(?s)0\.92_0\.03_205\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ApprovalArgs\.tsx",
+      $color <: r"(?s)0\.78_0\.1_75\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ApprovalArgs\.tsx",
+      $color <: r"(?s)0\.88_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ModelSelector\.tsx",
+      $color <: r"(?s)0\.10_0\.03_220/0\.95\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ModelSelector\.tsx",
+      $color <: r"(?s)0\.12_0\.03_220/0\.9\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ModelSelector\.tsx",
+      $color <: r"(?s)0\.18_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ModelSelector\.tsx",
+      $color <: r"(?s)0\.35_0\.02_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ModelSelector\.tsx",
+      $color <: r"(?s)0\.55_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ModelSelector\.tsx",
+      $color <: r"(?s)0\.58_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ModelSelector\.tsx",
+      $color <: r"(?s)0\.72_0\.20_290\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ModelSelector\.tsx",
+      $color <: r"(?s)0\.72_0\.20_290/0\.14\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ModelSelector\.tsx",
+      $color <: r"(?s)0\.75_0\.22_340\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ModelSelector\.tsx",
+      $color <: r"(?s)0\.75_0\.22_340/0\.14\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ModelSelector\.tsx",
+      $color <: r"(?s)0\.80_0\.19_55\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ModelSelector\.tsx",
+      $color <: r"(?s)0\.80_0\.19_55/0\.14\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ModelSelector\.tsx",
+      $color <: r"(?s)0_0_0/0\.4\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolApprovalPrompt\.tsx",
+      $color <: r"(?s)0\.14_0\.04_75/0\.6\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolApprovalPrompt\.tsx",
+      $color <: r"(?s)0\.45_0\.12_75\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolApprovalPrompt\.tsx",
+      $color <: r"(?s)0\.88_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.10_0\.02_220/0\.8\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.12_0\.03_220/0\.5\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.18_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.18_0\.04_220/0\.4\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.18_0\.06_10/0\.4\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.18_0\.06_140/0\.4\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.18_0\.06_170/0\.4\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.18_0\.06_205/0\.4\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.18_0\.06_290/0\.4\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.18_0\.06_70/0\.4\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.30_0\.05_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.35_0\.10_10\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.35_0\.10_140\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.35_0\.10_170\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.35_0\.10_205\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.35_0\.10_290\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.35_0\.10_70\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.55_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.65_0\.06_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.65_0\.10_205\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.72_0\.20_290\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]ToolCallDisplay\.tsx",
+      $color <: r"(?s)0\.78_0\.18_170\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]WorkerAIPanel\.tsx",
+      $color <: r"(?s)0\.10_0\.02_220/0\.9\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]WorkerAIPanel\.tsx",
+      $color <: r"(?s)0\.12_0\.03_220/0\.95\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]WorkerAIPanel\.tsx",
+      $color <: r"(?s)0\.18_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]WorkerAIPanel\.tsx",
+      $color <: r"(?s)0\.20_0\.08_205/0\.6\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]WorkerAIPanel\.tsx",
+      $color <: r"(?s)0\.35_0\.10_150\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]WorkerAIPanel\.tsx",
+      $color <: r"(?s)0\.35_0\.10_205\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]WorkerAIPanel\.tsx",
+      $color <: r"(?s)0\.35_0\.10_70\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]WorkerAIPanel\.tsx",
+      $color <: r"(?s)0\.58_0\.04_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]WorkerAIPanel\.tsx",
+      $color <: r"(?s)0\.75_0\.16_150\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ai[/\x5C]WorkerAIPanel\.tsx",
+      $color <: r"(?s)0_0_0/0\.5\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]GraphLegend\.tsx",
+      $color <: r"(?s)0\.12_0\.03_220/0\.85\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]GraphLegend\.tsx",
+      $color <: r"(?s)0\.65_0\.04_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]ProvenanceEdge\.tsx",
+      $color <: r"(?s)0\.72 0\.02 220 / 0\.8\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]ProvenanceEdge\.tsx",
+      $color <: r"(?s)0\.75 0\.19 145 / 0\.8\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]ProvenanceEdge\.tsx",
+      $color <: r"(?s)0\.80 0\.15 85 / 0\.8\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]ProvenanceEdge\.tsx",
+      $color <: r"(?s)0\.85 0\.20 205\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]WorkerDetail\.tsx",
+      $color <: r"(?s)0\.72_0\.04_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]WorkerGraph\.tsx",
+      $color <: r"(?s)0\.12_0\.03_220/0\.75\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]metrics[/\x5C]AIQueueChart\.tsx",
+      $color <: r"(?s)0\.08 0\.02 220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]metrics[/\x5C]PerformanceOverlay\.tsx",
+      $color <: r"(?s)0\.58_0\.04_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]metrics[/\x5C]PerformanceOverlay\.tsx",
+      $color <: r"(?s)0\.78_0\.04_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]metrics[/\x5C]PerformanceOverlay\.tsx",
+      $color <: r"(?s)0\.7_0\.05_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]metrics[/\x5C]ThroughputChart\.tsx",
+      $color <: r"(?s)0\.68 0\.22 290\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]metrics[/\x5C]ThroughputChart\.tsx",
+      $color <: r"(?s)0\.72 0\.18 205\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]metrics[/\x5C]ThroughputChart\.tsx",
+      $color <: r"(?s)0\.72 0\.19 330\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]metrics[/\x5C]ThroughputChart\.tsx",
+      $color <: r"(?s)0\.78 0\.18 130\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]metrics[/\x5C]ThroughputChart\.tsx",
+      $color <: r"(?s)0\.8 0\.15 70\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]HistorySearch\.tsx",
+      $color <: r"(?s)0\.15_0\.02_220/0\.4\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]HistorySearch\.tsx",
+      $color <: r"(?s)0\.18_0\.04_220/0\.5\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]HistorySearch\.tsx",
+      $color <: r"(?s)0\.25_0\.03_220/0\.4\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]HistorySearch\.tsx",
+      $color <: r"(?s)0\.65_0\.18_85/0\.3\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]HistorySearch\.tsx",
+      $color <: r"(?s)0\.85_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]HistorySearch\.tsx",
+      $color <: r"(?s)0\.88_0\.14_85\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]SessionActions\.tsx",
+      $color <: r"(?s)0\.72_0\.20_25\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]SessionCard\.tsx",
+      $color <: r"(?s)0\.14_0\.02_220/0\.5\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]SessionCard\.tsx",
+      $color <: r"(?s)0\.15_0\.03_220/0\.95\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]SessionCard\.tsx",
+      $color <: r"(?s)0\.20_0\.06_10/0\.3\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]SessionCard\.tsx",
+      $color <: r"(?s)0\.28_0\.04_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]SessionCard\.tsx",
+      $color <: r"(?s)0\.28_0\.04_220/0\.5\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]SessionCard\.tsx",
+      $color <: r"(?s)0\.30_0\.05_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]SessionCard\.tsx",
+      $color <: r"(?s)0\.65_0\.04_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]SessionCard\.tsx",
+      $color <: r"(?s)0\.78_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]SessionCard\.tsx",
+      $color <: r"(?s)0\.88_0\.02_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]SessionCard\.tsx",
+      $color <: r"(?s)1_0_0/0\.03\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]SessionCard\.tsx",
+      $color <: r"(?s)1_0_0/0\.05\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]TemplateSelector\.tsx",
+      $color <: r"(?s)0\.12_0\.02_220/0\.8\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]TemplateSelector\.tsx",
+      $color <: r"(?s)0\.16_0\.03_220/0\.6\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]TemplateSelector\.tsx",
+      $color <: r"(?s)0\.26_0\.04_220/0\.5\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]TemplateSelector\.tsx",
+      $color <: r"(?s)0\.28_0\.04_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]TemplateSelector\.tsx",
+      $color <: r"(?s)0\.55_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]TemplateSelector\.tsx",
+      $color <: r"(?s)0\.72_0\.20_25\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]TemplateSelector\.tsx",
+      $color <: r"(?s)0\.88_0\.04_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]session[/\x5C]TemplateSelector\.tsx",
+      $color <: r"(?s)0\.92_0\.02_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipPanel\.tsx",
+      $color <: r"(?s)0\.68_0\.20_25/0\.10\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipPanel\.tsx",
+      $color <: r"(?s)0\.68_0\.20_25/0\.3\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipPanel\.tsx",
+      $color <: r"(?s)0\.75_0\.16_150\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipPanel\.tsx",
+      $color <: r"(?s)0\.80_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipPanel\.tsx",
+      $color <: r"(?s)0\.80_0\.15_25\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipPreview\.tsx",
+      $color <: r"(?s)0\.11_0\.02_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipPreview\.tsx",
+      $color <: r"(?s)0\.60_0\.10_70\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipPreview\.tsx",
+      $color <: r"(?s)0\.68_0\.20_25\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipPreview\.tsx",
+      $color <: r"(?s)0\.68_0\.20_25/0\.10\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipPreview\.tsx",
+      $color <: r"(?s)0\.68_0\.20_25/0\.3\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipPreview\.tsx",
+      $color <: r"(?s)0\.75_0\.16_150\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipPreview\.tsx",
+      $color <: r"(?s)0\.80_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipPreview\.tsx",
+      $color <: r"(?s)0\.80_0\.15_25\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipProgress\.tsx",
+      $color <: r"(?s)0\.10_0\.03_220/0\.6\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipProgress\.tsx",
+      $color <: r"(?s)0\.68_0\.20_25\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipProgress\.tsx",
+      $color <: r"(?s)0\.75_0\.16_150\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]ship[/\x5C]ShipProgress\.tsx",
+      $color <: r"(?s)0\.88_0\.03_220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]tools[/\x5C]ToolBuilder\.tsx",
+      $color <: r"(?s)0\.09_0\.02_220/0\.5\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]tools[/\x5C]ToolBuilder\.tsx",
+      $color <: r"(?s)0\.55_0\.14_10\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]worker[/\x5C]ProviderBadge\.tsx",
+      $color <: r"(?s)0\.16_0\.06_290/0\.5\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]worker[/\x5C]ProviderBadge\.tsx",
+      $color <: r"(?s)0\.45_0\.14_290\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]worker[/\x5C]ProviderBadge\.tsx",
+      $color <: r"(?s)0\.80_0\.14_290\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]worker[/\x5C]SpawnWorkerDialog\.tsx",
+      $color <: r"(?s)0\.04_0\.01_220/0\.55\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]worker[/\x5C]SpawnWorkerDialog\.tsx",
+      $color <: r"(?s)0\.16_0\.08_25/0\.4\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]worker[/\x5C]SpawnWorkerDialog\.tsx",
+      $color <: r"(?s)0\.45_0\.18_25\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]worker[/\x5C]SpawnWorkerDialog\.tsx",
+      $color <: r"(?s)0\.55_0\.14_205\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]worker[/\x5C]SpawnWorkerDialog\.tsx",
+      $color <: r"(?s)0\.82_0\.19_25\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]hooks[/\x5C]useAlerts\.ts",
+      $color <: r"(?s)0\.14_0\.06_10/0\.95\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]hooks[/\x5C]useAlerts\.ts",
+      $color <: r"(?s)0\.14_0\.06_70/0\.95\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]hooks[/\x5C]useAlerts\.ts",
+      $color <: r"(?s)0\.50_0\.14_10\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]hooks[/\x5C]useAlerts\.ts",
+      $color <: r"(?s)0\.55_0\.12_70\).*"
+    }
+  }
+}
+
+// `split` leaves the text after each `oklch(` as one element, so every
+// numeric color in a class string is checked on its own. Only the first
+// element (the text before any `oklch(`) is not a color; a template chunk
+// that starts with a digit there fails safe, as a false positive.
+or {
+  JsStringLiteralExpression(),
+  JsxString(),
+  JsTemplateChunkElement()
+} as $literal where {
+  $literal <: r"(?s).*oklch\(\s*[0-9.].*",
+  $after = split($literal, "oklch("),
+  $after <: some $color where { $color <: r"(?s)\s*[0-9.].*", not known_raw_oklch($color) },
+  register_diagnostic(span=$literal, message="Raw oklch() literal: use a token from src/styles/tokens.css (a utility, a /N modifier, var(--color-…) or oklch(from var(--color-…) …)). Known exceptions live in biome-plugins/no-raw-oklch.grit.", severity="error")
+}
