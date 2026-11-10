@@ -91,6 +91,15 @@ const SCROLLER = "flex flex-1 flex-col-reverse overflow-y-auto -outline-offset-2
 
 const TRANSCRIPT = "flex flex-col gap-2 p-3";
 
+/**
+ * Every transcript row. `content-visibility: auto` skips rendering a row
+ * while it is off-screen; it stays in the DOM, the accessibility tree and
+ * find-in-page. `contain-intrinsic-size: auto 51px` reserves the median
+ * row height measured on the e2e transcript fixture at 1440x900 until the
+ * row has rendered once, and its real height after that.
+ */
+const ROW = "[contain-intrinsic-size:auto_51px] [content-visibility:auto]";
+
 const BUBBLE_BASE = "rounded-md px-3 py-2 font-sans text-[13px] leading-normal wrap-anywhere";
 
 const USER_BUBBLE = `${BUBBLE_BASE} max-w-[85%] self-end whitespace-pre-wrap`;
@@ -177,7 +186,7 @@ function PermissionRow({
     // A fieldset groups the request with its answer buttons; `loading`, not `disabled`, holds them while an answer is in flight, so keyboard focus stays on the pressed button.
     <fieldset
       aria-label={`Permission Request: ${escapeForDisplay(payload.tool)}`}
-      className={waiting ? PERMISSION_PENDING : PERMISSION_DENIED}
+      className={`${waiting ? PERMISSION_PENDING : PERMISSION_DENIED} ${ROW}`}
     >
       <div className={PERMISSION_HEADER}>
         <Pill tone={PERMISSION_TONE[state]} size="sm">
@@ -229,13 +238,13 @@ function TranscriptRow({
     case "user":
       // The red tint is not the only sign of a failed send: it also says so in words.
       return item.failed ? (
-        <div className={USER_BUBBLE_FAILED}>
+        <div className={`${USER_BUBBLE_FAILED} ${ROW}`}>
           <span className="sr-only">You: </span>
           {item.text}
           <div className={SETTLED_ERROR}>Not Sent</div>
         </div>
       ) : (
-        <div className={USER_BUBBLE_OK}>
+        <div className={`${USER_BUBBLE_OK} ${ROW}`}>
           <span className="sr-only">You: </span>
           {item.text}
         </div>
@@ -247,27 +256,30 @@ function TranscriptRow({
       if (!text.trim()) return null;
       if (item.payload.kind === "thinking") {
         return (
-          <div className={THINKING_BLOCK}>
+          <div className={`${THINKING_BLOCK} ${ROW}`}>
             <span className="sr-only">Assistant (thinking): </span>
             {text}
           </div>
         );
       }
       return (
-        <div className={STREAM_WRAP}>
+        <div className={`${STREAM_WRAP} ${ROW}`}>
           <span className="sr-only">Assistant: </span>
           <AIMessageStream content={text} isStreaming={false} />
         </div>
       );
     }
     case "tool_call":
+      // The card has no class of its own to take; the wrapper is the row.
       return (
-        <ToolCallDisplay
-          name={item.payload.name}
-          input={toRecord(item.payload.input)}
-          result={item.result ? toResultString(item.result.content) : undefined}
-          status={item.result ? (item.result.isError ? "error" : "complete") : "executing"}
-        />
+        <div className={ROW}>
+          <ToolCallDisplay
+            name={item.payload.name}
+            input={toRecord(item.payload.input)}
+            result={item.result ? toResultString(item.result.content) : undefined}
+            status={item.result ? (item.result.isError ? "error" : "complete") : "executing"}
+          />
+        </div>
       );
     case "permission":
       return <PermissionRow workerId={workerId} item={item} inputRef={inputRef} />;
@@ -279,7 +291,11 @@ function TranscriptRow({
         ...(numTurns != null ? [`${numTurns} Turn${numTurns === 1 ? "" : "s"}`] : []),
         ...(costUsd != null ? [`$${costUsd.toFixed(4)}`] : []),
       ];
-      return <div className={status === "ok" ? SETTLED : SETTLED_ERROR}>{parts.join(", ")}</div>;
+      return (
+        <div className={`${status === "ok" ? SETTLED : SETTLED_ERROR} ${ROW}`}>
+          {parts.join(", ")}
+        </div>
+      );
     }
   }
 }

@@ -33,6 +33,16 @@ const SCROLLER =
 
 const MESSAGES = "flex flex-col gap-3 p-4";
 
+/**
+ * Every committed message. `content-visibility: auto` skips rendering a
+ * message while it is off-screen; it stays in the DOM, the accessibility
+ * tree and find-in-page. `contain-intrinsic-size: auto 112px` reserves the
+ * median message height measured on the e2e transcript fixture at
+ * 1440x900 until the message has rendered once, and its real height after
+ * that. The streaming bubble is always the newest, so it has neither.
+ */
+const MESSAGE_ROW = "[contain-intrinsic-size:auto_112px] [content-visibility:auto]";
+
 const INPUT_AREA =
   "flex items-end gap-2 border-t border-border bg-[oklch(0.10_0.02_220/0.9)] px-4 py-3 backdrop-blur-[8px]";
 
@@ -108,7 +118,7 @@ function MessageBubble({ message }: { readonly message: ChatMessage }): React.Re
 
   if (message.role === "user") {
     return (
-      <div className={USER_BUBBLE}>
+      <div className={`${USER_BUBBLE} ${MESSAGE_ROW}`}>
         <span className="sr-only">You: </span>
         <div>{message.content}</div>
         <div className={`${META} text-right`}>{time}</div>
@@ -117,7 +127,7 @@ function MessageBubble({ message }: { readonly message: ChatMessage }): React.Re
   }
 
   return (
-    <div className={ASSISTANT_BUBBLE}>
+    <div className={`${ASSISTANT_BUBBLE} ${MESSAGE_ROW}`}>
       <span className="sr-only">Assistant: </span>
       {message.thinking && <Thinking text={message.thinking} />}
       {message.content && <AIMessageStream content={message.content} isStreaming={false} />}
