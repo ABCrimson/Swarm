@@ -62,6 +62,11 @@ jobs:
         env:
           NAPI_RS_FORCE_WASI: "true"
 
+      # The raw-OKLCH Biome plugins still flag their fixtures, and every
+      # known exception still names a literal in its file.
+      - name: Raw-OKLCH gate proof
+        run: pnpm check:raw-oklch
+
       - name: Docs site
         run: pnpm build:site
 

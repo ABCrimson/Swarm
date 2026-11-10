@@ -1,7 +1,9 @@
 //! Orderly shutdown when the app quits.
 //!
-//! Every way the app quits (closing the last window, Cmd+Q,
-//! `AppHandle::exit`, `restart`, `request_restart`) that goes ahead ends in
+//! Every way the app quits (closing the last window, Cmd+Q, on macOS the
+//! Dock's Quit, logout and shutdown (`applicationWillTerminate:` ends tao's
+//! event loop), `AppHandle::exit`, `restart`, `request_restart`) that goes
+//! ahead ends in
 //! [`tauri::App::cleanup_before_exit`], which runs the plugins'
 //! cleanup hooks, and Tauri then exits the process without running the
 //! destructors of managed state. [`plugin`] registers the app's hook:

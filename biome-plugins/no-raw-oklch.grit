@@ -373,10 +373,6 @@ predicate known_raw_oklch($color) {
       $color <: r"(?s)0\.12_0\.03_220/0\.75\).*"
     },
     and {
-      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]metrics[/\x5C]AIQueueChart\.tsx",
-      $color <: r"(?s)0\.08 0\.02 220\).*"
-    },
-    and {
       $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]metrics[/\x5C]PerformanceOverlay\.tsx",
       $color <: r"(?s)0\.58_0\.04_220\).*"
     },

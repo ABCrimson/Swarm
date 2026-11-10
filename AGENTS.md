@@ -179,6 +179,7 @@ pnpm exec biome ci .
 pnpm test:coverage      # Vitest plus the coverage floor in vitest.config.ts
 pnpm build              # also: pnpm build:web
 pnpm check:compiler     # also: NAPI_RS_FORCE_WASI=true pnpm check:compiler
+pnpm check:raw-oklch    # the raw-OKLCH Biome plugins still fail their fixtures; no stale exception
 pnpm exec knip --treat-config-hints-as-errors   # dead code / unused deps (knip.jsonc)
 pnpm test:e2e --shuffle # Playwright (chromium; webkit and firefox are opt-in projects)
 pnpm build:site         # docs site

@@ -4,7 +4,7 @@
 
 import { Bar, BarChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from "recharts";
 import { ChartPanel } from "#components/metrics/ChartPanel";
-import { PRIORITY_COLOR } from "#lib/chart-theme";
+import { BAR_SEGMENT_STROKE, PRIORITY_COLOR } from "#lib/chart-theme";
 import { useAiStore } from "#store/ai";
 import type { AiQueueItem } from "#store/types";
 
@@ -63,7 +63,7 @@ export function AIQueueChart(): React.ReactElement {
             name={label}
             stackId="queue"
             fill={color}
-            stroke="oklch(0.08 0.02 220)"
+            stroke={BAR_SEGMENT_STROKE}
             strokeWidth={1}
             isAnimationActive={false}
           />
