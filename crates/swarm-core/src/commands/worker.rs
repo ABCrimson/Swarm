@@ -283,10 +283,11 @@ mod tests {
     use std::sync::Arc;
 
     use serde_json::json;
+    use tracing_subscriber::fmt::format::FmtSpan;
 
     use super::*;
     use crate::commands::test_support::test_ctx;
-    use crate::test_support::SharedBuf;
+    use crate::test_support::capture_logs;
 
     /// `spawn_worker` is the first place a worker's `config` (and its
     /// secret-bearing `env`) is logged on the command path. Drives the
@@ -295,16 +296,7 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_worker_never_logs_an_env_secret() {
         const SECRET: &str = "sk-ant-registry-handler-secret-should-never-be-logged";
-        let capture = SharedBuf::default();
-        let _subscriber = tracing::subscriber::set_default(
-            tracing_subscriber::fmt()
-                .with_writer(capture.clone())
-                .with_max_level(tracing::Level::TRACE)
-                .with_ansi(false)
-                .finish(),
-        );
-        // A parallel test's subscriber change can leave a callsite cached as disabled; re-evaluate with this subscriber installed.
-        tracing::callsite::rebuild_interest_cache();
+        let capture = capture_logs(tracing::Level::TRACE, FmtSpan::NONE);
         let (ctx, _dir, _events) = test_ctx();
 
         let result = spawn_worker(
@@ -324,7 +316,7 @@ mod tests {
             "the bogus originWorker must stop the spawn"
         );
         assert!(ctx.registry.list_workers().is_empty());
-        let captured = String::from_utf8_lossy(&capture.0.lock()).into_owned();
+        let captured = capture.text();
         assert!(!captured.contains(SECRET), "leaked: {captured}");
         assert!(
             captured.contains("Registry Handler Secret Bearer")

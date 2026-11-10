@@ -29,6 +29,6 @@ keyring       = { workspace = true }
 zeroize       = { workspace = true }
 
 [dev-dependencies]
-# Captures formatted tracing output in tests that prove a worker's env
-# secrets never reach a log line (commands::worker, worker::lifecycle).
+# The formatting subscriber behind `test_support::capture_logs`, the one
+# helper every test that asserts on tracing output goes through.
 tracing-subscriber = { workspace = true }

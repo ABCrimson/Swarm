@@ -1182,15 +1182,10 @@ mod tests {
     /// with its type tag instead of losing it silently.
     #[test]
     fn test_a_record_behind_the_shutdown_barrier_is_dropped_with_an_error_log() {
-        let capture = crate::test_support::SharedBuf::default();
-        let _subscriber = tracing::subscriber::set_default(
-            tracing_subscriber::fmt()
-                .with_writer(capture.clone())
-                .with_ansi(false)
-                .finish(),
+        let capture = crate::test_support::capture_logs(
+            tracing::Level::INFO,
+            tracing_subscriber::fmt::format::FmtSpan::NONE,
         );
-        // A parallel test's subscriber change can leave a callsite cached as disabled; re-evaluate with this subscriber installed.
-        tracing::callsite::rebuild_interest_cache();
         let (done_tx, done_rx) = mpsc::sync_channel(1);
         let (late, mut ack) = acked(spawned());
         let (_log, seen) = drive(
@@ -1201,7 +1196,7 @@ mod tests {
         assert_eq!(done_rx.recv().unwrap().unwrap(), 0);
         assert!(seen.is_empty(), "nothing behind the barrier is emitted");
         assert_matches!(ack.try_recv(), Err(oneshot::error::TryRecvError::Closed));
-        let captured = String::from_utf8_lossy(&capture.0.lock()).into_owned();
+        let captured = capture.text();
         assert!(
             captured.contains("ERROR") && captured.contains("event_type=\"worker_spawned\""),
             "{captured}"
