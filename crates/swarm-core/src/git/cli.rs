@@ -585,6 +585,8 @@ fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
     use crate::git::test_support::TempRepo;
 
@@ -813,14 +815,14 @@ mod tests {
                 version: (2, 32, 0)
             }
         );
-        assert!(matches!(
+        assert_matches!(
             classify_version("git version 2.31.9\n"),
             GitCapability::Unavailable { reason } if reason.contains("older than the required 2.32.0")
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             classify_version("not git"),
             GitCapability::Unavailable { reason } if reason.contains("could not parse")
-        ));
+        );
     }
 
     #[test]
@@ -947,10 +949,7 @@ mod tests {
             Duration::from_secs(2),
         );
 
-        assert!(
-            matches!(result, Err(AppError::GitTimeout { .. })),
-            "{result:?}"
-        );
+        assert_matches!(result, Err(AppError::GitTimeout { .. }), "{result:?}");
         let index_lock = repo.root().join(".git").join("index.lock");
         assert!(
             !index_lock.exists(),
@@ -974,10 +973,7 @@ mod tests {
             &args_in(repo.root(), &["-c", &alias, "hang"]),
             Duration::from_secs(2),
         );
-        assert!(
-            matches!(result, Err(AppError::GitTimeout { .. })),
-            "{result:?}"
-        );
+        assert_matches!(result, Err(AppError::GitTimeout { .. }), "{result:?}");
         let pid = std::fs::read_to_string(&pid_file)
             .unwrap()
             .trim()
