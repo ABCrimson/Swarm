@@ -3,15 +3,12 @@ import { PROVIDER_LABELS, type ProviderId } from "#lib/agent-events";
 import { escapeForDisplay } from "#lib/display-escape";
 
 /**
- * Categorical provider color — not one of Pill's semantic tones, so it
- * is applied as a style override (inline style wins over the
- * `.swarm-pill[data-tone]` rule).
+ * Categorical provider color — not one of Pill's semantic tones, so it is
+ * applied as utility classes (the `utilities` layer wins over the
+ * `.swarm-pill[data-tone]` rules in the `components` layer).
  */
-const PROVIDER_BADGE_COLOR = {
-  background: "oklch(0.16 0.06 290 / 0.5)",
-  color: "oklch(0.80 0.14 290)",
-  borderColor: "oklch(0.45 0.14 290)",
-};
+const PROVIDER_BADGE_CLASS =
+  "border-[oklch(0.45_0.14_290)] bg-[oklch(0.16_0.06_290/0.5)] text-[oklch(0.80_0.14_290)]";
 
 interface ProviderBadgeProps {
   readonly provider: ProviderId;
@@ -28,7 +25,7 @@ export function ProviderBadge({ provider, model }: ProviderBadgeProps): React.Re
   const label = PROVIDER_LABELS[provider];
   const text = model ? `${label}, ${escapeForDisplay(model)}` : label;
   return (
-    <Pill tone="neutral" style={PROVIDER_BADGE_COLOR} maxWidth={220} title={text}>
+    <Pill tone="neutral" className={PROVIDER_BADGE_CLASS} maxWidth={220} title={text}>
       {text}
     </Pill>
   );

@@ -52,11 +52,13 @@ describe("SwarmToaster", () => {
 
     const toaster = (await findToast("Saved")).closest<HTMLElement>("[data-sonner-toaster]");
     expect(toaster).not.toBeNull();
+    // Each variable is an important arbitrary-property utility (important, because Sonner's own
+    // unlayered defaults would otherwise outrank the `utilities` layer) built from a theme token.
+    const classes = toaster?.className.split(/\s+/) ?? [];
     for (const type of ["success", "error", "warning", "info"]) {
       for (const part of ["bg", "border", "text"]) {
-        expect(toaster?.style.getPropertyValue(`--${type}-${part}`), `--${type}-${part}`).toMatch(
-          /var\(--color-/,
-        );
+        const utility = classes.find((c) => c.startsWith(`[--${type}-${part}:`));
+        expect(utility, `--${type}-${part}`).toMatch(/var\(--color-[a-z-]+\).*\]!$/);
       }
     }
   });

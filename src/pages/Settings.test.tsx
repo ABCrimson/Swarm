@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { getDefaultStore } from "jotai";
-import { Activity } from "react";
+import { Activity, StrictMode } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsBridge } from "#hooks/useSettingsBridge";
@@ -54,6 +54,11 @@ vi.mock("sonner", () => ({
   Toaster: () => null,
 }));
 
+/** Renders inside an awaited act(), so the API key field — read through `use()` — reveals before the test goes on. */
+async function renderPage(ui: React.ReactElement) {
+  return act(async () => render(ui));
+}
+
 const store = getDefaultStore();
 const DEFAULT_THRESHOLDS = store.get(alertThresholdsAtom);
 
@@ -76,23 +81,23 @@ beforeEach(() => {
 });
 
 describe("Settings — header subtitle", () => {
-  it("says settings are saved on this device in the desktop app", () => {
+  it("says settings are saved on this device in the desktop app", async () => {
     vi.mocked(isTauri).mockReturnValue(true);
     vi.mocked(hasTransport).mockReturnValue(true);
-    render(<Settings />);
+    await renderPage(<Settings />);
     expect(screen.getByText("Saved On This Device")).toBeInTheDocument();
   });
 
-  it("names the two daemon-persisted settings on swarmd", () => {
+  it("names the two daemon-persisted settings on swarmd", async () => {
     vi.mocked(hasTransport).mockReturnValue(true);
-    render(<Settings />);
+    await renderPage(<Settings />);
     expect(
       screen.getByText("Only The Stream Limit And Registry Cap Are Saved Outside The Desktop App"),
     ).toBeInTheDocument();
   });
 
-  it("says nothing is saved without a backend", () => {
-    render(<Settings />);
+  it("says nothing is saved without a backend", async () => {
+    await renderPage(<Settings />);
     expect(screen.getByText("Not Saved Outside The Desktop App")).toBeInTheDocument();
   });
 });
@@ -102,15 +107,84 @@ describe("Settings — API key", () => {
     vi.mocked(readConfig).mockImplementation(async (key) =>
       key === "anthropic_api_key" ? "sk-ant-existing-key" : null,
     );
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     const input = screen.getByLabelText<HTMLInputElement>("API Key");
     await waitFor(() => expect(input.value).toBe("sk-ant-existing-key"));
     expect(input.type).toBe("password");
   });
 
-  it("describes where the key is stored: the OS keychain, never plaintext", () => {
-    render(<Settings />);
+  it("holds the field read-only until the saved key answers, then makes it editable", async () => {
+    const read = Promise.withResolvers<string | null>();
+    vi.mocked(readConfig).mockImplementation((key) =>
+      key === "anthropic_api_key" ? read.promise : Promise.resolve(null),
+    );
+    await renderPage(<Settings />);
+
+    expect(screen.getByLabelText("API Key")).toHaveAttribute("readonly");
+    expect(screen.getByRole("button", { name: "Save API Key" })).toBeDisabled();
+
+    await act(async () => read.resolve("sk-ant-late-key"));
+
+    const input = screen.getByLabelText<HTMLInputElement>("API Key");
+    expect(input.value).toBe("sk-ant-late-key");
+    expect(input).not.toHaveAttribute("readonly");
+  });
+
+  it("leaves the field empty and editable when the saved key cannot be read", async () => {
+    const user = userEvent.setup();
+    using spyStack = new DisposableStack();
+    const warn = spyStack.use(vi.spyOn(console, "warn").mockImplementation(() => {}));
+    vi.mocked(readConfig).mockImplementation(async (key) => {
+      if (key === "anthropic_api_key") throw new Error("transport down");
+      return null;
+    });
+    await renderPage(<Settings />);
+
+    const input = screen.getByLabelText<HTMLInputElement>("API Key");
+    expect(input.value).toBe("");
+    await user.type(input, "sk-ant-typed");
+    expect(input.value).toBe("sk-ant-typed");
+    expect(warn).toHaveBeenCalledWith(
+      "[settings] Could not read the saved API key:",
+      expect.any(Error),
+    );
+  });
+
+  it("reads the saved key once, even when Strict Mode mounts the page twice", async () => {
+    vi.mocked(readConfig).mockImplementation(async (key) =>
+      key === "anthropic_api_key" ? "sk-ant-existing-key" : null,
+    );
+    await renderPage(
+      <StrictMode>
+        <Settings />
+      </StrictMode>,
+    );
+
+    expect(screen.getByLabelText<HTMLInputElement>("API Key").value).toBe("sk-ant-existing-key");
+    expect(
+      vi.mocked(readConfig).mock.calls.filter(([key]) => key === "anthropic_api_key"),
+    ).toHaveLength(1);
+  });
+
+  it("reads the saved key afresh when the page mounts again", async () => {
+    vi.mocked(readConfig).mockImplementation(async (key) =>
+      key === "anthropic_api_key" ? "sk-ant-first" : null,
+    );
+    const { unmount } = await renderPage(<Settings />);
+    expect(screen.getByLabelText<HTMLInputElement>("API Key").value).toBe("sk-ant-first");
+    unmount();
+
+    vi.mocked(readConfig).mockImplementation(async (key) =>
+      key === "anthropic_api_key" ? "sk-ant-second" : null,
+    );
+    await renderPage(<Settings />);
+
+    expect(screen.getByLabelText<HTMLInputElement>("API Key").value).toBe("sk-ant-second");
+  });
+
+  it("describes where the key is stored: the OS keychain, never plaintext", async () => {
+    await renderPage(<Settings />);
 
     const input = screen.getByLabelText("API Key");
     expect(input).toHaveAccessibleDescription(/Stored In Your OS Keychain/);
@@ -124,7 +198,7 @@ describe("Settings — API key", () => {
     const spies = (["log", "info", "warn", "error", "debug"] as const).map((method) =>
       spyStack.use(vi.spyOn(console, method).mockImplementation(() => {})),
     );
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     const save = screen.getByRole("button", { name: "Save API Key" });
     expect(save).toBeDisabled();
@@ -148,7 +222,7 @@ describe("Settings — API key", () => {
   it("keeps Save enabled and reports a failed write", async () => {
     const user = userEvent.setup();
     vi.mocked(writeConfig).mockRejectedValue(new Error("disk full"));
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     await user.type(screen.getByLabelText("API Key"), "sk-ant-x");
     await user.keyboard("{Enter}");
@@ -165,7 +239,7 @@ describe("Settings — API key", () => {
 describe("Settings — AI model", () => {
   it("is a single-choice radio group named by the model", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     const group = screen.getByRole("radiogroup", { name: "AI Model" });
     const sonnet = within(group).getByRole("radio", { name: "Claude Sonnet 5.5" });
@@ -183,7 +257,7 @@ describe("Settings — AI model", () => {
 
   it("warns once, and does not also toast success, for the gated model", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     // Looked up from the catalog so a relabel (e.g. a point release) cannot break this.
     const gated = Object.values(CLAUDE_MODELS).find((model) => model.gated !== undefined);
@@ -199,7 +273,7 @@ describe("Settings — AI model", () => {
 describe("Settings — switches and number fields", () => {
   it("names each switch by its label and describes it by its description", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     const toggle = screen.getByRole("switch", { name: "Check For Updates On Launch" });
     expect(toggle).toHaveAccessibleDescription(
@@ -215,7 +289,7 @@ describe("Settings — switches and number fields", () => {
 
   it("commits a number field once, clamped, on blur — never per keystroke", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     const retention = screen.getByLabelText("Log Retention");
     await user.clear(retention);
@@ -230,7 +304,7 @@ describe("Settings — switches and number fields", () => {
 
   it("restores the current value when a number field is left blank", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     const cooldown = screen.getByLabelText("Alert Cooldown");
     await user.clear(cooldown);
@@ -244,7 +318,7 @@ describe("Settings — switches and number fields", () => {
 describe("Settings — worker registry cap", () => {
   it("applies a new cap through set_max_workers", async () => {
     const user = userEvent.setup();
-    render(<SettingsWithBridge />);
+    await renderPage(<SettingsWithBridge />);
 
     const cap = screen.getByLabelText("Worker Registry Cap");
     await user.clear(cap);
@@ -260,7 +334,7 @@ describe("Settings — worker registry cap", () => {
   it("shows and announces the cap the backend reports when it differs from the request", async () => {
     vi.mocked(setMaxWorkers).mockResolvedValue(10);
     const user = userEvent.setup();
-    render(<SettingsWithBridge />);
+    await renderPage(<SettingsWithBridge />);
 
     const cap = screen.getByLabelText("Worker Registry Cap");
     await user.clear(cap);
@@ -275,7 +349,7 @@ describe("Settings — worker registry cap", () => {
   it("rolls the shown cap back when the backend refuses it", async () => {
     const user = userEvent.setup();
     vi.mocked(setMaxWorkers).mockRejectedValue(new Error("refused"));
-    render(<SettingsWithBridge />);
+    await renderPage(<SettingsWithBridge />);
 
     const cap = screen.getByLabelText("Worker Registry Cap");
     await user.clear(cap);
@@ -320,7 +394,7 @@ describe("Settings — worker registry cap, one call in flight", () => {
   it("shows the saved cap at launch without pushing it", async () => {
     vi.mocked(hasTransport).mockReturnValue(true);
     vi.mocked(readConfig).mockImplementation(async (key) => (key === "max_workers" ? 8 : null));
-    render(<SettingsWithBridge />);
+    await renderPage(<SettingsWithBridge />);
     await waitFor(() => expect(screen.getByLabelText("Worker Registry Cap")).toHaveValue(8));
     expect(setMaxWorkers).not.toHaveBeenCalled();
   });
@@ -328,7 +402,7 @@ describe("Settings — worker registry cap, one call in flight", () => {
   it("sends a second rapid commit only after the first reply, then the latest value", async () => {
     const first = Promise.withResolvers<number | null>();
     vi.mocked(setMaxWorkers).mockReturnValueOnce(first.promise);
-    render(<SettingsWithBridge />);
+    await renderPage(<SettingsWithBridge />);
 
     commitCap(12);
     const cap = commitCap(10);
@@ -345,7 +419,7 @@ describe("Settings — worker registry cap, one call in flight", () => {
   it("collapses commits made meanwhile into the latest one", async () => {
     const first = Promise.withResolvers<number | null>();
     vi.mocked(setMaxWorkers).mockReturnValueOnce(first.promise);
-    render(<SettingsWithBridge />);
+    await renderPage(<SettingsWithBridge />);
 
     commitCap(12);
     commitCap(11);
@@ -357,7 +431,7 @@ describe("Settings — worker registry cap, one call in flight", () => {
 
   it("shows the server's value when the reply differs from the request", async () => {
     vi.mocked(setMaxWorkers).mockResolvedValueOnce(9);
-    render(<SettingsWithBridge />);
+    await renderPage(<SettingsWithBridge />);
 
     const cap = commitCap(12);
 
@@ -369,7 +443,7 @@ describe("Settings — worker registry cap, one call in flight", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(setMaxWorkers).mockReturnValueOnce(new Promise<number | null>(() => {}));
-    render(<SettingsWithBridge />);
+    await renderPage(<SettingsWithBridge />);
 
     const cap = commitCap(12);
     await act(async () => {
@@ -394,7 +468,7 @@ describe("Settings — worker registry cap, one call in flight", () => {
     const a = Promise.withResolvers<number | null>();
     const b = Promise.withResolvers<number | null>();
     vi.mocked(setMaxWorkers).mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
-    render(<SettingsWithBridge />);
+    await renderPage(<SettingsWithBridge />);
 
     commitCap(12);
     await act(async () => {
@@ -414,7 +488,7 @@ describe("Settings — worker registry cap, one call in flight", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(setMaxWorkers).mockReturnValueOnce(new Promise<number | null>(() => {}));
-    const { rerender } = render(<Host mode="visible" />);
+    const { rerender } = await renderPage(<Host mode="visible" />);
 
     commitCap(12);
     rerender(<Host mode="hidden" />);
@@ -437,7 +511,7 @@ describe("Settings — alert thresholds", () => {
 
   it("clamps typed values to 0–100 and restores blank fields on blur", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    await renderPage(<Settings />);
     await startEditing(user);
 
     const cpuCritical = screen.getByLabelText("CPU Critical");
@@ -459,7 +533,7 @@ describe("Settings — alert thresholds", () => {
 
   it("never saves a blank field as 0, even when submitted without blurring", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    await renderPage(<Settings />);
     await startEditing(user);
 
     const cpuWarning = screen.getByLabelText("CPU Warning");
@@ -473,7 +547,7 @@ describe("Settings — alert thresholds", () => {
 
   it("refuses a warning level at or above its critical level", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    await renderPage(<Settings />);
     await startEditing(user);
 
     const cpuWarning = screen.getByLabelText("CPU Warning");
@@ -502,7 +576,7 @@ describe("Settings — alert thresholds", () => {
 
   it("discards drafts on Cancel", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    await renderPage(<Settings />);
     await startEditing(user);
 
     const cpuWarning = screen.getByLabelText("CPU Warning");
@@ -519,7 +593,7 @@ describe("Settings — alert thresholds", () => {
 describe("Settings — keybindings", () => {
   it("captures a new binding once, even after the parent re-renders", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     const chip = screen.getByRole("button", { name: "Change Shortcut For Performance Overlay" });
     await user.click(chip);
@@ -533,7 +607,7 @@ describe("Settings — keybindings", () => {
 
   it("rejects a binding another shortcut already uses", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     const chip = screen.getByRole("button", { name: "Change Shortcut For Graph / List Toggle" });
     await user.click(chip);
@@ -551,7 +625,7 @@ describe("Settings — updates", () => {
   ] as const)("reports %j", async ([result, level, message]) => {
     const user = userEvent.setup();
     vi.mocked(checkForUpdates).mockResolvedValue(result);
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     await user.click(screen.getByRole("button", { name: "Check For Updates" }));
 
@@ -561,7 +635,7 @@ describe("Settings — updates", () => {
   it("reports why the update check failed", async () => {
     const user = userEvent.setup();
     vi.mocked(checkForUpdates).mockRejectedValue(new Error("offline"));
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     await user.click(screen.getByRole("button", { name: "Check For Updates" }));
 
@@ -582,7 +656,7 @@ describe("Settings — AI concurrent stream limit acknowledgement", () => {
     const user = userEvent.setup();
     using _consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(setAgentConcurrency).mockRejectedValueOnce(new Error("limit out of range"));
-    render(<SettingsWithBridge />);
+    await renderPage(<SettingsWithBridge />);
 
     const field = screen.getByLabelText("AI Concurrent Stream Limit");
     await user.clear(field);
@@ -605,7 +679,7 @@ describe("Settings — AI concurrent stream limit acknowledgement", () => {
     const user = userEvent.setup();
     const ack = Promise.withResolvers<number | null>();
     vi.mocked(setAgentConcurrency).mockReturnValueOnce(ack.promise);
-    render(<SettingsWithBridge />);
+    await renderPage(<SettingsWithBridge />);
 
     const field = screen.getByLabelText("AI Concurrent Stream Limit");
     await user.clear(field);
@@ -627,7 +701,7 @@ describe("Settings — in the browser build", () => {
 
   it("disables Check For Updates with the desktop-only reason, so the check cannot report up to date", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     const button = screen.getByRole("button", { name: "Check For Updates" });
     expect(button).toBeDisabled();
@@ -641,7 +715,7 @@ describe("Settings — in the browser build", () => {
 
   it("disables the API key field and Save with the desktop-only reason, and never touches the key", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     const input = screen.getByLabelText("API Key");
     expect(input).toBeDisabled();
@@ -659,7 +733,7 @@ describe("Settings — in the browser build", () => {
     "disables the %s switch with the desktop-only reason",
     async (name) => {
       const user = userEvent.setup();
-      render(<Settings />);
+      await renderPage(<Settings />);
 
       const toggle = screen.getByRole("switch", { name });
       expect(toggle).toBeDisabled();
@@ -673,17 +747,17 @@ describe("Settings — in the browser build", () => {
 });
 
 describe("Settings — auto-snapshot interval", () => {
-  it("is disabled with the desktop-only reason in the browser build", () => {
+  it("is disabled with the desktop-only reason in the browser build", async () => {
     vi.mocked(hasCapability).mockReturnValue(false);
-    render(<Settings />);
+    await renderPage(<Settings />);
 
     const field = screen.getByLabelText("Auto-Snapshot Interval");
     expect(field).toBeDisabled();
     expect(field).toHaveAccessibleDescription(new RegExp(DESKTOP_ONLY_REASON));
   });
 
-  it("is editable when the transport offers local stores", () => {
-    render(<Settings />);
+  it("is editable when the transport offers local stores", async () => {
+    await renderPage(<Settings />);
 
     const field = screen.getByLabelText("Auto-Snapshot Interval");
     expect(field).toBeEnabled();

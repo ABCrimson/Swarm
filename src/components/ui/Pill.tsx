@@ -1,8 +1,10 @@
+import type { CSSProperties } from "react";
+
 export type PillTone = "neutral" | "info" | "success" | "warning" | "danger";
 type PillSize = "sm" | "md";
 
 interface PillOwnProps {
-  /** Semantic color — distinct from decorative/categorical accent colors, which stay as an inline `style` override. */
+  /** Semantic color — distinct from decorative/categorical accent colors, which are applied as utility classes in `className`. */
   readonly tone?: PillTone;
   readonly size?: PillSize;
   /** Caps the label width so overflowing (e.g. user-generated) text ellipsizes instead of stretching the pill. */
@@ -32,9 +34,10 @@ type PillProps = StaticPillProps | InteractivePillProps;
  * Fixed padding/radius/height/font-size/letter-spacing per `size`, and a
  * fixed semantic color per `tone` (`.swarm-pill` in components.css).
  * Decorative/categorical colors (e.g. per-tool-name accents) that aren't
- * one of the five semantic tones can still be applied via a `style`
- * override — inline styles win over the `.swarm-pill` class, so shape
- * stays consistent while color stays per-instance.
+ * one of the five semantic tones can still be applied through `className`
+ * utilities — the `utilities` layer wins over the `.swarm-pill` rules in the
+ * `components` layer (an inline `style` wins too) — so shape stays
+ * consistent while color stays per-instance.
  *
  * `interactive` picks the element: pills that act render a `<button>`
  * (and are the only ones the types let take `onClick`); pills that only
@@ -43,7 +46,18 @@ type PillProps = StaticPillProps | InteractivePillProps;
 export function Pill(props: PillProps): React.ReactElement {
   const { tone = "neutral", size = "sm", maxWidth, children, className, ...rest } = props;
   const label = (
-    <span className="swarm-pill-label" style={maxWidth != null ? { maxWidth } : undefined}>
+    <span
+      className={
+        maxWidth != null ? "swarm-pill-label max-w-(--pill-max-width)" : "swarm-pill-label"
+      }
+      style={
+        maxWidth != null
+          ? ({
+              "--pill-max-width": typeof maxWidth === "number" ? `${maxWidth}px` : maxWidth,
+            } as CSSProperties)
+          : undefined
+      }
+    >
       {children}
     </span>
   );

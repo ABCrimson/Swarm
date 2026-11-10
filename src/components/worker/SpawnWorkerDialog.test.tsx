@@ -7,6 +7,7 @@ import "#test/top-layer-shim";
 import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProbeReport } from "#lib/agent-events";
 
@@ -40,6 +41,11 @@ import {
 
 const AVAILABLE: ProbeReport = { available: true, version: "1.0.0", detail: null };
 
+/** Renders inside an awaited act(), so the rows that read the probes and the saved root through `use()` reveal. */
+async function renderDialog(ui: React.ReactElement) {
+  return act(async () => render(ui));
+}
+
 async function waitForProbeSettled(): Promise<void> {
   // Callers leave the project-root load at its `null` default (no
   // persisted root), so the "Loading…" placeholder clears once effects
@@ -65,7 +71,7 @@ describe("SpawnWorkerDialog", () => {
   });
 
   it("opens as a modal dialog labelled by its title", async () => {
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitForProbeSettled();
 
     const dialog = screen.getByRole("dialog", { name: "Spawn Worker" });
@@ -79,7 +85,7 @@ describe("SpawnWorkerDialog", () => {
         ? Promise.reject(new Error("ipc down"))
         : Promise.resolve(AVAILABLE),
     );
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
 
     await waitFor(() => expect(screen.getByRole("radio", { name: "Claude Code" })).toBeDisabled());
     expect(screen.getByText(/Claude Code Unavailable/)).toHaveTextContent(
@@ -90,7 +96,7 @@ describe("SpawnWorkerDialog", () => {
 
   it("stops loading and allows spawning when reading the saved project root fails", async () => {
     getPersistedRepoRootMock.mockRejectedValue(new Error("config unreadable"));
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
 
     expect(
       await screen.findByText("No Project Root — Spawns Without Worktree Isolation"),
@@ -105,7 +111,7 @@ describe("SpawnWorkerDialog", () => {
   it("names the real cause when validating the saved project root fails", async () => {
     getPersistedRepoRootMock.mockResolvedValue("/repo/root");
     vi.mocked(validateRepoRoot).mockRejectedValue(new Error("git not found"));
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Could Not Validate The Saved Project Root /repo/root: git not found",
@@ -116,7 +122,7 @@ describe("SpawnWorkerDialog", () => {
     const user = userEvent.setup();
     vi.mocked(openFolderPicker).mockResolvedValue("/not/a/repo");
     vi.mocked(validateRepoRoot).mockRejectedValueOnce("not inside a repository");
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitForProbeSettled();
 
     await user.click(screen.getByRole("button", { name: "Choose…" }));
@@ -134,7 +140,7 @@ describe("SpawnWorkerDialog", () => {
   it("shows a rejected folder picker inside the dialog", async () => {
     const user = userEvent.setup();
     vi.mocked(openFolderPicker).mockRejectedValueOnce(new Error("dialog unavailable"));
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitForProbeSettled();
 
     await user.click(screen.getByRole("button", { name: "Choose…" }));
@@ -146,7 +152,7 @@ describe("SpawnWorkerDialog", () => {
 
   it("hides the Claude Code fields until that provider is selected, then hides them again on switch-back", async () => {
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitForProbeSettled();
 
     expect(screen.queryByLabelText("Model Alias")).not.toBeInTheDocument();
@@ -170,7 +176,7 @@ describe("SpawnWorkerDialog", () => {
       detail: "Claude Code CLI Not Found On PATH",
     });
 
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitForProbeSettled();
 
     const claudeRadio = await screen.findByRole("radio", { name: "Claude Code" });
@@ -185,7 +191,7 @@ describe("SpawnWorkerDialog", () => {
     const probe = Promise.withResolvers<ProbeReport>();
     vi.mocked(agentProbe).mockImplementation(() => probe.promise);
 
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
 
     // Project root has already resolved (mocked to null), but the probe
     // is deliberately left pending — the option must not be disabled
@@ -199,7 +205,7 @@ describe("SpawnWorkerDialog", () => {
   it("submits via spawnWorker (not agentSpawn) for the default Webview Anthropic provider", async () => {
     const user = userEvent.setup();
     const onSpawned = vi.fn();
-    render(<SpawnWorkerDialog onClose={vi.fn()} onSpawned={onSpawned} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} onSpawned={onSpawned} />);
     await waitForProbeSettled();
 
     await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
@@ -212,7 +218,7 @@ describe("SpawnWorkerDialog", () => {
 
   it("submits via agentSpawn with the provider/model/trust-tier shape when Claude Code is selected", async () => {
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitForProbeSettled();
 
     await user.click(screen.getByRole("radio", { name: "Claude Code" }));
@@ -236,7 +242,7 @@ describe("SpawnWorkerDialog", () => {
 
   it('submits via agentSpawn with provider "codex" when Codex is selected', async () => {
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitForProbeSettled();
 
     await user.click(screen.getByRole("radio", { name: "Codex" }));
@@ -254,7 +260,7 @@ describe("SpawnWorkerDialog", () => {
 
   it("leaves the Codex model blank by default so Codex runs its own configured default", async () => {
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitForProbeSettled();
 
     await user.click(screen.getByRole("radio", { name: "Codex" }));
@@ -275,7 +281,7 @@ describe("SpawnWorkerDialog", () => {
   it("closes itself (firing onClose once) after a successful spawn", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={onClose} />);
+    await renderDialog(<SpawnWorkerDialog onClose={onClose} />);
     await waitForProbeSettled();
 
     await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
@@ -293,7 +299,7 @@ describe("SpawnWorkerDialog", () => {
       ),
     );
 
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitForProbeSettled();
 
     const codexRadio = await screen.findByRole("radio", { name: "Codex" });
@@ -304,12 +310,90 @@ describe("SpawnWorkerDialog", () => {
     );
   });
 
+  it("probes each provider and reads the saved root once, even when Strict Mode mounts it twice", async () => {
+    await renderDialog(
+      <StrictMode>
+        <SpawnWorkerDialog onClose={vi.fn()} />
+      </StrictMode>,
+    );
+    await waitForProbeSettled();
+
+    expect(vi.mocked(agentProbe).mock.calls).toStrictEqual([["claude_code"], ["codex"]]);
+    expect(getPersistedRepoRootMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("probes and reads the saved root afresh each time the dialog opens", async () => {
+    vi.mocked(agentProbe).mockResolvedValue({
+      available: false,
+      version: null,
+      detail: "Not Signed In",
+    });
+    const { unmount } = await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
+    expect(screen.getByRole("radio", { name: "Claude Code" })).toBeDisabled();
+    unmount();
+
+    vi.mocked(agentProbe).mockResolvedValue(AVAILABLE);
+    getPersistedRepoRootMock.mockResolvedValue("/repo/root");
+    vi.mocked(validateRepoRoot).mockResolvedValue("/repo/root");
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
+
+    expect(agentProbe).toHaveBeenCalledTimes(4);
+    expect(getPersistedRepoRootMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("radio", { name: "Claude Code" })).toBeEnabled();
+    expect(screen.getByText("/repo/root")).toBeInTheDocument();
+  });
+
+  it("fills in each provider as its own probe answers", async () => {
+    const claude = Promise.withResolvers<ProbeReport>();
+    const codex = Promise.withResolvers<ProbeReport>();
+    vi.mocked(agentProbe).mockImplementation((provider) =>
+      provider === "claude_code" ? claude.promise : codex.promise,
+    );
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
+
+    await act(async () =>
+      codex.resolve({ available: false, version: null, detail: "Not Signed In" }),
+    );
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Codex" })).toBeDisabled());
+    expect(screen.getByText(/Unavailable —/)).toHaveTextContent(
+      "Codex Unavailable — Not Signed In",
+    );
+    // Claude Code's probe is still in flight, so it stays enabled.
+    expect(screen.getByRole("radio", { name: "Claude Code" })).toBeEnabled();
+
+    await act(async () =>
+      claude.resolve({ available: false, version: null, detail: "Not Signed In" }),
+    );
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Claude Code" })).toBeDisabled());
+    expect(screen.getByText(/Unavailable —/)).toHaveTextContent(
+      "Claude Code And Codex Unavailable — Not Signed In",
+    );
+  });
+
+  it("keeps focus on the Spawn Worker button when a probe answers", async () => {
+    const claude = Promise.withResolvers<ProbeReport>();
+    vi.mocked(agentProbe).mockImplementation((provider) =>
+      provider === "claude_code" ? claude.promise : Promise.resolve(AVAILABLE),
+    );
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
+    const spawnButton = screen.getByRole("button", { name: "Spawn Worker" });
+    await act(async () => spawnButton.focus());
+    expect(spawnButton).toHaveFocus();
+
+    await act(async () =>
+      claude.resolve({ available: false, version: null, detail: "Not Signed In" }),
+    );
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Claude Code" })).toBeDisabled());
+    expect(screen.getByRole("button", { name: "Spawn Worker" })).toBe(spawnButton);
+    expect(document.activeElement).toBe(spawnButton);
+  });
+
   it("includes repoRoot in the spawn options once a project root has loaded", async () => {
     getPersistedRepoRootMock.mockResolvedValue("/repo/root");
     vi.mocked(validateRepoRoot).mockResolvedValue("/repo/root");
 
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitFor(() => expect(screen.getByText("/repo/root")).toBeInTheDocument());
 
     await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
@@ -322,7 +406,7 @@ describe("SpawnWorkerDialog", () => {
     vi.mocked(spawnWorker).mockRejectedValue(new Error("boom"));
     const onClose = vi.fn();
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={onClose} />);
+    await renderDialog(<SpawnWorkerDialog onClose={onClose} />);
     await waitForProbeSettled();
 
     await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
@@ -336,7 +420,7 @@ describe("SpawnWorkerDialog", () => {
     const onClose = vi.fn();
     const onSpawned = vi.fn();
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={onClose} onSpawned={onSpawned} />);
+    await renderDialog(<SpawnWorkerDialog onClose={onClose} onSpawned={onSpawned} />);
     await waitForProbeSettled();
 
     await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
@@ -356,7 +440,7 @@ describe("SpawnWorkerDialog", () => {
     const onClose = vi.fn();
     const onSpawned = vi.fn();
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={onClose} onSpawned={onSpawned} />);
+    await renderDialog(<SpawnWorkerDialog onClose={onClose} onSpawned={onSpawned} />);
     await waitForProbeSettled();
     await user.click(screen.getByRole("radio", { name: "Claude Code" }));
 
@@ -368,7 +452,7 @@ describe("SpawnWorkerDialog", () => {
 
   it("closes on a backdrop click, where `closedby` is missing", async () => {
     const onClose = vi.fn();
-    render(<SpawnWorkerDialog onClose={onClose} />);
+    await renderDialog(<SpawnWorkerDialog onClose={onClose} />);
     await waitForProbeSettled();
     const dialog = screen.getByRole("dialog", { name: "Spawn Worker" });
 
@@ -387,7 +471,7 @@ describe("SpawnWorkerDialog", () => {
   it("stays open when a press inside the dialog is released on the backdrop", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={onClose} />);
+    await renderDialog(<SpawnWorkerDialog onClose={onClose} />);
     await waitForProbeSettled();
     await user.click(screen.getByRole("radio", { name: "Claude Code" }));
     const dialog = screen.getByRole("dialog", { name: "Spawn Worker" });
@@ -409,7 +493,7 @@ describe("SpawnWorkerDialog", () => {
   it("calls onClose without spawning when Cancel is clicked", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={onClose} />);
+    await renderDialog(<SpawnWorkerDialog onClose={onClose} />);
     await waitForProbeSettled();
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
@@ -424,7 +508,7 @@ describe("SpawnWorkerDialog", () => {
     vi.mocked(spawnWorker).mockImplementation(() => pending.promise);
     const onClose = vi.fn();
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={onClose} />);
+    await renderDialog(<SpawnWorkerDialog onClose={onClose} />);
     await waitForProbeSettled();
 
     await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
@@ -453,7 +537,7 @@ describe("SpawnWorkerDialog", () => {
   it("closes from the header close button when no spawn is in flight", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={onClose} />);
+    await renderDialog(<SpawnWorkerDialog onClose={onClose} />);
     await waitForProbeSettled();
 
     await user.click(screen.getByRole("button", { name: "Close Spawn Worker Dialog" }));
@@ -464,7 +548,7 @@ describe("SpawnWorkerDialog", () => {
   it("in web mode disables Webview Anthropic with the desktop-only reason and defaults to Claude Code", async () => {
     web.on = true;
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitForProbeSettled();
 
     const webview = screen.getByRole("radio", { name: "Webview Anthropic" });
@@ -484,20 +568,21 @@ describe("SpawnWorkerDialog", () => {
     web.on = true;
     vi.mocked(agentProbe).mockResolvedValue({ available: false, version: null, detail: "Missing" });
     const user = userEvent.setup();
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitForProbeSettled();
     await waitFor(() => expect(screen.getByRole("radio", { name: "Claude Code" })).toBeDisabled());
 
-    expect(screen.getByRole("button", { name: "Spawn Worker" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Claude Code Unavailable: Missing");
     expect(spawnWorker).not.toHaveBeenCalled();
+    expect(agentSpawn).not.toHaveBeenCalled();
   });
 
   it("in web mode disables the folder picker with the desktop-only reason but still shows the saved root", async () => {
     web.on = true;
     getPersistedRepoRootMock.mockResolvedValue("/repo/root");
     vi.mocked(validateRepoRoot).mockResolvedValue("/repo/root");
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
 
     expect(await screen.findByText("/repo/root")).toBeInTheDocument();
     const choose = screen.getByRole("button", { name: "Choose…" });
@@ -508,7 +593,7 @@ describe("SpawnWorkerDialog", () => {
   });
 
   it("on desktop keeps Webview Anthropic selected by default and the folder picker enabled", async () => {
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
     await waitForProbeSettled();
 
     expect(screen.getByRole("radio", { name: "Webview Anthropic" })).toBeChecked();
@@ -517,7 +602,7 @@ describe("SpawnWorkerDialog", () => {
 
   it("closes on Escape", async () => {
     const onClose = vi.fn();
-    render(<SpawnWorkerDialog onClose={onClose} />);
+    await renderDialog(<SpawnWorkerDialog onClose={onClose} />);
     await waitForProbeSettled();
 
     await act(async () => {
@@ -540,7 +625,7 @@ describe("SpawnWorkerDialog — Trojan Source", () => {
     const user = userEvent.setup();
     getPersistedRepoRootMock.mockResolvedValue("/repo/a\u202Eb");
     vi.mocked(validateRepoRoot).mockResolvedValue("/repo/a\u202Eb");
-    render(<SpawnWorkerDialog onClose={vi.fn()} />);
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
 
     const root = await screen.findByText(String.raw`/repo/a\u202Eb`);
     expect(root).toHaveAttribute("title", String.raw`/repo/a\u202Eb`);
