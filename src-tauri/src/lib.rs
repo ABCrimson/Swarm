@@ -162,6 +162,10 @@ pub fn run() {
     app.manage(lifecycle::Teardown::new(init_tracing(
         app.path().app_log_dir(),
     )));
+    #[cfg(target_os = "macos")]
+    if quit_guard::QUIT_ITEM_MISSING.load(std::sync::atomic::Ordering::Relaxed) {
+        tracing::warn!("the default app menu has no Quit item; Cmd+Q is not guarded");
+    }
     app.manage(quit_guard::QuitGuard::default());
     app.run(|app, event| quit_guard::on_run_event(app, &event));
 }

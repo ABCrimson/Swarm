@@ -178,10 +178,17 @@ pub(crate) fn app_menu<R: tauri::Runtime>(
         let quit = MenuItem::with_id(app, QUIT_ITEM, label, true, Some("CmdOrCtrl+Q"))?;
         app_submenu.insert(&quit, position)?;
     } else {
-        tracing::warn!("the default app menu has no Quit item; Cmd+Q is not guarded");
+        QUIT_ITEM_MISSING.store(true, Ordering::Relaxed);
     }
     Ok(menu)
 }
+
+/// Set by [`app_menu`] when the default menu has no Quit to swap. Tauri
+/// builds the menu inside `Builder::build`, before `run` installs the
+/// tracing subscriber, so `run` reads this flag and logs the warning
+/// afterwards.
+#[cfg(target_os = "macos")]
+pub(crate) static QUIT_ITEM_MISSING: AtomicBool = AtomicBool::new(false);
 
 /// Decides `request`, calling `prevent` unless it may proceed. Returns
 /// whether it may.
