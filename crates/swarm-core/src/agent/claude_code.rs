@@ -108,7 +108,6 @@ mod wire;
 #[cfg(test)]
 mod tests;
 
-use std::cfg_select;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::mem::DropGuard;

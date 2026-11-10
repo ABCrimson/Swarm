@@ -31,7 +31,6 @@
 //! [`adapter::ProviderId`]; every other agent command reaches the live
 //! session through the registry by worker id.
 
-use std::cfg_select;
 use std::collections::VecDeque;
 use std::sync::LazyLock;
 use std::time::Duration;
