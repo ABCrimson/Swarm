@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { type CSSProperties, useEffect, useEffectEvent } from "react";
+import { useEffect, useEffectEvent } from "react";
 import { toast } from "sonner";
 import { Pill } from "#components/ui/Pill";
 import { Spinner } from "#components/ui/Spinner";
@@ -14,72 +14,15 @@ interface ShipPanelProps {
   readonly workerId: string;
 }
 
-const containerStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  height: "100%",
-  overflowY: "auto",
-  background: "var(--color-surface-1)",
-};
-
-const centeredStyle: CSSProperties = {
-  flex: 1,
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  justifyContent: "center",
-  gap: 12,
-  padding: 24,
-};
-
-const messageStyle: CSSProperties = {
-  fontFamily: "var(--font-body)",
-  fontSize: "0.8125rem",
-  color: "var(--color-fg-dim)",
-  textAlign: "center",
-};
-
-const receiptStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  padding: 16,
-  fontFamily: "var(--font-mono)",
-  fontSize: "0.75rem",
-};
-
-const receiptRowStyle: CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 8,
-  color: "oklch(0.80 0.03 220)",
-};
-
-const errorBoxStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "flex-start",
-  gap: 6,
-  padding: "10px 12px",
-  borderRadius: 8,
-  background: "oklch(0.68 0.20 25 / 0.10)",
-  border: "1px solid oklch(0.68 0.20 25 / 0.3)",
-  color: "oklch(0.80 0.15 25)",
-  fontFamily: "var(--font-body)",
-  fontSize: "0.8125rem",
-};
-
-const remedyCommandStyle: CSSProperties = {
-  display: "block",
-  padding: "6px 8px",
-  borderRadius: 6,
-  background: "var(--color-void)",
-  color: "var(--color-fg)",
-  fontFamily: "var(--font-mono)",
-  fontSize: "0.6875rem",
-  whiteSpace: "pre-wrap",
-  userSelect: "all",
-};
+const CONTAINER_CLASS = "flex h-full flex-col overflow-y-auto bg-surface-1";
+const CENTERED_CLASS = "flex flex-1 flex-col items-center justify-center gap-3 p-6";
+const MESSAGE_CLASS = "text-center font-body text-[0.8125rem] text-fg-dim";
+const RECEIPT_CLASS = "flex flex-col gap-2 p-4 font-mono text-[0.75rem]";
+const RECEIPT_ROW_CLASS = "flex justify-between gap-2 text-[oklch(0.80_0.03_220)]";
+const ERROR_BOX_CLASS =
+  "flex flex-col items-start gap-1.5 rounded-md border border-[oklch(0.68_0.20_25/0.3)] bg-[oklch(0.68_0.20_25/0.10)] px-3 py-2.5 font-body text-[0.8125rem] text-[oklch(0.80_0.15_25)]";
+const REMEDY_COMMAND_CLASS =
+  "block select-all whitespace-pre-wrap rounded-[6px] bg-void px-2 py-1.5 font-mono text-[0.6875rem] text-fg";
 
 /** A Title Case heading per failure kind, so the notice says *what* failed before the backend's own sentence says why. */
 const ERROR_TITLES = {
@@ -189,10 +132,10 @@ function WorkerShipFlow({ workerId }: ShipPanelProps): React.ReactElement {
 
   if (ship.state === "idle" || ship.state === "preflighting") {
     return (
-      <div style={containerStyle}>
-        <div style={centeredStyle}>
+      <div className={CONTAINER_CLASS}>
+        <div className={CENTERED_CLASS}>
           <Spinner size="md" />
-          <span style={messageStyle}>Running Ship Preflight…</span>
+          <span className={MESSAGE_CLASS}>Running Ship Preflight…</span>
         </div>
       </div>
     );
@@ -200,7 +143,7 @@ function WorkerShipFlow({ workerId }: ShipPanelProps): React.ReactElement {
 
   if (ship.state === "running") {
     return (
-      <div style={containerStyle}>
+      <div className={CONTAINER_CLASS}>
         <section ref={focusIfLost} tabIndex={-1} aria-label="Ship In Progress">
           <ShipProgress rows={ship.progress} />
         </section>
@@ -210,7 +153,7 @@ function WorkerShipFlow({ workerId }: ShipPanelProps): React.ReactElement {
 
   if (ship.state === "settled") {
     return (
-      <div style={containerStyle}>
+      <div className={CONTAINER_CLASS}>
         <ShipReceipt ship={ship} />
       </div>
     );
@@ -239,9 +182,9 @@ function WorkerShipFlow({ workerId }: ShipPanelProps): React.ReactElement {
 
   if (ship.state === "failed") {
     return (
-      <div style={containerStyle}>
+      <div className={CONTAINER_CLASS}>
         {preview}
-        <div style={{ padding: preview ? "0 16px 16px" : 16 }}>
+        <div className={preview ? "px-4 pb-4" : "p-4"}>
           <ShipErrorNotice
             error={ship.error}
             preflight={ship.preflight}
@@ -252,7 +195,7 @@ function WorkerShipFlow({ workerId }: ShipPanelProps): React.ReactElement {
     );
   }
 
-  return <div style={containerStyle}>{preview}</div>;
+  return <div className={CONTAINER_CLASS}>{preview}</div>;
 }
 
 /**
@@ -273,13 +216,13 @@ function ShipErrorNotice({
 }): React.ReactElement {
   const remedy = error?.remedy != null ? remedyInstructions(error.remedy, preflight) : null;
   return (
-    <div style={errorBoxStyle} role="alert" data-kind={error?.kind ?? "unknown"}>
+    <div className={ERROR_BOX_CLASS} role="alert" data-kind={error?.kind ?? "unknown"}>
       <strong>{ERROR_TITLES[error?.kind ?? "unknown"]}</strong>
       <span>{error?.message ?? "Ship Failed."}</span>
       {remedy != null && (
         <>
           <span>{remedy.hint}</span>
-          <code style={remedyCommandStyle}>{remedy.command}</code>
+          <code className={REMEDY_COMMAND_CLASS}>{remedy.command}</code>
         </>
       )}
       <Pill interactive tone="neutral" size="md" onClick={onRefresh}>
@@ -294,46 +237,38 @@ function ShipReceipt({ ship }: { readonly ship: UseShipReturn }): React.ReactEle
   const prUrl = ship.result?.prUrl;
   return (
     <>
-      <div style={receiptStyle} role="status" ref={focusIfLost} tabIndex={-1}>
-        <span style={{ ...messageStyle, color: "oklch(0.75 0.16 150)", textAlign: "left" }}>
+      <div className={RECEIPT_CLASS} role="status" ref={focusIfLost} tabIndex={-1}>
+        <span className="text-left font-body text-[0.8125rem] text-[oklch(0.75_0.16_150)]">
           Shipped
         </span>
         {ship.result?.commitSha != null && (
-          <div style={receiptRowStyle}>
+          <div className={RECEIPT_ROW_CLASS}>
             <span>Commit</span>
             <span>{ship.result.commitSha.slice(0, 12)}</span>
           </div>
         )}
         {ship.result?.pushedRef != null && (
-          <div style={receiptRowStyle}>
+          <div className={RECEIPT_ROW_CLASS}>
             <span>Pushed</span>
             <span>{ship.result.pushedRef}</span>
           </div>
         )}
         {prUrl != null && (
-          <div style={receiptRowStyle}>
+          <div className={RECEIPT_ROW_CLASS}>
             <span>Compare Page</span>
             <button
               type="button"
               aria-label="Open Compare Page"
               title={prUrl}
               onClick={() => void openComparePage(prUrl)}
-              className="cursor-pointer rounded-sm underline"
-              style={{
-                background: "none",
-                border: "none",
-                padding: 0,
-                color: "var(--color-plasma)",
-                fontFamily: "inherit",
-                fontSize: "inherit",
-              }}
+              className="cursor-pointer rounded-sm border-0 bg-transparent p-0 text-plasma underline [font-family:inherit] [font-size:inherit]"
             >
               Open
             </button>
           </div>
         )}
       </div>
-      <div style={{ padding: "0 16px 16px" }}>
+      <div className="px-4 pb-4">
         <Pill interactive tone="neutral" size="md" onClick={ship.reset}>
           Ship Again
         </Pill>

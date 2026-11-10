@@ -30,7 +30,7 @@ describe("SplitPane", () => {
   it("lays out the panes from the persisted size", () => {
     const { grid, divider } = renderSplit();
 
-    expect(grid.style.gridTemplate).toContain("60% 4px 1fr");
+    expect(grid.style.getPropertyValue("--split-main")).toBe("60%");
     expect(divider).toHaveAttribute("aria-valuenow", "60");
     expect(divider).toHaveAttribute("aria-controls", screen.getByText("Primary").parentElement?.id);
   });
@@ -43,7 +43,7 @@ describe("SplitPane", () => {
     for (const clientX of [550, 500, 450, 400]) {
       fireEvent.pointerMove(divider, { pointerId: 1, clientX });
     }
-    expect(grid.style.gridTemplate).toContain("40% 4px 1fr");
+    expect(grid.style.getPropertyValue("--split-main")).toBe("40%");
     expect(writes).toHaveLength(0);
 
     fireEvent.lostPointerCapture(divider, { pointerId: 1 });
@@ -70,7 +70,7 @@ describe("SplitPane", () => {
     fireEvent.pointerMove(divider, { pointerId: 1, clientX: 300 });
     fireEvent.lostPointerCapture(divider, { pointerId: 1 });
 
-    expect(grid.style.gridTemplate).toContain("60% 4px 1fr");
+    expect(grid.style.getPropertyValue("--split-main")).toBe("60%");
     expect(writes).toHaveLength(0);
   });
 
@@ -79,13 +79,13 @@ describe("SplitPane", () => {
   it("clamps an out-of-range hydrated size", () => {
     const { store, grid } = renderSplit();
     act(() => store.set(paneSizesAtom, { main: 99, detail: 1 }));
-    expect(grid.style.gridTemplate).toContain("80% 4px 1fr");
+    expect(grid.style.getPropertyValue("--split-main")).toBe("80%");
   });
 
   it("falls back to an even split when the hydrated size is not a number", () => {
     const { store, grid } = renderSplit();
     act(() => store.set(paneSizesAtom, { main: Number.NaN, detail: Number.NaN }));
-    expect(grid.style.gridTemplate).toContain("50% 4px 1fr");
+    expect(grid.style.getPropertyValue("--split-main")).toBe("50%");
   });
 
   it.for([
@@ -103,7 +103,10 @@ describe("SplitPane", () => {
 
   it("uses Up/Down for a vertical split", () => {
     const { store, grid, divider } = renderSplit(createStore(), "vertical");
-    expect(grid.style.gridTemplate).toContain('"primary" 60%');
+    expect(grid.style.getPropertyValue("--split-main")).toBe("60%");
+    expect(grid).toHaveClass(
+      '[grid-template:"primary"_var(--split-main)_"handle"_4px_"secondary"_1fr/1fr]',
+    );
 
     fireEvent.keyDown(divider, { key: "ArrowDown" });
     expect(store.get(paneSizesAtom).main).toBe(62);
