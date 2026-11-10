@@ -51,7 +51,7 @@ function reportRenderError(what: string, level: LogLevel) {
       level,
       source: "react",
       message: `${what}: ${errorMessage(error)}`,
-      metadata: info.componentStack ? { componentStack: info.componentStack } : undefined,
+      ...(info.componentStack && { metadata: { componentStack: info.componentStack } }),
     });
   };
 }

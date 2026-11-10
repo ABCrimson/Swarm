@@ -72,7 +72,7 @@ interface ContextMenuState {
  * overrides the layout until the next Reset Layout.
  */
 export interface NodeUiState {
-  readonly position?: XYPosition;
+  readonly position?: XYPosition | undefined;
   readonly measured?: Dimensions;
   readonly selected?: boolean;
   readonly dragging?: boolean;
@@ -174,7 +174,7 @@ function manualEdge(id: string, source: string, target: string): ProvenanceFlowE
 function WorkerGraphInner({
   onSpawnRequest,
 }: {
-  readonly onSpawnRequest?: () => void;
+  readonly onSpawnRequest?: (() => void) | undefined;
 }): React.ReactElement {
   // Graph-only projections with shallow equality: a PTY output chunk
   // (which replaces the worker object) leaves both records unchanged, so
@@ -226,13 +226,14 @@ function WorkerGraphInner({
   // by a user drag if there was one, else by the latest layout.
   const nodes: WorkerFlowNode[] = workerIds.map((id, index) => {
     const ui = nodeUi.get(id);
+    const label = nodeLabels[id];
     return {
       id,
       type: "worker",
       position: ui?.position ?? positions.get(id) ?? ORIGIN,
       data: { workerId: id, index },
-      ariaLabel: nodeLabels[id],
-      className: linkSource === id ? "worker-graph__node--link-source" : undefined,
+      ...(label !== undefined && { ariaLabel: label }),
+      ...(linkSource === id && { className: "worker-graph__node--link-source" }),
       domAttributes: { "aria-keyshortcuts": "L" },
       deletable: false,
       selected: ui?.selected ?? false,
@@ -563,7 +564,7 @@ function WorkerGraphInner({
 export function WorkerGraph({
   onSpawnRequest,
 }: {
-  readonly onSpawnRequest?: () => void;
+  readonly onSpawnRequest?: (() => void) | undefined;
 }): React.ReactElement {
   return (
     <ReactFlowProvider>

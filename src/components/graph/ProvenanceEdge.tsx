@@ -102,7 +102,7 @@ export function ProvenanceEdge({
         key={data?.lastSeq}
         id={id}
         path={edgePath}
-        markerEnd={markerEnd}
+        {...(markerEnd !== undefined && { markerEnd })}
         className="provenance-edge__path"
         data-measured={kind !== "manual"}
         data-selected={selected === true}

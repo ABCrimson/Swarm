@@ -60,9 +60,11 @@ test.describe("Stylesheet cascade", () => {
       "Alert Thresholds",
       "About",
     ];
-    await expect(app.main.getByRole("region", { name: groups[0] })).toHaveCSS("padding-top", "0px");
-    for (const name of groups.slice(1)) {
-      await expect(app.main.getByRole("region", { name })).toHaveCSS("padding-top", "24px");
+    for (const [index, name] of groups.entries()) {
+      await expect(app.main.getByRole("region", { name })).toHaveCSS(
+        "padding-top",
+        index === 0 ? "0px" : "24px",
+      );
     }
   });
 

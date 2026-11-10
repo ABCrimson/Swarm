@@ -86,7 +86,7 @@ function toolUse(id: string, name: string, input: Record<string, unknown>) {
 }
 
 /** An abortable wait the test releases by hand. */
-function gate(): { hold: Round["hold"]; release: () => void } {
+function gate(): { hold: NonNullable<Round["hold"]>; release: () => void } {
   const { promise, resolve } = Promise.withResolvers<void>();
   return {
     release: resolve,

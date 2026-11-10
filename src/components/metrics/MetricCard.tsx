@@ -17,9 +17,9 @@ export type Trend = "up" | "down" | "stable";
 interface MetricCardProps {
   readonly label: string;
   readonly value: string;
-  readonly severity?: Severity;
+  readonly severity?: Severity | undefined;
   /** Omit when there is no real series behind the value — no arrow is invented. */
-  readonly trend?: Trend;
+  readonly trend?: Trend | undefined;
 }
 
 /** Value text colour per severity: fg-bright at rest, the amber and rose tokens (as on the warning/danger pills) when a threshold speaks. */

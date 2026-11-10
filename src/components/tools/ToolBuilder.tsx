@@ -14,7 +14,7 @@ import {
 /** Props for the tool builder form. */
 interface ToolBuilderProps {
   /** Existing tool to edit, or undefined for a new tool. */
-  readonly initialTool?: CustomToolDef;
+  readonly initialTool?: CustomToolDef | undefined;
   /**
    * Names this tool may not take: every built-in tool plus every other
    * custom tool. A taken name would be saved but silently never offered

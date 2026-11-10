@@ -17,7 +17,7 @@ interface FileTreeProps {
   /** Called when a file is opened. */
   readonly onSelectFile: (path: string) => void;
   /** Currently open file path. */
-  readonly selectedPath?: string;
+  readonly selectedPath?: string | undefined;
 }
 
 /**
@@ -33,7 +33,7 @@ interface TreeNode {
   /** Loaded children; `undefined` until the directory was listed. */
   readonly children?: readonly TreeNode[];
   /** Why listing this directory failed, if it did. */
-  readonly error?: string;
+  readonly error?: string | undefined;
 }
 
 interface FlatRow {

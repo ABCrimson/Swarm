@@ -33,7 +33,7 @@ function titleCaseType(type: string): string {
 interface RowDescription {
   readonly text: string;
   /** Worker this row click-throughs to, when resolvable and still live. */
-  readonly workerId?: string;
+  readonly workerId?: string | undefined;
 }
 
 /** Describes one causality row per event type: Title Case text (e.g. "Worker A's Turn", "Spawned Worker B") plus the live worker a click opens; the row's `@seq` is rendered separately by `SeqLabel`. */

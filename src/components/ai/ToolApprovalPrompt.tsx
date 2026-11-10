@@ -23,7 +23,7 @@ function ApprovalRow({
   onResolved,
 }: {
   readonly request: ToolApprovalRequest;
-  readonly onResolved?: () => void;
+  readonly onResolved?: (() => void) | undefined;
 }): React.ReactElement {
   const review = useApprovalReview(request.tool, request.input);
   // Answering removes this row, so a focused button would drop focus to <body>; hand it back to the chat.
@@ -88,7 +88,7 @@ export function ToolApprovalPrompt({
 }: {
   readonly workerId: string;
   /** Called after a call is answered from a focused button, so the caller can take keyboard focus. */
-  readonly onResolved?: () => void;
+  readonly onResolved?: (() => void) | undefined;
 }): React.ReactElement | null {
   const pending = useSyncExternalStore(subscribeToolApprovals, getPendingToolApprovals);
   const mine = pending.filter(

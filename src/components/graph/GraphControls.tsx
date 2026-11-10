@@ -13,7 +13,7 @@ import { causalityInspectorAtom, reducedMotionAtom } from "#store/ui";
 interface GraphControlsProps {
   readonly onResetLayout: () => void;
   /** Present while a manual edge is selected. */
-  readonly onDeleteEdge?: () => void;
+  readonly onDeleteEdge?: (() => void) | undefined;
   /** Snapshot of the graph to write out (layout + manual annotations). */
   readonly getWorkflow: () => WorkflowDefinition;
   /** Applies a validated workflow; returns a Title Case summary for the toast. */

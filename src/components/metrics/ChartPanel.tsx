@@ -37,7 +37,7 @@ export function ChartPanel({
   /** Samples behind the chart. Under 2 the body says so instead of drawing empty axes; omit it for a snapshot chart. */
   readonly sampleCount?: number;
   /** A snapshot chart with nothing to plot: the body shows this line instead of empty axes. */
-  readonly empty?: string;
+  readonly empty?: string | undefined;
   readonly children: React.ReactNode;
 }): React.ReactElement {
   return (

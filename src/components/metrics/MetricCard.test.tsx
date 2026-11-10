@@ -7,7 +7,7 @@ import type { Severity } from "#lib/severity";
 function renderCard(props: {
   label: string;
   value: string;
-  severity?: Severity;
+  severity?: Severity | undefined;
   trend?: Trend;
 }): void {
   render(

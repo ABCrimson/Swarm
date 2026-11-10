@@ -4,8 +4,8 @@ type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 type ButtonSize = "sm" | "md";
 
 interface ButtonProps extends React.ComponentPropsWithRef<"button"> {
-  readonly variant?: ButtonVariant;
-  readonly size?: ButtonSize;
+  readonly variant?: ButtonVariant | undefined;
+  readonly size?: ButtonSize | undefined;
   /** Shows a spinner and ignores clicks, without disabling the element. */
   readonly loading?: boolean;
 }

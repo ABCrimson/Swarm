@@ -92,7 +92,7 @@ export interface StreamParams {
    * `thinking`/`text`/`tool_use` blocks, the user's `tool_result` blocks).
    */
   readonly messages: readonly ChatMessageParam[];
-  readonly system?: string;
+  readonly system?: string | undefined;
   readonly tools?: readonly ChatTool[];
   /**
    * `output_config.effort`. Dropped for models whose catalog entry
@@ -175,7 +175,10 @@ export class AiRequestError extends Error {
   constructor(
     kind: AiErrorKind,
     message: string,
-    options?: ErrorOptions & { readonly retryable?: boolean; readonly requestId?: string },
+    options?: ErrorOptions & {
+      readonly retryable?: boolean;
+      readonly requestId?: string | undefined;
+    },
   ) {
     super(message, options);
     this.kind = kind;

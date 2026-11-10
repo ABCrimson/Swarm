@@ -105,8 +105,8 @@ function SettingRow({
 }: {
   readonly id: string;
   readonly label: string;
-  readonly description?: string;
-  readonly feedback?: React.ReactNode;
+  readonly description?: string | undefined;
+  readonly feedback?: React.ReactNode | undefined;
   /** The labelled control's id; without it the name is plain text (the control names itself). */
   readonly controlId?: string;
   readonly children: React.ReactNode;
@@ -148,9 +148,9 @@ function Toggle({
   readonly checked: boolean;
   readonly onChange: (checked: boolean) => void;
   readonly label: string;
-  readonly description?: string;
+  readonly description?: string | undefined;
   /** Why the switch cannot be used in this build; when set it is disabled and the reason describes it. */
-  readonly unavailableReason?: string;
+  readonly unavailableReason?: string | undefined;
 }): React.ReactElement {
   const id = useId();
   const describedBy =
@@ -220,9 +220,9 @@ function NumberField({
   /** Marks the field busy while a change is being applied. */
   readonly busy?: boolean;
   /** A state message shown under the description and announced with it. */
-  readonly feedback?: React.ReactNode;
+  readonly feedback?: React.ReactNode | undefined;
   /** Why the field cannot be used in this build; when set it is disabled and the reason replaces `feedback`. */
-  readonly unavailableReason?: string;
+  readonly unavailableReason?: string | undefined;
 }): React.ReactElement {
   const id = useId();
   const feedback =

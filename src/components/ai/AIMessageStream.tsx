@@ -155,7 +155,7 @@ function highlightCodeLine(line: string, language: string | undefined): React.Re
 interface ParsedSegment {
   readonly type: "text" | "code_block" | "inline_code";
   readonly content: string;
-  readonly language?: string;
+  readonly language?: string | undefined;
   /** Offset of this segment's start within the raw source string — stable React key. */
   readonly start: number;
 }

@@ -13,7 +13,7 @@ interface ToolCallDisplayProps {
   /** Tool input as a record. */
   readonly input: Record<string, unknown>;
   /** Tool result, once the call has run. */
-  readonly result?: string;
+  readonly result?: string | undefined;
   /** Current execution status. */
   readonly status: ToolStatus;
 }

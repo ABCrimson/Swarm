@@ -9,7 +9,9 @@ import { toolRegistry } from "#lib/tools";
 import { useCustomToolsStore } from "#store/custom-tools";
 
 /** What the page shows: the list, or the builder for a new (`tool` absent) or existing tool. */
-type View = { readonly mode: "list" } | { readonly mode: "build"; readonly tool?: CustomToolDef };
+type View =
+  | { readonly mode: "list" }
+  | { readonly mode: "build"; readonly tool?: CustomToolDef | undefined };
 
 /**
  * Tools page for managing built-in and custom tool definitions: a list

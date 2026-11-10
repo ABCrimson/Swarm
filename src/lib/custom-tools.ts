@@ -60,7 +60,7 @@ export function isValidParamName(name: string): boolean {
 /** Everything that would stop a tool definition from being saved, keyed for the builder UI. */
 export interface CustomToolIssues {
   /** Title Case problem with the tool name, if any. */
-  readonly name?: string;
+  readonly name?: string | undefined;
   /** Title Case problem per parameter row id. */
   readonly params: ReadonlyMap<string, string>;
 }

@@ -91,7 +91,8 @@ export function SessionCard({
         onClick={() => onActivate(session.id)}
         onContextMenu={(e) => {
           e.preventDefault();
-          menuRef.current?.showPopover({ source: triggerRef.current ?? undefined });
+          const source = triggerRef.current;
+          menuRef.current?.showPopover(source ? { source } : {});
         }}
         aria-current={isActive || undefined}
         className={`block w-full cursor-pointer rounded-lg border p-4 pr-12 text-left backdrop-blur-[12px] backdrop-saturate-150 ${CARD_MOTION_CLASS} ${
