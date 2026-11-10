@@ -98,14 +98,10 @@ describe("AgentChat", () => {
     // jsdom has no layout, so this pins the mechanism: a reversed flex
     // scroller starts (and stays, until the user scrolls up) at its end.
     const log = screen.getByRole("log");
-    expect(log).toHaveStyle({
-      display: "flex",
-      flexDirection: "column-reverse",
-      overflowY: "auto",
-    });
+    expect(log).toHaveClass("flex", "flex-col-reverse", "overflow-y-auto");
     // A single child: the reversal moves the scroll anchor, never the message order.
     expect(log.children).toHaveLength(1);
-    expect(log.firstElementChild).toHaveStyle({ flexDirection: "column" });
+    expect(log.firstElementChild).toHaveClass("flex", "flex-col");
   });
 
   it("appends agent_turn_delta text live to the same in-progress bubble", () => {
@@ -149,11 +145,20 @@ describe("AgentChat", () => {
       content: "file.txt",
     });
 
-    await user.click(screen.getByRole("button", { name: "Tool Call: run_command, Complete" }));
+    const summary = screen.getByRole("button", { name: "Tool Call: run_command, Complete" });
+    expect(screen.getByText("Input")).not.toBeVisible();
 
-    expect(screen.getByText("Input")).toBeInTheDocument();
-    expect(screen.getByText(/"command"/)).toBeInTheDocument();
-    expect(screen.getByText("file.txt")).toBeInTheDocument();
+    await user.click(summary);
+
+    expect(summary).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Input")).toBeVisible();
+    expect(screen.getByText(/"command"/)).toBeVisible();
+    expect(screen.getByText("file.txt")).toBeVisible();
+
+    await user.click(summary);
+
+    expect(summary).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Input")).not.toBeVisible();
   });
 
   it("shows an is_error tool result via the error status", () => {
@@ -523,9 +528,9 @@ describe("AgentChat", () => {
     fire("agent_turn_delta", { turnId: "t1", blockIndex: 0, kind: "text", text: "working" });
     fire("agent_turn_settled", { turnId: "t1", status: "error", error: "boom", durationMs: 100 });
 
-    const failed = { border: "1px solid oklch(0.45 0.18 25)" };
-    expect(screen.getByText("first")).toHaveStyle(failed);
-    expect(screen.getByText("second")).not.toHaveStyle(failed);
+    const failed = "border-[oklch(0.45_0.18_25)]";
+    expect(screen.getByText("first")).toHaveClass(failed);
+    expect(screen.getByText("second")).not.toHaveClass(failed);
     expect(screen.getAllByText("Not Sent")).toHaveLength(1);
   });
 
@@ -536,7 +541,7 @@ describe("AgentChat", () => {
     await submit("hello");
 
     await vi.waitFor(() =>
-      expect(screen.getByText("hello")).toHaveStyle({ border: "1px solid oklch(0.45 0.18 25)" }),
+      expect(screen.getByText("hello")).toHaveClass("border-[oklch(0.45_0.18_25)]"),
     );
     expect(screen.getByText("Not Sent")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();

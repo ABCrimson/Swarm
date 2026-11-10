@@ -1,5 +1,4 @@
 import { useAtomValue } from "jotai";
-import type { CSSProperties } from "react";
 import { useRef, useState } from "react";
 import { Button } from "#components/ui/Button";
 import { cancelChatTurn, clearChat, sendChatMessage } from "#lib/ai-chat";
@@ -18,125 +17,50 @@ import { AIMessageStream } from "./AIMessageStream.tsx";
 import { ToolApprovalPrompt } from "./ToolApprovalPrompt.tsx";
 import { ToolCallDisplay } from "./ToolCallDisplay.tsx";
 
-// ── Styles (OKLCH) ──────────────────────────────────
+// ── Styles (utilities; literals with no token wait for the Q-9 design direction) ──
 
-const chatContainerStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  height: "100%",
-  background: "var(--color-surface-0)",
-  overflow: "hidden",
-};
+const CHAT_CONTAINER = "flex h-full flex-col overflow-hidden bg-surface-0";
 
 /**
  * `column-reverse` keeps the scroll position pinned to the newest
  * content natively as the transcript grows — and leaves it alone once
- * the user scrolls up — with no scroll effect.
+ * the user scrolls up — with no scroll effect. The container clips
+ * overflow, so the focus ring is drawn inside the scroller
+ * (`-outline-offset-2`).
  */
-const scrollerStyle: CSSProperties = {
-  flex: 1,
-  // The container clips overflow, so the focus ring is drawn inside the scroller.
-  outlineOffset: -2,
-  overflowY: "auto",
-  display: "flex",
-  flexDirection: "column-reverse",
-  scrollbarWidth: "thin",
-  scrollbarColor: "var(--color-border-2) oklch(0 0 0 / 0)",
-};
+const SCROLLER =
+  "scroll-area scrollbar-thin scrollbar-thumb-border-2 scrollbar-track-transparent flex flex-1 flex-col-reverse overflow-y-auto -outline-offset-2";
 
-const messagesStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 12,
-  padding: 16,
-};
+const MESSAGES = "flex flex-col gap-3 p-4";
 
-const inputAreaStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "flex-end",
-  gap: 8,
-  padding: "12px 16px",
-  borderTop: "1px solid var(--color-border)",
-  background: "oklch(0.10 0.02 220 / 0.9)",
-  backdropFilter: "blur(8px)",
-};
+const INPUT_AREA =
+  "flex items-end gap-2 border-t border-border bg-[oklch(0.10_0.02_220/0.9)] px-4 py-3 backdrop-blur-[8px]";
 
-const textareaStyle: CSSProperties = {
-  flex: 1,
-  height: "auto",
-  padding: "10px 14px",
-  background: "oklch(0.12 0.03 220)",
-  color: "oklch(0.88 0.03 220)",
-  fontSize: "var(--text-md)",
-  lineHeight: 1.5,
-  resize: "none",
-  fieldSizing: "content",
-  minHeight: 42,
-  maxHeight: 160,
-};
+const TEXTAREA =
+  "swarm-input h-auto max-h-40 min-h-10.5 flex-1 resize-none bg-[oklch(0.12_0.03_220)] px-3.5 py-2.5 text-(length:--text-md) leading-normal text-[oklch(0.88_0.03_220)] [field-sizing:content]";
 
-const userBubbleStyle: CSSProperties = {
-  alignSelf: "flex-end",
-  maxWidth: "75%",
-  padding: "10px 14px",
-  borderRadius: "12px 12px 4px 12px",
-  background: "oklch(from var(--color-plasma) l c h / 0.15)",
-  border: "1px solid oklch(from var(--color-plasma) l c h / 0.3)",
-  color: "oklch(0.88 0.03 220)",
-  fontSize: "var(--text-md)",
-  lineHeight: 1.6,
-  whiteSpace: "pre-wrap",
-  overflowWrap: "anywhere",
-};
+const USER_BUBBLE =
+  "max-w-[75%] self-end rounded-[12px_12px_4px_12px] border border-plasma/30 bg-plasma/15 px-3.5 py-2.5 text-(length:--text-md) leading-[1.6] wrap-anywhere whitespace-pre-wrap text-[oklch(0.88_0.03_220)]";
 
-const assistantBubbleStyle: CSSProperties = {
-  alignSelf: "flex-start",
-  maxWidth: "85%",
-  display: "flex",
-  flexDirection: "column",
-  gap: 4,
-};
+const ASSISTANT_BUBBLE = "flex max-w-[85%] flex-col gap-1 self-start";
 
-const metaStyle: CSSProperties = {
-  fontSize: 11,
-  color: "var(--color-fg-dim)",
-  marginTop: 4,
-};
+const META_BASE = "text-[11px] text-fg-dim";
+const META = `${META_BASE} mt-1`;
 
-const thinkingStyle: CSSProperties = {
-  fontSize: "var(--text-sm)",
-  lineHeight: 1.5,
-  color: "oklch(0.60 0.03 220)",
-  fontStyle: "italic",
-  whiteSpace: "pre-wrap",
-  overflowWrap: "anywhere",
-};
+const THINKING =
+  "text-(length:--text-sm) leading-normal wrap-anywhere whitespace-pre-wrap text-[oklch(0.60_0.03_220)] italic";
 
 const NOTICE_COLORS: Record<ChatNotice["tone"], string> = {
-  info: "var(--color-fg-dim)",
-  warning: "oklch(0.82 0.16 75)",
-  error: "oklch(0.78 0.16 20)",
+  info: "text-fg-dim",
+  warning: "text-[oklch(0.82_0.16_75)]",
+  error: "text-[oklch(0.78_0.16_20)]",
 };
 
-const emptyStateStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  justifyContent: "center",
-  minHeight: 160,
-  gap: 8,
-  color: "var(--color-fg-dim)",
-  fontSize: "var(--text-md)",
-};
+const EMPTY_STATE =
+  "flex min-h-40 flex-col items-center justify-center gap-2 text-(length:--text-md) text-fg-dim";
 
-const errorStyle: CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 8,
-  background: "oklch(0.14 0.06 10 / 0.6)",
-  border: "1px solid oklch(0.35 0.10 10)",
-  color: "oklch(0.82 0.15 10)",
-  fontSize: 13,
-};
+const ERROR =
+  "rounded-md border border-[oklch(0.35_0.10_10)] bg-[oklch(0.14_0.06_10/0.6)] px-3.5 py-2.5 text-[13px] text-[oklch(0.82_0.15_10)]";
 
 /** Bubble timestamps, e.g. "14:05" — one formatter for every message. */
 const TIME_FORMAT = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -173,8 +97,8 @@ function Thinking({
 }): React.ReactElement {
   return (
     <details open={open}>
-      <summary style={{ ...metaStyle, marginTop: 0, cursor: "pointer" }}>Thinking</summary>
-      <div style={thinkingStyle}>{text}</div>
+      <summary className={`${META_BASE} mt-0 cursor-pointer`}>Thinking</summary>
+      <div className={THINKING}>{text}</div>
     </details>
   );
 }
@@ -184,26 +108,26 @@ function MessageBubble({ message }: { readonly message: ChatMessage }): React.Re
 
   if (message.role === "user") {
     return (
-      <div style={userBubbleStyle}>
+      <div className={USER_BUBBLE}>
         <span className="sr-only">You: </span>
         <div>{message.content}</div>
-        <div style={{ ...metaStyle, textAlign: "right" }}>{time}</div>
+        <div className={`${META} text-right`}>{time}</div>
       </div>
     );
   }
 
   return (
-    <div style={assistantBubbleStyle}>
+    <div className={ASSISTANT_BUBBLE}>
       <span className="sr-only">Assistant: </span>
       {message.thinking && <Thinking text={message.thinking} />}
       {message.content && <AIMessageStream content={message.content} isStreaming={false} />}
       {message.toolCalls && <ToolCalls calls={message.toolCalls} />}
       {message.notice && (
-        <div style={{ fontSize: 12, color: NOTICE_COLORS[message.notice.tone] }}>
+        <div className={`text-[12px] ${NOTICE_COLORS[message.notice.tone]}`}>
           {message.notice.text}
         </div>
       )}
-      <div style={metaStyle}>
+      <div className={META}>
         {time}
         {message.servedBy && `, Answered By ${message.servedBy} (Refusal Fallback)`}
       </div>
@@ -214,13 +138,13 @@ function MessageBubble({ message }: { readonly message: ChatMessage }): React.Re
 function LiveBubble({ live }: { readonly live: LiveTurn }): React.ReactElement {
   const idle = !live.text && !live.thinking && live.toolCalls.length === 0;
   return (
-    <div style={assistantBubbleStyle} aria-busy="true">
+    <div className={ASSISTANT_BUBBLE} aria-busy="true">
       <span className="sr-only">Assistant: </span>
-      {live.phase === "queued" && <div style={metaStyle}>Waiting For A Free Stream Slot…</div>}
+      {live.phase === "queued" && <div className={META}>Waiting For A Free Stream Slot…</div>}
       {live.thinking && <Thinking text={live.thinking} open={!live.text} />}
       {live.text && <AIMessageStream content={live.text} isStreaming />}
       <ToolCalls calls={live.toolCalls} />
-      {live.phase !== "queued" && idle && <div style={metaStyle}>Thinking…</div>}
+      {live.phase !== "queued" && idle && <div className={META}>Thinking…</div>}
     </div>
   );
 }
@@ -271,8 +195,8 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
 
   if (!hasCapability("localAiChat")) {
     return (
-      <div style={chatContainerStyle}>
-        <div role="status" style={emptyStateStyle}>
+      <div className={CHAT_CONTAINER}>
+        <div role="status" className={EMPTY_STATE}>
           <span>{DESKTOP_ONLY_REASON}</span>
           <span>Use A Claude Code Or Codex Worker For AI Chat Here</span>
         </div>
@@ -281,18 +205,18 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
   }
 
   return (
-    <div style={chatContainerStyle}>
+    <div className={CHAT_CONTAINER}>
       <div
         role="log"
         aria-label={`AI Chat With ${model.label}`}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1); WebKit (WKWebView, WebKitGTK) does not focus scroll containers natively.
         tabIndex={0}
-        style={scrollerStyle}
+        className={SCROLLER}
       >
-        <div style={messagesStyle}>
+        <div className={MESSAGES}>
           {thread.messages.length === 0 && !busy && (
-            <div style={emptyStateStyle}>
-              <span style={{ fontSize: 24, opacity: 0.5 }}>AI</span>
+            <div className={EMPTY_STATE}>
+              <span className="text-[24px] opacity-50">AI</span>
               <span>Send A Message To Start Chatting</span>
             </div>
           )}
@@ -301,7 +225,7 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
           ))}
           {thread.live && <LiveBubble live={thread.live} />}
           {thread.error && (
-            <div role="alert" style={errorStyle}>
+            <div role="alert" className={ERROR}>
               {thread.error}
             </div>
           )}
@@ -310,15 +234,14 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
 
       <ToolApprovalPrompt workerId={workerId} onResolved={() => inputRef.current?.focus()} />
 
-      <form action={send} style={inputAreaStyle}>
+      <form action={send} className={INPUT_AREA}>
         <textarea
           ref={inputRef}
           name="message"
-          className="swarm-input"
+          className={TEXTAREA}
           aria-label={`Message ${model.label}`}
           placeholder="Type A Message… (Shift+Enter For A New Line)"
           rows={3}
-          style={textareaStyle}
           onInput={(e) => setDraftEmpty(!e.currentTarget.value.trim())}
           onKeyDown={handleKeyDown}
         />

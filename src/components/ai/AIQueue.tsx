@@ -1,80 +1,28 @@
-import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import type { CSSProperties } from "react";
+import { useState } from "react";
 import type { PillTone } from "#components/ui/Pill";
 import { Pill } from "#components/ui/Pill";
 import { Spinner } from "#components/ui/Spinner";
 import { useAiStore } from "#store/ai";
 import type { AiQueueItem } from "#store/types";
 
-// ── Styles (OKLCH) ──────────────────────────────────
+// ── Styles (utilities; literals with no token wait for the Q-9 design direction) ──
 
-const queueContainerStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 2,
-  padding: 12,
-  background: "var(--color-surface-0)",
-  borderRadius: 8,
-  border: "1px solid var(--color-border)",
-};
+const QUEUE_CONTAINER = "flex flex-col gap-0.5 rounded-md border border-border bg-surface-0 p-3";
 
-const headerStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  padding: "0 4px 8px",
-  borderBottom: "1px solid oklch(0.18 0.03 220)",
-  marginBottom: 4,
-};
+const HEADER =
+  "mb-1 flex items-center justify-between border-b border-[oklch(0.18_0.03_220)] px-1 pb-2";
 
-const headerTitleStyle: CSSProperties = {
-  margin: 0,
-  fontSize: 13,
-  fontWeight: 600,
-  color: "oklch(0.78 0.04 220)",
-  fontFamily: "var(--font-body)",
-};
+const HEADER_TITLE = "m-0 font-sans text-[13px] font-semibold text-[oklch(0.78_0.04_220)]";
 
-const streamCountStyle: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  fontSize: 12,
-  color: "var(--color-fg-dim)",
-  fontFamily: "var(--font-mono)",
-};
+const STREAM_COUNT = "inline-flex items-center gap-1.5 font-mono text-[12px] text-fg-dim";
 
-const itemStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "8px 10px",
-  borderRadius: 6,
-  background: "oklch(0.12 0.03 220 / 0.5)",
-  border: "1px solid oklch(0.20 0.03 220)",
-};
+const ITEM =
+  "flex items-center gap-2 rounded-[6px] border border-[oklch(0.20_0.03_220)] bg-[oklch(0.12_0.03_220/0.5)] px-2.5 py-2";
 
-const positionStyle: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: 24,
-  height: 24,
-  borderRadius: 4,
-  background: "oklch(0.16 0.03 220)",
-  color: "var(--color-fg-dim)",
-  fontSize: 11,
-  fontWeight: 700,
-  fontFamily: "var(--font-mono)",
-  flexShrink: 0,
-};
+const POSITION =
+  "inline-flex size-6 shrink-0 items-center justify-center rounded-sm bg-[oklch(0.16_0.03_220)] font-mono text-[11px] font-bold text-fg-dim";
 
-const emptyStyle: CSSProperties = {
-  textAlign: "center",
-  padding: "16px 0",
-  color: "var(--color-fg-dim)",
-  fontSize: 13,
-};
+const EMPTY = "py-4 text-center text-[13px] text-fg-dim";
 
 // ── Priority Badge ──────────────────────────────────
 
@@ -105,22 +53,55 @@ function StatusLabel({
   switch (status) {
     case "streaming":
       return (
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        <span className="inline-flex items-center gap-1">
           <Spinner size="sm" />
-          <span style={{ fontSize: 11, color: "var(--color-plasma)" }}>Running</span>
+          <span className="text-[11px] text-plasma">Running</span>
         </span>
       );
     case "pending":
-      return (
-        <span style={{ fontSize: 11, color: "var(--color-fg-dim)" }}>
-          Waiting, #{waitPosition} In Line
-        </span>
-      );
+      return <span className="text-[11px] text-fg-dim">Waiting, #{waitPosition} In Line</span>;
     case "complete":
-      return <span style={{ fontSize: 11, color: "var(--color-lime)" }}>✓ Done</span>;
+      return <span className="text-[11px] text-lime">✓ Done</span>;
     case "error":
-      return <span style={{ fontSize: 11, color: "var(--color-rose)" }}>✗ Error</span>;
+      return <span className="text-[11px] text-rose">✗ Error</span>;
   }
+}
+
+// ── Rows ────────────────────────────────────────────
+
+interface QueueRow {
+  readonly item: AiQueueItem;
+  /** 1-based place among the live rows; an exiting row keeps its last one. */
+  readonly position: number;
+  /** The item left the queue; the row waits for its leave transition. */
+  readonly exiting: boolean;
+}
+
+/** The rows after `queue` changed: kept order, leavers marked, newcomers last. */
+function settle(rows: readonly QueueRow[], queue: readonly AiQueueItem[]): readonly QueueRow[] {
+  const live = new Map(queue.map((item) => [item.id, item]));
+  const known = new Set(rows.map((r) => r.item.id));
+  const merged = [
+    ...rows.map((r) => {
+      const item = live.get(r.item.id);
+      return item ? { item, position: 0, exiting: false } : { ...r, exiting: true };
+    }),
+    ...queue
+      .filter((item) => !known.has(item.id))
+      .map((item) => ({ item, position: 0, exiting: false })),
+  ];
+  let position = 0;
+  return merged.map((r) => (r.exiting ? r : { ...r, position: ++position }));
+}
+
+function sameRows(a: readonly QueueRow[], b: readonly QueueRow[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((r, i) => {
+      const o = b[i];
+      return o?.item === r.item && o.position === r.position && o.exiting === r.exiting;
+    })
+  );
 }
 
 // ── Component ───────────────────────────────────────
@@ -146,6 +127,14 @@ export function AIQueue({ workerId }: AIQueueProps): React.ReactElement {
 
   const queue = allItems.filter((q) => q.workerId === workerId);
 
+  // Rows outlive their queue item: the store drops an item at once, so the
+  // leave animation needs its own state. A store update is not a Transition,
+  // so the exiting flag is set here while rendering, not in an effect.
+  const [rows, setRows] = useState<readonly QueueRow[]>(() => settle([], queue));
+  const settled = settle(rows, queue);
+  if (!sameRows(rows, settled)) setRows(settled);
+  const leave = (id: string): void => setRows((current) => current.filter((r) => r.item.id !== id));
+
   // Place in line among waiting items across the WHOLE queue — other
   // workers' turns ahead of this one still delay it.
   const waitPositions = new Map<string, number>();
@@ -155,50 +144,67 @@ export function AIQueue({ workerId }: AIQueueProps): React.ReactElement {
   }
 
   return (
-    <section style={queueContainerStyle} aria-label="AI Queue">
-      <div style={headerStyle}>
-        <h3 style={headerTitleStyle}>AI Queue</h3>
-        <span style={streamCountStyle}>
+    <section className={QUEUE_CONTAINER} aria-label="AI Queue">
+      <div className={HEADER}>
+        <h3 className={HEADER_TITLE}>AI Queue</h3>
+        <span className={STREAM_COUNT}>
           {activeStreams}/{concurrentLimit} Active
-          {waiting > 0 && <span style={{ color: "var(--color-amber)" }}> • {waiting} Waiting</span>}
+          {waiting > 0 && <span className="text-amber"> • {waiting} Waiting</span>}
         </span>
       </div>
 
-      {queue.length === 0 && <div style={emptyStyle}>No Items In Queue</div>}
+      {rows.length === 0 && <div className={EMPTY}>No Items In Queue</div>}
 
-      <MotionConfig reducedMotion="user">
-        <AnimatePresence initial={false}>
-          {queue.map((item, index) => (
-            <motion.div
-              key={item.id}
-              initial={{ opacity: 0, y: -8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, x: 20 }}
-              transition={{ duration: 0.15 }}
-              style={itemStyle}
+      {rows.map((row) => (
+        <div
+          key={row.item.id}
+          // getAnimations() flushes style, so a leave transition that started is
+          // listed. None (reduced motion, or an ancestor with display:none) means
+          // no transitionend will come: the row leaves at once.
+          ref={(el) => {
+            if (
+              el &&
+              row.exiting &&
+              typeof el.getAnimations === "function" &&
+              el.getAnimations().length === 0
+            ) {
+              leave(row.item.id);
+            }
+          }}
+          // A removed row stays mounted, faded out, until its leave transition ends.
+          className={`transition-[opacity,translate] duration-150 starting:-translate-y-2 starting:opacity-0 motion-reduce:starting:translate-y-0 ${row.exiting ? "translate-x-5 opacity-0 motion-reduce:translate-x-0" : ""} ${ITEM}`}
+          inert={row.exiting}
+          data-exiting={row.exiting || undefined}
+          onTransitionEnd={(event) => {
+            if (row.exiting && event.target === event.currentTarget) leave(row.item.id);
+          }}
+          onTransitionCancel={(event) => {
+            if (row.exiting && event.target === event.currentTarget) leave(row.item.id);
+          }}
+        >
+          <span className={POSITION}>{row.position}</span>
+          <Pill tone={PRIORITY_TONE[row.item.priority]} size="sm">
+            {PRIORITY_LABEL[row.item.priority]}
+          </Pill>
+          <StatusLabel
+            status={row.item.status}
+            waitPosition={waitPositions.get(row.item.id) ?? 0}
+          />
+
+          {(row.item.status === "pending" || row.item.status === "streaming") && !row.exiting && (
+            <Pill
+              interactive
+              tone="danger"
+              size="sm"
+              onClick={() => cancelItem(row.item.id)}
+              aria-label={`Cancel Queue Item ${row.position}`}
+              className="ml-auto shrink-0"
             >
-              <span style={positionStyle}>{index + 1}</span>
-              <Pill tone={PRIORITY_TONE[item.priority]} size="sm">
-                {PRIORITY_LABEL[item.priority]}
-              </Pill>
-              <StatusLabel status={item.status} waitPosition={waitPositions.get(item.id) ?? 0} />
-
-              {(item.status === "pending" || item.status === "streaming") && (
-                <Pill
-                  interactive
-                  tone="danger"
-                  size="sm"
-                  onClick={() => cancelItem(item.id)}
-                  aria-label={`Cancel Queue Item ${index + 1}`}
-                  style={{ marginLeft: "auto", flexShrink: 0 }}
-                >
-                  Cancel
-                </Pill>
-              )}
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </MotionConfig>
+              Cancel
+            </Pill>
+          )}
+        </div>
+      ))}
     </section>
   );
 }

@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import { Fragment, useId, useState } from "react";
 import { Button } from "#components/ui/Button";
 import { escapeForDisplay } from "#lib/display-escape";
@@ -9,30 +8,14 @@ import { escapeForDisplay } from "#lib/display-escape";
 // surfaces (the webview tool prompt and the agent permission row) take the
 // gate from here, so a change to the rule lands on both.
 
-const argsStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "fit-content(40%) minmax(0, 1fr)",
-  gap: "2px 12px",
-  margin: "4px 0 0",
-  fontFamily: "var(--font-mono)",
-  fontSize: 12,
-  lineHeight: 1.5,
-  color: "oklch(0.88 0.03 220)",
-  whiteSpace: "pre-wrap",
-  overflowWrap: "anywhere",
-};
+const ARGS =
+  "mt-1 mb-0 mx-0 grid grid-cols-[fit-content(40%)_minmax(0,1fr)] gap-x-3 gap-y-0.5 font-mono text-[12px] leading-normal wrap-anywhere whitespace-pre-wrap text-[oklch(0.88_0.03_220)]";
 
-const labelStyle: CSSProperties = { margin: 0, color: "var(--color-fg-muted)" };
+const LABEL = "m-0 text-fg-muted";
 
-const valueStyle: CSSProperties = { margin: 0 };
+const VALUE = "m-0";
 
-const reasonStyle: CSSProperties = {
-  margin: "6px 0 0",
-  fontSize: 12,
-  color: "oklch(0.78 0.1 75)",
-};
-
-const showAllStyle: CSSProperties = { marginLeft: 8 };
+const REASON = "mt-1.5 mb-0 mx-0 text-[12px] text-[oklch(0.78_0.1_75)]";
 
 /** Values longer than this are cut until the user asks for the rest. */
 const TRUNCATE_AT = 500;
@@ -133,11 +116,11 @@ function ArgValue({
   // Cut the raw value, then escape it, so an escape is never split.
   const hidden = [...arg.value.slice(cut)].length;
   return (
-    <dd style={valueStyle}>
+    <dd className={VALUE}>
       {escapeForDisplay(arg.value.slice(0, cut))}
       {hidden > 0 && ` … ${hidden} More Characters`}
       {long && (
-        <Button size="sm" variant="secondary" style={showAllStyle} onClick={onToggle}>
+        <Button size="sm" variant="secondary" className="ml-2" onClick={onToggle}>
           {showing ? "Show Less" : "Show All"}
         </Button>
       )}
@@ -181,10 +164,10 @@ export function ApprovalArgList({
   readonly review: ApprovalReview;
 }): React.ReactElement {
   return (
-    <dl style={argsStyle}>
+    <dl className={ARGS}>
       {review.args.map((arg) => (
         <Fragment key={arg.key}>
-          <dt style={labelStyle}>{arg.label}</dt>
+          <dt className={LABEL}>{arg.label}</dt>
           <ArgValue
             arg={arg}
             showing={review.showing.has(arg.key)}
@@ -204,7 +187,7 @@ export function ApprovalBlockedReason({
 }): React.ReactElement | null {
   if (!review.blocked) return null;
   return (
-    <p id={review.reasonId} style={reasonStyle}>
+    <p id={review.reasonId} className={REASON}>
       Allow Is Off Until You Have Used Show All On Every Shortened Value (
       {review.unseen.map((arg) => arg.label).join(", ")}).
     </p>

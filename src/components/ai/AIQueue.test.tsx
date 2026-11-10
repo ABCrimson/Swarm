@@ -2,7 +2,7 @@
 // item. The abort is what denies the turn's waiting tool calls (covered in
 // ai-chat.test.ts), so the button needs no denial of its own.
 
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { AIQueue } from "#components/ai/AIQueue";
@@ -45,5 +45,44 @@ describe("AIQueue", () => {
     render(<AIQueue workerId={W} />);
 
     expect(screen.getByText("Waiting, #2 In Line")).toBeInTheDocument();
+  });
+
+  it("keeps a removed row mounted, exiting, until its transition ends", () => {
+    useAiStore
+      .getState()
+      .enqueue({ id: ITEM, priority: "normal", workerId: W, messages: [], status: "streaming" });
+    render(<AIQueue workerId={W} />);
+    const row = screen.getByText("Running").closest("[class*='transition']");
+
+    act(() => useAiStore.getState().cancelItem(ITEM));
+
+    expect(useAiStore.getState().queue).toHaveLength(0);
+    expect(screen.getByText("Running")).toBeInTheDocument();
+    expect(row).toHaveAttribute("data-exiting", "true");
+    expect(screen.queryByRole("button", { name: /Cancel Queue Item/ })).not.toBeInTheDocument();
+
+    fireEvent.transitionEnd(row as Element);
+
+    expect(screen.queryByText("Running")).not.toBeInTheDocument();
+    expect(screen.getByText("No Items In Queue")).toBeInTheDocument();
+  });
+
+  it("drops an exiting row at once when no leave transition runs", () => {
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "getAnimations");
+    Element.prototype.getAnimations = () => [];
+    try {
+      useAiStore
+        .getState()
+        .enqueue({ id: ITEM, priority: "normal", workerId: W, messages: [], status: "streaming" });
+      render(<AIQueue workerId={W} />);
+
+      act(() => useAiStore.getState().cancelItem(ITEM));
+
+      expect(screen.queryByText("Running")).not.toBeInTheDocument();
+      expect(screen.getByText("No Items In Queue")).toBeInTheDocument();
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "getAnimations", original);
+      else Reflect.deleteProperty(Element.prototype, "getAnimations");
+    }
   });
 });
