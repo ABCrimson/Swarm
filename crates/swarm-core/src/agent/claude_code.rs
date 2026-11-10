@@ -325,11 +325,11 @@ fn probe_dir_path(root: &Path) -> PathBuf {
 /// rather than reuse a directory someone else made.
 async fn create_private_probe_dir(dir: &Path) -> std::io::Result<()> {
     let builder = cfg_select! {
-        unix => {
+        unix => {{
             let mut builder = tokio::fs::DirBuilder::new();
             builder.mode(0o700);
             builder
-        }
+        }}
         _ => tokio::fs::DirBuilder::new(),
     };
     builder.create(dir).await
