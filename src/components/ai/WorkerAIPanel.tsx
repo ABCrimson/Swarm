@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import { useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { SplitPane } from "#components/layout/SplitPane";
@@ -27,78 +26,30 @@ interface WorkerAIPanelProps {
   readonly onRequestShipTab?: () => void;
 }
 
-// ── Styles (OKLCH) ──────────────────────────────────
+// ── Styles (utilities; literals with no token wait for the Q-9 design direction) ──
 
-const panelContainerStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  height: "100%",
-  background: "var(--color-void)",
-  overflow: "hidden",
-};
+const PANEL_CONTAINER = "flex h-full flex-col overflow-hidden bg-void";
 
-const toolbarStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "6px 12px",
-  borderBottom: "1px solid var(--color-border)",
-  background: "oklch(0.10 0.02 220 / 0.9)",
-  backdropFilter: "blur(8px)",
-  flexShrink: 0,
-};
+const TOOLBAR =
+  "flex shrink-0 items-center gap-2 border-b border-border bg-[oklch(0.10_0.02_220/0.9)] px-3 py-1.5 backdrop-blur-[8px]";
 
-const flowIndicatorStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  fontSize: 11,
-  color: "oklch(0.58 0.04 220)",
-  fontFamily: "var(--font-mono)",
-};
+const FLOW_INDICATOR =
+  "flex items-center gap-1.5 font-mono text-[11px] text-[oklch(0.58_0.04_220)]";
 
-const flowDotStyle: CSSProperties = {
-  width: 6,
-  height: 6,
-  borderRadius: "50%",
-  background: "var(--color-lime)",
-};
+const FLOW_DOT = "size-1.5 rounded-full bg-lime";
 
-/** Tailwind's preflight zeroes dialog margins; `margin: auto` re-centers the modal. */
-const dialogStyle: CSSProperties = {
-  margin: "auto",
-  width: 400,
-  padding: 20,
-  borderRadius: 12,
-  background: "oklch(0.12 0.03 220 / 0.95)",
-  border: "1px solid var(--color-border-2)",
-  backdropFilter: "blur(16px) saturate(1.5)",
-  boxShadow: "0 16px 48px oklch(0 0 0 / 0.5)",
-  color: "var(--color-fg)",
-};
+/** Tailwind's preflight zeroes dialog margins; `m-auto` re-centers the modal. */
+const DIALOG =
+  "m-auto w-100 rounded-lg border border-border-2 bg-[oklch(0.12_0.03_220/0.95)] p-5 text-fg shadow-[0_16px_48px_oklch(0_0_0/0.5)] backdrop-blur-[16px] backdrop-saturate-150 backdrop:bg-[oklch(0_0_0/0.5)] backdrop:backdrop-blur-sm";
 
-const dialogTitleStyle: CSSProperties = {
-  margin: "0 0 12px",
-  fontSize: 15,
-  fontWeight: 600,
-  color: "var(--color-fg)",
-};
+const DIALOG_TITLE = "mx-0 mt-0 mb-3 text-[15px] font-semibold text-fg";
 
-const labelStyle: CSSProperties = {
-  color: "var(--color-fg-dim)",
-  fontFamily: "var(--font-display)",
-  fontSize: "var(--text-md)",
-  fontWeight: 600,
-  letterSpacing: "-0.01em",
-  padding: "0 4px",
-};
+const PANE_LABEL =
+  "px-1 font-display text-(length:--text-md) font-semibold tracking-[-0.01em] text-fg-dim";
 
-const paneWrapperStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  height: "100%",
-  overflow: "hidden",
-};
+const PANE_WRAPPER = "flex h-full flex-col overflow-hidden";
+
+const PANE_BODY = "min-h-0 flex-1";
 
 // ── Inject Instruction Dialog ───────────────────────
 
@@ -151,8 +102,7 @@ function InjectDialog({
         if (x < box.left || x > box.right || y < box.top || y > box.bottom) dialog.close();
       }}
       onClose={onClose}
-      style={dialogStyle}
-      className="backdrop:bg-[oklch(0_0_0/0.5)] backdrop:backdrop-blur-sm"
+      className={DIALOG}
     >
       <form
         action={() => {
@@ -162,17 +112,16 @@ function InjectDialog({
           dialogRef.current?.close();
         }}
       >
-        <h2 id={titleId} style={dialogTitleStyle}>
+        <h2 id={titleId} className={DIALOG_TITLE}>
           Inject Mid-Conversation Instruction
         </h2>
         <textarea
-          className="swarm-input h-auto max-h-60 min-h-20 [field-sizing:content]"
+          className="swarm-input h-auto max-h-60 min-h-20 resize-y px-3 py-2.5 [field-sizing:content]"
           aria-label="Instruction"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder="Enter An Instruction For The AI…"
           autoFocus
-          style={{ padding: "10px 12px", resize: "vertical" }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
@@ -180,7 +129,7 @@ function InjectDialog({
             }
           }}
         />
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+        <div className="mt-3 flex justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={() => dialogRef.current?.close()}>
             Cancel
           </Button>
@@ -225,16 +174,16 @@ export function WorkerAIPanel({
   };
 
   return (
-    <div style={panelContainerStyle}>
-      <div style={toolbarStyle}>
+    <div className={PANEL_CONTAINER}>
+      <div className={TOOLBAR}>
         {agentSession ? (
           <ProviderBadge provider={agentSession.provider} model={agentSession.model} />
         ) : (
           webviewChat && <ModelSelector workerId={workerId} />
         )}
 
-        <div style={flowIndicatorStyle}>
-          <span style={flowDotStyle} aria-hidden="true" />
+        <div className={FLOW_INDICATOR}>
+          <span className={FLOW_DOT} aria-hidden="true" />
           <span>AI ↔ PTY</span>
         </div>
 
@@ -243,7 +192,7 @@ export function WorkerAIPanel({
             size="sm"
             variant="secondary"
             onClick={() => setShowInject(true)}
-            style={{ borderColor: "oklch(0.35 0.10 70)", color: "var(--color-amber)" }}
+            className="border-[oklch(0.35_0.10_70)] text-amber"
           >
             Inject Instruction
           </Button>
@@ -256,10 +205,8 @@ export function WorkerAIPanel({
             onClick={onRequestShipTab}
             disabled={!shippable}
             title={shippable ? undefined : "Shipping Requires An Isolated Worktree"}
-            style={
-              shippable
-                ? { borderColor: "oklch(0.35 0.10 150)", color: "oklch(0.75 0.16 150)" }
-                : undefined
+            className={
+              shippable ? "border-[oklch(0.35_0.10_150)] text-[oklch(0.75_0.16_150)]" : undefined
             }
           >
             Ship
@@ -272,12 +219,7 @@ export function WorkerAIPanel({
             variant="secondary"
             onClick={() => setShowQueue(!showQueue)}
             aria-pressed={showQueue}
-            style={{
-              marginLeft: "auto",
-              borderColor: "oklch(0.35 0.10 205)",
-              color: "var(--color-plasma)",
-              background: showQueue ? "oklch(0.20 0.08 205 / 0.6)" : undefined,
-            }}
+            className={`ml-auto border-[oklch(0.35_0.10_205)] text-plasma ${showQueue ? "bg-[oklch(0.20_0.08_205/0.6)]" : ""}`}
           >
             Queue
           </Button>
@@ -285,30 +227,30 @@ export function WorkerAIPanel({
       </div>
 
       {showQueue && webviewChat && (
-        <div style={{ padding: "8px 12px", borderBottom: "1px solid oklch(0.18 0.03 220)" }}>
+        <div className="border-b border-[oklch(0.18_0.03_220)] px-3 py-2">
           <AIQueue workerId={workerId} />
         </div>
       )}
 
-      <div style={{ flex: 1, minHeight: 0 }}>
+      <div className={PANE_BODY}>
         <SplitPane
           direction="vertical"
           minPercent={20}
           maxPercent={80}
           primary={
-            <div style={paneWrapperStyle}>
-              <div style={labelStyle}>Terminal</div>
-              <div style={{ flex: 1, minHeight: 0 }}>
+            <div className={PANE_WRAPPER}>
+              <div className={PANE_LABEL}>Terminal</div>
+              <div className={PANE_BODY}>
                 <WorkerTerminal workerId={workerId} />
               </div>
             </div>
           }
           secondary={
-            <div style={paneWrapperStyle}>
-              <div style={labelStyle}>
+            <div className={PANE_WRAPPER}>
+              <div className={PANE_LABEL}>
                 {agentSession ? PROVIDER_LABELS[agentSession.provider] : "AI Chat"}
               </div>
-              <div style={{ flex: 1, minHeight: 0 }}>
+              <div className={PANE_BODY}>
                 {agentSession ? (
                   <AgentChat key={workerId} workerId={workerId} />
                 ) : (

@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import { useDeferredValue } from "react";
 
 interface AIMessageStreamProps {
@@ -8,71 +7,28 @@ interface AIMessageStreamProps {
   readonly isStreaming: boolean;
 }
 
-// ── Inline Styles (OKLCH) ───────────────────────────
+// ── Styles (utilities; literals with no token wait for the Q-9 design direction) ──
 
-const containerStyle: CSSProperties = {
-  position: "relative",
-  padding: "12px 16px",
-  borderRadius: 8,
-  background: "oklch(from var(--color-surface-2) l c h / 0.6)",
-  backdropFilter: "blur(12px) saturate(1.5)",
-  border: "1px solid var(--color-border)",
-  color: "oklch(0.88 0.03 220)",
-  fontFamily: "var(--font-body)",
-  fontSize: "var(--text-md)",
-  lineHeight: 1.7,
-  whiteSpace: "pre-wrap",
-  overflowWrap: "anywhere",
-};
+const CONTAINER =
+  "relative rounded-md border border-border bg-surface-2/60 px-4 py-3 font-sans text-(length:--text-md) leading-[1.7] wrap-anywhere whitespace-pre-wrap text-[oklch(0.88_0.03_220)] backdrop-blur-[12px] backdrop-saturate-150";
 
-const codeBlockStyle: CSSProperties = {
-  display: "block",
-  padding: "12px 14px",
-  margin: "8px 0",
-  borderRadius: 6,
-  background: "var(--color-surface-0)",
-  border: "1px solid oklch(0.20 0.03 220)",
-  fontFamily: "var(--font-mono)",
-  fontSize: 13,
-  lineHeight: 1.6,
-  overflowX: "auto",
-  color: "var(--color-fg)",
-  tabSize: 2,
-};
+const CODE_BLOCK =
+  "my-2 block overflow-x-auto rounded-[6px] border border-[oklch(0.20_0.03_220)] bg-surface-0 px-3.5 py-3 font-mono text-[13px] leading-[1.6] text-fg [tab-size:2]";
 
-const inlineCodeStyle: CSSProperties = {
-  padding: "2px 6px",
-  borderRadius: 4,
-  background: "oklch(0.12 0.02 220)",
-  fontFamily: "var(--font-mono)",
-  fontSize: "0.9em",
-  color: "var(--color-plasma)",
-};
+const INLINE_CODE_CLASS =
+  "rounded-sm bg-[oklch(0.12_0.02_220)] px-1.5 py-0.5 font-mono text-[0.9em] text-plasma";
 
-const cursorStyle: CSSProperties = {
-  display: "inline-block",
-  width: 2,
-  height: "1.2em",
-  background: "var(--color-plasma)",
-  marginLeft: 2,
-  verticalAlign: "text-bottom",
-};
+const CURSOR =
+  "ml-0.5 inline-block h-[1.2em] w-0.5 bg-plasma align-text-bottom motion-safe:animate-[cursor-blink_1s_step-end_infinite]";
 
-const langLabelStyle: CSSProperties = {
-  display: "block",
-  marginBottom: 6,
-  color: "oklch(0.62 0.08 205)",
-  fontFamily: "var(--font-display)",
-  fontSize: "var(--text-md)",
-  fontWeight: 600,
-  letterSpacing: "-0.01em",
-};
+const LANG_LABEL =
+  "mb-1.5 block font-display text-(length:--text-md) font-semibold tracking-[-0.01em] text-[oklch(0.62_0.08_205)]";
 
-const TOKEN_COLORS = {
-  string: "var(--color-lime)",
-  comment: "oklch(0.62 0.03 220)",
-  number: "var(--color-amber)",
-  keyword: "oklch(0.72 0.20 290)",
+const TOKEN_CLASSES = {
+  string: "text-lime",
+  comment: "text-[oklch(0.62_0.03_220)] italic",
+  number: "text-amber",
+  keyword: "text-[oklch(0.72_0.20_290)]",
 } as const;
 
 // ── Keyword Highlighting ────────────────────────────
@@ -175,25 +131,18 @@ function highlightCodeLine(line: string, language: string | undefined): React.Re
 
   for (const [token] of line.matchAll(tokenPattern)) {
     const key = index++;
-    let color: string | undefined;
+    let tokenClass: string | undefined;
     if (token.startsWith("//") || (hashComments && token.startsWith("#"))) {
-      color = TOKEN_COLORS.comment;
+      tokenClass = TOKEN_CLASSES.comment;
     } else if (/^(["`]|'.*'$)/.test(token) && token.length > 1) {
-      color = TOKEN_COLORS.string;
+      tokenClass = TOKEN_CLASSES.string;
     } else if (/^\d+\.?\d*$/.test(token)) {
-      color = TOKEN_COLORS.number;
+      tokenClass = TOKEN_CLASSES.number;
     } else if (CODE_KEYWORDS.has(token)) {
-      color = TOKEN_COLORS.keyword;
+      tokenClass = TOKEN_CLASSES.keyword;
     }
     tokens.push(
-      <span
-        key={key}
-        style={
-          color
-            ? { color, fontStyle: color === TOKEN_COLORS.comment ? "italic" : undefined }
-            : undefined
-        }
-      >
+      <span key={key} className={tokenClass}>
         {token}
       </span>,
     );
@@ -271,9 +220,9 @@ function CodeBlock({ segment }: { readonly segment: ParsedSegment }): React.Reac
     <pre
       // biome-ignore lint/a11y/noNoninteractiveTabindex: a horizontally scrollable block must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1); WebKit (WKWebView, WebKitGTK) does not focus scroll containers natively.
       tabIndex={0}
-      style={codeBlockStyle}
+      className={CODE_BLOCK}
     >
-      {segment.language && <span style={langLabelStyle}>{segment.language}</span>}
+      {segment.language && <span className={LANG_LABEL}>{segment.language}</span>}
       <code>
         {lines.map((line) => (
           <span key={line.key}>
@@ -303,14 +252,14 @@ export function AIMessageStream({
   const segments = parseContent(deferredContent);
 
   return (
-    <div style={containerStyle} aria-busy={isStreaming || undefined}>
+    <div className={CONTAINER} aria-busy={isStreaming || undefined}>
       {segments.map((segment) => {
         switch (segment.type) {
           case "code_block":
             return <CodeBlock key={`seg-${segment.start}`} segment={segment} />;
           case "inline_code":
             return (
-              <code key={`seg-${segment.start}`} style={inlineCodeStyle}>
+              <code key={`seg-${segment.start}`} className={INLINE_CODE_CLASS}>
                 {segment.content}
               </code>
             );
@@ -318,13 +267,7 @@ export function AIMessageStream({
             return <span key={`seg-${segment.start}`}>{segment.content}</span>;
         }
       })}
-      {isStreaming && (
-        <span
-          className="motion-safe:animate-[cursor-blink_1s_step-end_infinite]"
-          style={cursorStyle}
-          aria-hidden="true"
-        />
-      )}
+      {isStreaming && <span className={CURSOR} aria-hidden="true" />}
     </div>
   );
 }

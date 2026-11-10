@@ -17,13 +17,42 @@ import { useWorkerAgentStore } from "#store/worker-agents";
 // Colors and capability badges are cosmetic, so they live here; ids,
 // labels, prices and limits come from the catalog (#lib/models).
 
+/** Accent classes per key: `text` and `dot` paint the label and the trigger dot, `border` the open trigger, `tint` the selected option. */
 const MODEL_STYLE = {
-  fable: { color: "oklch(0.80 0.19 55)", tint: "oklch(0.80 0.19 55 / 0.14)" },
-  mythos: { color: "oklch(0.75 0.22 340)", tint: "oklch(0.75 0.22 340 / 0.14)" },
-  opus: { color: "oklch(0.72 0.20 290)", tint: "oklch(0.72 0.20 290 / 0.14)" },
-  sonnet: { color: "var(--color-plasma)", tint: "oklch(from var(--color-plasma) l c h / 0.14)" },
-  haiku: { color: "var(--color-lime)", tint: "oklch(from var(--color-lime) l c h / 0.14)" },
-} as const satisfies Record<ModelKey, { readonly color: string; readonly tint: string }>;
+  fable: {
+    text: "text-[oklch(0.80_0.19_55)]",
+    dot: "bg-[oklch(0.80_0.19_55)]",
+    border: "border-[oklch(0.80_0.19_55)]",
+    tint: "bg-[oklch(0.80_0.19_55/0.14)]",
+  },
+  mythos: {
+    text: "text-[oklch(0.75_0.22_340)]",
+    dot: "bg-[oklch(0.75_0.22_340)]",
+    border: "border-[oklch(0.75_0.22_340)]",
+    tint: "bg-[oklch(0.75_0.22_340/0.14)]",
+  },
+  opus: {
+    text: "text-[oklch(0.72_0.20_290)]",
+    dot: "bg-[oklch(0.72_0.20_290)]",
+    border: "border-[oklch(0.72_0.20_290)]",
+    tint: "bg-[oklch(0.72_0.20_290/0.14)]",
+  },
+  sonnet: {
+    text: "text-plasma",
+    dot: "bg-plasma",
+    border: "border-plasma",
+    tint: "bg-plasma/14",
+  },
+  haiku: {
+    text: "text-lime",
+    dot: "bg-lime",
+    border: "border-lime",
+    tint: "bg-lime/14",
+  },
+} as const satisfies Record<
+  ModelKey,
+  { readonly text: string; readonly dot: string; readonly border: string; readonly tint: string }
+>;
 
 const MODEL_CAPABILITIES = {
   fable: ["Long-Horizon Reasoning", "Agentic Work", "Adaptive Thinking"],
@@ -41,24 +70,12 @@ function costIndicator(model: ModelInfo): string {
   return "$";
 }
 
-// ── Styles (OKLCH) ──────────────────────────────────
+// ── Styles (utilities; literals with no token wait for the Q-9 design direction) ──
 
-const triggerStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "6px 12px",
-  borderRadius: 8,
-  border: "1px solid var(--color-border-2)",
-  background: "oklch(0.12 0.03 220 / 0.9)",
-  cursor: "pointer",
-  transition: "border-color 0.15s var(--ease-out)",
-  fontFamily: "var(--font-body)",
-  fontSize: 13,
-  color: "var(--color-fg)",
-};
+const TRIGGER =
+  "flex cursor-pointer items-center gap-2 rounded-md border bg-[oklch(0.12_0.03_220/0.9)] px-3 py-1.5 font-sans text-[13px] text-fg transition-[border-color] duration-150 ease-(--ease-out) [anchor-name:var(--model-anchor)]";
 
-/** CSS anchor positioning where the engine has it (WebKit 26+, Chromium); elsewhere (the WebKit 18.4 floor) the popover is centered in the viewport: panelStyle's margin: auto restores the UA popover margin that Tailwind's preflight zeroes. */
+/** CSS anchor positioning where the engine has it (WebKit 26+, Chromium); elsewhere (the WebKit 18.4 floor) the popover is centered in the viewport: `m-auto` restores the UA popover margin that Tailwind's preflight zeroes. */
 const SUPPORTS_ANCHOR_POSITIONING = globalThis.CSS?.supports?.("top", "anchor(bottom)") ?? false;
 
 /**
@@ -66,60 +83,27 @@ const SUPPORTS_ANCHOR_POSITIONING = globalThis.CSS?.supports?.("top", "anchor(bo
  * context (the toolbar's `backdrop-filter`) can trap it and no z-index
  * is needed.
  */
-const panelStyle: CSSProperties = {
-  margin: "auto",
-  minWidth: 280,
-  padding: 0,
-  borderRadius: 8,
-  border: "1px solid var(--color-border-2)",
-  background: "oklch(0.10 0.03 220 / 0.95)",
-  backdropFilter: "blur(16px) saturate(1.5)",
-  boxShadow: "0 8px 32px oklch(0 0 0 / 0.4)",
-  color: "var(--color-fg)",
-};
+const PANEL =
+  "rounded-md border border-border-2 bg-[oklch(0.10_0.03_220/0.95)] p-0 text-fg shadow-[0_8px_32px_oklch(0_0_0/0.4)] backdrop-blur-[16px] backdrop-saturate-150";
+
+const PANEL_CENTERED = "m-auto min-w-70";
 
 /**
  * Keeps the listbox under its trigger through scrolling and resizing,
- * flipping above it when there is no room; applies only with
+ * flipping above it when there is no room; used only with
  * SUPPORTS_ANCHOR_POSITIONING.
  */
-const anchoredPanelStyle: CSSProperties = {
-  margin: 0,
-  inset: "auto",
-  top: "anchor(bottom)",
-  left: "anchor(left)",
-  marginTop: 4,
-  minWidth: "max(280px, anchor-size(width))",
-  positionTryFallbacks: "flip-block",
-};
+const PANEL_ANCHORED =
+  "mx-0 mb-0 mt-1 top-[anchor(bottom)] right-auto bottom-auto left-[anchor(left)] min-w-[max(280px,anchor-size(width))] [position-anchor:var(--model-anchor)] [position-try-fallbacks:flip-block]";
 
-const optionStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 4,
-  padding: "10px 14px",
-  cursor: "pointer",
-  borderBottom: "1px solid oklch(0.18 0.03 220)",
-  outlineOffset: -2,
-};
+const OPTION =
+  "flex cursor-pointer flex-col gap-1 border-b border-[oklch(0.18_0.03_220)] px-3.5 py-2.5 -outline-offset-2";
 
-const optionHeaderStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  fontSize: 13,
-  fontWeight: 600,
-};
+const OPTION_HEADER = "flex items-center justify-between text-[13px] font-semibold";
 
-const optionMetaStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  fontSize: 11,
-  color: "oklch(0.58 0.03 220)",
-};
+const OPTION_META = "flex items-center gap-2 text-[11px] text-[oklch(0.58_0.03_220)]";
 
-const dotStyle: CSSProperties = { width: 6, height: 6, borderRadius: "50%", flexShrink: 0 };
+const DOT = "size-1.5 shrink-0 rounded-full";
 
 // ── Component ───────────────────────────────────────
 
@@ -156,7 +140,10 @@ export function ModelSelector({ workerId }: ModelSelectorProps): React.ReactElem
   const triggerRef = useRef<HTMLButtonElement>(null);
   const id = useId();
   const popoverId = `model-listbox-${id}`;
-  const anchorName = `--model-trigger-${id.replace(/[^\w-]/g, "")}`;
+  // Computed per instance, so it travels as a custom property the anchor classes read.
+  const anchor = {
+    "--model-anchor": `--model-trigger-${id.replace(/[^\w-]/g, "")}`,
+  } as CSSProperties;
 
   const pinned = agentMetadata?.model;
   const currentKey = pinned ?? selectedModel;
@@ -210,18 +197,12 @@ export function ModelSelector({ workerId }: ModelSelectorProps): React.ReactElem
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`AI Model: ${current.label}`}
-        style={{
-          ...triggerStyle,
-          anchorName,
-          borderColor: open ? MODEL_STYLE[currentKey].color : "var(--color-border-2)",
-        }}
+        className={`${TRIGGER} ${open ? MODEL_STYLE[currentKey].border : "border-border-2"}`}
+        style={anchor}
       >
-        <span
-          aria-hidden="true"
-          style={{ ...dotStyle, background: MODEL_STYLE[currentKey].color }}
-        />
+        <span aria-hidden="true" className={`${DOT} ${MODEL_STYLE[currentKey].dot}`} />
         <span>{current.label}</span>
-        <span aria-hidden="true" style={{ marginLeft: "auto", color: "oklch(0.55 0.03 220)" }}>
+        <span aria-hidden="true" className="ml-auto text-[oklch(0.55_0.03_220)]">
           {open ? "▴" : "▾"}
         </span>
       </button>
@@ -232,12 +213,8 @@ export function ModelSelector({ workerId }: ModelSelectorProps): React.ReactElem
         role="listbox"
         aria-label="AI Model Options"
         tabIndex={-1}
-        className="opacity-0 transition-[opacity,translate,display,overlay] transition-discrete duration-150 -translate-y-1 open:translate-y-0 open:opacity-100 starting:open:-translate-y-1 starting:open:opacity-0 motion-reduce:transition-none"
-        style={
-          SUPPORTS_ANCHOR_POSITIONING
-            ? { ...panelStyle, ...anchoredPanelStyle, positionAnchor: anchorName }
-            : panelStyle
-        }
+        className={`${PANEL} ${SUPPORTS_ANCHOR_POSITIONING ? PANEL_ANCHORED : PANEL_CENTERED} opacity-0 transition-[opacity,translate,display,overlay] transition-discrete duration-150 -translate-y-1 open:translate-y-0 open:opacity-100 starting:open:-translate-y-1 starting:open:opacity-0 motion-reduce:transition-none`}
+        style={anchor}
         onToggle={(e) => {
           const isOpen = e.newState === "open";
           setOpen(isOpen);
@@ -273,17 +250,11 @@ export function ModelSelector({ workerId }: ModelSelectorProps): React.ReactElem
                 e.preventDefault();
                 select(key, e.currentTarget.closest<HTMLElement>("[popover]"));
               }}
-              style={{ ...optionStyle, background: isSelected ? style.tint : "oklch(0 0 0 / 0)" }}
+              className={`${OPTION} ${isSelected ? style.tint : "bg-transparent"}`}
             >
-              <div style={optionHeaderStyle}>
-                <span style={{ color: style.color, whiteSpace: "nowrap" }}>{model.label}</span>
-                <span
-                  style={{
-                    color: style.color,
-                    fontSize: 12,
-                    fontFamily: "var(--font-mono)",
-                  }}
-                >
+              <div className={OPTION_HEADER}>
+                <span className={`${style.text} whitespace-nowrap`}>{model.label}</span>
+                <span className={`${style.text} font-mono text-[12px]`}>
                   {costIndicator(model)}
                 </span>
               </div>
@@ -294,14 +265,14 @@ export function ModelSelector({ workerId }: ModelSelectorProps): React.ReactElem
                   </Pill>
                 </div>
               )}
-              <div style={optionMetaStyle}>
+              <div className={OPTION_META}>
                 <span>{formatContextLabel(model.contextWindow)}</span>
-                <span aria-hidden="true" style={{ color: "oklch(0.35 0.02 220)" }}>
+                <span aria-hidden="true" className="text-[oklch(0.35_0.02_220)]">
                   •
                 </span>
                 <span>{model.id}</span>
               </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 2 }}>
+              <div className="mt-0.5 flex flex-wrap gap-1">
                 {MODEL_CAPABILITIES[key].map((capability) => (
                   <Pill key={capability} tone="neutral" size="sm">
                     {capability}

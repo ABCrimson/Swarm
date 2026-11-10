@@ -53,7 +53,7 @@ describe("AIMessageStream", () => {
   it("treats # as a comment only in hash-comment languages", () => {
     render(<AIMessageStream content={"```rust\n#[derive(Debug)]\n```"} isStreaming={false} />);
     const hash = screen.getByText("#[");
-    expect(hash).not.toHaveStyle({ fontStyle: "italic" });
+    expect(hash).not.toHaveClass("italic");
   });
 
   it("marks a streaming block busy and shows the cursor", () => {
