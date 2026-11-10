@@ -95,10 +95,9 @@ describe("superseded Fable and Mythos 5.1 pricing", () => {
     "still prices %s usage records at 10 / 0.25 / 50 USD per MTok outside the catalog",
     (id) => {
       expect(getModelById(id)).toBeUndefined();
-      expect(estimateCostUsd(id, { input_tokens: 1_000_000, output_tokens: 1_000_000 })).toBeCloseTo(
-        60,
-        10,
-      );
+      expect(
+        estimateCostUsd(id, { input_tokens: 1_000_000, output_tokens: 1_000_000 }),
+      ).toBeCloseTo(60, 10);
     },
   );
 });
@@ -182,7 +181,7 @@ describe("labels and gating", () => {
     expect(warnIfModelGated(CLAUDE_MODELS.sonnet)).toBe(false);
 
     expect(toast.warning).toHaveBeenCalledExactlyOnceWith(
-      "Claude Mythos 5.1 Requires Project Glasswing Access",
+      "Claude Mythos 5.2 Requires Project Glasswing Access",
     );
   });
 });
