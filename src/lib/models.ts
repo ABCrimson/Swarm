@@ -6,7 +6,7 @@
  * its own model list: widen this catalog and everything else derives
  * from it.
  *
- * Figures verified 2026-10-10 against platform.claude.com: the models
+ * Figures verified 2026-11-10 against platform.claude.com: the models
  * overview (https://platform.claude.com/docs/en/models/overview), the
  * Sonnet 5.5 and Haiku 5.5 model pages
  * (https://platform.claude.com/docs/en/models/sonnet-5-5/overview,
@@ -15,7 +15,7 @@
  * the prompt-caching page (mid-conversation system messages) and the
  * refusals-and-fallback page
  * (https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback).
- * Current lineup: Fable 5.1, Mythos 5.1 (verified organizations only, via Anthropic's verification programs such as the Cyber Verification Program: Mythos 5.1 overview, 2026-10-10),
+ * Current lineup: Fable 5.2, Mythos 5.2 (limited availability: verified organizations only, via Anthropic's verification programs such as the Cyber Verification Program),
  * Opus 5.5, Sonnet 5.5 (released 2026-09-28) and Haiku 5.5 (released
  * 2026-10-07). Every model has a 1M context window and 128K max output;
  * all take adaptive thinking and `effort`. Claude 4.6 and later models
@@ -72,7 +72,7 @@ export interface ModelInfo {
   readonly maxOutputTokens: number;
   /** USD per million uncached input tokens (5-minute cache writes bill at 1.25x this). */
   readonly inputPerMTok: number;
-  /** USD per million cache-read input tokens — not a fixed ratio: 0.025x on Fable 5.1 and Mythos 5.1, 0.05x on Opus 5.5 and Sonnet 5.5, 0.1x on Haiku 5.5's short-prompt tier. */
+  /** USD per million cache-read input tokens — not a fixed ratio: 0.025x on Fable 5.2 and Mythos 5.2, 0.05x on Opus 5.5 and Sonnet 5.5, 0.1x on Haiku 5.5's short-prompt tier. */
   readonly cacheReadPerMTok: number;
   /** USD per million output tokens (thinking tokens bill as output). */
   readonly outputPerMTok: number;
@@ -83,7 +83,7 @@ export interface ModelInfo {
   readonly longPrompt?: LongPromptPricing;
   /**
    * Takes `thinking: { type: "adaptive" }`. Every current model does
-   * (Fable/Mythos 5.1 and Opus 5.5 cannot turn thinking off at all).
+   * (Fable/Mythos 5.2 and Opus 5.5 cannot turn thinking off at all).
    */
   readonly adaptiveThinking: boolean;
   /** Accepts `output_config.effort` (every current model does). */
@@ -98,36 +98,36 @@ export interface ModelInfo {
   readonly refusalFallback: boolean;
   /** Accepts mid-conversation `role: "system"` messages (every current model; legacy Sonnet 5 did not). */
   readonly systemMessages: boolean;
-  /** Access gate required beyond a valid API key, if any (Mythos 5.1 → Anthropic verification programs; `glasswing` is a persisted legacy key). */
+  /** Access gate required beyond a valid API key, if any (Mythos 5.2 → Anthropic verification programs; `glasswing` is a persisted legacy key). */
   readonly gated?: ModelGate;
 }
 
 /** The current Claude model catalog, keyed by a stable short name. */
 export const CLAUDE_MODELS: Readonly<Record<ModelKey, ModelInfo>> = {
   fable: {
-    id: "claude-fable-5-1",
-    label: "Claude Fable 5.1",
+    id: "claude-fable-5-2",
+    label: "Claude Fable 5.2",
     description: "Most Capable — Long-Horizon Reasoning And Agentic Work",
     contextWindow: 1_000_000,
     maxOutputTokens: 128_000,
-    inputPerMTok: 10,
-    cacheReadPerMTok: 0.25,
-    outputPerMTok: 50,
+    inputPerMTok: 8,
+    cacheReadPerMTok: 0.2,
+    outputPerMTok: 40,
     adaptiveThinking: true,
     effort: true,
     refusalFallback: true,
     systemMessages: true,
   },
   mythos: {
-    id: "claude-mythos-5-1",
-    label: "Claude Mythos 5.1",
+    id: "claude-mythos-5-2",
+    label: "Claude Mythos 5.2",
     description: "Most Capable — Available Exclusively Through Project Glasswing",
     contextWindow: 1_000_000,
     maxOutputTokens: 128_000,
-    inputPerMTok: 10,
-    // 0.025x cache reads, same as Fable 5.1 (pricing page, 2026-10-10).
-    cacheReadPerMTok: 0.25,
-    outputPerMTok: 50,
+    inputPerMTok: 8,
+    // 0.025x cache reads, same as Fable 5.2 (pricing page, 2026-11-10).
+    cacheReadPerMTok: 0.2,
+    outputPerMTok: 40,
     adaptiveThinking: true,
     effort: true,
     refusalFallback: true,
@@ -200,21 +200,25 @@ type PricingOnly = Pick<ModelInfo, "inputPerMTok" | "cacheReadPerMTok" | "output
  * catalog. Permitted targets per catalog model with `refusalFallback`
  * (fallback-credit page,
  * https://platform.claude.com/docs/en/build-with-claude/fallback-credit,
- * and the Fable 5.1 what's-new page, 2026-10-10):
- * - Fable 5.1 and Opus 5.5: `claude-opus-4-8` and `claude-opus-5`.
+ * 2026-11-10):
+ * - Fable 5.2 and Opus 5.5: `claude-opus-4-8` and `claude-opus-5`.
  * - Sonnet 5.5: `claude-sonnet-5`.
- * - Mythos 5.1: its targets are not listed on those pages; the Models API
+ * - Mythos 5.2: its targets are not listed on that page; the Models API
  *   reports them as `allowed_fallback_models` under the
  *   `server-side-fallback-2026-07-01` beta header (needs Mythos access,
  *   not checked here). An attempt served by a model with no row here is
- *   priced at the requested model's rates, which for Mythos equal Fable 5.1's.
+ *   priced at the requested model's rates, which for Mythos equal Fable 5.2's.
  * - Haiku 5.5 has no server-side fallback.
+ * Also priced: the superseded Fable 5.1 and Mythos 5.1 ($10 / $0.25 / $50),
+ * so usage records stored under those ids keep their cost.
  * Rates from the pricing page
- * (https://platform.claude.com/docs/en/about-claude/pricing, 2026-10-10):
+ * (https://platform.claude.com/docs/en/about-claude/pricing, 2026-11-10):
  * Opus 5 and Opus 4.8 are $5 input / $0.50 cache read / $25 output;
  * Sonnet 5 is $2 / $0.20 / $10.
  */
 const FALLBACK_PRICING: ReadonlyMap<string, PricingOnly> = new Map([
+  ["claude-fable-5-1", { inputPerMTok: 10, cacheReadPerMTok: 0.25, outputPerMTok: 50 }],
+  ["claude-mythos-5-1", { inputPerMTok: 10, cacheReadPerMTok: 0.25, outputPerMTok: 50 }],
   ["claude-opus-4-8", { inputPerMTok: 5, cacheReadPerMTok: 0.5, outputPerMTok: 25 }],
   ["claude-opus-5", { inputPerMTok: 5, cacheReadPerMTok: 0.5, outputPerMTok: 25 }],
   ["claude-sonnet-5", { inputPerMTok: 2, cacheReadPerMTok: 0.2, outputPerMTok: 10 }],

@@ -126,7 +126,7 @@ describe("ModelSelector", () => {
     await user.click(screen.getByRole("option", { name: /Claude Mythos 5\.1/ }));
 
     expect(toast.warning).toHaveBeenCalledExactlyOnceWith(
-      "Claude Mythos 5.1 Requires Project Glasswing Access",
+      "Claude Mythos 5.2 Requires Project Glasswing Access",
     );
     expect(toast.success).not.toHaveBeenCalled();
   });
