@@ -1,5 +1,6 @@
-import { type CSSProperties, Suspense, use, useId, useSyncExternalStore } from "react";
+import { type CSSProperties, use, useId, useSyncExternalStore } from "react";
 import { Pill } from "#components/ui/Pill";
+import { Reveal } from "#components/ui/Reveal";
 import { escapeForDisplay } from "#lib/display-escape";
 import { pluralizeWorkers } from "#lib/format";
 import { DESKTOP_ONLY_REASON, hasCapability, isTauri } from "#lib/tauri";
@@ -87,7 +88,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
       </section>
 
       {hasCapability("localStores") && isTauri() ? (
-        <Suspense
+        <Reveal
           fallback={
             <p role="status" className="text-xs text-fg-dim">
               Loading Your Templates…
@@ -95,7 +96,7 @@ export function TemplateSelector({ onSelect, onClose }: TemplateSelectorProps): 
           }
         >
           <UserTemplates onSelect={onSelect} unavailableReasonId={unavailableReasonId} />
-        </Suspense>
+        </Reveal>
       ) : (
         <section aria-label="Your Templates">
           <h3 className={sectionHeadingClass}>Your Templates</h3>

@@ -1,8 +1,9 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { Suspense, useId, useRef, useState, useTransition } from "react";
+import { useId, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
 import { EmptyState } from "#components/ui/EmptyState";
+import { Reveal } from "#components/ui/Reveal";
 import { Spinner } from "#components/ui/Spinner";
 import { loadFilePreview } from "#lib/file-preview";
 import { errorMessage } from "#lib/is-error";
@@ -192,7 +193,7 @@ export function WorkspacePanel(): React.ReactElement {
 
       <div className="min-w-0 flex-1 overflow-hidden">
         {selection ? (
-          <Suspense
+          <Reveal
             fallback={
               <div className="flex h-full items-center justify-center">
                 <Spinner size="md" />
@@ -200,7 +201,7 @@ export function WorkspacePanel(): React.ReactElement {
             }
           >
             <FileViewer selection={selection} pending={loadingFile} />
-          </Suspense>
+          </Reveal>
         ) : (
           <p className="flex h-full items-center justify-center text-fg-dim text-lg">
             Select A File To View

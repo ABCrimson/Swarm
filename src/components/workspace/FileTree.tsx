@@ -1,6 +1,7 @@
 import { useResizeObserver } from "@crimson_dev/use-resize-observer";
 import { type DirEntry, readDir } from "@tauri-apps/plugin-fs";
-import { Suspense, use, useId, useRef, useState } from "react";
+import { use, useId, useRef, useState } from "react";
+import { Reveal } from "#components/ui/Reveal";
 import { escapeForDisplay } from "#lib/display-escape";
 import { childPath } from "#lib/file-preview";
 import { errorMessage } from "#lib/is-error";
@@ -155,8 +156,8 @@ interface Viewport {
  * Only the rows in view (plus {@link OVERSCAN}) are in the DOM. The
  * scroll container renders from the first commit — also while the root
  * is loading — so its height is measured before any rows are laid out.
- * The root listing is read with `use()` under a Suspense boundary inside
- * that container; directory listings below it load lazily on first
+ * The root listing is read with `use()` under a {@link Reveal} boundary
+ * inside that container; directory listings below it load lazily on first
  * expand. A failed listing is shown under its folder (or instead of the
  * tree for the root), never swallowed. Key it by `rootPath` so a new root
  * starts fresh.
@@ -177,7 +178,7 @@ export function FileTree({
       className="scroll-area h-full overflow-y-auto px-1 py-2"
       onScroll={(e) => setFirstRow(Math.floor(e.currentTarget.scrollTop / ROW_HEIGHT))}
     >
-      <Suspense
+      <Reveal
         fallback={
           <p role="status" className="p-4 text-fg-muted text-md">
             Loading…
@@ -190,7 +191,7 @@ export function FileTree({
           onSelectFile={onSelectFile}
           selectedPath={selectedPath}
         />
-      </Suspense>
+      </Reveal>
     </div>
   );
 }

@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { Suspense, use, useActionState, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
+import { Reveal } from "#components/ui/Reveal";
 import { PROVIDER_LABELS, type TrustTier, TrustTierSchema } from "#lib/agent-events";
 import { escapeForDisplay } from "#lib/display-escape";
 import { errorMessage } from "#lib/is-error";
@@ -158,9 +159,9 @@ function probeBoundary(
   render: (reasons: ProbeReasons) => React.ReactNode,
 ): React.ReactElement {
   return (
-    <Suspense fallback={render({})}>
+    <Reveal fallback={render({})}>
       <WithProbeAnswers answers={answers} render={render} />
-    </Suspense>
+    </Reveal>
   );
 }
 
@@ -786,9 +787,9 @@ export function SpawnWorkerDialog({
               {pickedRoot !== undefined ? (
                 <RootPath root={pickedRoot} />
               ) : (
-                <Suspense fallback={<span style={repoRootPathStyle}>Loading…</span>}>
+                <Reveal fallback={<span style={repoRootPathStyle}>Loading…</span>}>
                   <SavedRootPath read={reads.savedRoot} />
-                </Suspense>
+                </Reveal>
               )}
               <Button
                 variant="secondary"
@@ -810,9 +811,9 @@ export function SpawnWorkerDialog({
           {notice !== undefined ? (
             <Notice text={notice} />
           ) : (
-            <Suspense fallback={null}>
+            <Reveal fallback={null}>
               <SavedRootNotice read={reads.savedRoot} />
-            </Suspense>
+            </Reveal>
           )}
 
           {spawnError && (

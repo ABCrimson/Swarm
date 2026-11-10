@@ -1,14 +1,5 @@
 import { useAtom, useAtomValue } from "jotai";
-import {
-  Suspense,
-  use,
-  useEffect,
-  useEffectEvent,
-  useId,
-  useRef,
-  useState,
-  useTransition,
-} from "react";
+import { use, useEffect, useEffectEvent, useId, useRef, useState, useTransition } from "react";
 import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import * as z from "zod";
@@ -16,6 +7,7 @@ import { PageHeader } from "#components/layout/PageHeader";
 import { Button } from "#components/ui/Button";
 import { Input } from "#components/ui/Input";
 import { Pill } from "#components/ui/Pill";
+import { Reveal } from "#components/ui/Reveal";
 import type { CapSync } from "#lib/acknowledged-sync";
 import {
   type AlertThresholds,
@@ -641,7 +633,7 @@ function SavedApiKeyForm({ read }: { readonly read: Promise<string | null> }): R
 
 /**
  * The API key field, written on Save via #lib/tauri. While the saved key is
- * still being read (`pending`, the Suspense fallback) the field is
+ * still being read (`pending`, the Reveal fallback) the field is
  * read-only, so nothing typed is overwritten when the key arrives; after
  * that the draft is the user's own. The key itself is never logged, traced,
  * or included in a toast; a failed save shows the backend's error text,
@@ -793,9 +785,9 @@ export function Settings(): React.ReactElement {
         {savedApiKey === null ? (
           <ApiKeyForm savedKey="" />
         ) : (
-          <Suspense fallback={<ApiKeyForm savedKey="" pending />}>
+          <Reveal fallback={<ApiKeyForm savedKey="" pending />}>
             <SavedApiKeyForm read={savedApiKey} />
-          </Suspense>
+          </Reveal>
         )}
 
         <SettingsSection title="AI Model" headingId={modelHeadingId}>
