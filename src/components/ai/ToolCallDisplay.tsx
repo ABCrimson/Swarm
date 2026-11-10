@@ -169,9 +169,17 @@ function ResultViewer({ result }: { readonly result: string }): React.ReactEleme
 const DISCLOSURE =
   "details-content:grid details-content:grid-rows-[0fr] details-content:transition-[grid-template-rows,content-visibility] details-content:transition-discrete details-content:duration-200 details-content:ease-in-out open:details-content:grid-rows-[1fr] motion-reduce:details-content:transition-none";
 
-/** The opened body fades in over the row's growth, so the card settles rather than slides. */
+/**
+ * The opened body fades in over the row's growth, so the card settles rather
+ * than slides. A closed card's content is skipped (`content-visibility`), so
+ * the body has no computed style to transition from when it first renders on
+ * open, and Chromium would show it at full opacity at once. `starting:` emits
+ * `@starting-style` as that start; it is written with `group-open:` because a
+ * starting rule loses to the open rule's higher specificity unless it matches
+ * it. WebKit fades without it. Reduced motion drops the transition.
+ */
 const BODY =
-  "min-h-0 overflow-hidden opacity-0 transition-opacity duration-200 ease-in-out group-open:opacity-100 motion-reduce:transition-none";
+  "min-h-0 overflow-hidden opacity-0 transition-opacity duration-200 ease-in-out group-open:opacity-100 starting:group-open:opacity-0 motion-reduce:transition-none";
 
 // ── Component ───────────────────────────────────────
 

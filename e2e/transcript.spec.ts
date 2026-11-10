@@ -65,4 +65,48 @@ test.describe("Transcript fixture", () => {
     await sendChatMessage(app, "Now read the file");
     await expect(page.getByRole("group", { name: "Approve read_file" })).toBeVisible();
   });
+
+  // The body's fade needs a start style (`starting:opacity-0`): a closed card's content is skipped
+  // (`content-visibility`), so on Chromium the body would otherwise read 1 from its first frame.
+  // The card must be scrolled into view first, because an off-screen row is skipped entirely.
+  for (const reducedMotion of ["no-preference", "reduce"] as const) {
+    test(`a tool card's body ${reducedMotion === "reduce" ? "appears at once" : "fades in"} as it opens (${reducedMotion})`, async ({
+      page,
+    }) => {
+      await page.emulateMedia({ reducedMotion });
+      await installTauriIpc(page);
+      const app = new SwarmApp(page);
+      await app.open();
+      await emitEvents(page, new EventLog().agentWorker());
+      const log = await openWorkerChat(app, AGENT_WORKER_NAME);
+      await emitEvents(page, new EventLog().turn(AGENT_WORKER, "turn-1", 1));
+
+      const card = log.getByRole("button", { name: "Tool Call: Read, Complete" });
+      await card.scrollIntoViewIfNeeded();
+      await expect(card).toBeVisible();
+      const samples = await card.evaluate(async (element) => {
+        const body = element.nextElementSibling;
+        if (!(element instanceof HTMLElement && body instanceof HTMLElement)) {
+          throw new Error("the tool card has no body");
+        }
+        const seen: number[] = [];
+        element.click();
+        for (let frame = 0; frame < 12; frame += 1) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+          seen.push(Number(getComputedStyle(body).opacity));
+        }
+        return seen;
+      });
+
+      if (reducedMotion === "reduce") {
+        expect(samples[0]).toBe(1);
+      } else {
+        // Frames before React commits the open state read 0; the fade then climbs through (0, 1).
+        expect(
+          samples.some((opacity) => opacity > 0 && opacity < 1),
+          `opacity per frame: ${samples}`,
+        ).toBe(true);
+      }
+    });
+  }
 });
