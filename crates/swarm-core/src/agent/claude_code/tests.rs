@@ -2,6 +2,7 @@
 //! session path end to end against `fake_claude_cli.mjs` (run with
 //! `node`), which speaks the CLI's protocol with its real ordering.
 
+use std::assert_matches;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -897,14 +898,14 @@ async fn cancel_without_a_receipt_falls_back_to_a_kill() {
         settled[0]["error"]
     );
     assert_eq!(harness.recorder.count("agent_session_exited"), 1);
-    assert!(matches!(
+    assert_matches!(
         session
             .send_turn(TurnInput {
                 prompt: "again".to_owned()
             })
             .await,
         Err(AppError::Ipc(_))
-    ));
+    );
 }
 
 #[tokio::test]
@@ -1090,10 +1091,7 @@ async fn send_turn_while_busy_is_rejected() {
             prompt: "second".to_owned(),
         })
         .await;
-    assert!(
-        matches!(second, Err(AppError::AgentSessionBusy)),
-        "{second:?}"
-    );
+    assert_matches!(second, Err(AppError::AgentSessionBusy), "{second:?}");
     session.shutdown().await.expect("shutdown");
 }
 
@@ -1143,8 +1141,9 @@ async fn send_turn_racing_shutdown_never_loses_a_settlement() {
 /// the `closing` flag, not a write that failed on a closed stdin (which
 /// fails with a different message).
 fn assert_session_closed(sent: &Result<TurnId, AppError>) {
-    assert!(
-        matches!(sent, Err(AppError::Ipc(message)) if message == SESSION_CLOSED),
+    assert_matches!(
+        sent,
+        Err(AppError::Ipc(message)) if message == SESSION_CLOSED,
         "{sent:?}"
     );
 }
@@ -1352,7 +1351,7 @@ async fn a_permission_mode_the_tier_never_requests_fails_the_spawn_closed() {
         .await
         .err()
         .expect("spawn fails");
-    assert!(matches!(error, AppError::PermissionDenied(_)), "{error:?}");
+    assert_matches!(error, AppError::PermissionDenied(_), "{error:?}");
 }
 
 #[tokio::test]
@@ -1371,7 +1370,7 @@ async fn an_unknown_trust_tier_fails_the_spawn_before_any_process_starts() {
     .await
     .err()
     .expect("spawn fails");
-    assert!(matches!(error, AppError::PermissionDenied(_)), "{error:?}");
+    assert_matches!(error, AppError::PermissionDenied(_), "{error:?}");
 }
 
 // ── Probe ────────────────────────────────────────────────────────────
@@ -2268,16 +2267,14 @@ fn unknown_frames_and_fields_parse_as_other() {
         r#"{"type":"stream_event","event":{"type":"ping"}}"#,
     ] {
         let frame: Inbound = serde_json::from_str(line).expect(line);
-        assert!(
-            matches!(
-                frame,
-                Inbound::Other
-                    | Inbound::System(System::Other)
-                    | Inbound::StreamEvent(StreamEventLine {
-                        event: StreamEvent::Other,
-                        ..
-                    })
-            ),
+        assert_matches!(
+            frame,
+            Inbound::Other
+                | Inbound::System(System::Other)
+                | Inbound::StreamEvent(StreamEventLine {
+                    event: StreamEvent::Other,
+                    ..
+                }),
             "{line}: {frame:?}"
         );
     }
