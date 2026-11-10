@@ -52,7 +52,7 @@
     "@xterm/xterm": "6.1.0-beta.337",
     "@xyflow/react": "12.12.1",
     "elkjs": "0.12.1",
-    "immer": "11.2.9",
+    "immer": "11.2.10",
     "jotai": "3.0.2",
     "modern-cmdk": "1.7.0",
     "radix-ui": "1.8.2-rc.1791984254107",
