@@ -60,7 +60,7 @@
     "react-is": "19.3.0-canary-4ae637b6-20261109",
     "recharts": "3.11.0-canary.9",
     "sonner": "2.0.8",
-    "tailwindcss": "0.0.0-insiders.8cc0551",
+    "tailwindcss": "0.0.0-insiders.3603b3a",
     "temporal-polyfill": "1.0.8",
     "zod": "4.6.7",
     "zustand": "5.1.0"
@@ -69,7 +69,7 @@
     "@biomejs/biome": "2.6.6",
     "@oxc-transform-react/binding-wasm32-wasip1": "0.158.0",
     "@playwright/test": "1.66.0-alpha-2026-11-10",
-    "@tailwindcss/vite": "0.0.0-insiders.8cc0551",
+    "@tailwindcss/vite": "0.0.0-insiders.3603b3a",
     "@tauri-apps/cli": "3.0.0-alpha.6",
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "7.0.1",
