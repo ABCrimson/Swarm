@@ -11,6 +11,12 @@ import type { WorkerState } from "#store/types";
 /** How a related worker relates to the subject worker, as the row labels it (Title Case). */
 type LineageRelation = "Spawned By" | "Spawned" | "Caused By";
 
+const RELATION_ORDER: Readonly<Record<LineageRelation, number>> = {
+  "Spawned By": 0,
+  Spawned: 1,
+  "Caused By": 2,
+};
+
 /** One related, live worker. */
 interface LineageRow {
   readonly relation: LineageRelation;
@@ -19,7 +25,7 @@ interface LineageRow {
 }
 
 export interface Lineage {
-  /** Spawned By, then Spawned, then Caused By; each worker once, under its first relation. */
+  /** Spawned By, then Spawned, then Caused By, error rows first in each; each worker once, under its first relation. */
   readonly rows: readonly LineageRow[];
   /** Rows whose worker is in the `error` state. */
   readonly failed: number;
@@ -71,7 +77,9 @@ export function selectLineageStartSeq(
  *   `walkCausalityChain` result from `#lib/causality-walk`, root first)
  *   from nearest to root.
  *
- * Each group is most recent first. A worker appears once, under the first
+ * Each group lists its workers in the `error` state first (so the ones the
+ * failed count names are on the first page), then most recent first. A
+ * worker appears once, under the first
  * relation that names it, and the subject never appears, so a spawn cycle
  * or a chain that loops back cannot repeat or recurse. Only live workers
  * (keys of `liveStates`) are listed: a row selects its worker, and a
@@ -107,5 +115,11 @@ export function deriveLineage(
   }
   for (const event of causeChain.toReversed()) add("Caused By", event.originWorker);
 
-  return { rows, failed: rows.filter((row) => row.state === "error").length };
+  // Stable: within a relation, error rows move ahead and each part keeps its recency order.
+  const ordered = rows.toSorted(
+    (a, b) =>
+      RELATION_ORDER[a.relation] - RELATION_ORDER[b.relation] ||
+      Number(b.state === "error") - Number(a.state === "error"),
+  );
+  return { rows: ordered, failed: rows.filter((row) => row.state === "error").length };
 }

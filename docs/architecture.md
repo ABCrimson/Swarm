@@ -694,7 +694,7 @@ The Workers page is the centre: a graph/list switch (`WorkerGraph`, XYFlow with 
 `WorkerTerminal` (xterm.js with the WebGL addon), `SpawnWorkerDialog` (a native modal `<dialog>` with
 probed provider status and trust-tier copy), and `CausalityPanel`. `WorkerDetail` also lists Related Workers
 (Spawned By, Spawned, Caused By, from the provenance edges and a backward causality walk in
-`src/lib/lineage.ts`) as a labelled list of buttons, so the cause chain is reachable as text and by keyboard.
+`src/lib/lineage.ts`) as a labelled list of buttons in one sub-list per relation, so the cause chain is reachable as text and by keyboard.
 The settings API key field, the spawn dialog's provider probes and the workspace file tree read keyed module-level promise caches with `use()`, under a
 Suspense boundary around only the reading field or row; `ui/Reveal` cross-fades that boundary with a
 `ViewTransition`. Other component groups: `ai/`,

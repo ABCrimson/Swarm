@@ -17,6 +17,7 @@ import {
   deriveLineage,
   LINEAGE_FIRST_PAGE,
   LINEAGE_PAGE_STEP,
+  type Lineage,
   selectLineageStartSeq,
 } from "#lib/lineage";
 import { isTauri, openWorkerDirectory } from "#lib/tauri";
@@ -73,6 +74,54 @@ function DetailRow({
       </dt>
       <dd className="m-0 font-body text-[0.8125rem] text-fg">{children}</dd>
     </div>
+  );
+}
+
+type LineageRow = Lineage["rows"][number];
+
+/** How many rows the next page adds, and how many are hidden when that is not all of them. */
+function showMoreLabel(hidden: number): string {
+  return hidden <= LINEAGE_PAGE_STEP
+    ? `Show ${hidden} More`
+    : `Show ${LINEAGE_PAGE_STEP} More Of ${hidden}`;
+}
+
+/** One relation's rows, in list order; the rows arrive grouped (see `deriveLineage`). */
+function groupByRelation(
+  rows: readonly LineageRow[],
+): { readonly relation: LineageRow["relation"]; readonly rows: LineageRow[] }[] {
+  const groups: { readonly relation: LineageRow["relation"]; readonly rows: LineageRow[] }[] = [];
+  for (const row of rows) {
+    const last = groups.at(-1);
+    if (last?.relation === row.relation) last.rows.push(row);
+    else groups.push({ relation: row.relation, rows: [row] });
+  }
+  return groups;
+}
+
+/** One relation's rows as a single bordered list divided by rules, not a card per row. */
+const LINEAGE_GROUP =
+  "m-0 list-none divide-y divide-border overflow-hidden rounded-md border border-border p-0";
+
+/** The list clips overflow, so the focus ring is drawn inside the row (`-outline-offset-2`). */
+const LINEAGE_ROW =
+  "flex w-full cursor-pointer items-center justify-between gap-3 bg-transparent px-3 py-2 text-left font-body text-md text-fg transition-[background-color] duration-150 ease-(--ease-out) -outline-offset-2 hover:bg-surface-2";
+
+/** A trailing chevron in the sidebar icons' line style, at the tool card status marks' 2.2-unit stroke for 14px: the row opens that worker. */
+function ChevronIcon(): React.ReactElement {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="size-3.5 text-fg-dim"
+    >
+      <path d="M9 6l6 6-6 6" />
+    </svg>
   );
 }
 
@@ -274,40 +323,51 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
               </span>
               {lineage.failed > 0 && (
                 <Pill tone="danger" size="sm">
-                  {lineage.failed} Failed
+                  {lineage.failed} In {stateLabels.error}
                 </Pill>
               )}
             </div>
-            <ul aria-label="Related Workers" className="m-0 flex list-none flex-col gap-1.5 p-0">
-              {lineage.rows.slice(0, lineageShown).map((row) => {
-                const name = escapeForDisplay(liveNames[row.workerId] ?? row.workerId.slice(0, 8));
-                return (
-                  <li key={row.workerId}>
-                    <button
-                      type="button"
-                      aria-label={`${row.relation}: ${name}, Status: ${stateLabels[row.state]}`}
-                      onClick={() => selectRelated(row.workerId)}
-                      className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-md border border-border bg-surface-2/70 px-3 py-2 text-left font-body text-md text-fg hover:border-border-3"
-                    >
-                      <span className="flex min-w-0 flex-col">
-                        <span className="text-xs text-fg-dim">{row.relation}</span>
-                        <span className="truncate">{name}</span>
-                      </span>
-                      <Badge state={row.state}>{stateLabels[row.state]}</Badge>
-                    </button>
-                  </li>
-                );
-              })}
+            <ul aria-label="Related Workers" className="m-0 flex list-none flex-col gap-3 p-0">
+              {groupByRelation(lineage.rows.slice(0, lineageShown)).map((group) => (
+                <li key={group.relation}>
+                  <span aria-hidden="true" className="mb-1 block text-xs text-fg-dim">
+                    {group.relation}
+                  </span>
+                  <ul aria-label={group.relation} className={LINEAGE_GROUP}>
+                    {group.rows.map((row) => {
+                      const name = escapeForDisplay(
+                        liveNames[row.workerId] ?? row.workerId.slice(0, 8),
+                      );
+                      return (
+                        <li key={row.workerId}>
+                          <button
+                            type="button"
+                            aria-label={`${row.relation}: ${name}, Status: ${stateLabels[row.state]}`}
+                            onClick={() => selectRelated(row.workerId)}
+                            className={LINEAGE_ROW}
+                          >
+                            <span className="min-w-0 truncate">{name}</span>
+                            <span className="flex shrink-0 items-center gap-2">
+                              <Badge state={row.state}>{stateLabels[row.state]}</Badge>
+                              <ChevronIcon />
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </li>
+              ))}
             </ul>
             {lineage.rows.length > lineageShown && (
               <Pill
                 interactive
-                tone="neutral"
+                tone="info"
                 size="sm"
                 className="mt-2"
                 onClick={() => setLineageShown((shown) => shown + LINEAGE_PAGE_STEP)}
               >
-                Show More
+                {showMoreLabel(lineage.rows.length - lineageShown)}
               </Pill>
             )}
           </div>

@@ -462,6 +462,12 @@ describe("WorkerDetail — Related Workers", () => {
       "Caused By: Reviewer, Status: Idle",
     ]);
     expect(lineageButtons()).toEqual(rows);
+    // One list per relation, under its own label.
+    for (const relation of ["Spawned By", "Spawned", "Caused By"]) {
+      expect(
+        within(screen.getByRole("list", { name: relation })).getAllByRole("button"),
+      ).toHaveLength(1);
+    }
 
     rows[0]?.focus();
     await user.tab();
@@ -502,7 +508,7 @@ describe("WorkerDetail — Related Workers", () => {
     expect(screen.getByRole("heading", { name: "Worker Detail" })).toHaveFocus();
   });
 
-  it("shows the first 6 rows, then 12 more per Show More, and counts the failed workers", async () => {
+  it("shows the first 6 rows, then up to 12 more per Show More, and counts the workers in error", async () => {
     const user = userEvent.setup();
     const worker = createWorker({ name: "Planner" });
     seedWorker(worker);
@@ -515,18 +521,24 @@ describe("WorkerDetail — Related Workers", () => {
     }
     render(<WorkerDetail worker={worker} />);
 
-    expect(screen.getByText("4 Failed")).toBeInTheDocument();
+    expect(screen.getByText("4 In Error")).toBeInTheDocument();
     expect(lineageButtons()).toHaveLength(6);
+    // The counted rows lead the first page.
+    expect(
+      lineageButtons()
+        .slice(0, 4)
+        .map((row) => row.getAttribute("aria-label")),
+    ).toEqual(Array.from({ length: 4 }, () => expect.stringMatching(/, Status: Error$/)));
 
-    await user.click(screen.getByRole("button", { name: "Show More" }));
+    await user.click(screen.getByRole("button", { name: "Show 12 More Of 14" }));
     expect(lineageButtons()).toHaveLength(18);
 
-    await user.click(screen.getByRole("button", { name: "Show More" }));
+    await user.click(screen.getByRole("button", { name: "Show 2 More" }));
     expect(lineageButtons()).toHaveLength(20);
-    expect(screen.queryByRole("button", { name: "Show More" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Show \d+ More/ })).not.toBeInTheDocument();
   });
 
-  it("shows no failed count when no related worker failed", () => {
+  it("shows no error count when no related worker is in error", () => {
     const parent = createWorker({ name: "Orchestrator" });
     const worker = createWorker({ name: "Planner" });
     seedWorker(parent);
@@ -534,6 +546,6 @@ describe("WorkerDetail — Related Workers", () => {
     ingest("worker_spawned", parent.id, worker.id);
     render(<WorkerDetail worker={worker} />);
 
-    expect(screen.queryByText(/Failed$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/In Error$/)).not.toBeInTheDocument();
   });
 });

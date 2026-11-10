@@ -50,7 +50,7 @@ describe("deriveLineage", () => {
     });
   });
 
-  it("lists many children as Spawned, most recent first, and counts the failed ones", () => {
+  it("lists many children as Spawned, failed ones first, then most recent first, and counts the failed ones", () => {
     const lineage = deriveLineage(
       "w-a",
       edges(
@@ -64,9 +64,9 @@ describe("deriveLineage", () => {
     );
 
     expect(lineage.rows).toEqual([
-      { relation: "Spawned", workerId: "w-2", state: "running" },
       { relation: "Spawned", workerId: "w-3", state: "error" },
       { relation: "Spawned", workerId: "w-1", state: "error" },
+      { relation: "Spawned", workerId: "w-2", state: "running" },
     ]);
     expect(lineage.failed).toBe(2);
   });
