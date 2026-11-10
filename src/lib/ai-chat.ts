@@ -398,7 +398,10 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
         err,
       );
     }
-    const provenance: ToolProvenance = { originWorker: workerId, causeSeq };
+    const provenance: ToolProvenance = {
+      originWorker: workerId,
+      ...(causeSeq !== undefined && { causeSeq }),
+    };
 
     for (let round = 0; ; round++) {
       signal.throwIfAborted();

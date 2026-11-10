@@ -12,26 +12,29 @@ function keyByOffset(tokens: readonly HighlightToken[]): (HighlightToken & { key
   return keyed;
 }
 
-const baseStyle: CSSProperties = {
-  margin: 0,
-  fontFamily: "var(--font-mono)",
-  whiteSpace: "pre-wrap",
-  overflowWrap: "anywhere",
-};
+const BASE = "m-0 font-mono wrap-anywhere whitespace-pre-wrap";
 
-/** Pretty-printed JSON with OKLCH syntax colors (`#lib/syntax-highlight`). */
+/**
+ * Pretty-printed JSON with OKLCH syntax colors (`#lib/syntax-highlight`). Each
+ * token's color is computed per token, so it travels as `--token-color` for the
+ * `text-(--token-color)` class to read. `className` adds utilities to the `<pre>`.
+ */
 export function HighlightedJson({
   data,
-  style,
+  className,
 }: {
   readonly data: unknown;
-  readonly style?: CSSProperties;
+  readonly className?: string;
 }): React.ReactElement {
   const tokens = keyByOffset(tokenizeJson(JSON.stringify(data, null, 2) ?? "undefined"));
   return (
-    <pre style={{ ...baseStyle, ...style }}>
+    <pre className={className ? `${BASE} ${className}` : BASE}>
       {tokens.map((token) => (
-        <span key={token.key} style={{ color: token.color }}>
+        <span
+          key={token.key}
+          className="text-(--token-color)"
+          style={{ "--token-color": token.color } as CSSProperties}
+        >
           {token.value}
         </span>
       ))}

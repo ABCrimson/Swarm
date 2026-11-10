@@ -283,10 +283,10 @@ describe("listSessions", () => {
     const sessions = await listSessions();
 
     expect(sessions).toHaveLength(2);
-    expect(sessions[0].createdAt).toBe(new Date(RAW_SESSION_A.createdAt * 1000).toISOString());
-    expect(sessions[0].updatedAt).toBe(sessions[0].createdAt);
-    expect(sessions[1].workerIds).toEqual(RAW_SESSION_B.workerIds);
-    expect(sessions[1].updatedAt).toBe(sessions[1].createdAt);
+    expect(sessions[0]?.createdAt).toBe(new Date(RAW_SESSION_A.createdAt * 1000).toISOString());
+    expect(sessions[0]?.updatedAt).toBe(sessions[0]?.createdAt);
+    expect(sessions[1]?.workerIds).toEqual(RAW_SESSION_B.workerIds);
+    expect(sessions[1]?.updatedAt).toBe(sessions[1]?.createdAt);
   });
 
   it("throws instead of returning a list containing a malformed entry", async () => {

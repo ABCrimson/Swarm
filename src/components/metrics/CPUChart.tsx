@@ -3,7 +3,7 @@
 // MAX_CHART_POINTS samples of the system store's history.
 
 import { CartesianGrid, Legend, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
-import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
+import { ChartPanel } from "#components/metrics/ChartPanel";
 import { formatTime, METRIC_COLOR } from "#lib/chart-theme";
 import { lastN } from "#lib/chart-window";
 import { useSystemStore } from "#store/system";
@@ -20,7 +20,8 @@ export function CPUChart(): React.ReactElement {
     <ChartPanel title="CPU Usage" sampleCount={data.length}>
       <LineChart
         responsive
-        style={CHART_FILL_STYLE}
+        width="100%"
+        height="100%"
         data={data}
         margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
         title="CPU Usage Over Time"

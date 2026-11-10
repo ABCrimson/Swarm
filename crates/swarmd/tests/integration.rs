@@ -7,6 +7,7 @@
 //! argument handling, the exposure and non-loopback gates, the bound
 //! address, the lock's exit status and signal-driven shutdown.
 
+use std::assert_matches;
 use std::io::{BufRead, BufReader, Read};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -200,14 +201,14 @@ async fn hello(ws: &mut WsStream, last_seq: Option<u64>, token: Option<&str>) {
 async fn attach(server: &TestServer) -> WsStream {
     let mut ws = connect(server).await;
     hello(&mut ws, None, Some(&server.token)).await;
-    assert!(matches!(
+    assert_matches!(
         next_frame(&mut ws).await,
         Inbound::Control(ServerFrame::Ready { .. })
-    ));
-    assert!(matches!(
+    );
+    assert_matches!(
         next_frame(&mut ws).await,
         Inbound::Control(ServerFrame::ReplayEnd { .. })
-    ));
+    );
     ws
 }
 
@@ -244,6 +245,7 @@ async fn close_code(ws: &mut WsStream) -> Option<u16> {
 
 /// A server frame: control frames carry a `"frame"` tag; `event` frames are
 /// the bare `DomainEvent` JSON (the same demux `wsTransport` performs).
+#[derive(Debug)]
 enum Inbound {
     Control(ServerFrame),
     Event(Value),
@@ -314,7 +316,7 @@ async fn http_get(
         .await
         .unwrap()
         .unwrap();
-    let raw = String::from_utf8_lossy(&raw).into_owned();
+    let raw = String::from_utf8_lossy_owned(raw);
     let (head, body) = raw.split_once("\r\n\r\n").unwrap();
     let mut lines = head.lines();
     let status = lines
@@ -394,10 +396,10 @@ async fn test_bearer_header_authenticates_without_a_hello_token() {
     );
     let mut ws = connect_request(request).await;
     hello(&mut ws, None, None).await;
-    assert!(matches!(
+    assert_matches!(
         next_frame(&mut ws).await,
         Inbound::Control(ServerFrame::Ready { .. })
-    ));
+    );
 }
 
 /// A wrong token is refused with close code 4401 and no `ready`.
@@ -637,11 +639,9 @@ async fn test_loopback_aliases_and_allowed_hosts_are_accepted() {
         }
         let mut ws = connect_request(request).await;
         hello(&mut ws, None, Some(&server.token)).await;
-        assert!(
-            matches!(
-                next_frame(&mut ws).await,
-                Inbound::Control(ServerFrame::Ready { .. })
-            ),
+        assert_matches!(
+            next_frame(&mut ws).await,
+            Inbound::Control(ServerFrame::Ready { .. }),
             "{host} / {origin:?}"
         );
     }
@@ -722,10 +722,10 @@ async fn test_loopback_handshakes_are_not_capped_per_address() {
     }
     let mut ws = connect(&server).await;
     hello(&mut ws, None, Some(&server.token)).await;
-    assert!(matches!(
+    assert_matches!(
         next_frame(&mut ws).await,
         Inbound::Control(ServerFrame::Ready { .. })
-    ));
+    );
 
     // The pool still applies.
     idle.push(connect(&server).await);
@@ -758,10 +758,10 @@ async fn test_bearer_client_skips_a_full_handshake_pool() {
     );
     let mut ws = connect_request(request).await;
     hello(&mut ws, None, None).await;
-    assert!(matches!(
+    assert_matches!(
         next_frame(&mut ws).await,
         Inbound::Control(ServerFrame::Ready { .. })
-    ));
+    );
 }
 
 /// Asserts the server ends the connection without sending any frame (no
@@ -865,10 +865,10 @@ async fn test_reconnect_with_last_seq_replays_exactly_the_missed_events() {
 
     let mut client_a = connect(&server).await;
     hello(&mut client_a, Some(last_seen), Some(&server.token)).await;
-    assert!(matches!(
+    assert_matches!(
         next_frame(&mut client_a).await,
         Inbound::Control(ServerFrame::Ready { .. })
-    ));
+    );
     loop {
         match next_frame(&mut client_a).await {
             Inbound::Event(event) if event_type(&event) == Some("session_created") => {
@@ -975,10 +975,10 @@ async fn test_reattach_after_restart_replays_events_recorded_by_the_new_daemon()
 
     let mut ws = connect(&second).await;
     hello(&mut ws, Some(last_seen), Some(&token)).await;
-    assert!(matches!(
+    assert_matches!(
         next_frame(&mut ws).await,
         Inbound::Control(ServerFrame::Ready { .. })
-    ));
+    );
     let mut names = Vec::new();
     loop {
         match next_frame(&mut ws).await {
@@ -1664,8 +1664,8 @@ fn run(args: &[&str]) -> (Option<i32>, String, String) {
         .expect("failed to run swarmd");
     (
         output.status.code(),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
+        String::from_utf8_lossy_owned(output.stdout),
+        String::from_utf8_lossy_owned(output.stderr),
     )
 }
 
@@ -1924,10 +1924,10 @@ async fn test_port_zero_bind_serves_the_printed_address() {
         .await
         .expect("the printed address accepts WebSocket upgrades");
     hello(&mut ws, None, Some(token.as_str())).await;
-    assert!(matches!(
+    assert_matches!(
         next_frame(&mut ws).await,
         Inbound::Control(ServerFrame::Ready { .. })
-    ));
+    );
 }
 
 /// A second daemon on the same data directory exits with status 75 and a

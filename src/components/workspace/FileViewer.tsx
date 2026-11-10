@@ -1,4 +1,4 @@
-import { use } from "react";
+import { type CSSProperties, use } from "react";
 import { escapeForDisplay } from "#lib/display-escape";
 import { basename, type FilePreview, formatBytes, MAX_PREVIEW_BYTES } from "#lib/file-preview";
 import { tokenizeJson } from "#lib/syntax-highlight";
@@ -117,8 +117,8 @@ function TextView({
     >
       <pre
         aria-hidden="true"
-        className="sticky left-0 shrink-0 select-none bg-surface-0 pr-4 pl-4 text-right text-fg-dim"
-        style={{ minWidth: `${String(lineCount).length + 2}ch` }}
+        className="sticky left-0 shrink-0 select-none bg-surface-0 pr-4 pl-4 text-right text-fg-dim min-w-(--gutter-width)"
+        style={{ "--gutter-width": `${String(lineCount).length + 2}ch` } as CSSProperties}
       >
         {gutter}
       </pre>
@@ -128,8 +128,12 @@ function TextView({
               token.type === "whitespace" ? (
                 token.value
               ) : (
-                // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reorder
-                <span key={i} style={{ color: token.color }}>
+                <span
+                  // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reorder
+                  key={i}
+                  className="text-(--token-color)"
+                  style={{ "--token-color": token.color } as CSSProperties}
+                >
                   {token.value}
                 </span>
               ),

@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const ci = !!process.env.CI;
+const { CI } = process.env;
+const ci = !!CI;
 
 /**
  * CI tests what ships: the production bundle (Rolldown, the React

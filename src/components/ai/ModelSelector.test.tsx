@@ -41,6 +41,8 @@ describe("ModelSelector", () => {
   it("names the current model on the trigger and opens a popover listbox", async () => {
     render(<ModelSelector />);
     expect(trigger()).toHaveAccessibleName("AI Model: Claude Sonnet 5.5");
+    // A narrow toolbar ellipsizes the label; the title keeps the whole name.
+    expect(trigger()).toHaveAttribute("title", "Claude Sonnet 5.5");
     expect(trigger()).toHaveAttribute("aria-expanded", "false");
     expect(listbox()).toHaveAttribute("popover", "auto");
 

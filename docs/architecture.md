@@ -86,9 +86,10 @@ Principles that hold throughout:
 | --- | --- |
 | `crates/swarm-core/` | The Tauri-free domain library. No `tauri*` dependency (CI checks `cargo tree`). |
 | `crates/swarmd/` | The headless daemon: `auth`, `cli`, `ws`, `serve_ui`, and per-user service units in `service/`. |
-| `src-tauri/` | `swarm-desktop`, the Tauri shell: `lib.rs`, `startup.rs`, `lifecycle.rs`, `dialog_grants.rs`, `build.rs` (ACL manifest), `commands/{mod,native,command_list}.rs`, `capabilities/default.json`, `tauri.conf.json`. |
+| `src-tauri/` | `swarm-desktop`, the Tauri shell: `lib.rs`, `startup.rs`, `lifecycle.rs`, `quit_guard.rs`, `attention.rs`, `dialog_grants.rs`, `build.rs` (ACL manifest), `commands/{mod,native,command_list}.rs`, `capabilities/default.json`, `tauri.conf.json`. |
 | `src/` | The frontend. `boot.ts` → `main.tsx` → `App.tsx`; `components/`, `hooks/`, `lib/`, `store/`, `pages/`, `workers/elk.worker.ts`, `styles/`, `test/`. |
-| `e2e/` | Playwright specs against the web build; no Tauri backend. Chromium by default, WebKit and Firefox as opt-in projects; CI runs the suite with `--shuffle` ([e2e.md](e2e.md)). |
+| `e2e/` | Playwright specs against the web build; no Tauri backend (the transcript specs stand one in at the IPC boundary, `e2e/tauri-ipc.ts`). Chromium by default, WebKit and Firefox as opt-in projects; CI runs the suite with `--shuffle` ([e2e.md](e2e.md)). |
+| `biome-plugins/` | The raw-OKLCH GritQL plugins, their fixtures and `check-raw-oklch.ts` (`pnpm check:raw-oklch`). |
 | `scripts/`, `site/` | The React Compiler gate (`check-react-compiler.ts`), `sync-reference-repos.ts` (pinned upstream sources into the gitignored `.repos/`) and the documentation site build. |
 | `docs/` | This file, [api.md](api.md), [daemon.md](daemon.md), [adr/](adr/README.md), and the rest. |
 
@@ -184,7 +185,10 @@ any thread/task ──EventSink::emit / emit_with / emit_awaiting_seq──▶ o
   schema version 2 on a `PRAGMA user_version` ladder whose rungs each run in a transaction:
   `events(seq PK, ts, type, payload, origin_worker, cause_seq) STRICT` with an index on `(type, seq)`,
   and `meta`. A database newer than the build is refused. The writer owns the only read-write
-  connection; readers open their own read-only.
+  connection; readers open their own read-only. A new file is set to `auto_vacuum = INCREMENTAL` before
+  `journal_mode = WAL` (after WAL, or once a table exists, the pragma is a silent no-op); a log created
+  without it keeps mode 0 and opens unchanged, since only a full `VACUUM` changes the mode. Nothing frees
+  pages yet: no event is ever deleted until retention exists ([Roadmap](roadmap.md), W2.J).
 - **Persistence by exclusion** ([ADR-0004](adr/0004-persistence-by-exclusion.md)): never persisted are
   `worker_output`, `system_metrics`, `system_log`, `agent_turn_delta`, and `worker_input` whose
   `source` is `terminal`. Everything else is appended before it is emitted.
@@ -491,19 +495,45 @@ shells return the registry's value untouched, so desktop and daemon report ident
 
 - `lib.rs` installs the process's one Tokio runtime (threads named `swarm-tokio`) as Tauri's async runtime
   and builds `tauri::Builder::default().runtime(Wry::default())` with the plugins `fs`, `dialog`,
-  `opener` (link-click handling off), `store`, `updater`, `notification` and the app's own `swarm-lifecycle`. Release builds log JSON at
+  `opener` (link-click handling off), `store`, `updater`, `notification`, `window-state` and the app's own `swarm-lifecycle`. Release builds log JSON at
   `info` to `swarm-desktop.log` in the app log directory (rotated past 8 MiB); `RUST_LOG` overrides.
+- In bundled builds only (`!tauri::is_dev()`), `single-instance` is the first plugin: a second launch hands over
+  to the running instance, which shows, unminimizes and focuses `main` (`focus_main`), and exits 0. Dev
+  builds leave it out because the instance is keyed by the bundle identifier the installed app shares, so a
+  `pnpm tauri:dev` beside the installed app still starts and reports the held data directory.
+- `window-state` restores and saves size, position, maximized, fullscreen and decorations
+  (`StateFlags::all()` minus `VISIBLE`) in `.window-state.json` in the app config directory. Never
+  visibility: `main` is declared hidden and `startup.rs` shows it, and a restored `visible` would show it
+  before the app runs. The capability grants none of its commands; `config_contract.rs` pins the flags.
 - `startup.rs` runs in `setup`: resolve the data directory, `Runtime::start` with an `emit` closure that
   forwards each envelope to the webview on `swarm://events` from the writer thread (a slow webview backs
   up the writer instead of losing events), manage `Ctx`, `Registry` and the runtime, then show the main
   window (created hidden). A start failure is shown in a non-blocking dialog and the app exits.
 - `commands/command_list.rs` is the one list of app command names (registry, then native). `commands/mod.rs` expands it through `commands!` into one forwarder per registry command (arguments in, registry JSON out, untouched); `build.rs` hands the same names to `tauri_build::AppManifest::commands`, which generates `allow-<command>`/`deny-<command>` for each. `commands/native.rs` holds `check_for_updates`, `open_worker_directory` and `send_notification`.
 - `lifecycle.rs`: the app's `swarm-lifecycle` plugin. Its `on_cleanup_before_exit` hook, which every exit path reaches (including `restart` on the main thread, which skips `RunEvent::Exit`), runs `Runtime::shutdown` once (2.5 s for agent sessions, then the event drain, which waits for the writer's backlog) on a scoped helper thread through the Tokio handle captured at registration, so it is safe when `exit` runs it on a Tokio worker; then it drops the release-log guard so the teardown's own lines are flushed. See [ADR-0033](adr/0033-cleanup-hook-teardown-and-command-acl.md).
+- `quit_guard.rs`: while the worker registry is not empty, closing `main`, a user's exit
+  (`RunEvent::ExitRequested` with no code) and, on macOS, Cmd+Q / the app menu's Quit are held and a native
+  dialog asks "Quit SWARM Orchestrator?" ("N Workers Will Be Stopped"; `registry.count()` counts idle
+  shells too, so it never says agents are running). "Quit" exits 0 through the cleanup hook; "Keep Running"
+  changes nothing. Exits that carry a code (`exit`, `restart`, the startup failure) pass. On macOS the menu
+  is Tauri's default with the predefined Quit swapped for a plain `swarm-quit` item (same label,
+  CmdOrCtrl+Q); if the default has no Quit, the app logs a warning once at startup. The Dock's Quit, logout and
+  shutdown send `terminate:` straight to `NSApp` (tao implements no `applicationShouldTerminate:`), so
+  they are not asked, but they still end in `cleanup_before_exit`. Windows and Linux have no app menu.
+- `attention.rs`: the open permission questions, keyed by worker and request id. One opens on an
+  `agent_permission_request` with no suggested decision (from the `startup.rs` event callback), closes
+  when `agent_permission_respond` for it succeeds (from the forwarder), and every question of a worker
+  closes on its `agent_turn_settled` or `agent_session_exited`; the stream has no answered-question event.
+  The number of distinct waiting workers is the dock badge on macOS and the launcher badge on Linux (not
+  on Windows, where `set_badge_count` is unsupported), set only when it changes; when it rises while `main`
+  is unfocused, the window requests the user's attention on every OS. No IPC, no permission, no event.
 - `dialog_grants.rs`: mirrors dialog folder grants into the global fs scope so dot-entries are readable
   on macOS and Linux.
 
 **Capabilities** (`capabilities/default.json`, [ADR-0030](adr/0030-tauri-3-alpha-capability-scoped-fs.md)):
-`core:default`, one `allow-<command>` grant per app command (39; nothing else is invocable; pinned by `app_commands_are_granted_one_by_one`), `dialog:default`, `store:default`; fs `read-file`, `read-dir`, `stat` and
+from Tauri core only `core:event:allow-listen`, `core:event:allow-unlisten` and
+`core:webview:allow-internal-toggle-devtools` (the injected inspector shortcut), never `core:default`
+(pinned by `core_grants_are_events_and_the_devtools_shortcut`); one `allow-<command>` grant per app command (39; nothing else is invocable; pinned by `app_commands_are_granted_one_by_one`), `dialog:default`, `store:default`; fs `read-file`, `read-dir`, `stat` and
 `write-file` with **no static path scope** (only what the user picks in a dialog), `fs:deny-default` and
 a deny list (app data, `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`, `.config/gh`, `.claude`,
 `.codex`, `.git-credentials`, `.netrc`); opener `openUrl` for `https://*/*/*/compare/*` and no
@@ -513,7 +543,9 @@ worker id, so no file an agent writes under the worktrees can be opened from the
 font-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'`. Updates
 come from the GitHub releases `latest.json`, verified against the public key embedded in
 `tauri.conf.json` ([updater-keys.md](updater-keys.md)). `devtools` is an opt-in cargo feature; debug
-builds always have the inspector.
+builds always have the inspector. `tracing` is another, off by default: it turns on the spans Tauri and
+tauri-runtime-wry open around setup, IPC, event emission (`app::emit`) and script evaluation, which the
+default log filters leave out (`RUST_LOG=tauri=trace,swarm_desktop=debug` enables their targets; their timings need a span-aware layer).
 
 ---
 
@@ -523,7 +555,8 @@ One domain layer, two shells ([ADR-0001](adr/0001-tauri-free-core-two-shells.md)
 [ADR-0002](adr/0002-swarmd-separate-binary.md)): the desktop app (Tauri IPC, a webview) and `swarmd`
 (WebSocket, no webview), both built on `Runtime` and the same `Registry`. Both take the
 `SingleInstanceLock` first ([ADR-0025](adr/0025-single-instance-lock.md)), so two processes never share a
-data directory: `swarmd` exits 75, the desktop app shows a dialog.
+data directory: `swarmd` exits 75, the desktop app shows a dialog. A second launch of a bundled desktop
+app never gets that far: the single-instance plugin focuses the first one and the second exits 0.
 
 **`swarmd`** (`crates/swarmd`; operator guide in [daemon.md](daemon.md); frames in `swarm_core::protocol`
 and [api.md](api.md#wire-protocol-swarmd)):
@@ -556,7 +589,20 @@ and [api.md](api.md#wire-protocol-swarmd)):
 
 React 19 canary with the React Compiler (Oxc port, WASI fallback binding,
 [ADR-0032](adr/0032-react-compiler-oxc-wasi.md)), Vite, Tailwind, Zustand + immer, Jotai, XYFlow + ELK,
-xterm.js (WebGL), Recharts, `modern-cmdk`, Sonner, `motion`. Versions are in `package.json`.
+xterm.js (WebGL), Recharts, `modern-cmdk`, Sonner. Versions are in `package.json`. There is no animation
+library: entrances use `@starting-style` (`starting:`), exits an explicit exiting state, disclosures
+`details-content:` with a `grid-template-rows` transition, and springs the `--ease-spring` `linear()` token.
+
+**Styling.** `src/styles/tokens.css` is the token layer (OKLCH colours, easing); components use Tailwind
+utilities, the `/N` alpha modifier or `oklch(from var(--color-…) l c h / a)`. The inline styles left set
+only CSS custom properties for runtime values (widths, anchor names, stagger index, token colour). Raw
+`oklch(` literals remain where no token matches yet: the semantic tokens for them wait for the light-theme
+design direction, and the Biome GritQL plugins `biome-plugins/no-raw-oklch.grit` (TS/TSX) and
+`no-raw-oklch-css.grit` (CSS) fail `biome ci` on any new one. Their known exceptions are keyed on file and
+value (167 at this head); `pnpm check:raw-oklch` proves the fixtures still fail and no exception is stale.
+The canvas, xterm, WebGPU, SVG-attribute and syntax-highlight consumers (`useTerminal.ts`,
+`chart-theme.ts`, `particles.ts`, `postprocess.ts`, `syntax-highlight.ts`) are outside the gate, because
+they need concrete colours, and `tokens.css` itself is too.
 
 The bundle targets `esnext` and calls recent APIs (iterator helpers, `Error.isError`, `RegExp.escape`)
 unguarded, so the webview must be WebKit 18.4 class or newer: WebView2 (Chromium) on Windows, WKWebView
@@ -576,7 +622,10 @@ the app-wide subscriptions once (`useWorkerEvents`, `useAgentSessionEvents`,
 `useSettingsBridge`); the auto-snapshot loop and the store integrity check wait for the first idle period.
 `useSessionEvents` restores sessions from a `listSessions` snapshot at startup, recording `session_deleted` and
 worker-membership events that arrive while it is in flight and replaying them over the snapshot before
-`hydrateSessions`, so a late snapshot never undoes them; unmounting discards it. `useSettingsBridge` pushes the
+`hydrateSessions`, so a late snapshot never undoes them; unmounting discards it. `useSettingsBridge` only
+starts and stops `src/lib/settings-sync.ts`, which subscribes to the jotai store with `store.sub` (a
+settings change re-renders no component), pushes persisted settings into the zustand stores and the backend,
+and runs the once-on-launch update check. It pushes the
 agent concurrency cap ("AI Concurrent Stream Limit") to the backend and waits for the acknowledgement: Settings
 shows "Applying…", and a failure or a 10 s timeout rolls the field back to the last acknowledged value with an
 alert and Retry (a late acknowledgement is adopted, and an older push the backend acknowledges becomes the
@@ -586,7 +635,7 @@ orders calls only from the moment each reaches its lock; a value requested meanw
 queue (a newer request replaces it, so intermediate values are never sent) and goes out when the call
 settles or its 10 s ack timeout fires, whichever comes first. A call released by its timeout can still reach
 the daemon after a newer one (a reconnecting socket holds its frame), so when it settles late with a value other
-than the latest, the bridge sends the latest value again and the daemon ends on it. At launch, with a backend reachable, the field adopts the backend's `agent_concurrency`
+than the latest, the sync sends the latest value again and the daemon ends on it. At launch, with a backend reachable, the field adopts the backend's `agent_concurrency`
 (unset is 3); a backend value the field cannot show (11 to 16) is overwritten by pushing the field's value.
 Dates and durations use `src/lib/time.ts` on `Temporal` and `Intl`; there is no date library.
 
@@ -605,6 +654,12 @@ Settings API key field and Save API Key, the Ship preview's summary Generate / R
 editable), and the spawn dialog's Webview Anthropic provider (the dialog starts on Claude Code) and folder picker, each showing
 `DESKTOP_ONLY_REASON` ("Available In The Desktop App Only"). `checkForUpdates()` rejects with "Update Checks Need
 The Desktop App" when it cannot run. The table is in [daemon.md](daemon.md#what-the-browser-build-offers).
+
+`wsTransport` also wakes on `visibilitychange` (to visible), `pageshow` and `online`, because a sleeping
+page throttles or freezes its timers and the link can die unseen (the 30 s rpc watchdog runs only while
+an rpc is pending). A pending reconnect timer is cleared and the connect runs at once with the backoff
+reset; an open socket that delivers no frame within `WAKE_PROBE_MS` (1500 ms, three `system_metrics`
+periods) is abandoned and reconnects. A transport stopped by `DaemonAuthError` ignores wakes.
 
 `src/lib/event-bus.ts` subscribes to `swarm://events`, validates the envelope, dedupes by seq, and on a
 seq gap buffers live events and backfills from `events_since` (pages of 5000), retrying with doubling
@@ -637,7 +692,12 @@ area, status bar) over the particle background; its entrance is pure CSS (`@star
 The Workers page is the centre: a graph/list switch (`WorkerGraph`, XYFlow with ELK layout in
 `workers/elk.worker.ts`), a detail panel with three tabs (`WorkerDetail`, `WorkerAIPanel`, `ShipPanel`),
 `WorkerTerminal` (xterm.js with the WebGL addon), `SpawnWorkerDialog` (a native modal `<dialog>` with
-probed provider status and trust-tier copy), and `CausalityPanel`. Other component groups: `ai/`,
+probed provider status and trust-tier copy), and `CausalityPanel`. `WorkerDetail` also lists Related Workers
+(Spawned By, Spawned, Caused By, from the provenance edges and a backward causality walk in
+`src/lib/lineage.ts`) as a labelled list of buttons in one sub-list per relation, so the cause chain is reachable as text and by keyboard.
+The settings API key field, the spawn dialog's provider probes and the workspace file tree read keyed module-level promise caches with `use()`, under a
+Suspense boundary around only the reading field or row; `ui/Reveal` cross-fades that boundary with a
+`ViewTransition`. Other component groups: `ai/`,
 `session/`, `metrics/`, `logs/`, `workspace/` (file tree and viewer, desktop only), `tools/` (custom
 tool builder), `ship/`, `ui/`.
 
@@ -727,3 +787,6 @@ True at this commit and deliberately not hidden:
 - `OpenCode`, `Gemini` and `WebviewAnthropic` provider ids have no adapter; `bus_send`, `bus_list_channels`, `get_session` and
   `agent_shutdown` have no frontend caller (`NOT_WIRED` in the desktop shell's contract test).
 - A hard link to a denied file inside a scope is not detected by `read_file`/`write_file`.
+- On macOS the Dock's Quit, logout and shutdown quit without the confirmation (tao has no
+  `applicationShouldTerminate:` hook), and Windows shows no attention badge count (it would need an
+  overlay icon).

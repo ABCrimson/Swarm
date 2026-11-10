@@ -51,7 +51,7 @@ const WorkflowDefinitionSchema = z.object({
       id: Id,
       source: Id,
       target: Id,
-      label: z.string().optional(),
+      label: z.string().exactOptional(),
     }),
   ),
 });

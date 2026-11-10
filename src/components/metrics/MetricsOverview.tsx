@@ -5,7 +5,6 @@
 // disagree about a value, its severity or its trend.
 
 import { useAtomValue } from "jotai";
-import type { CSSProperties } from "react";
 import { useId } from "react";
 import type { Trend } from "#components/metrics/MetricCard";
 import { MetricCard, MetricCardList } from "#components/metrics/MetricCard";
@@ -98,15 +97,10 @@ export function MetricsSection({
   );
 }
 
-const chartGridStyle: CSSProperties = {
-  display: "grid",
-  // A track is at least half the row (less one gap), so auto-fit never makes a
-  // third column; the 16px in the calc must equal `gap`.
-  gridTemplateColumns:
-    "repeat(auto-fit, minmax(min(max(380px, calc((100% - 16px) / 2)), 100%), 1fr))",
-  gridAutoRows: 280,
-  gap: 16,
-};
+// A track is at least half the row (less one gap), so auto-fit never makes a
+// third column; the 16px in the calc must equal `gap-4`.
+const CHART_GRID_CLASS =
+  "grid auto-rows-[280px] grid-cols-[repeat(auto-fit,minmax(min(max(380px,calc((100%_-_16px)_/_2)),100%),1fr))] gap-4";
 
 /** Responsive grid of fixed-height chart panels, at most two columns. */
 export function ChartGrid({
@@ -114,13 +108,8 @@ export function ChartGrid({
 }: {
   readonly children: React.ReactNode;
 }): React.ReactElement {
-  return <div style={chartGridStyle}>{children}</div>;
+  return <div className={CHART_GRID_CLASS}>{children}</div>;
 }
 
 /** Body column under the PageHeader on the metrics pages. */
-export const metricsPageStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 24,
-  padding: "0 28px 56px",
-};
+export const METRICS_PAGE_CLASS = "flex flex-col gap-6 px-7 pb-14";

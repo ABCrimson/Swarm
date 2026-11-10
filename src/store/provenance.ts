@@ -62,7 +62,7 @@ function edgeKey(from: string, to: string, kind: ProvenanceEdgeKind): string {
 function resolveEdgeTarget(event: DomainEvent): string | undefined {
   const payload = event.payload;
   if (typeof payload !== "object" || payload === null) return undefined;
-  const p = payload as Record<string, unknown>;
+  const p = payload as { readonly workerId?: unknown; readonly toWorker?: unknown };
   switch (event.type) {
     case "worker_spawned":
     case "worker_killed":

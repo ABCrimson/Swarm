@@ -11,9 +11,9 @@ import { MemoryChart } from "#components/metrics/MemoryChart";
 import { MetricsChart } from "#components/metrics/MetricsChart";
 import {
   ChartGrid,
+  METRICS_PAGE_CLASS,
   MetricCards,
   MetricsSection,
-  metricsPageStyle,
 } from "#components/metrics/MetricsOverview";
 import { ThroughputChart } from "#components/metrics/ThroughputChart";
 
@@ -25,7 +25,7 @@ export function Metrics(): React.ReactElement {
   return (
     <div className="flex h-full flex-col overflow-y-auto">
       <PageHeader title="Metrics" />
-      <div style={metricsPageStyle}>
+      <div className={METRICS_PAGE_CLASS}>
         <MetricsSection title="Current">
           <MetricCards />
         </MetricsSection>

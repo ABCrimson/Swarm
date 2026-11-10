@@ -17,6 +17,14 @@ vi.mock(import("@tauri-apps/plugin-dialog"), () => ({
   save: vi.fn(),
 }));
 
+// Production code never imports `rename`, so the shared setup does not mock
+// it; this suite mocks it to assert the export never calls it.
+vi.mock(import("@tauri-apps/plugin-fs"), () => ({
+  readTextFile: vi.fn(),
+  rename: vi.fn(),
+  writeTextFile: vi.fn().mockResolvedValue(undefined),
+}));
+
 const mockCreateSession = vi.fn<(name: string) => Promise<Session>>();
 const mockDeleteSession = vi.fn<(id: string) => Promise<void>>();
 vi.mock(import("#lib/tauri"), async (importOriginal) => ({

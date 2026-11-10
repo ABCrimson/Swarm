@@ -411,8 +411,8 @@ mod tests {
 
     #[test]
     fn test_trailers_omit_an_unknown_or_inverted_range() {
-        assert!(trailers(&request(0, 0, None)).is_empty());
-        assert!(trailers(&request(9, 3, None)).is_empty());
+        assert_eq!(trailers(&request(0, 0, None)), [] as [&str; 0]);
+        assert_eq!(trailers(&request(9, 3, None)), [] as [&str; 0]);
         assert_eq!(trailers(&request(5, 12, None)), ["Swarm-Seq-Range: 5..12"]);
         assert_eq!(trailers(&request(0, 7, None)), ["Swarm-Seq-Range: 0..7"]);
     }
@@ -423,14 +423,14 @@ mod tests {
             trailers(&request(0, 0, Some("  SWARM <noreply@example.com> "))),
             ["Co-Authored-By: SWARM <noreply@example.com>"]
         );
-        assert!(trailers(&request(0, 0, Some("   "))).is_empty());
-        assert!(
+        assert_eq!(trailers(&request(0, 0, Some("   "))), [] as [&str; 0]);
+        assert_eq!(
             trailers(&request(
                 0,
                 0,
                 Some("Evil <e@example.com>\nSwarm-Seq-Range: 999..999")
-            ))
-            .is_empty()
+            )),
+            [] as [&str; 0]
         );
     }
 

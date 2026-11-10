@@ -9,7 +9,6 @@
 // `<dl>` (see `MetricCardList`), so assistive tech reads "CPU Usage,
 // 42.0%" as a labelled value rather than a form group.
 
-import type { CSSProperties } from "react";
 import type { Severity } from "#lib/severity";
 
 /** Direction of a measured change over the recent samples. */
@@ -18,16 +17,16 @@ export type Trend = "up" | "down" | "stable";
 interface MetricCardProps {
   readonly label: string;
   readonly value: string;
-  readonly severity?: Severity;
+  readonly severity?: Severity | undefined;
   /** Omit when there is no real series behind the value — no arrow is invented. */
-  readonly trend?: Trend;
+  readonly trend?: Trend | undefined;
 }
 
-/** Value colour per severity: fg-bright at rest, the amber and rose tokens (as on the warning/danger pills) when a threshold speaks. */
-export const SEVERITY_COLOR: Readonly<Record<Severity, string>> = {
-  good: "var(--color-fg-bright)",
-  warning: "var(--color-amber)",
-  critical: "var(--color-rose)",
+/** Value text colour per severity: fg-bright at rest, the amber and rose tokens (as on the warning/danger pills) when a threshold speaks. */
+export const SEVERITY_TEXT: Readonly<Record<Severity, string>> = {
+  good: "text-fg-bright",
+  warning: "text-amber",
+  critical: "text-rose",
 };
 
 /** Visible name for a non-good severity, so the state never rests on colour alone. */
@@ -42,31 +41,8 @@ const TREND: Readonly<Record<Trend, { readonly symbol: string; readonly label: s
   stable: { symbol: "→", label: "Stable" },
 };
 
-const cardStyle: CSSProperties = {
-  padding: "12px 16px",
-  display: "flex",
-  flexDirection: "column",
-  gap: 4,
-  minWidth: 140,
-};
-
-const labelStyle: CSSProperties = {
-  fontFamily: "var(--font-body)",
-  fontSize: 12,
-  fontWeight: 500,
-  color: "var(--color-fg-muted)",
-};
-
-const cardListStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-  margin: 0,
-  border: "1px solid var(--color-border)",
-  borderRadius: "var(--radius-lg)",
-  background: "oklch(from var(--color-surface-0) l c h / 0.7)",
-  backdropFilter: "blur(12px) saturate(1.5)",
-  overflow: "hidden",
-};
+const CARD_CLASS = "flex min-w-[140px] flex-col gap-1 px-4 py-3";
+const LABEL_CLASS = "font-body text-[12px] font-medium text-fg-muted";
 
 /**
  * Compact metric tile with label, severity-coloured value and an optional
@@ -78,46 +54,20 @@ export function MetricCard({
   severity = "good",
   trend,
 }: MetricCardProps): React.ReactElement {
-  const accentColor = SEVERITY_COLOR[severity];
+  const accent = SEVERITY_TEXT[severity];
 
   return (
-    <div style={cardStyle} data-severity={severity}>
-      <dt style={labelStyle}>{label}</dt>
+    <div className={CARD_CLASS} data-severity={severity}>
+      <dt className={LABEL_CLASS}>{label}</dt>
       <dd className="m-0 flex items-end gap-2">
-        <span
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 22,
-            fontWeight: 700,
-            color: accentColor,
-            lineHeight: 1,
-          }}
-        >
-          {value}
-        </span>
+        <span className={`font-mono text-[22px] leading-none font-bold ${accent}`}>{value}</span>
         {severity !== "good" && (
-          <span
-            style={{
-              fontFamily: "var(--font-body)",
-              fontSize: 11,
-              fontWeight: 600,
-              color: accentColor,
-              lineHeight: 1.4,
-            }}
-          >
+          <span className={`font-body text-[11px] leading-[1.4] font-semibold ${accent}`}>
             {SEVERITY_LABEL[severity]}
           </span>
         )}
         {trend && (
-          <span
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: 14,
-              color: accentColor,
-              opacity: 0.7,
-              lineHeight: 1.4,
-            }}
-          >
+          <span className={`font-mono text-[14px] leading-[1.4] opacity-70 ${accent}`}>
             <span aria-hidden="true">{TREND[trend].symbol}</span>
             <span className="sr-only">{TREND[trend].label}</span>
           </span>
@@ -134,7 +84,7 @@ export function MetricCardList({
   readonly children: React.ReactNode;
 }): React.ReactElement {
   return (
-    <dl style={cardListStyle} className="*:shadow-[-1px_-1px_0_var(--color-border)]">
+    <dl className="m-0 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] overflow-hidden rounded-lg border border-border bg-surface-0/70 backdrop-blur-[12px] backdrop-saturate-150 *:shadow-[-1px_-1px_0_var(--color-border)]">
       {children}
     </dl>
   );

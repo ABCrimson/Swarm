@@ -4481,8 +4481,10 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-notification",
  "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
  "tauri-plugin-store",
  "tauri-plugin-updater",
+ "tauri-plugin-window-state",
  "tauri-runtime-wry",
  "thiserror 2.0.21",
  "tokio",
@@ -4743,6 +4745,7 @@ dependencies = [
  "tauri-utils",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "tray-icon",
  "url",
  "window-vibrancy",
@@ -4912,6 +4915,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-single-instance"
+version = "3.0.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3407ebbd1dccc8cffbec98156563497505f24cc6ebd5be2d0b14e4bea4df22e6"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "windows-sys 0.61.2",
+ "zbus 5.19.0",
+]
+
+[[package]]
 name = "tauri-plugin-store"
 version = "3.0.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4961,6 +4980,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-window-state"
+version = "3.0.0-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b5d84fd244969b9f6c6a48de65cdcc4f9c82a055e00e7ff0c0e99ffb6a63d0a"
+dependencies = [
+ "bitflags 2.13.2",
+ "log",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "tauri-runtime"
 version = "3.0.0-alpha.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5002,6 +5036,7 @@ dependencies = [
  "tauri",
  "tauri-runtime",
  "tauri-utils",
+ "tracing",
  "url",
  "webkit2gtk",
  "webview2-com",
@@ -6445,6 +6480,7 @@ dependencies = [
  "soup3",
  "tao-macros",
  "thiserror 2.0.21",
+ "tracing",
  "url",
  "webkit2gtk",
  "webkit2gtk-sys",

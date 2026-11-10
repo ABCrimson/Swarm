@@ -284,7 +284,7 @@ mod tests {
     fn test_git_timeout_display_names_only_the_subcommand() {
         let err = AppError::GitTimeout {
             command: "commit".to_string(),
-            timeout: std::time::Duration::from_secs(900),
+            timeout: std::time::Duration::from_mins(15),
         };
         assert_eq!(
             err.to_string(),

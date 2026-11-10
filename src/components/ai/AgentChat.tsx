@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#components/ui/Button";
@@ -8,6 +7,7 @@ import { PROVIDER_LABELS } from "#lib/agent-events";
 import { escapeForDisplay } from "#lib/display-escape";
 import { errorMessage } from "#lib/is-error";
 import { agentCancel, agentPermissionRespond, agentSendTurn } from "#lib/tauri";
+import { onTranscriptKeyDown } from "#lib/transcript-keys";
 import {
   type AgentTranscriptItem,
   type PermissionState,
@@ -63,6 +63,12 @@ function toRecord(value: unknown): Record<string, unknown> {
     : { value };
 }
 
+/** The `changes` field of a Codex fileChange tool call's input. */
+function changesOf(input: unknown): unknown {
+  const { changes } = toRecord(input);
+  return changes;
+}
+
 /** Tool result content: strings verbatim, anything else as JSON for `ToolCallDisplay`'s viewer. */
 function toResultString(content: unknown): string {
   return typeof content === "string" ? content : JSON.stringify(content);
@@ -83,132 +89,57 @@ function blockText(kind: string, content: unknown): string {
   return typeof content === "string" ? content : JSON.stringify(content);
 }
 
-// ── Styles (OKLCH) ───────────────────────────────────
+// ── Styles (utilities; literals with no token wait for the Q-9 design direction) ──
 
-const containerStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  height: "100%",
-  overflow: "hidden",
-};
+const CONTAINER = "flex h-full flex-col overflow-hidden";
 
-/** `column-reverse` pins the scroll position to the newest row natively, and leaves it alone once the user scrolls up. */
-const scrollerStyle: CSSProperties = {
-  flex: 1,
-  // The container clips overflow, so the focus ring is drawn inside the scroller.
-  outlineOffset: -2,
-  overflowY: "auto",
-  display: "flex",
-  flexDirection: "column-reverse",
-};
+/** `column-reverse` pins the scroll position to the newest row natively, and leaves it alone once the user scrolls up. The container clips overflow, so the focus ring is drawn inside the scroller (`-outline-offset-2`). The top 12px fade out under the pane label, so a row is never cut hard mid-line there; the mask drops while the scroller or a row in it has keyboard focus, so no ring is faded. */
+const SCROLLER =
+  "flex flex-1 flex-col-reverse overflow-y-auto -outline-offset-2 mask-t-from-[calc(100%-12px)] focus-visible:mask-none has-focus-visible:mask-none";
 
-const transcriptStyle: CSSProperties = {
-  padding: 12,
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-};
+const TRANSCRIPT = "flex flex-col gap-2 p-3";
 
-const bubbleBaseStyle: CSSProperties = {
-  padding: "8px 12px",
-  borderRadius: 8,
-  fontFamily: "var(--font-body)",
-  fontSize: 13,
-  lineHeight: 1.5,
-  overflowWrap: "anywhere",
-};
+/**
+ * Every transcript row. `content-visibility: auto` skips rendering a row
+ * while it is off-screen; it stays in the DOM, the accessibility tree and
+ * find-in-page. `contain-intrinsic-size` sizes the content box: a row
+ * reserves 51px (the median border-box height on the e2e transcript
+ * fixture at 1440x900) plus its own padding and border until it has
+ * rendered once, and its real size after that. Paint containment clips at
+ * the padding box, so the text row trades `-m-1` for `p-1` to keep its code
+ * blocks' focus rings.
+ */
+const ROW = "[contain-intrinsic-size:auto_51px] [content-visibility:auto]";
 
-const userBubbleStyle: CSSProperties = {
-  ...bubbleBaseStyle,
-  alignSelf: "flex-end",
-  background: "oklch(from var(--color-plasma) l c h / 0.15)",
-  color: "oklch(0.92 0.03 205)",
-  maxWidth: "85%",
-  whiteSpace: "pre-wrap",
-};
+const BUBBLE_BASE = "rounded-md px-3 py-2 font-sans text-[13px] leading-normal wrap-anywhere";
 
-const userBubbleFailedStyle: CSSProperties = {
-  ...userBubbleStyle,
-  background: "oklch(0.16 0.08 25 / 0.35)",
-  border: "1px solid oklch(0.45 0.18 25)",
-};
+const USER_BUBBLE = `${BUBBLE_BASE} max-w-[85%] self-end whitespace-pre-wrap`;
+const USER_BUBBLE_OK = `${USER_BUBBLE} bg-plasma/15 text-[oklch(0.92_0.03_205)]`;
+const USER_BUBBLE_FAILED = `${USER_BUBBLE} border border-[oklch(0.45_0.18_25)] bg-[oklch(0.16_0.08_25/0.35)] text-[oklch(0.92_0.03_205)]`;
 
-const streamWrapStyle: CSSProperties = {
-  alignSelf: "flex-start",
-  maxWidth: "90%",
-  width: "100%",
-};
+const STREAM_WRAP = "w-full max-w-[90%] self-start";
 
-const thinkingBlockStyle: CSSProperties = {
-  ...bubbleBaseStyle,
-  alignSelf: "flex-start",
-  background: "oklch(0 0 0 / 0)",
-  color: "var(--color-fg-dim)",
-  fontStyle: "italic",
-  maxWidth: "90%",
-  whiteSpace: "pre-wrap",
-};
+const THINKING_BLOCK = `${BUBBLE_BASE} max-w-[90%] self-start whitespace-pre-wrap bg-transparent text-fg-dim italic`;
 
-const permissionStyle: CSSProperties = {
-  margin: 0,
-  minWidth: 0,
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-  alignSelf: "stretch",
-  padding: "8px 12px",
-  borderRadius: 8,
-  border: "1px solid oklch(0.45 0.18 25)",
-  background: "oklch(0.16 0.08 25 / 0.4)",
-};
+const PERMISSION = "m-0 flex min-w-0 flex-col gap-1.5 self-stretch rounded-md border px-3 py-2";
+const PERMISSION_DENIED = `${PERMISSION} border-[oklch(0.45_0.18_25)] bg-[oklch(0.16_0.08_25/0.4)]`;
+const PERMISSION_PENDING = `${PERMISSION} border-[oklch(0.55_0.15_75)] bg-[oklch(0.18_0.06_75/0.4)]`;
 
-const permissionPendingStyle: CSSProperties = {
-  ...permissionStyle,
-  border: "1px solid oklch(0.55 0.15 75)",
-  background: "oklch(0.18 0.06 75 / 0.4)",
-};
+const PERMISSION_HEADER = "flex items-center gap-2";
 
-const permissionHeaderStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const PERMISSION_TOOL = "font-mono text-(length:--text-xs) text-[oklch(0.85_0.12_60)]";
 
-const permissionToolStyle: CSSProperties = {
-  fontFamily: "var(--font-mono)",
-  fontSize: "var(--text-xs)",
-  color: "oklch(0.85 0.12 60)",
-};
+const PERMISSION_MESSAGE =
+  "font-mono text-[12px] leading-[1.4] wrap-anywhere whitespace-pre-wrap text-[oklch(0.88_0.06_60)]";
 
-const permissionMessageStyle: CSSProperties = {
-  fontFamily: "var(--font-mono)",
-  fontSize: 12,
-  color: "oklch(0.88 0.06 60)",
-  lineHeight: 1.4,
-  whiteSpace: "pre-wrap",
-  overflowWrap: "anywhere",
-};
+/** Status lines are words in the text face; only their numbers are mono (`SETTLED_NUMBER`). */
+const SETTLED = "self-center font-sans text-(length:--text-xs) text-fg-dim";
+const SETTLED_ERROR = "self-center font-sans text-(length:--text-xs) text-[oklch(0.72_0.20_25)]";
+const SETTLED_NUMBER = "font-mono tabular-nums";
 
-const settledStyle: CSSProperties = {
-  alignSelf: "center",
-  color: "var(--color-fg-dim)",
-  fontFamily: "var(--font-mono)",
-  fontSize: "var(--text-xs)",
-};
+const CAPABILITY_NOTE = "shrink-0 px-3 py-1 font-mono text-(length:--text-xs) text-fg-dim";
 
-const settledErrorStyle: CSSProperties = { ...settledStyle, color: "oklch(0.72 0.20 25)" };
-
-const capabilityNoteStyle: CSSProperties = {
-  padding: "4px 12px",
-  fontFamily: "var(--font-mono)",
-  fontSize: "var(--text-xs)",
-  color: "var(--color-fg-dim)",
-  flexShrink: 0,
-};
-
-const formStyle: CSSProperties = {
-  display: "flex",
-  gap: 8,
-  padding: 10,
-  borderTop: "1px solid oklch(0.20 0.03 220)",
-  flexShrink: 0,
-};
+const FORM = "flex shrink-0 gap-2 border-t border-[oklch(0.20_0.03_220)] p-2.5";
 
 // ── Rows ─────────────────────────────────────────────
 
@@ -227,10 +158,11 @@ function PermissionRow({
   // Codex's fileChange request names only its item: the paths and diff being approved are on that item's own tool call (same id, sent first).
   const isPatch = payload.tool === "fileChange";
   const request = toRecord(payload.input);
+  const { itemId } = request;
   const patch = isPatch
     ? items.find(
         (row): row is Extract<AgentTranscriptItem, { kind: "tool_call" }> =>
-          row.kind === "tool_call" && row.payload.toolUseId === request.itemId,
+          row.kind === "tool_call" && row.payload.toolUseId === itemId,
       )
     : undefined;
   // The exact arguments are what the user approves; the provider's message
@@ -240,7 +172,7 @@ function PermissionRow({
     isPatch
       ? {
           ...request,
-          changes: patch ? toRecord(patch.payload.input).changes : "(Not Received Yet)",
+          changes: patch ? changesOf(patch.payload.input) : "(Not Received Yet)",
         }
       : payload.input,
   );
@@ -268,21 +200,21 @@ function PermissionRow({
     // A fieldset groups the request with its answer buttons; `loading`, not `disabled`, holds them while an answer is in flight, so keyboard focus stays on the pressed button.
     <fieldset
       aria-label={`Permission Request: ${escapeForDisplay(payload.tool)}`}
-      style={waiting ? permissionPendingStyle : permissionStyle}
+      className={`${waiting ? PERMISSION_PENDING : PERMISSION_DENIED} ${ROW}`}
     >
-      <div style={permissionHeaderStyle}>
+      <div className={PERMISSION_HEADER}>
         <Pill tone={PERMISSION_TONE[state]} size="sm">
           {permissionLabel(state, payload.denialSubclass)}
         </Pill>
-        <span style={permissionToolStyle}>{escapeForDisplay(payload.tool)}</span>
+        <span className={PERMISSION_TOOL}>{escapeForDisplay(payload.tool)}</span>
       </div>
       {review.args.length > 0 && <ApprovalArgList review={review} />}
       {payload.message && (
-        <span style={permissionMessageStyle}>{escapeForDisplay(payload.message)}</span>
+        <span className={PERMISSION_MESSAGE}>{escapeForDisplay(payload.message)}</span>
       )}
       {waiting && <ApprovalBlockedReason review={review} />}
       {waiting && (
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="flex gap-2">
           <Button
             size="sm"
             variant={payload.suggestedDecision === "deny" ? "secondary" : "primary"}
@@ -320,13 +252,13 @@ function TranscriptRow({
     case "user":
       // The red tint is not the only sign of a failed send: it also says so in words.
       return item.failed ? (
-        <div style={userBubbleFailedStyle}>
+        <div className={`${USER_BUBBLE_FAILED} ${ROW}`}>
           <span className="sr-only">You: </span>
           {item.text}
-          <div style={settledErrorStyle}>Not Sent</div>
+          <div className={SETTLED_ERROR}>Not Sent</div>
         </div>
       ) : (
-        <div style={userBubbleStyle}>
+        <div className={`${USER_BUBBLE_OK} ${ROW}`}>
           <span className="sr-only">You: </span>
           {item.text}
         </div>
@@ -338,40 +270,54 @@ function TranscriptRow({
       if (!text.trim()) return null;
       if (item.payload.kind === "thinking") {
         return (
-          <div style={thinkingBlockStyle}>
+          <div className={`${THINKING_BLOCK} ${ROW}`}>
             <span className="sr-only">Assistant (thinking): </span>
             {text}
           </div>
         );
       }
       return (
-        <div style={streamWrapStyle}>
+        <div className={`${STREAM_WRAP} ${ROW} -m-1 p-1`}>
           <span className="sr-only">Assistant: </span>
           <AIMessageStream content={text} isStreaming={false} />
         </div>
       );
     }
     case "tool_call":
+      // The card has no class of its own to take; the wrapper is the row.
       return (
-        <ToolCallDisplay
-          name={item.payload.name}
-          input={toRecord(item.payload.input)}
-          result={item.result ? toResultString(item.result.content) : undefined}
-          status={item.result ? (item.result.isError ? "error" : "complete") : "executing"}
-        />
+        <div className={ROW}>
+          <ToolCallDisplay
+            name={item.payload.name}
+            input={toRecord(item.payload.input)}
+            result={item.result ? toResultString(item.result.content) : undefined}
+            status={item.result ? (item.result.isError ? "error" : "complete") : "executing"}
+          />
+        </div>
       );
     case "permission":
       return <PermissionRow workerId={workerId} item={item} inputRef={inputRef} />;
     case "settled": {
       const { status, error, durationMs, numTurns, costUsd } = item.payload;
-      const parts = [
-        status === "ok" ? "Turn Complete" : `Turn Failed${error ? `: ${error}` : ""}`,
-        formatDurationMs(durationMs),
-        ...(numTurns != null ? [`${numTurns} Turn${numTurns === 1 ? "" : "s"}`] : []),
-        ...(costUsd != null ? [`$${costUsd.toFixed(4)}`] : []),
-      ];
       return (
-        <div style={status === "ok" ? settledStyle : settledErrorStyle}>{parts.join(", ")}</div>
+        <div className={`${status === "ok" ? SETTLED : SETTLED_ERROR} ${ROW}`}>
+          {status === "ok" ? "Turn Complete" : `Turn Failed${error ? `: ${error}` : ""}`}
+          {", "}
+          <span className={SETTLED_NUMBER}>{formatDurationMs(durationMs)}</span>
+          {numTurns != null && (
+            <>
+              {", "}
+              <span className={SETTLED_NUMBER}>{numTurns}</span>
+              {` Turn${numTurns === 1 ? "" : "s"}`}
+            </>
+          )}
+          {costUsd != null && (
+            <>
+              {", "}
+              <span className={SETTLED_NUMBER}>{`$${costUsd.toFixed(4)}`}</span>
+            </>
+          )}
+        </div>
       );
     }
   }
@@ -430,54 +376,52 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
   };
 
   return (
-    <div style={containerStyle}>
+    <div className={CONTAINER}>
       <div
         role="log"
         aria-label={`${provider} Chat`}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: WebKit (macOS, Linux) never makes a scroll container focusable on its own, and the transcript must scroll from the keyboard (WCAG 2.1.1).
         tabIndex={0}
-        style={scrollerStyle}
+        className={SCROLLER}
+        onKeyDown={onTranscriptKeyDown}
       >
-        <div style={transcriptStyle}>
+        <div className={TRANSCRIPT}>
           {transcript.items.length === 0 && streaming.length === 0 && (
-            <div style={{ ...settledStyle, marginTop: 24 }}>
-              No Messages Yet — Say Something Below
-            </div>
+            <div className={`${SETTLED} mt-6`}>No Messages Yet — Say Something Below</div>
           )}
           {transcript.items.map((item) => (
             <TranscriptRow key={item.id} workerId={workerId} item={item} inputRef={inputRef} />
           ))}
           {streaming.map(([key, block]) =>
             block.kind === "thinking" ? (
-              <div key={key} style={thinkingBlockStyle} aria-busy="true">
+              <div key={key} className={THINKING_BLOCK} aria-busy="true">
                 <span className="sr-only">Assistant (thinking): </span>
                 {block.text}
               </div>
             ) : (
-              <div key={key} style={streamWrapStyle}>
+              <div key={key} className={STREAM_WRAP}>
                 <span className="sr-only">Assistant: </span>
                 <AIMessageStream content={block.text} isStreaming />
               </div>
             ),
           )}
-          {busy && streaming.length === 0 && <div style={settledStyle}>Working…</div>}
+          {busy && streaming.length === 0 && <div className={SETTLED}>Working…</div>}
         </div>
       </div>
 
       {busy && (
-        <div style={capabilityNoteStyle}>
+        <div className={CAPABILITY_NOTE}>
           {canInterrupt
             ? "Sending Now Interrupts The Current Turn."
             : "This Provider Has No Mid-Turn Interrupt — Sending Now Queues Behind The Current Turn."}
         </div>
       )}
 
-      <form action={send} style={formStyle}>
+      <form action={send} className={FORM}>
         <input
           ref={inputRef}
           name="message"
-          className="swarm-input"
-          style={{ flex: 1 }}
+          className="swarm-input flex-1"
           placeholder={`Message ${provider}…`}
           aria-label={`Message ${provider}`}
           autoComplete="off"

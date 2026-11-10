@@ -62,6 +62,11 @@ jobs:
         env:
           NAPI_RS_FORCE_WASI: "true"
 
+      # The raw-OKLCH Biome plugins still flag their fixtures, and every
+      # known exception still names a literal in its file.
+      - name: Raw-OKLCH gate proof
+        run: pnpm check:raw-oklch
+
       - name: Docs site
         run: pnpm build:site
 
@@ -103,16 +108,23 @@ jobs:
           cache: true
           require-lockfile: true
 
-      # Headless shell only: every project in playwright.config.ts runs
-      # headless, so the full headed Chromium would be dead weight.
+      # Headless shell only: every project in playwright.config.ts and the
+      # Vitest browser project runs headless, so the full headed Chromium would
+      # be dead weight. WebKit is the Vitest browser project's second engine
+      # (the stand-in for WKWebView and WebKitGTK).
       - name: Install Playwright browsers
-        run: pnpm exec playwright install --with-deps --only-shell chromium
+        run: pnpm exec playwright install --with-deps --only-shell chromium webkit
 
       # With CI set, playwright.config.ts builds the production bundle and
       # serves it with `vite preview` (not the dev server).
       # --shuffle randomizes spec order each run: the suite must not depend on it.
       - name: Playwright
         run: pnpm test:e2e --shuffle
+
+      # The *.browser.test.tsx suites in real Chromium and WebKit (vitest.config.ts,
+      # project `browser`); the unit project runs in the frontend job.
+      - name: Vitest browser mode
+        run: pnpm test:browser
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}

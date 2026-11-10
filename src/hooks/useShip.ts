@@ -64,9 +64,9 @@ export interface ShipProgressRow {
 
 /** Terminal outcome fields, populated as each step of the chosen action completes. */
 interface ShipResult {
-  readonly commitSha?: string;
-  readonly pushedRef?: string;
-  readonly prUrl?: string;
+  readonly commitSha?: string | undefined;
+  readonly pushedRef?: string | undefined;
+  readonly prUrl?: string | undefined;
 }
 
 /** Everything the ship flow shows; `shipReducer` is the only thing that changes it. */
@@ -774,7 +774,11 @@ const COMMAND_STEPS = new Map<string, readonly string[]>([
 interface ShipAttempt {
   readonly recorder: ShipRecorder;
   /** What the flow has learned so far, to fill what a receipt leaves out. */
-  readonly known: { commitSha?: string; pushedRef?: string; prUrl?: string };
+  readonly known: {
+    commitSha?: string | undefined;
+    pushedRef?: string | undefined;
+    prUrl?: string | undefined;
+  };
 }
 
 /** The recorder of one ship attempt, from {@link recordShip}. */

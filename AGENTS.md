@@ -40,9 +40,22 @@ file is canonical; `CLAUDE.md` only imports it.
   imports (`../`) are forbidden (Biome `noRestrictedImports`).
 - Tests are colocated: `X.test.ts(x)` sits next to `X.ts(x)`; a suite for one
   facet of a module is `X.<facet>.test.ts`. Shared setup is `src/test/setup.ts`;
+  a suite that needs a real engine (popover top layer, focus, layout) is
+  `X.browser.test.tsx` and runs in Chromium and WebKit (`pnpm test:browser`);
   Playwright specs live in `e2e/`.
 - Every user-facing UI string is Title Case. Colors are OKLCH only — never
-  hex, `rgb()`, `hsl()` or named colors.
+  hex, `rgb()`, `hsl()` or named colors — and a new raw `oklch(` value goes
+  only in `src/styles/tokens.css` (the canvas, xterm, WebGPU and
+  syntax-highlight consumers excepted); components use the tokens. The Biome
+  GritQL raw-OKLCH plugins in `biome-plugins/` fail anything new, and the
+  literals that predate them are a baselined exception list that `pnpm
+  check:raw-oklch` only lets shrink. Animation is CSS
+  (`@starting-style`, `linear()` springs via `--ease-spring`); there is no
+  animation library.
+- `tsconfig` turns on `noUncheckedIndexedAccess`,
+  `exactOptionalPropertyTypes` and `noPropertyAccessFromIndexSignature`:
+  narrow an indexed read or omit an optional key, never silence it with `!`
+  or a cast.
 - Biome is the only frontend linter and formatter. No ESLint, no Prettier.
 
 ## Rust
@@ -174,11 +187,13 @@ Frontend (all must pass):
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm typecheck          # tsconfig.json, tsconfig.worker.json, tsconfig.node.json
+pnpm typecheck          # tsconfig.json, tsconfig.worker.json, tsconfig.node.json, tsconfig.browser.json
 pnpm exec biome ci .
-pnpm test:coverage      # Vitest plus the coverage floor in vitest.config.ts
+pnpm test:coverage      # Vitest unit project (jsdom) plus the coverage floor in vitest.config.ts
+pnpm test:browser       # Vitest browser project: *.browser.test.tsx in Chromium and WebKit
 pnpm build              # also: pnpm build:web
 pnpm check:compiler     # also: NAPI_RS_FORCE_WASI=true pnpm check:compiler
+pnpm check:raw-oklch    # the raw-OKLCH Biome plugins still fail their fixtures; no stale exception
 pnpm exec knip --treat-config-hints-as-errors   # dead code / unused deps (knip.jsonc)
 pnpm test:e2e --shuffle # Playwright (chromium; webkit and firefox are opt-in projects)
 pnpm build:site         # docs site

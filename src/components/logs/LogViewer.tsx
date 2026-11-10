@@ -1,6 +1,7 @@
 import "./logs.css";
 
 import { useResizeObserver } from "@crimson_dev/use-resize-observer";
+import type { CSSProperties } from "react";
 import { useDeferredValue, useLayoutEffect, useRef, useState } from "react";
 import { LogFilter } from "#components/logs/LogFilter";
 import { Button } from "#components/ui/Button";
@@ -150,10 +151,18 @@ export function LogViewer(): React.ReactElement {
         onScroll={handleScroll}
       >
         <div
-          className="log-viewer__track"
-          style={{ height: filteredEntries.length * LOG_ROW_HEIGHT }}
+          className="log-viewer__track h-(--log-track-height)"
+          style={
+            {
+              "--log-track-height": `${filteredEntries.length * LOG_ROW_HEIGHT}px`,
+              "--log-row-height": `${LOG_ROW_HEIGHT}px`,
+            } as CSSProperties
+          }
         >
-          <div className="log-viewer__window" style={{ top: startIndex * LOG_ROW_HEIGHT }}>
+          <div
+            className="log-viewer__window top-(--log-window-top)"
+            style={{ "--log-window-top": `${startIndex * LOG_ROW_HEIGHT}px` } as CSSProperties}
+          >
             {visibleEntries.map((entry) => (
               <LogRow key={entry.id} entry={entry} searchQuery={deferredQuery} />
             ))}
@@ -187,7 +196,7 @@ function LogRow({
   readonly searchQuery: string;
 }): React.ReactElement {
   return (
-    <div className="log-row" style={{ height: LOG_ROW_HEIGHT }}>
+    <div className="log-row h-(--log-row-height)">
       <time
         className="log-row__time"
         dateTime={Temporal.Instant.fromEpochMilliseconds(entry.timestamp).toString()}

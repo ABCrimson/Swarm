@@ -45,24 +45,24 @@ pub(crate) fn home_dir() -> Result<PathBuf, AppError> {
 /// host that has no home without mutating the process environment. An
 /// empty path counts as no home.
 fn home_dir_from(lookup: impl FnOnce() -> Option<PathBuf>) -> Result<PathBuf, AppError> {
-    lookup()
-        .filter(|home| !home.as_os_str().is_empty())
-        .ok_or_else(|| {
-            AppError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "could not resolve the home directory",
-            ))
-        })
+    lookup().filter(|home| !home.is_empty()).ok_or_else(|| {
+        AppError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "could not resolve the home directory",
+        ))
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
 
     #[test]
     fn test_home_dir_resolves() {
         let home = home_dir().expect("the test environment has a home directory");
-        assert!(!home.as_os_str().is_empty());
+        assert!(!home.is_empty());
     }
 
     #[test]
@@ -75,10 +75,7 @@ mod tests {
     fn test_home_dir_from_missing_or_empty_is_a_non_git_io_error() {
         for lookup in [None, Some(PathBuf::new())] {
             let err = home_dir_from(|| lookup).unwrap_err();
-            assert!(
-                matches!(&err, AppError::Io(e) if e.kind() == std::io::ErrorKind::NotFound),
-                "{err:?}"
-            );
+            assert_matches!(&err, AppError::Io(e) if e.kind() == std::io::ErrorKind::NotFound);
             assert_eq!(
                 err.to_string(),
                 "IO error: could not resolve the home directory"

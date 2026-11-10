@@ -20,15 +20,21 @@
 //!   frames), plus the three desktop-only commands that drive OS integrations.
 //! - [`lifecycle`] shuts the runtime down in a plugin cleanup hook that
 //!   every exit path runs, and the release log is flushed after it.
+//! - [`quit_guard`] asks before a user's quit (closing the main window, or
+//!   Cmd+Q through the macOS app menu it builds) stops registered workers.
+//! - In bundled builds, a second launch hands over to the running
+//!   instance and exits; [`focus_main`] brings that instance forward.
 
 use std::path::PathBuf;
 
-use tauri::Manager;
+use tauri::{AppHandle, Manager, WebviewWindow};
 use tracing_appender::non_blocking::WorkerGuard;
 
+mod attention;
 mod commands;
 mod dialog_grants;
 mod lifecycle;
+mod quit_guard;
 mod startup;
 
 #[cfg(test)]
@@ -43,6 +49,15 @@ mod test_support;
 /// Label of the one window tauri.conf.json declares and
 /// capabilities/default.json grants.
 const MAIN_WINDOW: &str = "main";
+
+/// What tauri-plugin-window-state saves and restores: size, position,
+/// maximized, fullscreen and decorations, never visibility. The main
+/// window is declared hidden and `startup` shows it once swarm-core runs
+/// (or under the error dialog); restoring a saved `visible` would show it
+/// earlier, as soon as the window is ready.
+const WINDOW_STATE_FLAGS: tauri_plugin_window_state::StateFlags =
+    tauri_plugin_window_state::StateFlags::all()
+        .difference(tauri_plugin_window_state::StateFlags::VISIBLE);
 
 /// Builds the process's Tokio runtime and installs it as Tauri's async
 /// runtime.
@@ -84,8 +99,29 @@ pub fn run() {
     // Tauri 3 takes the webview runtime as a value: `Builder::default()`
     // is the type-erased `tauri::DynRuntime` builder, and wry is the
     // system webview (WebView2 / WKWebView / WebKitGTK).
-    let app = tauri::Builder::default()
-        .runtime(tauri_runtime_wry::Wry::default())
+    let mut builder = tauri::Builder::default().runtime(tauri_runtime_wry::Wry::default());
+    // First, so a second launch exits before anything else is set up: it
+    // hands over to the running instance, which brings its main window
+    // forward, and ends with status 0. Bundled builds only
+    // (`tauri::is_dev()` is false once the CLI's build enables
+    // `tauri/custom-protocol`): the instance is keyed by the bundle
+    // identifier, which dev builds share with the installed app, and a
+    // `pnpm tauri:dev` beside it must still start and report the held
+    // data directory instead of silently focusing the installed app.
+    if !tauri::is_dev() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            focus_main(app);
+        }));
+    }
+    // macOS only, where Tauri would otherwise install its default menu:
+    // the same menu with a guarded Quit (see `quit_guard`). Windows and
+    // Linux keep no menu, so the handler below never fires there.
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.menu(quit_guard::app_menu);
+    }
+    let app = builder
+        .on_menu_event(|app, event| quit_guard::on_menu_event(app, &event))
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         // Two things open: the ship chain's GitHub compare page, from the
@@ -103,6 +139,14 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        // Driven from Rust only: it restores the window when it is ready
+        // and saves `.window-state.json` in the app config directory on
+        // `RunEvent::Exit`. The capability grants none of its commands.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(WINDOW_STATE_FLAGS)
+                .build(),
+        )
         .plugin(lifecycle::plugin())
         .invoke_handler(commands::handler())
         .setup(|app| {
@@ -118,7 +162,52 @@ pub fn run() {
     app.manage(lifecycle::Teardown::new(init_tracing(
         app.path().app_log_dir(),
     )));
-    app.run(|_, _| {});
+    #[cfg(target_os = "macos")]
+    if quit_guard::QUIT_ITEM_MISSING.load(std::sync::atomic::Ordering::Relaxed) {
+        tracing::warn!("the default app menu has no Quit item; Cmd+Q is not guarded");
+    }
+    app.manage(quit_guard::QuitGuard::default());
+    app.run(|app, event| quit_guard::on_run_event(app, &event));
+}
+
+/// The single-instance callback: a second launch of the app has handed
+/// over and exited, so the running instance brings its main window
+/// forward. The second launch's arguments and working directory are
+/// ignored, because the app takes no command-line input.
+fn focus_main<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW)
+        && let Err(error) = bring_forward(&window)
+    {
+        tracing::warn!(%error, "failed to bring the main window forward for a second launch");
+    }
+}
+
+/// The window calls [`bring_forward`] makes.
+trait Raise {
+    fn show(&self) -> tauri::Result<()>;
+    fn unminimize(&self) -> tauri::Result<()>;
+    fn set_focus(&self) -> tauri::Result<()>;
+}
+
+impl<R: tauri::Runtime> Raise for WebviewWindow<R> {
+    fn show(&self) -> tauri::Result<()> {
+        WebviewWindow::show(self)
+    }
+
+    fn unminimize(&self) -> tauri::Result<()> {
+        WebviewWindow::unminimize(self)
+    }
+
+    fn set_focus(&self) -> tauri::Result<()> {
+        WebviewWindow::set_focus(self)
+    }
+}
+
+/// Shows `window`, restores it if it is minimized and focuses it.
+fn bring_forward(window: &impl Raise) -> tauri::Result<()> {
+    window.show()?;
+    window.unminimize()?;
+    window.set_focus()
 }
 
 /// Name of the release log file inside the app log directory.
@@ -218,8 +307,71 @@ fn open_log_file(dir: &std::path::Path) -> std::io::Result<std::fs::File> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
     use super::*;
     use crate::test_support::temp_dir;
+
+    /// A window that records what [`bring_forward`] does to it: the mock
+    /// runtime's windows accept every call and report fixed answers, so
+    /// they cannot show the result.
+    struct FakeWindow {
+        visible: Cell<bool>,
+        minimized: Cell<bool>,
+        focused: Cell<bool>,
+    }
+
+    impl Raise for FakeWindow {
+        fn show(&self) -> tauri::Result<()> {
+            self.visible.set(true);
+            Ok(())
+        }
+
+        fn unminimize(&self) -> tauri::Result<()> {
+            self.minimized.set(false);
+            Ok(())
+        }
+
+        fn set_focus(&self) -> tauri::Result<()> {
+            self.focused
+                .set(self.visible.get() && !self.minimized.get());
+            Ok(())
+        }
+    }
+
+    /// A second launch finds the main window hidden and minimized; it
+    /// ends visible, restored and focused.
+    #[test]
+    fn a_second_launch_brings_a_hidden_minimized_main_window_forward() {
+        let window = FakeWindow {
+            visible: Cell::new(false),
+            minimized: Cell::new(true),
+            focused: Cell::new(false),
+        };
+
+        bring_forward(&window).unwrap();
+
+        assert!(window.visible.get());
+        assert!(!window.minimized.get());
+        assert!(window.focused.get());
+    }
+
+    /// `focus_main` reaches the real main window through the app handle,
+    /// and does nothing when there is none.
+    #[test]
+    fn focus_main_handles_the_main_window_and_its_absence() {
+        let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+        focus_main(app.handle());
+
+        WebviewWindowBuilder::new(&app, MAIN_WINDOW, WebviewUrl::default())
+            .visible(false)
+            .build()
+            .unwrap();
+        focus_main(app.handle());
+    }
 
     #[test]
     fn log_file_is_rotated_once_it_outgrows_the_limit() {

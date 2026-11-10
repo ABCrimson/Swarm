@@ -1663,7 +1663,7 @@ mod tests {
         let result = SwarmEvent::AgentToolResult(AgentToolResultPayload {
             worker_id: Uuid::nil(),
             turn_id: "turn-1".to_string(),
-            tool_use_id: tool_use_id.clone(),
+            tool_use_id,
             is_error: false,
             content: serde_json::json!("ok"),
         });

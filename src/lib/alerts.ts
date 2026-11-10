@@ -62,7 +62,7 @@ export function thresholdsError(thresholds: AlertThresholds): ThresholdsProblem 
  * lacks a field still hydrates the fields it has over the defaults. Any
  * present field must be a valid percentage, or the whole value is ignored.
  */
-const PersistedThresholdsSchema = AlertThresholdsSchema.partial();
+const PersistedThresholdsSchema = AlertThresholdsSchema.exactPartial();
 
 /**
  * Persisted thresholds, stored under `swarm:alerts:thresholds` by

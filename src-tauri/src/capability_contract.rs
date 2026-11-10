@@ -141,6 +141,10 @@ fn capability_is_least_privilege() {
             !id.starts_with("updater:"),
             "{id}: the frontend never calls plugin:updater"
         );
+        assert!(
+            !id.starts_with("window-state:"),
+            "{id}: window state is driven from Rust only"
+        );
     }
     assert!(ids.contains(&"fs:deny-default"));
     let opener: Vec<&str> = ids
@@ -154,6 +158,34 @@ fn capability_is_least_privilege() {
         "the webview opens compare-page URLs and nothing else"
     );
     assert!(ids.contains(&"allow-open-worker-directory"));
+}
+
+/// The webview's whole Tauri core grant is event listening and the
+/// inspector shortcut. The page imports only `@tauri-apps/api/core`
+/// (`invoke`, `isTauri`, which needs no permission) and
+/// `@tauri-apps/api/event` (`listen`, whose unlisten function calls
+/// `unlisten`); plugin-store listens too and otherwise calls only its own
+/// `plugin:store|*` commands. The runtime's devtools shortcut script
+/// invokes the webview plugin's `internal_toggle_devtools`. `core:default`
+/// would add every window, menu, tray, path, app, image and resources
+/// command, none of which the page calls.
+#[test]
+fn core_grants_are_events_and_the_devtools_shortcut() {
+    let permissions = permissions();
+    let mut core: Vec<&str> = permissions
+        .iter()
+        .map(identifier)
+        .filter(|id| id.starts_with("core:"))
+        .collect();
+    core.sort_unstable();
+    assert_eq!(
+        core,
+        [
+            "core:event:allow-listen",
+            "core:event:allow-unlisten",
+            "core:webview:allow-internal-toggle-devtools",
+        ]
+    );
 }
 
 /// No fs permission grants a static path: the webview reads and writes
@@ -208,8 +240,9 @@ fn fs_grants_are_the_v3_command_set() {
     );
 }
 
-/// The app's own data directory (the API key in swarm-config.json, the
-/// event log, swarmd's token) and the usual credential stores stay out of
+/// The app's own data directory (the event log, swarmd's token, and the
+/// API key's `swarm-secrets.json` fallback on a host without an OS
+/// keychain) and the usual credential stores stay out of
 /// reach even when a dialog grant covers them, e.g. when the user opens
 /// their home directory as a workspace.
 #[test]

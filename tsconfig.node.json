@@ -6,10 +6,13 @@
     "types": ["node"],
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
+    "exactOptionalPropertyTypes": true,
     "allowImportingTsExtensions": true,
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true,
     "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUncheckedIndexedAccess": true,
     "noUncheckedSideEffectImports": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -21,6 +24,7 @@
     "vitest.config.ts",
     "playwright.config.ts",
     "e2e",
+    "biome-plugins/*.ts",
     "scripts",
     ".github/scripts"
   ]

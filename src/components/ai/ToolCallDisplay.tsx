@@ -1,5 +1,3 @@
-import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import type { CSSProperties } from "react";
 import { useState } from "react";
 import { Pill } from "#components/ui/Pill";
 import { escapeForDisplay } from "#lib/display-escape";
@@ -15,7 +13,7 @@ interface ToolCallDisplayProps {
   /** Tool input as a record. */
   readonly input: Record<string, unknown>;
   /** Tool result, once the call has run. */
-  readonly result?: string;
+  readonly result?: string | undefined;
   /** Current execution status. */
   readonly status: ToolStatus;
 }
@@ -26,155 +24,92 @@ const STATUS_LABEL: Record<ToolStatus, string> = {
   error: "Error",
 };
 
-// ── Styles (OKLCH) ──────────────────────────────────
+// ── Styles (utilities; literals with no token wait for the Q-9 design direction) ──
 
-const containerStyle: CSSProperties = {
-  borderRadius: 8,
-  border: "1px solid var(--color-border)",
-  background: "oklch(0.10 0.02 220 / 0.8)",
-  overflow: "hidden",
-  marginBlock: 6,
+const CONTAINER =
+  "my-1.5 overflow-hidden rounded-md border border-border bg-[oklch(0.10_0.02_220/0.8)]";
+
+/** The card clips overflow, so the focus ring is drawn inside the summary (`-outline-offset-2`). */
+const HEADER =
+  "flex w-full cursor-pointer items-center gap-2 border-none px-3 py-2 -outline-offset-2 text-left text-inherit select-none [font-family:inherit] [font-size:inherit]";
+
+/** Per-tool accent classes for the built-in tools; custom tools get the neutral default. */
+const TOOL_BADGE_CLASSES: Record<string, string> = {
+  spawn_worker: "bg-[oklch(0.18_0.06_205/0.4)] text-plasma border-[oklch(0.35_0.10_205)]",
+  kill_worker: "bg-[oklch(0.18_0.06_10/0.4)] text-rose border-[oklch(0.35_0.10_10)]",
+  run_command: "bg-[oklch(0.18_0.06_70/0.4)] text-amber border-[oklch(0.35_0.10_70)]",
+  read_file: "bg-[oklch(0.18_0.06_140/0.4)] text-lime border-[oklch(0.35_0.10_140)]",
+  write_file:
+    "bg-[oklch(0.18_0.06_290/0.4)] text-[oklch(0.72_0.20_290)] border-[oklch(0.35_0.10_290)]",
+  get_metrics:
+    "bg-[oklch(0.18_0.06_170/0.4)] text-[oklch(0.78_0.18_170)] border-[oklch(0.35_0.10_170)]",
 };
 
-const headerStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "8px 12px",
-  width: "100%",
-  border: "none",
-  textAlign: "left",
-  fontFamily: "inherit",
-  fontSize: "inherit",
-  color: "inherit",
-  cursor: "pointer",
-  userSelect: "none",
-  transition: "background-color 0.15s var(--ease-out)",
-};
+const DEFAULT_BADGE_CLASSES =
+  "bg-[oklch(0.18_0.04_220/0.4)] text-[oklch(0.65_0.06_220)] border-[oklch(0.30_0.05_220)]";
 
-/** Per-tool accent colors for the built-in tools; custom tools get the neutral default. */
-const TOOL_BADGE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
-  spawn_worker: {
-    bg: "oklch(0.18 0.06 205 / 0.4)",
-    text: "var(--color-plasma)",
-    border: "oklch(0.35 0.10 205)",
-  },
-  kill_worker: {
-    bg: "oklch(0.18 0.06 10 / 0.4)",
-    text: "var(--color-rose)",
-    border: "oklch(0.35 0.10 10)",
-  },
-  run_command: {
-    bg: "oklch(0.18 0.06 70 / 0.4)",
-    text: "var(--color-amber)",
-    border: "oklch(0.35 0.10 70)",
-  },
-  read_file: {
-    bg: "oklch(0.18 0.06 140 / 0.4)",
-    text: "var(--color-lime)",
-    border: "oklch(0.35 0.10 140)",
-  },
-  write_file: {
-    bg: "oklch(0.18 0.06 290 / 0.4)",
-    text: "oklch(0.72 0.20 290)",
-    border: "oklch(0.35 0.10 290)",
-  },
-  get_metrics: {
-    bg: "oklch(0.18 0.06 170 / 0.4)",
-    text: "oklch(0.78 0.18 170)",
-    border: "oklch(0.35 0.10 170)",
-  },
-};
+const JSON_BOX =
+  "border-t border-[oklch(0.18_0.03_220)] bg-surface-0 px-3.5 py-2.5 text-[12px] leading-[1.6]";
 
-const DEFAULT_BADGE_COLORS = {
-  bg: "oklch(0.18 0.04 220 / 0.4)",
-  text: "oklch(0.65 0.06 220)",
-  border: "oklch(0.30 0.05 220)",
-};
+const SECTION_LABEL =
+  "block bg-surface-0 px-3.5 pt-1.5 pb-0.5 font-display text-(length:--text-md) font-semibold tracking-[-0.01em] text-fg-dim";
 
-const jsonStyle: CSSProperties = {
-  padding: "10px 14px",
-  fontSize: 12,
-  lineHeight: 1.6,
-  background: "var(--color-surface-0)",
-  borderTop: "1px solid oklch(0.18 0.03 220)",
-};
-
-const sectionLabelStyle: CSSProperties = {
-  display: "block",
-  padding: "6px 14px 2px",
-  fontFamily: "var(--font-display)",
-  fontSize: "var(--text-md)",
-  fontWeight: 600,
-  letterSpacing: "-0.01em",
-  color: "var(--color-fg-dim)",
-  background: "var(--color-surface-0)",
-};
-
-const expandButtonStyle: CSSProperties = {
-  display: "block",
-  width: "100%",
-  padding: "4px 14px",
-  background: "var(--color-surface-0)",
-  border: "none",
-  borderTop: "1px solid oklch(0.18 0.03 220)",
-  color: "oklch(0.65 0.10 205)",
-  fontSize: 11,
-  cursor: "pointer",
-  textAlign: "center",
-};
+const EXPAND_BUTTON =
+  "block w-full cursor-pointer border-0 border-t border-[oklch(0.18_0.03_220)] bg-surface-0 px-3.5 py-1 text-center text-[11px] text-[oklch(0.65_0.10_205)]";
 
 // ── Status Indicator ────────────────────────────────
+
+/** A status mark in the sidebar icons' line style (24-unit viewBox, round currentColor strokes); 2.2 units at 14px draws about the 1.35px line their 1.8 draws at 18px. */
+function GlyphIcon({
+  className,
+  children,
+}: {
+  readonly className: string;
+  readonly children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={`size-3.5 ${className}`}
+    >
+      {children}
+    </svg>
+  );
+}
 
 function StatusGlyph({ status }: { readonly status: ToolStatus }): React.ReactElement {
   switch (status) {
     case "executing":
       return (
         <span
-          className="motion-safe:animate-[tool-pulse_1.5s_ease-in-out_infinite]"
-          style={{
-            display: "inline-block",
-            width: 8,
-            height: 8,
-            borderRadius: "50%",
-            background: "var(--color-amber)",
-          }}
+          className="inline-block size-2 rounded-full bg-amber motion-safe:animate-[tool-pulse_1.5s_ease-in-out_infinite]"
           aria-hidden="true"
         />
       );
     case "complete":
       return (
-        <span
-          style={{ color: "var(--color-lime)", fontSize: 16, lineHeight: 1 }}
-          aria-hidden="true"
-        >
-          ✓
-        </span>
+        <GlyphIcon className="text-lime">
+          <path d="M5 12.5l4.5 4.5L19 7.5" />
+        </GlyphIcon>
       );
     case "error":
       return (
-        <span
-          style={{ color: "var(--color-rose)", fontSize: 16, lineHeight: 1 }}
-          aria-hidden="true"
-        >
-          ✗
-        </span>
+        <GlyphIcon className="text-rose">
+          <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />
+        </GlyphIcon>
       );
   }
 }
 
 function StatusIndicator({ status }: { readonly status: ToolStatus }): React.ReactElement {
   return (
-    <span
-      aria-hidden="true"
-      style={{
-        display: "inline-grid",
-        placeItems: "center",
-        inlineSize: 16,
-        blockSize: 16,
-        flexShrink: 0,
-      }}
-    >
+    <span aria-hidden="true" className="inline-grid size-4 shrink-0 place-items-center">
       <StatusGlyph status={status} />
     </span>
   );
@@ -203,19 +138,11 @@ function ResultViewer({ result }: { readonly result: string }): React.ReactEleme
     return (
       <div>
         <pre
-          style={{
-            ...jsonStyle,
-            margin: 0,
-            maxHeight: 120,
-            overflow: "hidden",
-            fontFamily: "var(--font-mono)",
-            whiteSpace: "pre-wrap",
-            overflowWrap: "anywhere",
-          }}
+          className={`${JSON_BOX} m-0 max-h-30 overflow-hidden font-mono wrap-anywhere whitespace-pre-wrap`}
         >
           {result.slice(0, 200)}…
         </pre>
-        <button type="button" onClick={() => setCollapsed(false)} style={expandButtonStyle}>
+        <button type="button" onClick={() => setCollapsed(false)} className={EXPAND_BUTTON}>
           Show Full Result
         </button>
       </div>
@@ -223,22 +150,36 @@ function ResultViewer({ result }: { readonly result: string }): React.ReactEleme
   }
 
   return parsed.ok ? (
-    <HighlightedJson data={parsed.value} style={jsonStyle} />
+    <HighlightedJson data={parsed.value} className={JSON_BOX} />
   ) : (
-    <pre
-      style={{
-        ...jsonStyle,
-        margin: 0,
-        color: "var(--color-fg)",
-        fontFamily: "var(--font-mono)",
-        whiteSpace: "pre-wrap",
-        overflowWrap: "anywhere",
-      }}
-    >
+    <pre className={`${JSON_BOX} m-0 font-mono wrap-anywhere whitespace-pre-wrap text-fg`}>
       {result}
     </pre>
   );
 }
+
+/**
+ * The collapse is the details element's own `::details-content` box: a grid
+ * whose single row runs 0fr to 1fr, with `content-visibility` transitioned
+ * discretely so the closed content stays rendered until the row has shrunk.
+ * WebKit has no `interpolate-size`, which is why this is not a height
+ * transition. An engine without `::details-content` drops these rules and
+ * the card opens and closes instantly.
+ */
+const DISCLOSURE =
+  "details-content:grid details-content:grid-rows-[0fr] details-content:transition-[grid-template-rows,content-visibility] details-content:transition-discrete details-content:duration-200 details-content:ease-in-out open:details-content:grid-rows-[1fr] motion-reduce:details-content:transition-none";
+
+/**
+ * The opened body fades in over the row's growth, so the card settles rather
+ * than slides. A closed card's content is skipped (`content-visibility`), so
+ * the body has no computed style to transition from when it first renders on
+ * open, and Chromium would show it at full opacity at once. `starting:` emits
+ * `@starting-style` as that start; it is written with `group-open:` because a
+ * starting rule loses to the open rule's higher specificity unless it matches
+ * it. WebKit fades without it. Reduced motion drops the transition.
+ */
+const BODY =
+  "min-h-0 overflow-hidden opacity-0 transition-opacity duration-200 ease-in-out group-open:opacity-100 starting:group-open:opacity-0 motion-reduce:transition-none";
 
 // ── Component ───────────────────────────────────────
 
@@ -255,63 +196,41 @@ export function ToolCallDisplay({
   status,
 }: ToolCallDisplayProps): React.ReactElement {
   const [expanded, setExpanded] = useState(false);
-  const badgeColors = TOOL_BADGE_COLORS[name] ?? DEFAULT_BADGE_COLORS;
+  const badgeClasses = TOOL_BADGE_CLASSES[name] ?? DEFAULT_BADGE_CLASSES;
 
   return (
-    <div style={containerStyle}>
-      <button
-        type="button"
-        style={{
-          ...headerStyle,
-          background: expanded ? "oklch(0.12 0.03 220 / 0.5)" : "oklch(0 0 0 / 0)",
+    <details open={expanded} className={`group ${CONTAINER} ${DISCLOSURE}`}>
+      {/* biome-ignore lint/a11y/useSemanticElements: a summary is the details element's own disclosure control; the explicit role names it a button for assistive tech, as the card did before. */}
+      <summary
+        role="button"
+        className={`${HEADER} list-none transition-[background-color] duration-150 ease-(--ease-out) [&::-webkit-details-marker]:hidden ${expanded ? "bg-[oklch(0.12_0.03_220/0.5)]" : "bg-transparent"}`}
+        onClick={(event) => {
+          // The attribute follows React state, not the browser's own toggle.
+          event.preventDefault();
+          setExpanded(!expanded);
         }}
-        onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
         aria-label={`Tool Call: ${escapeForDisplay(name)}, ${STATUS_LABEL[status]}`}
       >
         <StatusIndicator status={status} />
-        <Pill
-          tone="neutral"
-          size="sm"
-          className="font-mono"
-          style={{
-            background: badgeColors.bg,
-            color: badgeColors.text,
-            borderColor: badgeColors.border,
-          }}
-        >
+        <Pill tone="neutral" size="sm" className={`font-mono ${badgeClasses}`}>
           {escapeForDisplay(name)}
         </Pill>
-        <span
-          style={{ marginLeft: "auto", color: "oklch(0.55 0.03 220)", fontSize: 14 }}
-          aria-hidden="true"
-        >
+        <span className="ml-auto text-[14px] text-[oklch(0.55_0.03_220)]" aria-hidden="true">
           {expanded ? "▴" : "▾"}
         </span>
-      </button>
+      </summary>
 
-      <MotionConfig reducedMotion="user">
-        <AnimatePresence initial={false}>
-          {expanded && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.2, ease: "easeInOut" }}
-              style={{ overflow: "hidden" }}
-            >
-              <span style={sectionLabelStyle}>Input</span>
-              <HighlightedJson data={input} style={jsonStyle} />
-              {result !== undefined && (
-                <>
-                  <span style={sectionLabelStyle}>Result</span>
-                  <ResultViewer result={result} />
-                </>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </MotionConfig>
-    </div>
+      <div className={BODY}>
+        <span className={SECTION_LABEL}>Input</span>
+        <HighlightedJson data={input} className={JSON_BOX} />
+        {result !== undefined && (
+          <>
+            <span className={SECTION_LABEL}>Result</span>
+            <ResultViewer result={result} />
+          </>
+        )}
+      </div>
+    </details>
   );
 }

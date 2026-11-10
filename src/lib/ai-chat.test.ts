@@ -23,7 +23,7 @@ import {
   streamMessage,
 } from "#lib/anthropic";
 import { isError } from "#lib/is-error";
-import { CLAUDE_MODELS, type ModelInfo } from "#lib/models";
+import { CLAUDE_MODELS, type ModelInfo, type ModelKey } from "#lib/models";
 import { agentTurnStarted } from "#lib/tauri";
 import { executeTool, getAllAnthropicTools, getPendingToolApprovals } from "#lib/tools";
 import { useAiStore } from "#store/ai";
@@ -86,7 +86,7 @@ function toolUse(id: string, name: string, input: Record<string, unknown>) {
 }
 
 /** An abortable wait the test releases by hand. */
-function gate(): { hold: Round["hold"]; release: () => void } {
+function gate(): { hold: NonNullable<Round["hold"]>; release: () => void } {
   const { promise, resolve } = Promise.withResolvers<void>();
   return {
     release: resolve,
@@ -465,7 +465,7 @@ describe("ai-chat engine", () => {
   it("folds an injection into user text for models without mid-conversation system messages", async () => {
     // Every current catalog model takes mid-conversation system messages,
     // so exercise the fold path with a synthetic Sonnet that does not.
-    const catalog: Record<string, ModelInfo> = CLAUDE_MODELS;
+    const catalog: Record<ModelKey, ModelInfo> = CLAUDE_MODELS;
     const original = CLAUDE_MODELS.sonnet;
     catalog.sonnet = { ...original, systemMessages: false };
     onTestFinished(() => {

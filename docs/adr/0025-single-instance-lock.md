@@ -29,4 +29,10 @@ action, before the event log is opened; whichever process starts second refuses 
 
 - The desktop app shows the message in a dialog and exits; `swarmd` exits with status 75, and its
   systemd unit treats 75 as "do not restart" (`RestartPreventExitStatus=75`).
+- A second launch of a bundled desktop app never reaches the lock: `tauri-plugin-single-instance`,
+  registered first, hands over to the running instance, which shows, unminimizes and focuses its main
+  window, and the second process exits 0. The dialog therefore appears when `swarmd` holds the
+  directory, or for a dev build (`pnpm tauri:dev`), which leaves the plugin out because it keys on the
+  bundle identifier the installed app shares. The plugin's `deep-link` feature is off: no `swarm:` URL
+  reaches a running instance.
 - The runtime keeps the lock until it is dropped, past `Runtime::shutdown`.

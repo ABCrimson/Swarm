@@ -80,7 +80,7 @@ fn committed_paths(dir: &Path, sha: &str) -> Vec<String> {
 
 fn commit_message(dir: &Path, sha: &str) -> String {
     let output = git_in(dir, &["show", "-s", "--format=%B", sha]);
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    String::from_utf8_lossy_owned(output.stdout)
 }
 
 fn skipped_paths(skipped: &[SkippedFile]) -> Vec<&str> {
@@ -155,7 +155,7 @@ fn test_literal_pathspecs_payload_shape() {
         payload,
         b":(top,literal)a b.txt\0:(top,literal)app/[slug]/page.tsx\0"
     );
-    assert!(literal_pathspecs([]).is_empty());
+    assert_eq!(literal_pathspecs([]), [] as [u8; 0]);
 }
 
 #[test]
@@ -489,7 +489,7 @@ fn test_staged_mode_never_commits_an_oversized_non_utf8_name() {
     assert!(err.message.contains("Refusing To Ship"), "{}", err.message);
 
     let tree = git_in(&worktree, &["ls-tree", "-r", "--name-only", "HEAD"]);
-    let tree = String::from_utf8_lossy(&tree.stdout).into_owned();
+    let tree = String::from_utf8_lossy_owned(tree.stdout);
     assert!(!tree.contains("big"), "oversized blob committed: {tree}");
 }
 
@@ -560,7 +560,7 @@ fn test_staged_mode_unstages_and_omits_denied_secret_from_the_commit() {
     assert_eq!(skipped_paths(&outcome.skipped), [".env"]);
     assert_eq!(committed_paths(&worktree, &outcome.sha), ["safe.txt"]);
     let after = status::StatusSnapshot::read(&worktree).unwrap().classify();
-    assert!(after.staged.is_empty());
+    assert_eq!(after.staged, [] as [&str; 0]);
     assert_eq!(after.untracked, [".env"]);
 }
 
@@ -845,13 +845,10 @@ fn test_index_lock_contention_is_retried() {
     assert!(err.to_string().contains("index.lock"), "{err}");
 
     // Released well inside the retry backoff: the retry succeeds.
-    let releaser = {
-        let index_lock = index_lock.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
-            std::fs::remove_file(index_lock).unwrap();
-        })
-    };
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        std::fs::remove_file(index_lock).unwrap();
+    });
     let output = mutate(
         &RepoLocks::new(),
         repo.root(),

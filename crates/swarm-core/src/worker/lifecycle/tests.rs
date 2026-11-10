@@ -144,7 +144,7 @@ fn test_pause_then_resume_transition_and_emit_worker_state() {
         cause_seq: Some(7),
     };
 
-    do_pause_worker(&sink, &registry, id, provenance.clone()).unwrap();
+    do_pause_worker(&sink, &registry, id, provenance).unwrap();
     assert_eq!(registry.get_worker(&id).unwrap().state, WorkerState::Paused);
     let msg = rx.try_recv().unwrap();
     assert_eq!(msg.provenance.cause_seq, Some(7));
@@ -1004,8 +1004,8 @@ fn test_spawn_at_capacity_creates_no_worktree_branch_or_shell() {
     );
 
     do_kill_worker(&sink, &registry, &repo_locks, first, Provenance::default()).unwrap();
-    assert!(worktree_dirs(&worktrees_of(&repo)).is_empty());
-    assert!(swarm_branches(repo.root()).is_empty());
+    assert_eq!(worktree_dirs(&worktrees_of(&repo)), [] as [PathBuf; 0]);
+    assert_eq!(swarm_branches(repo.root()), [] as [&str; 0]);
 }
 
 /// A shell that cannot start rolls back the worktree it was going to
@@ -1071,7 +1071,7 @@ fn test_spawn_and_kill_isolated_worker_full_cycle() {
     let worktree_path = info.worktree_path.clone().expect("worktree_path is set");
     assert!(Path::new(&worktree_path).starts_with(worktrees_of(&repo)));
     assert!(worktree_path.contains("w-"));
-    let branch = info.branch.clone().expect("branch is set");
+    let branch = info.branch.expect("branch is set");
     assert!(branch.starts_with("swarm/research-agent-"));
     assert!(Path::new(&worktree_path).join("README.md").exists());
 
@@ -1085,7 +1085,7 @@ fn test_spawn_and_kill_isolated_worker_full_cycle() {
     assert_eq!(created.worker_id, id);
     assert_eq!(created.worktree_path, worktree_path);
     assert_eq!(created.branch, branch);
-    assert!(!created.base_commit.is_empty());
+    assert_ne!(created.base_commit, "");
 
     do_kill_worker(&sink, &registry, &repo_locks, id, Provenance::default()).unwrap();
 

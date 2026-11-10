@@ -1,5 +1,5 @@
 import { useAtom } from "jotai";
-import type { KeyboardEvent, PointerEvent, ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent, PointerEvent, ReactNode } from "react";
 import { useId, useRef, useState } from "react";
 import { paneSizesAtom } from "#store/ui";
 
@@ -106,12 +106,12 @@ export function SplitPane({
 
   return (
     <div
-      className="grid size-full overflow-hidden"
-      style={{
-        gridTemplate: isHorizontal
-          ? `"primary handle secondary" 1fr / ${mainPercent}% 4px 1fr`
-          : `"primary" ${mainPercent}% "handle" 4px "secondary" 1fr / 1fr`,
-      }}
+      className={`grid size-full overflow-hidden ${
+        isHorizontal
+          ? '[grid-template:"primary_handle_secondary"_1fr/var(--split-main)_4px_1fr]'
+          : '[grid-template:"primary"_var(--split-main)_"handle"_4px_"secondary"_1fr/1fr]'
+      }`}
+      style={{ "--split-main": `${mainPercent}%` } as CSSProperties}
     >
       <div id={primaryId} className="min-h-0 min-w-0 overflow-auto [grid-area:primary]">
         {primary}

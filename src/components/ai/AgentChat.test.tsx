@@ -98,14 +98,10 @@ describe("AgentChat", () => {
     // jsdom has no layout, so this pins the mechanism: a reversed flex
     // scroller starts (and stays, until the user scrolls up) at its end.
     const log = screen.getByRole("log");
-    expect(log).toHaveStyle({
-      display: "flex",
-      flexDirection: "column-reverse",
-      overflowY: "auto",
-    });
+    expect(log).toHaveClass("flex", "flex-col-reverse", "overflow-y-auto");
     // A single child: the reversal moves the scroll anchor, never the message order.
     expect(log.children).toHaveLength(1);
-    expect(log.firstElementChild).toHaveStyle({ flexDirection: "column" });
+    expect(log.firstElementChild).toHaveClass("flex", "flex-col");
   });
 
   it("appends agent_turn_delta text live to the same in-progress bubble", () => {
@@ -129,7 +125,11 @@ describe("AgentChat", () => {
     });
 
     expect(screen.queryByText("Half a")).not.toBeInTheDocument();
-    expect(screen.getByText("Turn Failed: Cancelled, 5ms")).toBeInTheDocument();
+    expect(
+      screen.getByText((_, el) =>
+        Boolean(el?.matches("div.font-sans") && el.textContent === "Turn Failed: Cancelled, 5ms"),
+      ),
+    ).toBeInTheDocument();
   });
 
   it("renders a tool call as a labeled collapsible block showing name, input, and result", async () => {
@@ -149,11 +149,20 @@ describe("AgentChat", () => {
       content: "file.txt",
     });
 
-    await user.click(screen.getByRole("button", { name: "Tool Call: run_command, Complete" }));
+    const summary = screen.getByRole("button", { name: "Tool Call: run_command, Complete" });
+    expect(screen.getByText("Input")).not.toBeVisible();
 
-    expect(screen.getByText("Input")).toBeInTheDocument();
-    expect(screen.getByText(/"command"/)).toBeInTheDocument();
-    expect(screen.getByText("file.txt")).toBeInTheDocument();
+    await user.click(summary);
+
+    expect(summary).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Input")).toBeVisible();
+    expect(screen.getByText(/"command"/)).toBeVisible();
+    expect(screen.getByText("file.txt")).toBeVisible();
+
+    await user.click(summary);
+
+    expect(summary).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Input")).not.toBeVisible();
   });
 
   it("shows an is_error tool result via the error status", () => {
@@ -459,7 +468,18 @@ describe("AgentChat", () => {
       numTurns: 2,
     });
 
-    expect(screen.getByText("Turn Complete, 1.5s, 2 Turns, $0.1234")).toBeInTheDocument();
+    const receipt = screen.getByText((_, el) =>
+      Boolean(
+        el?.matches("div.font-sans") && el.textContent === "Turn Complete, 1.5s, 2 Turns, $0.1234",
+      ),
+    );
+    // Words in the text face; only the numbers are set in mono.
+    expect(receipt).toHaveClass("font-sans");
+    expect([...receipt.querySelectorAll(".font-mono")].map((el) => el.textContent)).toEqual([
+      "1.5s",
+      "2",
+      "$0.1234",
+    ]);
   });
 
   it('labels the send button "Queue Next Turn" when the provider cannot interrupt, once busy', async () => {
@@ -523,9 +543,9 @@ describe("AgentChat", () => {
     fire("agent_turn_delta", { turnId: "t1", blockIndex: 0, kind: "text", text: "working" });
     fire("agent_turn_settled", { turnId: "t1", status: "error", error: "boom", durationMs: 100 });
 
-    const failed = { border: "1px solid oklch(0.45 0.18 25)" };
-    expect(screen.getByText("first")).toHaveStyle(failed);
-    expect(screen.getByText("second")).not.toHaveStyle(failed);
+    const failed = "border-[oklch(0.45_0.18_25)]";
+    expect(screen.getByText("first")).toHaveClass(failed);
+    expect(screen.getByText("second")).not.toHaveClass(failed);
     expect(screen.getAllByText("Not Sent")).toHaveLength(1);
   });
 
@@ -536,7 +556,7 @@ describe("AgentChat", () => {
     await submit("hello");
 
     await vi.waitFor(() =>
-      expect(screen.getByText("hello")).toHaveStyle({ border: "1px solid oklch(0.45 0.18 25)" }),
+      expect(screen.getByText("hello")).toHaveClass("border-[oklch(0.45_0.18_25)]"),
     );
     expect(screen.getByText("Not Sent")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();

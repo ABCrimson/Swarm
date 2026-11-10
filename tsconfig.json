@@ -7,11 +7,14 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
+    "exactOptionalPropertyTypes": true,
     "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true,
     "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUncheckedIndexedAccess": true,
     "noUncheckedSideEffectImports": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -19,5 +22,5 @@
     "skipLibCheck": true
   },
   "include": ["src"],
-  "exclude": ["src/workers"]
+  "exclude": ["src/workers", "src/**/*.browser.test.tsx"]
 }

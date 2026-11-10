@@ -18,6 +18,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 use crate::MAIN_WINDOW;
+use crate::attention::Attention;
 
 /// Why SWARM Orchestrator could not start. `Display` is the Title Case
 /// text the startup dialog shows.
@@ -75,15 +76,16 @@ fn data_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, StartupErr
     Ok(dir)
 }
 
-/// Starts swarm-core against `data_dir`, registers [`Runtime`], [`Ctx`] and
-/// [`Registry`] as managed state for the command handlers, and shows the
-/// main window.
+/// Starts swarm-core against `data_dir`, registers [`Runtime`], [`Ctx`],
+/// [`Registry`] and [`Attention`] as managed state for the command
+/// handlers, and shows the main window.
 ///
 /// Every event the runtime records is emitted to the webview on
 /// [`EVENT_CHANNEL`] from the event writer thread, synchronously and in
 /// seq order: a slow webview backs up the writer's queue instead of
 /// losing events, which matters because ephemeral events (terminal
-/// output, metrics) are never persisted and cannot be replayed.
+/// output, metrics) are never persisted and cannot be replayed. The same
+/// callback hands each event to [`Attention`] for the attention badge.
 ///
 /// # Errors
 ///
@@ -92,6 +94,8 @@ fn data_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, StartupErr
 /// [`StartupError::Window`] when the main window cannot be shown.
 fn boot<R: tauri::Runtime>(app: &AppHandle<R>, data_dir: PathBuf) -> Result<(), StartupError> {
     let emitter = app.clone();
+    let attention = Attention::default();
+    let observer = attention.clone();
     let runtime = Runtime::start(
         RuntimeConfig {
             paths: Paths { data_dir },
@@ -102,9 +106,11 @@ fn boot<R: tauri::Runtime>(app: &AppHandle<R>, data_dir: PathBuf) -> Result<(), 
             if let Err(error) = emitter.emit(EVENT_CHANNEL, event) {
                 tracing::error!(%error, seq = event.seq, "failed to emit a domain event");
             }
+            observer.on_event(&emitter, &event.event);
         },
     )?;
 
+    app.manage(attention);
     app.manage(Ctx::from_runtime(&runtime));
     app.manage(Registry::new());
     // Managed for the app's lifetime: the runtime holds the data
@@ -195,6 +201,7 @@ mod tests {
         assert!(app.try_state::<Ctx>().is_none());
         assert!(app.try_state::<Registry>().is_none());
         assert!(app.try_state::<Runtime>().is_none());
+        assert!(app.try_state::<Attention>().is_none());
     }
 
     /// A data directory that cannot be resolved is reported the same way,
@@ -253,5 +260,6 @@ mod tests {
         assert!(app.try_state::<Ctx>().is_some());
         assert!(app.try_state::<Registry>().is_some());
         assert!(app.try_state::<Runtime>().is_some());
+        assert!(app.try_state::<Attention>().is_some());
     }
 }

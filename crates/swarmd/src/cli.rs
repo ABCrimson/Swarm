@@ -271,6 +271,8 @@ pub fn connect_url(bind: SocketAddr, token: &DaemonToken) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
 
     fn parse_strs(args: &[&str]) -> Result<Command, CliError> {
@@ -290,7 +292,7 @@ mod tests {
         assert_eq!(args.bind, DEFAULT_BIND);
         assert!(!args.allow_plaintext_lan);
         assert!(args.data_dir.is_none() && args.serve_ui.is_none() && args.log_file.is_none());
-        assert!(args.allow_hosts.is_empty());
+        assert_eq!(args.allow_hosts, []);
     }
 
     #[test]
@@ -323,8 +325,9 @@ mod tests {
             "--allow-host",
             "--log-file",
         ] {
-            assert!(
-                matches!(parse_strs(&[flag]), Err(CliError::MissingValue(f)) if f == flag),
+            assert_matches!(
+                parse_strs(&[flag]),
+                Err(CliError::MissingValue(f)) if f == flag,
                 "{flag}"
             );
         }
@@ -336,17 +339,17 @@ mod tests {
 
     #[test]
     fn test_invalid_and_unknown_arguments() {
-        assert!(matches!(
+        assert_matches!(
             parse_strs(&["--bind", "localhost"]),
             Err(CliError::Invalid { flag: "--bind", .. })
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             parse_strs(&["--allow-host", "http://x"]),
             Err(CliError::Invalid {
                 flag: "--allow-host",
                 ..
             })
-        ));
+        );
         assert_eq!(
             parse_strs(&["--nope"]).unwrap_err(),
             CliError::Unrecognized("--nope".to_owned())
@@ -372,17 +375,11 @@ mod tests {
 
     #[test]
     fn test_help_and_version() {
-        assert!(matches!(parse_strs(&["--help"]), Ok(Command::Help)));
+        assert_matches!(parse_strs(&["--help"]), Ok(Command::Help));
         assert!(parse_strs(&["--bind", "x", "-h"]).is_err());
-        assert!(matches!(
-            parse_strs(&["-h", "--bind", "x"]),
-            Ok(Command::Help)
-        ));
-        assert!(matches!(parse_strs(&["-V"]), Ok(Command::Version)));
-        assert!(matches!(
-            parse_strs(&["connect-url", "--help"]),
-            Ok(Command::Help)
-        ));
+        assert_matches!(parse_strs(&["-h", "--bind", "x"]), Ok(Command::Help));
+        assert_matches!(parse_strs(&["-V"]), Ok(Command::Version));
+        assert_matches!(parse_strs(&["connect-url", "--help"]), Ok(Command::Help));
     }
 
     #[test]
@@ -404,9 +401,7 @@ mod tests {
         use std::os::unix::ffi::OsStringExt;
         let raw = OsString::from_vec(b"/data/\xff".to_vec());
         let parsed = parse([OsString::from("--data-dir"), raw.clone()]).unwrap();
-        assert!(
-            matches!(parsed, Command::Serve(ServeArgs { data_dir: Some(dir), .. }) if dir == raw)
-        );
+        assert_matches!(parsed, Command::Serve(ServeArgs { data_dir: Some(dir), .. }) if dir == raw);
     }
 
     fn vars(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {

@@ -7,18 +7,11 @@ import { LogViewer } from "#components/logs/LogViewer";
  */
 export function Logs(): React.ReactElement {
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        overflow: "hidden",
-      }}
-    >
+    <div className="flex h-full flex-col overflow-hidden">
       <PageHeader title="Logs" />
 
       {/* Log viewer, on the PageHeader's 28px gutter */}
-      <div style={{ flex: 1, margin: "0 28px 24px", position: "relative" }}>
+      <div className="relative mx-7 mb-6 flex-1">
         <LogViewer />
       </div>
     </div>

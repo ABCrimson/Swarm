@@ -3,8 +3,8 @@
 // Colours: critical = rose, high = amber, normal = plasma, low = neutral grey.
 
 import { Bar, BarChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from "recharts";
-import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
-import { PRIORITY_COLOR } from "#lib/chart-theme";
+import { ChartPanel } from "#components/metrics/ChartPanel";
+import { BAR_SEGMENT_STROKE, PRIORITY_COLOR } from "#lib/chart-theme";
 import { useAiStore } from "#store/ai";
 import type { AiQueueItem } from "#store/types";
 
@@ -45,7 +45,8 @@ export function AIQueueChart(): React.ReactElement {
     >
       <BarChart
         responsive
-        style={CHART_FILL_STYLE}
+        width="100%"
+        height="100%"
         data={data}
         margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
         title="Pending AI Requests By Priority"
@@ -62,7 +63,7 @@ export function AIQueueChart(): React.ReactElement {
             name={label}
             stackId="queue"
             fill={color}
-            stroke="oklch(0.08 0.02 220)"
+            stroke={BAR_SEGMENT_STROKE}
             strokeWidth={1}
             isAnimationActive={false}
           />

@@ -4,7 +4,7 @@
 // step line is never flattened against thousands of MB.
 
 import { CartesianGrid, Legend, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
-import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
+import { ChartPanel } from "#components/metrics/ChartPanel";
 import { formatTime, METRIC_COLOR } from "#lib/chart-theme";
 import { lastN } from "#lib/chart-window";
 import { memPercent } from "#lib/memory";
@@ -48,7 +48,8 @@ export function MetricsChart(): React.ReactElement {
     <ChartPanel title="System Metrics" span="full" sampleCount={data.length}>
       <LineChart
         responsive
-        style={CHART_FILL_STYLE}
+        width="100%"
+        height="100%"
         data={data}
         margin={{ top: 8, right: 16, left: 0, bottom: 0 }}
         title="CPU, Memory And Worker Count Over Time"

@@ -18,10 +18,16 @@ Adopt the Tauri 3 alpha stack end to end, pinned exactly (`tauri` and `tauri-run
 explicitly: `tauri::Builder::default().runtime(tauri_runtime_wry::Wry::default())`. The webview
 runtime features (`devtools` and friends) live on `tauri-runtime-wry`; `devtools` is an opt-in
 `swarm-desktop` feature so signed release builds do not ship the inspector (debug builds keep it).
+`tracing`, also opt-in, forwards to both `tauri` and `tauri-runtime-wry` for measuring Tauri itself.
 
 Least-privilege capabilities (`src-tauri/capabilities/default.json`), pinned by `capability_contract`
 tests:
 
+- **Three core permissions, not `core:default`.** The page uses `invoke` and `listen`, so from Tauri
+  core it gets `core:event:allow-listen`, `core:event:allow-unlisten` and
+  `core:webview:allow-internal-toggle-devtools` (the script behind the inspector's keyboard shortcut).
+  `core:default` would add every window, menu, tray, path, app, image and resources command, none of
+  which the page calls.
 - **No static filesystem scope.** The fs commands (`read-file`, `read-dir`, `stat`, `write-file`) act
   only on paths the user picked in an open or save dialog, which grants that path (a directory with
   its contents) for the rest of the session. They never create directories, delete or rename.

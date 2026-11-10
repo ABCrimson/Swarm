@@ -34,8 +34,9 @@ const MODIFIER_KEYS = new Set(["control", "shift", "alt", "meta", "altgraph"]);
 function terminalKey(e: KeyboardEvent): string {
   const key = e.key.toLowerCase();
   if (key.length !== 1 || /^[a-z0-9]$/.test(key)) return key;
-  const physical = /^(?:Key(?<letter>[A-Z])|Digit(?<digit>\d))$/.exec(e.code)?.groups;
-  return (physical?.letter ?? physical?.digit ?? key).toLowerCase();
+  const { letter, digit } =
+    /^(?:Key(?<letter>[A-Z])|Digit(?<digit>\d))$/.exec(e.code)?.groups ?? {};
+  return (letter ?? digit ?? key).toLowerCase();
 }
 
 /**
@@ -101,10 +102,6 @@ export function formatBinding(binding: string): string {
   return binding
     .split("+")
     .filter((part) => part.length > 0)
-    .map(
-      (part) =>
-        KEY_DISPLAY_NAMES[part] ??
-        (part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1)),
-    )
+    .map((part) => KEY_DISPLAY_NAMES[part] ?? part.charAt(0).toUpperCase() + part.slice(1))
     .join("+");
 }

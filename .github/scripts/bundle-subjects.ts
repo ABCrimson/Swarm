@@ -11,7 +11,8 @@ import { hash } from "node:crypto";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 
-const paths: string[] = JSON.parse(process.env.ARTIFACT_PATHS ?? "[]");
+const { ARTIFACT_PATHS } = process.env;
+const paths: string[] = JSON.parse(ARTIFACT_PATHS ?? "[]");
 
 let subjects = "";
 for (const path of paths) {

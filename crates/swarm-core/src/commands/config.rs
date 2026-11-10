@@ -157,7 +157,7 @@ mod tests {
             ["ship", "co", "authored", "by"]
         );
         assert_eq!(key_words("__x--y__"), ["x", "y"]);
-        assert!(key_words("").is_empty());
+        assert_eq!(key_words(""), [] as [&str; 0]);
     }
 
     /// Every key the config module keeps in the secret store is denied

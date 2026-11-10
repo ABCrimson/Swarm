@@ -94,6 +94,14 @@ const BASE_RECONNECT_DELAY_MS = 500;
 const MAX_RECONNECT_DELAY_MS = 15_000;
 const JITTER_FRACTION = 0.3;
 /**
+ * How long an OPEN socket gets to deliver any frame after the page woke
+ * (tab visible again, back/forward-cache restore, network back). The
+ * daemon sends an ephemeral `system_metrics` event every 500 ms
+ * (`METRICS_INTERVAL`, `crates/swarm-core/src/metrics.rs`), so three
+ * periods of silence mean the link died while the page slept.
+ */
+export const WAKE_PROBE_MS = 1500;
+/**
  * Bound on the `hello` → `ready` handshake, the deadline of every `rpc`
  * that runs no budgeted git call (see {@link rpcDeadlineMs}), and the
  * period of the link watchdog (see `WsTransport`). A hung daemon, a
@@ -338,6 +346,8 @@ interface Connection {
   framesReceived: number;
   /** The link watchdog's interval while any rpc is pending; see {@link WsTransport.armWatchdog}. */
   watchdog: ReturnType<typeof setInterval> | null;
+  /** Rejects this socket's pending handshake, if any, so an abandoned connect clears `connectPromise`. */
+  failHandshake: () => void;
 }
 
 interface ReadyFrame {
@@ -385,6 +395,27 @@ export class WsTransport implements Transport {
   private lastRpcId = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
+  /** Set when swarmd refuses the token: no wake revives the loop; an explicit `connect()` clears it. */
+  private stopped = false;
+  private wakeProbe: ReturnType<typeof setTimeout> | null = null;
+  /** Aborted by `dispose`; removes the wake listeners. */
+  private readonly lifetime = new AbortController();
+
+  constructor() {
+    // The module-level singleton also exists under Node-environment suites.
+    if (typeof document === "undefined") return;
+    const { signal } = this.lifetime;
+    const wake = (): void => this.wake();
+    document.addEventListener(
+      "visibilitychange",
+      () => {
+        if (document.visibilityState === "visible") this.wake();
+      },
+      { signal },
+    );
+    window.addEventListener("pageshow", wake, { signal });
+    window.addEventListener("online", wake, { signal });
+  }
 
   readonly capabilities: TransportCapabilities = {
     kind: "ws",
@@ -410,6 +441,7 @@ export class WsTransport implements Transport {
 
   private openOnce(): Promise<void> {
     const { promise, resolve, reject } = Promise.withResolvers<void>();
+    this.stopped = false;
     let settled = false;
     const settle = (outcome: () => void): void => {
       if (settled) return;
@@ -431,7 +463,14 @@ export class WsTransport implements Transport {
       this.armReconnect();
       return Promise.reject(isError(err) ? err : new Error(String(err), { cause: err }));
     }
-    const conn: Connection = { ws, pending: new Map(), framesReceived: 0, watchdog: null };
+    const conn: Connection = {
+      ws,
+      pending: new Map(),
+      framesReceived: 0,
+      watchdog: null,
+      failHandshake: () =>
+        settle(() => reject(new Error("WebSocket Closed Before The Handshake Completed."))),
+    };
     this.connection = conn;
 
     const handshakeTimer = setTimeout(() => {
@@ -496,6 +535,7 @@ export class WsTransport implements Transport {
             : new Error("WebSocket Closed Before The Handshake Completed."),
         ),
       );
+      if (unauthorized) this.stopped = true;
       if (this.connection !== conn) return;
       this.connection = null;
       if (!this.disposed && !unauthorized) this.armReconnect();
@@ -514,13 +554,14 @@ export class WsTransport implements Transport {
     conn.watchdog = null;
   }
 
-  /** Closes `conn` and, without waiting for its `close` event (a half-open socket's closing handshake can stall until the browser gives up on TCP), rejects its pending calls and starts the reconnect. Idempotent with the `close` listener. */
+  /** Closes `conn` and, without waiting for its `close` event (a half-open socket's closing handshake can stall until the browser gives up on TCP), rejects its pending calls and handshake and starts the reconnect. Idempotent with the `close` listener. */
   private abandon(conn: Connection): void {
     conn.ws.close();
     this.clearWatchdog(conn);
     for (const pending of conn.pending.values())
       pending.reject(new RpcConnectionLostError(pending.cmd));
     conn.pending.clear();
+    conn.failHandshake();
     if (this.connection !== conn) return;
     this.connection = null;
     if (!this.disposed) this.armReconnect();
@@ -556,6 +597,36 @@ export class WsTransport implements Transport {
       }
       framesAtLastCheck = conn.framesReceived;
     }, DEFAULT_RPC_DEADLINE_MS);
+  }
+
+  /**
+   * The page woke (`visibilitychange` to visible, `pageshow`, `online`):
+   * timers were throttled or frozen and the link may have died unseen.
+   * A pending backoff timer is cleared and the connect runs now with the
+   * backoff reset. An OPEN socket is probed: no frame within
+   * {@link WAKE_PROBE_MS} abandons it (see `abandon`). A transport that
+   * never connected, was disposed, or stopped on `DaemonAuthError`
+   * ignores the wake.
+   */
+  private wake(): void {
+    if (this.disposed || this.stopped) return;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+      this.reconnectAttempt = 0;
+      this.connect().catch(() => {
+        // `close`'s handler already re-armed the NEXT attempt.
+      });
+      return;
+    }
+    const conn = this.connection;
+    if (conn?.ws.readyState !== WebSocket.OPEN) return;
+    if (this.wakeProbe !== null) clearTimeout(this.wakeProbe);
+    const framesAtWake = conn.framesReceived;
+    this.wakeProbe = setTimeout(() => {
+      this.wakeProbe = null;
+      if (conn.framesReceived === framesAtWake && this.connection === conn) this.abandon(conn);
+    }, WAKE_PROBE_MS);
   }
 
   private armReconnect(): void {
@@ -626,7 +697,9 @@ export class WsTransport implements Transport {
   /** Test-only: tears down the socket and stops reconnecting. */
   dispose(): void {
     this.disposed = true;
+    this.lifetime.abort();
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
+    if (this.wakeProbe !== null) clearTimeout(this.wakeProbe);
     const conn = this.connection;
     this.connection = null;
     if (conn) this.clearWatchdog(conn);

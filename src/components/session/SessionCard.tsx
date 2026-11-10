@@ -1,4 +1,3 @@
-import { motion } from "motion/react";
 import { type CSSProperties, useId, useRef } from "react";
 import { Pill } from "#components/ui/Pill";
 import { escapeForDisplay } from "#lib/display-escape";
@@ -25,6 +24,26 @@ interface SessionCardProps {
  */
 const SUPPORTS_ANCHOR_POSITIONING =
   globalThis.CSS?.supports?.("position-area", "block-end span-inline-start") ?? false;
+
+/**
+ * The menu's placement where `SUPPORTS_ANCHOR_POSITIONING`: anchored to its
+ * trigger through `--anchor-name` (the trigger and the menu both carry the
+ * per-card name inline, because it is computed at render), flipping to stay
+ * on screen, with a 4 px gap below the trigger.
+ */
+const ANCHORED_MENU_CLASS =
+  "inset-auto m-0 mt-1 [position-anchor:var(--anchor-name)] [position-area:block-end_span-inline-start] [position-try-fallbacks:flip-block,flip-inline]";
+
+/**
+ * The card's motion: colors fade as Tailwind's `transition-colors` does
+ * (150 ms, the default curve), and the hover lift and press dip spring on
+ * `scale` along `--ease-spring` (tokens.css: a stiffness-400, damping-25
+ * spring, settled within 500 ms). The `hover:` variant applies only
+ * where the pointer can hover, and the reduced-motion override in
+ * animations.css collapses every duration.
+ */
+const CARD_MOTION_CLASS =
+  "transition-[color,background-color,border-color,scale] duration-[150ms,150ms,150ms,500ms] ease-[cubic-bezier(0.4,0,0.2,1),cubic-bezier(0.4,0,0.2,1),cubic-bezier(0.4,0,0.2,1),var(--ease-spring)] hover:scale-[1.015] active:scale-[0.99]";
 
 /**
  * One session in the list: a full-width button that makes it the active
@@ -67,35 +86,26 @@ export function SessionCard({
 
   return (
     <div className="relative">
-      <motion.button
+      <button
         type="button"
         onClick={() => onActivate(session.id)}
         onContextMenu={(e) => {
           e.preventDefault();
-          menuRef.current?.showPopover({ source: triggerRef.current ?? undefined });
+          const source = triggerRef.current;
+          menuRef.current?.showPopover(source ? { source } : {});
         }}
         aria-current={isActive || undefined}
-        whileHover={{ scale: 1.015 }}
-        whileTap={{ scale: 0.99 }}
-        transition={{ type: "spring", stiffness: 400, damping: 25 }}
-        className="block w-full cursor-pointer rounded-lg p-4 pr-12 text-left transition-colors"
-        style={{
-          background: isActive
-            ? "oklch(from var(--color-plasma) l c h / 0.08)"
-            : "oklch(0.14 0.02 220 / 0.5)",
-          backdropFilter: "blur(12px) saturate(1.5)",
-          border: isActive
-            ? "1px solid oklch(from var(--color-plasma) l c h / 0.5)"
-            : "1px solid oklch(0.28 0.04 220 / 0.5)",
-          boxShadow: isActive
-            ? "0 0 20px oklch(from var(--color-plasma) l c h / 0.15), inset 0 1px 0 oklch(1 0 0 / 0.05)"
-            : "inset 0 1px 0 oklch(1 0 0 / 0.03)",
-        }}
+        className={`block w-full cursor-pointer rounded-lg border p-4 pr-12 text-left backdrop-blur-[12px] backdrop-saturate-150 ${CARD_MOTION_CLASS} ${
+          isActive
+            ? "border-plasma/50 bg-plasma/8 shadow-[0_0_20px_oklch(from_var(--color-plasma)_l_c_h/0.15),inset_0_1px_0_oklch(1_0_0/0.05)]"
+            : "border-[oklch(0.28_0.04_220/0.5)] bg-[oklch(0.14_0.02_220/0.5)] shadow-[inset_0_1px_0_oklch(1_0_0/0.03)]"
+        }`}
       >
         <span className="flex items-center justify-between gap-3">
           <span
-            className="truncate text-sm font-semibold font-display"
-            style={{ color: isActive ? "var(--color-fg-bright)" : "oklch(0.88 0.02 220)" }}
+            className={`truncate text-sm font-semibold font-display ${
+              isActive ? "text-fg-bright" : "text-[oklch(0.88_0.02_220)]"
+            }`}
           >
             {escapeForDisplay(session.name)}
           </span>
@@ -115,7 +125,7 @@ export function SessionCard({
             ))}
           </span>
         )}
-      </motion.button>
+      </button>
 
       <button
         ref={triggerRef}
@@ -123,8 +133,8 @@ export function SessionCard({
         popoverTarget={menuId}
         aria-haspopup="menu"
         aria-label={`Actions For Session "${escapeForDisplay(session.name)}"`}
-        className="absolute top-3 right-3 grid size-7 cursor-pointer place-items-center rounded-md text-[oklch(0.65_0.04_220)] transition-colors hover:bg-border/50 hover:text-[oklch(0.88_0.02_220)]"
-        style={{ anchorName }}
+        className="absolute top-3 right-3 grid size-7 cursor-pointer place-items-center rounded-md text-[oklch(0.65_0.04_220)] transition-colors hover:bg-border/50 hover:text-[oklch(0.88_0.02_220)] [anchor-name:var(--anchor-name)]"
+        style={{ "--anchor-name": anchorName } as CSSProperties}
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
           <circle cx="3" cy="8" r="1.5" />
@@ -198,16 +208,6 @@ function SessionMenu({
   onCreateTemplate,
   onDelete,
 }: SessionMenuProps): React.ReactElement {
-  const anchored: CSSProperties | undefined = SUPPORTS_ANCHOR_POSITIONING
-    ? {
-        positionAnchor: anchorName,
-        positionArea: "block-end span-inline-start",
-        positionTryFallbacks: "flip-block, flip-inline",
-        inset: "auto",
-        margin: "4px 0 0",
-      }
-    : undefined;
-
   return (
     <div
       ref={ref}
@@ -215,8 +215,8 @@ function SessionMenu({
       popover="auto"
       role="menu"
       aria-label={`Actions For Session "${sessionName}"`}
-      className="min-w-40 rounded-lg border border-[oklch(0.30_0.05_220)] bg-[oklch(0.15_0.03_220/0.95)] py-1.5 text-[oklch(0.78_0.03_220)] shadow-xl backdrop-blur-lg"
-      style={anchored}
+      className={`min-w-40 rounded-lg border border-[oklch(0.30_0.05_220)] bg-[oklch(0.15_0.03_220/0.95)] py-1.5 text-[oklch(0.78_0.03_220)] shadow-xl backdrop-blur-lg ${SUPPORTS_ANCHOR_POSITIONING ? ANCHORED_MENU_CLASS : ""}`}
+      style={{ "--anchor-name": anchorName } as CSSProperties}
       onToggle={(e) => {
         if (e.newState === "open") {
           e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();

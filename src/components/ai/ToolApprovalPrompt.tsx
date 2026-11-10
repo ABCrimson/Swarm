@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import { useSyncExternalStore } from "react";
 import { Button } from "#components/ui/Button";
 import {
@@ -10,31 +9,21 @@ import {
 } from "#lib/tools";
 import { ApprovalArgList, ApprovalBlockedReason, useApprovalReview } from "./ApprovalArgs.tsx";
 
-const promptListStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  padding: "10px 16px",
-  borderTop: "1px solid oklch(0.45 0.12 75)",
-  background: "oklch(0.14 0.04 75 / 0.6)",
-};
+const PROMPT_LIST =
+  "flex flex-col gap-2 border-t border-[oklch(0.45_0.12_75)] bg-[oklch(0.14_0.04_75/0.6)] px-4 py-2.5";
 
-const headingStyle: CSSProperties = {
-  fontSize: 13,
-  lineHeight: 1.5,
-  color: "oklch(0.88 0.03 220)",
-};
+const HEADING = "text-[13px] leading-normal text-[oklch(0.88_0.03_220)]";
 
-const rowStyle: CSSProperties = { border: 0, margin: 0, padding: 0, minWidth: 0 };
+const ROW = "m-0 min-w-0 border-0 p-0";
 
-const actionsStyle: CSSProperties = { display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 };
+const ACTIONS = "mt-1.5 flex flex-wrap gap-2";
 
 function ApprovalRow({
   request,
   onResolved,
 }: {
   readonly request: ToolApprovalRequest;
-  readonly onResolved?: () => void;
+  readonly onResolved?: (() => void) | undefined;
 }): React.ReactElement {
   const review = useApprovalReview(request.tool, request.input);
   // Answering removes this row, so a focused button would drop focus to <body>; hand it back to the chat.
@@ -44,13 +33,13 @@ function ApprovalRow({
     if (hadFocus) onResolved?.();
   };
   return (
-    <fieldset aria-label={`Approve ${request.tool}`} style={rowStyle}>
-      <div style={headingStyle}>
+    <fieldset aria-label={`Approve ${request.tool}`} className={ROW}>
+      <div className={HEADING}>
         <strong>{request.tool}</strong>
       </div>
       <ApprovalArgList review={review} />
       <ApprovalBlockedReason review={review} />
-      <div style={actionsStyle}>
+      <div className={ACTIONS}>
         <Button
           size="sm"
           variant="primary"
@@ -99,7 +88,7 @@ export function ToolApprovalPrompt({
 }: {
   readonly workerId: string;
   /** Called after a call is answered from a focused button, so the caller can take keyboard focus. */
-  readonly onResolved?: () => void;
+  readonly onResolved?: (() => void) | undefined;
 }): React.ReactElement | null {
   const pending = useSyncExternalStore(subscribeToolApprovals, getPendingToolApprovals);
   const mine = pending.filter(
@@ -107,7 +96,7 @@ export function ToolApprovalPrompt({
   );
   if (mine.length === 0) return null;
   return (
-    <div role="alert" aria-label="Tool Approval" style={promptListStyle}>
+    <div role="alert" aria-label="Tool Approval" className={PROMPT_LIST}>
       {mine.map((request) => (
         <ApprovalRow key={request.id} request={request} onResolved={onResolved} />
       ))}

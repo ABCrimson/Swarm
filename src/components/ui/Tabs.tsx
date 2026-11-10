@@ -5,7 +5,7 @@ export interface TabItem<T extends string> {
   readonly label: string;
   readonly disabled?: boolean;
   /** Tooltip, e.g. why the tab is disabled. */
-  readonly title?: string;
+  readonly title?: string | undefined;
 }
 
 const tabId = (base: string, id: string): string => `${base}-tab-${id}`;

@@ -141,7 +141,7 @@ mod tests {
     fn test_ship_error_from_git_timeout_is_timeout() {
         let err: ShipError = AppError::GitTimeout {
             command: "push".to_owned(),
-            timeout: Duration::from_secs(600),
+            timeout: Duration::from_mins(10),
         }
         .into();
         assert_eq!(err.kind, ShipErrorKind::Timeout);

@@ -71,7 +71,7 @@ const BROADCAST_WARN_INTERVAL: Duration = Duration::from_secs(30);
 /// that backlog times the per-event flush, and it ends there however slow
 /// the disk is. Hitting the ceiling is logged at error level with the
 /// number of events left unpersisted and fails the shutdown.
-pub const DRAIN_CEILING: Duration = Duration::from_secs(120);
+pub const DRAIN_CEILING: Duration = Duration::from_mins(2);
 
 /// How often a long drain logs how many accepted events are still
 /// uncommitted, so a slow exit shows progress instead of looking hung.
@@ -672,7 +672,7 @@ impl<E: FnMut(&DomainEvent)> Writer<E> {
         )
     }
 
-    fn finalize(&mut self) -> Result<(), AppError> {
+    fn finalize(&self) -> Result<(), AppError> {
         self.log.finalize(self.seq)
     }
 }

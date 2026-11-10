@@ -24,6 +24,7 @@ const reactWithCompiler = (dev: boolean): PluginOption[] =>
 // Vite, Vitest and TypeScript all read that map natively, so there is no
 // `resolve.alias` block to keep in sync.
 export default defineConfig(async ({ mode, command }): Promise<UserConfig> => {
+  const { SWARM_BUNDLED_DEV } = process.env;
   const analyzePlugins: PluginOption[] = [];
   if (mode === "analyze") {
     const { visualizer } = await import("rollup-plugin-visualizer");
@@ -65,7 +66,6 @@ export default defineConfig(async ({ mode, command }): Promise<UserConfig> => {
           codeSplitting: {
             groups: [
               { name: "react-vendor", test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
-              { name: "motion", test: /node_modules[\\/]motion[\\/]/ },
               { name: "graph", test: /node_modules[\\/](@xyflow|elkjs)[\\/]/ },
               { name: "terminal", test: /node_modules[\\/]@xterm[\\/]/ },
               { name: "state", test: /node_modules[\\/](zustand|immer|jotai)[\\/]/ },
@@ -88,11 +88,21 @@ export default defineConfig(async ({ mode, command }): Promise<UserConfig> => {
       format: "es",
     },
 
+    // `SWARM_BUNDLED_DEV=1 pnpm dev` serves the client from one Rolldown
+    // bundle instead of unbundled modules (Vite's experimental full-bundle
+    // dev mode; HMR boundaries are computed in the browser, so an accept in
+    // a dead branch reloads the page). Opt-in because it is experimental. On
+    // 2026-11-10 (Vite 8.3.7) a cold start to the first page heading took a
+    // median 1631 ms bundled against 2402 ms unbundled, three runs each.
+    experimental: {
+      bundledDev: SWARM_BUNDLED_DEV === "1",
+    },
+
     server: {
       port: 1420,
       strictPort: true,
       // boot.ts loads the app through `import("./main.tsx")` and PageHost
-      // lazy-loads every page; Vite pre-transforms only static imports, so a
+      // lazy-loads every page; unbundled dev (the default) pre-transforms only static imports, so a
       // cold server would transform each of these on first request. Pages are
       // named one by one: a `*.tsx` glob also matches the colocated
       // `*.test.tsx` files and pulls vitest and Testing Library into the dev

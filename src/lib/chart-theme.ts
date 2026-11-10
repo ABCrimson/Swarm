@@ -29,6 +29,9 @@ export const PRIORITY_COLOR = {
   low: SERIES_NEUTRAL,
 } as const;
 
+/** The gap stroke between stacked bar segments: the theme's surface-0 (`--color-surface-0`). */
+export const BAR_SEGMENT_STROKE = "oklch(0.08 0.02 220)";
+
 /**
  * One colour per system/AI metric, the same on every chart it appears
  * in, with hues far enough apart (205 / 290 / 140 / 70) to tell the

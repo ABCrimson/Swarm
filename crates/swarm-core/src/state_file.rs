@@ -91,7 +91,7 @@ fn replace_via(tmp: &Path, path: &Path, contents: &[u8]) -> io::Result<()> {
 /// directory for this; NTFS journals the rename's metadata instead.
 fn sync_parent_dir(path: &Path) -> io::Result<()> {
     if cfg!(unix)
-        && let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty())
+        && let Some(dir) = path.parent().filter(|dir| !dir.is_empty())
     {
         File::open(dir)?.sync_all()?;
     }

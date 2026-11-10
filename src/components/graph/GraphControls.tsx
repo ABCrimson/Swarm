@@ -13,7 +13,7 @@ import { causalityInspectorAtom, reducedMotionAtom } from "#store/ui";
 interface GraphControlsProps {
   readonly onResetLayout: () => void;
   /** Present while a manual edge is selected. */
-  readonly onDeleteEdge?: () => void;
+  readonly onDeleteEdge?: (() => void) | undefined;
   /** Snapshot of the graph to write out (layout + manual annotations). */
   readonly getWorkflow: () => WorkflowDefinition;
   /** Applies a validated workflow; returns a Title Case summary for the toast. */
@@ -133,15 +133,7 @@ export function GraphControls({
       role="toolbar"
       aria-label="Graph Controls"
       aria-orientation="vertical"
-      style={{
-        position: "absolute",
-        bottom: 16,
-        right: 16,
-        display: "flex",
-        flexDirection: "column",
-        gap: 4,
-        zIndex: 10,
-      }}
+      className="absolute right-4 bottom-4 z-10 flex flex-col gap-1"
     >
       {onDeleteEdge && (
         <ControlButton onClick={onDeleteEdge} label="Delete Selected Edge">

@@ -8,6 +8,26 @@
   "files": {
     "includes": ["**", "!**/*.svg", "!.claude", "!site/**/*.html"]
   },
+  "plugins": [
+    {
+      "path": "./biome-plugins/no-raw-oklch.grit",
+      "includes": [
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "!src/**/*.test.ts",
+        "!src/**/*.test.tsx",
+        "!src/hooks/useTerminal.ts",
+        "!src/lib/chart-theme.ts",
+        "!src/lib/particles.ts",
+        "!src/lib/postprocess.ts",
+        "!src/lib/syntax-highlight.ts"
+      ]
+    },
+    {
+      "path": "./biome-plugins/no-raw-oklch-css.grit",
+      "includes": ["src/**/*.css", "!src/styles/tokens.css"]
+    }
+  ],
   "formatter": {
     "enabled": true,
     "indentStyle": "space",
