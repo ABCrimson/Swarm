@@ -218,7 +218,7 @@ mod executed {
         /// Runs `script` with `args` and asserts it succeeds.
         fn run(&self, script: &str, args: &[&str]) -> String {
             let output = self.command(script, args).output().unwrap();
-            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let stdout = String::from_utf8_lossy_owned(output.stdout);
             assert!(
                 output.status.success(),
                 "{script} {args:?} failed: {stdout}{}",

@@ -316,7 +316,7 @@ async fn http_get(
         .await
         .unwrap()
         .unwrap();
-    let raw = String::from_utf8_lossy(&raw).into_owned();
+    let raw = String::from_utf8_lossy_owned(raw);
     let (head, body) = raw.split_once("\r\n\r\n").unwrap();
     let mut lines = head.lines();
     let status = lines
@@ -1664,8 +1664,8 @@ fn run(args: &[&str]) -> (Option<i32>, String, String) {
         .expect("failed to run swarmd");
     (
         output.status.code(),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
+        String::from_utf8_lossy_owned(output.stdout),
+        String::from_utf8_lossy_owned(output.stderr),
     )
 }
 
