@@ -678,8 +678,8 @@ whose endpoint is gone without deleting them.
   calls (the turn's abort signal does it). Each turn calls
   `agent_turn_started` and passes the seq as `causeSeq` on side-effecting tools. Queueing and
   concurrency are `store/ai.ts`, independent of the Rust scheduler.
-- **Model catalogue** (`src/lib/models.ts`, [ADR-0036](adr/0036-model-catalogue-and-per-attempt-pricing.md)): Fable 5.1,
-  Mythos 5.1 (gated behind Anthropic's verification programs), Opus 5.5, Sonnet 5.5 and Haiku 5.5, each with
+- **Model catalogue** (`src/lib/models.ts`, [ADR-0036](adr/0036-model-catalogue-and-per-attempt-pricing.md)): Fable 5.2,
+  Mythos 5.2 (gated behind Anthropic's verification programs), Opus 5.5, Sonnet 5.5 and Haiku 5.5, each with
   a 1M-token context window and 128K output. Haiku 5.5 alone has a long-prompt price tier (prompts over
   100K input tokens, counting cache reads and writes, bill the whole request at the higher rates); the
   others bill the full window at one rate. Cost is estimated per attempt: with server-side refusal fallbacks
