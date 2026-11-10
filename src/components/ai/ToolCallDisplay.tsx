@@ -1,4 +1,3 @@
-import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import type { CSSProperties } from "react";
 import { useState } from "react";
 import { Pill } from "#components/ui/Pill";
@@ -49,7 +48,6 @@ const headerStyle: CSSProperties = {
   color: "inherit",
   cursor: "pointer",
   userSelect: "none",
-  transition: "background-color 0.15s var(--ease-out)",
 };
 
 /** Per-tool accent colors for the built-in tools; custom tools get the neutral default. */
@@ -240,6 +238,17 @@ function ResultViewer({ result }: { readonly result: string }): React.ReactEleme
   );
 }
 
+/**
+ * The collapse is the details element's own `::details-content` box: a grid
+ * whose single row runs 0fr to 1fr, with `content-visibility` transitioned
+ * discretely so the closed content stays rendered until the row has shrunk.
+ * WebKit has no `interpolate-size`, which is why this is not a height
+ * transition. An engine without `::details-content` drops these rules and
+ * the card opens and closes instantly.
+ */
+const DISCLOSURE =
+  "details-content:grid details-content:grid-rows-[0fr] details-content:transition-[grid-template-rows,content-visibility] details-content:transition-discrete details-content:duration-200 details-content:ease-in-out open:details-content:grid-rows-[1fr] motion-reduce:details-content:transition-none";
+
 // ── Component ───────────────────────────────────────
 
 /**
@@ -258,14 +267,20 @@ export function ToolCallDisplay({
   const badgeColors = TOOL_BADGE_COLORS[name] ?? DEFAULT_BADGE_COLORS;
 
   return (
-    <div style={containerStyle}>
-      <button
-        type="button"
+    <details open={expanded} style={containerStyle} className={DISCLOSURE}>
+      {/* biome-ignore lint/a11y/useSemanticElements: a summary is the details element's own disclosure control; the explicit role names it a button for assistive tech, as the card did before. */}
+      <summary
+        role="button"
+        className="list-none transition-[background-color] duration-150 ease-(--ease-out) [&::-webkit-details-marker]:hidden"
         style={{
           ...headerStyle,
           background: expanded ? "oklch(0.12 0.03 220 / 0.5)" : "oklch(0 0 0 / 0)",
         }}
-        onClick={() => setExpanded(!expanded)}
+        onClick={(event) => {
+          // The attribute follows React state, not the browser's own toggle.
+          event.preventDefault();
+          setExpanded(!expanded);
+        }}
         aria-expanded={expanded}
         aria-label={`Tool Call: ${escapeForDisplay(name)}, ${STATUS_LABEL[status]}`}
       >
@@ -288,30 +303,18 @@ export function ToolCallDisplay({
         >
           {expanded ? "▴" : "▾"}
         </span>
-      </button>
+      </summary>
 
-      <MotionConfig reducedMotion="user">
-        <AnimatePresence initial={false}>
-          {expanded && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.2, ease: "easeInOut" }}
-              style={{ overflow: "hidden" }}
-            >
-              <span style={sectionLabelStyle}>Input</span>
-              <HighlightedJson data={input} style={jsonStyle} />
-              {result !== undefined && (
-                <>
-                  <span style={sectionLabelStyle}>Result</span>
-                  <ResultViewer result={result} />
-                </>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </MotionConfig>
-    </div>
+      <div className="min-h-0 overflow-hidden">
+        <span style={sectionLabelStyle}>Input</span>
+        <HighlightedJson data={input} style={jsonStyle} />
+        {result !== undefined && (
+          <>
+            <span style={sectionLabelStyle}>Result</span>
+            <ResultViewer result={result} />
+          </>
+        )}
+      </div>
+    </details>
   );
 }

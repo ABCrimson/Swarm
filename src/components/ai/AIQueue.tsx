@@ -1,5 +1,5 @@
-import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import type { CSSProperties } from "react";
+import { useState } from "react";
 import type { PillTone } from "#components/ui/Pill";
 import { Pill } from "#components/ui/Pill";
 import { Spinner } from "#components/ui/Spinner";
@@ -123,6 +123,43 @@ function StatusLabel({
   }
 }
 
+// ── Rows ────────────────────────────────────────────
+
+interface QueueRow {
+  readonly item: AiQueueItem;
+  /** 1-based place among the live rows; an exiting row keeps its last one. */
+  readonly position: number;
+  /** The item left the queue; the row waits for its leave transition. */
+  readonly exiting: boolean;
+}
+
+/** The rows after `queue` changed: kept order, leavers marked, newcomers last. */
+function settle(rows: readonly QueueRow[], queue: readonly AiQueueItem[]): readonly QueueRow[] {
+  const live = new Map(queue.map((item) => [item.id, item]));
+  const known = new Set(rows.map((r) => r.item.id));
+  const merged = [
+    ...rows.map((r) => {
+      const item = live.get(r.item.id);
+      return item ? { item, position: 0, exiting: false } : { ...r, exiting: true };
+    }),
+    ...queue
+      .filter((item) => !known.has(item.id))
+      .map((item) => ({ item, position: 0, exiting: false })),
+  ];
+  let position = 0;
+  return merged.map((r) => (r.exiting ? r : { ...r, position: ++position }));
+}
+
+function sameRows(a: readonly QueueRow[], b: readonly QueueRow[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((r, i) => {
+      const o = b[i];
+      return o?.item === r.item && o.position === r.position && o.exiting === r.exiting;
+    })
+  );
+}
+
 // ── Component ───────────────────────────────────────
 
 interface AIQueueProps {
@@ -146,6 +183,14 @@ export function AIQueue({ workerId }: AIQueueProps): React.ReactElement {
 
   const queue = allItems.filter((q) => q.workerId === workerId);
 
+  // Rows outlive their queue item: the store drops an item at once, so the
+  // leave animation needs its own state. A store update is not a Transition,
+  // so the exiting flag is set here while rendering, not in an effect.
+  const [rows, setRows] = useState<readonly QueueRow[]>(() => settle([], queue));
+  const settled = settle(rows, queue);
+  if (!sameRows(rows, settled)) setRows(settled);
+  const leave = (id: string): void => setRows((current) => current.filter((r) => r.item.id !== id));
+
   // Place in line among waiting items across the WHOLE queue — other
   // workers' turns ahead of this one still delay it.
   const waitPositions = new Map<string, number>();
@@ -164,41 +209,46 @@ export function AIQueue({ workerId }: AIQueueProps): React.ReactElement {
         </span>
       </div>
 
-      {queue.length === 0 && <div style={emptyStyle}>No Items In Queue</div>}
+      {rows.length === 0 && <div style={emptyStyle}>No Items In Queue</div>}
 
-      <MotionConfig reducedMotion="user">
-        <AnimatePresence initial={false}>
-          {queue.map((item, index) => (
-            <motion.div
-              key={item.id}
-              initial={{ opacity: 0, y: -8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, x: 20 }}
-              transition={{ duration: 0.15 }}
-              style={itemStyle}
+      {rows.map((row) => (
+        <div
+          key={row.item.id}
+          // A removed row stays mounted, faded out, until its leave transition ends.
+          className={`transition-[opacity,translate] duration-150 starting:-translate-y-2 starting:opacity-0 motion-reduce:starting:translate-y-0 ${row.exiting ? "translate-x-5 opacity-0 motion-reduce:translate-x-0" : ""}`}
+          style={itemStyle}
+          inert={row.exiting}
+          data-exiting={row.exiting || undefined}
+          onTransitionEnd={(event) => {
+            if (row.exiting && event.target === event.currentTarget) leave(row.item.id);
+          }}
+          onTransitionCancel={(event) => {
+            if (row.exiting && event.target === event.currentTarget) leave(row.item.id);
+          }}
+        >
+          <span style={positionStyle}>{row.position}</span>
+          <Pill tone={PRIORITY_TONE[row.item.priority]} size="sm">
+            {PRIORITY_LABEL[row.item.priority]}
+          </Pill>
+          <StatusLabel
+            status={row.item.status}
+            waitPosition={waitPositions.get(row.item.id) ?? 0}
+          />
+
+          {(row.item.status === "pending" || row.item.status === "streaming") && !row.exiting && (
+            <Pill
+              interactive
+              tone="danger"
+              size="sm"
+              onClick={() => cancelItem(row.item.id)}
+              aria-label={`Cancel Queue Item ${row.position}`}
+              style={{ marginLeft: "auto", flexShrink: 0 }}
             >
-              <span style={positionStyle}>{index + 1}</span>
-              <Pill tone={PRIORITY_TONE[item.priority]} size="sm">
-                {PRIORITY_LABEL[item.priority]}
-              </Pill>
-              <StatusLabel status={item.status} waitPosition={waitPositions.get(item.id) ?? 0} />
-
-              {(item.status === "pending" || item.status === "streaming") && (
-                <Pill
-                  interactive
-                  tone="danger"
-                  size="sm"
-                  onClick={() => cancelItem(item.id)}
-                  aria-label={`Cancel Queue Item ${index + 1}`}
-                  style={{ marginLeft: "auto", flexShrink: 0 }}
-                >
-                  Cancel
-                </Pill>
-              )}
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </MotionConfig>
+              Cancel
+            </Pill>
+          )}
+        </div>
+      ))}
     </section>
   );
 }
