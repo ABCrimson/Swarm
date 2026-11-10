@@ -18,7 +18,7 @@
 //! requests the user's attention on every OS. Everything is driven from
 //! Rust: the webview has no permission for any of it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -30,11 +30,13 @@ use tauri::{AppHandle, Manager, UserAttentionType};
 
 use crate::MAIN_WINDOW;
 
-/// The open permission questions, by request id, with the worker that
-/// asked each. A pure type, so the counting is tested without a window.
+/// The open permission questions, keyed by the asking worker and the
+/// request id: an id is unique only per worker (each provider session
+/// numbers its own requests). A pure type, so the counting is tested
+/// without a window.
 #[derive(Debug, Default)]
 pub(crate) struct OpenQuestions {
-    asks: HashMap<PermissionId, WorkerId>,
+    asks: HashSet<(WorkerId, PermissionId)>,
 }
 
 impl OpenQuestions {
@@ -43,7 +45,7 @@ impl OpenQuestions {
         match event {
             SwarmEvent::AgentPermissionRequest(request) if request.suggested_decision.is_none() => {
                 self.asks
-                    .insert(request.request_id.clone(), request.worker_id);
+                    .insert((request.worker_id, request.request_id.clone()));
             }
             SwarmEvent::AgentTurnSettled(settled) => self.release(settled.worker_id),
             SwarmEvent::AgentSessionExited(exited) => self.release(exited.worker_id),
@@ -51,30 +53,40 @@ impl OpenQuestions {
         }
     }
 
-    /// Closes the question `request_id`, which was just answered.
-    pub(crate) fn answered(&mut self, request_id: &str) {
-        self.asks.remove(request_id);
+    /// Closes `worker`'s question `request_id`, which was just answered.
+    pub(crate) fn answered(&mut self, worker: WorkerId, request_id: &str) {
+        self.asks.remove(&(worker, request_id.to_owned()));
     }
 
     /// Closes every question of `worker`.
     fn release(&mut self, worker: WorkerId) {
-        self.asks.retain(|_, asker| *asker != worker);
+        self.asks.retain(|(asker, _)| *asker != worker);
     }
 
     /// How many distinct workers wait on an answer: the badge.
     pub(crate) fn workers_waiting(&self) -> usize {
-        self.asks.values().collect::<HashSet<_>>().len()
+        self.asks
+            .iter()
+            .map(|(worker, _)| worker)
+            .collect::<HashSet<_>>()
+            .len()
     }
 }
 
-/// The request id a command call answered: `agent_permission_respond`'s
-/// `requestId`, once the command has succeeded. `None` for any other
-/// command, a failed call, or arguments without the id.
-fn answered_request<'a>(command: &str, args: &'a Value, succeeded: bool) -> Option<&'a str> {
+/// The question a command call answered: `agent_permission_respond`'s
+/// `workerId` and `requestId`, once the command has succeeded. `None` for
+/// any other command, a failed call, or arguments without both (the
+/// worker id must parse as a UUID).
+fn answered_request<'a>(
+    command: &str,
+    args: &'a Value,
+    succeeded: bool,
+) -> Option<(WorkerId, &'a str)> {
     if !succeeded || command != "agent_permission_respond" {
         return None;
     }
-    args.get("requestId")?.as_str()
+    let worker = WorkerId::parse_str(args.get("workerId")?.as_str()?).ok()?;
+    Some((worker, args.get("requestId")?.as_str()?))
 }
 
 /// Managed state: the open questions, shared by the event callback and
@@ -114,9 +126,9 @@ impl Attention {
         args: &Value,
         succeeded: bool,
     ) {
-        if let Some(request_id) = answered_request(command, args, succeeded) {
+        if let Some((worker, request_id)) = answered_request(command, args, succeeded) {
             self.update(
-                |questions| questions.answered(request_id),
+                |questions| questions.answered(worker, request_id),
                 |before, after| {
                     show(app, before, after);
                 },
@@ -221,7 +233,7 @@ mod tests {
     fn an_answer_closes_the_question() {
         let mut questions = OpenQuestions::default();
         questions.observe(&ask(WORKER, "r1"));
-        questions.answered("r1");
+        questions.answered(WORKER, "r1");
         assert_eq!(questions.workers_waiting(), 0);
     }
 
@@ -261,7 +273,20 @@ mod tests {
         questions.observe(&ask(WORKER, "r1"));
         questions.observe(&ask(WORKER, "r2"));
         assert_eq!(questions.workers_waiting(), 1);
-        questions.answered("r1");
+        questions.answered(WORKER, "r1");
+        assert_eq!(questions.workers_waiting(), 1);
+    }
+
+    /// Request ids are unique only per worker: the same id from two
+    /// workers is two questions, and answering one leaves the other.
+    #[test]
+    fn the_same_request_id_from_two_workers_is_two_questions() {
+        let other = WorkerId::from_u128(2);
+        let mut questions = OpenQuestions::default();
+        questions.observe(&ask(WORKER, "7"));
+        questions.observe(&ask(other, "7"));
+        assert_eq!(questions.workers_waiting(), 2);
+        questions.answered(WORKER, "7");
         assert_eq!(questions.workers_waiting(), 1);
     }
 
@@ -286,13 +311,23 @@ mod tests {
         });
         assert_eq!(
             answered_request("agent_permission_respond", &args, true),
-            Some("r1")
+            Some((WORKER, "r1"))
         );
         assert_eq!(
             answered_request("agent_permission_respond", &args, false),
             None
         );
         assert_eq!(answered_request("kill_worker", &args, true), None);
+        let no_worker = serde_json::json!({ "requestId": "r1" });
+        assert_eq!(
+            answered_request("agent_permission_respond", &no_worker, true),
+            None
+        );
+        let bad_worker = serde_json::json!({ "workerId": "w", "requestId": "r1" });
+        assert_eq!(
+            answered_request("agent_permission_respond", &bad_worker, true),
+            None
+        );
     }
 
     /// The badge is shown only when the count moves, and attention is
@@ -307,7 +342,7 @@ mod tests {
         };
         assert_eq!(moved(&|q| q.observe(&ask(WORKER, "r1"))), Some((0, 1)));
         assert_eq!(moved(&|q| q.observe(&ask(WORKER, "r2"))), None);
-        assert_eq!(moved(&|q| q.answered("r1")), None);
+        assert_eq!(moved(&|q| q.answered(WORKER, "r1")), None);
         assert_eq!(moved(&|q| q.observe(&settle(WORKER))), Some((1, 0)));
     }
 }

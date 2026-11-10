@@ -1,9 +1,13 @@
 //! Confirmation before a user's quit stops the workers.
 //!
 //! Closing the main window and a user-initiated exit
-//! (`RunEvent::ExitRequested` with no code: the last window closed, or the
-//! OS's quit command) are held while the worker registry is not empty,
-//! and a native dialog asks whether to quit. `Ctx.registry.count()`
+//! (`RunEvent::ExitRequested` with no code, which tauri-runtime-wry sends
+//! only after the last window is destroyed) are held while the worker
+//! registry is not empty, and a native dialog asks whether to quit.
+//! Closing the main window is the guarded path. On macOS, Cmd+Q and the
+//! Dock's Quit end through `NSApp terminate:` (the default menu's quit
+//! item), which tao reports only as `RunEvent::Exit`, so they are not
+//! guarded. `Ctx.registry.count()`
 //! counts every registered worker, idle terminal shells included, so the
 //! dialog says how many workers will be stopped, never that agents are
 //! running. "Quit" exits with code 0, a programmatic exit that passes
