@@ -511,6 +511,8 @@ mod whoami_tests {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
 
     fn temp_dir() -> tempfile::TempDir {
@@ -538,7 +540,7 @@ mod tests {
         first.permissions.unwrap();
         assert_eq!(first.token.as_str().len(), TOKEN_HEX_LEN);
         assert!(first.token.matches(first.token.as_str()));
-        assert!(matches!(DaemonToken::load(dir.path()), Ok(Some(_))));
+        assert_matches!(DaemonToken::load(dir.path()), Ok(Some(_)));
 
         let second = DaemonToken::load_or_create(dir.path()).unwrap();
         assert!(!second.minted, "second load finds the persisted token");
