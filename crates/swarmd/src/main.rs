@@ -379,10 +379,7 @@ fn init_tracing(log_file: Option<&Path>) -> io::Result<()> {
 /// Opens `path` for appending, creating it (private to the owner on Unix)
 /// and its parent directories.
 fn open_log_file(path: &Path) -> io::Result<File> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
+    if let Some(parent) = path.parent().filter(|parent| !parent.is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
     let mut options = OpenOptions::new();
