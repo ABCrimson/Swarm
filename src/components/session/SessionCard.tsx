@@ -1,4 +1,3 @@
-import { motion } from "motion/react";
 import { type CSSProperties, useId, useRef } from "react";
 import { Pill } from "#components/ui/Pill";
 import { escapeForDisplay } from "#lib/display-escape";
@@ -25,6 +24,17 @@ interface SessionCardProps {
  */
 const SUPPORTS_ANCHOR_POSITIONING =
   globalThis.CSS?.supports?.("position-area", "block-end span-inline-start") ?? false;
+
+/**
+ * The card's motion: colors fade as Tailwind's `transition-colors` does
+ * (150 ms, the default curve), and the hover lift and press dip spring on
+ * `scale` along a `linear()` sampling of a stiffness-400, damping-25 spring
+ * (8 % overshoot, settled within 500 ms). The `hover:` variant applies only
+ * where the pointer can hover, and the reduced-motion override in
+ * animations.css collapses every duration.
+ */
+const CARD_MOTION_CLASS =
+  "transition-[color,background-color,border-color,scale] duration-[150ms,150ms,150ms,500ms] ease-[cubic-bezier(0.4,0,0.2,1),cubic-bezier(0.4,0,0.2,1),cubic-bezier(0.4,0,0.2,1),linear(0,0.101,0.318,0.559,0.768,0.922,1.019,1.067,1.081,1.073,1.056,1.037,1.019,1.007,0.999,0.995,0.993,0.994,0.995,0.997,1)] hover:scale-[1.015] active:scale-[0.99]";
 
 /**
  * One session in the list: a full-width button that makes it the active
@@ -67,7 +77,7 @@ export function SessionCard({
 
   return (
     <div className="relative">
-      <motion.button
+      <button
         type="button"
         onClick={() => onActivate(session.id)}
         onContextMenu={(e) => {
@@ -75,10 +85,7 @@ export function SessionCard({
           menuRef.current?.showPopover({ source: triggerRef.current ?? undefined });
         }}
         aria-current={isActive || undefined}
-        whileHover={{ scale: 1.015 }}
-        whileTap={{ scale: 0.99 }}
-        transition={{ type: "spring", stiffness: 400, damping: 25 }}
-        className="block w-full cursor-pointer rounded-lg p-4 pr-12 text-left transition-colors"
+        className={`block w-full cursor-pointer rounded-lg p-4 pr-12 text-left ${CARD_MOTION_CLASS}`}
         style={{
           background: isActive
             ? "oklch(from var(--color-plasma) l c h / 0.08)"
@@ -115,7 +122,7 @@ export function SessionCard({
             ))}
           </span>
         )}
-      </motion.button>
+      </button>
 
       <button
         ref={triggerRef}

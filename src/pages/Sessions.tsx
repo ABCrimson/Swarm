@@ -1,5 +1,3 @@
-import { useAtomValue } from "jotai";
-import { MotionConfig } from "motion/react";
 import { Activity, useActionState, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "#components/layout/PageHeader";
@@ -20,7 +18,6 @@ import { applyTemplate, createTemplateFromSession, saveUserTemplate } from "#lib
 import { useSessionStore } from "#store/sessions";
 import { useSystemStore } from "#store/system";
 import type { Session, SessionTemplate } from "#store/types";
-import { reducedMotionAtom } from "#store/ui";
 
 type SessionView = "list" | "search" | "templates";
 
@@ -210,7 +207,6 @@ export function Sessions(): React.ReactElement {
     if (opener?.isConnected) opener.focus();
     setTemplateSourceId(null);
   };
-  const reducedMotion = useAtomValue(reducedMotionAtom);
   const setActiveSession = useSessionStore((s) => s.setActiveSession);
   const activeSession = useSessionStore((s) =>
     s.activeSessionId == null ? undefined : s.sessions.get(s.activeSessionId),
@@ -230,101 +226,99 @@ export function Sessions(): React.ReactElement {
   };
 
   return (
-    <MotionConfig reducedMotion={reducedMotion ? "always" : "user"}>
-      <div className="flex h-full flex-col overflow-auto">
-        <PageHeader title="Sessions" />
-        <div className="flex min-h-0 flex-1 flex-col gap-6 px-7 pb-6">
-          <div className="glass-panel flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border p-3">
-            <SessionActions />
+    <div className="flex h-full flex-col overflow-auto">
+      <PageHeader title="Sessions" />
+      <div className="flex min-h-0 flex-1 flex-col gap-6 px-7 pb-6">
+        <div className="glass-panel flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border p-3">
+          <SessionActions />
 
-            <div className="flex flex-wrap items-center gap-2">
-              <fieldset className={`m-0 ${SEGMENT_LIST_CLASS}`}>
-                <legend className="sr-only">View</legend>
-                {VIEWS.map(({ id, label }) => (
-                  <ViewToggle
-                    key={id}
-                    label={label}
-                    active={view === id}
-                    onClick={() => setView(id)}
-                  />
-                ))}
-              </fieldset>
+          <div className="flex flex-wrap items-center gap-2">
+            <fieldset className={`m-0 ${SEGMENT_LIST_CLASS}`}>
+              <legend className="sr-only">View</legend>
+              {VIEWS.map(({ id, label }) => (
+                <ViewToggle
+                  key={id}
+                  label={label}
+                  active={view === id}
+                  onClick={() => setView(id)}
+                />
+              ))}
+            </fieldset>
 
-              {/* Actions on the active session */}
-              {activeSession != null && (
-                <div className="ml-2 flex items-center gap-1 border-l border-border pl-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={!canUseLocalStores}
-                    aria-describedby={canUseLocalStores ? undefined : exportReasonId}
-                    onClick={() => void snapshotSession(activeSession)}
-                  >
-                    Snapshot
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={!canExportFiles}
-                    aria-describedby={canExportFiles ? undefined : exportReasonId}
-                    onClick={() => void exportSessionMarkdown(activeSession)}
-                  >
-                    Export MD
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={!canExportFiles}
-                    aria-describedby={canExportFiles ? undefined : exportReasonId}
-                    onClick={() => void exportSessionJson(activeSession.id)}
-                  >
-                    Export JSON
-                  </Button>
-                </div>
-              )}
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={!canExportFiles}
-                aria-describedby={canExportFiles ? undefined : exportReasonId}
-                onClick={() => void exportMetrics()}
-              >
-                Export Metrics
-              </Button>
-              {(!canExportFiles || (activeSession != null && !canUseLocalStores)) && (
-                <span id={exportReasonId} className="text-fg-dim text-xs">
-                  {DESKTOP_ONLY_REASON}
-                </span>
-              )}
-            </div>
-          </div>
-
-          {templateSource != null && (
-            <TemplateForm
-              key={templateSource.id}
-              session={templateSource}
-              onDone={closeTemplateForm}
-            />
-          )}
-
-          <div className="min-h-0 flex-1">
-            <Activity mode={view === "list" ? "visible" : "hidden"}>
-              <SessionList
-                onDelete={(id) => void deleteSession(id)}
-                onExport={(id) => void exportSessionJson(id)}
-                onCreateTemplate={openTemplateForm}
-              />
-            </Activity>
-            <Activity mode={view === "search" ? "visible" : "hidden"}>
-              <HistorySearch onResultSelect={handleSearchResultSelect} />
-            </Activity>
-            <Activity mode={view === "templates" ? "visible" : "hidden"}>
-              <TemplateSelector onSelect={handleTemplateSelect} onClose={() => setView("list")} />
-            </Activity>
+            {/* Actions on the active session */}
+            {activeSession != null && (
+              <div className="ml-2 flex items-center gap-1 border-l border-border pl-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={!canUseLocalStores}
+                  aria-describedby={canUseLocalStores ? undefined : exportReasonId}
+                  onClick={() => void snapshotSession(activeSession)}
+                >
+                  Snapshot
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={!canExportFiles}
+                  aria-describedby={canExportFiles ? undefined : exportReasonId}
+                  onClick={() => void exportSessionMarkdown(activeSession)}
+                >
+                  Export MD
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={!canExportFiles}
+                  aria-describedby={canExportFiles ? undefined : exportReasonId}
+                  onClick={() => void exportSessionJson(activeSession.id)}
+                >
+                  Export JSON
+                </Button>
+              </div>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!canExportFiles}
+              aria-describedby={canExportFiles ? undefined : exportReasonId}
+              onClick={() => void exportMetrics()}
+            >
+              Export Metrics
+            </Button>
+            {(!canExportFiles || (activeSession != null && !canUseLocalStores)) && (
+              <span id={exportReasonId} className="text-fg-dim text-xs">
+                {DESKTOP_ONLY_REASON}
+              </span>
+            )}
           </div>
         </div>
+
+        {templateSource != null && (
+          <TemplateForm
+            key={templateSource.id}
+            session={templateSource}
+            onDone={closeTemplateForm}
+          />
+        )}
+
+        <div className="min-h-0 flex-1">
+          <Activity mode={view === "list" ? "visible" : "hidden"}>
+            <SessionList
+              onDelete={(id) => void deleteSession(id)}
+              onExport={(id) => void exportSessionJson(id)}
+              onCreateTemplate={openTemplateForm}
+            />
+          </Activity>
+          <Activity mode={view === "search" ? "visible" : "hidden"}>
+            <HistorySearch onResultSelect={handleSearchResultSelect} />
+          </Activity>
+          <Activity mode={view === "templates" ? "visible" : "hidden"}>
+            <TemplateSelector onSelect={handleTemplateSelect} onClose={() => setView("list")} />
+          </Activity>
+        </div>
       </div>
-    </MotionConfig>
+    </div>
   );
 }
 

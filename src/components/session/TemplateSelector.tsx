@@ -1,5 +1,4 @@
-import { motion } from "motion/react";
-import { Suspense, use, useId, useSyncExternalStore } from "react";
+import { type CSSProperties, Suspense, use, useId, useSyncExternalStore } from "react";
 import { Pill } from "#components/ui/Pill";
 import { escapeForDisplay } from "#lib/display-escape";
 import { pluralizeWorkers } from "#lib/format";
@@ -12,9 +11,19 @@ interface TemplateSelectorProps {
   readonly onClose: () => void;
 }
 
-/** Entrance stagger per card, capped so a long template list never waits seconds to appear. */
-const STAGGER_S = 0.05;
+/** Cards past this index enter with the last card's delay, so a long template list never waits seconds to appear. */
 const MAX_STAGGERED = 8;
+
+/**
+ * A card's motion. Entrance: from `@starting-style` (`starting:`) it fades
+ * and rises 8 px over 200 ms on the shell's entrance curve, delayed 50 ms per
+ * `--i` (the card's capped index, set inline). Hover: colors fade as
+ * `transition-colors` does, and an enabled card's lift and press dip spring
+ * on `scale` along the same `linear()` stiffness-400, damping-25 spring as
+ * SessionCard. The per-property lists keep the stagger delay off hover.
+ */
+const CARD_MOTION_CLASS =
+  "transition-[opacity,translate,color,background-color,border-color,scale] duration-[200ms,200ms,150ms,150ms,150ms,500ms] ease-[var(--ease-out-cubic),var(--ease-out-cubic),cubic-bezier(0.4,0,0.2,1),cubic-bezier(0.4,0,0.2,1),cubic-bezier(0.4,0,0.2,1),linear(0,0.101,0.318,0.559,0.768,0.922,1.019,1.067,1.081,1.073,1.056,1.037,1.019,1.007,0.999,0.995,0.993,0.994,0.995,0.997,1)] delay-[calc(var(--i)*50ms),calc(var(--i)*50ms),0s,0s,0s,0s] starting:translate-y-2 starting:opacity-0 enabled:hover:scale-[1.02] enabled:active:scale-[0.98]";
 
 const sectionHeadingClass = "mb-3 font-display text-md font-semibold tracking-tight text-fg";
 
@@ -152,18 +161,15 @@ function TemplateCard({
 }): React.ReactElement {
   const unavailable = unavailableReasonId != null && template.workerConfigs.length > 0;
   return (
-    <motion.button
+    <button
       type="button"
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: Math.min(index, MAX_STAGGERED) * STAGGER_S, duration: 0.2 }}
-      whileHover={unavailable ? undefined : { scale: 1.02 }}
-      whileTap={unavailable ? undefined : { scale: 0.98 }}
       disabled={unavailable}
       aria-describedby={unavailable ? unavailableReasonId : undefined}
       onClick={() => onSelect(template)}
-      className="cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 rounded-lg border border-[oklch(0.26_0.04_220/0.5)] bg-[oklch(0.16_0.03_220/0.6)] p-4 text-left transition-colors hover:border-border-3 hover:bg-surface-3/60"
-      style={{ backdropFilter: "blur(8px)" }}
+      className={`cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 rounded-lg border border-[oklch(0.26_0.04_220/0.5)] bg-[oklch(0.16_0.03_220/0.6)] p-4 text-left hover:border-border-3 hover:bg-surface-3/60 ${CARD_MOTION_CLASS}`}
+      style={
+        { backdropFilter: "blur(8px)", "--i": Math.min(index, MAX_STAGGERED) } as CSSProperties
+      }
     >
       <span className="mb-1 block text-sm font-semibold text-[oklch(0.88_0.04_220)] font-display">
         {escapeForDisplay(template.name)}
@@ -172,6 +178,6 @@ function TemplateCard({
       <Pill tone="info" size="sm">
         {pluralizeWorkers(template.workerConfigs.length)}
       </Pill>
-    </motion.button>
+    </button>
   );
 }
