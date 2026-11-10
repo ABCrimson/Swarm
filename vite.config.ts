@@ -65,7 +65,6 @@ export default defineConfig(async ({ mode, command }): Promise<UserConfig> => {
           codeSplitting: {
             groups: [
               { name: "react-vendor", test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
-              { name: "motion", test: /node_modules[\\/]motion[\\/]/ },
               { name: "graph", test: /node_modules[\\/](@xyflow|elkjs)[\\/]/ },
               { name: "terminal", test: /node_modules[\\/]@xterm[\\/]/ },
               { name: "state", test: /node_modules[\\/](zustand|immer|jotai)[\\/]/ },

@@ -11,19 +11,27 @@ import {
   rpcDeadlineMs,
 } from "#lib/transport";
 
-/** The whole seconds of `pub const <name>: Duration = Duration::from_secs(N);` in `git/cli.rs`. */
+/** Seconds per unit of the whole-unit `Duration` constructors `git/cli.rs` uses. */
+const SECONDS_PER_UNIT = { secs: 1, mins: 60, hours: 3600 } as const;
+
+/**
+ * The seconds of `pub const <name>: Duration = Duration::from_{secs,mins,hours}(N);`
+ * in `git/cli.rs`.
+ */
 function rustBudgetSeconds(name: string): number {
   const source = readFileSync(join(process.cwd(), "crates/swarm-core/src/git/cli.rs"), "utf8");
   const declaration = new RegExp(
-    String.raw`const ${name}:\s*Duration\s*=\s*Duration::from_secs\((\d[\d_]*)\)`,
+    String.raw`const ${name}:\s*Duration\s*=\s*Duration::from_(secs|mins|hours)\((\d[\d_]*)\)`,
   );
-  const seconds = declaration.exec(source)?.[1];
-  if (seconds === undefined) {
+  const match = declaration.exec(source);
+  const unit = match?.[1] as keyof typeof SECONDS_PER_UNIT | undefined;
+  const count = match?.[2];
+  if (unit === undefined || count === undefined) {
     throw new Error(
-      `${name} is no longer a Duration::from_secs(N) const in crates/swarm-core/src/git/cli.rs: the daemon's git budget moved, so re-derive GIT_${name.replace(/_TIMEOUT$/, "")}_BUDGET_MS in #lib/transport.`,
+      `${name} is no longer a Duration::from_secs/from_mins/from_hours(N) const in crates/swarm-core/src/git/cli.rs: the daemon's git budget moved, so re-derive GIT_${name.replace(/_TIMEOUT$/, "")}_BUDGET_MS in #lib/transport.`,
     );
   }
-  return Number(seconds.replaceAll("_", ""));
+  return Number(count.replaceAll("_", "")) * SECONDS_PER_UNIT[unit];
 }
 
 describe("rpc deadlines", () => {
