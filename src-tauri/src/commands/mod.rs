@@ -8,7 +8,9 @@
 //! through the same table) accept exactly the same arguments and answer
 //! with the same JSON: optional arguments such as the `originWorker` /
 //! `causeSeq` provenance pair reach the handler however they are sent,
-//! with no per-command wrapper that could drop them.
+//! with no per-command wrapper that could drop them. Each forwarder then
+//! tells [`Attention`] how the call ended, so a successful
+//! `agent_permission_respond` closes its question on the attention badge.
 //!
 //! [`native`] holds the three commands with no registry entry
 //! ([`swarm_core::commands::NATIVE_ONLY`]).
@@ -17,9 +19,11 @@ pub mod native;
 
 use serde_json::Value;
 use swarm_core::commands::{Ctx, Registry};
-use tauri::State;
 use tauri::ipc::{Invoke, InvokeBody, Request};
+use tauri::{AppHandle, Manager, State};
 use tracing::Instrument;
+
+use crate::attention::Attention;
 
 /// Declares one forwarding `#[tauri::command]` per registry command, the
 /// app's invoke handler over them and the native commands, and the name
@@ -37,12 +41,20 @@ macro_rules! commands {
     (registry: [$($command:ident),+ $(,)?], native: [$($native:ident),+ $(,)?] $(,)?) => {
         $(
             #[tauri::command]
-            async fn $command(
+            async fn $command<R: tauri::Runtime>(
+                app: AppHandle<R>,
                 registry: State<'_, Registry>,
                 ctx: State<'_, Ctx>,
                 request: Request<'_>,
             ) -> Result<Value, Value> {
-                forward(&registry, &ctx, stringify!($command), request.body()).await
+                let command = stringify!($command);
+                let result = forward(&registry, &ctx, command, request.body()).await;
+                if let (Some(attention), InvokeBody::Json(args)) =
+                    (app.try_state::<Attention>(), request.body())
+                {
+                    attention.on_command(&app, command, args, result.is_ok());
+                }
+                result
             }
         )+
 

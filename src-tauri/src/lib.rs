@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager, WebviewWindow};
 use tracing_appender::non_blocking::WorkerGuard;
 
+mod attention;
 mod commands;
 mod dialog_grants;
 mod lifecycle;
