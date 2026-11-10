@@ -20,6 +20,7 @@
 //!   frames), plus the three desktop-only commands that drive OS integrations.
 //! - [`lifecycle`] shuts the runtime down in a plugin cleanup hook that
 //!   every exit path runs, and the release log is flushed after it.
+//! - [`quit_guard`] asks before a user's quit stops registered workers.
 //! - In bundled builds, a second launch hands over to the running
 //!   instance and exits; [`focus_main`] brings that instance forward.
 
@@ -32,6 +33,7 @@ mod attention;
 mod commands;
 mod dialog_grants;
 mod lifecycle;
+mod quit_guard;
 mod startup;
 
 #[cfg(test)]
@@ -151,7 +153,8 @@ pub fn run() {
     app.manage(lifecycle::Teardown::new(init_tracing(
         app.path().app_log_dir(),
     )));
-    app.run(|_, _| {});
+    app.manage(quit_guard::QuitGuard::default());
+    app.run(|app, event| quit_guard::on_run_event(app, &event));
 }
 
 /// The single-instance callback: a second launch of the app has handed
