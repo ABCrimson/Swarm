@@ -66,4 +66,23 @@ describe("AIQueue", () => {
     expect(screen.queryByText("Running")).not.toBeInTheDocument();
     expect(screen.getByText("No Items In Queue")).toBeInTheDocument();
   });
+
+  it("drops an exiting row at once when no leave transition runs", () => {
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "getAnimations");
+    Element.prototype.getAnimations = () => [];
+    try {
+      useAiStore
+        .getState()
+        .enqueue({ id: ITEM, priority: "normal", workerId: W, messages: [], status: "streaming" });
+      render(<AIQueue workerId={W} />);
+
+      act(() => useAiStore.getState().cancelItem(ITEM));
+
+      expect(screen.queryByText("Running")).not.toBeInTheDocument();
+      expect(screen.getByText("No Items In Queue")).toBeInTheDocument();
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "getAnimations", original);
+      else Reflect.deleteProperty(Element.prototype, "getAnimations");
+    }
+  });
 });

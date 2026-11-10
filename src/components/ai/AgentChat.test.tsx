@@ -145,11 +145,20 @@ describe("AgentChat", () => {
       content: "file.txt",
     });
 
-    await user.click(screen.getByRole("button", { name: "Tool Call: run_command, Complete" }));
+    const summary = screen.getByRole("button", { name: "Tool Call: run_command, Complete" });
+    expect(screen.getByText("Input")).not.toBeVisible();
 
-    expect(screen.getByText("Input")).toBeInTheDocument();
-    expect(screen.getByText(/"command"/)).toBeInTheDocument();
-    expect(screen.getByText("file.txt")).toBeInTheDocument();
+    await user.click(summary);
+
+    expect(summary).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Input")).toBeVisible();
+    expect(screen.getByText(/"command"/)).toBeVisible();
+    expect(screen.getByText("file.txt")).toBeVisible();
+
+    await user.click(summary);
+
+    expect(summary).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Input")).not.toBeVisible();
   });
 
   it("shows an is_error tool result via the error status", () => {

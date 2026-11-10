@@ -158,6 +158,19 @@ export function AIQueue({ workerId }: AIQueueProps): React.ReactElement {
       {rows.map((row) => (
         <div
           key={row.item.id}
+          // getAnimations() flushes style, so a leave transition that started is
+          // listed. None (reduced motion, or an ancestor with display:none) means
+          // no transitionend will come: the row leaves at once.
+          ref={(el) => {
+            if (
+              el &&
+              row.exiting &&
+              typeof el.getAnimations === "function" &&
+              el.getAnimations().length === 0
+            ) {
+              leave(row.item.id);
+            }
+          }}
           // A removed row stays mounted, faded out, until its leave transition ends.
           className={`transition-[opacity,translate] duration-150 starting:-translate-y-2 starting:opacity-0 motion-reduce:starting:translate-y-0 ${row.exiting ? "translate-x-5 opacity-0 motion-reduce:translate-x-0" : ""} ${ITEM}`}
           inert={row.exiting}
