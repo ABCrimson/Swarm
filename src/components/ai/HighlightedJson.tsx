@@ -17,21 +17,18 @@ const BASE = "m-0 font-mono wrap-anywhere whitespace-pre-wrap";
 /**
  * Pretty-printed JSON with OKLCH syntax colors (`#lib/syntax-highlight`). Each
  * token's color is computed per token, so it travels as `--token-color` for the
- * `text-(--token-color)` class to read. `className` adds utilities to the `<pre>`;
- * `style` stays for a caller that still passes an inline style.
+ * `text-(--token-color)` class to read. `className` adds utilities to the `<pre>`.
  */
 export function HighlightedJson({
   data,
   className,
-  style,
 }: {
   readonly data: unknown;
   readonly className?: string;
-  readonly style?: CSSProperties;
 }): React.ReactElement {
   const tokens = keyByOffset(tokenizeJson(JSON.stringify(data, null, 2) ?? "undefined"));
   return (
-    <pre className={className ? `${BASE} ${className}` : BASE} style={style}>
+    <pre className={className ? `${BASE} ${className}` : BASE}>
       {tokens.map((token) => (
         <span
           key={token.key}

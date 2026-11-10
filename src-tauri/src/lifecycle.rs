@@ -1,7 +1,7 @@
 //! Orderly shutdown when the app quits.
 //!
 //! Every way the app quits (closing the last window, Cmd+Q,
-//! `AppHandle::exit`, `restart`, `request_restart`) ends in
+//! `AppHandle::exit`, `restart`, `request_restart`) that goes ahead ends in
 //! [`tauri::App::cleanup_before_exit`], which runs the plugins'
 //! cleanup hooks, and Tauri then exits the process without running the
 //! destructors of managed state. [`plugin`] registers the app's hook:
@@ -21,6 +21,10 @@
 //! acceptable only because every window is already gone and the process
 //! exits right after. The hook runs its teardown once, however often it
 //! is called.
+//!
+//! Closing the main window and a user's exit can be held first: while
+//! workers are registered, `quit_guard` asks before the quit goes ahead,
+//! and "Keep Running" means this hook never runs.
 //!
 //! Terminal workers are left to the operating system: their PTYs close
 //! with the process, which ends the shells they run. Killing them through

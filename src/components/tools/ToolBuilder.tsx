@@ -249,7 +249,7 @@ export function ToolBuilder({
         </h2>
         <HighlightedJson
           data={customToolToAnthropic(draft)}
-          style={{ flex: 1, overflow: "auto", padding: 16, fontSize: "0.75rem", lineHeight: 1.6 }}
+          className="flex-1 overflow-auto p-4 text-[0.75rem] leading-[1.6]"
         />
       </section>
     </div>
