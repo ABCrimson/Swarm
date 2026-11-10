@@ -68,8 +68,8 @@ swarm-core                = { path = "crates/swarm-core" }
 # tauri-runtime-wry. swarm-desktop's own `devtools` feature forwards to
 # it; debug builds get the inspector regardless (tauri-runtime-wry and
 # wry gate it on `any(debug_assertions, feature = "devtools")`).
-tauri                     = { version = "=3.0.0-alpha.5", features = ["image-png"] }
-tauri-runtime-wry         = "=3.0.0-alpha.5"
+tauri                     = { version = "=3.0.0-alpha.6", features = ["image-png"] }
+tauri-runtime-wry         = "=3.0.0-alpha.6"
 tauri-build               = "=3.0.0-alpha.4"
 tauri-plugin-fs           = "=3.0.0-alpha.3"
 tauri-plugin-dialog       = "=3.0.0-alpha.4"
@@ -94,7 +94,7 @@ tracing-subscriber        = { version = "=0.3.23", features = ["json", "env-filt
 # The release log's writer thread (`tracing_appender::non_blocking`), used
 # by swarm-desktop.
 tracing-appender          = "=0.2.5"
-uuid                      = { version = "=1.29.0", features = ["v4", "serde"] }
+uuid                      = { version = "=1.29.2", features = ["v4", "serde"] }
 dashmap                   = "=7.0.0-rc2"
 parking_lot               = "=0.13.0"
 rusqlite                  = { version = "=0.41.1", features = ["bundled"] }
