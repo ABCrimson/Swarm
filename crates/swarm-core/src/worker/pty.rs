@@ -189,7 +189,6 @@ fn default_shell_command() -> CommandBuilder {
         "powershell.exe"
     })
 }
-
 /// A named thread held at its start line.
 ///
 /// Its body runs only after [`Self::start`]; dropping the `Parked`
@@ -437,7 +436,7 @@ impl Utf8Stream {
     /// Flushes a trailing incomplete sequence at end of stream (as
     /// U+FFFD); `None` when nothing is held back.
     fn finish(self) -> Option<String> {
-        (!self.pending.is_empty()).then(|| String::from_utf8_lossy(&self.pending).into_owned())
+        (!self.pending.is_empty()).then(|| String::from_utf8_lossy_owned(self.pending))
     }
 }
 
