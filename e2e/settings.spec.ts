@@ -53,7 +53,7 @@ test.describe("Settings", () => {
     page,
   }) => {
     // Matched by family, not the exact label, so a point release (e.g.
-    // "Claude Mythos 5.1") does not break the spec.
+    // "Claude Mythos 5.2") does not break the spec.
     await page
       .getByRole("radiogroup", { name: "AI Model" })
       .getByText(/^Claude Mythos \d[\d.]*$/)

@@ -15,8 +15,8 @@ describe("model catalog", () => {
   it("keeps the persisted keys stable and points each at the current model", () => {
     expect(MODEL_KEYS).toEqual(["fable", "mythos", "opus", "sonnet", "haiku"]);
     expect(MODEL_KEYS.map((key) => CLAUDE_MODELS[key].id)).toEqual([
-      "claude-fable-5-1",
-      "claude-mythos-5-1",
+      "claude-fable-5-2",
+      "claude-mythos-5-2",
       "claude-opus-5-5",
       "claude-sonnet-5-5",
       "claude-haiku-5-5",
@@ -31,15 +31,15 @@ describe("model catalog", () => {
         CLAUDE_MODELS[key].outputPerMTok,
       ]),
     ).toEqual([
-      ["fable", 10, 50],
-      ["mythos", 10, 50],
+      ["fable", 8, 40],
+      ["mythos", 8, 40],
       ["opus", 4, 20],
       ["sonnet", 2, 10],
       ["haiku", 0.1, 0.5],
     ]);
   });
 
-  it("gates only Mythos 5.1 (verification programs; persisted legacy key `glasswing`)", () => {
+  it("gates only Mythos 5.2 (verification programs; persisted legacy key `glasswing`)", () => {
     expect(MODEL_KEYS.filter((key) => CLAUDE_MODELS[key].gated === "glasswing")).toEqual([
       "mythos",
     ]);
@@ -90,9 +90,21 @@ describe("fallback-target pricing", () => {
   });
 });
 
+describe("superseded Fable and Mythos 5.1 pricing", () => {
+  it.each(["claude-fable-5-1", "claude-mythos-5-1"])(
+    "still prices %s usage records at 10 / 0.25 / 50 USD per MTok outside the catalog",
+    (id) => {
+      expect(getModelById(id)).toBeUndefined();
+      expect(
+        estimateCostUsd(id, { input_tokens: 1_000_000, output_tokens: 1_000_000 }),
+      ).toBeCloseTo(60, 10);
+    },
+  );
+});
+
 describe("Opus fallback-target pricing", () => {
   it.each(["claude-opus-5", "claude-opus-4-8"])(
-    "prices %s, a Fable 5.1 and Opus 5.5 fallback target, at 5 / 0.5 / 25 USD per MTok outside the catalog",
+    "prices %s, a Fable 5.2 and Opus 5.5 fallback target, at 5 / 0.5 / 25 USD per MTok outside the catalog",
     (id) => {
       expect(hasPricing(id)).toBe(true);
       expect(getModelById(id)).toBeUndefined();
@@ -169,7 +181,7 @@ describe("labels and gating", () => {
     expect(warnIfModelGated(CLAUDE_MODELS.sonnet)).toBe(false);
 
     expect(toast.warning).toHaveBeenCalledExactlyOnceWith(
-      "Claude Mythos 5.1 Requires Project Glasswing Access",
+      "Claude Mythos 5.2 Requires Project Glasswing Access",
     );
   });
 });

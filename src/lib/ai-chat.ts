@@ -73,8 +73,8 @@ import { useWorkerAgentStore } from "#store/worker-agents";
 
 /**
  * Chat effort. Explicit because the defaults differ: Opus 5.5 and Haiku 5.5
- * default to `medium`, Fable 5.1, Mythos 5.1 and Sonnet 5.5 to `high`
- * (effort page and models overview, 2026-10-10). `medium` is the
+ * default to `medium`, Fable 5.2, Mythos 5.2 and Sonnet 5.5 to `high`
+ * (effort page and models overview, 2026-11-10). `medium` is the
  * documented starting point for Opus 5.5 and Haiku 5.5 and a sound
  * cost/quality balance for an interactive orchestration chat on every model.
  */
@@ -450,7 +450,7 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
         ...live,
         phase: "tools",
         toolCalls: [
-          ...live.toolCalls.filter((call) => !calls.some((block) => block.id === call.id)),
+          ...live.toolCalls.filter((call) => calls.every((block) => block.id !== call.id)),
           ...calls.map((block) => ({
             id: block.id,
             name: block.name,

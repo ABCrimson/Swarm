@@ -119,7 +119,7 @@ const sync = async (source: Source): Promise<string> => {
 };
 
 const wanted = process.argv.slice(2);
-const unknown = wanted.filter((name) => !sources.some((source) => source.name === name));
+const unknown = wanted.filter((name) => sources.every((source) => source.name !== name));
 if (unknown.length > 0) {
   console.error(
     `unknown reference repo: ${unknown.join(", ")} (have: ${sources.map((s) => s.name).join(", ")})`,

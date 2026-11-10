@@ -4,22 +4,8 @@
       "kind": "npm",
       "name": "@xyflow/react",
       "pin": "12.12.1",
-      "reason": "pnpm install of 13.0.0-next.0 fails: 'High-risk trust downgrade for \"@xyflow/react@13.0.0-next.0\" (possible package takeover)' (trustPolicy no-downgrade). 13.0.0-next.0 and its dependency @xyflow/system 1.0.0-next.4 were published manually by npm user webk1d without provenance or trusted publisher, while 12.12.0 and 12.12.1 (2026-11-02, the newest 12.x) carry trusted-publisher SLSA provenance. Rechecked 2026-11-04: still no 13.x build with provenance. No upstream tag, changelog or migration guide for v13 exists. Recheck every sweep and move when a v13 build ships with provenance.",
+      "reason": "pnpm install of 13.0.0-next.0 fails: 'High-risk trust downgrade for \"@xyflow/react@13.0.0-next.0\" (possible package takeover)' (trustPolicy no-downgrade). 13.0.0-next.0 and its dependency @xyflow/system 1.0.0-next.4 were published manually by npm user webk1d without provenance or trusted publisher, while 12.12.0 and 12.12.1 (2026-11-02, the newest 12.x) carry trusted-publisher SLSA provenance. Rechecked 2026-11-10: the newest build, 13.0.0-next.3, is still published by npm user webk1d with no attestations (12.12.1 carries SLSA provenance via GitHub Actions OIDC), so trustPolicy no-downgrade still rejects the 13.x line; 12.12.1 is still the newest 12.x. No upstream tag, changelog or migration guide for v13 exists. Recheck every sweep and move when a v13 build ships with provenance.",
       "evidence": "https://registry.npmjs.org/@xyflow/react"
-    },
-    {
-      "kind": "npm",
-      "name": "tailwindcss",
-      "pin": "0.0.0-insiders.8cc0551",
-      "reason": "Every build after 8cc0551 (insiders 654f89f, 410a465, 2570e00, cd5831f, 2626ae6, and 4.3.4 from commit 2626ae6) ships a @tailwindcss/oxide-wasm32-wasi whose tailwindcss-oxide.wasi.cjs blocks the main thread forever on require (Node 28.0.0-nightly2026110370074c6f98 and Node 26.13.0 alike; timeout exit 124 after 15 s, no event-loop ticks), so CI's NAPI_RS_FORCE_WASI=true pnpm check:compiler hangs at `import \"@tailwindcss/vite\"`. 8cc0551 and 4.3.3 load at once with the same bundled @napi-rs/wasm-runtime 1.2.2 and @emnapi 1.11.3. The first bad build follows tailwindcss commit 654f89f (#20651), which moved the CI jobs, the release job among them, off the macos-14 runner; 8cc0551..654f89f touches no crate source, so the published WASI artifact changed, not the source. Checked 2026-11-04. Recheck every sweep: move when the newest oxide-wasm32-wasi loads.",
-      "evidence": "https://github.com/tailwindlabs/tailwindcss/pull/20651"
-    },
-    {
-      "kind": "npm",
-      "name": "@tailwindcss/vite",
-      "pin": "0.0.0-insiders.8cc0551",
-      "reason": "Moves in lockstep with tailwindcss (same insiders build); held with it because its @tailwindcss/oxide WASI binding hangs on load in every build after 8cc0551 (see the tailwindcss hold).",
-      "evidence": "https://github.com/tailwindlabs/tailwindcss/pull/20651"
     }
   ]
 }
