@@ -38,6 +38,9 @@ const LABEL_CLASS =
   "font-display text-(length:--text-md) font-semibold tracking-[-0.01em] text-fg-dim";
 const MONO_ROW_CLASS =
   "flex items-center gap-1.5 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.75rem] text-fg";
+/** The branch row wraps whole items; only the branch name, alone on a line too narrow for it, ellipsizes. */
+const BRANCH_ROW_CLASS =
+  "flex flex-wrap items-center gap-1.5 gap-y-1 font-mono text-[0.75rem] text-fg";
 const SEPARATOR_CLASS = "text-fg-dim";
 const FILE_LIST_CLASS =
   "m-0 flex max-h-[180px] list-none flex-col gap-1 overflow-y-auto rounded-md border border-surface-2 bg-void px-2.5 py-2 font-mono text-[0.6875rem]";
@@ -285,8 +288,14 @@ export function ShipPreview({
 
       <div className={SECTION_CLASS}>
         <span className={LABEL_CLASS}>Branch</span>
-        <div className={MONO_ROW_CLASS}>
-          <Pill tone="info" size="sm" className="font-mono">
+        <div className={BRANCH_ROW_CLASS}>
+          {/* The branch name is the one part that gives way: it ellipsizes (the title keeps it whole); the commit pills keep their width. */}
+          <Pill
+            tone="info"
+            size="sm"
+            className="min-w-0 font-mono"
+            title={escapeForDisplay(preflight.branch)}
+          >
             {escapeForDisplay(preflight.branch)}
           </Pill>
           <span className={SEPARATOR_CLASS}>{"→"}</span>
@@ -300,12 +309,12 @@ export function ShipPreview({
             </span>
           )}
           {preflight.ahead > 0 && (
-            <Pill tone="warning" size="sm">
+            <Pill tone="warning" size="sm" className="shrink-0">
               {pluralize("Unpushed Commit", preflight.ahead)}
             </Pill>
           )}
           {preflight.behind > 0 && (
-            <Pill tone="danger" size="sm">
+            <Pill tone="danger" size="sm" className="shrink-0">
               {`${pluralize("Commit", preflight.behind)} Behind`}
             </Pill>
           )}

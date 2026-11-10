@@ -91,6 +91,18 @@ describe("ShipPreview — Branch row", () => {
     );
   });
 
+  it("lets the branch name give way while the state pills keep their width", () => {
+    renderPreview({ preflight: makePreflight({ ahead: 1, behind: 2 }) });
+    // The visible label may ellipsize; the title keeps the whole name.
+    const branch = screen.getByText("swarm/agent-abcd1234").closest(".swarm-pill");
+    expect(branch).toHaveAttribute("title", "swarm/agent-abcd1234");
+    expect(branch).toHaveClass("min-w-0");
+    expect(branch?.parentElement).toHaveClass("flex-wrap");
+    for (const state of ["1 Unpushed Commit", "2 Commits Behind"]) {
+      expect(screen.getByText(state).closest(".swarm-pill")).toHaveClass("shrink-0");
+    }
+  });
+
   it("drops the comma when there is no remote", () => {
     renderPreview({ preflight: makePreflight({ remote: null, host: null }) });
     expect(screen.getByText("main")).toBeInTheDocument();
