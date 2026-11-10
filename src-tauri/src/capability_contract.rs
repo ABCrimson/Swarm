@@ -141,6 +141,10 @@ fn capability_is_least_privilege() {
             !id.starts_with("updater:"),
             "{id}: the frontend never calls plugin:updater"
         );
+        assert!(
+            !id.starts_with("window-state:"),
+            "{id}: window state is driven from Rust only"
+        );
     }
     assert!(ids.contains(&"fs:deny-default"));
     let opener: Vec<&str> = ids
