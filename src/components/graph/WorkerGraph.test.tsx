@@ -87,11 +87,27 @@ function resetStores(): void {
   });
 }
 
-/** Waits for the ELK layout overlay to clear (the mocked worker has responded and state committed). */
+/**
+ * The ELK layout overlay. It stays mounted (CSS fades it out through
+ * `transition-discrete`), so "gone" means closed: `data-open="false"`
+ * and inert.
+ */
+function layoutOverlay(): HTMLElement {
+  const overlay = document.querySelector<HTMLElement>(".worker-graph > [data-open]");
+  if (!overlay) throw new Error("No Layout Overlay");
+  return overlay;
+}
+
+/** Asserts the layout overlay is closed and the status line no longer announces a layout. */
+function expectLayoutOverlayClosed(): void {
+  expect(layoutOverlay()).toHaveAttribute("data-open", "false");
+  expect(layoutOverlay()).toHaveAttribute("inert");
+  expect(screen.getByRole("status")).not.toHaveTextContent("Computing Layout");
+}
+
+/** Waits for the ELK layout overlay to close (the mocked worker has responded and state committed). */
 async function waitForLayoutSettled(): Promise<void> {
-  await waitFor(() => {
-    expect(screen.queryByText("Computing Layout")).not.toBeInTheDocument();
-  });
+  await waitFor(expectLayoutOverlayClosed);
 }
 
 describe("WorkerGraph — measured edges", () => {
@@ -247,7 +263,20 @@ describe("WorkerGraph — measured edges", () => {
 
     expect(await screen.findByText("Wrote 1 File")).toBeInTheDocument();
     // The layout overlay never reappeared -- proves no relayout fired.
-    expect(screen.queryByText("Computing Layout")).not.toBeInTheDocument();
+    expectLayoutOverlayClosed();
+  });
+
+  it("keeps the layout overlay mounted: open and interactive while a layout runs, for the CSS fade", () => {
+    MockWorker.reset(false); // the layout engine never answers
+    act(() => {
+      useWorkerStore.getState().addWorker(createWorker({ id: "w-a", name: "A" }));
+    });
+
+    render(<WorkerGraph />);
+
+    expect(layoutOverlay()).toHaveAttribute("data-open", "true");
+    expect(layoutOverlay()).not.toHaveAttribute("inert");
+    expect(screen.getByRole("status")).toHaveTextContent("Computing Layout");
   });
 });
 

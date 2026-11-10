@@ -54,13 +54,13 @@ describe("ChartPanel", () => {
         <span>Chart Body</span>
       </ChartPanel>,
     );
-    expect(screen.getByRole("figure").style.gridColumn).toBe("1 / -1");
+    expect(screen.getByRole("figure")).toHaveClass("col-[1/-1]");
 
     rerender(
       <ChartPanel title="CPU Usage">
         <span>Chart Body</span>
       </ChartPanel>,
     );
-    expect(screen.getByRole("figure").style.gridColumn).toBe("");
+    expect(screen.getByRole("figure")).not.toHaveClass("col-[1/-1]");
   });
 });

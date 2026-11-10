@@ -111,7 +111,7 @@ export function ProvenanceEdge({
             ...style,
             "--edge-stroke": stroke,
             "--edge-width": `${strokeWidthForCount(count)}px`,
-            strokeDasharray: kindStyle.dash,
+            "--edge-dash": kindStyle.dash,
           } as CSSProperties
         }
       />
@@ -121,7 +121,11 @@ export function ProvenanceEdge({
             aria-hidden="true"
             className="provenance-edge__count"
             style={
-              { left: labelX, top: labelY, "--edge-stroke": kindStyle.stroke } as CSSProperties
+              {
+                "--label-x": `${labelX}px`,
+                "--label-y": `${labelY}px`,
+                "--edge-stroke": kindStyle.stroke,
+              } as CSSProperties
             }
           >
             ×{count}

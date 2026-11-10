@@ -8,48 +8,18 @@
 // dot (a live state), and a snapshot chart with nothing to plot shows its
 // `empty` line with no pulse (a resting state), never empty axes.
 
-import type { CSSProperties } from "react";
 import { RechartsThemeProvider } from "recharts";
 import { CHART_THEME } from "#lib/chart-theme";
 
-const panelStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  height: "100%",
-  minHeight: 200,
-  padding: 12,
-  background: "oklch(from var(--color-surface-0) l c h / 0.7)",
-  border: "1px solid var(--color-border)",
-  borderRadius: "var(--radius-lg)",
-  backdropFilter: "blur(12px) saturate(1.5)",
-};
-
-const headerStyle: CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "baseline",
-  gap: 8,
-  margin: 0,
-  fontFamily: "var(--font-display)",
-  fontSize: 14,
-  fontWeight: 600,
-  color: "var(--color-fg)",
-};
-
-const captionStyle: CSSProperties = {
-  fontFamily: "var(--font-body)",
-  fontSize: 11,
-  fontWeight: 400,
-  color: "var(--color-fg-dim)",
-};
-
-/** Style for the Recharts chart element itself: fill the panel body. */
-export const CHART_FILL_STYLE: CSSProperties = { width: "100%", height: "100%" };
+const PANEL_CLASS =
+  "m-0 flex h-full min-h-[200px] flex-col gap-2 rounded-lg border border-border bg-surface-0/70 p-3 backdrop-blur-[12px] backdrop-saturate-150";
+const HEADER_CLASS =
+  "m-0 flex items-baseline justify-between gap-2 font-display text-[14px] font-semibold text-fg";
+const CAPTION_CLASS = "font-body text-[11px] font-normal text-fg-dim";
 
 /**
  * Titled chart panel. `children` is one Recharts chart rendered with
- * `responsive` and {@link CHART_FILL_STYLE}.
+ * `responsive`, `width="100%"` and `height="100%"` so it fills the panel body.
  */
 export function ChartPanel({
   title,
@@ -71,15 +41,12 @@ export function ChartPanel({
   readonly children: React.ReactNode;
 }): React.ReactElement {
   return (
-    <figure
-      style={span === "full" ? { ...panelStyle, gridColumn: "1 / -1" } : panelStyle}
-      className="m-0"
-    >
-      <figcaption style={headerStyle}>
+    <figure className={span === "full" ? `${PANEL_CLASS} col-[1/-1]` : PANEL_CLASS}>
+      <figcaption className={HEADER_CLASS}>
         <span>{title}</span>
-        {caption && <span style={captionStyle}>{caption}</span>}
+        {caption && <span className={CAPTION_CLASS}>{caption}</span>}
       </figcaption>
-      <div style={{ flex: 1, minHeight: 0 }}>
+      <div className="min-h-0 flex-1">
         {(sampleCount !== undefined && sampleCount < 2) || empty !== undefined ? (
           <p className="m-0 flex h-full items-center justify-center gap-2 text-fg-dim text-md">
             {empty === undefined && (

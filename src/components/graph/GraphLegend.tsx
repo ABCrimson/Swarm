@@ -1,4 +1,5 @@
 import { Panel } from "@xyflow/react";
+import type { CSSProperties } from "react";
 import type { GraphEdgeKind } from "#components/graph/ProvenanceEdge";
 import { KIND_LABEL, KIND_STYLE } from "#components/graph/ProvenanceEdge";
 
@@ -20,14 +21,15 @@ const ANNOTATION_GROUP_LABEL = "Annotation";
 function LegendRow({ kind }: { readonly kind: GraphEdgeKind }): React.ReactElement {
   const { stroke, dash } = KIND_STYLE[kind];
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+    <div className="flex items-center gap-2">
       <svg width={20} height={8} viewBox="0 0 20 8" aria-hidden="true">
         <line
           x1={1}
           y1={4}
           x2={19}
           y2={4}
-          style={{ stroke }}
+          className="[stroke:var(--legend-stroke)]"
+          style={{ "--legend-stroke": stroke } as CSSProperties}
           strokeWidth={2}
           strokeDasharray={dash}
         />
@@ -64,20 +66,7 @@ export function GraphLegend({ presentKinds }: GraphLegendProps): React.ReactElem
       position="top-left"
       role="note"
       aria-label="Edge Legend"
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: 6,
-        padding: "8px 10px",
-        borderRadius: 8,
-        background: "oklch(0.12 0.03 220 / 0.85)",
-        backdropFilter: "blur(8px)",
-        border: "1px solid var(--color-border-2)",
-        fontFamily: "var(--font-body)",
-        fontSize: "0.6875rem",
-        fontWeight: 500,
-        color: "oklch(0.65 0.04 220)",
-      }}
+      className="flex flex-col gap-1.5 rounded-md border border-border-2 bg-[oklch(0.12_0.03_220/0.85)] px-2.5 py-2 font-body text-[0.6875rem] font-medium text-[color:oklch(0.65_0.04_220)] backdrop-blur-[8px]"
     >
       {measuredKinds.map((kind) => (
         <LegendRow key={kind} kind={kind} />
@@ -86,25 +75,9 @@ export function GraphLegend({ presentKinds }: GraphLegendProps): React.ReactElem
       {showManual && (
         <>
           {measuredKinds.length > 0 && (
-            <hr
-              style={{
-                width: "100%",
-                height: 1,
-                margin: "2px 0",
-                border: "none",
-                background: "var(--color-border-2)",
-              }}
-            />
+            <hr className="my-0.5 h-px w-full border-none bg-border-2" />
           )}
-          <span
-            style={{
-              fontFamily: "var(--font-display)",
-              fontSize: "var(--text-md)",
-              fontWeight: 600,
-              letterSpacing: "-0.01em",
-              color: "var(--color-fg-dim)",
-            }}
-          >
+          <span className="font-display text-[length:var(--text-md)] font-semibold tracking-[-0.01em] text-fg-dim">
             {ANNOTATION_GROUP_LABEL}
           </span>
           <LegendRow kind="manual" />

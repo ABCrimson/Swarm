@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import { Spinner } from "#components/ui/Spinner";
 import type { ShipProgressRow } from "#hooks/useShip";
 
@@ -26,41 +25,12 @@ const STATUS_LABELS: Record<ShipProgressRow["status"], string> = {
   error: "Failed",
 };
 
-const containerStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  padding: 16,
-  listStyle: "none",
-  margin: 0,
-};
-
-const rowStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  padding: "8px 10px",
-  borderRadius: 8,
-  background: "oklch(0.10 0.03 220 / 0.6)",
-  border: "1px solid var(--color-border)",
-};
-
-const labelStyle: CSSProperties = {
-  fontFamily: "var(--font-body)",
-  fontSize: "0.8125rem",
-  color: "oklch(0.88 0.03 220)",
-  flex: 1,
-};
-
-const detailStyle: CSSProperties = {
-  fontFamily: "var(--font-mono)",
-  fontSize: "0.6875rem",
-  color: "var(--color-fg-dim)",
-  maxWidth: 220,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-};
+const CONTAINER_CLASS = "m-0 flex list-none flex-col gap-2 p-4";
+const ROW_CLASS =
+  "flex items-center gap-2.5 rounded-md border border-border bg-[oklch(0.10_0.03_220/0.6)] px-2.5 py-2";
+const LABEL_CLASS = "flex-1 font-body text-[0.8125rem] text-[oklch(0.88_0.03_220)]";
+const DETAIL_CLASS =
+  "max-w-[220px] overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.6875rem] text-fg-dim";
 
 function StatusIcon({
   status,
@@ -69,14 +39,14 @@ function StatusIcon({
 }): React.ReactElement {
   if (status === "ok") {
     return (
-      <span aria-hidden="true" style={{ color: "oklch(0.75 0.16 150)", fontSize: "0.875rem" }}>
+      <span aria-hidden="true" className="text-[0.875rem] text-[oklch(0.75_0.16_150)]">
         {"✓"}
       </span>
     );
   }
   if (status === "error") {
     return (
-      <span aria-hidden="true" style={{ color: "oklch(0.68 0.20 25)", fontSize: "0.875rem" }}>
+      <span aria-hidden="true" className="text-[0.875rem] text-[oklch(0.68_0.20_25)]">
         {"✕"}
       </span>
     );
@@ -105,18 +75,18 @@ export function ShipProgress({ rows }: ShipProgressProps): React.ReactElement {
   const latestByStep = new Map(rows.map((row) => [row.step, row]));
 
   return (
-    <ul style={containerStyle} aria-label="Ship Progress" aria-live="polite">
+    <ul className={CONTAINER_CLASS} aria-label="Ship Progress" aria-live="polite">
       {latestByStep
         .values()
         .map((row) => (
-          <li key={row.step} style={rowStyle}>
+          <li key={row.step} className={ROW_CLASS}>
             <StatusIcon status={row.status} />
-            <span style={labelStyle}>
+            <span className={LABEL_CLASS}>
               {STEP_LABELS.get(row.step) ?? row.step}
               <span className="sr-only">{` — ${STATUS_LABELS[row.status]}`}</span>
             </span>
             {row.detail != null && (
-              <span style={detailStyle} title={row.detail}>
+              <span className={DETAIL_CLASS} title={row.detail}>
                 {row.detail}
               </span>
             )}

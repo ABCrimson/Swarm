@@ -52,10 +52,11 @@
     border-radius: var(--radius-lg);
   }
 
-  /* Colour and width arrive as custom properties so the focus rule below can override them. */
+  /* Colour, width and dash pattern arrive as custom properties so the focus rule below can override them. */
   .provenance-edge__path {
     stroke: var(--edge-stroke);
     stroke-width: var(--edge-width);
+    stroke-dasharray: var(--edge-dash, none);
   }
 
   .worker-graph .react-flow__edge:focus-visible .provenance-edge__path {
@@ -150,6 +151,8 @@
 
   .provenance-edge__count {
     position: absolute;
+    top: var(--label-y);
+    left: var(--label-x);
     translate: -50% -50%;
     pointer-events: none;
     padding: 1px 5px;

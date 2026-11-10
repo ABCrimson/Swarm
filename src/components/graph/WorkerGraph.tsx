@@ -22,7 +22,6 @@ import {
   useReactFlow,
 } from "@xyflow/react";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { GraphContextMenu } from "#components/graph/GraphContextMenu";
@@ -246,6 +245,7 @@ function WorkerGraphInner({
     ...edge,
     selected: selectedEdgeIds.has(edge.id),
   }));
+  const overlayOpen = isLayouting || layoutError !== null;
   const presentKinds = new Set<GraphEdgeKind>(edges.flatMap((e) => (e.data ? [e.data.kind] : [])));
   const selectedManualIds = manualEdges
     .filter((edge) => selectedEdgeIds.has(edge.id))
@@ -443,7 +443,7 @@ function WorkerGraphInner({
   }
 
   return (
-    <div className="worker-graph" style={{ width: "100%", height: "100%", position: "relative" }}>
+    <div className="worker-graph relative size-full">
       <p role="status" className="sr-only">
         {linkSource !== null
           ? `Linking From ${escapeForDisplay(names[linkSource] ?? linkSource)}: Focus Another Worker And Press Enter, Or Escape To Cancel`
@@ -451,72 +451,34 @@ function WorkerGraphInner({
             ? "Computing Layout"
             : ""}
       </p>
-      <AnimatePresence>
-        {(isLayouting || layoutError) && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            style={{
-              position: "absolute",
-              inset: 0,
-              zIndex: 20,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "oklch(from var(--color-void) l c h / 0.5)",
-              backdropFilter: "blur(2px)",
-              borderRadius: 12,
-            }}
-          >
-            {layoutError ? (
-              <div
-                role="alert"
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: 12,
-                  padding: 24,
-                  maxWidth: 320,
-                  textAlign: "center",
-                }}
-              >
-                <span
-                  style={{
-                    fontFamily: "var(--font-body)",
-                    fontSize: "0.875rem",
-                    fontWeight: 600,
-                    color: "var(--color-rose)",
-                  }}
-                >
-                  {layoutError}
-                </span>
-                <Button variant="secondary" size="sm" onClick={runLayout}>
-                  Retry Layout
-                </Button>
-              </div>
-            ) : (
-              <div
-                aria-hidden="true"
-                style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}
-              >
-                <Spinner size="lg" decorative className="text-plasma" />
-                <span
-                  style={{
-                    fontFamily: "var(--font-body)",
-                    fontSize: "0.75rem",
-                    color: "var(--color-fg-dim)",
-                  }}
-                >
-                  Computing Layout
-                </span>
-              </div>
-            )}
-          </motion.div>
+      {/* The layout overlay stays mounted so CSS can fade it both ways:
+          `starting:` fades it in when it leaves `display: none`, and
+          `transition-discrete` holds `display` until the fade-out ends.
+          Closed, it is inert (and out of the accessibility tree once
+          hidden); the status line above carries the announcement. */}
+      <div
+        data-open={overlayOpen}
+        inert={!overlayOpen}
+        className={`absolute inset-0 z-20 items-center justify-center rounded-lg bg-void/50 backdrop-blur-[2px] transition-[opacity,display] transition-discrete duration-200 ease-out-cubic ${
+          overlayOpen
+            ? "flex opacity-100 starting:opacity-0"
+            : "pointer-events-none hidden opacity-0"
+        }`}
+      >
+        {layoutError ? (
+          <div role="alert" className="flex max-w-80 flex-col items-center gap-3 p-6 text-center">
+            <span className="font-body text-[0.875rem] font-semibold text-rose">{layoutError}</span>
+            <Button variant="secondary" size="sm" onClick={runLayout}>
+              Retry Layout
+            </Button>
+          </div>
+        ) : (
+          <div aria-hidden="true" className="flex flex-col items-center gap-2">
+            <Spinner size="lg" decorative className="text-plasma" />
+            <span className="font-body text-[0.75rem] text-fg-dim">Computing Layout</span>
+          </div>
         )}
-      </AnimatePresence>
+      </div>
 
       <ReactFlow<WorkerFlowNode, ProvenanceFlowEdge>
         nodes={nodes}
@@ -552,16 +514,7 @@ function WorkerGraphInner({
           <Panel
             position="bottom-center"
             title="Provenance Edges Are Session-Scoped In v1 — A Reload Shows Nodes Without Historical Edges By Design."
-            style={{
-              padding: "6px 14px",
-              borderRadius: 999,
-              background: "oklch(0.12 0.03 220 / 0.75)",
-              backdropFilter: "blur(8px)",
-              border: "1px solid var(--color-border)",
-              fontFamily: "var(--font-body)",
-              fontSize: "0.6875rem",
-              color: "var(--color-fg-dim)",
-            }}
+            className="rounded-[999px] border border-border bg-[oklch(0.12_0.03_220/0.75)] px-3.5 py-1.5 font-body text-[0.6875rem] text-fg-dim backdrop-blur-[8px]"
           >
             No Measured Causality Yet
           </Panel>
@@ -614,9 +567,7 @@ export function WorkerGraph({
 }): React.ReactElement {
   return (
     <ReactFlowProvider>
-      <MotionConfig reducedMotion="user">
-        <WorkerGraphInner onSpawnRequest={onSpawnRequest} />
-      </MotionConfig>
+      <WorkerGraphInner onSpawnRequest={onSpawnRequest} />
     </ReactFlowProvider>
   );
 }

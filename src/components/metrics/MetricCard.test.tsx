@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { Trend } from "#components/metrics/MetricCard";
-import { MetricCard, MetricCardList, SEVERITY_COLOR } from "#components/metrics/MetricCard";
+import { MetricCard, MetricCardList, SEVERITY_TEXT } from "#components/metrics/MetricCard";
 import type { Severity } from "#lib/severity";
 
 function renderCard(props: {
@@ -30,10 +30,10 @@ describe("MetricCard", () => {
     ["good", "good"],
     ["warning", "warning"],
     ["critical", "critical"],
-  ] as const)("colours the value with the exact %s token", (expected, severity) => {
+  ] as const)("colours the value with the %s text colour", (expected, severity) => {
     renderCard({ label: "CPU", value: "50%", severity });
 
-    expect(screen.getByText("50%").style.color).toBe(SEVERITY_COLOR[expected]);
+    expect(screen.getByText("50%")).toHaveClass(SEVERITY_TEXT[expected]);
   });
 
   it("renders no trend arrow when no trend was measured", () => {

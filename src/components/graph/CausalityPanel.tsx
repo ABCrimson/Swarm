@@ -80,50 +80,18 @@ function describeRow(event: DomainEvent, names: LiveNames): RowDescription {
   }
 }
 
-const rowStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 12,
-  width: "100%",
-  padding: "10px 12px",
-  background: "oklch(from var(--color-surface-2) l c h / 0.7)",
-  border: "1px solid var(--color-border)",
-  borderRadius: 8,
-  textAlign: "left",
-  color: "var(--color-fg)",
-  fontFamily: "var(--font-body)",
-  fontSize: "0.8125rem",
-};
+const ROW_CLASS =
+  "flex w-full items-center justify-between gap-3 rounded-md border border-border bg-surface-2/70 px-3 py-2.5 text-left font-body text-[0.8125rem] text-fg";
 
 function SeqLabel({ seq }: { readonly seq: number }): React.ReactElement {
   return (
-    <span
-      style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: "0.6875rem",
-        color: "var(--color-fg-dim)",
-        fontVariantNumeric: "tabular-nums",
-        flexShrink: 0,
-      }}
-    >
-      @{seq}
-    </span>
+    <span className="shrink-0 font-mono text-[0.6875rem] text-fg-dim tabular-nums">@{seq}</span>
   );
 }
 
 /** Terminal placeholder chrome shared by the "not available" and "could not load" notes. */
-const placeholderStyle: React.CSSProperties = {
-  margin: 0,
-  fontFamily: "var(--font-body)",
-  fontSize: "0.75rem",
-  fontStyle: "italic",
-  color: "var(--color-fg-dim)",
-  textAlign: "center",
-  padding: "10px 12px",
-  border: "1px dashed var(--color-border-2)",
-  borderRadius: 8,
-};
+const PLACEHOLDER_CLASS =
+  "m-0 rounded-md border border-dashed border-border-2 px-3 py-2.5 text-center font-body text-[0.75rem] text-fg-dim italic";
 
 interface CausalityPanelProps {
   /** Seq of the measured event to walk backward from — an edge's `lastSeq`, or a worker's most recent inbound event. */
@@ -245,25 +213,8 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
         if (!unmountingRef.current && !event.currentTarget.open) onClose();
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "14px 16px",
-          borderBottom: "1px solid var(--color-border)",
-        }}
-      >
-        <h2
-          id={titleId}
-          style={{
-            fontFamily: "var(--font-display)",
-            fontSize: "0.9375rem",
-            fontWeight: 600,
-            color: "var(--color-fg-bright)",
-            margin: 0,
-          }}
-        >
+      <div className="flex items-center justify-between border-b border-border px-4 py-3.5">
+        <h2 id={titleId} className="m-0 font-display text-[0.9375rem] font-semibold text-fg-bright">
           Causality Trace
         </h2>
         <button
@@ -283,26 +234,14 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
         </button>
       </div>
 
-      <div
-        className="scroll-area"
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          padding: 16,
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
+      <div className="scroll-area flex flex-1 flex-col overflow-y-auto p-4">
         <p role="status" className="sr-only">
           {result === null
             ? "Loading Causality Trace"
             : `${result.rows.length} ${result.rows.length === 1 ? "Event" : "Events"} In Trace${result.incomplete ? ", Earlier Causes Unavailable" : ""}${result.truncated ? `, Truncated At ${MAX_CAUSALITY_HOPS} Hops` : ""}`}
         </p>
         {result === null && (
-          <div
-            aria-hidden="true"
-            style={{ display: "flex", justifyContent: "center", padding: 24 }}
-          >
+          <div aria-hidden="true" className="flex justify-center p-6">
             <Spinner size="md" />
           </div>
         )}
@@ -315,12 +254,12 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
             trail went cold here". Covers both "nothing at all" (zero
             rows) and "some rows, then a miss". */}
         {result?.incomplete && (
-          <p style={placeholderStyle}>Cause Event Not Available (Ephemeral Or Pruned)</p>
+          <p className={PLACEHOLDER_CLASS}>Cause Event Not Available (Ephemeral Or Pruned)</p>
         )}
 
         {/* A rejected or malformed backfill is a failure to look, not a pruned cause. */}
         {result?.failure != null && (
-          <p role="alert" style={placeholderStyle}>
+          <p role="alert" className={PLACEHOLDER_CLASS}>
             Could Not Load The Causality Trace: {result.failure}
           </p>
         )}
@@ -341,15 +280,14 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
                   {liveWorkerId ? (
                     <button
                       type="button"
-                      className="causality-panel__row"
-                      style={{ ...rowStyle, cursor: "pointer" }}
+                      className={`causality-panel__row cursor-pointer ${ROW_CLASS}`}
                       onClick={() => handleRowClick(liveWorkerId)}
                     >
                       <span>{text}</span>
                       <SeqLabel seq={row.seq} />
                     </button>
                   ) : (
-                    <div style={rowStyle}>
+                    <div className={ROW_CLASS}>
                       <span>{text}</span>
                       <SeqLabel seq={row.seq} />
                     </div>
@@ -361,15 +299,7 @@ export function CausalityPanel({ startSeq, onClose }: CausalityPanelProps): Reac
         )}
 
         {result?.truncated && (
-          <p
-            style={{
-              margin: "12px 0 0",
-              fontFamily: "var(--font-mono)",
-              fontSize: "0.6875rem",
-              color: "var(--color-fg-dim)",
-              textAlign: "center",
-            }}
-          >
+          <p className="mt-3 text-center font-mono text-[0.6875rem] text-fg-dim">
             Trace Truncated At {MAX_CAUSALITY_HOPS} Hops.
           </p>
         )}

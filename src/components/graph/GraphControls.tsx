@@ -133,15 +133,7 @@ export function GraphControls({
       role="toolbar"
       aria-label="Graph Controls"
       aria-orientation="vertical"
-      style={{
-        position: "absolute",
-        bottom: 16,
-        right: 16,
-        display: "flex",
-        flexDirection: "column",
-        gap: 4,
-        zIndex: 10,
-      }}
+      className="absolute right-4 bottom-4 z-10 flex flex-col gap-1"
     >
       {onDeleteEdge && (
         <ControlButton onClick={onDeleteEdge} label="Delete Selected Edge">
