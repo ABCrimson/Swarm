@@ -72,8 +72,9 @@ function costIndicator(model: ModelInfo): string {
 
 // ── Styles (utilities; literals with no token wait for the Q-9 design direction) ──
 
+/** One line at any width: in a narrow toolbar the label ellipsizes (the title names the whole model) instead of wrapping. */
 const TRIGGER =
-  "flex cursor-pointer items-center gap-2 rounded-md border bg-[oklch(0.12_0.03_220/0.9)] px-3 py-1.5 font-sans text-[13px] text-fg transition-[border-color] duration-150 ease-(--ease-out) [anchor-name:var(--model-anchor)]";
+  "flex min-w-0 cursor-pointer items-center gap-2 whitespace-nowrap rounded-md border bg-[oklch(0.12_0.03_220/0.9)] px-3 py-1.5 font-sans text-[13px] text-fg transition-[border-color] duration-150 ease-(--ease-out) [anchor-name:var(--model-anchor)]";
 
 /** CSS anchor positioning where the engine has it (WebKit 26+, Chromium); elsewhere (the WebKit 18.4 floor) the popover is centered in the viewport: `m-auto` restores the UA popover margin that Tailwind's preflight zeroes. */
 const SUPPORTS_ANCHOR_POSITIONING = globalThis.CSS?.supports?.("top", "anchor(bottom)") ?? false;
@@ -197,11 +198,12 @@ export function ModelSelector({ workerId }: ModelSelectorProps): React.ReactElem
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`AI Model: ${current.label}`}
+        title={current.label}
         className={`${TRIGGER} ${open ? MODEL_STYLE[currentKey].border : "border-border-2"}`}
         style={anchor}
       >
         <span aria-hidden="true" className={`${DOT} ${MODEL_STYLE[currentKey].dot}`} />
-        <span>{current.label}</span>
+        <span className="truncate">{current.label}</span>
         <span aria-hidden="true" className="ml-auto text-[oklch(0.55_0.03_220)]">
           {open ? "▴" : "▾"}
         </span>

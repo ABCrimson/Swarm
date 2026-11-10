@@ -125,7 +125,11 @@ describe("AgentChat", () => {
     });
 
     expect(screen.queryByText("Half a")).not.toBeInTheDocument();
-    expect(screen.getByText("Turn Failed: Cancelled, 5ms")).toBeInTheDocument();
+    expect(
+      screen.getByText((_, el) =>
+        Boolean(el?.matches("div.font-sans") && el.textContent === "Turn Failed: Cancelled, 5ms"),
+      ),
+    ).toBeInTheDocument();
   });
 
   it("renders a tool call as a labeled collapsible block showing name, input, and result", async () => {
@@ -464,7 +468,18 @@ describe("AgentChat", () => {
       numTurns: 2,
     });
 
-    expect(screen.getByText("Turn Complete, 1.5s, 2 Turns, $0.1234")).toBeInTheDocument();
+    const receipt = screen.getByText((_, el) =>
+      Boolean(
+        el?.matches("div.font-sans") && el.textContent === "Turn Complete, 1.5s, 2 Turns, $0.1234",
+      ),
+    );
+    // Words in the text face; only the numbers are set in mono.
+    expect(receipt).toHaveClass("font-sans");
+    expect([...receipt.querySelectorAll(".font-mono")].map((el) => el.textContent)).toEqual([
+      "1.5s",
+      "2",
+      "$0.1234",
+    ]);
   });
 
   it('labels the send button "Queue Next Turn" when the provider cannot interrupt, once busy', async () => {

@@ -30,13 +30,14 @@ interface WorkerAIPanelProps {
 
 const PANEL_CONTAINER = "flex h-full flex-col overflow-hidden bg-void";
 
+/** A control that does not fit drops whole to a second row; no label wraps inside its control. */
 const TOOLBAR =
-  "flex shrink-0 items-center gap-2 border-b border-border bg-[oklch(0.10_0.02_220/0.9)] px-3 py-1.5 backdrop-blur-[8px]";
+  "flex shrink-0 flex-wrap items-center gap-2 gap-y-1.5 border-b border-border bg-[oklch(0.10_0.02_220/0.9)] px-3 py-1.5 backdrop-blur-[8px]";
 
 const FLOW_INDICATOR =
-  "flex items-center gap-1.5 font-mono text-[11px] text-[oklch(0.58_0.04_220)]";
+  "flex shrink-0 items-center gap-1.5 whitespace-nowrap font-sans text-[11px] text-[oklch(0.58_0.04_220)]";
 
-const FLOW_DOT = "size-1.5 rounded-full bg-lime";
+const FLOW_DOT = "size-1.5 shrink-0 rounded-full bg-lime";
 
 /** Tailwind's preflight zeroes dialog margins; `m-auto` re-centers the modal. */
 const DIALOG =
@@ -44,8 +45,9 @@ const DIALOG =
 
 const DIALOG_TITLE = "mx-0 mt-0 mb-3 text-[15px] font-semibold text-fg";
 
+/** The transcript's 12px gutter, and 8px clear of the split handle so its focus ring (2px, offset 2px) never crosses the label. */
 const PANE_LABEL =
-  "px-1 font-display text-(length:--text-md) font-semibold tracking-[-0.01em] text-fg-dim";
+  "px-3 pt-2 pb-1 font-display text-(length:--text-md) font-semibold tracking-[-0.01em] text-fg-dim";
 
 const PANE_WRAPPER = "flex h-full flex-col overflow-hidden";
 

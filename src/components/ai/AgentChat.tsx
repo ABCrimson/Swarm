@@ -93,8 +93,9 @@ function blockText(kind: string, content: unknown): string {
 
 const CONTAINER = "flex h-full flex-col overflow-hidden";
 
-/** `column-reverse` pins the scroll position to the newest row natively, and leaves it alone once the user scrolls up. The container clips overflow, so the focus ring is drawn inside the scroller (`-outline-offset-2`). */
-const SCROLLER = "flex flex-1 flex-col-reverse overflow-y-auto -outline-offset-2";
+/** `column-reverse` pins the scroll position to the newest row natively, and leaves it alone once the user scrolls up. The container clips overflow, so the focus ring is drawn inside the scroller (`-outline-offset-2`). The top 12px fade out under the pane label, so a row is never cut hard mid-line there; the mask drops while the scroller or a row in it has keyboard focus, so no ring is faded. */
+const SCROLLER =
+  "flex flex-1 flex-col-reverse overflow-y-auto -outline-offset-2 mask-t-from-[calc(100%-12px)] focus-visible:mask-none has-focus-visible:mask-none";
 
 const TRANSCRIPT = "flex flex-col gap-2 p-3";
 
@@ -131,8 +132,10 @@ const PERMISSION_TOOL = "font-mono text-(length:--text-xs) text-[oklch(0.85_0.12
 const PERMISSION_MESSAGE =
   "font-mono text-[12px] leading-[1.4] wrap-anywhere whitespace-pre-wrap text-[oklch(0.88_0.06_60)]";
 
-const SETTLED = "self-center font-mono text-(length:--text-xs) text-fg-dim";
-const SETTLED_ERROR = "self-center font-mono text-(length:--text-xs) text-[oklch(0.72_0.20_25)]";
+/** Status lines are words in the text face; only their numbers are mono (`SETTLED_NUMBER`). */
+const SETTLED = "self-center font-sans text-(length:--text-xs) text-fg-dim";
+const SETTLED_ERROR = "self-center font-sans text-(length:--text-xs) text-[oklch(0.72_0.20_25)]";
+const SETTLED_NUMBER = "font-mono tabular-nums";
 
 const CAPABILITY_NOTE = "shrink-0 px-3 py-1 font-mono text-(length:--text-xs) text-fg-dim";
 
@@ -296,15 +299,24 @@ function TranscriptRow({
       return <PermissionRow workerId={workerId} item={item} inputRef={inputRef} />;
     case "settled": {
       const { status, error, durationMs, numTurns, costUsd } = item.payload;
-      const parts = [
-        status === "ok" ? "Turn Complete" : `Turn Failed${error ? `: ${error}` : ""}`,
-        formatDurationMs(durationMs),
-        ...(numTurns != null ? [`${numTurns} Turn${numTurns === 1 ? "" : "s"}`] : []),
-        ...(costUsd != null ? [`$${costUsd.toFixed(4)}`] : []),
-      ];
       return (
         <div className={`${status === "ok" ? SETTLED : SETTLED_ERROR} ${ROW}`}>
-          {parts.join(", ")}
+          {status === "ok" ? "Turn Complete" : `Turn Failed${error ? `: ${error}` : ""}`}
+          {", "}
+          <span className={SETTLED_NUMBER}>{formatDurationMs(durationMs)}</span>
+          {numTurns != null && (
+            <>
+              {", "}
+              <span className={SETTLED_NUMBER}>{numTurns}</span>
+              {` Turn${numTurns === 1 ? "" : "s"}`}
+            </>
+          )}
+          {costUsd != null && (
+            <>
+              {", "}
+              <span className={SETTLED_NUMBER}>{`$${costUsd.toFixed(4)}`}</span>
+            </>
+          )}
         </div>
       );
     }

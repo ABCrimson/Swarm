@@ -14,7 +14,7 @@ const HEADER =
 
 const HEADER_TITLE = "m-0 font-sans text-[13px] font-semibold text-[oklch(0.78_0.04_220)]";
 
-const STREAM_COUNT = "inline-flex items-center gap-1.5 font-mono text-[12px] text-fg-dim";
+const STREAM_COUNT = "inline-flex items-center gap-1.5 font-sans text-[12px] text-fg-dim";
 
 const ITEM =
   "flex items-center gap-2 rounded-[6px] border border-[oklch(0.20_0.03_220)] bg-[oklch(0.12_0.03_220/0.5)] px-2.5 py-2";
@@ -148,7 +148,10 @@ export function AIQueue({ workerId }: AIQueueProps): React.ReactElement {
       <div className={HEADER}>
         <h3 className={HEADER_TITLE}>AI Queue</h3>
         <span className={STREAM_COUNT}>
-          {activeStreams}/{concurrentLimit} Active
+          <span className="font-mono tabular-nums">
+            {activeStreams}/{concurrentLimit}
+          </span>{" "}
+          Active
           {waiting > 0 && <span className="text-amber"> • {waiting} Waiting</span>}
         </span>
       </div>

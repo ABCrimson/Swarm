@@ -29,8 +29,9 @@ const STATUS_LABEL: Record<ToolStatus, string> = {
 const CONTAINER =
   "my-1.5 overflow-hidden rounded-md border border-border bg-[oklch(0.10_0.02_220/0.8)]";
 
+/** The card clips overflow, so the focus ring is drawn inside the summary (`-outline-offset-2`). */
 const HEADER =
-  "flex w-full cursor-pointer items-center gap-2 border-none px-3 py-2 text-left text-inherit select-none [font-family:inherit] [font-size:inherit]";
+  "flex w-full cursor-pointer items-center gap-2 border-none px-3 py-2 -outline-offset-2 text-left text-inherit select-none [font-family:inherit] [font-size:inherit]";
 
 /** Per-tool accent classes for the built-in tools; custom tools get the neutral default. */
 const TOOL_BADGE_CLASSES: Record<string, string> = {
@@ -58,6 +59,30 @@ const EXPAND_BUTTON =
 
 // ── Status Indicator ────────────────────────────────
 
+/** A status mark in the sidebar icons' line style (24-unit viewBox, round currentColor strokes); 2.2 units at 14px draws about the 1.35px line their 1.8 draws at 18px. */
+function GlyphIcon({
+  className,
+  children,
+}: {
+  readonly className: string;
+  readonly children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={`size-3.5 ${className}`}
+    >
+      {children}
+    </svg>
+  );
+}
+
 function StatusGlyph({ status }: { readonly status: ToolStatus }): React.ReactElement {
   switch (status) {
     case "executing":
@@ -69,15 +94,15 @@ function StatusGlyph({ status }: { readonly status: ToolStatus }): React.ReactEl
       );
     case "complete":
       return (
-        <span className="text-[16px] leading-none text-lime" aria-hidden="true">
-          ✓
-        </span>
+        <GlyphIcon className="text-lime">
+          <path d="M5 12.5l4.5 4.5L19 7.5" />
+        </GlyphIcon>
       );
     case "error":
       return (
-        <span className="text-[16px] leading-none text-rose" aria-hidden="true">
-          ✗
-        </span>
+        <GlyphIcon className="text-rose">
+          <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />
+        </GlyphIcon>
       );
   }
 }
@@ -144,6 +169,10 @@ function ResultViewer({ result }: { readonly result: string }): React.ReactEleme
 const DISCLOSURE =
   "details-content:grid details-content:grid-rows-[0fr] details-content:transition-[grid-template-rows,content-visibility] details-content:transition-discrete details-content:duration-200 details-content:ease-in-out open:details-content:grid-rows-[1fr] motion-reduce:details-content:transition-none";
 
+/** The opened body fades in over the row's growth, so the card settles rather than slides. */
+const BODY =
+  "min-h-0 overflow-hidden opacity-0 transition-opacity duration-200 ease-in-out group-open:opacity-100 motion-reduce:transition-none";
+
 // ── Component ───────────────────────────────────────
 
 /**
@@ -162,7 +191,7 @@ export function ToolCallDisplay({
   const badgeClasses = TOOL_BADGE_CLASSES[name] ?? DEFAULT_BADGE_CLASSES;
 
   return (
-    <details open={expanded} className={`${CONTAINER} ${DISCLOSURE}`}>
+    <details open={expanded} className={`group ${CONTAINER} ${DISCLOSURE}`}>
       {/* biome-ignore lint/a11y/useSemanticElements: a summary is the details element's own disclosure control; the explicit role names it a button for assistive tech, as the card did before. */}
       <summary
         role="button"
@@ -184,7 +213,7 @@ export function ToolCallDisplay({
         </span>
       </summary>
 
-      <div className="min-h-0 overflow-hidden">
+      <div className={BODY}>
         <span className={SECTION_LABEL}>Input</span>
         <HighlightedJson data={input} className={JSON_BOX} />
         {result !== undefined && (

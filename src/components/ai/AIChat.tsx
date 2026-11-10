@@ -27,10 +27,12 @@ const CHAT_CONTAINER = "flex h-full flex-col overflow-hidden bg-surface-0";
  * content natively as the transcript grows — and leaves it alone once
  * the user scrolls up — with no scroll effect. The container clips
  * overflow, so the focus ring is drawn inside the scroller
- * (`-outline-offset-2`).
+ * (`-outline-offset-2`). The top 12px fade out under the pane label, so a
+ * message is never cut hard mid-line there; the mask drops while the
+ * scroller or a row in it has keyboard focus, so no ring is faded.
  */
 const SCROLLER =
-  "scroll-area scrollbar-thin scrollbar-thumb-border-2 scrollbar-track-transparent flex flex-1 flex-col-reverse overflow-y-auto -outline-offset-2";
+  "scroll-area scrollbar-thin scrollbar-thumb-border-2 scrollbar-track-transparent flex flex-1 flex-col-reverse overflow-y-auto -outline-offset-2 mask-t-from-[calc(100%-12px)] focus-visible:mask-none has-focus-visible:mask-none";
 
 const MESSAGES = "flex flex-col gap-3 p-4";
 

@@ -36,6 +36,14 @@ describe("AIQueue", () => {
     expect(useAiStore.getState().queue).toHaveLength(0);
   });
 
+  it("sets the Active count's numbers in mono and its word in the text face", () => {
+    render(<AIQueue workerId={W} />);
+    const count = screen.getByText((_, el) =>
+      Boolean(el?.matches("span.font-sans") && /^\d+\/\d+ Active/.test(el.textContent ?? "")),
+    );
+    expect(count.querySelector(".font-mono")?.textContent).toMatch(/^\d+\/\d+$/);
+  });
+
   it("names a pending item's place in the whole queue", () => {
     for (const id of ["aaaaaaaa-1111-4111-8111-111111111111", ITEM]) {
       useAiStore
