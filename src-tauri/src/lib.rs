@@ -44,6 +44,15 @@ mod test_support;
 /// capabilities/default.json grants.
 const MAIN_WINDOW: &str = "main";
 
+/// What tauri-plugin-window-state saves and restores: size, position,
+/// maximized, fullscreen and decorations, never visibility. The main
+/// window is declared hidden and `startup` shows it once swarm-core runs
+/// (or under the error dialog); restoring a saved `visible` would show it
+/// earlier, as soon as the window is ready.
+const WINDOW_STATE_FLAGS: tauri_plugin_window_state::StateFlags =
+    tauri_plugin_window_state::StateFlags::all()
+        .difference(tauri_plugin_window_state::StateFlags::VISIBLE);
+
 /// Builds the process's Tokio runtime and installs it as Tauri's async
 /// runtime.
 ///
@@ -103,6 +112,14 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        // Driven from Rust only: it restores the window when it is ready
+        // and saves `.window-state.json` in the app config directory on
+        // `RunEvent::Exit`. The capability grants none of its commands.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(WINDOW_STATE_FLAGS)
+                .build(),
+        )
         .plugin(lifecycle::plugin())
         .invoke_handler(commands::handler())
         .setup(|app| {
