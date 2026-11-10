@@ -205,6 +205,7 @@ pub(crate) fn keychain() -> Option<&'static CachedStore<KeyringStore>> {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
@@ -245,10 +246,10 @@ mod tests {
     fn test_a_failed_read_is_cached_within_its_ttl() {
         let store = CachedStore::new(Broken::default(), Duration::from_secs(3600));
         for _ in 0..3 {
-            assert!(matches!(
+            assert_matches!(
                 store.get("k"),
                 Err(AppError::Config(message)) if message == "Keychain Locked"
-            ));
+            );
         }
         assert_eq!(reads(&store), 1);
         // Another name is not covered by the first name's failure.
