@@ -92,17 +92,17 @@ A command happens exactly once or visibly fails, survives a crash or restart, an
 This release is Wave 2, tasks W2-T00 to W2-T21 with W2-T01b.
 
 - The plaintext exposure gate exists at this head (`crates/swarmd/src/exposure.rs`): `swarmd` serves plain `ws://` to loopback connections, to private IPv4 ones (RFC 1918 and `100.64.0.0/10`, which holds IPv4 tailnet addresses) only with `--allow-plaintext-lan`, and to public ones never, judging each connection by both of its ends. This release proves it on the integrated tree and the CI matrix. — W2.A (W2-T02)
-- Writer group commit and schema v3 with upcasters and a pre-migration copy of the database. — W2.B (W2-T03, W2-T04)
+- Writer group commit, for burst throughput and a shorter shutdown drain (the per-commit flush already meets ADR-0039's 5 ms gate, so it is not a latency fix), and schema v3 with upcasters and a pre-migration copy of the database. — W2.B (W2-T03, W2-T04)
 - Command identity: client-minted `commandId`, durable receipts, a retry returns the stored receipt. — W2.C (W2-T10)
 - Pure projection with sequenced snapshots and `list_*` reads. — W2.D (W2-T11)
 - Durable effect outbox, readiness gate and startup reconcile. — W2.E (W2-T12)
-- Bounded wire: gap measured before replay, one snapshot frame instead of an unbounded tail, per-connection byte cap. — W2.F (W2-T13, W2-T14)
+- Bounded wire: gap measured before replay, one snapshot frame instead of an unbounded tail, per-connection byte cap; each live event serialized once for every socket, with a bench at 1, 8 and 32 receivers. — W2.F (W2-T13, W2-T14)
 - Terminal bytes on their own channel with a bounded scrollback ring; process-tree kill per OS (a job object on Windows; on Unix a walk over the shell's session and its descendants). — W2.G (W2-T07, W2-T15, W2-T20)
 - Typed command contracts that generate the Zod schemas and the `docs/api.md` tables, checked in CI. — W2.H (W2-T05, W2-T17)
-- Injectable clock and ids, no waiting sleeps in tests, committed benches and `pnpm perf` budgets, writer and per-worker metrics. — W2.I (W2-T06, W2-T09, W2-T18, W2-T19)
-- Retention anchored on snapshots, with incremental vacuum. — W2.J (W2-T16)
+- Injectable clock and ids, no waiting sleeps in tests, committed benches and `pnpm perf` budgets, writer, per-worker and event-log size metrics (row count and payload bytes per event type). — W2.I (W2-T06, W2-T09, W2-T18, W2-T19)
+- Retention anchored on snapshots, with incremental vacuum; event logs created before the auto_vacuum pragma (0.14.x) get one full VACUUM, skipped when free disk is under twice the file size. — W2.J (W2-T16)
 - Truthful provider status: exit cause and stderr tail on `agent_session_exited`; provider session and message ids on every turn event. — W2.K (W2-T01b, W2-T08)
-- Deferred into this release from Milestone 0: the ship guard across remounts and a second tab (durable receipts), and the cold-start event lost before the listener attaches (seq handshake). — G5, G4 follow-ups
+- Deferred into this release from Milestone 0: the ship guard across remounts and a second tab (durable receipts), and the cold-start event lost before the listener attaches (seq handshake; on the desktop a native `subscribe_events(afterSeq, channel)` command replays and registers under one lock and streams on a `tauri::ipc::Channel`, measured with the `tracing` feature before and after). — G5, G4 follow-ups
 - Not in this release: TLS, pairing and scoped tokens (1.0.0); resuming provider sessions after a restart; telemetry that leaves the machine.
 
 ### Acceptance Evidence
@@ -135,7 +135,8 @@ Wave 2 design acceptance A1-A9, condensed:
 
 - Dependency refresh, including the newest Tauri 3 pre-release. — AGENTS.md rule, Q12
 - Tune the Wave 2 defaults (snapshot cadence, 30-day / 512 MiB retention, 1 MiB terminal ring) from measured numbers. — Wave 2 design section 13
-- Worktree upgrades: branch from the fetched remote tip, non-fatal submodule init, project setup scripts on worktree create, temporary branch names renamed under the repo lock (S each). — W3.9
+- Worktree upgrades: branch from the fetched remote tip, non-fatal submodule init, project setup scripts on worktree create, temporary branch names renamed under the repo lock, `.worktreeinclude` files copied on create (which trust tiers receive them is decided in that change, because such files usually hold secrets) (S each). — W3.9
+- `swarmd status`: bind address, the classes served, token file location and age, service state and version, read from local files and flags; no new route. (S)
 
 ---
 
@@ -250,7 +251,7 @@ You see, comment on, rewind and ship each worker's changes as a pull request, wi
 ## Minor Releases Before 0.19.0
 
 - Dependency refresh. — AGENTS.md rule
-- Codified taste: Biome GritQL rules for house patterns and a suppression-reason gate. — W4.14 (Q1)
+- Codified taste: more Biome GritQL rules for house patterns (the raw-OKLCH rule exists at this head) and a suppression-reason gate. — W4.14 (Q1)
 
 ---
 
@@ -263,12 +264,12 @@ You see what every attempt costs, every resource is bounded, and the job, review
 ### Scope
 
 - A unified attempt ledger with cache categories and an authoritative / estimated / unknown status on every amount; reservations and hard ceilings. — M3
-- Usage limits with scheduler deferral at window exhaustion, and cost per merged hunk; live model discovery replaces the hard-coded catalog. — W4.9
+- Usage limits with scheduler deferral at window exhaustion, and cost per merged hunk; live model discovery replaces the hard-coded catalog; provider limit frames (Claude `rate_limit_event`, Codex `account/rateLimits/updated`) are captured from the pinned CLIs into fixtures first, then persisted as one `provider_limit` event with its reset time, and `agent_turn_settled` gains a closed failure class. — W4.9
 - Disk and byte quotas, paged transcripts, retention and export; app-wide daemon limits; replay watermarks. — M3
 - Capability metadata authoritative at every control. — M3
 - Typed routes with deep links, and feature folders. — W4.1
 - Inbox and notifications: Needs You, Working and Done-Unread shelves; OS notifications that deep-link to the turn. — W4.2
-- Virtualized conversation timeline. — W4.3
+- Long conversations: transcript rows use `content-visibility: auto` at this head; JS virtualization only if a measured 5,000-row transcript still drops frames; a conversation-only mode hides tool rows but never a pending approval or a failed call. — W4.3
 - Theme tokens, a light variant and a contrast control; no static inline styles. — W4.8
 - Job overview, review queues, cost view and evidence inspector; accessibility and 30-40 worker layouts. — M3
 
@@ -303,13 +304,13 @@ Signed, notarized installers with attestations you can verify, scoped remote acc
 
 ### Scope
 
-- Scoped remote sessions: `swarmd pair` (QR, one-time code, revocation), per-scope remote policy, TLS with the certificate's SPKI hash in the pairing URL. Today the token is the only authentication and the transport is plain `ws://` ([The Daemon](daemon.md)). — W7.1, M4
+- Scoped remote sessions: `swarmd pair` (QR, one-time code, revocation), per-scope remote policy, a token-checked status route with live connection counts, TLS with the certificate's SPKI hash in the pairing URL. Today the token is the only authentication and the transport is plain `ws://` ([The Daemon](daemon.md)). — W7.1, M4
 - Process isolation per attempt and scoped credentials; the provider binary identity recorded per attempt. — M4
 - Authenticode signing on Windows and Developer ID signing plus notarization on macOS; arm64 Linux and Windows builds; install scripts. Today release artifacts carry Tauri updater signatures and build-provenance attestations (`.github/workflows/release.yml`), with no Authenticode signing or Apple notarization. — W7.8, M4
 - The desktop updater installs and relaunches through the cleanup hook; `swarmd` self-update with a database snapshot and trial / commit / rollback. — W7.5, W7.4
 - An SBOM for every artifact and checksums for the installer bundles (`swarmd` binaries already publish `.sha256` files); backups. — M4
 - Signed attestations over a seq range and tree hash, verified by `swarm verify`, signed with a per-installation key in the OS keychain or the user's git SSH signing key, never the updater key. — W5.4
-- Release train: nightly, stable promotes a nightly SHA, a bundle smoke test per runner, and `tauri-driver` end-to-end on Windows and Linux (the design in [End-to-End Testing](e2e.md), not built today). — W7.9
+- Release train: an opt-in nightly channel on a second updater endpoint, stable promotes a nightly SHA, a bundle smoke test per runner, and `tauri-driver` end-to-end on Windows and Linux (the design in [End-to-End Testing](e2e.md), not built today). — W7.9
 - User documentation (getting started, workers, ship, remote) beside the reference. — W4.13
 
 ### Acceptance Evidence
@@ -379,8 +380,8 @@ Full provider fidelity in the conversation: composer, plan mode, attachments, on
 
 - Markdown pipeline. — W4.4
 - Keybinding engine. — W4.5
-- Composer: `@file` mentions, slash commands, image paste, queue and steer, permission-mode picker, context meter. — W4.6
-- Provider contract: capabilities matrix, attachments, five-way permission decisions, steer, typed file-change / command / plan blocks, plan mode with structured questions, and Codex re-verified at the newest app-server at every bump: the checked-in schemas (0.166.0, 0.168.0-alpha.1) and the method-name drift test exist at this head, with `VERIFIED_CODEX_VERSION` 0.168.0-alpha.1. — W4.7
+- Composer: `@file` mentions, slash commands, image paste, queue and steer, permission-mode picker, context meter (Codex reports `last` usage and `modelContextWindow`; Claude needs the last request's usage from its assistant lines, because its result usage sums the turn's internal requests). — W4.6
+- Provider contract: capabilities matrix, attachments, five-way permission decisions, steer, fresh session in the same worker and worktree (a persisted `session_reset` event), typed file-change / command / plan blocks, plan mode with structured questions, and Codex re-verified at the newest app-server at every bump: the checked-in schemas (0.166.0, 0.168.0-alpha.1) and the method-name drift test exist at this head, with `VERIFIED_CODEX_VERSION` 0.168.0-alpha.1. — W4.7
 - One chat model: retire the webview Anthropic chat into a Rust adapter and close its CSP opening. — W4.10
 - Import or fork existing Claude Code / Codex CLI sessions into a worker. — W4.11
 - MCP Apps rendering in a sandboxed frame. — W4.12
@@ -462,7 +463,7 @@ Gate: the ACP and team pieces (W6.1-W6.3) ship only if the 1.1.0 measurements sh
 - Gemini CLI (an `npx` agent in the ACP Registry) installs at its exact pinned version and runs a turn, and a binary-archive agent installs with its `sha256` verified.
 - A cancelled ACP turn settles cancelled with every permission answered.
 - A three-provider team produces one log with cross-provider causal edges.
-- A scheduled prompt survives a restart.
+- A scheduled prompt survives a restart, stores its model and effort, resolves its base ref when the run starts (a missing branch ends that run with a named error), offers a fresh session, and links each run to its worker.
 - The desktop attaches to a WSL `swarmd` and a remote `swarmd` in one session.
 - The Playwright WebKit project passes against the PWA.
 
