@@ -174,9 +174,40 @@ pub(crate) fn base_args(dir: &Path) -> Vec<String> {
     ]
 }
 
-/// `base_args(dir)` followed by `args`.
+/// User git configuration that changes what a read-only subcommand
+/// prints, each pinned to git's documented default (`git help config`)
+/// for the reads in [`READ_SUBCOMMANDS`] only.
+///
+/// * `log.showSignature` — `true` makes `git show` print the signature
+///   check ahead of the `--numstat -z` records `ship::status::numstat`
+///   parses, so a signed commit's diff stat would not parse.
+///
+/// Other knobs that look relevant were checked against the installed git
+/// and change nothing these reads parse: every read that prints paths
+/// uses `-z` (`core.quotepath`), runs from a worktree root
+/// (`diff.relative`), and prints counts or records rather than patches
+/// (`diff.suppressBlankEmpty`, `diff.submodule`, `color.ui`);
+/// `core.safecrlf` only acts on writes.
+const READ_PINS: [(&str, &str); 1] = [("log.showSignature", "false")];
+
+/// The subcommands that receive [`READ_PINS`]: the purely read-only
+/// ones whose output the git layer parses and a pinned knob can reach.
+/// (`rev-parse` prints object names and paths no knob touches, and its
+/// builders' argv is asserted in full.) Subcommands that can also write (`config`,
+/// `remote`, `symbolic-ref`, `branch`, `worktree`, and every index or
+/// history mutation) are deliberately absent, so a write's argv is the
+/// caller's own.
+const READ_SUBCOMMANDS: [&str; 6] = ["cat-file", "diff", "ls-files", "rev-list", "show", "status"];
+
+/// `base_args(dir)`, then [`READ_PINS`] when `args` names a read-only
+/// subcommand, then `args`.
 pub(crate) fn args_in(dir: &Path, args: &[&str]) -> Vec<String> {
     let mut full = base_args(dir);
+    if READ_SUBCOMMANDS.contains(&subcommand(args).as_str()) {
+        for (key, value) in READ_PINS {
+            full.extend(["-c".to_owned(), format!("{key}={value}")]);
+        }
+    }
     full.extend(args.iter().map(|&arg| arg.to_owned()));
     full
 }
@@ -613,6 +644,105 @@ mod tests {
         ];
         assert_eq!(subcommand(&args), "commit");
         assert_eq!(subcommand(&["--version"]), "--version");
+    }
+
+    /// A user's `log.showSignature=true` makes `git show` print the
+    /// signature check into stdout, ahead of the `--numstat -z` records
+    /// the ship chain parses. `gpg.program=git` makes the check's output
+    /// deterministic (git rejects gpg's argv with a usage message on its
+    /// stderr, which `show` forwards) without a real gpg or key. The
+    /// unpinned argv proves the knob bites; `args_in` must neutralize it.
+    #[test]
+    fn test_read_pins_keep_show_signature_out_of_numstat_output() {
+        let repo = TempRepo::new("cli-read-pins-signature");
+        repo.git(&["config", "log.showSignature", "true"]);
+        repo.git(&["config", "gpg.program", "git"]);
+
+        let empty_tree = run_with_stdin(&args_in(repo.root(), &["mktree"]), b"", READ_TIMEOUT)
+            .unwrap()
+            .stdout_trimmed();
+        let parent = repo.git(&["rev-parse", "HEAD"]).stdout_trimmed();
+        let signed = [
+            format!("tree {empty_tree}"),
+            format!("parent {parent}"),
+            "author A <a@example.com> 1 +0000".to_owned(),
+            "committer A <a@example.com> 1 +0000".to_owned(),
+            "gpgsig -----BEGIN PGP SIGNATURE-----".to_owned(),
+            " ".to_owned(),
+            " abc".to_owned(),
+            " -----END PGP SIGNATURE-----".to_owned(),
+            String::new(),
+            "signed".to_owned(),
+            String::new(),
+        ]
+        .join("\n");
+        let sha = run_with_stdin(
+            &args_in(
+                repo.root(),
+                &["hash-object", "-t", "commit", "-w", "--stdin"],
+            ),
+            signed.as_bytes(),
+            READ_TIMEOUT,
+        )
+        .unwrap()
+        .stdout_trimmed();
+
+        let show = ["show", "--format=", "--numstat", "-z", sha.as_str()];
+        let mut unpinned = base_args(repo.root());
+        unpinned.extend(show.map(str::to_owned));
+        let polluted = run(&unpinned, READ_TIMEOUT).unwrap();
+        assert!(
+            !polluted.stdout.starts_with(b"0\t1\t"),
+            "the knob no longer bites, so the pin is dead weight: {:?}",
+            String::from_utf8_lossy(&polluted.stdout)
+        );
+
+        let clean = run(&args_in(repo.root(), &show), READ_TIMEOUT).unwrap();
+        assert!(clean.success(), "{}", clean.stderr);
+        assert_eq!(clean.stdout, b"0\t1\tREADME.md\0");
+    }
+
+    #[test]
+    fn test_args_in_pins_read_subcommands_after_the_base_args() {
+        let dir = Path::new("/tmp/repo");
+        for read in READ_SUBCOMMANDS {
+            let args = args_in(dir, &[read, "--flag"]);
+            let (base, rest) = args.split_at(4);
+            assert_eq!(base, base_args(dir), "{read}");
+            let pins: Vec<String> = READ_PINS
+                .iter()
+                .flat_map(|(key, value)| ["-c".to_owned(), format!("{key}={value}")])
+                .collect();
+            assert_eq!(rest[..pins.len()], pins[..], "{read}");
+            assert_eq!(subcommand(&args), *read);
+            assert_eq!(
+                rest[pins.len()..],
+                [(*read).to_owned(), "--flag".to_owned()]
+            );
+        }
+    }
+
+    /// The pins belong to reads only: a write subcommand's argv is the
+    /// base args plus the caller's, byte for byte.
+    #[test]
+    fn test_args_in_leaves_write_subcommands_unpinned() {
+        let dir = Path::new("/tmp/repo");
+        for write in [
+            &["commit", "--file=-"][..],
+            &["push", "origin", "main"],
+            &["branch", "-d", "topic"],
+            &["worktree", "add", "-b", "topic", "/tmp/wt", "HEAD"],
+            &["worktree", "remove", "/tmp/wt"],
+            &["add", "--pathspec-from-file=-"],
+            &["restore", "--staged", "a.txt"],
+            &["config", "--get", "init.defaultBranch"],
+            &["remote", "get-url", "origin"],
+            &["symbolic-ref", "-q", "HEAD"],
+        ] {
+            let mut expected = base_args(dir);
+            expected.extend(write.iter().map(|&arg| arg.to_owned()));
+            assert_eq!(args_in(dir, write), expected, "{write:?}");
+        }
     }
 
     #[test]
