@@ -80,7 +80,7 @@ fn committed_paths(dir: &Path, sha: &str) -> Vec<String> {
 
 fn commit_message(dir: &Path, sha: &str) -> String {
     let output = git_in(dir, &["show", "-s", "--format=%B", sha]);
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    String::from_utf8_lossy_owned(output.stdout)
 }
 
 fn skipped_paths(skipped: &[SkippedFile]) -> Vec<&str> {
@@ -489,7 +489,7 @@ fn test_staged_mode_never_commits_an_oversized_non_utf8_name() {
     assert!(err.message.contains("Refusing To Ship"), "{}", err.message);
 
     let tree = git_in(&worktree, &["ls-tree", "-r", "--name-only", "HEAD"]);
-    let tree = String::from_utf8_lossy(&tree.stdout).into_owned();
+    let tree = String::from_utf8_lossy_owned(tree.stdout);
     assert!(!tree.contains("big"), "oversized blob committed: {tree}");
 }
 
