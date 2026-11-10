@@ -215,15 +215,18 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
-#[cfg(unix)]
-fn restrict_permissions(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-}
-
-#[cfg(windows)]
-fn restrict_permissions(path: &Path) -> io::Result<()> {
-    windows_acl::restrict_to_current_user(path)
+cfg_select! {
+    unix => {
+        fn restrict_permissions(path: &Path) -> io::Result<()> {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        }
+    }
+    windows => {
+        fn restrict_permissions(path: &Path) -> io::Result<()> {
+            windows_acl::restrict_to_current_user(path)
+        }
+    }
 }
 
 /// The SID in one line of `whoami /user /fo csv /nh` output, which
