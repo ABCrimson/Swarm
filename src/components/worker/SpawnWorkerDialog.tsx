@@ -700,17 +700,16 @@ export function SpawnWorkerDialog({
           <Button variant="ghost" size="sm" onClick={requestDismiss} disabled={isSpawning}>
             Cancel
           </Button>
-          {probeBoundary(reads.answers, (reasons) => (
-            <Button
-              type="submit"
-              variant="primary"
-              size="sm"
-              loading={isSpawning}
-              disabled={providerReason(provider, reasons) != null}
-            >
-              Spawn Worker
-            </Button>
-          ))}
+          {/* Outside the probe boundary, so the button node (and focus on it) survives every probe answer; an unavailable provider is refused by the action. */}
+          <Button
+            type="submit"
+            variant="primary"
+            size="sm"
+            loading={isSpawning}
+            disabled={isSpawning}
+          >
+            Spawn Worker
+          </Button>
         </div>
       </form>
     </dialog>

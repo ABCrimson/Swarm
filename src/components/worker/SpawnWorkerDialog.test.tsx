@@ -370,6 +370,24 @@ describe("SpawnWorkerDialog", () => {
     );
   });
 
+  it("keeps focus on the Spawn Worker button when a probe answers", async () => {
+    const claude = Promise.withResolvers<ProbeReport>();
+    vi.mocked(agentProbe).mockImplementation((provider) =>
+      provider === "claude_code" ? claude.promise : Promise.resolve(AVAILABLE),
+    );
+    await renderDialog(<SpawnWorkerDialog onClose={vi.fn()} />);
+    const spawnButton = screen.getByRole("button", { name: "Spawn Worker" });
+    await act(async () => spawnButton.focus());
+    expect(spawnButton).toHaveFocus();
+
+    await act(async () =>
+      claude.resolve({ available: false, version: null, detail: "Not Signed In" }),
+    );
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Claude Code" })).toBeDisabled());
+    expect(screen.getByRole("button", { name: "Spawn Worker" })).toBe(spawnButton);
+    expect(document.activeElement).toBe(spawnButton);
+  });
+
   it("includes repoRoot in the spawn options once a project root has loaded", async () => {
     getPersistedRepoRootMock.mockResolvedValue("/repo/root");
     vi.mocked(validateRepoRoot).mockResolvedValue("/repo/root");
@@ -554,9 +572,10 @@ describe("SpawnWorkerDialog", () => {
     await waitForProbeSettled();
     await waitFor(() => expect(screen.getByRole("radio", { name: "Claude Code" })).toBeDisabled());
 
-    expect(screen.getByRole("button", { name: "Spawn Worker" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Spawn Worker" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Claude Code Unavailable: Missing");
     expect(spawnWorker).not.toHaveBeenCalled();
+    expect(agentSpawn).not.toHaveBeenCalled();
   });
 
   it("in web mode disables the folder picker with the desktop-only reason but still shows the saved root", async () => {
