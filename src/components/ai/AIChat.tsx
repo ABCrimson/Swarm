@@ -4,6 +4,7 @@ import { Button } from "#components/ui/Button";
 import { cancelChatTurn, clearChat, sendChatMessage } from "#lib/ai-chat";
 import { CLAUDE_MODELS } from "#lib/models";
 import { DESKTOP_ONLY_REASON, hasCapability } from "#lib/tauri";
+import { onTranscriptKeyDown } from "#lib/transcript-keys";
 import {
   type ChatMessage,
   type ChatNotice,
@@ -36,10 +37,13 @@ const MESSAGES = "flex flex-col gap-3 p-4";
 /**
  * Every committed message. `content-visibility: auto` skips rendering a
  * message while it is off-screen; it stays in the DOM, the accessibility
- * tree and find-in-page. `contain-intrinsic-size: auto 112px` reserves the
- * median message height measured on the e2e transcript fixture at
- * 1440x900 until the message has rendered once, and its real height after
- * that. The streaming bubble is always the newest, so it has neither.
+ * tree and find-in-page. `contain-intrinsic-size` sizes the content box: a
+ * message reserves 112px (the median border-box height on the e2e
+ * transcript fixture at 1440x900) plus its own padding and border until it
+ * has rendered once, and its real size after that. Paint containment clips
+ * at the padding box, so the assistant bubble trades `-m-1` for `p-1` to
+ * keep its controls' focus rings. The streaming bubble is always the
+ * newest, so it has neither.
  */
 const MESSAGE_ROW = "[contain-intrinsic-size:auto_112px] [content-visibility:auto]";
 
@@ -107,7 +111,7 @@ function Thinking({
 }): React.ReactElement {
   return (
     <details open={open}>
-      <summary className={`${META_BASE} mt-0 cursor-pointer`}>Thinking</summary>
+      <summary className={`${META_BASE} mt-0 cursor-pointer -outline-offset-2`}>Thinking</summary>
       <div className={THINKING}>{text}</div>
     </details>
   );
@@ -127,7 +131,7 @@ function MessageBubble({ message }: { readonly message: ChatMessage }): React.Re
   }
 
   return (
-    <div className={`${ASSISTANT_BUBBLE} ${MESSAGE_ROW}`}>
+    <div className={`${ASSISTANT_BUBBLE} ${MESSAGE_ROW} -m-1 p-1`}>
       <span className="sr-only">Assistant: </span>
       {message.thinking && <Thinking text={message.thinking} />}
       {message.content && <AIMessageStream content={message.content} isStreaming={false} />}
@@ -222,6 +226,7 @@ export function AIChat({ workerId }: AIChatProps): React.ReactElement {
         // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1); WebKit (WKWebView, WebKitGTK) does not focus scroll containers natively.
         tabIndex={0}
         className={SCROLLER}
+        onKeyDown={onTranscriptKeyDown}
       >
         <div className={MESSAGES}>
           {thread.messages.length === 0 && !busy && (

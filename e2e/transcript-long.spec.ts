@@ -33,6 +33,32 @@ function isRendered(locator: Locator): Promise<boolean> {
   return locator.evaluate((el) => el.checkVisibility({ contentVisibilityAuto: true }));
 }
 
+/** The AgentChat transcript's newest text row. */
+function newestRow(log: Locator): Locator {
+  return log.getByText(`Row ${ROWS} of ${ROWS}.`, { exact: true });
+}
+
+/**
+ * One End press in the focused transcript reaches the newest row and one
+ * Home press the oldest, across rows `content-visibility: auto` never
+ * rendered (Chromium's native Home and End stop short over them).
+ */
+async function expectHomeEndReach(
+  page: Page,
+  log: Locator,
+  oldest: Locator,
+  newest: Locator,
+): Promise<void> {
+  await log.focus();
+  await page.keyboard.press("End");
+  await expect(newest).toBeInViewport();
+  await expectPinnedToEnd(log);
+  await page.keyboard.press("Home");
+  await expect(oldest).toBeInViewport();
+  await page.keyboard.press("End");
+  await expect(newest).toBeInViewport();
+}
+
 /**
  * Find-in-page from script: `window.find` (non-standard, in Chromium and
  * WebKit; not in lib.dom) selects the next match, and, as the browser's find
@@ -115,16 +141,23 @@ test.describe("Long transcripts", () => {
 
     const approval = log.getByRole("group", { name: "Permission Request: Bash" });
     await expect(approval).not.toBeInViewport();
+    const allow = approval.getByRole("button", { name: "Allow" });
+    expect(await isRendered(allow)).toBe(false);
     // Tab from the transcript reaches the oldest row's first control, and
     // focusing it renders the skipped row and scrolls it into view.
     await log.focus();
     await page.keyboard.press("Tab");
-    const allow = approval.getByRole("button", { name: "Allow" });
     await expect(allow).toBeFocused();
+    expect(await isRendered(allow)).toBe(true);
     await expect(approval).toBeInViewport();
     await expect(approval).toBeVisible();
     await page.keyboard.press("Enter");
     await expect(approval.getByText("Allowed", { exact: true })).toBeVisible();
+
+    // The 200 rows arrived in one batch while pinned, so the rows between
+    // the oldest and the newest have never rendered: one End and one Home
+    // must still cross them.
+    await expectHomeEndReach(page, log, approval, newestRow(log));
   });
 
   test("AIChat keeps the newest message in view; off-screen messages skip rendering but stay findable", async ({
@@ -153,5 +186,33 @@ test.describe("Long transcripts", () => {
     expect(await log.ariaSnapshot()).toContain(sends[0]);
     expect(await findInPage(page, sends[0] ?? "")).toBe(true);
     await expect(first).toBeInViewport();
+
+    // A committed message is paint-contained, which clips at its padding
+    // box: the focus ring of its Thinking summary must lie inside the row.
+    await log.focus();
+    await page.keyboard.press("Tab");
+    const summary = log.locator("summary").first();
+    await expect(summary).toBeFocused();
+    const { ring, row } = await summary.evaluate((el) => {
+      const style = getComputedStyle(el);
+      const reach = Number.parseFloat(style.outlineOffset) + Number.parseFloat(style.outlineWidth);
+      const box = el.getBoundingClientRect();
+      const rowEl = el.closest("details")?.parentElement;
+      if (!rowEl) throw new Error("The Thinking block has no message row.");
+      const rowBox = rowEl.getBoundingClientRect();
+      return {
+        ring: {
+          top: box.top - reach,
+          left: box.left - reach,
+          right: box.right + reach,
+          bottom: box.bottom + reach,
+        },
+        row: { top: rowBox.top, left: rowBox.left, right: rowBox.right, bottom: rowBox.bottom },
+      };
+    });
+    expect(ring.top).toBeGreaterThanOrEqual(row.top);
+    expect(ring.left).toBeGreaterThanOrEqual(row.left);
+    expect(ring.right).toBeLessThanOrEqual(row.right);
+    expect(ring.bottom).toBeLessThanOrEqual(row.bottom);
   });
 });

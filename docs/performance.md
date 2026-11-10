@@ -48,7 +48,7 @@
 | `LogViewer` | Scroll-window virtualization, 28px rows, overscan 10 | Auto-scroll with pause-on-scroll-up detection |
 | `FileTree` | Scroll-window virtualization, 28px rows, overscan 10 | Flattened tree for O(1) index lookup |
 | `SessionList` | `content-visibility: auto` with `contain-intrinsic-size` | Plain flow layout, so wrapped tag rows can never overlap; the browser skips off-screen cards |
-| `AgentChat`, `AIChat` | `content-visibility: auto` per transcript row (`auto 51px`) and committed message (`auto 112px`) | The sizes are the median row heights on the e2e transcript fixture at 1440x900 (Chromium); the streaming bubble has none. On Chromium, Home in a focused transcript of never-rendered rows advances only part of the way per press; Tab, focus and programmatic scrolls reach the top |
+| `AgentChat`, `AIChat` | `content-visibility: auto` per transcript row (`auto 51px`) and committed message (`auto 112px`) | `contain-intrinsic-size` sizes the content box: a row reserves 51px (112px) plus its own padding and border until it has rendered once, and its real size after that (the values are median border-box heights on the e2e transcript fixture at 1440x900, Chromium); the streaming bubble has none. Home and End in a focused transcript jump straight to the oldest and newest row (`src/lib/transcript-keys.ts`), since Chromium's native keys stop short over never-rendered rows |
 
 The virtualized lists track container size with `@crimson_dev/use-resize-observer` and compute the visible range from `scrollTop`.
 

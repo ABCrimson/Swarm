@@ -7,6 +7,7 @@ import { PROVIDER_LABELS } from "#lib/agent-events";
 import { escapeForDisplay } from "#lib/display-escape";
 import { errorMessage } from "#lib/is-error";
 import { agentCancel, agentPermissionRespond, agentSendTurn } from "#lib/tauri";
+import { onTranscriptKeyDown } from "#lib/transcript-keys";
 import {
   type AgentTranscriptItem,
   type PermissionState,
@@ -100,9 +101,12 @@ const TRANSCRIPT = "flex flex-col gap-2 p-3";
 /**
  * Every transcript row. `content-visibility: auto` skips rendering a row
  * while it is off-screen; it stays in the DOM, the accessibility tree and
- * find-in-page. `contain-intrinsic-size: auto 51px` reserves the median
- * row height measured on the e2e transcript fixture at 1440x900 until the
- * row has rendered once, and its real height after that.
+ * find-in-page. `contain-intrinsic-size` sizes the content box: a row
+ * reserves 51px (the median border-box height on the e2e transcript
+ * fixture at 1440x900) plus its own padding and border until it has
+ * rendered once, and its real size after that. Paint containment clips at
+ * the padding box, so the text row trades `-m-1` for `p-1` to keep its code
+ * blocks' focus rings.
  */
 const ROW = "[contain-intrinsic-size:auto_51px] [content-visibility:auto]";
 
@@ -270,7 +274,7 @@ function TranscriptRow({
         );
       }
       return (
-        <div className={`${STREAM_WRAP} ${ROW}`}>
+        <div className={`${STREAM_WRAP} ${ROW} -m-1 p-1`}>
           <span className="sr-only">Assistant: </span>
           <AIMessageStream content={text} isStreaming={false} />
         </div>
@@ -367,6 +371,7 @@ export function AgentChat({ workerId }: AgentChatProps): React.ReactElement {
         // biome-ignore lint/a11y/noNoninteractiveTabindex: WebKit (macOS, Linux) never makes a scroll container focusable on its own, and the transcript must scroll from the keyboard (WCAG 2.1.1).
         tabIndex={0}
         className={SCROLLER}
+        onKeyDown={onTranscriptKeyDown}
       >
         <div className={TRANSCRIPT}>
           {transcript.items.length === 0 && streaming.length === 0 && (

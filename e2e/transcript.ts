@@ -54,10 +54,16 @@ export async function sendChatMessages(
   }
 }
 
-/** Types `message` into the webview chat's composer and sends it. */
+/**
+ * Types `message` into the webview chat's composer and sends it, then waits
+ * for the form reset: on WebKit a mocked turn can end before React resets
+ * the form, and a late reset would wipe the next `fill`.
+ */
 export async function sendChatMessage(app: SwarmApp, message: string): Promise<void> {
-  await app.page.getByRole("textbox", { name: /^Message / }).fill(message);
+  const box = app.page.getByRole("textbox", { name: /^Message / });
+  await box.fill(message);
   await app.page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(box).toHaveValue("");
 }
 
 /** Claude Code's announced capabilities: interactive permissions, so a request waits for an answer. */
