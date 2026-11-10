@@ -73,9 +73,14 @@ fn csp_is_otherwise_strict() {
 }
 
 /// The main window starts hidden: `startup` shows it once swarm-core
-/// runs, or under the error dialog when the start failed.
+/// runs, or under the error dialog when the start failed. The
+/// window-state plugin restores everything else it saved (size, position,
+/// maximized, fullscreen, decorations) but never visibility, which would
+/// show the window before the core is up.
 #[test]
 fn main_window_starts_hidden() {
+    use tauri_plugin_window_state::StateFlags;
+
     let config = config();
     let main = config
         .app
@@ -85,6 +90,15 @@ fn main_window_starts_hidden() {
         .expect("a main window is declared");
     assert!(!main.visible);
     assert!(main.create);
+    assert!(
+        !crate::WINDOW_STATE_FLAGS.contains(StateFlags::VISIBLE),
+        "the window-state plugin would restore visibility"
+    );
+    assert_eq!(
+        (crate::WINDOW_STATE_FLAGS | StateFlags::VISIBLE).bits(),
+        StateFlags::all().bits(),
+        "every other part of the window state is restored"
+    );
 }
 
 /// `additionalBrowserArgs` replaces wry's Windows default

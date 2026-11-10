@@ -65,9 +65,13 @@ swarm-core                = { path = "crates/swarm-core" }
 # v3 selects the webview runtime by depending on a runtime crate and
 # passing its attributes to `Builder::runtime`; the runtime-wide
 # features (`devtools`, `unstable`, `tracing`, `x11`, `dbus`) moved onto
-# tauri-runtime-wry. swarm-desktop's own `devtools` feature forwards to
-# it; debug builds get the inspector regardless (tauri-runtime-wry and
-# wry gate it on `any(debug_assertions, feature = "devtools")`).
+# tauri-runtime-wry (tauri keeps `tracing` and `unstable` features for
+# its own code; the runtime's `unstable` forwards to tauri's, its
+# `tracing` does not). swarm-desktop's `devtools` feature forwards to
+# tauri-runtime-wry, and its `tracing` feature to both crates; debug
+# builds get the inspector regardless
+# (tauri-runtime-wry and wry gate it on
+# `any(debug_assertions, feature = "devtools")`).
 tauri                     = { version = "=3.0.0-alpha.6", features = ["image-png"] }
 tauri-runtime-wry         = "=3.0.0-alpha.6"
 tauri-build               = "=3.0.0-alpha.4"
@@ -78,6 +82,10 @@ tauri-plugin-store        = "=3.0.0-alpha.3"
 # Default features minus zip (v1 .zip/.AppImage.tar.gz only); createUpdaterArtifacts ships raw .exe/.msi/.AppImage.
 tauri-plugin-updater      = { version = "=3.0.0-alpha.3", default-features = false, features = ["rustls-tls", "system-proxy"] }
 tauri-plugin-notification = "=3.0.0-alpha.3"
+tauri-plugin-window-state = "=3.0.0-alpha.2"
+# No features: the `deep-link` feature would route `swarm:` URLs into a
+# running instance, an untrusted entry point not built today.
+tauri-plugin-single-instance = "=3.0.0-alpha.3"
 # Dev-only, swarm-desktop's capability contract test: the matcher
 # tauri-plugin-opener evaluates URL scopes with (already in the tree
 # through it, at this exact version).

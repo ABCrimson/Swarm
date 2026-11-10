@@ -1,10 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the SWARM Orchestrator webview may do. It may invoke exactly the app commands listed as allow-* (the manifest in build.rs generates one per command), and no other. File access carries no static path scope: the fs commands read, list, stat and write only what the user picks in an open or save dialog, which grants that path (a directory with all its contents, dot entries included, when opened recursively) for the rest of the session. They never create directories, delete or rename.",
+  "description": "What the SWARM Orchestrator webview may do. From Tauri core it may only listen to and unlisten from events and toggle the inspector with its keyboard shortcut (the script the runtime injects invokes the webview plugin's internal_toggle_devtools); no window, menu, tray, path, app, image or resources command. It may invoke exactly the app commands listed as allow-* (the manifest in build.rs generates one per command), and no other. File access carries no static path scope: the fs commands read, list, stat and write only what the user picks in an open or save dialog, which grants that path (a directory with all its contents, dot entries included, when opened recursively) for the rest of the session. They never create directories, delete or rename.",
   "windows": ["main"],
   "permissions": [
-    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:webview:allow-internal-toggle-devtools",
     "allow-spawn-worker",
     "allow-pause-worker",
     "allow-resume-worker",

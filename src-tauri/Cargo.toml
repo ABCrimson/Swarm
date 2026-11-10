@@ -20,6 +20,18 @@ workspace = true
 # `cargo run`) have the inspector without this feature, because
 # tauri-runtime-wry and wry enable it on `debug_assertions`.
 devtools = ["tauri-runtime-wry/devtools"]
+# Instruments Tauri itself for measurement (e.g. `pnpm tauri dev
+# --features tracing`). tauri then opens spans around app setup, plugin
+# registration and hooks, IPC request handling and event emission (the
+# `app::emit` span and `emit::run` inside it, around every event the
+# shell forwards to the webview), and tauri-runtime-wry around window
+# and webview creation and the script evaluation that delivers an event.
+# The default filters of `init_tracing` leave them out: set `RUST_LOG`
+# to name their targets (e.g. `RUST_LOG=tauri=trace,swarm_desktop=debug`)
+# and attach a span-aware layer to read their timings. Off by default:
+# it is a profiling build, the measurement of event delivery cost before
+# and after a change to it.
+tracing = ["tauri/tracing", "tauri-runtime-wry/tracing"]
 
 [dependencies]
 swarm-core                = { workspace = true }
@@ -31,6 +43,8 @@ tauri-plugin-opener       = { workspace = true }
 tauri-plugin-store        = { workspace = true }
 tauri-plugin-updater      = { workspace = true }
 tauri-plugin-notification = { workspace = true }
+tauri-plugin-window-state = { workspace = true }
+tauri-plugin-single-instance = { workspace = true }
 tokio                     = { workspace = true }
 serde                     = { workspace = true }
 serde_json                = { workspace = true }
