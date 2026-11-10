@@ -1073,10 +1073,7 @@ fn entries(dir: &Path) -> Vec<String> {
 
 /// Sets `path`'s modification time to `at`.
 fn set_modified(path: &Path, at: std::time::SystemTime) {
-    std::fs::File::options()
-        .write(true)
-        .open(path)
-        .and_then(|file| file.set_modified(at))
+    std::fs::set_times(path, std::fs::FileTimes::new().set_modified(at))
         .expect("set the modification time");
 }
 
