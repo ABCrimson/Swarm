@@ -450,7 +450,7 @@ async function runTurn(workerId: string, userText: string): Promise<void> {
         ...live,
         phase: "tools",
         toolCalls: [
-          ...live.toolCalls.filter((call) => !calls.some((block) => block.id === call.id)),
+          ...live.toolCalls.filter((call) => calls.every((block) => block.id !== call.id)),
           ...calls.map((block) => ({
             id: block.id,
             name: block.name,

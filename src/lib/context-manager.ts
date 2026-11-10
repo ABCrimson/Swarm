@@ -33,7 +33,7 @@ function startsExchange(message: ChatMessageParam): boolean {
   if (message.role !== "user") return false;
   return (
     typeof message.content === "string" ||
-    !message.content.some((block) => block.type === "tool_result")
+    message.content.every((block) => block.type !== "tool_result")
   );
 }
 
