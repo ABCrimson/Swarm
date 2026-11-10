@@ -497,6 +497,7 @@ pub(crate) async fn execute_turn(
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
     use std::time::Duration;
 
     use tokio::sync::Notify;
@@ -720,13 +721,11 @@ mod tests {
         let overflow = gated
             .scheduler
             .enqueue(make_request(worker, TurnPriority::Normal));
-        assert!(
-            matches!(
-                overflow,
-                Err(AppError::QueueFull {
-                    capacity: AGENT_TURN_QUEUE_CAPACITY
-                })
-            ),
+        assert_matches!(
+            overflow,
+            Err(AppError::QueueFull {
+                capacity: AGENT_TURN_QUEUE_CAPACITY
+            }),
             "got {overflow:?}"
         );
 
@@ -750,10 +749,7 @@ mod tests {
         drop(runtime);
 
         let result = scheduler.enqueue(make_request(Uuid::new_v4(), TurnPriority::Normal));
-        assert!(
-            matches!(result, Err(AppError::ChannelClosed(_))),
-            "got {result:?}"
-        );
+        assert_matches!(result, Err(AppError::ChannelClosed(_)), "got {result:?}");
         assert_eq!(
             scheduler.queued.load(AtomicOrdering::SeqCst),
             0,
