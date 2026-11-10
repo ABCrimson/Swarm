@@ -108,6 +108,7 @@ mod wire;
 #[cfg(test)]
 mod tests;
 
+use std::cfg_select;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::mem::DropGuard;
@@ -323,14 +324,14 @@ fn probe_dir_path(root: &Path) -> PathBuf {
 /// Creation is not recursive, so it fails when the path already exists
 /// rather than reuse a directory someone else made.
 async fn create_private_probe_dir(dir: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    let builder = {
-        let mut builder = tokio::fs::DirBuilder::new();
-        builder.mode(0o700);
-        builder
+    let builder = cfg_select! {
+        unix => {
+            let mut builder = tokio::fs::DirBuilder::new();
+            builder.mode(0o700);
+            builder
+        }
+        _ => tokio::fs::DirBuilder::new(),
     };
-    #[cfg(not(unix))]
-    let builder = tokio::fs::DirBuilder::new();
     builder.create(dir).await
 }
 

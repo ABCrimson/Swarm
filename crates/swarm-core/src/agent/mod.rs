@@ -31,6 +31,7 @@
 //! [`adapter::ProviderId`]; every other agent command reaches the live
 //! session through the registry by worker id.
 
+use std::cfg_select;
 use std::collections::VecDeque;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -66,40 +67,43 @@ pub use scheduler::{
 /// (`Stderr: …` or `No Stderr Output`). Both adapters settle with it.
 pub(crate) const PROCESS_EXITED_WITHOUT_RECEIPT: &str = "Process Exited Without A Receipt";
 
-/// The terminating signal's name for a Unix exit status (`SIGKILL` for
-/// signal 9), `signal <n>` for one outside the table, and `None` for a
-/// normal exit. Shared by both adapters so an [`ExitSummary`]'s `signal`
-/// reads the same whichever provider produced it.
-#[cfg(unix)]
-pub(crate) fn signal_name(status: &std::process::ExitStatus) -> Option<String> {
-    use std::os::unix::process::ExitStatusExt;
-    /// Signals whose numbers agree across Linux and macOS.
-    const NAMES: [(i32, &str); 9] = [
-        (1, "SIGHUP"),
-        (2, "SIGINT"),
-        (3, "SIGQUIT"),
-        (6, "SIGABRT"),
-        (9, "SIGKILL"),
-        (11, "SIGSEGV"),
-        (13, "SIGPIPE"),
-        (14, "SIGALRM"),
-        (15, "SIGTERM"),
-    ];
-    status.signal().map(|signal| {
-        NAMES
-            .iter()
-            .find(|(number, _)| *number == signal)
-            .map_or_else(
-                || format!("signal {signal}"),
-                |(_, name)| (*name).to_owned(),
-            )
-    })
-}
-
-/// Windows has no signals: a killed process has only an exit code.
-#[cfg(not(unix))]
-pub(crate) fn signal_name(_status: &std::process::ExitStatus) -> Option<String> {
-    None
+cfg_select! {
+    unix => {
+        /// The terminating signal's name for a Unix exit status (`SIGKILL` for
+        /// signal 9), `signal <n>` for one outside the table, and `None` for a
+        /// normal exit. Shared by both adapters so an [`ExitSummary`]'s `signal`
+        /// reads the same whichever provider produced it.
+        pub(crate) fn signal_name(status: &std::process::ExitStatus) -> Option<String> {
+            use std::os::unix::process::ExitStatusExt;
+            /// Signals whose numbers agree across Linux and macOS.
+            const NAMES: [(i32, &str); 9] = [
+                (1, "SIGHUP"),
+                (2, "SIGINT"),
+                (3, "SIGQUIT"),
+                (6, "SIGABRT"),
+                (9, "SIGKILL"),
+                (11, "SIGSEGV"),
+                (13, "SIGPIPE"),
+                (14, "SIGALRM"),
+                (15, "SIGTERM"),
+            ];
+            status.signal().map(|signal| {
+                NAMES
+                    .iter()
+                    .find(|(number, _)| *number == signal)
+                    .map_or_else(
+                        || format!("signal {signal}"),
+                        |(_, name)| (*name).to_owned(),
+                    )
+            })
+        }
+    }
+    _ => {
+        /// Windows has no signals: a killed process has only an exit code.
+        pub(crate) fn signal_name(_status: &std::process::ExitStatus) -> Option<String> {
+            None
+        }
+    }
 }
 
 /// ANSI escape sequences: CSI (SGR colours and the like) and OSC (e.g.
@@ -169,19 +173,22 @@ pub(crate) async fn drained_stderr_snippet(tail: &Mutex<VecDeque<u8>>) -> String
     stderr_snippet(tail)
 }
 
-/// Whether a `PATH` search may start `path`: on Unix a regular file with an
-/// execute bit, elsewhere any file. Shared by both adapters' lookups.
-#[cfg(unix)]
-pub(crate) fn is_executable_file(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-}
-
-/// Windows has no execute bit: any file matches.
-#[cfg(not(unix))]
-pub(crate) fn is_executable_file(path: &std::path::Path) -> bool {
-    path.is_file()
+cfg_select! {
+    unix => {
+        /// Whether a `PATH` search may start `path`: on Unix a regular file with an
+        /// execute bit, elsewhere any file. Shared by both adapters' lookups.
+        pub(crate) fn is_executable_file(path: &std::path::Path) -> bool {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(path)
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        }
+    }
+    _ => {
+        /// Windows has no execute bit: any file matches.
+        pub(crate) fn is_executable_file(path: &std::path::Path) -> bool {
+            path.is_file()
+        }
+    }
 }
 
 #[cfg(test)]
