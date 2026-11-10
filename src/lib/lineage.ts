@@ -9,10 +9,10 @@ import type { ProvenanceEdgeRecord } from "#store/provenance";
 import type { WorkerState } from "#store/types";
 
 /** How a related worker relates to the subject worker, as the row labels it (Title Case). */
-export type LineageRelation = "Spawned By" | "Spawned" | "Caused By";
+type LineageRelation = "Spawned By" | "Spawned" | "Caused By";
 
 /** One related, live worker. */
-export interface LineageRow {
+interface LineageRow {
   readonly relation: LineageRelation;
   readonly workerId: string;
   readonly state: WorkerState;
