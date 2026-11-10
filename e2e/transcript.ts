@@ -36,21 +36,20 @@ export async function openWorkerChat(app: SwarmApp, workerName: string): Promise
 
 /**
  * Sends each message through the webview chat's composer and waits for its
- * turn to commit (its user bubble is in the log and no bubble is still
- * streaming), so the transcript grows by one user and one assistant message
- * per send. Needs `routeAnthropic`; a message that triggers an approval
- * never commits, so send it with {@link sendChatMessage} instead.
+ * turn to commit (its user bubble is in the log and the composer offers
+ * Send again), so the transcript grows by one user and one assistant
+ * message per send. Messages must be unique. Needs `routeAnthropic`; a
+ * message that triggers an approval never commits, so send it with
+ * {@link sendChatMessage} instead.
  */
 export async function sendChatMessages(
   app: SwarmApp,
   log: Locator,
   messages: readonly string[],
 ): Promise<void> {
-  const sent = log.getByText("You:", { exact: true });
   for (const message of messages) {
-    const before = await sent.count();
     await sendChatMessage(app, message);
-    await expect(sent).toHaveCount(before + 1);
+    await expect(log.getByText(message, { exact: true })).toBeAttached();
     await expect(log.locator('[aria-busy="true"]')).toHaveCount(0);
   }
 }
