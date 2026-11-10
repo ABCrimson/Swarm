@@ -90,25 +90,25 @@ pub const READ_TIMEOUT: Duration = Duration::from_secs(15);
 /// `status --untracked-files=all`, `diff --numstat`, `show --numstat`,
 /// `rev-list --count`. A cold file cache on a large checkout makes
 /// these legitimately slow.
-pub const SCAN_TIMEOUT: Duration = Duration::from_secs(60);
+pub const SCAN_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Budget for `git worktree add`, which performs a full checkout
 /// (including any smudge filters such as Git LFS).
-pub const CREATE_TIMEOUT: Duration = Duration::from_secs(120);
+pub const CREATE_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// Budget for the ship chain's index mutations — `add`, `restore
 /// --staged`, `commit`. `commit` runs the user's `pre-commit` and
 /// `commit-msg` hooks (lint-staged, `tsc`, `cargo clippy` …), which
 /// routinely take minutes; `add` runs clean filters.
-pub const MUTATE_TIMEOUT: Duration = Duration::from_secs(600);
+pub const MUTATE_TIMEOUT: Duration = Duration::from_mins(10);
 
 /// Budget for `git push`: network transfer plus the `pre-push` hook.
-pub const PUSH_TIMEOUT: Duration = Duration::from_secs(600);
+pub const PUSH_TIMEOUT: Duration = Duration::from_mins(10);
 
 /// Budget for `git worktree remove`, which recursively deletes the
 /// worktree — including ignored build output (`node_modules`,
 /// `target`) an agent produced inside it.
-pub const REMOVE_TIMEOUT: Duration = Duration::from_secs(600);
+pub const REMOVE_TIMEOUT: Duration = Duration::from_mins(10);
 
 /// Upper bound between exit checks while waiting on a child. The wait
 /// loop wakes as soon as output arrives, so a fast command returns
