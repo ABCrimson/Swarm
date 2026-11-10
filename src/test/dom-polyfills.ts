@@ -1,5 +1,5 @@
 /**
- * Minimal jsdom stand-ins for platform APIs jsdom 30 does not implement
+ * Minimal jsdom stand-ins for platform APIs jsdom 31 does not implement
  * yet — `HTMLDialogElement.showModal()/close()` and the Popover API
  * (`showPopover`/`hidePopover`/`togglePopover`, `popovertarget` buttons,
  * `toggle`/`beforetoggle` events, light dismiss on Escape and outside

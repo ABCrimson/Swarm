@@ -225,14 +225,6 @@ function retryAfterSeconds(err: InstanceType<typeof Anthropic.APIError>): number
   return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : undefined;
 }
 
-const ApiErrorBodySchema = z.object({ error: z.object({ message: z.string() }) });
-
-/** The API's own error text from a 4xx body (`{ error: { message } }`), when present. */
-function apiErrorDetail(err: InstanceType<typeof Anthropic.APIError>): string | undefined {
-  const body = ApiErrorBodySchema.safeParse(err.error);
-  return body.success ? body.data.error.message : undefined;
-}
-
 /**
  * Normalizes anything a request can throw into an {@link AiRequestError}.
  * Classification goes by SDK error class, most specific first; the
@@ -292,7 +284,7 @@ export function toAiRequestError(err: unknown): AiRequestError {
     });
   }
   if (err instanceof Anthropic.APIError && err.status !== undefined && err.status < 500) {
-    const detail = apiErrorDetail(err);
+    const detail = err.apiMessage;
     return new AiRequestError(
       "bad_request",
       `Request Rejected (${err.status})${detail ? `: ${detail}` : ""}`,

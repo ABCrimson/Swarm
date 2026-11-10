@@ -74,7 +74,7 @@ import { useWorkerAgentStore } from "#store/worker-agents";
 /**
  * Chat effort. Explicit because the defaults differ: Opus 5.5 and Haiku 5.5
  * default to `medium`, Fable 5.2, Mythos 5.2 and Sonnet 5.5 to `high`
- * (models overview, 2026-11-10). `medium` is the
+ * (effort page and models overview, 2026-11-10). `medium` is the
  * documented starting point for Opus 5.5 and Haiku 5.5 and a sound
  * cost/quality balance for an interactive orchestration chat on every model.
  */

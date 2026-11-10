@@ -1,5 +1,5 @@
 /**
- * Test-only stand-ins for the top-layer APIs jsdom 30 does not implement:
+ * Test-only stand-ins for the top-layer APIs jsdom 31 does not implement:
  * `HTMLDialogElement.showModal()/close()` (Escape fires `cancel`, then
  * closes) and the Popover API (`showPopover`/`hidePopover`,
  * `:popover-open`, `toggle` events with `newState`, and light dismiss of
