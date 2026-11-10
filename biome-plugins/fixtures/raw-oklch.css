@@ -1,0 +1,19 @@
+/* The CSS fixture for `pnpm check:raw-oklch`: the gate must report exactly
+   the three literals marked RAW and accept the token forms. */
+
+.raw {
+  /* RAW */
+  color: oklch(0.5 0.1 10);
+  /* RAW: nested in another function. */
+  background: linear-gradient(oklch(0.2 0.1 20), transparent);
+}
+
+/* RAW: a known exception of graph.css, used in a file that does not list it. */
+.borrowed {
+  background: oklch(0.04 0.01 220 / 0.55);
+}
+
+.tokens {
+  color: var(--color-plasma);
+  background: oklch(from var(--color-plasma) l c h / 0.15);
+}

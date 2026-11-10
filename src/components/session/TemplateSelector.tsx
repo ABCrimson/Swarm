@@ -20,11 +20,11 @@ const MAX_STAGGERED = 8;
  * and rises 8 px over 200 ms on the shell's entrance curve, delayed 50 ms per
  * `--i` (the card's capped index, set inline). Hover: colors fade as
  * `transition-colors` does, and an enabled card's lift and press dip spring
- * on `scale` along the same `linear()` stiffness-400, damping-25 spring as
- * SessionCard. The per-property lists keep the stagger delay off hover.
+ * on `scale` along `--ease-spring`, the same token as SessionCard. The
+ * per-property lists keep the stagger delay off hover.
  */
 const CARD_MOTION_CLASS =
-  "transition-[opacity,translate,color,background-color,border-color,scale] duration-[200ms,200ms,150ms,150ms,150ms,500ms] ease-[var(--ease-out-cubic),var(--ease-out-cubic),cubic-bezier(0.4,0,0.2,1),cubic-bezier(0.4,0,0.2,1),cubic-bezier(0.4,0,0.2,1),linear(0,0.101,0.318,0.559,0.768,0.922,1.019,1.067,1.081,1.073,1.056,1.037,1.019,1.007,0.999,0.995,0.993,0.994,0.995,0.997,1)] delay-[calc(var(--i)*50ms),calc(var(--i)*50ms),0s,0s,0s,0s] starting:translate-y-2 starting:opacity-0 enabled:hover:scale-[1.02] enabled:active:scale-[0.98]";
+  "transition-[opacity,translate,color,background-color,border-color,scale] duration-[200ms,200ms,150ms,150ms,150ms,500ms] ease-[var(--ease-out-cubic),var(--ease-out-cubic),cubic-bezier(0.4,0,0.2,1),cubic-bezier(0.4,0,0.2,1),cubic-bezier(0.4,0,0.2,1),var(--ease-spring)] delay-[calc(var(--i)*50ms),calc(var(--i)*50ms),0s,0s,0s,0s] starting:translate-y-2 starting:opacity-0 enabled:hover:scale-[1.02] enabled:active:scale-[0.98]";
 
 const sectionHeadingClass = "mb-3 font-display text-md font-semibold tracking-tight text-fg";
 

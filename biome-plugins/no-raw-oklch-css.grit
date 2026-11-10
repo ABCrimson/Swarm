@@ -1,0 +1,73 @@
+// The raw-OKLCH gate for CSS, the twin of biome-plugins/no-raw-oklch.grit
+// (which explains the rule and the exception keys). Every numeric `oklch(`
+// function in src/**/*.css outside src/styles/tokens.css, the token source,
+// fails `biome ci` unless its file and value are listed below.
+language css
+
+predicate known_raw_oklch($color) {
+  or {
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]graph\.css",
+      $color <: r"(?s)0\.04 0\.01 220 / 0\.55\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]graph\.css",
+      $color <: r"(?s)0\.1 0\.03 220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]graph\.css",
+      $color <: r"(?s)0\.1 0\.03 220 / 0\.85\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]graph\.css",
+      $color <: r"(?s)0\.12 0\.03 220 / 0\.7\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]graph\.css",
+      $color <: r"(?s)0\.12 0\.03 220 / 0\.85\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]graph\.css",
+      $color <: r"(?s)0\.45 0\.04 220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]graph\.css",
+      $color <: r"(?s)0\.55 0\.04 220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]graph\.css",
+      $color <: r"(?s)0\.72 0\.02 220 / 0\.8\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]graph\.css",
+      $color <: r"(?s)0\.85 0\.03 220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]graph\.css",
+      $color <: r"(?s)0\.85 0\.2 205\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]graph[/\x5C]graph\.css",
+      $color <: r"(?s)0\.95 0\.1 205\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]logs[/\x5C]logs\.css",
+      $color <: r"(?s)0\.6 0\.1 205\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]components[/\x5C]logs[/\x5C]logs\.css",
+      $color <: r"(?s)0\.65 0\.04 220\).*"
+    },
+    and {
+      $filename <: r".*[/\x5C]src[/\x5C]styles[/\x5C]components\.css",
+      $color <: r"(?s)0 0 0\).*"
+    }
+  }
+}
+
+CssFunction() as $function where {
+  $function <: r"(?s)oklch\(\s*[0-9.].*",
+  $after = split($function, "oklch("),
+  $after <: some $color where { $color <: r"(?s)\s*[0-9.].*", not known_raw_oklch($color) },
+  register_diagnostic(span=$function, message="Raw oklch() literal: use a token from src/styles/tokens.css (var(--color-…) or oklch(from var(--color-…) …)). Known exceptions live in biome-plugins/no-raw-oklch-css.grit.", severity="error")
+}

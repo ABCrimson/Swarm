@@ -37,13 +37,13 @@ const ANCHORED_MENU_CLASS =
 /**
  * The card's motion: colors fade as Tailwind's `transition-colors` does
  * (150 ms, the default curve), and the hover lift and press dip spring on
- * `scale` along a `linear()` sampling of a stiffness-400, damping-25 spring
- * (8 % overshoot, settled within 500 ms). The `hover:` variant applies only
+ * `scale` along `--ease-spring` (tokens.css: a stiffness-400, damping-25
+ * spring, settled within 500 ms). The `hover:` variant applies only
  * where the pointer can hover, and the reduced-motion override in
  * animations.css collapses every duration.
  */
 const CARD_MOTION_CLASS =
-  "transition-[color,background-color,border-color,scale] duration-[150ms,150ms,150ms,500ms] ease-[cubic-bezier(0.4,0,0.2,1),cubic-bezier(0.4,0,0.2,1),cubic-bezier(0.4,0,0.2,1),linear(0,0.101,0.318,0.559,0.768,0.922,1.019,1.067,1.081,1.073,1.056,1.037,1.019,1.007,0.999,0.995,0.993,0.994,0.995,0.997,1)] hover:scale-[1.015] active:scale-[0.99]";
+  "transition-[color,background-color,border-color,scale] duration-[150ms,150ms,150ms,500ms] ease-[cubic-bezier(0.4,0,0.2,1),cubic-bezier(0.4,0,0.2,1),cubic-bezier(0.4,0,0.2,1),var(--ease-spring)] hover:scale-[1.015] active:scale-[0.99]";
 
 /**
  * One session in the list: a full-width button that makes it the active
