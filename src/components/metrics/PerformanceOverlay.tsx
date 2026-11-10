@@ -4,7 +4,6 @@
 // particle count. Production builds render nothing and ship none of it.
 
 import { useAtom, useAtomValue } from "jotai";
-import type { CSSProperties } from "react";
 import { useEffect, useEffectEvent, useState } from "react";
 import { matchesBinding } from "#lib/keybindings";
 import {
@@ -14,48 +13,13 @@ import {
   perfOverlayOpenAtom,
 } from "#store/ui";
 
-const overlayStyle: CSSProperties = {
-  position: "fixed",
-  top: 56,
-  right: 12,
-  width: 220,
-  padding: "10px 14px",
-  background: "oklch(from var(--color-void) l c h / 0.88)",
-  border: "1px solid var(--color-border)",
-  borderRadius: 8,
-  backdropFilter: "blur(12px) saturate(1.5)",
-  fontFamily: "var(--font-mono)",
-  fontSize: 11,
-  color: "oklch(0.7 0.05 220)",
-  zIndex: 9999,
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-  pointerEvents: "none",
-};
+const OVERLAY_CLASS =
+  "pointer-events-none fixed top-14 right-3 z-[9999] flex w-[220px] flex-col gap-1.5 rounded-md border border-border bg-void/88 px-3.5 py-2.5 font-mono text-[11px] text-[color:oklch(0.7_0.05_220)] backdrop-blur-[12px] backdrop-saturate-150";
 
-const titleStyle: CSSProperties = {
-  fontSize: 10,
-  fontWeight: 700,
-  color: "var(--color-plasma)",
-  marginBottom: 2,
-};
-
-const rowStyle: CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-};
-
-const valueStyle: CSSProperties = {
-  color: "oklch(0.78 0.04 220)",
-  fontWeight: 600,
-};
-
-function fpsColor(fps: number): string {
-  if (fps >= 55) return "var(--color-lime)";
-  if (fps >= 30) return "var(--color-amber)";
-  return "var(--color-rose)";
+function fpsClass(fps: number): string {
+  if (fps >= 55) return "text-lime";
+  if (fps >= 30) return "text-amber";
+  return "text-rose";
 }
 
 /** Frames per second, measured with requestAnimationFrame while `active`. */
@@ -82,16 +46,17 @@ function useFps(active: boolean): number {
 function Row({
   label,
   children,
-  color,
+  colorClass = "text-[color:oklch(0.78_0.04_220)]",
 }: {
   readonly label: string;
   readonly children: React.ReactNode;
-  readonly color?: string;
+  /** Text-colour class of the value. */
+  readonly colorClass?: string;
 }): React.ReactElement {
   return (
-    <div style={rowStyle}>
-      <span style={{ color: "oklch(0.58 0.04 220)" }}>{label}</span>
-      <span style={color ? { ...valueStyle, color } : valueStyle}>{children}</span>
+    <div className="flex items-center justify-between">
+      <span className="text-[color:oklch(0.58_0.04_220)]">{label}</span>
+      <span className={`font-semibold ${colorClass}`}>{children}</span>
     </div>
   );
 }
@@ -120,9 +85,9 @@ function DevPerformanceOverlay(): React.ReactElement | null {
   // A plain labelled region, not a live region: the numbers change every
   // second and must not be announced.
   return (
-    <section style={overlayStyle} aria-label="Performance Overlay">
-      <div style={titleStyle}>Performance</div>
-      <Row label="FPS" color={fpsColor(fps)}>
+    <section className={OVERLAY_CLASS} aria-label="Performance Overlay">
+      <div className="mb-0.5 text-[10px] font-bold text-plasma">Performance</div>
+      <Row label="FPS" colorClass={fpsClass(fps)}>
         {fps}
       </Row>
       <Row label="GPU Frame">{gpuFrameTime.toFixed(2)}ms</Row>

@@ -67,28 +67,11 @@ function DetailRow({
   readonly children: React.ReactNode;
 }): React.ReactElement {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-      <dt
-        style={{
-          fontFamily: "var(--font-display)",
-          fontSize: "var(--text-md)",
-          fontWeight: 600,
-          letterSpacing: "-0.01em",
-          color: "var(--color-fg-dim)",
-        }}
-      >
+    <div className="flex items-center justify-between">
+      <dt className="font-display text-[length:var(--text-md)] font-semibold tracking-[-0.01em] text-fg-dim">
         {label}
       </dt>
-      <dd
-        style={{
-          margin: 0,
-          fontFamily: "var(--font-body)",
-          fontSize: "0.8125rem",
-          color: "var(--color-fg)",
-        }}
-      >
-        {children}
-      </dd>
+      <dd className="m-0 font-body text-[0.8125rem] text-fg">{children}</dd>
     </div>
   );
 }
@@ -196,36 +179,14 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
   return (
     <div
       data-worker-detail={worker.id}
-      style={{
-        width: 320,
-        height: "100%",
-        background: "var(--color-surface-1)",
-        borderLeft: "1px solid var(--color-border)",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
+      className="flex h-full w-80 flex-col overflow-hidden border-l border-border bg-surface-1"
     >
       {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "16px",
-          borderBottom: "1px solid var(--color-border)",
-        }}
-      >
+      <div className="flex items-center justify-between border-b border-border p-4">
         <h2
           // A focus target for a Related Workers selection (see selectRelated), not a tab stop.
           tabIndex={-1}
-          style={{
-            fontFamily: "var(--font-display)",
-            fontSize: "0.9375rem",
-            fontWeight: 600,
-            color: "var(--color-fg-bright)",
-            margin: 0,
-          }}
+          className="m-0 font-display text-[0.9375rem] font-semibold text-fg-bright"
         >
           Worker Detail
         </h2>
@@ -247,36 +208,17 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
       </div>
 
       {/* Content */}
-      <div
-        style={{
-          flex: 1,
-          padding: "16px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 16,
-          overflowY: "auto",
-        }}
-        className="scroll-area"
-      >
-        <span
-          style={{
-            fontFamily: "var(--font-display)",
-            fontSize: "1rem",
-            fontWeight: 600,
-            color: "var(--color-fg-bright)",
-          }}
-        >
+      <div className="scroll-area flex flex-1 flex-col gap-4 overflow-y-auto p-4">
+        <span className="font-display text-[1rem] font-semibold text-fg-bright">
           {escapeForDisplay(worker.name ?? worker.id.slice(0, 8))}
         </span>
 
-        <dl style={{ display: "flex", flexDirection: "column", gap: 10, margin: 0 }}>
+        <dl className="m-0 flex flex-col gap-2.5">
           <DetailRow label="State">
             <Badge state={currentState}>{stateLabels[currentState]}</Badge>
           </DetailRow>
           <DetailRow label="ID">
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.6875rem" }}>
-              {worker.id.slice(0, 12)}
-            </span>
+            <span className="font-mono text-[0.6875rem]">{worker.id.slice(0, 12)}</span>
           </DetailRow>
           {worker.pid != null && <DetailRow label="PID">{worker.pid}</DetailRow>}
           <DetailRow label="Uptime">
@@ -314,7 +256,7 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
             interactive
             tone="info"
             size="sm"
-            style={{ alignSelf: "flex-start" }}
+            className="self-start"
             onClick={() => setCausalityTarget({ startSeq: mostRecentCausalitySeq })}
           >
             View Causality
@@ -375,36 +317,14 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
           <section aria-label="Output">
             <span
               aria-hidden="true"
-              style={{
-                fontFamily: "var(--font-display)",
-                fontSize: "var(--text-md)",
-                fontWeight: 600,
-                letterSpacing: "-0.01em",
-                color: "var(--color-fg-dim)",
-                display: "block",
-                marginBottom: 8,
-              }}
+              className="mb-2 block font-display text-[length:var(--text-md)] font-semibold tracking-[-0.01em] text-fg-dim"
             >
               Output
             </span>
             <pre
               // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable so it can be scrolled without a mouse (WCAG 2.1.1); WebKit (WKWebView, WebKitGTK) does not focus scroll containers natively.
               tabIndex={0}
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: "0.6875rem",
-                color: "oklch(0.72 0.04 220)",
-                background: "var(--color-void)",
-                border: "1px solid var(--color-surface-2)",
-                borderRadius: 8,
-                padding: 12,
-                maxHeight: 200,
-                overflowY: "auto",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-                margin: 0,
-              }}
-              className="scroll-area"
+              className="scroll-area m-0 max-h-[200px] overflow-y-auto rounded-md border border-surface-2 bg-void p-3 font-mono text-[0.6875rem] break-all whitespace-pre-wrap text-[color:oklch(0.72_0.04_220)]"
             >
               {outputPreview}
             </pre>
@@ -415,21 +335,14 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
       {/* Actions — a uniform-width group; Kill is the danger tone. Each
           is a transition inside useWorker, so its optimistic state holds
           while the IPC call is in flight. */}
-      <div
-        style={{
-          display: "flex",
-          gap: 8,
-          padding: "16px",
-          borderTop: "1px solid var(--color-border)",
-        }}
-      >
+      <div className="flex gap-2 border-t border-border p-4">
         <Pill
           interactive
           tone="neutral"
           size="md"
           onClick={pause}
           disabled={!canPause}
-          style={{ flex: 1 }}
+          className="flex-1"
         >
           Pause
         </Pill>
@@ -439,11 +352,11 @@ export function WorkerDetail({ worker }: WorkerDetailProps): React.ReactElement 
           size="md"
           onClick={resume}
           disabled={!canResume}
-          style={{ flex: 1 }}
+          className="flex-1"
         >
           Resume
         </Pill>
-        <Pill interactive tone="danger" size="md" onClick={kill} style={{ flex: 1 }}>
+        <Pill interactive tone="danger" size="md" onClick={kill} className="flex-1">
           Kill
         </Pill>
       </div>

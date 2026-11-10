@@ -13,7 +13,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
+import { ChartPanel } from "#components/metrics/ChartPanel";
 import { formatMb, formatTime, METRIC_COLOR, SERIES_NEUTRAL } from "#lib/chart-theme";
 import { lastN } from "#lib/chart-window";
 import { memoryFreeMb } from "#lib/memory";
@@ -70,7 +70,8 @@ export function MemoryChart(): React.ReactElement {
     <ChartPanel title="Memory Usage" sampleCount={data.length}>
       <AreaChart
         responsive
-        style={CHART_FILL_STYLE}
+        width="100%"
+        height="100%"
         data={data}
         margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
         title="Used And Free Memory Over Time"

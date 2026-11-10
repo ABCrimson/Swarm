@@ -443,7 +443,7 @@ function WorkerGraphInner({
   }
 
   return (
-    <div className="worker-graph" style={{ width: "100%", height: "100%", position: "relative" }}>
+    <div className="worker-graph relative size-full">
       <p role="status" className="sr-only">
         {linkSource !== null
           ? `Linking From ${escapeForDisplay(names[linkSource] ?? linkSource)}: Focus Another Worker And Press Enter, Or Escape To Cancel`
@@ -466,47 +466,16 @@ function WorkerGraphInner({
         }`}
       >
         {layoutError ? (
-          <div
-            role="alert"
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: 12,
-              padding: 24,
-              maxWidth: 320,
-              textAlign: "center",
-            }}
-          >
-            <span
-              style={{
-                fontFamily: "var(--font-body)",
-                fontSize: "0.875rem",
-                fontWeight: 600,
-                color: "var(--color-rose)",
-              }}
-            >
-              {layoutError}
-            </span>
+          <div role="alert" className="flex max-w-80 flex-col items-center gap-3 p-6 text-center">
+            <span className="font-body text-[0.875rem] font-semibold text-rose">{layoutError}</span>
             <Button variant="secondary" size="sm" onClick={runLayout}>
               Retry Layout
             </Button>
           </div>
         ) : (
-          <div
-            aria-hidden="true"
-            style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}
-          >
+          <div aria-hidden="true" className="flex flex-col items-center gap-2">
             <Spinner size="lg" decorative className="text-plasma" />
-            <span
-              style={{
-                fontFamily: "var(--font-body)",
-                fontSize: "0.75rem",
-                color: "var(--color-fg-dim)",
-              }}
-            >
-              Computing Layout
-            </span>
+            <span className="font-body text-[0.75rem] text-fg-dim">Computing Layout</span>
           </div>
         )}
       </div>
@@ -545,16 +514,7 @@ function WorkerGraphInner({
           <Panel
             position="bottom-center"
             title="Provenance Edges Are Session-Scoped In v1 — A Reload Shows Nodes Without Historical Edges By Design."
-            style={{
-              padding: "6px 14px",
-              borderRadius: 999,
-              background: "oklch(0.12 0.03 220 / 0.75)",
-              backdropFilter: "blur(8px)",
-              border: "1px solid var(--color-border)",
-              fontFamily: "var(--font-body)",
-              fontSize: "0.6875rem",
-              color: "var(--color-fg-dim)",
-            }}
+            className="rounded-[999px] border border-border bg-[oklch(0.12_0.03_220/0.75)] px-3.5 py-1.5 font-body text-[0.6875rem] text-fg-dim backdrop-blur-[8px]"
           >
             No Measured Causality Yet
           </Panel>

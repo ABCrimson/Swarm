@@ -14,7 +14,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { CHART_FILL_STYLE, ChartPanel } from "#components/metrics/ChartPanel";
+import { ChartPanel } from "#components/metrics/ChartPanel";
 import { formatTime, METRIC_COLOR } from "#lib/chart-theme";
 import { lastN, MAX_CHART_POINTS } from "#lib/chart-window";
 import { tokensPerSecond } from "#lib/metrics-aggregation";
@@ -107,7 +107,8 @@ export function AIMetricsChart(): React.ReactElement {
     >
       <AreaChart
         responsive
-        style={CHART_FILL_STYLE}
+        width="100%"
+        height="100%"
         data={data}
         margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
         title="AI Queue, Streams And Throughput Over Time"

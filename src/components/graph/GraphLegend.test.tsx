@@ -47,7 +47,7 @@ describe("GraphLegend — gating", () => {
     renderLegend(new Set(["kill"]));
 
     const line = legend().querySelector("line");
-    expect(line?.style.stroke).toBe(KIND_STYLE.kill.stroke);
+    expect(line?.style.getPropertyValue("--legend-stroke")).toBe(KIND_STYLE.kill.stroke);
     expect(line).toHaveAttribute("stroke-dasharray", KIND_STYLE.kill.dash);
   });
 
