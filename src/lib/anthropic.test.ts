@@ -36,7 +36,10 @@ function useFreshKey(): string {
 /** Serializes events as a `text/event-stream` response body. */
 function sse(events: readonly Record<string, unknown>[]): Response {
   const body = events
-    .map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`)
+    .map(
+      ({ type, ...rest }) =>
+        `event: ${String(type)}\ndata: ${JSON.stringify({ type, ...rest })}\n\n`,
+    )
     .join("");
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
@@ -217,7 +220,7 @@ describe("streamMessage", () => {
       await run({ ...SONNET, model: CLAUDE_MODELS.haiku.id, maxTokens: 200_000, effort: "high" });
 
       const body = sentBody();
-      expect(body.max_tokens).toBe(128_000);
+      expect(body).toHaveProperty("max_tokens", 128_000);
       expect(body).toMatchObject({
         thinking: { type: "adaptive", display: "summarized" },
         output_config: { effort: "high" },
@@ -234,7 +237,7 @@ describe("streamMessage", () => {
       await run({ ...SONNET, model: "claude-future-9", maxTokens: 300_000, effort: "high" });
 
       const body = sentBody();
-      expect(body.max_tokens).toBe(300_000);
+      expect(body).toHaveProperty("max_tokens", 300_000);
       expect(body).not.toHaveProperty("thinking");
       expect(body).not.toHaveProperty("output_config");
       expect(body).not.toHaveProperty("fallbacks");
@@ -246,7 +249,7 @@ describe("streamMessage", () => {
 
       await run({ ...SONNET, model: CLAUDE_MODELS.opus.id });
 
-      expect(sentBody().fallbacks).toBe("default");
+      expect(sentBody()).toHaveProperty("fallbacks", "default");
       expect(sentHeaders().get("anthropic-beta")).toContain("server-side-fallback-2026-07-01");
     });
 
@@ -263,7 +266,7 @@ describe("streamMessage", () => {
 
       expect(final.content).toMatchObject([{ type: "text", text: "Hi" }]);
       expect(fetchMock).toHaveBeenCalledTimes(3);
-      expect(sentBody(0).fallbacks).toBe("default");
+      expect(sentBody(0)).toHaveProperty("fallbacks", "default");
       expect(sentBody(1)).not.toHaveProperty("fallbacks");
       expect(sentBody(2)).not.toHaveProperty("fallbacks");
     });
@@ -282,10 +285,10 @@ describe("streamMessage", () => {
       await run(mythos);
 
       expect(fetchMock).toHaveBeenCalledTimes(3);
-      expect(sentBody(0).fallbacks).toBe("default");
+      expect(sentBody(0)).toHaveProperty("fallbacks", "default");
       expect(sentBody(1)).not.toHaveProperty("fallbacks");
       // The next request still opts in: the opt-in was never the problem.
-      expect(sentBody(2).fallbacks).toBe("default");
+      expect(sentBody(2)).toHaveProperty("fallbacks", "default");
     });
 
     it("marks every tool for eager input streaming", async () => {
@@ -295,7 +298,7 @@ describe("streamMessage", () => {
 
       await run({ ...SONNET, tools: [tool] });
 
-      expect(sentBody().tools).toEqual([{ ...tool, eager_input_streaming: true }]);
+      expect(sentBody()).toHaveProperty("tools", [{ ...tool, eager_input_streaming: true }]);
     });
   });
 

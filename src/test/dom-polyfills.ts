@@ -18,7 +18,7 @@ if (typeof HTMLDialogElement.prototype.showModal !== "function") {
     showModal(this: HTMLDialogElement) {
       if (this.hasAttribute("open")) return;
       this.setAttribute("open", "");
-      this.dataset.modal = "true";
+      this.setAttribute("data-modal", "true");
       document.addEventListener("keydown", escapeHandlerFor(this), true);
     },
     show(this: HTMLDialogElement) {
@@ -27,7 +27,7 @@ if (typeof HTMLDialogElement.prototype.showModal !== "function") {
     close(this: HTMLDialogElement, returnValue?: string) {
       if (!this.hasAttribute("open")) return;
       this.removeAttribute("open");
-      delete this.dataset.modal;
+      this.removeAttribute("data-modal");
       if (returnValue !== undefined) this.returnValue = returnValue;
       document.removeEventListener("keydown", escapeHandlerFor(this), true);
       this.dispatchEvent(new Event("close"));

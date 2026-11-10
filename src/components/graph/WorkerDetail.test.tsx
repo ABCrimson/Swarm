@@ -299,7 +299,7 @@ describe("WorkerDetail", () => {
     function mountViews(workerId: string) {
       const node = document.createElement("div");
       node.className = "react-flow__node";
-      node.dataset.id = workerId;
+      node.setAttribute("data-id", workerId);
       node.tabIndex = 0;
       const row = document.createElement("button");
       row.setAttribute("aria-current", "true");

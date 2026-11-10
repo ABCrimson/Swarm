@@ -24,6 +24,7 @@ const reactWithCompiler = (dev: boolean): PluginOption[] =>
 // Vite, Vitest and TypeScript all read that map natively, so there is no
 // `resolve.alias` block to keep in sync.
 export default defineConfig(async ({ mode, command }): Promise<UserConfig> => {
+  const { SWARM_BUNDLED_DEV } = process.env;
   const analyzePlugins: PluginOption[] = [];
   if (mode === "analyze") {
     const { visualizer } = await import("rollup-plugin-visualizer");
@@ -94,7 +95,7 @@ export default defineConfig(async ({ mode, command }): Promise<UserConfig> => {
     // 2026-11-10 (Vite 8.3.7) a cold start to the first page heading took a
     // median 1631 ms bundled against 2402 ms unbundled, three runs each.
     experimental: {
-      bundledDev: process.env.SWARM_BUNDLED_DEV === "1",
+      bundledDev: SWARM_BUNDLED_DEV === "1",
     },
 
     server: {

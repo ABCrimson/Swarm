@@ -347,7 +347,7 @@ function WorkerGraphInner({
     const element = event.target.closest<HTMLElement | SVGElement>(
       ".react-flow__node, .react-flow__edge",
     );
-    const id = element?.dataset.id;
+    const id = element?.getAttribute("data-id");
     if (!element || element !== event.target || !id) return;
     const isNode = element.classList.contains("react-flow__node");
     if (

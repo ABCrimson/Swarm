@@ -111,7 +111,7 @@ describe("useTerminal (via WorkerTerminal)", () => {
   it("uses only opaque theme colors (xterm drops translucent CSS colors)", () => {
     render(<WorkerTerminal workerId="w1" />);
 
-    const theme = terminals.at(-1)?.options.theme as Record<string, string>;
+    const { theme } = (terminals.at(-1)?.options ?? {}) as { theme: Record<string, string> };
     expect(Object.keys(theme)).toContain("selectionBackground");
     for (const [key, color] of Object.entries(theme)) {
       expect(color, key).toMatch(/^oklch\([\d.]+ [\d.]+ [\d.]+\)$/);

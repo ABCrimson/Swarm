@@ -67,12 +67,12 @@ if (typeof (HTMLElement.prototype as Partial<Popover>).showPopover !== "function
     showPopover(this: HTMLElement): void {
       if (open.has(this)) return;
       open.add(this);
-      this.dataset.shimPopoverOpen = "";
+      this.setAttribute("data-shim-popover-open", "");
       toggle(this, "closed", "open");
     },
     hidePopover(this: HTMLElement): void {
       if (!open.delete(this)) return;
-      delete this.dataset.shimPopoverOpen;
+      this.removeAttribute("data-shim-popover-open");
       toggle(this, "open", "closed");
     },
   });

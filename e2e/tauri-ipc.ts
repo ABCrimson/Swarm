@@ -78,17 +78,22 @@ export async function installTauriIpc(page: Page, script: IpcScript = {}): Promi
         calls.push({ cmd, args });
         switch (cmd) {
           case "plugin:event|listen": {
-            const event = String(args.event);
-            const handler = Number(args.handler);
+            const { event: eventName, handler: callbackId } = args;
+            const event = String(eventName);
+            const handler = Number(callbackId);
             const ids = listeners.get(event) ?? new Set<number>();
             listeners.set(event, ids.add(handler));
             return handler;
           }
-          case "plugin:event|unlisten":
-            unregisterCallback(Number(args.eventId));
+          case "plugin:event|unlisten": {
+            const { eventId } = args;
+            unregisterCallback(Number(eventId));
             return null;
-          case "read_config":
-            return structuredClone(config[String(args.key)] ?? null);
+          }
+          case "read_config": {
+            const { key } = args;
+            return structuredClone(config[String(key)] ?? null);
+          }
           default:
             return structuredClone(replies[cmd] ?? null);
         }

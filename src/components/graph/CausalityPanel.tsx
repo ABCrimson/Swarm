@@ -39,6 +39,7 @@ interface RowDescription {
 /** Describes one causality row per event type: Title Case text (e.g. "Worker A's Turn", "Spawned Worker B") plus the live worker a click opens; the row's `@seq` is rendered separately by `SeqLabel`. */
 function describeRow(event: DomainEvent, names: LiveNames): RowDescription {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
+  const { preview: rawPreview, topic: rawTopic, path: rawPath } = payload;
   const workerIdOf = (key: string): string | undefined =>
     typeof payload[key] === "string" ? (payload[key] as string) : undefined;
 
@@ -57,22 +58,21 @@ function describeRow(event: DomainEvent, names: LiveNames): RowDescription {
     }
     case "worker_input": {
       const workerId = workerIdOf("workerId");
-      const preview =
-        typeof payload.preview === "string" ? escapeForDisplay(payload.preview.trim()) : "";
+      const preview = typeof rawPreview === "string" ? escapeForDisplay(rawPreview.trim()) : "";
       const label = workerLabel(workerId, names);
       return { text: preview ? `${label} Ran ${preview}` : `${label} Received Input`, workerId };
     }
     case "bus_message": {
       const fromWorker = workerIdOf("fromWorker");
       const toWorker = workerIdOf("toWorker");
-      const topic = typeof payload.topic === "string" ? escapeForDisplay(payload.topic) : "A Topic";
+      const topic = typeof rawTopic === "string" ? escapeForDisplay(rawTopic) : "A Topic";
       return {
         text: `${workerLabel(fromWorker, names)} Sent "${topic}" To ${workerLabel(toWorker, names)}`,
         workerId: toWorker ?? fromWorker,
       };
     }
     case "file_written": {
-      const path = typeof payload.path === "string" ? escapeForDisplay(payload.path) : "A File";
+      const path = typeof rawPath === "string" ? escapeForDisplay(rawPath) : "A File";
       return { text: `Wrote ${path}` };
     }
     default:

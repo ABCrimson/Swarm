@@ -62,6 +62,12 @@ function toRecord(value: unknown): Record<string, unknown> {
     : { value };
 }
 
+/** The `changes` field of a Codex fileChange tool call's input. */
+function changesOf(input: unknown): unknown {
+  const { changes } = toRecord(input);
+  return changes;
+}
+
 /** Tool result content: strings verbatim, anything else as JSON for `ToolCallDisplay`'s viewer. */
 function toResultString(content: unknown): string {
   return typeof content === "string" ? content : JSON.stringify(content);
@@ -145,10 +151,11 @@ function PermissionRow({
   // Codex's fileChange request names only its item: the paths and diff being approved are on that item's own tool call (same id, sent first).
   const isPatch = payload.tool === "fileChange";
   const request = toRecord(payload.input);
+  const { itemId } = request;
   const patch = isPatch
     ? items.find(
         (row): row is Extract<AgentTranscriptItem, { kind: "tool_call" }> =>
-          row.kind === "tool_call" && row.payload.toolUseId === request.itemId,
+          row.kind === "tool_call" && row.payload.toolUseId === itemId,
       )
     : undefined;
   // The exact arguments are what the user approves; the provider's message
@@ -158,7 +165,7 @@ function PermissionRow({
     isPatch
       ? {
           ...request,
-          changes: patch ? toRecord(patch.payload.input).changes : "(Not Received Yet)",
+          changes: patch ? changesOf(patch.payload.input) : "(Not Received Yet)",
         }
       : payload.input,
   );

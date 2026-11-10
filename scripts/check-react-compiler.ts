@@ -83,7 +83,8 @@ if (!("output" in result) && !Array.isArray(result)) {
   throw new Error("Expected a one-shot build result, got a watcher.");
 }
 const outputs: Rolldown.RolldownOutput[] = Array.isArray(result) ? result : [result];
-if (process.env.NAPI_RS_FORCE_WASI === "true" && __napiBindingTarget !== "wasm32-wasip1") {
+const { NAPI_RS_FORCE_WASI } = process.env;
+if (NAPI_RS_FORCE_WASI === "true" && __napiBindingTarget !== "wasm32-wasip1") {
   console.error("check:compiler: WASI forced but the native binding ran");
   process.exit(1);
 }
