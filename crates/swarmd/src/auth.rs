@@ -215,15 +215,18 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
-#[cfg(unix)]
-fn restrict_permissions(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-}
-
-#[cfg(windows)]
-fn restrict_permissions(path: &Path) -> io::Result<()> {
-    windows_acl::restrict_to_current_user(path)
+cfg_select! {
+    unix => {
+        fn restrict_permissions(path: &Path) -> io::Result<()> {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        }
+    }
+    windows => {
+        fn restrict_permissions(path: &Path) -> io::Result<()> {
+            windows_acl::restrict_to_current_user(path)
+        }
+    }
 }
 
 /// The SID in one line of `whoami /user /fo csv /nh` output, which
@@ -511,6 +514,8 @@ mod whoami_tests {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
 
     fn temp_dir() -> tempfile::TempDir {
@@ -538,7 +543,7 @@ mod tests {
         first.permissions.unwrap();
         assert_eq!(first.token.as_str().len(), TOKEN_HEX_LEN);
         assert!(first.token.matches(first.token.as_str()));
-        assert!(matches!(DaemonToken::load(dir.path()), Ok(Some(_))));
+        assert_matches!(DaemonToken::load(dir.path()), Ok(Some(_)));
 
         let second = DaemonToken::load_or_create(dir.path()).unwrap();
         assert!(!second.minted, "second load finds the persisted token");

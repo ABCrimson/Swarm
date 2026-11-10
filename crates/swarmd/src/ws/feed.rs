@@ -167,6 +167,7 @@ async fn replay(
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
     use std::time::Duration;
 
     use serde_json::Value;
@@ -257,7 +258,7 @@ mod tests {
         let feeder = tokio::spawn(feed(live_rx, Some(path), Some(2), 5, tx, 2));
         tokio::task::yield_now().await;
         drop(live_tx);
-        assert!(matches!(feeder.await.unwrap(), FeedEnd::EngineStopped));
+        assert_matches!(feeder.await.unwrap(), FeedEnd::EngineStopped);
 
         let frames = drain(&mut rx);
         assert_eq!(seqs(&frames), [3, 4, 5, 6]);
@@ -286,7 +287,7 @@ mod tests {
         let feeder = tokio::spawn(feed(live_rx, Some(path), None, 0, tx, 3));
         tokio::task::yield_now().await;
         drop(live_tx);
-        assert!(matches!(feeder.await.unwrap(), FeedEnd::EngineStopped));
+        assert_matches!(feeder.await.unwrap(), FeedEnd::EngineStopped);
         assert_eq!(seqs(&drain(&mut rx)), (1..=10).collect::<Vec<_>>());
     }
 
@@ -299,7 +300,7 @@ mod tests {
         let (_live_tx, live_rx) = broadcast::channel(2);
         let (tx, mut rx) = mpsc::channel(8);
         let end = feed(live_rx, Some(missing), Some(0), 0, tx, 10).await;
-        assert!(matches!(end, FeedEnd::Replay(_)), "{end:?}");
+        assert_matches!(end, FeedEnd::Replay(_), "{end:?}");
         assert!(
             drain(&mut rx).is_empty(),
             "no replayEnd after a failed replay"
@@ -344,10 +345,7 @@ mod tests {
         let wait = Duration::from_millis(100);
         let terminal =
             tokio::time::timeout(wait, forward(&input(1, InputSource::Terminal), &tx)).await;
-        assert!(
-            matches!(terminal, Ok(Ok(()))),
-            "terminal input must not block"
-        );
+        assert_matches!(terminal, Ok(Ok(())), "terminal input must not block");
         let tool = tokio::time::timeout(wait, forward(&input(2, InputSource::Tool), &tx)).await;
         assert!(
             tool.is_err(),

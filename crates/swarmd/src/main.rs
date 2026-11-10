@@ -379,10 +379,7 @@ fn init_tracing(log_file: Option<&Path>) -> io::Result<()> {
 /// Opens `path` for appending, creating it (private to the owner on Unix)
 /// and its parent directories.
 fn open_log_file(path: &Path) -> io::Result<File> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
+    if let Some(parent) = path.parent().filter(|parent| !parent.is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
     let mut options = OpenOptions::new();
@@ -397,33 +394,37 @@ fn open_log_file(path: &Path) -> io::Result<File> {
 
 /// Creates the data directory (and missing parents) private to the owner.
 fn create_private_dir(dir: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::create_dir_all(dir)
+    cfg_select! {
+        unix => {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(dir)
+        }
+        _ => std::fs::create_dir_all(dir),
     }
 }
 
 /// Tightens an existing data directory to mode `0700`. On Windows the
 /// default directory lives under the user's profile, which is already
 /// private to them; the token file gets its own owner-only ACL.
-fn restrict_dir(dir: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = dir;
-        Ok(())
+fn restrict_dir(
+    #[cfg_attr(
+        not(unix),
+        expect(
+            unused_variables,
+            reason = "the directory is already private under the user profile on Windows"
+        )
+    )]
+    dir: &Path,
+) -> io::Result<()> {
+    cfg_select! {
+        unix => {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -481,33 +482,33 @@ fn status_line(local_addr: SocketAddr, exposure: ExposurePolicy) -> String {
 /// the first shutdown request, including one delivered between installation
 /// and the first poll, and names it.
 fn shutdown_signal() -> io::Result<impl Future<Output = &'static str>> {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut terminate = signal(SignalKind::terminate())?;
-        let mut interrupt = signal(SignalKind::interrupt())?;
-        Ok(async move {
-            tokio::select! {
-                _ = terminate.recv() => "SIGTERM",
-                _ = interrupt.recv() => "SIGINT",
-            }
-        })
-    }
-    #[cfg(windows)]
-    {
-        use tokio::signal::windows;
-        let mut ctrl_c = windows::ctrl_c()?;
-        let mut close = windows::ctrl_close()?;
-        let mut logoff = windows::ctrl_logoff()?;
-        let mut shutdown = windows::ctrl_shutdown()?;
-        Ok(async move {
-            tokio::select! {
-                _ = ctrl_c.recv() => "CTRL_C",
-                _ = close.recv() => "CTRL_CLOSE",
-                _ = logoff.recv() => "CTRL_LOGOFF",
-                _ = shutdown.recv() => "CTRL_SHUTDOWN",
-            }
-        })
+    cfg_select! {
+        unix => {
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut terminate = signal(SignalKind::terminate())?;
+            let mut interrupt = signal(SignalKind::interrupt())?;
+            Ok(async move {
+                tokio::select! {
+                    _ = terminate.recv() => "SIGTERM",
+                    _ = interrupt.recv() => "SIGINT",
+                }
+            })
+        }
+        windows => {
+            use tokio::signal::windows;
+            let mut ctrl_c = windows::ctrl_c()?;
+            let mut close = windows::ctrl_close()?;
+            let mut logoff = windows::ctrl_logoff()?;
+            let mut shutdown = windows::ctrl_shutdown()?;
+            Ok(async move {
+                tokio::select! {
+                    _ = ctrl_c.recv() => "CTRL_C",
+                    _ = close.recv() => "CTRL_CLOSE",
+                    _ = logoff.recv() => "CTRL_LOGOFF",
+                    _ = shutdown.recv() => "CTRL_SHUTDOWN",
+                }
+            })
+        }
     }
 }
 
