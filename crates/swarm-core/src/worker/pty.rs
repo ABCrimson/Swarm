@@ -171,24 +171,24 @@ pub fn spawn_pty(
 }
 
 /// The platform default shell; see [`spawn_pty`]'s table.
-#[cfg(unix)]
 fn default_shell_command() -> CommandBuilder {
-    CommandBuilder::new_default_prog()
+    cfg_select! {
+        unix => CommandBuilder::new_default_prog(),
+        windows => {
+            let on_path = |exe: &str| {
+                std::env::var_os("PATH").is_some_and(|path| {
+                    std::env::split_paths(&path).any(|dir| dir.join(exe).is_file())
+                })
+            };
+            CommandBuilder::new(if on_path("pwsh.exe") {
+                "pwsh.exe"
+            } else {
+                "powershell.exe"
+            })
+        }
+    }
 }
 
-/// The platform default shell; see [`spawn_pty`]'s table.
-#[cfg(windows)]
-fn default_shell_command() -> CommandBuilder {
-    let on_path = |exe: &str| {
-        std::env::var_os("PATH")
-            .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(exe).is_file()))
-    };
-    CommandBuilder::new(if on_path("pwsh.exe") {
-        "pwsh.exe"
-    } else {
-        "powershell.exe"
-    })
-}
 /// A named thread held at its start line.
 ///
 /// Its body runs only after [`Self::start`]; dropping the `Parked`
