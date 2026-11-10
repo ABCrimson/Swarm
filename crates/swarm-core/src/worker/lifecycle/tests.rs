@@ -9,7 +9,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use super::*;
 use crate::events::emitter::WriterMsg;
 use crate::git::test_support::{TempRepo, git_in};
-use crate::test_support::SharedBuf;
+use crate::test_support::{SharedBuf, capture_logs};
 
 /// How long a test waits for a real shell to react.
 const SHELL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -594,14 +594,6 @@ const SECRET: &str = "sk-ant-super-secret-value-should-never-be-logged";
 /// subscriber that prints every event and every span's fields as
 /// the span opens, and returns the spawn result and all output.
 fn spawn_under_capture(shell: &str) -> (Result<Uuid, AppError>, String, WorkerRegistry) {
-    let capture = SharedBuf::default();
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(capture.clone())
-        .with_max_level(tracing::Level::DEBUG)
-        .with_span_events(FmtSpan::NEW)
-        .with_ansi(false)
-        .finish();
-
     let registry = WorkerRegistry::new();
     let repo_locks = RepoLocks::new();
     let (sink, _rx) = test_sink();
@@ -612,15 +604,13 @@ fn spawn_under_capture(shell: &str) -> (Result<Uuid, AppError>, String, WorkerRe
         ..WorkerConfig::default()
     };
 
-    let result = tracing::subscriber::with_default(subscriber, || {
-        // A parallel test's subscriber change can leave a callsite cached as disabled; re-evaluate with this subscriber installed.
-        tracing::callsite::rebuild_interest_cache();
-        do_spawn_worker(&sink, &registry, &repo_locks, config, Provenance::default())
-    });
+    let capture = capture_logs(tracing::Level::DEBUG, FmtSpan::NEW);
+    let result = do_spawn_worker(&sink, &registry, &repo_locks, config, Provenance::default());
+    let captured = capture.text();
+    drop(capture);
     if let Ok(id) = result {
         do_kill_worker(&sink, &registry, &repo_locks, id, Provenance::default()).unwrap();
     }
-    let captured = String::from_utf8_lossy(&capture.0.lock()).into_owned();
     (result, captured, registry)
 }
 
