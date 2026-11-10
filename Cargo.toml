@@ -83,6 +83,9 @@ tauri-plugin-store        = "=3.0.0-alpha.3"
 tauri-plugin-updater      = { version = "=3.0.0-alpha.3", default-features = false, features = ["rustls-tls", "system-proxy"] }
 tauri-plugin-notification = "=3.0.0-alpha.3"
 tauri-plugin-window-state = "=3.0.0-alpha.2"
+# No features: the `deep-link` feature would route `swarm:` URLs into a
+# running instance, an untrusted entry point not built today.
+tauri-plugin-single-instance = "=3.0.0-alpha.3"
 # Dev-only, swarm-desktop's capability contract test: the matcher
 # tauri-plugin-opener evaluates URL scopes with (already in the tree
 # through it, at this exact version).
