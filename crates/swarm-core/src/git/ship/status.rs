@@ -337,7 +337,7 @@ mod tests {
             Some("origin/swarm/x-abcd1234")
         );
         assert_eq!(snapshot.ahead_behind, Some((3, 1)));
-        assert!(snapshot.entries.is_empty());
+        assert_eq!(snapshot.entries, []);
     }
 
     #[test]
@@ -486,7 +486,7 @@ mod tests {
         assert_eq!(snapshot.upstream, None);
         let classified = snapshot.classify();
         assert_eq!(classified.staged, ["new.txt"]);
-        let mut untracked = classified.untracked.clone();
+        let mut untracked = classified.untracked;
         untracked.sort();
         assert_eq!(
             untracked,

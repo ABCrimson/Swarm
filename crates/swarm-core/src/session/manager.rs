@@ -205,7 +205,7 @@ mod tests {
         assert!(manager.add_worker_to_session(&id, worker).unwrap());
         assert_eq!(members(&manager, &id), vec![worker]);
         manager.remove_worker_from_session(&id, worker).unwrap();
-        assert!(members(&manager, &id).is_empty());
+        assert_eq!(members(&manager, &id), [] as [Uuid; 0]);
     }
 
     /// Re-adding a member leaves `worker_ids` unchanged (no duplicate id) and reports no change.
@@ -224,7 +224,7 @@ mod tests {
         manager
             .remove_worker_from_session(&id, Uuid::new_v4())
             .unwrap();
-        assert!(members(&manager, &id).is_empty());
+        assert_eq!(members(&manager, &id), [] as [Uuid; 0]);
     }
 
     #[test]

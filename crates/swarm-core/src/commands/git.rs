@@ -683,8 +683,8 @@ mod tests {
             .unwrap();
         assert!(events.is_empty(), "(5, 5] holds no seq: {events:?}");
         let context = git::build_ship_context(events, me, 5, 5, truncated);
-        assert!(context.turns.is_empty());
-        assert!(context.commits.is_empty());
+        assert_eq!(context.turns, []);
+        assert_eq!(context.commits, []);
         assert!(!context.events_truncated);
     }
 

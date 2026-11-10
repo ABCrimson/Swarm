@@ -383,7 +383,7 @@ impl EventLog {
     /// reservation (so a crash can never lose a seq it issued), and
     /// again at a clean shutdown with its exact head (so a clean restart
     /// continues without a gap).
-    pub(super) fn reserve_seqs(&mut self, through: u64) -> Result<(), AppError> {
+    pub(super) fn reserve_seqs(&self, through: u64) -> Result<(), AppError> {
         self.conn
             .prepare_cached(
                 "INSERT INTO meta (key, value) VALUES (?1, ?2) \
@@ -424,7 +424,7 @@ impl EventLog {
     /// checkpoints the WAL back into the main file. A checkpoint a reader
     /// blocks (`busy != 0`) is logged, not an error: the WAL stays and the
     /// next open recovers it, and the head is already recorded.
-    pub(super) fn finalize(&mut self, head: u64) -> Result<(), AppError> {
+    pub(super) fn finalize(&self, head: u64) -> Result<(), AppError> {
         self.reserve_seqs(head)?;
         self.conn.execute_batch("PRAGMA optimize;")?;
         let (busy, wal_frames, checkpointed): (i64, i64, i64) =
@@ -821,7 +821,7 @@ mod tests {
 
     #[test]
     fn test_finalize_records_the_exact_head() {
-        let mut log = EventLog::open_in_memory().unwrap();
+        let log = EventLog::open_in_memory().unwrap();
         log.reserve_seqs(2048).unwrap();
         log.finalize(1500).unwrap();
         assert_eq!(log.resume_seq().unwrap(), 1500);
@@ -1147,7 +1147,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut log = EventLog::init(conn).unwrap();
+        let log = EventLog::init(conn).unwrap();
         assert_eq!(user_version(&log.conn), 2);
         assert!(!index_list(&log.conn).contains(&"idx_events_origin_seq".to_string()));
         log.reserve_seqs(10).unwrap();

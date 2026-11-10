@@ -1893,10 +1893,9 @@ async fn an_oversized_reader_contributes_nothing() {
     let cap = usize::try_from(REPO_SETTINGS_MAX_BYTES).expect("fits");
     text.push_str(&" ".repeat(cap + 1 - text.len()));
     assert_eq!(text.len(), cap + 1);
-    assert!(
-        deny_from_reader(Path::new("x"), text.as_bytes())
-            .await
-            .is_empty()
+    assert_eq!(
+        deny_from_reader(Path::new("x"), text.as_bytes()).await,
+        [] as [&str; 0]
     );
     let fits = &text[..cap];
     assert_eq!(
@@ -1915,10 +1914,10 @@ async fn an_oversized_or_non_utf8_repo_settings_file_adds_nothing() {
         )
         .expect("write");
     });
-    assert!(read_repo_deny(&oversized.cwd).await.is_empty());
+    assert_eq!(read_repo_deny(&oversized.cwd).await, [] as [&str; 0]);
     let binary =
         harness_with_settings(|file| std::fs::write(file, [0xff, 0xfe, b'{']).expect("write"));
-    assert!(read_repo_deny(&binary.cwd).await.is_empty());
+    assert_eq!(read_repo_deny(&binary.cwd).await, [] as [&str; 0]);
     let fine = harness_with_settings(|file| {
         std::fs::write(file, r#"{"permissions":{"deny":["Bash(curl*)"]}}"#).expect("write");
     });

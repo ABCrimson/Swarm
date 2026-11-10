@@ -92,7 +92,8 @@ mod tests {
     #[test]
     fn test_clones_share_one_registry() {
         let bus = MessageBus::new();
-        bus.clone().register("shared").unwrap();
+        let clone = bus.clone();
+        clone.register("shared").unwrap();
         assert_eq!(bus.list_channels(), ["shared"]);
     }
 }

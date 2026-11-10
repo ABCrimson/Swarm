@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(args.bind, DEFAULT_BIND);
         assert!(!args.allow_plaintext_lan);
         assert!(args.data_dir.is_none() && args.serve_ui.is_none() && args.log_file.is_none());
-        assert!(args.allow_hosts.is_empty());
+        assert_eq!(args.allow_hosts, []);
     }
 
     #[test]

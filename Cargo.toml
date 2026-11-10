@@ -47,6 +47,16 @@ disallowed_methods              = "deny"
 dbg_macro                       = "deny"
 todo                            = "deny"
 unimplemented                   = "deny"
+# `assert!(x.is_empty())` fails without printing `x`; `assert_eq!` shows it.
+assert_is_empty                 = "deny"
+# A clone whose source is never used again is a real allocation.
+redundant_clone                 = "deny"
+# `.map(|x| format!(..)).collect::<String>()` allocates a String per item.
+format_collect                  = "deny"
+# A `&mut` parameter that is never mutated misstates the function's contract.
+needless_pass_by_ref_mut        = "deny"
+# `from_secs(120)` is `from_mins(2)`: write the largest unit that divides evenly.
+duration_suboptimal_units       = "deny"
 
 [workspace.lints.cargo]
 unused_dependencies             = "deny"
